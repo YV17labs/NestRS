@@ -2983,6 +2983,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "http",
+ "nest-rs-authn",
  "nest-rs-codegen",
  "nest-rs-config",
  "nest-rs-core",

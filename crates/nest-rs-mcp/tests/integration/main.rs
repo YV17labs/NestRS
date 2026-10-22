@@ -18,13 +18,19 @@ mod parameters;
 mod propagate;
 mod registry;
 mod scope;
+mod sessions;
 mod unit;
 
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use nest_rs_core::{App, Layer, Module, Transport, UnitContext, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs_http::{HttpConfig, HttpTransport};
+use nest_rs_mcp::rmcp::transport::streamable_http_server::session::store::{
+    SessionState, SessionStore, SessionStoreError,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
@@ -81,6 +87,57 @@ impl Guard for StoreDown {
 
 impl GuardFor<nest_rs_http::HttpView> for StoreDown {}
 impl GuardFor<nest_rs_mcp::McpView> for StoreDown {}
+
+/// An app's session store in memory, shared by the instances a test boots
+/// around it as a deployment's are.
+#[derive(Default)]
+pub(crate) struct MemoryStore {
+    states: Mutex<HashMap<String, SessionState>>,
+}
+
+impl MemoryStore {
+    /// Whether it holds `session`.
+    pub(crate) fn holds(&self, session: &str) -> bool {
+        self.states.lock().unwrap().contains_key(session)
+    }
+
+    /// Hold `session` as a release before the binding stored it: the client's
+    /// handshake alone.
+    pub(crate) fn put_unbound(&self, session: &str) {
+        let state = serde_json::from_value(serde_json::json!({
+            "initialize_params": {
+                "protocolVersion": nest_rs_testing::mcp::PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "elsewhere", "version": "0" },
+            },
+        }))
+        .expect("a session's state");
+        self.states
+            .lock()
+            .unwrap()
+            .insert(session.to_owned(), state);
+    }
+}
+
+#[async_trait]
+impl SessionStore for MemoryStore {
+    async fn load(&self, session: &str) -> Result<Option<SessionState>, SessionStoreError> {
+        Ok(self.states.lock().unwrap().get(session).cloned())
+    }
+
+    async fn store(&self, session: &str, state: &SessionState) -> Result<(), SessionStoreError> {
+        self.states
+            .lock()
+            .unwrap()
+            .insert(session.to_owned(), state.clone());
+        Ok(())
+    }
+
+    async fn delete(&self, session: &str) -> Result<(), SessionStoreError> {
+        self.states.lock().unwrap().remove(session);
+        Ok(())
+    }
+}
 
 /// `M` served on a free loopback port by the transport `HttpModule` would build,
 /// with `window` as its shutdown window.

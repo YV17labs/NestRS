@@ -881,51 +881,31 @@ fn one_session() -> nest_rs_mcp::McpConfig {
     }
 }
 
-/// The app's session store, holding every session a client names, as one
-/// another instance stored.
-struct StoredElsewhere;
-
-#[async_trait::async_trait]
-impl SessionStore for StoredElsewhere {
-    async fn load(&self, _: &str) -> Result<Option<SessionState>, SessionStoreError> {
-        let state = serde_json::json!({
-            "initialize_params": {
-                "protocolVersion": nest_rs_testing::mcp::PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": { "name": "elsewhere", "version": "0" },
-            },
-        });
-        Ok(Some(serde_json::from_value(state)?))
-    }
-
-    async fn store(&self, _: &str, _: &SessionState) -> Result<(), SessionStoreError> {
-        Ok(())
-    }
-
-    async fn delete(&self, _: &str) -> Result<(), SessionStoreError> {
-        Ok(())
-    }
-}
-
 /// A session restored from the app's store takes a place like one opened
 /// here: past the cap, the session manager refuses it, and the client reads
 /// the cap's refusal rather than rmcp's `500`.
 #[tokio::test]
 async fn a_session_restored_past_the_cap_is_refused_as_the_cap_refuses() {
-    let logs = nest_rs_testing::LogCapture::install();
-    let app = TestApp::builder()
-        .provide(one_session())
-        .provide_dyn::<dyn SessionStore>(std::sync::Arc::new(StoredElsewhere))
-        .module::<ListeningModule>()
-        .build()
-        .await
-        .expect("boots");
+    let store = std::sync::Arc::new(crate::MemoryStore::default());
+    let with_store = || {
+        TestApp::builder()
+            .provide(one_session())
+            .provide_dyn::<dyn SessionStore>(
+                std::sync::Arc::clone(&store) as std::sync::Arc<dyn SessionStore>
+            )
+            .module::<ListeningModule>()
+            .build()
+    };
+    let opened_here = with_store().await.expect("boots");
+    let stored = nest_rs_testing::mcp::open_session(opened_here.http(), LISTENING, None).await;
+    let app = with_store().await.expect("boots");
     nest_rs_testing::mcp::open_session(app.http(), LISTENING, None).await;
+    let logs = nest_rs_testing::LogCapture::install();
 
     let refused = nest_rs_testing::mcp::post_message(
         app.http(),
         LISTENING,
-        Some("stored-elsewhere"),
+        Some(&stored),
         None,
         &serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
     )

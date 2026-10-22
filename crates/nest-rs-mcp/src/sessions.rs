@@ -1,14 +1,16 @@
-//! [`BoundedSessions`] — rmcp's in-memory sessions, held to a maximum — and
-//! [`ReportedStore`], the app's session store. Each says the failures it hands
-//! rmcp, whose own lines are clamped.
+//! [`BoundedSessions`] — rmcp's in-memory sessions, held to a maximum and each
+//! bound to the principal that opened it — and [`ReportedStore`], the app's
+//! session store, keeping that principal beside each session. Each says the
+//! failures it hands rmcp, whose own lines are clamped.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use futures_util::Stream;
-use nest_rs_core::error_message;
-use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
+use nest_rs_core::{Correlation, current_tenant_id, error_message};
+use rmcp::model::{ClientJsonRpcMessage, InitializeRequestParams, ServerJsonRpcMessage};
 use rmcp::transport::streamable_http_server::session::local::{
     LocalSessionManager, LocalSessionManagerError, SessionConfig,
 };
@@ -23,26 +25,134 @@ use tokio::sync::Mutex;
 use crate::error::SessionsError;
 
 tokio::task_local! {
-    /// Set when a manager refuses a session at the cap while
-    /// [`BoundedSessions::watching`] runs a request's answer: rmcp turns the
-    /// refusal into a `500`, which the endpoint answers as the cap's `503`.
-    static REFUSED_AT_CAP: Cell<bool>;
+    /// The request rmcp is answering while [`BoundedSessions::answering`]
+    /// runs its answer: rmcp creates, restores and reaches the request's
+    /// session on the task answering it.
+    static ANSWERING: Answering;
+}
+
+/// The request rmcp is answering: who it is served for, and why a manager
+/// refused it, which the endpoint answers in place of rmcp.
+struct Answering {
+    caller: Principal,
+    refused: Cell<Option<Refused>>,
+}
+
+/// Why a manager refused the request rmcp is answering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refused {
+    /// The mount holds its maximum: rmcp answers `500`, the endpoint the
+    /// cap's `503`.
+    Full,
+    /// The session is another principal's, or one the mount does not hold:
+    /// answered as rmcp answers a session it does not hold.
+    Unknown,
+}
+
+/// Who a request is served for, as a session is bound to it: the actor id and
+/// the tenant the authentication guard read off the verified principal, and
+/// neither for an anonymous caller.
+///
+/// MCP's security guidance binds a session to "information unique to the
+/// authorized user": a request on a session another principal opened is
+/// answered as one on a session the mount does not hold.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Principal {
+    actor: Option<String>,
+    tenant: Option<String>,
+}
+
+/// The principal outside any request: anonymous.
+const ANONYMOUS: Principal = Principal {
+    actor: None,
+    tenant: None,
+};
+
+impl Principal {
+    /// The principal `request` is served for, read past its guards: the actor
+    /// the authentication guard recorded, and the tenant it made ambient.
+    pub(crate) fn of(request: &Correlation) -> Self {
+        Self {
+            actor: request.actor_id().map(str::to_owned),
+            tenant: current_tenant_id(),
+        }
+    }
+}
+
+/// The principal the request being answered is served for; anonymous
+/// outside one.
+fn caller() -> Principal {
+    ANSWERING
+        .try_with(|answering| answering.caller.clone())
+        .unwrap_or_default()
+}
+
+/// Whether `owner` is the principal the request being answered is served for.
+fn is_caller(owner: &Principal) -> bool {
+    ANSWERING
+        .try_with(|answering| answering.caller == *owner)
+        .unwrap_or(*owner == ANONYMOUS)
+}
+
+/// Whether a manager refused the request being answered already.
+fn refused() -> bool {
+    ANSWERING
+        .try_with(|answering| answering.refused.get().is_some())
+        .unwrap_or_default()
+}
+
+/// Mark the request being answered refused for `why`; the first reason
+/// stands. Outside `answering`, no answer reads the mark.
+fn refuse(why: Refused) {
+    ANSWERING
+        .try_with(|answering| {
+            if answering.refused.get().is_none() {
+                answering.refused.set(Some(why));
+            }
+        })
+        .unwrap_or_default();
+}
+
+/// Refuse the request being answered a session another principal opened,
+/// said once at `warn` by the `call` that refused it, never naming the session
+/// or its owner.
+fn refuse_foreign(call: &'static str) {
+    if !refused() {
+        tracing::warn!(
+            target: crate::TARGET,
+            call,
+            "mcp session refused: another principal opened it",
+        );
+    }
+    refuse(Refused::Unknown);
 }
 
 /// rmcp's local session manager, refusing a session past `max` with
-/// [`SessionsError::Full`].
+/// [`SessionsError::Full`] and serving each session to the principal that
+/// opened it alone.
 pub(crate) struct BoundedSessions {
     inner: LocalSessionManager,
     max: usize,
     /// Held across the count and the insert, so the cap is exact: a close only
     /// lowers the count.
     creating: Mutex<()>,
+    /// The principal each live session is bound to: the one its `initialize`,
+    /// or the request restoring it, was served for.
+    owners: RwLock<HashMap<SessionId, Principal>>,
+    /// The app's store, holding the sessions other instances opened.
+    store: Option<Arc<ReportedStore>>,
 }
 
 impl BoundedSessions {
     /// rmcp's local manager running each session on `session`, holding at
-    /// most `max` live sessions.
-    pub(crate) fn new(session: SessionConfig, max: usize) -> Self {
+    /// most `max` live sessions, and asking `store` whose a session it does
+    /// not hold is.
+    pub(crate) fn new(
+        session: SessionConfig,
+        max: usize,
+        store: Option<Arc<ReportedStore>>,
+    ) -> Self {
         // `#[non_exhaustive]`: rmcp's default, its session config replaced.
         let mut inner = LocalSessionManager::default();
         inner.session_config = session;
@@ -50,6 +160,8 @@ impl BoundedSessions {
             inner,
             max,
             creating: Mutex::new(()),
+            owners: RwLock::new(HashMap::new()),
+            store,
         }
     }
 
@@ -71,23 +183,87 @@ impl BoundedSessions {
     /// `SessionsError::Full`, said, and marked on the request being answered.
     fn full(&self) -> SessionsError {
         self.say_full();
-        // Outside `watching`, no answer reads the mark.
-        REFUSED_AT_CAP
-            .try_with(|refused| refused.set(true))
-            .unwrap_or_default();
+        refuse(Refused::Full);
         SessionsError::Full
     }
 
-    /// `answering`, the answer to one request, and whether a manager refused
-    /// a session at the cap while it ran: rmcp creates and restores the
-    /// request's session on the task answering it.
-    pub(crate) async fn watching<F: Future>(answering: F) -> (F::Output, bool) {
-        REFUSED_AT_CAP
-            .scope(Cell::new(false), async {
+    /// `answering`, the answer to one request served for `caller`, and why a
+    /// manager refused it while it ran.
+    pub(crate) async fn answering<F: Future>(
+        caller: Principal,
+        answering: F,
+    ) -> (F::Output, Option<Refused>) {
+        let request = Answering {
+            caller,
+            refused: Cell::new(None),
+        };
+        ANSWERING
+            .scope(request, async {
                 let answer = answering.await;
-                (answer, REFUSED_AT_CAP.with(Cell::get))
+                (answer, ANSWERING.with(|answering| answering.refused.get()))
             })
             .await
+    }
+
+    /// Whether session `id` is bound to the caller, to another principal, or
+    /// to none this manager knows of.
+    fn bound_to_caller(&self, id: &SessionId) -> Option<bool> {
+        self.owners
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .map(is_caller)
+    }
+
+    /// Bind session `id` to the principal the request being answered is
+    /// served for.
+    fn bind(&self, id: SessionId) {
+        self.owners
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, caller());
+    }
+
+    /// Refuse, at `call`, the request being answered a session another
+    /// principal opened; one this manager does not hold is rmcp's to refuse.
+    fn admit(&self, id: &SessionId, call: &'static str) -> Result<(), SessionsError> {
+        match self.bound_to_caller(id) {
+            Some(false) => {
+                refuse_foreign(call);
+                Err(SessionsError::Unknown)
+            }
+            Some(true) | None => Ok(()),
+        }
+    }
+
+    /// Whether a client's `DELETE` may close session `id`: one bound to its
+    /// principal, here or in the app's store. Any other is refused as
+    /// unknown, which rmcp would answer `202`, so a `DELETE` never says
+    /// whether another principal's session exists.
+    async fn admit_close(&self, id: &SessionId) -> Result<(), SessionsError> {
+        let bound = match self.bound_to_caller(id) {
+            Some(bound) => Some(bound),
+            // Held elsewhere: rmcp deletes it from the app's store next.
+            None => match &self.store {
+                Some(store) => store
+                    .owner(id)
+                    .await
+                    .map_err(SessionsError::Store)?
+                    .map(|owner| is_caller(&owner)),
+                None => None,
+            },
+        };
+        match bound {
+            Some(true) => Ok(()),
+            Some(false) => {
+                refuse_foreign("close_session");
+                Err(SessionsError::Unknown)
+            }
+            None => {
+                refuse(Refused::Unknown);
+                Err(SessionsError::Unknown)
+            }
+        }
     }
 }
 
@@ -117,7 +293,9 @@ impl SessionManager for BoundedSessions {
         if self.is_full().await {
             return Err(self.full());
         }
-        said("create_session", self.inner.create_session().await)
+        let (id, transport) = said("create_session", self.inner.create_session().await)?;
+        self.bind(id.clone());
+        Ok((id, transport))
     }
 
     async fn initialize_session(
@@ -125,18 +303,41 @@ impl SessionManager for BoundedSessions {
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<ServerJsonRpcMessage, Self::Error> {
+        self.admit(id, "initialize_session")?;
         said(
             "initialize_session",
             self.inner.initialize_session(id, message).await,
         )
     }
 
+    /// A session another principal opened is one the caller does not have;
+    /// one restored but not bound yet waits for the request restoring it.
     async fn has_session(&self, id: &SessionId) -> Result<bool, Self::Error> {
-        said("has_session", self.inner.has_session(id).await)
+        if !said("has_session", self.inner.has_session(id).await)? {
+            return Ok(false);
+        }
+        match self.bound_to_caller(id) {
+            Some(true) => Ok(true),
+            Some(false) => {
+                refuse_foreign("has_session");
+                Ok(false)
+            }
+            None => Ok(false),
+        }
     }
 
+    /// A client's `DELETE` closes its own session alone; rmcp closing a
+    /// session its worker ended runs outside any request.
     async fn close_session(&self, id: &SessionId) -> Result<(), Self::Error> {
-        said("close_session", self.inner.close_session(id).await)
+        if ANSWERING.try_with(|_| ()).is_ok() {
+            self.admit_close(id).await?;
+        }
+        let closed = said("close_session", self.inner.close_session(id).await);
+        self.owners
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(id);
+        closed
     }
 
     async fn create_stream(
@@ -144,6 +345,7 @@ impl SessionManager for BoundedSessions {
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
+        self.admit(id, "create_stream")?;
         said("create_stream", self.inner.create_stream(id, message).await)
     }
 
@@ -152,6 +354,7 @@ impl SessionManager for BoundedSessions {
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<(), Self::Error> {
+        self.admit(id, "accept_message")?;
         said(
             "accept_message",
             self.inner.accept_message(id, message).await,
@@ -162,6 +365,7 @@ impl SessionManager for BoundedSessions {
         &self,
         id: &SessionId,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
+        self.admit(id, "create_standalone_stream")?;
         said(
             "create_standalone_stream",
             self.inner.create_standalone_stream(id).await,
@@ -176,6 +380,7 @@ impl SessionManager for BoundedSessions {
         id: &SessionId,
         last_event_id: String,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
+        self.admit(id, "resume")?;
         self.inner.resume(id, last_event_id).await.map_err(|error| {
             tracing::warn!(
                 target: crate::TARGET,
@@ -187,7 +392,9 @@ impl SessionManager for BoundedSessions {
     }
 
     /// A restored session takes a place like a created one; one already
-    /// present takes none.
+    /// present takes none. rmcp restores only what the store loaded for the
+    /// request being answered ([`ReportedStore::load`]), so a restored
+    /// session is bound to that request's principal.
     async fn restore_session(
         &self,
         id: SessionId,
@@ -196,7 +403,14 @@ impl SessionManager for BoundedSessions {
         if !said("has_session", self.inner.has_session(&id).await)? && self.is_full().await {
             return Err(self.full());
         }
-        said("restore_session", self.inner.restore_session(id).await)
+        let restored = said(
+            "restore_session",
+            self.inner.restore_session(id.clone()).await,
+        )?;
+        if matches!(restored, RestoreOutcome::Restored(_)) {
+            self.bind(id);
+        }
+        Ok(restored)
     }
 
     fn event_store(&self) -> Option<Arc<dyn EventStore>> {
@@ -204,15 +418,41 @@ impl SessionManager for BoundedSessions {
     }
 }
 
-/// The app's `SessionStore`, each failure said: rmcp's own lines name the
-/// session.
+/// The `_meta` key of a stored session's handshake under which the mount
+/// keeps the principal the session is bound to. MCP's `_meta` keys take a
+/// reverse-DNS prefix, here the project's domain.
+const PRINCIPAL_KEY: &str = "dev.nestrs/principal";
+
+/// `params` carrying `owner` under [`PRINCIPAL_KEY`], in place of whatever
+/// the client wrote there.
+fn put_principal(params: &mut InitializeRequestParams, owner: &Principal) {
+    let owner = serde_json::json!({ "actor": owner.actor, "tenant": owner.tenant });
+    params
+        .meta
+        .get_or_insert_with(Default::default)
+        .insert(PRINCIPAL_KEY.to_owned(), owner);
+}
+
+/// The principal `params` carry under [`PRINCIPAL_KEY`], taken out so the
+/// handshake a restore replays is the client's own; `None` when they carry
+/// none it reads.
+fn take_principal(params: &mut InitializeRequestParams) -> Option<Principal> {
+    let meta = params.meta.as_mut()?;
+    let owner = meta.remove(PRINCIPAL_KEY);
+    if meta.is_empty() {
+        params.meta = None;
+    }
+    serde_json::from_value(owner?).ok()
+}
+
+/// The app's `SessionStore`, keeping beside each session the principal it is
+/// bound to and each failure said: rmcp's own lines name the session.
 pub(crate) struct ReportedStore(pub(crate) Arc<dyn SessionStore>);
 
-#[async_trait::async_trait]
-impl SessionStore for ReportedStore {
-    /// rmcp answers a failed load `500`.
-    async fn load(&self, session_id: &str) -> Result<Option<SessionState>, SessionStoreError> {
-        self.0.load(session_id).await.inspect_err(|error| {
+impl ReportedStore {
+    /// The state the store holds for session `id`, said when the load fails.
+    async fn loaded(&self, id: &str) -> Result<Option<SessionState>, SessionStoreError> {
+        self.0.load(id).await.inspect_err(|error| {
             tracing::error!(
                 target: crate::TARGET,
                 call = "load",
@@ -222,10 +462,64 @@ impl SessionStore for ReportedStore {
         })
     }
 
+    /// The principal session `id` is bound to and its state as the client
+    /// sent it, when the store holds it with one. A session stored without one
+    /// — by a release before the binding — is said at `warn` by the `call`
+    /// reading it, and read as none: no caller adopts it.
+    async fn bound(
+        &self,
+        id: &str,
+        call: &'static str,
+    ) -> Result<Option<(Principal, SessionState)>, SessionStoreError> {
+        let Some(mut state) = self.loaded(id).await? else {
+            return Ok(None);
+        };
+        let Some(owner) = take_principal(&mut state.initialize_params) else {
+            tracing::warn!(
+                target: crate::TARGET,
+                call,
+                "mcp session refused: stored without its principal",
+            );
+            return Ok(None);
+        };
+        Ok(Some((owner, state)))
+    }
+
+    /// The principal the store says session `id` is bound to, for a `DELETE`
+    /// an instance not holding the session answers.
+    async fn owner(&self, id: &str) -> Result<Option<Principal>, SessionStoreError> {
+        Ok(self
+            .bound(id, "close_session")
+            .await?
+            .map(|(owner, _)| owner))
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionStore for ReportedStore {
+    /// rmcp answers a failed load `500`, and a session it is not handed
+    /// `404`: one bound to another principal is not handed.
+    async fn load(&self, session_id: &str) -> Result<Option<SessionState>, SessionStoreError> {
+        // Refused already: the session is another principal's in memory.
+        if refused() {
+            return Ok(None);
+        }
+        let Some((owner, state)) = self.bound(session_id, "load").await? else {
+            return Ok(None);
+        };
+        if !is_caller(&owner) {
+            refuse_foreign("load");
+            return Ok(None);
+        }
+        Ok(Some(state))
+    }
+
     /// rmcp serves a session it failed to store, which another instance then
     /// cannot restore.
     async fn store(&self, session_id: &str, state: &SessionState) -> Result<(), SessionStoreError> {
-        self.0.store(session_id, state).await.inspect_err(|error| {
+        let mut bound = state.clone();
+        put_principal(&mut bound.initialize_params, &caller());
+        self.0.store(session_id, &bound).await.inspect_err(|error| {
             tracing::warn!(
                 target: crate::TARGET,
                 call = "store",
@@ -255,7 +549,7 @@ mod tests {
     use super::*;
 
     fn one_place() -> BoundedSessions {
-        BoundedSessions::new(SessionConfig::default(), 1)
+        BoundedSessions::new(SessionConfig::default(), 1, None)
     }
 
     /// The session id a client names, which no line may carry.
@@ -522,5 +816,186 @@ mod tests {
             .create_session()
             .await
             .expect("the freed place takes a new session");
+    }
+
+    fn named_actor(actor: &str) -> Principal {
+        Principal {
+            actor: Some(actor.to_owned()),
+            tenant: None,
+        }
+    }
+
+    /// A session `owner` opened on `sessions`.
+    async fn opened_by(sessions: &BoundedSessions, owner: Principal) -> SessionId {
+        let ((id, _transport), refused) = BoundedSessions::answering(owner, async {
+            sessions.create_session().await.expect("a session opens")
+        })
+        .await;
+        assert_eq!(refused, None);
+        id
+    }
+
+    /// rmcp asks `has_session` first, but a request waiting on another's
+    /// restore of the same session skips it: every call that reaches a
+    /// session refuses another principal's request itself, and the request
+    /// files one line.
+    #[tokio::test]
+    async fn every_call_reaching_another_principals_session_refuses_it() {
+        let sessions = BoundedSessions::new(SessionConfig::default(), 2, None);
+        let id = opened_by(&sessions, named_actor("alice")).await;
+        let logs = LogCapture::install();
+
+        let (refusals, refused) = BoundedSessions::answering(named_actor("bob"), async {
+            [
+                sessions.initialize_session(&id, ping()).await.err(),
+                sessions.create_stream(&id, ping()).await.err(),
+                sessions.accept_message(&id, ping()).await.err(),
+                sessions.create_standalone_stream(&id).await.err(),
+                sessions.resume(&id, "0".to_owned()).await.err(),
+                sessions.close_session(&id).await.err(),
+            ]
+        })
+        .await;
+
+        for refusal in refusals {
+            assert!(
+                matches!(refusal, Some(SessionsError::Unknown)),
+                "{refusal:?}"
+            );
+        }
+        assert_eq!(refused, Some(Refused::Unknown));
+        let event = logs.expect_one(
+            crate::TARGET,
+            "mcp session refused: another principal opened it",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("call").as_deref(), Some("initialize_session"));
+        logs.expect_none(
+            crate::TARGET,
+            "mcp stream not resumed: answered with an empty stream",
+        );
+        logs.expect_none(crate::TARGET, "mcp session manager failed");
+
+        let (held, refused) = BoundedSessions::answering(named_actor("bob"), async {
+            sessions.has_session(&id).await.expect("answered")
+        })
+        .await;
+        assert!(!held, "another principal does not have it");
+        assert_eq!(refused, Some(Refused::Unknown));
+
+        let (held, refused) = BoundedSessions::answering(named_actor("alice"), async {
+            sessions.has_session(&id).await.expect("answered")
+        })
+        .await;
+        assert!(held, "its owner still has it: nothing closed it");
+        assert_eq!(refused, None);
+    }
+
+    /// A session's worker ending closes it outside any request, whoever
+    /// opened it.
+    #[tokio::test]
+    async fn rmcps_own_close_outside_a_request_closes_any_session() {
+        let sessions = BoundedSessions::new(SessionConfig::default(), 2, None);
+        let id = opened_by(&sessions, named_actor("alice")).await;
+
+        sessions
+            .close_session(&id)
+            .await
+            .expect("rmcp's close is let through");
+
+        let (held, _) = BoundedSessions::answering(named_actor("alice"), async {
+            sessions.has_session(&id).await.expect("answered")
+        })
+        .await;
+        assert!(!held);
+        assert!(
+            sessions
+                .owners
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty(),
+            "a closed session leaves no binding behind"
+        );
+    }
+
+    /// rmcp answers a `DELETE` of a session it does not hold `202`; the
+    /// manager refuses it as unknown, as it refuses another principal's.
+    #[tokio::test]
+    async fn a_delete_of_a_session_the_mount_does_not_hold_is_refused_as_unknown() {
+        let sessions = one_place();
+        let logs = LogCapture::install();
+
+        let (closed, refused) = BoundedSessions::answering(named_actor("alice"), async {
+            sessions.close_session(&named()).await
+        })
+        .await;
+
+        assert!(matches!(closed, Err(SessionsError::Unknown)), "{closed:?}");
+        assert_eq!(refused, Some(Refused::Unknown));
+        logs.expect_none(
+            crate::TARGET,
+            "mcp session refused: another principal opened it",
+        );
+    }
+
+    fn handshake(meta: Option<serde_json::Value>) -> InitializeRequestParams {
+        let mut params = serde_json::json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "client", "version": "0" },
+        });
+        if let Some(meta) = meta {
+            params["_meta"] = meta;
+        }
+        serde_json::from_value(params).expect("a handshake")
+    }
+
+    /// The principal travels beside the client's handshake, through what a
+    /// store serializes, and leaves it as the client sent it.
+    #[test]
+    fn a_principal_travels_beside_the_handshake_and_leaves_it_as_sent() {
+        let acme = Principal {
+            actor: None,
+            tenant: Some("acme".to_owned()),
+        };
+        for sent in [
+            handshake(None),
+            handshake(Some(serde_json::json!({ "progressToken": 7 }))),
+        ] {
+            let mut stored = sent.clone();
+            put_principal(&mut stored, &acme);
+            let mut stored: InitializeRequestParams =
+                serde_json::from_value(serde_json::to_value(&stored).expect("serializes"))
+                    .expect("deserializes");
+
+            assert_eq!(take_principal(&mut stored), Some(acme.clone()));
+            assert_eq!(stored, sent);
+        }
+
+        let mut written_by_the_client = handshake(Some(
+            serde_json::json!({ PRINCIPAL_KEY: { "actor": "alice", "tenant": null } }),
+        ));
+        put_principal(&mut written_by_the_client, &ANONYMOUS);
+        assert_eq!(
+            take_principal(&mut written_by_the_client),
+            Some(ANONYMOUS),
+            "what the mount writes replaces what the client wrote"
+        );
+    }
+
+    #[test]
+    fn a_handshake_carrying_no_principal_it_reads_names_none() {
+        assert_eq!(take_principal(&mut handshake(None)), None);
+        for unread in [
+            serde_json::json!({ "progressToken": 7 }),
+            serde_json::json!({ PRINCIPAL_KEY: "alice" }),
+            serde_json::json!({ PRINCIPAL_KEY: { "actor": "alice", "role": "admin" } }),
+        ] {
+            assert_eq!(
+                take_principal(&mut handshake(Some(unread.clone()))),
+                None,
+                "{unread}"
+            );
+        }
     }
 }

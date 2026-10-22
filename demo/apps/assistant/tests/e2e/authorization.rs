@@ -1,7 +1,9 @@
 use nest_rs::http::{StatusCode, header};
-use serde_json::Value;
+use nest_rs::testing::mcp::{call_method, open_session, post_message};
+use serde_json::{Value, json};
+use uuid::Uuid;
 
-use features::testing::AUDIENCE as RESOURCE;
+use features::testing::{AUDIENCE as RESOURCE, ORG_ID, token_for};
 
 use crate::{SHARED_ENDPOINT, boot};
 
@@ -72,4 +74,47 @@ async fn discovery_is_reachable_without_a_token_but_tools_are_not() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn another_users_bearer_reaches_no_session_it_did_not_open() {
+    let (_db, app) = boot().await;
+    let owner = format!(
+        "Bearer {}",
+        token_for(ORG_ID, "admin", Some(Uuid::now_v7()))
+    );
+    let colleague = format!("Bearer {}", token_for(ORG_ID, "user", Some(Uuid::now_v7())));
+    let session = open_session(app.http(), SHARED_ENDPOINT, Some(&owner)).await;
+
+    post_message(
+        app.http(),
+        SHARED_ENDPOINT,
+        Some(&session),
+        Some(&colleague),
+        &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    )
+    .await
+    .assert_status(StatusCode::NOT_FOUND);
+    app.http()
+        .delete(SHARED_ENDPOINT)
+        .header("host", "localhost")
+        .header("mcp-session-id", session.as_str())
+        .header(header::AUTHORIZATION, colleague.as_str())
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    let listed = call_method(
+        app.http(),
+        SHARED_ENDPOINT,
+        &session,
+        Some(&owner),
+        "tools/list",
+        json!({}),
+    )
+    .await;
+    assert!(
+        listed.contains("list_people"),
+        "the session still serves the user who opened it: {listed}"
+    );
 }

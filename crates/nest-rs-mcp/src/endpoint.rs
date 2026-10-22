@@ -24,10 +24,12 @@ use rmcp::transport::streamable_http_server::session::store::SessionStore;
 use crate::McpError;
 use crate::ambient::McpAmbient;
 use crate::config::McpConfig;
-use crate::error::{is_transport_message, said_by_code, tool_not_found, transport_sentence};
+use crate::error::{
+    SESSION_NOT_FOUND, is_transport_message, said_by_code, tool_not_found, transport_sentence,
+};
 use crate::propagate::{OperationUnits, PropagatingHandler, RequestChains};
 use crate::registry::MountIndex;
-use crate::sessions::{BoundedSessions, ReportedStore};
+use crate::sessions::{BoundedSessions, Principal, Refused, ReportedStore};
 use nest_rs_database::UnitOfWork;
 
 /// The wait, in seconds, a client refused a session is told to take before
@@ -185,9 +187,11 @@ where
         units: units.clone(),
     });
 
+    let session_store = session_store.map(|store| Arc::new(ReportedStore(store)));
     let sessions = Arc::new(BoundedSessions::new(
         config.to_session_config(),
         config.max_concurrent_sessions,
+        session_store.clone(),
     ));
 
     // The stop, not the signal: rmcp ends every stream on this token, a POST's
@@ -195,8 +199,7 @@ where
     let mut server_config = config
         .to_server_config()
         .with_cancellation_token(detached.cancellation_token());
-    server_config.session_store =
-        session_store.map(|store| Arc::new(ReportedStore(store)) as Arc<dyn SessionStore>);
+    server_config.session_store = session_store.map(|store| store as Arc<dyn SessionStore>);
 
     let service = StreamableHttpService::new(
         move || Ok(PropagatingHandler::new(factory(), units.clone())),
@@ -221,6 +224,15 @@ struct SessionEndpoint<H: ServerHandler> {
     /// `None` on a hand-built [`endpoint`], whose mount read no declarations.
     undeclared: Option<UndeclaredTools>,
     service: StreamableHttpService<PropagatingHandler<H>, BoundedSessions>,
+}
+
+/// rmcp's answer to a session it does not hold, word for word: what a request
+/// naming another principal's session reads too, so neither tells a client
+/// whether the other exists.
+fn unknown_session() -> Response {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(SESSION_NOT_FOUND)
 }
 
 /// What refuses an `initialize` before rmcp opens a session past the cap.
@@ -588,18 +600,23 @@ where
         // A `GET` is the session's standalone stream, with no end of its own.
         let standalone = req.method() == Method::GET;
 
+        // Past the request's guards: the principal its session is bound to.
+        let caller = Principal::of(&correlation);
         // Also installed here, for an operation rmcp resolves inline.
-        let (response, refused_at_cap) =
-            BoundedSessions::watching(nest_rs_core::with_request_scope(
+        let (response, refused) = BoundedSessions::answering(
+            caller,
+            nest_rs_core::with_request_scope(
                 scope,
                 correlation,
                 self.service.handle(req.into_http()),
-            ))
-            .await;
-        if refused_at_cap {
-            return Ok(SessionCap::refused());
-        }
-        let response = Response::from(response);
+            ),
+        )
+        .await;
+        let response = match refused {
+            Some(Refused::Full) => return Ok(SessionCap::refused()),
+            Some(Refused::Unknown) => unknown_session(),
+            None => Response::from(response),
+        };
         // rmcp answers `403` to a `Host` outside the allowlist alone, the
         // endpoint keeping its `Origin` check off.
         if response.status() == StatusCode::FORBIDDEN {

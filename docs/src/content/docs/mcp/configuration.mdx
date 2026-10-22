@@ -109,6 +109,42 @@ reads the same `503` and the same `warn` on `nest_rs::mcp`. The wait for the
 `initialize` itself is 60 seconds, set in code so an rmcp release cannot
 move it.
 
+### A session belongs to the principal that opened it
+
+Every request is authenticated by its own bearer, and the session is never the
+credential. On top of that, a session is bound to the principal its
+`initialize` was served for: the actor id and the tenant your authentication
+guard read off the verified credential. A later request naming the session — a
+`POST`, the standalone `GET` stream, a resume with `Last-Event-ID`, a
+`DELETE` — is served only when its own credential resolves to that same
+principal. Any other caller reads exactly what a session the endpoint does not
+hold answers, so a session id never tells it whether someone else's session
+exists:
+
+```http
+HTTP/1.1 404 Not Found
+content-type: application/problem+json
+
+{"type":"about:blank","title":"Not Found","status":404,"detail":"Not Found: Session not found"}
+```
+
+One `warn` on `nest_rs::mcp`, `mcp session refused: another principal opened
+it`, names the `call` that refused the request, never the session or its
+owner. A `DELETE` of a session the endpoint does not hold, closed or never
+opened, is answered `404` too.
+
+The binding travels with a session restored from a `SessionStore`: the
+endpoint keeps the principal beside the client's handshake, under the `_meta`
+key `dev.nestrs/principal`, and checks it before another instance restores the
+session. A session stored by an earlier release, without that key, is refused
+to every caller, said at `warn` as `mcp session refused: stored without its
+principal`, and its client opens a new one.
+
+A public endpoint (`McpOptions::posture = Posture::Public`) runs no guard at
+its request, so it authenticates no one: its sessions all belong to the
+anonymous principal, and the session id is their only key. A principal whose
+`actor_id` is `None` is told apart by its tenant alone.
+
 ## The host allowlist
 
 The allowlist is a **security control**, which is why a deployment reached

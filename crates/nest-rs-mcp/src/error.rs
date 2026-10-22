@@ -63,6 +63,7 @@ use rmcp::model::ErrorCode;
 use rmcp::transport::streamable_http_server::session::local::{
     LocalSessionManagerError, SessionError,
 };
+use rmcp::transport::streamable_http_server::session::store::SessionStoreError;
 
 use nest_rs_core::OPAQUE_CLIENT_MESSAGE as OPAQUE;
 
@@ -406,6 +407,9 @@ pub(crate) fn tool_not_found() -> McpError {
     McpError::invalid_params(TOOL_NOT_FOUND, None)
 }
 
+/// rmcp 3.5's answer to a session it does not hold, word for word.
+pub(crate) const SESSION_NOT_FOUND: &str = "Not Found: Session not found";
+
 /// rmcp 3.5's streamable-HTTP refusals written as text, word for word, that
 /// quote nothing the request carried: what a client needs to fix its call.
 const TRANSPORT_SENTENCES: [&str; 15] = [
@@ -413,7 +417,7 @@ const TRANSPORT_SENTENCES: [&str; 15] = [
     "Not Acceptable: Client must accept text/event-stream",
     "Unsupported Media Type: Content-Type must be application/json",
     "Bad Request: Session ID is required",
-    "Not Found: Session not found",
+    SESSION_NOT_FOUND,
     "Bad Request: Invalid MCP-Protocol-Version header encoding",
     "Bad Request: Invalid Host header encoding",
     "Bad Request: Invalid Host header",
@@ -535,16 +539,24 @@ pub(crate) enum ScopeError {
     },
 }
 
-/// Why a mount's session manager refused: its cap, or rmcp's own manager.
+/// Why a mount's session manager refused: its cap, the principal a session is
+/// bound to, the app's store, or rmcp's own manager.
 ///
 /// rmcp writes the `Display` into the `500` it answers a refused session with
-/// — which the endpoint answers as the cap's `503` for [`Full`](Self::Full) —
-/// so neither variant names the session.
+/// — which the endpoint answers as the cap's `503` for [`Full`](Self::Full),
+/// and as a session it does not hold for [`Unknown`](Self::Unknown) — so no
+/// variant names the session.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SessionsError {
     /// The mount holds its `max_concurrent_sessions`.
     #[error("the mount holds its maximum of live sessions")]
     Full,
+    /// The session is another principal's, or one the mount does not hold.
+    #[error("no session of the caller's")]
+    Unknown,
+    /// The app's session store failed to say whose a session is.
+    #[error("the session store failed")]
+    Store(#[source] SessionStoreError),
     /// rmcp's local session manager refused.
     #[error("the session manager failed")]
     Local(#[from] LocalSessionManagerError),

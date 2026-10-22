@@ -56,7 +56,7 @@ pub(crate) enum Refused {
 /// MCP's security guidance binds a session to "information unique to the
 /// authorized user": a request on a session another principal opened is
 /// answered as one on a session the mount does not hold.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Principal {
     actor: Option<String>,
@@ -85,7 +85,7 @@ impl Principal {
 fn caller() -> Principal {
     ANSWERING
         .try_with(|answering| answering.caller.clone())
-        .unwrap_or_default()
+        .unwrap_or(ANONYMOUS)
 }
 
 /// Whether `owner` is the principal the request being answered is served for.
@@ -241,18 +241,17 @@ impl BoundedSessions {
     /// unknown, which rmcp would answer `202`, so a `DELETE` never says
     /// whether another principal's session exists.
     async fn admit_close(&self, id: &SessionId) -> Result<(), SessionsError> {
-        let bound = match self.bound_to_caller(id) {
-            Some(bound) => Some(bound),
-            // Held elsewhere: rmcp deletes it from the app's store next.
-            None => match &self.store {
-                Some(store) => store
-                    .owner(id)
-                    .await
-                    .map_err(SessionsError::Store)?
-                    .map(|owner| is_caller(&owner)),
-                None => None,
-            },
-        };
+        let mut bound = self.bound_to_caller(id);
+        // Held elsewhere: rmcp deletes it from the app's store next.
+        if bound.is_none()
+            && let Some(store) = &self.store
+        {
+            bound = store
+                .bound(id, "close_session")
+                .await
+                .map_err(SessionsError::Store)?
+                .map(|(owner, _)| is_caller(&owner));
+        }
         match bound {
             Some(true) => Ok(()),
             Some(false) => {
@@ -426,11 +425,10 @@ const PRINCIPAL_KEY: &str = "dev.nestrs/principal";
 /// `params` carrying `owner` under [`PRINCIPAL_KEY`], in place of whatever
 /// the client wrote there.
 fn put_principal(params: &mut InitializeRequestParams, owner: &Principal) {
-    let owner = serde_json::json!({ "actor": owner.actor, "tenant": owner.tenant });
     params
         .meta
         .get_or_insert_with(Default::default)
-        .insert(PRINCIPAL_KEY.to_owned(), owner);
+        .insert(PRINCIPAL_KEY.to_owned(), serde_json::json!(owner));
 }
 
 /// The principal `params` carry under [`PRINCIPAL_KEY`], taken out so the
@@ -483,15 +481,6 @@ impl ReportedStore {
             return Ok(None);
         };
         Ok(Some((owner, state)))
-    }
-
-    /// The principal the store says session `id` is bound to, for a `DELETE`
-    /// an instance not holding the session answers.
-    async fn owner(&self, id: &str) -> Result<Option<Principal>, SessionStoreError> {
-        Ok(self
-            .bound(id, "close_session")
-            .await?
-            .map(|(owner, _)| owner))
     }
 }
 

@@ -221,20 +221,21 @@ pub fn with_request_scope<F: Future>(
     correlation: crate::Correlation,
     fut: F,
 ) -> impl Future<Output = F::Output> {
-    Install::new(
-        move || {
-            Some(Arc::new(match current_request_ctx(Arc::clone) {
-                Some(outer) => RequestCtx {
-                    scope,
-                    correlation: Some(correlation),
-                    ambient: outer.ambient.clone(),
-                    parent: Some(outer),
-                },
-                None => RequestCtx::opened(scope, correlation),
-            }))
+    Install::new(move || Some(nested(scope, correlation)), fut)
+}
+
+/// The unit `scope` and `correlation` open where this runs: nested in the
+/// running one, it carries what that one carries.
+fn nested(scope: Option<Arc<RequestScope>>, correlation: crate::Correlation) -> Arc<RequestCtx> {
+    Arc::new(match current_request_ctx(Arc::clone) {
+        Some(outer) => RequestCtx {
+            scope,
+            correlation: Some(correlation),
+            ambient: outer.ambient.clone(),
+            parent: Some(outer),
         },
-        fut,
-    )
+        None => RequestCtx::opened(scope, correlation),
+    })
 }
 
 /// The ambient request context, held so work that continues the unit after the
@@ -402,8 +403,18 @@ impl RequestScope {
 pub(crate) mod __private {
     use std::sync::Arc;
 
-    use super::RequestScope;
+    use super::{RequestContinuation, RequestScope};
     use crate::Container;
+
+    /// The unit [`with_request_scope`](super::with_request_scope) would open
+    /// here, held to be entered around each poll of a stream it runs as — a
+    /// graphql-ws subscription, which its socket's engine polls.
+    pub fn nested_continuation(
+        scope: Option<Arc<RequestScope>>,
+        correlation: crate::Correlation,
+    ) -> RequestContinuation {
+        RequestContinuation(super::nested(scope, correlation))
+    }
 
     /// Where the units an edge dispatches over one container get their
     /// [`RequestScope`]: one they all share while no provider is

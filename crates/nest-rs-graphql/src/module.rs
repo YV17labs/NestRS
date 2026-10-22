@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
+use nest_rs_core::__private::RequestScopes;
 use nest_rs_core::anyhow;
 use nest_rs_core::{Collecting, Container, ContainerBuilder, Module, Registering};
 use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
@@ -105,8 +106,11 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             let bridge = Arc::new(OperationBridge::new(container.clone()));
             let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
             let sdl = schema.sdl();
-            let units =
-                OperationUnits::new(NullPropagated::new(Redacted(schema), &sdl), binding.clone());
+            let units = OperationUnits::new(
+                NullPropagated::new(Redacted(schema), &sdl),
+                binding.clone(),
+                RequestScopes::new(container.clone()),
+            );
             let post = crate::context::ContextEndpoint::new(
                 units.clone(),
                 Arc::clone(&bridge),

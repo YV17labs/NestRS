@@ -90,7 +90,8 @@ The edge owes propagation at every boundary it crosses.
   resources.** A socket opened by an upgrade takes the upgrade's trace, actor
   and the ambient values that cross a `Connection`, never its scope or its
   transaction; pinning the request's scope for the socket's life is the
-  defect. Where the framework dispatches inside the connection, the operation is
+  defect, so each operation it carries opens a scope of its own — a WS
+  message, a graphql-ws query, mutation or subscription. Where the framework dispatches inside the connection, the operation is
   the unit and the connection a field (`ws.message` carries `ws.connection_id`);
   where it cannot see one, the connection is the unit (`graphql.subscription`).
   Lifecycle hooks are units too (`ws.connect`, `ws.disconnect`): a hook is

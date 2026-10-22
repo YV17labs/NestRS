@@ -161,8 +161,9 @@ it comes from, never its scope. `nest_rs::seaorm::Bind<A, S>` is held the same
 way for the service `S` it loads through.
 
 HTTP, WebSockets, GraphQL, and MCP each install a fresh request scope per call
-(one per request for HTTP and MCP — every operation one `/mcp` request carries
-shares it — one per message for WebSockets, one per operation for GraphQL).
+(one per request for HTTP and MCP — every operation one `/mcp` request or one
+GraphQL `POST` carries shares it — one per message for WebSockets, one per
+operation on a graphql-ws socket, a subscription's for as long as it streams).
 Within a scope, request-scoped providers are cached and shared; across scopes,
 fresh instances are built. A WebSocket message, a GraphQL resolver and an MCP
 tool or prompt take them as a parameter, `nest_rs::ws::Scoped<T>`,

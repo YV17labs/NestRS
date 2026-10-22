@@ -43,10 +43,12 @@
 //! # }
 //! ```
 //!
-//! **Caveat.** A graphql-ws socket outlives the request that upgraded it and
-//! carries no request scope, and a `#[dataloader]` batch runs off-task, shared
-//! by every field of the request: a request-scoped provider is reachable in
-//! neither. A batch reads the ambient values its request carries into it.
+//! Each operation a graphql-ws socket carries runs in a request scope of its
+//! own, never its upgrade's: a query's or a mutation's for its unit, a
+//! subscription's from its opening through every item. **Caveat.** A
+//! `#[dataloader]` batch runs off-task, shared by every field of the request,
+//! so a request-scoped provider is not reachable there; a batch reads the
+//! ambient values its request carries into it.
 
 use std::any::{TypeId, type_name};
 use std::ops::Deref;
@@ -60,10 +62,9 @@ use crate::error::{FieldFailure, Unprovided};
 /// as a resolver method's parameter.
 ///
 /// The provider is part of the boot's access contract
-/// ([`ResolvesProvider`]). Should it still be missing at an operation — the
-/// operation came over a graphql-ws socket, or `T` is offered by no module —
-/// the field answers the opaque internal error and the type is filed at
-/// `error`, never answered.
+/// ([`ResolvesProvider`]). Should it still be missing at an operation — one
+/// run outside any request, as a schema driven bare is — the field answers the
+/// opaque internal error and the type is filed at `error`, never answered.
 ///
 /// ```
 /// use std::any::TypeId;

@@ -10,11 +10,13 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::identity;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, PoisonError};
+use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
 use async_graphql::futures_util::StreamExt;
-use async_graphql::futures_util::stream::{self, BoxStream, FuturesOrdered};
+use async_graphql::futures_util::stream::{self, BoxStream, FuturesOrdered, Stream};
 use async_graphql::parser::types::{
     DocumentOperations, ExecutableDocument, FragmentDefinition, OperationDefinition, OperationType,
     Selection, SelectionSet,
@@ -23,8 +25,10 @@ use async_graphql::{
     BatchRequest, BatchResponse, Context, Data, Executor, Name, Pos, Positioned, Request, Response,
     ServerError, ServerResult, Value,
 };
+use nest_rs_core::__private::{RequestScopes, nested_continuation};
 use nest_rs_core::operation_log::{CANCELLED, ERROR, OK, PANIC};
 use nest_rs_core::problem::{Problem, code};
+use nest_rs_core::{RequestContinuation, RequestScope};
 use nest_rs_database::{
     AtomicError, ExecutorScope, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec, run_unit,
 };
@@ -42,11 +46,22 @@ pub(crate) struct OperationUnits<E> {
     /// The unit-of-work binding, resolved once at mount; with none, every
     /// operation runs bare.
     binding: Option<Arc<dyn UnitOfWork>>,
+    /// Where a graphql-ws operation's request scope comes from: its socket
+    /// carries none of its upgrade's.
+    scopes: RequestScopes,
 }
 
 impl<E: Executor> OperationUnits<E> {
-    pub(crate) fn new(executor: E, binding: Option<Arc<dyn UnitOfWork>>) -> Self {
-        Self { executor, binding }
+    pub(crate) fn new(
+        executor: E,
+        binding: Option<Arc<dyn UnitOfWork>>,
+        scopes: RequestScopes,
+    ) -> Self {
+        Self {
+            executor,
+            binding,
+            scopes,
+        }
     }
 
     /// Execute `batch` within the request's `deadline`: one operation at a
@@ -106,12 +121,20 @@ impl<E: Executor> OperationUnits<E> {
     ) -> Response {
         let request = request.data(BatchSpan(tracing::Span::current()));
         let body = refused_or(selected.refusal.take(), self.executor.execute(request));
-        self.run(selected, cut, body).await
+        let scope = nest_rs_core::current_request_scope();
+        self.run(selected, scope, cut, body).await
     }
 
-    /// Run `body`, the operation `selected` names, as its unit: cut at `cut`,
-    /// settled on whether its answer reports data, and filed on its own line.
-    async fn run<B>(&self, selected: Selected, cut: Option<&RequestDeadline>, body: B) -> Response
+    /// Run `body`, the operation `selected` names, as its unit in `scope`: cut
+    /// at `cut`, settled on whether its answer reports data, and filed on its
+    /// own line.
+    async fn run<B>(
+        &self,
+        selected: Selected,
+        scope: Option<Arc<RequestScope>>,
+        cut: Option<&RequestDeadline>,
+        body: B,
+    ) -> Response
     where
         B: Future<Output = Response> + Send,
     {
@@ -154,11 +177,7 @@ impl<E: Executor> OperationUnits<E> {
             Answered::reports_data,
             Answered::unhonoured,
         );
-        let scoped = nest_rs_core::with_request_scope(
-            nest_rs_core::current_request_scope(),
-            correlation,
-            unit,
-        );
+        let scoped = nest_rs_core::with_request_scope(scope, correlation, unit);
         let answered = nest_rs_core::panic::contain(scoped).instrument(span).await;
         match answered {
             Ok(answered) => {
@@ -183,16 +202,24 @@ impl<E: Executor> Executor for OperationUnits<E> {
         self.execute_batch_within(batch, None).await
     }
 
-    /// A graphql-ws operation: a query or a mutation runs as its unit at its
-    /// start, inside the socket's; a subscription runs on the socket's own.
+    /// A graphql-ws operation, in a request scope of its own: a query or a
+    /// mutation runs as its unit at its start, inside the socket's; a
+    /// subscription runs on the socket's own, its opening and every item in
+    /// the scope it opened with.
     fn execute_stream(
         &self,
         mut request: Request,
         session_data: Option<Arc<Data>>,
     ) -> BoxStream<'static, Response> {
         let mut selected = Selected::of(&mut request);
+        let scope = self.scopes.open();
         if selected.ty == Some(OperationType::Subscription) {
-            return self.executor.execute_stream(request, session_data);
+            return InScope {
+                scope: Some(scope),
+                unit: None,
+                stream: self.executor.execute_stream(request, session_data),
+            }
+            .boxed();
         }
         let units = self.clone();
         stream::once(async move {
@@ -206,9 +233,32 @@ impl<E: Executor> Executor for OperationUnits<E> {
                     .unwrap_or_default()
             };
             let answer = refused_or(selected.refusal.take(), answer);
-            units.run(selected, None, answer).await
+            units.run(selected, Some(scope), None, answer).await
         })
         .boxed()
+    }
+}
+
+/// A subscription's stream, each poll of it in the request scope the
+/// subscription opened with, nested in the socket's unit, which polls it.
+struct InScope {
+    /// Taken into [`unit`](Self::unit) at the first poll.
+    scope: Option<Arc<RequestScope>>,
+    unit: Option<RequestContinuation>,
+    stream: BoxStream<'static, Response>,
+}
+
+impl Stream for InScope {
+    type Item = Response;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Response>> {
+        let this = self.get_mut();
+        let unit = this.unit.get_or_insert_with(|| {
+            let correlation = nest_rs_core::__private::current_correlation()
+                .unwrap_or_else(|| nest_rs_core::Correlation::minted(None));
+            nested_continuation(this.scope.take(), correlation)
+        });
+        unit.enter(|| this.stream.poll_next_unpin(cx))
     }
 }
 

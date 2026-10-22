@@ -40,11 +40,13 @@ use nest_rs_pipes::{GlobalPipe, PipeError};
 /// test subscriber needs this.
 pub fn compose_schema(container: Container, config: &GraphqlConfig) -> impl Executor + 'static {
     let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
+    let scopes = nest_rs_core::__private::RequestScopes::new(container.clone());
     let schema = crate::resolver::build_schema(container, config, &DetachedWork::new());
     let sdl = schema.sdl();
     crate::operation_units::OperationUnits::new(
         crate::null_propagation::NullPropagated::new(crate::redact::Redacted(schema), &sdl),
         binding,
+        scopes,
     )
 }
 

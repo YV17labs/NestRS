@@ -163,7 +163,7 @@ whole request.
 | The principal and its `Ability` | Carried, for the connection's life |
 | The trace and the `actor_id` | Carried — the socket opens one `graphql.subscription` span under the upgrade's trace |
 | A database handle | Carried, always **outside** the upgrade's transaction |
-| `RequestScope` (`Scoped<T>`) | **Not** carried — the field is refused |
+| `RequestScope` (`Scoped<T>`) | **Not** carried — each operation opens its own |
 
 The middle row is what makes a `Repo`-backed subscription work at all: the
 `101` is answered before the connection task starts, so the request
@@ -172,15 +172,17 @@ app's unit-of-work binding instead, so a DataLoader batch under it reads
 through that pool too. Carrying the transaction would pin a pooled connection for hours
 and write through something nobody will commit.
 
-The second row's span covers the **connection**, not each item: async-graphql
-owns the operation loop, so this crate never sees an operation boundary to open
-one at. See [Correlation](/fundamentals/correlation/).
+The second row's span covers the **connection**, and a subscription's items run
+in it: a stream has no boundary per item to open one at. A query or a mutation
+sent over the socket is a unit of its own, with its own span (below). See
+[Correlation](/fundamentals/correlation/).
 
 The last row is deliberate too. A request-scoped provider built once at
-connect and shared by every operation for four hours is not request-scoped
-— so a `Scoped<T>` parameter on the socket is refused opaquely, the provider
-named on the operator's line, rather than handing back something that looks
-right and is not.
+connect and shared by every operation for four hours would not be
+request-scoped, so the upgrade's scope stays behind. Each operation the socket
+carries opens a scope of its own instead, as a WebSocket message does: a query
+or a mutation for its unit, a subscription at its opening. A `Scoped<T>`
+parameter resolves there as it does on `POST`.
 
 A subscription's guards, class gate, exception filters and interceptors run at
 its **opening** — the call answering the stream — never per item: each item
@@ -247,8 +249,9 @@ Everything else is the GraphQL module's own configuration — see
   entity and action, not one per item.
 - **`bind = Service` binds at subscribe, not per item** — it names one
   subject for the subscription, the way it names one for a mutation.
-- **A request-scoped provider is unreachable** from a subscription — see
-  the table above.
+- **A subscription's request scope lasts as long as the subscription.** A
+  request-scoped provider it resolves is built at its opening and shared by
+  every item its stream yields, until it completes.
 - **Federation reaches queries, not subscriptions.** An `#[entity]` is a
   `Query`-root field the router resolves by reference; the `Subscription` root
   has no `_entities`, and declaring one there is a compile error naming both

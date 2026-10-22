@@ -4,15 +4,17 @@
 //! Posture *per item* is tested in `nest-rs-authz`'s
 //! `tests/integration/graphql/mask.rs`, where the entity fixtures live.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_graphql::SimpleObject;
+use async_graphql::futures_util::StreamExt as _;
 /// async-graphql's own `futures_util` re-export, reached through the framework.
 use async_graphql::futures_util::stream as futures_stream;
 use nest_rs_core::module;
 use nest_rs_graphql::async_graphql;
-use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, Scoped, operations, resolver};
 use nest_rs_pipes::{Piped, Trim};
 use nest_rs_testing::{LogCapture, TestApp};
 use tokio::sync::broadcast;
@@ -35,6 +37,37 @@ impl Default for TickResolverState {
             tx: broadcast::channel(8).0,
         }
     }
+}
+
+/// Hands out one stamp to each request scope that asks.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct StampCounter {
+    next: AtomicI32,
+}
+
+/// Request-scoped: the stamp of the scope that built it, read back as often as
+/// it is asked.
+#[nest_rs_core::injectable(scope = request)]
+struct SocketStamp {
+    #[inject]
+    counter: Arc<StampCounter>,
+    stamp: OnceLock<i32>,
+}
+
+impl SocketStamp {
+    fn id(&self) -> i32 {
+        *self
+            .stamp
+            .get_or_init(|| self.counter.next.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
+/// The stamp of the request scope the running code resolves through.
+fn current_stamp() -> Option<i32> {
+    nest_rs_core::current_request_scope()
+        .and_then(|scope| scope.get::<SocketStamp>())
+        .map(|stamp| stamp.id())
 }
 
 #[resolver]
@@ -80,19 +113,24 @@ impl TickResolver {
         Ok(futures_stream::iter([label.into_inner()]))
     }
 
-    /// Reaches for a request-scoped provider, which a socket does not carry.
+    #[query]
+    #[public]
+    async fn socket_stamp(&self, stamp: Scoped<SocketStamp>) -> i32 {
+        stamp.id()
+    }
+
+    /// The stamp of the scope the subscription opened in, then the stamp its
+    /// stream reads, when polled, off the scope it runs under.
     #[subscription]
     #[public]
-    async fn scoped_ticks(
-        &self,
-        scoped: nest_rs_graphql::Scoped<TickResolverState>,
-    ) -> impl futures_stream::Stream<Item = i32> {
-        let count = scoped.tx.receiver_count() as i32;
-        futures_stream::iter([count])
+    async fn stamps(&self, stamp: Scoped<SocketStamp>) -> impl futures_stream::Stream<Item = i32> {
+        futures_stream::iter([stamp.id()]).chain(futures_stream::once(async {
+            current_stamp().unwrap_or(-1)
+        }))
     }
 }
 
-#[module(providers = [TickResolverState, TickResolver])]
+#[module(providers = [TickResolverState, StampCounter, SocketStamp, TickResolver])]
 struct TickModule;
 
 #[module(imports = [
@@ -159,31 +197,49 @@ async fn a_synchronous_subscription_streams_like_an_async_one() {
     assert_eq!(second["data"]["counted"], 2, "{second}");
 }
 
+/// The stamp an operation on `socket` answers as `id`.
+async fn stamp_of(socket: &mut nest_rs_testing::graphql::GraphqlSocket, id: &str) -> i32 {
+    let item = socket.next_item(id).await.expect("the operation answers");
+    let field = item["data"]
+        .as_object()
+        .and_then(|data| data.values().next())
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_else(|| panic!("a stamp, not a refusal: {item}"));
+    i32::try_from(field).expect("a stamp fits")
+}
+
 #[tokio::test]
-async fn a_subscription_does_not_inherit_the_upgrades_request_scope() {
-    let logs = LogCapture::install();
+async fn a_subscription_resolves_a_request_scoped_parameter_and_polls_its_stream_in_that_scope() {
     let app = boot().await;
     let mut socket = app.graphql_socket().open();
     socket.connect().await;
-    socket.subscribe("scoped", "subscription { scopedTicks }");
+    socket.subscribe("stamps", "subscription { stamps }");
 
-    let message = socket
-        .next_item("scoped")
-        .await
-        .expect("the operation answers");
-    let rendered = message.to_string();
-    assert!(
-        rendered.contains(nest_rs_core::OPAQUE_CLIENT_MESSAGE),
-        "the socket refuses the provider rather than resolving one: {rendered}",
+    let opened = stamp_of(&mut socket, "stamps").await;
+    let polled = stamp_of(&mut socket, "stamps").await;
+
+    assert_eq!(
+        opened, polled,
+        "the subscription's opening and its stream share one request scope",
     );
-    assert!(!rendered.contains("TickResolverState"), "{rendered}");
-    let line = logs.expect_one("nest_rs::graphql", "graphql operation failed");
-    assert!(
-        line.field("error")
-            .is_some_and(|error| error.contains("TickResolverState")),
-        "the operator reads which provider: {:?}",
-        line.fields,
-    );
+}
+
+#[tokio::test]
+async fn each_operation_on_a_socket_runs_in_a_request_scope_of_its_own() {
+    let app = boot().await;
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+
+    socket.subscribe("first", "{ socketStamp }");
+    let first = stamp_of(&mut socket, "first").await;
+    socket.subscribe("second", "{ socketStamp }");
+    let second = stamp_of(&mut socket, "second").await;
+    socket.subscribe("subscribed", "subscription { stamps }");
+    let subscribed = stamp_of(&mut socket, "subscribed").await;
+
+    assert_ne!(first, second, "two queries on one socket share no scope");
+    assert_ne!(first, subscribed, "a subscription shares no query's scope");
+    assert_ne!(second, subscribed, "a subscription shares no query's scope");
 }
 
 #[test]
@@ -719,8 +775,14 @@ struct Caller(&'static str);
 
 impl nest_rs_core::AmbientValue for Caller {}
 
+/// The stamp of the upgrade request's own scope, carried onto its socket.
+#[derive(Debug)]
+struct UpgradeStamp(Option<i32>);
+
+impl nest_rs_core::AmbientValue for UpgradeStamp {}
+
 /// Adds the caller around the upgrade request, at its unit stage, as a
-/// guard's attachment does.
+/// guard's attachment does, and the stamp of the upgrade's request scope.
 #[nest_rs_core::interceptor(stage = unit)]
 #[derive(Default)]
 struct CallerInterceptor;
@@ -735,6 +797,7 @@ impl nest_rs_core::Interceptor for CallerInterceptor {
         next: nest_rs_core::Next<'_>,
     ) -> nest_rs_core::Outcome {
         cx.attach(Caller("alice"));
+        cx.attach(UpgradeStamp(current_stamp()));
         next.run(cx).await
     }
 }
@@ -757,19 +820,21 @@ impl CallerResolver {
         futures_stream::iter([caller.to_owned()])
     }
 
-    /// Whether the operation reads a request scope off the ambient context, as
-    /// a service resolving a request-scoped provider would.
+    /// The stamps of the upgrade's request scope and of the operation's.
     #[subscription]
     #[public]
-    async fn request_scoped(&self) -> impl futures_stream::Stream<Item = bool> {
-        let scoped = nest_rs_core::current_request_scope().is_some();
-        futures_stream::iter([scoped])
+    async fn scopes(
+        &self,
+        stamp: Scoped<SocketStamp>,
+    ) -> impl futures_stream::Stream<Item = String> {
+        let upgrade = nest_rs_core::ambient::<UpgradeStamp>().and_then(|upgrade| upgrade.0);
+        futures_stream::iter([format!("{upgrade:?} {}", stamp.id())])
     }
 }
 
 #[module(
     imports = [GraphqlModule::for_root(None)],
-    providers = [CallerInterceptor, CallerResolver],
+    providers = [StampCounter, SocketStamp, CallerInterceptor, CallerResolver],
 )]
 struct CallerApp;
 
@@ -789,20 +854,20 @@ async fn an_operation_on_the_socket_reads_what_its_upgrade_carried() {
 }
 
 #[tokio::test]
-async fn an_operation_on_the_socket_reads_no_request_scope_off_its_upgrade() {
+async fn an_operation_on_the_socket_runs_in_a_request_scope_of_its_own_never_its_upgrades() {
     let app = TestApp::builder()
         .module::<CallerApp>()
         .build_ws()
         .await
         .expect("the schema boots on a real port");
     let mut socket = graphql_ws(&app).connect().await;
-    subscribe(&mut socket, "subscription { requestScoped }").await;
+    subscribe(&mut socket, "subscription { scopes }").await;
 
     let item = next_message(&mut socket).await;
     assert_eq!(item["type"], "next", "{item}");
     assert_eq!(
-        item["payload"]["data"]["requestScoped"], false,
-        "the upgrade ran with a request scope, and the socket carries none of it: {item}",
+        item["payload"]["data"]["scopes"], "Some(0) 1",
+        "the upgrade's request scope built stamp 0, the operation's its own: {item}",
     );
 }
 

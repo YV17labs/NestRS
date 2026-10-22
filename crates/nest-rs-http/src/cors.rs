@@ -92,7 +92,7 @@ pub(crate) fn admitted_by_default<'a>(
 }
 
 /// Which check of the policy a cross-origin request failed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum CorsRefusal {
     /// Its `Origin` is not listed.
     Origin,

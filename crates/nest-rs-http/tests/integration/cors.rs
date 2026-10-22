@@ -5,12 +5,9 @@
 use std::time::Duration;
 
 use nest_rs_core::{ContainerBuilder, Discoverable, module};
-use nest_rs_http::{
-    HttpConfig, HttpCors, HttpEndpointMeta, HttpTransport, Response, controller, endpoint_fn,
-    routes,
-};
+use nest_rs_http::{HttpConfig, HttpCors, HttpEndpointMeta, HttpTransport, controller, routes};
 use nest_rs_http::{Method, StatusCode, header};
-use nest_rs_testing::LogCapture;
+use nest_rs_testing::{LogCapture, TestResponse};
 
 #[controller(path = "/cors")]
 struct PagesController;
@@ -61,10 +58,7 @@ impl Discoverable for EveryMethodMount {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.attach_meta::<EveryMethodMount, HttpEndpointMeta>(
             HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/rpc", "rpc", |_container, routes| {
-                routes.route_any(
-                    "/rpc",
-                    endpoint_fn(|_| async { Ok(Response::builder().body("rpc")) }),
-                );
+                routes.route_any("/rpc", crate::answering("rpc"));
             })
             .owned_by("EveryMethodMount"),
         )
@@ -106,6 +100,16 @@ fn values(response: &nest_rs_http::Response, name: header::HeaderName) -> Vec<St
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(',').map(|v| v.trim().to_ascii_lowercase()))
         .collect()
+}
+
+/// A preflight from the listed origin asking for `method` at `path`.
+async fn preflight(client: &crate::Client, path: &str, method: &str) -> TestResponse {
+    client
+        .request(Method::OPTIONS, path)
+        .header(header::ORIGIN, LISTED)
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, method)
+        .send()
+        .await
 }
 
 #[tokio::test]
@@ -182,12 +186,7 @@ async fn a_request_from_an_origin_the_policy_does_not_list_answers_a_403_problem
 async fn a_refused_preflight_varies_on_the_origin() {
     let client = crate::boot_on::<CorsModule>(policy(listed())).await;
 
-    let refused = client
-        .request(Method::OPTIONS, "/cors")
-        .header(header::ORIGIN, LISTED)
-        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "DELETE")
-        .send()
-        .await;
+    let refused = preflight(&client, "/cors", "DELETE").await;
 
     refused.assert_status(StatusCode::FORBIDDEN);
     refused.assert_header_is_not_exist(header::ACCESS_CONTROL_ALLOW_ORIGIN);
@@ -249,27 +248,13 @@ async fn a_policy_naming_no_method_lists_the_methods_the_app_routes() {
     }))
     .await;
 
-    let preflight = client
-        .request(Method::OPTIONS, "/documents/7")
-        .header(header::ORIGIN, LISTED)
-        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PUT")
-        .send()
-        .await;
-    assert!(
-        preflight.0.status().is_success(),
-        "{}",
-        preflight.0.status()
-    );
-    let mut methods = values(&preflight.0, header::ACCESS_CONTROL_ALLOW_METHODS);
+    let routed = preflight(&client, "/documents/7", "PUT").await;
+    assert!(routed.0.status().is_success(), "{}", routed.0.status());
+    let mut methods = values(&routed.0, header::ACCESS_CONTROL_ALLOW_METHODS);
     methods.sort();
     assert_eq!(methods, ["delete", "get", "head", "post", "put"]);
 
-    let unrouted = client
-        .request(Method::OPTIONS, "/documents/7")
-        .header(header::ORIGIN, LISTED)
-        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PATCH")
-        .send()
-        .await;
+    let unrouted = preflight(&client, "/documents/7", "PATCH").await;
     unrouted.assert_status(StatusCode::FORBIDDEN);
 }
 
@@ -283,12 +268,7 @@ async fn a_mount_answering_every_method_admits_every_method_a_page_sends() {
     }))
     .await;
 
-    let preflight = client
-        .request(Method::OPTIONS, "/rpc")
-        .header(header::ORIGIN, LISTED)
-        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "DELETE")
-        .send()
-        .await;
+    let preflight = preflight(&client, "/rpc", "DELETE").await;
     assert!(
         preflight.0.status().is_success(),
         "{}",
@@ -313,12 +293,7 @@ async fn a_wildcard_method_list_answers_the_wildcard_and_admits_an_extension_met
     }))
     .await;
 
-    let preflight = client
-        .request(Method::OPTIONS, "/cors")
-        .header(header::ORIGIN, LISTED)
-        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PROPFIND")
-        .send()
-        .await;
+    let preflight = preflight(&client, "/cors", "PROPFIND").await;
     assert!(
         preflight.0.status().is_success(),
         "{}",

@@ -481,7 +481,7 @@ mod tests {
         endpoint_fn(|_| async {
             Ok(Response::builder()
                 .header(
-                    HeaderName::from_static("x-content-type-options"),
+                    header::X_CONTENT_TYPE_OPTIONS,
                     HeaderValue::from_static("handler-value"),
                 )
                 .body("ok"))

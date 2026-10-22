@@ -708,13 +708,13 @@ impl Transport for HttpTransport {
         // swallow it.
         let self_mounts = routes.take_self_mounted();
         let addresses = routes.into_addresses();
-        let routed: Vec<Method> = addresses
-            .iter()
-            .flat_map(Address::methods)
-            .cloned()
-            .collect();
+        let known_methods =
+            KnownMethods::with(addresses.iter().flat_map(Address::methods).cloned());
         let every_method = addresses.iter().any(Address::answers_every_method);
-        let known_methods = KnownMethods::with(routed.iter().cloned());
+        let cors = self
+            .cors
+            .take()
+            .map(|cors| cors.serving(addresses.iter().flat_map(Address::methods), every_method));
         // What the router answers itself, as one site: its 404s and 405s, and
         // the fallback a module mounts.
         let fallback_chains = FALLBACK_SITE.chains(container)?;
@@ -784,7 +784,7 @@ impl Transport for HttpTransport {
         }
         // The problem normalizer must be outermost: without CORS or compression
         // that is the edge itself, otherwise a wrap outside both.
-        let fuse_normalize = !self.compression && self.cors.is_none();
+        let fuse_normalize = !self.compression && cors.is_none();
         let timeout = self.request_timeout.take();
 
         let endpoint = self.edge(
@@ -800,9 +800,7 @@ impl Transport for HttpTransport {
             // Outside the edge, so a preflight carries no request scope.
             false => BoxEndpoint::new(Normalized(PoemAdapter::around(
                 endpoint,
-                self.cors
-                    .take()
-                    .map(|cors| cors.serving(&routed, every_method)),
+                cors,
                 self.compression,
             ))),
         };

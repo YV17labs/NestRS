@@ -1235,12 +1235,7 @@ impl nest_rs_core::Discoverable for CarryingMount {
         builder
             .attach_meta::<CarryingMount, HttpEndpointMeta>(
                 HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/units", "units", |_c, routes| {
-                    routes.route_any(
-                        "/units",
-                        nest_rs_http::endpoint_fn(|_| async {
-                            Ok(nest_rs_http::Response::builder().body("units"))
-                        }),
-                    );
+                    routes.route_any("/units", crate::answering("units"));
                 })
                 .carries::<Units>()
                 .owned_by("CarryingMount"),

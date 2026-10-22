@@ -208,7 +208,7 @@ impl PoemAdapter {
         cors: Option<ServedCorsPolicy>,
         compression: bool,
     ) -> BoxEndpoint {
-        let mut endpoint: PoemEndpoint = to_poem(inner).boxed();
+        let mut endpoint: PoemEndpoint = ToPoem(inner).boxed();
         if compression {
             endpoint = Compressed {
                 decoding: Restored(endpoint).with(Compression::new()),
@@ -222,7 +222,7 @@ impl PoemAdapter {
             }
             .boxed();
         }
-        BoxEndpoint::new(from_poem(endpoint))
+        BoxEndpoint::new(FromPoem(endpoint))
     }
 
     /// `uri`'s query string decoded into `T`, or what the decoder refused, in
@@ -825,17 +825,6 @@ fn error_to_poem(error: HttpError) -> poem::Error {
     }
 }
 
-/// The [`HttpError`] a poem error carries, taken out to be rendered as nestrs
-/// renders it: poem's own rendering would replace the response's extensions with
-/// its error's.
-fn take_carried(error: poem::Error) -> std::result::Result<HttpError, poem::Error> {
-    if error.is::<Carried>() {
-        Ok(error_from_poem(error))
-    } else {
-        Err(error)
-    }
-}
-
 /// A poem body as nestrs's: both wrap one box, which moves.
 fn body_from_poem(body: poem::Body) -> Body {
     Body::from_boxed(body.into())
@@ -847,15 +836,6 @@ fn body_to_poem(body: Body) -> poem::Body {
 }
 
 /// A poem endpoint answering nestrs's requests.
-fn from_poem<E: poem::Endpoint + 'static>(endpoint: E) -> impl Endpoint {
-    FromPoem(endpoint)
-}
-
-/// A nestrs endpoint answering poem's requests.
-fn to_poem<E: Endpoint>(endpoint: E) -> impl poem::Endpoint<Output = poem::Response> {
-    ToPoem(endpoint)
-}
-
 struct FromPoem<E>(E);
 
 impl<E: poem::Endpoint + 'static> Endpoint for FromPoem<E> {
@@ -868,6 +848,7 @@ impl<E: poem::Endpoint + 'static> Endpoint for FromPoem<E> {
     }
 }
 
+/// A nestrs endpoint answering poem's requests.
 struct ToPoem<E>(E);
 
 impl<E: Endpoint> poem::Endpoint for ToPoem<E> {
@@ -959,10 +940,11 @@ fn addr(socket: Option<SocketAddr>) -> poem::Addr {
 /// `Query<T>`'s rejection is transparent over its serde error, so that one is
 /// read off the type.
 fn render_error(err: poem::Error) -> poem::Response {
-    let err = match take_carried(err) {
-        Ok(carried) => return response_to_poem(carried.answer()),
-        Err(err) => err,
-    };
+    // Taken out and rendered as nestrs renders it: poem's own rendering would
+    // replace the response's extensions with its error's.
+    if err.is::<Carried>() {
+        return response_to_poem(error_from_poem(err).answer());
+    }
     if let Some(refused) = media_type_refusal(&err) {
         return response_to_poem(refused.answer());
     }
@@ -1503,13 +1485,13 @@ mod tests {
         let nestrs = crate::endpoint_fn(|req: Request| async move {
             Ok(Response::builder().body(format!("nestrs saw {}", req.uri().path())))
         });
-        let answer = poem::Endpoint::get_response(&to_poem(nestrs), poem_get("/here")).await;
+        let answer = poem::Endpoint::get_response(&ToPoem(nestrs), poem_get("/here")).await;
         assert_eq!(poem_text(answer).await, "nestrs saw /here");
 
         let failing = poem::endpoint::make(|_req: poem::Request| async {
             Err::<String, _>(poem::Error::new(Busy, StatusCode::SERVICE_UNAVAILABLE))
         });
-        let refused = from_poem(failing)
+        let refused = FromPoem(failing)
             .call(Request::builder().finish())
             .await
             .unwrap_err();

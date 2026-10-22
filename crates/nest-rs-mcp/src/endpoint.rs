@@ -278,15 +278,16 @@ struct SessionCap {
 
 impl SessionCap {
     /// The answer refusing `req`, when it would open a session past the cap —
-    /// the body read and handed back otherwise. A `caller` no session could
-    /// be bound to reads that refusal instead, never told to retry.
+    /// the body read and handed back otherwise. A principal `correlation`
+    /// names that no session could be bound to is told why instead, never to
+    /// retry.
     ///
     /// Only a full mount reads the body, and only of a `POST` naming no session:
     /// an `initialize` is the one message that opens a session, and a stateless
     /// request is served at the cap. A creation racing past this check, or a
     /// session restored from the app's store past the cap, is refused by
     /// [`BoundedSessions`] itself, and answered [`refused`](Self::refused) too.
-    async fn refusal(&self, req: &mut Request, caller: &Principal) -> Option<Response> {
+    async fn refusal(&self, req: &mut Request, correlation: &Correlation) -> Option<Response> {
         if !self.legacy
             || req.method() != Method::POST
             || req.headers().contains_key(HEADER_SESSION_ID)
@@ -306,7 +307,7 @@ impl SessionCap {
             req.set_body(body);
             return None;
         }
-        if !self.sessions.binds(caller) {
+        if !self.sessions.binds(&Principal::of(correlation)) {
             say_no_subject();
             return Some(no_subject());
         }
@@ -618,9 +619,7 @@ where
         // Read once: two reads would mint two ids for one operation.
         let correlation = nest_rs_core::__private::current_correlation()
             .unwrap_or_else(|| Correlation::minted(None));
-        // Past the request's guards: the principal its session is bound to.
-        let caller = Principal::of(&correlation);
-        if let Some(refused) = self.session_cap.refusal(&mut req, &caller).await {
+        if let Some(refused) = self.session_cap.refusal(&mut req, &correlation).await {
             return Ok(refused);
         }
         if let Some(undeclared) = &self.undeclared
@@ -639,6 +638,8 @@ where
         // A `GET` is the session's standalone stream, with no end of its own.
         let standalone = req.method() == Method::GET;
 
+        // Past the request's guards: the principal its session is bound to.
+        let caller = Principal::of(&correlation);
         // Also installed here, for an operation rmcp resolves inline.
         let (response, refused) = BoundedSessions::answering(
             caller,

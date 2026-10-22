@@ -308,13 +308,13 @@ impl BoundedSessions {
             .map(is_caller)
     }
 
-    /// Bind session `id` to the principal the request being answered is
-    /// served for.
-    fn bind(&self, id: SessionId) {
+    /// Bind session `id` to `owner`, the principal the request being answered
+    /// is served for.
+    fn bind(&self, id: SessionId, owner: Principal) {
         self.owners
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, caller());
+            .insert(id, owner);
     }
 
     /// Refuse, at `call`, the request being answered a session another
@@ -377,7 +377,8 @@ impl SessionManager for BoundedSessions {
     /// A session opens only for a principal it can be bound to, and under the
     /// cap.
     async fn create_session(&self) -> Result<(SessionId, Self::Transport), Self::Error> {
-        if !self.binds(&caller()) {
+        let owner = caller();
+        if !self.binds(&owner) {
             return Err(Self::no_subject());
         }
         let _creating = self.creating.lock().await;
@@ -385,7 +386,7 @@ impl SessionManager for BoundedSessions {
             return Err(self.full());
         }
         let (id, transport) = said("create_session", self.inner.create_session().await)?;
-        self.bind(id.clone());
+        self.bind(id.clone(), owner);
         Ok((id, transport))
     }
 
@@ -513,7 +514,7 @@ impl SessionManager for BoundedSessions {
             self.inner.restore_session(id.clone()).await,
         )?;
         if matches!(restored, RestoreOutcome::Restored(_)) {
-            self.bind(id);
+            self.bind(id, caller());
         }
         Ok(restored)
     }
@@ -942,11 +943,15 @@ mod tests {
             .expect("the freed place takes a new session");
     }
 
-    fn named_actor(actor: &str) -> Principal {
+    fn principal(actor: Option<&str>, tenant: Option<&str>) -> Principal {
         Principal {
-            actor: Some(actor.to_owned()),
-            tenant: None,
+            actor: actor.map(str::to_owned),
+            tenant: tenant.map(str::to_owned),
         }
+    }
+
+    fn named_actor(actor: &str) -> Principal {
+        principal(Some(actor), None)
     }
 
     /// A session `owner` opened on `sessions`.
@@ -1065,13 +1070,6 @@ mod tests {
         );
     }
 
-    fn principal(actor: Option<&str>, tenant: Option<&str>) -> Principal {
-        Principal {
-            actor: actor.map(str::to_owned),
-            tenant: tenant.map(str::to_owned),
-        }
-    }
-
     /// Only the subject is unique to a principal: the tenant alone is shared
     /// by every machine client of it, and no tenant by every caller naming
     /// none. A public mount binds the anonymous caller, the session id its
@@ -1132,28 +1130,24 @@ mod tests {
         opened_by(&one_place(), ANONYMOUS).await;
     }
 
-    /// The app's store holding one session's state, as a deployment's would.
-    #[derive(Default)]
-    struct OneSession(std::sync::Mutex<Option<SessionState>>);
+    /// The app's store holding one session's state, as a deployment's would,
+    /// and refusing to change it.
+    struct OneSession(SessionState);
+
+    const READ_ONLY: &str = "the store is read-only";
 
     #[async_trait::async_trait]
     impl SessionStore for OneSession {
         async fn load(&self, _: &str) -> Result<Option<SessionState>, SessionStoreError> {
-            Ok(self
-                .0
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone())
+            Ok(Some(self.0.clone()))
         }
 
-        async fn store(&self, _: &str, state: &SessionState) -> Result<(), SessionStoreError> {
-            *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(state.clone());
-            Ok(())
+        async fn store(&self, _: &str, _: &SessionState) -> Result<(), SessionStoreError> {
+            Err(READ_ONLY.into())
         }
 
         async fn delete(&self, _: &str) -> Result<(), SessionStoreError> {
-            *self.0.lock().unwrap_or_else(PoisonError::into_inner) = None;
-            Ok(())
+            Err(READ_ONLY.into())
         }
     }
 
@@ -1165,9 +1159,7 @@ mod tests {
         for owner in [principal(None, Some("acme")), ANONYMOUS] {
             let mut params = handshake(None);
             put_principal(&mut params, &owner);
-            let held = Arc::new(OneSession(std::sync::Mutex::new(Some(SessionState::new(
-                params,
-            )))));
+            let held = Arc::new(OneSession(SessionState::new(params)));
 
             let logs = LogCapture::install();
             let gated = ReportedStore::new(held.clone(), Posture::Gated);

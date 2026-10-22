@@ -364,6 +364,47 @@ impl PoolOnlyTool {
 #[module(providers = [PoolOnlyTool, PoolOnlyMcp])]
 struct PoolOnlyModule;
 
+/// Call `tool` on `path` with no arguments as a `2026-07-28` client does,
+/// statelessly: no session opens, so none needs a caller to be bound to.
+async fn call_tool_statelessly(
+    client: &nest_rs_testing::TestClient,
+    path: &str,
+    tool: &str,
+) -> String {
+    let version = nest_rs_mcp::ProtocolVersion::LATEST;
+    nest_rs_testing::mcp::post_message_with(
+        client,
+        path,
+        None,
+        None,
+        &[
+            ("mcp-protocol-version", version.as_str()),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", tool),
+        ],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": tool,
+                "arguments": {},
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": version.as_str(),
+                    "io.modelcontextprotocol/clientInfo": { "name": "nest-rs-mcp", "version": "0" },
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+            },
+        }),
+    )
+    .await
+    .0
+    .into_body()
+    .into_string()
+    .await
+    .expect("a response body")
+}
+
 #[tokio::test]
 async fn a_global_guard_that_only_checks_mcp_still_refuses_the_operation() {
     let app = TestApp::builder()
@@ -375,7 +416,7 @@ async fn a_global_guard_that_only_checks_mcp_still_refuses_the_operation() {
 
     // No guard at the request names a caller, so no session opens for one:
     // a stateless call reaches the operation.
-    let body = crate::call_tool_statelessly(app.http(), "/mcp/pool-only", "ping").await;
+    let body = call_tool_statelessly(app.http(), "/mcp/pool-only", "ping").await;
 
     assert_eq!(
         POOL_ONLY_MCP_CALLS.load(Ordering::SeqCst),

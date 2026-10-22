@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy, bearer_token};
+use nest_rs_core::problem::code;
 use nest_rs_core::{AmbientValue, injectable, module};
 use nest_rs_guards::guard;
 use nest_rs_http::{Request, StatusCode};
@@ -352,18 +353,14 @@ async fn a_principal_naming_no_subject_is_refused_a_session() {
     for named in ["-@acme", "-@acme", "-"] {
         let refused = initialize_as(&app, named).await;
         refused.assert_status(StatusCode::FORBIDDEN);
-        assert!(
-            !refused.0.headers().contains_key("mcp-session-id"),
-            "{named} is handed no session"
-        );
-        let (_, content_type, body) = read(refused).await;
+        refused.assert_header_is_not_exist("mcp-session-id");
+        refused.assert_content_type("application/problem+json");
+        let problem: serde_json::Value = refused.json().await.value().deserialize();
         assert_eq!(
-            content_type.as_deref(),
-            Some("application/problem+json"),
-            "{named}"
+            problem["code"],
+            code::FORBIDDEN.as_str(),
+            "{named}: {problem}"
         );
-        let problem: serde_json::Value = serde_json::from_str(&body).expect("a problem document");
-        assert_eq!(problem["code"], "FORBIDDEN", "{named}: {problem}");
         assert!(
             problem["detail"].is_string(),
             "{named} reads why: {problem}"
@@ -408,7 +405,7 @@ async fn a_full_mount_refuses_a_principal_naming_no_subject_for_its_subject() {
 
     let refused = initialize_as(&app, "-@acme").await;
     refused.assert_status(StatusCode::FORBIDDEN);
-    assert!(!refused.0.headers().contains_key("retry-after"));
+    refused.assert_header_is_not_exist("retry-after");
     logs.expect_one("nest_rs::mcp", NO_SUBJECT);
     logs.expect_none(
         "nest_rs::mcp",

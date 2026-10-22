@@ -1,3 +1,4 @@
+use nest_rs::core::problem::code;
 use nest_rs::http::{StatusCode, header};
 use nest_rs::testing::mcp::{call_method, initialize_request, open_session, post_message};
 use serde_json::{Value, json};
@@ -91,11 +92,14 @@ async fn a_token_naming_no_subject_opens_no_session() {
     .await;
 
     refused.assert_status(StatusCode::FORBIDDEN);
-    assert!(!refused.0.headers().contains_key("mcp-session-id"));
-    let problem: Value =
-        serde_json::from_slice(&refused.0.into_body().into_bytes().await.expect("a body"))
-            .expect("a problem document");
-    assert_eq!(problem["code"], "FORBIDDEN", "{problem}");
+    refused.assert_header_is_not_exist("mcp-session-id");
+    refused
+        .json()
+        .await
+        .value()
+        .object()
+        .get("code")
+        .assert_string(code::FORBIDDEN.as_str());
 }
 
 #[tokio::test]

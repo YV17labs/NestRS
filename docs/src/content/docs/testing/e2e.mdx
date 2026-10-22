@@ -22,9 +22,16 @@ never trips.
 
 ```rust title="apps/api/tests/e2e/main.rs (from the demo, abridged)"
 use api::ApiModule;
+use features::authn::AuthnGuard;
+use features::authz::AuthzGuard;
 use nest_rs::authn::AuthnConfig;
+use nest_rs::guards::{GuardSpec, guard};
 use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
 // …
+
+pub(crate) fn global_guards() -> [GuardSpec; 2] {
+    [guard::<AuthnGuard>(), guard::<AuthzGuard>()]
+}
 
 pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
     boot_with(TestApp::builder()).await
@@ -36,6 +43,7 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
         .await
         .expect("create + migrate a throwaway database");
     let app = builder
+        .use_guards_global(global_guards())
         .module::<ApiModule>()
         .provide_arc(db.connection())
         .provide(AuthnConfig {
@@ -49,6 +57,11 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
     (db, app)
 }
 ```
+
+`global_guards()` is the list the api's `main` passes to `use_guards_global`.
+A global seam lives on the builder, outside the module tree, so the suite
+repeats it. Without it, every route runs, and the OpenAPI document describes
+it, without the guards the binary puts in front of it.
 
 Each test module reaches for that `boot()` and the token helpers beside it:
 

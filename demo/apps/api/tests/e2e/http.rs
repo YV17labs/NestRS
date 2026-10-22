@@ -1,28 +1,11 @@
-use api::ApiModule;
-use nest_rs::authn::AuthnConfig;
 use nest_rs::http::{StatusCode, header};
-use nest_rs::testing::{EphemeralDatabase, TestApp};
 use serde_json::json;
 
 use crate::*;
 
 #[tokio::test]
 async fn responses_are_gzip_compressed_when_the_client_accepts_it() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let app = TestApp::builder()
-        .module::<ApiModule>()
-        .provide_arc(db.connection())
-        .provide(AuthnConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(AUDIENCE.into()),
-            ..Default::default()
-        })
-        .build()
-        .await
-        .expect("ApiModule boots on a compression-enabled transport");
-    let _db = db;
+    let (_db, app) = boot().await;
     let bearer = format!("Bearer {}", login().await);
 
     let compressed = app

@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use api::ApiModule;
 
-use crate::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, token_for, token_with_sub};
+use crate::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, global_guards, token_for, token_with_sub};
 
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -131,6 +131,7 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
         .await
         .expect("create + migrate a throwaway database");
     let served = HeadlessApp::builder()
+        .use_guards_global(global_guards())
         .module::<ApiModule>()
         .provide_arc(db.connection())
         .provide(AuthnConfig {

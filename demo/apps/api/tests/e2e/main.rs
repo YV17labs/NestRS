@@ -19,7 +19,10 @@ mod subscription;
 mod users;
 
 use api::ApiModule;
+use features::authn::AuthnGuard;
+use features::authz::AuthzGuard;
 use nest_rs::authn::AuthnConfig;
+use nest_rs::guards::{GuardSpec, guard};
 use nest_rs::http::{StatusCode, header};
 use nest_rs::testing::TestResponse;
 use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
@@ -27,6 +30,10 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, RedisDatabase};
+
+pub(crate) fn global_guards() -> [GuardSpec; 2] {
+    [guard::<AuthnGuard>(), guard::<AuthzGuard>()]
+}
 
 pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
     boot_with(TestApp::builder()).await
@@ -41,6 +48,7 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
         .await
         .expect("create + migrate a throwaway database");
     let app = builder
+        .use_guards_global(global_guards())
         .module::<ApiModule>()
         .provide_arc(db.connection())
         .provide(AuthnConfig {

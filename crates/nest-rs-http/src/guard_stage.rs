@@ -324,7 +324,7 @@ pub(crate) fn denial_response(denial: &Denial) -> Response {
 fn problem_response(denial: &Denial) -> Response {
     let status =
         StatusCode::from_u16(denial.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let mut problem = ProblemDetails::from_status(status).with_code(denial_code(denial));
+    let mut problem = ProblemDetails::about_blank(status).with_code(denial_code(denial));
     if status.is_client_error() {
         problem = problem.with_detail(denial.message().to_owned());
     }

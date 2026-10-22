@@ -976,11 +976,14 @@ const TIMEOUT_REASON: &str = "timeout";
 
 fn error_frame(event: &str, error: &crate::WsError) -> String {
     WsEnvelope::encode(event, error).unwrap_or_else(|_| {
-        format!(
-            r#"{{"event":"error","data":{{"error":"{}","errors":{{"code":"{}"}}}}}}"#,
-            nest_rs_core::OPAQUE_CLIENT_MESSAGE,
-            nest_rs_core::problem::code::INTERNAL,
-        )
+        serde_json::json!({
+            "event": "error",
+            "data": {
+                "error": nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+                "errors": { "code": nest_rs_core::problem::code::INTERNAL.as_str() },
+            },
+        })
+        .to_string()
     })
 }
 

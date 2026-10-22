@@ -106,7 +106,7 @@ impl ProblemDetails {
         // `Problem::new` holds its status to 400..=599, every one of them valid.
         let status =
             StatusCode::from_u16(problem.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        let document = Self::from_status(status).with_code(problem.code());
+        let document = Self::about_blank(status).with_code(problem.code());
         match problem.detail() {
             Some(detail) => document.with_detail(detail),
             None => document,
@@ -152,17 +152,23 @@ impl ProblemDetails {
     /// assert!(ProblemDetails::from_status(StatusCode::METHOD_NOT_ALLOWED).extensions.is_empty());
     /// ```
     pub fn from_status(status: StatusCode) -> Self {
-        let problem = Self {
+        let problem = Self::about_blank(status);
+        match status_class(status) {
+            Some(class) => problem.with_code(class),
+            None => problem,
+        }
+    }
+
+    /// `about:blank` and `status`'s reason phrase, no member beside them: the
+    /// base a caller naming the class itself puts its `code` on.
+    pub(crate) fn about_blank(status: StatusCode) -> Self {
+        Self {
             type_uri: "about:blank".into(),
             title: reason_phrase(status).into(),
             status,
             detail: None,
             instance: None,
             extensions: serde_json::Map::new(),
-        };
-        match status_class(status) {
-            Some(class) => problem.with_code(class),
-            None => problem,
         }
     }
 

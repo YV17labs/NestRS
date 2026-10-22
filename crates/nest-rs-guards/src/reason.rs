@@ -1,6 +1,7 @@
 //! A [`Denial`] as the edges with no status line answer it — GraphQL, a
 //! WebSocket frame, a JSON-RPC error: one sentence, one class, and the evidence
-//! a client acts on, worded once for every in-band edge.
+//! a client acts on, worded once for every in-band edge; its class
+//! ([`denial_code`]) is every edge's, HTTP's problem document included.
 
 use nest_rs_core::Code;
 use nest_rs_core::problem::code;
@@ -17,7 +18,8 @@ pub fn client_message(denial: &Denial) -> &str {
     }
 }
 
-/// The [`Code`] a denial is known by where it has no status line: the member a
+/// The [`Code`] a denial is known by on every edge: the `code` member of
+/// HTTP's problem document, and on the edges with no status line the member a
 /// `Problem`'s class rides under there too.
 pub fn denial_code(denial: &Denial) -> Code {
     match denial {

@@ -117,11 +117,12 @@ fn refuse(cx: &mut UnitContext<'_>, refused: Refused) -> Failure {
 ///
 /// No status line: the message, plus `code`, `reason` and `requiredScopes`
 /// under the frame's `data.errors`, where a `Valid<T>` rejection's details
-/// ride. An internal denial is opaque, and an unavailable dependency answers its
-/// condition, never what the guard said of it.
+/// ride. An internal denial answers the opaque frame, the `INTERNAL` code its
+/// only member, and an unavailable dependency answers its condition, never
+/// what the guard said of it.
 pub fn denial_to_ws_error(denial: Denial) -> WsError {
     if matches!(denial, Denial::Internal(_)) {
-        return WsError::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+        return WsError::internal();
     }
     WsError::with_details(
         client_message(&denial),
@@ -340,5 +341,33 @@ mod tests {
         assert_eq!(json["errors"]["reason"], "unavailable");
         assert_eq!(json["errors"]["code"], "UNAVAILABLE");
         assert_eq!(json["errors"]["retryAfterSeconds"], 7);
+    }
+
+    /// An internal denial is the opaque frame every failure the client is not
+    /// told of answers, its class named; every denial names the code its class
+    /// is known by on every edge.
+    #[test]
+    fn every_denial_names_its_class_and_an_internal_one_answers_opaquely() {
+        use nest_rs_guards::__private::denial_code;
+
+        crate::testing::assert_opaque(&denial_to_ws_error(Denial::internal(
+            "redis at 10.0.3.7 refused",
+        )));
+        for denial in [
+            Denial::unauthorized("missing bearer token"),
+            Denial::invalid_credential("the token expired", "invalid_token"),
+            Denial::forbidden("not yours"),
+            Denial::insufficient_scope(["posts:write"], "narrow"),
+            Denial::rate_limited(30, "slow down"),
+            Denial::unavailable(Some(7), "store at 10.0.0.1 down"),
+            Denial::internal("redis at 10.0.3.7 refused"),
+        ] {
+            let frame = denial_to_ws_error(denial.clone());
+            assert_eq!(
+                frame.errors.as_ref().map(|errors| &errors["code"]),
+                Some(&json!(denial_code(&denial).as_str())),
+                "{denial:?}",
+            );
+        }
     }
 }

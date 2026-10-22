@@ -170,8 +170,9 @@ A refusal reads the same here as on HTTP, GraphQL and MCP. A `4xx`
 denial carries its own sentence, and its `errors` adds what the client
 acts on: `retryAfterSeconds` for a rate limit, `requiredScopes` for a
 token too narrow. A `5xx` never carries the guard's text: an internal
-denial answers `"internal error"` (`nest_rs_core::OPAQUE_CLIENT_MESSAGE`),
-and an unavailable dependency `"service unavailable"`
+denial answers the opaque frame every unexplained failure answers,
+`"internal error"` (`nest_rs_core::OPAQUE_CLIENT_MESSAGE`) with
+`code: "INTERNAL"`, and an unavailable dependency `"service unavailable"`
 (`UNAVAILABLE_CLIENT_MESSAGE`) with `code: "UNAVAILABLE"` and, when
 known, `retryAfterSeconds`.
 

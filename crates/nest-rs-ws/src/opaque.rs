@@ -1,7 +1,8 @@
 //! A failure the client is owed no word of, said where it is met: `.opaque()`
 //! turns any error into the [`WsError`] a handler returns, answering
-//! [`OPAQUE_CLIENT_MESSAGE`] and filing the whole chain at `error`, whatever the
-//! error's type would otherwise have answered.
+//! [`OPAQUE_CLIENT_MESSAGE`](nest_rs_core::OPAQUE_CLIENT_MESSAGE) under the
+//! `INTERNAL` code and filing the whole chain at `error`, whatever the error's
+//! type would otherwise have answered.
 //!
 //! ```
 //! # use std::sync::Arc;
@@ -51,8 +52,6 @@
 //! **A deliberate error is not this.** A validation rejection, a `Denial`, a
 //! message a client can act on — those exist to be *read*. Return them directly.
 
-use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
-
 use crate::envelope::WsError;
 
 /// Turn a failure the client must not read into one it may.
@@ -79,7 +78,7 @@ where
                 error = %nest_rs_core::error_message(&*err),
                 "websocket message failed",
             );
-            WsError::new(OPAQUE_CLIENT_MESSAGE)
+            WsError::internal()
         })
     }
 }
@@ -87,6 +86,8 @@ where
 #[cfg(test)]
 mod tests {
     use std::fmt::Display;
+
+    use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
 
     use super::*;
 
@@ -112,14 +113,12 @@ mod tests {
         );
     }
 
+    /// No per-field detail — that is for rejections a client can act on —
+    /// and the class a client branches on, as every other edge names it.
     #[test]
-    fn the_structured_member_is_left_empty() {
+    fn the_structured_member_names_the_internal_class_alone() {
         let out: Result<(), WsError> = Err(Leaky).opaque();
-        assert!(
-            out.expect_err("a failure").errors.is_none(),
-            "an opaque failure has no per-field detail to offer — that member is \
-             for rejections a client can act on",
-        );
+        crate::testing::assert_opaque(&out.expect_err("a failure"));
     }
 
     #[test]

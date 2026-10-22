@@ -55,6 +55,7 @@
 use std::error::Error as StdError;
 
 use nest_rs_core::__private::{Withheld, caught_problem, find_in_chain};
+use nest_rs_core::problem::code;
 use nest_rs_core::{DecodeError, Failure, Problem, ToProblem};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
@@ -64,8 +65,6 @@ use rmcp::transport::streamable_http_server::session::local::{
     LocalSessionManagerError, SessionError,
 };
 use rmcp::transport::streamable_http_server::session::store::SessionStoreError;
-
-use nest_rs_core::OPAQUE_CLIENT_MESSAGE as OPAQUE;
 
 /// Turn a failure the model must not read into one it may.
 ///
@@ -150,9 +149,10 @@ fn opaque_error(error: &(dyn StdError + 'static)) -> McpError {
     opaque_answer()
 }
 
-/// The opaque answer alone, for a failure whose cause is filed elsewhere.
+/// The opaque answer alone, for a failure whose cause is filed elsewhere: the
+/// `INTERNAL` class's, as every failure the model is not told of answers.
 pub(crate) fn opaque_answer() -> McpError {
-    McpError::internal_error(OPAQUE, None)
+    rendered(&Problem::new(500, code::INTERNAL))
 }
 
 /// The vocabulary `error`'s chain carries, else the opaque answer: the
@@ -592,6 +592,7 @@ fn say_session(link: &(dyn std::error::Error + 'static)) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::OPAQUE_CLIENT_MESSAGE as OPAQUE;
     use nest_rs_core::Problem;
 
     use super::*;
@@ -653,6 +654,23 @@ mod tests {
             rendered.contains(OPAQUE),
             "…and what it does say is the one constant message: {rendered}",
         );
+        crate::testing::assert_opaque(&err);
+    }
+
+    /// Whichever way a failure the model is not told of is answered — the
+    /// error no rule names, the class's own problem, the answer a site that
+    /// cannot run gives — it is one error, the `INTERNAL` class named.
+    #[test]
+    fn every_opaque_answer_names_the_internal_class() {
+        let _logs = nest_rs_testing::LogCapture::install();
+        for answer in [
+            OperationFailure::unanswered(Failure::new(std::io::Error::other("secret 42")))
+                .into_answer(),
+            problem_error(&Problem::new(500, code::INTERNAL)),
+            opaque_answer(),
+        ] {
+            crate::testing::assert_opaque(&answer);
+        }
     }
 
     #[test]
@@ -743,7 +761,7 @@ mod tests {
 
         let logs = nest_rs_testing::LogCapture::install();
         let error = problem_error(&LedgerDown);
-        assert_eq!(error.message, OPAQUE);
+        crate::testing::assert_opaque(&error);
         assert!(!format!("{error:?}").contains("10.0.0.1"), "{error:?}");
         let failed = logs.expect_one("nest_rs::mcp", "mcp operation failed");
         assert!(
@@ -868,7 +886,7 @@ mod tests {
         let frozen = ErrorReport(Frozen).into_failure();
         assert!(frozen.failure.find::<Frozen>().is_some());
         let frozen = frozen.into_answer();
-        assert_eq!(frozen.message, OPAQUE);
+        crate::testing::assert_opaque(&frozen);
         assert!(!format!("{frozen:?}").contains("4111"), "{frozen:?}");
         let event = logs.expect_one(crate::TARGET, "mcp operation failed");
         assert_eq!(

@@ -75,6 +75,8 @@ mod propagate;
 mod registry;
 mod scope;
 mod sessions;
+#[cfg(test)]
+mod testing;
 pub mod unit;
 mod view;
 

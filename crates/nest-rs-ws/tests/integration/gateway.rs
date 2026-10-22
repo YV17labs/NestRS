@@ -377,7 +377,13 @@ async fn result_err_becomes_an_opaque_error_frame() {
     match reply {
         WsReply::Error(msg) => {
             assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE, "{msg}");
-            assert!(msg.errors.is_none(), "{msg:?}");
+            assert_eq!(
+                msg.errors,
+                Some(serde_json::json!({
+                    "code": nest_rs_core::problem::code::INTERNAL.as_str()
+                })),
+                "the class alone, no per-field detail: {msg:?}",
+            );
         }
         _ => panic!("expected Error for Result::Err"),
     }
@@ -2109,8 +2115,11 @@ async fn a_message_handler_that_panics_files_panic_and_its_client_is_answered() 
     let answer = socket.next_envelope().await;
     assert_eq!(answer["event"], "explode");
     assert_eq!(
-        answer["data"]["error"],
-        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        answer["data"],
+        serde_json::json!({
+            "error": nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+            "errors": { "code": nest_rs_core::problem::code::INTERNAL.as_str() },
+        }),
         "{answer}"
     );
     assert!(!answer.to_string().contains("sk_live"), "{answer}");

@@ -120,8 +120,11 @@ Review a new edge, or a change to one, against it:
     failure an exception filter answers `4xx` files nothing. `Problem`, `Code` and `ToProblem` are the
     one client-error contract: a `Problem` answers in the edge's standard
     form (a `code` member, `extensions.code`, `errors.code`, `data.code`),
-    never with its detail on a `5xx`, a denial carries the same `code`
-    wherever it has no status line, and every code the framework emits is a
+    never with its detail on a `5xx`, a denial carries the same `code` on
+    every edge (`denial_code`), an opaque answer the `INTERNAL` one through
+    one constructor per edge, a problem HTTP builds from a status alone the
+    class core names for that status — none for a status no class names —
+    and every code the framework emits is a
     `nest_rs_core::problem::code` constant. The edge decides **by type**
     where it names the handler's error — GraphQL's, WS's and MCP's wrappers
     probe `ToProblem` before the chain — and a `Problem`, `PipeError` or decode failure its

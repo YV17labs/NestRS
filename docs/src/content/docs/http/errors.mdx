@@ -99,10 +99,26 @@ Constructors cover the well-known statuses — `bad_request`, `unauthorized`,
 `forbidden`, `not_found`, `conflict`, `unprocessable`, `internal` — and
 `from_status` any other. Each is `type: "about:blank"` with the status's phrase
 as its `title`: RFC 9457's spelling of a problem that says nothing beyond its
-status, the one every problem the framework renders carries. A `5xx` adds the
-`code` of its class — `UNAVAILABLE` for a `503`, `INTERNAL` for any other —
-and nothing more. A client keys on the `status`, on that `code`, or on a
-`type` of your own set with `.with_type(…)`. Builders extend the body:
+status, the one every problem the framework renders carries. A status that
+names one of the framework's classes adds that class's `code`: the code a
+`Problem` of that class carries on every edge, so a `#[crud]` refusal, a
+guard's denial or a failure the client is not told of reads here as it does
+on GraphQL, WebSockets and MCP:
+
+| Status | `code` |
+|--------|--------|
+| `400`, `422` | `INVALID_ARGUMENT` |
+| `401` | `UNAUTHENTICATED` |
+| `403` | `FORBIDDEN` |
+| `404` | `NOT_FOUND` |
+| `409` | `CONFLICT` |
+| `429` | `RATE_LIMITED` |
+| `503` | `UNAVAILABLE` |
+| any other `5xx` | `INTERNAL` |
+
+A status no class names — a `405`, a `413`, a `415` — carries no `code`. A
+client keys on the `status`, on that `code`, or on a `type` of your own set
+with `.with_type(…)`. Builders extend the body:
 
 | Builder | Field |
 |---------|-------|
@@ -122,7 +138,8 @@ automatically; an absent `detail` or `instance` is omitted from the body
   "title": "Not Found",
   "status": 404,
   "detail": "post 9c3d… does not exist",
-  "instance": "/posts/9c3d…"
+  "instance": "/posts/9c3d…",
+  "code": "NOT_FOUND"
 }
 ```
 
@@ -203,9 +220,10 @@ Every error the HTTP transport renders — a handler's `ServiceError`, an
 inline `ProblemDetails`, a validation rejection, and even a raw router
 error (an unmounted-route `404`, a `413` over the body cap) — comes back
 as one `application/problem+json` body. The transport lifts any leftover
-plain-text error onto the RFC 9457 envelope at its edge; a `5xx` answers its
-class's document above — `code: UNAVAILABLE` for a `503` — with no `detail`,
-so a driver or panic message never reaches the wire.
+plain-text error onto the RFC 9457 envelope at its edge, under its status's
+`code` from the table above — an unmounted route's `404` reads `NOT_FOUND`,
+as a `#[crud]` row nobody can see does; a `5xx` answers its class's document
+with no `detail`, so a driver or panic message never reaches the wire.
 
 An error nobody meant for the client — an `anyhow` chain, an
 `HttpError::new(e, StatusCode::INTERNAL_SERVER_ERROR)` — is never lost on the way: it answers the
@@ -231,7 +249,11 @@ error type (`Result<T, AuthError>`).
 There is **no `AbilityError`** — an ability denial is not an error. It is
 a guard denial, returned as an `Ok(403)` response by `AuthzGuard`, so it
 never travels the `?`/`ResponseError` path at all (see
-[Guards](/fundamentals/guards/)).
+[Guards](/fundamentals/guards/)). Its document's `code` is the one the
+denial's class carries on every edge: `UNAUTHENTICATED` for a missing or
+rejected credential, `FORBIDDEN`, `INSUFFICIENT_SCOPE` for a token too
+narrow, `RATE_LIMITED`, `UNAVAILABLE`, `INTERNAL` — so a client branches on
+one code whether the refusal reached it over HTTP, GraphQL, WebSockets or MCP.
 
 A feature only writes its own error enum for genuinely domain-specific
 wire contracts (a custom error code clients key on) or for security-opaque

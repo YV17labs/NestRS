@@ -17,7 +17,7 @@ use nest_rs_core::{Container, Failure, Handler, Outcome, Peer, Settled, UnitCont
 use nest_rs_guards::Denial;
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeSpec, PipeSpecs};
 
-use crate::envelope::{Rendered, WsReply, caught_rendered, chain_rendered};
+use crate::envelope::{Rendered, WsError, WsReply, caught_rendered, chain_rendered};
 use crate::gateway::Gateway;
 use crate::guard::denial_to_ws_error;
 use crate::server::WsClient;
@@ -165,7 +165,7 @@ impl Answered {
 
     /// The opaque failure, its cause said where it was met.
     pub(crate) fn opaque() -> Self {
-        Self::failed(WsReply::error(nest_rs_core::OPAQUE_CLIENT_MESSAGE))
+        Self::failed(WsReply::Error(WsError::internal()))
     }
 }
 
@@ -288,4 +288,22 @@ pub(crate) fn refused() -> Answered {
     Answered::failed(WsReply::Error(denial_to_ws_error(Denial::internal(
         "the message's site did not compose",
     ))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A unit that could not begin and a site that did not compose answer the
+    /// one opaque frame, failing the unit.
+    #[test]
+    fn what_the_message_cannot_run_answers_opaquely() {
+        for answered in [Answered::opaque(), refused()] {
+            assert!(answered.failed, "a failed unit never commits");
+            let WsReply::Error(frame) = answered.reply else {
+                panic!("an error frame");
+            };
+            crate::testing::assert_opaque(&frame);
+        }
+    }
 }

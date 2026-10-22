@@ -519,9 +519,17 @@ fn timed_out(method: &str, operation: Option<&str>, timeout: Duration) -> McpErr
 const TIMEOUT_REASON: &str = "timeout";
 
 /// What rmcp is handed for an operation stopped before it settled — never a
-/// claim the work was done.
+/// claim the work was done, nor that the server failed: the `UNAVAILABLE`
+/// class an operation past its deadline answers. No client reads it today:
+/// rmcp drops the answer to a request its peer cancelled, and the transport
+/// ends the stream of an operation it stops.
 fn cancelled_before_completion() -> McpError {
-    McpError::internal_error("the operation was cancelled before it completed", None)
+    McpError::internal_error(
+        "the operation was cancelled before it completed",
+        Some(serde_json::json!({
+            "code": nest_rs_core::problem::code::UNAVAILABLE.as_str(),
+        })),
+    )
 }
 
 /// The JSON-RPC method an operation answers: one the protocol defines, which
@@ -981,6 +989,26 @@ mod tests {
             negotiated.protocol_version = THE_HOST_ANSWERS_WITH;
             Ok(negotiated)
         }
+    }
+
+    /// An operation stopped before it settled is no failure of the server's:
+    /// its answer says so in its own sentence, under the `503` class, as an
+    /// operation past its deadline does.
+    #[test]
+    fn an_operation_stopped_before_it_settled_names_the_unavailable_class() {
+        let stopped = cancelled_before_completion();
+
+        assert_eq!(stopped.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(
+            stopped.message,
+            "the operation was cancelled before it completed"
+        );
+        assert_eq!(
+            stopped.data,
+            Some(serde_json::json!({
+                "code": nest_rs_core::problem::code::UNAVAILABLE.as_str(),
+            })),
+        );
     }
 
     /// A direct call: rmcp reaches this through `initialize`, so no wire probe

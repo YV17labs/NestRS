@@ -16,7 +16,7 @@ use nest_rs_core::__private::{
     new_unit_context, pending_of, take_pending,
 };
 use nest_rs_core::{AmbientValue, Failure, Handler, UnitContext};
-use nest_rs_guards::__private::{RefusalMark, Refused, denial_of, failure_chain};
+use nest_rs_guards::__private::{RefusalMark, Refused, denial_code, denial_of, failure_chain};
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
 
 use crate::error::HttpError;
@@ -300,8 +300,9 @@ fn file_denial(guard: &'static str, denial: &Denial) {
 }
 
 /// A [`Denial`] as the HTTP response the edge answers: the RFC 9457
-/// `application/problem+json` envelope, a `4xx` reason as its `detail`, a
-/// `5xx` its class's document with no `detail`, so no internal text leaks.
+/// `application/problem+json` envelope under the `code` the denial's class
+/// carries on every edge, a `4xx` reason as its `detail`, a `5xx` its class's
+/// document with no `detail`, so no internal text leaks.
 pub fn denial_to_http_response(denial: Denial) -> Response {
     denial_response(&denial)
 }
@@ -323,7 +324,7 @@ pub(crate) fn denial_response(denial: &Denial) -> Response {
 fn problem_response(denial: &Denial) -> Response {
     let status =
         StatusCode::from_u16(denial.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let mut problem = ProblemDetails::from_status(status);
+    let mut problem = ProblemDetails::from_status(status).with_code(denial_code(denial));
     if status.is_client_error() {
         problem = problem.with_detail(denial.message().to_owned());
     }
@@ -412,6 +413,33 @@ mod tests {
         assert_eq!(json["status"], 401);
         assert_eq!(json["title"], "Unauthorized");
         assert_eq!(json["detail"], "missing bearer token");
+    }
+
+    /// Every denial's document carries the code its class is known by on
+    /// every edge, an insufficient scope's included, which its `403` alone
+    /// would name `FORBIDDEN`; both the response and the `Err` path say it.
+    #[tokio::test]
+    async fn every_denial_names_the_code_its_class_is_known_by() {
+        for denial in [
+            Denial::unauthorized("missing bearer token"),
+            Denial::invalid_credential("the token expired", "invalid_token"),
+            Denial::forbidden("not yours"),
+            Denial::insufficient_scope(["posts:write"], "narrow"),
+            Denial::rate_limited(30, "slow down"),
+            Denial::unavailable(Some(7), "store at 10.0.0.1 down"),
+            Denial::internal("redis at 10.0.3.7 refused"),
+        ] {
+            let class = denial_code(&denial).as_str();
+            for resp in [
+                denial_to_http_response(denial.clone()),
+                denial_to_http_error(denial.clone()).into_response(),
+            ] {
+                let bytes = resp.into_body().into_bytes().await.expect("body");
+                let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+                assert_eq!(json["code"], class, "{denial:?}: {json}");
+                assert!(!json.to_string().contains("10.0."), "{json}");
+            }
+        }
     }
 
     #[tokio::test]

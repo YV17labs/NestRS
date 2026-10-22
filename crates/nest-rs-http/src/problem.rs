@@ -37,8 +37,9 @@ pub(crate) fn problem_response(problem: &Problem) -> crate::Response {
 /// Every problem the framework builds from a status alone has one `type`,
 /// `about:blank`, and the status's reason phrase as its `title`: RFC 9457
 /// §4.2.1's spelling of a problem that means nothing beyond its status. A
-/// `5xx` adds the `code` member of its class and nothing else, so a server
-/// failure reads the same whichever part of the framework answered it. A
+/// status that names one of core's classes adds that class's `code` member and
+/// nothing else — the code a [`Problem`] of that class carries on every edge —
+/// so a problem reads the same whichever part of the framework answered it. A
 /// problem type of an app's own, which a client may key on, is set with
 /// [`with_type`](Self::with_type).
 #[derive(Debug, Clone, Serialize)]
@@ -105,7 +106,7 @@ impl ProblemDetails {
         // `Problem::new` holds its status to 400..=599, every one of them valid.
         let status =
             StatusCode::from_u16(problem.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        let document = Self::from_status(status).with_extension(CODE, problem.code().as_str());
+        let document = Self::from_status(status).with_code(problem.code());
         match problem.detail() {
             Some(detail) => document.with_detail(detail),
             None => document,
@@ -131,10 +132,12 @@ impl ProblemDetails {
     }
 
     /// The problem a bare [`StatusCode`] answers: `about:blank` and the
-    /// status's reason phrase (RFC 9457 §4.2.1); a `5xx` also carries the
-    /// `code` of its class, the document [`from_problem`](Self::from_problem)
-    /// gives that class's [`Problem`], so every server failure the framework
-    /// does not describe answers one document.
+    /// status's reason phrase (RFC 9457 §4.2.1), and the `code` of the class
+    /// the status names when core names one — the document
+    /// [`from_problem`](Self::from_problem) gives that class's [`Problem`], so
+    /// one class answers one document whoever answered it, a server failure
+    /// the framework does not describe included. A status no class names (a
+    /// `405`, a `413`, a `415`) carries no `code`.
     ///
     /// ```
     /// use nest_rs_http::{ProblemDetails, StatusCode};
@@ -144,7 +147,9 @@ impl ProblemDetails {
     /// assert!(failed.detail.is_none());
     /// let busy = ProblemDetails::from_status(StatusCode::SERVICE_UNAVAILABLE);
     /// assert_eq!(busy.extensions["code"], "UNAVAILABLE");
-    /// assert!(ProblemDetails::from_status(StatusCode::NOT_FOUND).extensions.is_empty());
+    /// let missing = ProblemDetails::from_status(StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.extensions["code"], "NOT_FOUND");
+    /// assert!(ProblemDetails::from_status(StatusCode::METHOD_NOT_ALLOWED).extensions.is_empty());
     /// ```
     pub fn from_status(status: StatusCode) -> Self {
         let problem = Self {
@@ -155,8 +160,8 @@ impl ProblemDetails {
             instance: None,
             extensions: serde_json::Map::new(),
         };
-        match server_error_class(status) {
-            Some(class) => problem.with_extension(CODE, class.as_str()),
+        match status_class(status) {
+            Some(class) => problem.with_code(class),
             None => problem,
         }
     }
@@ -231,14 +236,28 @@ impl ProblemDetails {
         self.extensions.insert(key.into(), value.into());
         self
     }
+
+    /// The `code` member a client branches on, the class every edge names the
+    /// same failure by.
+    pub(crate) fn with_code(self, class: Code) -> Self {
+        self.with_extension(CODE, class.as_str())
+    }
 }
 
-/// The code a server failure answering `status` is known by: `UNAVAILABLE`
-/// for a `503`, the server unable to serve the request in time, and
-/// `INTERNAL` for any other `5xx` — core's two classes, as its
-/// `Problem::client_message` reads them. `None` for a client error.
-fn server_error_class(status: StatusCode) -> Option<Code> {
+/// The class `status` names, as core's codes each name their status:
+/// `INVALID_ARGUMENT` for a `400` or a `422`, `UNAUTHENTICATED` for a `401`,
+/// `FORBIDDEN` for a `403`, `NOT_FOUND` for a `404`, `CONFLICT` for a `409`,
+/// `RATE_LIMITED` for a `429`, `UNAVAILABLE` for a `503`, the server unable to
+/// serve the request in time, and `INTERNAL` for any other `5xx`. `None` for a
+/// status no class names.
+fn status_class(status: StatusCode) -> Option<Code> {
     match status {
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => Some(code::INVALID_ARGUMENT),
+        StatusCode::UNAUTHORIZED => Some(code::UNAUTHENTICATED),
+        StatusCode::FORBIDDEN => Some(code::FORBIDDEN),
+        StatusCode::NOT_FOUND => Some(code::NOT_FOUND),
+        StatusCode::CONFLICT => Some(code::CONFLICT),
+        StatusCode::TOO_MANY_REQUESTS => Some(code::RATE_LIMITED),
         StatusCode::SERVICE_UNAVAILABLE => Some(code::UNAVAILABLE),
         status if status.is_server_error() => Some(code::INTERNAL),
         _ => None,
@@ -651,10 +670,59 @@ mod tests {
         assert_eq!(v, internal_document(), "the one opaque document");
     }
 
+    /// A client error answered from its status alone is the class's problem
+    /// whenever core names one for that status, as `#[crud]` and every other
+    /// edge answer it; a status no class names carries no `code`.
+    #[test]
+    fn a_client_status_naming_a_class_answers_its_class_s_problem() {
+        for (status, class) in [
+            (StatusCode::BAD_REQUEST, code::INVALID_ARGUMENT),
+            (StatusCode::UNAUTHORIZED, code::UNAUTHENTICATED),
+            (StatusCode::FORBIDDEN, code::FORBIDDEN),
+            (StatusCode::NOT_FOUND, code::NOT_FOUND),
+            (StatusCode::CONFLICT, code::CONFLICT),
+            (StatusCode::UNPROCESSABLE_ENTITY, code::INVALID_ARGUMENT),
+            (StatusCode::TOO_MANY_REQUESTS, code::RATE_LIMITED),
+        ] {
+            let bare = serde_json::to_value(ProblemDetails::from_status(status)).unwrap();
+            let problem = Problem::new(status.as_u16(), class);
+            let classed = serde_json::to_value(ProblemDetails::from_problem(&problem)).unwrap();
+            assert_eq!(bare, classed, "{status}");
+            assert_eq!(bare["code"], class.as_str(), "{status}");
+        }
+        for (named, status) in [
+            (ProblemDetails::bad_request(), StatusCode::BAD_REQUEST),
+            (ProblemDetails::unauthorized(), StatusCode::UNAUTHORIZED),
+            (ProblemDetails::forbidden(), StatusCode::FORBIDDEN),
+            (ProblemDetails::not_found(), StatusCode::NOT_FOUND),
+            (ProblemDetails::conflict(), StatusCode::CONFLICT),
+            (
+                ProblemDetails::unprocessable(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            assert_eq!(
+                serde_json::to_value(named).unwrap(),
+                serde_json::to_value(ProblemDetails::from_status(status)).unwrap(),
+                "{status}",
+            );
+        }
+        for classless in [
+            StatusCode::METHOD_NOT_ALLOWED,
+            StatusCode::NOT_ACCEPTABLE,
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::GONE,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ] {
+            let bare = ProblemDetails::from_status(classless);
+            assert!(bare.extensions.get("code").is_none(), "{classless}");
+        }
+    }
+
     /// A server failure answered from its status alone is its class's
     /// problem, `code` included and no `detail`: `UNAVAILABLE` for a `503`,
-    /// `INTERNAL` for any other `5xx`, as core's classes read them. A `4xx`
-    /// carries no code it was not given.
+    /// `INTERNAL` for any other `5xx`, as core's classes read them.
     #[test]
     fn a_server_status_answers_its_class_s_problem() {
         for (status, class) in [
@@ -681,13 +749,6 @@ mod tests {
             &std::fmt::Error,
         );
         assert_eq!(failed.extensions["code"], "INTERNAL");
-        for client in [
-            ProblemDetails::bad_request(),
-            ProblemDetails::not_found(),
-            ProblemDetails::from_status(StatusCode::METHOD_NOT_ALLOWED),
-        ] {
-            assert!(client.extensions.get("code").is_none(), "{}", client.status);
-        }
     }
 
     /// The `503` the request deadline answers, an empty body, is lifted onto

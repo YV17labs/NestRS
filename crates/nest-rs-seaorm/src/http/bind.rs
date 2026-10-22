@@ -213,6 +213,33 @@ mod tests {
         assert!(body.contains(nest_rs_core::UUID_V7_REQUIRED), "{body}");
     }
 
+    /// A refusal answers its class's document, the code `#[crud]`'s service
+    /// error and the in-band edges name it by.
+    #[tokio::test]
+    async fn a_refusal_answers_its_class_s_document() {
+        use nest_rs_core::Problem;
+        use nest_rs_core::problem::code;
+
+        for (unbound, class) in [
+            (Unbound::Denied, Problem::new(403, code::FORBIDDEN)),
+            (Unbound::Missing, Problem::new(404, code::NOT_FOUND)),
+            (
+                Unbound::NotV7,
+                Problem::new(400, code::INVALID_ARGUMENT)
+                    .with_detail(nest_rs_core::UUID_V7_REQUIRED),
+            ),
+        ] {
+            let response = unbound.into_http().into_response();
+            assert_eq!(response.status().as_u16(), class.status());
+            let body = response.into_body().into_string().await.expect("body");
+            assert_eq!(
+                document(&body),
+                serde_json::to_value(ProblemDetails::from_problem(&class)).expect("a document"),
+                "{body}",
+            );
+        }
+    }
+
     #[tokio::test]
     async fn db_errors_map_to_an_opaque_500_with_no_driver_text() {
         let answered = Unbound::Failed(ServiceError::Db(DbErr::Custom(

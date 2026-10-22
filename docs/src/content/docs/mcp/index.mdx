@@ -359,7 +359,15 @@ let rows = self.svc.list().await.opaque()?;
 ```
 
 The real error is logged at `error` on `nest_rs::mcp`, inside rmcp's own
-per-operation span; the model gets a constant `internal error`. Returning the
+per-operation span; the model gets the opaque answer, one JSON-RPC internal
+error whoever answered it — a constant `internal error`, and the class every
+edge names it by under `data`:
+
+```json
+{ "code": -32603, "message": "internal error", "data": { "code": "INTERNAL" } }
+```
+
+Returning the
 error itself does the same — an operation answering a `Result<T, E>` answers
 an `E` that says no problem opaquely, and files it — while keeping it typed for an
 [exception filter](#layers-around-an-operation). A *deliberate* error is the
@@ -368,7 +376,7 @@ directly and never route it through `opaque`.
 
 A tool that **panics** is answered the same way: rmcp runs it on a task of its
 own, so the panic is contained where the operation is dispatched, the client
-gets `internal error` instead of waiting out its own timeout, the
+gets that opaque answer instead of waiting out its own timeout, the
 `mcp.operation` line files `outcome="panic"`, and the panic's text goes to
 `nest_rs::mcp` at `error` — never to the model.
 

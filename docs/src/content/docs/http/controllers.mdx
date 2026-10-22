@@ -234,7 +234,7 @@ $ curl -sX POST http://localhost:3000/ \
     -H 'Content-Type: application/json' \
     -d '{"name":""}'
 {"type":"about:blank","title":"Bad Request",
- "status":400,"detail":"validation failed",
+ "status":400,"detail":"validation failed","code":"INVALID_ARGUMENT",
  "errors":{"name":[{"code":"length","message":null}]}}
 ```
 

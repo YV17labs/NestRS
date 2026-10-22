@@ -86,7 +86,7 @@ the handler body never runs:
 
 | Transport | A rejection becomes |
 |-----------|--------------------|
-| HTTP | RFC 9457 `problem+json` `400` (`{ "type": …, "title": "Bad Request", "status": 400, "detail": "must be a UUID v7" }`) |
+| HTTP | RFC 9457 `problem+json` `400` (`{ "type": …, "title": "Bad Request", "status": 400, "detail": "must be a UUID v7", "code": "INVALID_ARGUMENT" }`) |
 | GraphQL | An error in the response's `errors` array |
 | WebSockets | An error frame on the socket (`{ event, data: { error, errors } }`) |
 | MCP | `invalid_params` (`-32602`), the field errors in the error's `data` |
@@ -137,6 +137,7 @@ that fails validation is an RFC 9457 `problem+json` `400` with:
   "title": "Bad Request",
   "status": 400,
   "detail": "validation failed",
+  "code": "INVALID_ARGUMENT",
   "errors": {
     "email": [{ "code": "email", "message": null }],
     "password": [{ "code": "length", "message": null }]

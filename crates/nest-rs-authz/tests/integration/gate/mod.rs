@@ -147,6 +147,7 @@ async fn a_token_too_narrow_reads_one_sentence_one_code_and_one_scope_list_on_ev
         serde_json::from_str(&http.0.into_body().into_string().await.expect("a body"))
             .expect("a problem document");
     assert_eq!(problem["detail"], TOO_NARROW, "HTTP: {problem}");
+    assert_eq!(problem["code"], "INSUFFICIENT_SCOPE", "HTTP: {problem}");
     assert_eq!(
         challenge, r#"Bearer error="insufficient_scope", scope="widgets:read""#,
         "HTTP carries the code and RFC 6750's `scope` on its challenge",

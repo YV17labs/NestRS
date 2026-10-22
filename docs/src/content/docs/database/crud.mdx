@@ -87,7 +87,7 @@ types the entity exposed with `input(update)`, so a non-`Option` column is
 
 ```bash frame="terminal"
 $ curl -X PUT …/posts/$ID -H 'content-type: application/json' -d '{"title":"Updated"}'
-{"type":"about:blank","status":400,"detail":"the JSON body does not decode: missing field `body` at line 1 column 19"}
+{"type":"about:blank","title":"Bad Request","status":400,"detail":"the JSON body does not decode: missing field `body` at line 1 column 19","code":"INVALID_ARGUMENT"}
 ```
 
 Make a column `Option<T>` on the entity when callers must be able to omit it —

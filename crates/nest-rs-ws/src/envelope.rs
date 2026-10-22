@@ -3,6 +3,7 @@ use std::error::Error;
 use std::fmt;
 
 use nest_rs_core::__private::{Withheld, find_in_chain};
+use nest_rs_core::problem::code;
 use nest_rs_core::{DecodeError, Failure, OPAQUE_CLIENT_MESSAGE, Problem, ToProblem};
 use nest_rs_pipes::PipeError;
 use serde::{Deserialize, Serialize};
@@ -89,6 +90,13 @@ impl WsError {
             errors.insert("retryAfterSeconds".to_owned(), seconds.into());
         }
         Self::with_details(problem.client_message(), serde_json::Value::Object(errors))
+    }
+
+    /// The frame every failure the client is not told of answers, whoever
+    /// answered it: the `INTERNAL` class's, [`OPAQUE_CLIENT_MESSAGE`] under its
+    /// code.
+    pub(crate) fn internal() -> Self {
+        Self::from_problem(&Problem::new(500, code::INTERNAL))
     }
 
     /// The frame a [`PipeError`] answers: its message, and its field-level
@@ -193,8 +201,9 @@ impl WsReply {
     /// chain carries: a [`WsError`] is sent whole, a [`Problem`] in its frame
     /// ([`WsError::from_problem`]), a [`PipeError`] with its detail, a decode
     /// failure without its value — each with a `warn` carrying the whole chain.
-    /// Anything else answers [`OPAQUE_CLIENT_MESSAGE`], its chain filed once at
-    /// `error`, as is the chain behind a `5xx` problem.
+    /// Anything else answers [`OPAQUE_CLIENT_MESSAGE`] under the `INTERNAL`
+    /// code, its chain filed once at `error`, as is the chain behind a `5xx`
+    /// problem.
     pub fn from_handler_error<E>(event: &str, error: E) -> WsReply
     where
         E: Into<Box<dyn Error + Send + Sync>> + 'static,
@@ -306,7 +315,7 @@ pub(crate) fn caught_rendered(error: &(dyn Error + 'static), problem: &Problem) 
 /// The opaque frame, with what the error said on the operator's line at `error`.
 fn opaque_rendered(said: String) -> Rendered {
     Rendered {
-        frame: WsError::new(OPAQUE_CLIENT_MESSAGE),
+        frame: WsError::internal(),
         line: Some(Line::Failed(said)),
     }
 }
@@ -654,6 +663,57 @@ mod tests {
         }
     }
 
+    /// Says nothing it may tell a client.
+    #[derive(Debug)]
+    struct Silent;
+
+    impl std::fmt::Display for Silent {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the ledger at 10.0.0.1 holds secret 42")
+        }
+    }
+
+    impl Error for Silent {}
+
+    impl ToProblem for Silent {
+        fn to_problem(&self) -> Option<Problem> {
+            None
+        }
+    }
+
+    /// A `Display`-only error, which no tier above the last one takes.
+    struct Worded;
+
+    impl std::fmt::Display for Worded {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the ledger at 10.0.0.1 holds secret 42")
+        }
+    }
+
+    /// Whichever tier renders a handler's error, the failure it does not
+    /// describe answers the one opaque frame — the `INTERNAL` class's — as
+    /// the class's own problem does.
+    #[test]
+    fn every_opaque_answer_names_the_internal_class() {
+        use nest_rs_core::problem::code;
+
+        let _logs = nest_rs_testing::LogCapture::install();
+        let frames = [
+            ErrorReport::new(Silent).into_failure().into_reply("charge"),
+            ErrorReportChain::into_failure(ErrorReport::new(std::io::Error::other("secret 42")))
+                .into_reply("charge"),
+            ErrorReportFallback::into_failure(&mut ErrorReport::new(Worded)).into_reply("charge"),
+            WsReply::from_handler_error("charge", std::io::Error::other("secret 42")),
+            WsReply::from_handler_error("charge", Problem::new(500, code::INTERNAL)),
+        ];
+        for frame in frames {
+            let WsReply::Error(frame) = frame else {
+                panic!("an error answers an error frame");
+            };
+            crate::testing::assert_opaque(&frame);
+        }
+    }
+
     /// A server problem answers the sentence an opaque failure answers, so it
     /// files the line an opaque failure files, at `error`, by either tier; a
     /// bare problem or a client one is a refusal answered, at `warn`.
@@ -737,13 +797,7 @@ mod tests {
             std::collections::HashMap::from([((1, 2), "corner")]);
 
         match WsReply::reply(&unserializable) {
-            WsReply::Error(err) => {
-                assert_eq!(err.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
-                assert!(
-                    err.errors.is_none(),
-                    "an opaque failure offers no per-field detail: {err:?}",
-                );
-            }
+            WsReply::Error(err) => crate::testing::assert_opaque(&err),
             _ => panic!("a value that cannot serialize must not read as a reply"),
         }
 

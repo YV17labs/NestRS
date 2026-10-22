@@ -926,7 +926,7 @@ async fn handle_text<G: Gateway>(
         }
         Err(payload) => {
             line.unwound(&*payload);
-            WsReply::Error(crate::WsError::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE))
+            WsReply::Error(crate::WsError::internal())
         }
     };
     match reply {
@@ -941,10 +941,7 @@ async fn handle_text<G: Gateway>(
                         error = %nest_rs_core::error_message(&err),
                         "failed to serialize reply",
                     );
-                    Some(error_frame(
-                        &envelope.event,
-                        &crate::WsError::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE),
-                    ))
+                    Some(error_frame(&envelope.event, &crate::WsError::internal()))
                 }
             }
         }
@@ -978,8 +975,13 @@ fn timed_out(conn_id: ConnId, event: &str, timeout: Duration) -> Answered {
 const TIMEOUT_REASON: &str = "timeout";
 
 fn error_frame(event: &str, error: &crate::WsError) -> String {
-    WsEnvelope::encode(event, error)
-        .unwrap_or_else(|_| String::from(r#"{"event":"error","data":{"error":"internal"}}"#))
+    WsEnvelope::encode(event, error).unwrap_or_else(|_| {
+        format!(
+            r#"{{"event":"error","data":{{"error":"{}","errors":{{"code":"{}"}}}}}}"#,
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+            nest_rs_core::problem::code::INTERNAL,
+        )
+    })
 }
 
 #[cfg(test)]

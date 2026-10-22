@@ -235,8 +235,8 @@ so a client can tell a deliberate close from the `1006` a network fault leaves:
 | `#[on_connect]` panicked, or outlasted `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` | `1011 Internal Error` | reconnects |
 
 A handler that panics does not close the socket: its `ws.message` line files
-`panic`, the client gets an error frame saying `internal error`, and the panic's
-text goes to `nest_rs::ws` at `error`. A message still running when the shutdown
+`panic`, the client gets the opaque error frame — `internal error`, under
+`code: "INTERNAL"` — and the panic's text goes to `nest_rs::ws` at `error`. A message still running when the shutdown
 window closes is dropped with its socket, and files `cancelled`.
 
 ## Version the socket

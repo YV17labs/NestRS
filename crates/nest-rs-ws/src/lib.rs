@@ -81,7 +81,9 @@
 //!   ([`WsError::from_problem`]); a `Problem`, a pipe rejection or a decode
 //!   failure its chain carries, in its own form, without a decode failure's
 //!   value; anything else as
-//!   [`OPAQUE_CLIENT_MESSAGE`](nest_rs_core::OPAQUE_CLIENT_MESSAGE).
+//!   [`OPAQUE_CLIENT_MESSAGE`](nest_rs_core::OPAQUE_CLIENT_MESSAGE) under the
+//!   `INTERNAL` code, the frame every failure the client is not told of
+//!   answers.
 //!
 //! An answered error is filed at `warn` on `nest_rs::ws`; an opaque one, and the
 //! chain behind a `5xx` problem, at `error`. An error's `Display` never reaches
@@ -171,6 +173,8 @@ mod namespace;
 mod opaque;
 mod scope;
 mod server;
+#[cfg(test)]
+mod testing;
 pub mod unit;
 mod view;
 

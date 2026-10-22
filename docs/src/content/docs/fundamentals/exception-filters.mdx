@@ -294,7 +294,7 @@ The framework's pipe error renderer already returns an RFC 9457
 `application/problem+json` body:
 
 ```json
-{ "type": "…#status.400", "title": "Bad Request", "status": 400, "detail": "…", "errors": { /* ... */ } }
+{ "type": "about:blank", "title": "Bad Request", "status": 400, "detail": "…", "code": "INVALID_ARGUMENT", "errors": { /* ... */ } }
 ```
 
 If your API uses a different envelope (`{ ok: false, error: { ... } }`), bind

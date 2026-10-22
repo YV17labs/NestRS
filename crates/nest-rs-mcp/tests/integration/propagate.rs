@@ -715,7 +715,7 @@ async fn an_operation_running_when_the_transport_stops_is_dropped_and_files_canc
     let serving = crate::serve_on_loopback::<StoppingModule>(window).await;
     let port = serving.port;
     let session = crate::open_raw_session(port, STOPPING).await;
-    let (_open, head) = crate::post(
+    let (mut open, head) = crate::post(
         port,
         STOPPING,
         Some(&session),
@@ -734,6 +734,19 @@ async fn an_operation_running_when_the_transport_stops_is_dropped_and_files_canc
         .expect("the tool starts");
 
     let took = serving.stop().await;
+    let mut read = Vec::new();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::io::AsyncReadExt::read_to_end(&mut open, &mut read),
+    )
+    .await
+    .expect("the transport closed the call's stream")
+    .expect("the stream reads to its end");
+    let read = String::from_utf8_lossy(&read);
+    assert!(
+        !read.contains("jsonrpc"),
+        "the client reads no answer to an operation the transport stopped: {read}",
+    );
 
     assert!(
         SLOW_DROPPED.load(Ordering::SeqCst) && !SLOW_FINISHED.load(Ordering::SeqCst),
@@ -801,6 +814,13 @@ async fn an_operation_its_client_cancels_is_dropped_and_files_cancelled() {
         HELD_DROPPED.load(Ordering::SeqCst) && !HELD_FINISHED.load(Ordering::SeqCst),
         "the operation was dropped where it waited",
     );
+    let read = tokio::time::timeout(Duration::from_secs(5), call)
+        .await
+        .expect("rmcp ends the stream of a request its client cancelled");
+    assert!(
+        !read.contains("jsonrpc"),
+        "rmcp drops the answer to a request its client cancelled: {read}",
+    );
 }
 
 const EXPLODING: &str = "/mcp/exploding";
@@ -851,6 +871,11 @@ async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
         answer["error"]["message"],
         nest_rs_core::OPAQUE_CLIENT_MESSAGE,
         "an internal error, worded for nobody in particular: {answer}",
+    );
+    assert_eq!(
+        answer["error"]["data"],
+        json!({ "code": nest_rs_core::problem::code::INTERNAL.as_str() }),
+        "the class every edge names an opaque failure by: {answer}",
     );
     assert!(
         !body.contains("sk_live"),

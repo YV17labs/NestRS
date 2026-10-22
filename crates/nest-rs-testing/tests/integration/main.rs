@@ -13,6 +13,7 @@ mod client;
 mod config;
 mod cors;
 mod database;
+mod denial_codes;
 mod denial_lines;
 mod destructured_args;
 mod endpoint_guards;

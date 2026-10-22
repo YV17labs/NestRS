@@ -67,7 +67,7 @@ $ curl -si '/posts?first=20&after=0193f1b2'
 HTTP/1.1 400 Bad Request
 content-type: application/problem+json
 
-{"type":"about:blank","title":"Bad Request","status":400,"detail":"after is not a cursor this endpoint issued"}
+{"type":"about:blank","title":"Bad Request","status":400,"detail":"after is not a cursor this endpoint issued","code":"INVALID_ARGUMENT"}
 ```
 
 The refusal names the parameter, never the value it was sent.

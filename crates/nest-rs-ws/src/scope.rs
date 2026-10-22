@@ -63,7 +63,7 @@ use std::any::{TypeId, type_name};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, ResolvesProvider};
+use nest_rs_core::ResolvesProvider;
 
 use crate::envelope::{WsError, WsReply};
 
@@ -136,7 +136,7 @@ pub fn scoped_parameter<T: Send + Sync + 'static>() -> Result<Scoped<T>, WsReply
 
 /// What a miss answers: the client learns nothing of the wiring.
 fn opaque() -> WsReply {
-    WsReply::Error(WsError::new(OPAQUE_CLIENT_MESSAGE))
+    WsReply::Error(WsError::internal())
 }
 
 #[cfg(test)]
@@ -218,7 +218,7 @@ mod tests {
             };
             let said = serde_json::to_string(&frame).expect("serializes");
             assert!(!said.contains("Hidden"), "the frame names the type: {said}");
-            assert_eq!(frame.error, OPAQUE_CLIENT_MESSAGE);
+            crate::testing::assert_opaque(&frame);
             let filed = logs
                 .events()
                 .into_iter()

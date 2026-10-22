@@ -259,6 +259,20 @@ impl FailureController {
     async fn busy(&self) -> Result<String> {
         Err(HttpError::from_status(StatusCode::SERVICE_UNAVAILABLE))
     }
+
+    /// A bare `404`, the handler's own.
+    #[get("/missing")]
+    async fn missing(&self) -> Result<String> {
+        Err(HttpError::from_status(StatusCode::NOT_FOUND))
+    }
+
+    /// A `404` the handler wrote as raw text.
+    #[get("/raw-missing")]
+    async fn raw_missing(&self) -> nest_rs_http::Response {
+        nest_rs_http::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body("no row 42")
+    }
 }
 
 /// A failure whose sentence names what the client must not read.
@@ -743,6 +757,36 @@ async fn every_opaque_500_is_one_document_whoever_answered_it() {
             let body = problem_json(resp).await;
             assert_eq!(body, internal_document(), "{path}");
             assert!(!body.to_string().contains("secret"), "{path}: {body}");
+        }
+    }
+}
+
+/// A `404` answered from its status alone is its class's document, the code
+/// `#[crud]` and the in-band edges name it by, whoever answered it — a bare
+/// status, a raw-text body, the class's own `Problem` a chain carries, the
+/// router for an address nothing serves — on every path an `Err` is rendered by.
+#[tokio::test]
+async fn every_bare_404_is_its_class_s_document_whoever_answered_it() {
+    for client in clients::<FailureModule>().await {
+        for path in [
+            "/failure/missing",
+            "/failure/raw-missing",
+            "/failure/carried",
+            "/failure/nowhere",
+        ] {
+            let resp = client.get(path).send().await;
+            resp.assert_status(StatusCode::NOT_FOUND);
+            resp.assert_content_type("application/problem+json");
+            assert_eq!(
+                problem_json(resp).await,
+                serde_json::json!({
+                    "type": "about:blank",
+                    "title": "Not Found",
+                    "status": 404,
+                    "code": "NOT_FOUND",
+                }),
+                "{path}",
+            );
         }
     }
 }

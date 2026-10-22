@@ -84,6 +84,7 @@ content-type: application/problem+json
   "title": "Bad Request",
   "status": 400,
   "detail": "validation failed",
+  "code": "INVALID_ARGUMENT",
   "errors": {
     "title": [{ "code": "length", "message": null }]
   }
@@ -98,7 +99,7 @@ value, which never echoes back.
 
 <Aside type="tip">
 The shape is stable RFC 9457: `type`, `title`, `status`, `detail`, plus
-the `errors` extension member. A test against the
+the `code` and `errors` extension members. A test against the
 `errors.<field>[0].code` value catches a regression to a different
 validator without locking the message string.
 </Aside>

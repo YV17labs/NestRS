@@ -39,7 +39,9 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
 
 use crate::McpError;
-use crate::error::{AVAILABLE_PROMPTS, TOOL_NOT_FOUND, prompt_not_found, refuses_task};
+use crate::error::{
+    AVAILABLE_PROMPTS, TOOL_NOT_FOUND, opaque_answer, prompt_not_found, refuses_task,
+};
 use crate::guard::BoxFuture;
 use crate::host::McpHost;
 use crate::identity::ResolvedIdentity;
@@ -173,9 +175,10 @@ impl CompositeHandler {
     }
 }
 
-/// Unreachable through `#[mcp]`, where a path exists because a host claimed it.
+/// Unreachable through `#[mcp]`, where a path exists because a host claimed it:
+/// a server failure, answered as every one the model is not told of is.
 fn no_hosts() -> McpError {
-    McpError::internal_error("no MCP host serves this endpoint".to_owned(), None)
+    opaque_answer()
 }
 
 /// Whether an error means *this host does not serve that name*, which lets the
@@ -644,6 +647,12 @@ mod refusal_precedence {
             ErrorCode::METHOD_NOT_FOUND,
             "no host serves it",
         );
+    }
+
+    /// A path no host serves is a server failure the model is not told of.
+    #[test]
+    fn a_path_no_host_serves_answers_opaquely() {
+        crate::testing::assert_opaque(&no_hosts());
     }
 }
 

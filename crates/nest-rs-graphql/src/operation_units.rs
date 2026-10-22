@@ -238,7 +238,7 @@ struct Selected {
     ty: Option<OperationType>,
     /// The operation's name as its document declares it: a GraphQL name, never
     /// the free text a request's `operationName` may hold.
-    name: Option<String>,
+    name: Option<Name>,
 }
 
 impl Selected {
@@ -249,17 +249,16 @@ impl Selected {
 
     fn of(request: &mut Request) -> Self {
         let wanted = request.operation_name.take();
-        let selected = match request.parsed_query() {
-            Ok(document) => {
-                selected_operation(document, wanted.as_deref()).map(|(name, operation)| Self {
-                    ty: Some(operation.node.ty),
-                    name: name.map(ToString::to_string),
-                })
-            }
-            Err(_) => None,
-        };
+        let selected = request
+            .parsed_query()
+            .ok()
+            .and_then(|document| selected_operation(document, wanted.as_deref()))
+            .map_or(Self::NONE, |(name, operation)| Self {
+                ty: Some(operation.node.ty),
+                name: name.cloned(),
+            });
         request.operation_name = wanted;
-        selected.unwrap_or(Self::NONE)
+        selected
     }
 
     /// A mutation commits its work; anything else — a query, a document that

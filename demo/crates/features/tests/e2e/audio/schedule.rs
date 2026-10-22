@@ -32,7 +32,7 @@ impl CountingProcessor {
     #[process(queue = AudioQueue)]
     async fn count(&self, job: TranscodeCommand) -> Result<()> {
         if let Some((secs, nanos)) = job.file.get_timestamp().map(|minted| minted.to_unix())
-            && u128::from(secs) * 1000 + u128::from(nanos / 1_000_000) >= started_ms()
+            && Duration::new(secs, nanos).as_millis() >= started_ms()
         {
             SCHEDULED_FIRES.fetch_add(1, Ordering::SeqCst);
         }

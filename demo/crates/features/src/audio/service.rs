@@ -33,17 +33,13 @@ impl AudioService {
     }
 
     pub async fn presign_upload(&self) -> Result<PresignedUrlDto, AudioError> {
-        let key = Uuid::now_v7();
+        let key = Uuid::now_v7().to_string();
         let upload = self
             .storage
-            .presign_put(
-                &key.to_string(),
-                &SignedPut::new(AUDIO_CONTENT_TYPE),
-                PRESIGN_TTL,
-            )
+            .presign_put(&key, &SignedPut::new(AUDIO_CONTENT_TYPE), PRESIGN_TTL)
             .await?;
         tracing::debug!(target: crate::audio::TARGET, %key, "minted presigned upload URL");
-        Ok(PresignedUrlDto::signed(key.to_string(), upload))
+        Ok(PresignedUrlDto::signed(key, upload))
     }
 
     pub async fn enqueue_transcode(&self, file: Uuid) -> Result<(), AudioError> {

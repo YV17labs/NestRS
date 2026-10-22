@@ -133,16 +133,14 @@ impl Storage {
                 reason: "is outside what SigV4 signs, 1 second to 7 days",
             });
         }
-        let options = headers.iter().try_fold(
-            SignedUrlOptions::new(),
-            |options, &(ref name, argument, value)| {
-                let value = header_value(value).ok_or(StorageError::Unsignable {
-                    argument,
-                    reason: "is not a header value: printable ASCII, neither blank nor padded",
-                })?;
-                Ok::<_, StorageError>(options.with_signed_header(name.clone(), value))
-            },
-        )?;
+        let mut options = SignedUrlOptions::new();
+        for &(ref name, argument, value) in headers {
+            let value = header_value(value).ok_or(StorageError::Unsignable {
+                argument,
+                reason: "is not a header value: printable ASCII, neither blank nor padded",
+            })?;
+            options = options.with_signed_header(name.clone(), value);
+        }
         let expires = Duration::from_secs(lifetime);
         // SigV4 dates a signature to its second (`X-Amz-Date`): the second read
         // before signing is at or before it, so the URL never lapses before this.
@@ -615,7 +613,7 @@ async fn abort_upload(
 /// value, or one padded with spaces the signature would trim.
 fn header_value(value: &str) -> Option<HeaderValue> {
     let printable = value.bytes().all(|byte| matches!(byte, b' '..=b'~'));
-    if !printable || value.trim().is_empty() || value.trim() != value {
+    if !printable || value.is_empty() || value.trim() != value {
         return None;
     }
     HeaderValue::from_str(value).ok()

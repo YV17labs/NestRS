@@ -614,6 +614,107 @@ async fn a_driver_offering_no_atomic_block_fails_the_first_root_field_and_resolv
     );
 }
 
+/// async-graphql runs a root field once per selection, where the
+/// specification runs one response key once: a mutation naming one root field
+/// twice — under one key, through fragments, a copy a directive skips included
+/// — would write twice and answer one of the two, so it is refused before any
+/// root field runs.
+#[tokio::test]
+async fn a_mutation_selecting_one_root_field_twice_is_refused_before_any_runs() {
+    let logs = LogCapture::install();
+    let (app, journal) = boot().await;
+    let documents = [
+        (
+            "mutation { a: maybeShaped { broken } a: maybeShaped { fine } }",
+            r#""a""#,
+        ),
+        (
+            "mutation { a: maybeShaped { fine } a: maybeShaped @skip(if: true) { strict } }",
+            r#""a""#,
+        ),
+        (
+            "mutation { maybeWrite(fail: false) ... on Mutation { maybeWrite(fail: false) } }",
+            r#""maybeWrite""#,
+        ),
+        (
+            "mutation { ...A ...B } \
+             fragment A on Mutation { w: maybeWrite(fail: false) } \
+             fragment B on Mutation { w: maybeWrite(fail: false) }",
+            r#""w""#,
+        ),
+        (
+            "mutation { ...A ...A } fragment A on Mutation { maybeWrite(fail: false) }",
+            r#""A""#,
+        ),
+    ];
+    for (document, named) in documents {
+        let reply = post(&app, json!({ "query": document })).await;
+        assert_eq!(reply["data"], Value::Null, "{document}: {reply}");
+        assert_eq!(
+            reply["errors"].as_array().map(Vec::len),
+            Some(1),
+            "{document}: {reply}"
+        );
+        let refused = &reply["errors"][0];
+        assert!(
+            refused["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(named)),
+            "{document}: {reply}"
+        );
+        assert_eq!(
+            refused["extensions"]["code"], "INVALID_ARGUMENT",
+            "{document}: {reply}"
+        );
+    }
+    assert_eq!(
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "settle graphql.operation false"
+        ]
+        .repeat(documents.len()),
+        "each refused operation is a unit that runs nothing and keeps nothing"
+    );
+    assert!(dispatched(&logs).is_empty(), "no root field resolves");
+
+    let reply = post(&app, json!({ "query": "{ a: policy a: policy }" })).await;
+    assert_eq!(
+        reply["data"],
+        json!({ "a": "pool" }),
+        "a query writes nothing, so it runs as async-graphql runs it: {reply}"
+    );
+}
+
+#[tokio::test]
+async fn a_batch_refuses_only_its_mutation_selecting_a_root_field_twice() {
+    let (app, journal) = boot().await;
+    let replies = post(
+        &app,
+        json!([
+            { "query": "mutation { a: write(fail: false) a: write(fail: false) }" },
+            { "query": "mutation { write(fail: false) }" },
+        ]),
+    )
+    .await;
+    assert_eq!(replies[0]["data"], Value::Null, "{replies}");
+    assert_eq!(
+        replies[0]["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
+        "{replies}"
+    );
+    assert_eq!(replies[1]["data"]["write"], "block", "{replies}");
+    assert_eq!(
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "settle graphql.operation false",
+            "open graphql.operation per_unit",
+            "block released",
+            "settle graphql.operation true",
+        ],
+    );
+}
+
 #[tokio::test]
 async fn a_batch_holding_a_mutation_runs_its_operations_in_order() {
     let (app, journal) = boot().await;
@@ -1060,6 +1161,20 @@ async fn over_graphql_ws_each_mutation_runs_as_its_unit_inside_the_sockets() {
             true => assert!(answer["payload"]["errors"].is_array(), "{answer}"),
         }
     }
+    let query = "mutation { a: write(fail: false) a: write(fail: false) }";
+    socket
+        .send_text(
+            json!({ "id": "3", "type": "subscribe", "payload": { "query": query } }).to_string(),
+        )
+        .await;
+    let refused = next_message(&mut socket).await;
+    assert_eq!(refused["type"], "next", "{refused}");
+    assert_eq!(refused["payload"]["data"], Value::Null, "{refused}");
+    assert_eq!(
+        refused["payload"]["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
+        "{refused}"
+    );
+    assert_eq!(next_message(&mut socket).await["type"], "complete");
 
     assert_eq!(
         journal.read(),
@@ -1071,8 +1186,10 @@ async fn over_graphql_ws_each_mutation_runs_as_its_unit_inside_the_sockets() {
             "open graphql.operation per_unit",
             "block rolled back",
             "settle graphql.operation false",
+            "open graphql.operation per_unit",
+            "settle graphql.operation false",
         ],
         "the socket's pool unit holds no transaction; each mutation opens and settles its own, \
-         on its own answer"
+         on its own answer, and one selecting a root field twice runs none"
     );
 }

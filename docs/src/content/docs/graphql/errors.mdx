@@ -298,7 +298,11 @@ field's answer: select it inside `... on <ConcreteType>` and its error carries
 the path, so its `null` lands. And an object selected twice at one place — two
 fragments that each select `org` — keeps whichever copy finishes first. When
 that copy's every field failed, the object answers `null`, or its nearest
-nullable parent does, never an object missing what the other copy answered.
+nullable parent does, never an object missing what the other copy answered; a
+copy that `@skip` or `@include` leaves out still counts here. At a mutation's
+root, where each copy would run its writes, such a document is refused before
+anything runs
+([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 
 ## Multiple errors in one response
 

@@ -105,6 +105,13 @@ mutation {
   answer reports nothing: the root fields that answered before it roll back
   too, and none after it runs. A mutation sent beside others whose work must
   stand on its own returns `Result<Option<T>>`.
+- **A mutation selects each root field once.** async-graphql 7.2.1 runs a root
+  field once per selection, where the specification runs one response key
+  once, so a document naming one twice — `a: createPost(…) { id }` beside
+  `a: createPost(…) { title }`, two fragments that each select it, one
+  fragment spread twice — would write twice and answer one of the two. It is
+  refused before any root field runs: `data: null` and one `INVALID_ARGUMENT`
+  error pointing at the second selection. Merge the sub-selections into one.
 - **A field that never touches the database sends nothing**: its savepoint is
   as lazy as the transaction around it.
 - **A batch** holding a mutation runs its operations one at a time, in

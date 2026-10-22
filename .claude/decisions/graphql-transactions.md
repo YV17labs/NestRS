@@ -84,10 +84,24 @@ closed (`fix/graphql-mutation-settles-on-its-answer`):
   sub-field's or a Non-Null one's held by a nullable parent, releases it, and
   the field's value and work stand. Decided by the run from the owner's own
   words: the count-based rule rolled back a block whose answer stood. The block
-  runs the placement the operation's answer gets, on the field's value as it
-  resolved, so the two cannot disagree; an error async-graphql 7.2.1 files
+  runs the placement the operation's answer gets, by the same document — the
+  one the request sent, so a copy a directive leaves out counts in both — on
+  the field's value as it resolved; with each root field resolved once (the
+  next bullet), the two cannot disagree. An error async-graphql 7.2.1 files
   without a `path` (an interface field's) places no null, so its root field's
   work stands with its answer.
+- **A mutation names each root field once.** async-graphql 7.2.1 runs a root
+  field once per selection, where §6.3.2 merges one response key into one
+  execution, and merges the two answers into one: a repeated mutation field
+  wrote twice, and `mutation { a: shaped { broken } a: shaped { fine } }`
+  answered `{"a": null}` while one copy's block was released. A mutation whose
+  root selections — through its fragments, one fragment spread twice, a copy a
+  directive skips included — name one response key more than once is refused
+  before any root field runs: `data: null` and one `INVALID_ARGUMENT` error at
+  the repeated selection, its unit opened and settled with nothing in it.
+  Decided by the run on correctness: it is the one answer that neither writes
+  twice nor reports work that was rolled back. A query naming a key twice
+  still runs as async-graphql runs it, since it writes nothing.
 - **The owner's decision of 2026-10-22**, amending "released otherwise" for
   one case: when a mutation operation's `data` is nulled by a field error — a
   Non-Null root field's `null` — the whole operation rolls back and no root
@@ -102,3 +116,16 @@ closed (`fix/graphql-mutation-settles-on-its-answer`):
   operation.** Their guards and handlers would run, and whatever they do
   outside the transaction — an outbound call, a message sent at once — would
   happen for an answer that reports none of it.
+- **Refused: running a repeated root field once, its selections merged, as
+  §6.3.2 does.** async-graphql resolves each selection through its own call
+  and gives no hook between validation and execution, so the merge would be a
+  rewrite of the document before validation, which would then judge a
+  document the client did not send; and a later copy cannot answer nothing,
+  since its key lands in the answer whenever the first copy erred.
+- **The limit, of the placement both read:** a copy a directive leaves out
+  still counts as selected, so an object selected twice below a root field,
+  one copy skipped and the other's every field failed, answers `null` (or its
+  nearest nullable parent does) where the specification answers the object
+  with its nulls — and the root field's block reads the same, so the two
+  still agree. Counting only the copies that run needs the request's
+  variables beside the kept document.

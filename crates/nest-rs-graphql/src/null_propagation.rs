@@ -9,13 +9,14 @@
 //! answer whose errors name a path. Each error costs a walk down its own path,
 //! never a pass over the other errors.
 //!
-//! A mutation's root fields read the same placement while they resolve
-//! ([`MutationAnswer`]), so each settles its work on the answer it will give.
+//! A mutation's root fields read the same placement, by the same document,
+//! while they resolve ([`MutationAnswer`]), so each settles its work on the
+//! answer it will give.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use async_graphql::futures_util::StreamExt;
 use async_graphql::futures_util::stream::BoxStream;
@@ -50,13 +51,16 @@ impl<E> NullPropagated<E> {
     }
 
     /// The document `request` executes, kept for its answer's nulls; a
-    /// mutation's root fields are handed the [`MutationAnswer`] they read.
-    fn keep(&self, request: &mut Request) -> Option<Kept> {
+    /// mutation's root fields are handed the [`MutationAnswer`] they read,
+    /// which reads the same document.
+    fn keep(&self, request: &mut Request) -> Option<Arc<Kept>> {
         let (kept, ty) = Kept::take(request)?;
+        let kept = Arc::new(kept);
         if ty == OperationType::Mutation {
-            request
-                .data
-                .insert(MutationAnswer::new(Arc::clone(&self.types)));
+            request.data.insert(MutationAnswer::new(
+                Arc::clone(&self.types),
+                Arc::clone(&kept),
+            ));
         }
         Some(kept)
     }
@@ -66,7 +70,7 @@ impl<E: Executor> Executor for NullPropagated<E> {
     async fn execute(&self, mut request: Request) -> Response {
         let kept = self.keep(&mut request);
         let mut response = self.executor.execute(request).await;
-        if let Some(mut kept) = kept {
+        if let Some(kept) = kept {
             kept.place_nulls(&mut response, &self.types);
         }
         response
@@ -77,12 +81,12 @@ impl<E: Executor> Executor for NullPropagated<E> {
         mut request: Request,
         session_data: Option<Arc<Data>>,
     ) -> BoxStream<'static, Response> {
-        let mut kept = self.keep(&mut request);
+        let kept = self.keep(&mut request);
         let types = Arc::clone(&self.types);
         self.executor
             .execute_stream(request, session_data)
             .map(move |mut response| {
-                if let Some(kept) = &mut kept {
+                if let Some(kept) = &kept {
                     kept.place_nulls(&mut response, &types);
                 }
                 response
@@ -95,6 +99,9 @@ impl<E: Executor> Executor for NullPropagated<E> {
 /// where each one's errors leave it, and whether one already nulled `data`.
 pub(crate) struct MutationAnswer {
     types: Arc<FieldTypes>,
+    /// The document the operation's answer places its nulls by: the one the
+    /// request sent, a copy a directive leaves out still in it.
+    kept: Arc<Kept>,
     nulled: AtomicBool,
 }
 
@@ -110,9 +117,10 @@ pub(crate) enum RootAnswer {
 }
 
 impl MutationAnswer {
-    fn new(types: Arc<FieldTypes>) -> Self {
+    fn new(types: Arc<FieldTypes>, kept: Arc<Kept>) -> Self {
         Self {
             types,
+            kept,
             nulled: AtomicBool::new(false),
         }
     }
@@ -124,8 +132,9 @@ impl MutationAnswer {
 
     /// What the root field `ctx` resolves answers, given what it `resolved`
     /// and the errors its resolution `filed`: the same placement its
-    /// operation's answer gets, so the field's work settles on what the
-    /// client reads. An answer of no data is kept for the root fields after it.
+    /// operation's answer gets, by the same document, so the field's work
+    /// settles on what the client reads. An answer of no data is kept for the
+    /// root fields after it.
     pub(crate) fn root_field(
         &self,
         ctx: &Context<'_>,
@@ -145,17 +154,16 @@ impl MutationAnswer {
             Err(_) => Some([PathSegment::Field(key.to_string())]),
         };
         let mut data = Value::Object(fields);
-        Selections::new(
-            &ctx.query_env.fragments,
-            &self.types,
-            &ctx.query_env.operation.node,
-        )
-        .place(
-            &mut data,
-            own.iter()
-                .map(|own| own.as_slice())
-                .chain(filed.iter().map(|error| error.path.as_slice())),
-        );
+        // A document that does not parse again places no null in the answer
+        // either: the field answers as async-graphql resolved it.
+        if let Some(mut selections) = self.kept.selections(&self.types) {
+            selections.place(
+                &mut data,
+                own.iter()
+                    .map(|own| own.as_slice())
+                    .chain(filed.iter().map(|error| error.path.as_slice())),
+            );
+        }
         let answer = match &data {
             Value::Object(fields) => match fields.get(key) {
                 Some(Value::Null) | None => RootAnswer::Null,
@@ -258,7 +266,9 @@ struct Kept {
     text: String,
     /// The name the document declares the selected operation under.
     operation: Option<Name>,
-    parsed: Option<ExecutableDocument>,
+    /// `text` parsed again, the first time a null is placed; `None` when it
+    /// does not parse.
+    parsed: OnceLock<Option<ExecutableDocument>>,
 }
 
 impl Kept {
@@ -276,34 +286,36 @@ impl Kept {
         let kept = Self {
             operation,
             text: std::mem::take(&mut request.query),
-            parsed: None,
+            parsed: OnceLock::new(),
         };
         Some((kept, ty))
     }
 
+    /// The selections of the operation the request executes, read off its
+    /// text parsed again; `None` when that does not parse.
+    fn selections<'k>(&'k self, types: &'k FieldTypes) -> Option<Selections<'k>> {
+        let document = self
+            .parsed
+            .get_or_init(|| parse_query(&self.text).ok())
+            .as_ref()?;
+        let (_, operation) = selected_operation(document, self.operation.as_deref())?;
+        Some(Selections::new(&document.fragments, types, &operation.node))
+    }
+
     /// `response`'s nulls, placed where its errors' paths say a field erred.
-    fn place_nulls(&mut self, response: &mut Response, types: &FieldTypes) {
+    fn place_nulls(&self, response: &mut Response, types: &FieldTypes) {
         if response.errors.iter().all(|error| error.path.is_empty()) {
             return;
         }
-        let document: &ExecutableDocument = match &mut self.parsed {
-            Some(document) => document,
-            unparsed @ None => match parse_query(&self.text) {
-                Ok(document) => unparsed.insert(document),
-                Err(_) => {
-                    tracing::warn!(
-                        target: crate::TARGET,
-                        errors = response.errors.len(),
-                        "graphql document did not parse again; its field errors keep the answer async-graphql gave",
-                    );
-                    return;
-                }
-            },
-        };
-        let Some((_, operation)) = selected_operation(document, self.operation.as_deref()) else {
+        let Some(mut selections) = self.selections(types) else {
+            tracing::warn!(
+                target: crate::TARGET,
+                errors = response.errors.len(),
+                "graphql document did not parse again; its field errors keep the answer async-graphql gave",
+            );
             return;
         };
-        Selections::new(&document.fragments, types, &operation.node).place(
+        selections.place(
             &mut response.data,
             response.errors.iter().map(|error| error.path.as_slice()),
         );
@@ -1195,10 +1207,10 @@ mod tests {
     }
 
     /// The mutation root, recording what each root field answers as its block
-    /// reads it, and whether `data` is nulled after it.
+    /// reads it, under its response key, and whether `data` is nulled after it.
     struct Answers {
         root: Changes,
-        seen: Arc<std::sync::Mutex<Vec<(RootAnswer, bool)>>>,
+        seen: Arc<std::sync::Mutex<Vec<(String, RootAnswer, bool)>>>,
     }
 
     impl async_graphql::OutputType for Answers {
@@ -1237,7 +1249,11 @@ mod tests {
             self.seen
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((answered, answer.data_nulled()));
+                .push((
+                    ctx.item.node.response_key().node.to_string(),
+                    answered,
+                    answer.data_nulled(),
+                ));
             resolved
         }
     }
@@ -1245,7 +1261,8 @@ mod tests {
     impl async_graphql::ObjectType for Answers {}
 
     /// Each mutation document, and what each of its root fields answers, as
-    /// the operation's answer places its nulls.
+    /// the operation's answer places its nulls: what the client reads under
+    /// its key, or no data at all.
     #[tokio::test]
     async fn a_root_field_reads_the_answer_its_errors_leave_it() {
         use RootAnswer::{NoData, Null, Stands};
@@ -1271,6 +1288,16 @@ mod tests {
                 "mutation { ...Writes } fragment Writes on Changes { leaf { strict } }",
                 vec![(Null, false)],
             ),
+            // A copy a directive leaves out still counts where the answer
+            // places its nulls, so it counts where the block reads them.
+            (
+                "mutation { leaf { child { broken } child @skip(if: true) { fine } } }",
+                vec![(Null, false)],
+            ),
+            (
+                "mutation { sureLeaf { child { broken } child @include(if: false) { fine } } }",
+                vec![(NoData, true)],
+            ),
         ] {
             let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
             let schema = Schema::new(
@@ -1282,16 +1309,34 @@ mod tests {
                 async_graphql::EmptySubscription,
             );
             let sdl = schema.sdl();
-            NullPropagated::new(schema, &sdl)
+            let response = NullPropagated::new(schema, &sdl)
                 .execute(Request::new(document))
                 .await;
-            assert_eq!(
-                *seen
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-                answers,
-                "{document}"
-            );
+            let seen = seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let read: Vec<(RootAnswer, bool)> = seen
+                .iter()
+                .map(|&(_, answer, nulled)| (answer, nulled))
+                .collect();
+            assert_eq!(read, answers, "{document}");
+            let Value::Object(fields) = &response.data else {
+                // No data: the operation rolls back whole, as its last block read.
+                assert_eq!(read.last(), Some(&(NoData, true)), "{document}");
+                continue;
+            };
+            for (key, answer, _) in &seen {
+                let reported = match fields.get(key.as_str()) {
+                    Some(Value::Null) | None => Null,
+                    Some(_) => Stands,
+                };
+                assert_eq!(
+                    *answer, reported,
+                    "{document}: `{key}`'s block read what its answer does not report: {}",
+                    response.data
+                );
+            }
         }
     }
 

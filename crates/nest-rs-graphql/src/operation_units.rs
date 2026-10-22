@@ -7,6 +7,7 @@
 //! data rolls back whole — a response never reports work that was rolled back,
 //! nor stays silent on work that stands.
 
+use std::collections::{HashMap, HashSet};
 use std::convert::identity;
 use std::future::Future;
 use std::sync::{Arc, PoisonError};
@@ -15,10 +16,11 @@ use std::time::Duration;
 use async_graphql::futures_util::StreamExt;
 use async_graphql::futures_util::stream::{self, BoxStream, FuturesOrdered};
 use async_graphql::parser::types::{
-    DocumentOperations, ExecutableDocument, OperationDefinition, OperationType,
+    DocumentOperations, ExecutableDocument, FragmentDefinition, OperationDefinition, OperationType,
+    Selection, SelectionSet,
 };
 use async_graphql::{
-    BatchRequest, BatchResponse, Context, Data, Executor, Name, Positioned, Request, Response,
+    BatchRequest, BatchResponse, Context, Data, Executor, Name, Pos, Positioned, Request, Response,
     ServerError, ServerResult, Value,
 };
 use nest_rs_core::operation_log::{CANCELLED, ERROR, OK, PANIC};
@@ -98,13 +100,13 @@ impl<E: Executor> OperationUnits<E> {
 
     async fn execute_selected(
         &self,
-        selected: Selected,
+        mut selected: Selected,
         request: Request,
         cut: Option<&RequestDeadline>,
     ) -> Response {
         let request = request.data(BatchSpan(tracing::Span::current()));
-        self.run(selected, cut, self.executor.execute(request))
-            .await
+        let body = refused_or(selected.refusal.take(), self.executor.execute(request));
+        self.run(selected, cut, body).await
     }
 
     /// Run `body`, the operation `selected` names, as its unit: cut at `cut`,
@@ -188,7 +190,7 @@ impl<E: Executor> Executor for OperationUnits<E> {
         mut request: Request,
         session_data: Option<Arc<Data>>,
     ) -> BoxStream<'static, Response> {
-        let selected = Selected::of(&mut request);
+        let mut selected = Selected::of(&mut request);
         if selected.ty == Some(OperationType::Subscription) {
             return self.executor.execute_stream(request, session_data);
         }
@@ -203,6 +205,7 @@ impl<E: Executor> Executor for OperationUnits<E> {
                     .await
                     .unwrap_or_default()
             };
+            let answer = refused_or(selected.refusal.take(), answer);
             units.run(selected, None, answer).await
         })
         .boxed()
@@ -242,12 +245,16 @@ struct Selected {
     /// The operation's name as its document declares it: a GraphQL name, never
     /// the free text a request's `operationName` may hold.
     name: Option<Name>,
+    /// What a mutation naming one root field twice answers in place of
+    /// running ([`repeated_root_selection`]).
+    refusal: Option<ServerError>,
 }
 
 impl Selected {
     const NONE: Self = Self {
         ty: None,
         name: None,
+        refusal: None,
     };
 
     fn of(request: &mut Request) -> Self {
@@ -255,11 +262,22 @@ impl Selected {
         let selected = request
             .parsed_query()
             .ok()
-            .and_then(|document| selected_operation(document, wanted.as_deref()))
-            .map_or(Self::NONE, |(name, operation)| Self {
-                ty: Some(operation.node.ty),
-                name: name.cloned(),
-            });
+            .and_then(|document| {
+                let (name, operation) = selected_operation(document, wanted.as_deref())?;
+                let refusal = match operation.node.ty {
+                    OperationType::Mutation => repeated_root_selection(
+                        &document.fragments,
+                        &operation.node.selection_set.node,
+                    ),
+                    OperationType::Query | OperationType::Subscription => None,
+                };
+                Some(Self {
+                    ty: Some(operation.node.ty),
+                    name: name.cloned(),
+                    refusal,
+                })
+            })
+            .unwrap_or(Self::NONE);
         request.operation_name = wanted;
         selected
     }
@@ -327,6 +345,92 @@ impl Answered {
             // The driver filed why.
             Self::Unhonoured => refused(&Problem::new(500, code::INTERNAL)),
         }
+    }
+}
+
+/// `body`'s answer, or `refusal` in its place with nothing run.
+async fn refused_or<B>(refusal: Option<ServerError>, body: B) -> Response
+where
+    B: Future<Output = Response>,
+{
+    match refusal {
+        Some(refusal) => Response::from_errors(vec![refusal]),
+        None => body.await,
+    }
+}
+
+/// The refusal of a mutation whose root selections, through its fragments,
+/// name one response key or spread one fragment more than once, pointing at
+/// the repeated selection: async-graphql (`=7.2.1`) runs a root field once per
+/// selection — its writes twice — where GraphQL §6.3.2 runs one key once, and
+/// answers only one of the two.
+fn repeated_root_selection(
+    fragments: &HashMap<Name, Positioned<FragmentDefinition>>,
+    root: &SelectionSet,
+) -> Option<ServerError> {
+    let mut selections = RootSelections {
+        fragments,
+        keys: HashSet::new(),
+        spread: HashSet::new(),
+        expanding: Vec::new(),
+    };
+    let (repeated, at) = selections.first_repeated(root)?;
+    let said = match repeated {
+        Repeated::Key(key) => format!(r#"the mutation selects "{key}" more than once at its root"#),
+        Repeated::Fragment(name) => {
+            format!(r#"the mutation spreads "{name}" more than once at its root"#)
+        }
+    };
+    let problem = Problem::new(400, code::INVALID_ARGUMENT).with_detail(said);
+    Some(crate::error::rendered(&problem).into_server_error(at))
+}
+
+/// A mutation's root selections, read before validation: each fragment is
+/// expanded once at most, so the walk never outgrows the document, and a
+/// fragment cycle, which validation refuses, ends it.
+struct RootSelections<'d> {
+    fragments: &'d HashMap<Name, Positioned<FragmentDefinition>>,
+    keys: HashSet<&'d str>,
+    spread: HashSet<&'d str>,
+    /// The fragments being expanded, the innermost last.
+    expanding: Vec<&'d str>,
+}
+
+/// What a root selection names a second time.
+enum Repeated<'d> {
+    Key(&'d str),
+    Fragment(&'d str),
+}
+
+impl<'d> RootSelections<'d> {
+    /// The first selection of `set` naming a response key, or spreading a
+    /// fragment, the root already holds, and where it stands.
+    fn first_repeated(&mut self, set: &'d SelectionSet) -> Option<(Repeated<'d>, Pos)> {
+        set.items
+            .iter()
+            .find_map(|selection| match &selection.node {
+                Selection::Field(field) => {
+                    let key = field.node.response_key().node.as_str();
+                    (!self.keys.insert(key)).then_some((Repeated::Key(key), selection.pos))
+                }
+                Selection::FragmentSpread(spread) => {
+                    let name = spread.node.fragment_name.node.as_str();
+                    if self.expanding.contains(&name) {
+                        return None;
+                    }
+                    if !self.spread.insert(name) {
+                        return Some((Repeated::Fragment(name), selection.pos));
+                    }
+                    let fragment = self.fragments.get(name)?;
+                    self.expanding.push(name);
+                    let repeated = self.first_repeated(&fragment.node.selection_set.node);
+                    self.expanding.pop();
+                    repeated
+                }
+                Selection::InlineFragment(fragment) => {
+                    self.first_repeated(&fragment.node.selection_set.node)
+                }
+            })
     }
 }
 
@@ -582,6 +686,88 @@ mod tests {
         assert!(unnamed.name.is_none());
     }
 
+    /// What a request is refused before it runs, when it is.
+    fn refusal(query: &str, name: Option<&str>) -> Option<String> {
+        selected(query, name).refusal.map(|refusal| refusal.message)
+    }
+
+    #[test]
+    fn a_mutation_naming_one_root_field_twice_is_refused_naming_it() {
+        let selects =
+            |key: &str| format!(r#"the mutation selects "{key}" more than once at its root"#);
+        let spreads =
+            |name: &str| format!(r#"the mutation spreads "{name}" more than once at its root"#);
+        for (query, said) in [
+            ("mutation { a a }", selects("a")),
+            ("mutation { x: a x: b }", selects("x")),
+            ("mutation { a b: a a }", selects("a")),
+            ("mutation { a ... { a } }", selects("a")),
+            ("mutation { a ... on Mutation { a } }", selects("a")),
+            ("mutation { a @skip(if: true) a }", selects("a")),
+            (
+                "mutation { ...A b } fragment A on Mutation { b }",
+                selects("b"),
+            ),
+            (
+                "mutation { ...A ...B } fragment A on Mutation { a } fragment B on Mutation { a }",
+                selects("a"),
+            ),
+            (
+                "mutation { ...A ...A } fragment A on Mutation { a }",
+                spreads("A"),
+            ),
+            (
+                "mutation { ...A ...B } fragment A on Mutation { ...C } \
+                 fragment B on Mutation { ...C } fragment C on Mutation { c }",
+                spreads("C"),
+            ),
+        ] {
+            assert_eq!(refusal(query, None), Some(said), "{query}");
+        }
+        assert_eq!(
+            refusal("query Q { a } mutation M { a a }", Some("M")),
+            Some(selects("a"))
+        );
+    }
+
+    #[test]
+    fn a_refusal_points_at_the_selection_repeated_and_says_its_class() {
+        let Some(refusal) = selected("mutation {\n  a\n  a\n}", None).refusal else {
+            panic!("the mutation names `a` twice");
+        };
+        assert_eq!(refusal.locations, [Pos { line: 3, column: 3 }]);
+        assert!(refusal.path.is_empty(), "the operation's, not a field's");
+        let code = refusal
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get(crate::error::CODE_EXTENSION));
+        assert_eq!(
+            code,
+            Some(&Value::from(code::INVALID_ARGUMENT.as_str())),
+            "{refusal:?}"
+        );
+    }
+
+    #[test]
+    fn a_document_naming_each_root_field_once_is_not_refused() {
+        for (query, name) in [
+            ("mutation { a b }", None),
+            ("mutation { a { b b } c: a { b } }", None),
+            (
+                "mutation { ...A b } fragment A on Mutation { a { x x } }",
+                None,
+            ),
+            ("{ a a }", None),
+            ("query Q { a a } mutation M { a }", Some("M")),
+            // Validation refuses these; the walk ends on them.
+            ("mutation { ...A } fragment A on Mutation { ...A b }", None),
+            ("mutation { ...Missing a }", None),
+            ("mutation { a a", None),
+        ] {
+            assert_eq!(refusal(query, name), None, "{query}");
+        }
+    }
+
     struct Query;
 
     #[Object]
@@ -663,5 +849,25 @@ mod tests {
         let response = schema.execute("mutation { shaped { broken } }").await;
         assert_eq!(response.errors.len(), 1, "{response:?}");
         assert_eq!(*added.lock().unwrap(), [1]);
+    }
+
+    /// Pins why a mutation naming one root field twice is refused: async-graphql
+    /// runs it once per selection, where GraphQL §6.3.2 runs one response key
+    /// once. A bump that merges them fails here, and the refusal can go.
+    #[tokio::test]
+    async fn a_root_field_selected_twice_runs_twice() {
+        let added = Arc::new(Mutex::new(Vec::new()));
+        let schema = Schema::new(
+            Query,
+            Counted {
+                root: Mutation,
+                added: Arc::clone(&added),
+            },
+            EmptySubscription,
+        );
+        schema
+            .execute("mutation { a: shaped { broken } a: shaped { broken } }")
+            .await;
+        assert_eq!(*added.lock().unwrap(), [1, 1]);
     }
 }

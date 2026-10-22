@@ -378,7 +378,10 @@ where
             let refused = Err(ctx.set_error_path(
                 crate::error::opaque_error(&error).into_server_error(ctx.item.pos),
             ));
-            answered(ctx, answer, &refused, errors_reported(ctx));
+            // Its own `null` covers whatever its resolution filed below it.
+            if let Some(answer) = answer {
+                answer.root_field(ctx, &refused, &[]);
+            }
             refused
         }
     }

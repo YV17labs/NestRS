@@ -295,10 +295,10 @@ Two selections fall outside it, both from async-graphql 7.2.1. A field selected
 on an interface type reports its error without a `path`, so its key stays
 absent, and under a mutation its root field's writes stand with the root
 field's answer: select it inside `... on <ConcreteType>` and its error carries
-the path, so its `null` lands. And an object selected twice at one place — two fragments
-that each select `org` — keeps whichever copy finishes first. When that copy's
-every field failed, the object answers `null`, or its nearest nullable parent
-does, never an object missing what the other copy answered.
+the path, so its `null` lands. And an object selected twice at one place — two
+fragments that each select `org` — keeps whichever copy finishes first. When
+that copy's every field failed, the object answers `null`, or its nearest
+nullable parent does, never an object missing what the other copy answered.
 
 ## Multiple errors in one response
 

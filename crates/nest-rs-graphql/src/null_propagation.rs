@@ -136,23 +136,26 @@ impl MutationAnswer {
             return RootAnswer::Stands;
         }
         let key = &ctx.item.node.response_key().node;
-        let own = [PathSegment::Field(key.to_string())];
         let mut fields = IndexMap::new();
-        let mut paths: Vec<&[PathSegment]> = Vec::with_capacity(filed.len() + 1);
-        match resolved {
+        let own = match resolved {
             Ok(value) => {
                 fields.insert(key.clone(), value.clone().unwrap_or_default());
+                None
             }
-            Err(_) => paths.push(&own),
-        }
-        paths.extend(filed.iter().map(|error| error.path.as_slice()));
+            Err(_) => Some([PathSegment::Field(key.to_string())]),
+        };
         let mut data = Value::Object(fields);
         Selections::new(
             &ctx.query_env.fragments,
             &self.types,
             &ctx.query_env.operation.node,
         )
-        .place(&mut data, paths);
+        .place(
+            &mut data,
+            own.iter()
+                .map(|own| own.as_slice())
+                .chain(filed.iter().map(|error| error.path.as_slice())),
+        );
         let answer = match &data {
             Value::Object(fields) => match fields.get(key) {
                 Some(Value::Null) | None => RootAnswer::Null,
@@ -392,11 +395,11 @@ impl<'a> Selections<'a> {
         let mut lacking = HashSet::new();
         let mut erred_in_null = HashMap::<PathKey<'_>, usize>::new();
         let mut paths = Vec::new();
-        for error in errors {
-            let Some((len, holder)) = unanswered(data, error) else {
+        for erred in errors {
+            let Some((len, holder)) = unanswered(data, erred) else {
                 continue;
             };
-            let path = &error[..len];
+            let path = &erred[..len];
             if !lacking.insert(PathKey(path)) {
                 continue;
             }

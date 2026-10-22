@@ -143,7 +143,7 @@ impl ExceptionFilter for Internal {
     }
 }
 
-/// Built per request, so no listener call resolves it from the app's root.
+/// Built per request: no listener's site, composed once at boot, can hold it.
 #[injectable(scope = request)]
 #[derive(Default)]
 struct PerRequest;
@@ -379,20 +379,17 @@ async fn a_layer_a_listener_binds_that_no_module_provides_fails_the_boot_naming_
 struct PerRequestModule;
 
 #[tokio::test]
-async fn a_layer_a_listener_binds_that_its_wiring_cannot_resolve_fails_the_boot_naming_both() {
-    let booted = async {
-        let app = App::builder().module::<PerRequestModule>().build().await?;
-        app.init().await
-    };
-    let refused = booted
+async fn a_request_scoped_layer_a_listener_binds_fails_the_boot_naming_its_scope() {
+    let refused = App::builder()
+        .module::<PerRequestModule>()
+        .build()
         .await
         .err()
-        .map(|error| format!("{error:#}"))
-        .unwrap_or_default();
-    for part in ["AuditListeners::on_archived", "PerRequest"] {
-        assert!(
-            refused.contains(part),
-            "the refusal names `{part}`: {refused}"
-        );
-    }
+        .expect("no listener's site could ever resolve the layer");
+    let scoped = refused
+        .downcast::<nest_rs_core::ScopedLayerError>()
+        .unwrap_or_else(|refused| panic!("not the scope refusal: {refused:#}"));
+    assert_eq!(scoped.module, "PerRequestModule");
+    assert_eq!(scoped.host, "AuditListeners");
+    assert!(scoped.layer.ends_with("PerRequest"), "{}", scoped.layer);
 }

@@ -72,6 +72,28 @@ pub struct ScopeViolationError {
     pub dependency: &'static str,
 }
 
+/// A layer a provider-hosted site binds — a `#[process]` method's, a
+/// trigger's, an `#[on_event]` method's — is request-scoped or transient,
+/// while a site resolves its layers once, when it composes at boot: a
+/// request-scoped layer is never built there, and a transient one would be
+/// built once and shared by every run, which is not transient.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "scope violation: `{layer}` is bound on a site `{host}` (in module `{module}`) hosts, and is \
+     request-scoped or transient — a site resolves its layers once, when it composes at boot, \
+     so a request-scoped `{layer}` would never be built for it, and a transient one would be \
+     built once and shared by every run. Make `{layer}` a singleton."
+)]
+pub struct ScopedLayerError {
+    /// Module that lists the host.
+    pub module: &'static str,
+    /// The provider hosting the site that binds the layer.
+    pub host: &'static str,
+    /// The request-scoped or transient layer.
+    pub layer: &'static str,
+}
+
 /// The failure modes of the access-graph pass: a cross-module reach that no
 /// import covers, or a dependency no module provides.
 ///
@@ -89,6 +111,9 @@ pub(crate) enum AccessError {
     /// A singleton injected a provider that only exists inside a request.
     #[error(transparent)]
     Scope(#[from] ScopeViolationError),
+    /// A provider-hosted site bound a layer that only exists inside a request.
+    #[error(transparent)]
+    ScopedLayer(#[from] ScopedLayerError),
 }
 
 impl AccessError {
@@ -100,6 +125,7 @@ impl AccessError {
             AccessError::CrossModule(e) => anyhow::Error::new(e),
             AccessError::Missing(e) => anyhow::Error::new(e),
             AccessError::Scope(e) => anyhow::Error::new(e),
+            AccessError::ScopedLayer(e) => anyhow::Error::new(e),
         }
     }
 }

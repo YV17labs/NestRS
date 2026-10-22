@@ -496,3 +496,104 @@ async fn a_layer_a_job_binds_that_nothing_provides_fails_the_configure_naming_bo
         );
     }
 }
+
+#[queue(name = "per-attempt", job = ViewedCommand)]
+struct PerAttemptQueue;
+
+/// Built per request: no job's site, composed once at boot, can hold it.
+#[injectable(scope = request)]
+#[derive(Default)]
+struct PerAttempt;
+
+impl Layer for PerAttempt {}
+
+#[async_trait]
+impl Interceptor for PerAttempt {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        next.run(cx).await
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct PerAttemptProcessor;
+
+#[processor]
+impl PerAttemptProcessor {
+    #[process(queue = PerAttemptQueue)]
+    #[use_interceptors(PerAttempt)]
+    async fn per_attempt(&self, job: ViewedCommand) -> anyhow::Result<()> {
+        let _ = job;
+        Ok(())
+    }
+}
+
+#[module(providers = [PerAttemptProcessor, PerAttempt])]
+struct PerAttemptModule;
+
+#[tokio::test]
+async fn a_request_scoped_layer_a_job_binds_fails_the_boot_naming_its_scope() {
+    let refused = App::builder()
+        .module::<PerAttemptModule>()
+        .build()
+        .await
+        .err()
+        .expect("no job's site could ever resolve the layer");
+    let scoped = refused
+        .downcast::<nest_rs_core::ScopedLayerError>()
+        .unwrap_or_else(|refused| panic!("not the scope refusal: {refused:#}"));
+    assert_eq!(scoped.module, "PerAttemptModule");
+    assert_eq!(scoped.host, "PerAttemptProcessor");
+    assert!(scoped.layer.ends_with("PerAttempt"), "{}", scoped.layer);
+}
+
+#[queue(name = "per-use", job = ViewedCommand)]
+struct PerUseQueue;
+
+/// Rebuilt on every resolution: a job's site, composed once at boot, would
+/// build it once and share it with every attempt.
+#[injectable(scope = transient)]
+#[derive(Default)]
+struct PerUse;
+
+impl Layer for PerUse {}
+
+#[async_trait]
+impl Interceptor for PerUse {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        next.run(cx).await
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct PerUseProcessor;
+
+#[processor]
+impl PerUseProcessor {
+    #[process(queue = PerUseQueue)]
+    #[use_interceptors(PerUse)]
+    async fn per_use(&self, job: ViewedCommand) -> anyhow::Result<()> {
+        let _ = job;
+        Ok(())
+    }
+}
+
+#[module(providers = [PerUseProcessor, PerUse])]
+struct PerUseModule;
+
+#[tokio::test]
+async fn a_transient_layer_a_job_binds_fails_the_boot_naming_its_scope() {
+    let refused = App::builder()
+        .module::<PerUseModule>()
+        .build()
+        .await
+        .err()
+        .expect("a job's site would share one instance of the layer across every attempt");
+    let scoped = refused
+        .downcast::<nest_rs_core::ScopedLayerError>()
+        .unwrap_or_else(|refused| panic!("not the scope refusal: {refused:#}"));
+    assert_eq!(scoped.module, "PerUseModule");
+    assert_eq!(scoped.host, "PerUseProcessor");
+    assert!(scoped.layer.ends_with("PerUse"), "{}", scoped.layer);
+}

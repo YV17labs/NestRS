@@ -353,3 +353,49 @@ async fn a_layer_a_tick_binds_that_nothing_provides_fails_the_configure_naming_b
         );
     }
 }
+
+/// Built per request: no tick's site, composed once at boot, can hold it.
+#[injectable(scope = request)]
+#[derive(Default)]
+struct PerTick;
+
+impl Layer for PerTick {}
+
+#[async_trait]
+impl Interceptor for PerTick {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        next.run(cx).await
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct PerTickTasks;
+
+#[scheduled]
+impl PerTickTasks {
+    #[after("100ms")]
+    #[use_interceptors(PerTick)]
+    async fn per_tick(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[nest_rs_core::module(providers = [PerTickTasks, PerTick])]
+struct PerTickModule;
+
+#[tokio::test]
+async fn a_request_scoped_layer_a_tick_binds_fails_the_boot_naming_its_scope() {
+    let refused = nest_rs_core::App::builder()
+        .module::<PerTickModule>()
+        .build()
+        .await
+        .err()
+        .expect("no tick's site could ever resolve the layer");
+    let scoped = refused
+        .downcast::<nest_rs_core::ScopedLayerError>()
+        .unwrap_or_else(|refused| panic!("not the scope refusal: {refused:#}"));
+    assert_eq!(scoped.module, "PerTickModule");
+    assert_eq!(scoped.host, "PerTickTasks");
+    assert!(scoped.layer.ends_with("PerTick"), "{}", scoped.layer);
+}

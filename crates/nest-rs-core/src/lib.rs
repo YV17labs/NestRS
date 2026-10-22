@@ -166,9 +166,9 @@ pub use error::{
     ContestedDeclarationError, DecodeError, DuplicateMetaError, DuplicateProviderError,
     FactoryCycleError, FactoryFailedError, InitFailedError, LateFactoryError,
     LateOptionalDependencyError, MissingDependencyError, OverriddenDependencyError,
-    ProviderCycleError, ScopeViolationError, UnboundedTransportError, UnbuiltCause,
-    UnbuiltProviderError, UnclaimedOverrideError, UnregisteredModuleError, UnresolvedFactoryError,
-    UnresolvedLayerError, WiringFailedError,
+    ProviderCycleError, ScopeViolationError, ScopedLayerError, UnboundedTransportError,
+    UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError, UnregisteredModuleError,
+    UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
 pub use exception_filter::{Catch, Caught, ExceptionFilter, ExceptionFilterSpec, exception_filter};

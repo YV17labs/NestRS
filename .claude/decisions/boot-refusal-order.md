@@ -134,3 +134,22 @@ returns unwrapped.
 **Refused:** running the check at `provide`, which cannot know whether a
 factory of that type will be queued, nor read the configs a check compares
 against, registered later in the builder's calls.
+
+## 2026-10-22 — a scoped layer a provider-hosted site binds, with the scope violations
+
+A layer a `#[process]`, `#[scheduled]` or `#[on_event]` site binds is read by
+the access graph from its `HostLayers` entry, and a request-scoped or
+transient one is now refused there (`ScopedLayerError`), where a singleton
+injecting such a provider is (`ScopeViolationError`), before the reach of any
+dependency: a site resolves its layers once, when it composes at boot. A
+request-scoped one is never built there: it used to pass the graph and be
+refused by the site's composition with "no imported module provides it", a
+remedy that is false when a module provides it request-scoped — at the wiring
+step for a listener, and at the transport's configure, after the boot, for a
+job and a tick. A transient one was built there once and shared by every run,
+so an app binding one booted and ran it as a singleton; that boot now fails,
+as a transient layer on a controller, a gateway or a resolver already did
+(`ScopeViolationError`).
+
+**Refused:** naming the site's method: the `HostLayers` entry carries its
+host, which a macro ABI change would have to widen for every decorator.

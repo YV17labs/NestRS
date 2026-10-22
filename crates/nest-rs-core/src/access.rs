@@ -15,7 +15,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use crate::container::ProviderScope;
 use crate::error::{
     AccessError, AccessGraphError, MissingDependencyError, ProviderCycleError, ScopeViolationError,
-    UnbuiltCause,
+    ScopedLayerError, UnbuiltCause,
 };
 
 pub(crate) use self::__private::{HostLayers, ModuleDescriptor, ProviderDescriptor};
@@ -275,12 +275,26 @@ pub(crate) fn validate_access_graph(
                 }
                 .into());
             }
-            // Resolved per request or where a site composes, so out of the
-            // scope check above: a request-scoped provider is what a handler's
-            // parameter is for, and a site refuses a layer it cannot resolve.
+            let bound_layers = bound.get(&(p.provider)()).into_iter().flatten().copied();
+            // A site resolves its layers once, when it composes: a request-scoped one
+            // would refuse there naming a missing import, a transient one be shared by
+            // every run.
+            if let Some((_, layer)) = bound_layers
+                .clone()
+                .find(|(layer, _)| scoped_or_transient.contains(layer))
+            {
+                return Err(ScopedLayerError {
+                    module: desc.name,
+                    host: provider_name(p),
+                    layer,
+                }
+                .into());
+            }
+            // A request-scoped provider is what a handler's parameter is for,
+            // so it is out of the scope check above.
             let per_request = (p.injects_per_request)()
                 .into_iter()
-                .chain(bound.get(&(p.provider)()).into_iter().flatten().copied())
+                .chain(bound_layers)
                 .map(|(dep, name)| (dep, name, false));
             for (dep, name, optional) in deps.into_iter().chain(per_request) {
                 if global.contains(&dep) || closure_keys.contains(&dep) {

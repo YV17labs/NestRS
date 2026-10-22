@@ -79,7 +79,10 @@ framework half.
   governs `#[inject]`, optional or not — an optional dependency no module the
   app reaches provides is absent, never a leak — the `#[use_*]` layer lists (a
   provider-hosted site's through the `HostLayers` entry its decorator
-  submits, since the host's struct is `#[injectable]`'s), and
+  submits, since the host's struct is `#[injectable]`'s; a site resolves its
+  layers once, at boot, where a request-scoped one is never built and a
+  transient one would be shared by every run, so either fails the boot naming
+  its scope, `ScopedLayerError`), and
   every provider a handler resolves through a parameter whose type implements
   `ResolvesProvider`, checked for reach but never for scope, since a request is
   its consumer; `Container::get` at runtime is an unchecked escape hatch. **A provider a module lists is built, or the boot

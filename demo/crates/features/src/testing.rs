@@ -1,9 +1,13 @@
 use nest_rs::authn::{JwtOptions, JwtService};
 use nest_rs::config::Config;
-use nest_rs::redis::RedisConfig;
+use nest_rs::core::Container;
+use nest_rs::database::OutboxStore;
+use nest_rs::redis::{RedisConfig, RedisConnection};
+use nest_rs::storage::Storage;
 use nest_rs::testing::url_on;
 use uuid::Uuid;
 
+use crate::audio::{AudioService, Transcodes};
 use crate::{Claims, Role};
 
 pub const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEYTRN4vmCuIfaUslO5G9pKyxkDJn3q3t9WDHo2FCfw3\n-----END PRIVATE KEY-----\n";
@@ -90,3 +94,32 @@ const _: () = assert!(
     RedisDatabase::SUITES < *RedisDatabase::OWN.start()
         && *RedisDatabase::OWN.end() < RedisDatabase::TRANSCODES
 );
+
+pub async fn arm_outbox(container: &Container) {
+    container
+        .get_dyn::<dyn OutboxStore>()
+        .expect("SeaOrmDatabaseModule keeps the app's outbox")
+        .arm()
+        .await
+        .expect("the outbox arms over the migrated database");
+}
+
+pub async fn delete_transcode(container: &Container, file: Uuid) {
+    let storage = container
+        .get::<Storage>()
+        .expect("the app opens the audio feature's store");
+    for key in [file.to_string(), AudioService::derived_key(file)] {
+        storage
+            .delete(&key)
+            .await
+            .expect("the store deletes what the test filed");
+    }
+    let transcodes = container
+        .get::<RedisConnection<Transcodes>>()
+        .expect("the app opens the transcodes instance");
+    redis::cmd("DEL")
+        .arg(AudioService::record_key(file))
+        .query_async::<()>(&mut RedisConnection::clone(&transcodes))
+        .await
+        .expect("the transcodes instance deletes the record");
+}

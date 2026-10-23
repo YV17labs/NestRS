@@ -29,7 +29,9 @@ use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, RedisDatabase};
+pub(crate) use features::testing::{
+    AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, RedisDatabase, arm_outbox, delete_transcode,
+};
 
 pub(crate) fn global_guards() -> [GuardSpec; 2] {
     [guard::<AuthnGuard>(), guard::<AuthzGuard>()]
@@ -59,6 +61,7 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
         .build()
         .await
         .expect("ApiModule boots against the throwaway database");
+    arm_outbox(app.container()).await;
     (db, app)
 }
 

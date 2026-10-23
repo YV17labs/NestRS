@@ -33,14 +33,12 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [features]
-# Dev-only e2e helpers (`features::testing`): the dev keypair, the seeded org
-# id, Claims token minting, and the Redis database each draining test owns.
-# Enabled from the app suites' dev-dependencies; never on in a production build.
+# `features::testing`: the helpers the demo's suites share, never in production.
 test-support = ["nest-rs/testing"]
 
 [dev-dependencies]
 nest-rs = { workspace = true, features = ["testing"] }
-# Enables `features::testing` for this crate's own e2e suite.
+# Enables `features::testing` for this crate's own suites.
 features = { path = ".", features = ["test-support"] }
 tokio.workspace = true
 serde_json.workspace = true

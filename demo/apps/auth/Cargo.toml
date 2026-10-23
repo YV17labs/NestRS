@@ -15,7 +15,7 @@ serde_json.workspace = true
 [dev-dependencies]
 tokio.workspace = true
 nest-rs = { workspace = true, features = ["testing"] }
-# Enables `features::testing` (dev keypair, org id, tokens, Redis databases) for e2e.
+# Enables `features::testing`, the helpers the demo's suites share, for e2e.
 features = { workspace = true, features = ["test-support"] }
 migrations = { workspace = true }
 base64.workspace = true

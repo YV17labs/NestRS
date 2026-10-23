@@ -54,6 +54,7 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
         .build()
         .await
         .expect("ApiModule boots against the throwaway database");
+    arm_outbox(app.container()).await;
     (db, app)
 }
 ```
@@ -61,7 +62,10 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
 `global_guards()` is the list the api's `main` passes to `use_guards_global`.
 A global seam lives on the builder, outside the module tree, so the suite
 repeats it. Without it, every route runs, and the OpenAPI document describes
-it, without the guards the binary puts in front of it.
+it, without the guards the binary puts in front of it. `arm_outbox` arms the
+app's outbox, as the binary's relay does at boot, so what a test pushes waits in
+the throwaway database
+([below](#a-job-pushed-inside-a-transaction-waits-for-a-relay)).
 
 Each test module reaches for that `boot()` and the token helpers beside it:
 
@@ -443,19 +447,28 @@ can own is the database. Two settings keep a suite apart:
 
 A harness runs no transport you did not spawn, so the outbox relay a served app
 runs is absent, and an app booted by `TestApp` or `HeadlessApp` files a push at
-once, as an app with no database does. A test proving that a job waits for its
-commit runs what a served app runs: it arms the app's outbox, as the relay does
-at boot, and spawns a relay beside the worker that drains — any relay files any
-app's records from the shared table:
+once, as an app with no database does — onto the suites' Redis database, where
+nothing drains. The demo's suites run what a served app runs instead: their boot
+arms the app's outbox, as the relay does at boot, so a push waits in the
+throwaway database and is dropped with it:
+
+```rust title="crates/features/src/testing.rs (from the demo)"
+pub async fn arm_outbox(container: &Container) {
+    container
+        .get_dyn::<dyn OutboxStore>()
+        .expect("SeaOrmDatabaseModule keeps the app's outbox")
+        .arm()
+        .await
+        .expect("the outbox arms over the migrated database");
+}
+```
+
+A test proving that a job waits for its commit, or needing it run, spawns a
+relay beside the worker that drains — any relay files any app's records from
+the shared table:
 
 ```rust title="apps/api/tests/e2e/posts.rs (from the demo, abridged)"
 let (db, app) = boot_on(RedisDatabase::PostsNotify).await;
-app.container()
-    .get_dyn::<dyn OutboxStore>()
-    .expect("SeaOrmDatabaseModule keeps the api's outbox")
-    .arm()
-    .await
-    .expect("the api's outbox arms over its migrated database");
 // …
 let relaying = worker
     .spawn_transport(OutboxRelay::new())

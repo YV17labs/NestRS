@@ -12,7 +12,9 @@ use uuid::Uuid;
 
 use api::ApiModule;
 
-use crate::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, global_guards, token_for, token_with_sub};
+use crate::{
+    AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, arm_outbox, global_guards, token_for, token_with_sub,
+};
 
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -143,6 +145,7 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
         .await
         .expect("ApiModule boots against the throwaway database");
     served.init().await.expect("the init hooks run");
+    arm_outbox(served.container()).await;
     let config = served
         .container()
         .get::<HttpConfig>()

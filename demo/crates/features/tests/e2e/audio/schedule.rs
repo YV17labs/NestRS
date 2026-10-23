@@ -4,14 +4,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use features::audio::{AudioQueue, AudioScheduleModule, TranscodeCommand};
-use features::testing::RedisDatabase;
+use features::testing::{RedisDatabase, delete_transcode};
 use nest_rs::core::{injectable, module};
 use nest_rs::queue::{QueueModule, QueueWorker, processor};
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::schedule::{ScheduleModule, Scheduler};
 use nest_rs::testing::HeadlessApp;
+use parking_lot::Mutex;
+use uuid::Uuid;
 
 static SCHEDULED_FIRES: AtomicUsize = AtomicUsize::new(0);
+
+static SEEDED: Mutex<Vec<Uuid>> = Mutex::new(Vec::new());
 
 fn started_ms() -> u128 {
     static STARTED: OnceLock<u128> = OnceLock::new();
@@ -31,6 +35,7 @@ pub struct CountingProcessor;
 impl CountingProcessor {
     #[process(queue = AudioQueue)]
     async fn count(&self, job: TranscodeCommand) -> Result<()> {
+        SEEDED.lock().push(job.file);
         if let Some((secs, nanos)) = job.file.get_timestamp().map(|minted| minted.to_unix())
             && Duration::new(secs, nanos).as_millis() >= started_ms()
         {
@@ -93,9 +98,14 @@ async fn the_every_5s_audio_task_fires_and_lands_on_the_queue() {
 
     let _ = schedule_handle.shutdown().await;
     let _ = worker_handle.shutdown().await;
+    let fired = SCHEDULED_FIRES.load(Ordering::SeqCst);
+    let seeded = std::mem::take(&mut *SEEDED.lock());
+    for file in seeded {
+        delete_transcode(schedule.container(), file).await;
+    }
 
     assert!(
-        SCHEDULED_FIRES.load(Ordering::SeqCst) >= 1,
+        fired >= 1,
         "the #[every(\"5s\")] task must fire and its command must be consumed \
          from the queue within {deadline:?}",
     );

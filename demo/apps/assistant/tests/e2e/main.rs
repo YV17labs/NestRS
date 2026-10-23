@@ -12,14 +12,12 @@ mod tool;
 
 use assistant::AssistantModule;
 use nest_rs::authn::AuthnConfig;
-use nest_rs::config::Config;
-use nest_rs::storage::{Storage, StorageConfig};
 use nest_rs::testing::{EphemeralDatabase, TestApp};
 use sea_orm::sea_query::Query;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
 use uuid::Uuid;
 
-use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID};
+use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, delete_transcode};
 
 pub(crate) const SHARED_ENDPOINT: &str = "/mcp";
 
@@ -132,11 +130,4 @@ pub(crate) fn bearer_for(org_id: &str) -> String {
 
 pub(crate) fn bearer() -> String {
     bearer_for(ORG_ID)
-}
-
-pub(crate) async fn storage_client() -> Storage {
-    let config = StorageConfig::load().expect("storage config parses from env");
-    Storage::connect(&config)
-        .await
-        .expect("the dev container's bucket opens")
 }

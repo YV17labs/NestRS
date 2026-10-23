@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use features::audio::{AudioModule, AudioService, TranscodeState, Transcodes};
+use features::testing::delete_transcode;
 use futures_util::StreamExt;
 use nest_rs::core::module;
 use nest_rs::redis::{RedisConnection, RedisModule, RedisQueueModule};
@@ -58,4 +59,6 @@ async fn a_transcode_files_its_record_on_the_transcodes_instance_and_the_progres
         .await
         .expect("the transcodes instance answers");
     assert!(recorded, "the record lives on the transcodes instance");
+
+    delete_transcode(container, file).await;
 }

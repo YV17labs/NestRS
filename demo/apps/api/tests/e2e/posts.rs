@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use features::notifications::{Entity as Notifications, NotificationsQueueModule};
 use nest_rs::core::module;
-use nest_rs::database::OutboxStore;
 use nest_rs::http::{StatusCode, header};
 use nest_rs::queue::{OutboxRelay, QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
@@ -193,12 +192,6 @@ struct NotificationsWorkerHarness;
 #[tokio::test]
 async fn a_publish_notifies_its_org_once_after_its_commit_and_never_after_its_rollback() {
     let (db, app) = boot_on(RedisDatabase::PostsNotify).await;
-    app.container()
-        .get_dyn::<dyn OutboxStore>()
-        .expect("SeaOrmDatabaseModule keeps the api's outbox")
-        .arm()
-        .await
-        .expect("the api's outbox arms over its migrated database");
 
     let worker = HeadlessApp::builder()
         .module::<NotificationsWorkerHarness>()

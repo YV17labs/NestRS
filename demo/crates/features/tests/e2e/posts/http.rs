@@ -1,5 +1,4 @@
 use nest_rs::core::module;
-use nest_rs::database::OutboxStore;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::http::{StatusCode, header};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
@@ -13,7 +12,7 @@ use features::authn::Role;
 use features::authz::AuthzModule;
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::{PostsHttpModule, publication};
-use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, token};
+use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, arm_outbox, token};
 use features::users::{ActiveModel as UserActive, UserRole};
 use nest_rs::authn::AuthnConfig;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
@@ -72,12 +71,7 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
         .build()
         .await
         .expect("PostsHttpTestModule boots against the throwaway database");
-    app.container()
-        .get_dyn::<dyn OutboxStore>()
-        .expect("SeaOrmDatabaseModule keeps the outbox")
-        .arm()
-        .await
-        .expect("a publish's notification waits in the throwaway database's outbox");
+    arm_outbox(app.container()).await;
     (db, app, bearer, org_id)
 }
 

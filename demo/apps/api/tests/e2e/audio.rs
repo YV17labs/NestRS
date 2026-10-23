@@ -3,8 +3,9 @@ use std::time::Duration;
 use features::audio::AudioQueueModule;
 use nest_rs::core::module;
 use nest_rs::http::{StatusCode, header};
-use nest_rs::queue::{QueueModule, QueueWorker};
+use nest_rs::queue::{OutboxRelay, QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::testing::{HeadlessApp, LogCapture};
 use nest_rs::testing::{TestForm, TestFormField};
 use serde_json::{Value, json};
@@ -83,6 +84,8 @@ async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
 
 #[module(
     imports = [
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
         RedisModule::for_root(None),
         RedisQueueModule,
         QueueModule::for_root(None),
@@ -93,15 +96,20 @@ struct AudioWorkerHarness;
 
 #[tokio::test]
 async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
-    let (_db, app) = boot_on(RedisDatabase::AudioUpload).await;
+    let (db, app) = boot_on(RedisDatabase::AudioUpload).await;
     let http = reqwest::Client::new();
 
     let worker = HeadlessApp::builder()
         .module::<AudioWorkerHarness>()
+        .provide_arc(db.connection())
         .provide(RedisDatabase::AudioUpload.config())
         .build_headless()
         .await
-        .expect("the audio worker boots against Redis and storage");
+        .expect("the audio worker boots against the throwaway database, Redis and storage");
+    let relaying = worker
+        .spawn_transport(OutboxRelay::new())
+        .await
+        .expect("the worker's relay files what the api committed");
     let worker_queue = worker
         .spawn_transport(QueueWorker::new())
         .await
@@ -210,18 +218,32 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
         .shutdown()
         .await
         .expect("the worker's QueueWorker stops cleanly");
+    relaying
+        .shutdown()
+        .await
+        .expect("the worker's relay stops cleanly");
+    delete_transcode(
+        app.container(),
+        Uuid::parse_str(&key).expect("the minted key"),
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn audio_multipart_upload_and_streamed_download_round_trip() {
-    let (_db, app) = boot_on(RedisDatabase::AudioMultipart).await;
+    let (db, app) = boot_on(RedisDatabase::AudioMultipart).await;
 
     let worker = HeadlessApp::builder()
         .module::<AudioWorkerHarness>()
+        .provide_arc(db.connection())
         .provide(RedisDatabase::AudioMultipart.config())
         .build_headless()
         .await
-        .expect("the audio worker boots against Redis and storage");
+        .expect("the audio worker boots against the throwaway database, Redis and storage");
+    let relaying = worker
+        .spawn_transport(OutboxRelay::new())
+        .await
+        .expect("the worker's relay files what the api committed");
     let worker_queue = worker
         .spawn_transport(QueueWorker::new())
         .await
@@ -366,4 +388,13 @@ async fn audio_multipart_upload_and_streamed_download_round_trip() {
         .shutdown()
         .await
         .expect("the worker's QueueWorker stops cleanly");
+    relaying
+        .shutdown()
+        .await
+        .expect("the worker's relay stops cleanly");
+    delete_transcode(
+        app.container(),
+        Uuid::parse_str(&key).expect("the minted key"),
+    )
+    .await;
 }

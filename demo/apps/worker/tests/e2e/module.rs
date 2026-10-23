@@ -1,10 +1,10 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use features::notifications::{Column, Entity, NotifyCommand, NotifyQueue};
 use features::testing::RedisDatabase;
 use nest_rs::core::module;
-use nest_rs::queue::JobProducerExt;
-use nest_rs::queue::QueueWorker;
+use nest_rs::queue::{JobProducerExt, PushReceipt, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisQueueProducer};
 use nest_rs::schedule::Scheduler;
 use nest_rs::testing::{EphemeralDatabase, HeadlessApp};
@@ -15,10 +15,14 @@ use worker::WorkerModule;
 #[module(imports = [RedisModule::for_root(None), RedisQueueModule])]
 struct SuitesProducer;
 
-async fn notify(app: &HeadlessApp, org_id: Uuid) {
+fn producer(app: &HeadlessApp) -> Arc<RedisQueueProducer> {
     app.container()
         .get::<RedisQueueProducer>()
         .expect("RedisQueueModule bound the producer")
+}
+
+async fn notify(app: &HeadlessApp, org_id: Uuid) -> PushReceipt {
+    producer(app)
         .push(
             NotifyQueue,
             NotifyCommand {
@@ -28,7 +32,7 @@ async fn notify(app: &HeadlessApp, org_id: Uuid) {
             None,
         )
         .await
-        .expect("enqueue a notification");
+        .expect("enqueue a notification")
 }
 
 async fn notifications(conn: &DatabaseConnection, org_id: Uuid) -> u64 {
@@ -62,9 +66,9 @@ async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suit
         .await
         .expect("a producer boots on the suites' Redis database");
     let foreign = Uuid::now_v7();
-    notify(&suites, foreign).await;
+    let foreign_job = notify(&suites, foreign).await;
     let ours = Uuid::now_v7();
-    notify(&worker, ours).await;
+    let _ = notify(&worker, ours).await;
 
     let conn = db.connection();
     let mut ran = false;
@@ -82,10 +86,15 @@ async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suit
         .shutdown()
         .await
         .expect("WorkerModule's QueueWorker stops cleanly");
+    let waiting = producer(&suites)
+        .cancel(&foreign_job)
+        .await
+        .expect("the suites' database answers the cancel");
 
     assert!(ran, "the worker ran the job enqueued on its own database");
     assert_eq!(
-        stolen, 0,
+        (stolen, waiting),
+        (0, true),
         "the worker ran a job enqueued on the suites' database"
     );
 }

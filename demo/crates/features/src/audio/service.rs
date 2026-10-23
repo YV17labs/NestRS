@@ -33,11 +33,11 @@ pub struct AudioService {
 }
 
 impl AudioService {
-    fn derived_key(source: Uuid) -> String {
+    pub(crate) fn derived_key(source: Uuid) -> String {
         format!("transcoded/{source}")
     }
 
-    fn record_key(source: Uuid) -> String {
+    pub(crate) fn record_key(source: Uuid) -> String {
         format!("audio:transcoded:{source}")
     }
 

@@ -1,6 +1,7 @@
 use nest_rs::core::Discovery;
 use nest_rs::http::HttpEndpointMeta;
 use nest_rs::http::StatusCode;
+use nest_rs::storage::Storage;
 use nest_rs::testing::mcp::{initialize_request, open_session, post_message};
 use nest_rs::testing::{CapturedEvent, LogCapture};
 use serde_json::json;
@@ -59,7 +60,8 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
 
     let session = open_session(app.http(), SHARED_ENDPOINT, Some(&auth)).await;
 
-    let file = Uuid::now_v7().to_string();
+    let source = Uuid::now_v7();
+    let file = source.to_string();
     let call = |id: u32, file: String| {
         json!({
             "jsonrpc": "2.0",
@@ -96,8 +98,9 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
     );
     drop(logs);
 
-    storage_client()
-        .await
+    app.container()
+        .get::<Storage>()
+        .expect("AssistantModule opens the audio feature's store")
         .put_bytes(
             &format!("transcoded/{file}"),
             b"derived bytes".to_vec(),
@@ -120,4 +123,6 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
         body.contains("ready") && body.contains("download"),
         "the seeded derived object flips the tool to ready + link: {body}",
     );
+
+    delete_transcode(app.container(), source).await;
 }

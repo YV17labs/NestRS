@@ -113,8 +113,10 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
   the framework the queue is named for the test. A demo test cannot name its
   queue — `audio` and `notifications` are the product's `#[queue]`s — so its
   own Redis database is the isolation, seeded into every app of the test that
-  must meet: the producer and the worker alike. A test that only pushes stays
-  on the suites' shared database, where nothing drains.
+  must meet: the producer and the worker alike. A test that only pushes
+  leaves no job on Redis: an app over SeaORM arms its outbox, as its relay
+  does when served, so the job waits in the throwaway database; a push with
+  no database cancels its job by its receipt.
 - **The demo's suites file into a bucket of their own**, which its test
   profile names and the dev container creates beside development's, so what a
   test uploads never sits among the objects a running app lists; the
@@ -127,7 +129,8 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
   `<PREFIX>_REDIS__URL` outranks a pin field by field and would move the app
   back onto the shared database, or around a proxy the test put in front of
   it.
-- **What a test files where nothing drains, it names uniquely and deletes.**
+- **What a test files where nothing drains, it names uniquely and deletes**
+  once its assertions are read — an object, a record, a job.
 - **`nest-rs-redis`'s e2e runs on the Valkey topology its URL declares**: the
   dev container's one server by default, which CI runs too. With the
   `valkey-sentinel` or `valkey-cluster` dev container open, uncommenting its

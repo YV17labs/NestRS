@@ -148,7 +148,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         submissions.push(quote! {
             #(#cfgs)*
             ::nest_rs_core::inventory::submit! {
-                ::nest_rs_schedule::ScheduledMethod {
+                ::nest_rs_schedule::__private::scheduled_method(
+                    ::nest_rs_schedule::__private::ScheduledMethodParts {
                     origin: ::core::module_path!(),
                     provider: #provider_name,
                     method: #method_name,
@@ -158,7 +159,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     transaction: #transaction_tokens,
                     replicas: #replicas_tokens,
                     key: #key_tokens,
-                    __site: #site_ref,
+                    site: #site_ref,
                     run: |__container| ::std::boxed::Box::pin(async move {
                         let __provider = ::nest_rs_core::Container::get::<#self_ty>(__container)
                             .expect(::std::concat!(
@@ -168,7 +169,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             ));
                         #call
                     }),
-                }
+                    },
+                )
             }
         });
     }

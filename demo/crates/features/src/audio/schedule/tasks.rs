@@ -60,8 +60,8 @@ mod tests {
     fn three_methods_are_discovered_through_the_inventory() {
         let names: Vec<(&'static str, &'static str)> =
             nest_rs::core::inventory::iter::<ScheduledMethod>()
-                .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioTasks>())
-                .map(|m| (m.provider, m.method))
+                .filter(|m| m.provider_type_id() == TypeId::of::<AudioTasks>())
+                .map(|m| (m.provider(), m.method()))
                 .collect();
         assert!(
             names.contains(&("AudioTasks", "enqueue_transcode")),
@@ -79,9 +79,9 @@ mod tests {
         let replicas = |method: &str| {
             nest_rs::core::inventory::iter::<ScheduledMethod>()
                 .find(|m| {
-                    (m.provider_type_id)() == TypeId::of::<AudioTasks>() && m.method == method
+                    m.provider_type_id() == TypeId::of::<AudioTasks>() && m.method() == method
                 })
-                .map(|m| m.replicas)
+                .map(|m| m.replicas())
         };
         assert_eq!(replicas("enqueue_transcode"), Some(Replicas::One));
         assert_eq!(replicas("heartbeat"), Some(Replicas::Each));

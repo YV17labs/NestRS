@@ -4,6 +4,7 @@
 /// How many replicas of an app fire one occurrence of a scheduled job, declared
 /// as `replicas = "each"` or `replicas = "one"` on `#[every]` and `#[cron]`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Replicas {
     /// Every replica fires every occurrence — the default. An `#[every]` job
     /// first fires one period after this process boots.

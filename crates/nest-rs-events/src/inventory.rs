@@ -18,7 +18,7 @@ pub struct ListenerMethod {
 impl ListenerMethod {
     /// `module_path!()` of the crate that declared it, which picks the level a
     /// skipped listener is reported at.
-    pub(crate) const fn origin(&self) -> &'static str {
+    pub const fn origin(&self) -> &'static str {
         self.origin
     }
 
@@ -27,8 +27,10 @@ impl ListenerMethod {
         self.name
     }
 
-    /// `TypeId` of the host provider, matched against the reachable set.
-    pub(crate) fn provider_type_id(&self) -> TypeId {
+    /// `TypeId` of the host provider, which a reader gates on
+    /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) as the boot
+    /// does.
+    pub fn provider_type_id(&self) -> TypeId {
         (self.provider_type_id)()
     }
 

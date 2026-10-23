@@ -43,6 +43,14 @@ pub use scheduler::Scheduler;
 pub use trigger::{CronExpression, Trigger};
 pub use view::ScheduleView;
 
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::inventory::{ScheduledMethodParts, scheduled_method};
+}
+
 /// Orchestrator on a provider's `impl` block: each `#[every]`, `#[after]` or
 /// `#[cron]` method in it is a job the [`Scheduler`] fires.
 ///
@@ -69,13 +77,13 @@ pub use view::ScheduleView;
 /// }
 ///
 /// let jobs: Vec<&ScheduledMethod> = nest_rs_core::inventory::iter::<ScheduledMethod>()
-///     .filter(|job| job.provider == "ReportTasks")
+///     .filter(|job| job.provider() == "ReportTasks")
 ///     .collect();
-/// assert!(jobs.iter().any(|job| job.method == "nightly"
-///     && job.replicas == Replicas::Each
-///     && matches!(job.trigger, Trigger::Cron { expr: "0 0 2 * * *", tz: Some("Europe/Paris") })));
-/// assert!(jobs.iter().any(|job| job.method == "refresh"
-///     && job.replicas == Replicas::One
-///     && matches!(job.trigger, Trigger::Interval(every) if every == Duration::from_secs(30))));
+/// assert!(jobs.iter().any(|job| job.method() == "nightly"
+///     && job.replicas() == Replicas::Each
+///     && matches!(job.trigger(), Trigger::Cron { expr: "0 0 2 * * *", tz: Some("Europe/Paris") })));
+/// assert!(jobs.iter().any(|job| job.method() == "refresh"
+///     && job.replicas() == Replicas::One
+///     && matches!(job.trigger(), Trigger::Interval(every) if every == Duration::from_secs(30))));
 /// ```
 pub use nest_rs_schedule_macros::scheduled;

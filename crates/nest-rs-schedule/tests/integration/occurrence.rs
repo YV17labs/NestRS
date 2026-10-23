@@ -55,7 +55,7 @@ struct LedgerTasksModule;
 /// What `#[every(.., replicas = "one")]` submitted, read rather than retyped.
 fn declared() -> &'static ScheduledMethod {
     nest_rs_core::inventory::iter::<ScheduledMethod>()
-        .find(|entry| (entry.provider_type_id)() == TypeId::of::<ReplicatedTasks>())
+        .find(|entry| entry.provider_type_id() == TypeId::of::<ReplicatedTasks>())
         .expect("`#[scheduled]` submitted the host's one trigger")
 }
 
@@ -126,8 +126,8 @@ struct UnboundRoot;
 #[tokio::test(start_paused = true)]
 async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
     let declared = declared();
-    assert_eq!(declared.replicas, Replicas::One);
-    assert_eq!(declared.key, None);
+    assert_eq!(declared.replicas(), Replicas::One);
+    assert_eq!(declared.key(), None);
 
     let app = HeadlessApp::builder()
         .module::<BoundRoot>()
@@ -152,10 +152,10 @@ async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
         "each granted occurrence fired, once",
     );
     let krate = declared
-        .origin
+        .origin()
         .split_once("::")
-        .map_or(declared.origin, |(krate, _)| krate);
-    let job = format!("{krate}:{}:{}", declared.provider, declared.method);
+        .map_or(declared.origin(), |(krate, _)| krate);
+    let job = format!("{krate}:{}:{}", declared.provider(), declared.method());
     assert_eq!(job, "integration:ReplicatedTasks:sweep");
     for occurrence in &claimed {
         let instant: u64 = occurrence
@@ -228,7 +228,7 @@ async fn a_job_firing_once_with_no_lock_bound_fails_the_boot_naming_it() {
         .expect("no lock is bound")
         .to_string();
     assert!(
-        refusal.contains(&format!("`{}::{}`", declared.provider, declared.method)),
+        refusal.contains(&format!("`{}::{}`", declared.provider(), declared.method())),
         "names the job: {refusal}"
     );
     assert!(refusal.contains(BACKEND_REMEDY), "{refusal}");

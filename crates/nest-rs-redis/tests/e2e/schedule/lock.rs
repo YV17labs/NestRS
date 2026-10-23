@@ -578,10 +578,8 @@ async fn the_first_claim_wins_and_the_key_is_the_whole_claim() {
     let conn = schedule_connection().await;
     let lock = RedisOccurrenceLock::new(conn.clone());
     let job = format!("probe:ClaimProbe:hold{}", now_ms());
-    let at = |instant: u64, run: &str| Occurrence {
-        token: format!("{job}:{instant}"),
-        hold: Duration::from_secs(30),
-        run: run.to_owned(),
+    let at = |instant: u64, run: &str| {
+        Occurrence::new(format!("{job}:{instant}"), Duration::from_secs(30), run)
     };
     let (first, second, following) = (at(1_000, "run-a"), at(1_000, "run-b"), at(2_000, "run-b"));
 

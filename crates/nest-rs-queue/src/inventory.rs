@@ -65,7 +65,7 @@ impl ProcessMethod {
     /// `module_path!()` of the crate that declared the method — read by
     /// [`inert_host`](::nest_rs_core::inert_host) to pick a report level, and
     /// emitted as a field so a skip line names a type the developer can find.
-    pub(crate) const fn origin(&self) -> &'static str {
+    pub const fn origin(&self) -> &'static str {
         self.origin
     }
 
@@ -84,7 +84,10 @@ impl ProcessMethod {
         &self.options
     }
 
-    pub(crate) fn provider_type_id(&self) -> TypeId {
+    /// `TypeId` of the host provider, which a reader gates on
+    /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) as the
+    /// worker does.
+    pub fn provider_type_id(&self) -> TypeId {
         (self.provider_type_id)()
     }
 

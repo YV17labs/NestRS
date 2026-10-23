@@ -350,30 +350,30 @@ impl Transport for Scheduler {
             .collect::<Result<Vec<_>>>()?;
         let reachable = ReachableProviders::of(container, "scheduled method")?;
         for entry in inventory::iter::<ScheduledMethod>() {
-            if !reachable.reaches((entry.provider_type_id)()) {
+            if !reachable.reaches(entry.provider_type_id()) {
                 ::nest_rs_core::report_inert_host!(
                     target: crate::TARGET,
                     what: "scheduled method",
-                    origin: entry.origin,
-                    host: (entry.provider_type_id)(),
+                    origin: entry.origin(),
+                    host: entry.provider_type_id(),
                     container: container,
-                    provider = entry.provider,
-                    method = entry.method,
+                    provider = entry.provider(),
+                    method = entry.method(),
                 );
                 continue;
             }
             let synthesized = Arc::new(CronJobMeta {
-                origin: entry.origin,
-                provider: entry.provider,
-                method: entry.method,
-                trigger: entry.trigger,
-                run: entry.run,
-                timeout: entry.timeout,
-                transaction: entry.transaction,
-                replicas: entry.replicas,
-                key: entry.key,
+                origin: entry.origin(),
+                provider: entry.provider(),
+                method: entry.method(),
+                trigger: entry.trigger(),
+                run: entry.run(),
+                timeout: entry.timeout(),
+                transaction: entry.transaction(),
+                replicas: entry.replicas(),
+                key: entry.key(),
             });
-            jobs.push(Scheduler::resolve(&synthesized, entry.__site)?);
+            jobs.push(Scheduler::resolve(&synthesized, entry.site())?);
         }
 
         // Two jobs under one `Provider::method` would file lines nobody can tell

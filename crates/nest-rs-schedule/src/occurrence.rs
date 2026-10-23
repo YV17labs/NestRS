@@ -29,6 +29,7 @@ use crate::scheduler::{MAX_SKEW, MIN_HOLD};
 /// A backend never parses a string here: it prefixes the token with its own
 /// structure. Every replica computes the same `token` for the same occurrence.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Occurrence {
     /// The occurrence's token: the job's identity (its crate, host struct and
     /// method, or the path its `key = "…"` pins), then the instant in
@@ -44,8 +45,21 @@ pub struct Occurrence {
     pub run: String,
 }
 
+impl Occurrence {
+    /// The occurrence `token` names, claimed for `hold` by the tick `run`
+    /// traces — as a backend's suite claims one without a scheduler.
+    pub fn new(token: impl Into<String>, hold: Duration, run: impl Into<String>) -> Self {
+        Self {
+            token: token.into(),
+            hold,
+            run: run.into(),
+        }
+    }
+}
+
 /// What a claim on an [`Occurrence`] came to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OccurrenceClaim {
     /// This replica claimed the occurrence, and fires it.
     Claimed,

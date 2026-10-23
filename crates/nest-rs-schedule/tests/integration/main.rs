@@ -8,6 +8,7 @@
 )]
 
 mod error;
+mod inventory;
 mod module;
 mod occurrence;
 mod scheduler;

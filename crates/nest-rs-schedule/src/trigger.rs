@@ -2,6 +2,7 @@ use std::time::Duration;
 
 /// When a scheduled job fires.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub enum Trigger {
     /// First run one interval in (matches `@Interval`).
     Interval(Duration),

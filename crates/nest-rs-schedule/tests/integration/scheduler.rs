@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nest_rs_core::JOB_TIMEOUT;
 use nest_rs_core::{Container, DuplicateMetaError, Transport, injectable};
 use nest_rs_schedule::nest_rs_database::{
     self, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec,
@@ -57,42 +56,30 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
     struct CronHost;
 
     let container = crate::hermetic()
-        .attach_meta::<IntervalHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "IntervalHost",
-            method: "interval",
-            trigger: Trigger::Interval(Duration::from_millis(200)),
-            run: tick_interval,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
-        .attach_meta::<TimeoutHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "TimeoutHost",
-            method: "timeout",
-            trigger: Trigger::Timeout(Duration::from_millis(300)),
-            run: tick_timeout,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
-        .attach_meta::<CronHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "CronHost",
-            method: "cron",
-            trigger: Trigger::Cron {
+        .attach_meta::<IntervalHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "IntervalHost",
+            "interval",
+            Trigger::Interval(Duration::from_millis(200)),
+            tick_interval,
+        ))
+        .attach_meta::<TimeoutHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "TimeoutHost",
+            "timeout",
+            Trigger::Timeout(Duration::from_millis(300)),
+            tick_timeout,
+        ))
+        .attach_meta::<CronHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "CronHost",
+            "cron",
+            Trigger::Cron {
                 expr: CronExpression::EVERY_SECOND,
                 tz: None,
             },
-            run: tick_cron,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
+            tick_cron,
+        ))
         .build()
         .expect("the container builds");
 
@@ -149,28 +136,20 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
     struct SurvivorHost;
 
     let container = crate::hermetic()
-        .attach_meta::<PanicHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "PanicHost",
-            method: "panics",
-            trigger: Trigger::Interval(Duration::from_millis(100)),
-            run: tick_panic,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
-        .attach_meta::<SurvivorHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "SurvivorHost",
-            method: "survives",
-            trigger: Trigger::Interval(Duration::from_millis(100)),
-            run: tick_survivor,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<PanicHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "PanicHost",
+            "panics",
+            Trigger::Interval(Duration::from_millis(100)),
+            tick_panic,
+        ))
+        .attach_meta::<SurvivorHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "SurvivorHost",
+            "survives",
+            Trigger::Interval(Duration::from_millis(100)),
+            tick_survivor,
+        ))
         .build()
         .expect("the container builds");
 
@@ -229,17 +208,13 @@ async fn a_tick_still_running_at_the_shutdown_bound_is_stopped_and_files_cancell
 
     let logs = LogCapture::install();
     let container = crate::hermetic()
-        .attach_meta::<StuckHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "StuckHost",
-            method: "never_returns",
-            trigger: Trigger::Timeout(Duration::from_millis(10)),
-            run: tick_stuck,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<StuckHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "StuckHost",
+            "never_returns",
+            Trigger::Timeout(Duration::from_millis(10)),
+            tick_stuck,
+        ))
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -323,20 +298,16 @@ async fn invalid_cron_expression_fails_configure() {
     struct BadHost;
 
     let container = crate::hermetic()
-        .attach_meta::<BadHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "BadHost",
-            method: "broken",
-            trigger: Trigger::Cron {
+        .attach_meta::<BadHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "BadHost",
+            "broken",
+            Trigger::Cron {
                 expr: "not a cron expression",
                 tz: None,
             },
-            run: tick_cron,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
+            tick_cron,
+        ))
         .build()
         .expect("the container builds");
 
@@ -355,19 +326,17 @@ async fn a_cron_jobs_boot_line_names_its_zone_and_the_database_release_it_read()
     struct ZonedHost;
     struct UtcHost;
 
-    let cron = |provider, tz| CronJobMeta {
-        origin: module_path!(),
-        provider,
-        method: "report",
-        trigger: Trigger::Cron {
-            expr: "0 0 9 * * *",
-            tz,
-        },
-        run: tick_cron,
-        timeout: JOB_TIMEOUT,
-        transaction: TransactionPolicy::PerUnit,
-        replicas: Replicas::Each,
-        key: None,
+    let cron = |provider, tz| {
+        CronJobMeta::new(
+            module_path!(),
+            provider,
+            "report",
+            Trigger::Cron {
+                expr: "0 0 9 * * *",
+                tz,
+            },
+            tick_cron,
+        )
     };
     let container = crate::hermetic()
         .attach_meta::<ZonedHost, CronJobMeta>(cron("ZonedHost", Some("america/vancouver")))
@@ -464,17 +433,13 @@ async fn a_tick_runs_as_a_unit_of_work_of_the_bound_binding() {
         .provide_dyn::<dyn UnitOfWork>(Arc::new(Marking {
             answer: Settlement::Settled,
         }))
-        .attach_meta::<ObserveHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "ObserveHost",
-            method: "observe",
-            trigger: Trigger::Interval(Duration::from_millis(100)),
-            run: tick_observe,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<ObserveHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "ObserveHost",
+            "observe",
+            Trigger::Interval(Duration::from_millis(100)),
+            tick_observe,
+        ))
         .build()
         .expect("the container builds");
 
@@ -528,17 +493,13 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
 
     let logs = nest_rs_testing::LogCapture::install();
     let container = crate::hermetic()
-        .attach_meta::<NamedPanicHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "NamedPanicHost",
-            method: "panics",
-            trigger: Trigger::Interval(Duration::from_millis(50)),
-            run: tick_panic_naming_itself,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<NamedPanicHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "NamedPanicHost",
+            "panics",
+            Trigger::Interval(Duration::from_millis(50)),
+            tick_panic_naming_itself,
+        ))
         .build()
         .expect("the container builds");
 
@@ -606,17 +567,16 @@ async fn a_failed_tick_names_every_cause_beneath_its_error() {
 
     let logs = nest_rs_testing::LogCapture::install();
     let container = crate::hermetic()
-        .attach_meta::<WrappedFailureHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "WrappedFailureHost",
-            method: "tick",
-            trigger: Trigger::Interval(Duration::from_millis(50)),
-            run: tick_wrapped_failure,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<WrappedFailureHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "WrappedFailureHost",
+                "tick",
+                Trigger::Interval(Duration::from_millis(50)),
+                tick_wrapped_failure,
+            )
+            .with_transaction(TransactionPolicy::Pool),
+        )
         .build()
         .expect("the container builds");
 
@@ -672,17 +632,16 @@ async fn a_failed_tick_says_a_decode_failure_without_its_value() {
 
     let logs = nest_rs_testing::LogCapture::install();
     let container = crate::hermetic()
-        .attach_meta::<DecodingHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "DecodingHost",
-            method: "tick",
-            trigger: Trigger::Interval(Duration::from_millis(50)),
-            run: tick_decode_failure,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<DecodingHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "DecodingHost",
+                "tick",
+                Trigger::Interval(Duration::from_millis(50)),
+                tick_decode_failure,
+            )
+            .with_transaction(TransactionPolicy::Pool),
+        )
         .build()
         .expect("the container builds");
 
@@ -730,17 +689,13 @@ async fn a_tick_its_unit_could_not_settle_is_reported_as_failed() {
                 "the job's transaction could not be committed",
             )),
         }))
-        .attach_meta::<UnsettleableHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "UnsettleableHost",
-            method: "tick",
-            trigger: Trigger::Interval(Duration::from_millis(50)),
-            run: tick_succeed,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<UnsettleableHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "UnsettleableHost",
+            "tick",
+            Trigger::Interval(Duration::from_millis(50)),
+            tick_succeed,
+        ))
         .build()
         .expect("the container builds");
 
@@ -802,17 +757,17 @@ async fn a_tick_past_its_timeout_is_cut_reported_and_the_schedule_goes_on() {
 
     let logs = nest_rs_testing::LogCapture::install();
     let container = crate::hermetic()
-        .attach_meta::<HungHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "HungHost",
-            method: "tick",
-            trigger: Trigger::Interval(Duration::from_secs(2)),
-            run: tick_hung,
-            timeout: Duration::from_secs(1),
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<HungHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "HungHost",
+                "tick",
+                Trigger::Interval(Duration::from_secs(2)),
+                tick_hung,
+            )
+            .with_timeout(Duration::from_secs(1))
+            .with_transaction(TransactionPolicy::Pool),
+        )
         .build()
         .expect("the container builds");
 
@@ -869,20 +824,16 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
     let logs = LogCapture::install_global();
 
     let container = crate::hermetic()
-        .attach_meta::<NeverHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "NeverHost",
-            method: "never",
-            trigger: Trigger::Cron {
+        .attach_meta::<NeverHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "NeverHost",
+            "never",
+            Trigger::Cron {
                 expr: "0 0 0 1 1 ? 2020",
                 tz: None,
             },
-            run: tick_never,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
+            tick_never,
+        ))
         .build()
         .expect("the container builds");
 
@@ -987,17 +938,17 @@ async fn two_replicas_sharing_a_lock_fire_each_occurrence_once() {
         let shared: Arc<dyn OccurrenceLock> = lock.clone();
         let container = crate::hermetic()
             .provide_dyn::<dyn OccurrenceLock>(shared)
-            .attach_meta::<OnceHost, CronJobMeta>(CronJobMeta {
-                origin: module_path!(),
-                provider: PROVIDER,
-                method: METHOD,
-                trigger: Trigger::Interval(PERIOD),
-                run: tick_once,
-                timeout: JOB_TIMEOUT,
-                transaction: TransactionPolicy::Pool,
-                replicas: Replicas::One,
-                key: None,
-            })
+            .attach_meta::<OnceHost, CronJobMeta>(
+                CronJobMeta::new(
+                    module_path!(),
+                    PROVIDER,
+                    METHOD,
+                    Trigger::Interval(PERIOD),
+                    tick_once,
+                )
+                .with_transaction(TransactionPolicy::Pool)
+                .with_replicas(Replicas::One),
+            )
             .build()
             .expect("the container builds");
         let mut scheduler = Scheduler::new();
@@ -1081,17 +1032,17 @@ async fn a_run_outlasting_its_period_leaves_the_next_occurrences_to_its_peers() 
         let shared: Arc<dyn OccurrenceLock> = lock.clone();
         let container = crate::hermetic()
             .provide_dyn::<dyn OccurrenceLock>(shared)
-            .attach_meta::<OverlapHost, CronJobMeta>(CronJobMeta {
-                origin: module_path!(),
-                provider: "OverlapHost",
-                method: "overlap",
-                trigger: Trigger::Interval(PERIOD),
-                run: tick_overlapping,
-                timeout: JOB_TIMEOUT,
-                transaction: TransactionPolicy::Pool,
-                replicas: Replicas::One,
-                key: None,
-            })
+            .attach_meta::<OverlapHost, CronJobMeta>(
+                CronJobMeta::new(
+                    module_path!(),
+                    "OverlapHost",
+                    "overlap",
+                    Trigger::Interval(PERIOD),
+                    tick_overlapping,
+                )
+                .with_transaction(TransactionPolicy::Pool)
+                .with_replicas(Replicas::One),
+            )
             .build()
             .expect("the container builds");
         let mut scheduler = Scheduler::new();
@@ -1165,20 +1116,20 @@ async fn a_cron_firing_on_one_replica_claims_the_instant_its_expression_names() 
     let shared: Arc<dyn OccurrenceLock> = lock.clone();
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(shared)
-        .attach_meta::<CronOnceHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "CronOnceHost",
-            method: "each_second",
-            trigger: Trigger::Cron {
-                expr: CronExpression::EVERY_SECOND,
-                tz: None,
-            },
-            run: tick_cron_once,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<CronOnceHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "CronOnceHost",
+                "each_second",
+                Trigger::Cron {
+                    expr: CronExpression::EVERY_SECOND,
+                    tz: None,
+                },
+                tick_cron_once,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -1212,17 +1163,17 @@ async fn a_job_firing_on_one_replica_fails_the_boot_without_a_lock() {
     struct LonelyHost;
 
     let container = crate::hermetic()
-        .attach_meta::<LonelyHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "LonelyHost",
-            method: "once",
-            trigger: Trigger::Interval(Duration::from_secs(5)),
-            run: tick_once,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<LonelyHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "LonelyHost",
+                "once",
+                Trigger::Interval(Duration::from_secs(5)),
+                tick_once,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
 
@@ -1245,17 +1196,17 @@ async fn a_one_shot_firing_on_one_replica_fails_the_boot() {
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        .attach_meta::<OneShotHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "OneShotHost",
-            method: "warmup",
-            trigger: Trigger::Timeout(Duration::from_millis(10)),
-            run: tick_once,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<OneShotHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "OneShotHost",
+                "warmup",
+                Trigger::Timeout(Duration::from_millis(10)),
+                tick_once,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
 
@@ -1273,17 +1224,16 @@ async fn a_zero_interval_fails_the_boot() {
     struct ZeroHost;
 
     let container = crate::hermetic()
-        .attach_meta::<ZeroHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "ZeroHost",
-            method: "spin",
-            trigger: Trigger::Interval(Duration::ZERO),
-            run: tick_once,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<ZeroHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "ZeroHost",
+                "spin",
+                Trigger::Interval(Duration::ZERO),
+                tick_once,
+            )
+            .with_transaction(TransactionPolicy::Pool),
+        )
         .build()
         .expect("the container builds");
 
@@ -1302,17 +1252,17 @@ async fn a_sub_millisecond_interval_fails_the_boot_whatever_its_replicas() {
         let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
         let container = crate::hermetic()
             .provide_dyn::<dyn OccurrenceLock>(lock)
-            .attach_meta::<SubMillisecondHost, CronJobMeta>(CronJobMeta {
-                origin: module_path!(),
-                provider: "SubMillisecondHost",
-                method: "spin",
-                trigger: Trigger::Interval(Duration::from_micros(500)),
-                run: tick_once,
-                timeout: JOB_TIMEOUT,
-                transaction: TransactionPolicy::Pool,
-                replicas,
-                key: None,
-            })
+            .attach_meta::<SubMillisecondHost, CronJobMeta>(
+                CronJobMeta::new(
+                    module_path!(),
+                    "SubMillisecondHost",
+                    "spin",
+                    Trigger::Interval(Duration::from_micros(500)),
+                    tick_once,
+                )
+                .with_transaction(TransactionPolicy::Pool)
+                .with_replicas(replicas),
+            )
             .build()
             .expect("the container builds");
 
@@ -1373,17 +1323,17 @@ async fn an_occurrence_whose_lock_fails_is_skipped_and_says_so() {
     let lock: Arc<dyn OccurrenceLock> = Arc::new(FailingLock);
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        .attach_meta::<UnclaimedHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "UnclaimedHost",
-            method: "once",
-            trigger: Trigger::Interval(Duration::from_millis(50)),
-            run: tick_unclaimed,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<UnclaimedHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "UnclaimedHost",
+                "once",
+                Trigger::Interval(Duration::from_millis(50)),
+                tick_unclaimed,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -1485,17 +1435,17 @@ async fn occurrences_overrun_by_a_slow_claim_are_skipped_and_counted_aloud() {
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SlowLock::default());
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        .attach_meta::<OverrunHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "OverrunHost",
-            method: "sweep",
-            trigger: Trigger::Interval(PERIOD),
-            run: tick_slowly_claimed,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<OverrunHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "OverrunHost",
+                "sweep",
+                Trigger::Interval(PERIOD),
+                tick_slowly_claimed,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -1567,16 +1517,16 @@ async fn two_jobs_sharing_one_name_fail_the_boot_naming_both() {
     struct SecondTasks;
 
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
-    let meta = || CronJobMeta {
-        origin: module_path!(),
-        provider: "Tasks",
-        method: "sweep",
-        trigger: Trigger::Interval(Duration::from_secs(1)),
-        run: tick_noop,
-        timeout: JOB_TIMEOUT,
-        transaction: TransactionPolicy::Pool,
-        replicas: Replicas::One,
-        key: None,
+    let meta = || {
+        CronJobMeta::new(
+            module_path!(),
+            "Tasks",
+            "sweep",
+            Trigger::Interval(Duration::from_secs(1)),
+            tick_noop,
+        )
+        .with_transaction(TransactionPolicy::Pool)
+        .with_replicas(Replicas::One)
     };
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
@@ -1606,17 +1556,18 @@ async fn boot_pinning(key: &'static str, replicas: Replicas) -> Result<(), Strin
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        .attach_meta::<PinnedTasks, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "PinnedTasks",
-            method: "sweep",
-            trigger: Trigger::Interval(Duration::from_secs(1)),
-            run: tick_noop,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas,
-            key: Some(key),
-        })
+        .attach_meta::<PinnedTasks, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "PinnedTasks",
+                "sweep",
+                Trigger::Interval(Duration::from_secs(1)),
+                tick_noop,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(replicas)
+            .with_key(key),
+        )
         .build()
         .expect("the container builds");
     Scheduler::new()
@@ -1691,28 +1642,29 @@ async fn two_jobs_firing_once_under_one_identity_fail_the_boot_naming_both() {
     let pinned: &'static str = Box::leak(derived.clone().into_boxed_str());
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        .attach_meta::<InvoiceTasks, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "InvoiceTasks",
-            method: "close_day",
-            trigger: Trigger::Interval(Duration::from_secs(1)),
-            run: tick_noop,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
-        .attach_meta::<LedgerTasks, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "LedgerTasks",
-            method: "close",
-            trigger: Trigger::Interval(Duration::from_secs(1)),
-            run: tick_noop,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: Some(pinned),
-        })
+        .attach_meta::<InvoiceTasks, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "InvoiceTasks",
+                "close_day",
+                Trigger::Interval(Duration::from_secs(1)),
+                tick_noop,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
+        .attach_meta::<LedgerTasks, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "LedgerTasks",
+                "close",
+                Trigger::Interval(Duration::from_secs(1)),
+                tick_noop,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One)
+            .with_key(pinned),
+        )
         .build()
         .expect("the container builds");
     let refusal = Scheduler::new()
@@ -1735,16 +1687,20 @@ async fn a_job_firing_once_names_its_identity_at_boot() {
 
     let logs = LogCapture::install();
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
-    let meta = |provider, replicas, key| CronJobMeta {
-        origin: module_path!(),
-        provider,
-        method: "sweep",
-        trigger: Trigger::Interval(Duration::from_secs(1)),
-        run: tick_noop,
-        timeout: JOB_TIMEOUT,
-        transaction: TransactionPolicy::Pool,
-        replicas,
-        key,
+    let meta = |provider, replicas, key: Option<&'static str>| {
+        let meta = CronJobMeta::new(
+            module_path!(),
+            provider,
+            "sweep",
+            Trigger::Interval(Duration::from_secs(1)),
+            tick_noop,
+        )
+        .with_transaction(TransactionPolicy::Pool)
+        .with_replicas(replicas);
+        match key {
+            Some(key) => meta.with_key(key),
+            None => meta,
+        }
     };
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
@@ -1812,17 +1768,17 @@ async fn occurrences_a_peer_claimed_while_this_replica_overran_are_not_reported_
     let lock: Arc<dyn OccurrenceLock> = Arc::new(PeerFiredLock::default());
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        .attach_meta::<PeerFiredHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "PeerFiredHost",
-            method: "sweep",
-            trigger: Trigger::Interval(PERIOD),
-            run: tick_noop,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<PeerFiredHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "PeerFiredHost",
+                "sweep",
+                Trigger::Interval(PERIOD),
+                tick_noop,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -1881,17 +1837,17 @@ async fn an_occurrence_a_run_overran_by_less_than_a_period_fires_late_rather_tha
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        .attach_meta::<BackToBackHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "BackToBackHost",
-            method: "crunch",
-            trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
-            run: tick_a_little_longer_than_its_period,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<BackToBackHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "BackToBackHost",
+                "crunch",
+                Trigger::Interval(Duration::from_millis(PERIOD_MS)),
+                tick_a_little_longer_than_its_period,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -1980,31 +1936,31 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        .attach_meta::<StalledIntervalHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "StalledIntervalHost",
-            method: "tick",
-            trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
-            run: tick_stalled_interval,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
-        .attach_meta::<StalledCronHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "StalledCronHost",
-            method: "tick",
-            trigger: Trigger::Cron {
-                expr: "* * * * * *",
-                tz: None,
-            },
-            run: tick_stalled_cron,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<StalledIntervalHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "StalledIntervalHost",
+                "tick",
+                Trigger::Interval(Duration::from_millis(PERIOD_MS)),
+                tick_stalled_interval,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
+        .attach_meta::<StalledCronHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "StalledCronHost",
+                "tick",
+                Trigger::Cron {
+                    expr: "* * * * * *",
+                    tz: None,
+                },
+                tick_stalled_cron,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -2074,17 +2030,16 @@ async fn ticks_a_long_run_overran_on_every_replica_are_skipped_and_counted_aloud
 
     let logs = LogCapture::install();
     let container = crate::hermetic()
-        .attach_meta::<LongRunHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "LongRunHost",
-            method: "crunch",
-            trigger: Trigger::Interval(PERIOD),
-            run: tick_longer_than_its_period,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<LongRunHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "LongRunHost",
+                "crunch",
+                Trigger::Interval(PERIOD),
+                tick_longer_than_its_period,
+            )
+            .with_transaction(TransactionPolicy::Pool),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -2144,17 +2099,16 @@ async fn a_run_just_over_its_period_is_late_on_every_tick_and_skips_none() {
 
     let logs = LogCapture::install();
     let container = crate::hermetic()
-        .attach_meta::<SlightlyLongHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "SlightlyLongHost",
-            method: "crunch",
-            trigger: Trigger::Interval(Duration::from_millis(100)),
-            run: tick_slightly_longer_than_its_period,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<SlightlyLongHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "SlightlyLongHost",
+                "crunch",
+                Trigger::Interval(Duration::from_millis(100)),
+                tick_slightly_longer_than_its_period,
+            )
+            .with_transaction(TransactionPolicy::Pool),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -2247,17 +2201,17 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
     let bound: Arc<dyn OccurrenceLock> = lock.clone();
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(bound)
-        .attach_meta::<RecordedHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: PROVIDER,
-            method: METHOD,
-            trigger: Trigger::Interval(Duration::from_millis(100)),
-            run: tick_noop,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<RecordedHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                PROVIDER,
+                METHOD,
+                Trigger::Interval(Duration::from_millis(100)),
+                tick_noop,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -2306,17 +2260,17 @@ async fn every_instant_of_a_job_firing_once_is_claimed_or_counted() {
     let bound: Arc<dyn OccurrenceLock> = lock.clone();
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(bound)
-        .attach_meta::<StalledHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "StalledHost",
-            method: "sweep",
-            trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
-            run: tick_noop,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<StalledHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "StalledHost",
+                "sweep",
+                Trigger::Interval(Duration::from_millis(PERIOD_MS)),
+                tick_noop,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -2401,17 +2355,17 @@ async fn an_overrun_the_lock_cannot_answer_about_is_counted_unanswered_and_unche
     let lock: Arc<dyn OccurrenceLock> = Arc::new(UnanswerableLock::default());
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        .attach_meta::<UnanswerableHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "UnanswerableHost",
-            method: "sweep",
-            trigger: Trigger::Interval(Duration::from_millis(5)),
-            run: tick_noop,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<UnanswerableHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "UnanswerableHost",
+                "sweep",
+                Trigger::Interval(Duration::from_millis(5)),
+                tick_noop,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -2514,17 +2468,17 @@ async fn a_lock_that_panics_skips_the_occurrence_and_the_schedule_goes_on() {
     let bound: Arc<dyn OccurrenceLock> = lock.clone();
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(bound)
-        .attach_meta::<PanickedLockHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "PanickedLockHost",
-            method: "once",
-            trigger: Trigger::Interval(Duration::from_millis(50)),
-            run: tick_behind_a_panicking_lock,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<PanickedLockHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "PanickedLockHost",
+                "once",
+                Trigger::Interval(Duration::from_millis(50)),
+                tick_behind_a_panicking_lock,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -2581,17 +2535,13 @@ async fn a_run_panicking_before_its_future_keeps_its_schedule() {
     struct EarlyPanicHost;
 
     let container = crate::hermetic()
-        .attach_meta::<EarlyPanicHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "EarlyPanicHost",
-            method: "panics_early",
-            trigger: Trigger::Interval(Duration::from_millis(100)),
-            run: tick_panicking_before_its_future,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<EarlyPanicHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "EarlyPanicHost",
+            "panics_early",
+            Trigger::Interval(Duration::from_millis(100)),
+            tick_panicking_before_its_future,
+        ))
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -2658,17 +2608,17 @@ async fn a_schedule_whose_every_job_died_keeps_serving_until_shutdown() {
     let lock: Arc<dyn OccurrenceLock> = Arc::new(UnwritableLock);
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        .attach_meta::<DoomedHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "DoomedHost",
-            method: "once",
-            trigger: Trigger::Interval(Duration::from_millis(50)),
-            run: tick_behind_an_unwritable_lock,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<DoomedHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "DoomedHost",
+                "once",
+                Trigger::Interval(Duration::from_millis(50)),
+                tick_behind_an_unwritable_lock,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -2713,17 +2663,17 @@ async fn serve_until_the_schedule_panicked(logs: &LogCapture) {
     let lock: Arc<dyn OccurrenceLock> = Arc::new(UnwritableLock);
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        .attach_meta::<DoomedHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "DoomedHost",
-            method: "once",
-            trigger: Trigger::Interval(Duration::from_millis(50)),
-            run: tick_behind_an_unwritable_lock,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<DoomedHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "DoomedHost",
+                "once",
+                Trigger::Interval(Duration::from_millis(50)),
+                tick_behind_an_unwritable_lock,
+            )
+            .with_transaction(TransactionPolicy::Pool)
+            .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -2812,17 +2762,11 @@ async fn shut_down_while_a_claim_hangs(
     let shared: Arc<dyn OccurrenceLock> = lock.clone();
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(shared)
-        .attach_meta::<HungHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "HungHost",
-            method,
-            trigger,
-            run,
-            timeout: JOB_TIMEOUT,
-            transaction: TransactionPolicy::Pool,
-            replicas: Replicas::One,
-            key: None,
-        })
+        .attach_meta::<HungHost, CronJobMeta>(
+            CronJobMeta::new(module_path!(), "HungHost", method, trigger, run)
+                .with_transaction(TransactionPolicy::Pool)
+                .with_replicas(Replicas::One),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();
@@ -2995,17 +2939,16 @@ async fn one_timed_tick(run: RunFn, unit: Settling) -> Vec<nest_rs_testing::Capt
     let logs = LogCapture::install();
     let container = crate::hermetic()
         .provide_dyn::<dyn UnitOfWork>(Arc::new(unit))
-        .attach_meta::<TimedHost, CronJobMeta>(CronJobMeta {
-            origin: module_path!(),
-            provider: "TimedHost",
-            method: "tick",
-            trigger: Trigger::Interval(Duration::from_secs(60)),
-            run,
-            timeout: Duration::from_secs(1),
-            transaction: TransactionPolicy::PerUnit,
-            replicas: Replicas::Each,
-            key: None,
-        })
+        .attach_meta::<TimedHost, CronJobMeta>(
+            CronJobMeta::new(
+                module_path!(),
+                "TimedHost",
+                "tick",
+                Trigger::Interval(Duration::from_secs(60)),
+                run,
+            )
+            .with_timeout(Duration::from_secs(1)),
+        )
         .build()
         .expect("the container builds");
     let mut scheduler = Scheduler::new();

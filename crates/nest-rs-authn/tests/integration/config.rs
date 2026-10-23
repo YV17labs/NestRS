@@ -564,7 +564,7 @@ fn an_authority_without_a_jwk_set_is_refused() {
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
         tls: nest_rs_config::ClientTls::new(
             Some(nest_rs_config::Material::inline(
-                b"-----BEGIN CERTIFICATE-----".to_vec(),
+                b"-----BEGIN CERTIFICATE-----",
             )),
             None,
         ),

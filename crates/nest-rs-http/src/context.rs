@@ -30,21 +30,6 @@ pub struct RejectedCredential {
     pub bearer_error: Option<&'static str>,
 }
 
-impl RejectedCredential {
-    /// A credential rejected on its way to a `P` principal, the guard's
-    /// client-safe message and its RFC 6750 §3.1 error code beside it.
-    pub fn of<P: 'static>(
-        client_message: impl Into<String>,
-        bearer_error: Option<&'static str>,
-    ) -> Self {
-        Self {
-            principal: TypeId::of::<P>(),
-            client_message: client_message.into(),
-            bearer_error,
-        }
-    }
-}
-
 /// Extracts a value of type `T` a guard attached to the request with
 /// `UnitContext::attach` — ambient for the rest of the request once the guards
 /// passed.
@@ -80,6 +65,19 @@ enum Absent<'a> {
 }
 
 impl RejectedCredential {
+    /// A credential rejected on its way to a `P` principal, the guard's
+    /// client-safe message and its RFC 6750 §3.1 error code beside it.
+    pub fn of<P: 'static>(
+        client_message: impl Into<String>,
+        bearer_error: Option<&'static str>,
+    ) -> Self {
+        Self {
+            principal: TypeId::of::<P>(),
+            client_message: client_message.into(),
+            bearer_error,
+        }
+    }
+
     /// The deferred `401`: the guard's client-safe message, and the RFC 6750
     /// challenge it would have stamped.
     fn deferred(&self) -> Response {
@@ -218,11 +216,11 @@ mod tests {
     #[tokio::test]
     async fn a_rejection_with_no_code_defers_a_401_whose_challenge_names_none() {
         let mut req = Request::builder().finish();
-        req.extensions_mut().insert(RejectedCredential {
-            principal: TypeId::of::<Principal>(),
-            client_message: "authentication failed".into(),
-            bearer_error: None,
-        });
+        req.extensions_mut()
+            .insert(RejectedCredential::of::<Principal>(
+                "authentication failed",
+                None,
+            ));
         let err = extract(req).await.err().expect("credential was rejected");
         assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
         let challenge = err
@@ -244,11 +242,11 @@ mod tests {
         impl AmbientValue for SomethingElse {}
 
         let mut req = Request::builder().finish();
-        req.extensions_mut().insert(RejectedCredential {
-            principal: TypeId::of::<SomethingElse>(),
-            client_message: "authentication failed".into(),
-            bearer_error: Some(crate::challenge::INVALID_TOKEN),
-        });
+        req.extensions_mut()
+            .insert(RejectedCredential::of::<SomethingElse>(
+                "authentication failed",
+                Some(crate::challenge::INVALID_TOKEN),
+            ));
         let err = extract(req).await.err().expect("no guard attached it");
         assert_eq!(
             err.status(),

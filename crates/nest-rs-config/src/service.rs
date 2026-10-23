@@ -293,10 +293,7 @@ impl ConfigService {
         Ok(match self.spelled(key)? {
             None => None,
             Some(Spelled::Inline(value)) => Some(Setting::new(
-                Material {
-                    bytes: value.into_bytes(),
-                    path: None,
-                },
+                Material::inline(value),
                 self.var_name(key),
                 false,
             )),

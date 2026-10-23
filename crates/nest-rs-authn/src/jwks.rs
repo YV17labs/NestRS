@@ -657,7 +657,7 @@ mod tests {
         for pem in [&b""[..], b"not a certificate"] {
             let Err(refused @ AuthError::Failed { .. }) = Jwks::new(
                 "https://issuer.example/jwks",
-                &ClientTls::new(Some(nest_rs_config::Material::inline(pem.to_vec())), None),
+                &ClientTls::new(Some(nest_rs_config::Material::inline(pem)), None),
                 &[Algorithm::EdDSA],
             ) else {
                 panic!("an authority file with no certificate must be refused");

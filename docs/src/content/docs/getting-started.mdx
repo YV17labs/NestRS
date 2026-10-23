@@ -91,6 +91,7 @@ impl HelloController {
     // This greeting is deliberately open, so it says so.
     #[get("/")]
     #[public]
+    #[api(summary = "Greet the caller")]
     async fn hello(&self) -> String {
         self.svc.greeting()
     }
@@ -110,7 +111,7 @@ Edit the greeting in `crates/features/src/hello/service.rs`, save, and
 `nestrs run dev` hot-reloads. Then curl again:
 
 ```rust title="crates/features/src/hello/service.rs"
-fn greeting(&self) -> String {
+pub fn greeting(&self) -> String {
     "Hello, NestRS".to_string()   // was "Hello World"
 }
 ```
@@ -127,4 +128,4 @@ That's the loop — edit, save, curl. Every reference section builds on it.
 - [Tutorial](/tutorial/) — add `apps/blog/` with `nestrs new blog` and build posts over HTTP.
 - [The demo apps (Publish)](/publish/) — the multi-tenant publishing platform all the reference apps build.
 - [CLI](/cli/) — scaffold apps, features, and transport adapters.
-- [Fundamentals](/fundamentals/) — modules, providers, guards, pipes, interceptors, filters.
+- [Fundamentals](/fundamentals/) — modules, providers, guards, pipes, interceptors, exception filters.

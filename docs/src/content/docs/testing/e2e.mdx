@@ -173,7 +173,7 @@ opens is the app's pool's: TLS verified or off as the URL says, an `sslmode`
 that encrypts without verifying refused.
 
 `provide_arc(db.connection())` seeds the real connection into the
-container, short-circuiting `SeaOrmDatabaseModule`'s `for_root` factory. The
+container, in place of the pool `SeaOrmModule::for_root` would open. The
 rest of the app builds normally.
 
 ```rust title="apps/api/tests/e2e/users.rs"
@@ -326,8 +326,7 @@ pre-cloned `Arc` so the test and the container share the same instance.
 
 ### What an override does to the provider it replaces
 
-The double stands in for the whole provider, as NestJS's
-`overrideProvider(X).useValue(v)` does:
+The double stands in for the whole provider:
 
 - **The real provider is never built.** Its constructor never runs and
   its own dependencies need not exist, so a test of `UsersService` can
@@ -552,7 +551,7 @@ and `curl` the affected endpoint:
 
 ```bash frame="terminal"
 $ nestrs run dev api &
-$ curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/users
+$ curl -H "Authorization: Bearer $TOKEN" http://localhost:3002/users
 $ kill %1
 ```
 

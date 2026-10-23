@@ -246,9 +246,13 @@ Each of them converts into `HttpError`, so `?` propagates it through a
 `nest_rs::http::Result` handler, and a handler may also return it as its own
 error type (`Result<T, AuthError>`).
 
-There is **no `AbilityError`** — an ability denial is not an error. It is
-a guard denial, returned as an `Ok(403)` response by `AuthzGuard`, so it
-never travels the `?`/`ResponseError` path at all (see
+There is **no `AbilityError`** — an ability denial is not a handler's error. It
+is a `Denial`, the type a guard refuses with: the class gate that
+`#[authorize(Action, Entity)]` declares checks the ability your `AuthzGuard`
+attached and answers its `Denial` before the handler runs: `Forbidden` when no
+grant covers the action, `InsufficientScope` for a token too narrow,
+`Unauthorized` for an anonymous caller off a `#[public]` route. It never
+travels the `?`/`ResponseError` path at all (see
 [Guards](/fundamentals/guards/)). Its document's `code` is the one the
 denial's class carries on every edge: `UNAUTHENTICATED` for a missing or
 rejected credential, `FORBIDDEN`, `INSUFFICIENT_SCOPE` for a token too

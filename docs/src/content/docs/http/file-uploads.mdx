@@ -91,17 +91,18 @@ Nothing in a `Multipart` handler states what the form's parts are, so
 `#[api(multipart = Type)]` declares them and the
 [OpenAPI document](/openapi/) files the schema under `multipart/form-data`:
 
-```rust title="crates/features/src/media/http/controller.rs"
-#[derive(JsonSchema)]
+```rust title="crates/features/src/audio/dtos/direct_upload_dto.rs (from the demo)"
+use schemars::JsonSchema;
+
+#[derive(Debug, Clone, JsonSchema)]
 pub struct DirectUploadDto {
     #[schemars(extend("format" = "binary"))]
     pub file: String,
 }
-
-#[post("/uploads/direct")]
-#[api(multipart = DirectUploadDto)]
-async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDto>> { /* ... */ }
 ```
+
+`upload_direct`, at the top of the page, names it in its
+`#[api(…, multipart = DirectUploadDto, …)]`.
 
 `format: binary` is what makes Swagger UI render a file picker for the part.
 Undeclared, a `Multipart` handler still documents `multipart/form-data` with a

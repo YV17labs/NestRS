@@ -206,6 +206,8 @@ use features::authn::AuthnModule;
 use features::authz::AuthzModule;
 use features::users::UsersHttpModule;
 use nest_rs::core::module;
+use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
 #[module(
     imports = [
@@ -233,14 +235,14 @@ SQL — the `Repo::scoped(Action::Read)` `CrudService::list` uses joins
 the ambient ability's `condition_for(Read)`.
 
 **By-id load checks access.** `Bind<Read, UsersService>` parses the
-`:id` path segment, loads the row through the service, runs the
+`{id}` path segment, loads the row through the service, runs the
 ability check. Three failure shapes:
 
 | Caller's view | Status |
 |---------------|--------|
 | The row doesn't exist | `404` |
 | The row exists but the ability refuses it | `403` |
-| The `:id` segment isn't a valid UUID | `400` |
+| The `{id}` segment isn't a valid UUID | `400` |
 
 `403` (rather than `404`) on a denied-but-existing row discloses that the
 row exists — the standard REST trade-off, chosen here so a client can
@@ -290,7 +292,7 @@ trait's own order):
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 
 use crate::authn::Claims;
-use crate::posts::entity as post;
+use crate::posts as post;
 
 impl AbilityFactory for AuthzAbility {
     type Actor = Claims;

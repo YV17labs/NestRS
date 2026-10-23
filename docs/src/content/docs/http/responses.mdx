@@ -58,7 +58,7 @@ macros sit beside the verb attribute:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::{
-    IntoResponse, Json, Request, Response, Result, caller_path, http_code, redirect,
+    IntoResponse, Json, Request, Response, Result, Valid, caller_path, http_code, redirect,
     response_header, set_created_location,
 };
 
@@ -159,7 +159,7 @@ user — go back to a plain tuple return and let the handler decide:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::{
-    IntoResponse, Json, Request, Response, Result, StatusCode, caller_path,
+    IntoResponse, Json, Request, Response, Result, StatusCode, Valid, caller_path,
     set_created_location,
 };
 

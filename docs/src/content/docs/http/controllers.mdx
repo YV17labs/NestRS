@@ -22,6 +22,7 @@ versioning ([versioning](/http/versioning/)) each have their own page.
 
 ```rust title="crates/features/src/hello/http/controller.rs"
 use std::sync::Arc;
+
 use nest_rs::http::{controller, routes};
 
 use crate::hello::HelloService;
@@ -35,6 +36,7 @@ pub struct HelloController {
 #[routes]
 impl HelloController {
     #[get("/")]
+    #[public]
     async fn hello(&self) -> String {
         self.svc.greeting()
     }
@@ -46,6 +48,9 @@ impl HelloController {
   container hands the controller the shared `Arc<HelloService>` when it
   builds the controller.
 - **`#[routes]`** generates the route table; one entry per verb attribute.
+- **`#[public]`** declares the route open on purpose. A route with neither a
+  guard nor `#[public]` is named at boot in one `warn`,
+  `unguarded routes detected` — see [Security](/security/).
 - **`async fn hello(&self) -> String`** — any type that implements
   `IntoResponse` is a valid return. `String`, `&'static str`, `Json<T>`,
   `StatusCode`, `(StatusCode, Body)`, a built `Response` … all work, and so does
@@ -80,9 +85,10 @@ folded in.
 `#[get("/")]` on `#[controller(path = "/greetings")]` serves `/greetings`, and
 `/greetings/` reaches the same handler: the transport edge trims the trailing
 slash before anything routes on the path, so both spellings run the same
-guards, interceptors and filters. The mounted path — the one the event above
-prints, the one the OpenAPI document lists — is the trimmed form. Interior
-slashes are left alone: `/greetings//hello` is a different path, not a typo.
+guards, interceptors and exception filters. The mounted path — the one the
+event above prints, the one the OpenAPI document lists — is the trimmed form.
+Interior slashes are left alone: `/greetings//hello` is a different path, not a
+typo.
 When a route seems missing, compare your URL against the `path` field of that
 event rather than against the attribute.
 
@@ -92,6 +98,7 @@ event rather than against the attribute.
 use nest_rs::http::Path;
 
 #[get("/{name}")]
+#[public]
 async fn greet(&self, Path(name): Path<String>) -> String {
     format!("Hello, {name}!")
 }
@@ -124,13 +131,17 @@ what the document, the span's `http.route` and the
 |---|---|---|
 | `/users/{id}` | `/users/42` | `id` = `42` |
 | `/@{handle}` | `/@ada` — a parameter may follow literal text in its segment | `handle` = `ada` |
-| `/files/{*path}` | `/files/a/b.txt` — the rest of the path, never empty | `path` = `a/b.txt` |
+| `/files/{*path}` | `/files/a/b.txt` — the rest of the path | `path` = `a/b.txt` |
 | `/{{raw}}` | `/{raw}` — a doubled brace is a literal one | nothing |
 
 A parameter reads up to the next `/`, so it ends its segment; a catch-all takes
-the rest of the path, so it comes last. A controller's own `path` may hold
-parameters too (`/orgs/{org}/members`); it ends before its routes, so it holds
-no catch-all.
+the rest of the path, so it comes last. Neither matches an empty value:
+`/a//b` reaches no `/a/{x}/b`, and a root catch-all `/{*path}` leaves `/` to a
+route of its own — declare `#[get("/")]` beside it, or `/` answers the
+fallback's `404`. Each value is percent-decoded once, so a `%2F` is a `/` inside
+it; one whose bytes are not UTF-8 is a `400` naming the parameter, never its
+value. A controller's own `path` may hold parameters too (`/orgs/{org}/members`);
+it ends before its routes, so it holds no catch-all.
 
 **Everything else is refused at compile time, at the literal**, with the
 spelling to write instead:
@@ -161,6 +172,7 @@ struct Greet {
 }
 
 #[get("/")]
+#[public]
 async fn hello(&self, Query(q): Query<Greet>) -> String {
     match q.lang.as_deref() {
         Some("fr") => "Bonjour le monde".to_string(),
@@ -191,6 +203,7 @@ struct GreetReply {
 }
 
 #[post("/")]
+#[public]
 async fn shout(&self, Valid(input): Valid<Json<GreetInput>>) -> Result<Json<GreetReply>> {
     Ok(Json(GreetReply {
         greeting: format!("HELLO, {}!", input.name.to_uppercase()),
@@ -245,6 +258,7 @@ and sets `Content-Type: application/json`:
 
 ```rust title="crates/features/src/hello/http/controller.rs"
 #[get("/me")]
+#[public]
 async fn me(&self) -> Json<GreetReply> {
     Json(GreetReply { greeting: self.svc.greeting() })
 }

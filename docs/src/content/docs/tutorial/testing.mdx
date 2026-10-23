@@ -54,7 +54,7 @@ like every other line here — the app manifest only points at the root.
 `testing` is what brings `TestApp` in, and `nestrs new` already put it on the
 app's `nest-rs` dev-dependency: it stays out of the workspace's `nest-rs`, so no
 release binary carries the harness. `EphemeralDatabase` rides the `seaorm`
-feature you enabled on the [entity page](/tutorial/entity/), which is what a
+feature the workspace's `nest-rs` has carried since `nestrs new`, which is what a
 suite testing against a real schema already has. There is no telemetry feature
 to enable: `blog` imports no `OpenTelemetryModule`, so
 `TestApp` needs no `with_test_telemetry()` — that builder method exists only to
@@ -146,9 +146,9 @@ async fn posts_round_trip() {
 }
 ```
 
-The assertions cover the entire chain: the `POST` walks validation, the
-transaction interceptor, and the service; the `GET /posts/{id}` walks
-`CrudService::find_by_id` through `Repo`.
+The assertions cover the entire chain: the `POST` walks validation, the unit
+of work's transaction, and the service; the `GET /posts/{id}` walks
+`CrudService::access` through `Repo`.
 
 ## The validation failure
 

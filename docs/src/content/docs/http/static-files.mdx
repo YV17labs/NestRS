@@ -185,9 +185,10 @@ field.
 - One module serves one folder at one path.
 - A segment carrying an encoded `/`, `\` or control character is refused,
   even as a client-side route.
-- With the transport's [`compression`](/http/compression/) on, a ranged
-  `206` is encoded like any other response, under the same `ETag`: leave
-  compression to the proxy in front when you serve ranges.
+- With the transport's [`compression`](/http/compression/) on, a whole file is
+  encoded under the same `ETag` as its plain bytes; a ranged `206` is sent as
+  written, since its offsets count unencoded bytes. Leave compression to the
+  proxy in front when a cache keys on the `ETag`.
 
 ## What fails if you get it wrong
 

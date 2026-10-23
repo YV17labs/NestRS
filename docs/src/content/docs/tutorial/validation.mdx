@@ -22,12 +22,15 @@ not a shortcut — for a bare CRUD feature, the macro is the handler.
 `#[crud]` emits `create` and `update` methods that already wrap the
 body in `Valid<...>`:
 
-```rust title="(expanded by #[crud] — you don't write this)"
+```rust title="from the #[crud] expansion, abridged — you don't write this"
+#[post("/")]
+#[http_code(201)]
 async fn create(
     &self,
-    __body: ::nest_rs::http::Valid<::nest_rs::http::Json<CreatePost>>,
-) -> ::nest_rs::http::Result<::nest_rs::http::Response> {
-    // delegates to CrudService::create
+    __req: &Request,
+    __body: Valid<Json<CreatePost>>,
+) -> Result<Response> {
+    // Creatable::create, then the `Location` of the row it made
 }
 ```
 
@@ -111,15 +114,19 @@ successful validation — and, with the database wired on the previous
 page, the handler persists the post and returns it.
 
 ```bash frame="terminal"
-$ curl -s -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
+$ curl -i -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"title":"Hello","body":"World"}'
+HTTP/1.1 201 Created
+location: /posts/018f…
+content-type: application/json
+
 {"id":"018f…","title":"Hello","body":"World"}
 ```
 
-A `2xx` with the created row — the body cleared validation and the
-service committed it in a transaction. The pipe only ever intercepts the
-malformed case.
+A `201` with the created row, and the `Location` that names it — the body
+cleared validation and the service committed it in a transaction. The pipe
+only ever intercepts the malformed case.
 
 ## Two failure modes worth the distinction
 

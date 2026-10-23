@@ -23,8 +23,8 @@ Three categories, Rust's standard model plus the app e2e:
   access and no DI boot.
 - **[Integration tests](/testing/integration/)** — `tests/integration/main.rs`,
   a directory and never a flat `tests/<x>.rs`. The crate's public API,
-  exercised as an external consumer would. Shared fixtures go in
-  `tests/integration/common/mod.rs`.
+  exercised as an external consumer would. Shared fixtures sit in the suite's
+  `main.rs`, beside its `mod` list.
 - **[End-to-end tests](/testing/e2e/)** — `TestApp` boots the real
   `AppModule` against an `EphemeralDatabase`. The route table, the DI
   graph, the access-graph check, authn/authz, and the data path all run.
@@ -90,16 +90,14 @@ test result: ok. 14 passed in 4.31s
 
 ```bash frame="terminal"
 $ nestrs run test cov               # full suite with coverage (llvm-cov)
-error: failed to find llvm-tools-preview, please install llvm-tools-preview,
-       or set LLVM_COV and LLVM_PROFDATA environment variables
 ```
 
-`cov` is the one recipe with a prerequisite the CLI does not bootstrap: it
-shells out to the LLVM tools, installed with
-`rustup component add llvm-tools-preview`. A toolchain without rustup
-(Homebrew, a distro package) points `LLVM_COV` / `LLVM_PROFDATA` at its own
-copies instead. `unit`, `integration`, `e2e` and `doc` need nothing beyond the
-bootstrap.
+`cov` shells out to the LLVM tools. The CLI's first-run bootstrap installs
+`cargo-llvm-cov`, and rustup installs the `llvm-cov` / `llvm-profdata` it drives
+on the first run, from the `llvm-tools-preview` component the scaffold's
+`rust-toolchain.toml` pins. A toolchain without rustup (Homebrew, a distro
+package) ignores that file: point `LLVM_COV` / `LLVM_PROFDATA` at its own copies
+instead.
 
 One recipe per kind, named for the suite it runs: `unit` the `#[cfg(test)]`
 modules, `integration` the `tests/integration` suites — in process, no

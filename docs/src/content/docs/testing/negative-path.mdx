@@ -27,9 +27,9 @@ catch bugs the happy path can't:
 - **Malformed input → 400 with the wire error shape.** Confirms the
   pipe runs, the error mapping survives, and the body matches the
   client contract.
-- **Server error → rollback verified.** The ambient executor rolls
-  back on non-2xx; a test that triggers a 500 then queries the DB
-  confirms the row is absent.
+- **Server error → rollback verified.** The ambient transaction rolls
+  back on an error status, `4xx` or `5xx`; a test that triggers a 500 then
+  queries the DB confirms the row is absent.
 
 ## Auth refused
 

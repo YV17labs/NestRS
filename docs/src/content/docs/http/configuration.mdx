@@ -42,7 +42,7 @@ runs one server, configured by its `for_root`.
 Default values: host `0.0.0.0`, port `3000`, no TLS (plain HTTP), no CORS,
 no framework `Server` header, a `2 MiB` request-body cap, a `20`-second
 request timeout, at most `10 000` open connections, a `20`-second shutdown
-window, fail-secure boot on, and the default security headers on.
+window, the access log and the default security headers on.
 
 ## `HttpConfig` fields
 
@@ -56,13 +56,19 @@ Real env always wins over the `.env` cascade.
 | `port` | `<PREFIX>_HTTP__PORT` | `3000` | `HttpConfig { port: 3002, ..Default::default() }` |
 | `tls.cert` | `<PREFIX>_HTTP__TLS_CERT` (inline PEM) or `<PREFIX>_HTTP__TLS_CERT_FILE` (path) | unset ⇒ plain HTTP | `HttpConfig { tls: Some(HttpTls::new(cert, key)), ..Default::default() }` |
 | `tls.key`  | `<PREFIX>_HTTP__TLS_KEY` or `<PREFIX>_HTTP__TLS_KEY_FILE`  | unset ⇒ plain HTTP | (set together with `tls.cert`) |
+| `tls.reload_secs` | `<PREFIX>_HTTP__TLS_RELOAD_SECS` (`1`–`86400`, `0` ⇒ unwatched) | `60` for a pair read from files | in a test: `HttpTls::from_files(cert_path, key_path)?.with_reload_secs(300)` — see [Renewal without a restart](#renewal-without-a-restart) |
 | `cors.origins` | `<PREFIX>_HTTP__CORS_ORIGINS` (comma list) | unset ⇒ CORS off | `HttpCors { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
 | `cors.methods` | `<PREFIX>_HTTP__CORS_METHODS` | empty | `methods: vec!["GET".into(), "POST".into()]` |
 | `cors.headers` | `<PREFIX>_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
 | `cors.exposed_headers` | `<PREFIX>_HTTP__CORS_EXPOSED` | empty — `Link`, `Location` and `Retry-After`, which the framework sends, are always exposed | `exposed_headers: vec!["X-Total-Count".into()]` |
 | `cors.credentials` | `<PREFIX>_HTTP__CORS_CREDENTIALS` (`true`/`false`) | `false` | `credentials: true` |
-| `cors.max_age` | `<PREFIX>_HTTP__CORS_MAX_AGE` (seconds) | unset | `max_age: Some(Duration::from_secs(3600))` |
+| `cors.max_age` | `<PREFIX>_HTTP__CORS_MAX_AGE` (seconds) | unset ⇒ no `Access-Control-Max-Age`, the browser's own few seconds | `max_age: Some(Duration::from_secs(3600))` |
+| `versioning` | `<PREFIX>_HTTP__VERSIONING` (`uri`, `header`, `media_type`) | `uri` | `HttpConfig { versioning: ApiVersioning::Header, ..Default::default() }` — see [Versioning](/http/versioning/) |
+| `version_header` | `<PREFIX>_HTTP__VERSION_HEADER` | `X-API-Version` | `HttpConfig { version_header: "X-Version".into(), ..Default::default() }` |
+| `default_version` | `<PREFIX>_HTTP__DEFAULT_VERSION` | unset ⇒ no default | `HttpConfig { default_version: Some("1".into()), ..Default::default() }` |
 | `server_header` | `<PREFIX>_HTTP__SERVER_HEADER` (`true`/`false`) | `false` | `HttpConfig { server_header: true, ..Default::default() }` |
+| `access_log` | `<PREFIX>_HTTP__ACCESS_LOG` (`true`/`false`) | `true` | `HttpConfig { access_log: false, ..Default::default() }` — see [Logs](/opentelemetry/logs/) |
+| `trusted_proxies` | `<PREFIX>_HTTP__TRUSTED_PROXIES` (comma list of IPs) | empty | `HttpConfig { trusted_proxies: vec![IpAddr::from([10, 0, 0, 1])], ..Default::default() }` — see [`ClientIp`](/http/extractors/#clientip--best-effort-observation-grade) |
 | `global_prefix` | `<PREFIX>_HTTP__GLOBAL_PREFIX` (one literal path: `{` `}` or `:` `*` `<` fail the boot) | unset ⇒ no prefix | `HttpConfig { global_prefix: Some("/api".into()), ..Default::default() }` |
 | `max_body_bytes` | `<PREFIX>_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig { max_body_bytes: Some(4 * 1024 * 1024), ..Default::default() }` |
 | `request_timeout` | `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `20 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
@@ -72,6 +78,8 @@ Real env always wins over the `.env` cascade.
 | `idle_timeout` | `<PREFIX>_HTTP__IDLE_TIMEOUT_SECS` (seconds, `1`–`3600`) | `75 s` | `HttpConfig { idle_timeout: Duration::from_secs(620), ..Default::default() }` |
 | `send_timeout` | `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (seconds, `1`–`3600`) | `60 s` | `HttpConfig { send_timeout: Duration::from_secs(120), ..Default::default() }` |
 | `shutdown_timeout` | `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` (seconds, `1`–`3600`) | `20 s` | `HttpConfig { shutdown_timeout: Duration::from_secs(55), ..Default::default() }` |
+| `sse_max_connection` | `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS` (seconds, `0` ⇒ unlimited) | `4 h` | `HttpConfig { sse_max_connection: Some(Duration::from_secs(3600)), ..Default::default() }` — see [Streaming](/http/streaming/#configuration) |
+| `sse_keep_alive` | `<PREFIX>_HTTP__SSE_KEEP_ALIVE_SECS` (seconds, `1`–`3600`, `0` ⇒ none) | `15 s` | `HttpConfig { sse_keep_alive: Some(Duration::from_secs(30)), ..Default::default() }` |
 | `security_headers` | `<PREFIX>_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: HttpSecurityHeaders { enabled: false, ..Default::default() }, ..Default::default() }` |
 | `compression` | `<PREFIX>_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
 
@@ -125,27 +133,12 @@ remounted Secret), so this does not arise with either — but a hand-rolled hook
 that writes the two files in sequence should write them together, or set
 `<PREFIX>_HTTP__TLS_RELOAD_SECS` longer than the gap.
 
-Inline PEM has no source to watch, so it is loaded once, as before.
-
-Pinning TLS material in code uses `HttpTls::new` — rarely useful outside
-tests (production deploys carry secrets in the environment):
-
-```rust title="apps/api/src/module.rs"
-use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule, HttpTls};
-
-let cert = std::fs::read("fullchain.pem")?;
-let key  = std::fs::read("privkey.pem")?;
-
-#[module(imports = [
-    HttpModule::for_root(HttpConfig {
-        port: 3002,
-        tls: Some(HttpTls::new(cert, key)),
-        ..Default::default()
-    }),
-])]
-pub struct ApiModule;
-```
+Inline PEM has no source to watch, so it is loaded once. In code the two forms
+are two constructors: `HttpTls::from_files(cert_path, key_path)?` reads the pair
+and watches it (`.with_reload_secs(secs)` sets the interval), and
+`HttpTls::new(cert, key)` takes inline PEM bytes. Production carries its
+material in the environment, so the pinned form is a test's: a suite hands
+`HttpTls::new` the pair `nest_rs::testing::TestAuthority` issues in process.
 
 ## CORS
 
@@ -227,9 +220,9 @@ and `/mcp` check `Origin` themselves, CORS on or off; a client that sends no
 - **Once `cors.origins` is set**, the CORS layer answers first, on every
   route, and admits only the origins it lists: a page the server serves
   itself that opens a socket or calls MCP has its own origin listed too. The
-  CORS layer's `403` files no `warn`. Leaving the server's own origin to the
-  list keeps a DNS-rebinding page, whose `Host` names the attacker's domain,
-  from passing for it.
+  CORS layer's `403` files the one `warn` [above](#cors), naming the check it
+  failed. Leaving the server's own origin to the list keeps a DNS-rebinding
+  page, whose `Host` names the attacker's domain, from passing for it.
 
 ## Mounting under a shared prefix
 

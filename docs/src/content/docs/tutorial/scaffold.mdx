@@ -97,6 +97,7 @@ end to end on the first run. Delete it once `posts` is serving something real.
 name = "blog"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -105,15 +106,16 @@ nest-rs.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
-nest-rs.workspace = true
+nest-rs = { workspace = true, features = ["testing"] }
 tokio.workspace = true
 ```
 
-One `nest-rs` line, and it stays one for the rest of this tutorial: the
+One `nest-rs` dependency, and it stays one for the rest of this tutorial: the
 capabilities arrive as **features** on it (`[workspace.dependencies]` in the
-root manifest is where the list lives). `anyhow` is there because `main.rs`
-writes it, and `tokio` only for the tests, which write `#[tokio::test]`:
-`#[nest_rs::main]` builds the runtime `main` runs on itself.
+root manifest is where the list lives). The dev-dependency adds `testing`, the
+harness, to the tests alone, so no release binary carries it. `anyhow` is there
+because `main.rs` writes it, and `tokio` only for the tests, which write
+`#[tokio::test]`: `#[nest_rs::main]` builds the runtime `main` runs on itself.
 
 The root module is where transports come in. `HttpModule::for_root` pins
 the listen port in code — not in `.env`:

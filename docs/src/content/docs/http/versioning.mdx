@@ -58,25 +58,26 @@ pub struct PostsController {
 
 #[routes]
 impl PostsController {
-    #[get("/")]
+    #[get("/{id}")]
     #[authorize(Read, posts::Entity)]
-    async fn list(&self) -> Result<Json<Vec<Post>>> {
-        Ok(Json(self.svc.feed().await?))
+    async fn get(&self, Path(id): Path<Uuid>) -> Result<Json<Post>> {
+        Ok(Json(self.svc.find(id).await?))
     }
 
-    #[post("/{id}/publish")]
+    #[delete("/{id}")]
     #[version("2")]
-    #[authorize(Publish, posts::Entity)]
-    async fn publish(&self, Path(id): Path<Uuid>) -> Result<Json<Post>> {
-        Ok(Json(self.svc.publish(id).await?))
+    #[http_code(204)]
+    #[authorize(Delete, posts::Entity)]
+    async fn delete(&self, Path(id): Path<Uuid>) -> Result<()> {
+        Ok(self.svc.delete(id).await?)
     }
 }
 ```
 
-`list` answers at `/v1/posts` and `/v2/posts`; `publish` only at
-`/v2/posts/{id}/publish`. `POST /v1/posts/{id}/publish` is a `405` — the path
-exists in v1, that verb does not — which is the honest answer, and one a
-`404` would have hidden.
+`get` answers at `/v1/posts/{id}` and `/v2/posts/{id}`; `delete` only under
+v2. `DELETE /v1/posts/{id}` is a `405` — the path exists in v1, that verb does
+not — which is the honest answer, and one a `404` would have hidden. A path no
+v1 route serves at all is a `404` there.
 
 A `#[version]` naming something `#[controller(version = […])]` never declared
 **does not compile**. It would otherwise mount nowhere: a handler that builds,

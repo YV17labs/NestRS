@@ -124,10 +124,17 @@ generator emits them into. Every route of a controller defaults to its
 a `#[crud]` controller and the routes written beside it share one group.
 `tags(...)` replaces it on an operation:
 
-```rust title="crates/features/src/oauth/http/controller.rs"
+```rust title="crates/features/src/oauth/http/controller.rs (from the demo, abridged)"
 #[post("/login")]
-#[api(summary = "Sign in with email and password", tags("Auth"))]
-async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<Json<TokenDto>> { /* ... */ }
+// …
+#[api(
+    summary = "Sign in with email and password",
+    tags("Auth"),
+    response = AccessTokenResponse
+)]
+async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse> {
+    // …
+}
 ```
 
 ## Deprecate a route

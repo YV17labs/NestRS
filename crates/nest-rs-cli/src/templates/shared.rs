@@ -163,14 +163,25 @@ pub(crate) const ENV_TEST: &str = r#"# nestrs workspace — test-profile overrid
 "#;
 
 /// `compose.yml`'s services, in plaintext, appended to the two profiles that
-/// run beside it: never in `.env`, which production reads.
+/// run beside it, each followed by its own Redis line: never in `.env`, which
+/// production reads.
 pub(crate) const DEV_SERVICES: &str = r#"# Postgres + Valkey as `compose.yml` exposes them on localhost. Start them with
 # `docker compose up -d`, then `nestrs run db up`. An app only connects if it
 # imports SeaOrmModule / RedisModule, so these are inert for a plain HTTP app.
 # Both run without TLS here, which the URLs say: Postgres's connection is
 # verified TLS unless `sslmode=disable` opens it.
 {{env_prefix}}_SEAORM__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}?sslmode=disable
-{{env_prefix}}_REDIS__URL=redis://localhost:6379
+"#;
+
+/// Development's Redis: database 0, the one `nestrs run dev` drains.
+pub(crate) const ENV_DEVELOPMENT_REDIS: &str = r#"{{env_prefix}}_REDIS__URL=redis://localhost:6379
+"#;
+
+/// The suites' Redis: a database of their own, so a running app never runs a
+/// test's job, nor a test a job the app filed.
+pub(crate) const ENV_TEST_REDIS: &str = r#"# The test suites enqueue on Redis database 1, never on the 0 a running
+# `nestrs run dev` drains.
+{{env_prefix}}_REDIS__URL=redis://localhost:6379/1
 "#;
 
 /// The file that *instructs* a developer to write `.env.local`, so it is where

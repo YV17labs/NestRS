@@ -96,11 +96,15 @@ pub(crate) fn prefix_vars(env_prefix: &str) -> Vec<(&'static str, String)> {
 /// created with `--env-prefix` gets a cascade its app actually reads.
 pub(crate) fn queue_env_files(s: &mut Scaffold, base: &Path, r: &Renderer) {
     s.create_if_missing(base.join(".env"), r.render(shared::ENV));
-    for (file, profile) in [
-        (".env.development", shared::ENV_DEVELOPMENT),
-        (".env.test", shared::ENV_TEST),
+    for (file, profile, redis) in [
+        (
+            ".env.development",
+            shared::ENV_DEVELOPMENT,
+            shared::ENV_DEVELOPMENT_REDIS,
+        ),
+        (".env.test", shared::ENV_TEST, shared::ENV_TEST_REDIS),
     ] {
-        let body = format!("{profile}\n{}", shared::DEV_SERVICES);
+        let body = format!("{profile}\n{}{redis}", shared::DEV_SERVICES);
         s.create_if_missing(base.join(file), r.render(&body));
     }
     s.create_if_missing(base.join(".env.example"), r.render(shared::ENV_EXAMPLE));
@@ -140,7 +144,54 @@ pub(crate) fn run_cargo_check(project_dir: &Path) -> CliResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::{ConfigService, Environment, load_cascade};
+
+    use super::{queue_env_files, with_env_prefix};
+    use crate::naming::Names;
+    use crate::scaffold::{Renderer, Scaffold};
     use crate::templates::{hello, workspace};
+
+    /// The logical database a Redis URL selects: its path, `0` when it has none.
+    fn database(url: &str) -> u8 {
+        let (_, authority_and_path) = url.split_once("://").expect("a Redis URL");
+        authority_and_path
+            .split_once('/')
+            .map_or(0, |(_, index)| index.parse().expect("a database index"))
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail's closure signature is fixed"
+    )]
+    fn the_generated_test_profile_enqueues_on_a_redis_database_development_never_drains() {
+        let prefix = nest_rs_core::EnvPrefix::current();
+        figment::Jail::expect_with(|jail| {
+            let mut scaffold = Scaffold::new();
+            queue_env_files(
+                &mut scaffold,
+                jail.directory(),
+                &with_env_prefix(Renderer::new(&Names::parse("shop")), prefix),
+            );
+            scaffold.apply(false).expect("the profiles are written");
+            let mut redis = |profile| {
+                jail.clear_env();
+                load_cascade(jail.directory(), profile);
+                ConfigService::for_namespace("redis")
+                    .get("URL")
+                    .expect("the Redis URL reads")
+                    .expect("the profile names a Redis URL")
+            };
+            let (development, test) = (redis(Environment::Development), redis(Environment::Test));
+
+            assert_ne!(
+                database(&test),
+                database(&development),
+                "the test profile ({test}) enqueues on development's database ({development})"
+            );
+            Ok(())
+        });
+    }
 
     /// Whichever layout renders it, the controller mounts `/` and declares its
     /// posture.

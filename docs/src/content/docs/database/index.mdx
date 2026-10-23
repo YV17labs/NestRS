@@ -223,7 +223,7 @@ The pool closes when the app ends, after every shutdown hook: each connection
 gets Postgres's goodbye rather than a dropped socket. Every unit of work has
 settled by then, so one still on its way back is waited for half a second at
 most; one a cut request left running a statement closes when it returns, and a
-`warn` counts it ([the way down](/fundamentals/lifecycle/#the-way-down)).
+`warn` counts it ([the way down](/fundamentals/shutdown/#the-way-down)).
 
 ## What the data layer hands you for free
 

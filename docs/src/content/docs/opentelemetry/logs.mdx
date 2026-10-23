@@ -398,7 +398,7 @@ same way, and the first refusal is said on stderr. Every exit
 `#[nest_rs::main]` controls — `main` returning, a panic leaving it, a second
 signal — waits until every line queued before it is written, within one second
 (`CONSOLE_FLUSH_TIMEOUT`, the last step of
-[the way down](/fundamentals/lifecycle/#the-way-down)); past it the rest is lost,
+[the way down](/fundamentals/shutdown/#the-way-down)); past it the rest is lost,
 and one line on stderr says so. A hard kill loses what was queued, as it would
 with any writer.
 

@@ -338,7 +338,7 @@ left running until they drain the 6.x jobs (step 7).
      worker's — needs `terminationGracePeriodSeconds` at least 8.5 seconds above
      it; a worker pod you gave 45 seconds for the old 30-second drain can keep
      its drain and its grace, or drop both to the defaults. See
-     [the way down](/fundamentals/lifecycle/#the-way-down).
+     [the way down](/fundamentals/shutdown/#the-way-down).
    - **`main` is `#[nest_rs::main]`.** Replace `#[tokio::main]` on every
      binary's `main` — the apps, and the `migrate` and `seed` tools — and drop
      the `tokio` line a crate carried only for it (its tests keep theirs as a

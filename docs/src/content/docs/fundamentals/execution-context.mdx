@@ -1,0 +1,217 @@
+---
+title: Execution context
+description: "What a guard, global pipe, interceptor or exception filter knows about the unit it runs around — on every edge, through one UnitContext."
+sidebar:
+  order: 5.5
+---
+
+Every layer is handed the same thing: a `UnitContext` for the unit it runs
+around — an HTTP request, a GraphQL field, a WebSocket message, an MCP tool
+call, a job's attempt, a tick, a listener call. It says which unit this is,
+which handler it reaches, what that handler declared and what the unit
+carries, and it opens the edge's own view of the unit when you need one.
+
+```rust title="crates/features/src/posts/interceptor.rs"
+use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable};
+
+#[injectable]
+#[derive(Default)]
+pub struct Timed;
+
+impl Layer for Timed {}
+
+#[async_trait]
+impl Interceptor for Timed {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let started = std::time::Instant::now();
+        let outcome = next.run(cx).await;
+        let handler = cx.handler();
+        tracing::info!(
+            unit = cx.unit().name(),
+            method = handler.method(),
+            elapsed = ?started.elapsed(),
+            "unit timed",
+        );
+        outcome
+    }
+}
+```
+
+Bound globally, that one interceptor times a route, a field, a message, a tool
+call and a job alike: nothing in it names an edge.
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs
+```
+
+`UnitContext`, `Reflector`, the views' trait and the ambient context live in
+`nest_rs::core`, which every build has. Each edge's view comes with its
+feature.
+
+## What the context answers
+
+| Call | Answers |
+|---|---|
+| `cx.unit()` | the unit running, by its name: `http.request`, `graphql.field`, `ws.message`, `mcp.operation`, `queue.job`, `schedule.tick`, `events.dispatch` |
+| `cx.edge()` | the edge dispatching it, `Some(Edge::Http)` and so on |
+| `cx.handler()` | the site it reaches: `host_name()`, `method()`, `address()` — the route template, the field, the event, the tool, the queue — and `posture()` |
+| `cx.reflector()` | what that site declared with `#[meta]`, and its posture |
+| `cx.switch_to::<V>()` | the edge's view of the unit, when the unit is that edge's |
+| `cx.attach(value)` | makes `value` ambient for the rest of the unit |
+| `cx.ambient::<T>()` | the `T` the unit carries |
+| `cx.peer()` | the client's address and the connection, where the edge knows them |
+| `cx.deadline()` | when the unit must end by, on an edge that bounds it |
+
+The address a peer carries is personal data: no line or span the framework
+writes holds it, and yours should not either.
+
+## Switch to the edge's view
+
+A layer that needs more than the context reads the edge's view of the unit.
+`switch_to::<V>()` answers it when the unit is that edge's, and `None` on any
+other, so one layer serves every edge it knows and lets the others pass:
+
+```rust title="crates/features/src/posts/interceptor.rs"
+use nest_rs::graphql::GraphqlView;
+use nest_rs::ws::WsView;
+
+let subject = if let Some(field) = cx.switch_to::<GraphqlView>() {
+    field.field().to_owned()
+} else if let Some(message) = cx.switch_to::<WsView>() {
+    message.event().to_owned()
+} else {
+    cx.handler().address().to_owned()
+};
+```
+
+| Edge | View | Reads | Answers or settles the unit with |
+|---|---|---|---|
+| HTTP | `HttpView`, through `HttpView::of(cx)?` | `request()`, `request_mut()`, `route()`, `response()` | `respond(response)` |
+| GraphQL | `GraphqlView` | `field()`, `operation()`, `role()` | an exception filter's `Problem` |
+| WebSockets | `WsView` | `client()`, `event()`, `data()`, `reply()` | `respond(reply)` |
+| MCP | `McpView` | `method()`, `kind()`, `name()`, `host()` | an exception filter's `Problem` |
+| Queue | `QueueView` | `attempt()`, `processor()`, `backend_id()` | `acknowledge()`, the job done without running it |
+| Schedule | `ScheduleView` | `job()`, `occurrence()`, `replicas()` | `skip()` |
+| Events | `EventsView` | `event()`, `listener()` | `skip()` |
+
+`HttpView::of(cx)` is the HTTP entry's shorthand: it returns the view or a
+`Denial` a guard's `?` passes on, so `HttpView::of(cx)?.request()` reads the
+whole request — head and body — in `check_http`. An interceptor that should
+never see another edge's units says so once, with `Layer::serves`, and the
+app-wide list leaves it out of every other edge's site.
+
+## Read what the site declared
+
+`#[meta(EXPR)]` declares a typed value on a host — a controller, a resolver,
+a gateway, an MCP host, a worker's impl block — or on one of its methods. The
+site keeps one declaration for the process, built once, and a layer reads it
+through the reflector:
+
+```rust title="crates/features/src/posts/guard.rs"
+#[async_trait]
+impl Guard for RolesGuard {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let Some(Roles(required)) = cx.reflector().get::<Roles>() else {
+            return Ok(());
+        };
+        let claims = cx
+            .ambient::<Claims>()
+            .ok_or_else(|| Denial::unauthorized("sign in first"))?;
+        if required.iter().any(|role| claims.roles.iter().any(|held| held == role)) {
+            Ok(())
+        } else {
+            Err(Denial::forbidden("a role this route requires is missing"))
+        }
+    }
+}
+```
+
+`get::<M>()` answers the method's value, else its host's. `get_all::<M>()`
+yields every one, the method's first, for a layer that merges them.
+`posture()` says what `#[public]` and `#[authorize]` compiled to — `Public`,
+`Gated`, `InBand` for `/graphql`, `System` for a unit no caller sends — and
+`is_public()` is its shortcut. [Guards](/fundamentals/guards/#attach-context-and-route-metadata)
+shows the declaring side.
+
+## What a unit carries
+
+The **ambient context** is what a unit carries for the code it calls: the
+database executor, the caller's ability, the principal your authentication
+guard attached, and your own values. A singleton reads it without an argument
+on every method, and a value becomes ambient only because its type says so:
+
+```rust title="crates/features/src/posts/tenant.rs"
+use nest_rs::core::AmbientValue;
+
+#[derive(Clone)]
+pub struct Tenant(pub String);
+
+impl AmbientValue for Tenant {}
+```
+
+A layer adds one with `cx.attach(Tenant(..))`. From a guard, it becomes
+ambient once the whole guard stage passed, so a refused unit carries nothing
+its guards attached; from an interceptor, it is ambient inside
+`next.run(cx)`. Everything the unit reaches reads it back: a later guard with
+`cx.ambient::<Tenant>()`, an HTTP handler with a `Ctx<Tenant>` parameter, a
+service anywhere with `nest_rs::core::ambient::<Tenant>()`. Outside a layer,
+`with_ambient(value, future)` runs a future with one more value.
+
+### How far a value travels
+
+A unit can continue after the future that accepted it: a streaming body
+polled once the handler returned, a DataLoader batch, a spawned task. Each is
+a `Continuation`, and `AmbientValue::carry` decides what crosses into it:
+
+| `Continuation` | Where the unit continues | By default |
+|---|---|---|
+| `Body` | a streaming response body (`#[sse]`, a download) | crosses |
+| `Batch` | a DataLoader batch, shared by every field of the request | crosses |
+| `Task` | a task handed work with `TaskContext`, which may outlive the unit | crosses |
+| `Commit` | work held for the commit: `after_commit`, an emitted event's listeners | crosses |
+| `Connection` | a connection's next units: a socket's messages, a graphql-ws operation | crosses |
+| `Envelope` | a job the unit pushes | nothing crosses |
+
+A job is system work, run later and elsewhere, so its envelope carries only
+its own keys — the trace, the actor, the tenant and W3C `baggage` — whatever a
+value's `carry` says. A value that must stay closer to its unit narrows it:
+
+```rust title="crates/features/src/posts/budget.rs"
+use std::sync::Arc;
+use nest_rs::core::{AmbientValue, Continuation};
+
+pub struct QueryBudget(pub u32);
+
+impl AmbientValue for QueryBudget {
+    fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
+        matches!(into, Continuation::Body | Continuation::Batch).then_some(self)
+    }
+}
+```
+
+The framework's own values follow the same contract: the executor steps down
+to the pool wherever the unit outlives its transaction, and the ability
+crosses everywhere but an envelope — see
+[transactions](/database/transactions/).
+
+## Limits
+
+- The context lives on the edge's stack for one unit: it is never boxed,
+  stored or sent to a task. Take what you need into an owned value first.
+- The container is not on the context. A layer injects what it needs with
+  `#[inject]`, and the boot checks that its module reaches it.
+- Reading the ambient context is not deciding: a service may read who the
+  caller is, but an authorization decision belongs in a guard.
+- A WebSocket connection hook carries what the upgrade's guards attached and
+  runs no layer of its own.
+
+## Going further
+
+- [The request lifecycle](/fundamentals/request-lifecycle/) — the stages a
+  unit runs, and where each layer sits.
+- [Guards](/fundamentals/guards/) — the two entries that read this context.
+- [Interceptors](/fundamentals/interceptors/) — wrap a unit, on every edge.
+- [Coming from NestJS](/coming-from-nestjs/#the-execution-context) — the same
+  context, name by name.

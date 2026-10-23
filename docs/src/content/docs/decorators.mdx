@@ -21,7 +21,7 @@ whether you type it, not how the compiler resolves it.
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[module]` | struct | Composes a binary: lists `providers` it owns and `imports` it depends on | [Modules](/fundamentals/modules/) |
-| `#[nest_rs::main]` | `main` function | Installs the panic hook and publishes the `.env` cascade before `main`, builds the runtime, and ends the process within the shutdown budget; written in full, never a bare `#[main]`, which `use tokio::main;` would make tokio's | [Lifecycle](/fundamentals/lifecycle/#the-way-down) |
+| `#[nest_rs::main]` | `main` function | Installs the panic hook and publishes the `.env` cascade before `main`, builds the runtime, and ends the process within the shutdown budget; written in full, never a bare `#[main]`, which `use tokio::main;` would make tokio's | [Shutdown](/fundamentals/shutdown/) |
 | `#[injectable]` | struct | Marks a provider built from the container, with optional `scope = request \| transient` | [Providers](/fundamentals/providers/) |
 | `#[inject]` | field | Resolves the field from the container by its type, at construction; takes no argument | [Providers](/fundamentals/providers/) |
 | `#[instance]` | unit struct | Declares a marker naming one instance of a resource the app opens more than once; its name is the ident in snake case | [Providers](/fundamentals/providers/#instances--one-resource-opened-twice) |
@@ -43,14 +43,25 @@ whether you type it, not how the compiler resolves it.
 | `#[http_code]` | method | Overrides the default response status code | [Responses](/http/responses/) |
 | `#[response_header]` | method | Appends a response header (repeatable) | [Responses](/http/responses/) |
 | `#[redirect]` | method | Issues a redirect and discards the handler payload | [Responses](/http/responses/) |
-| `#[use_guards]` | struct or method | Binds container-resolved Guards, first listed outermost | [Guards](/fundamentals/guards/) |
-| `#[use_interceptors]` | struct or method | Binds container-resolved Interceptors at the handler stage, after the guards | [Interceptors](/fundamentals/interceptors/) |
-| `#[use_exception_filters]` | struct or method | Binds exception filters — a typed catch, or every error with `dyn Error + Send + Sync`; the method's tried first | [Error handling](/fundamentals/exception-filters/#exception-filters) |
-| `#[meta]` | struct, impl block or method | Declares typed metadata, the method's over its host's (repeatable); read back by a guard through `cx.reflector()`, on every edge | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
-| `#[public]` | method | Marks the route public so auth guards skip it | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
-| `#[interceptor]` | struct | Makes a struct an interceptor its module's import brings to every unit — at the handler stage, or around the guards with `stage = unit` | [Interceptors](/fundamentals/interceptors/#brought-by-a-module-interceptor) |
+| `#[no_pipes]` | method | Runs no global pipe over the route's body, the app's pool included | [Global pipes](/fundamentals/global-pipes/) |
 | `#[version]` | method | Narrows a route to one of the controller's declared versions | [Versioning](/http/versioning/) |
-| `#[force_guards]` | method | Binds a guard and re-runs it though the broader scope already ran it — the opt-out from dedup | [Guards](/fundamentals/guards/#re-running-one-on-purpose-force_guards) |
+
+## Layers and posture
+
+One set for every edge: a host is a controller, a resolver, a gateway, an MCP
+host or a worker's impl block, and a method one of its handlers.
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[use_guards]` | host or method | Binds container-resolved guards, first listed outermost | [Guards](/fundamentals/guards/) |
+| `#[force_guards]` | method | Binds a guard and re-runs it though a broader scope already ran it — the opt-out from dedup | [Guards](/fundamentals/guards/#re-running-one-on-purpose-force_guards) |
+| `#[use_pipes]` | host or method | Binds global pipes to an HTTP or WebSocket site, beside the app's pool | [Global pipes](/fundamentals/global-pipes/) |
+| `#[use_interceptors]` | host or method | Binds interceptors at the handler stage, after the guards | [Interceptors](/fundamentals/interceptors/) |
+| `#[use_exception_filters]` | host or method | Binds exception filters — a typed catch, or every error with `dyn Error + Send + Sync`; the method's tried first | [Error handling](/fundamentals/exception-filters/#exception-filters) |
+| `#[interceptor]` | struct | Makes a struct an interceptor its module's import brings to every unit — at the handler stage, or around the guards with `stage = unit` | [Interceptors](/fundamentals/interceptors/#brought-by-a-module-interceptor) |
+| `#[meta]` | host or method | Declares typed metadata, the method's over its host's (repeatable); read back by a layer through `cx.reflector()` | [Execution context](/fundamentals/execution-context/#read-what-the-site-declared) |
+| `#[public]` | method | Access posture: the unit admits an anonymous caller — guards relax, no mask | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
+| `#[authorize]` | method | Access posture: gates the unit by ability (`Action`, `Entity`) and masks the response | [Authorization](/security/authorization/) |
 
 ## Layer attributes, pair by pair
 
@@ -68,11 +79,12 @@ payload), and run no interceptor or exception filter yet.
 | `#[use_pipes]` | struct, method | — bind a per-argument pipe | struct, method; — on a connection hook | — bind it inside `Parameters<…>` | — bind a per-argument pipe | — |
 | `#[use_interceptors]` | struct, method | struct, method | struct, method; not yet on a connection hook | struct, method | impl block, method | — |
 | `#[use_exception_filters]` | struct, method | struct, method | struct, method; not yet on a connection hook | struct, method | impl block, method | — |
-| `#[use_filters]` | — use `#[use_exception_filters]` | — | — | — | — | — |
 | `#[meta]` | struct, method | struct, method | struct, method, connection hook | struct, method | impl block, method | — |
 
 **Not yet** marks a family the edge does not run yet: the compiler refuses it
 today, as a silent no-op would be worse, and the edge takes it once it runs it.
+`#[use_filters]` is refused at every pair, naming `#[use_exception_filters]`,
+whose catch-all replaced it.
 
 ## Wire types
 
@@ -96,8 +108,6 @@ re-exports it, so import it from the one the file already uses
 | `#[mutation]` | method | Root mutation operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[subscription]` | method | Root subscription over graphql-ws; same posture, gated at subscribe and masked per item | [Subscriptions](/graphql/subscriptions/) |
 | `#[entity]` | method | Federation entity resolver — the router resolves it by reference through `_entities`; same mandatory posture, and its arguments are the `@key` | [Federation](/graphql/federation/) |
-| `#[authorize]` | method | Access posture: gates the operation by ability (`Action`, `Entity`) and masks the response | [Queries and mutations](/graphql/queries-mutations/) |
-| `#[public]` | method | Access posture: deliberately ungated operation — no gate, no mask | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[field_resolver]` | method | Custom field resolver on a wire type; takes no posture attribute | [Field resolvers](/graphql/field-resolvers/) |
 | `#[dataloader]` | impl block on service | Batches a method into a request-scoped DataLoader | [Dataloader](/database/dataloaders/) |
 

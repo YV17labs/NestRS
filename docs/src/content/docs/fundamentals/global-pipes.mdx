@@ -73,9 +73,8 @@ it, whether or not the app serves HTTP.
 
 ## What a pipe is handed
 
-`argument` says which input `input` is — read off NestJS's
-`ArgumentMetadata.type`, since a unit's name cannot say it (the `/graphql`
-request is an `http.request` like a route):
+`argument` says which input `input` is, since a unit's name cannot say it
+(the `/graphql` request is an `http.request` like a route):
 
 | `ArgumentKind` | The input | Where it runs | A refusal answers |
 |---|---|---|---|
@@ -102,7 +101,9 @@ an edge may hand a new kind in a minor release.
 - A WebSocket message whose event no handler serves meets no pipe: nothing
   would read what it made.
 - A pipe reads and writes a `serde_json::Value`, the one place the framework
-  passes one through: the input is not decoded yet, so there is no type to hand.
+  passes one through: the input is not decoded yet, so there is no type to
+  hand. The handler still receives its argument parsed into its own type, and
+  a [per-argument pipe](/fundamentals/pipes/) stays typed.
 
 ## Going further
 

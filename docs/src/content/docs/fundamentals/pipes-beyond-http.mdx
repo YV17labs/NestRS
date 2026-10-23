@@ -1,0 +1,100 @@
+---
+title: Pipes beyond HTTP
+description: "The same pipes on GraphQL arguments, WebSocket payloads, MCP tool arguments and queued jobs — bound on the wire value, rejected in each edge's own form."
+sidebar:
+  order: 7.2
+---
+
+On GraphQL, WebSockets, MCP and queues the argument *is* the wire value, so
+the binding is `nest_rs::pipes::Piped<P, T>` / `Valid<T>`. `T` is what
+appears on the wire — the SDL argument type, the WS payload, the job payload
+— and the handler body sees `P::Out` through `into_inner()` / `Deref`,
+exactly as on HTTP. The edge's macro (`#[operations]`, `#[messages]`,
+`#[tools]`, `#[processor]`) does the stripping and the call; on MCP the
+carrier goes **inside** `Parameters<…>`, since that is what the protocol
+deserializes an operation's arguments into. The pipe runs in the unit's tail,
+after its guards and its class gate, so a caller the site refuses never pays
+for validation and never learns what a valid input looks like.
+
+```rust title="crates/features/src/users/graphql/resolver.rs"
+// GraphQL — the SDL argument is `String`; the body sees it trimmed.
+#[query]
+#[public]
+async fn trimmed(&self, raw: Piped<Trim, String>) -> async_graphql::Result<String> {
+    Ok(raw.into_inner())
+}
+
+// GraphQL — validates the input object; the SDL argument is `NameInput`.
+#[query]
+#[public]
+async fn named(&self, input: Valid<NameInput>) -> async_graphql::Result<String> {
+    Ok(input.into_inner().name)
+}
+```
+
+```rust title="crates/features/src/users/ws/gateway.rs"
+// WebSockets — the message payload is a `String`, piped before the handler.
+#[subscribe_message("trim")]
+#[public]
+async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
+    name.into_inner()
+}
+```
+
+```rust title="crates/features/src/weather/mcp/tool.rs"
+// MCP — the tool's schema is `Coords`; the body sees it validated.
+#[tool]
+#[public]
+async fn current_weather(
+    &self,
+    Parameters(coords): Parameters<Valid<Coords>>,
+) -> Result<String, McpError> {
+    let coords = coords.into_inner();
+    /* ... */
+}
+```
+
+```rust title="crates/features/src/users/queue/processor.rs"
+// Queue — the job payload is a `String`, piped after deserialization.
+#[process(queue = SignupsQueue, retries = 0)]
+async fn handle(&self, name: Piped<Trim, String>) -> anyhow::Result<()> {
+    /* ... */
+}
+```
+
+## What a rejection becomes
+
+A `PipeError` rejection surfaces as the transport's native error —
+the handler body never runs:
+
+| Transport | A rejection becomes |
+|-----------|--------------------|
+| HTTP | RFC 9457 `problem+json` `400` (`{ "type": …, "title": "Bad Request", "status": 400, "detail": "must be a UUID v7", "code": "INVALID_ARGUMENT" }`) |
+| GraphQL | An error in the response's `errors` array, under `extensions.code: "INVALID_ARGUMENT"` |
+| WebSockets | An error frame on the socket (`{ event, data: { error, errors } }`) |
+| MCP | `invalid_params` (`-32602`), the field errors in the error's `data` |
+| Queue | A job error — the queue's retry/failure policy applies |
+
+A handler that parses a value itself answers its `PipeError` the same way,
+through its edge's `pipe_error`: `nest_rs::http::pipe_error`,
+`nest_rs::graphql::pipe_error`, `nest_rs::mcp::pipe_error`, and
+`WsReply::pipe_error` on WebSockets.
+
+`ValidationPipe<T>` attaches the structured field-level errors to the
+rejection, and **every** transport carries them through under the name
+`errors`: an RFC 9457 extension member on HTTP, `extensions.errors` on
+GraphQL, `data.errors` on a WebSocket frame, the error `data` on MCP, an
+`errors` field on the queue's `job dead-lettered` event. A client (or an operator reading a dead-letter log)
+can always tell which field was wrong, not merely that something was. HTTP
+and GraphQL name the rejection's class beside that map, `INVALID_ARGUMENT`; a
+WebSocket frame's `errors` and MCP's `data` are the map itself, with no
+`code`, since a field may be named `code`.
+
+## Going further
+
+- [Pipes](/fundamentals/pipes/) — the pipe contract, the built-in set and the
+  HTTP binding.
+- [Global pipes](/fundamentals/global-pipes/) — one pipe over every input of
+  the app.
+- [GraphQL errors](/graphql/errors/) — how a field's rejection reaches the
+  client.

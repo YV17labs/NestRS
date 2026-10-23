@@ -444,7 +444,7 @@ you looking.
 On `SIGTERM` or `SIGINT` the transport stops accepting, ends what has no end of
 its own — a stream, a socket — the way its protocol ends one, and gives what is
 still answering `shutdown_timeout` to finish — `20` seconds by default. It is the
-first of the bounded steps on [the way down](/fundamentals/lifecycle/#the-way-down):
+first of the bounded steps on [the way down](/fundamentals/shutdown/#the-way-down):
 the window, then half a second for what the transport stopped to unwind, then
 five seconds for the [shutdown hooks](/fundamentals/lifecycle/#ordering-and-failure),
 then three for the [telemetry flush](/opentelemetry/), then one for the

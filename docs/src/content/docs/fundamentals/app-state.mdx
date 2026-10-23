@@ -1,0 +1,159 @@
+---
+title: App state
+description: "Where an app stands between its boot and its exit — the sequence App::run walks, and the AppLifecycle any provider injects to read it."
+sidebar:
+  order: 4.2
+---
+
+An app walks one fixed sequence from its boot to its exit, and every provider
+can ask where it stands on it: starting, serving, or draining and why. The
+[lifecycle hooks](/fundamentals/lifecycle/) bracket the serving window;
+`AppLifecycle` is what a loop, a factory or a hook reads in between.
+
+```rust title="crates/features/src/blog/service.rs"
+use std::sync::Arc;
+
+use nest_rs::core::{AppLifecycle, AppState, injectable};
+
+#[injectable]
+pub struct BlogService {
+    #[inject]
+    lifecycle: Arc<AppLifecycle>,
+}
+
+impl BlogService {
+    pub fn serving(&self) -> bool {
+        self.lifecycle.state() == AppState::Ready
+    }
+}
+```
+
+## Where it sits in the run
+
+`App::run` walks a fixed sequence. The hooks bracket the serving window:
+
+```
+build container             — Starting
+→ wire registries           — events, health, social: filled before any hook
+→ attach + configure transports
+→ on_module_init            ┐ strict, once — first error or panic aborts boot
+→ on_application_bootstrap  ┘
+→ every transport listens      — binds its port, checks its TLS material
+→ Ready                        — `app ready`, with the addresses it listens on
+→ serve (until SIGINT / SIGTERM, or a transport errors or ends on its own)
+→ Draining                     — `app draining`, with its cause
+→ transports stop              — each within its own window, held by the kernel
+→ on_module_destroy            ┐ exhaustive — every hook starts, errors and
+→ before_application_shutdown  │ panics logged; five seconds between all of
+→ on_application_shutdown      │ them, what still waits then is abandoned
+→ resources close              │ the pool's goodbye, last opened first
+→ the container drops          ┘ every provider's `Drop`, off the runtime thread
+```
+
+**Nothing serves until everything listens.** Once the init hooks ran, each
+transport takes what serving needs — the HTTP transport binds its port and
+checks its TLS material — and only when every one has does the app turn
+`Ready` and the transports start serving. A port already taken fails the boot
+there, naming the step (``the `listen` of transport `HttpTransport` ``), with
+the failed boot's teardown, before the queue worker has consumed a single job.
+A transport that panics as it configures or listens fails the boot the same
+way, its panic one `error` line. A transport you write does its binding in `listen`, never in `serve`: one that
+binds in `serve` counts as ready before it is.
+
+Shutdown is triggered by `SIGINT` / `SIGTERM`, or by the first transport
+that errors — or that stops serving on its own: a `serve` that returns before
+a stop was asked, `Ok` included, files `error` (`transport stopped serving
+before the app was asked to stop`) and fails the app. Either one turns the app
+`Draining`, which cancels the stop token every transport serves under; the
+teardown phases run once the last transport has stopped.
+
+**What a module opened, it closes.** A resource module attaches a close to the
+handle it opened — SeaORM's pool sends Postgres a goodbye on every connection
+rather than letting the sockets fall — and the closes run after every shutdown
+hook, so no hook finds its pool gone, the last opened first: a client a
+factory opened over a pool closes before the pool. Each runs by the hooks' rules: a failure is logged at `error`, one
+still waiting when the budget is spent is abandoned at `warn` naming it, and the
+next still starts. Every unit of work has settled by then, so the pool waits
+half a second at most (`SHUTDOWN_SETTLE_TIMEOUT`) for a connection still on its
+way back: one a cut request left running a statement closes when it returns,
+and one `warn` counts it. Then the container drops, on a thread of its own: a
+provider whose `Drop` blocks is abandoned at `warn` rather than holding the exit. A
+Valkey connection owes its server no goodbye, so Redis attaches none.
+
+## Where the app stands
+
+Some code needs more than a hook's moment: whether the app serves yet,
+or why it is stopping. Every app carries one `AppLifecycle`, seeded
+before the first factory runs, so a factory, a constructor or a hook
+injects it like any other provider — and only the kernel moves it.
+
+| Method | Answers |
+|---|---|
+| `state()` | `AppState::Starting` from the start of the boot, `Ready` once every transport listens and they serve, `Draining` once a stop is asked |
+| `cause()` | `None` until the app drains, then why: `StopCause::Interrupt` (`SIGINT`, or Ctrl-C on Windows), `Terminate` (`SIGTERM`), `TransportFailed` (a transport returned an error, panicked, or stopped serving on its own), `BootFailed` (a transport's `configure` or `listen`, or an init hook, failed before it served), `Closed` (`App::close` ended an app that was not serving) |
+| `stopping()` | a `CancellationToken`, cancelled the instant the app turns `Draining` |
+| `ready().await` | `true` once the app is `Ready`, `false` once it drains, whether or not it served first |
+
+Each move is one `info` on `nest_rs::app`: `app ready`, with the
+`transports` it serves and the `addresses` they listen on — the real port
+when one was bound to `0` —, then `app draining`, with its `cause` — and the
+`signal` when a signal asked. The first cause wins: a transport that
+fails while the app already drains for a `SIGTERM` leaves it at
+`Terminate`.
+
+**A loop running beside the app stops at `stopping()`** — the instant a
+stop is asked, before the transports drain, so it is not still working
+when the shutdown hooks run. A constructor cannot await, so the loop
+starts in a hook and is joined in the provider's own shutdown hook:
+
+```rust title="crates/features/src/blog/heartbeat.rs"
+use std::sync::Arc;
+use std::time::Duration;
+
+use nest_rs::core::{AppLifecycle, hooks, injectable};
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+
+#[injectable]
+pub struct Heartbeat {
+    #[inject]
+    lifecycle: Arc<AppLifecycle>,
+    beating: Mutex<Option<JoinHandle<()>>>,
+}
+
+#[hooks]
+impl Heartbeat {
+    #[on_application_bootstrap]
+    async fn start(&self) {
+        let stopping = self.lifecycle.stopping();
+        let beating = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    () = stopping.cancelled() => return,
+                    () = tokio::time::sleep(Duration::from_secs(10)) => {}
+                }
+                tracing::debug!(target: crate::blog::TARGET, interval_secs = 10, "heartbeat");
+            }
+        });
+        *self.beating.lock().await = Some(beating);
+    }
+
+    #[on_module_destroy]
+    async fn stop(&self) -> anyhow::Result<()> {
+        if let Some(beating) = self.beating.lock().await.take() {
+            beating.await?;
+        }
+        Ok(())
+    }
+}
+```
+
+A shutdown hook that must know why the app stops reads `cause()`.
+
+## Going further
+
+- [Lifecycle](/fundamentals/lifecycle/) — the hooks that run on the way up and
+  the way down.
+- [Shutdown](/fundamentals/shutdown/) — every bounded step from the signal to
+  the exit.
+- [Health](/health/) — the probes an orchestrator reads.

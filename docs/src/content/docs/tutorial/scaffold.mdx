@@ -165,7 +165,7 @@ async fn main() -> Result<()> {
 register — verifies the access graph, then `.run()` blocks on the
 transports. `#[nest_rs::main]` builds the runtime all of it runs on, and once
 `run` returns it ends the process within the
-[shutdown budget](/fundamentals/lifecycle/#the-way-down) rather than waiting on
+[shutdown budget](/fundamentals/shutdown/#the-way-down) rather than waiting on
 whatever the way down abandoned. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
 for the tests in [Test it end to end](/tutorial/testing/)), a smoke test that
 asserts the greeting, and an **empty** `tests/e2e/main.rs`. The e2e suite has to

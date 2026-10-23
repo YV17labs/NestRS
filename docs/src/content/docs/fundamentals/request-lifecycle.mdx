@@ -1,31 +1,34 @@
 ---
 title: The request lifecycle
-description: "One pool per layer family, deduplicated by TypeId, run exactly once — how scope chooses where a guard, pipe, interceptor or exception filter executes."
+description: "The stages every unit runs, on every edge, and how scope chooses where a guard, pipe, interceptor or exception filter executes — exactly once."
 sidebar:
   order: 5
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Four layer families wrap every request: **guards** (gate access), **pipes**
-(edge conversion), **interceptors** (cross-cutting work around the handler)
-and **exception filters** (error mapping). This page is the one place that
-explains how they compose — every other page links here instead of
-re-explaining it.
+Four layer families wrap every unit the framework dispatches — an HTTP
+request, a GraphQL field, a WebSocket message, an MCP tool call, a job's
+attempt, a tick, a listener call: **guards** (gate access), **pipes** (edge
+conversion), **interceptors** (cross-cutting work around the handler) and
+**exception filters** (answering a failure). One pipeline runs them, in one
+order, whatever the edge. This page is the one place that explains how they
+compose — every other page links here instead of re-explaining it.
 
 ## One pool per family
 
-Declaring a layer at any scope — **global** (`use_*_global`), **controller**
-(on the struct), or **handler** (beside the verb) — contributes to **one pool
-per family**, deduplicated by `TypeId` in a single composition. The
-layer executes **exactly once per request**. Broadest scope wins;
-`#[force_guards]` is the opt-in to re-run.
+Declaring a layer at any scope — **global** (`use_*_global`), **host** (on
+the controller, resolver, gateway, MCP host or worker block), or **handler**
+(beside the method) — contributes to **one pool per family**, deduplicated by
+`TypeId` in a single composition. The layer executes **exactly once per
+unit**. Broadest scope wins; `#[force_guards]` is the opt-in to re-run a
+guard.
 
 Scope never multiplies executions — it chooses the **execution site**. The
 teachable rule:
 
-> Global = around the whole HTTP process. Scoped = around your handler. Either
-> way, once.
+> Global = around every unit the app serves. Scoped = around your handler.
+> Either way, once.
 
 You can watch the dedup happen. Declare `AuthnGuard` both globally
 (`use_guards_global`) and on a controller (`#[use_guards(AuthnGuard, …)]`), and
@@ -38,108 +41,93 @@ DEBUG nest_rs::layers: redundant layer declaration deduped
   hint="broadest site wins; `#[force_guards]` re-runs a guard"
 ```
 
-## Execution sites
+## The stages
 
-Each family runs at the site that matches its nature. The pool is the same; the
-site differs:
+Every unit runs the same stages, outermost first:
 
-| Family | Global scope | Controller / handler scope |
+1. **The edge**: the unit's span and its operation line, the request scope,
+   the deadline, panic containment.
+2. **The unit of work**, opened through the database binding when one is
+   imported: a transaction where the unit writes, the pool otherwise. It
+   commits on the unit's own outcome.
+3. **The unit stage**: `#[interceptor(stage = unit)]` (`Server-Timing`, the
+   RFC 9728 challenge).
+4. **The guard stage**: the global, host and method guards, then the
+   `#[authorize]` class gate. A refusal is answered here.
+5. **Exception filters**: the method's, the host's, then the app's.
+6. **The handler stage**: the app-wide interceptors — the app's global list
+   and the modules' `#[interceptor]`s, ordered together by `Layer::priority`,
+   the app's list then import order breaking a tie — then the host's, then
+   the method's.
+7. **The tail**: the global pipes over the input, the per-argument pipes, the
+   handler, the response mask, the reply.
+
+Each layer reads the unit through one [execution
+context](/fundamentals/execution-context/): which unit, which handler, what
+it declared, what it carries. The operation span is outside all of it, so
+every stage logs under one `trace_id` — see
+[Correlation](/fundamentals/correlation/).
+
+## What each edge runs
+
+The stages are the same everywhere; what a unit has decides which of them
+run:
+
+| Unit | Stages | What differs |
 |---|---|---|
-| Guard | the guard stage, after routing (reads `#[public]`); a self-mount's request | same site |
-| Pipe | before the handler, over the body or a WS message's `data`, after its guards; `/graphql` POST variables, at the endpoint — a graphql-ws operation runs none | before the handler, over the body or a WS message's `data`; per argument on the other edges |
-| Exception filter | around the handler stage; a self-mount's request; what the router answers itself | around the handler stage |
-| Interceptor | the handler stage, after the guards | the handler stage, inside the app's |
+| HTTP route | 1 to 7 | its guards run `check_http`, the global pipes read the body |
+| A self-mount's request: `/graphql`, `/mcp`, a gateway's upgrade, the OpenAPI document | 1 to 5 | its guard stage is the request stage the transport composes; no handler of yours runs, so no handler stage — `/graphql`'s variables meet the global pipes at its endpoint |
+| What the router answers itself: a `404`, a `405`, a module's fallback | 1, 3, 5 | no unit of work, no guard |
+| [GraphQL root field](/fundamentals/interceptors/#around-a-graphql-field) | 1, 4 to 7, inside its request | its guards run `check`; the request ran the unit stage |
+| `#[field_resolver]` call | its resolver's and its own guards, its own interceptors and filters | runs once per parent row, inside the root field that produced it |
+| [WebSocket message](/websockets/messages/#interceptors-filters-and-pipes) | 1 to 7 | its guards run `check`, the global pipes read its `data` |
+| [MCP request](/mcp/#layers-around-an-operation) | 1 to 3 | one unit per JSON-RPC request the `/mcp` request carries |
+| its tool call or prompt fetch | 4 to 7, inside the request | its guards run `check` |
+| [Job](/queue/#layers-around-a-job), [tick](/schedule/#layers-around-a-tick), [listener call](/events/dispatch/#layers-around-a-listener-call) | 1 to 3, 5 to 7 | no caller, so no guard stage; the decorator's `timeout` is its deadline |
 
-Global guards are **pooled** globally but **execute** after routing, because a
-guard reads `#[public]` route data that only exists once the route is known —
-they do **not** run "before routing". Nothing the framework runs before them
-reads the request body: the transport wraps it, and whatever reads it first — a
-guard, the pipe pool, an extractor — reads it under
-[the body cap and its gap bound](/http/configuration/#request-body-size-limit).
+A WebSocket `#[on_connect]` or `#[on_disconnect]` hook carries what the
+upgrade's guards attached and runs no layer yet.
+
+Global guards are **pooled** globally but **execute** in each site's guard
+stage, after routing, because a guard reads the site's declarations —
+`#[public]`, `#[meta]` — that only exist once the site is known. Nothing the
+framework runs before them reads an HTTP body: the transport wraps it, and
+whatever reads it first — a guard, the pipe pool, an extractor — reads it
+under [the body cap and its gap bound](/http/configuration/#request-body-size-limit).
 
 Two ways to be app-wide, both at the handler stage: `use_interceptors_global`
 is the app's list, and `#[interceptor]` is what a module import brings. Only
 an interceptor its module declares `#[interceptor(stage = unit)]` runs around
-the guards — on every HTTP unit and every WebSocket message, a `404` and a
-refusal included — and writing `stage = unit` is the visible line that opens
-it.
+the guards — a `404` and a refusal included — and writing `stage = unit` is
+the visible line that opens it.
 
-## Nesting order
+## Order holds on every edge
 
-Every HTTP unit — a route, a self-mount's request, what the router answers
-itself — and every [WebSocket message](/websockets/messages/#interceptors-filters-and-pipes)
-runs the same stages, outermost first:
-
-1. **The edge**: the request span and its operation line, the request scope,
-   the deadline, panic containment.
-2. **The unit of work**, opened through the database binding when one is
-   imported: a transaction on a mutating route, the pool otherwise. It
-   commits on the unit's own outcome.
-3. **The unit stage**: `#[interceptor(stage = unit)]` (`Server-Timing`, the
-   RFC 9728 challenge).
-4. **The guard stage**: the global, controller and method guards, then the
-   route's `#[authorize]` class gate. A refusal is answered here.
-5. **Exception filters**: the method's, the controller's, then the app's.
-6. **The handler stage**: the app's global interceptors, then the modules'
-   `#[interceptor]`s in import order, then the controller's, then the
-   method's.
-7. **The handler**: the global pipe pool over the body, the extractors and
-   their pipes, the handler, the response mask.
-
-A self-mount's request runs stages 1 to 5, its guard stage the request stage
-the transport composes for it; no handler of yours runs there, so no handler
-stage either. What the router answers itself — a `404`, a `405`, a module's
-fallback — runs the edge, the unit stage and the exception filters alone: no
-unit of work, no guard.
-
-A GraphQL root field is a unit nested in the `/graphql` request (and in its
-operation's unit of work): it runs stages 4 to 7 — its guard stage the app's
-pool, the resolver's and the field's guards, each one's `check`, then the
-field's class gate; the exception filters and the handler stage with the
-app's own; then its argument pipes, the call and the mask. A
-`#[field_resolver]` runs once per parent row, inside the root field that
-produced it: its resolver's guards and its own, then only the interceptors and
-exception filters declared on it — none of the app's, since the root field ran
-them.
-
-Each operation an `/mcp` request carries is a unit of its own, inside that
-request's context: stages 1 to 3 for every one — its span and line, its unit of
-work, the unit stage — and, for a tool call or a prompt fetch, stages 4 to 7 at
-the operation's own site inside it: its guards' `check`, its class gate, its
-exception filters, its interceptors, then its pipes, its `Scoped<T>`
-parameters, the body and the mask. See
-[MCP](/mcp/#layers-around-an-operation).
-
-The operation span is outside all of it: the transport opens it before routing,
-so every stage above logs under one `trace_id` — see
-[Correlation](/fundamentals/correlation/).
-
-The route's `#[authorize]` class gate runs with its guards, before any
-interceptor or filter the route declares: a caching interceptor never answers a
-caller the gate refuses, and a filter never sees the refusal. `Layer::priority`
-orders entries *within* a site, never across sites: a handler-scope guard at
-`-10` still runs after every global and controller guard.
+The `#[authorize]` class gate runs with the guards, before any interceptor or
+filter the site declares: a caching interceptor never answers a caller the
+gate refuses, and a filter never sees the refusal. `Layer::priority` orders
+entries *within* a site, never across sites: a handler-scope guard at `-10`
+still runs after every global and host guard.
 
 A failure is sticky. A handler's error, or a `4xx`/`5xx` it answered, fails
 the unit; an exception filter or an interceptor may change what the client
-reads, never whether the unit failed, so a failed mutating request rolls back
-whatever it answered.
+reads, never whether the unit failed, so a failed unit rolls back whatever it
+answered.
 
 ## `#[public]` and `#[meta]`
 
 `#[public]` and `#[meta(EXPR)]` are not layers — they are **declarations** a
-layer reads. `#[public]` marks a route as anonymous-admissible (the guard admits
-it through); `#[meta]` declares typed data on a route or its controller, which a
-guard reads through `cx.reflector()`. Each route keeps one declaration for
-the process, its values built once as it mounts; its layers read it through a
-pointer, so nothing is copied per request. A refusal is answered by the guard
-stage — exception filters never see it; a unit-stage interceptor observes it.
+layer reads. `#[public]` marks a route or an operation as anonymous-admissible
+(the authentication guard admits it through); `#[meta]` declares typed data
+on a host or one of its methods, which a layer reads through
+`cx.reflector()`. Each site keeps one declaration for the process, its values
+built once as it mounts; its layers read it through a pointer, so nothing is
+copied per unit.
 
-Every guarded site's `#[meta]` is read the same way: a resolver, a gateway, an
-MCP host and each of their methods keep theirs with their site, and a guard's
-`check` reads it through `cx.reflector()` as `check_http` does on a route. A
-processor, scheduled tasks and listeners take `#[meta]` too, but run no guard,
-so a value declared there is read by nothing yet.
+Every site's `#[meta]` is read the same way: a route, a resolver's field, a
+gateway's message, an MCP tool, a job, a tick and a listener call keep theirs
+with their site, read by its guards where it has a caller and by its
+interceptors and exception filters everywhere.
 
 ## What fails at boot
 
@@ -161,10 +149,10 @@ resolve (its provider's module is not imported) fails the boot of every app, one
 that serves no HTTP included, naming the type: the check runs at the boot's
 wiring step, before any hook.
 
-A layer a site declares — on a controller, a route, a gateway or one of its
-messages, a GraphQL field, an MCP tool or prompt — that no imported module
-provides fails the boot too, naming the layer and the site. No site ever runs
-without a layer it declares.
+A layer a site declares — on a controller or a route, a resolver or a field,
+a gateway or a message, an MCP host or an operation, a worker block or a
+method — that no imported module provides fails the boot too, naming the
+layer and the site. No site ever runs without a layer it declares.
 
 A route whose guards are misordered — an authorization guard listed before the
 authentication guard whose principal it reads, at any scope — fails the boot
@@ -179,7 +167,8 @@ point: forgetting to wire authz cannot ship.
 
 ## Going further
 
+- [Execution context](/fundamentals/execution-context/) — what every layer
+  reads about the unit it runs around.
 - [Guards](/fundamentals/guards/) — authoring a guard and reading its context.
-- [Error handling](/fundamentals/exception-filters/) — typed catches at the route site.
-- [Interceptors](/fundamentals/interceptors/) — cross-cutting infra and the pool.
-- [Authorization](/security/authorization/) — the guard chain in order.
+- [Interceptors](/fundamentals/interceptors/) — cross-cutting work and the pool.
+- [Error handling](/fundamentals/exception-filters/) — typed catches at the site.

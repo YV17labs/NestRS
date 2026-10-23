@@ -1,0 +1,205 @@
+---
+title: Shutdown
+description: "How an app stops between SIGTERM and SIGKILL — every step bounded, the shutdown hooks within one budget, and the platform taking the replica out first."
+sidebar:
+  order: 4.4
+---
+
+An app stops in a fixed order, and every step of it is bounded: the
+transports drain, the [shutdown hooks](/fundamentals/lifecycle/) run within
+one budget, the resources close and telemetry flushes — all of it under the
+30 seconds Kubernetes allows between `SIGTERM` and `SIGKILL`. The last step is
+the runtime's teardown, which is why every `main` carries `#[nest_rs::main]`:
+
+```rust title="apps/blog/src/main.rs"
+#[nest_rs::main]
+async fn main() -> anyhow::Result<()> {
+    App::builder().module::<BlogModule>().build().await?.run().await
+}
+```
+
+## The way down
+
+Kubernetes gives a pod 30 seconds between `SIGTERM` and `SIGKILL` by default,
+and a process past it dies without a line, skipping every hook still to run and
+the telemetry flush. So every step from the signal to the exit is bounded, and
+by default they sum under the kill:
+
+| Step | Bound | Default |
+|---|---|---|
+| The transports stop, together | each its own window, then half a second (`SHUTDOWN_SETTLE_TIMEOUT`) for what it stopped to unwind: its `stop_bound` | 20.5 s, the longest |
+| The shutdown hooks run | `SHUTDOWN_HOOKS_TIMEOUT`, across all three phases | 5 s |
+| The resources close, then the container drops | what the hooks left of their budget | inside the 5 s |
+| Telemetry flushes | [`FLUSH_TIMEOUT`](/opentelemetry/), every provider at once | 3 s |
+| The runtime is torn down | what the hooks and the flush left of their budget | nothing past it |
+| The console writes what it still queues | [`CONSOLE_FLUSH_TIMEOUT`](/opentelemetry/logs/#a-console-that-stalls), under `#[nest_rs::main]` | 1 s |
+
+29.5 seconds, half a second under the kill. Each transport's window is its
+own:
+
+- the HTTP transport's [shutdown window](/http/configuration/#shutdown),
+  `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s, then the half second, which
+  the HTTP/2 streams it cut and the work its self-mounts ran off their
+  connections share;
+- the queue worker's [drain window](/queue/delivery/#shutdown),
+  `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, 20 s, its hand-backs inside it;
+- the scheduler's: a [scheduled tick](/schedule/) already running gets what a
+  hook gets — five seconds, spent *before* the hooks so no tick runs through the
+  cleanup it may depend on — and one still running then is stopped where it
+  waits and files its `schedule.tick` line `outcome="cancelled"`, then the half
+  second.
+
+Raising a window means raising the pod's grace period with it, keeping 9.5
+seconds above the longest window for the half second, the hooks and the two
+flushes — plus the `preStop` delay, which Kubernetes counts inside the grace
+([below](#leaving-the-load-balancer-first)).
+
+**The kernel holds every transport to the bound it states.** A transport's
+`stop_bound` is read at the boot: one past a day — `Duration::MAX` among them —
+is refused with `UnboundedTransportError` before any hook runs, since a stop
+nothing bounds is a `SIGKILL` with nothing to say why. On the way down `run`
+waits for the transports until the longest bound and the half second past the
+stop; one still serving then is abandoned, named at `error` (`transport did not
+stop within its declared bound: abandoned`, with `transport` and
+`stop_bound_ms`), and is the app's error.
+The boot says what this deployment will spend: once every transport is
+configured, `way down bounded` on `nest_rs::app` carries the longest stop among
+the transports it mounted, settle included (`stop_bound_ms`), and the hooks'
+budget (`hooks_budget_ms`); add the telemetry flush when OpenTelemetry is
+installed, and the console's second under `#[nest_rs::main]`.
+
+**The last step is `#[nest_rs::main]`'s**, which is why every `main` is
+written with it rather than `#[tokio::main]`. Before it builds anything it
+installs the
+[panic hook](/opentelemetry/logs/#a-panic-is-said-once-without-its-value) and
+publishes the [`.env` cascade](/configuration/env-cascade/#when-the-load-happens)
+while the process has one thread. It builds the same runtime `#[tokio::main]`
+does — tokio's multi-threaded one, sized by `TOKIO_WORKER_THREADS` — and tears
+it down differently. Dropping a
+runtime waits for every blocking task still running, so under `#[tokio::main]`
+a hook abandoned while it waited on a `spawn_blocking` (a synchronous client
+wrapped the usual way, a `tokio::fs` call) held the exit for as long as that
+call lasted, after the process had said its last line. `#[nest_rs::main]` gives
+the teardown what the hooks and the flush left of their budget and then exits,
+abandoning what still runs — said at `warn` when it waited out a bound — whether
+`main` returned or panicked; a panic then goes on out with its exit status. A
+`main` that runs no app, such as a migration tool, spent none of the budget, so
+work it left behind gets all five seconds. Last, it writes what the
+[console](/opentelemetry/logs/#a-console-that-stalls) still queues, within a
+second of its own, as it does before a signal exits at once. The app's manifest
+needs no `tokio` line for it.
+
+**The signals are the kernel's from `main`'s first line.**
+`#[nest_rs::main]` installs the `SIGINT` / `SIGTERM` handlers before it runs
+`main`, so the operating system's default action — a silent kill — never runs,
+whatever the process is doing when the signal lands:
+
+- **Before any app begins its boot** — a `main` still reading its
+  arguments, a migration tool that boots none — the process exits at once
+  with the code a shell gives a process that signal killed (130 for
+  `SIGINT`, 143 for `SIGTERM`), after one `error` on `nest_rs::app`,
+  `shutdown signal received before the app started: exiting at once`, with
+  `step="main"`. No subscriber may exist yet, so the line goes to stderr
+  when none can take it.
+- **During the boot** — a factory opening its pool, a transport
+  configuring or listening, an init hook warming a cache — the boot stops at its next
+  await: the step it waits on is dropped there, one `warn` names it
+  (`shutdown signal received during the boot: stopping it`, with `signal`
+  and `step`), and `build()`, `init()` or `run()` returns
+  `BootInterruptedError`, so `main` exits 1 through `anyhow`, after the
+  telemetry flush. A step that blocks its thread cannot be dropped; a second
+  signal is the way out.
+- **While it serves**, the app turns `Draining` and the way down above
+  begins.
+
+A factory that fails ends the boot naming the type it would have built — a
+`FactoryFailedError` whose source is the factory's own error:
+
+```text frame="terminal"
+Error: the factory for `app::Pool` failed
+
+Caused by:
+    connection refused
+```
+
+**A second signal exits at once.** One `SIGINT` or `SIGTERM` starts the way
+down; another received during it — a second `Ctrl-C`, an orchestrator repeating
+its `SIGTERM`, a signal after a failing transport began the way down, one while
+a boot step blocks its thread — exits immediately, with the same 130 or 143,
+after one `error` on `nest_rs::app` naming what it abandons (`step` is `boot`,
+`transports`, `shutdown hooks`, `resource closes` or `exit`, beside what it
+waited on):
+
+```text frame="terminal"
+ERROR nest_rs::app: shutdown signal received on the way down: exiting at once, abandoning what still runs signal="SIGINT" exit_code=130 step="shutdown hooks" phase=OnModuleDestroy provider="CacheService" method="flush" origin="api::cache"
+```
+
+Nothing runs after that line but the
+[console](/opentelemetry/logs/#a-console-that-stalls) writing what it still
+queues, that line included, within its one second — no later hook, no telemetry
+flush — since exiting at once is what was asked.
+
+## Leaving the load balancer first
+
+The way down begins at the signal, and the HTTP transport stops accepting right
+there. A platform that still routes requests to the replica after the signal
+sends them to a closed port, and their clients see a refused connection or a
+`502`. Kubernetes does exactly that on its own: it removes a terminating pod
+from its Service's endpoints while it sends `SIGTERM`, and kube-proxy and the
+ingress controllers catch up a few seconds later.
+
+So the replica leaves the rotation **before** the signal, and that half is the
+platform's. Each one has its hook:
+
+| Platform | Takes the replica out first with | Grace before the kill |
+|---|---|---|
+| Kubernetes 1.30+ | a `preStop` hook's `sleep` action, while the endpoint removal propagates | `terminationGracePeriodSeconds`, counted from the `preStop` hook: at least the sleep plus 29.5 s |
+| Amazon ECS behind a load balancer | itself: it deregisters the task and waits the target group's deregistration delay | `stopTimeout` after the signal, 30 s by default |
+| Nomad | the task's `shutdown_delay`, once its services are deregistered | `kill_timeout` after the signal, 5 s by default: raise it to `30s` |
+| Cloud Run | itself: new requests go to other instances | 10 s after the signal, which it does not let you raise |
+
+The 29.5 seconds are [the way down](#the-way-down) at the framework's defaults;
+a window you raise raises them. On Kubernetes, the sleep goes on every
+container that serves:
+
+```yaml title="deployment.yaml"
+spec:
+  template:
+    spec:
+      terminationGracePeriodSeconds: 35
+      containers:
+        - name: api
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+```
+
+Five seconds covers kube-proxy and an in-cluster ingress controller; a cloud
+load balancer that targets pod IPs can take longer to deregister one, so the
+sleep matches its deregistration time and the grace grows with it. The `sleep`
+action needs nothing in the image, so it works on a distroless one, where a
+`preStop` that runs `sleep` would find no binary. The
+[demo's chart](https://github.com/YV17labs/NestRS/tree/main/demo/charts/demo#graceful-shutdown)
+sets both, and refuses a grace that holds less.
+
+**Readiness does not take the replica out.** `/health/ready` answers `200`
+until the listener closes at the signal, and the port refuses after that, so a
+load balancer that polls it learns the replica is gone only once its probes
+fail, and routes requests to it meanwhile. The platform's hook is the one way
+out ahead of the signal.
+
+Cloud Run's ten seconds are fewer than the way down's bounds, and it offers no
+setting to raise them. Its traffic has moved when the signal lands, so the
+transports find little to drain, but what still runs at the tenth second — a
+long request, a hook, a flush — dies without its line. Lower the HTTP window
+there, `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, so a long request is cut with its
+`cancelled` line and the hooks still get their turn.
+
+## Going further
+
+- [Lifecycle](/fundamentals/lifecycle/) — the shutdown hooks and their budget.
+- [App state](/fundamentals/app-state/) — `stopping()`, for a loop that must
+  stop at the signal.
+- [HTTP configuration](/http/configuration/#shutdown) — the HTTP transport's
+  window.

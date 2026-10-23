@@ -221,7 +221,7 @@ lands on a job the worker still holds. The window is
 shutdown hooks' five, the telemetry flush's three and the console's one inside
 Kubernetes' default 30-second grace period; a window you raise needs the pod's
 grace period at least 9.5 seconds above it, plus any `preStop` delay
-([the way down](/fundamentals/lifecycle/#the-way-down)).
+([the way down](/fundamentals/shutdown/#the-way-down)).
 
 **The reserve is one Redis call long**: the connection's budget, or five seconds
 when that is shorter, and never more than half the window. A delivery still

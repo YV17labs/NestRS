@@ -35,9 +35,9 @@ condition alone. A guard that files a line of its own for every denial — the
 framework's authentication, ability and throttler guards do, on their crates'
 targets — says so with `files_its_denials()`, and the edge then files none:
 one denial is one line, the decider's. One trait, four
-transports — the same
-`#[injectable]` impl is reachable from HTTP, GraphQL, WS and MCP through the
-[the request lifecycle](/fundamentals/request-lifecycle/).
+edges — the same `#[injectable]` impl gates an HTTP route, a GraphQL field, a
+WebSocket message and an MCP operation
+([Guards beyond HTTP](/fundamentals/guards-beyond-http/)).
 
 `Guard` ships in
 [`nest-rs-guards`](https://crates.io/crates/nest-rs-guards). It extends
@@ -70,8 +70,8 @@ impl GuardFor<HttpView> for RateLimitGuard {}
 ```
 
 That last line declares the units your guard checks — see
-[A guard must declare the transports it checks](#a-guard-must-declare-the-transports-it-checks)
-below. Without it, binding this guard on a route is a compile error.
+[A guard declares the edges it checks](/fundamentals/guards-beyond-http/#a-guard-declares-the-edges-it-checks).
+Without it, binding this guard on a route is a compile error.
 
 A guard is an `#[injectable]` provider listed in some module's
 `providers = [...]`. The access graph (see
@@ -96,12 +96,11 @@ pub trait Guard: Layer {
 }
 ```
 
-Whatever the edge, the context answers the same questions:
-`cx.reflector()` reads what the site declared (`#[meta]`, its posture),
-`cx.ambient::<T>()` what an earlier guard attached, `cx.attach(value)` hands
-a value to everything after the guard, and `cx.edge()` and `cx.handler()`
-say which unit this is. `cx.peer()` names the connection a WebSocket message
-came on; the other edges leave it empty. An entry you do not
+Whatever the edge, the [execution context](/fundamentals/execution-context/)
+answers the same questions: `cx.reflector()` reads what the site declared
+(`#[meta]`, its posture), `cx.ambient::<T>()` what an earlier guard attached,
+`cx.attach(value)` hands a value to everything after the guard, and
+`cx.edge()` and `cx.handler()` say which unit this is. An entry you do not
 override costs nothing: it is answered without an allocation.
 
 ### What a route's document lists
@@ -235,7 +234,7 @@ from the same provider — declare once, choose *where* it runs.
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
 | **Global** | `App::builder().use_guards_global([guard::<AuthnGuard>()])` in `main` | The route's guard stage, post-routing (a self-mount's request stage for gateways) |
-| **Controller / Resolver / Gateway** | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct — a resolver binds `AuthzGuard` alone, [authenticated in band](#a-guard-must-declare-the-transports-it-checks) | Container, at mount |
+| **Controller / Resolver / Gateway** | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct — a resolver binds `AuthzGuard` alone, [authenticated in band](/fundamentals/guards-beyond-http/#a-guard-declares-the-edges-it-checks) | Container, at mount |
 | **Per-handler** | `#[use_guards(AdminGuard)]` beside a verb / `#[query]` / `#[subscribe_message]` | Container, at mount |
 
 Multiple guards in one attribute run in **declaration order**, outermost
@@ -541,95 +540,6 @@ flowchart TB
   PC -. "debug at boot, zero extra cost" .-> RUN
 ```
 
-## One trait, four transports
-
-A guard overrides the entries that apply to it, and the framework runs each at
-its own seam:
-
-| Entry | Runs | Bound by |
-|---|---|---|
-| `check_http` | post-routing on the request, before the handler; on a WS upgrade; on the `/graphql` and `/mcp` requests | `#[controller]` / `#[routes]`, and the `#[gateway]` struct |
-| `check` | per GraphQL field, and in front of the federation root fields | `#[resolver]` / `#[operations]` |
-| `check` | once per inbound envelope, after the upgrade | beside a `#[subscribe_message]` |
-| `check` | once per `#[tool]` / `#[prompt]` operation, inside rmcp's dispatch | `#[mcp]` host / `#[tools]` operation |
-
-`use_guards_global([...])` reaches every transport at every entry it
-implements. `/graphql` and `/mcp` run the pool at their request and in each
-operation: `check_http` once on the request, `check` once per operation it
-carries — so a global `ThrottlerGuard` rate-limits the `/mcp` request and each
-tool call, and a global guard overriding only `check` still refuses one.
-
-The three multiplexed transports need one thing on top: the guards that build
-the caller's `Ability` at the request, because a unit below the request does
-not see the request. A gateway binds them on its struct, for its upgrade; on
-`/graphql` and `/mcp`, which no controller owns, a module declares them —
-`EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` — and the transport
-runs them beside the global pool, each guard once. What they attach is ambient
-for every operation the request carries; below it you bind ordinary guards as
-usual. That wiring — `AuthzGraphqlModule`, `AuthzWsModule`, `AuthzMcpModule`,
-`forward_principal!`, and what each one gates — lives on
-[Endpoint guards](/security/authorization/endpoint-guards/),
-with the connection-vs-message split on
-[WebSocket guards](/websockets/guards/).
-
-## A guard must declare the transports it checks
-
-Both entries admit by default — right as "this guard does not apply to that
-transport", and the reason a guard bound where it has no check would compile
-and pass everything. `GuardFor<V>`, `V` the view of the units a site
-dispatches, closes that:
-
-| Bound at | Requires | Because it runs |
-|---|---|---|
-| `#[controller]` / `#[routes]`, `#[gateway]` struct | `GuardFor<HttpView>` | `check_http` |
-| `#[resolver]` / `#[operations]` | `GuardFor<GraphqlView>` | `check` |
-| beside a `#[subscribe_message]` | `GuardFor<WsView>` | `check` |
-| `#[mcp]` host / `#[tools]` operation | `GuardFor<McpView>` | `check` |
-
-Declare it next to the entry it covers — `impl GuardFor<GraphqlView> for
-RequireAdmin {}` — and the binding compiles. Bind a guard that lacks it and it
-does not, with a diagnostic naming the view and the way out. `AuthnGuard` is
-the guard it catches most often: it checks HTTP requests only, which is why a
-resolver binds `AuthzGuard` alone and leaves authentication to the guards
-at the `/graphql` request. Bound on one anyway:
-
-```text frame="terminal"
-$ cargo check -p features
-error[E0277]: `nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>` does not declare that it checks `GraphqlView` units
-   --> crates/features/src/users/graphql/resolver.rs:14:14
-    |
- 14 | #[use_guards(AuthnGuard, AuthzGuard)]
-    |              ^^^^^^^^^^ bound at a site whose units are `GraphqlView`
-    |
-    = note: `check_http` and `check` admit by default, so a guard bound here without its check would pass every unit silently
-    = note: override `Guard::check_http` (an HTTP request) or `Guard::check` (every other edge's unit), then declare `impl GuardFor<GraphqlView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
-```
-
-The declaration never proves the *entry* is overridden — the default gives
-every guard both. It proves you **declared** that this guard checks this
-edge's units. An empty `impl Guard for X {}` satisfies the compiler and
-passes every request; `GuardFor` is what turns that into an error at the
-`#[use_guards]` line rather than a chain entry that guards nothing. A guard
-whose one `check` is the same on every edge declares it once for all of them,
-`impl<V: UnitView> GuardFor<V> for X {}` — `ThrottlerGuard` does.
-
-A guard bound **globally** takes no `GuardFor`, and that is a deliberate hole
-rather than an oversight. A global guard serves whichever edges it
-implements — its `check_http` on the request, its `check` on every unit.
-Requiring `GuardFor<HttpView>` there would refuse a GraphQL-only guard, and
-the alternative is four global lists where the developer wrote one. So an
-empty guard registered globally still passes everything: `GuardFor` binds
-`#[use_guards]` sites, not the pool.
-
-A guard on the `#[gateway]` **struct** declares `GuardFor<HttpView>`, not
-`GuardFor<WsView>` — the upgrade is an HTTP `GET`, and `WsView` belongs to the
-per-message scope.
-
-See [Endpoint guards](/security/authorization/endpoint-guards/)
-for the full HTTP / GraphQL / WS / MCP wiring, and
-[WebSockets / Guards](/websockets/guards/) for the two WS scopes
-(connection vs message).
-
 <Aside type="note" title="What to remember">
 - **Guard** — `#[injectable]` provider; `Ok(())` passes, `Denial`
   short-circuits with a typed status.
@@ -643,6 +553,8 @@ for the full HTTP / GraphQL / WS / MCP wiring, and
 
 ## Going further
 
+- [Guards beyond HTTP](/fundamentals/guards-beyond-http/) — the two
+  entries on GraphQL, WebSockets and MCP, and the `GuardFor` declaration.
 - [Interceptors](/fundamentals/interceptors/) — the sibling layer: it
   wraps the handler instead of gating it, and dedups the same way.
 - [The request lifecycle](/fundamentals/request-lifecycle/) — where a

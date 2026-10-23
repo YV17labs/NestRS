@@ -17,9 +17,10 @@ framework tries them:
    the crate that owns it.
 
 `ExceptionFilter` is a [`Layer`](/fundamentals/request-lifecycle/) sub-trait in
-`nest_rs::core`, edge-neutral like [interceptors](/fundamentals/interceptors/),
+`nest_rs::core`, edge-neutral like [interceptors](/fundamentals/interceptors/):
+it reads the unit through its [execution context](/fundamentals/execution-context/),
 and dedups by [`TypeId`](https://doc.rust-lang.org/std/any/struct.TypeId.html)
-across the global, controller and method scopes.
+across the global, host and method scopes.
 
 ```rust title="nest_rs::core::ExceptionFilter"
 #[async_trait]
@@ -33,8 +34,8 @@ pub trait ExceptionFilter: Layer {
 ```
 
 <Aside type="caution">
-**HTTP runs them today**, on a route, a self-mount's request (`/graphql`,
-`/mcp`, a WS upgrade) and what the router answers itself, and so do
+**Every edge runs them**: HTTP on a route, a self-mount's request (`/graphql`,
+`/mcp`, a WS upgrade) and what the router answers itself, and
 [GraphQL fields](#on-a-graphql-field),
 [WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes),
 [MCP tool calls and prompt fetches](/mcp/#layers-around-an-operation),
@@ -182,9 +183,9 @@ status is the **default** the filter replaces. Drop the filter and the same
 handler answers the opaque `500` from that status — `code: INTERNAL`, no
 `detail`.
 
-A filter reads the request it answers as a guard does, through
-`HttpView::of(cx)?.request()` — its method, its headers, its extensions — so it
-can answer in the media type the client accepts; only the body is gone once
+A filter reads the request it answers through the same view, `view.request()`
+in the match above — its method, its headers, its extensions — so it can
+answer in the media type the client accepts; only the body is gone once
 the handler read it. What the client is finally sent decides what is filed,
 whatever the failure's type: a failure a filter answers with a `4xx` files
 nothing, and one it answers with a `5xx`, its own reply or a `Problem`, files
@@ -276,7 +277,7 @@ keeps the cost at zero.
 Exception filters run around the handler stage, after the guards and the
 posture's class gate, so a failure of the handler or of any handler-stage
 interceptor reaches them. The full order is on
-[the request lifecycle](/fundamentals/request-lifecycle/#nesting-order).
+[the request lifecycle](/fundamentals/request-lifecycle/#the-stages).
 
 ## Choosing between the seams
 

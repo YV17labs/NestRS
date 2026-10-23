@@ -7,17 +7,18 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-An interceptor wraps a unit: an HTTP request a route serves, a job's attempt,
-a tick and a listener call today, and every other edge's unit as each moves
-onto the same pipeline. It sees the unit before the handler runs, holds the
-outcome after, and in between calls `next.run(cx)` to run whatever sits inside
-it — another interceptor, and eventually the handler. One call, both sides of
-the boundary.
+An interceptor wraps a unit: an HTTP request a route serves, a GraphQL
+field, a WebSocket message, an MCP tool call, a job's attempt, a tick, a
+listener call. It sees the unit before the handler runs, holds the outcome
+after, and in between calls `next.run(cx)` to run whatever sits inside it —
+another interceptor, and eventually the handler. One call, both sides of the
+boundary.
 
 `Interceptor` is a [`Layer`](/fundamentals/request-lifecycle/) sub-trait in
 `nest_rs::core`, edge-neutral: it reads the unit through its
-[`UnitContext`](/fundamentals/guards/), the same context a guard reads, and
-reaches the HTTP request and reply through `HttpView::of(cx)`.
+[execution context](/fundamentals/execution-context/), the same `UnitContext`
+a guard reads, and reaches an edge's own view — the HTTP request and reply
+through `HttpView::of(cx)` — when it needs one.
 
 ```rust title="nest_rs::core::Interceptor"
 #[async_trait]
@@ -31,13 +32,13 @@ of the unit or answering it mints one: an interceptor that does neither does
 not compile. `next.run(cx)` consumes `next`, so the rest of the unit runs once.
 
 <Aside type="caution">
-**HTTP routes, [GraphQL fields](#around-a-graphql-field),
+**Every edge runs them: HTTP routes, [GraphQL fields](#around-a-graphql-field),
 [WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes),
 [MCP operations](/mcp/#layers-around-an-operation),
 [jobs](/queue/#layers-around-a-job),
 [ticks](/schedule/#layers-around-a-tick) and
-[listener calls](/events/dispatch/#layers-around-a-listener-call) run them
-today.** A WebSocket `#[on_connect]` / `#[on_disconnect]` hook runs none yet:
+[listener calls](/events/dispatch/#layers-around-a-listener-call).** A
+WebSocket `#[on_connect]` / `#[on_disconnect]` hook runs none yet:
 `#[use_interceptors]` on one is a compile error, and the app's global
 interceptors do not reach it.
 </Aside>
@@ -93,8 +94,8 @@ macro no longer matches it (`E0195`).
 
 | Scope | Binding | Runs |
 |-------|---------|------|
-| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main` | around every route's handler, after its guards, and every job, tick and listener call |
-| **Controller** | `#[use_interceptors(Tracer)]` on the struct | around each of its handlers |
+| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main` | around every unit's handler — a route, a field, a message, a tool call, a job, a tick, a listener call — after its guards |
+| **Host** | `#[use_interceptors(Tracer)]` on the controller, resolver, gateway, MCP host or worker block | around each of its handlers |
 | **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb | around that handler |
 
 ```rust title="crates/features/src/api/http/controller.rs"
@@ -128,8 +129,9 @@ for the worked example and the defense-in-depth argument.
 
 For infrastructure a module brings with its import, write `#[interceptor]` on
 the struct instead of `#[injectable]`. The struct is a singleton provider like
-any other, and importing its module adds it to every route's handler stage —
-after the app's global list, in import order, no `#[use_interceptors]`
+any other, and importing its module adds it to every unit's handler stage —
+ordered with the app's global list by `Layer::priority`, the app's list then
+import order breaking a tie, no `#[use_interceptors]`
 anywhere. The demo's API audits every write it admits that way: its
 `ApiModule` imports `AuditHttpModule`, and nothing else names the interceptor.
 
@@ -172,9 +174,9 @@ pub struct Timing;
 
 It runs on every HTTP unit — a route, a self-mount's request (`/graphql`,
 `/mcp`, a gateway's upgrade, the OpenAPI document) and what the router answers
-itself (a `404`, a `405`) — and on every WebSocket message, and observes what
-the guards refused; one serving MCP runs once around every operation an `/mcp`
-request carries. It is the
+itself (a `404`, a `405`) — on every WebSocket message, once around every
+operation an `/mcp` request carries, and around every job's attempt, tick and
+listener call; it observes what the guards refused. It is the
 place for what must see every answer: `Server-Timing` and the RFC 9728
 challenge `nest-rs-oauth-resource` adds to a `401` sit there. Writing
 `stage = unit` is the visible line that opens it; an app-listed global

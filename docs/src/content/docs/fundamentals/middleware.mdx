@@ -16,6 +16,10 @@ shape of each layer is explicit:
   context the handler reads back via `Ctx<T>`.
 - **Wrap-the-handler work** lives in **[Interceptors](/fundamentals/interceptors/)** —
   observe both sides, install ambient state, transform the response.
+- **Work around every request, before the access decision** — what a
+  pre-routing middleware usually does — is an interceptor its module declares
+  at the **unit stage**, `#[interceptor(stage = unit)]`: it sees every unit,
+  refusals and `404`s included.
 
 If you're looking for a place to put work the word "middleware" usually
 covers — logging, request id, rate limiting, auth, opening a transaction
@@ -26,6 +30,7 @@ covers — logging, request id, rate limiting, auth, opening a transaction
 | Role | NestRS primitive | Why |
 |------|------------------|-----|
 | Logging the request | **Interceptor** | Needs both sides (start time, end time, status) |
+| Timing every answer, refusals and `404`s included | **Unit-stage interceptor**, `#[interceptor(stage = unit)]` | Runs around the guards, so it sees what they refuse |
 | Adding a `X-Cache-Status` header to the response | **Interceptor** | Touches the response |
 | Authenticating the bearer token | **Guard** (`AuthnGuard`) | Short-circuit on 401, attach `Claims` for the handler |
 | Rate-limiting | **Guard** | Short-circuit on 429 before any work runs |

@@ -51,7 +51,11 @@ resolver — carries across intact.
 | `@Inject('TOKEN')` provider token | inject `Arc<dyn Trait>`, provider listed `as dyn Trait` |
 | `@UseGuards(...)` | `#[use_guards(...)]` |
 | `@UseInterceptors(...)` | `#[use_interceptors(...)]` |
-| `@UseFilters(...)` (binds `@Catch(...)` classes) | `#[use_exception_filters(...)]`; `@Catch()` with no argument is `type Exception = dyn Error + Send + Sync` |
+| `@UseFilters(...)` (binds `@Catch(...)` classes) | `#[use_exception_filters(...)]`; `@Catch(T)` is `type Exception = T`, and `@Catch()` with no argument is `type Exception = dyn Error + Send + Sync` |
+| `APP_INTERCEPTOR` | `#[interceptor]` on the struct, so its module's import brings it; or `use_interceptors_global` in `main` |
+| `APP_FILTER`, `APP_PIPE` | `use_exception_filters_global`, `use_pipes_global` in `main` |
+| an `HttpException` whose body carries an error code | a `nest_rs::core::Problem` and its `Code`, which every edge renders in its own form |
+| `AsyncLocalStorage`, `nestjs-cls` | the [ambient context](/fundamentals/execution-context/#what-a-unit-carries): `cx.attach(value)` in a layer, `ambient::<T>()` anywhere the unit reaches |
 | `@Resolver()` operation | `#[operations]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
 | `OnModuleInit` interface | `#[hooks] impl` + `#[on_module_init]` on the method |
 | Hooks run by DI level, each level at once (`Promise.all`) | dependencies first, one hook at a time, and shutdown in exact reverse ([order](/fundamentals/lifecycle/#ordering-and-failure)) |
@@ -188,13 +192,13 @@ controller has no way to say it depends on that binding. NestRS binds globals in
 `main` with `App::builder().use_guards_global([...])`, but the convention is to
 **also** declare the guard on the controller, resolver or gateway that needs it.
 That is not double work: the Layer System dedups every layer by `TypeId` across
-scopes, so a guard listed twice resolves once and runs once per request.
+scopes, so a guard listed twice resolves once and runs once per unit.
 
 The redundancy buys portability. A feature crate travels between binaries, and
 the app that forgets a global would otherwise leave a controller silently
 unprotected. Declared on the provider, the requirement travels with the code —
-and a binary with no global pool at all fails boot rather than serving open
-routes.
+and in a binary with no global pool the boot names, in one `warn`, every route
+that binds no guard and is not `#[public]`.
 
 ## There is no `forwardRef`
 
@@ -237,11 +241,33 @@ does not do.
 
 | NestJS | Why NestRS has none |
 |---|---|
-| `configure(consumer)` middleware | The word covers two shapes. Gating is a [Guard](/fundamentals/guards/), wrapping is an [Interceptor](/fundamentals/interceptors/), body normalization is a [Pipe](/fundamentals/pipes/), CORS and security headers are `HttpConfig`. [Middleware](/fundamentals/middleware/) maps every role to its home |
+| `configure(consumer)` middleware, `registerPreRequestHook` | The word covers several shapes. Gating is a [Guard](/fundamentals/guards/), wrapping is an [Interceptor](/fundamentals/interceptors/), work around every request before the access decision is an interceptor declared `#[interceptor(stage = unit)]`, body normalization is a [Pipe](/fundamentals/pipes/), CORS and security headers are `HttpConfig`. [Middleware](/fundamentals/middleware/) maps every role to its home |
 | `@Global()` | What a seed or a factory makes is [app-global](/fundamentals/modules/#what-is-global) — every config and connection, as `TypeOrmModule.forRoot` and `ConfigModule.forRoot({ isGlobal: true })` are in NestJS. A provider a module lists is import-gated, and no flag opens it everywhere: the import list is its declaration, the one the boot-time access-graph check reads |
 | `app.enableShutdownHooks()` | Never opt-in. `#[on_module_destroy]` and `#[on_application_shutdown]` always run, best-effort, so one failing cleanup doesn't skip the rest |
-| Terminus's `gracefulShutdownTimeoutMs`, Fastify's `return503OnClosing` | The transport stops accepting at the signal and answers what it already took, so no request arrives to be answered `503`; taking the replica out of rotation first is the platform's — a Kubernetes `preStop` sleep, an ECS deregistration ([leaving the load balancer first](/fundamentals/lifecycle/#leaving-the-load-balancer-first)) |
+| Terminus's `gracefulShutdownTimeoutMs`, Fastify's `return503OnClosing` | The transport stops accepting at the signal and answers what it already took, so no request arrives to be answered `503`; taking the replica out of rotation first is the platform's — a Kubernetes `preStop` sleep, an ECS deregistration ([leaving the load balancer first](/fundamentals/shutdown/#leaving-the-load-balancer-first)) |
 | `@Injectable()` on everything | `#[injectable]` marks a provider the container builds; a controller, resolver or gateway is already one through its own decorator |
+
+## The execution context
+
+A guard, an interceptor, a pipe and an exception filter all read one
+`UnitContext`, as every NestJS enhancer reads one `ExecutionContext`, on every
+edge. The calls map one for one:
+
+| NestJS | NestRS |
+|---|---|
+| `ExecutionContext` | `UnitContext`, handed to every layer |
+| `context.getType()` | `cx.edge()` — `Edge::Http`, `Edge::Graphql`, `Edge::Ws`, `Edge::Mcp`, `Edge::Queue`, … |
+| `context.switchToHttp()` | `cx.switch_to::<HttpView>()`; in a guard, `HttpView::of(cx)?` |
+| `switchToWs()`, `GqlExecutionContext.create(context)` | `cx.switch_to::<WsView>()`, `cx.switch_to::<GraphqlView>()` — a view per edge |
+| `context.getHandler()`, `context.getClass()` | `cx.handler()` — the method and its host in one value |
+| `SetMetadata`, `Reflector.createDecorator` | `#[meta(value)]`, typed, on a host or a method |
+| `reflector.get`, `reflector.getAllAndOverride` | `cx.reflector().get::<M>()` — the method's value over its host's |
+| `reflector.getAllAndMerge` | `cx.reflector().get_all::<M>()` |
+
+What differs is where it reaches. The context is typed, so a value read by
+type cannot collide with another's key, and the container is not on it: a
+layer injects what it needs, and the boot checks it. [Execution
+context](/fundamentals/execution-context/) is the reference.
 
 ## The parameter type is the decorator
 
@@ -255,7 +281,7 @@ full list.
 
 Interceptors follow the same move. There is no RxJS: `intercept` is an
 `async fn` receiving `Next<'_>`, and "after the handler" is the code you write
-after `next.run(req).await` — no `.pipe(map(...))`, no stream to remember to
+after `next.run(cx).await` — no `.pipe(map(...))`, no stream to remember to
 subscribe.
 
 ## One declaration feeds every schema

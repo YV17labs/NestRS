@@ -83,7 +83,7 @@ bounded: the three providers export at once, and what is still exporting after
 three seconds (`FLUSH_TIMEOUT`) is abandoned with a line on stderr naming it,
 so a collector that stopped answering delays the exit by three seconds and
 never holds it. Three is the step of
-[the way down](/fundamentals/lifecycle/#the-way-down) before the console's last
+[the way down](/fundamentals/shutdown/#the-way-down) before the console's last
 second, which sums to 29.5 seconds under a Kubernetes pod's 30-second grace.
 `OpenTelemetryModule` then exposes the meter as a provider; it mounts no
 per-request layer, since what it adds to a span reaches every edge through

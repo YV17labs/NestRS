@@ -188,8 +188,8 @@ processors, MCP tools) are transport-specific and live in their own categories:
   and declaring on the provider.
 - [Pipes](/fundamentals/pipes/) — parse, normalize and validate at the
   request boundary.
-- [Interceptors](/fundamentals/interceptors/) — wrap handler execution,
-  install ambient state, shape the response.
+- [Interceptors](/fundamentals/interceptors/) — wrap a unit on every edge,
+  install ambient state, shape the reply.
 - [Error handling](/fundamentals/exception-filters/) — typed catches,
   unconditional mapping, and the defaults underneath.
 
@@ -197,10 +197,22 @@ processors, MCP tools) are transport-specific and live in their own categories:
 
 - [Lifecycle](/fundamentals/lifecycle/) — `#[hooks]` on the init and
   shutdown phases the framework drains in order.
-- [The request lifecycle](/fundamentals/request-lifecycle/) — one pool per
-  layer family, deduplicated by `TypeId`, run exactly once.
+- [App state](/fundamentals/app-state/) — the sequence `App::run` walks, and
+  where the app stands on it.
+- [Shutdown](/fundamentals/shutdown/) — every bounded step from the signal
+  to the exit.
+- [The request lifecycle](/fundamentals/request-lifecycle/) — the stages
+  every unit runs, and one pool per layer family, run exactly once.
+- [Execution context](/fundamentals/execution-context/) — what every layer
+  reads about the unit it runs around, on every edge.
+- [Guards beyond HTTP](/fundamentals/guards-beyond-http/) — one guard on
+  GraphQL fields, WebSocket messages and MCP operations.
+- [Pipes beyond HTTP](/fundamentals/pipes-beyond-http/) — the same pipes on
+  every edge's wire value.
+- [Global pipes](/fundamentals/global-pipes/) — one pipe over every body,
+  set of variables and message.
 - [Middleware](/fundamentals/middleware/) — why there is no middleware
-  primitive, and which of the two roles you actually want.
+  primitive, and which of the layers you actually want.
 - [Correlation](/fundamentals/correlation/) — the W3C trace every unit of
   work runs under, readable anywhere.
 - [Extending NestRS](/fundamentals/extending/) — the extension contract and

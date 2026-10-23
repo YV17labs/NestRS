@@ -39,6 +39,7 @@ pub(crate) const RESOLVERS: &str = "GraphQL resolver";
 
 /// Which root a resolver's methods contribute to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum GraphqlResolverKind {
     /// The `Query` root.
     Query,
@@ -116,6 +117,7 @@ impl<T: SubscriptionType> GraphqlSubscriptionObject for T {
 }
 
 /// What a registration builds: the two root shapes async-graphql distinguishes.
+#[non_exhaustive]
 pub enum GraphqlRootMember {
     /// A `#[query]` / `#[mutation]` root object.
     Object(Box<dyn GraphqlResolverObject>),

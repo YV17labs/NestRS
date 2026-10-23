@@ -43,14 +43,14 @@ impl GuardFor<nest_rs_http::HttpView> for RoleHeaderGuard {}
 struct RequireAdmin;
 
 nest_rs_core::inventory::submit! {
-    GraphqlContextSeed {
-        lifetime: SeedLifetime::Connection,
-        owner_type_id: || Some(std::any::TypeId::of::<RequireAdmin>()),
-        seed: |_req, _container, gql| match nest_rs_core::ambient::<Role>() {
+    GraphqlContextSeed::new(
+        Some(std::any::TypeId::of::<RequireAdmin>),
+        SeedLifetime::Connection,
+        |_req, _container, gql| match nest_rs_core::ambient::<Role>() {
             Some(role) => gql.data(Role::clone(&role)),
             None => gql,
         },
-    }
+    )
 }
 
 impl Layer for RequireAdmin {}

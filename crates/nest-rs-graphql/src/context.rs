@@ -33,20 +33,36 @@ use crate::view::GraphqlView;
 /// A per-request forwarder, submitted via `inventory`, attaching values from
 /// the HTTP request (and the container) to the GraphQL request.
 pub struct GraphqlContextSeed {
-    /// `None` for a framework-level seed (always fires); `Some(id)` gates the
-    /// seed on its owner being reachable, so two apps forward different types
-    /// without colliding.
-    pub owner_type_id: fn() -> Option<TypeId>,
-    /// How far the forwarded value may travel.
-    pub lifetime: SeedLifetime,
-    /// Attaches values onto the outgoing GraphQL request.
-    pub seed: fn(&Request, &Container, GqlRequest) -> GqlRequest,
+    owner: Option<fn() -> TypeId>,
+    lifetime: SeedLifetime,
+    seed: ContextSeed,
+}
+
+impl GraphqlContextSeed {
+    /// A seed that `seed` attaches values onto each GraphQL request with, as
+    /// far as `lifetime` lets them travel.
+    ///
+    /// `owner` gates it on that provider being reachable, so two apps forward
+    /// different types without colliding; `None` is a framework-level seed,
+    /// which always fires.
+    pub const fn new(
+        owner: Option<fn() -> TypeId>,
+        lifetime: SeedLifetime,
+        seed: fn(&Request, &Container, GqlRequest) -> GqlRequest,
+    ) -> Self {
+        Self {
+            owner,
+            lifetime,
+            seed,
+        }
+    }
 }
 
 /// How long a forwarded value stays valid — on a graphql-ws socket, opened by
 /// **one** request that then serves operations for hours, only the caller's
 /// identity carries over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SeedLifetime {
     /// The upgrade request's own state — forwarded on the POST path, and
     /// **dropped** on a socket.
@@ -173,7 +189,7 @@ fn active_seeds(
 ) -> Result<Vec<&'static GraphqlContextSeed>, UngatedDiscoveryError> {
     let reachable = ReachableProviders::of(container, SEEDS)?;
     Ok(inventory::iter::<GraphqlContextSeed>()
-        .filter(|reg| (reg.owner_type_id)().is_none_or(|owner| reachable.reaches(owner)))
+        .filter(|reg| reg.owner.is_none_or(|owner| reachable.reaches(owner())))
         .collect())
 }
 
@@ -528,16 +544,16 @@ fn batch_response(executed: &BatchResponse) -> nest_rs_http::Result<Response> {
 macro_rules! forward_principal {
     ($ty:ty) => {
         $crate::__private::inventory::submit! {
-            $crate::GraphqlContextSeed {
-                owner_type_id: || ::core::option::Option::None,
-                lifetime: $crate::SeedLifetime::Connection,
-                seed: |_req, _container, __gql| match $crate::__private::ambient::<$ty>() {
+            $crate::GraphqlContextSeed::new(
+                ::core::option::Option::None,
+                $crate::SeedLifetime::Connection,
+                |_req, _container, __gql| match $crate::__private::ambient::<$ty>() {
                     ::core::option::Option::Some(__v) => {
                         __gql.data(<$ty as ::core::clone::Clone>::clone(&__v))
                     }
                     ::core::option::Option::None => __gql,
                 },
-            }
+            )
         }
     };
 }

@@ -33,6 +33,7 @@ use crate::view::{FieldRole, GraphqlView};
 /// Which GraphQL site a field is — what decides whether its guard stage folds
 /// the app-wide pool, and the role its field plays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GraphqlSite {
     /// A `#[query]` / `#[mutation]` / `#[subscription]`: the app-wide pool runs
     /// here, each pooled guard's `check`, which the `/graphql` request's

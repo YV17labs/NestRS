@@ -34,14 +34,14 @@ impl GuardFor<nest_rs_http::HttpView> for TagGuard {}
 struct TagResolver;
 
 nest_rs_core::inventory::submit! {
-    GraphqlContextSeed {
-        lifetime: SeedLifetime::Connection,
-        owner_type_id: || Some(std::any::TypeId::of::<TagResolver>()),
-        seed: |_req, _container, gql| match nest_rs_core::ambient::<RequestTag>() {
+    GraphqlContextSeed::new(
+        Some(std::any::TypeId::of::<TagResolver>),
+        SeedLifetime::Connection,
+        |_req, _container, gql| match nest_rs_core::ambient::<RequestTag>() {
             Some(tag) => gql.data(RequestTag::clone(&tag)),
             None => gql,
         },
-    }
+    )
 }
 
 #[operations]
@@ -433,11 +433,11 @@ mod the_endpoint_guards_speak_the_request_vocabulary {
     }
 
     nest_rs_core::inventory::submit! {
-        GraphqlContextSeed {
-            lifetime: SeedLifetime::Request,
-            owner_type_id: || Some(std::any::TypeId::of::<TenantResolver>()),
-            seed: forward_tenant,
-        }
+        GraphqlContextSeed::new(
+            Some(std::any::TypeId::of::<TenantResolver>),
+            SeedLifetime::Request,
+            forward_tenant,
+        )
     }
 
     #[resolver]

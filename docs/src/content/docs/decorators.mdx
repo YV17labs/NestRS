@@ -14,7 +14,9 @@ inclusion rule, and it is wider than "an attribute macro". Roughly half the
 rows below — `#[get]`, `#[query]`, `#[public]`, `#[on_module_init]` — are
 inert tokens an orchestrator reads (`#[routes]`, `#[operations]`, `#[hooks]`),
 not macros of their own, and they need no import. What decides a row is
-whether you type it, not how the compiler resolves it.
+whether you type it, not how the compiler resolves it. A decorator of your
+own reads its keys and words its refusals as these do, on the kit
+[Writing a decorator](/extending/decorator/) walks through.
 
 ## DI and lifecycle
 

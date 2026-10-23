@@ -1,0 +1,182 @@
+---
+title: Extending NestRS
+description: "What you can plug into NestRS, how the framework picks your implementation, and where each contract a package or a driver implements is written."
+sidebar:
+  label: Overview
+  order: 1
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Some parts of NestRS are meant to be replaced — the database, the queue
+backend, the rate-limit and lock stores, a social provider — and a crate of
+your own can add to the rest: a module with its own configuration, a
+transport, a decorator. This section is the contract for that crate's
+author: what each seam asks of you, how the framework picks your
+implementation, and where your configuration lives.
+
+Replacing a backend is one import at the composition root. The port keeps
+its policy and its guard; the binding beside it moves the work elsewhere:
+
+```rust title="apps/api/src/module.rs"
+use nest_rs::core::module;
+use nest_rs::redis::{RedisModule, RedisThrottlerModule};
+use nest_rs::throttler::ThrottlerModule;
+
+#[module(imports = [
+    ThrottlerModule::for_root(None),
+    RedisModule::for_root(None),
+    RedisThrottlerModule,
+])]
+pub struct ApiModule;
+```
+
+## What a swappable concern owes you
+
+A concern you can plug into ships an **extension contract**: the trait you
+implement, the seam that makes your implementation reachable from the
+container, and the sentence describing what happens when there is more than
+one.
+
+If that contract cannot be written, the concern is **not** swappable, and the
+crate says so in its module docs. A trait with no contract beside it would be
+an extension you have to reverse-engineer; a client with no trait at all is a
+closed door that looks open. Neither is left to inference.
+
+## Two questions decide the shape
+
+### Who owns the driver problem?
+
+**Delegated.** A third-party library is *already* the multi-driver
+abstraction, and the NestRS crate is a thin adapter over it that does not let
+the vendor's types leak.
+
+| the crate that *binds* the port | delegates to | which already drives |
+|---|---|---|
+| `nest-rs-seaorm` | `sea-orm` | PostgreSQL, the one engine nestrs builds it for |
+| `nest-rs-storage` | `object_store` | S3, GCS, Azure, local filesystem, in-memory — of which the store's URL opens `s3` and `memory` |
+
+The question is answered by whoever **binds** the port, never by the crate
+that declares it: `nest-rs-database` names no database library, and
+`nest-rs-queue` no Redis client. A delegated port exists for one move —
+swapping the **vendor** — so its contract is thin and it declares no
+configuration of its own. If you want a different object store, you do not
+write a NestRS driver: you point `object_store` at it.
+
+**Owned.** Nothing abstracts the concern, so NestRS defines the trait, the
+registration seam and the arbitration sentence itself — `ThrottlerStore`,
+`JobProducer` and `JobConsumer`, `OccurrenceLock`, `SocialProvider`,
+`Strategy`. An adapter then carries only its transport:
+`nest-rs-redis` moves jobs and keeps their leases, while what a job attempt
+*is* — its retries and their backoff, its trace, the capabilities a backend
+declares, the consume loop — is `nest-rs-queue`'s. A second queue backend
+implements the port's two traits and inherits the rest.
+
+### What selects the active implementation?
+
+Three modes. They are not interchangeable, and which one a concern uses tells
+you where your configuration goes.
+
+**By import.** Exactly one implementation, chosen by which binding the app
+imports beside the port's module — the snippet above. Consumers inject
+`dyn Port` and never name the backend, so swapping it edits the composition
+root alone. The port's own default is an ordinary factory, so a vendor
+binding supersedes it wherever it sits in `imports`; two vendor bindings
+contest, and the boot fails naming both and the port's `BACKEND_REMEDY`, the
+sentence each port words once.
+
+**By type parameter.** You name the implementation in an alias, and the
+generic host is instantiated with it. Two instantiations are two distinct
+types, so nothing can be contested and no arbitration is owed:
+
+```rust title="crates/features/src/authn/strategy.rs"
+pub type AuthnStrategy = JwtStrategy<Claims>;
+pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
+```
+
+The same shape carries `AbilityGuard<F: AbilityFactory>` and
+`EndpointGuards<V, G>`. This is the mode NestRS uses most.
+
+**By configuration.** The import only **opens the gate** — for a social
+provider, the provider's own module beside `SocialModule` — and configuration
+decides which opened members are active, from zero to all of them.
+Registering a provider is not activating it:
+
+| `<PREFIX>_SOCIAL__<KEY>__*` | outcome |
+|---|---|
+| complete | the provider is active |
+| absent entirely | inert, with one boot `warn` — its routes 404 |
+| partial, or invalid | **the boot fails**, naming the provider |
+
+## Where your configuration lives
+
+It follows from the contract; nothing is arbitrated.
+
+**A port owns a config namespace if and only if its contract requires you to
+honour one.** The throttler's does, so `<PREFIX>_THROTTLER__LIMIT` and
+`<PREFIX>_THROTTLER__WINDOW_SECS` survive a backend swap unchanged: they are
+the policy every store honours. The queue's does too: its worker is the
+port's, so the drain window, `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, is the
+same on every backend.
+
+Your own settings take their namespace from where they are declared — **read
+off the path, exactly as a type name is**: your crate's word (`nestrs-kafka` →
+`<PREFIX>_KAFKA__*`, by the [naming rule](/semver/#naming-a-package)), then
+the binding folder's when the config sits in one, joined by `__`. The
+resource your crate opens is its own subject, so its config sits at the crate
+root: `nest-rs-redis/src/config.rs` → `RedisConfig` → `<PREFIX>_REDIS__*`. A
+setting one binding owns sits in that binding's folder and wears both words —
+`nest-rs-redis/src/queue/config.rs` → `RedisQueueConfig` →
+`<PREFIX>_REDIS__QUEUE__*`. From the variable an operator can name your crate
+and your type; from your module a developer can name the variable.
+
+Selection by configuration is the case where the member is a folder of your
+crate, hence two segments — `<PREFIX>_SOCIAL__GITHUB__*` beside
+`<PREFIX>_SOCIAL__GOOGLE__*`. Selection by type parameter needs no namespace
+at all.
+
+## Where each contract is written
+
+Each contract lives on one page, beside the concern it extends. Every driver
+page follows one order — the contract, how the binding is selected, the
+budget it declares under the port's net, what a failure of its backend
+becomes, TLS, the proof it passes at boot, its health check, and the test
+that holds it — so the four read alike:
+
+| You write | Its contract |
+|---|---|
+| A package: a module, its configuration, the resources it opens | [Writing a package](/extending/package/) |
+| A transport, or a surface your package serves over HTTP | [Writing a transport](/extending/transport/) |
+| A decorator | [Writing a decorator](/extending/decorator/) |
+| A queue backend: `JobProducer`, `JobConsumer` | [Writing a queue driver](/queue/writing-a-driver/) |
+| A rate-limit store: `ThrottlerStore` | [Writing a rate-limit store](/rate-limiting/writing-a-store/) |
+| An occurrence lock: `OccurrenceLock` | [Writing an occurrence lock](/schedule/writing-a-lock/) |
+| A database driver: `UnitOfWork`, `Executor` | [Writing a database driver](/database/writing-a-driver/) |
+| An authentication `Strategy` | [Authentication](/security/authentication/) |
+| A social provider: `SocialProvider` | [Social login](/security/authentication/social-login/) |
+| The health check of a resource you open | [Indicators](/health/indicators/#an-indicator-a-module-attaches) |
+
+**`nest-rs-storage` is the delegated case at its plainest.** There is no
+driver trait to implement: the store's URL picks the `object_store` backend —
+`s3://` for AWS S3 and the servers speaking its API, `memory:///` for
+development and tests — as a Redis URL's scheme picks its topology. This
+release opens those two. Another backend `object_store` drives (`gs://`,
+`az://`, `file://`) is a scheme the crate learns, added in a minor without an
+API change for the features that inject `Storage`; if you need one, say so on
+the issue tracker — that is the signal that decides it.
+
+## In this section
+
+<CardGrid>
+  <LinkCard title="Writing a package" href="/extending/package/" description="The manifest and names, a module that owns its configuration, the resources it opens and closes, and its tests." />
+  <LinkCard title="Writing a transport" href="/extending/transport/" description="Serve beside HTTP and the workers, open your own units, or mount a surface on HTTP." />
+  <LinkCard title="Writing a decorator" href="/extending/decorator/" description="An attribute macro on nest-rs-codegen's kit, and discovery gated on the app's imports." />
+</CardGrid>
+
+## Going further
+
+- [Semver policy](/semver/) — what 7.x keeps for the crate you build, and how
+  it depends on NestRS.
+- [Modules](/fundamentals/modules/) — how an import registers what you ship.
+- [Configuration](/configuration/) — the `.env` cascade, namespaces, and the
+  dual path between a pinned struct and an environment variable.

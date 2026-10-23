@@ -1,0 +1,213 @@
+---
+title: Writing a decorator
+description: "Write an attribute macro on nest-rs-codegen's kit: keys read as every decorator reads them, paths that hold across 7.x, discovery gated on the app's imports."
+sidebar:
+  order: 4
+---
+
+A decorator is an attribute your users write — `#[audited]` on a struct —
+that expands into the code your package needs: a trait implementation, a
+registry entry. NestRS writes its own on a kit it publishes, `nest-rs-codegen`,
+so yours reads its keys, words its refusals and roots its paths as every
+framework decorator does. At the end of this page your attribute expands in
+any app on any 7.x, and what it declares is discovered only in an app that
+imports your module.
+
+```rust title="from nest-rs-codegen's crate example"
+use nest_rs_codegen::{Grammar, reroot};
+use proc_macro2::TokenStream;
+use quote::quote;
+
+const AUDITED: Grammar = Grammar::new("audited", &["topic"]);
+
+fn audited(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+    let mut topic = None;
+    AUDITED.parse2(args, |arg| {
+        topic = Some(arg.str_lit("billing")?.value());
+        Ok(())
+    })?;
+    let item: syn::ItemStruct = syn::parse2(item)?;
+    let ident = &item.ident;
+    let topic = topic.unwrap_or_else(|| nest_rs_codegen::snake_case(&ident.to_string()));
+    Ok(reroot(quote! {
+        #item
+        impl ::nestrs_audit::Audited for #ident {
+            const TOPIC: &'static str = #topic;
+        }
+    }))
+}
+```
+
+## Two crates
+
+A `proc-macro` crate can export nothing but macros, so a decorator ships as
+two: the package your users depend on, `nestrs-audit`, holding the trait the
+expansion implements and re-exporting the macro, and its macro crate,
+`nestrs-audit-macros`, which no one names directly. The macro crate is the one
+crate that depends on `nest-rs-codegen` rather than the umbrella
+([the semver page's manifest rules](/semver/#writing-a-package)):
+
+```toml title="crates/audit-macros/Cargo.toml"
+[lib]
+proc-macro = true
+
+[dependencies]
+nest-rs-codegen = "7.2"
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "3.0", features = ["full"] }
+```
+
+The kit's root names `syn` 3 and `proc-macro2` 1 types, so their majors move
+with NestRS's. Everything else in `nest-rs-codegen` is the framework's own and
+no API.
+
+## Read its keys
+
+`Grammar::new(attr, keys)` declares the decorator's name and every key it
+takes. `parse2` hands your closure each key once it passed two refusals — a
+key the grammar does not take, a key written twice — and an `Arg` refuses a
+bare key when you read its value. Each refusal is the sentence every
+framework decorator words it with, so `#[audited(topc = "billing")]` fails to
+compile with:
+
+```text
+unknown #[audited] argument `topc`; expected `topic`
+```
+
+The rest of the kit reads what decorators commonly take, each with its own
+compiled example on docs.rs:
+
+- `Arg::str_lit(example)`, `Arg::expr()`, `Arg::input()` for a string, an
+  expression, or a key that takes a list or nothing;
+- `duration_millis` for a duration written `"30s"`;
+- `snake_case` and `pascal_case` to derive a name from the item's;
+- `take_flag_attr`, `take_single_attr` and `take_path_list` to take a marker
+  attribute off a method, and `repeated_attribute` to word a second copy;
+- `Refusals`, to report every refusal an item holds at once — a developer
+  fixes every mistake of a build, not one per build.
+
+## Emit paths that hold
+
+Your macro is compiled against one 7.x and expands in apps on later ones, so
+its expansion keeps two rules:
+
+1. **A framework path is emitted as `::nest_rs_<concern>::<item>`**, an item
+   that concern's documentation shows, and the finished expansion goes
+   through `reroot`, which rewrites each such root to the path the call site
+   resolves — `::nest_rs::<concern>::` behind the umbrella. It never names a
+   `__private` path: those differ between releases, and only documented
+   items hold across them.
+2. **Your own package's items are emitted as `::<your_crate>::…`** —
+   `::nestrs_audit::Audited` — which `reroot` leaves untouched.
+
+## Register what it declares
+
+A decorator that declares something the app discovers — a handler, a job, a
+listener — submits an entry to a link-time registry. Your package defines the
+entry and collects it; the expansion submits one per item, through the
+umbrella's `inventory`:
+
+```rust title="crates/audit/src/entry.rs"
+use std::any::TypeId;
+
+/// One `#[audited]` struct, as the expansion submits it.
+pub struct AuditedEntry {
+    pub topic: &'static str,
+    pub origin: &'static str,
+    pub provider_type_id: fn() -> TypeId,
+}
+
+nest_rs::core::inventory::collect!(AuditedEntry);
+```
+
+The expansion writes `::nest_rs_core::inventory::submit! { ::nestrs_audit::AuditedEntry { … } }`,
+with `module_path!()` as its origin. An entry your package submits itself —
+a social provider's — reaches an app only if the app's code names your crate,
+since a crate no code names is not linked: the app's import of your module is
+what names it.
+
+## Discover it where the app imports it
+
+An entry is linked into every binary that links its crate, so your module
+reads the registry gated on what the running app imports. It does so in its
+[wiring step](/extending/package/#a-registry-it-fills), where a refusal can
+fail the boot:
+
+```rust title="crates/audit/src/module.rs"
+use nest_rs::core::anyhow;
+use nest_rs::core::{Container, ContainerBuilder, Module, ReachableProviders, Registering, inventory};
+
+use crate::{AuditRegistry, AuditedEntry};
+
+pub struct AuditModule;
+
+impl Module for AuditModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide(AuditRegistry::default())
+            .provide_wiring("nestrs_audit::registry", wire)
+    }
+}
+
+fn wire(container: &Container) -> anyhow::Result<()> {
+    let reachable = ReachableProviders::of(container, "#[audited] struct")?;
+    let Some(registry) = container.get::<AuditRegistry>() else {
+        return Ok(());
+    };
+    for entry in inventory::iter::<AuditedEntry>() {
+        if !reachable.reaches((entry.provider_type_id)()) {
+            nest_rs::core::report_inert_host!(
+                target: crate::TARGET,
+                what: "#[audited] struct",
+                origin: entry.origin,
+                host: (entry.provider_type_id)(),
+                container: container,
+                topic = entry.topic,
+            );
+            continue;
+        }
+        registry.add(entry);
+    }
+    Ok(())
+}
+```
+
+`ReachableProviders::of(container, "<what it discovers>")` answers the set the
+boot sealed, or `UngatedDiscoveryError` naming your word when the container
+was built by hand: discovery never runs ungated. `reaches(provider)` is the
+gate. An entry it refuses goes to `report_inert_host!`, which says it at
+`warn` when it is the app's own and at `debug` when it is a dependency's,
+with a hint naming the module to import. Your `what` is the same word in both
+places, so the refusal and the report name one population. Every registry
+the framework fills from its decorators — listeners, scheduled methods,
+indicators, processors — is read this way, and `ReachableProviders::of` and
+`report_inert_host!` each carry a compiled example on docs.rs.
+
+Your users' tests boot through `TestApp`, `HeadlessApp` or `App::builder`,
+which seal the set as `App::run` does, so a test discovers what production
+does.
+
+## Test it
+
+The expansion is a function from tokens to tokens, so a unit test calls it
+with `quote!` and reads what it returns — the expansion, or the refusal:
+
+```rust title="from nest-rs-codegen's crate example"
+let expanded = audited(quote!(), quote!(struct OrderLine;))?;
+assert!(expanded.to_string().contains("\"order_line\""));
+let refused = audited(quote!(topc = "billing"), quote!(struct Invoice;)).unwrap_err();
+assert_eq!(refused.to_string(), "unknown #[audited] argument `topc`; expected `topic`");
+```
+
+What the expansion does in an app — the entry discovered, or reported inert —
+is your module's integration test, booted as above.
+
+## Going further
+
+- [Decorator reference](/decorators/) — every framework decorator and its
+  keys, the grammar yours joins.
+- [Writing a package](/extending/package/) — the module that reads your
+  registry.
+- [Semver policy](/semver/) — what a 7.x keeps of the paths your expansion
+  emits.

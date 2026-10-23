@@ -217,7 +217,8 @@ pub(crate) fn netted(
 }
 ```
 
-`declared_budget` reads the budget off the connection the app opened, and
+`declared_budget` reads the budget off the connection the app opened —
+[Writing a package](/extending/package/#a-resource-it-opens) shows it — and
 `Net::over` names the port in the refusal. Bound each round trip inside that
 budget yourself, so an outage reaches the caller as your error rather than
 as the port's.
@@ -389,4 +390,4 @@ the stall limit, the drain and an envelope enqueued twice.
 
 - [Delivery on Redis](/queue/delivery/) — the reference driver: one Lua script per transition, each fenced.
 - [Retries and failure](/queue/retries-and-failure/) — what the port does with each outcome.
-- [Extending NestRS](/fundamentals/extending/) — every contract a driver's crate may implement.
+- [Extending NestRS](/extending/) — every contract a driver's crate may implement.

@@ -339,6 +339,7 @@ export default defineConfig({
             { label: 'Writing a rate-limit store', slug: 'rate-limiting/writing-a-store' },
           ],
         },
+        { label: 'Extending NestRS', items: [{ autogenerate: { directory: 'extending' } }] },
         {
           label: 'Reference',
           items: [

@@ -148,7 +148,7 @@ never add them as direct dependencies; the surface crate re-exports what you
 need. **`nest-rs-codegen`** holds the token helpers they share. A decorator
 crate of your own, a `proc-macro` crate, is the one place it is a dependency:
 it uses the crate's root items, the kit semver covers, and the rest is the
-framework's ([Writing a package](/semver/#writing-a-package)).
+framework's — [Writing a decorator](/extending/decorator/) walks it.
 For a decorator index see [Decorators](/decorators/).
 
 **Your product's `features` crate** holds domain modules (entities, services,

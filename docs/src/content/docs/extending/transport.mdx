@@ -1,0 +1,243 @@
+---
+title: Writing a transport
+description: "Serve your package beside HTTP and the workers: the Transport steps, the units it opens, its tests, and a surface it mounts on HTTP."
+sidebar:
+  order: 3
+---
+
+What serves an app — the HTTP server, the queue worker, the scheduler — is a
+`Transport`, and your package can ship one: a metrics scrape port, the tail of
+a change feed, a broker's consumer. Its module attaches it, and `App::run`
+builds it from the assembled container, configures it, has it listen and
+serves it beside the others until the app stops.
+
+```rust title="from nest-rs-core's ContainerBuilder::provide_transport example"
+struct MetricsPort;
+
+#[async_trait]
+impl Transport for MetricsPort {
+    async fn configure(&mut self, _: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
+        cancel.cancelled().await;
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::from_secs(1)
+    }
+}
+
+struct MetricsModule;
+
+impl Module for MetricsModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transport(|_| Ok(MetricsPort))
+    }
+}
+```
+
+Through the umbrella these are `nest_rs::core::{Transport, async_trait, …}`;
+`CancellationToken` is `tokio-util`'s, one of the libraries whose major NestRS
+holds ([Third-party libraries](/semver/#third-party-libraries)). The boot
+lines name the transport `MetricsPort`, read off its type.
+
+## The four steps
+
+`App::run` drives every transport through the same steps, and each one has a
+job no other step does:
+
+- **`configure`**, before the init hooks: scan the container for what you
+  serve and wire it. A failure fails the boot.
+- **`listen`**, after the init hooks: take what serving needs — bind a socket,
+  check TLS material, subscribe — and return `Listening::on(addresses)`, whose
+  addresses the `info` line `app ready` carries. The default listens on
+  nothing. A port taken fails the boot here, before any transport has served
+  anything.
+- **`serve`**, once every transport listened: accept work until `cancel`
+  fires, then stop within your bound. It never binds — a transport that binds
+  in `serve` counts as ready before it is — and returning before `cancel`
+  fires, `Ok` included, stops the app.
+- **`stop_bound`**: the longest `serve` takes to return once told to, your
+  drain window. It is finite and at most `MAX_STOP_BOUND`, a day; the boot
+  refuses more with `UnboundedTransportError`, and a transport still serving
+  at its bound plus the settle is abandoned, and `App::run` returns an error —
+  see [Shutdown](/fundamentals/shutdown/#the-way-down).
+
+`provide_transport` takes a function, never a closure holding a value: what
+your transport needs comes from the container, where the app's `for_root`
+value has already landed. An app runs one transport of each type, so a second
+`MetricsPort` fails the boot naming both imports; one generic over a marker
+(`Consumer<AudioQueue>`) is one type per marker.
+
+## What a transport may do
+
+A transport adds no edge — the edges, and the guard pipeline each runs, are
+the framework's. So it does one of three things, and its own code makes no
+authentication or authorization decision:
+
+1. **It serves infrastructure no caller identifies** — a metrics scrape, a
+   readiness socket.
+2. **It carries system work into an edge that exists** — it publishes an
+   event, pushes a job — under a correlation of its own: `Correlation::minted`
+   for work it starts, `Correlation::continued` for a trace that arrived with
+   the work, from a source it already trusts.
+3. **When it is request-shaped and must authenticate, it rides HTTP** as a
+   self-mount, whose posture and guards decide before your code runs — see
+   [Serving HTTP from a package](#serving-http-from-a-package).
+
+## Its units and their lines
+
+Each piece of work your transport runs is a **unit**, declared once under your
+crate's name, and every unit files one operation line on `nest_rs::operation`
+beside every edge's. `nestrs-unit-probe`, a package-shaped fixture of
+`nest-rs-opentelemetry`'s suite, declares one:
+
+```rust title="from nestrs-unit-probe, a package-shaped fixture"
+use nest_rs::core::operation_log::Unit;
+
+/// One piece of the probe's work.
+pub const WORK: Unit = nest_rs::core::unit!(
+    "nestrs_unit_probe.work",
+    target: crate::TARGET,
+    kind: Internal
+);
+```
+
+`unit!` reads the declaring crate off the build: a package declares
+`<its library name>.<unit>` on its own target, and a name off that grammar —
+an edge's word, another crate's name, the framework's prefix — is a compile
+error. The unit then opens its span and files its line with the framework's
+own macros:
+
+```rust title="from nestrs-unit-probe, a package-shaped fixture"
+/// Open [`WORK`]'s span under `correlation`, as an edge opens its unit's.
+pub fn open(correlation: &Correlation) -> Span {
+    nest_rs::core::operation_span!(WORK, correlation)
+}
+
+/// File [`WORK`]'s operation line for a unit opened at `started`.
+pub fn settle(span: &Span, started: Instant) {
+    nest_rs::core::operation_line!(WORK, span: span, outcome: OK, started: started);
+}
+```
+
+Run the unit's work under its correlation — hold the continuation
+`RequestContinuation::new(None, correlation)` builds and run
+`continuation.scope(work)` — so `current_trace_id()` answers inside it, and an
+event it publishes or a job it pushes continues its trace. File its line under
+that same correlation and outside the unit's span,
+`continuation.enter(|| settle(&span, started))`, so the line carries the
+unit's ids and is nobody's child; filed bare once `scope` has returned, it
+carries none of them. The outcome is yours to file: `OK` or `ERROR`, `PANIC`
+for work that unwound (`nest_rs::core::panic::contain` catches it),
+`CANCELLED` for work dropped before it settled. The line's fields and words
+are on [the logs page](/opentelemetry/logs/#every-unit-of-work-files-one-line).
+
+## Serving HTTP from a package
+
+A surface your package serves over HTTP — a status page, a webhook, a
+protocol of its own — is a **self-mount**: a module attaches an
+`HttpEndpointMeta`, and the HTTP transport mounts it beside the app's routes.
+Its requests run as a `Handler` that `declare_endpoint` builds in a `static`,
+naming the module that mounts it, its path and its posture:
+
+```rust title="from nest-rs-macro-hygiene's self-mount, through the umbrella's http feature alone"
+use nest_rs::core::{ContainerBuilder, Handler, Module, Posture, Registering};
+use nest_rs::http::{HttpEndpointMeta, Method, Response, declare_endpoint, endpoint_fn};
+
+/// A package's module, serving its status page beside the app's routes.
+pub struct HygieneStatusModule;
+
+static STATUS: Handler =
+    declare_endpoint::<HygieneStatusModule>("HygieneStatusModule", "/status", Posture::Public);
+
+impl Module for HygieneStatusModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_meta(HttpEndpointMeta::new(
+            &STATUS,
+            "/status",
+            "status",
+            |_, routes| {
+                routes.route(
+                    Method::GET,
+                    "/status",
+                    endpoint_fn(|_req| async { Ok(Response::builder().body("up")) }),
+                );
+            },
+        ))
+    }
+}
+```
+
+**The posture decides who calls it.** `Posture::Public` runs no guard.
+`Posture::Gated`, the posture of a surface that must authenticate, runs the
+app's [global guard pool](/fundamentals/guards/#the-three-scopes) in front of
+every entry, before your endpoint sees the request — and an app that lists
+no global guard serves it unguarded, its boot saying so once at `warn`,
+`unguarded self-mount edges detected`. So a gated surface's docs name the
+guard an app lists globally for it. A surface whose request carries units of
+its own, as `/graphql` does, declares their view with
+`HttpEndpointMeta::carries::<V>()`: the
+[`EndpointGuards<V, _>`](/security/authorization/endpoint-guards/#endpointguards--guards-a-module-adds-to-an-endpoints-request)
+the app's modules declare join the pool at its request, and with no guard at
+all it denies every request. A unit it carries is authorized by
+[the class gate](/security/authorization/#one-class-gate-on-every-edge), which
+your decorator emits after the unit's guards as every `#[authorize]` does —
+never by a check of your own.
+
+**It registers its own path and what lies under it.** The mount closure
+registers on `&mut HttpRoutes`, in the route grammar (`/status/{name}`,
+`/status/{*rest}`); a path outside its own is declared with `also_mounts`, and
+a registration neither covers fails the boot, naming both. A catch-all never
+matches its bare prefix, so a surface that must answer `/status` itself
+registers it beside `/status/{*rest}`. Each entry is served as registered
+whatever API version a request states.
+
+## Test it
+
+`HeadlessApp` builds your app without serving it, and `spawn_transport`
+configures your transport, has it listen and serves it on a background task:
+once it returns, what it listens on accepts, so a test connects at once. The
+schedule port's own suite runs its scheduler that way:
+
+```rust title="from nest-rs-schedule's suite, abridged"
+let app = HeadlessApp::builder()
+    .module::<BoundRoot>()
+    .build_headless()
+    .await
+    .expect("an app importing one lock binding boots");
+let scheduler = app
+    .spawn_transport(Scheduler::new())
+    .await
+    .expect("the scheduler configures: a lock is bound");
+tokio::time::sleep(Duration::from_millis(450)).await;
+scheduler.shutdown().await.expect("clean shutdown");
+```
+
+A self-mount is tested through the HTTP app it mounts on —
+`TestApp::for_module::<M>()`, then `app.http().get("/status")` — as
+`declare_endpoint`'s own example does.
+
+## What fails if you get it wrong
+
+- **A second transport of one type** fails the boot with
+  `ContestedDeclarationError`, naming both imports.
+- **A `stop_bound` past a day** fails the boot with `UnboundedTransportError`.
+- **A panic in `configure` or `listen`** fails the boot: the hooks that ran
+  and the closes still run.
+- **A `serve` that returns before its stop** stops the app, whatever it
+  returned.
+- **A transport bound in `serve`** reads as ready before it listens: the
+  `app ready` line names no address of yours, and a client may meet a closed
+  port.
+
+## Going further
+
+- [Writing a package](/extending/package/) — the module that attaches your
+  transport, and its configuration.
+- [Lifecycle](/fundamentals/lifecycle/) — the init hooks your transport is
+  configured before and listens after.
+- [Logs](/opentelemetry/logs/) — the operation line every unit files.

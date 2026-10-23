@@ -1,0 +1,248 @@
+---
+title: Writing a package
+description: "Ship a crate other NestRS apps import: its manifest and names, a module that owns its configuration, the resources it opens and closes, and its tests."
+sidebar:
+  order: 2
+---
+
+A package is a crate an app adds beside the umbrella and imports as a
+module: its providers, its configuration under its own namespace, the
+resources it opens and closes when the app ends. At the end of this page your
+module boots in every app that imports it, in none that does not, and your
+tests boot it the same way.
+
+A module that owns a configuration offers one `for_root`, taking the value an
+app pins, or `None` to read the environment alone:
+
+```rust title="from nest-rs-config's ConfigModule::setup example"
+#[module(imports = [ConfigModule::for_feature::<WsConfig>()])]
+pub struct WsModule;
+pub type WsSetup = ConfigSetup<WsModule, WsConfig>;
+
+impl WsModule {
+    pub fn for_root(config: impl Into<Option<WsConfig>>) -> WsSetup {
+        ConfigModule::setup(config.into())
+    }
+}
+```
+
+`for_feature` registers the config, so a bare `WsModule` import still reads
+its variables; `for_root` pins the base those variables overlay, field by
+field. A second pin of the same config fails the boot, naming both imports:
+one config has one seam.
+
+## The manifest and the names
+
+Your crate depends on the umbrella alone, at the minor it builds against, with
+the default features off and the capabilities it uses named —
+[the semver page's manifest rules](/semver/#writing-a-package) give each its
+reason. Its name is
+`nestrs-<subject>`, and every name it owns is rooted at that crate: its path,
+its span target, its units, its configuration namespace, its datastore keys
+and its health indicators ([Naming a package](/semver/#naming-a-package)).
+`nestrs-acme` reads `<PREFIX>_ACME__*` and logs on `nestrs_acme`, so
+`nest_rs=off` never silences it.
+
+## Its configuration
+
+A `#[config]` struct names its namespace and reads each field over the base it
+is handed — `Default`, or the value an app pinned:
+
+```rust title="from nestrs-social-probe, a package-shaped fixture, abridged"
+#[config(namespace = "social_probe")]
+#[derive(Clone)]
+pub struct ProbeSocialConfig {
+    /// The OAuth client id.
+    #[validate(length(min = 1))]
+    pub client_id: String,
+    // …
+}
+// …
+
+impl Config for ProbeSocialConfig {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
+        Ok(Self {
+            client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
+            client_secret: env.get("CLIENT_SECRET")?.unwrap_or(base.client_secret),
+        })
+    }
+}
+```
+
+Every field is settable both ways — from `<PREFIX>_SOCIAL_PROBE__CLIENT_ID`
+and from a pinned struct — and a field your users can only reach one way is a
+setting missing from the other. A field you add in a minor is a minor for your
+users too, provided they build the struct as the
+[semver page](/semver/#build-a-config-the-way-it-grows) says.
+
+## A resource it opens
+
+What your module opens — a client, a pool — is a factory that names the
+outputs it reads as its inputs, so the boot runs it once they exist,
+wherever the imports fall. It reads the config with `ConfigModule::resolved`,
+whose refusal names the config when nothing resolved it:
+
+```rust title="from nest-rs-config's ConfigModule::resolved example"
+pub struct Bucket(String);
+
+pub struct BucketSetup(Option<BucketConfig>);
+
+impl DynamicModule for BucketSetup {
+    fn module() -> TypeId {
+        TypeId::of::<Self>()
+    }
+
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature(self.0.clone(), builder)
+            .provide_factory_after::<Bucket, (BucketConfig,), _, _>(|container| async move {
+                let config = ConfigModule::resolved::<BucketConfig>(&container)?;
+                Ok(Bucket(config.name.clone()))
+            })
+    }
+}
+```
+
+**Declare how long it waits.** A resource that waits on a server — for a
+connection, for a reply — has a budget, and the boot holds every budget below
+each net that waits on the resource: a `ThrottlerGuard` that gives up after
+18 seconds must never wait on a client that gives up after 30. Declare it
+beside the factory, read off the value it opened:
+
+```rust title="from nest-rs-redis's connection"
+pub(crate) fn declared_budget() -> nest_rs_core::Budget {
+    nest_rs_core::Budget::of::<Self>(
+        "the Redis connection",
+        format!(
+            "{}, or `{}` in code",
+            RedisInstance::of::<I>().connect_timeout_var(),
+            CONNECT_TIMEOUT.field(),
+        ),
+        |conn| Some(conn.budget()),
+    )
+}
+```
+
+A budget at or past a net reaching it fails the boot with
+`BudgetPastNetError`, naming the resource, the port and the setting that
+lowers it. A port you bind declares its net over the resource, and its TLS
+and its proof at boot follow the same contract: each
+[driver page](/extending/#where-each-contract-is-written) shows the three
+steps in the same order.
+
+**Close what you opened.** `provide_close` hands the kernel a close for the
+value, run once the app ends, after every shutdown hook, the value installed
+last closing first — one step of [the way down](/fundamentals/shutdown/#the-way-down):
+
+```rust title="from nest-rs-core's ContainerBuilder::provide_close example"
+impl Module for PoolModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide(Pool)
+            .provide_close::<Pool, _, _>(|pool| async move { pool.goodbye().await })
+    }
+}
+```
+
+A close for a factory's output is attached in `collect`, beside its factory:
+a boot whose later factory fails then closes what the earlier ones opened,
+which a close attached in `register` would never reach. A value the app was
+handed instead — a seed, a test's override — is not yours to close, and the
+kernel skips it. The [database driver page](/database/writing-a-driver/#close-what-it-opened)
+shows a pool's close that waits for the units still settling.
+
+A resource an app may open more than once is generic over its instance:
+`I: Instance = Unnamed` on the resource, its setup and each binding, the
+config read with `ConfigModule::resolved_for::<I, C>` under the instance's
+namespace — as `RedisModule::for_root((Cache, None))` opens a second Valkey.
+
+## A registry it fills
+
+A module that collects what the app declares — handlers, routes, listeners —
+fills its registry once, from the assembled container, through a wiring step:
+
+```rust title="from nest-rs-core's ContainerBuilder::provide_wiring example"
+impl Module for RecipesModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_wiring("acme::recipes::catalog", |_container| Ok(()))
+    }
+}
+```
+
+It runs after the container is sealed and before any transport is built or
+any lifecycle hook runs, so a hook reads the registry full. It is synchronous:
+nothing in it waits on I/O. The first wiring that fails ends the boot with
+`WiringFailedError`, naming the registry by the string you gave it. What a
+decorator of yours registers is read there, gated on the app's imports — see
+[Writing a decorator](/extending/decorator/#discover-it-where-the-app-imports-it).
+
+## A value every unit carries
+
+A per-unit value your package provides — a tenant, a locale — becomes ambient
+because its type implements `nest_rs::core::AmbientValue`, and a layer of
+yours attaches it to the unit with `cx.attach(..)`. Everything the unit
+reaches reads it back, and its `carry` decides which continuations it crosses
+into: [what a unit carries](/fundamentals/execution-context/#what-a-unit-carries)
+is the whole contract. Reading is not deciding: an authorization decision
+still belongs in a guard.
+
+## Test it
+
+Your suite boots your module the way an app does. A package that serves no
+HTTP boots headless, which compiles without the `http` feature:
+
+```rust title="from nest-rs-testing's HeadlessApp::builder example"
+#[injectable]
+struct Transcoder;
+
+#[module(providers = [Transcoder])]
+struct WorkerModule;
+
+let app = HeadlessApp::builder().module::<WorkerModule>().build_headless().await?;
+assert!(app.container().get::<Transcoder>().is_some());
+app.close().await;
+```
+
+`TestApp::for_module::<M>()` boots one with HTTP. Both seal the app's
+composition as `App::run` does, so what your module discovers is gated in the
+test as in production. A test against live services shares them with every
+other suite: it takes a database, a Redis database and a bucket of its own as
+[end-to-end tests](/testing/e2e/) do, and what it files where nothing drains,
+it names uniquely and deletes.
+
+Your providers live only where your module is imported. `nestrs-hooks-probe`,
+a package-shaped fixture of `nest-rs-core`'s suite, declares a `#[hooks]` host
+that an app without its `HooksProbeModule` never runs: the boot says so once
+at `debug`, with `cause="dependency"` and a hint naming the module.
+
+## What your users build on
+
+Your crate is a dependency in someone's app, and the same policy binds it:
+its public items, its decorator keys, its variables and their defaults, its
+span target, its unit names and its datastore keys are what your users match,
+and a change to any of them is a major of your crate. The list is NestRS's
+own, on the [semver page](/semver/#what-7x-keeps); yours follows it.
+
+## What fails if you get it wrong
+
+- **Two `for_root` pins of one config** fail the boot with
+  `ContestedDeclarationError`, naming both imports.
+- **A namespace two crates read** fails the boot, naming the pair.
+- **A budget at or past a net** fails the boot with `BudgetPastNetError`.
+- **A close attached in `register` for a factory's output** never runs when a
+  later factory fails the boot, and your client stays open until the process
+  exits.
+- **A request-scoped or transient layer on a job, a tick or a listener** your
+  package declares fails the boot with `ScopedLayerError`: such a site
+  resolves its layers once, at boot. Make the layer a singleton.
+- **A seed your module's check refuses** — a config a test hands a container
+  it builds by hand — fails `build` with `ContainerError::SeedRefused`, as the
+  value your factory read would have been refused.
+
+## Going further
+
+- [Writing a transport](/extending/transport/) — serve something of your own,
+  or a surface over HTTP.
+- [Writing a decorator](/extending/decorator/) — an attribute your users
+  write, and the registry it fills.
+- [Configuration](/configuration/) — the cascade your namespace is read
+  through.

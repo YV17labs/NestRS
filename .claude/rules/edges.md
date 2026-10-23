@@ -46,10 +46,36 @@ the first on a path the one `HttpEndpointMeta` that mounts them all).
 
 The edge vocabulary is closed (`architecture.md`); the form is open and costs
 all of this — a missing item is a hole a developer finds at the worst moment.
-Review a new edge, or a change to one, against it:
+Review a new edge, or a change to one, against it. **The layers come from one
+contract**: an edge writes what is its own — its units, its view, its tail and
+how it renders a failure — and calls core's pipeline for the rest, never a
+guard, filter or interceptor loop of its own.
 
 1. **A decorator pair** (`macros.md`).
-2. **A mandatory posture per operation** — `#[authorize(Action, Entity)]` or
+2. **A `unit.rs` and a view.** Each unit the edge opens is a `Unit` constant
+   in the edge crate's `unit.rs` (`nest_rs_core::unit!`, named
+   `<edge>.<what>` on the crate's target), so its operation line, a layer's
+   `Layer::serves` and `cx.unit()` read one name. What a layer reads of the
+   unit is `<Edge>View`, in the edge crate's `view.rs`, implementing
+   `UnitView` and reached through `cx.switch_to::<<Edge>View>()`; a layer
+   answers or settles the unit through it, never through a slot of its own.
+3. **The pipeline, inside the unit of work.** Each unit is one `Site` — its
+   `Handler` and what its decorators bound — dispatched through core's
+   `dispatch` inside `nest_rs_database::run_unit` (`run_unit_bounded` where
+   the edge cuts the body at a deadline), over the `dyn UnitOfWork` resolved
+   at mount, committing on the edge's own outcome, so commit and rollback
+   cannot drift (`data-layer.md`). Its sites compose at boot, so a layer
+   nothing provides fails it, and are held by their container, never a
+   `static`; a unit nested in another folds only the app-wide buckets its
+   parent did not run (`GlobalLayers`) and says where the others ran.
+4. **Its tail and rendering arm.** The tail runs the per-argument pipes after
+   the gate — a refused caller never pays for validation, and a validation
+   message is never an existence oracle; a rejection is the edge's native
+   error — then the handler and the posture's mask, and writes the answer
+   into the view. A failure no exception filter answered is rendered by the
+   edge's one rule (*Error opacity*, below) before the unit stage returns,
+   so a unit-stage interceptor reads what goes out.
+5. **A mandatory posture per operation** — `#[authorize(Action, Entity)]` or
    `#[public]`; no posture is a compile error with a trybuild snapshot. This is
    what keeps *no authn/authz decision outside a guard* true. The grammar is one
    `PostureRules` in `nest-rs-codegen` where it is the same grammar: `#[tools]`
@@ -57,8 +83,10 @@ Review a new edge, or a change to one, against it:
    GraphQL can synthesise an id argument and an `Authorized<A, E>` proof
    (`bind = Service`, `id_arg`); `#[routes]`' posture is optional, because a
    route may be gated by `#[use_guards]` alone, and it refuses `#[authorize]` on
-   `#[sse]` and a posture bound to a handler parameter.
-3. **A class gate the posture emits** — `nest_rs_authz::class_gate::<A, E>`,
+   `#[sse]` and a posture bound to a handler parameter. An edge whose units
+   have no caller (a job, a tick, an event) declares `Posture::System` and
+   runs no guard stage.
+6. **A class gate the posture emits** — `nest_rs_authz::class_gate::<A, E>`,
    one function for every edge and ungated by any edge feature, run on the unit
    right after its guards, so `#[authorize]` cannot mean several things; a
    missing ambient ability fails closed. Off a `#[public]` site it refuses a
@@ -67,46 +95,36 @@ Review a new edge, or a change to one, against it:
    `#[public]` route reads the visitor's grant, the public-reads pattern. One
    refusal reads one sentence on every edge (RFC 6750 §3.1's for a scope) and
    files one `warn`; an edge renders the `Denial` it carries.
-4. **Response masking armed by the posture**, never hand-written in a body,
+7. **Response masking armed by the posture**, never hand-written in a body,
    chosen by the protocol rather than by symmetry (`data-layer.md`, *Response
    masking*).
-5. **Guards at two scopes** plus `#[force_guards]` on a method, which binds
-   the guard there and re-runs it, composed once per site and
-   deduplicated by `TypeId`; a denial renders through one
-   `denial_to_<edge>_error`, so a guard's refusal and a gate's look the same.
-   **One denial files one line**, its decider's: a guard that files its own
-   says so (`Guard::files_its_denials`), as the framework's authentication,
-   ability and throttler guards do, and the edge files the structural
-   `guard denied …` on `nest_rs::layers` only for one that does not; a class
-   gate files its own. Held by a test per edge.
-6. **A view, `<Edge>View` in the edge crate's `view.rs`, and the bound the
-   decorators emit for it** (`guard_capability_bounds`: `GuardFor<<Edge>View>`).
-   A guard has two entries, `check_http` for an HTTP request and `check` for
-   every other edge's unit, both reading a `UnitContext` and both admitting by
-   default, so without the bound an empty `impl Guard for X {}` passes
-   everything; `GuardFor` makes the author declare that the guard checks this
-   edge's units. All four edges assert, at every emitter (HTTP has three:
+8. **Guards at two scopes, and their `GuardFor` bound when the unit has a
+   caller**, plus `#[force_guards]` on a method, which binds the guard there
+   and re-runs it, composed once per site and deduplicated by `TypeId`; a
+   denial renders through one `denial_to_<edge>_error`, so a guard's refusal
+   and a gate's look the same. **One denial files one line**, its decider's:
+   a guard that files its own says so (`Guard::files_its_denials`), as the
+   framework's authentication, ability and throttler guards do, and the edge
+   files the structural `guard denied …` on `nest_rs::layers` only for one
+   that does not; a class gate files its own. A guard has two entries,
+   `check_http` for an HTTP request and `check` for every other edge's unit,
+   both reading the `UnitContext` and both admitting by default, so without
+   the bound an empty `impl Guard for X {}` passes everything: each emitter
+   asserts `GuardFor<<Edge>View>` (`guard_capability_bounds`; HTTP has three:
    `#[controller]`, `#[routes]`, and `#[gateway]` for the upgrade), with a
-   trybuild snapshot each.
-7. **Per-argument pipes**, run **after** the gate, so a refused caller never pays
-   for validation and a validation message is never an existence oracle; a
-   rejection is the edge's native error.
-8. **A named compile error for every layer family the edge does not run** —
+   trybuild snapshot each. Held by a test per edge.
+9. **A named compile error for every layer family the edge does not run** —
    one row in `nest_rs_codegen::__private::layers`' table, read through
    `take_layers`, never a second refusal: a cell is built, pending (refused as a
    silent no-op until the edge runs the family) or refused with its fact, and
    the change that builds a family flips its cell.
-9. **Request scope and a unit of work** — `Scoped<T>`, a parameter the boot
-   checks (its provider is inside the access contract, through
-   `ResolvesProvider` and the impl half's probe — HTTP's, GraphQL's, WS's and
-   MCP's today, as is the service HTTP's `Bind<A, S>` and GraphQL's
-   `bind = Service` load through), a miss answered opaquely with the type on
-   the operator's line, and each
-   dispatch run through `nest_rs_database::run_unit` over the `dyn UnitOfWork`
-   resolved at mount, committing on the edge's own outcome, so commit and
-   rollback cannot drift (`data-layer.md`).
-10. **A `#[config]` and its `for_root`** (`container.md`).
-11. **Error opacity** — an error that is neither the edge's own deliberate
+10. **Request scope** — `Scoped<T>`, a parameter the boot checks (its provider
+    is inside the access contract, through `ResolvesProvider` and the impl
+    half's probe — HTTP's, GraphQL's, WS's and MCP's today, as is the service
+    HTTP's `Bind<A, S>` and GraphQL's `bind = Service` load through), a miss
+    answered opaquely with the type on the operator's line.
+11. **A `#[config]` and its `for_root`** (`container.md`).
+12. **Error opacity** — an error that is neither the edge's own deliberate
     error, a `nest_rs_core::ToProblem` error where the edge reads one, nor
     framework vocabulary is answered opaquely on every edge
     (`nest_rs_core::OPAQUE_CLIENT_MESSAGE`, the `INTERNAL` code; on HTTP its
@@ -147,20 +165,20 @@ Review a new edge, or a change to one, against it:
     stated exceptions aside (`.claude/decisions/payload-never-quoted.md`).
     Held by each edge's behaviour tests and a trybuild snapshot of the
     refused `?`.
-12. **Discovery and its gate** (`container.md`).
-13. **Aggregation**, as above.
-14. **A mount** — a `Transport` attached with
+13. **Discovery and its gate** (`container.md`).
+14. **Aggregation**, as above.
+15. **A mount** — a `Transport` attached with
     `ContainerBuilder::provide_transport`, binding in `listen`, never in
     `serve`, and stating a finite `stop_bound` the kernel holds, or an HTTP
     self-mount declaring its `static` `Handler`, whose posture says how the
     pool meets it.
-15. **Its target, unit and operation line** (`observability.md`).
-16. **A way down** (below), proved over a real socket — an in-process test
+16. **Its target, unit and operation line** (`observability.md`).
+17. **A way down** (below), proved over a real socket — an in-process test
     cannot see a socket left open.
-17. **Witnesses** — an `integration` suite over guards, pipes, scope and posture;
+18. **Witnesses** — an `integration` suite over guards, pipes, scope and posture;
     a driver in `nest-rs-testing` if the protocol needs one; an adapter in
-    `demo/`; a use site in `nest-rs-macro-hygiene`; its `nestrs generate`
-    adapter generator (`cli.md`).
+    `demo/`; a use site in `nest-rs-macro-hygiene` per built layer cell; its
+    `nestrs generate` adapter generator (`cli.md`).
 
 Argued, not gaps: a WS gateway owns its mount, and on WS the connection
 carries the ability its upgrade's guards attached (`data-layer.md`,
@@ -199,23 +217,25 @@ interceptor or exception filter at any scope — global (`use_*_global`),
 controller, handler — contributes to one pool per family, deduplicated by
 `TypeId` in `compose_chain`, the single dedup for all four. The broadest scope
 wins and `#[force_guards]` is the re-run opt-in. Scope never multiplies
-executions; it chooses the **site**, by the family's nature:
+executions; it chooses the **site**, by the family's nature. Every family at
+every unit, global and scoped together, outermost first:
 
-| Family | Global scope runs at | Controller / handler scope runs at |
-|---|---|---|
-| Guard | a route's, a WS message's, a GraphQL root field's and an MCP tool's or prompt's guard stage, and the federation fields'; a self-mount's request (a gateway's upgrade, `/graphql`, `/mcp`) | the same, plus each in-band operation's chain |
-| Pipe | a route's tail, over the body, and a WS message's, over its `data`; `/graphql` variables (a POST or a graphql-ws operation) at its endpoint | a route's or a WS message's tail; per argument on the other edges |
-| Exception filter | around a route's, a WS message's, a GraphQL root field's or an MCP tool's or prompt's handler stage; a self-mount's request; the fallback (`404`, `405`) | around the route's, the message's, the field's or the operation's handler stage |
-| Interceptor | a route's, a WS message's, a GraphQL root field's or an MCP tool's or prompt's handler stage, after the guards and the class gate | the same, inside the app's |
+| Unit | Unit stage | Guards, then the class gate | Exception filters | Handler-stage interceptors | Pipes |
+|---|---|---|---|---|---|
+| HTTP route | runs | pool, controller, method (`check_http`) | method, controller, app | app, modules, controller, method | the pool over the body, `#[use_pipes]`, per argument |
+| HTTP self-mount's request | runs | the request stage: pool, the mount's guards, `EndpointGuards` | app | — | `/graphql`'s variables, a POST's or a graphql-ws operation's |
+| HTTP fallback (`404`, `405`) | runs | — | app | — | — |
+| GraphQL root field | — (its request ran it) | pool, resolver, field (`check`) | field, resolver, app | app, modules, resolver, field | per argument |
+| `#[field_resolver]` call | — | resolver's, its own | its own | its own | per argument |
+| WS message | runs | pool, gateway, message (`check`) | message, gateway, app | app, modules, gateway, message | the pool over `data`, `#[use_pipes]`, per argument |
+| WS connection hook | — | — (the upgrade's) | pending | pending | — |
+| MCP request (`mcp.operation`) | runs | — (the `/mcp` request's) | — | — | — |
+| its `#[tool]` or `#[prompt]` | — | pool, host, operation (`check`) | operation, host, app | app, modules, host, operation | per argument, inside `Parameters` |
+| Job attempt, tick, listener call | runs | — (no caller) | method, host, app | app, modules, host, method | per argument |
 
-An HTTP unit — a route, a self-mount's request, the fallback — and a WS
-message are each one `Site` dispatched through core's pipeline inside `run_unit`
-(`.claude/decisions/one-execution-pipeline.md`): the unit stage, the guard
-stage and class gate, the exception filters (method, host, app), the handler
-stage (the app's list, the modules' `#[interceptor]`s in import order, host,
-method), the tail. A self-mount folds the unit stage and the app's exception
-filters, its guard stage the transport's request stage, and no handler stage;
-the fallback the same with no guard stage and no unit of work. A route a
+Every unit is one `Site` dispatched through core's pipeline inside `run_unit`
+(`.claude/decisions/one-execution-pipeline.md`), its stages in the table's
+order and the tail last; the fallback opens no unit of work. A route a
 controller registers on `HttpRoutes` by hand is a route all the same, on one
 site for every such route: the app's guard pool, filters and interceptors,
 inside a unit of work. The view holds the request for the whole unit, so a
@@ -427,7 +447,11 @@ router parses. The rewrite is skipped when nothing is versioned.
   each edge resolving the pool once at mount; MCP and queues have none. One
   entry, `GlobalPipe::transform(cx, ArgumentKind, input)`: the unit's context
   says which site, the kind which input, so an edge adds a kind, never a
-  method. Reusable pipes are framework primitives — never define one in an app.
+  method. `input` is the raw JSON, a `serde_json::Value`, the one passthrough
+  the project map's correctness list admits: nothing is decoded yet, and the
+  handler still receives its argument parsed at the edge
+  (`.claude/decisions/one-execution-pipeline.md`). Reusable pipes are
+  framework primitives — never define one in an app.
 - **WS is not a `Transport`**: an upgrade is an HTTP `GET`, so a gateway
   self-mounts on `HttpTransport` and inherits its port, CORS and TLS. One
   envelope, `{event, data}`. A handler returns at most a `Result` around a

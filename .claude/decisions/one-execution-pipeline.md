@@ -310,3 +310,15 @@ stage. Where it departs:
 - **The futures rmcp holds stay boxed**: rmcp keeps every method's future in
   its serve loop, so each request's future is a pointer there whatever the
   operation runs; unboxed, a debug build overflowed a test thread's stack.
+
+**2026-10-23 — a global pipe sees the raw JSON, by the owner's answer of
+2026-10-19.** `GlobalPipe::transform(cx, ArgumentKind, &mut serde_json::Value)`
+passes a `serde_json::Value` through, which the project map's correctness list
+refuses everywhere else. The exception is stated and scoped to `GlobalPipe`
+alone: a global pipe runs before anything decodes the input, over a body, a
+`/graphql` operation's variables or a socket message's `data`, so there is no
+type to hand it — the input arrives as its kind, as NestJS hands its pipes an
+`ArgumentMetadata` and never the handler's type. The handler still receives its
+argument parsed at the edge into its own type, and a per-argument pipe stays
+typed. Refused: typing the global pipe per site, which would make one global
+pipe a generic per handler type, registered once per type the app decodes.

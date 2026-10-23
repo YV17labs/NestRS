@@ -18,3 +18,15 @@ principal half needs a per-message notion of "produces".
 `#[operations]` and `#[tools]` compose their chains on the first dispatch that
 reaches a site, after every boot check, and nothing at boot enumerates the
 sites. Validating them would need a link-time registry of sites walked at boot.
+
+## 2026-10-23 — the registry exists; walking it for phase order stays Deferred
+
+The link-time registry of sites this entry said was missing now exists. Every
+GraphQL field's and every MCP operation's `Site` is a `static` its decorator
+declares, listed for the boot (`GraphqlSiteRegistration`, each host's
+`operation_sites`), and composed at the kernel's wiring step, so a layer one
+declares that no module provides fails the boot. Phase-validating those guard
+stages at the same step is additive and Deferred: the ordering half would
+transfer as is, while the principal half still needs a notion of what a guard
+produces for `check` rather than for `check_http`, the one the validation
+reads.

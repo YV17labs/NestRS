@@ -320,6 +320,12 @@ config** (the throttler's does); otherwise the adapter's config takes the
 namespace its path gives it (`architecture.md`) —
 `.claude/decisions/port-config-namespace.md`.
 
+**What runs around a unit is an ordered list or a port, never a single `dyn`
+slot**: a concern wrapping every unit is a unit-stage interceptor its module
+brings, a driver the data unit of work through the one `UnitOfWork` port. A
+slot holds one implementation, so the second concern needing it has nowhere
+to go (`.claude/decisions/one-execution-pipeline.md`).
+
 **A resource an app may open more than once is generic over its instance**
 (`.claude/decisions/named-instances.md`), one step per piece:
 

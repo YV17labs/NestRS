@@ -252,7 +252,7 @@ pub mod __private {
     pub use crate::controller::{
         HttpRouteParts, http_controller_meta, http_route_meta, route_denial_statuses, schema_of,
     };
-    pub use crate::deprecation::deprecated_route;
+    pub use crate::deprecation::{deprecated_route, deprecation_meta};
     pub use crate::endpoint::{OriginCheck, checks_origin, guarded_by};
     pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};
     pub use crate::error::{OriginRefused, OriginRefusedReason};
@@ -267,6 +267,7 @@ pub mod __private {
         RouteGuards, RoutePipes, RouteWrapper, mount_controller, mount_route, route_guard_stage,
     };
     pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
+    pub use crate::versioning::{VersionLocation, version_location};
     pub use crate::view::with_view;
     pub use nest_rs_pipes::PipeSpec;
 

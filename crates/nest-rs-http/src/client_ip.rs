@@ -31,6 +31,7 @@ const X_REAL_IP: &str = "x-real-ip";
 /// [`Unknown`](Self::Unknown) and [`TrustedProxy`](Self::TrustedProxy) collapse
 /// every caller into one throttler bucket.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub enum ClientOrigin {
     /// The direct transport peer, which is not a configured trusted proxy.
     /// Forwarding headers were present or not — either way they were ignored.
@@ -46,6 +47,16 @@ pub enum ClientOrigin {
 }
 
 impl ClientOrigin {
+    /// The address the request is attributed to — the peer, a forwarded hop,
+    /// or the trusted proxy that forwarded none — or `None` when there is no
+    /// peer address at all.
+    pub const fn ip(self) -> Option<IpAddr> {
+        match self {
+            Self::Peer(ip) | Self::Forwarded(ip) | Self::TrustedProxy(ip) => Some(ip),
+            Self::Unknown => None,
+        }
+    }
+
     /// Resolve from a live request, reading the trusted-proxy list off the
     /// [`HttpConfig`] the app booted with.
     ///
@@ -164,6 +175,7 @@ impl ClientOrigin {
 /// Best-effort client IP for the current request. Always present — see
 /// [`ClientOrigin`] for the resolution and the security caveat.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct ClientIp {
     /// The resolved address. `0.0.0.0` only when the request has no peer
     /// address at all.
@@ -428,6 +440,19 @@ mod tests {
             resolve(Some("203.0.113.50"), None, &[]),
             ClientOrigin::Unknown,
         );
+    }
+
+    #[test]
+    fn every_origin_but_an_unknown_one_is_attributed_to_its_address() {
+        let addr = ip("203.0.113.50");
+        for origin in [
+            ClientOrigin::Peer(addr),
+            ClientOrigin::Forwarded(addr),
+            ClientOrigin::TrustedProxy(addr),
+        ] {
+            assert_eq!(origin.ip(), Some(addr), "{origin:?}");
+        }
+        assert_eq!(ClientOrigin::Unknown.ip(), None);
     }
 
     #[test]

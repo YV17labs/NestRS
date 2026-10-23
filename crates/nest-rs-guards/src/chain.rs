@@ -28,6 +28,7 @@ pub struct SiteChainSources {
 /// Every site does, bar the ones a site in front of them already ran it for —
 /// see [`compose_site_chain`].
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GlobalBucket {
     /// Fold the pool in, deduped against the narrower scopes.
     Fold,

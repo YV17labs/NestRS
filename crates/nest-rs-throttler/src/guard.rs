@@ -296,20 +296,19 @@ impl std::fmt::Display for ClientId {
 /// resolutions that collapse every caller into one bucket.
 impl From<ClientOrigin> for ClientId {
     fn from(origin: ClientOrigin) -> Self {
-        match origin {
-            ClientOrigin::Peer(ip) | ClientOrigin::Forwarded(ip) => Self::network(ip),
-            ClientOrigin::TrustedProxy(ip) => {
-                static SEEN: AtomicBool = AtomicBool::new(false);
-                warn_shared_bucket(
-                    &SEEN,
-                    "trusted_proxy_without_forwarded_for",
-                    "the direct peer is a trusted proxy but sent no usable X-Forwarded-For — \
-                     every caller behind it shares one rate-limit bucket; make the proxy forward \
-                     the client address",
-                );
-                Self::network(ip)
-            }
-            ClientOrigin::Unknown => {
+        if let ClientOrigin::TrustedProxy(_) = origin {
+            static SEEN: AtomicBool = AtomicBool::new(false);
+            warn_shared_bucket(
+                &SEEN,
+                "trusted_proxy_without_forwarded_for",
+                "the direct peer is a trusted proxy but sent no usable X-Forwarded-For — \
+                 every caller behind it shares one rate-limit bucket; make the proxy forward \
+                 the client address",
+            );
+        }
+        match origin.ip() {
+            Some(ip) => Self::network(ip),
+            None => {
                 static SEEN: AtomicBool = AtomicBool::new(false);
                 warn_shared_bucket(
                     &SEEN,

@@ -14,11 +14,18 @@ const DEPRECATION: HeaderName = HeaderName::from_static("deprecation");
 /// What a deprecated route declares, as `#[routes]` reads it off
 /// `#[api(deprecated = "…")]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DeprecationMeta {
     /// The RFC 3339 full-date the route was deprecated on.
     pub since: &'static str,
     /// The `Deprecation` header value: `@` and that date's Unix time.
     pub header: &'static str,
+}
+
+/// What `#[api(deprecated = "…")]` declares: deprecated on `since`, stamped
+/// with `header`.
+pub const fn deprecation_meta(since: &'static str, header: &'static str) -> DeprecationMeta {
+    DeprecationMeta { since, header }
 }
 
 /// Stamp `Deprecation` onto every response the route answers, a guard's

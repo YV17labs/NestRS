@@ -18,6 +18,7 @@ use crate::response::{IntoResponse, Response};
 /// A [`Ctx`] of the `principal` type then answers the deferred `401` instead of
 /// a `500`; any other missing context stays a wiring bug.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct RejectedCredential {
     /// The principal type the rejected credential would have produced.
     pub principal: TypeId,
@@ -27,6 +28,21 @@ pub struct RejectedCredential {
     /// `WWW-Authenticate` challenge, or `None` when §3 says to report none —
     /// which is the case for a request that carried no credentials at all.
     pub bearer_error: Option<&'static str>,
+}
+
+impl RejectedCredential {
+    /// A credential rejected on its way to a `P` principal, the guard's
+    /// client-safe message and its RFC 6750 §3.1 error code beside it.
+    pub fn of<P: 'static>(
+        client_message: impl Into<String>,
+        bearer_error: Option<&'static str>,
+    ) -> Self {
+        Self {
+            principal: TypeId::of::<P>(),
+            client_message: client_message.into(),
+            bearer_error,
+        }
+    }
 }
 
 /// Extracts a value of type `T` a guard attached to the request with
@@ -175,11 +191,11 @@ mod tests {
     #[tokio::test]
     async fn a_rejected_credential_turns_the_missing_principal_into_the_deferred_401() {
         let mut req = Request::builder().finish();
-        req.extensions_mut().insert(RejectedCredential {
-            principal: TypeId::of::<Principal>(),
-            client_message: "authentication failed".into(),
-            bearer_error: Some(crate::challenge::INVALID_TOKEN),
-        });
+        req.extensions_mut()
+            .insert(RejectedCredential::of::<Principal>(
+                "authentication failed",
+                Some(crate::challenge::INVALID_TOKEN),
+            ));
         let err = extract(req).await.err().expect("credential was rejected");
         assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
         let response = err.into_response();

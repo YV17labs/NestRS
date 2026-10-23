@@ -16,6 +16,7 @@ use crate::denial::Denial;
 /// whose authorization guard is listed before the authentication guard it
 /// depends on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GuardPhase {
     /// Establishes *who* the caller is (attaches a principal).
     Authentication,
@@ -29,6 +30,7 @@ pub enum GuardPhase {
 /// have attached — described by `TypeId` plus a human-readable name for boot
 /// errors.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct PrincipalClaim {
     /// The principal's `TypeId`, the key it is attached under.
     pub type_id: TypeId,

@@ -1041,6 +1041,7 @@ impl OriginRefused {
 /// origin, scheme, host and port in §5's order. Each word is the variant in
 /// snake case.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OriginRefusedReason {
     /// The field holds a byte outside visible ASCII.
     OriginNotVisibleAscii,
@@ -1111,6 +1112,7 @@ impl ResponseError for OriginRefused {
 /// value the request sent.
 #[cfg(feature = "websocket")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum HandshakeRefused {
     /// Not a `GET` — a `HEAD` the route table answers through its `GET` entry
     /// included: `400`. The `405` naming what an address serves is the route

@@ -225,11 +225,10 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                 HttpView::of(cx)?
                     .request_mut()
                     .extensions_mut()
-                    .insert(RejectedCredential {
-                        principal: std::any::TypeId::of::<S::Principal>(),
-                        client_message: error.client_message().to_owned(),
-                        bearer_error: error.error_code(),
-                    });
+                    .insert(RejectedCredential::of::<S::Principal>(
+                        error.client_message(),
+                        error.error_code(),
+                    ));
                 Ok(())
             }
             Err(error) => {

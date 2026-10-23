@@ -662,10 +662,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         }
         let deprecation_meta = match &deprecation {
             Some((since, header)) => quote! {
-                ::core::option::Option::Some(::nest_rs_http::DeprecationMeta {
-                    since: #since,
-                    header: #header,
-                })
+                ::core::option::Option::Some(::nest_rs_http::__private::deprecation_meta(
+                    #since,
+                    #header,
+                ))
             },
             None => quote! { ::core::option::Option::None },
         };

@@ -185,6 +185,7 @@ pub(crate) struct Carried {
 /// The requests of a self-mount on which the transport checks a browser's
 /// `Origin` before any guard runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OriginCheck {
     /// A WebSocket upgrade, which a browser opens without consulting CORS
     /// (RFC 6455 §10.2).

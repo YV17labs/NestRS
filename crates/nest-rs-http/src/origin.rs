@@ -298,6 +298,7 @@ impl Tuple {
 /// A refused origin's scheme, from a closed set: the two a page is served
 /// over, and any other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OriginScheme {
     /// `http`.
     Http,

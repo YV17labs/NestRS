@@ -21,6 +21,7 @@ pub fn schema_of<T: schemars::JsonSchema>(
 /// The request body a route accepts: how it arrives on the wire, and the
 /// schema of its content when the framework can name the type.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub enum RequestBodyMeta {
     /// A `Json<T>` extractor — `application/json`, carrying `T`'s schema.
     Json(SchemaFn),
@@ -401,6 +402,7 @@ impl HttpControllerMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::deprecation::deprecation_meta;
     use std::any::TypeId;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -572,10 +574,7 @@ mod tests {
         fn schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
             generator.subschema_for::<String>()
         }
-        let deprecation = DeprecationMeta {
-            since: "2026-10-01",
-            header: "@1790812800",
-        };
+        let deprecation = deprecation_meta("2026-10-01", "@1790812800");
         let route = http_route_meta(HttpRouteParts {
             method: Method::PUT,
             path: "/{id}",

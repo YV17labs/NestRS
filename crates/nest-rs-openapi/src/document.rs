@@ -4,9 +4,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use nest_rs_core::{Container, Discovery};
-use nest_rs_http::__private::route_denial_statuses;
+use nest_rs_http::__private::{VersionLocation, route_denial_statuses, version_location};
 use nest_rs_http::{
-    ApiVersioning, HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RouteTemplate,
+    HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RouteTemplate,
     declared_versions, join_path,
 };
 use nest_rs_http::{ProblemDetails, StatusCode, header};
@@ -99,7 +99,7 @@ pub(crate) fn build_document(
                 continue;
             };
             let version_parameter = match (&selection, version) {
-                (Some(selection), Some(version)) => Some(selection.parameter(version, route)),
+                (Some(selection), Some(version)) => selection.parameter(version, route),
                 _ => None,
             };
             let id = operation_id(meta.token(), route.handler(), version);
@@ -297,14 +297,13 @@ pub(crate) fn versioned_documents(container: &Container) -> Vec<String> {
 pub(crate) fn selects_per_request(container: &Container) -> bool {
     container
         .get::<HttpConfig>()
-        .is_some_and(|config| config.versioning != ApiVersioning::Uri)
+        .is_some_and(|config| version_location(&config) != VersionLocation::Path)
 }
 
 /// How a document tells a caller to ask for an API version when the version is
-/// not in the path: as a header parameter on the unversioned address.
+/// not in the path: as a parameter on the unversioned address.
 struct VersionSelection {
-    strategy: ApiVersioning,
-    header: String,
+    location: VersionLocation,
     required: bool,
     /// The one version this document describes, or `None` for every one.
     claims: Option<String>,
@@ -313,15 +312,12 @@ struct VersionSelection {
 impl VersionSelection {
     fn resolve(container: &Container, claims: Option<&str>) -> Option<Self> {
         let config = container.get::<HttpConfig>()?;
-        if config.versioning == ApiVersioning::Uri {
+        let location = version_location(&config);
+        if location == VersionLocation::Path {
             return None;
         }
         Some(Self {
-            strategy: config.versioning,
-            header: match config.versioning {
-                ApiVersioning::MediaType => header::ACCEPT.as_str().to_owned(),
-                _ => config.version_header.clone(),
-            },
+            location,
             required: config.default_version.is_none(),
             claims: claims
                 .map(str::to_owned)
@@ -336,9 +332,20 @@ impl VersionSelection {
         }
     }
 
-    fn parameter(&self, version: &str, route: &HttpRouteMeta) -> Value {
-        let (description, accepted) = match self.strategy {
-            ApiVersioning::MediaType => (
+    /// The parameter an operation of `version` is selected through, `None`
+    /// where the path carries the version.
+    fn parameter(&self, version: &str, route: &HttpRouteMeta) -> Option<Value> {
+        let (location, name, description, accepted) = match &self.location {
+            VersionLocation::Path => return None,
+            VersionLocation::Header(name) => (
+                "header",
+                name.clone(),
+                "Selects the API version this operation is served under.".to_owned(),
+                version.to_owned(),
+            ),
+            VersionLocation::MediaType => (
+                "header",
+                header::ACCEPT.as_str().to_owned(),
                 format!(
                     "Selects the API version, as the `{MEDIA_TYPE_PARAM}` parameter of the media \
                      range this operation is requested under.",
@@ -348,18 +355,14 @@ impl VersionSelection {
                     route.response_content_type().unwrap_or(JSON_MEDIA_TYPE),
                 ),
             ),
-            _ => (
-                "Selects the API version this operation is served under.".to_owned(),
-                version.to_owned(),
-            ),
         };
-        json!({
-            "name": self.header,
-            "in": "header",
+        Some(json!({
+            "name": name,
+            "in": location,
             "required": self.required,
             "description": description,
             "schema": { "type": "string", "enum": [accepted] },
-        })
+        }))
     }
 }
 
@@ -891,7 +894,7 @@ mod tests {
     };
     use nest_rs_core::{Handler, Posture};
     use nest_rs_http::__private::{HttpRouteParts, http_controller_meta, http_route_meta};
-    use nest_rs_http::{DEFAULT_VERSION_HEADER, Method, RequestBodyMeta};
+    use nest_rs_http::{ApiVersioning, DEFAULT_VERSION_HEADER, Method, RequestBodyMeta};
     use schemars::JsonSchema;
     use schemars::generate::SchemaSettings;
     use serde::Serialize;
@@ -1589,10 +1592,10 @@ mod tests {
     fn a_deprecated_route_is_marked_and_documents_its_header() {
         let mut g = generator();
         let mut r = route("list", "/v1/posts");
-        r.deprecation = Some(nest_rs_http::DeprecationMeta {
-            since: "2026-10-08",
-            header: "@1791417600",
-        });
+        r.deprecation = Some(nest_rs_http::__private::deprecation_meta(
+            "2026-10-08",
+            "@1791417600",
+        ));
         let op = operation(&r, "/v1/posts", &mut g, &[], None);
         assert_eq!(op["deprecated"], true, "{op}");
         let header = &op["responses"]["200"]["headers"]["Deprecation"];
@@ -1892,13 +1895,17 @@ mod tests {
     fn the_version_header_is_required_only_where_no_default_answers_for_it() {
         let stated = selection(ApiVersioning::Header, None, None).expect("a selection");
         assert_eq!(
-            stated.parameter("2", &http_route_meta(route("list", "/posts")))["required"],
+            stated
+                .parameter("2", &http_route_meta(route("list", "/posts")))
+                .expect("a header parameter")["required"],
             true,
             "with no default version the caller must state one",
         );
         let defaulted = selection(ApiVersioning::Header, Some("1"), None).expect("a selection");
         assert_eq!(
-            defaulted.parameter("1", &http_route_meta(route("list", "/posts")))["required"],
+            defaulted
+                .parameter("1", &http_route_meta(route("list", "/posts")))
+                .expect("a header parameter")["required"],
             false,
             "a default version answers for a caller that states none",
         );
@@ -1907,7 +1914,9 @@ mod tests {
     #[test]
     fn the_header_strategy_documents_the_configured_header_and_its_versions() {
         let selection = selection(ApiVersioning::Header, None, None).expect("a selection");
-        let parameter = selection.parameter("2", &http_route_meta(route("list", "/posts")));
+        let parameter = selection
+            .parameter("2", &http_route_meta(route("list", "/posts")))
+            .expect("a header parameter");
         assert_eq!(parameter["name"], DEFAULT_VERSION_HEADER);
         assert_eq!(parameter["in"], "header");
         assert_eq!(
@@ -1920,7 +1929,9 @@ mod tests {
     #[test]
     fn the_media_type_strategy_documents_the_accept_header_it_reads() {
         let selection = selection(ApiVersioning::MediaType, None, None).expect("a selection");
-        let parameter = selection.parameter("2", &http_route_meta(route("list", "/posts")));
+        let parameter = selection
+            .parameter("2", &http_route_meta(route("list", "/posts")))
+            .expect("a header parameter");
         assert_eq!(parameter["name"], "accept");
         assert_eq!(
             parameter["schema"]["enum"],
@@ -1936,7 +1947,9 @@ mod tests {
         let mut streamed = route("events", "/audio/events");
         streamed.response_content_type = Some("text/event-stream");
         assert_eq!(
-            selection.parameter("2", &http_route_meta(streamed))["schema"]["enum"],
+            selection
+                .parameter("2", &http_route_meta(streamed))
+                .expect("a header parameter")["schema"]["enum"],
             json!(["text/event-stream; version=2"]),
         );
     }
@@ -1972,7 +1985,7 @@ mod tests {
             "/posts",
             &mut g,
             &[],
-            Some(selection.parameter("2", &http_route_meta(r.clone()))),
+            selection.parameter("2", &http_route_meta(r.clone())),
         );
         assert_eq!(op["parameters"][0]["name"], DEFAULT_VERSION_HEADER);
         assert!(op["responses"].get("400").is_some(), "{op}");

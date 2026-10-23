@@ -12,6 +12,7 @@ use crate::{Denial, Guard};
 
 /// Why a guard stage refused its unit.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Refused {
     /// A guard's denial nobody filed, beside the name of the guard that raised
     /// it, as raised: the edge files it and renders it.

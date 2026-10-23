@@ -18,6 +18,7 @@ use http::uri::PathAndQuery;
 use http::{HeaderName, StatusCode, Uri, header};
 use nest_rs_core::{Container, Discovery};
 
+use crate::config::HttpConfig;
 use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::Result;
 use crate::problem::ProblemDetails;
@@ -37,7 +38,23 @@ pub const DEFAULT_VERSION_HEADER: &str = "x-api-version";
 const MAX_VERSION_LEN: usize = 32;
 
 /// How a caller selects an API version.
+///
+/// A later 7.x may add a strategy, so a `match` outside this crate ends in a
+/// `_` arm:
+///
+/// ```compile_fail,E0004
+/// use nest_rs_http::ApiVersioning;
+///
+/// fn read_from(versioning: ApiVersioning) -> &'static str {
+///     match versioning {
+///         ApiVersioning::Uri => "the path",
+///         ApiVersioning::Header => "a header",
+///         ApiVersioning::MediaType => "the media type",
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ApiVersioning {
     /// `/v2/users` — the version is part of the path. The default.
     #[default]
@@ -72,6 +89,33 @@ impl FromStr for ApiVersioning {
                  `media_type`",
             )),
         }
+    }
+}
+
+/// Where a request states its API version, as a document describing the API
+/// tells a client to: one place per [`ApiVersioning`] strategy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "tier 2: nest-rs-openapi documents each place, so a new one fails its build until it \
+              does"
+)]
+pub enum VersionLocation {
+    /// The path: each version is an address of its own, `/v2/users`.
+    Path,
+    /// The named request header, carrying the version alone: `X-API-Version: 2`.
+    Header(String),
+    /// The [`MEDIA_TYPE_PARAM`] parameter of the `Accept` media range:
+    /// `Accept: application/json; version=2`.
+    MediaType,
+}
+
+/// Where `config`'s strategy reads the version a request states.
+pub fn version_location(config: &HttpConfig) -> VersionLocation {
+    match config.versioning {
+        ApiVersioning::Uri => VersionLocation::Path,
+        ApiVersioning::Header => VersionLocation::Header(config.version_header.clone()),
+        ApiVersioning::MediaType => VersionLocation::MediaType,
     }
 }
 
@@ -648,6 +692,26 @@ mod tests {
         assert_eq!("media_type".parse(), Ok(ApiVersioning::MediaType));
         let err = "v2".parse::<ApiVersioning>().expect_err("unknown strategy");
         assert!(err.contains("media_type"), "names the options: {err}");
+    }
+
+    #[test]
+    fn each_strategy_names_where_a_request_states_its_version() {
+        let located = |versioning| {
+            version_location(&HttpConfig {
+                versioning,
+                version_header: "X-Api-Revision".into(),
+                ..HttpConfig::default()
+            })
+        };
+        assert_eq!(located(ApiVersioning::Uri), VersionLocation::Path);
+        assert_eq!(
+            located(ApiVersioning::Header),
+            VersionLocation::Header("X-Api-Revision".into()),
+        );
+        assert_eq!(
+            located(ApiVersioning::MediaType),
+            VersionLocation::MediaType
+        );
     }
 
     #[tokio::test]

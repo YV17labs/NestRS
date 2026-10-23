@@ -104,6 +104,14 @@ impl HygieneTool {
         Ok("pong".into())
     }
 
+    /// The host's guard re-run on this operation alone.
+    #[tool(description = "Answer once the guard ran again.")]
+    #[public]
+    #[force_guards(HygieneGuard)]
+    fn again(&self) -> Result<String, McpError> {
+        Ok("again".into())
+    }
+
     #[tool(description = "Read this request's basket.")]
     #[public]
     #[use_interceptors(HygieneUnitAudit)]

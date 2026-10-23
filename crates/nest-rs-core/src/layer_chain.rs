@@ -3,8 +3,8 @@
 //!
 //! Each resolved entry is tagged with its [`LayerSite`]; the chain keeps the
 //! broadest site for any duplicated [`TypeId`] and runs the sites from the
-//! broadest in, each in declaration order with
-//! [`Layer::priority`](crate::Layer::priority) as the tiebreaker within it.
+//! broadest in, each ordered by [`Layer::priority`](crate::Layer::priority),
+//! declaration order breaking a tie.
 
 use std::any::{Any, TypeId};
 use std::sync::Arc;
@@ -242,7 +242,7 @@ pub(crate) mod __private {
                 layer = crate::type_name::shorten(name),
                 kept = existing.label(),
                 skipped = skipped.label(),
-                hint = "broadest site wins; use `#[force_*]` to re-run",
+                hint = "broadest site wins; `#[force_guards]` re-runs a guard",
                 "redundant layer declaration deduped",
             );
         }
@@ -465,6 +465,37 @@ mod tests {
             "x",
         );
         assert_eq!(chain.len(), 2);
+    }
+
+    /// Declared twice by the one test below alone: the line is filed once per
+    /// process for each layer type.
+    struct Redeclared;
+    impl Layer for Redeclared {}
+
+    #[test]
+    fn a_redundant_declaration_names_the_one_decorator_that_re_runs_a_layer() {
+        let logs = nest_rs_testing::LogCapture::install();
+
+        let chain = compose_chain::<dyn Layer>(
+            vec![entry(Redeclared, LayerSite::Global)],
+            vec![entry(Redeclared, LayerSite::Host)],
+            vec![],
+            &[],
+            "GET /posts",
+        );
+
+        assert_eq!(chain.len(), 1, "the broadest site's declaration runs alone");
+        let deduped: Vec<_> = logs
+            .events()
+            .into_iter()
+            .filter(|event| event.message == "redundant layer declaration deduped")
+            .collect();
+        assert_eq!(deduped.len(), 1, "one line: {deduped:#?}");
+        assert_eq!(deduped[0].target, crate::target::LAYERS);
+        assert_eq!(
+            deduped[0].field("hint").as_deref(),
+            Some("broadest site wins; `#[force_guards]` re-runs a guard"),
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! `#[gateway]` + `#[use_guards]` + `#[messages]`: the guard-layer emission,
-//! a guard `#[force_guards]` binds on a message alone, the interceptors,
+//! a guard a message binds or `#[force_guards]` re-runs, the interceptors,
 //! exception filters and data pipes a gateway and its messages bind, a
 //! `Scoped<T>` parameter, the message sites and the versioned mount.
 
@@ -28,7 +28,7 @@ impl Guard for HygieneWsGuard {
 
 impl GuardFor<HttpView> for HygieneWsGuard {}
 
-/// Forced on a message: bound there, and re-run past the app-wide pool.
+/// Bound on one message, and forced on another past the app-wide pool.
 #[injectable]
 pub struct HygieneMessageGuard;
 
@@ -81,6 +81,11 @@ impl HygieneGateway {
     #[public]
     #[force_guards(HygieneMessageGuard)]
     async fn again(&self) {}
+
+    #[subscribe_message("hygiene.checked")]
+    #[public]
+    #[use_guards(HygieneMessageGuard)]
+    async fn checked(&self) {}
 
     #[subscribe_message("hygiene.layered")]
     #[public]

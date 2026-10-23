@@ -1,14 +1,16 @@
 //! `#[resolver]` + `#[operations]`, through the umbrella alone: a resolver's
-//! and its fields' interceptors and exception filters, and a request-scoped
-//! parameter, included.
+//! and its fields' guards, interceptors and exception filters, and a
+//! request-scoped parameter, included.
 //!
 //! `#[operations]` wraps async-graphql's `#[Object]`, which roots its paths at
 //! the call site's manifest, falling back to a bare `::async_graphql`; this
 //! compile fails if the `crate = ` override is ever dropped.
 
+use nest_rs::core::{Layer, UnitContext};
 use nest_rs::graphql::async_graphql::SimpleObject;
 use nest_rs::graphql::async_graphql::futures_util::stream::{self, Stream};
-use nest_rs::graphql::{Scoped, operations, resolver};
+use nest_rs::graphql::{GraphqlView, Scoped, operations, resolver};
+use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
 
 /// The federated type; its `@key` comes from the entity resolver's arguments.
 #[derive(SimpleObject)]
@@ -167,5 +169,43 @@ impl ShelfResolver {
     fn label(&self, parent: &Shelf, count: Scoped<HygieneShelfCount>) -> String {
         let _ = count;
         format!("shelf {}", parent.id)
+    }
+}
+
+/// Checks each field it is bound on, through `check`.
+#[nest_rs::core::injectable]
+pub struct HygieneFieldGuard;
+
+impl Layer for HygieneFieldGuard {}
+
+#[async_trait]
+impl Guard for HygieneFieldGuard {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<GraphqlView> for HygieneFieldGuard {}
+
+/// A resolver guarding its fields, a field adding the guard of its own and
+/// one re-running the resolver's.
+#[resolver]
+#[use_guards(HygieneFieldGuard)]
+pub struct DeskResolver;
+
+#[operations]
+impl DeskResolver {
+    #[query]
+    #[public]
+    #[use_guards(HygieneFieldGuard)]
+    fn desk(&self) -> i32 {
+        1
+    }
+
+    #[query]
+    #[public]
+    #[force_guards(HygieneFieldGuard)]
+    fn desk_again(&self) -> i32 {
+        2
     }
 }

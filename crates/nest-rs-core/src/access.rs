@@ -1,8 +1,9 @@
 //! Build-time validation of the module import graph (the access contract).
 //!
-//! A provider's `#[inject]` dependency (and its `#[use_guards]` /
-//! `#[use_filters]` / `#[use_interceptors]` layers, and each provider its
-//! handlers resolve through a parameter) must be provided by its own
+//! A provider's `#[inject]` dependency (and the layers it binds —
+//! `#[use_guards]`, `#[use_pipes]`, `#[use_interceptors]`,
+//! `#[use_exception_filters]` — and each provider its handlers resolve
+//! through a parameter) must be provided by its own
 //! module, a module in its transitive import closure, or global infrastructure
 //! (seeds + factory outputs); otherwise the boot fails with an
 //! [`AccessGraphError`]. Runtime [`Container::get`](crate::Container::get) is
@@ -54,7 +55,8 @@ pub(crate) mod __private {
         /// each with its label ([`Discoverable::also_provides`](crate::Discoverable::also_provides)).
         pub also_provides: fn() -> Vec<(TypeId, &'static str)>,
         /// `TypeId` of each bare `#[inject]` field plus each attribute-referenced
-        /// layer (`#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`).
+        /// layer (`#[use_guards]`, `#[use_pipes]`, `#[use_interceptors]`,
+        /// `#[use_exception_filters]`).
         pub injects: fn() -> Vec<TypeId>,
         /// Label for each [`injects`](Self::injects) entry, in the same order; may
         /// be shorter than `injects`, never longer.

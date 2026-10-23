@@ -18,8 +18,9 @@
 //! before any transport starts: [`AccessGraphError`] when a provider reaches
 //! across a module boundary no `import` covers, [`MissingDependencyError`] when
 //! no module provides a dependency, [`BudgetPastNetError`] when a resource's
-//! [`Budget`] reaches past a [`Net`] that waits on it. `#[use_guards]` /
-//! `#[use_filters]` / `#[use_interceptors]` are checked the same way.
+//! [`Budget`] reaches past a [`Net`] that waits on it. The layers a site
+//! binds — `#[use_guards]`, `#[use_pipes]`, `#[use_interceptors]`,
+//! `#[use_exception_filters]` — are checked the same way.
 //!
 //! # Scopes and lifecycle
 //!

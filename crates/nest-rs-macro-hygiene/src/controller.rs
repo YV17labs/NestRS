@@ -1,10 +1,14 @@
 //! `#[controller]` + `#[routes]` + the response shapers, through the umbrella
 //! alone: no HTTP library's line, and the wrapper's `Span::mixed_site()` locals
-//! cannot be masked by a `Json(body)` destructure.
+//! cannot be masked by a `Json(body)` destructure; and every layer a
+//! controller and its routes bind.
 
+use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs::http::futures_util::stream;
-use nest_rs::http::{ClientIp, Header, SseEvent, SseStream, controller, input, routes};
+use nest_rs::http::{ClientIp, Header, HttpView, SseEvent, SseStream, controller, input, routes};
 use nest_rs::http::{Json, Multipart, Path};
+use nest_rs::pipes::GlobalPipe;
 
 #[input]
 pub struct HygienePayload {
@@ -145,5 +149,54 @@ impl HygieneVersionedController {
     #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
     fn count(&self) -> String {
         "0".into()
+    }
+}
+
+/// Checks each request it is bound on.
+#[injectable]
+pub struct HygieneRouteGuard;
+
+impl Layer for HygieneRouteGuard {}
+
+#[async_trait]
+impl Guard for HygieneRouteGuard {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for HygieneRouteGuard {}
+
+/// Reads a body and changes nothing: the pipe a controller and a route bind.
+#[injectable]
+#[derive(Default)]
+pub struct HygieneBodyPipe;
+
+impl Layer for HygieneBodyPipe {}
+
+impl GlobalPipe for HygieneBodyPipe {}
+
+/// A guard, a pipe and an exception filter on the struct, and each route's
+/// own beside them.
+#[controller(path = "/hygiene-layered")]
+#[use_guards(HygieneRouteGuard)]
+#[use_pipes(HygieneBodyPipe)]
+#[use_exception_filters(crate::pipeline::HygieneUnitRefusal)]
+pub struct HygieneLayeredController;
+
+#[routes]
+impl HygieneLayeredController {
+    #[post("/checked")]
+    #[use_guards(HygieneRouteGuard)]
+    #[use_pipes(HygieneBodyPipe)]
+    async fn checked(&self, Json(body): Json<HygienePayload>) -> String {
+        body.name
+    }
+
+    /// The struct's guard re-run on this route alone.
+    #[get("/again")]
+    #[force_guards(HygieneRouteGuard)]
+    fn again(&self) -> String {
+        "again".into()
     }
 }

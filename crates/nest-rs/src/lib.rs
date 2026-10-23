@@ -1,4 +1,4 @@
-//! `nestrs` — umbrella crate that re-exports the framework's surface so an
+//! `nest-rs` — the umbrella that re-exports the framework's surface so an
 //! application can write a single `use nest_rs::prelude::*;` instead of a
 //! handful of per-crate imports. Each surface sits behind its own Cargo
 //! feature, so an app pays only for what it uses.

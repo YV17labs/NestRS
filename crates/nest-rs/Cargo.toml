@@ -79,16 +79,13 @@ database = ["dep:nest-rs-database"]
 # `nest-rs-testing?/orm` carries `EphemeralDatabase`: a suite that tests against
 # a real schema needs it, and "which extra feature turns the fixture on" is not
 # a question the app should have to answer.
-# `authz` is not optional here even though `#[authorize]` is: `#[crud]` emits
-# `::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, _>` and an
-# `::nest_rs_authz::Action` on *every* operation it generates, and `#[expose]`
-# implements `::nest_rs_authz::WireModelDefaults` on every entity, whether or
-# not the developer writes a posture attribute. `nest-rs-seaorm` already depends
-# on the crate, so it was compiled and only the umbrella's `pub use` was gated out —
-# `cargo add nest-rs --features http,seaorm` + `#[crud]` was
-# `E0433: cannot find `authz` in `nest_rs``, blamed on the attribute. That is the
-# defect this matrix exists to prevent, so the feature carries what the
-# expansion names.
+# `authz` is not optional here even though `#[authorize]` is: `#[crud]` writes
+# an `#[authorize(::nest_rs_authz::<marker>, Entity)]` on *every* operation it
+# generates and an `::nest_rs_authz::Action` on each one that loads a row, and
+# `#[expose]` implements `::nest_rs_authz::WireModelDefaults` on every entity,
+# whether or not the developer writes a posture attribute. `nest-rs-seaorm`
+# depends on the crate already, so the feature carries what the expansion names
+# and costs no compilation.
 seaorm = [
     "dep:nest-rs-seaorm",
     "database",

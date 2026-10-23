@@ -78,8 +78,14 @@ these crates are the engine.
 
 ## Request pipeline
 
-Cross-cutting layers shared across HTTP, GraphQL, and WebSockets. Bind them
-globally on `App::builder()` or per controller / resolver / gateway.
+Cross-cutting layers, each bound globally on `App::builder()` or per host and
+method. A guard gates a caller, so it runs on the edges that have one — HTTP,
+GraphQL, WebSockets and MCP. A pipe validates what a unit carries: on an
+argument on every edge, a job's payload included, and through `#[use_pipes]`
+on an HTTP or WebSocket host and method. A global pipe runs over a route's
+JSON body, a `/graphql` operation's variables and a WebSocket message's data,
+and nothing else: an MCP tool's arguments and a job's payload take a pipe on
+the argument.
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
@@ -88,7 +94,8 @@ globally on `App::builder()` or per controller / resolver / gateway.
 
 Interceptors and exception filters take no feature: `Interceptor`,
 `ExceptionFilter` and `#[interceptor]` live in `nest_rs::core`, beside the
-pipeline that runs them — see [Interceptors](/fundamentals/interceptors/) and
+pipeline that runs them, and run on every edge — around a job, a tick and an
+event as around a request. See [Interceptors](/fundamentals/interceptors/) and
 [Exception filters](/fundamentals/exception-filters/).
 
 ## Background work
@@ -128,8 +135,8 @@ packages a deployable usually pulls in.
 | GraphQL API | `http`, `graphql`, `config`, `seaorm`, `authn`, `authz` |
 | WebSocket live service | `http`, `ws`, `config`, `seaorm`, `authn`, `authz` |
 | Queue worker | `redis-queue`, `schedule`, `seaorm`, `config` |
-| MCP assistant | `http`, `mcp`, `config`, `authn`, `authz` |
-| Token issuer | `http`, `config`, `seaorm`, `authn` |
+| MCP assistant | `http`, `mcp`, `config`, `authn`, `authz`, `oauth-resource` |
+| Token issuer | `http`, `config`, `seaorm`, `authn`, `oauth-server` |
 
 See [The Publish workspace](/publish/) for five real apps that follow these
 profiles.

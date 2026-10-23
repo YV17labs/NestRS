@@ -1,9 +1,10 @@
 //! Compile-time witness of macro path hygiene.
 //!
-//! This crate depends **only** on `nest-rs-*` surface crates, so a bare
-//! third-party path (`::anyhow`, `::tracing`, …) emitted by any decorator used
-//! here fails this crate's compile; its suite pins each decorator's refusals
-//! through the umbrella, as a developer meets them.
+//! This crate depends **only** on the `nest-rs` umbrella, so a bare
+//! third-party path (`::anyhow`, `::tracing`, …) or a framework crate's own root
+//! (`::nest_rs_http`) emitted by any decorator used here fails this crate's
+//! compile; its suite pins each decorator's refusals through the umbrella, as a
+//! developer meets them.
 //!
 //! Each witness compiles under its capability's feature alone, mirroring the
 //! umbrella's features; the kernel's decorators compile under none. Extend this

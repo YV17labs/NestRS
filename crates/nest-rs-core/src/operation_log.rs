@@ -22,6 +22,7 @@ pub const TARGET: &str = "nest_rs::operation";
 /// OpenTelemetry's `SpanKind`, which [`operation_span!`](crate::operation_span)
 /// records as `otel.kind`; only the kinds this framework emits are declared.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Kind {
     /// Work this process accepted from somewhere else — an HTTP request, a WS
     /// message, an MCP operation, a GraphQL subscription.

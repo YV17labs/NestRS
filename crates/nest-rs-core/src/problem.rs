@@ -339,6 +339,10 @@ pub(crate) mod __private {
     /// The chain a `5xx` answer keeps from its client, and the level the edge
     /// files it at.
     #[derive(Debug, PartialEq, Eq)]
+    #[expect(
+        clippy::exhaustive_enums,
+        reason = "tier 2: each edge's filing matches it, so a new level reaches every edge"
+    )]
     pub enum Withheld {
         /// The server failed: filed at `error`, as an opaque failure is.
         Failed(String),

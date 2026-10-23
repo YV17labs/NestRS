@@ -10,6 +10,17 @@ use crate::container::ProviderScope;
 
 /// A provider depends on something its module does not import and that is not
 /// global infrastructure. Raised at boot by the access-graph validation.
+///
+/// The boot builds it; a program reads its fields, and a later 7.x may add one:
+///
+/// ```compile_fail,E0639
+/// let refused = nest_rs_core::AccessGraphError {
+///     module: "UsersModule",
+///     consumer: "UsersService",
+///     dependency: "Mailer",
+///     owner: "MailModule",
+/// };
+/// ```
 #[derive(Debug, Error)]
 #[error(
     "module access violation: `{consumer}` (in module `{module}`) depends on `{dependency}`, \
@@ -17,6 +28,7 @@ use crate::container::ProviderScope;
      — add `{owner}` to `#[module(imports = [...])]` of `{module}`, or route the dependency \
      through a module `{module}` already imports."
 )]
+#[non_exhaustive]
 pub struct AccessGraphError {
     /// Module that owns the offending consumer and whose imports fall short.
     pub module: &'static str,
@@ -38,6 +50,7 @@ pub struct AccessGraphError {
      provider for `{dependency}` to a module reachable from the root, or seed it at \
      `App::builder()`."
 )]
+#[non_exhaustive]
 pub struct MissingDependencyError {
     /// Module that owns the consumer whose dependency is unmet.
     pub module: &'static str,
@@ -45,6 +58,22 @@ pub struct MissingDependencyError {
     pub consumer: &'static str,
     /// The dependency that is registered nowhere and is not global infra.
     pub dependency: &'static str,
+}
+
+impl MissingDependencyError {
+    /// `consumer`, in `module`, needs `dependency`, which nothing provides — as
+    /// a module's factory says of what it reads from the container.
+    pub const fn new(
+        module: &'static str,
+        consumer: &'static str,
+        dependency: &'static str,
+    ) -> Self {
+        Self {
+            module,
+            consumer,
+            dependency,
+        }
+    }
 }
 
 /// A **singleton** provider `#[inject]`s one the container never places in the
@@ -63,6 +92,7 @@ pub struct MissingDependencyError {
      boundary of the edge that dispatches the work — the `Scoped<T>` its crate \
      exports — or make `{consumer}` request-scoped too."
 )]
+#[non_exhaustive]
 pub struct ScopeViolationError {
     /// Module that owns the offending consumer.
     pub module: &'static str,
@@ -265,6 +295,7 @@ fn scopes_clause(scopes: Option<(ProviderScope, ProviderScope)>) -> String {
 #[error(
     "contested declaration: `{type_name}` is declared twice — by {first}, and by {second}. {remedy}"
 )]
+#[non_exhaustive]
 pub struct ContestedDeclarationError {
     /// The type declared more than once.
     pub type_name: &'static str,
@@ -286,6 +317,7 @@ pub struct ContestedDeclarationError {
      A module's `for_root(..)` and `ConfigModule::for_feature` both queue one. Boot with \
      `App::builder().module::<M>().build().await` instead."
 )]
+#[non_exhaustive]
 pub struct UnresolvedFactoryError {
     /// The type whose factory nothing would drain.
     pub type_name: &'static str,
@@ -300,6 +332,7 @@ pub struct UnresolvedFactoryError {
      of this set (itself included) would provide, so no order satisfies them. \
      Drop one `_after` declaration."
 )]
+#[non_exhaustive]
 pub struct FactoryCycleError {
     /// The types whose factories wait on each other.
     pub type_names: Vec<&'static str>,
@@ -308,6 +341,7 @@ pub struct FactoryCycleError {
 /// A factory failed, so the boot ends before any provider is built from it:
 /// named by the type it would have built, its cause the factory's own error.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 #[error("the factory for `{type_name}` failed")]
 pub struct FactoryFailedError {
     /// The type the factory would have built.
@@ -320,6 +354,7 @@ pub struct FactoryFailedError {
 /// A stop was asked while the boot waited on one of its steps: the step was
 /// dropped where it waited, and the app never served.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 #[error("the boot was stopped by {cause:?} during {step}")]
 pub struct BootInterruptedError {
     /// Why the app stops.
@@ -337,6 +372,7 @@ pub struct BootInterruptedError {
     "transport `{transport}` states a stop bound of {stop_bound_ms} ms, past the one-day \
      ceiling: a transport's stop is bounded: declare its drain window"
 )]
+#[non_exhaustive]
 pub struct UnboundedTransportError {
     /// The transport, by its short type name.
     pub transport: String,
@@ -348,6 +384,7 @@ pub struct UnboundedTransportError {
 /// finished, on an earlier call: they do not run again, so neither
 /// [`App::init`](crate::App::init) nor [`App::run`](crate::App::run) proceeds.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 #[error("the app's init failed earlier: it does not run again")]
 pub struct InitFailedError;
 
@@ -448,6 +485,7 @@ fn late_factory_sentence(type_name: &str, on: QueuedOn) -> String {
     "`{module}` was imported in a collect phase alone, so none of its providers registered: \
      import it through `ContainerBuilder::import` in its importer's `register` too."
 )]
+#[non_exhaustive]
 pub struct UnregisteredModuleError {
     /// The module imported in a collect phase alone.
     pub module: &'static str,
@@ -659,6 +697,7 @@ fn and_list(names: &[&str]) -> String {
     "{resource}'s budget ({budget:?}) must be shorter than {port}'s net ({net:?}), which would \
      otherwise give up on a call still answering and lose its cause: lower {setting}"
 )]
+#[non_exhaustive]
 pub struct BudgetPastNetError {
     /// The resource, as a sentence names it.
     pub resource: &'static str,
@@ -676,6 +715,7 @@ pub struct BudgetPastNetError {
 /// before any transport is built or any lifecycle hook runs, its cause the
 /// wiring's own error.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 #[error("the `{registry}` wiring failed")]
 pub struct WiringFailedError {
     /// The registry the wiring fills, as its module names it.
@@ -693,6 +733,7 @@ pub struct WiringFailedError {
     "`{layer}` is declared on `{site}`, and no imported module provides it — import the module \
      that provides it"
 )]
+#[non_exhaustive]
 pub struct UnresolvedLayerError {
     /// The layer type, as declared.
     pub layer: &'static str,

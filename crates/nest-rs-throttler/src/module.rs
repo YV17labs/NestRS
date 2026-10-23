@@ -64,11 +64,11 @@ impl DynamicModule for ThrottlerSetup {
             _,
             _,
         >(|container| async move {
-            let default = container.get::<Throttle>().ok_or(MissingDependencyError {
-                module: "ThrottlerModule",
-                consumer: "ThrottlerGuard",
-                dependency: "Throttle",
-            })?;
+            let default = container.get::<Throttle>().ok_or(MissingDependencyError::new(
+                "ThrottlerModule",
+                "ThrottlerGuard",
+                "Throttle",
+            ))?;
             let store = container.get_dyn::<dyn ThrottlerStore>().ok_or_else(|| {
                 anyhow::anyhow!(
                     "ThrottlerGuard needs a `dyn ThrottlerStore` binding — \

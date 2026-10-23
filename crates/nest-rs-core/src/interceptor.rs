@@ -307,6 +307,7 @@ pub(crate) mod __private {
 
     /// Where `#[interceptor]` runs one: around the guards, or after them.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[non_exhaustive]
     pub enum InterceptorStage {
         /// `#[interceptor(stage = unit)]`: around the guard stage.
         Unit,

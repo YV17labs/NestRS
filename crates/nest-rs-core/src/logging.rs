@@ -59,6 +59,7 @@ pub mod var {
 /// Shape of the console log layer's output — the grammar of
 /// `<PREFIX>_LOG_FORMAT`, for every subscriber the framework ships.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LogFormat {
     /// Human-readable text; the default in debug builds.
     #[default]

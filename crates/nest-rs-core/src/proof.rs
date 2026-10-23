@@ -10,7 +10,14 @@ use tokio::time::Instant;
 use crate::backoff::{Backoff, Retries};
 
 /// Why one attempt to open a resource failed.
+///
+/// Exhaustive on purpose: a failure ends the proof or leaves it running, so a
+/// driver maps each arm to its own error and never needs a `_` arm.
 #[derive(Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "closed by definition: a failure ends the proof or leaves it running"
+)]
 pub enum Attempt<E, R> {
     /// What every attempt would meet — refused credentials, a certificate the
     /// client does not accept — which ends the proof at once.
@@ -20,7 +27,14 @@ pub enum Attempt<E, R> {
 }
 
 /// How a proof ended without the resource.
+///
+/// Exhaustive on purpose: a proof ends refused or with its budget spent, so a
+/// driver maps each arm to its own error and never needs a `_` arm.
 #[derive(Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "closed by definition: a proof ends refused or with its budget spent"
+)]
 pub enum Unproved<E, R> {
     /// An attempt met what every attempt would.
     Refused(R),

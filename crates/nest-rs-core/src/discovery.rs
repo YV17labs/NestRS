@@ -45,6 +45,7 @@ impl<'a> Discovery<'a> {
 /// A discovered piece of metadata, paired with the host provider's `TypeId`
 /// when host-bound. Scanners invoke the live provider through closures
 /// embedded in `meta`.
+#[non_exhaustive]
 pub struct Discovered<M> {
     /// The metadata payload the provider submitted at registration.
     pub meta: Arc<M>,

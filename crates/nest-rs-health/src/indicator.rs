@@ -11,8 +11,15 @@ use nest_rs_http::schemars::JsonSchema;
 use serde::Serialize;
 
 /// Which Kubernetes-style probe an indicator participates in.
+///
+/// Exhaustive on purpose: Kubernetes' container probes are these three, so a
+/// caller matches each and never needs a `_` arm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "closed by Kubernetes, whose container probes are these three"
+)]
 pub enum ProbeKind {
     /// Liveness — is the process healthy enough to keep running?
     Liveness,
@@ -26,6 +33,7 @@ pub enum ProbeKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 #[schemars(crate = "nest_rs_http::schemars")]
+#[non_exhaustive]
 pub enum IndicatorStatus {
     /// The check returned `Ok`.
     Up,
@@ -36,6 +44,7 @@ pub enum IndicatorStatus {
 /// Outcome of a single indicator check, included in a [`ProbeReport`].
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 #[schemars(crate = "nest_rs_http::schemars")]
+#[non_exhaustive]
 pub struct IndicatorReport {
     /// The indicator's stable id: its snake_case method name, or the crate
     /// owning a resource and its instance (`redis:cache`).
@@ -55,6 +64,7 @@ pub struct IndicatorReport {
 /// plus per-indicator reports.
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 #[schemars(crate = "nest_rs_http::schemars")]
+#[non_exhaustive]
 pub struct ProbeReport {
     /// The overall probe result — `down` if any indicator is down.
     pub status: IndicatorStatus,
@@ -105,22 +115,64 @@ impl ProbeReport {
 /// The boxed future one indicator check resolves to, borrowing the [`Container`].
 pub type IndicatorFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
-/// The thunk stored in [`HealthIndicator::run`]; a function pointer because
-/// `inventory` submits it from a `const` context.
+/// The check an indicator runs: a function pointer, because `inventory`
+/// submits a [`HealthIndicator`] from a `const` context.
 pub type IndicatorRun = for<'a> fn(&'a Container) -> IndicatorFuture<'a>;
 
 /// One indicator submitted to the link-time registry by `#[indicators]`.
 pub struct HealthIndicator {
+    origin: &'static str,
+    name: &'static str,
+    kind: ProbeKind,
+    provider_type_id: fn() -> TypeId,
+    run: IndicatorRun,
+}
+
+impl HealthIndicator {
     /// `module_path!()` of the crate that declared it.
-    pub origin: &'static str,
+    pub const fn origin(&self) -> &'static str {
+        self.origin
+    }
+
     /// The indicator's stable id (snake_case method name), its JSON key.
-    pub name: &'static str,
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
     /// The probe this indicator participates in.
-    pub kind: ProbeKind,
-    /// `TypeId` of the owning provider, matched against the reachable set.
-    pub provider_type_id: fn() -> TypeId,
+    pub const fn kind(&self) -> ProbeKind {
+        self.kind
+    }
+
+    /// `TypeId` of the owning provider, which a reader gates on
+    /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) as the probe
+    /// does.
+    pub fn provider_type_id(&self) -> TypeId {
+        (self.provider_type_id)()
+    }
+
     /// Resolves the owning provider and runs the check method.
-    pub run: IndicatorRun,
+    pub(crate) const fn run(&self) -> IndicatorRun {
+        self.run
+    }
+}
+
+/// The entry `#[indicators]` submits for one method; a hand-built entry is a
+/// test's, never an app's.
+pub const fn health_indicator(
+    origin: &'static str,
+    name: &'static str,
+    kind: ProbeKind,
+    provider_type_id: fn() -> TypeId,
+    run: IndicatorRun,
+) -> HealthIndicator {
+    HealthIndicator {
+        origin,
+        name,
+        kind,
+        provider_type_id,
+        run,
+    }
 }
 
 ::nest_rs_core::inventory::collect!(HealthIndicator);

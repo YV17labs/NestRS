@@ -35,8 +35,6 @@ mod module;
 mod service;
 
 pub use config::HealthConfig;
-// `IndicatorFuture` and `IndicatorRun` name the type of the public field
-// `HealthIndicator::run` and of the check `IndicatorEntry::new` takes.
 pub use indicator::{
     HealthIndicator, IndicatorEntry, IndicatorFuture, IndicatorReport, IndicatorRun,
     IndicatorStatus, ProbeKind, ProbeReport,
@@ -48,6 +46,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::indicator::health_indicator;
     pub use nest_rs_core::unresolved_host;
 }
 
@@ -85,8 +84,8 @@ pub mod __private {
 /// assert!(ready.details.contains_key("db_ping"));
 ///
 /// let declared = nest_rs_core::inventory::iter::<HealthIndicator>()
-///     .find(|indicator| indicator.name == "db_ping")
-///     .map(|indicator| indicator.kind);
+///     .find(|indicator| indicator.name() == "db_ping")
+///     .map(|indicator| indicator.kind());
 /// assert_eq!(declared, Some(ProbeKind::Readiness));
 /// # Ok(())
 /// # }

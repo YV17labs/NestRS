@@ -105,12 +105,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         submissions.push(quote! {
             #(#cfgs)*
             ::nest_rs_core::inventory::submit! {
-                ::nest_rs_health::HealthIndicator {
-                    origin: ::core::module_path!(),
-                    name: #method_name,
-                    kind: ::nest_rs_health::ProbeKind::#kind_ident,
-                    provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
-                    run: |__container| ::std::boxed::Box::pin(async move {
+                ::nest_rs_health::__private::health_indicator(
+                    ::core::module_path!(),
+                    #method_name,
+                    ::nest_rs_health::ProbeKind::#kind_ident,
+                    || ::std::any::TypeId::of::<#self_ty>(),
+                    |__container| ::std::boxed::Box::pin(async move {
                         // Not an `expect`: a panic would take the probe response down.
                         let __provider = match ::nest_rs_core::Container::get::<#self_ty>(
                             __container,
@@ -124,7 +124,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         };
                         #invoke
                     }),
-                }
+                )
             }
         });
     }

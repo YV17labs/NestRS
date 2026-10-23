@@ -63,10 +63,10 @@ pub(crate) struct Indicator {
 impl From<&HealthIndicator> for Indicator {
     fn from(entry: &HealthIndicator) -> Self {
         Self {
-            name: Cow::Borrowed(entry.name),
-            kind: entry.kind,
-            origin: entry.origin,
-            run: entry.run,
+            name: Cow::Borrowed(entry.name()),
+            kind: entry.kind(),
+            origin: entry.origin(),
+            run: entry.run(),
         }
     }
 }
@@ -90,7 +90,7 @@ pub(crate) const INDICATORS: &str = "indicator";
 /// gated by construction, since only an imported module registers.
 pub(crate) fn wired(container: &Container, reachable: &ReachableProviders) -> Vec<Indicator> {
     inventory::iter::<HealthIndicator>()
-        .filter(|entry| reachable.reaches((entry.provider_type_id)()))
+        .filter(|entry| reachable.reaches(entry.provider_type_id()))
         .map(Indicator::from)
         .chain(
             Discovery::new(container)
@@ -270,7 +270,7 @@ pub(crate) fn check_names<'a>(
 /// skips in silence.
 fn report_unreachable_indicators(container: &Container, reachable: &ReachableProviders) {
     for entry in inventory::iter::<HealthIndicator>() {
-        if !reachable.reaches((entry.provider_type_id)()) {
+        if !reachable.reaches(entry.provider_type_id()) {
             report_inert_indicator(container, entry);
         }
     }
@@ -282,11 +282,11 @@ fn report_inert_indicator(container: &Container, entry: &HealthIndicator) {
     ::nest_rs_core::report_inert_host!(
         target: crate::TARGET,
         what: "indicator",
-        origin: entry.origin,
-        host: (entry.provider_type_id)(),
+        origin: entry.origin(),
+        host: entry.provider_type_id(),
         container: container,
-        indicator = entry.name,
-        kind = ::tracing::field::debug(entry.kind),
+        indicator = entry.name(),
+        kind = ::tracing::field::debug(entry.kind()),
     );
 }
 
@@ -337,6 +337,7 @@ async fn run_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::indicator::health_indicator;
 
     #[tokio::test]
     async fn a_hanging_indicator_times_out_to_down() {
@@ -382,13 +383,13 @@ mod tests {
         // Not submitted: `inventory` is process-wide.
         report_inert_indicator(
             app.container(),
-            &HealthIndicator {
-                origin: "nest_rs_seaorm::health::indicator",
-                name: "db",
-                kind: ProbeKind::Readiness,
-                provider_type_id: || std::any::TypeId::of::<UpHost>(),
-                run: |_| Box::pin(async move { Ok(()) }),
-            },
+            &health_indicator(
+                "nest_rs_seaorm::health::indicator",
+                "db",
+                ProbeKind::Readiness,
+                || std::any::TypeId::of::<UpHost>(),
+                |_| Box::pin(async move { Ok(()) }),
+            ),
         );
 
         let skipped = logs.find(crate::TARGET, "skipped indicator: not this app's to run");
@@ -426,29 +427,29 @@ mod tests {
     }
 
     nest_rs_core::inventory::submit! {
-        HealthIndicator {
+        health_indicator(
             // Not `module_path!()`: `nest_rs_health::…` would read as the
             // framework's and report at `debug`.
-            origin: "features::probes::up",
-            name: "up_host",
-            kind: ProbeKind::Readiness,
-            provider_type_id: || std::any::TypeId::of::<UpHost>(),
-            run: |c| Box::pin(async move {
+            "features::probes::up",
+            "up_host",
+            ProbeKind::Readiness,
+            || std::any::TypeId::of::<UpHost>(),
+            |c| Box::pin(async move {
                 c.get::<UpHost>().expect("UpHost registered").ping().await
             }),
-        }
+        )
     }
 
     nest_rs_core::inventory::submit! {
-        HealthIndicator {
-            origin: "features::probes::down",
-            name: "down_host",
-            kind: ProbeKind::Readiness,
-            provider_type_id: || std::any::TypeId::of::<DownHost>(),
-            run: |c| Box::pin(async move {
+        health_indicator(
+            "features::probes::down",
+            "down_host",
+            ProbeKind::Readiness,
+            || std::any::TypeId::of::<DownHost>(),
+            |c| Box::pin(async move {
                 c.get::<DownHost>().expect("DownHost registered").ping().await
             }),
-        }
+        )
     }
 
     /// Install what `container`'s set reaches, as the wiring step does.

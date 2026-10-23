@@ -91,6 +91,12 @@ fn generate_migration_bootstraps_the_crate_when_absent() {
         migrator.contains("_create_widget::Migration)"),
         "migrator boxes it: {migrator}"
     );
+
+    let manifest = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(
+        manifest.contains("\"seaorm\"") && !manifest.contains("\"http\""),
+        "the migrations crate is headless, so it turns on `seaorm` alone: {manifest}"
+    );
 }
 
 /// The migrations in `crates/migrations/src`, by file name.

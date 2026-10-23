@@ -62,6 +62,10 @@ fn generate_entity_writes_the_lone_entity_and_wires_the_port() {
         !features_cargo.contains("authz"),
         "an entity alone needs no authz feature: {features_cargo}",
     );
+    assert!(
+        !features_cargo.contains("\"http\"") && !root_cargo.contains("\"http\""),
+        "an entity alone serves nothing over HTTP: {root_cargo}\n{features_cargo}",
+    );
 }
 
 /// `#[expose(service = …)]` is left out: `g entity` writes no service, and a

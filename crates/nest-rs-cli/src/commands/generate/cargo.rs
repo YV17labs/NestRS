@@ -40,10 +40,11 @@ impl Dep {
     }
 }
 
-pub(super) const SEAORM: Dep = nest_rs(&["seaorm", "http"]);
-// `#[expose]` and `#[wire_enum]` are `nest_rs::seaorm`'s own decorators: an
-// entity needs `seaorm` alone, and no `http` until a controller serves it.
-pub(super) const RESOURCE: Dep = nest_rs(&["seaorm"]);
+// `#[expose]`, `#[wire_enum]` and `connect_from_env` are `nest_rs::seaorm`'s:
+// an entity and a migration need `seaorm` alone, and no `http` until a
+// controller serves it, which `HTTP` or `AUTHZ` brings.
+pub(super) const SEAORM: Dep = nest_rs(&["seaorm"]);
+pub(super) const HTTP: Dep = nest_rs(&["http"]);
 pub(super) const GRAPHQL: Dep = nest_rs(&["graphql"]);
 pub(super) const WS: Dep = nest_rs(&["ws"]);
 pub(super) const SCHEDULE: Dep = nest_rs(&["schedule"]);
@@ -96,21 +97,21 @@ const SEA_ORM_MIGRATION: Dep = Dep {
     features: &[],
 };
 
-/// The crates a resource port (DB-backed CRUD + HTTP) needs; `authz` because
-/// `#[crud]` declares its posture through `Authorize<…>`.
+/// The crates a resource port (DB-backed CRUD + HTTP) needs; `authz`, with the
+/// `http` it carries, because `#[crud]` writes an `#[authorize]` on every route.
 pub(super) fn resource_deps() -> Vec<&'static Dep> {
-    vec![&SEAORM, &RESOURCE, &AUTHZ, &SEA_ORM, &SERDE]
+    vec![&SEAORM, &AUTHZ, &SEA_ORM, &SERDE]
 }
 
 /// The crates one `#[expose]`d entity needs — [`resource_deps`] without `authz`.
 pub(super) fn entity_deps() -> Vec<&'static Dep> {
-    vec![&SEAORM, &RESOURCE, &SEA_ORM, &SERDE]
+    vec![&SEAORM, &SEA_ORM, &SERDE]
 }
 
 /// The crates the authn/authz adapter (`g auth`) needs.
 pub(super) fn auth_deps() -> Vec<&'static Dep> {
-    // `RESOURCE` for `#[wire_enum]` on `Role`.
-    vec![&AUTHN, &AUTHZ, &RESOURCE, &SERDE, &UUID]
+    // `SEAORM` for `#[wire_enum]` on `Role`.
+    vec![&AUTHN, &AUTHZ, &SEAORM, &SERDE, &UUID]
 }
 
 /// The crates the `migrations` + `seed` bootstrap crates need — the union of
@@ -123,7 +124,7 @@ pub(super) fn migrations_deps() -> Vec<&'static Dep> {
 /// The crates an adapter for `transport` needs on top of the port.
 pub(super) fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
     match transport {
-        Transport::Http => vec![],
+        Transport::Http => vec![&HTTP],
         Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL],
         Transport::Ws => vec![&WS, &TRACING],
         // `SERDE`: the payload carries plain derives, not `#[input]`, whose
@@ -151,7 +152,7 @@ pub(super) fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
 /// async-graphql object through `nest_rs::seaorm`, which compiles that half
 /// only under the umbrella's `graphql` feature.
 pub(super) fn graphql_port_deps() -> Vec<&'static Dep> {
-    vec![&RESOURCE, &GRAPHQL]
+    vec![&SEAORM, &GRAPHQL]
 }
 
 /// Edit the root manifest: add any missing `[workspace.dependencies]` entries.
@@ -262,10 +263,13 @@ mod tests {
     #[test]
     fn ensures_features_dep_with_features() {
         let src = "[dependencies]\nanyhow.workspace = true\n";
-        let out = ensure_features_deps(vec![&SEAORM])(src).expect("adds dep");
+        let out = ensure_features_deps(vec![&AUTHZ])(src).expect("adds dep");
         assert!(out.contains("nest-rs"));
         assert!(out.contains("workspace = true"));
-        assert!(out.contains("\"http\""));
+        assert!(
+            out.contains("\"authz\"") && out.contains("\"http\""),
+            "{out}"
+        );
     }
 
     // `g graphql` on a workspace already depending on `nest-rs`: only its feature
@@ -339,6 +343,48 @@ mod tests {
                         transport.folder(),
                     );
                 }
+            }
+        }
+    }
+
+    /// Every umbrella module a skeleton over a `g feature` port names is a
+    /// feature its generator turns on, since a headless workspace
+    /// (`default-features = false`) enables nothing else: `nest_rs::<module>`
+    /// is gated on the feature of that name, which a `redis-<port>` binding
+    /// closes over, and `nest_rs::core` on none.
+    #[test]
+    fn a_skeleton_that_names_an_umbrella_module_turns_its_feature_on() {
+        for transport in Transport::ALL {
+            let enabled: Vec<&str> = adapter_deps(transport)
+                .iter()
+                .flat_map(|dep| dep.features.iter().copied())
+                .collect();
+            let (handler, module) =
+                crate::commands::generate::adapter::templates_for(transport, false);
+            let extra = if transport == Transport::Queue {
+                crate::templates::adapter::QUEUE_COMMAND
+            } else {
+                ""
+            };
+            let src = format!("{handler}{module}{extra}");
+            for rest in src.split("nest_rs::").skip(1) {
+                let named = rest
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .next()
+                    .unwrap_or_default();
+                if named == "core" {
+                    continue;
+                }
+                let feature = named.replace('_', "-");
+                assert!(
+                    enabled
+                        .iter()
+                        .any(|f| *f == feature || f.strip_prefix("redis-") == Some(&feature)),
+                    "the {} skeleton names `nest_rs::{named}` but `nestrs g {}` turns on \
+                     {enabled:?}, not `{feature}`: a headless workspace cannot compile it",
+                    transport.folder(),
+                    transport.folder(),
+                );
             }
         }
     }

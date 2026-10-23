@@ -445,6 +445,31 @@ fn generate_mcp_adapter_enables_the_mcp_feature() {
     );
 }
 
+/// A headless workspace (`default-features = false`) has no `http` until an
+/// HTTP adapter asks for it; the entity before it turns on `seaorm` alone.
+#[test]
+fn generate_http_adapter_enables_the_http_feature_on_a_headless_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let root_manifest = dir.path().join("Cargo.toml");
+    let headless = fs::read_to_string(&root_manifest).unwrap()
+        + "\n[workspace.dependencies]\n\
+           nest-rs = { version = \"7.0\", default-features = false, features = [\"config\"] }\n";
+    fs::write(&root_manifest, headless).unwrap();
+    let root = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", root]);
+    run_ok(dir.path(), &["g", "entity", "posts", "-p", root]);
+    run_ok(dir.path(), &["g", "http", "posts", "-p", root]);
+
+    let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
+    assert!(
+        features_cargo.contains("\"http\""),
+        "the controller imports `nest_rs::http`, which the umbrella gates on `http`: \
+         {features_cargo}",
+    );
+}
+
 /// `#[resolver]` expands to names behind the `graphql` feature, so the generator
 /// turns the *feature* on rather than adding the entry.
 #[test]

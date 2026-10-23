@@ -44,7 +44,6 @@ impl Router {
                 return Err(RouteError::Router {
                     template: address.template.as_str().to_owned(),
                     owner: address.owner.to_string(),
-                    reason: "the table holds that address twice".to_owned(),
                 });
             }
             entries.push(Entry::new(address));

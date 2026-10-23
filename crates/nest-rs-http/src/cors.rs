@@ -52,11 +52,11 @@ pub struct HttpCors {
 }
 
 /// The wildcard, as the four lists spell it.
-pub(crate) const WILDCARD: &str = "*";
+const WILDCARD: &str = "*";
 
 /// The response headers the framework sends on a route's behalf. None is
 /// CORS-safelisted, so a cross-origin client reads them only when exposed.
-pub(crate) const FRAMEWORK_SENT: [&str; 3] = ["link", "location", "retry-after"];
+const FRAMEWORK_SENT: [&str; 3] = ["link", "location", "retry-after"];
 
 /// The methods WHATWG Fetch forbids a page to send (*forbidden method*), which
 /// no preflight asks for.
@@ -88,7 +88,7 @@ fn is_forbidden(method: &str) -> bool {
 /// What a policy naming no method admits: the CORS-safelisted methods, each
 /// method `routed` names, and every method a page may send when an address
 /// answers `every_method` itself — never a forbidden one.
-pub(crate) fn admitted_by_default<'a>(
+fn admitted_by_default<'a>(
     routed: impl IntoIterator<Item = &'a Method>,
     every_method: bool,
 ) -> Vec<Method> {
@@ -106,7 +106,7 @@ pub(crate) fn admitted_by_default<'a>(
 
 /// Which check of the policy a cross-origin request failed.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum CorsRefusal {
+enum CorsRefusal {
     /// Its `Origin` is not listed.
     Origin,
     /// The method its preflight asks for is not admitted.
@@ -237,6 +237,19 @@ impl ServedCorsPolicy {
         }
     }
 
+    /// Whether a preflight asking for the method `requested` may send it; one
+    /// naming none asks for none the policy admits.
+    fn admits_method(&self, requested: Option<&HeaderValue>) -> bool {
+        requested
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<Method>().ok())
+            .is_some_and(|method| {
+                self.methods
+                    .as_ref()
+                    .is_none_or(|methods| methods.contains(&method))
+            })
+    }
+
     /// Whether a preflight asking for `requested` may send them: one of
     /// them listed is enough, the answer naming what is.
     fn admits_headers(&self, requested: Option<&HeaderValue>) -> bool {
@@ -295,18 +308,7 @@ impl<E: Endpoint> Cors<E> {
             return CorsRefusal::Origin.answer();
         }
         if req.method() == Method::OPTIONS {
-            let admitted = req
-                .headers()
-                .get(ACCESS_CONTROL_REQUEST_METHOD)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<Method>().ok())
-                .is_some_and(|method| {
-                    policy
-                        .methods
-                        .as_ref()
-                        .is_none_or(|methods| methods.contains(&method))
-                });
-            if !admitted {
+            if !policy.admits_method(req.headers().get(ACCESS_CONTROL_REQUEST_METHOD)) {
                 return CorsRefusal::Method.answer();
             }
             let requested = req.headers().get(ACCESS_CONTROL_REQUEST_HEADERS);
@@ -348,6 +350,22 @@ fn joined<'a>(values: impl Iterator<Item = &'a str>) -> HeaderValue {
     HeaderValue::try_from(joined).unwrap_or(HeaderValue::from_static(""))
 }
 
+/// Each of `values` parsed by `parse`, kept once, in the order first listed;
+/// the first that does not parse is the boot's refusal.
+fn parsed_once<T: PartialEq>(
+    values: impl IntoIterator<Item = impl AsRef<str>>,
+    parse: impl Fn(&str) -> Result<T>,
+) -> Result<Vec<T>> {
+    let mut parsed = Vec::new();
+    for value in values {
+        let value = parse(value.as_ref())?;
+        if !parsed.contains(&value) {
+            parsed.push(value);
+        }
+    }
+    Ok(parsed)
+}
+
 /// Whether a list holds the wildcard, which admits every value.
 pub(crate) fn holds_wildcard(values: &[String]) -> bool {
     values.iter().any(|value| value == WILDCARD)
@@ -355,7 +373,7 @@ pub(crate) fn holds_wildcard(values: &[String]) -> bool {
 
 /// The values a list admits one by one: none when it holds the wildcard, which
 /// admits them all.
-pub(crate) fn listed(values: &[String]) -> &[String] {
+fn listed(values: &[String]) -> &[String] {
     if holds_wildcard(values) { &[] } else { values }
 }
 
@@ -381,7 +399,7 @@ impl HttpCors {
 
     /// Refuse a method no page can send: a policy listing it would claim to
     /// admit what no browser asks for.
-    pub(crate) fn reject_forbidden_methods(&self) -> Result<()> {
+    fn reject_forbidden_methods(&self) -> Result<()> {
         if let Some(method) = self.methods.iter().find(|method| is_forbidden(method)) {
             anyhow::bail!(
                 "invalid CORS config: `{}` in `methods` is a forbidden method — WHATWG Fetch \
@@ -393,7 +411,7 @@ impl HttpCors {
     }
 
     /// Refuse a `*` that credentials turn into a literal no browser honours.
-    pub(crate) fn reject_wildcards_with_credentials(&self) -> Result<()> {
+    fn reject_wildcards_with_credentials(&self) -> Result<()> {
         if !self.credentials {
             return Ok(());
         }
@@ -418,50 +436,34 @@ impl HttpCors {
     pub(crate) fn policy(&self) -> Result<CorsPolicy> {
         self.reject_wildcards_with_credentials()?;
         self.reject_forbidden_methods()?;
-        let origins = listed(&self.origins)
-            .iter()
-            .map(|origin| {
-                HeaderValue::from_str(origin)
-                    .with_context(|| format!("invalid origin in CORS allow-list: {origin:?}"))
-            })
-            .collect::<Result<_>>()?;
+        let origins = parsed_once(listed(&self.origins), |origin| {
+            HeaderValue::from_str(origin)
+                .with_context(|| format!("invalid origin in CORS allow-list: {origin:?}"))
+        })?;
         let methods = if holds_wildcard(&self.methods) {
             Admitted::Every
         } else if self.methods.is_empty() {
             Admitted::Routed
         } else {
-            let mut methods: Vec<Method> = Vec::new();
-            for m in &self.methods {
-                let method = Method::from_bytes(m.as_bytes())
-                    .with_context(|| format!("invalid HTTP method in CORS config: `{m}`"))?;
-                if !methods.contains(&method) {
-                    methods.push(method);
-                }
-            }
-            Admitted::Listed(methods)
+            Admitted::Listed(parsed_once(&self.methods, |m| {
+                Method::from_bytes(m.as_bytes())
+                    .with_context(|| format!("invalid HTTP method in CORS config: `{m}`"))
+            })?)
         };
-        let mut headers: Vec<HeaderName> = Vec::new();
-        for h in listed(&self.headers) {
-            let header = HeaderName::from_str(h)
-                .with_context(|| format!("invalid header name in CORS allow-list: `{h}`"))?;
-            if !headers.contains(&header) {
-                headers.push(header);
-            }
-        }
-        let mut exposed: Vec<HeaderName> = Vec::new();
-        for h in &self.exposed_headers {
-            let header = HeaderName::from_str(h)
-                .with_context(|| format!("invalid header name in CORS expose-list: `{h}`"))?;
-            if !exposed.contains(&header) {
-                exposed.push(header);
-            }
-        }
-        for h in FRAMEWORK_SENT {
-            let header = HeaderName::from_static(h);
-            if !exposed.contains(&header) {
-                exposed.push(header);
-            }
-        }
+        let headers = parsed_once(listed(&self.headers), |h| {
+            HeaderName::from_str(h)
+                .with_context(|| format!("invalid header name in CORS allow-list: `{h}`"))
+        })?;
+        let exposed = parsed_once(
+            self.exposed_headers
+                .iter()
+                .map(String::as_str)
+                .chain(FRAMEWORK_SENT),
+            |h| {
+                HeaderName::from_str(h)
+                    .with_context(|| format!("invalid header name in CORS expose-list: `{h}`"))
+            },
+        )?;
         let max_age = self
             .max_age
             .map(|age| {

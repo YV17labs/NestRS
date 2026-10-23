@@ -319,9 +319,10 @@ must win.
 
 **The decoders and the codings are the crates axum and tower-http wrap, taken
 directly.** serde_urlencoded reads the query string and a form, poem's
-sentences byte for byte; multer reads a multipart body through a 4 KiB reader,
-so a part arrives in pieces as under poem; both are past the freshness bar,
-finished, without an advisory, and flagged at their pins. async-compression
+sentences byte for byte; multer reads a multipart body's frames as they
+arrive, and a part streams in pieces through its own 4 KiB reader, as under
+poem; both are past the freshness bar, finished, without an advisory, and
+flagged at their pins. async-compression
 encodes a response (brotli at its fastest level, the others at their default,
 as before) and decodes a request body its `Content-Encoding` names. Refused:
 tower-http's `CompressionLayer`, which negotiates on its own and skips a body

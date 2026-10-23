@@ -26,7 +26,7 @@ use crate::accept_encoding::{AcceptEncoding, Coding};
 use crate::body::Body;
 use crate::endpoint::Endpoint;
 use crate::error::Result;
-use crate::request::Request;
+use crate::request::{Request, essence};
 use crate::response::Response;
 use crate::vary::vary_on;
 
@@ -76,8 +76,8 @@ fn compressible(resp: &Response) -> bool {
         .headers()
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|media| media.trim().eq_ignore_ascii_case("text/event-stream"));
+        .and_then(essence)
+        .is_some_and(|media| media.is_exactly("text", "event-stream"));
     !bodiless && !partial && !event_stream && !resp.headers().contains_key(CONTENT_ENCODING)
 }
 

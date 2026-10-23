@@ -84,11 +84,8 @@ impl<'a> FromRequest<'a> for Multipart {
             multer::Error::NoMultipart => HttpError::from(MultipartError::MediaType),
             refused => malformed(refused),
         })?;
-        // Read through a reader, so a part arrives in pieces however large the
-        // frames the body arrives in.
-        let read = StreamReader::new(body.take()?.into_stream());
         Ok(Self {
-            parts: multer::Multipart::new(ReaderStream::new(read), boundary),
+            parts: multer::Multipart::new(body.take()?.into_stream(), boundary),
         })
     }
 }

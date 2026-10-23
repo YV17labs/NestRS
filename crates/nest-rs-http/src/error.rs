@@ -375,8 +375,8 @@ impl HttpError {
     /// The response this error answers, as [`answer`](Self::answer) renders
     /// it but filing nothing, and the error to keep beside it: itself, unless
     /// rendering took the ready response it held and its status is what is
-    /// left. Whoever answers last files what
-    /// the client was not told ([`withheld_behind`](Self::withheld_behind)).
+    /// left. Whoever answers last files what the client was not told
+    /// ([`withheld_behind`](Self::withheld_behind)).
     pub(crate) fn rendered_kept(self) -> (Response, HttpError) {
         match self.0.cause {
             Cause::Response(_) => {
@@ -735,12 +735,8 @@ pub(crate) enum RouteError {
     TwoFallbacks { first: String, second: String },
     /// An address the router was handed twice: the table merges every
     /// spelling of one address before it compiles, so this is a defect.
-    #[error("the router cannot mount {template:?} for {owner}: {reason}")]
-    Router {
-        template: String,
-        owner: String,
-        reason: String,
-    },
+    #[error("the router cannot mount {template:?} for {owner}: the table holds that address twice")]
+    Router { template: String, owner: String },
 }
 
 /// A path parameter whose percent-decoded bytes are not UTF-8: said with its

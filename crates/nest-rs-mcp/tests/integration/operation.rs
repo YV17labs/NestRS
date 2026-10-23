@@ -39,6 +39,7 @@ impl Guard for Recorder {
             match kind {
                 McpOperationKind::Tool => "tools/call",
                 McpOperationKind::Prompt => "prompts/get",
+                _ => "a method this test declares no router for",
             },
             "the view names the JSON-RPC method its router answers",
         );

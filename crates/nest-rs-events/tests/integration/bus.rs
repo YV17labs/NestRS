@@ -330,7 +330,7 @@ async fn a_compiled_out_listener_is_skipped_and_the_spelled_out_shapes_are_serve
     assert_eq!(SHAPED.load(Ordering::SeqCst), 3);
 
     let mut names: Vec<&str> = nest_rs_core::inventory::iter::<nest_rs_events::ListenerMethod>()
-        .map(|listener| listener.name)
+        .map(|listener| listener.name())
         .filter(|name| name.starts_with("ShapedListeners::") || name.starts_with("loop::"))
         .collect();
     names.sort_unstable();

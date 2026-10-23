@@ -163,13 +163,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
             #(#cfgs)*
             ::nest_rs_core::inventory::submit! {
-                ::nest_rs_events::ListenerMethod {
-                    origin: ::core::module_path!(),
-                    name: #qualified_name,
-                    provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
-                    declaration_index: #declaration,
-                    wire: #wire_ident,
-                }
+                ::nest_rs_events::__private::listener_method(
+                    ::core::module_path!(),
+                    #qualified_name,
+                    || ::std::any::TypeId::of::<#self_ty>(),
+                    #declaration,
+                    #wire_ident,
+                )
             }
         });
     }

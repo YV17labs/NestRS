@@ -42,6 +42,7 @@ pub mod __private {
 
     pub use crate::answer::{ListenerAnswer, answered};
     pub use crate::bus::subscribe_named;
+    pub use crate::inventory::listener_method;
 
     pub use nest_rs_database;
 }
@@ -98,7 +99,7 @@ pub mod __private {
 /// bus.emit(PointsRedeemed { user_id: 1, amount: 3 }).await;
 /// assert_eq!(ledger.balance(1), 7);
 ///
-/// let wired: Vec<_> = nest_rs_core::inventory::iter::<ListenerMethod>().map(|l| l.name).collect();
+/// let wired: Vec<_> = nest_rs_core::inventory::iter::<ListenerMethod>().map(|l| l.name()).collect();
 /// assert!(wired.contains(&"PointsHandlers::on_awarded"));
 /// # Ok(())
 /// # }

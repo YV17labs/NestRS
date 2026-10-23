@@ -35,6 +35,7 @@ pub fn current_container() -> Option<Container> {
 
 /// Which router an operation belongs to — the two roles `#[tools]` serves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum McpOperationKind {
     /// A `#[tool]` method, reached by `tools/call`.
     Tool,

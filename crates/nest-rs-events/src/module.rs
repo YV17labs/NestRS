@@ -61,8 +61,8 @@ fn report_missing_bus(
             for entry in reachable_listeners(&reachable) {
                 tracing::warn!(
                     target: crate::TARGET,
-                    listener = entry.name,
-                    origin = entry.origin,
+                    listener = entry.name(),
+                    origin = entry.origin(),
                     "{NO_BUS_REPORT}",
                 );
             }
@@ -90,9 +90,9 @@ fn wire_listeners(container: &Container) -> anyhow::Result<()> {
         (
             order
                 .as_ref()
-                .map_or(0, |o| o.rank((entry.provider_type_id)())),
-            entry.declaration_index,
-            entry.name,
+                .map_or(0, |o| o.rank(entry.provider_type_id())),
+            entry.declaration_index(),
+            entry.name(),
         )
     });
 
@@ -101,17 +101,17 @@ fn wire_listeners(container: &Container) -> anyhow::Result<()> {
             ::nest_rs_core::report_inert_host!(
                 target: crate::TARGET,
                 what: "#[on_event] method",
-                origin: entry.origin,
-                host: (entry.provider_type_id)(),
+                origin: entry.origin(),
+                host: entry.provider_type_id(),
                 container: container,
-                listener = entry.name,
+                listener = entry.name(),
             );
             continue;
         }
-        (entry.wire)(container, &bus)?;
+        entry.wire(container, &bus)?;
         tracing::debug!(
             target: crate::TARGET,
-            listener = entry.name,
+            listener = entry.name(),
             "wired event listener",
         );
     }
@@ -122,7 +122,7 @@ fn wire_listeners(container: &Container) -> anyhow::Result<()> {
 /// Whether this app would wire `entry` — shared by the no-bus report and the
 /// wiring loop so both speak of one population.
 fn is_reachable(reachable: &ReachableProviders, entry: &ListenerMethod) -> bool {
-    reachable.reaches((entry.provider_type_id)())
+    reachable.reaches(entry.provider_type_id())
 }
 
 fn reachable_listeners(

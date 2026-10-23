@@ -1,6 +1,6 @@
 # nest-rs-core
 
-Core building blocks (DI container, module trait, lifecycle, access graph) for the NestRS framework.
+Core building blocks for the NestRS framework: the DI container, the module trait, the lifecycle, the boot-time access graph, and the one pipeline every unit of work runs through, with its interceptors and exception filters.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

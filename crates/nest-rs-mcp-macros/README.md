@@ -1,6 +1,6 @@
 # nest-rs-mcp-macros
 
-Macro crate for the NestRS framework — the #[mcp] decorator macro; re-exported by nest-rs-mcp: depend on that crate, not this one.
+Macro crate for the NestRS framework — the #[mcp] and #[tools] decorator macros; re-exported by nest-rs-mcp: depend on that crate, not this one.
 
 A `proc-macro` companion crate — never added directly. Its decorators are re-exported by the surface crate, reached through the [`nest-rs`](https://crates.io/crates/nest-rs) umbrella.
 

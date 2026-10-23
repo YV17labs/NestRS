@@ -1,6 +1,6 @@
 # nest-rs-ws
 
-WebSocket gateways for NestRS: the #[gateway]/#[subscribe_message] decorators self-mount on the HTTP transport's upgrade.
+WebSocket gateways for NestRS: a #[gateway] struct and its #[messages] impl self-mount on the HTTP transport's upgrade.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

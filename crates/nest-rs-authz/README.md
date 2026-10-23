@@ -1,6 +1,6 @@
 # nest-rs-authz
 
-Ability-based authorization for NestRS: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking. Transport bindings (`http`, `graphql`, `mcp`) live behind Cargo features; the database-coupled extractors (`Bind`, `bind`) live in `nest-rs-seaorm` so the engine stays free of a data-layer dependency.
+Ability-based authorization for NestRS: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking. Transport bindings (`http`, `graphql`, `ws`, `mcp`) live behind Cargo features; the extractors that load the row they authorize (`Bind`, `bind`) live in `nest-rs-seaorm`, which owns the data layer they load through.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

@@ -12,7 +12,7 @@ categories = ["development-tools::debugging", "asynchronous"]
 
 
 [features]
-# OTLP exporter is default so a dev who sets NESTRS_OPENTELEMETRY__OTLP_ENDPOINT
+# OTLP exporter is default so a dev who sets <PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT
 # gets traces out of the box.
 #
 # There is no `http` feature, and its removal is the point: this crate used to
@@ -65,7 +65,7 @@ reqwest = { workspace = true, features = ["blocking"], optional = true }
 nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 # The collector double serves on a runtime of its own.
 tokio.workspace = true
-# `OpenTelemetryConfig::from_env` reads `NESTRS_OPENTELEMETRY__*` off the process
+# `OpenTelemetryConfig::from_env` reads `<PREFIX>_OPENTELEMETRY__*` off the process
 # env; the tests isolate it with `figment::Jail`, matching how `nest-rs-config`
 # tests its env reads.
 figment = { workspace = true, features = ["test"] }

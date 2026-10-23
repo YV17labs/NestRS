@@ -16,7 +16,7 @@ categories = ["authentication", "web-programming"]
 # is a `DynamicModule` that provides the configured `JwtService` as global infra.
 nest-rs-core.workspace = true
 # `AuthnModule` owns `AuthnConfig` (namespace `authn`), loaded from
-# `NESTRS_AUTHN__*`. The `#[config]` derive routes through
+# `<PREFIX>_AUTHN__*`. The `#[config]` derive routes through
 # `nest_rs_config::__private::validator`, so this crate declares no `validator`
 # of its own.
 # `reqwest` is `ClientTls`, what the JWK Set endpoint's certificate chains to

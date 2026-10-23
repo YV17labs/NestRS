@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Redis for nest-rs: one shared connection (RedisModule) to one Valkey server, Sentinel or a Cluster, and one binding per port over it, each a feature — the job queue on Redis Streams (RedisQueueModule, feature `queue`), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`), and each instance's readiness indicator (RedisHealthModule, feature `health`)."
+description = "Redis for NestRS: one connection per instance (RedisModule) to a Valkey server, a Sentinel deployment or a Cluster, and one binding per port over it, each a feature — the job queue on Redis Streams (RedisQueueModule, feature `queue`), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`), and each instance's readiness indicator (RedisHealthModule, feature `health`)."
 keywords = ["framework", "nestrs", "redis", "queue", "streams"]
 categories = ["asynchronous", "database"]
 

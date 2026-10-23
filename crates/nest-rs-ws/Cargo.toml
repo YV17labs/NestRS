@@ -6,14 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "WebSocket gateways for NestRS: the #[gateway]/#[subscribe_message] decorators self-mount on the HTTP transport's upgrade."
+description = "WebSocket gateways for NestRS: a #[gateway] struct and its #[messages] impl self-mount on the HTTP transport's upgrade."
 keywords = ["framework", "nestrs", "websocket", "web", "gateway"]
 categories = ["web-programming::websocket", "asynchronous"]
 
 
 [dependencies]
 nest-rs-core.workspace = true
-# `WsConfig` follows the framework dual-path config rule (`NESTRS_WS__*` env +
+# `WsConfig` follows the framework dual-path config rule (`<PREFIX>_WS__*` env +
 # pinned struct via `WsModule::for_root`) — the socket-lifetime ceiling lives here.
 nest-rs-config.workspace = true
 # The gateway self-mounts as an HttpEndpointMeta (the upgrade is an HTTP GET),

@@ -1,7 +1,8 @@
 //! The nestrs core: the IoC container, the module system, the boot-time access
-//! graph, and the application lifecycle. Every other `nest-rs-*` crate composes
-//! on these primitives; an app rarely calls into this crate beyond
-//! [`App::builder`] in `main`.
+//! graph, the application lifecycle, and the one pipeline every unit of work
+//! runs through — its [`Interceptor`] and [`ExceptionFilter`] layers included.
+//! Every other `nest-rs-*` crate composes on these primitives; an app rarely
+//! calls into this crate beyond [`App::builder`] in `main`.
 //!
 //! # The composition model
 //!

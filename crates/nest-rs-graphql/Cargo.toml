@@ -20,7 +20,7 @@ nest-rs-graphql-macros.workspace = true
 # operation runs bare.
 nest-rs-database.workspace = true
 # `GraphqlModule` owns its `#[config]` `GraphqlConfig` (namespace `graphql`),
-# loaded from `NESTRS_GRAPHQL__*`; `validator` backs its `#[validate]` derive.
+# loaded from `<PREFIX>_GRAPHQL__*`; `validator` backs its `#[validate]` derive.
 nest-rs-config.workspace = true
 # The `/graphql` endpoint round-trips operation variables through JSON to run
 # the global pipes over them (`ArgumentKind::Variables`).

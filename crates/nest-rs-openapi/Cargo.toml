@@ -14,7 +14,7 @@ categories = ["web-programming::http-server"]
 [dependencies]
 nest-rs-core.workspace = true
 # `OpenApiModule` owns its `#[config]` `OpenApiConfig` (namespace `openapi`),
-# loaded from `NESTRS_OPENAPI__*`; serde backs its derives.
+# loaded from `<PREFIX>_OPENAPI__*`; serde backs its derives.
 nest-rs-config.workspace = true
 serde.workspace = true
 # OpenApiModule self-mounts over HTTP via HttpEndpointMeta and reads the
@@ -43,7 +43,7 @@ nest-rs-guards = { path = "../nest-rs-guards" }
 # The framework guards whose declared statuses a route's document lists.
 nest-rs-authn = { path = "../nest-rs-authn" }
 nest-rs-throttler = { path = "../nest-rs-throttler" }
-# `figment::Jail` isolates `NESTRS_ENV` for the one config branch that reads the
+# `figment::Jail` isolates `<PREFIX>_ENV` for the one config branch that reads the
 # *process* environment rather than a `ConfigService`.
 figment = { workspace = true, features = ["test"] }
 

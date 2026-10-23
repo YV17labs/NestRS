@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Core building blocks (DI container, module trait, lifecycle, access graph) for the NestRS framework."
+description = "Core building blocks for the NestRS framework: the DI container, the module trait, the lifecycle, the boot-time access graph, and the one pipeline every unit of work runs through, with its interceptors and exception filters."
 keywords = ["framework", "nestrs", "di", "dependency-injection", "ioc"]
 categories = ["rust-patterns", "asynchronous"]
 

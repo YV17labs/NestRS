@@ -16,7 +16,7 @@ categories = ["authentication", "web-programming"]
 # `DynamicModule` that queues it.
 nest-rs-core.workspace = true
 # `OAuthClientModule` owns `OAuthClientConfig` (namespace `oauth__client`), loaded from
-# `NESTRS_OAUTH__CLIENT__*`; `validator` backs this crate's own `Validate` impls.
+# `<PREFIX>_OAUTH__CLIENT__*`; `validator` backs this crate's own `Validate` impls.
 # `reqwest` is `ClientTls`, what the provider's certificate must chain to and
 # the certificate presented to it, converted for the client calling it.
 nest-rs-config = { workspace = true, features = ["reqwest"] }

@@ -13,8 +13,8 @@ categories = ["authentication", "web-programming"]
 
 [dependencies]
 nest-rs-core.workspace = true
-# `ProtectedResourceModule` owns `ProtectedResourceConfig` (namespace
-# `oauth__resource`), loaded from `NESTRS_OAUTH__RESOURCE__*`. The `#[config]`
+# `OAuthResourceModule` owns `OAuthResourceConfig` (namespace
+# `oauth__resource`), loaded from `<PREFIX>_OAUTH__RESOURCE__*`. The `#[config]`
 # derive routes through `nest_rs_config::__private::validator`, so no
 # `validator` here.
 nest-rs-config.workspace = true

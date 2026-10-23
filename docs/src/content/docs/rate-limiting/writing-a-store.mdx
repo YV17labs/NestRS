@@ -1,0 +1,209 @@
+---
+title: Writing a rate-limit store
+description: "Count the throttler's hits in a store of your own: the ThrottlerStore contract, its binding, the net it answers under, and why its failure always denies."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The throttler's counter sits behind a `ThrottlerStore`. The port keeps the
+policy — which limit a unit runs under, whose bucket a hit falls in, what a
+failure means — and a store **counts and nothing else**. At the end of this
+page your store counts every edge's hits, shared across replicas, and refuses
+the caller whenever it cannot count. Every excerpt is `nest-rs-redis`'s
+store or the throttler's own suite, compiled and run in the framework's
+tests.
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --no-default-features --features throttler
+cargo add nest-rs --dev --no-default-features --features throttler,testing
+```
+
+Your crate is `nestrs-<storage>`, depending on the umbrella alone. The
+`throttler` capability brings `http` with it, so your tests run your store
+under the guard on a request with no feature added. The
+[naming rule](/semver/#naming-a-package) roots its target, its keys and its
+settings at that crate.
+
+## The contract
+
+`hit` counts one hit for a bucket under a limit, and answers whether it is
+allowed and, when it is not, how long until the window resets — the
+`Retry-After` the guard sends:
+
+```rust title="from nest-rs-redis's throttler store, abridged"
+#[async_trait]
+impl<I: Instance> ThrottlerStore for RedisThrottler<I> {
+    async fn hit(&self, key: &str, limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+        // Redis refuses an expiry whose instant overflows its `i64` milliseconds,
+        // which `Throttle::new` lets a window reach.
+        let window_ms = crate::millis::millis(limit.window());
+        let (count, ttl_ms) = self
+            .run(key, window_ms)
+            .await
+            .map_err(ThrottlerStoreError::new)?;
+        // Denied when the count has passed the limit — identical rule to the
+        // in-memory store (`count > limit.limit()`).
+        if count <= i64::from(limit.limit()) {
+            return Ok(Decision::allowed());
+        }
+        // …
+        Ok(Decision::denied(retry_after))
+    }
+
+    fn name(&self) -> &'static str {
+        store_name::<I>()
+    }
+}
+```
+
+The count and its window move as one step — Redis's is one Lua script, so two
+replicas never both read a count and both write it. `name` is what the guard
+reports your store as, your type's name by default.
+
+**What you are handed.** `in_process` defaults to `false`: a store whose
+counters leave the process is handed each bucket's subject as a pseudonym, an
+HMAC under `<PREFIX>_THROTTLER__PSEUDONYM_KEY`, and the boot refuses it without
+that key — a client's address or identity never reaches your storage. A store
+whose counters never leave the process returns `true` and is handed each
+subject as it is. Who a hit belongs to is the transport's answer
+(`<PREFIX>_HTTP__TRUSTED_PROXIES` among it), never the store's, so the trait
+carries no proxy setting.
+
+<Aside type="note">
+**Fixed-window by design.** `Throttle { limit, window }` maps one-to-one onto
+a counter plus a TTL — the shape every distributed store implements cheaply.
+Sliding-window and token-bucket algorithms need per-key state the trait does
+not carry; implement them in a crate of your own, with their own store type.
+</Aside>
+
+## The binding
+
+Your binding is a bare module that **declares** your store as the
+`dyn ThrottlerStore`, carrying the port's `BACKEND_REMEDY`: it supersedes the
+in-process default wherever it falls in `imports`, and a second vendor's
+contests it by name:
+
+```rust title="from nest-rs-redis's throttler binding, abridged"
+impl<I: Instance> Module for RedisThrottlerModule<I> {
+    // …
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        // Declared: it supersedes the port's in-memory default, and a second
+        // vendor binding contests it by name (`BACKEND_REMEDY`).
+        RedisConnection::<I>::netted(builder, "the rate limiter", nest_rs_throttler::HIT_TIMEOUT)
+            .provide_declared_factory_after::<Arc<dyn ThrottlerStore>, (RedisConnection<I>,), _, _>(
+                nest_rs_throttler::BACKEND_REMEDY,
+                |container| async move {
+                    let conn = RedisConnection::<I>::of(&container, "RedisThrottlerModule")?;
+                    Ok(Arc::new(RedisThrottler::new(conn)) as Arc<dyn ThrottlerStore>)
+                },
+            )
+    }
+}
+```
+
+The app imports it beside `ThrottlerModule::for_root`, which keeps the policy
+(`<PREFIX>_THROTTLER__*`) and the `ThrottlerGuard`, unchanged by the swap.
+
+## Budget and net
+
+The guard waits `HIT_TIMEOUT` — 18 seconds — on each `hit`, its net, which the
+binding declares over the connection with `netted`, beside the connection's
+budget; the boot refuses a budget at or past it. The net sits below the HTTP
+edge's request timeout (20 s), so a hung store reads as the same `429` on HTTP
+as on the edges no request timeout covers. Bound each round trip yourself,
+well inside it, so an outage reaches the guard as your store's own error.
+
+## When the backend fails
+
+**The guard alone decides what a store's failure means, and it fails
+closed.** Return your client's error as `ThrottlerStoreError::new(e)` rather
+than choosing an answer, and log nothing yourself: a store answering
+`allowed` on its own outage would open the limiter exactly when its backend is
+in trouble. An `Err`, a `hit` still silent at `HIT_TIMEOUT` and a `hit` that
+panics each refuse the caller for the whole window, on every edge, and the
+guard files one line on `nest_rs::throttler` naming the `transport` and your
+`store`, never the key:
+
+| The store | The guard's line |
+|---|---|
+| answered `Err` | `throttler store failed; denying (fail-closed)`, `warn`, with the `error` chain |
+| was silent past `HIT_TIMEOUT` | `throttler store did not answer within the guard's timeout; denying (fail-closed)`, `warn`, with `waited_ms` |
+| panicked | `throttler store panicked; denying (fail-closed)`, `error`, with the `panic` |
+
+## TLS
+
+A store over a connection another module opens — Redis's, over
+`RedisModule`'s — inherits its TLS. A store whose crate opens its own client
+reads `nest_rs::config::ClientTls` under its namespace, as the
+[queue driver page](/queue/writing-a-driver/#tls) shows.
+
+## Proof at boot
+
+The same split holds: `RedisModule` proves the connection the store counts
+over before the app serves. A client your crate opens is proved through
+`nest_rs::core::prove` — see the [queue driver page](/queue/writing-a-driver/#proof-at-boot).
+
+## Health
+
+The connection's readiness check belongs to the module that opens it:
+`RedisHealthModule` for Redis, an `IndicatorEntry` keyed `nestrs_<storage>`
+for a client of your crate's —
+[an indicator a module attaches](/health/indicators/#an-indicator-a-module-attaches).
+
+## Test it
+
+The throttler's own suite binds its test stores the way a store's module
+does, and proves each failure is refused:
+
+```rust title="from nest-rs-throttler's suite, abridged"
+#[async_trait]
+impl ThrottlerStore for FailingStore {
+    async fn hit(&self, _key: &str, _limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+        Err(ThrottlerStoreError::new(std::io::Error::other(
+            STORE_FAILURE,
+        )))
+    }
+}
+
+/// Binds `S` the way a store's own module does: a declared factory carrying the
+/// port's remedy.
+struct StoreModule<S>(std::marker::PhantomData<S>);
+
+impl<S: ThrottlerStore + Default> Module for StoreModule<S> {
+    // …
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder
+            .provide_declared_factory::<Arc<dyn ThrottlerStore>, _, _>(BACKEND_REMEDY, |_| async {
+                Ok(Arc::new(S::default()) as Arc<dyn ThrottlerStore>)
+            })
+    }
+}
+```
+
+Run your store the same way under the guard: `tests/integration/guard.rs`'s
+`a_store_that_fails_is_refused_for_the_window_and_said_once` and its
+neighbours for a panic and a silence, and `tests/integration/module.rs`'s
+`a_store_outside_the_process_boots_only_with_a_key`. Against your live
+backend, prove two hits from two app instances share one bucket, and that a
+window resets when its time is up. No behaviour kit ships for stores yet, so
+these cases are yours to write.
+
+## What fails if you get it wrong
+
+- **A store answering `allowed` when it cannot count** turns an outage of its
+  backend into no rate limit at all.
+- **A store logging the key** writes the caller's address or identity — or
+  its pseudonym — into your logs; the guard's line already names the store.
+- **A count and its expiry set in two steps** let a window lose its expiry
+  between them, and that bucket then never resets.
+- **A second store binding** fails the boot, its message ending in
+  `BACKEND_REMEDY`.
+
+## Going further
+
+- [Rate limiting](/rate-limiting/) — the guard, its buckets and the Redis
+  store an app imports.
+- [Extending NestRS](/fundamentals/extending/) — every contract a driver's crate may
+  implement.

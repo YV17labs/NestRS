@@ -1,0 +1,188 @@
+---
+title: Writing an occurrence lock
+description: "Claim a scheduled job's occurrences in a store of your own: the OccurrenceLock contract, its binding, its net, and why a failure skips the occurrence."
+---
+
+A job declared `replicas = "one"` fires each occurrence on the one replica
+whose claim on it succeeds, and the claim goes through an `OccurrenceLock`.
+The scheduler keeps everything about firing — the instants, the hold, the
+token, the decision to skip — and a lock **claims atomically and nothing
+else**. At the end of this page your store claims every occurrence for one
+replica of the deployment, and a failure of it never fires an occurrence
+twice. Every excerpt is `nest-rs-redis`'s lock or the schedule's own suite,
+compiled and run in the framework's tests.
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --no-default-features --features schedule
+cargo add nest-rs --dev --no-default-features --features schedule,testing
+```
+
+Your crate is `nestrs-<storage>`, depending on the umbrella alone; the
+[naming rule](/semver/#naming-a-package) roots its target, its settings and its
+keys — `nestrs_<storage>:…` — at that crate.
+
+## The contract
+
+Two calls. `claim` takes an `Occurrence` — its `token`, the `hold` its claim
+lasts, the trace id of the `run` it would fire — and answers `Claimed` for
+exactly one of the replicas claiming one token, and `ClaimedElsewhere` for
+every other while the claim is held. `claimed` answers whether a replica holds
+the claim on a token, for the occurrences a replica overran:
+
+```rust title="from nest-rs-redis's occurrence lock, abridged"
+#[async_trait]
+impl<I: Instance> OccurrenceLock for RedisOccurrenceLock<I> {
+    async fn claim(&self, occurrence: &Occurrence) -> Result<OccurrenceClaim, OccurrenceLockError> {
+        // `OK` when this call created the key, nil when a replica already held it;
+        // read as Redis's own reply, so an answer that is neither never fires.
+        let answer: redis::Value = redis::cmd("SET")
+            .arg(claim_key(&occurrence.token))
+            .arg(format!("{}/{}", self.holder, occurrence.run))
+            .arg("NX")
+            .arg("PX")
+            // `PX 0` is an error to Redis, and a hold is never meant to be none.
+            .arg(millis(occurrence.hold))
+            .query_async(&mut self.conn.clone())
+            .await
+            .map_err(OccurrenceLockError::new)?;
+        match answer {
+            redis::Value::Okay => Ok(OccurrenceClaim::Claimed),
+            redis::Value::Nil => Ok(OccurrenceClaim::ClaimedElsewhere),
+            other => Err(OccurrenceLockError::new(format!(
+                "the claim's `SET … NX` answered {other:?}, which is neither `OK` nor nil"
+            ))),
+        }
+    }
+    // …
+}
+```
+
+What a lock owes:
+
+- **The claim is atomic.** One step creates the claim or finds it held — a
+  `SET … NX`, a unique insert — never a read followed by a write, which two
+  replicas would both win.
+- **The token is the port's, verbatim.** Every replica computes the same token
+  for the same occurrence — the job's identity, then the instant in
+  milliseconds, `:`-separated — and your key prefixes it with your own
+  structure without parsing it, so an operator can list one crate's claims or
+  one job's.
+- **The claim expires with its hold.** The scheduler sizes the hold to
+  outlast the clock skew between replicas, and a store that keeps claims
+  forever fills; one that drops them early lets a late replica fire the
+  occurrence again.
+- **An answer that is neither is an error.** A reply your store cannot read as
+  claimed or held elsewhere fires nothing.
+- **A call may be dropped at any `.await`** — at the scheduler's net, and at
+  shutdown — so keep no state a dropped call would have had to undo.
+
+## The binding
+
+Your binding declares the lock as `Arc<dyn OccurrenceLock>`, carrying the
+port's `BACKEND_REMEDY`: a second lock binding fails the boot naming both, and
+none fails it for any reachable job declaring `replicas = "one"`:
+
+```rust title="from nest-rs-redis's schedule binding"
+fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+    // Declared, so a second lock backend contests it by name (`BACKEND_REMEDY`).
+    RedisConnection::<I>::netted(builder, "the scheduler", nest_rs_schedule::LOCK_TIMEOUT)
+        .provide_declared_factory_after::<Arc<dyn OccurrenceLock>, (RedisConnection<I>,), _, _>(
+            nest_rs_schedule::BACKEND_REMEDY,
+            |container| async move {
+                let conn = RedisConnection::<I>::of(&container, "RedisScheduleModule")?;
+                Ok(Arc::new(RedisOccurrenceLock::new(conn)) as Arc<dyn OccurrenceLock>)
+            },
+        )
+}
+```
+
+The app imports it beside `ScheduleModule` in every app that runs such a job.
+
+## Budget and net
+
+The scheduler waits on a claim until its occurrence goes stale — ten seconds
+before the claim's hold ends — and never less than `LOCK_TIMEOUT`, fifty
+seconds, its net. The binding declares it over the connection with `netted`,
+beside the connection's budget, and the boot refuses a budget at or past it:
+the scheduler would abandon a claim the store was still answering. Bound each
+command yourself, well inside it.
+
+## When the backend fails
+
+**The scheduler decides, and it fails closed: an occurrence is fired only
+when this replica is known to have claimed it.** An `Err`, a claim still
+unanswered when the occurrence goes stale or shutdown is asked for, and a
+claim that panics each skip the occurrence — at `warn`, the panic at `error` —
+and the next one is claimed as usual. Return your store's error as
+`OccurrenceLockError::new(e)` and log nothing yourself, so each skip is said
+once. Firing on an unanswered claim would fire on every replica, which is what
+the declaration exists to prevent; work that must not be lost belongs in a
+queue job the tick pushes.
+
+## TLS
+
+A lock over a connection another module opens — Redis's, over
+`RedisModule`'s — inherits its TLS. A lock whose crate opens its own client
+reads `nest_rs::config::ClientTls` under its namespace, as the
+[queue driver page](/queue/writing-a-driver/#tls) shows.
+
+## Proof at boot
+
+`RedisModule` proves the connection the lock claims over before the app
+serves. A client your crate opens is proved through `nest_rs::core::prove` —
+see the [queue driver page](/queue/writing-a-driver/#proof-at-boot).
+
+## Health
+
+The connection's readiness check belongs to the module that opens it:
+`RedisHealthModule` for Redis, an `IndicatorEntry` keyed `nestrs_<storage>`
+for a client of your crate's —
+[an indicator a module attaches](/health/indicators/#an-indicator-a-module-attaches).
+
+## Test it
+
+The schedule's own suite binds a lock the way a backend does and boots the
+scheduler over it headless, on paused time:
+
+```rust title="from nest-rs-schedule's suite, abridged"
+/// A binding as a backend writes one: a declared factory for the port, carrying
+/// the port's remedy, deduplicated like a `#[module]` expansion.
+struct RecordingLockModule;
+
+impl Module for RecordingLockModule {
+    // …
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder
+            .provide_declared_factory::<Arc<dyn OccurrenceLock>, _, _>(BACKEND_REMEDY, |_| async {
+                Ok(Arc::new(RecordingLock) as Arc<dyn OccurrenceLock>)
+            })
+    }
+}
+```
+
+`tests/integration/occurrence.rs` proves the binding's side —
+`a_job_firing_once_claims_each_occurrence_through_the_bound_lock`, a pinned
+key, a second binding and none at all. Against your live store, prove what
+only it can: two claims on one token answer `Claimed` once, a claim lapses
+with its hold, and `claimed` answers `false` after it. No behaviour kit ships
+for locks yet, so these cases are yours to write.
+
+## What fails if you get it wrong
+
+- **A claim made in two steps** lets two replicas both claim one occurrence,
+  and the job fires twice.
+- **A claim kept past its hold** fills the store; one dropped before it lets
+  a replica reaching the occurrence late fire it again.
+- **A lock answering `Claimed` when it cannot tell** fires the occurrence on
+  every replica that asked.
+- **A second lock binding** fails the boot, its message ending in
+  `BACKEND_REMEDY`.
+
+## Going further
+
+- [Firing once across replicas](/schedule/#firing-once-across-replicas) — the
+  declaration, the claim's keys and the at-most-once rule, seen from the app.
+- [Extending NestRS](/fundamentals/extending/) — every contract a driver's crate may
+  implement.

@@ -307,84 +307,12 @@ its `maxmemory`, and the next hit opens a fresh window: the client it denied get
 through. The boot cannot read the policy, so it is the deployment's to set, for
 every binding the server holds — see [Eviction](/queue/topologies/#eviction).
 
-### Writing your own
+### Your own store
 
-```rust title="crates/mythrottler/src/throttler/store.rs"
-use async_trait::async_trait;
-use nest_rs::throttler::{Decision, Throttle, ThrottlerStore, ThrottlerStoreError};
-
-pub struct MyThrottler {
-    client: MyClient,
-}
-
-#[async_trait]
-impl ThrottlerStore for MyThrottler {
-    async fn hit(&self, key: &str, limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
-        let (count, left) = self
-            .client
-            .count(key, limit.window())
-            .await
-            .map_err(ThrottlerStoreError::new)?;
-        Ok(if count <= u64::from(limit.limit()) {
-            Decision::allowed()
-        } else {
-            Decision::denied(left)
-        })
-    }
-}
-```
-
-A store counts and nothing else. Which limit a route runs under is the port's
-policy, carried by the guard, and so is what a store may keep: `in_process`
-defaults to `false`, so your store is handed pseudonyms and the boot asks for
-`<PREFIX>_THROTTLER__PSEUDONYM_KEY`, as Redis's does. A store whose counters never
-leave the process — another in-memory one — returns `true` and is handed each
-subject as it is. Your binding is a bare module that *declares*
-your store as the `dyn ThrottlerStore`
-(`provide_declared_factory_after::<Arc<dyn ThrottlerStore>, (YourConnection,), _, _>(BACKEND_REMEDY, …)`)
-so it supersedes the in-process default and contests a second vendor's by name.
-The trait is **async**, so a networked implementor awaits its round-trip
-directly — no `block_in_place` bridge occupying a runtime worker per check, and
-no panic on a current-thread runtime.
-
-**The guard alone decides what a store's failure means, and it fails
-closed.** Return your client's error as `ThrottlerStoreError` rather than
-choosing an answer, and log nothing yourself: a store answering `allowed` on its
-own outage would open the limiter exactly when its backend is in trouble. An
-`Err`, a `hit` still silent after `HIT_TIMEOUT` — 18 seconds — and a `hit` that
-panics each refuse the caller for the whole window, on every edge — `429` with
-`Retry-After`, or the edge's own error frame — and the guard files one line on
-`nest_rs::throttler` with the `transport` and the `store` (your type's name,
-from `ThrottlerStore::name`), never the key, which holds the caller's address:
-
-| The store | The guard's line |
-|---|---|
-| answered `Err` | `throttler store failed; denying (fail-closed)`, `warn`, with the `error` chain |
-| was silent past `HIT_TIMEOUT` | `throttler store did not answer within the guard's timeout; denying (fail-closed)`, `warn`, with `waited_ms` |
-| panicked | `throttler store panicked; denying (fail-closed)`, `error`, with the `panic` |
-
-Without the bound a store that never answered held the request, the GraphQL
-field, the MCP operation or the socket's message for as long — and nothing times
-out a socket's messages. It is a net, not your budget: bound each round-trip
-yourself, as the Redis store does, so an outage reaches the guard's line as your
-store's own error. The value sits above the Redis store's default budget and
-below the HTTP edge's request timeout (20 s), so a hung store reads as the same
-`429` on HTTP as on the edges no request timeout covers.
-
-There is no `trusted_proxies` on the trait, and that is deliberate: a store
-counts hits, while **who** a hit belongs to is the transport's answer
-(`nest_rs_http::ClientOrigin`, configured by `<PREFIX>_HTTP__TRUSTED_PROXIES`).
-A backend that had to be told about proxies would be a second place the same
-question is answered.
-
-<Aside type="note">
-**Fixed-window by design.** `Throttle { limit, window }` maps one-to-one onto
-a counter plus a TTL — the shape every distributed store implements cheaply,
-and the reason the Redis store is a short Lua script. Sliding-window and
-token-bucket algorithms need per-key state the trait deliberately does not carry
-(a list of timestamps, or a `(tokens, refilled_at)` pair); implement them in a
-downstream crate with their own store type.
-</Aside>
+Any store that can count a window implements `ThrottlerStore` and binds it the
+way `RedisThrottlerModule` does: the contract, its binding, the net it answers
+under and why its failure always denies are on
+[Writing a rate-limit store](/rate-limiting/writing-a-store/).
 
 ## Reference
 

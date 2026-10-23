@@ -418,7 +418,9 @@ reachable job declaring `replicas = "one"` with no lock bound fails the boot
 naming the job, and a second lock binding beside this one fails it too, naming
 the contested lock and the same remedy.
 `#[after]` refuses the key — a one-shot fires on the replica that booted, and
-there is no shared occurrence to claim.
+there is no shared occurrence to claim. Another store claims through the same
+port, `OccurrenceLock`, bound the same way — see
+[Writing an occurrence lock](/schedule/writing-a-lock/).
 
 ### How an occurrence is claimed
 

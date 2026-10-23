@@ -318,7 +318,13 @@ the backend's own bound is written on the backend. **A port owns a config
 namespace if and only if its contract requires the integrator to honour a
 config** (the throttler's does); otherwise the adapter's config takes the
 namespace its path gives it (`architecture.md`) —
-`.claude/decisions/port-config-namespace.md`.
+`.claude/decisions/port-config-namespace.md`. **Each port selected by import
+has its contract written on one driver page, in one order**: the contract,
+the binding and its `BACKEND_REMEDY`, the budget it declares under the port's
+net, what a failure of its backend becomes, TLS, the proof at boot, health,
+and the test that holds it — each excerpt lifted line for line from code the
+framework compiles, its binding or the port's suite; the docs' *Extending
+NestRS* section lists the pages.
 
 **What runs around a unit is an ordered list or a port, never a single `dyn`
 slot**: a concern wrapping every unit is a unit-stage interceptor its module

@@ -178,7 +178,7 @@ other discovered item. Its key is rooted at the package's crate, as every name
 it owns is ([Naming a package](/semver/#naming-a-package)): `nestrs_acme`, and
 `nestrs_acme:<instance>` for a named one.
 
-```rust title="src/health/module.rs"
+```rust title="crates/acme/src/health/module.rs"
 use nest_rs::core::{Container, ContainerBuilder, Module, Registering};
 use nest_rs::health::{IndicatorEntry, IndicatorFuture, ProbeKind};
 

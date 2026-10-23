@@ -323,6 +323,7 @@ export default defineConfig({
           items: [
             { autogenerate: { directory: 'queue' } },
             { label: 'Scheduling', slug: 'schedule' },
+            { label: 'Writing an occurrence lock', slug: 'schedule/writing-a-lock' },
             { label: 'Events', slug: 'events' },
             { label: 'Event dispatch', slug: 'events/dispatch' },
           ],
@@ -335,6 +336,7 @@ export default defineConfig({
             { label: 'Server-Timing', slug: 'server-timing' },
             { autogenerate: { directory: 'health' } },
             { label: 'Rate limiting', slug: 'rate-limiting' },
+            { label: 'Writing a rate-limit store', slug: 'rate-limiting/writing-a-store' },
           ],
         },
         {

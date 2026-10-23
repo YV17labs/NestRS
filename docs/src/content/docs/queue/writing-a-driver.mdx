@@ -1,6 +1,6 @@
 ---
 title: Writing a queue driver
-description: "Plug a storage into the queue port: declare the backend, file jobs, hand them to the port's worker under a lease, and prove it with the behaviour kit."
+description: "Plug a storage into the queue port: file jobs, hand them over under a lease, declare the budget the port's net holds, and prove it with the behaviour kit."
 sidebar:
   order: 8
 ---
@@ -13,14 +13,24 @@ retry budget and backoff, the trace, each method's permits, the lease's
 renewal, the drain. Its `QueueWorker` runs all of it on every backend, so a
 driver only moves records and keeps leases. At the end of this page your
 backend runs every `#[process]` method an app declares, and the port's
-behaviour kit proves it keeps the contract. You need a crate of your own,
-`nestrs-<storage>`, depending on `nest-rs` with `default-features = false` and
-the `queue` feature, and on `nest-rs` with `default-features = false`, `queue`
-and `testing` as a dev-dependency, so neither links an HTTP stack. The [naming rule](/semver/#naming-a-package) roots every name
-your driver owns at that crate.
+behaviour kit proves it keeps the contract.
 
 Every excerpt below is lifted from `nest-rs-queue`'s in-memory test backend or
 from the Redis binding, so each compiles and runs in the framework's suite.
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --no-default-features --features queue
+cargo add nest-rs --dev --no-default-features --features queue,testing
+```
+
+Your crate is `nestrs-<storage>`, and it depends on the umbrella alone, so
+neither line links an HTTP stack. The [naming rule](/semver/#naming-a-package)
+roots every name your driver owns at that crate — its target, its keys, its
+`<PREFIX>_<STORAGE>__*` settings.
+
+## The contract
 
 <Steps>
 
@@ -78,13 +88,8 @@ from the Redis binding, so each compiles and runs in the framework's suite.
 
    A backend declaring `UniquePush` makes that check first: a held envelope's own
    job holds its key, which never refuses it. A backend declaring
-   `Cancellation` implements `remove`, and `remove_unique` beside `UniquePush`. The port waits `BACKEND_TIMEOUT` — eighteen seconds — for
-   each call, then gives up on it: bound your own round trips well inside that,
-   so an outage reaches the caller as your error, with its cause. A call that
-   panics is given up on the same way — a push or a cancel answers
-   `QueueError::Panicked`, naming the queue and the call, and the port files the
-   panic once at `error` — so answer your client's failure as an error, never an
-   `unwrap`. Checkpoint: a push answers a receipt naming the job.
+   `Cancellation` implements `remove`, and `remove_unique` beside `UniquePush`.
+   Checkpoint: a push answers a receipt naming the job.
 
    The skip is also what the outbox leans on: a job pushed inside a
    transaction reaches `enqueue` from the port's relay after the commit, and a
@@ -119,12 +124,16 @@ from the Redis binding, so each compiles and runs in the framework's suite.
        }
        // …
        match disposition {
-           Disposition::Complete => { /* … */ }
+           Disposition::Complete => {
+               // …
+           }
            Disposition::Retry { after, record, .. } | Disposition::Defer { after, record, .. } => {
                refile(&mut state, record, after);
            }
            Disposition::Requeue { record, .. } => refile(&mut state, record, Duration::ZERO),
-           Disposition::DeadLetter { reason, record, .. } => { /* … */ }
+           Disposition::DeadLetter { reason, record, .. } => {
+               // …
+           }
            other => panic!("a disposition the in-memory backend was not written for: {other:?}"),
        }
        // …
@@ -142,84 +151,6 @@ from the Redis binding, so each compiles and runs in the framework's suite.
    delivery the worker never settles comes back once its lease lapses, with its
    count one higher.
 
-4. **Bind both in one module.** `<Vendor>QueueModule` binds the producer as
-   `Arc<dyn JobProducer>` and the consumer as `BoundConsumer`, each a
-   **declaration** carrying `BACKEND_REMEDY`, so a second backend imported beside
-   yours fails the boot naming both:
-
-   ```rust title="from nest-rs-redis's queue binding, abridged"
-   builder
-       .provide_declared_factory_after::<Arc<dyn JobProducer>, (RedisQueueProducer,), _, _>(
-           BACKEND_REMEDY,
-           |container| async move {
-               // …
-           },
-       )
-       .provide_declared_factory_after::<BoundConsumer, (RedisConnection, RedisQueueConfig), _, _>(
-           BACKEND_REMEDY,
-           |container| async move {
-               // …
-               Ok(BoundConsumer::new(RedisQueueConsumer::new(conn, config.lease)))
-           },
-       )
-   ```
-
-   The worker renews a lease a third of the way in, so a lease no renewal fits
-   in lapses while your storage still answers: refuse it at boot with
-   `nest_rs_queue::lease_fits_renewal(lease, answer_bound)`, naming the settings
-   that lengthen the one or shorten the other.
-
-   An app running jobs imports `QueueModule::for_root(None)` beside your module;
-   one only pushing does not. Checkpoint: the worker app's boot logs
-   `attached module-contributed transport transport="QueueWorker"`.
-
-5. **Run the behaviour kit.** Implement `KitBackend` — an app reaching your
-   storage, the lease it holds deliveries for, and three hooks on the storage —
-   and let `queue_kit!` write one test per case:
-
-   ```rust title="from nest-rs-queue's suite, abridged"
-   impl KitBackend for MemoryKit {
-       fn app(&self) -> nest_rs_testing::TestAppBuilder {
-           let producer: Arc<dyn JobProducer> = Arc::new(self.memory.clone());
-           HeadlessApp::builder()
-               .provide(BoundConsumer::new(self.memory.consumer()))
-               .provide_dyn(producer)
-       }
-
-       fn lease(&self) -> Duration {
-           LEASE
-       }
-
-       async fn purge(&self, queue: &QueueName) -> anyhow::Result<()> {
-           // …
-       }
-
-       async fn lapse(&self, queue: &QueueName) -> anyhow::Result<()> {
-           // …
-       }
-
-       async fn take(&self, queue: &QueueName) -> anyhow::Result<()> {
-           // …
-       }
-   }
-
-   mod delaying {
-       use super::MemoryKit;
-
-       nest_rs_testing::queue_kit!(MemoryKit::delaying());
-   }
-   ```
-
-   Your crate reaches the kit through the umbrella, as
-   `nest_rs::testing::queue_kit!` and `nest_rs::testing::queue::KitBackend`;
-   `app` starts from `nest_rs::testing::HeadlessApp::builder()`, since a
-   driver's suite serves no HTTP.
-   `purge` empties a queue, `lapse` makes every lease on it lapse with its
-   holder and count unchanged, and `take` hands every delivery to another holder
-   that lapses at once — what a frozen worker meets. Checkpoint: twelve tests
-   pass, among them a worker dying mid-attempt, a lease taken under a running
-   attempt, the stall limit, the drain and an envelope enqueued twice.
-
 </Steps>
 
 <Aside type="caution">
@@ -227,6 +158,215 @@ from the Redis binding, so each compiles and runs in the framework's suite.
 no job delivers some twice — a lease that lapsed under a frozen worker, an
 acknowledgement lost — and a `#[process]` handler is idempotent.
 </Aside>
+
+## The binding
+
+`<Vendor>QueueModule` binds the producer as `Arc<dyn JobProducer>` and the
+consumer as `BoundConsumer`, each a **declaration** carrying `BACKEND_REMEDY`,
+so a second backend imported beside yours fails the boot naming both:
+
+```rust title="from nest-rs-redis's queue binding, abridged"
+fn bind(builder: ContainerBuilder) -> ContainerBuilder {
+    RedisConnection::<I>::netted(builder, "the queue port", BACKEND_TIMEOUT)
+        // …
+        .provide_declared_factory_after::<Arc<dyn JobProducer>, (RedisQueueProducer<I>,), _, _>(
+            BACKEND_REMEDY,
+            |container| async move {
+                // …
+            },
+        )
+        .provide_declared_factory_after::<
+            BoundConsumer,
+            (RedisConnection<I>, I::Of<RedisQueueConfig>),
+            _,
+            _,
+        >(BACKEND_REMEDY, |container| async move {
+            let conn = RedisConnection::<I>::of(&container, "RedisQueueModule")?;
+            // …
+            renewable::<I>(config.lease, conn.budget())?;
+            Ok(BoundConsumer::new(RedisQueueConsumer::new(conn, config.lease)))
+        })
+}
+```
+
+The worker renews a lease a third of the way in, so a lease no renewal fits
+in lapses while your storage still answers: refuse it at boot with
+`nest_rs::queue::lease_fits_renewal(lease, answer_bound)`, naming the settings
+that lengthen the one or shorten the other, as `renewable` does.
+
+An app running jobs imports `QueueModule::for_root(None)` beside your module;
+one only pushing does not. Checkpoint: the worker app's boot logs
+`attached module-contributed transport transport="QueueWorker"`.
+
+## Budget and net
+
+The port waits `BACKEND_TIMEOUT` — eighteen seconds — for each call, its net,
+then gives up on it. Your client's own budget must answer first, with its
+cause, so the binding declares both, and the boot refuses a budget at or past
+the net with `BudgetPastNetError`:
+
+```rust title="from nest-rs-redis's connection"
+pub(crate) fn netted(
+    builder: nest_rs_core::ContainerBuilder,
+    port: &'static str,
+    net: Duration,
+) -> nest_rs_core::ContainerBuilder {
+    builder
+        .provide_meta(Self::declared_budget())
+        .provide_meta(nest_rs_core::Net::over::<Self>(port, net))
+}
+```
+
+`declared_budget` reads the budget off the connection the app opened, and
+`Net::over` names the port in the refusal. Bound each round trip inside that
+budget yourself, so an outage reaches the caller as your error rather than
+as the port's.
+
+## When the backend fails
+
+The port decides, and your backend returns its error rather than logging it,
+so each failure is said once:
+
+- **A push or a cancel** answers the caller your `Err` as it is, a call silent
+  past the net as `QueueError::Unanswered`, and a call that panics as
+  `QueueError::Panicked`, naming the queue and the call — the panic filed once
+  at `error`. Answer your client's failure as an error, never an `unwrap`.
+- **A consumer call** that fails, falls silent or panics counts as one that did
+  not answer, and the worker makes it again under its backoff; a `settle` only
+  while its lease holds, and `prepare` never — it fails the boot.
+- **A checkpoint's read or save** that fails fails the attempt, retryably.
+
+## TLS
+
+A client your driver opens verifies its server, with nothing that turns
+verification off. Read what it trusts and presents as
+`nest_rs::config::ClientTls`, a field of your config read under your own
+namespace — `<PREFIX>_<STORAGE>__TLS_CA_CERT`, `__TLS_CERT` and `__TLS_KEY`,
+each with its `_FILE` spelling:
+
+```rust title="from nest-rs-redis's config, abridged"
+#[config(namespace = "redis")]
+#[derive(Clone)]
+pub struct RedisConfig {
+    // …
+    pub tls: ClientTls,
+}
+// …
+    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+        let connect_timeout = CONNECT_TIMEOUT.read(env, base.connect_timeout)?.value;
+        Ok(Self {
+            url: resolve_url(env, base.url)?,
+            connect_timeout,
+            tls: ClientTls::from_env(env, base.tls)?,
+        })
+    }
+```
+
+Before dialling, `ClientTls::check` refuses material no handshake could use,
+naming your variables and never quoting the PEM, and `refuse_beside_plaintext`
+refuses material beside a URL that does not encrypt, where it would go unused.
+Hand your client `authorities_pem()` — the system's authorities, read once,
+unless the deployment names others — and `identity_pem()` when a certificate
+is set.
+
+## Proof at boot
+
+The connection your driver opens is proved before the app serves, through
+`nest_rs::core::prove`: attempt after attempt within the connect budget, on
+`Backoff::RECONNECT`'s curve drawn from the process's own seed, so replicas
+that lost the server together do not dial it again together:
+
+```rust title="from nest-rs-redis's connection"
+pub(crate) async fn proved<T, E, F, Fut>(
+    instance: &RedisInstance,
+    budget: Duration,
+    endpoint: &str,
+    seed: u64,
+    attempt: F,
+) -> Result<T, Unproved<E, RedisError>>
+where
+    F: FnMut(Duration) -> Fut,
+    Fut: Future<Output = Result<T, Attempt<E, RedisError>>>,
+    E: std::error::Error + 'static,
+{
+    prove(
+        budget,
+        Backoff::RECONNECT,
+        seed,
+        said(instance, endpoint, budget),
+        attempt,
+    )
+    .await
+}
+```
+
+Each attempt answers `Attempt::Refused` for what every attempt would meet —
+credentials refused, a handshake `ClientTls::negotiation_failed` recognises —
+which ends the boot at once with `ClientTls::remedy`'s sentence, and
+`Attempt::Failed` for what may clear. `said` reports each retry on your own
+target, naming the server by its endpoint, never by a URL carrying a
+password.
+
+## Health
+
+Ship the connection's readiness check as a binding module attaching an
+`IndicatorEntry` keyed `nestrs_<storage>` — see
+[an indicator a module attaches](/health/indicators/#an-indicator-a-module-attaches).
+It runs on the readiness and startup probes, never on liveness: an
+orchestrator should not restart a pod because the broker blinked.
+
+## Test it
+
+Implement `KitBackend` — an app reaching your storage, the lease it holds
+deliveries for, and three hooks on the storage — and let `queue_kit!` write
+one test per case:
+
+```rust title="from nest-rs-queue's suite, abridged"
+impl KitBackend for MemoryKit {
+    const IN_PROCESS: bool = true;
+
+    fn app(&self) -> nest_rs_testing::TestAppBuilder {
+        let producer: Arc<dyn JobProducer> = Arc::new(self.memory.clone());
+        HeadlessApp::builder()
+            .provide(BoundConsumer::new(self.memory.consumer()))
+            .provide_dyn(producer)
+    }
+
+    fn lease(&self) -> Duration {
+        LEASE
+    }
+
+    async fn purge(&self, queue: &QueueName) -> anyhow::Result<()> {
+        // …
+    }
+
+    async fn lapse(&self, queue: &QueueName) -> anyhow::Result<()> {
+        // …
+    }
+
+    async fn take(&self, queue: &QueueName) -> anyhow::Result<()> {
+        // …
+    }
+}
+
+/// The kit over a backend that files a record due later.
+mod delaying {
+    use super::MemoryKit;
+
+    nest_rs_testing::queue_kit!(MemoryKit::delaying());
+}
+```
+
+Your crate reaches the kit through the umbrella, as
+`nest_rs::testing::queue_kit!` and `nest_rs::testing::queue::KitBackend`;
+`app` starts from `nest_rs::testing::HeadlessApp::builder()`, since a driver's
+suite serves no HTTP. `IN_PROCESS` is for a backend living in the test's own
+process, whose leases run on paused time; a networked one leaves it `false`.
+`purge` empties a queue, `lapse` makes every lease on it lapse with its holder
+and count unchanged, and `take` hands every delivery to another holder that
+lapses at once — what a frozen worker meets. Checkpoint: twelve tests pass,
+among them a worker dying mid-attempt, a lease taken under a running attempt,
+the stall limit, the drain and an envelope enqueued twice.
 
 ## What fails if you get it wrong
 
@@ -249,4 +389,4 @@ acknowledgement lost — and a `#[process]` handler is idempotent.
 
 - [Delivery on Redis](/queue/delivery/) — the reference driver: one Lua script per transition, each fenced.
 - [Retries and failure](/queue/retries-and-failure/) — what the port does with each outcome.
-- [Observability](/queue/observability/) — the lines the port files for every backend.
+- [Extending NestRS](/fundamentals/extending/) — every contract a driver's crate may implement.

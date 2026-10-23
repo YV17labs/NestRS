@@ -13,6 +13,8 @@ pub const ORG_ID: &str = "018f0000-0000-7000-8000-000000000000";
 
 pub const AUDIENCE: &str = "http://localhost:3003";
 
+pub const SUITES_BUCKET: &str = "nestrs-test";
+
 pub fn token(org_id: Uuid, roles: Vec<Role>, sub: Option<Uuid>) -> String {
     token_with_scopes(org_id, roles, sub, crate::authz::constants::all())
 }

@@ -406,11 +406,13 @@ can own is the database. Two settings keep a suite apart:
   nothing drains, so what a test enqueues never reaches the app you are
   running. A named instance reads a URL of its own, so it takes a line of
   its own, on another database — without one, the test profile reads the
-  URL your running app writes to:
+  URL your running app writes to. A store takes a bucket of its own the same
+  way, so what a test uploads never sits among the objects your app lists:
 
   ```bash title=".env.test"
   NESTRS_REDIS__URL=rediss://valkey-standalone:6379/1
   NESTRS_REDIS__TRANSCODES__URL=rediss://valkey-standalone:6379/8
+  NESTRS_STORAGE__URL=s3://nestrs-test
   ```
 
 - **A test that starts a worker takes a database of its own**, and seeds it

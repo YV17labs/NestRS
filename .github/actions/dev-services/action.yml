@@ -5,7 +5,7 @@ description: >-
   .devcontainer/scripts/issue-certificates.sh issues into the CERTS directory the job names,
   whose authority joins the runner's trust store as the dev container's does — with
   Valkey and RustFS reached by the names the certificate gives them, and RustFS
-  holding the bucket the development clients name.
+  holding the buckets the development clients name.
 
 runs:
   using: composite
@@ -26,6 +26,6 @@ runs:
     - name: Name the services
       shell: bash
       run: echo '127.0.0.1 valkey-standalone rustfs' | sudo tee -a /etc/hosts
-    - name: Create the bucket
+    - name: Create the buckets
       shell: bash
       run: sh .devcontainer/scripts/create-bucket.sh https://rustfs:9000

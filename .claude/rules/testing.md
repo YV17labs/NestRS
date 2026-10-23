@@ -93,7 +93,7 @@ nextest prints each test's time: compare before and after.
 ## Live backends are shared — each suite hands out its parts
 
 nextest runs each test in its own process, and both workspaces' suites run on
-one Postgres and one Redis. Isolation is declared, never hoped for.
+one Postgres, one Redis and one store. Isolation is declared, never hoped for.
 
 - **A suite that boots over SeaORM runs on an `EphemeralDatabase`**, never on
   the database `<PREFIX>_SEAORM__URL` names: it seeds the connection
@@ -115,6 +115,12 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   own Redis database is the isolation, seeded into every app of the test that
   must meet: the producer and the worker alike. A test that only pushes stays
   on the suites' shared database, where nothing drains.
+- **The demo's suites file into a bucket of their own**, which its test
+  profile names and the dev container creates beside development's, so what a
+  test uploads never sits among the objects a running app lists; the
+  features' integration suite holds both profiles to
+  `features::testing::SUITES_BUCKET`. The framework's storage suite shares
+  development's, as its Redis suite shares database 0.
 - **A test needing its own database, user or proxy seeds its config**
   (`TestApp::provide`) on the suite's URL rewritten by `url_on`, `url_as` or
   `url_at`, never a `for_root` pin nor a URL of its own: the suite's own

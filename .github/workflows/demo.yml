@@ -76,8 +76,9 @@ jobs:
     # trusting through the system's store the authority the dev-services
     # action issues into CERTS; the
     # suites push on Redis database 1, as demo/.env.test sets it. The
-    # Transcodes instance keeps that file's URL, by the name the action maps:
-    # a variable here would also outrank the development profile a suite reads.
+    # Transcodes instance and the store keep the profile's URLs, by the names
+    # the action maps: a variable here would also outrank the development
+    # profile a suite reads.
     env:
       CERTS: /tmp/nestrs-certs
       NESTRS_SEAORM__URL: postgres://nestrs:nestrs@localhost:5432/nestrs

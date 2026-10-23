@@ -68,7 +68,7 @@ async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suit
     let foreign = Uuid::now_v7();
     let foreign_job = notify(&suites, foreign).await;
     let ours = Uuid::now_v7();
-    let _ = notify(&worker, ours).await;
+    notify(&worker, ours).await;
 
     let conn = db.connection();
     let mut ran = false;

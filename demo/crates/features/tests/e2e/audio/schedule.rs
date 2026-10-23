@@ -98,14 +98,13 @@ async fn the_every_5s_audio_task_fires_and_lands_on_the_queue() {
 
     let _ = schedule_handle.shutdown().await;
     let _ = worker_handle.shutdown().await;
-    let fired = SCHEDULED_FIRES.load(Ordering::SeqCst);
     let seeded = std::mem::take(&mut *SEEDED.lock());
     for file in seeded {
         delete_transcode(schedule.container(), file).await;
     }
 
     assert!(
-        fired >= 1,
+        SCHEDULED_FIRES.load(Ordering::SeqCst) >= 1,
         "the #[every(\"5s\")] task must fire and its command must be consumed \
          from the queue within {deadline:?}",
     );

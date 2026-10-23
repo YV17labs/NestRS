@@ -781,10 +781,7 @@ mod tests {
     /// client's refusal names its namespace and its variables.
     #[test]
     fn a_composed_client_is_refused_naming_no_variable_it_never_reads() {
-        let material = |pem: &str| nest_rs_config::Material {
-            bytes: pem.as_bytes().to_vec(),
-            path: None,
-        };
+        let material = |pem: &str| nest_rs_config::Material::inline(pem.as_bytes().to_vec());
         let var = |key| nest_rs_config::var_name(OAuthClientConfig::NAMESPACE, key);
         let invalid = OAuthClientConfig {
             client_secret: String::new(),

@@ -249,8 +249,8 @@ use nest_rs::config::{Bound, DurationBounds, Floor};
 const WINDOW: DurationBounds = DurationBounds::secs(
     "WINDOW_SECS",
     "ReportsConfig::window",
-    Floor::Units(Bound { count: 1, why: "a shorter window counts nothing" }),
-    Bound { count: 3600, why: "past an hour the report is stale before it is read" },
+    Floor::Units(Bound::new(1, "a shorter window counts nothing")),
+    Bound::new(3600, "past an hour the report is stale before it is read"),
 );
 ```
 

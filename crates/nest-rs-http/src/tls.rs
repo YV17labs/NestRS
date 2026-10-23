@@ -23,18 +23,18 @@ const DEFAULT_RELOAD_SECS: u64 = 60;
 const RELOAD: DurationBounds = DurationBounds::secs(
     "TLS_RELOAD_SECS",
     "HttpTls::with_reload_secs",
-    Floor::UnitsOrOff(Bound {
-        count: 1,
-        why: "the kernel's timers and the files' own write settle are not finer than that, and \
-              a renewal is not that urgent",
-    }),
-    Bound {
-        count: 24 * 60 * 60,
-        why: "a certificate replaced on disk is served only once the next read finds it, and a \
-              replacement after a key compromise is due within a day of it (CA/Browser Forum \
-              Baseline Requirements §4.9.1.1) — a watch rarer than that serves the revoked one \
-              past it",
-    },
+    Floor::UnitsOrOff(Bound::new(
+        1,
+        "the kernel's timers and the files' own write settle are not finer than that, and \
+         a renewal is not that urgent",
+    )),
+    Bound::new(
+        24 * 60 * 60,
+        "a certificate replaced on disk is served only once the next read finds it, and a \
+         replacement after a key compromise is due within a day of it (CA/Browser Forum \
+         Baseline Requirements §4.9.1.1) — a watch rarer than that serves the revoked one \
+         past it",
+    ),
 );
 
 /// Where the PEM material came from: only files are reloaded.

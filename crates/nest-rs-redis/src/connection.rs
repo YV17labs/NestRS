@@ -746,11 +746,13 @@ const _: () = {
 mod tests {
     use std::time::Instant;
 
+    use nest_rs_config::Material;
+
     use super::*;
     use crate::testing::{
-        CLIENT, SERVER, answer, config, dropping_then_refusing_listener, inline,
-        mutual_tls_listener, presenting, sentinel_listener, silent_listener, tls_listener,
-        trusting_the_authority, unnamed,
+        CLIENT, SERVER, answer, config, dropping_then_refusing_listener, mutual_tls_listener,
+        presenting, sentinel_listener, silent_listener, tls_listener, trusting_the_authority,
+        unnamed,
     };
 
     #[test]
@@ -954,7 +956,8 @@ mod tests {
             "rediss-cluster://127.0.0.1:9",
         ] {
             let mut trusting_nothing = config(url, Duration::from_secs(5));
-            trusting_nothing.tls = ClientTls::new(Some(inline("no certificate in here")), None);
+            trusting_nothing.tls =
+                ClientTls::new(Some(Material::inline("no certificate in here")), None);
             let mut mismatched = config(url, Duration::from_secs(5));
             mismatched.tls = presenting(&CLIENT.cert, &SERVER.key);
 

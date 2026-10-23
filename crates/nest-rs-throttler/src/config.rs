@@ -12,16 +12,16 @@ use crate::pseudonym::MIN_KEY_BYTES;
 const WINDOW: DurationBounds = DurationBounds::secs(
     "WINDOW_SECS",
     "ThrottlerConfig::window_secs",
-    Floor::Units(Bound {
-        count: 1,
-        why: "a zero window resets every bucket on every hit, so the count never passes one and \
-              every request is allowed at any limit",
-    }),
-    Bound {
-        count: 24 * 60 * 60,
-        why: "a window past a day is a quota rather than a rate, and a quota kept in a store \
-              that a restart or an eviction forgets is not one — count it in the database",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "a zero window resets every bucket on every hit, so the count never passes one and \
+         every request is allowed at any limit",
+    )),
+    Bound::new(
+        24 * 60 * 60,
+        "a window past a day is a quota rather than a rate, and a quota kept in a store \
+         that a restart or an eviction forgets is not one — count it in the database",
+    ),
 );
 
 /// The key the pseudonym key is read from, beside its `_FILE` spelling.

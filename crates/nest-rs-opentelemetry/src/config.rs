@@ -18,17 +18,17 @@ pub(crate) const NAMESPACE: &str = "opentelemetry";
 pub(crate) const METRIC_INTERVAL: DurationBounds = DurationBounds::secs(
     "METRIC_INTERVAL_SECS",
     "OpenTelemetryConfig::metric_interval",
-    Floor::Units(Bound {
-        count: 1,
-        why: "a periodic reader on a shorter period exports in a tight loop, which costs the \
-              collector more than any metric is worth",
-    }),
-    Bound {
-        count: 60 * 60,
-        why: "a metric exported less often than hourly reaches the collector after the \
-              dashboards and alerts that read it have moved on, and the reader holds an hour of \
-              state in memory meanwhile",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "a periodic reader on a shorter period exports in a tight loop, which costs the \
+         collector more than any metric is worth",
+    )),
+    Bound::new(
+        60 * 60,
+        "a metric exported less often than hourly reaches the collector after the \
+         dashboards and alerts that read it have moved on, and the reader holds an hour of \
+         state in memory meanwhile",
+    ),
 );
 
 /// Configuration for [`crate::OpenTelemetry::init`].

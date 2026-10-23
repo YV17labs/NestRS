@@ -16,17 +16,17 @@ const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 20;
 const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds::secs(
     "SHUTDOWN_TIMEOUT_SECS",
     "QueueConfig::shutdown_timeout",
-    Floor::Units(Bound {
-        count: 1,
-        why: "the drain keeps up to half its window to hand interrupted jobs back, and with \
-              none a job running at shutdown waits out its lease before another worker runs it",
-    }),
-    Bound {
-        count: 60 * 60,
-        why: "a stopping replica holds its rollout for as long as it drains, and a job still \
-              running an hour into a shutdown is one to hand back and resume from its \
-              checkpoint, not to wait out",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "the drain keeps up to half its window to hand interrupted jobs back, and with \
+         none a job running at shutdown waits out its lease before another worker runs it",
+    )),
+    Bound::new(
+        60 * 60,
+        "a stopping replica holds its rollout for as long as it drains, and a job still \
+         running an hour into a shutdown is one to hand back and resume from its \
+         checkpoint, not to wait out",
+    ),
 );
 
 /// The queue worker's settings, set through `<PREFIX>_QUEUE__*` or pinned

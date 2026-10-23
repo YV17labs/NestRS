@@ -1080,10 +1080,7 @@ mod tests {
     #[tokio::test]
     async fn a_client_built_in_code_refuses_what_the_boot_refuses_naming_the_variables() {
         let issued = nest_rs_testing::TestAuthority::new().client("nestrs-test-client");
-        let inline = |pem: &str| nest_rs_config::Material {
-            bytes: pem.as_bytes().to_vec(),
-            path: None,
-        };
+        let inline = |pem: &str| nest_rs_config::Material::inline(pem.as_bytes().to_vec());
         for (config, names) in [
             (
                 StorageConfig {

@@ -6,7 +6,7 @@ error[E0080]: evaluation panicked: a `DurationBounds::millis` key ends in `_MS`,
  7 | |     "WINDOW_SECS",
  8 | |     "FixtureConfig::window",
  9 | |     Floor::AboveZero("a zero window counts nothing"),
-10 | |     Bound { count: 60_000, why: "past a minute it is a unit slip" },
+10 | |     Bound::new(60_000, "past a minute it is a unit slip"),
 11 | | );
    | |_^ evaluation of `WINDOW` failed inside this call
    |

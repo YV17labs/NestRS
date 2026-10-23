@@ -8,7 +8,7 @@ const DEADLINE: DurationBounds = DurationBounds::secs(
     "DEADLINE_MS",
     "FixtureConfig::deadline",
     Floor::AboveZero("a zero deadline answers nothing"),
-    Bound { count: 60, why: "past a minute it is a unit slip" },
+    Bound::new(60, "past a minute it is a unit slip"),
 );
 
 fn main() {

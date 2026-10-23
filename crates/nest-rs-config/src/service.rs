@@ -1213,10 +1213,7 @@ mod tests {
             "WINDOW_SECS",
             "FixtureConfig::window",
             crate::Floor::AboveZero("why"),
-            crate::Bound {
-                count: 60,
-                why: "why",
-            },
+            crate::Bound::new(60, "why"),
         );
         assert_eq!(
             WINDOW

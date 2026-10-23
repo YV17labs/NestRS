@@ -15,12 +15,23 @@ pub(crate) const MAX_MATERIAL_BYTES: u64 = 1024 * 1024;
 /// came from when the deployment named a path — what a reloading consumer
 /// watches. `Debug` shows the path and the length, never the bytes.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct Material {
     /// The material, as read.
     pub bytes: Vec<u8>,
     /// The file the bytes were read from, as the variable named it with
     /// surrounding whitespace trimmed; `None` when they were inline.
     pub path: Option<PathBuf>,
+}
+
+impl Material {
+    /// `bytes` given inline, as a value pinned in code is: read from no file.
+    pub fn inline(bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            bytes: bytes.into(),
+            path: None,
+        }
+    }
 }
 
 impl fmt::Debug for Material {

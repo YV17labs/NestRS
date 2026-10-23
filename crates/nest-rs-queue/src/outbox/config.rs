@@ -16,16 +16,16 @@ use crate::ENQUEUE_BATCH;
 const SWEEP_INTERVAL: DurationBounds = DurationBounds::millis(
     "SWEEP_INTERVAL_MS",
     "OutboxConfig::sweep_interval",
-    Floor::Units(Bound {
-        count: 100,
-        why: "a shorter sweep queries the store several times a second for records a commit \
-              already wakes the relay for",
-    }),
-    Bound {
-        count: 60_000,
-        why: "a record a commit's wake-up missed, or one a failed pass rescheduled, waits a \
-              whole sweep to be filed",
-    },
+    Floor::Units(Bound::new(
+        100,
+        "a shorter sweep queries the store several times a second for records a commit \
+         already wakes the relay for",
+    )),
+    Bound::new(
+        60_000,
+        "a record a commit's wake-up missed, or one a failed pass rescheduled, waits a \
+         whole sweep to be filed",
+    ),
 );
 
 /// When records waiting unfiled are an outage the relay says at `error`, its
@@ -33,15 +33,15 @@ const SWEEP_INTERVAL: DurationBounds = DurationBounds::millis(
 const STALL_WARNING: DurationBounds = DurationBounds::secs(
     "STALL_WARNING_SECS",
     "OutboxConfig::stall_warning",
-    Floor::Units(Bound {
-        count: 1,
-        why: "a record waits at least one pass, so a shorter warning fires on every write",
-    }),
-    Bound {
-        count: 24 * 60 * 60,
-        why: "a backend refusing every job for a day has stopped serving; the table grows \
-              until it is said",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "a record waits at least one pass, so a shorter warning fires on every write",
+    )),
+    Bound::new(
+        24 * 60 * 60,
+        "a backend refusing every job for a day has stopped serving; the table grows \
+         until it is said",
+    ),
 );
 
 /// The batch's variable.

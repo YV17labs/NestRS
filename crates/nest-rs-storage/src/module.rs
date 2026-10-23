@@ -179,10 +179,7 @@ mod tests {
     /// A client certificate pinned in code, which object_store cannot present.
     fn presenting_storage() -> StorageSetup {
         let issued = nest_rs_testing::TestAuthority::new().client("nestrs-test-client");
-        let inline = |pem: String| nest_rs_config::Material {
-            bytes: pem.into_bytes(),
-            path: None,
-        };
+        let inline = |pem: String| nest_rs_config::Material::inline(pem.into_bytes());
         StorageModule::for_root(StorageConfig {
             url: "s3://bucket".into(),
             access_key: "AKIAPINNED".into(),

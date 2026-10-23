@@ -13,17 +13,17 @@ use sea_orm::sqlx::postgres::{PgConnectOptions, PgSslMode};
 pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     "CONNECT_TIMEOUT_SECS",
     "SeaOrmConfig::connect_timeout_secs",
-    Floor::Units(Bound {
-        count: 1,
-        why: "the pool gives up on a zero budget before any connection opens, so the boot fails \
-              as a pool timeout against a database that answers",
-    }),
-    Bound {
-        count: 60 * 60,
-        why: "the budget is how long every query waits for a pooled connection, and past an hour \
-              the request that asked for one has long been abandoned — a pool that cannot hand \
-              one out sooner is down, not busy",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "the pool gives up on a zero budget before any connection opens, so the boot fails \
+         as a pool timeout against a database that answers",
+    )),
+    Bound::new(
+        60 * 60,
+        "the budget is how long every query waits for a pooled connection, and past an hour \
+         the request that asked for one has long been abandoned — a pool that cannot hand \
+         one out sooner is down, not busy",
+    ),
 );
 
 /// The statement bound's range: Postgres cancels a statement past it
@@ -31,16 +31,16 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
 pub(crate) const STATEMENT_TIMEOUT: DurationBounds = DurationBounds::secs(
     "STATEMENT_TIMEOUT_SECS",
     "SeaOrmConfig::statement_timeout_secs",
-    Floor::Units(Bound {
-        count: 1,
-        why: "Postgres cancels every statement that takes longer, and under a second it cancels \
-              ones that only had to wait their turn",
-    }),
-    Bound {
-        count: 60 * 60,
-        why: "the bound is how long one statement holds its connection and its locks, and a \
-              statement running an hour belongs to an operator's tool, not to the app",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "Postgres cancels every statement that takes longer, and under a second it cancels \
+         ones that only had to wait their turn",
+    )),
+    Bound::new(
+        60 * 60,
+        "the bound is how long one statement holds its connection and its locks, and a \
+         statement running an hour belongs to an operator's tool, not to the app",
+    ),
 );
 
 /// The statement bound when none is set: under the authentication guard's

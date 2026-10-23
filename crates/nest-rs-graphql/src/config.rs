@@ -30,14 +30,14 @@ const DEFAULT_CONNECTION_INIT_TIMEOUT_SECS: u64 = 3;
 const CONNECTION_INIT_TIMEOUT: DurationBounds = DurationBounds::secs(
     "CONNECTION_INIT_TIMEOUT_SECS",
     "GraphqlConfig::connection_init_timeout",
-    Floor::Units(Bound {
-        count: 1,
-        why: "a client on a slow link cannot finish its first message below it",
-    }),
-    Bound {
-        count: 60,
-        why: "an idle socket held longer is the exhaustion this bound exists for",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "a client on a slow link cannot finish its first message below it",
+    )),
+    Bound::new(
+        60,
+        "an idle socket held longer is the exhaustion this bound exists for",
+    ),
 );
 
 /// A hundred operations at once on one socket.

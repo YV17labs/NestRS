@@ -21,30 +21,24 @@ const DEFAULT_PROBE_DEADLINE_MS: u64 = 900;
 const NOT_ZERO: &str = "an unbounded probe outlives the kubelet's deadline and a zero one fails \
                         every probe on the first poll, so neither is a ceiling";
 
-const PAST_A_MINUTE: Bound = Bound {
-    count: 60_000,
-    why: "a probe answered later than a minute has been scored a failure already — the kubelet \
-          sends the next one every `periodSeconds`, ten by default — so a ceiling that long \
-          bounds nothing an orchestrator waits for",
-};
+const PAST_A_MINUTE: Bound = Bound::new(
+    60_000,
+    "a probe answered later than a minute has been scored a failure already — the kubelet \
+     sends the next one every `periodSeconds`, ten by default — so a ceiling that long \
+     bounds nothing an orchestrator waits for",
+);
 
 const INDICATOR_TIMEOUT: DurationBounds = DurationBounds::millis(
     "INDICATOR_TIMEOUT_MS",
     "HealthConfig::indicator_timeout_ms",
-    Floor::Units(Bound {
-        count: 1,
-        why: NOT_ZERO,
-    }),
+    Floor::Units(Bound::new(1, NOT_ZERO)),
     PAST_A_MINUTE,
 );
 
 const PROBE_DEADLINE: DurationBounds = DurationBounds::millis(
     "PROBE_DEADLINE_MS",
     "HealthConfig::probe_deadline_ms",
-    Floor::Units(Bound {
-        count: 1,
-        why: NOT_ZERO,
-    }),
+    Floor::Units(Bound::new(1, NOT_ZERO)),
     PAST_A_MINUTE,
 );
 

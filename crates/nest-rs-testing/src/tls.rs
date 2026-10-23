@@ -78,13 +78,7 @@ impl TestAuthority {
     /// The TLS settings of a framework client trusting this authority alone,
     /// as `TLS_CA_CERT` naming its [`pem`](Self::pem) sets them.
     pub fn client_tls(&self) -> ClientTls {
-        ClientTls::new(
-            Some(Material {
-                bytes: self.pem.as_bytes().to_vec(),
-                path: None,
-            }),
-            None,
-        )
+        ClientTls::new(Some(Material::inline(self.pem.as_bytes().to_vec())), None)
     }
 
     /// A server certificate naming `names` — each a DNS name, or an IP

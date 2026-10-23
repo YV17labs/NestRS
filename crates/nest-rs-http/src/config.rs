@@ -28,66 +28,66 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = DEFAULT_SHUTDOWN_TIMEOUT;
 const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds::secs(
     "SHUTDOWN_TIMEOUT_SECS",
     "HttpConfig::shutdown_timeout",
-    Floor::Units(Bound {
-        count: 1,
-        why: "a shorter window cuts every request in flight at the signal, and `0` is not the \
-              off switch it is for `REQUEST_TIMEOUT_SECS`: a shutdown that waits without a bound \
-              is what this window exists to prevent",
-    }),
-    Bound {
-        count: 3600,
-        why: "a window past an hour is a unit slip more often than a choice (`25000` meant as \
-              milliseconds is seven hours), and it outlasts the grace period an orchestrator \
-              gives a replica, whose kill then cuts what the window held without a word",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "a shorter window cuts every request in flight at the signal, and `0` is not the \
+         off switch it is for `REQUEST_TIMEOUT_SECS`: a shutdown that waits without a bound \
+         is what this window exists to prevent",
+    )),
+    Bound::new(
+        3600,
+        "a window past an hour is a unit slip more often than a choice (`25000` meant as \
+         milliseconds is seven hours), and it outlasts the grace period an orchestrator \
+         gives a replica, whose kill then cuts what the window held without a word",
+    ),
 );
 
 /// The floor every long-lived connection's lifetime ceiling is held to — an
 /// `#[sse]` stream here, a WebSocket and a GraphQL subscription in their own
 /// crates — and its off switch: `0` from the environment, `None` in code.
-pub const MAX_CONNECTION_FLOOR: Floor = Floor::UnitsOrOff(Bound {
-    count: 1,
-    why: "a ceiling under a second ends every connection as it opens, so its client reconnects \
-          in a loop",
-});
+pub const MAX_CONNECTION_FLOOR: Floor = Floor::UnitsOrOff(Bound::new(
+    1,
+    "a ceiling under a second ends every connection as it opens, so its client reconnects \
+     in a loop",
+));
 
 /// The ceiling on [`MAX_CONNECTION_FLOOR`]'s settings — a day.
-pub const MAX_CONNECTION_CEILING: Bound = Bound {
-    count: 24 * 60 * 60,
-    why: "a connection keeps the privileges it authenticated with until it ends, so past a day \
-          it outlives the token that admitted it — an hour by default — many times over; a \
-          deployment that means no ceiling turns it off",
-};
+pub const MAX_CONNECTION_CEILING: Bound = Bound::new(
+    24 * 60 * 60,
+    "a connection keeps the privileges it authenticated with until it ends, so past a day \
+     it outlives the token that admitted it — an hour by default — many times over; a \
+     deployment that means no ceiling turns it off",
+);
 
 /// The floor of a server-sent stream's keep-alive interval — HTTP's `#[sse]`
 /// here, MCP's stream in its own crate — and its off switch.
-pub const SSE_KEEP_ALIVE_FLOOR: Floor = Floor::UnitsOrOff(Bound {
-    count: 1,
-    why: "a comment under a second apart is traffic, not a keep-alive",
-});
+pub const SSE_KEEP_ALIVE_FLOOR: Floor = Floor::UnitsOrOff(Bound::new(
+    1,
+    "a comment under a second apart is traffic, not a keep-alive",
+));
 
 /// The ceiling on [`SSE_KEEP_ALIVE_FLOOR`]'s settings — an hour.
-pub const SSE_KEEP_ALIVE_CEILING: Bound = Bound {
-    count: 60 * 60,
-    why: "a keep-alive exists to beat an intermediary's idle timeout, and those are minutes — \
-          nginx's and a cloud load balancer's sixty seconds by default — so one sent less often \
-          than hourly keeps nothing alive",
-};
+pub const SSE_KEEP_ALIVE_CEILING: Bound = Bound::new(
+    60 * 60,
+    "a keep-alive exists to beat an intermediary's idle timeout, and those are minutes — \
+     nginx's and a cloud load balancer's sixty seconds by default — so one sent less often \
+     than hourly keeps nothing alive",
+);
 
 /// The floor of an edge's per-unit timeout — HTTP's request here, a WebSocket
 /// message's and an MCP operation's in their own crates — and its off switch.
-pub const UNIT_TIMEOUT_FLOOR: Floor = Floor::UnitsOrOff(Bound {
-    count: 1,
-    why: "a timeout under a second cuts every unit before its handler has run",
-});
+pub const UNIT_TIMEOUT_FLOOR: Floor = Floor::UnitsOrOff(Bound::new(
+    1,
+    "a timeout under a second cuts every unit before its handler has run",
+));
 
 /// The ceiling on [`UNIT_TIMEOUT_FLOOR`]'s settings — an hour.
-pub const UNIT_TIMEOUT_CEILING: Bound = Bound {
-    count: 60 * 60,
-    why: "a unit still running after an hour has outlived every client and proxy timeout in \
-          front of it, and a timeout that long is a typo more often than a choice (`30000` meant \
-          as milliseconds is eight hours); a handler that runs longer turns it off",
-};
+pub const UNIT_TIMEOUT_CEILING: Bound = Bound::new(
+    60 * 60,
+    "a unit still running after an hour has outlived every client and proxy timeout in \
+     front of it, and a timeout that long is a typo more often than a choice (`30000` meant \
+     as milliseconds is eight hours); a handler that runs longer turns it off",
+);
 
 const REQUEST_TIMEOUT: DurationBounds = DurationBounds::secs(
     "REQUEST_TIMEOUT_SECS",
@@ -116,68 +116,68 @@ pub(crate) const DEFAULT_SEND_TIMEOUT: Duration = Duration::from_secs(60);
 const HEADER_READ_TIMEOUT: DurationBounds = DurationBounds::secs(
     "HEADER_READ_TIMEOUT_SECS",
     "HttpConfig::header_read_timeout",
-    Floor::Units(Bound {
-        count: 1,
-        why: "a shorter deadline cuts a client on a slow network before its request is out, and \
-              `0` is no off switch: a head without a deadline is how a client that sends nothing \
-              holds a connection",
-    }),
-    Bound {
-        count: 300,
-        why: "a head is a few hundred bytes, so a client taking five minutes over one is holding \
-              the connection rather than sending it, and a deadline that long no longer bounds \
-              what a slow head holds",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "a shorter deadline cuts a client on a slow network before its request is out, and \
+         `0` is no off switch: a head without a deadline is how a client that sends nothing \
+         holds a connection",
+    )),
+    Bound::new(
+        300,
+        "a head is a few hundred bytes, so a client taking five minutes over one is holding \
+         the connection rather than sending it, and a deadline that long no longer bounds \
+         what a slow head holds",
+    ),
 );
 
 const BODY_READ_TIMEOUT: DurationBounds = DurationBounds::secs(
     "BODY_READ_TIMEOUT_SECS",
     "HttpConfig::body_read_timeout",
-    Floor::Units(Bound {
-        count: 1,
-        why: "a shorter bound fails an upload on a slow network between two of its packets, and \
-              `0` is no off switch: a body that stops arriving would hold its request, its task \
-              and its place under the connection cap for as long as the client likes",
-    }),
-    Bound {
-        count: 3600,
-        why: "a body that has sent nothing for an hour has stopped, and a bound that long is a \
-              unit slip more often than a choice (`30000` meant as milliseconds is eight hours)",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "a shorter bound fails an upload on a slow network between two of its packets, and \
+         `0` is no off switch: a body that stops arriving would hold its request, its task \
+         and its place under the connection cap for as long as the client likes",
+    )),
+    Bound::new(
+        3600,
+        "a body that has sent nothing for an hour has stopped, and a bound that long is a \
+         unit slip more often than a choice (`30000` meant as milliseconds is eight hours)",
+    ),
 );
 
 const IDLE_TIMEOUT: DurationBounds = DurationBounds::secs(
     "IDLE_TIMEOUT_SECS",
     "HttpConfig::idle_timeout",
-    Floor::Units(Bound {
-        count: 1,
-        why: "a shorter deadline closes a kept-alive connection between two requests of one \
-              client, which then pays a new handshake for each, and `0` is no off switch: an idle \
-              connection holds its place under the connection cap",
-    }),
-    Bound {
-        count: 3600,
-        why: "a connection idle for an hour is one its client forgot, holding a place under the \
-              connection cap, and a deadline that long is a unit slip more often than a choice \
-              (`75000` meant as milliseconds is twenty hours)",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "a shorter deadline closes a kept-alive connection between two requests of one \
+         client, which then pays a new handshake for each, and `0` is no off switch: an idle \
+         connection holds its place under the connection cap",
+    )),
+    Bound::new(
+        3600,
+        "a connection idle for an hour is one its client forgot, holding a place under the \
+         connection cap, and a deadline that long is a unit slip more often than a choice \
+         (`75000` meant as milliseconds is twenty hours)",
+    ),
 );
 
 const SEND_TIMEOUT: DurationBounds = DurationBounds::secs(
     "SEND_TIMEOUT_SECS",
     "HttpConfig::send_timeout",
-    Floor::Units(Bound {
-        count: 1,
-        why: "a shorter deadline cuts a reader on a slow network mid-body, and `0` is no off \
-              switch: a peer that stops reading would hold the write, its buffers and its place \
-              under the connection cap forever",
-    }),
-    Bound {
-        count: 3600,
-        why: "a peer that has taken no byte for an hour has stopped reading, and a deadline that \
-              long is a unit slip more often than a choice (`60000` meant as milliseconds is \
-              seventeen hours)",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "a shorter deadline cuts a reader on a slow network mid-body, and `0` is no off \
+         switch: a peer that stops reading would hold the write, its buffers and its place \
+         under the connection cap forever",
+    )),
+    Bound::new(
+        3600,
+        "a peer that has taken no byte for an hour has stopped reading, and a deadline that \
+         long is a unit slip more often than a choice (`60000` meant as milliseconds is \
+         seventeen hours)",
+    ),
 );
 
 pub(crate) const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 10_000;
@@ -188,16 +188,16 @@ const MAX_CONCURRENT_CONNECTIONS: &str = "MAX_CONCURRENT_CONNECTIONS";
 /// The key of [`HttpConfig::version_header`].
 const VERSION_HEADER: &str = "VERSION_HEADER";
 
-const CONNECTIONS_FLOOR: Bound = Bound {
-    count: 1,
-    why: "a cap of none binds the port and never accepts a connection",
-};
+const CONNECTIONS_FLOOR: Bound = Bound::new(
+    1,
+    "a cap of none binds the port and never accepts a connection",
+);
 
-const CONNECTIONS_CEILING: Bound = Bound {
-    count: 1 << 20,
-    why: "a process holds no more open files than Linux's `fs.nr_open` allows, 1048576 by \
-          default, so the kernel refuses a socket past it before the cap is reached",
-};
+const CONNECTIONS_CEILING: Bound = Bound::new(
+    1 << 20,
+    "a process holds no more open files than Linux's `fs.nr_open` allows, 1048576 by \
+     default, so the kernel refuses a socket past it before the cap is reached",
+);
 
 const SSE_MAX_CONNECTION: DurationBounds = DurationBounds::secs(
     "SSE_MAX_CONNECTION_SECS",

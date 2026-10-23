@@ -24,14 +24,6 @@ pub(crate) static CLIENT: LazyLock<TestCertificate> =
 /// The line a TLS refusal met after the boot is said in, once.
 pub(crate) const REFUSED: &str = "redis refused a reopened tls connection";
 
-/// `pem` as a value given inline.
-pub(crate) fn inline(pem: &str) -> Material {
-    Material {
-        bytes: pem.as_bytes().to_vec(),
-        path: None,
-    }
-}
-
 /// The test authority trusted, and no certificate presented.
 pub(crate) fn trusting_the_authority() -> ClientTls {
     AUTHORITY.client_tls()
@@ -39,7 +31,13 @@ pub(crate) fn trusting_the_authority() -> ClientTls {
 
 /// `cert` presented with `key`, nothing else set.
 pub(crate) fn presenting(cert: &str, key: &str) -> ClientTls {
-    ClientTls::new(None, Some(TlsIdentity::new(inline(cert), inline(key))))
+    ClientTls::new(
+        None,
+        Some(TlsIdentity::new(
+            Material::inline(cert),
+            Material::inline(key),
+        )),
+    )
 }
 
 /// The default instance, as a link's lines and refusals name it.

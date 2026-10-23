@@ -6,7 +6,7 @@ error[E0080]: evaluation panicked: a `DurationBounds::secs` key ends in `_SECS`,
  8 | |     "DEADLINE_MS",
  9 | |     "FixtureConfig::deadline",
 10 | |     Floor::AboveZero("a zero deadline answers nothing"),
-11 | |     Bound { count: 60, why: "past a minute it is a unit slip" },
+11 | |     Bound::new(60, "past a minute it is a unit slip"),
 12 | | );
    | |_^ evaluation of `DEADLINE` failed inside this call
    |

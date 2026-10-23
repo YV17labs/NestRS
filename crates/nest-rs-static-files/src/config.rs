@@ -16,16 +16,16 @@ use nest_rs_config::{
 pub(crate) const MAX_AGE: DurationBounds = DurationBounds::secs(
     "MAX_AGE_SECS",
     "StaticFilesConfig::max_age",
-    Floor::UnitsOrOff(Bound {
-        count: 1,
-        why: "a lifetime under a second is a revalidation on every request, which is what \
-              leaving it off already says",
-    }),
-    Bound {
-        count: 365 * 24 * 60 * 60,
-        why: "a year is the longest freshness HTTP has ever asked a cache to honour (RFC 2616 \
-              §14.21), and caches treat it as forever, so a longer one is a unit slip",
-    },
+    Floor::UnitsOrOff(Bound::new(
+        1,
+        "a lifetime under a second is a revalidation on every request, which is what \
+         leaving it off already says",
+    )),
+    Bound::new(
+        365 * 24 * 60 * 60,
+        "a year is the longest freshness HTTP has ever asked a cache to honour (RFC 2616 \
+         §14.21), and caches treat it as forever, so a longer one is a unit slip",
+    ),
 );
 
 /// Where the files answer and how they are cached, settable through

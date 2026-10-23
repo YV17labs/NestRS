@@ -14,6 +14,7 @@ use crate::service::{ConfigService, var_name};
 /// The whole-number unit a duration's variable is written in — the suffix its
 /// key carries, `_SECS` or `_MS`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DurationUnit {
     /// Whole seconds — every `*_SECS` key.
     Seconds,
@@ -45,6 +46,7 @@ impl DurationUnit {
 /// the reason a refusal gives, so it is written for the operator reading the
 /// boot error.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct Bound {
     /// The end, in the variable's [`DurationUnit`].
     pub count: u64,
@@ -52,8 +54,17 @@ pub struct Bound {
     pub why: &'static str,
 }
 
+impl Bound {
+    /// The end at `count` of the variable's unit, past which nothing works
+    /// for the reason `why` gives.
+    pub const fn new(count: u64, why: &'static str) -> Self {
+        Self { count, why }
+    }
+}
+
 /// Where a range starts.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum Floor {
     /// At least `count` of the variable's unit, whichever side set the value.
     Units(Bound),
@@ -81,8 +92,8 @@ pub enum Floor {
 /// const WINDOW: DurationBounds = DurationBounds::secs(
 ///     "WINDOW_SECS",
 ///     "FixtureConfig::window",
-///     Floor::Units(Bound { count: 1, why: "a shorter window counts nothing" }),
-///     Bound { count: 3600, why: "past an hour it is a unit slip" },
+///     Floor::Units(Bound::new(1, "a shorter window counts nothing")),
+///     Bound::new(3600, "past an hour it is a unit slip"),
 /// );
 ///
 /// let env = ConfigService::with_vars("fixture", [("WINDOW_SECS", "30")]);
@@ -98,7 +109,7 @@ pub enum Floor {
 /// const CEILING: DurationBounds = DurationBounds::secs(
 ///     "WINDOW_SECS",
 ///     "FixtureConfig::window",
-///     Floor::UnitsOrOff(Bound { count: 1, why: "a shorter ceiling ends every stream" }),
+///     Floor::UnitsOrOff(Bound::new(1, "a shorter ceiling ends every stream")),
 ///     WINDOW.most(),
 /// );
 /// let off = ConfigService::with_vars("fixture", [("WINDOW_SECS", "0")]);
@@ -390,14 +401,8 @@ mod tests {
     const RANGE: DurationBounds = DurationBounds::secs(
         "WINDOW_SECS",
         "FixtureConfig::window",
-        Floor::Units(Bound {
-            count: 1,
-            why: "the floor's reason",
-        }),
-        Bound {
-            count: 60,
-            why: "the ceiling's reason",
-        },
+        Floor::Units(Bound::new(1, "the floor's reason")),
+        Bound::new(60, "the ceiling's reason"),
     );
 
     fn env(vars: &[(&str, &str)]) -> ConfigService {
@@ -499,14 +504,8 @@ mod tests {
         const PROBE: DurationBounds = DurationBounds::millis(
             "DEADLINE_MS",
             "FixtureConfig::deadline",
-            Floor::Units(Bound {
-                count: 1,
-                why: "why",
-            }),
-            Bound {
-                count: 60_000,
-                why: "past a minute",
-            },
+            Floor::Units(Bound::new(1, "why")),
+            Bound::new(60_000, "past a minute"),
         );
         let text = refused(PROBE.read(&env(&[("DEADLINE_MS", "0")]), Duration::from_millis(5)));
         assert!(text.contains("must be at least 1 millisecond"), "{text}");
@@ -542,10 +541,7 @@ mod tests {
     #[test]
     fn an_off_switch_is_zero_from_the_environment_and_none_in_code() {
         const CEILING: DurationBounds = DurationBounds {
-            least: Floor::UnitsOrOff(Bound {
-                count: 10,
-                why: "the floor's reason",
-            }),
+            least: Floor::UnitsOrOff(Bound::new(10, "the floor's reason")),
             ..RANGE
         };
         assert!(
@@ -605,10 +601,7 @@ mod tests {
             "BUDGET_SECS",
             "FixtureConfig::budget",
             Floor::AboveZero("a zero budget gives up before its first attempt"),
-            Bound {
-                count: 3600,
-                why: "why",
-            },
+            Bound::new(3600, "why"),
         );
         let from_env = refused(BUDGET.read(&env(&[("BUDGET_SECS", "0")]), Duration::from_secs(5)));
         assert!(

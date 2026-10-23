@@ -396,6 +396,10 @@ pub fn reqwest_tls(tls: &ClientTls, env: &ConfigService) -> Result<ReqwestTls> {
 
 /// Why a PEM pair cannot be presented, each half judged as rustls judges it.
 #[derive(Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "tier 2: the HTTP server describes each refusal of its own certificate"
+)]
 pub enum PairRefusal {
     /// The certificate does not parse as PEM.
     CertificateNotPem,
@@ -549,15 +553,14 @@ mod tests {
     static OTHER: LazyLock<TestCertificate> =
         LazyLock::new(|| AUTHORITY.client("nestrs-other-client"));
 
-    fn inline(pem: &[u8]) -> Material {
-        Material {
-            bytes: pem.to_vec(),
-            path: None,
-        }
-    }
-
     fn presenting(cert: &[u8], key: &[u8]) -> ClientTls {
-        ClientTls::new(None, Some(TlsIdentity::new(inline(cert), inline(key))))
+        ClientTls::new(
+            None,
+            Some(TlsIdentity::new(
+                Material::inline(cert),
+                Material::inline(key),
+            )),
+        )
     }
 
     fn redis() -> ConfigService {
@@ -577,7 +580,7 @@ mod tests {
     #[cfg(feature = "reqwest")]
     #[test]
     fn a_reqwest_client_trusts_what_the_material_names_and_presents_its_certificate() {
-        let trusting = ClientTls::new(Some(inline(AUTHORITY.pem().as_bytes())), None);
+        let trusting = ClientTls::new(Some(Material::inline(AUTHORITY.pem().as_bytes())), None);
         let converted = reqwest_tls(&trusting, &redis()).expect("the authority converts");
         assert_eq!(converted.roots.len(), 1, "the named authority alone");
         assert!(converted.identity.is_none());
@@ -603,10 +606,10 @@ mod tests {
     #[test]
     fn the_deployment_overlays_each_field_and_the_certificate_moves_with_its_key() {
         let pinned = ClientTls::new(
-            Some(inline(b"pinned-authority")),
+            Some(Material::inline(b"pinned-authority")),
             Some(TlsIdentity::new(
-                inline(b"pinned-cert"),
-                inline(b"pinned-key"),
+                Material::inline(b"pinned-cert"),
+                Material::inline(b"pinned-key"),
             )),
         );
         let tls = ClientTls::from_env(
@@ -705,14 +708,14 @@ mod tests {
                 "cannot use as an authority",
             ),
         ] {
-            let refused = refusal(&ClientTls::new(Some(inline(pem)), None));
+            let refused = refusal(&ClientTls::new(Some(Material::inline(pem)), None));
             assert!(
                 refused.contains(&var("TLS_CA_CERT")) && refused.contains(says),
                 "{refused}"
             );
             assert!(!refused.contains("s3cret"), "{refused}");
         }
-        ClientTls::new(Some(inline(AUTHORITY.pem().as_bytes())), None)
+        ClientTls::new(Some(Material::inline(AUTHORITY.pem().as_bytes())), None)
             .check(&redis())
             .expect("an authority is accepted");
     }
@@ -837,7 +840,7 @@ mod tests {
             .refuse_beside_plaintext(&redis(), &declared_by)
             .expect("nothing set goes unused");
         for tls in [
-            ClientTls::new(Some(inline(AUTHORITY.pem().as_bytes())), None),
+            ClientTls::new(Some(Material::inline(AUTHORITY.pem().as_bytes())), None),
             presenting(CLIENT.cert.as_bytes(), CLIENT.key.as_bytes()),
         ] {
             let refused = tls
@@ -853,7 +856,7 @@ mod tests {
 
     #[test]
     fn an_identity_for_a_client_that_cannot_present_one_is_refused_naming_the_client() {
-        ClientTls::new(Some(inline(AUTHORITY.pem().as_bytes())), None)
+        ClientTls::new(Some(Material::inline(AUTHORITY.pem().as_bytes())), None)
             .refuse_identity(&redis(), "object_store")
             .expect("authorities alone are presented by no one");
         let refused = presenting(CLIENT.cert.as_bytes(), CLIENT.key.as_bytes())

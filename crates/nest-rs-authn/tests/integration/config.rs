@@ -563,10 +563,9 @@ fn an_authority_without_a_jwk_set_is_refused() {
     let refused = AuthnConfig {
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
         tls: nest_rs_config::ClientTls::new(
-            Some(nest_rs_config::Material {
-                bytes: b"-----BEGIN CERTIFICATE-----".to_vec(),
-                path: None,
-            }),
+            Some(nest_rs_config::Material::inline(
+                b"-----BEGIN CERTIFICATE-----".to_vec(),
+            )),
             None,
         ),
         ..Default::default()

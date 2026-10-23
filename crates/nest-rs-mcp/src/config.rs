@@ -47,10 +47,10 @@ const DEFAULT_MAX_CONCURRENT_SESSIONS: usize = 1024;
 /// The key of [`McpConfig::max_concurrent_sessions`].
 const MAX_CONCURRENT_SESSIONS: &str = "MAX_CONCURRENT_SESSIONS";
 
-const SESSIONS_FLOOR: Bound = Bound {
-    count: 1,
-    why: "a cap of none refuses every legacy client's `initialize`",
-};
+const SESSIONS_FLOOR: Bound = Bound::new(
+    1,
+    "a cap of none refuses every legacy client's `initialize`",
+);
 
 /// rmcp's own idle timeout today, pinned so a release of it cannot move a
 /// deployment's.
@@ -59,18 +59,18 @@ const DEFAULT_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const SESSION_IDLE_TIMEOUT: DurationBounds = DurationBounds::secs(
     "SESSION_IDLE_TIMEOUT_SECS",
     "McpConfig::session_idle_timeout",
-    Floor::Units(Bound {
-        count: 1,
-        why: "a shorter timeout closes a session between two calls of one client, which then \
-              starts over with `initialize`, and `0` is no off switch: an idle session holds its \
-              worker and its place under the session cap",
-    }),
-    Bound {
-        count: 60 * 60,
-        why: "a session idle for an hour is one its client forgot, holding its worker and its \
-              place under the session cap, and a timeout that long is a unit slip more often than \
-              a choice (`300000` meant as milliseconds is three days)",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "a shorter timeout closes a session between two calls of one client, which then \
+         starts over with `initialize`, and `0` is no off switch: an idle session holds its \
+         worker and its place under the session cap",
+    )),
+    Bound::new(
+        60 * 60,
+        "a session idle for an hour is one its client forgot, holding its worker and its \
+         place under the session cap, and a timeout that long is a unit slip more often than \
+         a choice (`300000` meant as milliseconds is three days)",
+    ),
 );
 
 /// How long a new session waits for its `initialize` before it is closed —
@@ -89,16 +89,16 @@ const SSE_KEEP_ALIVE: DurationBounds = DurationBounds::secs(
 const SSE_RETRY: DurationBounds = DurationBounds::secs(
     "SSE_RETRY_SECS",
     "McpConfig::sse_retry",
-    Floor::UnitsOrOff(Bound {
-        count: 1,
-        why: "a client told to come back sooner reconnects at once, and every client a restart \
-              dropped does it together",
-    }),
-    Bound {
-        count: 60 * 60,
-        why: "a client told to wait more than an hour before resuming a dropped stream has \
-              abandoned the session it would resume",
-    },
+    Floor::UnitsOrOff(Bound::new(
+        1,
+        "a client told to come back sooner reconnects at once, and every client a restart \
+         dropped does it together",
+    )),
+    Bound::new(
+        60 * 60,
+        "a client told to wait more than an hour before resuming a dropped stream has \
+         abandoned the session it would resume",
+    ),
 );
 
 /// MCP streamable-HTTP options resolved at boot (namespace `mcp`).

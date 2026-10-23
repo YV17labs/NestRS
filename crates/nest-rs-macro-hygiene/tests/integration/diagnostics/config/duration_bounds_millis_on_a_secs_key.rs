@@ -7,7 +7,7 @@ const WINDOW: DurationBounds = DurationBounds::millis(
     "WINDOW_SECS",
     "FixtureConfig::window",
     Floor::AboveZero("a zero window counts nothing"),
-    Bound { count: 60_000, why: "past a minute it is a unit slip" },
+    Bound::new(60_000, "past a minute it is a unit slip"),
 );
 
 fn main() {

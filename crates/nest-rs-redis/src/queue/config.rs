@@ -12,15 +12,15 @@ const DEFAULT_LEASE_SECS: u64 = 30;
 pub(crate) const LEASE: DurationBounds = DurationBounds::secs(
     "LEASE_SECS",
     "RedisQueueConfig::lease",
-    Floor::Units(Bound {
-        count: 1,
-        why: "a lease is renewed every third of it, and a renewal is a round trip to Redis",
-    }),
-    Bound {
-        count: 60 * 60,
-        why: "a crashed replica's jobs wait out their lease before another worker runs them, \
-              and past an hour that wait is a typo rather than a choice",
-    },
+    Floor::Units(Bound::new(
+        1,
+        "a lease is renewed every third of it, and a renewal is a round trip to Redis",
+    )),
+    Bound::new(
+        60 * 60,
+        "a crashed replica's jobs wait out their lease before another worker runs them, \
+         and past an hour that wait is a typo rather than a choice",
+    ),
 );
 
 /// The Redis queue binding's settings, set through `<PREFIX>_REDIS__QUEUE__*`

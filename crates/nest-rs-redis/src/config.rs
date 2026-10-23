@@ -25,12 +25,12 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
         "the budget bounds the boot's connect and every command after it, and a zero one gives \
          up before the first attempt and fails every command at once",
     ),
-    Bound {
-        count: 60 * 60,
-        why: "the budget bounds the boot's wait for Redis and every command a caller waits on, \
-              and past an hour it bounds neither — a Redis silent that long is gone rather than \
-              slow, and a boot that waits longer is a parked process",
-    },
+    Bound::new(
+        60 * 60,
+        "the budget bounds the boot's wait for Redis and every command a caller waits on, \
+         and past an hour it bounds neither — a Redis silent that long is gone rather than \
+         slow, and a boot that waits longer is a parked process",
+    ),
 );
 
 /// Redis settings, settable via `<PREFIX>_REDIS__*` or pinned through

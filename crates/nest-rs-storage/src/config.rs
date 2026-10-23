@@ -27,11 +27,11 @@ pub(crate) const OPERATION_TIMEOUT: DurationBounds = DurationBounds::secs(
     "OPERATION_TIMEOUT_SECS",
     "StorageConfig::operation_timeout",
     Floor::AboveZero("a zero budget gives up on every call before the store is asked"),
-    Bound {
-        count: 60 * 60,
-        why: "the budget bounds every call a caller waits on, and a store silent for an hour is \
-              gone rather than slow",
-    },
+    Bound::new(
+        60 * 60,
+        "the budget bounds every call a caller waits on, and a store silent for an hour is \
+         gone rather than slow",
+    ),
 );
 
 /// The read bound's range, the variable that sets it, and why.
@@ -39,10 +39,10 @@ pub(crate) const READ_TIMEOUT: DurationBounds = DurationBounds::secs(
     "READ_TIMEOUT_SECS",
     "StorageConfig::read_timeout",
     Floor::AboveZero("a zero bound cuts every transfer before its first bytes"),
-    Bound {
-        count: 60 * 60,
-        why: "a transfer that moved nothing for an hour is a dead connection, not a slow one",
-    },
+    Bound::new(
+        60 * 60,
+        "a transfer that moved nothing for an hour is a dead connection, not a slow one",
+    ),
 );
 
 /// The object store's configuration, read from the framework-namespaced

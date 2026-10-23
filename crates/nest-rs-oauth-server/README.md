@@ -20,4 +20,4 @@ Reached through the [`nest-rs`](https://crates.io/crates/nest-rs) umbrella: one 
 
 ## Why it is not `nest-rs-authn`
 
-That crate resolves *who is calling*, and an authenticated machine client is nobody — `AuthenticatedClient::actor_id()` returns `None`. `TokenError::UnsupportedGrant` and `TokenError::InvalidScope` are the same tell from the other side: neither is a credential verdict. Keeping them together meant every resource server compiled a token endpoint it never serves.
+That crate resolves *who is calling* at a resource server; this one answers a machine client at the authorization server, where the client is its own subject — `AuthenticatedClient::actor_id()` returns its `client_id`, as RFC 9068 §2.2 names it. `TokenError::UnsupportedGrant` and `TokenError::InvalidScope` are the tell: neither is a credential verdict. Keeping them together meant every resource server compiled a token endpoint it never serves.

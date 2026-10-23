@@ -22,6 +22,7 @@ use nest_rs_authn::AuthError;
 use nest_rs_authn::JwtService;
 
 /// The redirect leg of the flow, produced by [`OAuthClient::authorize`].
+#[non_exhaustive]
 pub struct AuthorizationRedirect {
     /// The provider authorization URL to redirect the user agent to.
     pub url: String,

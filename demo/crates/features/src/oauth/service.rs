@@ -187,7 +187,6 @@ pub(crate) fn grant_client_credentials_with_jwt(
     let scopes = granted_scopes(scope, &client.scopes).inspect_err(|_| {
         tracing::warn!(
             target: crate::oauth::TARGET,
-            org_id = %client.payload.org_id,
             reason = "invalid_scope",
             "token request refused"
         );
@@ -307,13 +306,14 @@ mod tests {
     }
 
     fn auth_client(roles: Vec<Role>, scopes: &[&str]) -> AuthenticatedClient {
-        AuthenticatedClient {
-            payload: ClientPayload {
+        AuthenticatedClient::new(
+            "ci",
+            scopes.iter().copied(),
+            ClientPayload {
                 org_id: Uuid::now_v7(),
                 roles,
             },
-            scopes: scopes.iter().map(|s| (*s).into()).collect(),
-        }
+        )
     }
 
     #[test]
@@ -387,15 +387,15 @@ mod tests {
         let jwt_svc = Arc::new(jwt_with_ttl(ttl));
         let providers = Arc::new(SocialRegistry::default());
         let config = Arc::new(OAuthConfig {
-            clients: vec![RegisteredClient {
-                client_id: "ci".into(),
-                client_secret: "s3cret".into(),
-                scopes: vec![POSTS_READ.into()],
-                payload: ClientPayload {
+            clients: vec![RegisteredClient::new(
+                "ci",
+                "s3cret",
+                [POSTS_READ],
+                ClientPayload {
                     org_id: Uuid::now_v7(),
                     roles: vec![Role::User],
                 },
-            }],
+            )],
             default_org_id: Uuid::now_v7(),
         });
         OAuthService::new(jwt_svc, providers, Arc::new(UsersService), config)

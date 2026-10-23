@@ -1,7 +1,8 @@
 use features::authz::constants::{POSTS_READ, POSTS_WRITE};
+use features::oauth::TARGET;
 use features::{Claims, Role};
 use nest_rs::http::StatusCode;
-use nest_rs::testing::{TestApp, TestResponse};
+use nest_rs::testing::{LogCapture, TestApp, TestResponse};
 
 use super::harness::*;
 
@@ -106,7 +107,8 @@ async fn token_endpoint_rejects_a_bad_client_secret() {
 }
 
 #[tokio::test]
-async fn token_endpoint_rejects_a_scope_beyond_the_client_registration() {
+async fn token_endpoint_refuses_a_scope_beyond_the_registration_naming_the_client_as_actor() {
+    let logs = LogCapture::install();
     let (_db, app) = boot().await;
 
     let resp = request_token(
@@ -118,6 +120,11 @@ async fn token_endpoint_rejects_a_scope_beyond_the_client_registration() {
     resp.assert_status(StatusCode::BAD_REQUEST);
     let json = resp.json().await;
     assert_eq!(json.value().object().get("error").string(), "invalid_scope");
+
+    let refusal = logs.expect_one(TARGET, "token request refused");
+    assert_eq!(refusal.field("reason").as_deref(), Some("invalid_scope"));
+    assert_eq!(refusal.actor_id.as_deref(), Some(READER_ID));
+    assert!(refusal.fields.keys().eq(["reason"]), "{refusal:?}");
 }
 
 #[tokio::test]

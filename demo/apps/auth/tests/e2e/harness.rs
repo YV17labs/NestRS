@@ -54,18 +54,18 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
         })
         .provide(OAuthConfig {
             clients: vec![
-                RegisteredClient {
-                    client_id: CLIENT_ID.into(),
-                    client_secret: CLIENT_SECRET.into(),
-                    payload: payload(Role::Admin),
-                    scopes: constants::all(),
-                },
-                RegisteredClient {
-                    client_id: READER_ID.into(),
-                    client_secret: READER_SECRET.into(),
-                    payload: payload(Role::User),
-                    scopes: vec![constants::POSTS_READ.into()],
-                },
+                RegisteredClient::new(
+                    CLIENT_ID,
+                    CLIENT_SECRET,
+                    constants::all(),
+                    payload(Role::Admin),
+                ),
+                RegisteredClient::new(
+                    READER_ID,
+                    READER_SECRET,
+                    [constants::POSTS_READ],
+                    payload(Role::User),
+                ),
             ],
             default_org_id: ORG_ID.parse().expect("a valid org uuid"),
         })

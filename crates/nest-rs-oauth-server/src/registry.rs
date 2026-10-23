@@ -12,6 +12,7 @@ use nest_rs_core::AmbientValue;
 /// (deserialized from the `payload` field next to the credentials).
 /// [`Debug`] is hand-written and redacts `client_secret`.
 #[derive(Clone, serde::Deserialize)]
+#[non_exhaustive]
 pub struct RegisteredClient<P> {
     /// The client's public identifier, matched in constant time.
     pub client_id: String,
@@ -22,6 +23,24 @@ pub struct RegisteredClient<P> {
     /// App-defined per-client data (tenant id, role set, …) carried onto the
     /// principal — nest-rs never inspects it.
     pub payload: P,
+}
+
+impl<P> RegisteredClient<P> {
+    /// The client `client_id`, authenticated by `client_secret`, granted
+    /// `scopes` and carrying `payload` — as a registry pinned in code lists it.
+    pub fn new(
+        client_id: impl Into<String>,
+        client_secret: impl Into<String>,
+        scopes: impl IntoIterator<Item = impl Into<String>>,
+        payload: P,
+    ) -> Self {
+        Self {
+            client_id: client_id.into(),
+            client_secret: client_secret.into(),
+            scopes: scopes.into_iter().map(Into::into).collect(),
+            payload,
+        }
+    }
 }
 
 impl<P: std::fmt::Debug> std::fmt::Debug for RegisteredClient<P> {
@@ -36,26 +55,46 @@ impl<P: std::fmt::Debug> std::fmt::Debug for RegisteredClient<P> {
 }
 
 /// The principal established by authenticating a [`RegisteredClient`] at the
-/// token endpoint (RFC 6749 §2.3.1). It names no subject, so
-/// [`PrincipalIdentity::actor_id`] is `None` — the `payload` carries whatever the
-/// app logs and authorizes on — and a gated MCP endpoint whose guard admits it
-/// opens it no session. The access token an app issues it names the client's id
-/// as its `sub`, as RFC 9068 §2.2 requires: the subject a resource server binds.
+/// token endpoint (RFC 6749 §2.3.1). A client acting on its own behalf is its
+/// own subject (RFC 9068 §2.2), so [`PrincipalIdentity::actor_id`] is its
+/// `client_id`: the audit names it, and the access token an app issues it names
+/// it as its `sub`. The `payload` carries whatever else the app logs and
+/// authorizes on.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AuthenticatedClient<P> {
-    /// The matched client's app-defined payload — what the app logs and
-    /// authorizes on.
-    pub payload: P,
+    /// The matched client's public identifier (RFC 6749 §2.2).
+    pub client_id: String,
     /// The matched client's granted scopes — reported verbatim as this
     /// principal's [`PrincipalIdentity::scopes`].
     pub scopes: Vec<String>,
+    /// The matched client's app-defined payload — what the app logs and
+    /// authorizes on.
+    pub payload: P,
+}
+
+impl<P> AuthenticatedClient<P> {
+    /// The client `client_id`, authenticated, granted `scopes` and carrying
+    /// `payload` — as [`authenticate_against_registry`] answers it.
+    pub fn new(
+        client_id: impl Into<String>,
+        scopes: impl IntoIterator<Item = impl Into<String>>,
+        payload: P,
+    ) -> Self {
+        Self {
+            client_id: client_id.into(),
+            scopes: scopes.into_iter().map(Into::into).collect(),
+            payload,
+        }
+    }
 }
 
 impl<P: Send + Sync + 'static> AmbientValue for AuthenticatedClient<P> {}
 
 impl<P> PrincipalIdentity for AuthenticatedClient<P> {
+    /// The client's own id: the subject of what it does for itself.
     fn actor_id(&self) -> Option<String> {
-        None
+        Some(self.client_id.clone())
     }
 
     /// `Some`, always: an empty entry means *delegated nothing*, where `None` would
@@ -88,8 +127,9 @@ pub fn authenticate_against_registry<P: Clone>(
     }
     let client = matched.ok_or_else(|| AuthError::failed("invalid client credentials"))?;
     Ok(AuthenticatedClient {
-        payload: client.payload.clone(),
+        client_id: client.client_id.clone(),
         scopes: client.scopes.clone(),
+        payload: client.payload.clone(),
     })
 }
 
@@ -98,12 +138,7 @@ mod tests {
     use super::*;
 
     fn client(id: &str, secret: &str, scopes: &[&str]) -> RegisteredClient<u32> {
-        RegisteredClient {
-            client_id: id.into(),
-            client_secret: secret.into(),
-            scopes: scopes.iter().map(|s| (*s).to_string()).collect(),
-            payload: 7,
-        }
+        RegisteredClient::new(id, secret, scopes.iter().copied(), 7)
     }
 
     #[test]
@@ -120,6 +155,7 @@ mod tests {
     fn authenticates_a_matching_pair_and_returns_the_payload() {
         let registry = [client("ci", "s3cret", &["read"])];
         let auth = authenticate_against_registry(&registry, "ci", "s3cret").expect("auth");
+        assert_eq!(auth.client_id, "ci");
         assert_eq!(auth.payload, 7);
         assert_eq!(auth.scopes, vec!["read".to_string()]);
     }
@@ -174,10 +210,10 @@ mod tests {
     }
 
     #[test]
-    fn machine_principal_has_no_actor_id() {
+    fn a_machine_principal_is_its_own_subject() {
         let registry = [client("ci", "s3cret", &["read"])];
         let auth = authenticate_against_registry(&registry, "ci", "s3cret").unwrap();
-        assert_eq!(auth.actor_id(), None);
+        assert_eq!(auth.actor_id().as_deref(), Some("ci"));
     }
 
     #[test]

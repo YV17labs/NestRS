@@ -37,15 +37,15 @@ async fn issues_a_token_for_a_registered_client() {
     let app = TestApp::builder()
         .module::<AuthModule>()
         .provide(OAuthConfig {
-            clients: vec![RegisteredClient {
-                client_id: "test-client".into(),
-                client_secret: "secret".into(),
-                scopes: vec!["posts:read".into()],
-                payload: ClientPayload {
+            clients: vec![RegisteredClient::new(
+                "test-client",
+                "secret",
+                ["posts:read"],
+                ClientPayload {
                     org_id: Uuid::nil(),
                     roles: vec![Role::User],
                 },
-            }],
+            )],
             default_org_id: Uuid::nil(),
         })
         .build()

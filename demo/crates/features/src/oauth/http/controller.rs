@@ -32,7 +32,9 @@ impl OAuthController {
         client: Ctx<AuthenticatedClient>,
         body: Form<AccessTokenRequest>,
     ) -> Result<AccessTokenResponse> {
-        let AccessTokenRequest { grant_type, scope } = body.0;
+        let AccessTokenRequest {
+            grant_type, scope, ..
+        } = body.0;
         Ok(self
             .svc
             .grant_client_credentials(&grant_type, scope.as_deref(), &client)?)

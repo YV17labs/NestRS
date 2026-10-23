@@ -26,13 +26,14 @@ fn oauth_service() -> OAuthService {
 const ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_00a1);
 
 fn read_only_client() -> AuthenticatedClient {
-    AuthenticatedClient {
-        payload: ClientPayload {
+    AuthenticatedClient::new(
+        "reporting",
+        [POSTS_READ],
+        ClientPayload {
             org_id: ORG,
             roles: vec![Role::User],
         },
-        scopes: vec![POSTS_READ.into()],
-    }
+    )
 }
 
 #[test]
@@ -109,7 +110,10 @@ fn a_refused_scope_is_logged_by_its_reason_never_by_the_scope_sent() {
     assert!(matches!(refused, Err(TokenError::InvalidScope)));
     let refusal = the_one_refusal(&logs);
     assert_eq!(refusal.field("reason").as_deref(), Some("invalid_scope"));
-    assert_eq!(refusal.field("org_id"), Some(ORG.to_string()));
+    assert!(
+        refusal.fields.keys().eq(["reason"]),
+        "the client is the line's actor, off the request it answers: {refusal:?}"
+    );
     assert!(
         refusal
             .fields

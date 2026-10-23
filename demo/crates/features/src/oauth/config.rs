@@ -73,15 +73,15 @@ mod tests {
     use super::*;
 
     fn client(id: &str, scopes: &[&str]) -> RegisteredClient<ClientPayload> {
-        RegisteredClient {
-            client_id: id.into(),
-            client_secret: "s3cr3t".into(),
-            scopes: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
-            payload: ClientPayload {
+        RegisteredClient::new(
+            id,
+            "s3cr3t",
+            scopes.iter().copied(),
+            ClientPayload {
                 org_id: Uuid::nil(),
                 roles: vec![Role::User],
             },
-        }
+        )
     }
 
     #[test]

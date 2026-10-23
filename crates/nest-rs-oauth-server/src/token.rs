@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, JsonSchema)]
 // schemars would otherwise publish this whole rustdoc as the schema's description.
 #[schemars(description = "RFC 6749 §4.4.2 — the `client_credentials` access token request.")]
+#[non_exhaustive]
 pub struct AccessTokenRequest {
     /// The grant being exercised — `client_credentials` at this endpoint.
     pub grant_type: String,
@@ -64,6 +65,7 @@ pub struct AccessTokenRequest {
 /// let cacheable = Json(AccessTokenResponse::bearer("t", 60)).into_response();
 /// ```
 #[derive(JsonSchema)]
+#[non_exhaustive]
 #[schemars(description = "RFC 6749 §5.1 — the successful access token response.")]
 pub struct AccessTokenResponse {
     /// §5.1 REQUIRED — the token itself.

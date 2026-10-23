@@ -114,6 +114,7 @@ pub(crate) mod mask_reason {
 
 /// Which fields of a subject may be read back in the response.
 #[derive(Default)]
+#[non_exhaustive]
 pub enum FieldSet {
     /// No restriction — every field is permitted.
     #[default]

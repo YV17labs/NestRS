@@ -251,6 +251,7 @@ impl WsSocketBuilder {
 /// One frame read off the socket; `Ping` and `Pong` are answered by the
 /// protocol layer and never appear.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WsFrame {
     /// A text frame — a gateway's replies and pushes are all of these.
     Text(String),
@@ -264,6 +265,7 @@ pub enum WsFrame {
 /// What one read off the socket found — the three states `Option<WsFrame>`
 /// collapses into `None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WsRead {
     /// A frame arrived.
     Frame(WsFrame),

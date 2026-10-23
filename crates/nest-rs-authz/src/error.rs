@@ -17,6 +17,7 @@ use crate::action::Action;
      relation predicate — the relation is composite-keyed or does not point at the related \
      entity. Fix the `related(...)` call in your `AbilityFactory`."
 )]
+#[non_exhaustive]
 pub struct MalformedRuleError {
     /// The action the faulty rule was declared for.
     pub action: Action,
@@ -30,6 +31,7 @@ pub struct MalformedRuleError {
 /// Why [`masked_reply`](crate::masked_reply) could not produce a masked value. Callers must treat
 /// either case as fail-closed: send an error frame, never the unmasked body.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum MaskReplyError {
     /// No ambient [`Ability`](crate::Ability) — no ability guard ran at the
     /// request, so masking cannot run.

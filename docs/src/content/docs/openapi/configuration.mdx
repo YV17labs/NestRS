@@ -41,11 +41,7 @@ use nest_rs::openapi::{OpenApiConfig, OpenApiLicense, OpenApiModule};
 OpenApiModule::for_root(OpenApiConfig {
     title: "Publish API".into(),
     version: "2.1.0".into(),
-    license: Some(OpenApiLicense {
-        name: "Apache 2.0".into(),
-        identifier: Some("Apache-2.0".into()),
-        url: None,
-    }),
+    license: Some(OpenApiLicense::new("Apache 2.0").with_identifier("Apache-2.0")),
     ..OpenApiConfig::defaults()
 })
 ```

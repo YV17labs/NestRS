@@ -188,7 +188,7 @@ mod tests {
                 assert!(cols.contains("name"));
                 assert!(!cols.contains("email"), "email is admin-only");
             }
-            FieldSet::All => panic!("members must have a restricted field set"),
+            _ => panic!("members must have a restricted field set"),
         }
     }
 
@@ -344,7 +344,7 @@ mod tests {
         assert!(!ab.can::<user::Entity>(Action::Delete, &user_model(Uuid::now_v7(), org)));
         match ab.permitted_fields::<user::Entity>(Action::Read, &user_model(Uuid::now_v7(), org)) {
             FieldSet::Only(cols) => assert!(!cols.contains("email")),
-            FieldSet::All => panic!("an empty-roles caller must have a restricted field set"),
+            _ => panic!("an empty-roles caller must have a restricted field set"),
         }
     }
 }

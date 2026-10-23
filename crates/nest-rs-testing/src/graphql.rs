@@ -171,6 +171,7 @@ fn tokio_stream_from(
 /// Only [`Silent`](Self::Silent), never [`Ended`](Self::Ended), proves the
 /// server chose to say nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GraphqlEvent {
     /// A protocol message.
     Message(Value),
@@ -185,6 +186,7 @@ pub enum GraphqlEvent {
 
 /// Why a connection attempt did not reach `connection_ack`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GraphqlRefusal {
     /// The server closed instead of acknowledging — the code says why.
     Closed(u16, String),

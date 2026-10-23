@@ -30,6 +30,7 @@ pub enum CmpOp {
 
 /// A condition over entity `E`, interpreted as SQL or in memory.
 #[derive(Default)]
+#[non_exhaustive]
 pub enum Predicate<E: EntityTrait> {
     /// Unconditional match — an unrestricted grant/denial over every row.
     #[default]

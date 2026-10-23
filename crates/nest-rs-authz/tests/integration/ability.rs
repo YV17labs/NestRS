@@ -101,7 +101,7 @@ fn permitted_fields_restricts_to_listed_columns() {
             assert!(cols.contains("name"));
             assert!(!cols.contains("secret"), "secret must be masked");
         }
-        FieldSet::All => panic!("expected a restricted field set"),
+        _ => panic!("expected a restricted field set"),
     }
 }
 

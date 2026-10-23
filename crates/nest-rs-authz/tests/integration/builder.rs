@@ -88,7 +88,7 @@ fn fields_narrow_to_the_listed_columns() {
             assert!(!cols.contains("secret"));
             assert!(!cols.contains("org_id"));
         }
-        FieldSet::All => panic!("expected a restricted field set"),
+        _ => panic!("expected a restricted field set"),
     }
 }
 

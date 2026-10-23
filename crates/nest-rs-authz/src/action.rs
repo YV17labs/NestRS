@@ -5,6 +5,7 @@
 /// entity; [`Manage`](Self::Manage) is the wildcard that matches all four
 /// concrete verbs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Action {
     /// Read/list the entity — the query-filter and response-mask layers.
     Read,

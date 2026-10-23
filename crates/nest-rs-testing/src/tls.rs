@@ -36,6 +36,7 @@ pub struct TestAuthority {
 
 /// A certificate a [`TestAuthority`] issued and its private key, both PEM.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct TestCertificate {
     /// The certificate, its issuer's not appended.
     pub cert: String,

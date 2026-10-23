@@ -32,6 +32,7 @@ use tracing_subscriber::registry::Registry;
 
 /// One recorded `tracing` event.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct CapturedEvent {
     /// The event's target — `nest_rs::orm`, `features::users`, …
     pub target: String,
@@ -63,6 +64,7 @@ impl CapturedEvent {
 
 /// One recorded `tracing` span, with every field value it ever held.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct CapturedSpan {
     /// The span's target — `nest_rs::http`, `nest_rs::ws`, …
     pub target: String,

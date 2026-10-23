@@ -48,5 +48,4 @@ unknown-git = "deny"
 multiple-versions = "allow"
 deny = [
     { crate = "ring", reason = "one crypto provider: rustls, jsonwebtoken and object_store run on aws-lc-rs, and a second compiles twice the cryptography (sea-orm's `runtime-tokio-rustls` and reqwest 0.12's `rustls-tls` bring it back)" },
-    { crate = "poem", wrappers = ["nest-rs-http"], reason = "the HTTP engine is nest-rs-http's crate-private adapter, which the next engine replaces alone: another crate reaches HTTP through nest_rs::http's own types" },
 ]

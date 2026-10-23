@@ -1,6 +1,6 @@
 //! `src/routes.rs`: the route table the transport assembles from every
-//! registrant, and the router it compiles into. Black-box over the public
-//! seams, so a router library replacing poem's passes it unchanged.
+//! registrant, and the router it compiles into (`src/router.rs`). Black-box
+//! over the public seams, so whatever matches the path passes it unchanged.
 
 use nest_rs_core::{App, Transport, module};
 use nest_rs_http::{
@@ -118,6 +118,29 @@ async fn a_catch_all_never_matches_its_bare_prefix() {
     );
 }
 
+/// The root's bare prefix is `/`: a catch-all at the root leaves it to the
+/// root's own entry, or to the fallback when there is none.
+#[tokio::test]
+async fn a_root_catch_all_never_matches_the_root() {
+    let alone = table(|routes| {
+        routes.route(Method::GET, "/{*rest}", echoing("rest", &["rest"]));
+    })
+    .await;
+    assert_eq!(get(&alone, "/").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        get(&alone, "/app.js").await,
+        (StatusCode::OK, "rest /{*rest} rest=app.js".into())
+    );
+
+    let beside = table(|routes| {
+        routes
+            .route(Method::GET, "/{*rest}", echoing("rest", &["rest"]))
+            .route(Method::GET, "/", echoing("root", &[]));
+    })
+    .await;
+    assert_eq!(get(&beside, "/").await, (StatusCode::OK, "root / ".into()));
+}
+
 #[tokio::test]
 async fn a_parameter_is_percent_decoded_once_and_a_slash_stays_inside_it() {
     let client = table(|routes| {
@@ -176,6 +199,20 @@ async fn an_empty_segment_is_another_path() {
     assert_eq!(get(&client, "/a/b").await.0, StatusCode::OK);
     assert_eq!(get(&client, "/a//b").await.0, StatusCode::NOT_FOUND);
     assert_eq!(get(&client, "/users//").await.0, StatusCode::NOT_FOUND);
+}
+
+/// An empty segment names nothing: no parameter takes it, wherever it sits.
+#[tokio::test]
+async fn an_empty_segment_fills_no_parameter() {
+    let client = table(|routes| {
+        routes.route(Method::GET, "/a/{x}/b", echoing("x", &["x"]));
+    })
+    .await;
+    assert_eq!(
+        get(&client, "/a/1/b").await,
+        (StatusCode::OK, "x /a/{x}/b x=1".into())
+    );
+    assert_eq!(get(&client, "/a//b").await.0, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

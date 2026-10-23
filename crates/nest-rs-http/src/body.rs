@@ -227,15 +227,10 @@ impl Body {
         BodyDataStream::new(self.0)
     }
 
-    /// A body around `boxed`, the box the HTTP adapter's library wraps too: it
-    /// moves across, never copied.
+    /// A body around `boxed`, the box hyper's frames and the edge's wrappers
+    /// arrive in: it moves in, never copied.
     pub(crate) fn from_boxed(boxed: BoxBody<Bytes, io::Error>) -> Self {
         Self(boxed)
-    }
-
-    /// The box, for the HTTP adapter's library, which wraps the same type.
-    pub(crate) fn into_boxed(self) -> BoxBody<Bytes, io::Error> {
-        self.0
     }
 }
 

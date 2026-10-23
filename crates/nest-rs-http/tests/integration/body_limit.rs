@@ -119,8 +119,9 @@ async fn raw_body_handler_rejects_an_oversized_body_with_413() {
     resp.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
 }
 
-// poem's `Compression` decompresses before the edge and leaves the compressed
-// `Content-Length` in the headers; the gzip is real so that middleware runs.
+// The transport's compression decodes the body before the edge and leaves the
+// compressed `Content-Length` in the headers; the gzip is real so that decoding
+// runs.
 #[tokio::test]
 async fn a_compressed_body_cannot_outrun_the_cap_it_declares_it_is_under() {
     let client = boot_with(true).await;

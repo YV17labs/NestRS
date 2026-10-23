@@ -167,9 +167,6 @@ struct Repr {
     extensions: Extensions,
 }
 
-/// How another library's cause answers on the wire, consumed.
-type Render = fn(BoxError, StatusCode) -> Response;
-
 /// How a [`ResponseError`] answers on the wire, from a borrow.
 type RenderTyped = fn(&BoxError, StatusCode) -> Response;
 
@@ -185,9 +182,6 @@ enum Cause {
         error: BoxError,
         render: RenderTyped,
     },
-    /// Another HTTP library's error crossing into this one: it renders itself,
-    /// and a downcast reaches the cause it wraps.
-    Wrapped { error: BoxError, render: Render },
     /// `500`, opaque on the wire, its chain kept for the log.
     Anyhow(anyhow::Error),
 }
@@ -228,12 +222,6 @@ impl HttpError {
     /// ```
     pub fn from_response(response: Response) -> Self {
         Self::with(response.status(), Cause::Response(response))
-    }
-
-    /// Another library's error, rendered by `render`; a downcast also reaches
-    /// the error it wraps, one level down.
-    pub(crate) fn wrapping(error: BoxError, status: StatusCode, render: Render) -> Self {
-        Self::with(status, Cause::Wrapped { error, render })
     }
 
     fn with(status: StatusCode, cause: Cause) -> Self {
@@ -279,17 +267,12 @@ impl HttpError {
     pub fn downcast_ref<T: Error + Send + Sync + 'static>(&self) -> Option<&T> {
         match &self.0.cause {
             Cause::Error(error) | Cause::Typed { error, .. } => error.downcast_ref::<T>(),
-            Cause::Wrapped { error, .. } => error
-                .downcast_ref::<T>()
-                .or_else(|| error.source()?.downcast_ref::<T>()),
             Cause::Anyhow(error) => error.downcast_ref::<T>(),
             Cause::Status | Cause::Response(_) => None,
         }
     }
 
-    /// The cause itself when it is a `T`, otherwise this error back. Unlike
-    /// [`downcast_ref`](Self::downcast_ref), it does not reach inside another
-    /// library's error.
+    /// The cause itself when it is a `T`, otherwise this error back.
     ///
     /// ```
     /// use nest_rs_http::{HttpError, StatusCode};
@@ -308,10 +291,6 @@ impl HttpError {
                 Ok(cause) => return Ok(*cause),
                 Err(error) => Cause::Typed { error, render },
             },
-            Cause::Wrapped { error, render } => match error.downcast::<T>() {
-                Ok(cause) => return Ok(*cause),
-                Err(error) => Cause::Wrapped { error, render },
-            },
             Cause::Anyhow(error) => match error.downcast::<T>() {
                 Ok(cause) => return Ok(cause),
                 Err(error) => Cause::Anyhow(error),
@@ -319,20 +298,6 @@ impl HttpError {
             other => other,
         };
         Err(self)
-    }
-
-    /// The cause, when it is another library's error of type `T` to which this
-    /// side added nothing: it goes back to that library whole.
-    pub(crate) fn into_wrapped<T: Error + Send + Sync + 'static>(
-        self,
-    ) -> std::result::Result<T, Self> {
-        let unwrappable = matches!(&self.0.cause, Cause::Wrapped { error, .. } if error.is::<T>())
-            && self.0.extensions.is_empty();
-        if unwrappable {
-            self.downcast::<T>()
-        } else {
-            Err(self)
-        }
     }
 
     /// Values copied onto the response this error renders, each replacing the
@@ -389,7 +354,6 @@ impl HttpError {
             Cause::Response(response) => response,
             Cause::Error(error) => ProblemDetails::answering(status, &*error).into_response(),
             Cause::Typed { error, render } => render(&error, status),
-            Cause::Wrapped { error, render } => render(error, status),
         };
         response.extensions_mut().extend(extensions);
         response
@@ -403,19 +367,19 @@ impl HttpError {
     /// answer withholds is filed once at `error`, at `warn` behind a `503`.
     pub(crate) fn answer(self) -> Response {
         match self.0.cause {
-            Cause::Response(_) | Cause::Wrapped { .. } => self.into_response(),
+            Cause::Response(_) => self.into_response(),
             _ => self.answer_ref(),
         }
     }
 
     /// The response this error answers, as [`answer`](Self::answer) renders
     /// it but filing nothing, and the error to keep beside it: itself, unless
-    /// rendering took what it held — a ready response, another library's
-    /// error — and its status is what is left. Whoever answers last files what
+    /// rendering took the ready response it held and its status is what is
+    /// left. Whoever answers last files what
     /// the client was not told ([`withheld_behind`](Self::withheld_behind)).
     pub(crate) fn rendered_kept(self) -> (Response, HttpError) {
         match self.0.cause {
-            Cause::Response(_) | Cause::Wrapped { .. } => {
+            Cause::Response(_) => {
                 let status = self.0.status;
                 (self.into_response(), HttpError::from_status(status))
             }
@@ -423,9 +387,8 @@ impl HttpError {
         }
     }
 
-    /// [`answer`](Self::answer), from a borrow: a ready response or another
-    /// library's error, which only their owner renders, answers its status's
-    /// problem.
+    /// [`answer`](Self::answer), from a borrow: a ready response, which only
+    /// its owner renders, answers its status's problem.
     pub(crate) fn answer_ref(&self) -> Response {
         let response = self.rendered_ref();
         if let Some(withheld) = self.withheld_behind(response.status()) {
@@ -455,8 +418,8 @@ impl HttpError {
     /// What a `status` answer keeps from the client of this error: the chain
     /// it carries behind a `5xx` — a [`ResponseError`]'s too, whatever it
     /// rendered — unless that is a bare [`Problem`], or a [`ProblemDetails`]
-    /// rendering itself, which answers all it holds. A status alone, a ready
-    /// response and another library's error carry none.
+    /// rendering itself, which answers all it holds. A status alone and a
+    /// ready response carry none.
     pub(crate) fn withheld_behind(&self, status: StatusCode) -> Option<Withheld> {
         let chain: &(dyn Error + 'static) = match &self.0.cause {
             Cause::Typed { error, .. } if error.is::<ProblemDetails>() => return None,
@@ -476,9 +439,7 @@ impl HttpError {
         match &self.0.cause {
             Cause::Anyhow(error) => Some(error.as_ref()),
             Cause::Error(error) => Some(&**error),
-            Cause::Status | Cause::Response(_) | Cause::Typed { .. } | Cause::Wrapped { .. } => {
-                None
-            }
+            Cause::Status | Cause::Response(_) | Cause::Typed { .. } => None,
         }
     }
 }
@@ -524,9 +485,7 @@ impl fmt::Debug for HttpError {
         match &self.0.cause {
             Cause::Status => debug.field("cause", &"none"),
             Cause::Response(_) => debug.field("cause", &"a ready response"),
-            Cause::Error(error) | Cause::Typed { error, .. } | Cause::Wrapped { error, .. } => {
-                debug.field("cause", error)
-            }
+            Cause::Error(error) | Cause::Typed { error, .. } => debug.field("cause", error),
             Cause::Anyhow(error) => debug.field("cause", error),
         };
         debug.finish()
@@ -537,9 +496,7 @@ impl fmt::Display for HttpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0.cause {
             Cause::Status | Cause::Response(_) => fmt::Display::fmt(&self.0.status, f),
-            Cause::Error(error) | Cause::Typed { error, .. } | Cause::Wrapped { error, .. } => {
-                fmt::Display::fmt(error, f)
-            }
+            Cause::Error(error) | Cause::Typed { error, .. } => fmt::Display::fmt(error, f),
             Cause::Anyhow(error) => fmt::Display::fmt(error, f),
         }
     }
@@ -548,9 +505,7 @@ impl fmt::Display for HttpError {
 impl Error for HttpError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.0.cause {
-            Cause::Error(error) | Cause::Typed { error, .. } | Cause::Wrapped { error, .. } => {
-                Some(&**error)
-            }
+            Cause::Error(error) | Cause::Typed { error, .. } => Some(&**error),
             Cause::Anyhow(error) => Some(error.as_ref()),
             Cause::Status | Cause::Response(_) => None,
         }
@@ -778,7 +733,8 @@ pub(crate) enum RouteError {
          whatever nothing else claims; import one of them"
     )]
     TwoFallbacks { first: String, second: String },
-    /// A template the router library refused although the grammar read it.
+    /// An address the router was handed twice: the table merges every
+    /// spelling of one address before it compiles, so this is a defect.
     #[error("the router cannot mount {template:?} for {owner}: {reason}")]
     Router {
         template: String,

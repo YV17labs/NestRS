@@ -1,6 +1,6 @@
 //! `#[controller]` + `#[routes]` + the response shapers, through the umbrella
-//! alone: no `poem` line, and the wrapper's `Span::mixed_site()` locals cannot
-//! be masked by a `Json(body)` destructure.
+//! alone: no HTTP library's line, and the wrapper's `Span::mixed_site()` locals
+//! cannot be masked by a `Json(body)` destructure.
 
 use nest_rs::http::futures_util::stream;
 use nest_rs::http::{ClientIp, Header, SseEvent, SseStream, controller, input, routes};
@@ -72,7 +72,7 @@ impl HygieneController {
     }
 
     /// `#[sse]`: a streaming controller declares neither `futures-util` nor
-    /// `poem`.
+    /// an HTTP library.
     #[sse("/events")]
     #[public]
     async fn events(&self) -> SseStream {

@@ -8,8 +8,8 @@ sidebar:
 import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 
 You ship one e2e test that boots the *real* `BlogModule`
-against a throwaway Postgres, drives it through the same poem runtime
-production uses, and asserts on the round-trip you've been verifying
+against a throwaway Postgres, drives it through the same transport
+production runs, and asserts on the round-trip you've been verifying
 by hand. By the end of this page, `nestrs run test e2e` runs it green, a
 wiring regression in any of the previous six steps fails this test,
 and the feature is locked down.

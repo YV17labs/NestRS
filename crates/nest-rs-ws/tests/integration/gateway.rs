@@ -1081,7 +1081,7 @@ impl TwinBGateway {
 #[module(imports = [WsModule], providers = [TwinAGateway, TwinBGateway])]
 struct TwinModule;
 
-/// Fails boot naming both rather than letting poem panic during route assembly.
+/// Fails boot naming both rather than panicking during route assembly.
 #[tokio::test]
 async fn one_path_and_one_version_shared_by_two_gateways_still_fails_boot() {
     let Err(err) = TestApp::for_module::<TwinModule>().await else {

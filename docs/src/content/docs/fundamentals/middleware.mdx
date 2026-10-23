@@ -32,7 +32,7 @@ covers — logging, request id, rate limiting, auth, opening a transaction
 | Parsing/normalizing the body | **Pipe** at the boundary | Pure transform, no DI |
 | Opening a database transaction | **Nothing to write** | Importing the database binding runs every request as a [unit of work](/database/transactions/), committed on its outcome |
 | Stamping a request / correlation id | **Nothing to write** | Every unit of work already runs under a [W3C trace](/fundamentals/correlation/) |
-| CORS, security headers | poem middleware, configured on `HttpConfig` | Lower-level than a Guard/Interceptor |
+| CORS, security headers | The transport, configured on `HttpConfig` | Lower-level than a Guard/Interceptor |
 
 The split is on purpose: "gate" and "wrap" are different shapes, the
 framework names them differently, and the request-layer ordering reflects
@@ -134,21 +134,21 @@ async fn me(&self, auth: Ctx<Claims>) -> Json<User> { /* ... */ }
 
 See [Guards / Attach context](/fundamentals/guards/#attach-context-and-route-metadata).
 
-## What about the raw poem middleware trait?
+## What about raw HTTP middleware?
 
-`nest-rs-http` builds on [poem](https://docs.rs/poem), and poem has its
-own `Middleware` trait. The framework exposes the named categories
-(Guard / Interceptor / Exception filter) layered over it. CORS, request-size
+`nest-rs-http` serves requests itself, on [hyper](https://docs.rs/hyper),
+and has no lower-level middleware trait: the named categories
+(Guard / Interceptor / Exception filter) are the layers. CORS, request-size
 limits, body-decoding — those things live on `HttpConfig` and are
-applied as poem middleware by the transport, not as NestRS Guards or
+applied by the transport around every route, not as NestRS Guards or
 Interceptors.
 
-`nest-rs-http` owns the poem endpoint, which is what makes every layer
+`nest-rs-http` owns the endpoint, which is what makes every layer
 go through DI and the access graph — portable across controllers and
-checkable at boot. A third-party `poem::Middleware` ports to an
+checkable at boot. A middleware written for another HTTP library ports to an
 **Interceptor** in a few lines and gains both: it wraps the handler the
 same way, with DI and the access graph on top. The lower-level knobs
-poem middleware is often reached for — CORS, TLS, body-size limits,
+such middleware is often reached for — CORS, TLS, body-size limits,
 request timeout — are already `HttpConfig` fields.
 
 <Aside type="tip">

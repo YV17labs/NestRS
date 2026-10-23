@@ -1,21 +1,24 @@
 //! [`Multipart`]: a `multipart/form-data` body read part by part, each part
-//! buffered or streamed as it arrives.
+//! buffered or streamed as it arrives; the parser is multer's.
 //!
 //! The request body stays capped at [`HttpConfig.max_body_bytes`](crate::HttpConfig):
 //! streaming bounds memory, not the request.
+#![expect(
+    clippy::disallowed_types,
+    reason = "multer is the multipart parser this file wraps, and the one that names it"
+)]
 
 use std::fmt;
-use std::io::Result as IoResult;
+use std::io::{self, Result as IoResult};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use futures_util::Stream;
+use futures_util::{Stream, TryStreamExt};
 use tokio::io::AsyncRead;
-use tokio_util::io::ReaderStream;
+use tokio_util::io::{ReaderStream, StreamReader};
 
-use crate::error::{MultipartError, Result};
-use crate::poem_adapter::{FieldReader, MultipartReader, PoemAdapter};
+use crate::error::{HttpError, MultipartError, Result};
 use crate::request::{FromRequest, Request, RequestBody};
 
 /// A `multipart/form-data` body, read one part at a time as it arrives.
@@ -42,18 +45,18 @@ use crate::request::{FromRequest, Request, RequestBody};
 /// # }
 /// ```
 pub struct Multipart {
-    reader: MultipartReader,
+    parts: multer::Multipart<'static>,
 }
 
 impl Multipart {
     /// The next part, or `None` past the last; a part not read whole is
     /// skipped.
     pub async fn next_field(&mut self) -> Result<Option<Field>> {
-        Ok(self
-            .reader
+        self.parts
             .next_field()
-            .await?
-            .map(|reader| Field { reader }))
+            .await
+            .map(|part| part.map(|part| Field { part }))
+            .map_err(malformed)
     }
 }
 
@@ -68,47 +71,60 @@ impl<'a> FromRequest<'a> for Multipart {
         let Some(content_type) = req
             .headers()
             .get(http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
             .filter(|value| {
-                value
-                    .to_str()
-                    .ok()
-                    .and_then(crate::request::essence)
+                crate::request::essence(value)
                     .is_some_and(|essence| essence.is_exactly("multipart", "form-data"))
             })
         else {
             return Err(MultipartError::MediaType.into());
         };
-        let reader = PoemAdapter::multipart(content_type.clone(), body.take()?).await?;
-        Ok(Self { reader })
+        let boundary = multer::parse_boundary(content_type).map_err(|refused| match refused {
+            // A type no media-type parser reads is no `multipart/form-data`.
+            multer::Error::NoMultipart => HttpError::from(MultipartError::MediaType),
+            refused => malformed(refused),
+        })?;
+        // Read through a reader, so a part arrives in pieces however large the
+        // frames the body arrives in.
+        let read = StreamReader::new(body.take()?.into_stream());
+        Ok(Self {
+            parts: multer::Multipart::new(ReaderStream::new(read), boundary),
+        })
     }
+}
+
+/// What the parser refused, kept for the log and never answered: it may name
+/// what the client sent.
+fn malformed(refused: multer::Error) -> HttpError {
+    MultipartError::Malformed(Box::new(refused)).into()
 }
 
 /// One part of a [`Multipart`] body: its name, its file name and media type
 /// when the client sent them, and its bytes.
 pub struct Field {
-    reader: FieldReader,
+    part: multer::Field<'static>,
 }
 
 impl Field {
     /// The form field's name.
     pub fn name(&self) -> Option<&str> {
-        self.reader.name()
+        self.part.name()
     }
 
     /// The file name a client sent with the part, as it sent it: never a path
     /// to write to as is.
     pub fn file_name(&self) -> Option<&str> {
-        self.reader.file_name()
+        self.part.file_name()
     }
 
     /// The part's media type, its parameters dropped.
     pub fn content_type(&self) -> Option<&str> {
-        self.reader.content_type()
+        self.part.content_type().map(|media| media.essence_str())
     }
 
     /// The whole part, buffered.
     pub async fn bytes(self) -> Result<Bytes> {
-        self.reader.bytes().await
+        self.part.bytes().await.map_err(malformed)
     }
 
     /// The whole part, buffered, as UTF-8 text; a part that is not answers
@@ -122,7 +138,8 @@ impl Field {
     /// The part's bytes as they arrive, for a sink that consumes a stream — an
     /// object store's streamed upload — rather than a buffered part.
     pub fn into_byte_stream(self) -> PartStream {
-        PartStream(ReaderStream::new(Box::pin(self.reader.into_async_read())))
+        let read = StreamReader::new(self.part.map_err(io::Error::other));
+        PartStream(ReaderStream::new(Box::pin(read)))
     }
 }
 

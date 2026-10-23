@@ -50,8 +50,8 @@ async fn a_refused_list_item_is_never_quoted_in_the_problem() {
     );
 }
 
-/// The same route on the vocabulary's extractors: what a handler moving off
-/// poem's answers, case for case.
+/// The same route written by hand on the vocabulary's extractors: what
+/// `#[routes]` answers, case for case.
 async fn on_the_vocabulary() -> crate::Client {
     crate::vocabulary_route(
         nest_rs_http::Method::GET,

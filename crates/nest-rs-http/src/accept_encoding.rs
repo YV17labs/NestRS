@@ -16,16 +16,24 @@ pub(crate) enum Coding {
 
 impl Coding {
     /// Every coding offered, the first winning a tie between equal weights.
-    const OFFERED: [Self; 4] = [Self::Zstd, Self::Brotli, Self::Gzip, Self::Deflate];
+    pub(crate) const OFFERED: [Self; 4] = [Self::Zstd, Self::Brotli, Self::Gzip, Self::Deflate];
 
     /// The coding's token (RFC 9110 §8.4.1, IANA's content coding registry).
-    fn token(self) -> &'static str {
+    pub(crate) fn token(self) -> &'static str {
         match self {
             Self::Zstd => "zstd",
             Self::Brotli => "br",
             Self::Gzip => "gzip",
             Self::Deflate => "deflate",
         }
+    }
+
+    /// The coding a `Content-Encoding` names when it names one coding, spelt
+    /// as its token.
+    pub(crate) fn named(content_encoding: &str) -> Option<Self> {
+        Self::OFFERED
+            .into_iter()
+            .find(|coding| coding.token() == content_encoding)
     }
 }
 

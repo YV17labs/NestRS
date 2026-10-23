@@ -1,5 +1,5 @@
-//! `src/query.rs`: `Query<T>` through a mounted route, answering what poem's
-//! did in 6.x, through the same edge.
+//! `src/query.rs`: `Query<T>` through a mounted route, answering what 6.x's
+//! did, through the same edge.
 
 use nest_rs_core::module;
 use nest_rs_http::{FromRequest, IntoResponse, Method, controller, routes};

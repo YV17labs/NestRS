@@ -1,5 +1,5 @@
 name = "nestrs"
-variant = "poem"
+variant = "hyper"
 runtime = "rust"
 port = 3100
 build = "cargo build --release --locked"

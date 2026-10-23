@@ -6,7 +6,8 @@ sidebar:
 ---
 
 Take a file part straight from a `multipart/form-data` request with the
-`Multipart` extractor and hand it to storage as it arrives. A direct
+`Multipart` extractor, which parses the body with
+[multer](https://docs.rs/multer), and hand it to storage as it arrives. A direct
 upload is the single-round-trip alternative to the
 [presigned flow](/storage/): the client posts the bytes, the server stores
 them. The demo reads the form in an extractor of its own, so the handler is

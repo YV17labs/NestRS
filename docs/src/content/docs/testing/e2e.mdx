@@ -9,8 +9,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 An end-to-end test boots the **real** top-level module in process,
 against a throwaway Postgres database, and drives the HTTP surface
-through the same [`poem`](https://crates.io/crates/poem) runtime
-production uses. Every app ships one, at `apps/<app>/tests/e2e/main.rs`
+through the same transport production runs. Every app ships one, at `apps/<app>/tests/e2e/main.rs`
 — the same `tests/<suite>/main.rs` directory form as every test binary
 in the codebase (see [Integration tests](/testing/integration/) for the
 layout rule). The happy path covered here pairs with

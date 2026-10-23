@@ -73,7 +73,7 @@ async fn an_sse_route_answers_text_event_stream() {
     let client = boot::<FeedModule>().await;
     let resp = client.get("/feed/ticks").send().await;
     resp.assert_status_is_ok();
-    // poem appends the charset, so only the media type's prefix is compared.
+    // A parameter may follow the media type, so only its prefix is compared.
     let content_type = resp
         .0
         .headers()

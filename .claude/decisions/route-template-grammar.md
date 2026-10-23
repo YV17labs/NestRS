@@ -88,3 +88,10 @@ parameter percent-decoded once: the span, the access line and the throttler's
 bucket read it from the request, a self-mount's included. poem's spelling is
 now one translation, one way, inside `poem_adapter.rs`; the read-back of
 poem's `PathPattern` and its per-request translation are gone.
+
+**2026-10-23 — the router reads the grammar as written.** poem left with its
+spelling: the route table compiles into the transport's own segment tree,
+which reads each template as this grammar spells it, so the last translation
+is gone. matchit, axum's router, spells `{name}`, `{*rest}` and `{{` as this
+grammar does, but refuses a parameter beside a catch-all at one position, which
+this grammar admits (`http-server.md`).

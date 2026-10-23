@@ -6,8 +6,8 @@ sidebar:
   order: 1
 ---
 
-NestRS's HTTP layer routes with [poem](https://docs.rs/poem) and accepts
-connections itself, on [hyper](https://docs.rs/hyper); a handler reads its
+NestRS's HTTP layer accepts connections and routes requests itself, on
+[hyper](https://docs.rs/hyper); a handler reads its
 request through nestrs's own [extractors](/http/extractors/) and answers with
 nestrs's response types. A controller is a struct, routes come from
 `#[routes]`, and the transport activates by importing

@@ -6,7 +6,6 @@ use http::Method;
 use serde::de::DeserializeOwned;
 
 use crate::error::{FormError, Result};
-use crate::poem_adapter::PoemAdapter;
 use crate::request::{FromRequest, Request, RequestBody};
 
 /// An HTML form, decoded into `T`: the body of a request whose
@@ -74,7 +73,7 @@ impl<T> DerefMut for Form<T> {
 impl<'a, T: DeserializeOwned> FromRequest<'a> for Form<T> {
     async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
         if req.method() == Method::GET {
-            return PoemAdapter::query(req.uri())
+            return serde_urlencoded::from_str(req.uri().query().unwrap_or_default())
                 .map(Form)
                 .map_err(|refused| FormError::Malformed(refused).into());
         }
@@ -89,7 +88,9 @@ impl<'a, T: DeserializeOwned> FromRequest<'a> for Form<T> {
             .take()?
             .into_bytes_limit(crate::current_body_limit())
             .await?;
-        PoemAdapter::form(bytes).await.map(Form)
+        serde_urlencoded::from_bytes(&bytes)
+            .map(Form)
+            .map_err(|refused| FormError::Malformed(refused).into())
     }
 }
 

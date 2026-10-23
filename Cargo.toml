@@ -46,10 +46,15 @@ serde_json = "1.0"  # public
 # release by 2027-01-31 and the suites stop mutating the process environment.
 figment = "0.10"
 
-# Past the 12-month bar (3.1.12, 2025-07-28), and nest-rs-http's crate-private
-# adapter alone (`deny.toml`): the adapter's move to axum retires it, by
-# 2027-01-31 at the latest (`.claude/decisions/http-server.md`).
-poem = { version = "3.1", default-features = false, features = ["compression", "multipart"] }
+# Past the 12-month bar (3.1.0, 2024-05-04): finished, without an advisory, the
+# multipart parser axum and async-graphql read with, already in every lockfile;
+# it moves when they move.
+multer = "3.1"
+# Past the 12-month bar (0.7.1, 2022-01-17): finished, without an advisory, the
+# form decoder axum, async-graphql and object_store read with, already in every
+# lockfile; it moves when they move.
+serde_urlencoded = "0.7"
+async-compression = { version = "0.4", features = ["tokio", "brotli", "deflate", "gzip", "zstd"] }
 rustls = "0.23"  # public in nest-rs-testing alone
 rustls-native-certs = "0.8"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }

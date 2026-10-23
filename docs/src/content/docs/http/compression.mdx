@@ -8,7 +8,9 @@ sidebar:
 One flag makes the transport compress responses when the client asks for
 it. With `HttpConfig.compression` on, each request's `Accept-Encoding` picks
 zstd, brotli, gzip or deflate, weighed as RFC 9110 §12.5.3 reads it, and the
-response body is encoded before it leaves the process. Off by default — in
+response body is encoded with
+[async-compression](https://docs.rs/async-compression) before it leaves the
+process. Off by default — in
 most deployments a reverse proxy already does this.
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)" {3}

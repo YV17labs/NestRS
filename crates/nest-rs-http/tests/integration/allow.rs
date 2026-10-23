@@ -48,7 +48,7 @@ async fn the_allow_header_survives_the_problem_details_rewrite() {
     assert_eq!(body["status"], 405);
 }
 
-// No `#[head]` is declared: poem answers `HEAD` through the `GET` route.
+// No `#[head]` is declared: the route table answers `HEAD` through the `GET` route.
 #[tokio::test]
 async fn the_advertised_head_answers() {
     let client = crate::boot::<PostsModule>().await;

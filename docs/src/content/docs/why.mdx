@@ -254,7 +254,7 @@ rather than mocks — wiring bugs are the ones unit tests never see.
 
 ## What this is not
 
-- **Not an HTTP layer.** NestRS sits *on top of* `hyper` / `tokio` / `poem` —
+- **Not an HTTP layer.** NestRS sits *on top of* `hyper` / `tokio` —
   it gives them structure, it does not replace them.
 - **Not a thin convenience layer.** The framework's value is in the cross-cutting
   guarantees (authz, transactions, masking, boot-time wiring). A controller-only

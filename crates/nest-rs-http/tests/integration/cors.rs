@@ -139,6 +139,26 @@ async fn a_preflight_from_a_listed_origin_answers_the_policy_and_varies_on_the_o
     assert!(vary.iter().any(|v| v == "origin"), "{vary:?}");
 }
 
+/// A policy that sets no lifetime lets the browser keep its own, a few
+/// seconds, so a change to the policy reaches every page at once.
+#[tokio::test]
+async fn a_preflight_under_a_policy_with_no_lifetime_names_none() {
+    let client = crate::boot_on::<CorsModule>(policy(HttpCors {
+        max_age: None,
+        ..listed()
+    }))
+    .await;
+
+    let preflight = preflight(&client, "/cors", "PUT").await;
+
+    assert!(
+        preflight.0.status().is_success(),
+        "{}",
+        preflight.0.status()
+    );
+    preflight.assert_header_is_not_exist(header::ACCESS_CONTROL_MAX_AGE);
+}
+
 #[tokio::test]
 async fn an_answer_to_a_listed_origin_names_it_exposes_what_the_framework_sends_and_varies_on_it() {
     let client = crate::boot_on::<CorsModule>(policy(listed())).await;
@@ -237,6 +257,34 @@ async fn a_wildcard_opens_every_origin_method_and_header() {
     );
 }
 
+/// An answer to any origin varies on it beside what compression varies on: a
+/// shared cache keys on both, or hands one client a coding it never accepted.
+#[tokio::test]
+async fn an_answer_to_any_origin_varies_on_it_and_on_what_compression_reads() {
+    let client = crate::boot_on::<CorsModule>(HttpConfig {
+        compression: true,
+        ..policy(HttpCors {
+            origins: vec!["*".into()],
+            ..HttpCors::default()
+        })
+    })
+    .await;
+
+    let read = client
+        .get("/cors")
+        .header(header::ORIGIN, "https://any.example")
+        .header(header::ACCEPT_ENCODING, "gzip")
+        .send()
+        .await;
+
+    read.assert_status_is_ok();
+    read.assert_header(header::CONTENT_ENCODING, "gzip");
+    let vary = values(&read.0, header::VARY);
+    for name in ["origin", "accept-encoding"] {
+        assert!(vary.iter().any(|v| v == name), "{name}: {vary:?}");
+    }
+}
+
 /// A policy naming no method lists what the routes serve — and the
 /// CORS-safelisted three, which a preflight still checks — never a method a
 /// page cannot send; a method no route serves is refused.
@@ -323,6 +371,20 @@ fn a_policy_listing_a_forbidden_method_fails_the_boot() {
         assert!(said.contains("forbidden method"), "{said}");
         assert!(said.contains(&method.to_ascii_uppercase()), "{said}");
     }
+}
+
+/// An origin no header can carry is a configuration the boot refuses, naming
+/// the list, never a panic.
+#[test]
+fn a_policy_listing_an_origin_no_header_carries_fails_the_boot() {
+    let refused = HttpTransport::from_config(&policy(HttpCors {
+        origins: vec!["https://app.example\r\n".into()],
+        ..HttpCors::default()
+    }))
+    .err()
+    .expect("the origin is refused");
+    let said = format!("{refused:#}");
+    assert!(said.contains("CORS allow-list"), "{said}");
 }
 
 /// Each refusal files one `warn` on the transport's target, naming the check

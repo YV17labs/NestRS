@@ -277,3 +277,71 @@ among them; `*` answers
 send fails the boot; and each refusal files one `warn` on `nest_rs::http`
 naming the check it failed — origin, method or headers — and nothing the
 request sent, where a refusal answered outside the edge filed nothing.
+
+## 2026-10-23 — poem leaves; the route table matches its own paths
+
+The owner's yes of 2026-10-14 closed the dated condition early: poem's last
+release (3.1.12, 2025-07-28) is past the 12-month bar, its one publisher is
+active elsewhere and 4.0 is unreleased. poem is now in no manifest and no
+lockfile — the framework's, the demo's, the bench's or one `nestrs new`
+writes.
+
+**axum, weighed as decided, then read to its router.** The adapter was to be
+axum's, and axum's `Router` is matchit (`=0.8.4`, 2024-07-11; matchit's own line
+is 0.9). matchit refuses a parameter beside a catch-all at one position
+(`/files/{name}` and `/files/{*rest}`) and a catch-all beside a deeper
+parameter (`/a/{x}/b` and `/a/{*rest}`): the route table admits both, its
+conformance suite pins the first, and axum's `route_service` panics on such an
+insert where the boot must refuse or serve. Beyond the matcher, axum's `Router`
+would cost a crossing per request — the body boxed into axum's, a boxed clone of
+the route's service, the parameters decoded into an extension of its own — for
+what the transport already owns: the method dispatch, the `405` with `Allow`,
+the fallback, the template and the parameters. Its extractors change the
+answers: `Query` and `Form` read through serde_path_to_error, which prefixes
+serde's sentence with a path, and `Multipart` lends its fields from the reader
+and caps a body at 2 MiB unless a layer lifts it, where nestrs's `Field` is
+owned and the cap is the edge's. So no axum crate is a dependency; the
+decision's reasons — off a stale crate, onto what the ecosystem maintains —
+hold through the crates axum and tower-http wrap.
+
+**The router is the transport's own.** `router.rs` compiles the table into a
+tree of path segments: a literal before a parameter before a catch-all at each,
+the next candidate tried when a deeper segment fails, a parameter after
+literal text before a bare one, the longest text first. It is the order
+poem's radix tree gave, kept, with two edges now said the rule's way and
+pinned: a catch-all never matches its bare prefix, so a root catch-all no
+longer answers `/`; and a parameter matches no empty value, so `/a//b` is no
+longer `/a/{x}/b` with an empty `x`, as an empty last segment never was. Each
+parameter is percent-decoded once, a non-UTF-8 one the client's `400`, before
+the method is chosen. Refused: matchit with a second tree for the catch-alls,
+which answers `/a/b` with `/{x}/b` where the first segment's literal (`/a/{*rest}`)
+must win.
+
+**The decoders and the codings are the crates axum and tower-http wrap, taken
+directly.** serde_urlencoded reads the query string and a form, poem's
+sentences byte for byte; multer reads a multipart body through a 4 KiB reader,
+so a part arrives in pieces as under poem; both are past the freshness bar,
+finished, without an advisory, and flagged at their pins. async-compression
+encodes a response (brotli at its fastest level, the others at their default,
+as before) and decodes a request body its `Content-Encoding` names. Refused:
+tower-http's `CompressionLayer`, which negotiates on its own and skips a body
+under 32 bytes, and its `CorsLayer`, which lets an unlisted origin through
+without its headers where the policy answers `403` and files a `warn`.
+
+**CORS is the transport's own layer** over B-41's policy, poem's rules kept — a
+listed origin compared exactly, any origin echoed, never `*`, a preflight that
+names no method refused, one listed header in a preflight's request enough, its
+answer naming the listed ones — and three of poem's defects left behind, each
+pinned: `Vary` is added to, never replaced (poem's any-origin answer dropped the
+`Accept-Encoding` compression had said); a policy without `max_age` sends no
+`Access-Control-Max-Age`, as `HttpCors` documents (poem sent its own day); an
+origin no header can carry fails the boot (poem panicked).
+
+What stays the transport's own, then, is all of it: the accept loop, TLS,
+the router, CORS, the `Accept-Encoding` negotiation and the vocabulary. The
+holders follow the crates: clippy's `disallowed-types` refuses multer's and
+async-compression's types outside the one file wrapping each (`multipart.rs`,
+`compression.rs`); `deny.toml`'s poem ban left with poem, and no engine is left
+for another crate to reach around. What neither sees stays review's: a type
+of those crates the file does not name yet, and a `pub` item written inside
+it.

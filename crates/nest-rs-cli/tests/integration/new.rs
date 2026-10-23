@@ -381,8 +381,9 @@ fn the_scaffold_leaves_validator_to_the_framework() {
     assert!(!cargo.contains("validator"), "{cargo}");
 }
 
-/// The server library is the transport's internal adapter: no manifest the
-/// scaffold writes names it, so an app reaches HTTP through `nest-rs` alone.
+/// The libraries the transport runs on are its own, and so was the library it
+/// replaced: no manifest the scaffold writes names one, so an app reaches HTTP
+/// through `nest-rs` alone.
 #[test]
 fn no_generated_manifest_names_the_server_library() {
     let dir = tempfile::tempdir().unwrap();
@@ -398,7 +399,9 @@ fn no_generated_manifest_names_the_server_library() {
     assert!(manifests.len() > 3, "{:?}", files.keys());
     for (manifest, bytes) in manifests {
         let text = String::from_utf8_lossy(bytes);
-        assert!(!text.contains("poem"), "{}: {text}", manifest.display());
+        for library in ["poem", "hyper", "multer", "async-compression"] {
+            assert!(!text.contains(library), "{}: {text}", manifest.display());
+        }
     }
 }
 

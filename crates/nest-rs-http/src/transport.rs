@@ -15,7 +15,9 @@ use nest_rs_core::{Container, Discovery, Listening, Posture, Transport};
 use nest_rs_database::UnitOfWork;
 use tokio_util::sync::CancellationToken;
 
+use crate::compression::Compression;
 use crate::controller::HttpControllerMeta;
+use crate::cors::{CorsPolicy, HttpCors};
 use crate::detached::DetachedWork;
 use crate::drain::Drain;
 use crate::edge::EdgeEndpoint;
@@ -28,10 +30,10 @@ use crate::fallback::{
 };
 use crate::guard_stage::{DeniedStage, HttpGuardStage, StageKind};
 use crate::origin::{OriginChecked, OriginPolicy};
-use crate::poem_adapter::{CorsPolicy, PoemAdapter};
 use crate::problem::Normalized;
 use crate::route_site::{HAND_ROUTE, HAND_ROUTE_SITE};
 use crate::route_template::RouteTemplate;
+use crate::router::Router;
 use crate::routes::{Address, HttpRoutes, Wrap};
 use crate::server::Server;
 use crate::site::{EndpointTail, SiteEndpoint, UnitPolicy};
@@ -370,11 +372,7 @@ impl HttpTransport {
     pub fn from_config(cfg: &crate::HttpConfig) -> anyhow::Result<Self> {
         let transport = Self {
             bind: format!("{}:{}", cfg.host, cfg.port),
-            cors: cfg
-                .cors
-                .as_ref()
-                .map(PoemAdapter::cors_policy)
-                .transpose()?,
+            cors: cfg.cors.as_ref().map(HttpCors::policy).transpose()?,
             tls: cfg.tls.clone(),
             server_header: cfg.server_header,
             global_prefix: cfg
@@ -724,7 +722,7 @@ impl Transport for HttpTransport {
             None,
             Unrouted,
         ));
-        let mut router = PoemAdapter::router(addresses, unrouted.clone())?;
+        let mut router = BoxEndpoint::new(Router::new(addresses, unrouted.clone())?);
         // In front of routing, after the global prefix: it rewrites the path a
         // controller's route is registered at. `rewrites()`, not `Some`: wrapping
         // the URI strategy would refuse every `/v{n}/…`.
@@ -795,14 +793,13 @@ impl Transport for HttpTransport {
             fuse_normalize,
             known_methods,
         );
-        let endpoint = match fuse_normalize {
-            true => endpoint,
-            // Outside the edge, so a preflight carries no request scope.
-            false => BoxEndpoint::new(Normalized(PoemAdapter::around(
-                endpoint,
-                cors,
-                self.compression,
-            ))),
+        // Outside the edge, so a preflight carries no request scope; compression
+        // inside CORS, so a preflight is never encoded.
+        let endpoint = match (cors, self.compression) {
+            (None, false) => endpoint,
+            (None, true) => BoxEndpoint::new(Normalized(Compression(endpoint))),
+            (Some(cors), false) => BoxEndpoint::new(Normalized(cors.around(endpoint))),
+            (Some(cors), true) => BoxEndpoint::new(Normalized(cors.around(Compression(endpoint)))),
         };
 
         self.endpoint = Some(endpoint);

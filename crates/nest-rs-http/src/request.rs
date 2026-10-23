@@ -462,11 +462,6 @@ impl Request {
         Self { head, body, facts }
     }
 
-    /// The parts, and the facts with them.
-    pub(crate) fn into_raw(self) -> (RequestParts, Body, RequestFacts) {
-        (self.head, self.body, self.facts)
-    }
-
     /// This request without its body: the head, its extensions included, and
     /// what the connection and the router know of it.
     pub(crate) fn head_copy(&self) -> Self {

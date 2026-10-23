@@ -5,7 +5,6 @@ use std::ops::{Deref, DerefMut};
 use serde::de::DeserializeOwned;
 
 use crate::error::{QueryError, Result};
-use crate::poem_adapter::PoemAdapter;
 use crate::request::{FromRequest, Request, RequestBody};
 
 /// The request's query string, decoded as `application/x-www-form-urlencoded`
@@ -66,7 +65,7 @@ impl<T> DerefMut for Query<T> {
 
 impl<'a, T: DeserializeOwned> FromRequest<'a> for Query<T> {
     async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        PoemAdapter::query(req.uri())
+        serde_urlencoded::from_str(req.uri().query().unwrap_or_default())
             .map(Query)
             .map_err(|refused| QueryError(refused).into())
     }

@@ -40,3 +40,6 @@ serves whichever edges it implements.
 A guard whose one `check` is the same on every edge declares
 `impl<V: UnitView> GuardFor<V>` once (`ThrottlerGuard`), so it owes its crate
 no feature per edge.
+
+**2026-10-23** — poem left the dependency tree; `cargo tree -i nest-rs-http`
+on a headless feature set names the crates a worker pays the HTTP stack for.

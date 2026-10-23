@@ -42,10 +42,14 @@ serde_json.workspace = true
 # tool parameters already use. Re-exported below so macro-generated
 # `::nest_rs_http::schemars::…` paths resolve at the call site.
 schemars.workspace = true
-# The router, the CORS and compression layers and the query, form and multipart
-# decoders, behind the crate-private `poem_adapter.rs`: clippy refuses the poem
-# types it names in any other file, and `deny.toml` poem in any other crate.
-poem.workspace = true
+# The multipart parser `multipart.rs` wraps, the one file clippy lets name it.
+multer.workspace = true
+# The query string and a form body, decoded as `application/x-www-form-urlencoded`.
+serde_urlencoded.workspace = true
+# The content codings `compression.rs` encodes a response and decodes a request
+# body with, the one file clippy lets name them; the negotiation is the
+# transport's own (`accept_encoding.rs`).
+async-compression.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true

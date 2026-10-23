@@ -100,3 +100,24 @@ app binding SeaORM's database. "Nothing to wire" decided.
   run no transport a test did not spawn, the relay included; a test proving a
   push waits for its commit arms the app's outbox and spawns `OutboxRelay`, as
   the demo's api suite does.
+
+## 2026-10-23 — a suite over SeaORM arms its app's outbox at boot
+
+The demo's api suite filed every push of a test that only pushes on the
+suites' shared Redis database, where nothing drains and a job that never runs
+never ends: two dozen jobs a run, for good, among them the orphan of a publish
+its database refused. Its boot now arms the app's outbox, as the binary's relay
+does when served, so a push waits in the throwaway database and is dropped
+with it, and a test needing its job run spawns a relay beside its worker.
+Correctness decided: the suite runs the path its binary runs, and nothing is
+left to clean.
+
+**Refused:**
+
+- **Cancelling by receipt** alone: an HTTP push answers none. A push holding
+  one, with no database to keep it, is still cancelled that way.
+- **Flushing the suites' database where a run starts**: a step beside the
+  tests that every way of running them must remember, and a run's own jobs
+  stay until the next.
+- **A rule bounding how long a push may stay**: it names the leak instead of
+  closing it.

@@ -6,7 +6,7 @@
 //! [`GoogleSocialModule`] beside [`SocialModule`], one visible line per
 //! provider. A third-party provider is a crate implementing [`SocialProvider`] +
 //! [`SocialProviderConfig`], shipping its module and submitting one
-//! [`SocialProviderEntry`] that names it ([`SocialProviderEntry::module`]).
+//! [`SocialProviderEntry`] that names it ([`SocialProviderEntry::new`]).
 //!
 //! Each imported provider reads its own `#[config]` ([`SocialProviderEntry::config_namespace`]):
 //!

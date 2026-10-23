@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use nest_rs_config::{Config, ConfigError, ConfigService};
-use nest_rs_core::{Composition, Container, injectable, inventory};
+use nest_rs_core::{Composition, Container, Module, injectable, inventory};
 
 use crate::provider::SocialProvider;
 
@@ -32,23 +32,72 @@ pub trait SocialProviderConfig: Config {
 
 /// One provider submitted to the link-time registry by a provider `provider.rs`,
 /// opened by the provider's module.
+///
+/// ```
+/// # use nest_rs_core::{Container, module};
+/// # use nest_rs_social::{BuiltProvider, SocialProvider, SocialProviderEntry};
+/// # #[module]
+/// # pub struct AcmeSocialModule;
+/// # pub struct AcmeSocialProvider;
+/// # impl SocialProvider for AcmeSocialProvider {
+/// #     fn key(&self) -> &'static str { "acme" }
+/// #     fn client(&self) -> &nest_rs_oauth_client::OAuthClient { unimplemented!() }
+/// #     fn profile<'a>(&'a self, _: &'a nest_rs_oauth_client::TokenSet) -> nest_rs_social::ProfileFuture<'a> { unimplemented!() }
+/// # }
+/// fn build(_container: &Container) -> anyhow::Result<BuiltProvider> {
+///     Ok(None)
+/// }
+///
+/// nest_rs_core::inventory::submit! {
+///     SocialProviderEntry::new::<AcmeSocialProvider, AcmeSocialModule>("acme", "SOCIAL__ACME", build)
+/// }
+///
+/// let acme = nest_rs_core::inventory::iter::<SocialProviderEntry>()
+///     .find(|entry| entry.key() == "acme")
+///     .expect("the entry is linked");
+/// assert_eq!(acme.config_namespace(), "SOCIAL__ACME");
+/// ```
 pub struct SocialProviderEntry {
-    /// The route/config key this provider is registered under.
-    pub key: &'static str,
-    /// `type_name::<Provider>()` — used only in the duplicate-key diagnostic.
-    pub provider_type_name: fn() -> &'static str,
-    /// The provider config's [`Namespaced::NAMESPACE`](nest_rs_config::Namespaced)
-    /// — write `GithubSocialConfig::NAMESPACE`, never a hand-typed copy.
-    pub config_namespace: &'static str,
-    /// Build the provider from the deployment's configuration; [`resolve_provider`]
-    /// is the standard implementation.
-    pub build: fn(&Container) -> anyhow::Result<BuiltProvider>,
-    /// `TypeId` of the provider's module (`GithubSocialModule`): the entry is
-    /// discovered only in an app that imports it.
-    pub module: fn() -> TypeId,
+    key: &'static str,
+    provider_type_name: fn() -> &'static str,
+    config_namespace: &'static str,
+    build: fn(&Container) -> anyhow::Result<BuiltProvider>,
+    module: fn() -> TypeId,
 }
 
-/// The standard [`SocialProviderEntry::build`]: a provider in the container wins,
+impl SocialProviderEntry {
+    /// The provider `P` under `key`, opened by the module `M`: discovered only
+    /// in an app that imports `M`, reading the `#[config]` whose
+    /// [`Namespaced::NAMESPACE`](nest_rs_config::Namespaced) is
+    /// `config_namespace` (write `GithubSocialConfig::NAMESPACE`, never a
+    /// hand-typed copy), and built from the deployment's configuration by
+    /// `build` — [`resolve_provider`] is the standard one.
+    pub const fn new<P: SocialProvider + 'static, M: Module>(
+        key: &'static str,
+        config_namespace: &'static str,
+        build: fn(&Container) -> anyhow::Result<BuiltProvider>,
+    ) -> Self {
+        Self {
+            key,
+            provider_type_name: std::any::type_name::<P>,
+            config_namespace,
+            build,
+            module: TypeId::of::<M>,
+        }
+    }
+
+    /// The route and config key this provider is registered under.
+    pub const fn key(&self) -> &'static str {
+        self.key
+    }
+
+    /// The namespace of the `#[config]` this provider reads.
+    pub const fn config_namespace(&self) -> &'static str {
+        self.config_namespace
+    }
+}
+
+/// The standard build a [`SocialProviderEntry`] takes: a provider in the container wins,
 /// then a config in the container, then the provider's own environment. `make`
 /// turns a validated config into the concrete provider.
 pub fn resolve_provider<P, C>(
@@ -236,6 +285,45 @@ mod tests {
 
     fn stub(reported_key: &'static str) -> Arc<dyn SocialProvider> {
         Arc::new(StubProvider { reported_key })
+    }
+
+    /// The module opening the test's linked entry.
+    struct StubSocialModule;
+
+    impl Module for StubSocialModule {
+        fn register(
+            builder: nest_rs_core::ContainerBuilder,
+            _: nest_rs_core::Registering<Self>,
+        ) -> nest_rs_core::ContainerBuilder {
+            builder
+        }
+    }
+
+    inventory::submit! {
+        SocialProviderEntry::new::<StubProvider, StubSocialModule>(
+            "stub",
+            "SOCIAL__STUB",
+            |_container| Ok(None),
+        )
+    }
+
+    #[test]
+    fn an_entry_built_by_its_constructor_is_drained_naming_its_provider_and_module() {
+        let entry = inventory::iter::<SocialProviderEntry>()
+            .find(|entry| entry.key() == "stub")
+            .expect("the entry `new` built is linked");
+
+        assert!(
+            (entry.provider_type_name)().ends_with("::StubProvider"),
+            "{}",
+            (entry.provider_type_name)()
+        );
+        assert_eq!((entry.module)(), TypeId::of::<StubSocialModule>());
+        assert_eq!(entry.config_namespace(), "SOCIAL__STUB");
+        assert!(matches!(
+            (entry.build)(&Container::builder().build().expect("builds")),
+            Ok(None)
+        ));
     }
 
     #[test]

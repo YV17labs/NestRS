@@ -14,7 +14,7 @@ use nest_rs_social::SocialProviderEntry;
 #[test]
 fn a_provider_package_no_path_names_is_not_linked() {
     let keys: Vec<&str> = nest_rs_core::inventory::iter::<SocialProviderEntry>()
-        .map(|entry| entry.key)
+        .map(|entry| entry.key())
         .collect();
     assert!(
         keys.contains(&"github"),

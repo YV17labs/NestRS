@@ -261,15 +261,15 @@ provider, and it brings `SocialModule` along.
 pub struct AcmeSocialModule;
 ```
 
-**4. Submit the registry entry.** `SocialProviderEntry::new` takes the key,
-the config's namespace, how to build the provider and the module that opens
-it. `resolve_provider` is the standard build: a provided instance wins, then a
-provided config, then the environment. The module is the one gate the
-registry reads.
+**4. Submit the registry entry.** `SocialProviderEntry::new` names the
+provider and the module that opens it as types, then takes the key, the
+config's namespace and how to build the provider. `resolve_provider` is the
+standard build: a provided instance wins, then a provided config, then the
+environment. The module is the one gate the registry reads.
 
 ```rust title="crates/features/src/social/provider.rs"
 nest_rs::core::inventory::submit! {
-    SocialProviderEntry::new::<AcmeProvider>(
+    SocialProviderEntry::new::<AcmeProvider, AcmeSocialModule>(
         "acme",
         AcmeSocialConfig::NAMESPACE,
         |container| {
@@ -279,7 +279,6 @@ nest_rs::core::inventory::submit! {
                 Ok(AcmeProvider::new(client))
             })
         },
-        || std::any::TypeId::of::<AcmeSocialModule>(),
     )
 }
 ```

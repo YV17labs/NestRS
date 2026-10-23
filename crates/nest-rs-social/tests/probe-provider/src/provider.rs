@@ -32,17 +32,15 @@ impl SocialProvider for ProbeSocialProvider {
 }
 
 nest_rs::core::inventory::submit! {
-    SocialProviderEntry {
-        key: ProbeSocialProvider::KEY,
-        provider_type_name: || std::any::type_name::<ProbeSocialProvider>(),
-        config_namespace: <ProbeSocialConfig as Namespaced>::NAMESPACE,
-        build: |container| {
+    SocialProviderEntry::new::<ProbeSocialProvider, ProbeSocialModule>(
+        ProbeSocialProvider::KEY,
+        <ProbeSocialConfig as Namespaced>::NAMESPACE,
+        |container| {
             resolve_provider::<ProbeSocialProvider, ProbeSocialConfig>(container, |config| {
                 Ok(ProbeSocialProvider {
                     client: OAuthClient::new(config.oauth2_config())?,
                 })
             })
         },
-        module: || std::any::TypeId::of::<ProbeSocialModule>(),
-    }
+    )
 }

@@ -103,19 +103,17 @@ impl SocialProvider for GithubSocialProvider {
 }
 
 nest_rs_core::inventory::submit! {
-    SocialProviderEntry {
-        key: GithubSocialProvider::KEY,
-        provider_type_name: || std::any::type_name::<GithubSocialProvider>(),
-        config_namespace: <GithubSocialConfig as nest_rs_config::Namespaced>::NAMESPACE,
-        build: |container| {
+    SocialProviderEntry::new::<GithubSocialProvider, GithubSocialModule>(
+        GithubSocialProvider::KEY,
+        <GithubSocialConfig as nest_rs_config::Namespaced>::NAMESPACE,
+        |container| {
             resolve_provider::<GithubSocialProvider, GithubSocialConfig>(container, |config| {
                 let client = OAuthClient::new(config.oauth2_config()?)
                     .map_err(|e| anyhow::Error::new(e).context("invalid GitHub OAuth2 client config"))?;
                 Ok(GithubSocialProvider::new(client))
             })
         },
-        module: || std::any::TypeId::of::<GithubSocialModule>(),
-    }
+    )
 }
 
 #[cfg(test)]

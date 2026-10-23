@@ -54,19 +54,17 @@ impl SocialProvider for GoogleSocialProvider {
 }
 
 nest_rs_core::inventory::submit! {
-    SocialProviderEntry {
-        key: GoogleSocialProvider::KEY,
-        provider_type_name: || std::any::type_name::<GoogleSocialProvider>(),
-        config_namespace: <GoogleSocialConfig as nest_rs_config::Namespaced>::NAMESPACE,
-        build: |container| {
+    SocialProviderEntry::new::<GoogleSocialProvider, GoogleSocialModule>(
+        GoogleSocialProvider::KEY,
+        <GoogleSocialConfig as nest_rs_config::Namespaced>::NAMESPACE,
+        |container| {
             resolve_provider::<GoogleSocialProvider, GoogleSocialConfig>(container, |config| {
                 let client = OAuthClient::new(config.oauth2_config()?)
                     .map_err(|e| anyhow::Error::new(e).context("invalid Google OAuth2 client config"))?;
                 Ok(GoogleSocialProvider::new(client))
             })
         },
-        module: || std::any::TypeId::of::<GoogleSocialModule>(),
-    }
+    )
 }
 
 #[cfg(test)]

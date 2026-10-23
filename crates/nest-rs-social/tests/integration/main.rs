@@ -19,7 +19,7 @@ use nest_rs_social::{GithubSocialConfig, GoogleSocialConfig, SocialProviderEntry
 
 fn linked_keys() -> Vec<&'static str> {
     nest_rs_core::inventory::iter::<SocialProviderEntry>()
-        .map(|entry| entry.key)
+        .map(|entry| entry.key())
         .collect()
 }
 

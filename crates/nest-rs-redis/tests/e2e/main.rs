@@ -464,6 +464,7 @@ async fn node_addresses(with_replicas: bool) -> Vec<String> {
             .filter(|node| with_replicas || node.primary)
             .map(|node| node.addr)
             .collect(),
+        other => panic!("the suite reaches no node of a {other} topology"),
     }
 }
 
@@ -1326,6 +1327,7 @@ fn topology_addition() -> String {
     match topology() {
         RedisTopology::Standalone | RedisTopology::Sentinel => String::new(),
         RedisTopology::Cluster => documented_acl(CONNECTION_PAGE, "Cluster"),
+        other => panic!("the connection's page prescribes nothing for a {other} topology"),
     }
 }
 

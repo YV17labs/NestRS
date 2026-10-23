@@ -6,7 +6,14 @@ use std::time::{Duration, SystemTime};
 use crate::{Capabilities, Capability, QueueError};
 
 /// When a pushed job becomes available to a worker.
+///
+/// Exhaustive on purpose: a delay is relative to the push or an absolute
+/// instant, so a caller matches both and never needs a `_` arm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "closed by definition: a delay is relative to the push or an absolute instant"
+)]
 pub enum Delay {
     /// This long after the push.
     For(Duration),

@@ -198,6 +198,7 @@ fn check_duplicate_queue_claims(methods: &[&ProcessMethod]) -> Result<(), String
 /// How one attempt ended, in the port's vocabulary; the adapter translates it
 /// into its backend's.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum AttemptOutcome {
     /// The handler returned `Ok`, and its unit of work settled. The job is done:
     /// acknowledge it.

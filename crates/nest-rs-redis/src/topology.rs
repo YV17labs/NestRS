@@ -15,6 +15,7 @@ use redis::{ErrorKind, Value};
 /// A deployment topology Valkey offers in production, named as its servers
 /// report their mode. The URL's scheme declares it, and nothing infers it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum RedisTopology {
     /// One primary, with or without replicas, reached at one address
     /// (`redis://`, `rediss://`).

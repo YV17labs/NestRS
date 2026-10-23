@@ -50,6 +50,7 @@ async fn a_url_declaring_a_topology_its_server_does_not_serve_fails_at_once_nami
     let data = match crate::topology() {
         RedisTopology::Cluster => RedisTopology::Cluster,
         RedisTopology::Standalone | RedisTopology::Sentinel => RedisTopology::Standalone,
+        other => panic!("the suite serves no {other} topology"),
     };
     let mut servers = vec![(crate::node_addresses(false).await.remove(0), data)];
     if crate::topology() == RedisTopology::Sentinel {
@@ -72,6 +73,7 @@ async fn a_url_declaring_a_topology_its_server_does_not_serve_fails_at_once_nami
                     one_server.replacen("://", "-sentinel://", 1)
                 ),
                 RedisTopology::Cluster => one_server.replacen("://", "-cluster://", 1),
+                other => panic!("no scheme declares a {other} topology"),
             };
             let started = Instant::now();
             let Err(refused) = RedisConnection::connect(&config(url.clone())).await else {

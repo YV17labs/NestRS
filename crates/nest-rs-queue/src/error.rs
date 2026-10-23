@@ -165,6 +165,7 @@ impl QueueError {
 /// `408` and `429`) — and another attempt would fail identically, so the
 /// attempt dead-letters at once instead of spending the budget on it. A method
 /// returning a `JobError` keeps the disposition it chose.
+#[non_exhaustive]
 pub struct JobError {
     /// Whether another attempt could clear the failure.
     pub retryable: bool,

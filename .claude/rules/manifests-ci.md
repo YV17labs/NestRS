@@ -182,12 +182,12 @@ readers, and the two move in one change.
   app or configuration into a boot refusal, is a break. Prose is not API: a
   compile error, a refusal or a log message is reworded in a patch.
 - **A minor adds**: a tier-1 item; a variant or field where the type is
-  `#[non_exhaustive]` or has a private field; a field to a `#[config]` struct or
-  a `Default` struct nested in one — documented as built with
-  `..Default::default()`, a complete literal not covered; a key, a variable, a
-  feature, a unit, a `nest_rs::prelude` name; a public dependency's minor; the
-  MSRV, named in the changelog. **A patch fixes** behaviour and tier 2, and never
-  raises the MSRV.
+  `#[non_exhaustive]` or has a private field; a field to a configuration — a
+  `#[config]` struct, a `Default` struct nested in one, `OpenTelemetryConfig`
+  — documented as built over its base (`..Default::default()`, `new`), a
+  complete literal not covered; a key, a variable, a feature, a unit, a
+  `nest_rs::prelude` name; a public dependency's minor; the MSRV, named in the
+  changelog. **A patch fixes** behaviour and tier 2, and never raises the MSRV.
 - **Whether a security fix refusing a configuration that used to boot ships in
   7.x is the owner's open question** (`decisions/semver-7x.md`): ask, never
   decide it in a change.
@@ -197,6 +197,15 @@ readers, and the two move in one change.
   false, features = [...] }`**, its tests on `nest-rs` with `testing`; a
   `proc-macro` crate uses `nest-rs-codegen`'s root items alone and emits no
   `__private` path.
+- **A type leaves room to grow** (`decisions/room-to-grow.md`). A public enum
+  is `#[non_exhaustive]` (`exhaustive_enums`), unless a standard or its own
+  definition closes it and every caller gains from naming each arm — its
+  rustdoc then says so — or it is tier 2 and another framework crate matches
+  it; each exception is an `#[expect]` saying which. A public struct is
+  `#[non_exhaustive]` or has a private field, unless it is tier 2, a
+  configuration (above), a newtype over its one value (`Json<T>`) or a shape
+  a standard closes (W3C's `traceparent`); one that a page, the demo, another
+  crate or an expansion builds gets a constructor beside the attribute.
 
 Held by the tiers, `#[non_exhaustive]`, and review of each change against this
 list.

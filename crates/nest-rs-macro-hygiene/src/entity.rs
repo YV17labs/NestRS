@@ -4,6 +4,11 @@
 //! sea-orm's derives emit a *relative* `sea_orm::`, which the `use` below
 //! satisfies — no `sea-orm` line.
 
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "sea-orm's derives emit the entity's `Column` and `Relation`, as in a developer's crate"
+)]
+
 use nest_rs::core::__private::serde::{Deserialize, Serialize};
 use nest_rs::seaorm::{expose, sea_orm};
 use sea_orm::entity::prelude::*;

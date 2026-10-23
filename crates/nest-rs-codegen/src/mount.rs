@@ -12,6 +12,7 @@ use crate::route_path::RoutePath;
 
 /// What a declared mount path holds beyond literal text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MountPath {
     /// A controller's: route parameters, since every route's template opens
     /// with it, and no catch-all, since its routes follow it.

@@ -14,6 +14,7 @@ use syn::Ident;
 
 /// What rustc finds when two claims of one key are both compiled.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Collision {
     /// [`DispatchKeys::markers`] emits a constant that collides.
     Marker,

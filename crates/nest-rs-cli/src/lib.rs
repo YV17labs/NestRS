@@ -12,6 +12,10 @@
     clippy::print_stderr,
     reason = "a command-line tool's output is its interface; tracing is for the apps it scaffolds"
 )]
+#![expect(
+    clippy::exhaustive_enums,
+    reason = "this library is not API: the semver policy covers the `nestrs` commands and flags"
+)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 pub mod lint;

@@ -152,6 +152,7 @@ pub fn host_meta_fn(values: &[Expr]) -> TokenStream {
 }
 
 /// Where a site's host-level values come from.
+#[non_exhaustive]
 pub enum HostMeta<'a> {
     /// The host half's [`host_meta_fn`], on the struct.
     Struct,
@@ -161,6 +162,7 @@ pub enum HostMeta<'a> {
 
 /// Who a site's declaration says may call it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SitePosture {
     /// `#[public]`.
     Public,

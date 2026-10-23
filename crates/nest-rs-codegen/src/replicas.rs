@@ -22,6 +22,7 @@ const WHAT_THE_VALUES_DO: &str = "`\"each\"` (the default) fires every occurrenc
 
 /// The `replicas` a job declared; `key` is valid only beside [`Replicas::One`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Replicas {
     /// `"each"`, and the key unwritten.
     #[default]

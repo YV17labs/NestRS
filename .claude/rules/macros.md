@@ -59,6 +59,14 @@ renders a link into a hidden module dead without a warning, so review holds
 that, the hygiene build an emitted path, and rustdoc's `-D warnings` a doc link
 that no longer resolves.
 
+**An expansion builds no tier-1 struct by literal**: it lands in the
+developer's crate, where a `#[non_exhaustive]` one is refused. A registry
+entry it submits that a program reads has private fields, read through
+accessors, and a `const fn` constructor in `__private` (`ProcessMethod`'s
+shape; many facts travel as a tier-2 `*Parts` struct); one only the framework
+reads stays whole in `__private`, built by literal; a seam a third party
+fills by hand has a public constructor (`SocialProviderEntry::new`).
+
 "The use site owns that crate by definition" is not an admissible reason;
 owning a capability means enabling its feature.
 

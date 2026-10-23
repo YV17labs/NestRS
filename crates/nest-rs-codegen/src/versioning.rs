@@ -167,6 +167,7 @@ fn check_versions(literals: &[LitStr], attr: &str, key: Option<&str>) -> syn::Re
 /// An edge belongs here once [`VersionedEdge::answer`] can say what a caller selects
 /// instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum VersionedEdge {
     /// GraphQL — refused by `#[resolver]`.
     Graphql,

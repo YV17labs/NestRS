@@ -43,7 +43,8 @@ for the whole line.
 - a public item, a decorator key, a variable, a feature or a unit;
 - a variant to a `#[non_exhaustive]` enum, or a field to a `#[non_exhaustive]`
   struct or to one with a private field;
-- a field to a `#[config]` struct, or to a `Default` struct nested in one;
+- a field to a `#[config]` struct, to a `Default` struct nested in one, or to
+  `OpenTelemetryConfig`;
 - a name to `nest_rs::prelude`;
 - a third-party library's minor;
 - the minimum supported Rust version, named in the changelog.
@@ -66,6 +67,26 @@ does not cover it. This is the one place the policy departs from Cargo's
 SemVer reference, which counts a new public field as a break: a config is the
 one struct you write as a literal, and freezing it would freeze every module's
 settings for the whole line.
+
+`OpenTelemetryConfig` is read before the container exists, so it is no
+`#[config]`, but it grows the same way: start from `OpenTelemetryConfig::new`
+or `from_env`, and set what you change on that value, through its `with_*`
+methods or its fields.
+
+## Match and build the rest the way it grows
+
+Every other public enum leaves room for a variant, so a `match` on one ends in
+a `_` arm. The few a standard or their own definition closes are matched
+whole, and their docs say so — Kubernetes' three probes (`ProbeKind`), for
+example, or a delay that is relative or absolute (`Delay`).
+
+Every other public struct leaves room for a field: read its fields, and build
+one through its constructor — `Page::new`, `CronJobMeta::new`,
+`SocialProviderEntry::new`. Two kinds never grow, so you build them as
+written: a wrapper around its one value, such as `Json(value)`, and a shape a
+standard closes, such as W3C Trace Context's `TraceParent`. A registry entry a
+decorator submits, such as `ScheduledMethod`, is read through its accessors
+and built only by its decorator.
 
 ## The `__private` tier
 

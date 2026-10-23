@@ -387,7 +387,7 @@ mod tests {
                 "nest_rs_seaorm::health::indicator",
                 "db",
                 ProbeKind::Readiness,
-                || std::any::TypeId::of::<UpHost>(),
+                std::any::TypeId::of::<UpHost>,
                 |_| Box::pin(async move { Ok(()) }),
             ),
         );
@@ -433,7 +433,7 @@ mod tests {
             "features::probes::up",
             "up_host",
             ProbeKind::Readiness,
-            || std::any::TypeId::of::<UpHost>(),
+            std::any::TypeId::of::<UpHost>,
             |c| Box::pin(async move {
                 c.get::<UpHost>().expect("UpHost registered").ping().await
             }),
@@ -445,7 +445,7 @@ mod tests {
             "features::probes::down",
             "down_host",
             ProbeKind::Readiness,
-            || std::any::TypeId::of::<DownHost>(),
+            std::any::TypeId::of::<DownHost>,
             |c| Box::pin(async move {
                 c.get::<DownHost>().expect("DownHost registered").ping().await
             }),

@@ -97,6 +97,12 @@ when it is wired.
   install contract `just lint` builds one by one; a sub-crate is a compilation
   unit, and its tier 2 is exactly what moves under a package's feet.
 
+**2026-10-23 — `OpenTelemetryConfig` grows as a config does.** It is read
+before the container exists, so it is no `#[config]`, but a program builds it
+over its base (`new`, `from_env`) as a config is built over
+`..Default::default()`: a new field is a minor, a complete literal not
+covered (`room-to-grow.md`).
+
 ## Open — the owner's
 
 Whether a security fix that refuses a configuration 7.x used to accept — an

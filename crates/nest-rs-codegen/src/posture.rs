@@ -75,6 +75,11 @@ pub fn posture_key_unsupported(key: &str, site: &str, because: &str) -> String {
 }
 
 /// What an operation declared about who may call it.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "tier 2: the `#[messages]` and `#[tools]` emitters match it, and a new posture \
+              must reach each"
+)]
 pub enum Posture {
     /// `#[authorize(Action, Entity)]` — emit the class gate, and the response mask
     /// unless `unmasked` opted the return shape out of it.

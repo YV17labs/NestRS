@@ -9,6 +9,10 @@ use crate::grammar::Grammar;
 
 /// How a generated `list` op bounds its result set.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "tier 2: `#[crud]`'s HTTP and GraphQL emitters match it, and a new mode must reach both"
+)]
 pub enum Paginate {
     /// Keyset over the primary key — the default.
     Cursor,
@@ -22,6 +26,7 @@ pub enum Paginate {
 /// matching opt-in trait (`Creatable`/`Updatable`/`Deletable`); `Create`/`Update`
 /// additionally require an input type (`create = ` / `update = `).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
 pub enum CrudOp {
     /// `GET /` — the collection, bounded by [`Paginate`].
     List,
@@ -36,6 +41,7 @@ pub enum CrudOp {
 }
 
 /// Which operations a `#[crud]` block generates.
+#[non_exhaustive]
 pub enum OpsSelection {
     /// No `ops = [...]` given: `list` + `get` + `delete` always, plus
     /// `create`/`update` when their input type is given.

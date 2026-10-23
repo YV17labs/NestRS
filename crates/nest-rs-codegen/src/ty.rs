@@ -66,6 +66,11 @@ pub fn generic_args(ty: &Type) -> Option<(&Ident, Vec<&Type>)> {
 /// A per-argument pipe binding read off a parameter's type — the shape
 /// `#[resolver]`, `#[messages]` and `#[processor]` each need to strip before
 /// deserializing the wire value.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "tier 2: the `#[processor]`, `#[messages]`, `#[tools]` and `#[operations]` \
+              emitters match it, and a new wrapper must reach each"
+)]
 pub enum PipeWrapper {
     /// `Piped<P, T>` — run pipe `P` over the wire value `T`.
     Piped {
@@ -223,6 +228,7 @@ pub fn answer_span(sig: &syn::Signature) -> proc_macro2::Span {
 /// What an impl half's expansion calls a decorated method through — the one
 /// thing about the receiver that differs between the nine decorators.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HostBorrow {
     /// A borrow of the host alone: an edge dispatches from code holding `&Self`.
     Host,

@@ -27,6 +27,10 @@ const TIMEOUT_CEILING_MILLIS: u64 = 24 * 60 * 60 * 1000;
 /// A member of the worker-job family — a decorator that declares a unit of work
 /// a worker transport drives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "tier 2: `#[scheduled]` matches it, and a new member must reach its emitter"
+)]
 pub enum JobDecorator {
     /// `#[process]` — a job delivered from a queue.
     Process,
@@ -113,6 +117,10 @@ const fn column(member: JobDecorator) -> Column {
 
 /// A key of the worker-job family — every key any member takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "tier 2: `#[processor]` and `#[scheduled]` match it, and a new key must reach both"
+)]
 pub enum JobKey {
     /// `queue = AudioQueue` — the `#[queue]` marker a job is delivered from.
     Queue,

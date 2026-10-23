@@ -24,20 +24,24 @@ on its surface crate.
 
 ## Every emitted path is rooted
 
-An expansion lands in the developer's crate, so it emits only `::std` / `::core`
-paths and paths rooted at `::nest_rs::<concern>::`. A `*-macros` crate whose
-expansion also lands in framework crates that do not carry the umbrella reaches
-its **own** surface crate's re-export (`::nest_rs_queue::TARGET` from
-`nest-rs-queue-macros`), never a sibling's root and never a bare third-party
-path — `::anyhow`, `::tracing`, `::uuid` resolve against the consumer's extern
-prelude and break every app that lacks that direct dependency. Routing through
-the umbrella is also what dissolves the cycles: `nest-rs-guards` sits below
-the transports, `nest-rs-authz` and `nest-rs-seaorm` above them, and only
-`::nest_rs::` sits above all of them. One place roots them:
-`nest_rs_codegen::reroot`, which every decorator calls on its finished
-expansion, and which follows a path an attribute pulled in (`#[authorize]`,
-`#[crud]`) with the umbrella's check for its feature, under the `cfg`s around
-that path.
+An expansion lands in the developer's crate, so it emits only `::std` /
+`::core` paths and `::nest_rs_<concern>::` roots, which
+`nest_rs_codegen::reroot` — called by every decorator on its finished
+expansion — rewrites to `::nest_rs::<concern>::` at a call site holding the
+umbrella; a framework crate, which cannot depend on the umbrella, keeps the
+sibling root. A macro crate roots a sibling concern only when the umbrella
+feature of its own capability enables that concern (`http` enables `guards`
+and `pipes`, so `#[routes]` roots both), or when an attribute the developer
+writes drives the emission and the concern is attribute-gated in codegen's
+crate table (`#[authorize]` reaches `authz`, `#[crud]` `seaorm`): `reroot`
+follows that path with the umbrella's check for its feature, under the `cfg`s
+around it. Never a bare third-party path — `::anyhow`, `::tracing`, `::uuid`
+resolve against the consumer's extern prelude and break every app that lacks
+that direct dependency. Routing through the umbrella is also what dissolves
+the cycles: `nest-rs-guards` and `nest-rs-pipes` sit below the transports, on
+core alone, `nest-rs-authz` and `nest-rs-seaorm` above them, and only
+`::nest_rs::` above all of them. Held by `nest-rs-macro-hygiene`'s
+per-feature check.
 
 **A seam that is not public API lives in its crate's `__private`** — one inline
 `#[doc(hidden)] pub mod __private` of `pub use` in `lib.rs` — reached as

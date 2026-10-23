@@ -269,7 +269,7 @@ exist. **Owns, not emits** — a concern several crates emit on is declared once
 by the crate the others already depend on and read from there. A crate owning
 one concern spells it `TARGET` at its root; a crate owning several has a
 `target` module (`nest_rs_core::target`, `nest_rs_http::target`). A `*-macros`
-crate reaches its own surface crate's re-export (`macros.md`).
+crate emits its surface crate's constant, rooted as `macros.md` says.
 
 **The root is the crate, never the product**: a feature in `features` emits on
 `features::…` whatever the binary is called, because a target's one job is to

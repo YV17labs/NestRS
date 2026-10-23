@@ -199,7 +199,7 @@ async fn ws_dispatches_to_a_destructured_payload_argument() {
     match reply {
         WsReply::Reply(v) => assert_eq!(v.as_str(), Some("framed")),
         WsReply::Error(msg) => panic!("expected a reply, got error: {msg}"),
-        WsReply::None => panic!("expected a reply, got none"),
+        other => panic!("expected a reply, got {other:?}"),
     }
 }
 

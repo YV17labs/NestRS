@@ -586,7 +586,7 @@ async fn an_aliased_result_produces_an_error_frame_not_a_serialized_err() {
     match reply {
         WsReply::Error(msg) => assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE),
         WsReply::Reply(value) => panic!("the Err variant was shipped as a success frame — {value}"),
-        WsReply::None => panic!("expected an error frame"),
+        other => panic!("expected an error frame, got {other:?}"),
     }
 
     let event = logs.expect_one("nest_rs::ws", "websocket message failed");
@@ -612,7 +612,7 @@ async fn an_aliased_result_with_a_display_only_error_is_an_error_frame() {
     match reply {
         WsReply::Error(msg) => assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE),
         WsReply::Reply(value) => panic!("the Err variant was shipped as a success frame — {value}"),
-        WsReply::None => panic!("expected an error frame"),
+        other => panic!("expected an error frame, got {other:?}"),
     }
     let failed = logs.expect_one("nest_rs::ws", "websocket message failed");
     assert_eq!(
@@ -668,7 +668,7 @@ async fn a_result_inside_a_result_is_an_error_frame_however_it_is_spelled() {
             WsReply::Reply(value) => {
                 panic!("`{event}`: the inner Err was shipped as a success frame — {value}")
             }
-            WsReply::None => panic!("`{event}`: expected an error frame"),
+            other => panic!("`{event}`: expected an error frame, got {other:?}"),
         }
         let line = logs.expect_one("nest_rs::ws", "websocket message failed");
         assert_eq!(line.field("event").as_deref(), Some(event));
@@ -762,7 +762,7 @@ async fn a_malformed_payload_warns_on_the_ws_target() {
             msg.error,
         ),
         WsReply::Reply(value) => panic!("expected an error frame, got a reply: {value}"),
-        WsReply::None => panic!("expected an error frame, got silence"),
+        other => panic!("expected an error frame, got {other:?}"),
     }
 
     let event = logs.expect_one(

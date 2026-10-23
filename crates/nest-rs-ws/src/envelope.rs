@@ -16,6 +16,7 @@ const UNKNOWN_EVENT: &str = "unknown event";
 /// `{ "event": ..., "data": ... }` — the wire shape every gateway message
 /// rides.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct WsEnvelope {
     /// The message's event name, routing it and labelling its reply.
     pub event: String,
@@ -44,6 +45,7 @@ impl WsEnvelope {
 /// What an error frame carries: the human-readable message, plus the structured
 /// per-field detail when the failure had any, under HTTP's RFC 9457 `errors` name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct WsError {
     /// The human-readable message — the frame's `data.error`.
     pub error: String,
@@ -133,6 +135,7 @@ impl<T: Into<String>> From<T> for WsError {
 
 /// What a message answers: a frame, an error frame, or silence.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum WsReply {
     /// Send this value back on the request's event name.
     Reply(serde_json::Value),
@@ -400,6 +403,14 @@ fn unsendable(rendered: Rendered) -> HandlerFailed {
 pub struct ReplyValue<T>(pub T);
 
 /// A handler's return value, split into what replies and what failed.
+///
+/// Exhaustive on purpose: a return replies or it failed, so a caller matches
+/// both and never needs a `_` arm.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "closed by definition: a return replies or it failed, and every `#[messages]` \
+              expansion matches both"
+)]
 pub enum ReplyOutcome<T, E> {
     /// The value a success replies with — split again, or serialized.
     Value(T),

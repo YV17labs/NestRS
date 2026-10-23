@@ -229,6 +229,7 @@ impl Interceptor for ReadsTheReply {
                 Some(WsReply::Error(frame)) => format!("error: {}", frame.error),
                 Some(WsReply::Reply(data)) => format!("reply: {data}"),
                 Some(WsReply::None) => "silence".to_owned(),
+                Some(other) => format!("{other:?}"),
                 None => "nothing".to_owned(),
             };
             READ_AT_THE_UNIT_STAGE

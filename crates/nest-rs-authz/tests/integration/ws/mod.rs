@@ -85,6 +85,7 @@ pub(crate) fn body(reply: WsReply) -> String {
         WsReply::Reply(value) => value.to_string(),
         WsReply::Error(error) => format!("error: {error}"),
         WsReply::None => "none".to_owned(),
+        other => format!("{other:?}"),
     }
 }
 

@@ -327,15 +327,15 @@ fn emit_fk_loaders(
                                 ));
                             }
                             __out.insert(
-                                ::nest_rs_seaorm::graphql::RelationKey {
-                                    parent: __parent,
-                                    first: __first,
-                                    after: ::core::clone::Clone::clone(&__after),
-                                },
-                                ::nest_rs_seaorm::graphql::RelationPage {
-                                    edges: __edges,
-                                    has_next_page: __page.has_more,
-                                },
+                                ::nest_rs_seaorm::__private::relation_key(
+                                    __parent,
+                                    __first,
+                                    ::core::clone::Clone::clone(&__after),
+                                ),
+                                ::nest_rs_seaorm::__private::relation_page(
+                                    __edges,
+                                    __page.has_more,
+                                ),
                             );
                         }
                     }
@@ -538,14 +538,14 @@ fn emit_has_many_method(
                     ))
                 })?;
             let __page = __loader
-                .load_one(::nest_rs_seaorm::graphql::RelationKey {
-                    parent: #key_expr,
-                    first: ::nest_rs_seaorm::clamp_page_size(::core::option::Option::unwrap_or(
+                .load_one(::nest_rs_seaorm::__private::relation_key(
+                    #key_expr,
+                    ::nest_rs_seaorm::clamp_page_size(::core::option::Option::unwrap_or(
                         first,
                         ::nest_rs_seaorm::DEFAULT_PAGE_SIZE,
                     )),
-                    after: __after,
-                })
+                    __after,
+                ))
                 .await?
                 .unwrap_or_default();
             ::core::result::Result::Ok(

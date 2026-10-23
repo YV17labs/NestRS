@@ -117,6 +117,8 @@ pub mod __private {
     pub use crate::error::http_crud_error;
     pub use crate::error::masking;
     #[cfg(feature = "graphql")]
+    pub use crate::graphql::relations::__private::{relation_key, relation_page};
+    #[cfg(feature = "graphql")]
     pub use crate::page::graphql_page_cursor;
 
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};

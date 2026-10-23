@@ -8,7 +8,7 @@
 //! resolved in a mutation's own response reads the state before the mutation.
 
 mod bind;
-mod relations;
+pub(crate) mod relations;
 
 pub use bind::{bind, bind_required, parse_v7};
 pub use relations::{PkLoadable, RelatedTo, RelationKey, RelationPage, SoleForeignKey};

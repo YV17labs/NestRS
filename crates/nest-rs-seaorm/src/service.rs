@@ -35,6 +35,10 @@ pub trait UpdateModel<E: EntityTrait> {
 ///
 /// Exhaustive on purpose: found, denied or missing is the whole answer to a
 /// load by id, so a caller matches all three and never needs a `_` arm.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "closed by definition: a load by id finds the row, is denied it, or misses it"
+)]
 pub enum Access<M> {
     /// The row exists and the ability grants the action — carries the row.
     Found(M),

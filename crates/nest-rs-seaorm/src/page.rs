@@ -20,6 +20,7 @@ use crate::repo::{Repo, scope_for};
 /// One keyset page. `next_cursor` is the last row's primary key, present only
 /// when [`has_more`](Page::has_more).
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Page<M> {
     /// The rows on this page, ascending by primary key.
     pub items: Vec<M>,
@@ -28,6 +29,30 @@ pub struct Page<M> {
     pub next_cursor: Option<PageCursor>,
     /// Whether a further page exists (an extra row was over-fetched).
     pub has_more: bool,
+}
+
+impl<M> Page<M> {
+    /// The page holding `items`, its next page starting after `next_cursor`
+    /// when `has_more` — as a service hands on a page whose rows it mapped.
+    ///
+    /// ```
+    /// use nest_rs_seaorm::Page;
+    ///
+    /// let rows = Page::new(vec![1, 2], None, false);
+    /// let shown = Page::new(
+    ///     rows.items.iter().map(|id| format!("post {id}")).collect(),
+    ///     rows.next_cursor,
+    ///     rows.has_more,
+    /// );
+    /// assert_eq!(shown.items, ["post 1", "post 2"]);
+    /// ```
+    pub fn new(items: Vec<M>, next_cursor: Option<PageCursor>, has_more: bool) -> Self {
+        Self {
+            items,
+            next_cursor,
+            has_more,
+        }
+    }
 }
 
 /// The refusal of an `after` no page issued: it names the parameter, never the
@@ -191,6 +216,7 @@ pub(crate) fn next_cursor_from<M>(
 /// The `?first=&after=` cursor query. An `after` no page issued is refused,
 /// never read as the first page.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[non_exhaustive]
 pub struct PageParams {
     /// Requested page size; defaults to 20 and is clamped to `1..=100`.
     pub first: Option<u64>,
@@ -200,6 +226,20 @@ pub struct PageParams {
 }
 
 impl PageParams {
+    /// The query asking `first` rows after `after`, as a request spells it.
+    ///
+    /// ```
+    /// use nest_rs_seaorm::PageParams;
+    ///
+    /// let params = PageParams::new(Some(500), None);
+    /// assert_eq!(params.limit(), 100);
+    /// assert!(params.cursor()?.is_none());
+    /// # Ok::<(), nest_rs_pipes::PipeError>(())
+    /// ```
+    pub fn new(first: Option<u64>, after: Option<String>) -> Self {
+        Self { first, after }
+    }
+
     /// Page size, defaulting to 20 and clamped to `1..=100`.
     pub fn limit(&self) -> u64 {
         clamp_page_size(self.first.unwrap_or(DEFAULT_PAGE_SIZE))
@@ -667,19 +707,6 @@ mod tests {
         let (items, more) = split_overfetched::<i32>(vec![], 10);
         assert!(items.is_empty());
         assert!(!more);
-    }
-
-    #[test]
-    fn page_struct_fields_are_publicly_constructible() {
-        let cursor = PageCursor::from(Uuid::now_v7());
-        let page = Page {
-            items: vec!["a", "b"],
-            next_cursor: Some(cursor.clone()),
-            has_more: true,
-        };
-        assert_eq!(page.items.len(), 2);
-        assert_eq!(page.next_cursor, Some(cursor));
-        assert!(page.has_more);
     }
 
     #[test]

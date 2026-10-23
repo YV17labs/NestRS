@@ -9,6 +9,7 @@ use nest_rs_graphql::async_graphql::connection::{Connection, Edge};
 /// The window travels in the key: keyed by parent alone, two sibling selections
 /// asking different windows of one relation would both get the first one's page.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct RelationKey<K> {
     /// The parent row's primary key — the child's foreign-key value.
     pub parent: K,
@@ -23,11 +24,39 @@ pub struct RelationKey<K> {
 ///
 /// Not a `Connection`: a `Loader::Value` must be `Clone` and a `Connection` is not.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct RelationPage<T> {
     /// `(cursor, node)` in primary-key order.
     pub edges: Vec<(String, T)>,
     /// Whether a further page exists — an over-fetched row, not a count.
     pub has_next_page: bool,
+}
+
+/// `graphql` is public: the constructors `#[expose]` emits live here, reached
+/// only through the crate's `__private`.
+pub(crate) mod __private {
+    use super::{RelationKey, RelationPage};
+
+    /// The key `#[expose]`'s relation loader asks one parent's page under.
+    pub fn relation_key<K>(
+        parent: K,
+        first: u64,
+        after: Option<crate::PageCursor>,
+    ) -> RelationKey<K> {
+        RelationKey {
+            parent,
+            first,
+            after,
+        }
+    }
+
+    /// The page `#[expose]`'s relation loader answers one parent with.
+    pub fn relation_page<T>(edges: Vec<(String, T)>, has_next_page: bool) -> RelationPage<T> {
+        RelationPage {
+            edges,
+            has_next_page,
+        }
+    }
 }
 
 impl<T> Default for RelationPage<T> {

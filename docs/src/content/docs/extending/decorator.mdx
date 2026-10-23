@@ -156,12 +156,13 @@ fn wire(container: &Container) -> anyhow::Result<()> {
         return Ok(());
     };
     for entry in inventory::iter::<AuditedEntry>() {
-        if !reachable.reaches((entry.provider_type_id)()) {
+        let host = (entry.provider_type_id)();
+        if !reachable.reaches(host) {
             nest_rs::core::report_inert_host!(
                 target: crate::TARGET,
                 what: "#[audited] struct",
                 origin: entry.origin,
-                host: (entry.provider_type_id)(),
+                host: host,
                 container: container,
                 topic = entry.topic,
             );
@@ -184,10 +185,6 @@ the framework fills from its decorators — listeners, scheduled methods,
 indicators, processors — is read this way, and `ReachableProviders::of` and
 `report_inert_host!` each carry a compiled example on docs.rs.
 
-Your users' tests boot through `TestApp`, `HeadlessApp` or `App::builder`,
-which seal the set as `App::run` does, so a test discovers what production
-does.
-
 ## Test it
 
 The expansion is a function from tokens to tokens, so a unit test calls it
@@ -201,7 +198,10 @@ assert_eq!(refused.to_string(), "unknown #[audited] argument `topc`; expected `t
 ```
 
 What the expansion does in an app — the entry discovered, or reported inert —
-is your module's integration test, booted as above.
+is your module's integration test, booted as
+[Writing a package](/extending/package/#test-it) shows: `TestApp`,
+`HeadlessApp` and `App::builder` seal the set as `App::run` does, so a test
+discovers what production does.
 
 ## Going further
 

@@ -26,11 +26,11 @@ cargo add nest-rs --dev --no-default-features --features database,http,testing
 A driver implements the port rather than consuming it, so it takes `database`
 without `seaorm` — the first-party integration is what you are replacing. It
 needs no edge feature: every edge, HTTP included, opens its units through the
-binding on its own — its tests take `http` to drive one. Your crate is `nestrs-<technology>`, depending on the
-umbrella alone beside what your store needs; the
-[naming rule](/semver/#naming-a-package) roots every name it owns at that
-crate, its span target included. The app picks a driver by importing its
-binding instead of `SeaOrmDatabaseModule`.
+binding on its own — its tests take `http` to drive one. Your crate is
+`nestrs-<technology>`, depending on the umbrella alone beside what your store
+needs; the [naming rule](/semver/#naming-a-package) roots every name it owns
+at that crate, its span target included. The app picks a driver by importing
+its binding instead of `SeaOrmDatabaseModule`.
 
 ## The contract
 
@@ -126,9 +126,9 @@ Box::pin(told(ok, transport, net, deadline, answered, async move {
 What your binding owes:
 
 - **Settle on the outcome you are handed.** `ok` is the edge's verdict — a
-  2xx, a reply that is not an error frame, a tool answer without `isError`, a
-  job's `Ok`. `Settlement::Unhonoured` turns a success you could not keep into
-  the edge's failure; a failure stands whatever you answer.
+  2xx or 3xx, a reply that is not an error frame, a tool answer without
+  `isError`, a job's `Ok`. `Settlement::Unhonoured` turns a success you could
+  not keep into the edge's failure; a failure stands whatever you answer.
 - **Answer within your settle net.** Past `settle_net` without your store's
   answer to a commit, answer `Unhonoured::IN_DOUBT`: the commit may have
   landed, so the unit is never retried. Wait for the held work until the
@@ -147,14 +147,12 @@ What your binding owes:
 
 You write nothing per edge: each resolves your binding once, when it mounts
 or boots, and runs every unit through it, around its guards — so a guard that
-denies has run before anything opens. On HTTP, a safe method (`GET`, `HEAD`,
-`OPTIONS`, `TRACE`) opens a `Pool` unit and a mutating one a `PerUnit` unit,
-committed on a success and rolled back on a handler error or any `4xx`/`5xx`,
-whatever an exception filter answered. `/graphql` and `/mcp` open a `Pool`
-unit for the request, and each operation opens its own. The request timeout
-cuts the body, never the commit: the edge waits your `settle_net` past the
-unit's deadline before it answers `500` for a commit that never answered. What
-the router answers itself — a `404`, a `405` — opens no unit.
+denies has run before anything opens. Which policy each edge's units ask for,
+and which outcome commits, is the app's side of this contract, on
+[Transactions](/database/transactions/#how-the-auto-commit-works). The request
+timeout cuts the body, never the commit: the edge waits your `settle_net` past
+the unit's deadline before it answers `500` for a commit that never answered.
+What the router answers itself — a `404`, a `405` — opens no unit.
 
 ### Atomic blocks (optional)
 
@@ -256,14 +254,12 @@ pins, as every module's is.
 
 ### Close what it opened
 
-What the substrate opens, it closes with `provide_close`, attached in
-`collect` beside its factory, so a boot whose later factory fails still
-closes the pool. Closes run after every shutdown hook, the value installed
-last closing first — which is why the binding installs its `Settles` after
-the pool: every unit's settle is drained before the pool says goodbye. The
-pool's close then waits `SHUTDOWN_SETTLE_TIMEOUT`, half a second, for what
-the settled units hand back, and says what it leaves at `warn`. A pool the
-app seeded instead — a test's database — is the app's to close.
+What the substrate opens, it closes with `provide_close`, by the rules
+[Writing a package](/extending/package/#a-resource-it-opens) gives. The value
+installed last closes first, which is why the binding installs its `Settles`
+after the pool: every unit's settle is drained before the pool says goodbye.
+The pool's close then waits `SHUTDOWN_SETTLE_TIMEOUT`, half a second, for what
+the settled units hand back, and says what it leaves at `warn`.
 
 ## Budget and net
 

@@ -211,3 +211,65 @@ GraphQL grammar bounds.
   header, hex the client wrote — a secret minted as hex or as a UUID
   included — is recorded as a minted id would be. The shape is all a header
   without a grammar offers to check.
+
+## 2026-10-26 — a decode failure says where, in the names its type declares
+
+SEC-03 and B-122 took the value out of every decode failure the framework
+says; nothing said where. A query parameter a type refused answered `a value
+its type does not accept`, naming no parameter; a JSON body named a line and
+a column, never the field; a WebSocket payload, an MCP tool's arguments, a
+job's payload and a structured config value the same.
+
+- **Where is read off the type, never the payload.** A failed decode runs
+  once more over the same payload under a tracker (`DecodeError::located`,
+  nest-rs-core's `decode_path.rs`), only after it failed. A step is a field
+  by the name out of the `fields` list a derive hands `deserialize_struct`,
+  a variant out of `variants`, an element by its index; **any other key — a
+  map's, or one a struct does not declare — is an entry, `[…]`**, its text
+  never said: it is the sender's, as an unknown field's key is above. A
+  field missing or given twice is placed at the field; a type's refusal in
+  its own words keeps the fallback and adds what the visitor that refused
+  expected, the type's words as serde's `expected …` tails are — nothing
+  when the type refused a value a nested read had accepted (a `try_from`
+  newtype, inside an `Option` or not), since what its holder expected was
+  met.
+- **What it costs.** A payload decoded from its text — a query, a form, a
+  JSON body, a GraphQL request body, a config value, a WebSocket envelope —
+  pays nothing on success: the text is still there to read again. A payload
+  the edge already holds as a `serde_json::Value` — a WebSocket message's
+  `data`, an MCP call's arguments, a job's payload — must outlive its first
+  decode, so it is decoded by reference instead of moved: every string it
+  holds is copied on every decode, about 90 ns on an eight-string payload
+  (520 ns against 435 ns for its parse and decode, release build). Taken:
+  correctness ranks above that copy, and a report says where on every edge
+  or on none.
+- **Each edge says it in the vocabulary its set already uses**: `query
+  parameter `p``, `form field `p``, `JSON body at `p``, as `path parameter
+  `id`` and `header `X-Api-Key`` did; the WebSocket envelope and payload
+  frames (`invalid envelope at `event`: missing`), MCP's refusal (its
+  `failed to deserialize parameters:` prefix whole, which rmcp's router
+  reads) and a job's dead letter put the path in their own sentence.
+- **A deployment's value is said by its place, never its text**: a boot
+  refusal names the setting and where in it — a structured value's path, a
+  URL's parameter by its position — as the `.env` cascade's refusals of
+  `<PREFIX>_ENV` and of the prefix now do.
+- **Refused: serde_path_to_error**, which the plan named. Its deserialize
+  side records every object key as the payload's own text
+  (`Segment::Map { key: String }`), a struct's field and a map's key alike,
+  and a `deny_unknown_fields` refusal with the unknown key in its path: its
+  rendering quotes what the client chose, and nothing it hands back tells
+  the two apart.
+- **What serde reads from a buffer of its own is placed at its holder**: an
+  internally tagged or untagged enum's content, a `#[serde(flatten)]`
+  field; a struct with a flattened field is read as a map, so its own fields
+  are said as entries. Less said, nothing quoted.
+- **Not located**: a multipart GraphQL request's `operations` and `map`
+  parts, whose payload is gone (async-graphql returns its own error, not the
+  part); a queue record that is no JSON at all, whose syntax names a line
+  and a column; and a graphql-ws frame that is no protocol message, which
+  stays `not a graphql-ws message`: async-graphql's `ClientMessage` is an
+  internally tagged enum, read through serde's buffer, so a re-run would
+  place nothing, and the answer is the engine's Close frame, whose reason
+  RFC 6455 §5.5 caps at 123 bytes — the report, kind and expectation, is on
+  the `debug` line. GraphQL's arguments and variables are named by
+  async-graphql itself.

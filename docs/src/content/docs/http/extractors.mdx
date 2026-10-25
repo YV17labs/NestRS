@@ -24,7 +24,8 @@ This page is the reference: one extractor, one example, one rule. The
 
 ## `Json<T>` — typed JSON in and out
 
-Parses the request body into `T`; rejects malformed JSON with `400`.
+Parses the request body into `T`; rejects a body that does not decode with
+`400`, naming where — ``JSON body at `title`: missing`` — and never the value.
 Works as a return type too — serializes `T`, sets
 `Content-Type: application/json`, and feeds the OpenAPI document with
 the same schema:

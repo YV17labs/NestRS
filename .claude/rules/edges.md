@@ -159,7 +159,8 @@ guard, filter or interceptor loop of its own.
     `.opaque()?` infer. A handler's error is boxed with
     `nest_rs_core::boxed_error`, never `.into()`, so its chain stays
     readable; every reply built from an error says a decode failure without
-    its value (`DecodeError::redact`), and a library's refusal quoting what
+    its value (`DecodeError::redact`), where it failed when the edge decoded
+    the payload (`DecodeError::located`), and a library's refusal quoting what
     the request sent — a value its variables held, a name or a header only
     the request named — by kind, matched on the locked version's wording, the
     stated exceptions aside (`.claude/decisions/payload-never-quoted.md`).

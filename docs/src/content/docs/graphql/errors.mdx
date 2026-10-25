@@ -331,7 +331,7 @@ edge says one — where and of what kind, never the value sent, under
 ```bash frame="terminal"
 $ curl -s localhost:3000/graphql -H 'content-type: application/json' \
     -d '{"query":"{ tag }","variables":"sk_live_secret"}'
-{"errors":[{"message":"the body is not a GraphQL request: invalid type: a string, expected a map at line 1 column 47","extensions":{"code":"INVALID_ARGUMENT"}}]}
+{"errors":[{"message":"the body is not a GraphQL request: the JSON body at `variables`: invalid type: a string, expected a map","extensions":{"code":"INVALID_ARGUMENT"}}]}
 ```
 
 ## Going further

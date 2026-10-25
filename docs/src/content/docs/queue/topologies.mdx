@@ -55,8 +55,10 @@ rediss-cluster://app:s3cret@node-a:6379/2?node=node-b:6379&node=node-c:6379
 | `sentinelServiceName` | — | the name the sentinels monitor the primary under — required | — |
 | `sentinelUsername`, `sentinelPassword` | — | the sentinels' own credentials, when they hold users — the password alone authenticates their `default` user | — |
 
-A parameter its topology does not take fails the boot naming it — `node` on a
-URL of one server included, which names the scheme to use instead. A value that
+A parameter its topology does not take fails the boot naming its place in the
+query and the parameters the scheme takes, never its text, which is whatever the
+URL was mistyped with; `node` on a URL of one server fails it too, naming the
+scheme to use instead. A value that
 carries `+`, `&` or `=` is percent-encoded, as in any URL query. Like every
 `<PREFIX>_REDIS__URL`, the URL may hold passwords, so set it through
 `<PREFIX>_REDIS__URL_FILE` from a secret, and no error or line quotes it: they
@@ -273,7 +275,7 @@ ACL SETUSER <user> reset on ><password> &+switch-master &+replica-reconf-done +c
 
 | The deployment | What the boot says |
 |---|---|
-| A URL naming a parameter its topology does not take, or `node` on a URL of one server | `RedisError::InvalidUrl`, naming the parameter and the scheme to use, at once |
+| A URL naming a parameter its topology does not take, or `node` on a URL of one server | `RedisError::InvalidUrl`, naming the parameter's place in the query and the scheme to use, at once |
 | A scheme declaring another topology than the server serves — `rediss://` at a Cluster node or a sentinel, `rediss-cluster://` at a server of its own, `rediss-sentinel://` at a data node | `RedisError::TopologyMismatch`, naming both, at once |
 | No sentinel answering within `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS` | `RedisError::SentinelUnreachable`, naming every sentinel |
 | Sentinels that know no primary by `sentinelServiceName` | `RedisError::PrimaryUnknown`, naming the service |

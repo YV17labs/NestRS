@@ -18,6 +18,13 @@ That's it — no separate ack channel, no second protocol for errors,
 no per-event wire format to negotiate. One envelope handles
 fire-and-forget, request/response, server pushes, and error replies.
 
+A frame that is no envelope is answered on the `error` event, saying where
+it failed and never what it held:
+
+```json
+{ "event": "error", "data": { "error": "invalid envelope at `event`: missing", "errors": { "code": "INVALID_ARGUMENT" } } }
+```
+
 ## A handler signature
 
 `#[subscribe_message("event")]` binds a method to that event name in the
@@ -156,7 +163,8 @@ async fn on_message(&self, msg: SendMessageDto) { /* ... */ }
 
 A malformed payload (wrong shape, missing fields) is treated as a
 dispatch error: the connection stays open, the client receives an error
-frame on the same event name (see below). Richer checks bind a
+frame on the same event name (see below), naming where the payload failed
+and never its value — ``invalid payload for `message` at `text`: missing``. Richer checks bind a
 [pipe](/fundamentals/pipes/) on the payload argument: `Valid<T>` runs
 `validator` rules, `Piped<P, T>` names a custom transform — a rejection
 is an error frame, and the handler body never runs.

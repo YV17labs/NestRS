@@ -401,3 +401,13 @@ vulnerability, and with `credentials` it is the opening the policy refuses for
 `*`. The refusal says so and points at `*`, which says what it opens and which
 `credentials` refuses. A `null` a browser sends is refused by both readers
 under any list but `*`.
+
+## 2026-10-26 — a form's refusal leaves poem's `url decode:` prefix
+
+The 2026-10-23 entry kept poem's sentences byte for byte, `url decode:`
+before a form's refusal included. A query, a form and a JSON body now say
+where a decode failed (`payload-never-quoted.md`, 2026-10-26): `query
+parameter `file`: …`, `form field `grant_type`: missing`, `JSON body at
+`author.name`: …`. With `form field` in the sentence, `url decode` was a
+second word for one concept, so it left; nothing else of poem's wording is
+left to keep.

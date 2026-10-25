@@ -224,13 +224,18 @@ async fn shout(&self, Valid(input): Valid<Json<GreetInput>>) -> Result<Json<Gree
   custom `Deserialize` shape (e.g. untagged enums)? Skip `#[input]` and derive
   all four by hand.
 - **`Json<T>`** parses the request body into `T`. A body that does not decode
-  is `400`, and its `detail` says where and what kind — `the JSON body does not
-  decode: invalid type: a string, expected u64 at line 1 column 12` — never the
-  value refused, nor a key the client sent: serde's own sentence quotes both,
-  and a body field is where a password or a card number travels. A body sent
-  under another media type is `415`, naming the type it expected and never the
-  one sent. `Form<T>`, `Query<T>`, `Path<T>` and `Header<T>` refuse the same
-  way, and so does a handler's own decode returned as a `400`
+  is `400`, and its `detail` says where, in the names `T` declares, what kind
+  of value it found and what was expected — ``JSON body at `author.name`:
+  invalid type: an integer, expected a string``, an element as `items[2]` — and
+  never the value refused, nor a key the client sent: serde's own sentence
+  quotes both, and a body field is where a password or a card number travels.
+  A map's entry is said as `limits[…]`, since its key is the client's. A body
+  that is not JSON at all keeps its line and column instead. A body sent under
+  another media type is `415`, naming the type it expected and never the one
+  sent. `Form<T>` (``form field `grant_type`: missing``), `Query<T>` (``query
+  parameter `file`: a value its type does not accept, expected a formatted UUID
+  string``), `Path<T>` and `Header<T>` refuse the same way, and so does a
+  handler's own decode returned as a `400`
   (`HttpError::new(err, StatusCode::BAD_REQUEST)`).
 - **`Valid<E>`** runs [validator](https://docs.rs/validator) on the
   extracted value. A failure returns `400` with the structured error list

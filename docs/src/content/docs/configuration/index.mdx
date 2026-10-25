@@ -285,10 +285,10 @@ in.
 
 **A structured value is refused without its content, whichever spelling gave
 it.** `env.json::<T>("KEY")?` decodes a JSON value as any `Deserialize` type, and
-a value that does not decode fails the boot saying where it failed, the kind of
-value found and the type expected — `invalid value for <PREFIX>_OAUTH__CLIENTS:
-invalid type: a string, expected a sequence at line 1 column 76` — never the
-value itself, inline or not: a list of records is where a deployment writes
+a value that does not decode fails the boot saying where in it it failed, the
+kind of value found and the type expected — ``invalid value for
+<PREFIX>_OAUTH__CLIENTS at `[0].scopes`: invalid type: a string, expected a
+sequence`` — never the value itself, inline or not: a list of records is where a deployment writes
 credentials, such as each OAuth client's secret. Decode one through `env.json`
 rather than `serde_json::from_str` in your own `from_env`, whose error quotes
 what it refused.

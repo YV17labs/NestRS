@@ -152,6 +152,13 @@ let token = self.jwt.sign(&claims)?;
 (default one hour); `ttl_secs()` exposes the duration directly so the
 issuer can return it alongside the token.
 
+[RFC 9068 §2.2](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2)
+lists the claims every JWT access token carries, and `sign` writes the ones
+only the signer knows: `iat`, the time it signs; `jti`, an identifier no other
+token shares; and the `aud` and `iss` you configured. Your claims name the
+rest — `sub`, `client_id` and `exp` — and a claim they already carry is kept
+as written.
+
 ## Verifying outside the guard
 
 Most code reaches the claims through `Ctx<C>`. A path that needs to

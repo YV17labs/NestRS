@@ -436,6 +436,65 @@ fn a_minted_token_carries_the_rfc9068_media_type() {
     assert_eq!(header.typ.as_deref(), Some("at+jwt"));
 }
 
+/// RFC 9068 §2.2 requires `iat` and `jti` in a JWT access token: the signer
+/// knows when it signs and draws an identifier no other token shares, so it
+/// stamps both, and a claims type's own are kept.
+#[tokio::test]
+async fn a_minted_token_carries_its_issue_time_and_an_identifier_of_its_own() {
+    let jwt = service("iat-jti-secret");
+    let mint = || jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
+    let before = get_current_timestamp();
+    let first: serde_json::Value = jwt.verify(&mint()).await.expect("verify");
+    let second: serde_json::Value = jwt.verify(&mint()).await.expect("verify");
+    let after = get_current_timestamp();
+
+    let issued = first["iat"].as_u64().expect("`iat` is a NumericDate");
+    assert!((before..=after).contains(&issued), "{first}");
+    let id = first["jti"].as_str().expect("`jti` is a string");
+    assert!(!id.is_empty(), "{first}");
+    assert_ne!(Some(id), second["jti"].as_str(), "each token names its own");
+
+    #[derive(Serialize)]
+    struct OwnClaims {
+        sub: &'static str,
+        exp: u64,
+        iat: u64,
+        jti: &'static str,
+    }
+    let own = OwnClaims {
+        sub: "alice",
+        exp: jwt.expiry(),
+        iat: 7,
+        jti: "chosen-by-the-issuer",
+    };
+    let kept: serde_json::Value = jwt
+        .verify(&jwt.sign(&own).expect("sign"))
+        .await
+        .expect("verify");
+    assert_eq!(kept["iat"], 7);
+    assert_eq!(kept["jti"], "chosen-by-the-issuer");
+
+    #[derive(Serialize)]
+    struct NullClaims {
+        sub: &'static str,
+        exp: u64,
+        jti: Option<&'static str>,
+    }
+    let null = NullClaims {
+        sub: "alice",
+        exp: jwt.expiry(),
+        jti: None,
+    };
+    let filled: serde_json::Value = jwt
+        .verify(&jwt.sign(&null).expect("sign"))
+        .await
+        .expect("verify");
+    assert!(
+        filled["jti"].as_str().is_some_and(|id| !id.is_empty()),
+        "a claim serialized as null is no claim: {filled}"
+    );
+}
+
 /// RFC 9068 §4: the resource server "MUST verify that the `typ` header value is
 /// `at+jwt` or `application/at+jwt` and reject tokens carrying any other
 /// value". An ID Token signed by the same issuer and key must not be spendable here.

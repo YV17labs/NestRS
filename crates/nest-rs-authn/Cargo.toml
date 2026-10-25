@@ -40,6 +40,9 @@ serde.workspace = true
 # Claim stamping in `JwtService` — a caller's claims type is serialized to a
 # JSON object before the framework's own claims are merged into it.
 serde_json.workspace = true
+# The `jti` every minted token carries (RFC 9068 §2.2): a random v4 id, unique
+# per token, on the version `nest-rs-core` already links.
+uuid.workspace = true
 thiserror.workspace = true
 # Argon2id for local credential storage (`hash_password` / `verify_password`).
 argon2.workspace = true

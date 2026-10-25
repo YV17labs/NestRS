@@ -8,6 +8,7 @@ use jsonwebtoken::{
 };
 use nest_rs_config::{Namespaced, var_name};
 use serde::{Serialize, de::DeserializeOwned};
+use uuid::Uuid;
 
 use crate::Algorithm;
 use crate::algorithm::{Family, algorithms_of};
@@ -240,7 +241,7 @@ pub struct JwtService {
     expires_in: Duration,
     /// Stamped onto every minted token when configured — the validation
     /// requires them on the verifying side, so the signer must not leave them
-    /// to the app's claims struct.
+    /// to the app's claims struct. `iat` and `jti` are stamped beside them.
     audience: Option<String>,
     issuer: Option<String>,
 }
@@ -466,6 +467,11 @@ impl JwtService {
 
     /// Sign `claims` into a compact JWT. Errors on a verify-only service (no
     /// encoding key) or a serialization failure.
+    ///
+    /// The token carries what the signer owns of RFC 9068 §2.2's required set
+    /// — `iat`, a fresh `jti`, and the configured `aud` and `iss` — beside
+    /// `claims`, which name the rest: `sub`, `client_id` and `exp`. A claim
+    /// `claims` already carry is never overwritten.
     pub fn sign<C: Serialize>(&self, claims: &C) -> Result<String, AuthError> {
         let signer = self.signer()?;
         self.encode_with(signer, &signer.header, claims)
@@ -478,42 +484,45 @@ impl JwtService {
         })
     }
 
-    /// Sign `claims` under `header`, stamping `aud`/`iss` first.
+    /// Sign `claims` under `header`, stamping the signer's claims first.
     fn encode_with<C: Serialize>(
         &self,
         signer: &Signer,
         header: &Header,
         claims: &C,
     ) -> Result<String, AuthError> {
-        match self.stamped(claims)? {
-            Some(stamped) => encode(header, &stamped, &signer.key),
-            None => encode(header, claims, &signer.key),
-        }
-        .map_err(|e| AuthError::failed_because("the claims could not be signed", e))
+        encode(header, &self.stamped(claims)?, &signer.key)
+            .map_err(|e| AuthError::failed_because("the claims could not be signed", e))
     }
 
-    /// Stamp the configured `aud` / `iss` onto a claims object.
+    /// `claims` as a JSON object carrying `iat`, a fresh `jti`, and the
+    /// configured `aud` / `iss`.
     ///
-    /// Verification requires both when configured, so a claims struct omitting
-    /// them would mint tokens its own verifier rejects. `None` when neither is
-    /// configured; a claims type's own `aud`/`iss` is never overwritten.
-    fn stamped<C: Serialize>(&self, claims: &C) -> Result<Option<serde_json::Value>, AuthError> {
-        if self.audience.is_none() && self.issuer.is_none() {
-            return Ok(None);
-        }
+    /// Verification requires `aud` and `iss` when configured, so a claims
+    /// struct omitting them would mint tokens its own verifier rejects. A claim
+    /// the claims type carries is never overwritten; one it serializes as
+    /// `null` is absent.
+    fn stamped<C: Serialize>(&self, claims: &C) -> Result<serde_json::Value, AuthError> {
         let mut value = serde_json::to_value(claims)
             .map_err(|e| AuthError::failed_because("the claims could not be serialized", e))?;
         let Some(map) = value.as_object_mut() else {
             // A non-object body cannot carry registered claims; the encoder fails it.
-            return Ok(None);
+            return Ok(value);
         };
-        for (key, configured) in [("aud", &self.audience), ("iss", &self.issuer)] {
-            if let Some(v) = configured {
-                map.entry(key)
-                    .or_insert_with(|| serde_json::Value::String(v.clone()));
+        let stamps: [(&str, Option<serde_json::Value>); 4] = [
+            ("iat", Some(get_current_timestamp().into())),
+            ("jti", Some(Uuid::new_v4().to_string().into())),
+            ("aud", self.audience.clone().map(Into::into)),
+            ("iss", self.issuer.clone().map(Into::into)),
+        ];
+        for (key, stamp) in stamps {
+            if let Some(stamp) = stamp
+                && map.get(key).is_none_or(serde_json::Value::is_null)
+            {
+                map.insert(key.to_owned(), stamp);
             }
         }
-        Ok(Some(value))
+        Ok(value)
     }
 
     /// Verify `token` and deserialize its claims into `C`, applying the pinned

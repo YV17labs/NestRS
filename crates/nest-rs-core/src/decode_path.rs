@@ -839,6 +839,21 @@ mod tests {
     }
 
     #[test]
+    fn a_struct_serde_reads_as_a_map_says_its_fields_as_entries() {
+        #[derive(Debug, Deserialize)]
+        #[expect(
+            dead_code,
+            reason = "the fields exist for serde to read; the test asserts where it failed"
+        )]
+        struct Loose {
+            count: u32,
+            #[serde(flatten)]
+            rest: HashMap<String, serde_json::Value>,
+        }
+        assert_eq!(path_of::<Loose>(r#"{"count":"x"}"#), "[…]");
+    }
+
+    #[test]
     fn a_struct_s_own_failure_carries_its_declared_fields() {
         let missing = failed::<Author>("{}");
         assert_eq!(missing.path.to_string(), "");

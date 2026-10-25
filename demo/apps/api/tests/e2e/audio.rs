@@ -57,6 +57,31 @@ async fn audio_transcode_endpoint_enqueues_a_job_for_the_worker() {
 }
 
 #[tokio::test]
+async fn a_download_whose_file_is_no_uuid_names_the_parameter_and_never_the_value() {
+    let (_db, app) = boot().await;
+    let bearer = format!("Bearer {}", login().await);
+    let resp = app
+        .http()
+        .get("/audio/download?file=not-a-uuid")
+        .header(header::AUTHORIZATION, &bearer)
+        .send()
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    let detail = resp
+        .json()
+        .await
+        .value()
+        .object()
+        .get("detail")
+        .string()
+        .to_owned();
+    assert!(
+        detail.starts_with("query parameter `file`: ") && !detail.contains("not-a-uuid"),
+        "{detail}"
+    );
+}
+
+#[tokio::test]
 async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
     let (_db, app) = boot().await;
     let bearer = format!("Bearer {}", login().await);

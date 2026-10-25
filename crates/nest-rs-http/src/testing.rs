@@ -2,8 +2,8 @@
 //! so its `OnUpgrade` yields a socket once answered; an allocator counting the
 //! bytes a thread holds on the heap; a handler whose future weighs what a test
 //! asks; the in-process call this crate's units drive an endpoint with, since
-//! `nest_rs_testing::TestClient` names the crate's other copy; and the document
-//! every opaque `500` answers.
+//! `nest_rs_testing::TestClient` names the crate's other copy; the `detail` an
+//! extractor's `400` says; and the document every opaque `500` answers.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -210,6 +210,24 @@ pub(crate) async fn text(response: crate::Response) -> String {
         .into_string()
         .await
         .expect("a text body")
+}
+
+/// The `detail` of the `400` problem document an extractor's refusal answers.
+pub(crate) async fn refusal_detail(refused: crate::HttpError) -> String {
+    let response = refused.into_response();
+    assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .map(|v| v.as_bytes()),
+        Some(b"application/problem+json".as_slice()),
+        "a refusal renders as RFC-9457, like every other edge error",
+    );
+    let problem: serde_json::Value =
+        serde_json::from_str(&text(response).await).expect("a problem document");
+    assert_eq!(problem["status"], 400);
+    problem["detail"].as_str().unwrap_or_default().to_owned()
 }
 
 /// The one document every opaque `500` is: its class's `code`, no `detail`.

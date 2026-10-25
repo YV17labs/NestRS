@@ -409,7 +409,7 @@ async fn a_body_that_does_not_decode_is_refused_without_its_value() {
                 .await;
             assert_eq!(
                 detail(resp).await,
-                "the JSON body does not decode: invalid type: a string, expected u64 at line 1 column 34",
+                "JSON body at `amount`: invalid type: a string, expected u64",
                 "{path}",
             );
         }
@@ -422,7 +422,7 @@ async fn a_body_that_does_not_decode_is_refused_without_its_value() {
                 .await;
             assert_eq!(
                 detail(resp).await,
-                "the JSON body does not decode: invalid type: a sequence, expected u64 at line 1 column 10",
+                "JSON body at `amount`: invalid type: a sequence, expected u64",
                 "{path}",
             );
         }
@@ -434,7 +434,7 @@ async fn a_body_that_does_not_decode_is_refused_without_its_value() {
             .await;
         assert_eq!(
             detail(resp).await,
-            "the JSON body does not decode: unknown field, expected `amount` at line 1 column 36",
+            "JSON body: unknown field, expected `amount`",
         );
     }
     assert!(
@@ -452,7 +452,10 @@ async fn a_query_or_a_form_that_does_not_decode_is_refused_without_its_value() {
             .query("card", &SECRET)
             .send()
             .await;
-        assert_eq!(detail(resp).await, "unknown variant, expected `Visa`");
+        assert_eq!(
+            detail(resp).await,
+            "query parameter `card`: unknown variant, expected `Visa`"
+        );
         let resp = client
             .post("/decode/form")
             .content_type("application/x-www-form-urlencoded")
@@ -461,7 +464,7 @@ async fn a_query_or_a_form_that_does_not_decode_is_refused_without_its_value() {
             .await;
         assert_eq!(
             detail(resp).await,
-            "url decode: unknown variant, expected `Visa`"
+            "form field `card`: unknown variant, expected `Visa`"
         );
     }
 }

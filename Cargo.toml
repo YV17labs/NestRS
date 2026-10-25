@@ -54,6 +54,10 @@ multer = "3.1"
 # form decoder axum, async-graphql and object_store read with, already in every
 # lockfile; it moves when they move.
 serde_urlencoded = "0.7"
+# Past the 12-month bar (1.2.2, 2025-08-21): finished, without an advisory, the
+# parser serde_urlencoded reads a query and a form with, already in every
+# lockfile; it moves when serde_urlencoded and url move.
+form_urlencoded = "1.2"
 async-compression = { version = "0.4", features = ["tokio", "brotli", "deflate", "gzip", "zstd"] }
 rustls = "0.23"  # public in nest-rs-testing alone
 rustls-native-certs = "0.8"

@@ -2876,6 +2876,7 @@ dependencies = [
  "bytes",
  "figment",
  "flate2",
+ "form_urlencoded",
  "futures-util",
  "h2",
  "http",
@@ -2906,6 +2907,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "validator",
 ]
 

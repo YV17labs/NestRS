@@ -19,7 +19,8 @@ use crate::response::{IntoResponse, Response};
 ///
 /// A body without a JSON `Content-Type` (`application/json`, or any
 /// `application/*+json`) answers `415`, a body past the cap `413`, and one
-/// that does not decode into `T` `400`, said without the value it held.
+/// that does not decode into `T` `400`, naming where — `author.name`,
+/// `items[2]` — and what the type expected there, never the value it held.
 ///
 /// ```
 /// use nest_rs_http::{FromRequest, HeaderValue, IntoResponse, Json, Request, header};
@@ -82,9 +83,10 @@ impl<'a, T: DeserializeOwned> FromRequest<'a> for Json<T> {
             .take()?
             .into_bytes_limit(crate::current_body_limit())
             .await?;
-        serde_json::from_slice(&bytes)
-            .map(Json)
-            .map_err(|error| JsonError::Malformed(error).into())
+        serde_json::from_slice(&bytes).map(Json).map_err(|error| {
+            let again = &mut serde_json::Deserializer::from_slice(&bytes);
+            JsonError::Malformed(DecodeError::new(&error).located::<T, _>(again)).into()
+        })
     }
 }
 
@@ -127,13 +129,16 @@ mod tests {
         quantity: u32,
     }
 
-    async fn read(content_type: Option<&'static str>, body: &'static str) -> Result<Json<Order>> {
+    async fn read<T: DeserializeOwned>(
+        content_type: Option<&'static str>,
+        body: &'static str,
+    ) -> Result<Json<T>> {
         let mut builder = Request::builder();
         if let Some(content_type) = content_type {
             builder = builder.header(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
         }
         let (request, mut body) = builder.body(body).split();
-        Json::<Order>::from_request(&request, &mut body).await
+        Json::<T>::from_request(&request, &mut body).await
     }
 
     async fn detail_of(response: Response) -> serde_json::Value {
@@ -165,7 +170,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_json_body_decodes_into_its_type() {
-        let Json(order) = read(Some("application/json"), r#"{"quantity":3}"#)
+        let Json(order) = read::<Order>(Some("application/json"), r#"{"quantity":3}"#)
             .await
             .unwrap();
         assert_eq!(order, Order { quantity: 3 });
@@ -174,7 +179,9 @@ mod tests {
     #[tokio::test]
     async fn a_body_that_is_not_json_by_its_type_is_415_and_its_type_is_never_quoted() {
         for content_type in [None, Some("text/plain; secret=sk_live_51")] {
-            let refused = read(content_type, r#"{"quantity":3}"#).await.unwrap_err();
+            let refused = read::<Order>(content_type, r#"{"quantity":3}"#)
+                .await
+                .unwrap_err();
             assert_eq!(refused.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
             let problem = detail_of(refused.into_response()).await;
             let detail = problem["detail"].as_str().unwrap();
@@ -184,15 +191,85 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_body_that_does_not_decode_is_400_said_without_its_value() {
-        let refused = read(Some("application/json"), r#"{"quantity":"sk_live_51"}"#)
+    async fn a_body_that_does_not_decode_names_where_and_never_its_value() {
+        assert_eq!(
+            refused_as::<Order>(r#"{"quantity":"sk_live_51"}"#).await,
+            "JSON body at `quantity`: invalid type: a string, expected u32"
+        );
+    }
+
+    async fn refused_as<T: DeserializeOwned>(body: &'static str) -> String {
+        let refused = read::<T>(Some("application/json"), body)
             .await
-            .unwrap_err();
-        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
-        let problem = detail_of(refused.into_response()).await;
-        let detail = problem["detail"].as_str().unwrap();
-        assert!(detail.contains("invalid type"), "{detail}");
-        assert!(!detail.contains("sk_live"), "{detail}");
+            .err()
+            .expect("the body does not decode");
+        crate::testing::refusal_detail(refused).await
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[expect(
+        dead_code,
+        reason = "the fields exist for serde to read; the tests assert the error, never a value"
+    )]
+    struct Post {
+        author: Author,
+        tags: Vec<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[expect(
+        dead_code,
+        reason = "the fields exist for serde to read; the tests assert the error, never a value"
+    )]
+    struct Author {
+        name: String,
+    }
+
+    #[tokio::test]
+    async fn a_nested_refusal_names_its_path() {
+        assert_eq!(
+            refused_as::<Post>(r#"{"author":{"name":51},"tags":[]}"#).await,
+            "JSON body at `author.name`: invalid type: an integer, expected a string"
+        );
+        assert_eq!(
+            refused_as::<Post>(r#"{"author":{"name":"a"},"tags":["x",7]}"#).await,
+            "JSON body at `tags[1]`: invalid type: an integer, expected a string"
+        );
+        assert_eq!(
+            refused_as::<Post>(r#"{"author":{},"tags":[]}"#).await,
+            "JSON body at `author.name`: missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_map_entry_is_named_by_its_map_never_by_the_key_the_client_chose() {
+        #[derive(Debug, Deserialize)]
+        #[expect(
+            dead_code,
+            reason = "the field exists for serde to read; the test asserts the error, never a value"
+        )]
+        struct Limits {
+            limits: std::collections::HashMap<String, u32>,
+        }
+        let detail = refused_as::<Limits>(r#"{"limits":{"sk_live_x":"seven"}}"#).await;
+        assert_eq!(
+            detail,
+            "JSON body at `limits[…]`: invalid type: a string, expected u32"
+        );
+        let detail =
+            refused_as::<std::collections::HashMap<String, u32>>(r#"{"sk_live_x":"seven"}"#).await;
+        assert_eq!(
+            detail,
+            "JSON body at `[…]`: invalid type: a string, expected u32"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_that_is_not_json_keeps_its_line_and_column() {
+        assert_eq!(
+            refused_as::<Order>(r#"{"quantity":"#).await,
+            "JSON body: EOF while parsing a value at line 1 column 12"
+        );
     }
 
     #[tokio::test]

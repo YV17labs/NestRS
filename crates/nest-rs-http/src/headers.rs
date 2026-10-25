@@ -358,11 +358,12 @@ impl<'de> Deserializer<'de> for Part {
 mod tests {
     use std::collections::HashMap;
 
-    use http::{HeaderName, HeaderValue, StatusCode};
+    use http::{HeaderName, HeaderValue};
     use serde::Deserialize;
 
     use super::*;
-    use crate::{FromRequest, HttpError, Request, Result};
+    use crate::testing::refusal_detail;
+    use crate::{FromRequest, Request, Result};
 
     #[derive(Debug, Deserialize)]
     struct Tracing {
@@ -386,22 +387,6 @@ mod tests {
 
     fn value(v: &str) -> HeaderValue {
         HeaderValue::from_str(v).expect("a header value")
-    }
-
-    async fn detail_of(err: HttpError) -> String {
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            resp.headers()
-                .get(http::header::CONTENT_TYPE)
-                .map(|v| v.as_bytes()),
-            Some(b"application/problem+json".as_slice()),
-            "a header rejection renders as RFC-9457, like every other edge error",
-        );
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        assert_eq!(json["status"], 400);
-        json["detail"].as_str().unwrap_or_default().to_owned()
     }
 
     #[tokio::test]
@@ -451,7 +436,7 @@ mod tests {
             .err()
             .expect("the type refuses it");
         assert_eq!(
-            detail_of(err).await,
+            refusal_detail(err).await,
             "header `X-Api-Key` is not a value its type accepts",
         );
     }
@@ -463,7 +448,7 @@ mod tests {
             .err()
             .expect("the required header is absent");
         assert_eq!(
-            detail_of(err).await,
+            refusal_detail(err).await,
             "missing required header `X-Request-Id`",
         );
     }
@@ -478,7 +463,7 @@ mod tests {
         .err()
         .expect("`soon` is not a u32");
         assert_eq!(
-            detail_of(err).await,
+            refusal_detail(err).await,
             "header `X-Retry-Count` is not an integer",
         );
     }
@@ -495,7 +480,7 @@ mod tests {
             .await
             .err()
             .expect("the key is not a u64");
-        let detail = detail_of(err).await;
+        let detail = refusal_detail(err).await;
         assert!(
             !detail.contains("super-secret"),
             "the value must not reach the response body: {detail}",
@@ -519,7 +504,7 @@ mod tests {
             .await
             .err()
             .expect("no variant is spelled that");
-        let detail = detail_of(err).await;
+        let detail = refusal_detail(err).await;
         assert!(
             !detail.contains("super-secret"),
             "an enum field must not echo it either: {detail}",
@@ -545,7 +530,10 @@ mod tests {
         .await
         .err()
         .expect("the value is not UTF-8");
-        assert_eq!(detail_of(err).await, "header `X-Blob` is not valid UTF-8");
+        assert_eq!(
+            refusal_detail(err).await,
+            "header `X-Blob` is not valid UTF-8"
+        );
     }
 
     #[tokio::test]

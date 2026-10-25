@@ -12,8 +12,8 @@ use std::time::Duration;
 use http::{Extensions, StatusCode};
 
 use nest_rs_core::__private::Withheld;
-use nest_rs_core::Problem;
 use nest_rs_core::problem::code;
+use nest_rs_core::{DecodeError, Problem};
 
 use crate::headers::one_of;
 use crate::origin::OriginScheme;
@@ -753,9 +753,10 @@ pub(crate) enum JsonError {
     /// No `Content-Type`, or one that is not JSON: `415`.
     #[error("{}", MediaType("`application/json` or a `+json` type"))]
     MediaType,
-    /// The body is not the JSON the type reads: `400`, said without its value.
-    #[error("the JSON body does not decode: {0}")]
-    Malformed(#[source] serde_json::Error),
+    /// The body is not the JSON the type reads: `400`, said where and without
+    /// its value.
+    #[error("{}", Located::of("JSON body", "JSON body at", .0))]
+    Malformed(DecodeError),
 }
 
 impl ResponseError for JsonError {
@@ -768,10 +769,10 @@ impl ResponseError for JsonError {
 }
 
 /// What [`Query`](crate::Query) refused: the query string is not what the type
-/// reads, `400`, in serde's words said without its value.
+/// reads, `400`, said by the parameter and without its value.
 #[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub(crate) struct QueryError(#[source] pub(crate) serde::de::value::Error);
+#[error("{}", Located::of("query string", "query parameter", .0))]
+pub(crate) struct QueryError(pub(crate) DecodeError);
 
 impl ResponseError for QueryError {
     fn status(&self) -> StatusCode {
@@ -785,9 +786,10 @@ pub(crate) enum FormError {
     /// A body whose `Content-Type` is missing or not a form's: `415`.
     #[error("{}", MediaType("`application/x-www-form-urlencoded`"))]
     MediaType,
-    /// The form is not what the type reads: `400`, said without its value.
-    #[error("url decode: {0}")]
-    Malformed(#[source] serde::de::value::Error),
+    /// The form is not what the type reads: `400`, said by the field and
+    /// without its value.
+    #[error("{}", Located::of("form", "form field", .0))]
+    Malformed(DecodeError),
 }
 
 impl ResponseError for FormError {
@@ -817,6 +819,33 @@ impl ResponseError for MultipartError {
         match self {
             Self::MediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::Malformed(_) => StatusCode::BAD_REQUEST,
+        }
+    }
+}
+
+/// A decode failure as an extractor says it: `<whole>: <what>` when it is the
+/// payload's as a whole, ``<member> `<path>`: <what>`` when it sits inside.
+struct Located<'r> {
+    whole: &'static str,
+    member: &'static str,
+    report: &'r DecodeError,
+}
+
+impl<'r> Located<'r> {
+    fn of(whole: &'static str, member: &'static str, report: &'r DecodeError) -> Self {
+        Self {
+            whole,
+            member,
+            report,
+        }
+    }
+}
+
+impl fmt::Display for Located<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.report.path() {
+            Some(path) => write!(f, "{} `{path}`: {}", self.member, self.report),
+            None => write!(f, "{}: {}", self.whole, self.report),
         }
     }
 }

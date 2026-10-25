@@ -6,6 +6,7 @@ use http::Method;
 use serde::de::DeserializeOwned;
 
 use crate::error::{FormError, Result};
+use crate::query::urlencoded_refusal;
 use crate::request::{FromRequest, Request, RequestBody};
 
 /// An HTML form, decoded into `T`: the body of a request whose
@@ -14,8 +15,8 @@ use crate::request::{FromRequest, Request, RequestBody};
 /// `GET`, which has no body, the query string.
 ///
 /// A body without a form's `Content-Type` answers `415`, a body past the cap
-/// `413`, and a form that does not decode into `T` `400`, said without the
-/// value it held.
+/// `413`, and a form that does not decode into `T` `400`, naming the field and
+/// what its type expected, never the value it held.
 ///
 /// ```
 /// use nest_rs_http::{Form, FromRequest, HeaderValue, Method, Request, header};
@@ -73,9 +74,12 @@ impl<T> DerefMut for Form<T> {
 impl<'a, T: DeserializeOwned> FromRequest<'a> for Form<T> {
     async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
         if req.method() == Method::GET {
-            return serde_urlencoded::from_str(req.uri().query().unwrap_or_default())
+            let query = req.uri().query().unwrap_or_default();
+            return serde_urlencoded::from_str(query)
                 .map(Form)
-                .map_err(|refused| FormError::Malformed(refused).into());
+                .map_err(|refused| {
+                    FormError::Malformed(urlencoded_refusal::<T>(&refused, query.as_bytes())).into()
+                });
         }
         let is_form = req
             .content_type()
@@ -90,7 +94,9 @@ impl<'a, T: DeserializeOwned> FromRequest<'a> for Form<T> {
             .await?;
         serde_urlencoded::from_bytes(&bytes)
             .map(Form)
-            .map_err(|refused| FormError::Malformed(refused).into())
+            .map_err(|refused| {
+                FormError::Malformed(urlencoded_refusal::<T>(&refused, &bytes)).into()
+            })
     }
 }
 
@@ -100,6 +106,7 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
+    use crate::testing::refusal_detail;
 
     #[derive(Debug, Deserialize, PartialEq)]
     struct Login {
@@ -166,22 +173,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_form_that_does_not_decode_is_400_said_without_its_value() {
+    async fn a_form_that_does_not_decode_names_its_field_and_never_its_value() {
         let refused = post(
             Some("application/x-www-form-urlencoded"),
             "email=a&remember=sk_live_51",
         )
         .await
         .unwrap_err();
-        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
-        let body = refused
-            .into_response()
-            .into_body()
-            .into_string()
+        assert_eq!(
+            refusal_detail(refused).await,
+            "form field `remember`: a value its type does not accept, expected a boolean"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_field_is_named_once() {
+        let refused = post(Some("application/x-www-form-urlencoded"), "email=a")
             .await
-            .unwrap();
-        assert!(body.contains("url decode"), "{body}");
-        assert!(!body.contains("sk_live"), "{body}");
+            .unwrap_err();
+        assert_eq!(
+            refusal_detail(refused).await,
+            "form field `remember`: missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_get_form_names_its_field_the_same_way() {
+        let (request, mut body) = Request::builder()
+            .uri(Uri::from_static("/login?email=a&remember=sk_live_51"))
+            .finish()
+            .split();
+        let refused = Form::<Login>::from_request(&request, &mut body)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refusal_detail(refused).await,
+            "form field `remember`: a value its type does not accept, expected a boolean"
+        );
     }
 
     #[tokio::test]

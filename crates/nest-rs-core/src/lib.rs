@@ -103,6 +103,7 @@ mod budget;
 mod close;
 pub mod container;
 pub(crate) mod cycle_guard;
+mod decode_path;
 pub mod discoverable;
 pub mod discovery;
 mod dispatch;

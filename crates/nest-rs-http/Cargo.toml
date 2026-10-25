@@ -46,6 +46,9 @@ schemars.workspace = true
 multer.workspace = true
 # The query string and a form body, decoded as `application/x-www-form-urlencoded`.
 serde_urlencoded.workspace = true
+# The parser serde_urlencoded's own deserializer reads, built here so a query
+# or a form that failed to decode runs again under the tracker that says where.
+form_urlencoded.workspace = true
 # The content codings `compression.rs` encodes a response and decodes a request
 # body with, the one file clippy lets name them; the negotiation is the
 # transport's own (`accept_encoding.rs`).
@@ -124,6 +127,10 @@ reqwest.workspace = true
 # against the composition that defeated it rather than against a hand-set header.
 flate2.workspace = true
 futures-util.workspace = true
+# A query's `Uuid` the type refuses in its own words, as the demo's
+# `/audio/download?file=` reads one: the refusal names the parameter and never
+# the value.
+uuid.workspace = true
 # The access line's unit tests write it through the kernel's console format,
 # which is what a query on the console's lines reads.
 tracing-subscriber.workspace = true

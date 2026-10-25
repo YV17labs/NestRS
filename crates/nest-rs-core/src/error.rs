@@ -774,11 +774,18 @@ pub struct DuplicateMetaError {
 ///
 /// Built with `DecodeError::from(&error)` from serde_json's error or serde's
 /// [`value::Error`](serde::de::value::Error) (`serde_urlencoded`); a text
-/// already rendered from an error goes through [`redact`](Self::redact).
+/// already rendered from an error goes through [`redact`](Self::redact). An
+/// edge answering the failure [`located`](Self::located) it first, and says
+/// its [`path`](Self::path) before the report.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("{sentence}")]
+#[error("{sentence}{}", .position.as_deref().unwrap_or_default())]
 pub struct DecodeError {
     sentence: String,
+    position: Option<String>,
+    path: Option<String>,
+    /// A failure of the value's type, which a tracked re-run can place; a
+    /// syntax failure's line and column already say where.
+    of_data: bool,
 }
 
 impl DecodeError {
@@ -795,16 +802,106 @@ impl DecodeError {
             .as_deref()
             .and_then(|position| rendered.strip_suffix(position))
             .unwrap_or(&rendered);
-        let sentence = match error.classify() {
-            Category::Data => data(message),
+        let of_data = error.classify() == Category::Data;
+        let sentence = if of_data {
+            data(message)
+        } else {
             // One fixed sentence per fault, naming no byte of the input.
-            Category::Syntax | Category::Eof | Category::Io => message.to_owned(),
+            message.to_owned()
         };
-        let mut sentence = bounded(&sentence).into_owned();
-        if let Some(position) = position {
-            sentence.push_str(&position);
+        Self {
+            sentence: bounded(&sentence).into_owned(),
+            position,
+            path: None,
+            of_data,
         }
-        Self { sentence }
+    }
+
+    /// Where in its payload the failure sits, in the names the payload's type
+    /// declares: `author.name`, `items[2]`, a map's entry as `limits[…]`.
+    /// `None` until the report is [`located`](Self::located), and for a
+    /// failure of the payload as a whole — its syntax, its root's type.
+    ///
+    /// ```
+    /// use nest_rs_core::DecodeError;
+    ///
+    /// #[derive(Debug, serde::Deserialize)]
+    /// struct Order {
+    ///     quantity: u32,
+    /// }
+    ///
+    /// let body = r#"{"quantity":"sk_live_51"}"#;
+    /// let failure = serde_json::from_str::<Order>(body).expect_err("not a number");
+    /// let report = DecodeError::new(&failure)
+    ///     .located::<Order, _>(&mut serde_json::Deserializer::from_str(body));
+    /// assert_eq!(report.path(), Some("quantity"));
+    /// assert_eq!(report.to_string(), "invalid type: a string, expected u32");
+    /// ```
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// This report, located: `again`, a deserializer over the payload that
+    /// failed, runs `T`'s decode once more under a tracker, and the report
+    /// says where in `T` it failed — a field by the name `T` declares, an
+    /// element by its index, a map's entry as `[…]`, never a key the payload
+    /// chose — and, for a type's refusal in its own words, what that type
+    /// expected there. Run only once a decode has failed, so a decode that
+    /// succeeds pays nothing for it; but the payload must outlive the first
+    /// decode, so a `serde_json::Value` is decoded by reference, which copies
+    /// the strings `serde_json::from_value` would have moved.
+    ///
+    /// A field missing or given twice is placed at the field, said as
+    /// `missing` or `duplicate`. A syntax failure keeps its line and column,
+    /// and a located one drops them: the path says where.
+    pub fn located<'de, T, D>(self, again: D) -> Self
+    where
+        T: serde::Deserialize<'de>,
+        D: serde::Deserializer<'de>,
+        for<'e> Self: From<&'e D::Error>,
+    {
+        if !self.of_data {
+            return self;
+        }
+        match crate::decode_path::trace::<T, D>(again) {
+            Err((error, failed)) => Self::from(&error).at(failed),
+            // A decode that changed its mind has nothing to place.
+            Ok(_) => self,
+        }
+    }
+
+    /// This report placed where `failed` says.
+    fn at(mut self, failed: crate::decode_path::Failed) -> Self {
+        let crate::decode_path::Failed {
+            mut path,
+            fields,
+            expected,
+        } = failed;
+        // serde names the field a struct misses, or reads twice, by the name
+        // the struct declares: said at the field instead.
+        for (opening, said) in [
+            ("missing field `", "missing"),
+            ("duplicate field `", "duplicate"),
+        ] {
+            let named = self
+                .sentence
+                .strip_prefix(opening)
+                .and_then(|rest| rest.strip_suffix('`'));
+            let declared =
+                named.and_then(|name| fields?.iter().copied().find(|field| *field == name));
+            if let Some(field) = declared {
+                path.0.push(crate::decode_path::Step::Field(field));
+                said.clone_into(&mut self.sentence);
+            }
+        }
+        if let Some(expected) = expected.filter(|_| self.sentence == REFUSED_BY_ITS_TYPE) {
+            self.sentence =
+                bounded(&format!("{REFUSED_BY_ITS_TYPE}, expected {expected}")).into_owned();
+        }
+        let path = path.to_string();
+        self.path = (!path.is_empty()).then(|| bounded(&path).into_owned());
+        self.position = None;
+        self
     }
 
     /// The report of the first decode failure in `error`'s chain, `error`
@@ -876,6 +973,9 @@ impl From<&serde::de::value::Error> for DecodeError {
     fn from(error: &serde::de::value::Error) -> Self {
         Self {
             sentence: bounded(&data(&error.to_string())).into_owned(),
+            position: None,
+            path: None,
+            of_data: true,
         }
     }
 }
@@ -905,7 +1005,8 @@ impl Redactions {
             } else {
                 current.source()
             };
-            let safe = claimed.or_else(|| DecodeError::of(current).map(|report| report.sentence));
+            let safe =
+                claimed.or_else(|| DecodeError::of(current).map(|report| report.to_string()));
             if let Some(said) = safe {
                 let displayed = current.to_string();
                 if !displayed.is_empty() && displayed != said {
@@ -961,6 +1062,10 @@ fn bounded(text: &str) -> Cow<'_, str> {
     }
 }
 
+/// What a type's refusal in its own words is said as: its message may quote the
+/// value it refused.
+const REFUSED_BY_ITS_TYPE: &str = "a value its type does not accept";
+
 /// What a data error — a value that is valid JSON and not the type — is reported
 /// as, rebuilt from the shapes serde words.
 fn data(message: &str) -> String {
@@ -981,7 +1086,7 @@ fn data(message: &str) -> String {
     if KEPT.iter().any(|kept| message.starts_with(kept)) {
         return message.to_owned();
     }
-    "a value its type does not accept".to_owned()
+    REFUSED_BY_ITS_TYPE.to_owned()
 }
 
 /// A sentence in one of serde's quoting shapes, rebuilt without what the payload
@@ -1057,7 +1162,7 @@ fn quoting_sentences(text: &str) -> Cow<'_, str> {
     // Every opening `quoting_opens_at` finds is one `quoting` rebuilds; the
     // fallback is the report for a shape it does not know, which says nothing
     // the payload held.
-    let rebuilt = quoting(failure).unwrap_or_else(|| "a value its type does not accept".to_owned());
+    let rebuilt = quoting(failure).unwrap_or_else(|| REFUSED_BY_ITS_TYPE.to_owned());
     let mut redacted = String::with_capacity(at + rebuilt.len() + '…'.len_utf8());
     redacted.push_str(&text[..at]);
     redacted.push_str(&bounded(&rebuilt));
@@ -1542,6 +1647,142 @@ mod decode_error_tests {
     fn a_validator_rule_with_its_own_message_is_left_to_its_author() {
         let text = "password: must be at least 32 characters";
         assert!(matches!(DecodeError::redact(text, None), Cow::Borrowed(_)));
+    }
+
+    /// The report of `text` failing to decode as `T`, located.
+    fn located<T: for<'de> Deserialize<'de> + std::fmt::Debug>(text: &str) -> DecodeError {
+        let error = serde_json::from_str::<T>(text).expect_err("does not decode");
+        DecodeError::new(&error).located::<T, _>(&mut serde_json::Deserializer::from_str(text))
+    }
+
+    #[test]
+    fn a_located_report_says_where_and_drops_the_position_the_path_replaces() {
+        let report = located::<Charge>(r#"{"amount":"sk_live_51","card":"Visa"}"#);
+        assert_eq!(report.path(), Some("amount"));
+        assert_eq!(report.to_string(), "invalid type: a string, expected u64");
+
+        let report = located::<Charge>(r#"{"amount":1,"card":"sk_live_51"}"#);
+        assert_eq!(report.path(), Some("card"));
+        assert_eq!(report.to_string(), "unknown variant, expected `Visa`");
+    }
+
+    #[test]
+    fn a_field_missing_or_given_twice_is_placed_at_the_field() {
+        let report = located::<Charge>(r#"{"amount":1}"#);
+        assert_eq!(report.path(), Some("card"));
+        assert_eq!(report.to_string(), "missing");
+
+        let report = located::<Charge>(r#"{"amount":1,"amount":2,"card":"Visa"}"#);
+        assert_eq!(report.path(), Some("amount"));
+        assert_eq!(report.to_string(), "duplicate");
+    }
+
+    #[test]
+    fn a_type_s_own_refusal_says_what_it_expected_and_never_the_value() {
+        #[derive(Debug)]
+        struct Even;
+        impl<'de> Deserialize<'de> for Even {
+            fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+                struct Visit;
+                impl serde::de::Visitor<'_> for Visit {
+                    type Value = Even;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str("an even number")
+                    }
+                    fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Even, E> {
+                        Err(E::custom(format!("{value} is odd")))
+                    }
+                }
+                de.deserialize_u64(Visit)
+            }
+        }
+        #[derive(Debug, Deserialize)]
+        #[expect(
+            dead_code,
+            reason = "the field exists for serde to read; the test asserts the error, never a value"
+        )]
+        struct Lucky {
+            lucky: Even,
+        }
+        let report = located::<Lucky>(r#"{"lucky":51}"#);
+        assert_eq!(report.path(), Some("lucky"));
+        assert_eq!(
+            report.to_string(),
+            "a value its type does not accept, expected an even number"
+        );
+    }
+
+    #[test]
+    fn what_a_type_expected_is_bounded_with_the_sentence_it_joins() {
+        #[derive(Debug)]
+        struct Verbose;
+        impl<'de> Deserialize<'de> for Verbose {
+            fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+                struct Visit;
+                impl serde::de::Visitor<'_> for Visit {
+                    type Value = Verbose;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str(&"é".repeat(DecodeError::MAX_LEN))
+                    }
+                    fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Verbose, E> {
+                        Err(E::custom(format!("{value} is refused")))
+                    }
+                }
+                de.deserialize_u64(Visit)
+            }
+        }
+        #[derive(Debug, Deserialize)]
+        #[expect(
+            dead_code,
+            reason = "the field exists for serde to read; the test asserts the error, never a value"
+        )]
+        struct Holder {
+            verbose: Verbose,
+        }
+        let report = located::<Holder>(r#"{"verbose":51}"#).to_string();
+        let sentence = report
+            .strip_suffix('…')
+            .expect("a report past the bound says it was cut");
+        assert!(sentence.len() <= DecodeError::MAX_LEN, "{}", sentence.len());
+        assert!(
+            sentence.starts_with("a value its type does not accept, expected é"),
+            "{sentence}"
+        );
+    }
+
+    #[test]
+    fn a_report_that_is_not_a_type_s_keeps_its_line_and_column() {
+        let report = located::<Charge>(r#"{"amount":"#);
+        assert_eq!(report.path(), None);
+        assert_eq!(
+            report.to_string(),
+            "EOF while parsing a value at line 1 column 10"
+        );
+    }
+
+    #[test]
+    fn a_failure_of_the_payload_as_a_whole_has_no_path() {
+        let report = located::<Charge>(r#""sk_live_51""#);
+        assert_eq!(report.path(), None);
+        assert_eq!(
+            report.to_string(),
+            "invalid type: a string, expected struct Charge"
+        );
+    }
+
+    #[test]
+    fn serde_s_own_value_error_is_located_the_same_way() {
+        use serde::de::value::{Error, MapDeserializer};
+
+        let pairs = || {
+            MapDeserializer::<_, Error>::new(
+                [("amount", "sk_live_51"), ("card", "Visa")].into_iter(),
+            )
+        };
+        let refused = Charge::deserialize(pairs()).expect_err("amount is no number");
+        let report = DecodeError::from(&refused).located::<Charge, _>(pairs());
+        assert_eq!(report.path(), Some("amount"));
+        assert_eq!(report.to_string(), "invalid type: a string, expected u64");
     }
 }
 

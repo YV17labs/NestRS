@@ -214,7 +214,7 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Ref
     let settings = settings(&url).map_err(Refusal::Invalid)?;
     let mut hosts = vec![first];
     let (mut service_name, mut username, mut password) = (None, None, None);
-    for (key, value) in url.query_pairs() {
+    for (position, (key, value)) in (1_usize..).zip(url.query_pairs()) {
         match (key.as_ref(), several) {
             (NODE, _) => hosts.push(node(&value, several.default_port()).ok_or_else(|| {
                 refusal(
@@ -229,10 +229,16 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Ref
             (SENTINEL_PASSWORD, Several::Sentinel) => {
                 once(&mut password, SENTINEL_PASSWORD, value)?;
             }
-            (other, _) => {
+            // The parameter is the deployment's text, which may be anything a
+            // URL was mistyped with: said by its place.
+            _ => {
                 return Err(refusal(
                     "the URL names a parameter it does not take",
-                    format!("`{other}`: {} takes {}", url.scheme(), several.parameters()),
+                    format!(
+                        "parameter {position} of its query; {} takes {}",
+                        url.scheme(),
+                        several.parameters()
+                    ),
                 ));
             }
         }
@@ -548,21 +554,25 @@ mod tests {
     }
 
     #[test]
-    fn a_parameter_the_grammar_does_not_take_is_refused_by_its_name_alone() {
-        for (raw, named) in [
-            ("rediss-cluster://n1?protocol=resp3", "protocol"),
+    fn a_parameter_the_grammar_does_not_take_is_refused_by_its_position_never_its_text() {
+        for (raw, named, position) in [
+            ("rediss-cluster://n1?protocol=resp3", "protocol", 1),
             (
                 "rediss-cluster://n1?sentinelServiceName=s3cr3t",
                 "sentinelServiceName",
+                1,
             ),
             (
                 "rediss-cluster://n1?sentinelPassword=s3cr3t",
                 "sentinelPassword",
+                1,
             ),
             (
                 "rediss-sentinel://s1?sentinelServiceName=m&sentinelPasword=s3cr3t",
                 "sentinelPasword",
+                2,
             ),
+            ("rediss-cluster://n1?node=n2&s3cr3t", "s3cr3t", 2),
         ] {
             let (error, rendered) = refused(raw);
             assert!(
@@ -570,9 +580,10 @@ mod tests {
                 "{raw}: {rendered}"
             );
             assert!(
-                rendered.contains(&format!("`{named}`")),
+                rendered.contains(&format!("parameter {position} of its query")),
                 "{raw}: {rendered}"
             );
+            assert!(!rendered.contains(named), "{raw}: {rendered}");
             assert!(!rendered.contains("s3cr3t"), "{raw}: {rendered}");
         }
     }

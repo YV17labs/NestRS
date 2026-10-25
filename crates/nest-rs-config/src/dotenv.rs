@@ -59,10 +59,10 @@ fn assert_prefix_not_from_cascade(values: &HashMap<String, String>) {
     let resolved = EnvPrefix::current();
     assert!(
         declared == resolved,
-        "{} is `{declared}` in the `.env` cascade, but `{resolved}` was already resolved. \
-         The prefix chooses which cascade to read, so a value inside it arrives too late \
-         to have done so — set it on the process instead (your container, your shell, the \
-         Justfile).",
+        "{} is set in the `.env` cascade to another prefix than the one already resolved, \
+         `{resolved}`. The prefix chooses which cascade to read, so a value inside it arrives \
+         too late to have done so — set it on the process instead (your container, your \
+         shell, the Justfile).",
         EnvPrefix::VAR,
     );
 }
@@ -80,14 +80,15 @@ fn assert_environment_not_from_cascade(values: &HashMap<String, String>) {
     let process = crate::source::real_env_var(&var);
     assert!(
         process.as_deref() == Some(declared.as_str()),
-        "{var} is `{declared}` in the `.env` cascade, but the process environment {}. \
+        "{var} is set in the `.env` cascade, but the process environment {}. \
          The variable chooses which `.env` files to read, so a value inside one arrives too \
          late to have done so — and it arms development-only affordances, which must never \
          answer to a committed file. Set it on the process instead (`nestrs run dev` does) \
          and remove it from the file.",
-        match process {
-            Some(actual) => format!("carries `{actual}`"),
-            None => "does not carry it".to_owned(),
+        if process.is_some() {
+            "carries another value"
+        } else {
+            "does not carry it"
         },
     );
 }

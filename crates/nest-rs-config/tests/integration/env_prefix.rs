@@ -114,7 +114,9 @@ fn the_active_environment_is_read_from_the_declared_prefix() {
 /// A prefix written into the cascade aborts, through a plain config read — all
 /// a `migrate` or `seed` binary does.
 #[test]
-#[should_panic(expected = "is `ACME` in the `.env` cascade")]
+#[should_panic(
+    expected = "is set in the `.env` cascade to another prefix than the one already resolved, `FIXTURE`"
+)]
 #[expect(
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
@@ -139,7 +141,9 @@ fn a_prefix_written_into_the_cascade_aborts_without_environment_init() {
 
 /// And through `load_cascade`, which bypasses the memoized map.
 #[test]
-#[should_panic(expected = "is `ACME` in the `.env` cascade")]
+#[should_panic(
+    expected = "is set in the `.env` cascade to another prefix than the one already resolved, `FIXTURE`"
+)]
 #[expect(
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
@@ -149,6 +153,30 @@ fn a_prefix_written_into_the_cascade_aborts_through_load_cascade() {
         jail.set_env(EnvPrefix::VAR, "FIXTURE");
         jail.create_file(".env", &format!("{}=ACME\n", EnvPrefix::VAR))?;
         nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Development);
+        Ok(())
+    });
+}
+
+/// The refusal names the prefix already resolved, never the one the file wrote.
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn the_prefix_refusal_quotes_no_value_the_cascade_wrote() {
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(EnvPrefix::VAR, "FIXTURE");
+        jail.create_file(".env", &format!("{}=SK_LIVE_FILE\n", EnvPrefix::VAR))?;
+        let refused = std::panic::catch_unwind(|| {
+            nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Development);
+        })
+        .expect_err("the cascade aborts");
+        let said = refused
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(said.contains("`FIXTURE`"), "{said}");
+        assert!(!said.contains("SK_LIVE"), "{said}");
         Ok(())
     });
 }

@@ -7,7 +7,7 @@ use nest_rs_config::Environment;
 /// by absence only, and still aborts.
 #[test]
 #[should_panic(
-    expected = "is `production` in the `.env` cascade, but the process environment does not carry it"
+    expected = "is set in the `.env` cascade, but the process environment does not carry it"
 )]
 #[expect(
     clippy::result_large_err,
@@ -22,9 +22,9 @@ fn the_environment_written_into_the_cascade_aborts() {
 }
 
 /// Set on the process to one thing, declared in the file as another: abort,
-/// naming both values.
+/// naming neither value.
 #[test]
-#[should_panic(expected = "carries `production`")]
+#[should_panic(expected = "but the process environment carries another value")]
 #[expect(
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
@@ -37,6 +37,34 @@ fn the_environment_contradicted_by_the_cascade_aborts() {
             &format!("{}=development\n", Environment::var_name()),
         )?;
         nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Production);
+        Ok(())
+    });
+}
+
+/// Neither the file's value nor the process's is said: a deployment's config is
+/// somebody's data.
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn the_cascade_s_refusal_quotes_no_value() {
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(Environment::var_name(), "sk_live_process");
+        jail.create_file(
+            ".env",
+            &format!("{}=sk_live_file\n", Environment::var_name()),
+        )?;
+        let refused = std::panic::catch_unwind(|| {
+            nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Production);
+        })
+        .expect_err("the cascade aborts");
+        let said = refused
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(said.contains(&Environment::var_name()), "{said}");
+        assert!(!said.contains("sk_live"), "{said}");
         Ok(())
     });
 }

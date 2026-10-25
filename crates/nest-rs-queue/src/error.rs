@@ -277,10 +277,10 @@ pub(crate) enum CallFailed {
 /// The failure of a payload that does not decode as the job type of the queue
 /// it came from — deterministic, since the same bytes never decode on a retry.
 /// Said by where and what kind ([`DecodeError`](nest_rs_core::DecodeError)),
-/// never by the value.
-pub fn undecodable(queue: &str, error: &serde_json::Error) -> JobError {
-    JobError::abort(format!(
-        "failed to deserialize job for queue `{queue}`: {}",
-        nest_rs_core::DecodeError::new(error),
-    ))
+/// inside the payload when the report is located, never by the value.
+pub fn undecodable(queue: &str, error: &nest_rs_core::DecodeError) -> JobError {
+    JobError::abort(match error.path() {
+        Some(path) => format!("failed to deserialize job for queue `{queue}` at `{path}`: {error}"),
+        None => format!("failed to deserialize job for queue `{queue}`: {error}"),
+    })
 }

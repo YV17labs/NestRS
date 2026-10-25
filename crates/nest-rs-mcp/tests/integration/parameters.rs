@@ -61,7 +61,7 @@ async fn a_tool_s_arguments_that_do_not_decode_are_refused_without_their_value()
     for (arguments, said) in [
         (
             json!({ "amount": SECRET }),
-            "failed to deserialize parameters: invalid type: a string, expected u64",
+            "failed to deserialize parameters: argument `amount`: invalid type: a string, expected u64",
         ),
         (
             json!({ "amount": 1, SECRET: 1 }),
@@ -100,7 +100,9 @@ async fn a_prompt_s_arguments_that_do_not_decode_are_refused_without_their_value
     assert_eq!(answer["error"]["code"], json!(-32602), "{answer}");
     assert_eq!(
         answer["error"]["message"],
-        json!("failed to deserialize parameters: invalid type: a string, expected u64"),
+        json!(
+            "failed to deserialize parameters: argument `amount`: invalid type: a string, expected u64"
+        ),
     );
     assert_eq!(
         answer["error"]["data"],

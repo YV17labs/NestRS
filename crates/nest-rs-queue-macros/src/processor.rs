@@ -322,7 +322,7 @@ fn emit_method(
         #[doc(hidden)]
         #[allow(non_snake_case)]
         fn #handler_ident(
-            __payload: ::std::borrow::Cow<'_, ::nest_rs_queue::__private::serde_json::Value>,
+            __payload: &::nest_rs_queue::__private::serde_json::Value,
             __context: ::nest_rs_queue::__private::HandlerContext,
         ) -> ::std::pin::Pin<
             ::std::boxed::Box<

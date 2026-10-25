@@ -27,7 +27,7 @@ pub enum ConfigError {
     ///
     /// Carries [`DecodeError`], never serde's own sentence, which quotes the
     /// value it refused.
-    #[error("invalid value for {var}: {source}")]
+    #[error("invalid value for {var}{}: {source}", inside(.source))]
     Decode {
         /// The variable that supplied the value — `<KEY>` or `<KEY>_FILE`.
         var: String,
@@ -202,6 +202,15 @@ fn of_instance(instance: &str) -> String {
     } else {
         format!(" of the instance `{instance}`")
     }
+}
+
+/// Where inside a variable's value its decode failed, as the refusal says it
+/// after the variable: `` at `clients[0].secret` ``, or nothing.
+fn inside(report: &DecodeError) -> String {
+    report
+        .path()
+        .map(|path| format!(" at `{path}`"))
+        .unwrap_or_default()
 }
 
 /// `message` without the values a decoder quoted in it.

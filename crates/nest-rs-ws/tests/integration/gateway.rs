@@ -756,10 +756,9 @@ async fn a_malformed_payload_warns_on_the_ws_target() {
         )
         .await;
     match reply {
-        WsReply::Error(msg) => assert!(
-            msg.error.contains("invalid payload for `named`"),
-            "the frame is unchanged: {}",
-            msg.error,
+        WsReply::Error(msg) => assert_eq!(
+            msg.error, "invalid payload for `named` at `name`: missing",
+            "the frame names the field it misses",
         ),
         WsReply::Reply(value) => panic!("expected an error frame, got a reply: {value}"),
         other => panic!("expected an error frame, got {other:?}"),
@@ -788,7 +787,7 @@ async fn a_malformed_payload_is_reported_without_its_value() {
     };
     assert_eq!(
         frame.error,
-        "invalid payload for `named`: invalid type: an integer, expected a string"
+        "invalid payload for `named` at `name`: invalid type: an integer, expected a string"
     );
     assert_eq!(
         frame.errors,
@@ -801,7 +800,7 @@ async fn a_malformed_payload_is_reported_without_its_value() {
     );
     assert_eq!(
         event.field("error").as_deref(),
-        Some("invalid type: an integer, expected a string")
+        Some("at `name`: invalid type: an integer, expected a string")
     );
 }
 

@@ -26,8 +26,8 @@ const REFUSED: &str = "failed to deserialize parameters";
 /// destructured as `Parameters(args): Parameters<T>`, with `T`'s JSON Schema
 /// advertised as the operation's input — rmcp's `#[tool]` / `#[prompt]` find the
 /// argument by its name. A call whose arguments do not decode is refused with
-/// `invalid_params` naming where and what kind, never the value, under the
-/// `INVALID_ARGUMENT` code.
+/// `invalid_params` naming the argument — ``argument `address.city` `` — what
+/// its type expected, never the value, under the `INVALID_ARGUMENT` code.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct Parameters<P>(pub P);
@@ -47,9 +47,13 @@ impl<P: DeserializeOwned> Parameters<P> {
     /// type whose every field is optional binds.
     fn decode(arguments: Option<JsonObject>) -> Result<Self, McpError> {
         let arguments = serde_json::Value::Object(arguments.unwrap_or_default());
-        serde_json::from_value(arguments)
-            .map(Self)
-            .map_err(|error| invalid_argument(format!("{REFUSED}: {}", DecodeError::new(&error))))
+        P::deserialize(&arguments).map(Self).map_err(|error| {
+            let report = DecodeError::new(&error).located::<P, _>(&arguments);
+            invalid_argument(match report.path() {
+                Some(path) => format!("{REFUSED}: argument `{path}`: {report}"),
+                None => format!("{REFUSED}: {report}"),
+            })
+        })
     }
 }
 

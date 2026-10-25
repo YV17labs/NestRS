@@ -2,7 +2,6 @@
 //! `#[process]` method, and the one way a backend reaches the method.
 
 use std::any::TypeId;
-use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -18,22 +17,20 @@ use crate::{Attempt, Capabilities, Capability, JobError, ProcessOptions};
 /// ([`decode`]), runs its per-argument pipe, resolves the provider and calls
 /// the method, its error classified by its type.
 ///
-/// The payload is borrowed from the stored record while another attempt may
-/// follow, and handed over on the last.
+/// The payload is read in place from the stored record, which outlives the
+/// attempt.
 pub type JobHandler = fn(
-    payload: Cow<'_, serde_json::Value>,
+    payload: &serde_json::Value,
     context: HandlerContext,
 ) -> Pin<Box<dyn Future<Output = Result<(), JobError>> + Send + '_>>;
 
-/// The job a handler runs, out of `payload`: moved out of it when the attempt
-/// was handed the value, read from it when the value stays the record's.
+/// The job a handler runs, read from `payload` by reference, so a payload
+/// that does not decode is still there to say where it failed.
 pub fn decode<T: serde::de::DeserializeOwned>(
-    payload: Cow<'_, serde_json::Value>,
-) -> Result<T, serde_json::Error> {
-    match payload {
-        Cow::Owned(value) => serde_json::from_value(value),
-        Cow::Borrowed(value) => T::deserialize(value),
-    }
+    payload: &serde_json::Value,
+) -> Result<T, nest_rs_core::DecodeError> {
+    T::deserialize(payload)
+        .map_err(|error| nest_rs_core::DecodeError::new(&error).located::<T, _>(payload))
 }
 
 /// What one attempt hands the handler besides the payload.
@@ -150,8 +147,6 @@ impl std::fmt::Debug for ProcessMethod {
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
-
     use serde::Deserialize;
 
     #[derive(Debug, Deserialize, PartialEq)]
@@ -160,10 +155,25 @@ mod tests {
     }
 
     #[test]
-    fn a_job_decodes_from_a_borrowed_payload_as_from_an_owned_one() {
+    fn a_job_decodes_from_its_payload_in_place() {
         let payload = serde_json::json!({ "file": "song.wav" });
-        let read: Clip = super::decode(Cow::Borrowed(&payload)).expect("decodes");
-        let taken: Clip = super::decode(Cow::Owned(payload)).expect("decodes");
-        assert_eq!(read, taken);
+        let clip: Clip = super::decode(&payload).expect("decodes");
+        assert_eq!(
+            clip,
+            Clip {
+                file: "song.wav".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_payload_that_does_not_decode_says_where() {
+        let payload = serde_json::json!({ "file": 51 });
+        let report = super::decode::<Clip>(&payload).expect_err("no string");
+        assert_eq!(report.path(), Some("file"));
+        assert_eq!(
+            report.to_string(),
+            "invalid type: an integer, expected a string"
+        );
     }
 }

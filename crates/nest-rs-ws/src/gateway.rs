@@ -841,16 +841,10 @@ async fn handle_text<G: Gateway>(
     client: &WsClient,
     text: &str,
 ) -> Option<String> {
-    let envelope: WsEnvelope = match serde_json::from_str(text) {
+    let WsEnvelope { event, data } = match crate::envelope::decode_envelope(text) {
         Ok(envelope) => envelope,
-        Err(_) => {
-            return Some(error_frame(
-                "error",
-                &crate::WsError::invalid_argument("invalid envelope"),
-            ));
-        }
+        Err(refused) => return Some(error_frame("error", &refused)),
     };
-    let WsEnvelope { event, data } = envelope;
     let served = messages.get(&event);
     // What the lines and the span name: the event a handler declares, never
     // one only the client named.
@@ -1240,26 +1234,46 @@ mod tests {
     }
 
     /// A text message that is no envelope names the class HTTP's `400` names
-    /// for a body that does not decode.
+    /// for a body that does not decode, and says where, never the value.
     #[tokio::test]
     async fn a_message_that_is_no_envelope_names_the_invalid_argument_class() {
-        let frame = handle_text(
-            &Echo,
-            &MessageTable::new(),
-            &wiring(),
-            &WsClient::for_test(),
-            r#"{"data":"sk_live_secret"}"#,
-        )
-        .await
-        .expect("an error frame");
-        let frame: serde_json::Value = serde_json::from_str(&frame).expect("a JSON frame");
-        assert_eq!(
-            frame,
-            serde_json::json!({
-                "event": "error",
-                "data": { "error": "invalid envelope", "errors": { "code": "INVALID_ARGUMENT" } },
-            }),
-        );
+        for (text, said) in [
+            (
+                r#"{"data":"sk_live_secret"}"#,
+                "invalid envelope at `event`: missing",
+            ),
+            (
+                r#"{"event":7,"data":"sk_live_secret"}"#,
+                "invalid envelope at `event`: invalid type: an integer, expected a string",
+            ),
+            (
+                r#""sk_live_secret""#,
+                "invalid envelope: invalid type: a string, expected struct WsEnvelope",
+            ),
+            (
+                r#"{"event":"sk_live_secret""#,
+                "invalid envelope: EOF while parsing an object at line 1 column 25",
+            ),
+        ] {
+            let frame = handle_text(
+                &Echo,
+                &MessageTable::new(),
+                &wiring(),
+                &WsClient::for_test(),
+                text,
+            )
+            .await
+            .expect("an error frame");
+            let frame: serde_json::Value = serde_json::from_str(&frame).expect("a JSON frame");
+            assert_eq!(
+                frame,
+                serde_json::json!({
+                    "event": "error",
+                    "data": { "error": said, "errors": { "code": "INVALID_ARGUMENT" } },
+                }),
+                "{text}",
+            );
+        }
     }
 
     /// A handler whose future holds `N` bytes across an await.

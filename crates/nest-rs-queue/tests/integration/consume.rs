@@ -189,11 +189,11 @@ async fn an_undecodable_payload_is_dead_lettered_without_its_values() {
     for (payload, said) in [
         (
             json!({ "amount": "sk_live_51HsecretTOKEN", "card": "Visa" }),
-            "failed to deserialize job for queue `charges`: invalid type: a string, expected u64",
+            "failed to deserialize job for queue `charges` at `amount`: invalid type: a string, expected u64",
         ),
         (
             json!({ "amount": 1, "card": "4242424242424242" }),
-            "failed to deserialize job for queue `charges`: unknown variant, expected `Visa`",
+            "failed to deserialize job for queue `charges` at `card`: unknown variant, expected `Visa`",
         ),
     ] {
         let logs = nest_rs_testing::LogCapture::install();
@@ -1552,10 +1552,7 @@ async fn a_newer_release_job_naming_no_id_is_dead_lettered_at_once() {
 
 type Handled<'a> = Pin<Box<dyn Future<Output = Result<(), JobError>> + Send + 'a>>;
 
-fn never_runs(
-    _payload: std::borrow::Cow<'_, serde_json::Value>,
-    _context: HandlerContext,
-) -> Handled<'_> {
+fn never_runs(_payload: &serde_json::Value, _context: HandlerContext) -> Handled<'_> {
     Box::pin(async { Ok(()) })
 }
 

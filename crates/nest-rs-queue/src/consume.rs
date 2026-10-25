@@ -3,7 +3,6 @@
 //! inventory, and [`attempt`], from the envelope to the `nest_rs::operation`
 //! line.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -424,18 +423,13 @@ pub(crate) async fn attempt_in(
     let attempt = delivery.attempt;
     let retries = method.options().retries();
     let last = attempt > retries;
-    // The last attempt takes the stored value; one another may follow reads it.
-    let message = if last {
-        Cow::Owned(std::mem::take(&mut delivery.message))
-    } else {
-        Cow::Borrowed(&delivery.message)
-    };
+    let message = &delivery.message;
     let (payload, inherited, minted_trace, unversioned, unusable, carried) = match newer {
         // Past its patience: nothing is opened, and the job's own trace is
         // what its dead letter is filed in.
         Some(_) => (
-            Ok(Cow::Owned(Value::Null)),
-            envelope::newer_trace(&message),
+            Ok(&Value::Null),
+            envelope::newer_trace(message),
             false,
             false,
             Unusable::default(),
@@ -676,7 +670,7 @@ pub async fn refuse(
 enum Input<'a> {
     /// The payload the envelope carried, for the handler, and the pipeline its
     /// method's site composed.
-    Payload(Cow<'a, Value>, Arc<UnitChains>),
+    Payload(&'a Value, Arc<UnitChains>),
     /// Nothing: the envelope was refused, and this is why.
     Refused(JobError),
     /// Nothing: the record was handed over `deliveries` times, and every
@@ -979,7 +973,7 @@ impl Ran {
 async fn ran(
     method: &'static ProcessMethod,
     chains: &UnitChains,
-    payload: Cow<'_, Value>,
+    payload: &Value,
     context: HandlerContext,
     backend_id: Option<Arc<str>>,
     unit_of_work: Option<&Arc<dyn UnitOfWork>>,
@@ -1018,7 +1012,7 @@ async fn ran(
 /// called once with the payload and what the attempt hands it.
 struct JobTail<'a> {
     handler: JobHandler,
-    input: Option<(Cow<'a, Value>, HandlerContext)>,
+    input: Option<(&'a Value, HandlerContext)>,
 }
 
 impl Tail for JobTail<'_> {
@@ -1100,7 +1094,7 @@ mod tests {
         let chains = SITE.chains(&context.container).expect("the site composes");
         run(
             method_of(handler),
-            Input::Payload(Cow::Owned(serde_json::json!({})), chains),
+            Input::Payload(&serde_json::json!({}), chains),
             context,
             identity(attempt),
             None,
@@ -1138,7 +1132,7 @@ mod tests {
         run_handler(handler, 1, last).await
     }
 
-    fn linked(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+    fn linked(_job: &Value, _context: HandlerContext) -> Handler<'_> {
         Box::pin(async { Ok(()) })
     }
 
@@ -1172,7 +1166,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_panicking_handler_is_dead_lettered_with_an_event() {
-        fn boom(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+        fn boom(_job: &Value, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { panic!("deliberate panic for panic-2") })
         }
 
@@ -1209,7 +1203,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_dead_lettered_pipe_rejection_logs_its_field_errors() {
-        fn rejected(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+        fn rejected(_job: &Value, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async {
                 Err(
                     JobError::abort("validation failed").with_details(Some(serde_json::json!({
@@ -1238,7 +1232,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_dead_letter_without_detail_logs_no_errors_field() {
-        fn bare(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+        fn bare(_job: &Value, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::abort("missing field `id`")) })
         }
 
@@ -1256,13 +1250,13 @@ mod tests {
 
     #[tokio::test]
     async fn every_other_outcome_keeps_its_own_event() {
-        fn ok(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+        fn ok(_job: &Value, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Ok(()) })
         }
-        fn fatal(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+        fn fatal(_job: &Value, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::abort("missing field `id`")) })
         }
-        fn transient(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+        fn transient(_job: &Value, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::retry("upstream timed out")) })
         }
 
@@ -1295,7 +1289,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_retryable_failure_with_budget_left_is_reported_before_it_runs_again() {
-        fn flaky(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+        fn flaky(_job: &Value, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::retry("the upstream API timed out")) })
         }
 
@@ -1326,7 +1320,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failure_event_carries_every_cause_beneath_the_error() {
-        fn wrapped(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+        fn wrapped(_job: &Value, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async {
                 Err(JobError::retry(crate::QueueError::backend(
                     std::io::Error::other("Job not found"),
@@ -1349,7 +1343,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_retryable_failure_on_the_last_attempt_dead_letters_and_says_the_budget_is_spent() {
-        fn flaky(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+        fn flaky(_job: &Value, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::retry("the upstream API timed out")) })
         }
 
@@ -1369,7 +1363,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_envelope_never_reaches_the_handler() {
-        fn unreachable_handler(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
+        fn unreachable_handler(_job: &Value, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { panic!("the handler must not run on a refused envelope") })
         }
 

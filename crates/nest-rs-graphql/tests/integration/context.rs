@@ -286,8 +286,11 @@ async fn a_body_that_is_not_a_graphql_request_is_answered_with_an_error_entry_an
         .as_str()
         .unwrap_or_else(|| panic!("an `errors` entry with a message: {body}"));
     assert!(
-        message.contains("invalid type: a string, expected"),
-        "the decode failure is said: {message}",
+        message.starts_with(
+            "the body is not a GraphQL request: the JSON body at `variables`: invalid type: a \
+             string, expected"
+        ),
+        "the decode failure is said, and where: {message}",
     );
     assert!(!message.contains("sk_live"), "without the value: {message}");
     assert_eq!(

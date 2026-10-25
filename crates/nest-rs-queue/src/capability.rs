@@ -159,7 +159,7 @@ mod tests {
     }
 
     fn handler(
-        _: std::borrow::Cow<'_, Value>,
+        _: &Value,
         _: HandlerContext,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), JobError>> + Send + '_>>
     {

@@ -197,6 +197,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::envelope::decode_payload;
     pub use crate::gateway::{gateway_endpoint, wire_gateway};
     pub use crate::guard::{MessageGuards, message_guard_stage, refused_origin};
     pub use crate::message::{DeclaredMessage, MessageTable};

@@ -78,11 +78,12 @@ impl Setting {
     /// when it does not decode.
     ///
     /// The refusal is [`ConfigError::Decode`], worded by [`DecodeError`] for
-    /// both spellings, never quoting the value.
+    /// both spellings: where in the value it failed, never the value.
     pub fn json<T: DeserializeOwned>(&self) -> Result<T, ConfigError> {
         serde_json::from_str(&self.value).map_err(|error| ConfigError::Decode {
             var: self.var.clone(),
-            source: DecodeError::new(&error),
+            source: DecodeError::new(&error)
+                .located::<T, _>(&mut serde_json::Deserializer::from_str(&self.value)),
         })
     }
 }

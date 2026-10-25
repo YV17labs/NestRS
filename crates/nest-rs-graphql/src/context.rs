@@ -347,17 +347,32 @@ fn multipart_refused(refusal: &ParseRequestError) -> Response {
     refused(&reason)
 }
 
-/// Why `bytes` is not a GraphQL request, as the shape it was decodes it.
+/// Why `bytes` is not a GraphQL request, as the shape it was decodes it: where
+/// in the JSON body, when it is JSON.
 fn what_it_is_not(bytes: &[u8]) -> String {
-    let failed = match serde_json::from_slice::<serde_json::Value>(bytes) {
-        Ok(serde_json::Value::Array(_)) => serde_json::from_slice::<Vec<GqlRequest>>(bytes).err(),
-        Ok(_) => serde_json::from_slice::<GqlRequest>(bytes).err(),
-        Err(not_json) => Some(not_json),
+    let value = match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Ok(value) => value,
+        Err(not_json) => return nest_rs_core::DecodeError::new(&not_json).to_string(),
     };
-    match failed {
-        Some(failed) => nest_rs_core::DecodeError::new(&failed).to_string(),
+    let report = if value.is_array() {
+        refusal::<Vec<GqlRequest>>(&value)
+    } else {
+        refusal::<GqlRequest>(&value)
+    };
+    match report {
+        Some(report) => match report.path() {
+            Some(path) => format!("the JSON body at `{path}`: {report}"),
+            None => report.to_string(),
+        },
         None => "neither a GraphQL request nor a list of them".to_owned(),
     }
+}
+
+/// Why `value` does not decode as `T`, located in it; `None` when it does.
+fn refusal<T: DeserializeOwned>(value: &serde_json::Value) -> Option<nest_rs_core::DecodeError> {
+    T::deserialize(value)
+        .err()
+        .map(|error| nest_rs_core::DecodeError::new(&error).located::<T, _>(value))
 }
 
 /// Answer a request that is not a GraphQL request: GraphQL-over-HTTP's `400`

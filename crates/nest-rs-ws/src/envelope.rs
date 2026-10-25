@@ -13,6 +13,33 @@ use crate::opaque::Opaque;
 /// What an event no handler serves is answered.
 const UNKNOWN_EVENT: &str = "unknown event";
 
+/// What a text message that is no envelope is answered, before where it failed.
+const INVALID_ENVELOPE: &str = "invalid envelope";
+
+/// `text` decoded as the envelope every message rides, or the error saying
+/// where in it the decode failed, never the value.
+pub(crate) fn decode_envelope(text: &str) -> Result<WsEnvelope, WsError> {
+    serde_json::from_str(text).map_err(|error| {
+        let report = DecodeError::new(&error)
+            .located::<WsEnvelope, _>(&mut serde_json::Deserializer::from_str(text));
+        WsError::invalid_argument(match report.path() {
+            Some(path) => format!("{INVALID_ENVELOPE} at `{path}`: {report}"),
+            None => format!("{INVALID_ENVELOPE}: {report}"),
+        })
+    })
+}
+
+/// `data` decoded as the payload of `event`'s handler, or the error frame
+/// saying where in it the decode failed ([`WsReply::payload_error`]).
+pub fn decode_payload<T: serde::de::DeserializeOwned>(
+    event: &str,
+    data: &serde_json::Value,
+) -> Result<T, WsReply> {
+    T::deserialize(data).map_err(|error| {
+        WsReply::payload_error(event, DecodeError::new(&error).located::<T, _>(data))
+    })
+}
+
 /// `{ "event": ..., "data": ... }` — the wire shape every gateway message
 /// rides.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,19 +206,26 @@ impl WsReply {
 
     /// The error frame a payload that does not deserialize puts on the wire,
     /// under the `INVALID_ARGUMENT` code, with a `warn`. Both say where it
-    /// failed and what kind of value was found ([`DecodeError`]), never the
-    /// value.
-    pub fn payload_error(event: &str, error: &serde_json::Error) -> WsReply {
-        let error = nest_rs_core::DecodeError::new(error);
+    /// failed — inside the payload when the report is
+    /// [`located`](DecodeError::located) — what kind of value was found and
+    /// what was expected ([`DecodeError`]), never the value.
+    pub fn payload_error(event: &str, error: impl Into<DecodeError>) -> WsReply {
+        let error = error.into();
+        let said = match error.path() {
+            Some(path) => format!("at `{path}`: {error}"),
+            None => error.to_string(),
+        };
         tracing::warn!(
             target: crate::TARGET,
             event,
-            error = %error,
+            error = %said,
             "subscribe_message payload failed to deserialize",
         );
-        WsReply::Error(WsError::invalid_argument(format!(
-            "invalid payload for `{event}`: {error}"
-        )))
+        let message = match error.path() {
+            Some(path) => format!("invalid payload for `{event}` at `{path}`: {error}"),
+            None => format!("invalid payload for `{event}`: {error}"),
+        };
+        WsReply::Error(WsError::invalid_argument(message))
     }
 
     /// The reply for an event with no registered handler, so a client can tell

@@ -697,9 +697,13 @@ mod tests {
                     "{err:?}"
                 );
                 let rendered = nest_rs_core::error_message(&err);
-                assert!(rendered.contains(&var), "{rendered}");
-                assert!(rendered.contains("invalid type: a string"), "{rendered}");
-                assert!(rendered.contains("line 1 column"), "{rendered}");
+                assert_eq!(
+                    rendered,
+                    format!(
+                        "invalid value for {var} at `[0].scopes`: invalid type: a string, \
+                         expected a sequence"
+                    ),
+                );
                 assert!(!rendered.contains("hunter2"), "{rendered}");
                 assert!(!format!("{err:?}").contains("hunter2"), "{err:?}");
             }

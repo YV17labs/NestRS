@@ -398,12 +398,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     }
                 };
                 quote! {
-                    let __deser: #deser_ty = match ::nest_rs_ws::serde_json::from_value(__data) {
+                    let __deser: #deser_ty = match ::nest_rs_ws::__private::decode_payload::<#deser_ty>(#event, &__data) {
                         ::core::result::Result::Ok(__p) => __p,
-                        ::core::result::Result::Err(__e) => {
-                            return ::core::result::Result::Ok(
-                                ::nest_rs_ws::WsReply::payload_error(#event, &__e),
-                            );
+                        ::core::result::Result::Err(__refused) => {
+                            return ::core::result::Result::Ok(__refused);
                         }
                     };
                     #wrap

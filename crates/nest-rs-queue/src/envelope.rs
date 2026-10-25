@@ -1,7 +1,6 @@
 //! The wire envelope every job travels in, sealed and opened by this crate
 //! alone; the format is specified on [`Envelope`].
 
-use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -431,7 +430,7 @@ pub(crate) enum Opened<'a> {
     /// when the trace context beside it was missing or unusable; `None` when it
     /// carried neither.
     Sealed {
-        payload: Cow<'a, Value>,
+        payload: &'a Value,
         correlation: Option<Correlation>,
         /// The trace carried is the one a consumer minted at the job's first
         /// attempt, not the producer's.
@@ -442,7 +441,7 @@ pub(crate) enum Opened<'a> {
         carried: Carried,
     },
     /// A value that is no envelope at all, decoded as the payload itself.
-    Unversioned(Cow<'a, Value>),
+    Unversioned(&'a Value),
 }
 
 /// The shape, never the payload.
@@ -570,8 +569,8 @@ impl Unusable {
 ///
 /// The producer's trace is trusted here, and only here: our own push wrote the
 /// envelope into infrastructure the deployment owns.
-pub(crate) fn open<'a>(value: Cow<'a, Value>, queue: &str) -> Result<Opened<'a>, JobError> {
-    let Value::Object(map) = value.as_ref() else {
+pub(crate) fn open<'a>(value: &'a Value, queue: &str) -> Result<Opened<'a>, JobError> {
+    let Value::Object(map) = value else {
         return Ok(Opened::Unversioned(value));
     };
     let Some(version) = envelope_version(map) else {
@@ -644,19 +643,8 @@ pub(crate) fn open<'a>(value: Cow<'a, Value>, queue: &str) -> Result<Opened<'a>,
         Some(parent) => Some(Correlation::continued(parent, state, actor_id)),
         None => actor_id.map(|actor| Correlation::minted(Some(actor))),
     };
-    let payload = match value {
-        Cow::Borrowed(value) => value
-            .get(PAYLOAD)
-            .map_or(Cow::Owned(Value::Null), Cow::Borrowed),
-        Cow::Owned(mut value) => Cow::Owned(
-            value
-                .get_mut(PAYLOAD)
-                .map(Value::take)
-                .unwrap_or(Value::Null),
-        ),
-    };
     Ok(Opened::Sealed {
-        payload,
+        payload: map.get(PAYLOAD).unwrap_or(&Value::Null),
         correlation,
         minted,
         unusable,
@@ -713,8 +701,8 @@ fn envelope_version(map: &Map<String, Value>) -> Option<u64> {
 mod tests {
     use super::*;
 
-    fn opened(value: Value) -> Opened<'static> {
-        open(Cow::Owned(value), "audio").expect("opens")
+    fn opened(value: &Value) -> Opened<'_> {
+        open(value, "audio").expect("opens")
     }
 
     fn under<F: std::future::Future>(
@@ -729,20 +717,22 @@ mod tests {
         let secret = json!({ "card": "4242-SECRET" });
         let sealed = seal(secret.clone(), JobId::mint(), None);
         assert!(!format!("{sealed:?}").contains("SECRET"), "{sealed:?}");
-        let opened = opened(sealed.into_json());
+        let stored = sealed.into_json();
+        let opened = opened(&stored);
         assert!(!format!("{opened:?}").contains("SECRET"), "{opened:?}");
-        let foreign = Opened::Unversioned(Cow::Owned(secret));
+        let foreign = Opened::Unversioned(&secret);
         assert!(!format!("{foreign:?}").contains("SECRET"), "{foreign:?}");
     }
 
     #[test]
     fn a_sealed_job_opens_to_exactly_its_payload() {
         let payload = json!({ "file": "song.wav" });
+        let stored = seal(payload.clone(), JobId::mint(), None).into_json();
         let Opened::Sealed {
             payload: opened,
             correlation,
             ..
-        } = opened(seal(payload.clone(), JobId::mint(), None).into_json())
+        } = opened(&stored)
         else {
             panic!("a sealed job opens as sealed");
         };
@@ -751,24 +741,12 @@ mod tests {
     }
 
     #[test]
-    fn a_borrowed_record_opens_to_its_payload_in_place() {
+    fn a_record_opens_to_its_payload_in_place() {
         let stored = seal(json!({ "file": "song.wav" }), JobId::mint(), None).into_json();
-        let Ok(Opened::Sealed {
-            payload: Cow::Borrowed(read),
-            ..
-        }) = open(Cow::Borrowed(&stored), "audio")
-        else {
-            panic!("a borrowed record opens to a borrowed payload");
+        let Ok(Opened::Sealed { payload, .. }) = open(&stored, "audio") else {
+            panic!("a record opens to its payload");
         };
-        assert!(std::ptr::eq(read, &stored[PAYLOAD]));
-        let Ok(Opened::Sealed {
-            payload: Cow::Owned(taken),
-            ..
-        }) = open(Cow::Owned(stored.clone()), "audio")
-        else {
-            panic!("an owned record opens to an owned payload");
-        };
-        assert_eq!(taken, stored[PAYLOAD]);
+        assert!(std::ptr::eq(payload, &stored[PAYLOAD]));
     }
 
     #[tokio::test]
@@ -779,7 +757,7 @@ mod tests {
         })
         .await;
 
-        let Opened::Sealed { correlation, .. } = opened(sealed.into_json()) else {
+        let Opened::Sealed { correlation, .. } = opened(&sealed.into_json()) else {
             panic!("sealed");
         };
         let adopted = correlation.expect("the context travelled");
@@ -810,7 +788,7 @@ mod tests {
             seal(json!({ "clip": 1 }), JobId::mint(), None)
         })
         .await;
-        let Opened::Sealed { correlation, .. } = opened(sealed.into_json()) else {
+        let Opened::Sealed { correlation, .. } = opened(&sealed.into_json()) else {
             panic!("sealed");
         };
         assert_eq!(
@@ -830,7 +808,7 @@ mod tests {
         })
         .await;
 
-        let Opened::Sealed { correlation, .. } = opened(sealed.into_json()) else {
+        let Opened::Sealed { correlation, .. } = opened(&sealed.into_json()) else {
             panic!("sealed");
         };
         assert_eq!(
@@ -845,7 +823,7 @@ mod tests {
             seal(json!({ "clip": 1 }), JobId::mint(), None)
         })
         .await;
-        let Opened::Sealed { correlation, .. } = opened(sealed.into_json()) else {
+        let Opened::Sealed { correlation, .. } = opened(&sealed.into_json()) else {
             panic!("sealed");
         };
         assert!(correlation.is_some(), "the job is still correlated");
@@ -869,7 +847,7 @@ mod tests {
             json!({ "v": 1, "payload": { "n": 1 }, "trace_minted": "yes" }),
             json!({ "v": 1 }),
         ] {
-            let Opened::Unversioned(value) = opened(bare.clone()) else {
+            let Opened::Unversioned(value) = opened(&bare) else {
                 panic!("{bare} is not an envelope");
             };
             assert_eq!(*value, bare, "nothing is reshaped");
@@ -882,7 +860,7 @@ mod tests {
             json!({ "v": 1, "payload": { "clip": 1 }, "tenant_id": "acme" }),
             json!({ "v": 1, "payload": { "clip": 1 }, "baggage": "region=eu" }),
         ] {
-            let Opened::Sealed { payload, .. } = opened(envelope.clone()) else {
+            let Opened::Sealed { payload, .. } = opened(&envelope) else {
                 panic!("{envelope} is an envelope");
             };
             assert_eq!(*payload, json!({ "clip": 1 }), "{envelope}");
@@ -900,7 +878,7 @@ mod tests {
                 payload,
                 correlation,
                 ..
-            } = opened(envelope.clone())
+            } = opened(&envelope)
             else {
                 panic!("{envelope} is an envelope");
             };
@@ -912,7 +890,7 @@ mod tests {
     #[test]
     fn another_version_is_refused_naming_the_direction_of_the_release_gap() {
         let newer = open(
-            Cow::Owned(json!({ "v": u64::from(WIRE_FORMAT_VERSION) + 99, "payload": {} })),
+            &json!({ "v": u64::from(WIRE_FORMAT_VERSION) + 99, "payload": {} }),
             "audio",
         )
         .expect_err("a newer version is refused");
@@ -924,7 +902,7 @@ mod tests {
         );
         assert!(newer.contains("`audio`"), "{newer}");
 
-        let foreign = open(Cow::Owned(json!({ "v": 0, "payload": {} })), "audio")
+        let foreign = open(&json!({ "v": 0, "payload": {} }), "audio")
             .expect_err("a version below the first is refused")
             .to_string();
         assert!(
@@ -938,7 +916,7 @@ mod tests {
     fn unusable_keys_are_flagged_where_the_job_runs_without_them() {
         let traceparent = Correlation::minted(None).traceparent().to_string();
         let flagged = |envelope: Value| {
-            let Opened::Sealed { unusable, .. } = opened(envelope.clone()) else {
+            let Opened::Sealed { unusable, .. } = opened(&envelope) else {
                 panic!("{envelope} is an envelope");
             };
             unusable.keys()
@@ -1067,7 +1045,7 @@ mod tests {
     #[test]
     fn an_unusable_identity_key_is_flagged() {
         let flagged = |envelope: Value| {
-            let Opened::Sealed { unusable, .. } = opened(envelope.clone()) else {
+            let Opened::Sealed { unusable, .. } = opened(&envelope) else {
                 panic!("{envelope} is an envelope");
             };
             unusable.keys()
@@ -1162,7 +1140,7 @@ mod tests {
 
     /// What the attempt `envelope` opens to reads as its tenant.
     async fn tenant_of(envelope: Value) -> Option<String> {
-        let Opened::Sealed { carried, .. } = opened(envelope.clone()) else {
+        let Opened::Sealed { carried, .. } = opened(&envelope) else {
             panic!("{envelope} is an envelope");
         };
         carried
@@ -1217,7 +1195,7 @@ mod tests {
     fn a_tenant_naming_no_tenant_is_refused_without_being_quoted() {
         for tenant in [json!(""), json!(7), json!(null), json!({ "org": "SECRET" })] {
             let refused = open(
-                Cow::Owned(json!({ "v": 1, "payload": {}, "tenant_id": tenant })),
+                &json!({ "v": 1, "payload": {}, "tenant_id": tenant }),
                 "audio",
             )
             .expect_err("a job runs for the tenant it was pushed for or not at all");
@@ -1236,7 +1214,7 @@ mod tests {
         let raw = "userId=alice%40example.com;ttl=60, region = eu";
         let Opened::Sealed {
             carried, unusable, ..
-        } = opened(json!({ "v": 1, "payload": {}, "baggage": raw }))
+        } = opened(&json!({ "v": 1, "payload": {}, "baggage": raw }))
         else {
             panic!("an envelope");
         };
@@ -1260,7 +1238,7 @@ mod tests {
         ] {
             let Opened::Sealed {
                 carried, unusable, ..
-            } = opened(json!({ "v": 1, "payload": {}, "baggage": baggage }))
+            } = opened(&json!({ "v": 1, "payload": {}, "baggage": baggage }))
             else {
                 panic!("an envelope");
             };
@@ -1291,7 +1269,7 @@ mod tests {
                 "{stored}"
             );
             assert_eq!(json[ACTOR_ID], json!("bob"));
-            let Opened::Sealed { payload, .. } = opened(json.clone()) else {
+            let Opened::Sealed { payload, .. } = opened(&json) else {
                 panic!("{json} is an envelope");
             };
             assert_eq!(*payload, json!({ "clip": 1 }), "the payload is kept whole");
@@ -1304,7 +1282,7 @@ mod tests {
             json!({ "v": 1, "payload": {}, "actor_id": "bob" }),
             json!({ "v": 1, "payload": {}, "actor_id": "bob", "traceparent": "corrupt" }),
         ] {
-            let Opened::Sealed { correlation, .. } = opened(envelope.clone()) else {
+            let Opened::Sealed { correlation, .. } = opened(&envelope) else {
                 panic!("{envelope} is an envelope");
             };
             let correlation = correlation.expect("a trace minted for the actor");

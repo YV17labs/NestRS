@@ -621,11 +621,10 @@ mod tests {
         assert_eq!(refused.len(), 3, "{:#?}", logs.events());
         for event in &refused {
             assert_eq!(event.level, "warn");
+            let fields = format!("{:?}", event.fields);
             assert!(
-                !format!("{:?}", event.fields).contains(&domain)
-                    && !format!("{:?}", event.fields).contains("anything"),
-                "{:?}",
-                event.fields
+                !fields.contains(&domain) && !fields.contains("anything"),
+                "{fields}"
             );
         }
         assert_eq!(refused[0].field("user_id"), None);

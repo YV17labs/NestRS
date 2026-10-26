@@ -45,6 +45,14 @@ async fn create_post_with(app: &TestApp, bearer: &str) -> nest_rs::http::Respons
         .0
 }
 
+fn www_authenticate(refused: &nest_rs::http::Response) -> &str {
+    refused
+        .headers()
+        .get(header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+}
+
 #[tokio::test]
 async fn a_read_only_delegation_reads_but_cannot_write() {
     let (_db, app) = boot().await;
@@ -65,11 +73,7 @@ async fn a_read_only_delegation_reads_but_cannot_write() {
         StatusCode::FORBIDDEN,
         "a read-only delegation must not be able to write",
     );
-    let challenge = refused
-        .headers()
-        .get(header::WWW_AUTHENTICATE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
+    let challenge = www_authenticate(&refused);
     assert!(
         challenge.contains(r#"error="insufficient_scope""#)
             && challenge.contains(&format!(r#"scope="{}""#, constants::POSTS_WRITE)),
@@ -141,12 +145,7 @@ async fn a_machine_token_delegated_reading_is_refused_a_write_by_an_insufficient
         .send()
         .await;
     refused.assert_status(StatusCode::FORBIDDEN);
-    let challenge = refused
-        .0
-        .headers()
-        .get(header::WWW_AUTHENTICATE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
+    let challenge = www_authenticate(&refused.0);
     assert!(
         challenge.contains(r#"error="insufficient_scope""#),
         "{challenge}"
@@ -177,13 +176,7 @@ async fn a_refused_read_names_the_one_scope_it_needs_on_every_edge() {
         .send()
         .await;
     refused.assert_status(StatusCode::FORBIDDEN);
-    let challenge = refused
-        .0
-        .headers()
-        .get(header::WWW_AUTHENTICATE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_owned();
+    let challenge = www_authenticate(&refused.0);
     assert!(
         challenge.contains(&format!(r#"scope="{}""#, constants::POSTS_READ)),
         "{challenge}"

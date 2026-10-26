@@ -244,6 +244,12 @@ framework's own for that reason, with rmcp's shape and schema. A prompt's
 arguments are refused in the same words, as JSON-RPC's `invalid_params` under
 `data: { "code": "INVALID_ARGUMENT" }`.
 
+A tool error is a failed call all the same, whether rmcp answered it for
+arguments that do not decode or the tool returned `CallToolResult::error`
+itself: its unit of work rolls back, its `mcp.operation` line files
+`outcome="error"`, and its span carries `error.type` `tool_error`, the class
+OpenTelemetry's MCP conventions give a result with `isError: true`.
+
 For extra checks beyond shape — ranges, enums, mutual exclusion — add
 `validate(...)` attributes: `#[input]` already carries the `validator` derive,
 so no extra import and no extra manifest line.

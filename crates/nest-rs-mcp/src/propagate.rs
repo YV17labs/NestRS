@@ -18,11 +18,13 @@
 //! The request context is the `/mcp` request's: its span, scope and
 //! correlation, and what its guards and layers made ambient.
 //!
-//! An operation files `ok` or `error` — `error` too when it outlives
-//! `McpConfig::operation_timeout`, which every request but `subscriptions/listen`
-//! runs under; `panic` when it unwinds (contained, the client answered with an
-//! internal error rather than left to its timeout); or `cancelled` when its
-//! client cancels it or the transport stops it. The line is filed by
+//! An operation files `ok`, or `error` for an answer its unit would not
+//! commit — a tool's error in band among them, which its span records as
+//! `tool_error` — and for one outliving `McpConfig::operation_timeout`, which
+//! every request but `subscriptions/listen` runs under; `panic` when it unwinds
+//! (contained, the client answered with an internal error rather than left to
+//! its timeout); or `cancelled` when its client cancels it or the transport
+//! stops it. The line is filed by
 //! [`OperationLine`], so an end nobody saw still files one.
 
 #![expect(
@@ -319,17 +321,12 @@ impl OperationUnits {
                     line.file(operation_log::CANCELLED);
                     answered.answer
                 }
-                Some(Ok(Answered {
-                    answer: Ok(value), ..
-                })) => {
-                    line.file(operation_log::OK);
-                    Ok(value)
-                }
-                Some(Ok(Answered {
-                    answer: Err(error), ..
-                })) => {
-                    line.file(operation_log::ERROR);
-                    Err(error)
+                Some(Ok(answered)) => {
+                    match answered.failed_as() {
+                        None => line.file(operation_log::OK),
+                        Some(error_type) => line.failed(error_type),
+                    }
+                    answered.answer
                 }
                 Some(Err(payload)) => {
                     line.unwound(&*payload);
@@ -418,6 +415,20 @@ impl<T: 'static> Answered<T> {
         Self { answer, commits }
     }
 
+    /// The class its unit failed in, read off what decided the commit, so the
+    /// line and the span never say `ok` for a unit that rolled back: `None`
+    /// when it commits, [`TOOL_ERROR`] for a tool's error in band, `error`
+    /// otherwise.
+    fn failed_as(&self) -> Option<&'static str> {
+        if self.commits {
+            return None;
+        }
+        Some(match &self.answer {
+            Ok(value) if reports_tool_error(value) => TOOL_ERROR,
+            _ => operation_log::ERROR,
+        })
+    }
+
     /// `error`, the unit rolled back.
     fn refused(error: McpError) -> Self {
         Self {
@@ -463,6 +474,10 @@ fn reports_tool_error(value: &dyn Any) -> bool {
     };
     result.is_some_and(|result| result.is_error == Some(true))
 }
+
+/// The `error.type` OpenTelemetry's MCP semantic conventions give a
+/// `CallToolResult` answered with `isError: true`.
+const TOOL_ERROR: &str = "tool_error";
 
 /// The request's own site's tail: rmcp's routing, its answer written into the
 /// operation's slot. An error, or a tool error reported in band, fails the
@@ -667,6 +682,16 @@ impl<'a> OperationLine<'a> {
 
     fn file(mut self, outcome: &'static str) {
         self.emit(outcome);
+    }
+
+    /// The operation failed in class `error_type`, which its span records in
+    /// place of the outcome word its line files, `error`: `tracing-opentelemetry`
+    /// keeps every value a field is recorded with, so the class is recorded once
+    /// and the line files with the span taken out.
+    fn failed(mut self, error_type: &'static str) {
+        let span = std::mem::replace(&mut self.span, tracing::Span::none());
+        operation_log::record_error(&span, error_type);
+        self.emit(operation_log::ERROR);
     }
 
     /// The operation unwound: file `panic`, and give the operator what the

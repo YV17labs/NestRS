@@ -115,10 +115,12 @@ and declaring a field nothing fills is the same defect with the opposite sign.
 - **`otel.kind` values are constants in `operation_log::kind`**, and only the
   kinds this framework emits are declared; the edge that first needs another
   adds it.
-- **The span says what the line says.** Wherever an edge files a line it records
+- **The span says what the line says, and neither says `ok` for a unit whose
+  work rolled back.** Wherever an edge files a line it records
   the outcome on the unit's span, so anything but `ok` exports as `error.type`
   with the same word and an `Error` status (an HTTP `5xx` records its status code
-  instead, as the HTTP conventions ask). A request cut before it answered is
+  instead, and an MCP tool's error in band `tool_error`, as their conventions
+  ask). A request cut before it answered is
   named for the template its route table entry recorded, never exported
   anonymous.
 

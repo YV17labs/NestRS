@@ -915,6 +915,118 @@ async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
     );
 }
 
+const REPORTING: &str = "/mcp/reporting";
+
+#[nest_rs_mcp::input]
+struct AmountArgs {
+    amount: u64,
+}
+
+#[mcp(path = "/mcp/reporting")]
+#[derive(Clone, Default)]
+struct ReportingTools;
+
+#[tools]
+impl ReportingTools {
+    #[tool(description = "Echoes an amount.")]
+    #[public]
+    async fn amount(
+        &self,
+        nest_rs_mcp::Parameters(args): nest_rs_mcp::Parameters<AmountArgs>,
+    ) -> Result<String, McpError> {
+        Ok(args.amount.to_string())
+    }
+
+    #[tool(description = "Reports its own error in its result.")]
+    #[public]
+    async fn reported(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::error(vec![ContentBlock::text(
+            "the tool failed",
+        )]))
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [ReportingTools])]
+struct ReportingModule;
+
+/// A tool's error in band — rmcp's answer to arguments that do not decode, or
+/// the tool's own `CallToolResult::error` — fails its unit, which rolls back:
+/// the line says what the commit decided, and the span records the class the
+/// MCP semantic conventions name for it, `tool_error`. The client's answer is
+/// the tool result it was.
+#[tokio::test]
+async fn a_tool_error_in_band_files_its_line_error_and_its_span_tool_error() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<ReportingModule>()
+        .await
+        .expect("the module boots");
+    let session = open_session(app.http(), REPORTING, None).await;
+
+    for (tool, arguments) in [
+        ("amount", json!({ "amount": "sk_live_51HsecretTOKEN" })),
+        ("reported", json!({})),
+    ] {
+        let body = call_method(
+            app.http(),
+            REPORTING,
+            &session,
+            None,
+            "tools/call",
+            json!({ "name": tool, "arguments": arguments }),
+        )
+        .await;
+        let answer = result(&body);
+        assert_eq!(answer["result"]["isError"], json!(true), "{tool}: {answer}");
+
+        let line = operation_line(&logs, tool).await;
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::ERROR),
+            "{tool}: the unit rolled back, and its line says so",
+        );
+        let span = logs
+            .spans()
+            .into_iter()
+            .find(|span| {
+                span.name == nest_rs_mcp::unit::OPERATION.name()
+                    && span.field("mcp.operation.name").as_deref() == Some(tool)
+            })
+            .unwrap_or_else(|| panic!("{tool}: the operation's span"));
+        assert_eq!(
+            span.field("error.type").as_deref(),
+            Some("tool_error"),
+            "{tool}: {:?}",
+            span.fields,
+        );
+        assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+    }
+
+    call_method(
+        app.http(),
+        REPORTING,
+        &session,
+        None,
+        "tools/call",
+        json!({ "name": "amount", "arguments": { "amount": 7 } }),
+    )
+    .await;
+    let answered = || {
+        logs.find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_mcp::unit::OPERATION.name(),
+        )
+        .into_iter()
+        .filter(|line| line.field("operation").as_deref() == Some("amount"))
+        .nth(1)
+    };
+    nest_rs_testing::wait_until(Duration::from_secs(2), || answered().is_some()).await;
+    assert_eq!(
+        answered().and_then(|line| line.field("outcome")).as_deref(),
+        Some(nest_rs_core::operation_log::OK),
+        "a call its tool answered stays ok",
+    );
+}
+
 const SUBSCRIBED: &str = "/mcp/subscribed";
 
 /// A host whose subscription only its client ends: `listen` waits for the

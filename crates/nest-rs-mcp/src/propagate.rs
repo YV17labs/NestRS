@@ -73,8 +73,9 @@ use tracing::Instrument;
 use crate::McpError;
 use crate::ambient::McpAmbient;
 use crate::error::{
-    ToolReportedError, answer, method_not_found, opaque_answer, prompt_not_found, refuses_method,
-    refuses_prompt, refuses_task, task_not_found, tool_not_found,
+    AVAILABLE_PROMPTS, ClassData, ToolReportedError, answer, classed_method_not_found,
+    method_not_found, opaque_answer, prompt_not_found, refuses_method, refuses_prompt,
+    refuses_task, task_not_found, tool_not_found,
 };
 use crate::guard::BoxFuture;
 use crate::operation::McpOperationKind;
@@ -562,10 +563,11 @@ fn timed_out(method: &str, operation: Option<&str>, timeout: Duration) -> McpErr
     );
     McpError::internal_error(
         "the operation was not answered in time",
-        Some(serde_json::json!({
-            "code": nest_rs_core::problem::code::UNAVAILABLE.as_str(),
-            "reason": TIMEOUT_REASON,
-        })),
+        ClassData {
+            reason: Some(TIMEOUT_REASON),
+            ..ClassData::of(nest_rs_core::problem::code::UNAVAILABLE)
+        }
+        .into_data(),
     )
 }
 
@@ -580,9 +582,7 @@ const TIMEOUT_REASON: &str = "timeout";
 fn cancelled_before_completion() -> McpError {
     McpError::internal_error(
         "the operation was cancelled before it completed",
-        Some(serde_json::json!({
-            "code": nest_rs_core::problem::code::UNAVAILABLE.as_str(),
-        })),
+        ClassData::of(nest_rs_core::problem::code::UNAVAILABLE).into_data(),
     )
 }
 
@@ -675,13 +675,19 @@ impl Addressed {
     }
 
     /// `error` as the client is answered: rmcp's own refusals of a name no
-    /// host serves quote it, so each is said by kind.
+    /// host serves quote it, so each is said by kind, and its refusal of a
+    /// protocol method no host serves, which names the protocol's method,
+    /// takes the class every other refusal carries.
     fn said_by_kind(&self, method: &Method, error: McpError) -> McpError {
         match (method, self) {
             (Method::Custom(sent), _) if refuses_method(&error, sent) => method_not_found(),
-            (_, Self::Prompt(name)) if refuses_prompt(&error, name) => prompt_not_found(error.data),
+            (_, Self::Prompt(name)) if refuses_prompt(&error, name) => {
+                prompt_not_found(error.data.and_then(|mut data| {
+                    data.get_mut(AVAILABLE_PROMPTS).map(serde_json::Value::take)
+                }))
+            }
             (_, Self::Task(id)) if refuses_task(&error, id) => task_not_found(),
-            _ => error,
+            _ => classed_method_not_found(error),
         }
     }
 }

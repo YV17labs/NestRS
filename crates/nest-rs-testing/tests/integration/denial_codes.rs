@@ -1,8 +1,7 @@
 //! One denial, one code, on every edge: a guard's refusal names its class by
 //! the code a client branches on — the problem document's `code` on HTTP,
-//! `extensions.code` on GraphQL, `errors.code` in a WebSocket frame, `data.code`
-//! in an MCP error — the same one wherever it is read, an internal denial's
-//! included.
+//! `extensions.code` on GraphQL, `data.code` in a WebSocket frame and in an MCP
+//! error — the same one wherever it is read, an internal denial's included.
 
 use nest_rs_core::problem::code;
 use nest_rs_core::{Code, Layer, UnitContext, injectable, module};
@@ -360,7 +359,7 @@ async fn every_denial_names_one_code_on_every_edge() {
             ("HTTP", &http["code"]),
             ("GraphQL", &graphql["errors"][0]["extensions"]["code"]),
             ("MCP", &mcp["error"]["data"]["code"]),
-            ("WS", &frame["data"]["errors"]["code"]),
+            ("WS", &frame["data"]["code"]),
         ];
         for (edge, code) in said {
             assert_eq!(

@@ -4,13 +4,14 @@
 //!
 //! Each edge answers a problem in its own standard form: an RFC 9457 problem
 //! document with a `code` member on HTTP (`ProblemDetails` is its document),
-//! `extensions.code` on GraphQL, `data.errors.code` in a WebSocket error frame,
-//! `data.code` in an MCP JSON-RPC error. Where a [`ToProblem`] error is read
-//! differs: GraphQL's and WebSocket's handler wrappers probe a handler's error
-//! for it by type, an MCP operation converts one with
-//! `nest_rs_mcp::problem_error`, and HTTP reads a [`Problem`] only — the error
-//! itself or one its chain carries — beside an error's own `ResponseError`. An
-//! error the edge finds no answer in is answered opaquely
+//! `extensions.code` on GraphQL, `data.code` in a WebSocket error frame and in
+//! an MCP JSON-RPC error — beside a pipe's field-level `errors` on every edge
+//! (`.claude/decisions/every-refusal-carries-its-class.md`). Where a
+//! [`ToProblem`] error is read differs: GraphQL's and WebSocket's handler
+//! wrappers probe a handler's error for it by type, an MCP operation converts
+//! one with `nest_rs_mcp::problem_error`, and HTTP reads a [`Problem`] only —
+//! the error itself or one its chain carries — beside an error's own
+//! `ResponseError`. An error the edge finds no answer in is answered opaquely
 //! ([`OPAQUE_CLIENT_MESSAGE`]; on HTTP the `500` document under the `INTERNAL`
 //! code, with no `detail`) and its chain is logged once at `error`.
 //!

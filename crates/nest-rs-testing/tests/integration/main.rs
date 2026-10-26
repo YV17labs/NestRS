@@ -29,6 +29,7 @@ mod interceptors;
 mod layer_pool;
 mod lifecycle_hooks;
 mod mcp;
+mod pipe_codes;
 mod pipes;
 mod reflector;
 mod request_scope;

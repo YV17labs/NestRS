@@ -140,15 +140,16 @@ guard, filter or interceptor loop of its own.
     where the unit's answer is final, by the status the client is sent, so a
     failure an exception filter answers `4xx` files nothing. `Problem`, `Code` and `ToProblem` are the
     one client-error contract: a `Problem` answers in the edge's standard
-    form (a `code` member, `extensions.code`, `errors.code`, `data.code`),
-    never with its detail on a `5xx`, a denial carries the same `code` on
-    every edge (`denial_code`), an opaque answer the `INTERNAL` one through
+    form (a `code` member, `extensions.code`, `data.code` on WebSocket and
+    MCP), never with its detail on a `5xx`, a denial carries the same `code`
+    on every edge (`denial_code`), an opaque answer the `INTERNAL` one through
     one constructor per edge, a problem HTTP builds from a status alone the
-    class core names for that status, a decode failure the
-    `INVALID_ARGUMENT` one wherever its answer has a member for it, as a
-    pipe's refusal where that member is not its field map, and every code
-    the framework emits is a `nest_rs_core::problem::code` constant, read off
-    the standard that names its class (its module doc). The edge decides **by type**
+    class core names for that status, a decode failure and a pipe's refusal
+    the `INVALID_ARGUMENT` one — the class beside the field map, which
+    `errors` names on every edge and nothing else does — and every code the
+    framework emits is a `nest_rs_core::problem::code` constant, read off the
+    standard that names its class (its module doc;
+    `.claude/decisions/every-refusal-carries-its-class.md`). The edge decides **by type**
     where it names the handler's error — GraphQL's, WS's and MCP's wrappers
     probe `ToProblem` before the chain — and a `Problem`, `PipeError` or decode failure its
     chain carries answers itself; HTTP reads no `ToProblem`: it renders an

@@ -16,16 +16,22 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 ///
 /// MCP has no status line: the code picks the closest JSON-RPC family and the
 /// `data` carries the machine-readable `code` and `reason`, plus
-/// `requiredScopes` when the denial names them. An internal denial answers
-/// opaquely ([`Opaque`](crate::Opaque)), the `INTERNAL` code its only data:
-/// the reader is a language model.
+/// `requiredScopes` and `retryAfterSeconds` when the denial names them. An
+/// internal denial answers opaquely ([`Opaque`](crate::Opaque)), the
+/// `INTERNAL` code its only data: the reader is a language model.
 pub fn denial_to_mcp_error(denial: Denial) -> McpError {
-    use nest_rs_guards::__private::{client_message, structured_reason};
+    use nest_rs_guards::__private::{client_message, denial_code, denial_reason};
 
     if matches!(denial, Denial::Internal(_)) {
         return crate::error::opaque_answer();
     }
-    let data = Some(serde_json::Value::Object(structured_reason(&denial)));
+    let data = crate::error::ClassData {
+        reason: Some(denial_reason(&denial)),
+        required_scopes: denial.required_scopes(),
+        retry_after_secs: denial.retry_after_secs(),
+        ..crate::error::ClassData::of(denial_code(&denial))
+    }
+    .into_data();
     // Not the caller's request: something the server depends on did not
     // answer, which JSON-RPC files under its internal error, with the reason
     // and the wait a client acts on.
@@ -39,16 +45,29 @@ pub fn denial_to_mcp_error(denial: Denial) -> McpError {
 mod tests {
     use super::*;
 
-    /// What an unavailable dependency's refusal said of it stays on the server.
+    /// What an unavailable dependency's refusal said of it stays on the server;
+    /// a wait is reported when given, and never invented.
     #[test]
     fn an_unavailable_denial_tells_the_client_its_condition_and_its_wait_only() {
         let error = denial_to_mcp_error(Denial::unavailable(Some(7), "store at 10.0.0.1 down"));
         let json = serde_json::to_value(&error).expect("serializes");
         assert!(!json.to_string().contains("10.0.0.1"), "{json}");
         assert_eq!(json["message"], nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
-        assert_eq!(json["data"]["reason"], "unavailable");
-        assert_eq!(json["data"]["code"], "UNAVAILABLE");
-        assert_eq!(json["data"]["retryAfterSeconds"], 7);
+        assert_eq!(
+            json["data"],
+            serde_json::json!({ "code": "UNAVAILABLE", "reason": "unavailable", "retryAfterSeconds": 7 }),
+        );
+        let unknown = denial_to_mcp_error(Denial::unavailable(None, "store down"));
+        assert_eq!(
+            unknown.data,
+            Some(serde_json::json!({ "code": "UNAVAILABLE", "reason": "unavailable" })),
+        );
+        let refused = denial_to_mcp_error(Denial::forbidden("not yours"));
+        assert_eq!(
+            refused.data,
+            Some(serde_json::json!({ "code": "FORBIDDEN", "reason": "forbidden" })),
+            "only a denial that may clear names a wait",
+        );
     }
 
     #[test]

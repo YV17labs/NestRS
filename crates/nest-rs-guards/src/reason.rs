@@ -1,7 +1,7 @@
 //! A [`Denial`] as the edges with no status line answer it — GraphQL, a
-//! WebSocket frame, a JSON-RPC error: one sentence, one class, and the evidence
-//! a client acts on, worded once for every in-band edge; its class
-//! ([`denial_code`]) is every edge's, HTTP's problem document included.
+//! WebSocket frame, a JSON-RPC error: one sentence, one class, and its class
+//! in words, worded once for every in-band edge; its class ([`denial_code`])
+//! is every edge's, HTTP's problem document included.
 
 use nest_rs_core::Code;
 use nest_rs_core::problem::code;
@@ -32,74 +32,60 @@ pub fn denial_code(denial: &Denial) -> Code {
     }
 }
 
-/// The machine-readable half of a refusal, for the edges with no status line
-/// to carry it: the `code` a client branches on, the member a `Problem`
-/// answers under, and the same class as `reason`, the member these edges
-/// carried first; plus `requiredScopes` when the denial names them and
-/// `retryAfterSeconds` when it names a wait.
-pub fn structured_reason(denial: &Denial) -> serde_json::Map<String, serde_json::Value> {
-    let reason = match denial {
+/// A denial's class in lowercase words, the `reason` the edges with no status
+/// line carried first and still carry beside its [`denial_code`] — WebSocket's
+/// frame and MCP's error `data` — with the `requiredScopes` and the
+/// `retryAfterSeconds` the denial names.
+pub fn denial_reason(denial: &Denial) -> &'static str {
+    match denial {
         Denial::Unauthorized(_) | Denial::InvalidCredential { .. } => "unauthenticated",
         Denial::Forbidden(_) => "forbidden",
         Denial::InsufficientScope { .. } => "insufficient_scope",
         Denial::RateLimited { .. } => "rate_limited",
         Denial::Unavailable { .. } => "unavailable",
         Denial::Internal(_) => "internal",
-    };
-    let mut data = serde_json::Map::new();
-    data.insert(
-        "code".to_owned(),
-        serde_json::Value::from(denial_code(denial).as_str()),
-    );
-    data.insert("reason".to_owned(), serde_json::Value::from(reason));
-    let scopes = denial.required_scopes();
-    if !scopes.is_empty() {
-        data.insert("requiredScopes".to_owned(), serde_json::json!(scopes));
     }
-    // The wait, in delay-seconds like `Retry-After`, for edges with no status line.
-    if let Some(retry_after_secs) = denial.retry_after_secs() {
-        data.insert(
-            "retryAfterSeconds".to_owned(),
-            serde_json::Value::from(retry_after_secs),
-        );
-    }
-    data
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// All four edges report the wait, in one unit.
+    /// Each class has its word, and its code reads the same class.
     #[test]
-    fn every_edge_reports_the_wait_a_rate_limit_denial_carries() {
-        let data = structured_reason(&Denial::rate_limited(42, "too many requests"));
-        assert_eq!(data["reason"], "rate_limited");
-        assert_eq!(
-            data["retryAfterSeconds"], 42,
-            "the in-band edges carry the wait: {data:?}",
-        );
-
-        // Only a rate limit and an unavailable dependency have one — a 403
-        // carrying `retryAfterSeconds` would tell a client to retry something
-        // that will never succeed.
-        let forbidden = structured_reason(&Denial::forbidden("nope"));
-        assert!(
-            forbidden.get("retryAfterSeconds").is_none(),
-            "only a denial that may clear names a wait: {forbidden:?}",
-        );
-    }
-
-    /// A dependency that did not answer: reason `unavailable`, its wait
-    /// reported when given and never invented.
-    #[test]
-    fn every_edge_reports_an_unavailable_dependency_and_its_known_wait() {
-        let data = structured_reason(&Denial::unavailable(Some(7), "authentication unavailable"));
-        assert_eq!(data["reason"], "unavailable");
-        assert_eq!(data["retryAfterSeconds"], 7, "{data:?}");
-        let unknown = structured_reason(&Denial::unavailable(None, "authentication unavailable"));
-        assert_eq!(unknown["reason"], "unavailable");
-        assert!(unknown.get("retryAfterSeconds").is_none(), "{unknown:?}");
+    fn every_denial_names_its_class_in_words_and_by_its_code() {
+        for (denial, reason, class) in [
+            (
+                Denial::unauthorized("no credential"),
+                "unauthenticated",
+                code::UNAUTHENTICATED,
+            ),
+            (
+                Denial::invalid_credential("the token expired", "invalid_token"),
+                "unauthenticated",
+                code::UNAUTHENTICATED,
+            ),
+            (Denial::forbidden("not yours"), "forbidden", code::FORBIDDEN),
+            (
+                Denial::insufficient_scope(["posts:write"], "narrow"),
+                "insufficient_scope",
+                code::INSUFFICIENT_SCOPE,
+            ),
+            (
+                Denial::rate_limited(42, "too many requests"),
+                "rate_limited",
+                code::RATE_LIMITED,
+            ),
+            (
+                Denial::unavailable(Some(7), "authentication unavailable"),
+                "unavailable",
+                code::UNAVAILABLE,
+            ),
+            (Denial::internal("store down"), "internal", code::INTERNAL),
+        ] {
+            assert_eq!(denial_reason(&denial), reason, "{denial:?}");
+            assert_eq!(denial_code(&denial), class, "{denial:?}");
+        }
     }
 
     #[test]

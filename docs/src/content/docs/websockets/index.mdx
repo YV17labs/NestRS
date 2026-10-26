@@ -149,8 +149,8 @@ INFO nest_rs::operation: ws.message event="_OTHER" conn_id=0 outcome="error" dur
 The last message named an event no handler serves. Its line says `_OTHER`
 rather than the event it sent, as its span does: a name only the client used is
 its own data, and no line the framework files repeats it. The client still gets
-`{"event":"nope","data":{"error":"unknown event"}}`, answered on the event it
-sent.
+`{"event":"nope","data":{"error":"unknown event","code":"NOT_FOUND"}}`,
+answered on the event it sent.
 
 Same `trace_id` throughout, a fresh `span_id` per message — because a connection
 inherits identity, never resources: it takes the upgrade's trace and actor, and
@@ -176,7 +176,7 @@ timeout its work is dropped and rolled back, the client gets an error frame on
 the message's event, and the socket goes on serving the next one:
 
 ```json
-{"event":"report","data":{"error":"the message was not answered in time","errors":{"code":"UNAVAILABLE","reason":"timeout"}}}
+{"event":"report","data":{"error":"the message was not answered in time","code":"UNAVAILABLE","reason":"timeout"}}
 ```
 
 The `ws.message` line files `error`, and one `warn` on `nest_rs::ws` names the

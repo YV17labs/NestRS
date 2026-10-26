@@ -873,10 +873,7 @@ mod ws {
             "the refusal answers its event: {refused}"
         );
         assert_eq!(refused["data"]["error"], "Too Many Requests", "{refused}");
-        assert_eq!(
-            refused["data"]["errors"]["code"], "RATE_LIMITED",
-            "{refused}"
-        );
+        assert_eq!(refused["data"]["code"], "RATE_LIMITED", "{refused}");
 
         for _ in 0..3 {
             socket.send("tock", serde_json::Value::Null).await;

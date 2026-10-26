@@ -14,7 +14,7 @@ use nest_rs_core::__private::{
 use nest_rs_core::{Container, Failure, Handler, Peer, UnitContext};
 use nest_rs_guards::__private::{
     GlobalBucket, Refused, SiteChainSources, boot_validate_guards, check_guards, client_message,
-    compose_site_chain, denial_of, failure_chain, structured_reason,
+    compose_site_chain, denial_code, denial_of, denial_reason, failure_chain,
 };
 use nest_rs_guards::{Denial, Guard, GuardSpec};
 use nest_rs_http::__private::OriginRefused;
@@ -115,19 +115,21 @@ fn refuse(cx: &mut UnitContext<'_>, refused: Refused) -> Failure {
 
 /// Render a guard's [`Denial`] as the error frame one message answers with.
 ///
-/// No status line: the message, plus `code`, `reason` and `requiredScopes`
-/// under the frame's `data.errors`, where a `Valid<T>` rejection's details
-/// ride. An internal denial answers the opaque frame, the `INTERNAL` code its
-/// only member, and an unavailable dependency answers its condition, never
-/// what the guard said of it.
+/// No status line: the message, its `code` and `reason`, and the
+/// `requiredScopes` or the `retryAfterSeconds` it names, each a member of the
+/// frame's `data`. An internal denial answers the opaque frame, the `INTERNAL`
+/// code its only member, and an unavailable dependency answers its condition,
+/// never what the guard said of it.
 pub fn denial_to_ws_error(denial: Denial) -> WsError {
     if matches!(denial, Denial::Internal(_)) {
         return WsError::internal();
     }
-    WsError::with_details(
-        client_message(&denial),
-        serde_json::Value::Object(structured_reason(&denial)),
-    )
+    WsError {
+        required_scopes: denial.required_scopes().to_vec(),
+        retry_after_secs: denial.retry_after_secs(),
+        ..WsError::classed(client_message(&denial), denial_code(&denial))
+            .with_reason(denial_reason(&denial))
+    }
 }
 
 /// The posture's class `gate` the message `handler` declares, run alone on
@@ -274,10 +276,9 @@ mod tests {
         let Some(crate::WsReply::Error(refused)) = reply else {
             panic!("a refusal answers an error frame");
         };
-        assert_eq!(refused.error, "a number, please");
         assert_eq!(
-            refused.errors.as_ref().map(|e| &e["code"]),
-            Some(&json!("FORBIDDEN"))
+            serde_json::to_value(&refused).expect("a frame"),
+            json!({ "error": "a number, please", "code": "FORBIDDEN", "reason": "forbidden" }),
         );
         assert!(line.is_none(), "the stage filed the denial itself");
         let event = logs.expect_one("nest_rs::layers", "guard denied the message");
@@ -338,9 +339,9 @@ mod tests {
         let json = serde_json::to_value(&frame).expect("serializes");
         assert!(!json.to_string().contains("10.0.0.1"), "{json}");
         assert_eq!(json["error"], nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
-        assert_eq!(json["errors"]["reason"], "unavailable");
-        assert_eq!(json["errors"]["code"], "UNAVAILABLE");
-        assert_eq!(json["errors"]["retryAfterSeconds"], 7);
+        assert_eq!(json["reason"], "unavailable");
+        assert_eq!(json["code"], "UNAVAILABLE");
+        assert_eq!(json["retryAfterSeconds"], 7);
     }
 
     /// An internal denial is the opaque frame every failure the client is not
@@ -362,12 +363,36 @@ mod tests {
             Denial::unavailable(Some(7), "store at 10.0.0.1 down"),
             Denial::internal("redis at 10.0.3.7 refused"),
         ] {
-            let frame = denial_to_ws_error(denial.clone());
+            let frame = serde_json::to_value(denial_to_ws_error(denial.clone())).expect("a frame");
             assert_eq!(
-                frame.errors.as_ref().map(|errors| &errors["code"]),
-                Some(&json!(denial_code(&denial).as_str())),
-                "{denial:?}",
+                frame["code"],
+                json!(denial_code(&denial).as_str()),
+                "{denial:?}"
             );
+            assert!(frame.get("errors").is_none(), "no field map: {frame}");
         }
+        assert_eq!(
+            serde_json::to_value(denial_to_ws_error(Denial::insufficient_scope(
+                ["posts:write"],
+                "narrow",
+            )))
+            .expect("a frame"),
+            json!({
+                "error": "narrow",
+                "code": "INSUFFICIENT_SCOPE",
+                "reason": "insufficient_scope",
+                "requiredScopes": ["posts:write"],
+            }),
+        );
+        assert_eq!(
+            serde_json::to_value(denial_to_ws_error(Denial::rate_limited(30, "slow down")))
+                .expect("a frame"),
+            json!({
+                "error": "slow down",
+                "code": "RATE_LIMITED",
+                "reason": "rate_limited",
+                "retryAfterSeconds": 30,
+            }),
+        );
     }
 }

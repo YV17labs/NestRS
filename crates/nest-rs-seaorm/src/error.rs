@@ -1182,8 +1182,12 @@ pub(crate) mod tests {
             panic!("a handler's error answers an error frame");
         };
         assert_eq!(
-            frame.errors,
-            Some(serde_json::json!({ "code": "UNAVAILABLE", "retryAfterSeconds": 3 })),
+            serde_json::to_value(&frame).expect("a frame"),
+            serde_json::json!({
+                "error": nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE,
+                "code": "UNAVAILABLE",
+                "retryAfterSeconds": 3,
+            }),
         );
     }
 

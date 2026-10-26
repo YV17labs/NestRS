@@ -56,7 +56,7 @@ use std::error::Error as StdError;
 
 use nest_rs_core::__private::{Withheld, caught_problem, find_in_chain};
 use nest_rs_core::problem::code;
-use nest_rs_core::{DecodeError, Failure, Problem, ToProblem};
+use nest_rs_core::{Code, DecodeError, Failure, Problem, ToProblem};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
@@ -84,10 +84,68 @@ where
     }
 }
 
-/// Render a rejected pipe as an `invalid_params` the model can act on, its
-/// `details` as the error's data; emitted by `#[tools]`, never written by hand.
+/// Render a rejected pipe as an `invalid_params` the model can act on: its
+/// message, and in the error's `data` the `INVALID_ARGUMENT` code HTTP's `400`
+/// names for it, its field-level `errors` beside it when it has some; emitted
+/// by `#[tools]`, never written by hand.
 pub fn pipe_error(err: &PipeError) -> McpError {
-    McpError::invalid_params(err.message().to_owned(), err.details().cloned())
+    McpError::invalid_params(
+        err.message().to_owned(),
+        ClassData {
+            errors: err.details(),
+            ..ClassData::of(code::INVALID_ARGUMENT)
+        }
+        .into_data(),
+    )
+}
+
+/// What an error's `data` carries, one shape whoever writes it: the class a
+/// client branches on, the evidence a refusal names beside it — its class in
+/// words, the scopes it requires, the wait before a retry — and a pipe's
+/// field-level `errors`, which nothing else is.
+pub(crate) struct ClassData<'a> {
+    pub(crate) code: Code,
+    pub(crate) reason: Option<&'static str>,
+    pub(crate) required_scopes: &'a [String],
+    pub(crate) retry_after_secs: Option<u32>,
+    pub(crate) errors: Option<&'a serde_json::Value>,
+}
+
+impl ClassData<'_> {
+    /// `code` alone.
+    pub(crate) const fn of(code: Code) -> Self {
+        Self {
+            code,
+            reason: None,
+            required_scopes: &[],
+            retry_after_secs: None,
+            errors: None,
+        }
+    }
+
+    /// The members, each under its wire name and only when it has a value.
+    fn into_members(self) -> serde_json::Map<String, serde_json::Value> {
+        let mut members = serde_json::Map::new();
+        members.insert("code".to_owned(), self.code.as_str().into());
+        if let Some(reason) = self.reason {
+            members.insert("reason".to_owned(), reason.into());
+        }
+        if !self.required_scopes.is_empty() {
+            members.insert("requiredScopes".to_owned(), self.required_scopes.into());
+        }
+        if let Some(seconds) = self.retry_after_secs {
+            members.insert("retryAfterSeconds".to_owned(), seconds.into());
+        }
+        if let Some(errors) = self.errors {
+            members.insert("errors".to_owned(), errors.clone());
+        }
+        members
+    }
+
+    /// The `data` an [`McpError`] carries.
+    pub(crate) fn into_data(self) -> Option<serde_json::Value> {
+        Some(serde_json::Value::Object(self.into_members()))
+    }
 }
 
 /// Render what a [`ToProblem`] error says — a
@@ -114,12 +172,11 @@ pub fn problem_error<E: ToProblem>(error: &E) -> McpError {
 
 /// A problem as the JSON-RPC error an MCP operation answers with.
 fn rendered(problem: &Problem) -> McpError {
-    let mut data = serde_json::Map::new();
-    data.insert("code".to_owned(), problem.code().as_str().into());
-    if let Some(seconds) = problem.retry_after() {
-        data.insert("retryAfterSeconds".to_owned(), seconds.into());
+    let data = ClassData {
+        retry_after_secs: problem.retry_after(),
+        ..ClassData::of(problem.code())
     }
-    let data = Some(serde_json::Value::Object(data));
+    .into_data();
     if problem.is_server_error() {
         McpError::internal_error(problem.client_message(), data)
     } else {
@@ -159,10 +216,7 @@ pub(crate) fn opaque_answer() -> McpError {
 /// `sentence`, under the `INVALID_ARGUMENT` code HTTP's `400` names for a body
 /// that does not.
 pub(crate) fn invalid_argument(sentence: String) -> McpError {
-    McpError::invalid_params(
-        sentence,
-        Some(serde_json::json!({ "code": code::INVALID_ARGUMENT.as_str() })),
-    )
+    McpError::invalid_params(sentence, ClassData::of(code::INVALID_ARGUMENT).into_data())
 }
 
 /// The vocabulary `error`'s chain carries, else the opaque answer: the
@@ -356,10 +410,15 @@ pub(crate) fn refuses_prompt(error: &McpError, name: &str) -> bool {
 /// declares.
 pub(crate) const AVAILABLE_PROMPTS: &str = "available_prompts";
 
-/// The refusal of a prompt no host serves, said by kind, its `data` the
-/// prompts the hosts declare as rmcp lists them.
-pub(crate) fn prompt_not_found(data: Option<serde_json::Value>) -> McpError {
-    McpError::invalid_params("prompt not found", data)
+/// The refusal of a prompt no host serves, said by kind under the `NOT_FOUND`
+/// class HTTP's `404` names, its `data` listing beside it the prompts the
+/// hosts declare, as rmcp lists them, when they were read.
+pub(crate) fn prompt_not_found(available: Option<serde_json::Value>) -> McpError {
+    let mut data = ClassData::of(code::NOT_FOUND).into_members();
+    if let Some(available) = available {
+        data.insert(AVAILABLE_PROMPTS.to_owned(), available);
+    }
+    McpError::invalid_params("prompt not found", Some(serde_json::Value::Object(data)))
 }
 
 /// Whether `error` is rmcp's `TaskManager` refusing `id`, a task it does not
@@ -372,9 +431,10 @@ pub(crate) fn refuses_task(error: &McpError, id: &str) -> bool {
 /// How rmcp's `TaskManager` opens its refusal of a task, the id following it.
 const UNKNOWN_TASK_QUOTED: &str = "unknown task: ";
 
-/// The refusal of a task no host holds, said by kind.
+/// The refusal of a task no host holds, said by kind under the `NOT_FOUND`
+/// class.
 pub(crate) fn task_not_found() -> McpError {
-    McpError::invalid_params("unknown task", None)
+    McpError::invalid_params("unknown task", ClassData::of(code::NOT_FOUND).into_data())
 }
 
 /// Whether `error` is rmcp's default answer to a custom method no host serves,
@@ -383,9 +443,27 @@ pub(crate) fn refuses_method(error: &McpError, method: &str) -> bool {
     error.code == ErrorCode::METHOD_NOT_FOUND && error.message == method
 }
 
-/// The refusal of a method no host serves, in JSON-RPC 2.0's words (§5.1).
+/// The refusal of a method no host serves, in JSON-RPC 2.0's words (§5.1),
+/// under the `NOT_FOUND` class.
 pub(crate) fn method_not_found() -> McpError {
-    McpError::new(ErrorCode::METHOD_NOT_FOUND, METHOD_NOT_FOUND, None)
+    McpError::new(
+        ErrorCode::METHOD_NOT_FOUND,
+        METHOD_NOT_FOUND,
+        ClassData::of(code::NOT_FOUND).into_data(),
+    )
+}
+
+/// `error` under the `NOT_FOUND` class [`method_not_found`] carries when it is
+/// a `-32601` with no `data`: rmcp's own answer to a protocol method no host
+/// serves, naming that method. Any other error is returned as it is.
+pub(crate) fn classed_method_not_found(error: McpError) -> McpError {
+    if error.code != ErrorCode::METHOD_NOT_FOUND || error.data.is_some() {
+        return error;
+    }
+    McpError {
+        data: ClassData::of(code::NOT_FOUND).into_data(),
+        ..error
+    }
 }
 
 /// JSON-RPC 2.0's words for an unknown method (§5.1).
@@ -419,7 +497,7 @@ pub(crate) fn unread_message(text: &str) -> Option<McpError> {
     Some(McpError::new(
         refused,
         said,
-        Some(serde_json::json!({ "code": code::INVALID_ARGUMENT.as_str() })),
+        ClassData::of(code::INVALID_ARGUMENT).into_data(),
     ))
 }
 
@@ -444,9 +522,10 @@ pub(crate) fn said_by_code(code: ErrorCode) -> Option<&'static str> {
 /// found*.
 pub(crate) const TOOL_NOT_FOUND: &str = "tool not found";
 
-/// The refusal of a tool no host declares, in rmcp's own words.
+/// The refusal of a tool no host declares, in rmcp's own words, under the
+/// `NOT_FOUND` class.
 pub(crate) fn tool_not_found() -> McpError {
-    McpError::invalid_params(TOOL_NOT_FOUND, None)
+    McpError::invalid_params(TOOL_NOT_FOUND, ClassData::of(code::NOT_FOUND).into_data())
 }
 
 /// rmcp 3.5's answer to a session it does not hold, word for word.
@@ -717,18 +796,84 @@ mod tests {
 
     #[test]
     fn a_rejected_pipe_tells_the_model_what_to_fix() {
-        let err = pipe_error(&PipeError::with_details(
-            "validation failed",
-            serde_json::json!({ "file": ["must not be empty"] }),
-        ));
+        let detailed = || {
+            PipeError::with_details(
+                "validation failed",
+                serde_json::json!({ "file": ["must not be empty"] }),
+            )
+        };
+        let carried = chain_error(&detailed());
+        for err in [pipe_error(&detailed()), carried] {
+            assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+            assert_eq!(err.message, "validation failed");
+            assert_eq!(
+                err.data,
+                Some(serde_json::json!({
+                    "code": "INVALID_ARGUMENT",
+                    "errors": { "file": ["must not be empty"] },
+                })),
+                "the class and the field errors ride along so the model can correct the \
+                 argument it got wrong, exactly as the HTTP 400 carries them",
+            );
+        }
 
-        assert_eq!(err.message, "validation failed");
+        let bare = pipe_error(&PipeError::new("must be a valid UUID"));
         assert_eq!(
-            err.data,
-            Some(serde_json::json!({ "file": ["must not be empty"] })),
-            "the field errors ride along so the model can correct the argument \
-             it got wrong, exactly as the HTTP 400 carries them",
+            bare.data,
+            Some(serde_json::json!({ "code": "INVALID_ARGUMENT" }))
         );
+    }
+
+    /// An address no host serves names the class HTTP's `404` names, beside
+    /// what the refusal already carries.
+    #[test]
+    fn an_address_no_host_serves_names_the_not_found_class() {
+        let listed = serde_json::json!(["greet"]);
+        for (refused, data) in [
+            (tool_not_found(), serde_json::json!({ "code": "NOT_FOUND" })),
+            (task_not_found(), serde_json::json!({ "code": "NOT_FOUND" })),
+            (
+                method_not_found(),
+                serde_json::json!({ "code": "NOT_FOUND" }),
+            ),
+            (
+                prompt_not_found(Some(listed)),
+                serde_json::json!({ "code": "NOT_FOUND", AVAILABLE_PROMPTS: ["greet"] }),
+            ),
+            (
+                prompt_not_found(None),
+                serde_json::json!({ "code": "NOT_FOUND" }),
+            ),
+        ] {
+            assert_eq!(refused.data, Some(data), "{}", refused.message);
+        }
+    }
+
+    /// rmcp's `-32601` for a protocol method no host serves takes the class
+    /// its siblings carry, its code and message kept; a `-32601` whose writer
+    /// gave it `data`, and any other code, keep what they carry.
+    #[test]
+    fn a_method_rmcp_refuses_with_no_data_takes_the_not_found_class() {
+        let refused = classed_method_not_found(McpError::method_not_found::<
+            rmcp::model::ReadResourceRequestMethod,
+        >());
+        assert_eq!(refused.code, ErrorCode::METHOD_NOT_FOUND);
+        assert_eq!(refused.message, "resources/read");
+        assert_eq!(
+            refused.data,
+            Some(serde_json::json!({ "code": "NOT_FOUND" }))
+        );
+
+        for kept in [
+            McpError::new(
+                ErrorCode::METHOD_NOT_FOUND,
+                "resources/read",
+                Some(serde_json::json!({ "reason": "the host's own" })),
+            ),
+            McpError::invalid_params("prompt not found", None),
+        ] {
+            assert_eq!(classed_method_not_found(kept.clone()), kept);
+        }
     }
 
     /// rmcp's refusal of a body it cannot read as a message, as its

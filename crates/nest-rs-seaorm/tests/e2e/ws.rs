@@ -335,7 +335,7 @@ async fn a_message_that_wrote_then_outlived_its_deadline_leaves_no_row() {
     tokio::time::resume();
 
     let answer = socket.next_envelope().await;
-    assert_eq!(answer["data"]["errors"]["reason"], "timeout", "{answer}");
+    assert_eq!(answer["data"]["reason"], "timeout", "{answer}");
     // The close drains the binding's settles: the count follows the cut unit's.
     drop(socket);
     app.close().await;
@@ -422,7 +422,7 @@ async fn a_message_whose_statement_is_blocked_is_answered_at_its_deadline() {
     let sent = std::time::Instant::now();
     let answer = socket.next_envelope().await;
     let took = sent.elapsed();
-    assert_eq!(answer["data"]["errors"]["reason"], "timeout", "{answer}");
+    assert_eq!(answer["data"]["reason"], "timeout", "{answer}");
     assert!(
         took < MESSAGE_DEADLINE + std::time::Duration::from_secs(2),
         "answered at its deadline while the lock is still held, took {took:?}",

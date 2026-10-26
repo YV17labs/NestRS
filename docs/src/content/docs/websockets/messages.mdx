@@ -24,13 +24,23 @@ envelope is answered on the `error` event, saying where it failed, or what
 kind of value it was and what was expected, and never what it held:
 
 ```json
-{ "event": "error", "data": { "error": "invalid envelope at `event`: missing", "errors": { "code": "INVALID_ARGUMENT" } } }
-{ "event": "error", "data": { "error": "invalid envelope: invalid type: a sequence, expected an object with `event` and `data`", "errors": { "code": "INVALID_ARGUMENT" } } }
+{ "event": "error", "data": { "error": "invalid envelope at `event`: missing", "code": "INVALID_ARGUMENT" } }
+{ "event": "error", "data": { "error": "invalid envelope: invalid type: a sequence, expected an object with `event` and `data`", "code": "INVALID_ARGUMENT" } }
 ```
 
-It is a message all the same: its `ws.message` line files `outcome="error"`
-under `event="_OTHER"`, as a binary frame's does, since no handler declared
-what it named.
+A binary frame carries no envelope, and a frame past `max_message_bytes` is
+not read: each is answered on the `error` event under the class HTTP names for
+the same refusal, as RFC 6455's close codes 1003 and 1009 name it:
+
+```json
+{ "event": "error", "data": { "error": "binary frames are not supported", "code": "UNSUPPORTED_MEDIA_TYPE" } }
+{ "event": "error", "data": { "error": "message too large", "code": "CONTENT_TOO_LARGE" } }
+```
+
+Each is a message all the same: its `ws.message` line files `outcome="error"`
+under `event="_OTHER"`, since no handler declared what it named. An event no
+handler serves is answered on the event it sent, `unknown event` under the
+`NOT_FOUND` class.
 
 ## A handler signature
 
@@ -224,8 +234,8 @@ someone meant it to read:
 - a `WsError` is sent whole — `WsError::new("text must not be empty")`, or a
   `String` through `?` into a `Result<T, WsError>`;
 - an error implementing `ToProblem` answers the problem it says: its sentence,
-  and its code under `errors` (`{ "code": "CONFLICT" }`, plus
-  `retryAfterSeconds` when it names a wait); `ServiceError` is one;
+  and its code beside it (`"code": "CONFLICT"`, plus `retryAfterSeconds` when
+  it names a wait); `ServiceError` is one;
 - the framework's own vocabulary found in the chain — a `Problem`, a pipe
   rejection, a decode failure said without its value
   (`invalid type: a string, expected u64 at line 1 column 24`) — answers in its
@@ -239,18 +249,25 @@ That opaque frame is one shape whoever answered it — an unknown error, a
 message cannot reach:
 
 ```json
-{ "event": "send", "data": { "error": "internal error", "errors": { "code": "INTERNAL" } } }
+{ "event": "send", "data": { "error": "internal error", "code": "INTERNAL" } }
 ```
 
-A rejection that carries **structured** detail adds an `errors`
-member beside it — a `Valid<T>` payload names the offending fields, the same way
-the HTTP body does:
+Every error frame the framework writes says its class in `data.code`, beside
+`error`, with what a client acts on next to it: `reason` and `requiredScopes`
+for a guard's denial, `retryAfterSeconds` for a wait. A frame a handler builds
+itself with `WsError::new` carries no class, as a GraphQL `Error::new` carries
+none.
+
+A rejection that carries **structured** detail adds an `errors` member beside
+its class — a `Valid<T>` payload names the offending fields, the same way the
+HTTP body does:
 
 ```json
 {
   "event": "validated",
   "data": {
     "error": "invalid payload for `validated`: validation failed",
+    "code": "INVALID_ARGUMENT",
     "errors": {
       "text": [{ "code": "length", "message": "text must not be empty" }]
     }
@@ -258,8 +275,10 @@ the HTTP body does:
 }
 ```
 
-A pipe's rejection carries that field map alone under `errors`, with no
-`code` beside it, since a payload may have a field named `code`.
+`errors` is the field map and nothing else, on every edge: the class a client
+branches on is `data.code`, as HTTP's problem document carries `code` beside
+its `errors`. A pipe's rejection with no field map is its sentence and
+`"code": "INVALID_ARGUMENT"` alone.
 
 Each entry is `{ code, message, params }`. `params` carries the rule's own
 bounds — `min`, `max`, the regex name — so a client renders "at least 1
@@ -387,14 +406,14 @@ async fn send(&self, msg: SendMessageDto) -> Result<ChatMessageDto, SendError> {
 
 ```text frame="terminal"
 > {"event":"send","data":{"author":"ada","text":""}}
-< {"event":"send","data":{"error":"text must not be empty","errors":{"code":"INVALID_ARGUMENT"}}}
+< {"event":"send","data":{"error":"text must not be empty","code":"INVALID_ARGUMENT"}}
 ```
 
 Without the `ToProblem` impl the same `Err` answers `"internal error"` under
 `code: "INTERNAL"`: an error's `Display` is never what decides. The wire shape stays the same
-envelope — clients branch on the presence of `data.error`, on
-`data.errors.code` for the class, and read the field entries under
-`data.errors` when they need to point at a field.
+envelope — clients branch on the presence of `data.error`, on `data.code` for
+the class, and read the field entries under `data.errors` when they need to
+point at a field.
 
 ## Interceptors, filters and pipes
 
@@ -436,7 +455,7 @@ impl CatalogGateway {
 
 An exception filter reads the handler's error by its type and answers the
 client in place of the frame the error would have answered — a
-`Caught::Problem` as `{ "error": …, "errors": { "code": … } }`, or a reply it
+`Caught::Problem` as `{ "error": …, "code": … }`, or a reply it
 writes through `WsView::respond`. The message still failed, so whatever it
 wrote rolls back. An interceptor reads the message through `WsView` — its
 connection, its event, its `data` — and the reply once the rest of the message

@@ -290,12 +290,12 @@ async fn current_weather(
 
 `JsonSchema` derives the schema sent to the client — from `Coords`, not from the
 carrier, so a client never sees `Valid` — and a rejection answers
-`invalid_params` carrying the field errors, which is the one MCP error a model
-can act on:
+`invalid_params` carrying its class and the field errors under `errors`, which
+is the one MCP error a model can act on:
 
 ```json
 {"code":-32602,"message":"validation failed",
- "data":{"latitude":[{"code":"range"}]}}
+ "data":{"code":"INVALID_ARGUMENT","errors":{"latitude":[{"code":"range"}]}}}
 ```
 
 `Piped<P, T>` runs any [pipe](/fundamentals/pipes/) in the same slot when the
@@ -412,7 +412,13 @@ status's problem document, under the class its status names. A refusal rmcp
 words without quoting the request — `Not Acceptable: Client must accept both
 application/json and text/event-stream`, `Not Found: Session not found`, the
 `_meta` keys the specification requires — keeps its sentence, as the `detail`
-or the message.
+or the message. A tool, prompt, task or method no host serves carries
+`{"code":"NOT_FOUND"}` in its `data`, beside what it lists: a protocol method
+rmcp refuses on a host's behalf, such as `resources/read` on a host serving no
+resources, keeps its `-32601` and rmcp's message naming the method. Two
+refusals carry no class: in a session negotiated before `2026-07-28`, rmcp
+answers `subscriptions/listen`, and a tasks method when no host offers tasks,
+inside the session's stream, before any host or the endpoint reads it.
 
 A body typed JSON that is no JSON-RPC message is input the server cannot
 accept, as MCP's Streamable HTTP transport says: it is answered `400` with a

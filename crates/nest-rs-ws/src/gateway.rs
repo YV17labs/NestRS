@@ -7,6 +7,7 @@ use futures_util::FutureExt as _;
 use futures_util::future::Either;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use nest_rs_core::__private::{ClassGate, RequestScopes};
+use nest_rs_core::problem::code;
 use nest_rs_core::{
     Container, Continuation, Correlation, Handler, RequestContinuation, operation_log,
 };
@@ -559,8 +560,8 @@ where
     }
 }
 
-/// Refuse a message past the per-message cap, telling the client and, at
-/// `debug`, the operator.
+/// Refuse a message past the per-message cap, telling the client under the
+/// class HTTP's `413` names and, at `debug`, the operator.
 fn refuse_oversize(
     wiring: &DispatchWiring,
     conn_id: ConnId,
@@ -579,12 +580,13 @@ fn refuse_oversize(
                 "websocket message refused: over the per-message cap",
             );
         },
-        &crate::WsError::new("message too large"),
+        &crate::WsError::classed("message too large", code::CONTENT_TOO_LARGE),
     )
 }
 
 /// Refuse a Binary frame (RFC 6455 §5.6), which carries no JSON envelope,
-/// telling the client and, at `debug`, the operator.
+/// telling the client under the class HTTP's `415` names and, at `debug`, the
+/// operator.
 fn refuse_binary(wiring: &DispatchWiring, conn_id: ConnId, bytes: usize) -> String {
     refuse_unread(
         wiring,
@@ -597,7 +599,10 @@ fn refuse_binary(wiring: &DispatchWiring, conn_id: ConnId, bytes: usize) -> Stri
                 "websocket message refused: binary frames carry no envelope",
             );
         },
-        &crate::WsError::new("binary frames are not supported"),
+        &crate::WsError::classed(
+            "binary frames are not supported",
+            code::UNSUPPORTED_MEDIA_TYPE,
+        ),
     )
 }
 
@@ -1019,13 +1024,10 @@ fn timed_out(conn_id: ConnId, event: &str, timeout: Duration) -> Answered {
         timeout_secs = timeout.as_secs(),
         "websocket message not answered within its deadline; it is cut",
     );
-    Answered::failed(WsReply::Error(crate::WsError::with_details(
-        "the message was not answered in time",
-        serde_json::json!({
-            "code": nest_rs_core::problem::code::UNAVAILABLE.as_str(),
-            "reason": TIMEOUT_REASON,
-        }),
-    )))
+    Answered::failed(WsReply::Error(
+        crate::WsError::classed("the message was not answered in time", code::UNAVAILABLE)
+            .with_reason(TIMEOUT_REASON),
+    ))
 }
 
 /// The `reason` a deadline's refusal carries, beside its `code`.
@@ -1037,7 +1039,7 @@ fn error_frame(event: &str, error: &crate::WsError) -> String {
             "event": "error",
             "data": {
                 "error": nest_rs_core::OPAQUE_CLIENT_MESSAGE,
-                "errors": { "code": nest_rs_core::problem::code::INTERNAL.as_str() },
+                "code": code::INTERNAL.as_str(),
             },
         })
         .to_string()
@@ -1127,9 +1129,13 @@ mod tests {
 
         let frame = refuse_oversize(&wiring, 7, 4096, 1024);
 
-        assert!(
-            frame.contains("message too large"),
-            "the client is told why: {frame}",
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&frame).expect("a frame"),
+            serde_json::json!({
+                "event": "error",
+                "data": { "error": "message too large", "code": "CONTENT_TOO_LARGE" },
+            }),
+            "the client is told why, and the class HTTP's 413 names",
         );
         let event =
             assert_refused_unread(&logs, "websocket message refused: over the per-message cap");
@@ -1258,7 +1264,7 @@ mod tests {
             "author `banned` is not allowed to post"
         );
         assert_eq!(
-            frame["data"]["errors"]["reason"], "forbidden",
+            frame["data"]["reason"], "forbidden",
             "the structured half the stage rendered travels whole: {frame}",
         );
         assert!(
@@ -1338,7 +1344,7 @@ mod tests {
                 frame,
                 serde_json::json!({
                     "event": "error",
-                    "data": { "error": said, "errors": { "code": "INVALID_ARGUMENT" } },
+                    "data": { "error": said, "code": "INVALID_ARGUMENT" },
                 }),
                 "{text}",
             );
@@ -1405,9 +1411,16 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let frame = refuse_binary(&wiring(), 7, 3);
 
-        assert!(
-            frame.contains("binary frames are not supported"),
-            "the client is told why: {frame}",
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&frame).expect("a frame"),
+            serde_json::json!({
+                "event": "error",
+                "data": {
+                    "error": "binary frames are not supported",
+                    "code": "UNSUPPORTED_MEDIA_TYPE",
+                },
+            }),
+            "the client is told why, and the class HTTP's 415 names",
         );
         let event = assert_refused_unread(
             &logs,

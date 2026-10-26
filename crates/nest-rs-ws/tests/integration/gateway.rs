@@ -284,11 +284,9 @@ impl TestGateway {
     #[subscribe_message("frame_in_anyhow")]
     #[public]
     async fn frame_in_anyhow_handler(&self) -> nest_rs_core::anyhow::Result<String> {
-        Err(nest_rs_ws::WsError::with_details(
-            "pick another name",
-            serde_json::json!({ "name": ["taken"] }),
-        )
-        .into())
+        Err(nest_rs_ws::WsError::new("pick another name")
+            .with_errors(serde_json::json!({ "name": ["taken"] }))
+            .into())
     }
 }
 
@@ -378,11 +376,13 @@ async fn result_err_becomes_an_opaque_error_frame() {
         WsReply::Error(msg) => {
             assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE, "{msg}");
             assert_eq!(
-                msg.errors,
-                Some(serde_json::json!({
-                    "code": nest_rs_core::problem::code::INTERNAL.as_str()
-                })),
-                "the class alone, no per-field detail: {msg:?}",
+                msg.code.as_deref(),
+                Some(nest_rs_core::problem::code::INTERNAL.as_str()),
+                "{msg:?}",
+            );
+            assert!(
+                msg.errors.is_none(),
+                "the class alone, no per-field detail: {msg:?}"
             );
         }
         _ => panic!("expected Error for Result::Err"),
@@ -565,6 +565,7 @@ async fn the_error_frame_carries_error_and_errors_under_data() {
             .expect("parse");
     assert_eq!(frame["event"], "named");
     assert!(frame["data"]["error"].is_string(), "{frame}");
+    assert_eq!(frame["data"]["code"], "INVALID_ARGUMENT", "{frame}");
     assert!(frame["data"]["errors"]["name"].is_array(), "{frame}");
 
     let plain = nest_rs_ws::WsError::new("unknown event `nope`");
@@ -802,10 +803,11 @@ async fn a_malformed_payload_is_reported_without_its_value() {
         "invalid payload for `named` at `name`: invalid type: an integer, expected a string"
     );
     assert_eq!(
-        frame.errors,
-        Some(serde_json::json!({ "code": "INVALID_ARGUMENT" })),
+        frame.code.as_deref(),
+        Some("INVALID_ARGUMENT"),
         "the class HTTP's 400 names for a body that does not decode",
     );
+    assert!(frame.errors.is_none(), "no field map: {frame:?}");
     let event = logs.expect_one(
         "nest_rs::ws",
         "subscribe_message payload failed to deserialize",
@@ -1314,9 +1316,9 @@ async fn a_message_past_its_deadline_is_answered_a_timeout_and_the_socket_goes_o
         frame["data"]["error"], "the message was not answered in time",
         "{frame}"
     );
-    assert_eq!(frame["data"]["errors"]["reason"], "timeout", "{frame}");
+    assert_eq!(frame["data"]["reason"], "timeout", "{frame}");
     assert_eq!(
-        frame["data"]["errors"]["code"],
+        frame["data"]["code"],
         nest_rs_core::problem::code::UNAVAILABLE.as_str(),
         "{frame}"
     );
@@ -1466,7 +1468,7 @@ async fn a_message_cut_at_its_deadline_settles_its_unit_as_a_failure() {
     tokio::time::resume();
 
     let frame = socket.next_envelope().await;
-    assert_eq!(frame["data"]["errors"]["reason"], "timeout", "{frame}");
+    assert_eq!(frame["data"]["reason"], "timeout", "{frame}");
     let messages: Vec<UnitEnd> = units_ended()
         .into_iter()
         .filter(|(unit, _)| *unit == nest_rs_ws::unit::MESSAGE.name())
@@ -1554,7 +1556,7 @@ async fn a_message_cut_at_its_deadline_is_answered_while_its_rollback_still_wait
     tokio::time::resume();
 
     let frame = socket.next_envelope().await;
-    assert_eq!(frame["data"]["errors"]["reason"], "timeout", "{frame}");
+    assert_eq!(frame["data"]["reason"], "timeout", "{frame}");
     ROLLBACK_RELEASED.notify_one();
     app.shutdown().await.expect("the transport stops cleanly");
 }
@@ -1769,9 +1771,12 @@ async fn a_global_pipe_folds_over_each_messages_data_and_its_refusal_is_a_frame(
         refusal,
         serde_json::json!({
             "event": "boom",
-            "data": { "error": "invalid data for `boom`: no boom allowed" },
+            "data": {
+                "error": "invalid data for `boom`: no boom allowed",
+                "code": "INVALID_ARGUMENT",
+            },
         }),
-        "the pipe's refusal answers in place of the handler",
+        "the pipe's refusal answers in place of the handler, under its class",
     );
 
     socket
@@ -1859,11 +1864,8 @@ async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_val
             panic!("{event}: a failed handler answers with an error frame");
         };
         assert_eq!(frame.error, framed, "{event}");
-        assert_eq!(
-            frame.errors,
-            Some(serde_json::json!({ "code": class })),
-            "{event}",
-        );
+        assert_eq!(frame.code.as_deref(), Some(class), "{event}");
+        assert!(frame.errors.is_none(), "{event}: {frame:?}");
     }
     let quoting: Vec<String> = logs
         .events()
@@ -1883,13 +1885,16 @@ async fn a_ws_error_a_handler_returns_answers_as_built() {
     let WsReply::Error(frame) = reply else {
         panic!("a failed handler answers with an error frame");
     };
-    assert_eq!(frame.error, "nope");
-    assert!(frame.errors.is_none(), "{frame:?}");
+    assert_eq!(
+        serde_json::to_value(&frame).expect("a frame"),
+        serde_json::json!({ "error": "nope" }),
+        "a frame a handler built with no class names none",
+    );
 }
 
 /// A `ToProblem` error answers its problem — its detail, its code and its wait
-/// under `errors` — never its own sentence; a `Problem` in an anyhow chain
-/// answers itself.
+/// beside it — never its own sentence; a `Problem` in an anyhow chain answers
+/// itself.
 #[tokio::test]
 async fn a_problem_answers_its_detail_its_code_and_its_wait() {
     let reply = TestGateway
@@ -1898,10 +1903,13 @@ async fn a_problem_answers_its_detail_its_code_and_its_wait() {
     let WsReply::Error(frame) = reply else {
         panic!("a failed handler answers with an error frame");
     };
-    assert_eq!(frame.error, "the handle is taken");
     assert_eq!(
-        frame.errors,
-        Some(serde_json::json!({ "code": "CONFLICT", "retryAfterSeconds": 30 })),
+        serde_json::to_value(&frame).expect("a frame"),
+        serde_json::json!({
+            "error": "the handle is taken",
+            "code": "CONFLICT",
+            "retryAfterSeconds": 30,
+        }),
     );
 
     let reply = TestGateway
@@ -1914,10 +1922,9 @@ async fn a_problem_answers_its_detail_its_code_and_its_wait() {
     let WsReply::Error(frame) = reply else {
         panic!("a failed handler answers with an error frame");
     };
-    assert_eq!(frame.error, "not found");
     assert_eq!(
-        frame.errors,
-        Some(serde_json::json!({ "code": "NOT_FOUND" }))
+        serde_json::to_value(&frame).expect("a frame"),
+        serde_json::json!({ "error": "not found", "code": "NOT_FOUND" }),
     );
 }
 
@@ -1934,7 +1941,10 @@ async fn a_frame_returned_through_anyhow_is_sent_whole() {
         panic!("a failed handler answers with an error frame");
     };
     assert_eq!(frame.error, "pick another name");
-    assert_eq!(frame.errors, Some(serde_json::json!({ "name": ["taken"] })));
+    assert_eq!(
+        frame.errors.as_deref(),
+        Some(&serde_json::json!({ "name": ["taken"] }))
+    );
 }
 
 static SLOW_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
@@ -2155,7 +2165,7 @@ async fn a_message_handler_that_panics_files_panic_and_its_client_is_answered() 
         answer["data"],
         serde_json::json!({
             "error": nest_rs_core::OPAQUE_CLIENT_MESSAGE,
-            "errors": { "code": nest_rs_core::problem::code::INTERNAL.as_str() },
+            "code": nest_rs_core::problem::code::INTERNAL.as_str(),
         }),
         "{answer}"
     );
@@ -2585,9 +2595,9 @@ async fn a_per_message_rate_limit_carries_its_reason_and_its_wait() {
     socket.send("limited", serde_json::Value::Null).await;
     let reply = socket.next_envelope().await;
     assert_eq!(reply["data"]["error"], "too many messages", "{reply}");
-    assert_eq!(reply["data"]["errors"]["reason"], "rate_limited", "{reply}");
-    assert_eq!(reply["data"]["errors"]["code"], "RATE_LIMITED", "{reply}");
-    assert_eq!(reply["data"]["errors"]["retryAfterSeconds"], 7, "{reply}");
+    assert_eq!(reply["data"]["reason"], "rate_limited", "{reply}");
+    assert_eq!(reply["data"]["code"], "RATE_LIMITED", "{reply}");
+    assert_eq!(reply["data"]["retryAfterSeconds"], 7, "{reply}");
     app.shutdown().await.expect("the transport stops cleanly");
 }
 

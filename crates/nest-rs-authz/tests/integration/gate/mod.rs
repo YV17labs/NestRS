@@ -201,12 +201,9 @@ async fn a_token_too_narrow_reads_one_sentence_one_code_and_one_scope_list_on_ev
     ws.shutdown().await.expect("the transport stops cleanly");
     let refused = &frame["data"];
     assert_eq!(refused["error"], TOO_NARROW, "WS: {frame}");
+    assert_eq!(refused["code"], "INSUFFICIENT_SCOPE", "WS: {frame}");
     assert_eq!(
-        refused["errors"]["code"], "INSUFFICIENT_SCOPE",
-        "WS: {frame}"
-    );
-    assert_eq!(
-        refused["errors"]["requiredScopes"],
+        refused["requiredScopes"],
         serde_json::json!(NEEDED),
         "WS: {frame}",
     );

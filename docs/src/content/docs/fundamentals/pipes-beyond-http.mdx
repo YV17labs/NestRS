@@ -71,8 +71,8 @@ the handler body never runs:
 |-----------|--------------------|
 | HTTP | RFC 9457 `problem+json` `400` (`{ "type": …, "title": "Bad Request", "status": 400, "detail": "must be a UUID v7", "code": "INVALID_ARGUMENT" }`) |
 | GraphQL | An error in the response's `errors` array, under `extensions.code: "INVALID_ARGUMENT"` |
-| WebSockets | An error frame on the socket (`{ event, data: { error, errors } }`) |
-| MCP | `invalid_params` (`-32602`), the field errors in the error's `data` |
+| WebSockets | An error frame on the socket (`{ event, data: { error, code: "INVALID_ARGUMENT", errors? } }`) |
+| MCP | `invalid_params` (`-32602`), `{ code: "INVALID_ARGUMENT", errors? }` in the error's `data` |
 | Queue | A job error — the queue's retry/failure policy applies |
 
 A handler that parses a value itself answers its `PipeError` the same way,
@@ -83,12 +83,14 @@ through its edge's `pipe_error`: `nest_rs::http::pipe_error`,
 `ValidationPipe<T>` attaches the structured field-level errors to the
 rejection, and **every** transport carries them through under the name
 `errors`: an RFC 9457 extension member on HTTP, `extensions.errors` on
-GraphQL, `data.errors` on a WebSocket frame, the error `data` on MCP, an
-`errors` field on the queue's `job dead-lettered` event. A client (or an operator reading a dead-letter log)
-can always tell which field was wrong, not merely that something was. HTTP
-and GraphQL name the rejection's class beside that map, `INVALID_ARGUMENT`; a
-WebSocket frame's `errors` and MCP's `data` are the map itself, with no
-`code`, since a field may be named `code`.
+GraphQL, `data.errors` on a WebSocket frame and in an MCP error, an `errors`
+field on the queue's `job dead-lettered` event. A client (or an operator
+reading a dead-letter log) can always tell which field was wrong, not merely
+that something was. Every edge names the rejection's class beside that map,
+`INVALID_ARGUMENT`, in the member a problem's class rides in there: `code` on
+HTTP, `extensions.code` on GraphQL, `data.code` on WebSockets and MCP. `errors`
+is the field map and nothing else, so a field named `code` never meets the
+class.
 
 ## Going further
 

@@ -39,9 +39,7 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
 
 use crate::McpError;
-use crate::error::{
-    AVAILABLE_PROMPTS, TOOL_NOT_FOUND, opaque_answer, prompt_not_found, refuses_task,
-};
+use crate::error::{TOOL_NOT_FOUND, opaque_answer, prompt_not_found, refuses_task};
 use crate::guard::BoxFuture;
 use crate::host::McpHost;
 use crate::identity::ResolvedIdentity;
@@ -442,9 +440,7 @@ impl ServerHandler for CompositeHandler {
             .into_iter()
             .map(|prompt| prompt.name)
             .collect();
-        Err(prompt_not_found(Some(
-            serde_json::json!({ AVAILABLE_PROMPTS: names }),
-        )))
+        Err(prompt_not_found(Some(serde_json::json!(names))))
     }
     merged_listing!(list_prompts, ListPromptsResult, prompts, "prompts/list");
 

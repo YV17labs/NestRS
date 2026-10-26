@@ -156,20 +156,20 @@ impl ChatGateway {
 ```
 
 A denial surfaces as a wire-shaped error frame on the rejected event,
-the class a client branches on under `errors` — `code`, the member a
+the class a client branches on beside its sentence — `code`, the member a
 `Problem` answers under too, and the same class as `reason`:
 
 ```text frame="terminal"
 > {"event":"message","data":{"author":"banned","text":"hi"}}
-< {"event":"message","data":{"error":"author `banned` is not allowed to post","errors":{"code":"FORBIDDEN","reason":"forbidden"}}}
+< {"event":"message","data":{"error":"author `banned` is not allowed to post","code":"FORBIDDEN","reason":"forbidden"}}
 ```
 
 The connection stays open; the client can fire other events.
 
 A refusal reads the same here as on HTTP, GraphQL and MCP. A `4xx`
-denial carries its own sentence, and its `errors` adds what the client
-acts on: `retryAfterSeconds` for a rate limit, `requiredScopes` for a
-token too narrow. A `5xx` never carries the guard's text: an internal
+denial carries its own sentence, and its frame adds beside its `code`
+what the client acts on: `retryAfterSeconds` for a rate limit,
+`requiredScopes` for a token too narrow. A `5xx` never carries the guard's text: an internal
 denial answers the opaque frame every unexplained failure answers,
 `"internal error"` (`nest_rs_core::OPAQUE_CLIENT_MESSAGE`) with
 `code: "INTERNAL"`, and an unavailable dependency `"service unavailable"`

@@ -600,6 +600,68 @@ async fn a_refusal_of_a_name_no_host_serves_quotes_none_of_it() {
     assert_eq!(custom["error"]["code"], json!(-32601), "{custom}");
 }
 
+/// Every method no host serves answers `-32601` under the `NOT_FOUND` class,
+/// whoever wrote the refusal: the endpoint for a custom method, a host's rmcp
+/// default for a protocol method it does not serve, both in band, and rmcp's
+/// dispatch for a method the request's version does not have, answered `404`.
+#[tokio::test]
+async fn a_method_no_host_serves_names_the_not_found_class() {
+    let app = TestApp::for_module::<DraftModule>()
+        .await
+        .expect("a prompt host boots");
+    let session = open_session(app.http(), REFUSALS, None).await;
+    for (method, params) in [
+        ("marked/custom", json!({})),
+        ("resources/read", json!({ "uri": "file:///draft" })),
+        ("logging/setLevel", json!({ "level": "info" })),
+    ] {
+        let body = call_method(app.http(), REFUSALS, &session, None, method, params).await;
+        let refused = result(&body);
+        assert_eq!(
+            refused["error"]["code"],
+            json!(-32601),
+            "{method}: {refused}"
+        );
+        assert_eq!(
+            refused["error"]["data"],
+            json!({ "code": "NOT_FOUND" }),
+            "{method}: {refused}"
+        );
+    }
+
+    let unversioned = nest_rs_testing::mcp::post_message_with(
+        app.http(),
+        REFUSALS,
+        None,
+        None,
+        &[
+            ("mcp-protocol-version", MODERN_VERSION),
+            ("mcp-method", "ping"),
+        ],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "ping",
+            "params": { "_meta": modern_meta() },
+        }),
+    )
+    .await;
+    assert_eq!(unversioned.0.status(), nest_rs_http::StatusCode::NOT_FOUND);
+    let body = unversioned
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a JSON-RPC error");
+    let refused = result(&body);
+    assert_eq!(refused["error"]["code"], json!(-32601), "{refused}");
+    assert_eq!(
+        refused["error"]["data"],
+        json!({ "code": "NOT_FOUND" }),
+        "{refused}"
+    );
+}
+
 /// POST one stateless `2026-07-28` request: no session id, the negotiated
 /// version in the header, and whatever SEP-2243 standard headers the case needs.
 async fn post_modern(

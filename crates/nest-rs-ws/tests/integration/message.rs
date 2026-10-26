@@ -188,7 +188,7 @@ async fn a_filter_answers_a_typed_error_with_a_frame_carrying_its_code() {
 
     assert_eq!(frame["event"], "buy", "{frame}");
     assert_eq!(frame["data"]["error"], "try another item", "{frame}");
-    assert_eq!(frame["data"]["errors"]["code"], "CONFLICT", "{frame}");
+    assert_eq!(frame["data"]["code"], "CONFLICT", "{frame}");
     assert!(!frame.to_string().contains("eu-west"), "{frame}");
     app.shutdown().await.expect("the transport stops cleanly");
 
@@ -713,8 +713,8 @@ async fn a_service_unavailable_in_time_answers_its_code_and_no_deadline_reason()
     let mut socket = app.socket("/slow").connect().await;
     socket.send("cancelled", serde_json::Value::Null).await;
     let frame = socket.next_envelope().await;
-    assert_eq!(frame["data"]["errors"]["code"], "UNAVAILABLE", "{frame}");
-    assert!(frame["data"]["errors"].get("reason").is_none(), "{frame}");
+    assert_eq!(frame["data"]["code"], "UNAVAILABLE", "{frame}");
+    assert!(frame["data"].get("reason").is_none(), "{frame}");
     assert_eq!(
         frame["data"]["error"],
         nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE,
@@ -791,7 +791,7 @@ async fn a_refusal_a_handler_answers_files_its_line_alone() {
     let answered = [
         ("full", None),
         ("conflict", Some("CONFLICT")),
-        ("piped", None),
+        ("piped", Some("INVALID_ARGUMENT")),
         ("undecodable", Some("INVALID_ARGUMENT")),
         ("unavailable", Some("UNAVAILABLE")),
         ("failed", Some("INTERNAL")),
@@ -801,11 +801,7 @@ async fn a_refusal_a_handler_answers_files_its_line_alone() {
         let frame = socket.next_envelope().await;
         assert_eq!(frame["event"], event, "{frame}");
         assert!(frame["data"]["error"].is_string(), "{frame}");
-        assert_eq!(
-            frame["data"]["errors"]["code"],
-            serde_json::json!(code),
-            "{frame}"
-        );
+        assert_eq!(frame["data"]["code"], serde_json::json!(code), "{frame}");
         let said = frame.to_string();
         assert!(
             !said.contains("sk_live") && !said.contains("eu-west"),

@@ -1,10 +1,11 @@
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::error::Error;
 use std::fmt;
 
 use nest_rs_core::__private::{Withheld, find_in_chain};
 use nest_rs_core::problem::code;
-use nest_rs_core::{DecodeError, Failure, OPAQUE_CLIENT_MESSAGE, Problem, ToProblem};
+use nest_rs_core::{Code, DecodeError, Failure, OPAQUE_CLIENT_MESSAGE, Problem, ToProblem};
 use nest_rs_pipes::PipeError;
 use serde::{Deserialize, Serialize};
 
@@ -108,39 +109,79 @@ impl WsEnvelope {
     }
 }
 
-/// What an error frame carries: the human-readable message, plus the structured
-/// per-field detail when the failure had any, under HTTP's RFC 9457 `errors` name.
+/// What an error frame carries: the human-readable message, the class a client
+/// branches on and the evidence a refusal names beside it, and a pipe's
+/// field-level errors under HTTP's RFC 9457 `errors` name.
+///
+/// Each member is the frame's `data.<member>`, omitted when there is none, as
+/// HTTP omits it: `{ "error": …, "code"?: …, "reason"?: …, "requiredScopes"?:
+/// […], "retryAfterSeconds"?: …, "errors"?: { … } }`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct WsError {
     /// The human-readable message — the frame's `data.error`.
     pub error: String,
-    /// Structured detail, usually per-field validation errors — the frame's
-    /// `data.errors`, omitted when there is none (as HTTP omits it).
+    /// The class a client branches on (`nest_rs_core::problem::code`) — the
+    /// frame's `data.code`; `None` on a frame a handler built with
+    /// [`new`](Self::new), which names none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub errors: Option<serde_json::Value>,
+    pub code: Option<Cow<'static, str>>,
+    /// A refusal's class in lowercase words, the member these frames carried
+    /// first (`forbidden`, `timeout`) — the frame's `data.reason`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Cow<'static, str>>,
+    /// The scopes a scope denial requires (RFC 6750 §3.1) — the frame's
+    /// `data.requiredScopes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_scopes: Vec<String>,
+    /// The wait before a retry, in seconds — the frame's
+    /// `data.retryAfterSeconds`, every edge's spelling of it.
+    #[serde(
+        default,
+        rename = "retryAfterSeconds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub retry_after_secs: Option<u32>,
+    /// A pipe's field-level errors, field by field, as every edge carries them
+    /// — the frame's `data.errors`, and nothing else is. Boxed, so the `Err`
+    /// of every handler's `Result` stays the size of the members most frames
+    /// carry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub errors: Option<Box<serde_json::Value>>,
 }
 
 impl WsError {
-    /// A message with no structured detail.
+    /// A message with no class and no field-level errors.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             error: message.into(),
+            code: None,
+            reason: None,
+            required_scopes: Vec::new(),
+            retry_after_secs: None,
             errors: None,
         }
     }
 
-    /// A message plus the structured detail a client can act on per field.
-    pub fn with_details(message: impl Into<String>, details: serde_json::Value) -> Self {
-        Self {
-            error: message.into(),
-            errors: Some(details),
-        }
+    /// This frame with `errors`, the field-level errors a client acts on per
+    /// field, as a pipe's [`details`](PipeError::details) carry them.
+    ///
+    /// ```
+    /// use nest_rs_ws::WsError;
+    ///
+    /// let frame = WsError::new("the name is taken")
+    ///     .with_errors(serde_json::json!({ "name": ["taken"] }));
+    /// assert_eq!(frame.errors.as_deref(), Some(&serde_json::json!({ "name": ["taken"] })));
+    /// ```
+    pub fn with_errors(mut self, errors: serde_json::Value) -> Self {
+        self.errors = Some(Box::new(errors));
+        self
     }
 
     /// The frame a [`Problem`] answers: its
-    /// [`client_message`](Problem::client_message), and its code — with its
-    /// wait as `retryAfterSeconds` when it has one — under `errors`.
+    /// [`client_message`](Problem::client_message), its code, and its wait as
+    /// `retryAfterSeconds` when it has one.
     ///
     /// ```
     /// use nest_rs_core::Problem;
@@ -148,16 +189,30 @@ impl WsError {
     /// use nest_rs_ws::WsError;
     ///
     /// let frame = WsError::from_problem(&Problem::new(409, code::CONFLICT));
-    /// assert_eq!(frame.error, "conflict");
-    /// assert_eq!(frame.errors, Some(serde_json::json!({ "code": "CONFLICT" })));
+    /// assert_eq!(
+    ///     serde_json::to_value(&frame).unwrap(),
+    ///     serde_json::json!({ "error": "conflict", "code": "CONFLICT" }),
+    /// );
     /// ```
     pub fn from_problem(problem: &Problem) -> Self {
-        let mut errors = serde_json::Map::new();
-        errors.insert("code".to_owned(), problem.code().as_str().into());
-        if let Some(seconds) = problem.retry_after() {
-            errors.insert("retryAfterSeconds".to_owned(), seconds.into());
+        Self {
+            retry_after_secs: problem.retry_after(),
+            ..Self::classed(problem.client_message(), problem.code())
         }
-        Self::with_details(problem.client_message(), serde_json::Value::Object(errors))
+    }
+
+    /// `message`, under `class`.
+    pub(crate) fn classed(message: impl Into<String>, class: Code) -> Self {
+        Self {
+            code: Some(Cow::Borrowed(class.as_str())),
+            ..Self::new(message)
+        }
+    }
+
+    /// This frame with `reason`, its class in lowercase words.
+    pub(crate) fn with_reason(mut self, reason: &'static str) -> Self {
+        self.reason = Some(Cow::Borrowed(reason));
+        self
     }
 
     /// The frame every failure the client is not told of answers, whoever
@@ -169,16 +224,17 @@ impl WsError {
 
     /// The frame a value that does not decode answers: `sentence`, under the
     /// `INVALID_ARGUMENT` code HTTP's `400` names for a body that does not.
-    pub(crate) fn invalid_argument(sentence: impl Into<std::borrow::Cow<'static, str>>) -> Self {
-        Self::from_problem(&Problem::new(400, code::INVALID_ARGUMENT).with_detail(sentence))
+    pub(crate) fn invalid_argument(sentence: impl Into<String>) -> Self {
+        Self::classed(sentence, code::INVALID_ARGUMENT)
     }
 
-    /// The frame a [`PipeError`] answers: its message, and its field-level
-    /// detail under `errors` when it has some.
-    fn from_pipe(rejection: &PipeError) -> Self {
+    /// The frame a [`PipeError`] answers: `message`, under the
+    /// `INVALID_ARGUMENT` code HTTP's `400` names for it, and its field-level
+    /// `errors` when it has some.
+    fn piped(message: impl Into<String>, errors: Option<serde_json::Value>) -> Self {
         Self {
-            error: rejection.message().to_owned(),
-            errors: rejection.details().cloned(),
+            errors: errors.map(Box::new),
+            ..Self::invalid_argument(message)
         }
     }
 }
@@ -207,7 +263,7 @@ pub enum WsReply {
     Reply(serde_json::Value),
     /// Send nothing — the handler returned `()` or chose to stay silent.
     None,
-    /// Send an error frame `{ event, data: { error, errors? } }`.
+    /// Send an error frame `{ event, data: { error, code?, …, errors? } }`.
     Error(WsError),
 }
 
@@ -226,9 +282,10 @@ impl WsReply {
         WsReply::Error(WsError::new(message))
     }
 
-    /// The error frame a rejected [`PipeError`] puts on the wire, carrying its
-    /// per-field detail, reported at `debug` on `nest_rs::ws`: the client's
-    /// error, which the message's line files.
+    /// The error frame a rejected [`PipeError`] puts on the wire, under the
+    /// `INVALID_ARGUMENT` code with its field-level errors beside it, reported
+    /// at `debug` on `nest_rs::ws`: the client's error, which the message's
+    /// line files.
     pub fn pipe_error(event: &str, what: &str, error: nest_rs_pipes::PipeError) -> WsReply {
         let message = format!("invalid {what} for `{event}`: {}", error.message());
         tracing::debug!(
@@ -238,10 +295,7 @@ impl WsReply {
             error = error.message(),
             "subscribe_message rejected by a pipe",
         );
-        match error.into_details() {
-            Some(details) => WsReply::Error(WsError::with_details(message, details)),
-            None => WsReply::Error(WsError::new(message)),
-        }
+        WsReply::Error(WsError::piped(message, error.into_details()))
     }
 
     /// The error frame a payload that does not deserialize puts on the wire,
@@ -270,17 +324,18 @@ impl WsReply {
     }
 
     /// The reply for an event with no registered handler, so a client can tell
-    /// a typo from an auth failure; the frame answers on the event it sent, and
-    /// neither its text nor the report repeats it, the event being only the
-    /// client's word. The report is at `debug`: the client's error, which the
-    /// message's line files under `_OTHER`.
+    /// a typo from an auth failure: the `NOT_FOUND` class HTTP's `404` names.
+    /// The frame answers on the event it sent, and neither its text nor the
+    /// report repeats it, the event being only the client's word. The report
+    /// is at `debug`: the client's error, which the message's line files under
+    /// `_OTHER`.
     pub fn unknown() -> WsReply {
         tracing::debug!(
             target: crate::TARGET,
             event = nest_rs_core::operation_log::OTHER,
             "subscribe_message dispatched to an unknown event",
         );
-        WsReply::Error(WsError::new(UNKNOWN_EVENT))
+        WsReply::Error(WsError::classed(UNKNOWN_EVENT, code::NOT_FOUND))
     }
 
     /// The error frame a handler's `Err` produces, read off the vocabulary its
@@ -351,7 +406,7 @@ pub(crate) fn chain_rendered(error: &(dyn Error + 'static)) -> Rendered {
     } else if let Some(problem) = find_in_chain::<Problem>(error) {
         return problem_rendered(error, problem);
     } else if let Some(rejection) = find_in_chain::<PipeError>(error) {
-        WsError::from_pipe(rejection)
+        WsError::piped(rejection.message(), rejection.details().cloned())
     } else if let Some(report) = DecodeError::in_chain(error) {
         WsError::invalid_argument(report.to_string())
     } else {
@@ -663,11 +718,14 @@ mod tests {
     }
 
     /// The event is the client's word: the frame answers on it, its text
-    /// repeats none of it.
+    /// repeats none of it, and it names the class HTTP's `404` names.
     #[test]
     fn unknown_event_message_names_no_event() {
         match WsReply::unknown() {
-            WsReply::Error(err) => assert_eq!(err.error, UNKNOWN_EVENT),
+            WsReply::Error(err) => assert_eq!(
+                serde_json::to_value(&err).expect("a frame"),
+                serde_json::json!({ "error": UNKNOWN_EVENT, "code": "NOT_FOUND" }),
+            ),
             _ => panic!("expected Error"),
         }
     }
@@ -683,24 +741,47 @@ mod tests {
         }
     }
 
+    /// A pipe's refusal names its class beside its field map, as HTTP's
+    /// problem document and GraphQL's extensions do, whichever tier read it;
+    /// with no field map, the class alone.
     #[test]
-    fn pipe_error_carries_the_field_level_detail() {
+    fn pipe_error_carries_its_class_beside_the_field_level_detail() {
+        let _logs = nest_rs_testing::LogCapture::install();
         let details = serde_json::json!({ "text": [{ "code": "length" }] });
-        let err = nest_rs_pipes::PipeError::with_details("validation failed", details);
-        match WsReply::pipe_error("validated", "payload", err) {
-            WsReply::Error(err) => {
-                assert_eq!(
-                    err.error,
-                    "invalid payload for `validated`: validation failed"
-                );
-                assert_eq!(
-                    err.errors.as_ref().and_then(|e| e.get("text")),
-                    Some(&serde_json::json!([{ "code": "length" }])),
-                    "the per-field errors reach the frame: {err:?}",
-                );
-            }
-            _ => panic!("expected Error"),
-        }
+        let detailed = || PipeError::with_details("validation failed", details.clone());
+
+        let WsReply::Error(piped) = WsReply::pipe_error("validated", "payload", detailed()) else {
+            panic!("a pipe's refusal answers an error frame");
+        };
+        assert_eq!(
+            serde_json::to_value(&piped).expect("a frame"),
+            serde_json::json!({
+                "error": "invalid payload for `validated`: validation failed",
+                "code": "INVALID_ARGUMENT",
+                "errors": { "text": [{ "code": "length" }] },
+            }),
+        );
+        assert_eq!(
+            serde_json::to_value(chain_rendered(&detailed()).frame).expect("a frame"),
+            serde_json::json!({
+                "error": "validation failed",
+                "code": "INVALID_ARGUMENT",
+                "errors": { "text": [{ "code": "length" }] },
+            }),
+        );
+
+        let WsReply::Error(bare) =
+            WsReply::pipe_error("send", "payload", PipeError::new("must be a valid UUID"))
+        else {
+            panic!("a pipe's refusal answers an error frame");
+        };
+        assert_eq!(
+            serde_json::to_value(&bare).expect("a frame"),
+            serde_json::json!({
+                "error": "invalid payload for `send`: must be a valid UUID",
+                "code": "INVALID_ARGUMENT",
+            }),
+        );
     }
 
     /// A value that does not decode names the class HTTP's `400` names under
@@ -718,11 +799,9 @@ mod tests {
         let carried = chain_rendered(&error).frame;
 
         for frame in [payload, carried] {
-            assert_eq!(
-                frame.errors,
-                Some(serde_json::json!({ "code": "INVALID_ARGUMENT" })),
-                "{frame:?}",
-            );
+            let said = serde_json::to_value(&frame).expect("a frame");
+            assert_eq!(said["code"], "INVALID_ARGUMENT", "{said}");
+            assert!(said.get("errors").is_none(), "no field map: {said}");
             assert!(frame.error.contains("invalid type"), "{frame:?}");
             assert!(!frame.error.contains("sk_live"), "{frame:?}");
         }
@@ -736,6 +815,30 @@ mod tests {
             frame.get("errors").is_none(),
             "absent detail must not ship an explicit null, matching HTTP: {frame}",
         );
+    }
+
+    /// Every member reads and writes under the name every edge gives it, so a
+    /// client decoding a frame with `WsError` reads what the server wrote.
+    #[test]
+    fn a_frame_round_trips_through_its_wire_names() {
+        let wire = serde_json::json!({
+            "error": "slow down",
+            "code": "RATE_LIMITED",
+            "reason": "rate_limited",
+            "requiredScopes": ["posts:write"],
+            "retryAfterSeconds": 7,
+            "errors": { "text": ["too long"] },
+        });
+        let frame: WsError = serde_json::from_value(wire.clone()).expect("a frame");
+        assert_eq!(frame.code.as_deref(), Some("RATE_LIMITED"));
+        assert_eq!(frame.reason.as_deref(), Some("rate_limited"));
+        assert_eq!(frame.required_scopes, ["posts:write"]);
+        assert_eq!(frame.retry_after_secs, Some(7));
+        assert_eq!(
+            frame.errors.as_deref(),
+            Some(&serde_json::json!({ "text": ["too long"] }))
+        );
+        assert_eq!(serde_json::to_value(&frame).expect("a frame"), wire);
     }
 
     #[derive(Debug)]
@@ -822,10 +925,13 @@ mod tests {
         else {
             panic!("an error answers an error frame");
         };
-        assert_eq!(frame.error, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
         assert_eq!(
-            frame.errors,
-            Some(serde_json::json!({ "code": "UNAVAILABLE", "retryAfterSeconds": 30 })),
+            serde_json::to_value(&frame).expect("a frame"),
+            serde_json::json!({
+                "error": nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE,
+                "code": "UNAVAILABLE",
+                "retryAfterSeconds": 30,
+            }),
         );
         let unavailable = answered();
         assert_eq!(unavailable.len(), 1, "{unavailable:#?}");

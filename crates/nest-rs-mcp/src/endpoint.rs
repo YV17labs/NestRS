@@ -16,8 +16,8 @@ use nest_rs_http::{
 };
 use rmcp::ServerHandler;
 use rmcp::model::{
-    CallToolRequestMethod, ClientJsonRpcMessage, ClientRequest, ConstString, ErrorCode,
-    JsonRpcError, ProtocolVersion, RequestId,
+    CallToolRequestMethod, ClientJsonRpcMessage, ClientRequest, ConstString, JsonRpcError,
+    ProtocolVersion, RequestId,
 };
 use rmcp::transport::common::http_header::{HEADER_MCP_PROTOCOL_VERSION, HEADER_SESSION_ID};
 use rmcp::transport::streamable_http_server::StreamableHttpService;
@@ -27,8 +27,8 @@ use crate::McpError;
 use crate::ambient::McpAmbient;
 use crate::config::McpConfig;
 use crate::error::{
-    SESSION_NOT_FOUND, is_transport_message, said_by_code, tool_not_found, transport_sentence,
-    unread_message,
+    SESSION_NOT_FOUND, classed_method_not_found, is_transport_message, said_by_code,
+    tool_not_found, transport_sentence, unread_message,
 };
 use crate::propagate::{OperationUnits, PropagatingHandler, RequestChains};
 use crate::registry::MountIndex;
@@ -579,8 +579,9 @@ fn host_refused() {
 ///
 /// Several of rmcp's refusals quote what the request carried — a header's
 /// value, the method or name its body named — and its failures their cause.
-/// The status stays rmcp's; a JSON-RPC error keeps its id, code and data, and
-/// says its code's words; any other body is the status's problem document.
+/// The status stays rmcp's; a JSON-RPC error keeps its id, code and data — a
+/// `-32601` carrying none takes the `NOT_FOUND` class — and says its code's
+/// words; any other body is the status's problem document.
 /// A refusal in one of rmcp's sentences quoting nothing the request carried
 /// keeps it: the message, or the problem's `detail`. The one status changed
 /// is rmcp's `415` for a body typed JSON it could not read as a message: the
@@ -622,21 +623,19 @@ async fn said_by_kind(response: Response) -> Response {
 
 /// `refusal` with its JSON-RPC error said by its code, when it is one: the
 /// code's words, else the status's reason phrase — rmcp's own message where
-/// it quotes nothing the request carried.
+/// it quotes nothing the request carried — and the `NOT_FOUND` class on a
+/// method rmcp's dispatch refused before any handler could class it.
 fn jsonrpc_said_by_kind(refusal: &[u8], status: StatusCode) -> Option<Vec<u8>> {
     let mut answer: serde_json::Value = serde_json::from_slice(refusal).ok()?;
-    let error = answer.get_mut("error")?.as_object_mut()?;
-    let code = i32::try_from(error.get("code")?.as_i64()?).ok()?;
-    let kept = error
-        .get("message")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(is_transport_message);
-    if !kept {
-        let said = said_by_code(ErrorCode(code))
+    let slot = answer.get_mut("error")?;
+    let mut error: McpError = serde_json::from_value(slot.take()).ok()?;
+    if !is_transport_message(&error.message) {
+        let said = said_by_code(error.code)
             .or_else(|| status.canonical_reason())
             .unwrap_or("Error");
-        error.insert("message".to_owned(), said.into());
+        error.message = said.into();
     }
+    *slot = serde_json::to_value(classed_method_not_found(error)).ok()?;
     serde_json::to_vec(&answer).ok()
 }
 

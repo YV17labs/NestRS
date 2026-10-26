@@ -75,8 +75,8 @@
 //! - `()` — send nothing.
 //! - `T` — serialize as the reply on the request's event name.
 //! - `Result<(), E>` / `Result<T, E>` — `Err(e)` becomes an error frame
-//!   `{ "event": "<event>", "data": { "error": "…", "errors": … } }`, said by
-//!   `e`'s **type**: a [`WsError`] as built; a
+//!   `{ "event": "<event>", "data": { "error": "…", "code": "…", … } }`, said
+//!   by `e`'s **type**: a [`WsError`] as built; a
 //!   [`ToProblem`](nest_rs_core::ToProblem) error as the problem it says
 //!   ([`WsError::from_problem`]); a `Problem`, a pipe rejection or a decode
 //!   failure its chain carries, in its own form, without a decode failure's

@@ -140,8 +140,8 @@ async fn dispatch_refuses_an_ungranted_write_before_its_body() {
         panic!("a `Read` grant does not carry `Update`");
     };
     assert_eq!(
-        refused.errors.as_ref().map(|errors| &errors["code"]),
-        Some(&serde_json::json!("FORBIDDEN")),
+        refused.code.as_deref(),
+        Some("FORBIDDEN"),
         "the refusal reads as the socket's: {refused:?}",
     );
     assert_eq!(TOUCHED.load(Ordering::SeqCst), before, "the body never ran");

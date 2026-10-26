@@ -286,11 +286,11 @@ impl WsReply {
     /// The error frame a handler's `Err` produces, read off the vocabulary its
     /// chain carries: a [`WsError`] is sent whole, a [`Problem`] in its frame
     /// ([`WsError::from_problem`]), a [`PipeError`] with its detail, a decode
-    /// failure without its value under the `INVALID_ARGUMENT` code — each with
-    /// a `warn` carrying the whole chain.
+    /// failure without its value under the `INVALID_ARGUMENT` code — each a
+    /// refusal the message's line files, with nothing beside it.
     /// Anything else answers [`OPAQUE_CLIENT_MESSAGE`] under the `INTERNAL`
     /// code, its chain filed once at `error`, as is the chain behind a `5xx`
-    /// problem.
+    /// problem — at `warn` behind a `503`.
     pub fn from_handler_error<E>(event: &str, error: E) -> WsReply
     where
         E: Into<Box<dyn Error + Send + Sync>> + 'static,
@@ -299,58 +299,52 @@ impl WsReply {
     }
 }
 
-/// An error frame, and the line it files for the operator once the unit's
-/// answer is final: an answer an exception filter replaced files nothing of
-/// what it replaced.
+/// An error frame, and what it keeps from the client, filed for the operator
+/// once the unit's answer is final: an answer an exception filter replaced
+/// files nothing of what it replaced.
 #[derive(Debug)]
 pub(crate) struct Rendered {
     /// What the client reads.
     pub(crate) frame: WsError,
-    /// What the operator reads once the frame goes out.
-    pub(crate) line: Option<Line>,
+    /// The chain the frame withholds, filed once the frame goes out; `None`
+    /// for a refusal, which the message's `ws.message` line alone files.
+    pub(crate) withheld: Option<Withheld>,
 }
 
 impl Rendered {
-    /// The frame, its line filed at once for the message `event` declares.
+    /// The frame, what it withholds filed at once for the message `event`
+    /// declares.
     fn into_reply(self, event: &str) -> WsReply {
-        if let Some(line) = self.line {
-            line.file(event);
+        if let Some(withheld) = self.withheld {
+            file(withheld, event);
         }
         WsReply::Error(self.frame)
     }
 }
 
-/// The operator's line an error frame files once it goes out.
-#[derive(Clone, Debug)]
-pub(crate) enum Line {
-    /// A refusal answered — or a `503`, the server unable to serve it in time
-    /// — at `warn`, its whole chain.
-    Answered(String),
-    /// A failure the frame withholds, at `error`, its whole chain.
-    Failed(String),
-}
-
-impl Line {
-    /// File the line, for the message `event` declares.
-    pub(crate) fn file(self, event: &str) {
-        match self {
-            Self::Answered(said) => tracing::warn!(
-                target: crate::TARGET,
-                event,
-                error = %said,
-                "subscribe_message handler returned Err",
-            ),
-            Self::Failed(said) => tracing::error!(
-                target: crate::TARGET,
-                event,
-                error = %said,
-                "websocket message failed",
-            ),
-        }
+/// File the chain a frame answering `event`'s message withholds: behind a
+/// `503`, the server unable to serve it in time, at `warn`; behind any other
+/// failure, at `error`.
+pub(crate) fn file(withheld: Withheld, event: &str) {
+    match withheld {
+        Withheld::Unavailable(said) => tracing::warn!(
+            target: crate::TARGET,
+            event,
+            error = %said,
+            "websocket message unavailable",
+        ),
+        Withheld::Failed(said) => tracing::error!(
+            target: crate::TARGET,
+            event,
+            error = %said,
+            "websocket message failed",
+        ),
     }
 }
 
-/// The frame a failure's chain carries, else the opaque one.
+/// The frame a failure's chain carries, else the opaque one. A frame the
+/// chain says — a [`WsError`], a client [`Problem`], a [`PipeError`], a
+/// decode failure — is a refusal and withholds nothing.
 pub(crate) fn chain_rendered(error: &(dyn Error + 'static)) -> Rendered {
     let frame = if let Some(frame) = find_in_chain::<WsError>(error) {
         frame.clone()
@@ -365,37 +359,17 @@ pub(crate) fn chain_rendered(error: &(dyn Error + 'static)) -> Rendered {
     };
     Rendered {
         frame,
-        line: Some(Line::Answered(nest_rs_core::error_message(error))),
+        withheld: None,
     }
 }
 
-/// `problem`'s frame as the answer to `error`: a refusal answered — or a `503`,
-/// the server unable to serve it in time — at `warn`, unless the `5xx` answer
-/// withholds the chain behind a failure, which is then filed as an opaque
-/// failure's is.
+/// `problem`'s frame as the answer to `error`, whoever answered it — the
+/// handler, or an exception filter in its place: only the chain a `5xx`
+/// withholds is filed, so a refusal, and a bare problem, file nothing.
 pub(crate) fn problem_rendered(error: &(dyn Error + 'static), problem: &Problem) -> Rendered {
-    let line = match nest_rs_core::__private::withheld(problem, error) {
-        Some(Withheld::Failed(said)) => Line::Failed(said),
-        Some(Withheld::Unavailable(_)) | None => Line::Answered(nest_rs_core::error_message(error)),
-    };
     Rendered {
         frame: WsError::from_problem(problem),
-        line: Some(line),
-    }
-}
-
-/// The problem an exception filter answered `error` with: only the chain a
-/// `5xx` withholds is filed, so a failure a filter answers as a refusal files
-/// nothing.
-pub(crate) fn caught_rendered(error: &(dyn Error + 'static), problem: &Problem) -> Rendered {
-    let line = match nest_rs_core::__private::withheld(problem, error) {
-        Some(Withheld::Failed(said)) => Some(Line::Failed(said)),
-        Some(Withheld::Unavailable(said)) => Some(Line::Answered(said)),
-        None => None,
-    };
-    Rendered {
-        frame: WsError::from_problem(problem),
-        line,
+        withheld: nest_rs_core::__private::withheld(problem, error),
     }
 }
 
@@ -403,13 +377,13 @@ pub(crate) fn caught_rendered(error: &(dyn Error + 'static), problem: &Problem) 
 fn opaque_rendered(said: String) -> Rendered {
     Rendered {
         frame: WsError::internal(),
-        line: Some(Line::Failed(said)),
+        withheld: Some(Withheld::Failed(said)),
     }
 }
 
-/// A handler's error, rendered by its type: the frame it answers, the line that
-/// frame files once it goes out, and the failure the exception filters read —
-/// the error itself, whenever it can cross threads.
+/// A handler's error, rendered by its type: the frame it answers, what that
+/// frame withholds, filed once it goes out, and the failure the exception
+/// filters read — the error itself, whenever it can cross threads.
 pub struct HandlerFailed {
     rendered: Rendered,
     failure: Failure,
@@ -421,8 +395,8 @@ impl HandlerFailed {
         Self { rendered, failure }
     }
 
-    /// The frame, its line filed at once for the message `event` declares:
-    /// what a handler answers called on its own.
+    /// The frame, what it withholds filed at once for the message `event`
+    /// declares: what a handler answers called on its own.
     pub fn into_reply(self, event: &str) -> WsReply {
         self.rendered.into_reply(event)
     }
@@ -443,7 +417,7 @@ impl fmt::Debug for HandlerFailed {
 }
 
 /// What the exception filters read of a handler's error that cannot cross
-/// threads: its chain, as the operator's line says it.
+/// threads: its chain, as a sentence.
 #[derive(Debug)]
 struct Unsendable(String);
 
@@ -455,13 +429,9 @@ impl fmt::Display for Unsendable {
 
 impl Error for Unsendable {}
 
-/// The failure a handler's error that cannot cross threads leaves the
-/// exception filters: its chain as `rendered` files it.
-fn unsendable(rendered: Rendered) -> HandlerFailed {
-    let said = match &rendered.line {
-        Some(Line::Answered(said) | Line::Failed(said)) => said.clone(),
-        None => rendered.frame.error.clone(),
-    };
+/// `rendered`, leaving the exception filters `said`: the chain of a handler's
+/// error that cannot cross threads, whatever its frame files.
+fn unsendable(rendered: Rendered, said: String) -> HandlerFailed {
     HandlerFailed::new(rendered, Failure::from(Unsendable(said)))
 }
 
@@ -523,14 +493,15 @@ impl<T> ReplyValueFallback for ReplyValue<T> {
     }
 }
 
-/// A handler's error, turned into the frame a client reads, the line an operator
-/// reads once that frame goes out, and the failure the exception filters read —
-/// **by type**, resolved where the expansion names it, in four tiers, each taken
-/// only when the one above does not apply:
+/// A handler's error, turned into the frame a client reads, what that frame
+/// withholds, filed for the operator once it goes out, and the failure the
+/// exception filters read — **by type**, resolved where the expansion names
+/// it, in four tiers, each taken only when the one above does not apply:
 ///
 /// 1. A [`ToProblem`] error takes the inherent method: the problem it says, in
-///    its frame ([`WsError::from_problem`]); `None` answers opaquely, its chain
-///    filed at `error`, as is the chain behind a `5xx` problem.
+///    its frame ([`WsError::from_problem`]), a refusal filing nothing beside
+///    the message's line; `None` answers opaquely, its chain filed at `error`,
+///    as is the chain behind a `5xx` problem — at `warn` behind a `503`.
 /// 2. Any other error that crosses threads takes [`ErrorReportChain`]: the
 ///    vocabulary its chain carries ([`WsReply::from_handler_error`]), else the
 ///    opaque frame.
@@ -609,7 +580,9 @@ where
         let Some(error) = self.take() else {
             return taken();
         };
-        unsendable(chain_rendered(&*boxed(error)))
+        let error = boxed(error);
+        let said = nest_rs_core::error_message(&*error);
+        unsendable(chain_rendered(&*error), said)
     }
 }
 
@@ -644,16 +617,15 @@ impl<E: fmt::Display> ErrorReportFallback for &mut ErrorReport<E> {
             return taken();
         };
         let said = DecodeError::redact(&error.to_string(), None).into_owned();
-        unsendable(opaque_rendered(said))
+        unsendable(opaque_rendered(said.clone()), said)
     }
 }
 
 /// What a report answers once a tier took its error: unreachable, since each
 /// call takes the report whole.
 fn taken() -> HandlerFailed {
-    unsendable(opaque_rendered(
-        "a handler's error was rendered twice".to_owned(),
-    ))
+    let said = "a handler's error was rendered twice";
+    unsendable(opaque_rendered(said.to_owned()), said.to_owned())
 }
 
 #[cfg(test)]
@@ -835,15 +807,16 @@ mod tests {
     }
 
     /// A server problem answers the sentence an opaque failure answers, so it
-    /// files the line an opaque failure files, at `error`, by either tier; a
-    /// bare problem or a client one is a refusal answered, at `warn`.
+    /// files the line an opaque failure files, at `error`, by either tier, and
+    /// a `503` the chain behind it at `warn`; a bare problem or a client one
+    /// withholds nothing, and files nothing.
     #[test]
     fn a_server_problem_files_the_chain_its_frame_withholds() {
         use nest_rs_core::problem::code;
 
         let logs = nest_rs_testing::LogCapture::install();
         let failed = || logs.find(crate::TARGET, "websocket message failed");
-        let answered = || logs.find(crate::TARGET, "subscribe_message handler returned Err");
+        let answered = || logs.find(crate::TARGET, "websocket message unavailable");
 
         let WsReply::Error(frame) = ErrorReport::new(Outage).into_failure().into_reply("search")
         else {
@@ -901,12 +874,84 @@ mod tests {
             1,
             "a bare problem or a client one withholds nothing"
         );
-        let refused = answered();
-        assert_eq!(refused.len(), 3, "{refused:#?}");
+        assert_eq!(answered().len(), 1, "{:#?}", answered());
+    }
+
+    /// A refusal a handler answers — its own `WsError`, a `4xx` problem, a
+    /// pipe's rejection, a decode failure, bare or carried in a chain — is
+    /// the client's answer: the message's line files it, and the edge files
+    /// nothing beside it, as HTTP files its `4xx` on its access line alone.
+    #[test]
+    fn a_refusal_a_handler_answers_files_nothing_beside_its_line() {
+        use nest_rs_core::anyhow::Error as Anyhow;
+        use nest_rs_core::problem::code;
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let undecodable =
+            || serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
+        let frames = [
+            WsReply::from_handler_error("buy", WsError::new("no room")),
+            WsReply::from_handler_error("buy", Problem::new(409, code::CONFLICT)),
+            WsReply::from_handler_error(
+                "buy",
+                Anyhow::from(Problem::new(409, code::CONFLICT)).context("reserving sku-42"),
+            ),
+            WsReply::from_handler_error("buy", PipeError::new("not for sale")),
+            WsReply::from_handler_error("buy", undecodable()),
+            WsReply::from_handler_error(
+                "buy",
+                Anyhow::from(undecodable()).context("reading the basket"),
+            ),
+            ErrorReport::new(Problem::new(422, code::INVALID_ARGUMENT))
+                .into_failure()
+                .into_reply("buy"),
+        ];
+        for frame in frames {
+            let WsReply::Error(frame) = frame else {
+                panic!("an error answers an error frame");
+            };
+            assert_ne!(frame.error, OPAQUE_CLIENT_MESSAGE, "{frame:?}");
+        }
         assert!(
-            refused.iter().all(|line| line.level == "warn"),
-            "{refused:#?}"
+            logs.events()
+                .iter()
+                .all(|event| event.target != crate::TARGET || event.level == "debug"),
+            "a client's refusal is no denial and no failure: {:#?}",
+            logs.events(),
         );
+    }
+
+    /// A refusal holding an `Rc`, so it cannot cross threads, whose sentence
+    /// names no cause.
+    #[derive(Debug)]
+    struct LocalRefusal {
+        cause: std::rc::Rc<WsError>,
+    }
+
+    impl std::fmt::Display for LocalRefusal {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("reserving sku-42")
+        }
+    }
+
+    impl Error for LocalRefusal {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            Some(&*self.cause)
+        }
+    }
+
+    /// A refusal that cannot cross threads answers the frame its chain names,
+    /// and the exception filters read its whole chain, not that frame's text.
+    #[test]
+    fn a_refusal_that_cannot_cross_threads_hands_the_filters_its_chain() {
+        let report = ErrorReport::new(LocalRefusal {
+            cause: std::rc::Rc::new(WsError::new("no room")),
+        });
+
+        let (rendered, failure) = ErrorReportLocal::into_failure(&report).into_parts();
+
+        assert_eq!(rendered.frame.error, "no room");
+        assert_eq!(failure.error().to_string(), "reserving sku-42: no room");
     }
 
     /// A non-string map key is the shape `serde_json` refuses.

@@ -458,7 +458,8 @@ router parses. The rewrite is skipped when nothing is versioned.
   envelope, `{event, data}`. A handler returns at most a `Result` around a
   `Result`-free value, decided by type (`ReplyValue`); a `Result` inside an
   `Option`, a `Vec` or a struct is data. An `Err` becomes a frame through
-  `ErrorReport`, so a cause chain is logged whenever the type has one.
+  `ErrorReport`, by its type, so the chain a frame withholds is read whenever
+  the type has one, and filed as *Error opacity* says.
 - **MCP aggregates** behind one endpoint, since clients point at one URL; one
   host on a path is served verbatim. Endpoint guards, posture and config
   resolve once per path. **A host's `path` is a join key, not a namespace**: written whole,

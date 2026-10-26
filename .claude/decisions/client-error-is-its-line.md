@@ -36,3 +36,28 @@ GraphQL request, a `debug` line beside its request's.
   where HTTP, GraphQL and MCP file their line alone. It is the handler's
   verdict rather than the edge's refusal, and the edges rule's error opacity
   decides what a handler's error files.
+
+## 2026-10-26 — a handler's refusal on the WebSocket edge, decided
+
+The entry above left a handler's own `Err` answered as a `4xx` to the edges
+rule's error opacity. It filed a `warn` with its chain on `nest_rs::ws`
+(`subscribe_message handler returned Err`) for a `WsError`, a `4xx`
+`Problem`, a pipe's rejection or a decode failure the handler returned, while
+the same failure answered `4xx` by an exception filter filed nothing, and
+HTTP, GraphQL and MCP file their unit's line alone for it.
+
+- **Decided**, as error opacity reads: a handler's error is filed where the
+  unit's answer is final, by the status the client is sent, whoever answered
+  it — the handler, by its error's type, or an exception filter. A refusal
+  files the message's `ws.message` line alone, `outcome="error"`; the chain
+  behind a `503` is filed at `warn`, the chain a `5xx` withholds at `error`,
+  each worded as the other edges word theirs (`websocket message
+  unavailable`, `websocket message failed`); a bare `Problem` withholds
+  nothing and files nothing beside its line. One rendering serves the
+  handler's error and a filter's answer, so the two cannot drift again.
+- **No `debug` report of a handler's refusal**: HTTP files none for a
+  handler's `4xx`, nor do GraphQL and MCP. The frame already says what the
+  handler meant the client to read, and the line says which message failed.
+- **Refused: the chain at `debug`**, the smallest move. It would make the
+  WebSocket edge the one that says a handler's refusal twice, and the chain
+  of a refusal is the handler's own words, which its frame carries.

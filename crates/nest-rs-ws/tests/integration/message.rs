@@ -722,3 +722,142 @@ async fn a_service_unavailable_in_time_answers_its_code_and_no_deadline_reason()
     );
     app.shutdown().await.expect("the transport stops cleanly");
 }
+
+#[gateway(path = "/refusing")]
+struct RefusingGateway;
+
+#[messages]
+impl RefusingGateway {
+    #[subscribe_message("full")]
+    #[public]
+    async fn full(&self) -> Result<String, nest_rs_ws::WsError> {
+        Err(nest_rs_ws::WsError::new("no room left"))
+    }
+
+    #[subscribe_message("conflict")]
+    #[public]
+    async fn conflict(&self) -> nest_rs_core::anyhow::Result<String> {
+        Err(
+            nest_rs_core::anyhow::Error::from(Problem::new(409, code::CONFLICT))
+                .context("sku-42 is reserved at the eu-west warehouse"),
+        )
+    }
+
+    #[subscribe_message("piped")]
+    #[public]
+    async fn piped(&self) -> Result<String, nest_rs_pipes::PipeError> {
+        Err(nest_rs_pipes::PipeError::new("not for sale"))
+    }
+
+    #[subscribe_message("undecodable")]
+    #[public]
+    async fn undecodable(&self) -> Result<u64, serde_json::Error> {
+        serde_json::from_str(r#""sk_live_secret""#)
+    }
+
+    #[subscribe_message("unavailable")]
+    #[public]
+    async fn unavailable(&self) -> Result<String, Cancelled> {
+        Err(Cancelled)
+    }
+
+    #[subscribe_message("failed")]
+    #[public]
+    async fn failed(&self) -> nest_rs_core::anyhow::Result<String> {
+        Err(
+            nest_rs_core::anyhow::Error::from(Problem::new(500, code::INTERNAL))
+                .context("the ledger at the eu-west warehouse refused"),
+        )
+    }
+}
+
+#[module(imports = [WsModule], providers = [RefusingGateway])]
+struct RefusingModule;
+
+/// A refusal a handler answers is the client's error: its message's line
+/// files it `error`, and the gateway files nothing beside it, as HTTP files a
+/// `4xx` on its access line alone. The chain behind a `503` is filed at
+/// `warn`, the server unable to serve it in time, and the chain a `5xx`
+/// withholds at `error`.
+#[tokio::test]
+async fn a_refusal_a_handler_answers_files_its_line_alone() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<RefusingModule>()
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+    let mut socket = app.socket("/refusing").connect().await;
+    let answered = [
+        ("full", None),
+        ("conflict", Some("CONFLICT")),
+        ("piped", None),
+        ("undecodable", Some("INVALID_ARGUMENT")),
+        ("unavailable", Some("UNAVAILABLE")),
+        ("failed", Some("INTERNAL")),
+    ];
+    for (event, code) in answered {
+        socket.send(event, serde_json::Value::Null).await;
+        let frame = socket.next_envelope().await;
+        assert_eq!(frame["event"], event, "{frame}");
+        assert!(frame["data"]["error"].is_string(), "{frame}");
+        assert_eq!(
+            frame["data"]["errors"]["code"],
+            serde_json::json!(code),
+            "{frame}"
+        );
+        let said = frame.to_string();
+        assert!(
+            !said.contains("sk_live") && !said.contains("eu-west"),
+            "{frame}"
+        );
+    }
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let lines = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE.name(),
+    );
+    for (event, _) in answered {
+        let filed: Vec<_> = lines
+            .iter()
+            .filter(|line| line.field("event").as_deref() == Some(event))
+            .collect();
+        let [line] = filed.as_slice() else {
+            panic!("{event}: one line, {lines:#?}");
+        };
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::ERROR),
+            "{event}",
+        );
+    }
+    let beside: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.target == nest_rs_ws::TARGET)
+        .filter(|event| event.level == "warn" || event.level == "error")
+        .collect();
+    let said: Vec<_> = beside
+        .iter()
+        .map(|line| {
+            (
+                line.level.as_str(),
+                line.message.as_str(),
+                line.field("event").unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        said,
+        [
+            (
+                "warn",
+                "websocket message unavailable",
+                "unavailable".to_owned()
+            ),
+            ("error", "websocket message failed", "failed".to_owned()),
+        ],
+        "{beside:#?}",
+    );
+}

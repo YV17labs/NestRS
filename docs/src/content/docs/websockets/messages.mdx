@@ -274,10 +274,15 @@ without extra instrumentation, and says why beside it. What the gateway refuses
 of what the client sent — a frame that is no envelope, a payload that does not
 deserialize, a pipe rejection, an unknown event — is reported at `debug` on
 `nest_rs::ws`, where it failed included: a client can send one per frame, and
-none is a denial. A handler's answered `Err` is filed at `warn` on
-`nest_rs::ws`, a guard's denial at `warn` on `nest_rs::layers`, an opaque
-failure at `error`, as is the chain behind a `5xx` problem. A handler's `Err`
-is filed once its answer is final: an
+none is a denial. A handler's `Err` answered as a refusal — its `WsError`, a
+`4xx` problem, a pipe rejection, a decode failure — is the client's error too.
+The message's line files it, with nothing beside it, as HTTP files a `4xx` on
+its access line alone. A guard's denial is filed at `warn` on
+`nest_rs::layers`. An opaque failure is filed at `error` on `nest_rs::ws`
+(`websocket message failed`), as is the chain behind a `5xx` problem. The
+chain behind a `503`, the server unable to answer in time, is filed at `warn`
+(`websocket message unavailable`). A handler's `Err` is filed once its answer
+is final, by the status that answer says, whoever gave it: an
 [exception filter](#interceptors-filters-and-pipes) that answers it as a
 refusal files nothing, and one answering a `5xx` files the chain it withholds.
 

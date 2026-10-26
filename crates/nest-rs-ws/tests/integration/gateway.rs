@@ -392,9 +392,9 @@ async fn result_err_becomes_an_opaque_error_frame() {
     assert_eq!(failed.field("event").as_deref(), Some("err"));
     assert_eq!(failed.field("error").as_deref(), Some("boom"));
     assert!(
-        logs.find(nest_rs_ws::TARGET, "subscribe_message handler returned Err")
-            .is_empty(),
-        "an opaque failure is filed once",
+        logs.events_at(tracing::Level::WARN).is_empty(),
+        "an opaque failure is filed once: {:#?}",
+        logs.events(),
     );
 }
 

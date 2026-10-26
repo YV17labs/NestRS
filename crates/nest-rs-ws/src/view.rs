@@ -1,8 +1,9 @@
 //! [`WsView`], the WebSocket edge's view of the message it dispatches.
 
+use nest_rs_core::__private::Withheld;
 use nest_rs_core::{Failure, Settled, UnitContext, UnitView};
 
-use crate::envelope::{Line, Rendered, WsReply};
+use crate::envelope::{Rendered, WsReply};
 use crate::server::WsClient;
 
 /// The WebSocket edge's view of one message: the connection it arrived on,
@@ -37,9 +38,9 @@ pub struct WsView {
     event: &'static str,
     data: Option<serde_json::Value>,
     reply: Option<WsReply>,
-    /// What the reply files for the operator once it goes out: set where the
-    /// edge rendered a failure, dropped by a layer's own reply.
-    line: Option<Line>,
+    /// What the reply withholds, filed for the operator once it goes out: set
+    /// where the edge rendered a failure, dropped by a layer's own reply.
+    withheld: Option<Withheld>,
 }
 
 impl UnitView for WsView {}
@@ -52,7 +53,7 @@ impl WsView {
             event,
             data: Some(data),
             reply: None,
-            line: None,
+            withheld: None,
         }
     }
 
@@ -96,21 +97,21 @@ impl WsView {
     /// in place of the failure's frame — the unit still fails and rolls back.
     pub fn respond(&mut self, reply: WsReply) -> Settled {
         self.reply = Some(reply);
-        self.line = None;
+        self.withheld = None;
         nest_rs_core::__private::settled()
     }
 
-    /// Answer the message with the error frame `rendered` holds, its line kept
-    /// for the moment the answer is final.
+    /// Answer the message with the error frame `rendered` holds, what it
+    /// withholds kept for the moment the answer is final.
     pub(crate) fn answer_failed(&mut self, rendered: Rendered) -> Settled {
-        let Rendered { frame, line } = rendered;
+        let Rendered { frame, withheld } = rendered;
         let settled = self.respond(WsReply::Error(frame));
-        self.line = line;
+        self.withheld = withheld;
         settled
     }
 
-    /// The answer, and the line it files once it goes out.
-    pub(crate) fn into_answer(self) -> (Option<WsReply>, Option<Line>) {
-        (self.reply, self.line)
+    /// The answer, and what it withholds, filed once it goes out.
+    pub(crate) fn into_answer(self) -> (Option<WsReply>, Option<Withheld>) {
+        (self.reply, self.withheld)
     }
 }

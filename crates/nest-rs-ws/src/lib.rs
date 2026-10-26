@@ -85,10 +85,11 @@
 //!   `INTERNAL` code, the frame every failure the client is not told of
 //!   answers.
 //!
-//! An answered error is filed at `warn` on `nest_rs::ws`; an opaque one, and the
-//! chain behind a `5xx` problem, at `error`. An error's `Display` never reaches
-//! the frame. [`Opaque`]'s `.opaque()?` says at the call site that a failure is
-//! none of the client's business, whatever its type.
+//! A refusal is filed by the message's `ws.message` line alone, as HTTP files
+//! a `4xx`; an opaque error, and the chain behind a `5xx` problem, at `error`
+//! on `nest_rs::ws` — at `warn` behind a `503`. An error's `Display` never
+//! reaches the frame. [`Opaque`]'s `.opaque()?` says at the call site that a
+//! failure is none of the client's business, whatever its type.
 //!
 //! # Server→client push
 //!

@@ -17,7 +17,7 @@ use nest_rs_core::{Container, Failure, Handler, Outcome, Peer, Settled, UnitCont
 use nest_rs_guards::Denial;
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeSpec, PipeSpecs};
 
-use crate::envelope::{Rendered, WsError, WsReply, caught_rendered, chain_rendered};
+use crate::envelope::{Rendered, WsError, WsReply, chain_rendered, problem_rendered};
 use crate::gateway::Gateway;
 use crate::guard::denial_to_ws_error;
 use crate::server::WsClient;
@@ -170,7 +170,7 @@ impl Answered {
 }
 
 /// Run `data`, arrived on `client` for `event`, through `message`'s chains,
-/// then render what the unit came to, filing the line its answer owes.
+/// then render what the unit came to, filing what its answer withholds.
 pub(crate) async fn answer<G: Gateway>(
     gateway: &G,
     message: &Message,
@@ -195,12 +195,12 @@ pub(crate) async fn answer<G: Gateway>(
 }
 
 /// The answer `outcome` comes to: the reply the view holds, or, for a failure
-/// nobody answered, the edge's one rule. The line the answer owes is filed
+/// nobody answered, the edge's one rule. What the answer withholds is filed
 /// here, once, as it goes out.
 fn rendered(view: WsView, outcome: Outcome, event: &str) -> Answered {
     let failed = outcome.is_err();
-    let (reply, line) = match (outcome, view.into_answer()) {
-        (Ok(_), (Some(reply), line)) => (reply, line),
+    let (reply, withheld) = match (outcome, view.into_answer()) {
+        (Ok(_), (Some(reply), withheld)) => (reply, withheld),
         (Ok(_), (None, _)) => {
             tracing::error!(
                 target: crate::TARGET,
@@ -209,14 +209,14 @@ fn rendered(view: WsView, outcome: Outcome, event: &str) -> Answered {
             );
             return Answered::opaque();
         }
-        (Err(failure), (Some(reply), line)) if failure.is_answered() => (reply, line),
+        (Err(failure), (Some(reply), withheld)) if failure.is_answered() => (reply, withheld),
         (Err(failure), _) => {
-            let Rendered { frame, line } = failure_rendered(&failure);
-            (WsReply::Error(frame), line)
+            let Rendered { frame, withheld } = failure_rendered(&failure);
+            (WsReply::Error(frame), withheld)
         }
     };
-    if let Some(line) = line {
-        line.file(event);
+    if let Some(withheld) = withheld {
+        crate::envelope::file(withheld, event);
     }
     Answered { reply, failed }
 }
@@ -225,12 +225,12 @@ fn rendered(view: WsView, outcome: Outcome, event: &str) -> Answered {
 /// problem, a refusal, else the vocabulary its chain carries.
 fn failure_rendered(failure: &Failure) -> Rendered {
     if let Some(problem) = caught_problem(failure) {
-        return caught_rendered(failure.error(), problem);
+        return problem_rendered(failure.error(), problem);
     }
     if let Some(denial) = failure.find::<Denial>() {
         return Rendered {
             frame: denial_to_ws_error(denial.clone()),
-            line: None,
+            withheld: None,
         };
     }
     chain_rendered(failure.error())

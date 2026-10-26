@@ -346,3 +346,58 @@ async-compression's types outside the one file wrapping each (`multipart.rs`,
 for another crate to reach around. What neither sees stays review's: a type
 of those crates the file does not name yet, and a `pub` item written inside
 it.
+
+## 2026-10-26 — the CORS allow-list is parsed once, and both readers read it
+
+`HttpCors::origins` had two readers that read it two ways. The CORS layer kept
+each entry as header bytes and compared a request's `Origin` with them; the
+browser-origin check of the upgrades and `/mcp` parsed each entry as an origin
+(RFC 6454 §6.2) and dropped one it could not parse, reading the container's
+config again rather than the transport's. So one deployment value answered
+twice: `https://app.example/` was dead bytes to the first and nothing to the
+second, `https://APP.example` admitted a socket and refused a `fetch`, a
+punycode page was refused unless the list held its raw UTF-8, and `null` was
+admitted by both.
+
+**One parse, at boot, one list.** The transport parses the list once into
+origins, the CORS layer reads it, and the browser-origin check reads the same
+value from the transport — never its own read of the configuration. A
+request's `Origin` is parsed the same way and matched by its tuple; the bytes a
+browser sends, the serialization each entry keeps, decide first, so the parse
+runs only for what no browser sends. The answer still echoes the request's own
+`Origin` bytes, which the browser compares with its serialization exactly.
+
+**An entry that is no origin fails the boot**: a path (a trailing `/`
+included), a query, a fragment, userinfo, no or an empty host, a malformed IP
+literal or port, a host that ends in a number and is no IPv4 address
+(`app.123`), a percent-encoded host, a space or control character, a
+character outside ASCII — an internationalized host is written in IDNA's ASCII
+form, as browsers send it. The refusal names the list, the entry's place and
+the kind, never the entry, which is a deployment's data (the payload rule);
+`methods`, `headers` and `exposed_headers` refuse the same way, an entry beside
+a `*` included. A list naming no origin installs no CORS layer, whatever else
+it sets. `for_root` and the environment already read an empty list as no
+layer; a seeded `HttpConfig` (`App::builder().provide`) or a config handed to
+`HttpTransport::from_config` reached the layer with it, and it admitted every
+origin.
+
+**An entry in a form a browser never sends is the origin it parses to**, an
+upper-case scheme or host, the scheme's default port, or an IPv4 host written
+other than as its four decimal bytes: RFC 6454 §5 compares origins as tuples,
+and the URL standard parses `https://APP.example:443` to the origin
+`https://app.example` and, through its IPv4 parser, `https://127.1` or
+`https://0x7f.0.0.1` to `https://127.0.0.1`; the browser-origin check read the
+first two so already.
+Weighed: refusing it so the list holds the bytes a browser sends. Both are
+equally safe, since an entry has one meaning either way; refusing fails a boot
+over the spelling of a value whose meaning is not in doubt, which no standard
+asks.
+
+**`null` fails the boot.** Every sandboxed iframe, `data:` document and
+redirect across origins sends `Origin: null` whatever site it runs on (WHATWG
+HTML, opaque origins), so a listed `null` admits every site that asks;
+OWASP's HTML5 security cheat sheet and PortSwigger's CORS research name it a
+vulnerability, and with `credentials` it is the opening the policy refuses for
+`*`. The refusal says so and points at `*`, which says what it opens and which
+`credentials` refuses. A `null` a browser sends is refused by both readers
+under any list but `*`.

@@ -57,7 +57,7 @@ Real env always wins over the `.env` cascade.
 | `tls.cert` | `<PREFIX>_HTTP__TLS_CERT` (inline PEM) or `<PREFIX>_HTTP__TLS_CERT_FILE` (path) | unset ⇒ plain HTTP | `HttpConfig { tls: Some(HttpTls::new(cert, key)), ..Default::default() }` |
 | `tls.key`  | `<PREFIX>_HTTP__TLS_KEY` or `<PREFIX>_HTTP__TLS_KEY_FILE`  | unset ⇒ plain HTTP | (set together with `tls.cert`) |
 | `tls.reload_secs` | `<PREFIX>_HTTP__TLS_RELOAD_SECS` (`1`–`86400`, `0` ⇒ unwatched) | `60` for a pair read from files | in a test: `HttpTls::from_files(cert_path, key_path)?.with_reload_secs(300)` — see [Renewal without a restart](#renewal-without-a-restart) |
-| `cors.origins` | `<PREFIX>_HTTP__CORS_ORIGINS` (comma list) | unset ⇒ CORS off | `HttpCors { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
+| `cors.origins` | `<PREFIX>_HTTP__CORS_ORIGINS` (comma list of `scheme://host[:port]`, or `*`; see [CORS](#cors)) | unset or empty ⇒ CORS off | `HttpCors { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
 | `cors.methods` | `<PREFIX>_HTTP__CORS_METHODS` | empty | `methods: vec!["GET".into(), "POST".into()]` |
 | `cors.headers` | `<PREFIX>_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
 | `cors.exposed_headers` | `<PREFIX>_HTTP__CORS_EXPOSED` | empty — `Link`, `Location` and `Retry-After`, which the framework sends, are always exposed | `exposed_headers: vec!["X-Total-Count".into()]` |
@@ -147,8 +147,9 @@ The transport answers the CORS policy **outermost**, so a preflight
 under the policy, a refusal included, carries `Vary: Origin`: a shared cache
 keeps one origin's answer from another.
 
-CORS activates only when `cors.origins` is non-empty — the default is no
-CORS layer. Set the origins (and any other knob you need) via either path:
+CORS activates only when `cors.origins` is non-empty, whatever else the
+policy sets — the default is no CORS layer. Set the origins (and any other
+knob you need) via either path:
 
 ```bash title=".env.production" frame="terminal"
 NESTRS_HTTP__CORS_ORIGINS=https://app.example.com,https://admin.example.com
@@ -181,10 +182,28 @@ use nest_rs::http::{HttpCors, HttpConfig, HttpModule};
 pub struct ApiModule;
 ```
 
+Each origin is written as a browser sends it in `Origin`,
+`scheme://host[:port]`: no path, not even a trailing `/`, no query, fragment
+or `user@`, and an internationalized host in its ASCII form
+(`https://xn--9ca.example`, never `https://é.example`). The list is read once,
+at boot, and compared origin to origin (RFC 6454): `https://App.example:443`
+admits a page on `https://app.example`, since scheme and host compare without
+case and the default port is implied. The answer echoes the page's own
+`Origin` back, the bytes the browser checks.
+
 `origins: vec!["*".into()]` opens a fully public API to every origin, and a
 `*` in `methods` or `headers` admits every method or header. With
 `credentials`, a `*` in any list fails the boot: a browser reads it as a
-literal on a credentialed request, so it would open nothing.
+literal on a credentialed request, so it would open nothing. `null` fails the
+boot too: every sandboxed iframe, `data:` document and redirect across origins
+sends it, whatever site it runs on, so listing it would admit every site that
+asks. Write `*` when that is what you mean; it says so, and `credentials`
+refuses it.
+
+An entry a list cannot take, in any of the four, fails the boot with a
+sentence naming the list, the entry's place and what is wrong with it
+(`entry 2 of origins … carries a path`), never the entry itself: your
+configuration is your data, and the sentence lands in your logs.
 
 With no `methods`, the policy admits the methods your routes serve, beside the
 CORS-safelisted `GET`, `HEAD` and `POST` — every method a page may send when a
@@ -196,11 +215,12 @@ answers `403` and files one `warn` on `nest_rs::http`, `cross-origin request
 refused by the CORS policy`, whose `reason` names the check it failed and
 nothing the request sent.
 
-The same origins decide who opens a socket or calls MCP. A browser consults
-CORS neither before a WebSocket upgrade nor before a request simple enough to
-need no preflight, so the WebSocket gateways, the GraphQL subscription socket
-and `/mcp` check `Origin` themselves, CORS on or off; a client that sends no
-`Origin` — anything but a browser — passes.
+The same origins, the one list read once, decide who opens a socket or calls
+MCP: an entry admits a page's socket exactly when it admits its `fetch`. A
+browser consults CORS neither before a WebSocket upgrade nor before a request
+simple enough to need no preflight, so the WebSocket gateways, the GraphQL
+subscription socket and `/mcp` check `Origin` themselves, CORS on or off; a
+client that sends no `Origin` — anything but a browser — passes.
 
 - **With no `cors`**, a browser page on the server's own origin is admitted
   and any other is answered `403`, with a `warn` that says why by kind. The

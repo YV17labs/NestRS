@@ -15,6 +15,7 @@ use nest_rs_core::{Container, Discovery, Listening, Posture, Transport};
 use nest_rs_database::UnitOfWork;
 use tokio_util::sync::CancellationToken;
 
+use crate::client_ip::trusted_proxies;
 use crate::compression::Compression;
 use crate::controller::HttpControllerMeta;
 use crate::cors::{CorsPolicy, HttpCors};
@@ -372,7 +373,12 @@ impl HttpTransport {
     pub fn from_config(cfg: &crate::HttpConfig) -> anyhow::Result<Self> {
         let transport = Self {
             bind: format!("{}:{}", cfg.host, cfg.port),
-            cors: cfg.cors.as_ref().map(HttpCors::policy).transpose()?,
+            cors: cfg
+                .cors
+                .as_ref()
+                .map(HttpCors::policy)
+                .transpose()?
+                .flatten(),
             tls: cfg.tls.clone(),
             server_header: cfg.server_header,
             global_prefix: cfg
@@ -577,7 +583,12 @@ impl Transport for HttpTransport {
         // A warning, not a fail-secure stop: a gateway whose messages are all
         // `#[public]` is a legitimate shape.
         let mut unguarded_edges: Vec<String> = Vec::new();
-        let origins = OriginPolicy::from_container(container);
+        // The CORS layer's parsed list: the container's config read again
+        // would be a second list, which a seeded transport config never reaches.
+        let origins = OriginPolicy::new(
+            self.cors.as_ref().map(|cors| cors.origins().clone()),
+            trusted_proxies(container.get::<crate::HttpConfig>().as_deref()).into(),
+        );
         let mut endpoint_owner: HashMap<String, String> = HashMap::new();
         let mut carried: Vec<TypeId> = Vec::new();
         for d in discovery.meta::<HttpEndpointMeta>() {

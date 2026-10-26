@@ -3,23 +3,24 @@
 //! CORS before it lets a page read a response, never before it opens a socket
 //! or sends a request whose effect is the point.
 //!
-//! The policy is the transport's own configuration — its CORS origins and its
-//! trusted proxies — resolved once per mount. With CORS configured, the
-//! transport's CORS layer answers first and admits only what it lists, the
-//! server's own origin included; an entry point mounted outside the transport
-//! is held to this policy all the same.
+//! The policy is the transport's own: the origins its CORS policy lists,
+//! parsed once at boot into [`ListedOrigins`], which the CORS layer reads too,
+//! so one entry answers alike on both; and the proxies its configuration
+//! trusts. With CORS configured, the transport's CORS layer answers first and
+//! admits only what it lists, the server's own origin included; an entry point
+//! mounted outside the transport is held to this policy all the same.
 
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
 
+use http::HeaderValue;
 use http::header::{self, HeaderMap};
 use http::uri::Authority;
-use nest_rs_core::Container;
 
-use crate::HttpConfig;
 use crate::client_ip::forwarded_param;
-use crate::cors::holds_wildcard;
+use crate::cors::{WILDCARD, holds_wildcard};
 use crate::endpoint::{BoxEndpoint, Endpoint, OriginCheck, OriginGate};
-use crate::error::{OriginRefused, OriginRefusedReason, ResponseError};
+use crate::error::{NotAnOrigin, OriginRefused, OriginRefusedReason, ResponseError};
 
 /// The de-facto forwarding headers for the scheme and the host, which the
 /// `http` crate does not name.
@@ -35,79 +36,27 @@ const X_FORWARDED_HOST: &str = "x-forwarded-host";
 /// `Forwarded` (`proto=`, `host=`) or `X-Forwarded-Proto` / `X-Forwarded-Host`
 /// say the client asked for. Origins compare per RFC 6454 §5: scheme and host
 /// without case, ports with the scheme's default filled in.
-///
-/// ```
-/// use nest_rs_core::Container;
-/// use nest_rs_http::__private::OriginPolicy;
-/// use nest_rs_http::{HeaderValue, Request, header};
-///
-/// let container = Container::builder().build().expect("an empty container builds");
-/// let policy = OriginPolicy::from_container(&container);
-/// let browser = |origin: &'static str| {
-///     Request::builder()
-///         .header(header::HOST, HeaderValue::from_static("api.example"))
-///         .header(header::ORIGIN, HeaderValue::from_static(origin))
-///         .finish()
-/// };
-///
-/// assert!(policy.allows(&Request::builder().finish()).is_ok(), "no browser");
-/// assert!(policy.allows(&browser("http://api.example")).is_ok());
-/// assert!(policy.allows(&browser("https://evil.example")).is_err());
-/// ```
-#[derive(Clone, Debug, Default)]
-pub struct OriginPolicy {
-    listed: Listed,
+#[derive(Clone, Debug)]
+pub(crate) struct OriginPolicy {
+    /// What the CORS policy lists; `None` without one.
+    listed: Option<ListedOrigins>,
     trusted_proxies: Box<[IpAddr]>,
 }
 
-/// The origins a CORS policy lists, beside the request's own.
-#[derive(Clone, Debug)]
-enum Listed {
-    /// Each origin, parsed once. An entry that is no origin serialization
-    /// lists nothing, as it lists nothing to the CORS layer.
-    Origins(Box<[Origin]>),
-    /// `*`.
-    Every,
-}
-
-impl Default for Listed {
-    fn default() -> Self {
-        Self::Origins(Box::default())
-    }
-}
-
 impl OriginPolicy {
-    /// The policy the app's transport serves under, read off the
-    /// [`HttpConfig`] the app booted with; an app importing no `HttpModule`
-    /// admits the request's own origin alone, behind no trusted proxy.
-    pub fn from_container(container: &Container) -> Self {
-        container
-            .get::<HttpConfig>()
-            .map_or_else(Self::default, |config| Self::from_config(&config))
-    }
-
-    /// The policy `config` describes.
-    pub(crate) fn from_config(config: &HttpConfig) -> Self {
-        let listed = match &config.cors {
-            None => Listed::default(),
-            Some(cors) if holds_wildcard(&cors.origins) => Listed::Every,
-            Some(cors) => Listed::Origins(
-                cors.origins
-                    .iter()
-                    .filter_map(|origin| Origin::parse(origin))
-                    .collect(),
-            ),
-        };
+    /// The policy of a transport whose CORS policy lists `listed`, `None`
+    /// without one, behind the proxies `trusted_proxies` names.
+    pub(crate) fn new(listed: Option<ListedOrigins>, trusted_proxies: Box<[IpAddr]>) -> Self {
         Self {
             listed,
-            trusted_proxies: config.trusted_proxies.clone().into_boxed_slice(),
+            trusted_proxies,
         }
     }
 
     /// `Ok` when `request` carries no `Origin`, its own, or one the CORS policy
     /// lists; otherwise the refusal, which answers `403`. A second `Origin`
     /// field, or one that is no origin serialization, is refused.
-    pub fn allows(&self, request: &crate::Request) -> Result<(), OriginRefused> {
+    pub(crate) fn allows(&self, request: &crate::Request) -> Result<(), OriginRefused> {
         let mut sent = request.headers().get_all(header::ORIGIN).iter();
         let Some(origin) = sent.next() else {
             return Ok(());
@@ -125,7 +74,11 @@ impl OriginPolicy {
         let Some(origin) = Origin::parse(origin) else {
             return refused(OriginRefusedReason::OriginNotSerialized, None);
         };
-        if self.lists(&origin) {
+        if self
+            .listed
+            .as_ref()
+            .is_some_and(|listed| listed.lists(&origin))
+        {
             return Ok(());
         }
         let Origin::Tuple(sent) = origin else {
@@ -142,13 +95,6 @@ impl OriginPolicy {
         }
     }
 
-    fn lists(&self, origin: &Origin) -> bool {
-        match &self.listed {
-            Listed::Every => true,
-            Listed::Origins(origins) => origins.contains(origin),
-        }
-    }
-
     /// The origin the request was sent to: its `Host` and the scheme it
     /// arrived over, or what a trusted proxy forwarded of them.
     fn own(&self, request: &crate::Request, proxied: bool) -> Option<Tuple> {
@@ -162,7 +108,84 @@ impl OriginPolicy {
         let host = host
             .or_else(|| headers.get(header::HOST)?.to_str().ok())
             .or_else(|| request.original_uri().authority().map(Authority::as_str))?;
-        Tuple::of(scheme, host)
+        Tuple::of(scheme, host).ok()
+    }
+}
+
+/// The origins a CORS policy lists, parsed once at boot: the one list the
+/// CORS layer and the browser-origin check both read, so an entry answers
+/// alike on both.
+#[derive(Clone, Debug)]
+pub(crate) enum ListedOrigins {
+    /// Each origin, listed once.
+    Origins(Arc<[ListedOrigin]>),
+    /// `*`.
+    Every,
+}
+
+/// One listed origin: the tuple two origins compare by, and the serialization
+/// a browser sends for it.
+#[derive(Debug)]
+pub(crate) struct ListedOrigin {
+    tuple: Tuple,
+    serialized: Box<str>,
+}
+
+impl ListedOrigins {
+    /// `entries` read as origins, `*` listing every one; or the first entry
+    /// that is none, by its place from zero and why. Each entry must be what
+    /// a browser could send: `null` is refused, since any sandboxed or
+    /// `data:` document sends it whatever site it runs on.
+    pub(crate) fn parse(entries: &[String]) -> Result<Self, (usize, NotAnOrigin)> {
+        let mut listed: Vec<ListedOrigin> = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            if entry == WILDCARD {
+                continue;
+            }
+            if entry.eq_ignore_ascii_case("null") {
+                return Err((index, NotAnOrigin::Null));
+            }
+            let tuple = Tuple::parse(entry).map_err(|defect| (index, defect))?;
+            if !listed.iter().any(|origin| origin.tuple == tuple) {
+                let serialized = tuple.serialization().into_boxed_str();
+                listed.push(ListedOrigin { tuple, serialized });
+            }
+        }
+        Ok(match holds_wildcard(entries) {
+            true => Self::Every,
+            false => Self::Origins(listed.into()),
+        })
+    }
+
+    /// Whether the CORS layer admits a request whose `Origin` is `sent`: its
+    /// origin is listed, compared as [`OriginPolicy`] compares it.
+    pub(crate) fn admits(&self, sent: &HeaderValue) -> bool {
+        match self {
+            Self::Every => true,
+            // A browser sends the serialization each entry keeps, so the bytes
+            // decide what a browser sends before any parse.
+            Self::Origins(listed) => {
+                listed
+                    .iter()
+                    .any(|origin| origin.serialized.as_bytes() == sent.as_bytes())
+                    || sent
+                        .to_str()
+                        .ok()
+                        .and_then(Origin::parse)
+                        .is_some_and(|origin| self.lists(&origin))
+            }
+        }
+    }
+
+    /// Whether `origin` is listed: an opaque one never is, but by `*`.
+    fn lists(&self, origin: &Origin) -> bool {
+        match (self, origin) {
+            (Self::Every, _) => true,
+            (Self::Origins(listed), Origin::Tuple(sent)) => {
+                listed.iter().any(|origin| origin.tuple == *sent)
+            }
+            (Self::Origins(_), Origin::Opaque) => false,
+        }
     }
 }
 
@@ -238,7 +261,7 @@ impl Endpoint for OriginChecked {
 /// An origin (RFC 6454 §4), in the form two compare in (§5).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Origin {
-    /// `null`, an opaque origin (§7.3): admitted only where `null` is listed.
+    /// `null`, an opaque origin (§7.3): admitted only where `*` is listed.
     Opaque,
     /// A scheme, a host and a port.
     Tuple(Tuple),
@@ -260,27 +283,83 @@ impl Origin {
         if serialized == "null" {
             return Some(Self::Opaque);
         }
-        let (scheme, authority) = serialized.split_once("://")?;
-        Tuple::of(scheme, authority).map(Self::Tuple)
+        Tuple::parse(serialized).ok().map(Self::Tuple)
     }
 }
 
 impl Tuple {
+    /// `scheme "://" host [ ":" port ]`, or the first way `serialized` is not
+    /// one.
+    fn parse(serialized: &str) -> Result<Self, NotAnOrigin> {
+        if !serialized.is_ascii() {
+            return Err(NotAnOrigin::NonAscii);
+        }
+        if serialized
+            .bytes()
+            .any(|b| b.is_ascii_control() || b == b' ')
+        {
+            return Err(NotAnOrigin::Character);
+        }
+        let (scheme, rest) = serialized.split_once("://").ok_or(NotAnOrigin::NoScheme)?;
+        if let Some(delimiter) = rest.bytes().find(|b| matches!(b, b'/' | b'?' | b'#')) {
+            return Err(match delimiter {
+                b'/' => NotAnOrigin::Path,
+                b'?' => NotAnOrigin::Query,
+                _ => NotAnOrigin::Fragment,
+            });
+        }
+        Self::of(scheme, rest)
+    }
+
     /// The origin of a request sent to `authority` over `scheme`.
-    fn of(scheme: &str, authority: &str) -> Option<Self> {
+    fn of(scheme: &str, authority: &str) -> Result<Self, NotAnOrigin> {
         let scheme_is_valid = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
             && scheme
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'));
-        // Userinfo is no part of an origin, nor of a `Host`.
-        if !scheme_is_valid || authority.contains('@') {
-            return None;
+        if !scheme_is_valid {
+            return Err(NotAnOrigin::Scheme);
         }
-        let authority: Authority = authority.parse().ok()?;
-        let host = canonical_host(authority.host())?;
+        // Userinfo is no part of an origin, nor of a `Host`.
+        if authority.contains('@') {
+            return Err(NotAnOrigin::Userinfo);
+        }
+        if authority.is_empty() {
+            return Err(NotAnOrigin::NoHost);
+        }
+        // A browser decodes a percent-encoded host before it serializes it.
+        if authority.contains('%') {
+            return Err(NotAnOrigin::Host);
+        }
+        let parsed: Authority = authority.parse().ok().ok_or(NotAnOrigin::Host)?;
+        let host = parsed.host();
+        let port = match authority.get(host.len()..) {
+            Some("" | ":") => None,
+            Some(written) => Some(
+                written
+                    .strip_prefix(':')
+                    .filter(|digits| digits.bytes().all(|b| b.is_ascii_digit()))
+                    .and_then(|digits| digits.parse::<u16>().ok())
+                    .ok_or(NotAnOrigin::Port)?,
+            ),
+            None => return Err(NotAnOrigin::Host),
+        };
+        let host = canonical_host(host)?;
         let scheme = scheme.to_ascii_lowercase();
-        let port = authority.port_u16().or_else(|| default_port(&scheme));
-        Some(Self { scheme, host, port })
+        let port = port.or_else(|| default_port(&scheme));
+        Ok(Self { scheme, host, port })
+    }
+
+    /// The serialization a browser sends for this origin (§6.2): the port
+    /// written only when it is not the scheme's default.
+    fn serialization(&self) -> String {
+        match self
+            .port
+            .filter(|&port| Some(port) != default_port(&self.scheme))
+        {
+            Some(port) => format!("{}://{}:{port}", self.scheme, self.host),
+            None => format!("{}://{}", self.scheme, self.host),
+        }
     }
 
     /// The first component, in §5's order, in which `self` is not `own`.
@@ -329,13 +408,84 @@ impl OriginScheme {
 }
 
 /// `host` as two origins compare it: lowercase, an IPv6 literal in its
-/// canonical text; `None` when it is empty or a malformed literal.
-fn canonical_host(host: &str) -> Option<String> {
+/// canonical text, a host that ends in a number the IPv4 address the URL
+/// standard reads it as (`127.1` is `127.0.0.1`); refused when it is empty, a
+/// malformed literal, or ends in a number and is no IPv4 address.
+fn canonical_host(host: &str) -> Result<String, NotAnOrigin> {
     if let Some(literal) = host.strip_prefix('[') {
-        let address: Ipv6Addr = literal.strip_suffix(']')?.parse().ok()?;
-        return Some(format!("[{address}]"));
+        let address: Ipv6Addr = literal
+            .strip_suffix(']')
+            .and_then(|literal| literal.parse().ok())
+            .ok_or(NotAnOrigin::Host)?;
+        return Ok(format!("[{address}]"));
     }
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+    if host.is_empty() {
+        return Err(NotAnOrigin::NoHost);
+    }
+    let host = host.to_ascii_lowercase();
+    if !ends_in_a_number(&host) {
+        return Ok(host);
+    }
+    ipv4(&host)
+        .map(|address| address.to_string())
+        .ok_or(NotAnOrigin::Host)
+}
+
+/// Whether the URL standard reads `host` as an IPv4 address (WHATWG URL,
+/// *ends in a number checker*): its last label, one trailing `.` aside, is
+/// decimal digits or an IPv4 number.
+fn ends_in_a_number(host: &str) -> bool {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    let last = host.rsplit_once('.').map_or(host, |(_, last)| last);
+    (!last.is_empty() && last.bytes().all(|b| b.is_ascii_digit())) || ipv4_number(last).is_some()
+}
+
+/// `host` as the URL standard's *IPv4 parser* reads it: at most four parts,
+/// one trailing `.` aside, each but the last a byte and the last filling the
+/// bytes left; `None` when it is no IPv4 address.
+fn ipv4(host: &str) -> Option<Ipv4Addr> {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    let numbers = host
+        .split('.')
+        .map(ipv4_number)
+        .collect::<Option<Vec<u64>>>()?;
+    let (&last, leading) = numbers.split_last()?;
+    if leading.len() > 3 || leading.iter().any(|&byte| byte > 255) {
+        return None;
+    }
+    if last >> (8 * (4 - leading.len())) != 0 {
+        return None;
+    }
+    let address = leading
+        .iter()
+        .zip([24, 16, 8])
+        .fold(last, |address, (&byte, shift)| address + (byte << shift));
+    u32::try_from(address).ok().map(Ipv4Addr::from)
+}
+
+/// One part of an IPv4 address as the URL standard's *IPv4 number parser*
+/// reads it: hexadecimal after `0x`, octal after a leading `0`, else decimal,
+/// a bare prefix reading `0`; `None` when it is no number. A value past `u64`
+/// saturates, too large for any address all the same.
+fn ipv4_number(part: &str) -> Option<u64> {
+    if part.is_empty() {
+        return None;
+    }
+    let (digits, radix) = if let Some(hex) = part.strip_prefix("0x") {
+        (hex, 16)
+    } else if let Some(octal) = part.strip_prefix('0').filter(|octal| !octal.is_empty()) {
+        (octal, 8)
+    } else {
+        (part, 10)
+    };
+    digits.chars().try_fold(0_u64, |value, digit| {
+        let digit = digit.to_digit(radix)?;
+        Some(
+            value
+                .saturating_mul(u64::from(radix))
+                .saturating_add(u64::from(digit)),
+        )
+    })
 }
 
 /// The port a scheme's URLs default to (RFC 9110 §4.2, RFC 6455 §3).
@@ -354,23 +504,155 @@ mod tests {
     use http::{HeaderValue, Uri};
 
     use super::*;
+    use crate::Request;
     use crate::error::{ORIGIN_REFUSED, ResponseError};
-    use crate::{HttpCors, Request};
 
     const PROXY: &str = "10.0.0.1";
 
+    fn entries(origins: &[&str]) -> Vec<String> {
+        origins.iter().map(|&origin| origin.to_owned()).collect()
+    }
+
+    /// The policy of a transport whose CORS policy lists `origins`, none
+    /// meaning no CORS policy, behind the proxies `trusted` names.
     fn policy(origins: &[&str], trusted: &[&str]) -> OriginPolicy {
-        OriginPolicy::from_config(&HttpConfig {
-            cors: (!origins.is_empty()).then(|| HttpCors {
-                origins: origins.iter().map(|&origin| origin.to_owned()).collect(),
-                ..HttpCors::default()
-            }),
-            trusted_proxies: trusted
+        let listed = (!origins.is_empty())
+            .then(|| ListedOrigins::parse(&entries(origins)).expect("the test's list parses"));
+        OriginPolicy::new(
+            listed,
+            trusted
                 .iter()
                 .map(|ip| ip.parse().expect("a test literal is an address"))
                 .collect(),
-            ..HttpConfig::default()
-        })
+        )
+    }
+
+    /// Each entry no browser sends as an origin is refused at its place, by
+    /// the first way it is not one.
+    #[test]
+    fn an_entry_that_is_no_origin_is_refused_by_kind() {
+        for (entry, kind) in [
+            ("null", NotAnOrigin::Null),
+            ("Null", NotAnOrigin::Null),
+            ("https://é.example", NotAnOrigin::NonAscii),
+            ("https://app\u{7f}.example", NotAnOrigin::Character),
+            ("https://app .example", NotAnOrigin::Character),
+            ("app.example", NotAnOrigin::NoScheme),
+            ("1https://app.example", NotAnOrigin::Scheme),
+            ("https://user@app.example", NotAnOrigin::Userinfo),
+            ("https://app.example/", NotAnOrigin::Path),
+            ("https://app.example/path", NotAnOrigin::Path),
+            ("https://app.example?query", NotAnOrigin::Query),
+            ("https://app.example#fragment", NotAnOrigin::Fragment),
+            ("https://", NotAnOrigin::NoHost),
+            ("https://:443", NotAnOrigin::NoHost),
+            ("https://app%2Eexample", NotAnOrigin::Host),
+            ("https://[::1", NotAnOrigin::Host),
+            ("https://[nope]", NotAnOrigin::Host),
+            ("https://app.123", NotAnOrigin::Host),
+            ("https://app.0x1", NotAnOrigin::Host),
+            ("https://1.2.3.08", NotAnOrigin::Host),
+            ("https://1..2", NotAnOrigin::Host),
+            ("https://256.0.0.1", NotAnOrigin::Host),
+            ("https://1.2.3.256", NotAnOrigin::Host),
+            ("https://1.2.3.4.5", NotAnOrigin::Host),
+            ("https://4294967296", NotAnOrigin::Host),
+            ("https://app.example:99999", NotAnOrigin::Port),
+            ("https://app.example:https", NotAnOrigin::Port),
+            ("https://app.example:+443", NotAnOrigin::Port),
+        ] {
+            let refused = ListedOrigins::parse(&entries(&["https://listed.example", entry]))
+                .map(|_| ())
+                .expect_err(entry);
+            assert_eq!(refused, (1, kind), "{entry:?}");
+        }
+    }
+
+    /// An entry is the origin it parses to: written without case or with its
+    /// default port, it is listed once, and kept as a browser serializes it.
+    #[test]
+    fn an_entry_is_kept_as_the_origin_it_parses_to() {
+        let ListedOrigins::Origins(listed) = ListedOrigins::parse(&entries(&[
+            "HTTPS://App.Example:443",
+            "https://app.example",
+            "http://[0:0:0:0:0:0:0:1]:8080",
+            "chrome-extension://abcdef",
+        ]))
+        .expect("the list parses") else {
+            panic!("no wildcard is listed");
+        };
+        let serialized: Vec<&str> = listed.iter().map(|origin| &*origin.serialized).collect();
+        assert_eq!(
+            serialized,
+            [
+                "https://app.example",
+                "http://[::1]:8080",
+                "chrome-extension://abcdef"
+            ]
+        );
+        for origin in listed.iter() {
+            assert_eq!(
+                Origin::parse(&origin.serialized),
+                Some(Origin::Tuple(origin.tuple.clone())),
+                "{}",
+                origin.serialized,
+            );
+        }
+    }
+
+    /// A host that ends in a number is the IPv4 address the URL standard
+    /// reads it as, which is what a browser on it sends; a host whose last
+    /// label is no number stays a domain name.
+    #[test]
+    fn a_host_that_ends_in_a_number_is_the_ipv4_address_it_reads_as() {
+        for (entry, origin) in [
+            ("https://127.1", "https://127.0.0.1"),
+            ("https://0x7f.0.0.1", "https://127.0.0.1"),
+            ("https://0X7F.1", "https://127.0.0.1"),
+            ("https://0177.0.0.1", "https://127.0.0.1"),
+            ("https://2130706433", "https://127.0.0.1"),
+            ("https://127.0.0.1.", "https://127.0.0.1"),
+            ("https://1.2.3.04", "https://1.2.3.4"),
+            ("https://0x", "https://0.0.0.0"),
+            ("https://4294967295", "https://255.255.255.255"),
+            ("http://127.1:8080", "http://127.0.0.1:8080"),
+            ("https://1.2.3.app", "https://1.2.3.app"),
+            ("https://app.1x", "https://app.1x"),
+        ] {
+            assert_eq!(
+                Tuple::parse(entry).map(|tuple| tuple.serialization()),
+                Ok(origin.to_owned()),
+                "{entry}"
+            );
+        }
+        let listed = ListedOrigins::parse(&entries(&["https://127.1"])).expect("parses");
+        assert!(listed.admits(&HeaderValue::from_static("https://127.0.0.1")));
+        assert!(
+            policy(&["https://127.1"], &[])
+                .allows(&from_browser("https://127.0.0.1", "api.example"))
+                .is_ok()
+        );
+    }
+
+    /// The CORS layer's reader: the bytes a browser sends, else the origin a
+    /// client's spelling parses to; never `null` but under `*`.
+    #[test]
+    fn a_listed_origin_admits_what_parses_to_it() {
+        let listed = ListedOrigins::parse(&entries(&["https://app.example"])).expect("parses");
+        let admits = |sent: &'static str| listed.admits(&HeaderValue::from_static(sent));
+        assert!(admits("https://app.example"));
+        assert!(admits("HTTPS://APP.example:443"));
+        for refused in [
+            "https://app.example:8443",
+            "https://app.example/",
+            "https://app.example:https",
+            "null",
+            "app.example",
+        ] {
+            assert!(!admits(refused), "{refused}");
+        }
+        let every = ListedOrigins::parse(&entries(&["*"])).expect("parses");
+        assert!(every.admits(&HeaderValue::from_static("null")));
     }
 
     /// A request sent to `uri`, from `peer`, carrying `headers`.
@@ -513,7 +795,7 @@ mod tests {
             "{proxied}"
         );
         let null = hint(false, OriginRefusedReason::OriginNull).expect("a hint");
-        assert!(null.contains(&origins) && null.contains("`null`"), "{null}");
+        assert!(null.contains(&origins) && null.contains("`*`"), "{null}");
         for reason in [
             OriginRefusedReason::OriginNotVisibleAscii,
             OriginRefusedReason::OriginNotSerialized,
@@ -533,6 +815,8 @@ mod tests {
             "http://api.example/path",
             "http://[::1",
             "http://api.example http://other.example",
+            "http://api.example:http",
+            "http://api.example:99999",
         ] {
             let refused = policy
                 .allows(&from_browser(origin, "api.example"))
@@ -609,8 +893,9 @@ mod tests {
         assert_eq!(refused.scheme(), Some(OriginScheme::Https));
     }
 
+    /// No list may name `null`, so an opaque origin is admitted by `*` alone.
     #[test]
-    fn an_opaque_origin_is_admitted_only_where_null_is_listed() {
+    fn an_opaque_origin_is_admitted_by_the_wildcard_alone() {
         let null = from_browser("null", "api.example");
         assert_eq!(
             policy(&[], &[])
@@ -619,10 +904,21 @@ mod tests {
             Err(OriginRefusedReason::OriginNull),
         );
         assert!(policy(&["https://app.example"], &[]).allows(&null).is_err());
-        assert!(policy(&["null"], &[]).allows(&null).is_ok());
         assert!(
             policy(&["*"], &[]).allows(&null).is_ok(),
             "`*` lists every origin"
+        );
+    }
+
+    /// An internationalized host is listed as browsers send it, in IDNA's
+    /// ASCII form.
+    #[test]
+    fn an_internationalized_host_listed_in_its_ascii_form_admits_what_browsers_send() {
+        let listed = policy(&["https://xn--9ca.example"], &[]);
+        assert!(
+            listed
+                .allows(&from_browser("https://xn--9ca.example", "api.example"))
+                .is_ok()
         );
     }
 
@@ -630,7 +926,7 @@ mod tests {
     fn a_listed_origin_is_admitted_and_a_wildcard_admits_every_origin() {
         let app = from_browser("https://app.example", "api.example");
         let evil = from_browser("https://evil.example", "api.example");
-        let listed = policy(&["https://app.example:443", "not an origin"], &[]);
+        let listed = policy(&["https://app.example:443"], &[]);
         assert!(listed.allows(&app).is_ok());
         assert!(listed.allows(&evil).is_err());
         let every = policy(&["https://app.example", "*"], &[]);

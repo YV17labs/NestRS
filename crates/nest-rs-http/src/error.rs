@@ -1,7 +1,7 @@
 //! Every error type of the HTTP edge: the vocabulary's ([`BodyError`],
 //! [`HttpError`], [`ResponseError`]), the route grammar's
-//! ([`RouteTemplateError`]), the browser-origin check's ([`OriginRefused`]),
-//! the WebSocket handshake's and the header binding's.
+//! ([`RouteTemplateError`]), the browser-origin check's ([`OriginRefused`])
+//! and its origin list's, the WebSocket handshake's and the header binding's.
 
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -971,10 +971,11 @@ impl ResponseError for PathError {
 pub(crate) const ORIGIN_REFUSED: &str =
     "the request's origin is neither this server's own nor one its CORS policy lists";
 
-/// A browser `Origin` the [`OriginPolicy`](crate::__private::OriginPolicy)
-/// refused: it answers `403` with a problem document that names no origin, and
-/// keeps no value the request carried — the `Origin` sent and the `Host` it was
-/// compared to are both the client's — only why, by kind, for the edge's `warn`
+/// A browser `Origin` the transport's browser-origin check refused (a
+/// WebSocket or graphql-ws upgrade, `/mcp`): it answers `403` with a problem
+/// document that names no origin, and keeps no value the request carried —
+/// the `Origin` sent and the `Host` it was compared to are both the client's
+/// — only why, by kind, for the edge's `warn`
 /// ([`__origin_refused!`](crate::__origin_refused)).
 #[derive(Debug, thiserror::Error)]
 #[error("{}", ORIGIN_REFUSED)]
@@ -1024,7 +1025,8 @@ impl OriginRefused {
             | OriginRefusedReason::OriginNotSerialized
             | OriginRefusedReason::OriginRepeated => None,
             OriginRefusedReason::OriginNull => Some(format!(
-                "an opaque origin is admitted only where {origins} lists `null`"
+                "an opaque origin, a sandboxed or `data:` document's, is admitted only by `*` \
+                 in {origins}, which admits every origin"
             )),
             _ if self.trusted_proxy => Some(format!("list the page's origin in {origins}")),
             _ => Some(format!(
@@ -1105,6 +1107,65 @@ impl ResponseError for OriginRefused {
     fn as_response(&self) -> Response {
         problem_response(&Problem::new(403, code::FORBIDDEN).with_detail(ORIGIN_REFUSED))
     }
+}
+
+/// What an origin is, as a refusal names the grammar it expects.
+pub(crate) const ORIGIN_GRAMMAR: &str = "an origin, `scheme://host[:port]`";
+
+/// Why an entry of an origin list is no origin a browser sends, by kind: the
+/// entry is a deployment's data and is never said. Each renders as what the
+/// entry is, after the words naming its place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum NotAnOrigin {
+    /// `null`, the opaque origin.
+    #[error(
+        "is `null`, the opaque origin every sandboxed iframe, `data:` document and redirect \
+         across origins sends, whatever site it runs on, so listing it admits every site that \
+         asks; drop it, or write `*`, which admits every origin openly and which `credentials` \
+         refuses"
+    )]
+    Null,
+    /// A character outside ASCII: an internationalized host not in IDNA's
+    /// ASCII form.
+    #[error(
+        "is not {ORIGIN_GRAMMAR}: it holds a character outside ASCII; write an \
+         internationalized host in IDNA's ASCII form (`xn--…`), as browsers send it"
+    )]
+    NonAscii,
+    /// A space or a control character.
+    #[error("is not {ORIGIN_GRAMMAR}: it holds a space or a control character")]
+    Character,
+    /// No `scheme://`.
+    #[error("is not {ORIGIN_GRAMMAR}: it names no scheme")]
+    NoScheme,
+    /// A scheme that is none (RFC 3986 §3.1).
+    #[error("is not {ORIGIN_GRAMMAR}: its scheme is none (RFC 3986 §3.1)")]
+    Scheme,
+    /// Userinfo before the host.
+    #[error("is not {ORIGIN_GRAMMAR}: it carries userinfo, which no origin holds")]
+    Userinfo,
+    /// A path, a trailing `/` included.
+    #[error(
+        "is not {ORIGIN_GRAMMAR}: it carries a path, a trailing `/` included, where an origin \
+         ends at its host or port"
+    )]
+    Path,
+    /// A query.
+    #[error("is not {ORIGIN_GRAMMAR}: it carries a query")]
+    Query,
+    /// A fragment.
+    #[error("is not {ORIGIN_GRAMMAR}: it carries a fragment")]
+    Fragment,
+    /// An empty host.
+    #[error("is not {ORIGIN_GRAMMAR}: it names no host")]
+    NoHost,
+    /// A host that is no domain name nor IP address, one that ends in a
+    /// number (`app.123`) but is no IPv4 address included.
+    #[error("is not {ORIGIN_GRAMMAR}: its host is neither a domain name nor an IP address")]
+    Host,
+    /// A port that is no number from 0 to 65535.
+    #[error("is not {ORIGIN_GRAMMAR}: its port is no number from 0 to 65535")]
+    Port,
 }
 
 /// Why a WebSocket opening handshake was refused (RFC 6455 §4.2.1): each

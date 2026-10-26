@@ -353,7 +353,7 @@ fn configured() -> Option<std::sync::Arc<HttpConfig>> {
 }
 
 /// The proxies `config` trusts; none without one.
-fn trusted_proxies(config: Option<&HttpConfig>) -> &[IpAddr] {
+pub(crate) fn trusted_proxies(config: Option<&HttpConfig>) -> &[IpAddr] {
     config.map_or(&[][..], |config| &config.trusted_proxies)
 }
 

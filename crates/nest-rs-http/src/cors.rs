@@ -2,6 +2,7 @@
 //! pinned as `HttpConfig.cors`, checked at boot into a [`CorsPolicy`], and
 //! answered around every route by [`Cors`] (WHATWG Fetch, *CORS protocol*).
 
+use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -12,10 +13,11 @@ use http::header::{
     ACCESS_CONTROL_REQUEST_HEADERS, ACCESS_CONTROL_REQUEST_METHOD, ORIGIN,
 };
 use http::{HeaderName, HeaderValue, Method, StatusCode};
-use nest_rs_config::ConfigService;
+use nest_rs_config::{ConfigService, Namespaced};
 
 use crate::endpoint::Endpoint;
-use crate::error::HttpError;
+use crate::error::{HttpError, ORIGIN_GRAMMAR};
+use crate::origin::ListedOrigins;
 use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
@@ -27,11 +29,22 @@ use crate::vary::vary_on;
 /// The same `origins` decide which browser origins open a WebSocket gateway's
 /// socket or a graphql-ws socket and call `/mcp`, which a browser never asks
 /// CORS about; the CORS layer answers first and admits only what they list,
-/// the server's own origin included.
+/// the server's own origin included. The list is read once, at boot, for both.
+///
+/// Every entry of every list is read at boot, and one the list cannot take
+/// fails it, named by its list and its place, never by its value.
 #[derive(Clone, Debug, Default)]
 pub struct HttpCors {
     /// Allowed origins; empty ⇒ no CORS layer installed. Also the browser
     /// origins the socket upgrades and `/mcp` admit.
+    ///
+    /// Each entry is an origin as a browser sends it, `scheme://host[:port]`:
+    /// no path (a trailing `/` included), query, fragment or userinfo, and an
+    /// internationalized host in IDNA's ASCII form (`xn--…`). It is compared
+    /// as an origin (RFC 6454 §5): scheme and host without case, the scheme's
+    /// default port implied, so `https://App.example:443` lists what
+    /// `https://app.example` does. `*` admits every origin; `null`, which any
+    /// sandboxed or `data:` document sends, fails the boot.
     pub origins: Vec<String>,
     /// Allowed request methods (`Access-Control-Allow-Methods`); empty ⇒ the
     /// methods the routes serve and the CORS-safelisted `GET`, `HEAD`,
@@ -52,7 +65,7 @@ pub struct HttpCors {
 }
 
 /// The wildcard, as the four lists spell it.
-const WILDCARD: &str = "*";
+pub(crate) const WILDCARD: &str = "*";
 
 /// The response headers the framework sends on a route's behalf. None is
 /// CORS-safelisted, so a cross-origin client reads them only when exposed.
@@ -78,11 +91,11 @@ const SENDABLE_METHODS: [Method; 7] = [
     Method::PATCH,
 ];
 
-/// Whether `method` is one a page cannot send, matched without case.
-fn is_forbidden(method: &str) -> bool {
+/// The forbidden method `method` names, matched without case.
+fn forbidden(method: &str) -> Option<&'static str> {
     FORBIDDEN_METHODS
-        .iter()
-        .any(|forbidden| forbidden.eq_ignore_ascii_case(method))
+        .into_iter()
+        .find(|forbidden| forbidden.eq_ignore_ascii_case(method))
 }
 
 /// What a policy naming no method admits: the CORS-safelisted methods, each
@@ -97,11 +110,74 @@ fn admitted_by_default<'a>(
         false => SAFELISTED_METHODS.to_vec(),
     };
     for method in routed {
-        if !is_forbidden(method.as_str()) && !admitted.contains(method) {
+        if forbidden(method.as_str()).is_none() && !admitted.contains(method) {
             admitted.push(method.clone());
         }
     }
     admitted
+}
+
+/// The four lists a CORS policy holds, each with the names a deployment sets
+/// it by and the header it renders into.
+#[derive(Clone, Copy, Debug)]
+enum CorsList {
+    Origins,
+    Methods,
+    Headers,
+    ExposedHeaders,
+}
+
+impl CorsList {
+    /// The [`HttpCors`] field.
+    fn field(self) -> &'static str {
+        match self {
+            Self::Origins => "origins",
+            Self::Methods => "methods",
+            Self::Headers => "headers",
+            Self::ExposedHeaders => "exposed_headers",
+        }
+    }
+
+    /// The key `<PREFIX>_HTTP__<KEY>` reads it from.
+    fn key(self) -> &'static str {
+        match self {
+            Self::Origins => "CORS_ORIGINS",
+            Self::Methods => "CORS_METHODS",
+            Self::Headers => "CORS_HEADERS",
+            Self::ExposedHeaders => "CORS_EXPOSED",
+        }
+    }
+
+    /// The response header the list renders into.
+    fn header(self) -> &'static str {
+        match self {
+            Self::Origins => "Access-Control-Allow-Origin",
+            Self::Methods => "Access-Control-Allow-Methods",
+            Self::Headers => "Access-Control-Allow-Headers",
+            Self::ExposedHeaders => "Access-Control-Expose-Headers",
+        }
+    }
+
+    /// What each of its entries is.
+    fn grammar(self) -> &'static str {
+        match self {
+            Self::Origins => ORIGIN_GRAMMAR,
+            Self::Methods => "a method, a token (RFC 9110 §9.1)",
+            Self::Headers | Self::ExposedHeaders => "a header name, a token (RFC 9110 §5.1)",
+        }
+    }
+
+    /// The boot's refusal of entry `index` (from zero), which `is` says by
+    /// kind: by its place, never its value, since a deployment's config is
+    /// its data.
+    fn refuse(self, index: usize, is: impl fmt::Display) -> anyhow::Error {
+        anyhow::anyhow!(
+            "invalid CORS config: entry {} of `{}` ({}) {is}",
+            index + 1,
+            self.field(),
+            nest_rs_config::var_name(<crate::HttpConfig as Namespaced>::NAMESPACE, self.key()),
+        )
+    }
 }
 
 /// Which check of the policy a cross-origin request failed.
@@ -156,8 +232,7 @@ impl CorsRefusal {
 /// A CORS policy checked at boot: it answers nothing until it knows the route
 /// table it serves ([`CorsPolicy::serving`]).
 pub(crate) struct CorsPolicy {
-    /// The origins admitted one by one; none admits every origin.
-    origins: Vec<HeaderValue>,
+    origins: ListedOrigins,
     methods: Admitted,
     /// The request headers admitted; none admits every header a preflight
     /// asks for.
@@ -180,6 +255,12 @@ enum Admitted {
 }
 
 impl CorsPolicy {
+    /// The origins the policy lists, which the browser-origin check of every
+    /// upgrade and of `/mcp` reads too.
+    pub(crate) fn origins(&self) -> &ListedOrigins {
+        &self.origins
+    }
+
     /// The policy as it serves the route table: one listing no method admits
     /// the CORS-safelisted ones and those `routed` names, or every method a
     /// page sends when an address answers `every_method` itself.
@@ -215,7 +296,7 @@ impl CorsPolicy {
 /// A CORS policy serving one route table, every header its answers carry
 /// built once.
 pub(crate) struct ServedCorsPolicy {
-    origins: Vec<HeaderValue>,
+    origins: ListedOrigins,
     /// The methods a preflight may ask for; `None` admits every one.
     methods: Option<Vec<Method>>,
     allow_methods: HeaderValue,
@@ -301,10 +382,12 @@ pub(crate) struct Cors<E> {
 }
 
 impl<E: Endpoint> Cors<E> {
-    /// The answer to a request carrying `origin`, before it varies.
+    /// The answer to a request carrying `origin`, before it varies. An
+    /// admitted answer echoes `origin` as sent, the bytes a browser compares
+    /// `Access-Control-Allow-Origin` with.
     async fn answer(&self, req: Request, origin: HeaderValue) -> Response {
         let policy = &self.policy;
-        if !policy.origins.is_empty() && !policy.origins.contains(&origin) {
+        if !policy.origins.admits(&origin) {
             return CorsRefusal::Origin.answer();
         }
         if req.method() == Method::OPTIONS {
@@ -350,15 +433,16 @@ fn joined<'a>(values: impl Iterator<Item = &'a str>) -> HeaderValue {
     HeaderValue::try_from(joined).unwrap_or(HeaderValue::from_static(""))
 }
 
-/// Each of `values` parsed by `parse`, kept once, in the order first listed;
-/// the first that does not parse is the boot's refusal.
-fn parsed_once<T: PartialEq>(
-    values: impl IntoIterator<Item = impl AsRef<str>>,
-    parse: impl Fn(&str) -> Result<T>,
-) -> Result<Vec<T>> {
+/// Each entry of `list`, `values`, parsed as a `T`, kept once, in the order
+/// first listed; the first that does not parse is the boot's refusal, by its
+/// place. `*` parses as the token it is, so an entry beside it is read too.
+fn parsed_once<T: FromStr + PartialEq>(list: CorsList, values: &[String]) -> Result<Vec<T>> {
     let mut parsed = Vec::new();
-    for value in values {
-        let value = parse(value.as_ref())?;
+    for (index, value) in values.iter().enumerate() {
+        let value = value
+            .parse::<T>()
+            .ok()
+            .ok_or_else(|| list.refuse(index, format_args!("is not {}", list.grammar())))?;
         if !parsed.contains(&value) {
             parsed.push(value);
         }
@@ -371,99 +455,95 @@ pub(crate) fn holds_wildcard(values: &[String]) -> bool {
     values.iter().any(|value| value == WILDCARD)
 }
 
-/// The values a list admits one by one: none when it holds the wildcard, which
-/// admits them all.
-fn listed(values: &[String]) -> &[String] {
-    if holds_wildcard(values) { &[] } else { values }
-}
-
-/// A list a `*` may appear in, paired with the response header it renders into.
-type WildcardList<'a> = (&'a str, &'a str, &'a [String]);
-
 impl HttpCors {
-    /// Every list where `*` is a literal once the request's credentials mode is
-    /// `include` — WHATWG Fetch, *CORS protocol*. `*` is a valid `tchar`, so
-    /// nothing else refuses it: the header is emitted and every browser drops it.
-    fn wildcard_lists(&self) -> [WildcardList<'_>; 4] {
-        [
-            ("origins", "Access-Control-Allow-Origin", &self.origins),
-            ("headers", "Access-Control-Allow-Headers", &self.headers),
-            ("methods", "Access-Control-Allow-Methods", &self.methods),
-            (
-                "exposed_headers",
-                "Access-Control-Expose-Headers",
-                &self.exposed_headers,
-            ),
-        ]
+    /// The entries of `list`.
+    fn list(&self, list: CorsList) -> &[String] {
+        match list {
+            CorsList::Origins => &self.origins,
+            CorsList::Methods => &self.methods,
+            CorsList::Headers => &self.headers,
+            CorsList::ExposedHeaders => &self.exposed_headers,
+        }
     }
 
     /// Refuse a method no page can send: a policy listing it would claim to
     /// admit what no browser asks for.
     fn reject_forbidden_methods(&self) -> Result<()> {
-        if let Some(method) = self.methods.iter().find(|method| is_forbidden(method)) {
-            anyhow::bail!(
-                "invalid CORS config: `{}` in `methods` is a forbidden method — WHATWG Fetch \
-                 never lets a page send it, so no preflight asks for it; drop it from the list",
-                method.to_ascii_uppercase(),
-            );
+        let named = self
+            .methods
+            .iter()
+            .enumerate()
+            .find_map(|(index, method)| Some((index, forbidden(method)?)));
+        if let Some((index, method)) = named {
+            return Err(CorsList::Methods.refuse(
+                index,
+                format_args!(
+                    "is `{method}`, a forbidden method — WHATWG Fetch never lets a page send \
+                     it, so no preflight asks for it; drop it from the list"
+                ),
+            ));
         }
         Ok(())
     }
 
-    /// Refuse a `*` that credentials turn into a literal no browser honours.
+    /// Refuse a `*` that credentials turn into a literal no browser honours:
+    /// in every list, a `*` is a literal once the request's credentials mode is
+    /// `include` — WHATWG Fetch, *CORS protocol*. `*` is a valid `tchar`, so
+    /// nothing else refuses it: the header is emitted and every browser drops it.
     fn reject_wildcards_with_credentials(&self) -> Result<()> {
         if !self.credentials {
             return Ok(());
         }
-        for (field, header, values) in self.wildcard_lists() {
-            if holds_wildcard(values) {
+        for list in [
+            CorsList::Origins,
+            CorsList::Headers,
+            CorsList::Methods,
+            CorsList::ExposedHeaders,
+        ] {
+            if holds_wildcard(self.list(list)) {
                 anyhow::bail!(
-                    "invalid CORS config: `{WILDCARD}` in `{field}` with `credentials` — for a \
+                    "invalid CORS config: `{WILDCARD}` in `{}` with `credentials` — for a \
                      request whose credentials mode is `include`, WHATWG Fetch reads \
-                     `{WILDCARD}` in `{header}` as that literal value rather than as a \
+                     `{WILDCARD}` in `{}` as that literal value rather than as a \
                      wildcard, so the response is emitted and no browser honours it; list the \
                      values explicitly or turn `credentials` off",
+                    list.field(),
+                    list.header(),
                 );
             }
         }
         Ok(())
     }
 
-    /// The policy these settings describe, or the boot's refusal naming the
-    /// value it cannot take. A `*` in `origins`, `methods` or `headers` admits
-    /// every value; no method at all admits what the routes serve
-    /// ([`CorsPolicy::serving`]).
-    pub(crate) fn policy(&self) -> Result<CorsPolicy> {
+    /// The policy these settings describe — `None` when they list no origin,
+    /// which installs no CORS layer — or the boot's refusal naming the entry
+    /// it cannot take by its list and its place. A `*` in `origins`, `methods`
+    /// or `headers` admits every value; no method at all admits what the
+    /// routes serve ([`CorsPolicy::serving`]).
+    pub(crate) fn policy(&self) -> Result<Option<CorsPolicy>> {
         self.reject_wildcards_with_credentials()?;
         self.reject_forbidden_methods()?;
-        let origins = parsed_once(listed(&self.origins), |origin| {
-            HeaderValue::from_str(origin)
-                .with_context(|| format!("invalid origin in CORS allow-list: {origin:?}"))
-        })?;
+        let origins = ListedOrigins::parse(&self.origins)
+            .map_err(|(index, defect)| CorsList::Origins.refuse(index, defect))?;
+        let methods = parsed_once::<Method>(CorsList::Methods, &self.methods)?;
         let methods = if holds_wildcard(&self.methods) {
             Admitted::Every
-        } else if self.methods.is_empty() {
+        } else if methods.is_empty() {
             Admitted::Routed
         } else {
-            Admitted::Listed(parsed_once(&self.methods, |m| {
-                Method::from_bytes(m.as_bytes())
-                    .with_context(|| format!("invalid HTTP method in CORS config: `{m}`"))
-            })?)
+            Admitted::Listed(methods)
         };
-        let headers = parsed_once(listed(&self.headers), |h| {
-            HeaderName::from_str(h)
-                .with_context(|| format!("invalid header name in CORS allow-list: `{h}`"))
-        })?;
-        let exposed = parsed_once(
-            self.exposed_headers
-                .iter()
-                .map(String::as_str)
-                .chain(FRAMEWORK_SENT),
-            |h| {
-                HeaderName::from_str(h)
-                    .with_context(|| format!("invalid header name in CORS expose-list: `{h}`"))
-            },
-        )?;
+        let mut headers = parsed_once::<HeaderName>(CorsList::Headers, &self.headers)?;
+        if holds_wildcard(&self.headers) {
+            headers.clear();
+        }
+        let mut exposed =
+            parsed_once::<HeaderName>(CorsList::ExposedHeaders, &self.exposed_headers)?;
+        for sent in FRAMEWORK_SENT.map(HeaderName::from_static) {
+            if !exposed.contains(&sent) {
+                exposed.push(sent);
+            }
+        }
         let max_age = self
             .max_age
             .map(|age| {
@@ -472,14 +552,17 @@ impl HttpCors {
             })
             .transpose()?
             .map(HeaderValue::from);
-        Ok(CorsPolicy {
+        if self.origins.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(CorsPolicy {
             origins,
             methods,
             headers,
             exposed: joined(exposed.iter().map(HeaderName::as_str)),
             credentials: self.credentials,
             max_age,
-        })
+        }))
     }
 
     /// Overlay the `<PREFIX>_HTTP__CORS_*` keys onto `base` (the policy pinned in
@@ -491,15 +574,15 @@ impl HttpCors {
         base: Option<Self>,
     ) -> nest_rs_config::Result<Option<Self>> {
         let base = base.unwrap_or_default();
-        let origins = env.list("CORS_ORIGINS", base.origins)?;
+        let origins = env.list(CorsList::Origins.key(), base.origins)?;
         if origins.is_empty() {
             return Ok(None);
         }
         Ok(Some(Self {
             origins,
-            methods: env.list("CORS_METHODS", base.methods)?,
-            headers: env.list("CORS_HEADERS", base.headers)?,
-            exposed_headers: env.list("CORS_EXPOSED", base.exposed_headers)?,
+            methods: env.list(CorsList::Methods.key(), base.methods)?,
+            headers: env.list(CorsList::Headers.key(), base.headers)?,
+            exposed_headers: env.list(CorsList::ExposedHeaders.key(), base.exposed_headers)?,
             credentials: env.flag("CORS_CREDENTIALS", base.credentials)?,
             max_age: env
                 .parse::<u64>("CORS_MAX_AGE")?
@@ -588,55 +671,28 @@ mod tests {
         }
     }
 
-    fn err_string(result: Result<CorsPolicy>) -> String {
+    fn err_string(result: Result<Option<CorsPolicy>>) -> String {
         match result {
             Ok(_) => panic!("expected an error"),
             Err(err) => format!("{err:#}"),
         }
     }
 
+    /// A list naming no origin is no policy, however the rest reads: no
+    /// layer is installed, so nothing is admitted across origins.
     #[test]
-    fn a_cors_policy_accepts_an_empty_config_and_a_basic_origin_list() {
-        cfg(&[]).policy().expect("empty config builds");
-        cfg(&["https://app.example.com"])
-            .policy()
-            .expect("valid config");
-    }
-
-    #[test]
-    fn a_cors_policy_rejects_an_invalid_method() {
-        // Spaces aren't token characters in RFC 9110 §9 — `Method::from_bytes`
-        // refuses them.
-        let cfg = HttpCors {
-            methods: vec!["BAD METHOD".into()],
-            ..cfg(&["*"])
+    fn a_cors_policy_listing_no_origin_is_none_and_a_basic_origin_list_builds() {
+        let none = HttpCors {
+            credentials: true,
+            ..cfg(&[])
         };
-        let err = err_string(cfg.policy());
-        assert!(err.contains("invalid HTTP method"), "got: {err}");
-    }
-
-    #[test]
-    fn a_cors_policy_rejects_an_invalid_header_name_in_either_list() {
-        for (cfg, list) in [
-            (
-                HttpCors {
-                    headers: vec!["bad header!".into()],
-                    ..cfg(&["*"])
-                },
-                "allow-list",
-            ),
-            (
-                HttpCors {
-                    exposed_headers: vec!["bad header!".into()],
-                    ..cfg(&["*"])
-                },
-                "expose-list",
-            ),
-        ] {
-            let err = err_string(cfg.policy());
-            assert!(err.contains("invalid header name"), "got: {err}");
-            assert!(err.contains(list), "must name the list: {err}");
-        }
+        assert!(none.policy().expect("it reads").is_none());
+        assert!(
+            cfg(&["https://app.example.com"])
+                .policy()
+                .expect("valid config")
+                .is_some()
+        );
     }
 
     #[test]
@@ -712,6 +768,7 @@ mod tests {
     fn served(cfg: HttpCors) -> Cors<impl Endpoint> {
         cfg.policy()
             .expect("the policy builds")
+            .expect("the test lists an origin")
             .serving(&[Method::GET], false)
             .around(crate::endpoint_fn(|_req: Request| async {
                 Ok(Response::builder().body("served"))
@@ -803,6 +860,176 @@ mod tests {
             .expect("answered");
         assert_eq!(read.headers()[ACCESS_CONTROL_ALLOW_CREDENTIALS], "true");
         assert_eq!(read.headers()[ACCESS_CONTROL_ALLOW_ORIGIN], LISTED);
+    }
+
+    /// What no browser sends as an origin: each fails the build, named by its
+    /// list and its place, and no part of it reaches the sentence.
+    #[test]
+    fn an_entry_that_is_no_origin_fails_the_build_by_place_never_by_value() {
+        let var = nest_rs_config::var_name("http", "CORS_ORIGINS");
+        for entry in [
+            "https://app.example/",
+            "https://app.example/path",
+            "https://app.example?q=marker",
+            "https://app.example#marker",
+            "https://user@app.example",
+            "https://é.example",
+            "https://app\u{7f}.example",
+            "https://app .example",
+            "app.example",
+            "https://",
+            "https://app.example:99999",
+            "https://app.example:https",
+            "https://[::1",
+            "null",
+            "NULL",
+        ] {
+            let err = err_string(cfg(&["https://listed.example", entry]).policy());
+            assert!(err.contains("entry 2 of `origins`"), "{entry:?}: {err}");
+            assert!(err.contains(&var), "{entry:?} names its variable: {err}");
+            for quoted in [
+                "app.example",
+                "listed.example",
+                "app\u{7f}",
+                "é",
+                "user@",
+                "/path",
+                "marker",
+                "99999",
+                "::1",
+            ] {
+                assert!(!err.contains(quoted), "{entry:?} quoted: {err}");
+            }
+        }
+    }
+
+    /// `null` is what a sandboxed or `data:` document sends from any site:
+    /// the refusal says so, and names the wildcard as the honest opening.
+    #[test]
+    fn null_fails_the_build_saying_why_and_what_to_write_instead() {
+        let err = err_string(cfg(&["null"]).policy());
+        assert!(err.contains("entry 1 of `origins`"), "{err}");
+        assert!(err.contains("sandboxed"), "says why: {err}");
+        assert!(err.contains("`*`"), "says what to write instead: {err}");
+    }
+
+    /// A method, a header name or an exposed header name that is no token is
+    /// refused by place, the same shape as an origin.
+    #[test]
+    fn an_entry_of_the_other_lists_is_refused_by_place_never_by_value() {
+        type Case = (&'static str, &'static str, fn(&mut HttpCors));
+        let cases: [Case; 3] = [
+            ("methods", "CORS_METHODS", |c| {
+                c.methods = vec!["GET".into(), "BAD marker".into()]
+            }),
+            ("headers", "CORS_HEADERS", |c| {
+                c.headers = vec!["x-tenant".into(), "bad marker!".into()]
+            }),
+            ("exposed_headers", "CORS_EXPOSED", |c| {
+                c.exposed_headers = vec!["x-cost".into(), "bad marker!".into()]
+            }),
+        ];
+        for (list, key, set) in cases {
+            let mut cfg = cfg(&["*"]);
+            set(&mut cfg);
+            let err = err_string(cfg.policy());
+            assert!(err.contains(&format!("entry 2 of `{list}`")), "{err}");
+            assert!(
+                err.contains(&nest_rs_config::var_name("http", key)),
+                "{err}"
+            );
+            assert!(!err.contains("marker"), "{list} quoted: {err}");
+        }
+    }
+
+    /// An entry beside the wildcard is held to its list's grammar all the
+    /// same: no entry is kept without being read.
+    #[test]
+    fn an_entry_beside_the_wildcard_is_read_too() {
+        let err = err_string(cfg(&["*", "https://app.example/"]).policy());
+        assert!(err.contains("entry 2 of `origins`"), "{err}");
+        let err = err_string(
+            HttpCors {
+                headers: vec!["*".into(), "bad header!".into()],
+                ..cfg(&["*"])
+            }
+            .policy(),
+        );
+        assert!(err.contains("entry 2 of `headers`"), "{err}");
+    }
+
+    /// A list read from the environment and one pinned in code are one list:
+    /// the same entry is refused in the same words.
+    #[test]
+    fn the_environment_and_a_pinned_list_are_refused_alike() {
+        let env =
+            ConfigService::with_vars("http", [("CORS_ORIGINS", "https://listed.example, null")]);
+        let read = HttpCors::from_env(&env, None)
+            .expect("the list reads")
+            .expect("origins are set");
+        let pinned = cfg(&["https://listed.example", "null"]);
+        let from_env = err_string(read.policy());
+        assert!(from_env.contains("entry 2 of `origins`"), "{from_env}");
+        assert_eq!(from_env, err_string(pinned.policy()));
+    }
+
+    /// A request from `origin`, answered under `cors`.
+    async fn from_origin(cors: &Cors<impl Endpoint>, origin: &'static str) -> Response {
+        cors.call(
+            Request::builder()
+                .header(ORIGIN, HeaderValue::from_static(origin))
+                .finish(),
+        )
+        .await
+        .expect("answered")
+    }
+
+    /// An entry is the origin it parses to (RFC 6454 §5): scheme and host
+    /// without case, the default port implied; the answer echoes the
+    /// request's own bytes, which the browser compares with its own.
+    #[tokio::test]
+    async fn an_origin_is_matched_as_the_tuple_it_parses_to_and_echoed_as_sent() {
+        let cors = served(cfg(&["https://APP.example:443"]));
+        for sent in ["https://app.example", "HTTPS://App.Example:443"] {
+            let read = from_origin(&cors, sent).await;
+            assert_eq!(read.status(), StatusCode::OK, "{sent}");
+            assert_eq!(read.headers()[ACCESS_CONTROL_ALLOW_ORIGIN], sent);
+        }
+        for sent in [
+            "https://app.example:8443",
+            "http://app.example",
+            "https://app.example/",
+            "null",
+        ] {
+            let refused = from_origin(&cors, sent).await;
+            assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{sent}");
+        }
+    }
+
+    /// An internationalized host is listed as browsers send it, in IDNA's
+    /// ASCII form.
+    #[tokio::test]
+    async fn an_internationalized_host_listed_in_its_ascii_form_admits_what_browsers_send() {
+        let cors = served(cfg(&["https://xn--9ca.example"]));
+        let read = from_origin(&cors, "https://xn--9ca.example").await;
+        assert_eq!(read.status(), StatusCode::OK);
+        assert_eq!(
+            read.headers()[ACCESS_CONTROL_ALLOW_ORIGIN],
+            "https://xn--9ca.example"
+        );
+    }
+
+    /// `null` admits nothing a list names; the wildcard, which says what it
+    /// opens, admits it as it admits every origin.
+    #[tokio::test]
+    async fn null_is_admitted_by_the_wildcard_alone() {
+        let listed = served(cfg(&[LISTED]));
+        assert_eq!(
+            from_origin(&listed, "null").await.status(),
+            StatusCode::FORBIDDEN
+        );
+        let every = served(cfg(&[WILDCARD]));
+        assert_eq!(from_origin(&every, "null").await.status(), StatusCode::OK);
     }
 
     /// A request with no `Origin` is no CORS request, and its answer still

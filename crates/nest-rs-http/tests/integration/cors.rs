@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use nest_rs_core::{ContainerBuilder, Discoverable, module};
+use nest_rs_http::__private::{OriginCheck, checks_origin};
 use nest_rs_http::{HttpConfig, HttpCors, HttpEndpointMeta, HttpTransport, controller, routes};
 use nest_rs_http::{Method, StatusCode, header};
 use nest_rs_testing::{LogCapture, TestResponse};
@@ -374,7 +375,7 @@ fn a_policy_listing_a_forbidden_method_fails_the_boot() {
 }
 
 /// An origin no header can carry is a configuration the boot refuses, naming
-/// the list, never a panic.
+/// the list and the place, never a panic.
 #[test]
 fn a_policy_listing_an_origin_no_header_carries_fails_the_boot() {
     let refused = HttpTransport::from_config(&policy(HttpCors {
@@ -384,7 +385,143 @@ fn a_policy_listing_an_origin_no_header_carries_fails_the_boot() {
     .err()
     .expect("the origin is refused");
     let said = format!("{refused:#}");
-    assert!(said.contains("CORS allow-list"), "{said}");
+    assert!(said.contains("entry 1 of `origins`"), "{said}");
+    assert!(!said.contains("app.example"), "{said}");
+}
+
+/// A self-mount whose every request is origin-checked, as `/mcp` is: the
+/// list's other reader.
+struct CheckedMount;
+
+impl Discoverable for CheckedMount {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<CheckedMount, HttpEndpointMeta>(checks_origin(
+            HttpEndpointMeta::new(
+                &crate::PUBLIC_MOUNT,
+                "/checked",
+                "checked",
+                |_container, routes| {
+                    routes.route_any("/checked", crate::answering("checked"));
+                },
+            )
+            .owned_by("CheckedMount"),
+            OriginCheck::Every,
+            |_refused| {},
+        ))
+    }
+}
+
+#[module(providers = [PagesController, CheckedMount])]
+struct BothReadersModule;
+
+/// The verdict a route and the origin-checked mount give `origin`, as their
+/// statuses.
+async fn verdicts(client: &crate::Client, origin: &str) -> (StatusCode, StatusCode) {
+    let route = client
+        .get("/cors")
+        .header(header::ORIGIN, origin)
+        .send()
+        .await;
+    let checked = client
+        .get("/checked")
+        .header(header::ORIGIN, origin)
+        .send()
+        .await;
+    (route.0.status(), checked.0.status())
+}
+
+/// One list, two readers: the CORS layer and the origin check give one
+/// verdict for each `Origin`, an entry read as the origin it parses to, an
+/// IPv4 shorthand (`127.1`) as the address a browser on it sends.
+#[tokio::test]
+async fn the_cors_layer_and_the_origin_check_read_one_list_alike() {
+    let client = crate::boot_on::<BothReadersModule>(policy(HttpCors {
+        origins: vec![
+            "https://APP.example:443".into(),
+            "http://local.example:8080".into(),
+            "https://127.1".into(),
+        ],
+        ..HttpCors::default()
+    }))
+    .await;
+
+    for (origin, expected) in [
+        ("https://app.example", StatusCode::OK),
+        ("HTTPS://App.Example:443", StatusCode::OK),
+        ("http://local.example:8080", StatusCode::OK),
+        ("http://local.example", StatusCode::FORBIDDEN),
+        ("https://127.0.0.1", StatusCode::OK),
+        ("https://127.0.0.2", StatusCode::FORBIDDEN),
+        ("https://app.example:8443", StatusCode::FORBIDDEN),
+        ("https://evil.example", StatusCode::FORBIDDEN),
+        ("https://app.example/", StatusCode::FORBIDDEN),
+        ("null", StatusCode::FORBIDDEN),
+    ] {
+        assert_eq!(
+            verdicts(&client, origin).await,
+            (expected, expected),
+            "{origin}"
+        );
+    }
+}
+
+/// `null` is what any sandboxed or `data:` document sends: refused by both
+/// readers under a list, admitted by both under the wildcard alone.
+#[tokio::test]
+async fn null_is_refused_by_both_readers_but_under_the_wildcard() {
+    let listed = crate::boot_on::<BothReadersModule>(policy(HttpCors {
+        origins: vec![LISTED.into()],
+        ..HttpCors::default()
+    }))
+    .await;
+    assert_eq!(
+        verdicts(&listed, "null").await,
+        (StatusCode::FORBIDDEN, StatusCode::FORBIDDEN)
+    );
+    let every = crate::boot_on::<BothReadersModule>(policy(HttpCors {
+        origins: vec!["*".into()],
+        ..HttpCors::default()
+    }))
+    .await;
+    assert_eq!(
+        verdicts(&every, "null").await,
+        (StatusCode::OK, StatusCode::OK)
+    );
+}
+
+/// A list naming no origin installs no CORS layer, whatever else the policy
+/// says: a cross-origin page reads nothing, credentials or not.
+#[tokio::test]
+async fn a_policy_listing_no_origin_installs_no_cors_layer() {
+    let client = crate::boot_on::<CorsModule>(policy(HttpCors {
+        credentials: true,
+        ..HttpCors::default()
+    }))
+    .await;
+
+    let read = client
+        .get("/cors")
+        .header(header::ORIGIN, "https://evil.example")
+        .send()
+        .await;
+
+    read.assert_status_is_ok();
+    read.assert_header_is_not_exist(header::ACCESS_CONTROL_ALLOW_ORIGIN);
+    read.assert_header_is_not_exist(header::ACCESS_CONTROL_ALLOW_CREDENTIALS);
+}
+
+/// `null` in the list fails the boot by place, saying why.
+#[test]
+fn a_policy_listing_null_fails_the_boot() {
+    let refused = HttpTransport::from_config(&policy(HttpCors {
+        origins: vec![LISTED.into(), "null".into()],
+        ..HttpCors::default()
+    }))
+    .err()
+    .expect("`null` is refused");
+    let said = format!("{refused:#}");
+    assert!(said.contains("entry 2 of `origins`"), "{said}");
+    assert!(!said.contains("app.example.com"), "{said}");
 }
 
 /// Each refusal files one `warn` on the transport's target, naming the check

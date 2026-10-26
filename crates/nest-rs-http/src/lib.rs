@@ -260,7 +260,7 @@ pub mod __private {
         attached, attached_pending, behind_guards, check_request, denial_to_http_error,
         denial_to_http_response,
     };
-    pub use crate::origin::{OriginPolicy, OriginScheme};
+    pub use crate::origin::OriginScheme;
     pub use crate::problem::framework_sentence;
     pub use crate::response::IntoResult;
     pub use crate::route_site::{

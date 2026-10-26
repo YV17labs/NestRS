@@ -226,24 +226,23 @@ pub async fn authenticate<S: Strategy>(
     let request = HttpView::of(cx)?.request_mut();
     let outcome = match within(AUTHENTICATE_TIMEOUT, strategy.authenticate(request)).await {
         Ok(outcome) => outcome,
-        Err(Unanswered::Panicked(payload)) => {
-            nest_rs_core::contained_panic!(
-                target: crate::TARGET,
-                payload.as_ref(),
-                "strategy panicked; denying (fail-closed)",
-                strategy = name,
-                transport = TRANSPORT,
-            );
-            return Ok(Verdict::Unavailable(Denial::unavailable(None, UNAVAILABLE)));
-        }
-        Err(_) => {
-            tracing::warn!(
-                target: crate::TARGET,
-                strategy = name,
-                transport = TRANSPORT,
-                waited_ms = u64::try_from(AUTHENTICATE_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
-                "strategy did not answer within the guard's timeout; denying (fail-closed)",
-            );
+        Err(unanswered) => {
+            match unanswered {
+                Unanswered::Panicked(payload) => nest_rs_core::contained_panic!(
+                    target: crate::TARGET,
+                    payload.as_ref(),
+                    "strategy panicked; denying (fail-closed)",
+                    strategy = name,
+                    transport = TRANSPORT,
+                ),
+                _ => tracing::warn!(
+                    target: crate::TARGET,
+                    strategy = name,
+                    transport = TRANSPORT,
+                    waited_ms = u64::try_from(AUTHENTICATE_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+                    "strategy did not answer within the guard's timeout; denying (fail-closed)",
+                ),
+            }
             return Ok(Verdict::Unavailable(Denial::unavailable(None, UNAVAILABLE)));
         }
     };

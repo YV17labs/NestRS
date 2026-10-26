@@ -100,13 +100,10 @@ impl TokenError {
     /// §5.2's answer to this refusal, `description` its `error_description`
     /// when the request is said to fail somewhere.
     fn answer(&self, description: Option<&str>) -> Response {
-        let body = match description {
-            Some(description) => serde_json::json!({
-                "error": self.to_string(),
-                "error_description": description,
-            }),
-            None => serde_json::json!({ "error": self.to_string() }),
-        };
+        let mut body = serde_json::json!({ "error": self.to_string() });
+        if let Some(description) = description {
+            body["error_description"] = description.into();
+        }
         let status = TokenError::status(self);
         let mut response = Response::builder()
             .status(status)

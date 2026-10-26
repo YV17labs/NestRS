@@ -32,12 +32,11 @@ impl OAuthController {
         client: Ctx<AuthenticatedClient>,
         request: AccessTokenRequest,
     ) -> Result<AccessTokenResponse> {
-        let AccessTokenRequest {
-            grant_type, scope, ..
-        } = request;
-        Ok(self
-            .svc
-            .grant_client_credentials(&grant_type, scope.as_deref(), &client)?)
+        Ok(self.svc.grant_client_credentials(
+            &request.grant_type,
+            request.scope.as_deref(),
+            &client,
+        )?)
     }
 
     #[get("/social/{provider}/authorize")]

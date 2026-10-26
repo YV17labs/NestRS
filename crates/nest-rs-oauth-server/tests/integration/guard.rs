@@ -297,10 +297,9 @@ async fn an_admitted_client_is_read_back_as_the_actor() {
     let response = post(&app, "/token", Some(&basic(CLIENT_ID, SECRET))).await;
 
     response.assert_status_is_ok();
-    assert_eq!(
-        response.0.into_body().into_string().await.expect("a body"),
-        format!("{CLIENT_ID} 7 {CLIENT_ID}")
-    );
+    response
+        .assert_text(format!("{CLIENT_ID} 7 {CLIENT_ID}"))
+        .await;
 }
 
 /// One refusal, one `warn`, the guard's: the method attempted and the

@@ -195,11 +195,7 @@ async fn assert_invalid_request(response: TestResponse, said: &str) {
     response.assert_header("content-type", "application/json");
     response.assert_header("cache-control", "no-store");
     response.assert_header("pragma", "no-cache");
-    assert!(
-        response.0.headers().get("www-authenticate").is_none(),
-        "{:?}",
-        response.0.headers()
-    );
+    response.assert_header_is_not_exist("www-authenticate");
     response
         .assert_json(serde_json::json!({
             "error": "invalid_request",
@@ -303,10 +299,7 @@ async fn an_empty_parameter_is_read_as_omitted() {
         .await;
 
     response.assert_status_is_ok();
-    assert_eq!(
-        response.0.into_body().into_string().await.expect("a body"),
-        "client_credentials None"
-    );
+    response.assert_text("client_credentials None").await;
 }
 
 /// What the transport refuses before any parameter is read keeps its answer.

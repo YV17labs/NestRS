@@ -55,14 +55,17 @@ impl<M> Page<M> {
     }
 }
 
-/// The refusal of an `after` no page issued: it names the parameter, never the
-/// value a client sent.
-const NOT_A_CURSOR: &str = "after is not a cursor this endpoint issued";
+/// Why a cursor no page issued is refused, never the value a client sent: each
+/// edge says it after where it read the cursor, as it places a value its type
+/// refused.
+const NOT_A_CURSOR: &str = "not a cursor this endpoint issued";
 
 /// Where a keyset page starts: the last key of the page before.
 ///
 /// Its text is the key's own — a UUID's hyphenated form — so a client passes
 /// back what a page gave it, and reads any spelling of that UUID back the same.
+/// Any other text is refused saying it is not a cursor this endpoint issued,
+/// never the text; the reader says where it read it.
 ///
 /// ```
 /// use nest_rs_seaorm::PageCursor;
@@ -99,7 +102,7 @@ impl FromStr for PageCursor {
 
     #[expect(
         clippy::map_err_ignore,
-        reason = "the refusal names the parameter and what it expected, never a parser's internals"
+        reason = "the refusal says what the text is not, never a parser's internals"
     )]
     fn from_str(text: &str) -> Result<Self, PipeError> {
         Uuid::parse_str(text)
@@ -125,17 +128,17 @@ pub(crate) fn parse_after(after: Option<&str>) -> Result<Option<PageCursor>, Pip
 
 /// An `after` argument read at the GraphQL edge, a `#[crud]` list's or a
 /// relation's: its refusal is the `INVALID_ARGUMENT` field error a malformed
-/// id answers there.
+/// id answers there, naming the argument as async-graphql names one its type
+/// refused.
 #[cfg(feature = "graphql")]
-#[expect(
-    clippy::map_err_ignore,
-    reason = "the refusal is one constant sentence, the one `FromStr` gives"
-)]
 pub fn graphql_page_cursor(after: Option<&str>) -> async_graphql::Result<Option<PageCursor>> {
-    parse_after(after).map_err(|_| {
+    parse_after(after).map_err(|refused| {
         nest_rs_graphql::problem_error(
             &nest_rs_core::Problem::new(400, nest_rs_core::problem::code::INVALID_ARGUMENT)
-                .with_detail(NOT_A_CURSOR),
+                .with_detail(format!(
+                    r#"Invalid value for argument "after", {}"#,
+                    refused.message()
+                )),
         )
     })
 }
@@ -246,9 +249,11 @@ impl PageParams {
     }
 
     /// The page's start: `None` when `after` is absent or empty, the refusal
-    /// when it is not a cursor a page issued.
+    /// when it is not a cursor a page issued, naming the query parameter.
     pub fn cursor(&self) -> Result<Option<PageCursor>, PipeError> {
-        parse_after(self.after.as_deref())
+        parse_after(self.after.as_deref()).map_err(|refused| {
+            PipeError::new(format!("query parameter `after`: {}", refused.message()))
+        })
     }
 }
 
@@ -619,11 +624,22 @@ mod tests {
             let refused = params(None, Some(sent))
                 .cursor()
                 .expect_err("a cursor no page issued is refused");
-            assert!(refused.message().contains("after"), "{refused}");
-            assert!(!refused.message().contains(sent), "{refused}");
+            assert_eq!(
+                refused.message(),
+                "query parameter `after`: not a cursor this endpoint issued",
+                "said where the query carried it, as a value its type refused is",
+            );
             assert!(
                 refused.details().is_none(),
                 "one value, not a form: {refused}"
+            );
+            let parsed = sent
+                .parse::<PageCursor>()
+                .expect_err("a cursor no page issued is refused");
+            assert_eq!(
+                parsed.message(),
+                "not a cursor this endpoint issued",
+                "the type says why; whoever read it says where",
             );
         }
     }

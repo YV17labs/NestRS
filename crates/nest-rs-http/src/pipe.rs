@@ -53,7 +53,9 @@ into_inner!(Json<T>, Path<T>, Query<T>, Form<T>, Header<T>);
 /// use nest_rs_http::{StatusCode, pipe_error};
 /// use nest_rs_pipes::PipeError;
 ///
-/// let refused = pipe_error(&PipeError::new("after is not a cursor this endpoint issued"));
+/// let refused = pipe_error(&PipeError::new(
+///     "query parameter `after`: not a cursor this endpoint issued",
+/// ));
 /// assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
 /// ```
 pub fn pipe_error(err: &PipeError) -> HttpError {

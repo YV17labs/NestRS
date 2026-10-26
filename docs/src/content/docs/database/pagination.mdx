@@ -67,10 +67,11 @@ $ curl -si '/posts?first=20&after=0193f1b2'
 HTTP/1.1 400 Bad Request
 content-type: application/problem+json
 
-{"type":"about:blank","title":"Bad Request","status":400,"detail":"after is not a cursor this endpoint issued","code":"INVALID_ARGUMENT"}
+{"type":"about:blank","title":"Bad Request","status":400,"detail":"query parameter `after`: not a cursor this endpoint issued","code":"INVALID_ARGUMENT"}
 ```
 
-The refusal names the parameter, never the value it was sent.
+The refusal names the parameter as a value its type refused is named, never
+the value it was sent.
 
 ## Keyset, the GraphQL shape
 
@@ -89,9 +90,10 @@ query {
 
 UUID-v7 keys are time-ordered, so the cursor is the previous page's last
 `id`, as its text — no opaque encoding. An `after` that is not one is a
-field error naming `after`, never the first page; its `extensions.code` is
-`INVALID_ARGUMENT`, as for a malformed `id`. An empty page means you reached
-the end.
+field error naming the argument as GraphQL names one its type refused —
+`Invalid value for argument "after", not a cursor this endpoint issued` —
+never the first page; its `extensions.code` is `INVALID_ARGUMENT`, as for a
+malformed `id`. An empty page means you reached the end.
 
 ## What `Page<M>` carries
 
@@ -115,9 +117,10 @@ does when it hands on a page whose rows it mapped.
 
 `PageCursor` is that key as a type. It writes the key's own text
 (`Display`), reads any spelling of a UUID back (`FromStr`), and refuses
-anything else with a `PipeError` that names `after` — the refusal every
-edge answers as its native client error. `PageParams::cursor()` reads the
-query's `after` that way, an empty one as the first page.
+anything else with a `PipeError` saying it is `not a cursor this endpoint
+issued` — the refusal every edge answers as its native client error, after
+where it read the cursor. `PageParams::cursor()` reads the query's `after`
+that way, an empty one as the first page, and names the query parameter.
 
 `CrudService::page(first, after)` returns a `Page<E::Model>` directly;
 callers paginating a query of their own reach for `Repo::<E>::page(first,

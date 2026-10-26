@@ -198,16 +198,20 @@ async fn graphql(app: &TestApp, query: &str) -> Value {
         .deserialize()
 }
 
-/// The refusal names the parameter and what it expected, never the value.
-fn assert_refuses_the_cursor(said: &str) {
-    assert!(said.contains("after"), "names the parameter: {said}");
+/// The refusal names the parameter where the edge read it, as a value its
+/// type refused is named there, and never the value.
+fn assert_refuses_the_cursor(said: &str, named: &str) {
+    assert_eq!(said, named);
     assert!(!said.contains(NOT_A_CURSOR), "quotes the value: {said}");
 }
 
-/// A GraphQL refusal of the cursor: the sentence, under the code a malformed
-/// id answers there.
+/// A GraphQL refusal of the cursor: async-graphql's naming of an argument its
+/// type refused, under the code a malformed id answers there.
 fn assert_graphql_refuses_the_cursor(error: &Value) {
-    assert_refuses_the_cursor(error["message"].as_str().unwrap_or_default());
+    assert_refuses_the_cursor(
+        error["message"].as_str().unwrap_or_default(),
+        r#"Invalid value for argument "after", not a cursor this endpoint issued"#,
+    );
     assert_eq!(
         error["extensions"]["code"], "INVALID_ARGUMENT",
         "the client branches on the class: {error}",
@@ -229,7 +233,10 @@ async fn a_list_refuses_a_cursor_it_did_not_issue_with_a_400_problem() {
     refused.assert_header_is_not_exist(header::LINK);
     let problem: Value = refused.json().await.value().deserialize();
     assert_eq!(problem["status"], 400, "{problem}");
-    assert_refuses_the_cursor(problem["detail"].as_str().unwrap_or_default());
+    assert_refuses_the_cursor(
+        problem["detail"].as_str().unwrap_or_default(),
+        "query parameter `after`: not a cursor this endpoint issued",
+    );
     assert!(
         problem.get("errors").is_none(),
         "a cursor is one value, not a form: {problem}",

@@ -31,13 +31,9 @@ impl<E: async_graphql::Executor> Endpoint for GetEndpoint<E> {
             Some(html) => Ok(Response::builder()
                 .content_type(HeaderValue::from_static("text/html; charset=utf-8"))
                 .body(html.clone())),
-            None => Err(HttpError::from_response(not_a_graphql_request())),
+            None => Err(HttpError::from_response(method_not_allowed(
+                HeaderValue::from_static("POST"),
+            ))),
         }
     }
-}
-
-/// A plain `GET` with the playground off: `405` naming the method a GraphQL
-/// request takes here, `GET` serving the socket alone.
-fn not_a_graphql_request() -> Response {
-    method_not_allowed(HeaderValue::from_static("POST"))
 }

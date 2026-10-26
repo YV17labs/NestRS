@@ -32,10 +32,9 @@ pub fn denial_code(denial: &Denial) -> Code {
     }
 }
 
-/// A denial's class in lowercase words, the `reason` the edges with no status
-/// line carried first and still carry beside its [`denial_code`] — WebSocket's
-/// frame and MCP's error `data` — with the `requiredScopes` and the
-/// `retryAfterSeconds` the denial names.
+/// A denial's class in lowercase words: the `reason` WebSocket's frame and
+/// MCP's error `data` carried first, and still carry beside its
+/// [`denial_code`].
 pub fn denial_reason(denial: &Denial) -> &'static str {
     match denial {
         Denial::Unauthorized(_) | Denial::InvalidCredential { .. } => "unauthenticated",

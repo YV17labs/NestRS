@@ -440,7 +440,7 @@ impl ServerHandler for CompositeHandler {
             .into_iter()
             .map(|prompt| prompt.name)
             .collect();
-        Err(prompt_not_found(Some(serde_json::json!(names))))
+        Err(prompt_not_found(Some(names.into())))
     }
     merged_listing!(list_prompts, ListPromptsResult, prompts, "prompts/list");
 

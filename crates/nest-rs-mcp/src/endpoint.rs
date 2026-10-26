@@ -602,8 +602,9 @@ async fn said_by_kind(response: Response) -> Response {
         Default::default()
     });
     head.headers.remove(header::CONTENT_LENGTH);
+    let text = std::str::from_utf8(&refusal).ok();
     if head.status == StatusCode::UNSUPPORTED_MEDIA_TYPE
-        && let Some(unread) = std::str::from_utf8(&refusal).ok().and_then(unread_message)
+        && let Some(unread) = text.and_then(unread_message)
     {
         return refused_call(None, unread);
     }
@@ -611,8 +612,7 @@ async fn said_by_kind(response: Response) -> Response {
         Some(answer) => Response::from_parts(head, Body::from(answer)),
         None => {
             head.headers.remove(header::CONTENT_TYPE);
-            let detail = std::str::from_utf8(&refusal)
-                .ok()
+            let detail = text
                 .and_then(transport_sentence)
                 .map_or_else(Body::empty, |sentence| Body::from(sentence.to_owned()));
             let refusal = Response::from_parts(head, detail);

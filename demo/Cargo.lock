@@ -2762,7 +2762,6 @@ version = "7.0.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
- "serde_json",
  "tracing",
 ]
 

@@ -2833,7 +2833,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-http",
  "nest-rs-testing",
- "serde_json",
  "tokio",
  "tracing",
 ]

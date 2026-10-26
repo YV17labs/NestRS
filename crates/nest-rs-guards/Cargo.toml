@@ -13,9 +13,6 @@ categories = ["web-programming", "authentication"]
 [dependencies]
 async-trait.workspace = true
 tracing.workspace = true
-# The machine-readable half of a denial the in-band edges answer, one JSON
-# object every edge with no status line carries the same way.
-serde_json.workspace = true
 # The only framework crate below this one: the contract names a unit's context,
 # never an edge's types, so every edge depends on guards and guards on none.
 nest-rs-core.workspace = true

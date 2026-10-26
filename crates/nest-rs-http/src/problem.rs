@@ -284,7 +284,7 @@ fn status_class(status: StatusCode) -> Option<Code> {
 /// The `405` an address answers a method it does not serve, with the
 /// methods it does serve as its `Allow` (RFC 9110 §15.5.6).
 pub fn method_not_allowed(allow: HeaderValue) -> crate::Response {
-    let mut refused = crate::ResponseError::as_response(&ProblemDetails::from_status(
+    let mut refused = crate::IntoResponse::into_response(ProblemDetails::from_status(
         StatusCode::METHOD_NOT_ALLOWED,
     ));
     refused.headers_mut().insert(header::ALLOW, allow);

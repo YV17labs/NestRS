@@ -56,3 +56,15 @@ WsEnvelope``).
   the map path: it buffers every field through serde's private content
   representation on every decode, and adds a field a struct literal must
   name.
+
+## 2026-10-26 — `AccessTokenRequest` reads no derive
+
+`AccessTokenRequest`, listed above as keeping the derive, no longer derives
+`Deserialize`: the token request is read by its own extractor
+(`token-endpoint-client-refusal.md`, 2026-10-26), which decodes a private
+struct through `Form` — no sequence at its top, as above — and answers RFC 6749
+§5.2's `invalid_request`. Kept, the derive was a second reader that skipped
+those refusals — `Form<AccessTokenRequest>` handed `grant_type=` to the issuer
+as an empty grant — and a third, `Json<AccessTokenRequest>`, that read a JSON
+array by position. The family read above is otherwise unchanged: `PageParams`
+keeps its derive, read from a query string alone.

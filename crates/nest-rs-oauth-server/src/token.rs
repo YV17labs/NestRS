@@ -1,18 +1,47 @@
-//! The token endpoint's **successful** exchange — RFC 6749 §4.4.2's request and
-//! §5.1's response.
+//! The token endpoint's exchange — RFC 6749 §4.4.2's request, read as §3.2
+//! and §5.2 say, and §5.1's response.
 
 use std::fmt;
 
-use nest_rs_http::{HeaderValue, IntoResponse, Json, Response, header};
+use nest_rs_http::__private::{DocumentedBody, schema_of};
+use nest_rs_http::{
+    Form, FromRequest, HeaderValue, HttpError, IntoResponse, Json, Request, RequestBody,
+    RequestBodyMeta, Response, StatusCode, header,
+};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::error::MalformedRequest;
 
 /// RFC 6749 §4.4.2 — the `client_credentials` access token request.
 ///
 /// `grant_type` is a `String`: §5.2 answers an unknown grant with
 /// [`TokenError::UnsupportedGrant`](crate::TokenError::UnsupportedGrant), which an
 /// enum would turn into a deserialization error the issuer never sees.
-#[derive(Debug, Deserialize, JsonSchema)]
+///
+/// A handler takes it as a parameter, which reads the request's
+/// `application/x-www-form-urlencoded` body (§4.4.2) and documents it so; a
+/// request that does not parse is refused with §5.2's `invalid_request`, its
+/// `error_description` saying where — a parameter missing, sent with no value
+/// (§3.2: "treated as if they were omitted"), repeated or of the wrong kind, a
+/// body that is no form, a client credential in the body beside the
+/// `Authorization` header (more than one mechanism) — never what it held. An
+/// empty `scope` is no scope, and a parameter the request does not define is
+/// ignored (§3.2). A body past the transport's cap keeps the transport's
+/// `413`.
+///
+/// That parameter is its one reader: the type derives no `Deserialize`, so no
+/// other spelling — a `Form<Self>`, a `Json<Self>` — skips the refusals above.
+///
+/// ```compile_fail,E0277
+/// use nest_rs_http::{Form, FromRequest};
+/// use nest_rs_oauth_server::AccessTokenRequest;
+///
+/// fn extractor<T: for<'a> FromRequest<'a>>() {}
+///
+/// extractor::<Form<AccessTokenRequest>>();
+/// ```
+#[derive(Debug, JsonSchema)]
 // schemars would otherwise publish this whole rustdoc as the schema's description.
 #[schemars(description = "RFC 6749 §4.4.2 — the `client_credentials` access token request.")]
 #[non_exhaustive]
@@ -20,8 +49,82 @@ pub struct AccessTokenRequest {
     /// The grant being exercised — `client_credentials` at this endpoint.
     pub grant_type: String,
     /// §3.3 space-delimited scope list. Absent ⇒ the issuer's own default.
-    #[serde(default)]
+    #[schemars(default)]
     pub scope: Option<String>,
+}
+
+/// §4.4.2's parameters as the body spells them, with the client credentials
+/// §2.3.1 and RFC 7521 §4.2 place there, read for their presence alone.
+#[derive(Deserialize)]
+struct Parameters {
+    grant_type: String,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    client_secret: Credential,
+    #[serde(default)]
+    client_assertion: Credential,
+    #[serde(default)]
+    client_assertion_type: Credential,
+}
+
+/// Whether a body parameter carrying a client credential has a value (§3.2);
+/// the value itself is never kept.
+#[derive(Default)]
+struct Credential(bool);
+
+impl<'de> Deserialize<'de> for Credential {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(|value| Self(!value.is_empty()))
+    }
+}
+
+/// What a client that authenticates twice is told: §5.2's "utilizes more
+/// than one mechanism for authenticating the client".
+const TWO_MECHANISMS: &str =
+    "the client authenticates by more than one mechanism: the `Authorization` header and the body";
+
+/// What `grant_type` sent with no value is told: what a request omitting it
+/// is (§3.2).
+const NO_GRANT_TYPE: &str = "form field `grant_type`: missing";
+
+impl<'a> FromRequest<'a> for AccessTokenRequest {
+    async fn from_request(req: &'a Request, body: &mut RequestBody) -> nest_rs_http::Result<Self> {
+        let Form(sent) = Form::<Parameters>::from_request(req, body)
+            .await
+            .map_err(malformed)?;
+        if sent.grant_type.is_empty() {
+            return Err(MalformedRequest::at(NO_GRANT_TYPE).into());
+        }
+        let in_body =
+            sent.client_secret.0 || sent.client_assertion.0 || sent.client_assertion_type.0;
+        if in_body && req.headers().contains_key(header::AUTHORIZATION) {
+            return Err(MalformedRequest::at(TWO_MECHANISMS).into());
+        }
+        Ok(Self {
+            grant_type: sent.grant_type,
+            scope: sent.scope.filter(|scope| !scope.is_empty()),
+        })
+    }
+}
+
+/// The form's refusal as §5.2's: a body that is no form (`415`) or a form
+/// that does not decode (`400`) is `invalid_request`, said as the edge says
+/// it; anything else — a body past the cap — keeps the transport's answer.
+fn malformed(refused: HttpError) -> HttpError {
+    match refused.status() {
+        StatusCode::BAD_REQUEST | StatusCode::UNSUPPORTED_MEDIA_TYPE => {
+            MalformedRequest::at(&refused.to_string()).into()
+        }
+        _ => refused,
+    }
+}
+
+/// The body a route reading it documents: §4.4.2's form.
+impl DocumentedBody for AccessTokenRequest {
+    fn request_body() -> RequestBodyMeta {
+        RequestBodyMeta::Form(schema_of::<Self>)
+    }
 }
 
 /// RFC 6749 §5.1 — the successful access token response.
@@ -211,6 +314,18 @@ mod tests {
             .collect();
         required.sort_unstable();
         assert_eq!(required, ["access_token", "expires_in", "token_type"]);
+    }
+
+    /// §4.4.2: `grant_type` is REQUIRED and `scope` OPTIONAL, which the
+    /// published form says with no `Deserialize` to read it off.
+    #[test]
+    fn the_request_schema_requires_grant_type_alone() {
+        let schema = schemars::schema_for!(AccessTokenRequest);
+
+        assert_eq!(
+            schema.get("required"),
+            Some(&serde_json::json!(["grant_type"]))
+        );
     }
 
     #[test]

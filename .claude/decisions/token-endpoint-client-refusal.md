@@ -42,3 +42,59 @@ prompt. Authlib answers the same way.
 challenge and a problem document, not §5.2's `invalid_client`. Reopened with a
 client-authentication guard in `nest-rs-oauth-server`, or a strategy that
 declares its challenge.
+
+## 2026-10-26 — a client-authentication guard, and the token request's own refusals
+
+The *Not covered* above is closed: a client a token endpoint authenticates is
+refused by `ClientAuthenticationGuard<S>` in `nest-rs-oauth-server`, in §5.2's
+words, through `TokenError`'s one rendering.
+
+- **Taken: a guard over authn's `Strategy`**, refusing through `TokenError`,
+  the HTTP guard stage serving the error a refusing guard writes into its view
+  (`HttpView::respond`). One way to check a credential — the app's strategy,
+  unchanged — one rendering of §5.2, and no public name in `nest-rs-guards` or
+  `nest-rs-http`. The run — the bound, the net, the contained panic, the
+  principal attached — is authn's, called through a hidden seam, never copied.
+- **Refused: a strategy that declares its challenge**, the other road above. A
+  strategy maps a request to a principal and answers nothing on the wire;
+  declaring a challenge would have `AuthnGuard` render two protocols, and §5.2's
+  `400 invalid_client` is no challenge at all — no `Denial` renders it.
+- **Refused: `client_secret_post`.** §2.3.1 makes Basic the MUST and the
+  body's credentials a MAY, "NOT RECOMMENDED". The guard never reads the body,
+  so a client sending its secret there is answered as `None`: `400
+  invalid_client`, §5.2's "unsupported authentication method".
+- **Refused: a guard per method or per endpoint** (`ClientSecretBasicGuard`,
+  `TokenEndpointGuard`). A further method is a `TokenEndpointAuthMethod` the
+  same guard reads, and revocation (RFC 7009 §2.1) authenticates the client by
+  §2.3, as introspection (RFC 7662 §2.1) may, so those endpoints bind this
+  guard.
+- **`#[public]` opens nothing**: every client authenticates at a token
+  endpoint (§3.2.1), and no public client's grant is built.
+- **The token request's own refusals** are §5.2's `invalid_request`, its
+  `error_description` the located sentence the edge says, kept to §5.2's
+  character set and never the value: a parameter missing, empty (§3.2, "treated
+  as if they were omitted"), repeated or of the wrong kind, and a body that is
+  no form (§4.4.2 fixes the encoding; the JSON `415` checkpoint 14b expected is
+  superseded). `AccessTokenRequest` is its own extractor, documented as a form
+  body by its type, and the request's one reader: it derives no `Deserialize`,
+  so a `Form<AccessTokenRequest>`, which would skip each of these refusals,
+  does not compile. What is refused before a parameter is read keeps the edge's
+  answer: the cap's `413`, the router's `405`, the throttler's `429` (§2.3.1
+  asks for the protection, not its shape).
+- **Several mechanisms in one request** — §5.2's `invalid_request` for one that
+  "utilizes more than one mechanism for authenticating the client" — is
+  answered by the extractor, the one reader of the body: a `client_secret`,
+  `client_assertion` or `client_assertion_type` (RFC 7521 §4.2) with a value,
+  beside an `Authorization` header. A body `client_id` alone identifies and
+  does not authenticate; it is ignored, as §3.2 ignores what the request does
+  not define.
+- **Not covered:** the methods `none` (a public client, which needs the
+  authorization-code grant, not built), `client_secret_jwt` and
+  `private_key_jwt` (RFC 7523), `tls_client_auth` and
+  `self_signed_tls_client_auth` (RFC 8705), each a value the guard reads once a
+  registry carries it; RFC 7009 revocation and RFC 7662 introspection, built
+  nowhere; `/login`, a JSON `LoginDto` with no `grant_type` and no client
+  authentication, which is no §4.3 token request, so its body refusals stay the
+  edge's problem documents; and the OpenAPI document, which still lists a
+  guard's declared statuses as problem documents, a `401` with a `Bearer`
+  challenge and a `bearerAuth` requirement.

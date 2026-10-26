@@ -4,10 +4,11 @@ use async_trait::async_trait;
 use nest_rs::authn::{AuthError, Strategy, basic_credentials};
 use nest_rs::core::injectable;
 use nest_rs::http::Request;
+use nest_rs::oauth::server::ClientAuthenticationGuard;
 
 use super::super::service::{AuthenticatedClient, OAuthService};
 
-pub type ClientAuthnGuard = nest_rs::authn::AuthnGuard<ClientCredentialsStrategy>;
+pub type ClientAuthnGuard = ClientAuthenticationGuard<ClientCredentialsStrategy>;
 
 #[injectable]
 pub struct ClientCredentialsStrategy {

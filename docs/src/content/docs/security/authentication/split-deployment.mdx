@@ -31,9 +31,11 @@ mints. Same app, two standards, one deployment.
 The split is a deployment shape; the crates divide once more narrowly, one per
 RFC 6749 §1.1 role. Both halves need `authn` — `JwtService` signs and verifies,
 and that is the question preceding all four roles. Only the issuer needs
-`oauth-server`, which holds the §5.2 token-endpoint codes and the §2.3.1
-machine-client registry: neither is a credential verdict, and a resource server
-that compiled them would carry a token endpoint it never serves.
+`oauth-server`, which holds the §5.2 token-endpoint codes, the guard that
+authenticates a client there — over an authn `Strategy`, so the feature brings
+`authn` — and the §2.3.1 machine-client registry: none is a
+resource server's credential verdict, and a resource server that compiled them
+would carry a token endpoint it never serves.
 
 ```bash frame="terminal"
 # the issuer — signs tokens, so it serves a token endpoint

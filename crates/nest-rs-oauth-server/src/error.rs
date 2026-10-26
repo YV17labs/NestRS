@@ -1,5 +1,5 @@
-//! RFC 6749 §5.2's token-endpoint error vocabulary, and the client
-//! authentication (§2.3.1) an issuer performs before it mints anything.
+//! RFC 6749 §5.2's token-endpoint error vocabulary, and the refusal of a
+//! token request that does not parse.
 
 use nest_rs_http::challenge::NoBearerChallenge;
 use nest_rs_http::{HeaderValue, Response, ResponseError, StatusCode, header};
@@ -24,6 +24,17 @@ pub enum TokenEndpointAuthMethod {
     /// 6749 §2.3.1) — the method a request whose `Authorization` header named
     /// any scheme attempted, since Basic is the one this server reads there.
     ClientSecretBasic,
+}
+
+impl TokenEndpointAuthMethod {
+    /// The value RFC 7591 §2 registers for this method, as a log line names it.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::ClientSecretPost => "client_secret_post",
+            Self::ClientSecretBasic => "client_secret_basic",
+        }
+    }
 }
 
 /// Token-endpoint failure — RFC 6749 §5.2's closed set, all six of it.
@@ -85,18 +96,17 @@ impl TokenError {
             _ => StatusCode::BAD_REQUEST,
         }
     }
-}
 
-/// RFC 6749 §5.2's JSON body, with §5.1's `no-store` and `no-cache`, which
-/// bind the whole token endpoint; `?` on one in a handler answers it, and the
-/// edge files the cause a `server_error` withholds.
-impl ResponseError for TokenError {
-    fn status(&self) -> StatusCode {
-        TokenError::status(self)
-    }
-
-    fn as_response(&self) -> Response {
-        let body = serde_json::json!({ "error": self.to_string() });
+    /// §5.2's answer to this refusal, `description` its `error_description`
+    /// when the request is said to fail somewhere.
+    fn answer(&self, description: Option<&str>) -> Response {
+        let body = match description {
+            Some(description) => serde_json::json!({
+                "error": self.to_string(),
+                "error_description": description,
+            }),
+            None => serde_json::json!({ "error": self.to_string() }),
+        };
         let status = TokenError::status(self);
         let mut response = Response::builder()
             .status(status)
@@ -113,6 +123,59 @@ impl ResponseError for TokenError {
         }
         response.body(body.to_string())
     }
+}
+
+/// RFC 6749 §5.2's JSON body, with §5.1's `no-store` and `no-cache`, which
+/// bind the whole token endpoint; `?` on one in a handler answers it, and the
+/// edge files the cause a `server_error` withholds.
+impl ResponseError for TokenError {
+    fn status(&self) -> StatusCode {
+        TokenError::status(self)
+    }
+
+    fn as_response(&self) -> Response {
+        self.answer(None)
+    }
+}
+
+/// A token request refused before its grant is read — a parameter missing,
+/// repeated or of the wrong kind, a body that is no form, a client
+/// authenticating by two mechanisms: [`TokenError::InvalidRequest`]'s answer,
+/// its `error_description` saying where, never what the request held.
+#[derive(Debug, thiserror::Error)]
+#[error("invalid_request: {description}")]
+pub(crate) struct MalformedRequest {
+    description: String,
+}
+
+impl MalformedRequest {
+    /// The request refused where `said` places it.
+    pub(crate) fn at(said: &str) -> Self {
+        Self {
+            description: error_description(said),
+        }
+    }
+}
+
+impl ResponseError for MalformedRequest {
+    fn status(&self) -> StatusCode {
+        StatusCode::BAD_REQUEST
+    }
+
+    fn as_response(&self) -> Response {
+        TokenError::InvalidRequest.answer(Some(&self.description))
+    }
+}
+
+/// `said` kept to the characters §5.2 allows an `error_description`
+/// (`%x20-21 / %x23-5B / %x5D-7E`), each other one written `?`.
+fn error_description(said: &str) -> String {
+    said.chars()
+        .map(|c| match c {
+            ' '..='!' | '#'..='[' | ']'..='~' => c,
+            _ => '?',
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -150,5 +213,38 @@ mod tests {
             }
         }
         assert_eq!(unauthorized, 1, "Basic is the one 401");
+    }
+
+    /// RFC 6749 §5.2: "Values for the "error_description" parameter MUST NOT
+    /// include characters outside the set %x20-21 / %x23-5B / %x5D-7E".
+    #[test]
+    fn an_error_description_holds_only_the_characters_5_2_allows() {
+        assert_eq!(
+            error_description("form field `grant_type`: missing"),
+            "form field `grant_type`: missing",
+            "a located sentence passes as it is"
+        );
+        assert_eq!(
+            error_description("a \"quoted\" back\\slash, caf\u{e9}\n\ttab\u{7f}"),
+            "a ?quoted? back?slash, caf???tab?"
+        );
+        let allowed = (0x20_u8..=0x7e)
+            .filter(|byte| *byte != b'"' && *byte != b'\\')
+            .map(char::from)
+            .collect::<String>();
+        assert_eq!(error_description(&allowed), allowed);
+    }
+
+    #[tokio::test]
+    async fn a_malformed_request_is_invalid_request_described() {
+        let response = MalformedRequest::at("form field `grant_type`: missing").as_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(response.headers().get(header::WWW_AUTHENTICATE).is_none());
+        let body = response.into_body().into_string().await.expect("a body");
+        assert_eq!(
+            body,
+            r#"{"error":"invalid_request","error_description":"form field `grant_type`: missing"}"#
+        );
     }
 }

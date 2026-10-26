@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "OAuth 2.0 authorization-server vocabulary for NestRS: RFC 6749 §5.1's access token response, §5.2's token-endpoint error set, and §2.3.1 client authentication against a static registry in constant time."
+description = "OAuth 2.0 authorization-server vocabulary for NestRS: RFC 6749 §2.3 client authentication at the token endpoint through a guard, §4.4.2's token request, §5.1's access token response and §5.2's token-endpoint error set."
 keywords = ["framework", "nestrs", "oauth", "rfc6749", "authorization-server"]
 categories = ["authentication", "web-programming"]
 
@@ -19,6 +19,8 @@ nest-rs-authn.workspace = true
 # `AuthenticatedClient` is what the authentication guard attaches for the rest
 # of the request, so it is an ambient value.
 nest-rs-core.workspace = true
+# `ClientAuthenticationGuard` is a guard, bound with `#[use_guards]`.
+nest-rs-guards.workspace = true
 # `TokenError` renders itself as the §5.2 JSON envelope, and marks the response
 # `NoBearerChallenge` so a token refusal is never dressed up as a
 # oauth-resource challenge.
@@ -36,12 +38,15 @@ aws-lc-rs.workspace = true
 # `TokenError::Sign`/`Server` keep the real cause attached for tracing while
 # `Display` stays the opaque `server_error`.
 anyhow.workspace = true
+# The guard files each client it refuses.
+tracing.workspace = true
 
 [dev-dependencies]
-# The suite mounts a token endpoint through `#[controller]` / `#[routes]`,
-# whose expansion binds the route's guards.
-nest-rs-guards = { path = "../nest-rs-guards" }
+# A token endpoint in an app that is a resource server too: its RFC 9728
+# interceptor must leave a client's refusal as §5.2 words it.
+nest-rs-oauth-resource = { path = "../nest-rs-oauth-resource" }
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
+base64 = { workspace = true }
 tokio = { workspace = true }
 
 [lints]

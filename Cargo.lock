@@ -3019,16 +3019,19 @@ version = "7.0.0"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
+ "base64 0.23.1",
  "nest-rs-authn",
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
+ "nest-rs-oauth-resource",
  "nest-rs-testing",
  "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

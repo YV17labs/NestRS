@@ -59,3 +59,10 @@ pub use principal::PrincipalIdentity;
 pub use service::{JwtKey, JwtOptions, JwtService};
 pub use strategies::JwtStrategy;
 pub use strategy::{AUTHENTICATE_TIMEOUT, Strategy};
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by sibling crates. Not API: may change in any release.
+
+    pub use crate::guard::{Verdict, authenticate};
+}

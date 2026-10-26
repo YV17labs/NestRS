@@ -34,9 +34,14 @@ line carries the whole chain as its `error` field, while the caller reads the
 condition alone. A guard that files a line of its own for every denial — the
 framework's authentication, ability and throttler guards do, on their crates'
 targets — says so with `files_its_denials()`, and the edge then files none:
-one denial is one line, the decider's. One trait, four
-edges — the same `#[injectable]` impl gates an HTTP route, a GraphQL field, a
-WebSocket message and an MCP operation
+one denial is one line, the decider's. On HTTP the denial is answered as a
+problem document, unless the guard's protocol fixes a refusal of its own: a
+token endpoint's client is refused in RFC 6749 §5.2's words, which
+`ClientAuthenticationGuard` writes through `HttpView::respond` before it
+returns its denial, and the edge serves that answer instead
+([Token endpoint errors](/security/authentication/oauth2/#token-endpoint-errors)).
+One trait, four edges — the same `#[injectable]` impl gates an HTTP route, a
+GraphQL field, a WebSocket message and an MCP operation
 ([Guards beyond HTTP](/fundamentals/guards-beyond-http/)).
 
 `Guard` ships in
@@ -122,7 +127,8 @@ impl Guard for RateLimitGuard {
 ```
 
 The framework's guards declare theirs: `AuthnGuard` a `503` on every route
-and a `401` off a `#[public]` one, `ThrottlerGuard` a `429`, the ability guard
+and a `401` off a `#[public]` one, `ClientAuthenticationGuard` a `400`, a
+`401` and a `503` on every route, `ThrottlerGuard` a `429`, the ability guard
 none — the `403` an ability earns is answered where it is read, and a masked
 route lists it. A `500` is never declared: every route lists it.
 

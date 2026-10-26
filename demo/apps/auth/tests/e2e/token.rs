@@ -83,28 +83,77 @@ async fn token_endpoint_rejects_an_unsupported_grant() {
         .assert_status(StatusCode::BAD_REQUEST);
 }
 
+async fn assert_token_error(resp: TestResponse, status: StatusCode, expected: serde_json::Value) {
+    resp.assert_status(status);
+    resp.assert_header("content-type", "application/json");
+    resp.assert_header("cache-control", "no-store");
+    resp.assert_header("pragma", "no-cache");
+    resp.assert_json(expected).await;
+}
+
 #[tokio::test]
 async fn token_endpoint_rejects_an_unauthenticated_client() {
     let (_db, app) = boot().await;
-    app.http()
-        .post("/token")
-        .content_type("application/x-www-form-urlencoded")
-        .body("grant_type=client_credentials")
-        .send()
-        .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+
+    for body in [
+        "grant_type=client_credentials".to_owned(),
+        format!(
+            "grant_type=client_credentials&client_id={CLIENT_ID}&client_secret={CLIENT_SECRET}"
+        ),
+    ] {
+        let resp = app
+            .http()
+            .post("/token")
+            .content_type("application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await;
+        resp.assert_header_is_not_exist("www-authenticate");
+        assert_token_error(
+            resp,
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "error": "invalid_client" }),
+        )
+        .await;
+    }
 }
 
 #[tokio::test]
 async fn token_endpoint_rejects_a_bad_client_secret() {
     let (_db, app) = boot().await;
-    request_token(
+
+    let resp = request_token(
         &app,
         (CLIENT_ID, "wrong-secret"),
         "grant_type=client_credentials",
     )
-    .await
-    .assert_status(StatusCode::UNAUTHORIZED);
+    .await;
+
+    resp.assert_header("www-authenticate", r#"Basic realm="authorization server""#);
+    assert_token_error(
+        resp,
+        StatusCode::UNAUTHORIZED,
+        serde_json::json!({ "error": "invalid_client" }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn token_endpoint_refuses_a_request_without_a_grant_type() {
+    let (_db, app) = boot().await;
+
+    for body in ["scope=posts%3Aread", "grant_type=&scope=posts%3Aread"] {
+        let resp = request_token(&app, (CLIENT_ID, CLIENT_SECRET), body).await;
+        assert_token_error(
+            resp,
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({
+                "error": "invalid_request",
+                "error_description": "form field `grant_type`: missing",
+            }),
+        )
+        .await;
+    }
 }
 
 #[tokio::test]
@@ -140,8 +189,14 @@ async fn token_endpoint_refuses_another_media_type_naming_only_the_form_type() {
         .body("grant_type=client_credentials")
         .send()
         .await;
-    resp.assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    let body = resp.0.into_body().into_string().await.expect("a body");
-    assert!(!body.contains("x-quoted-marker"), "{body}");
-    assert!(body.contains("application/x-www-form-urlencoded"), "{body}");
+    assert_token_error(
+        resp,
+        StatusCode::BAD_REQUEST,
+        serde_json::json!({
+            "error": "invalid_request",
+            "error_description":
+                "the request's content type is not `application/x-www-form-urlencoded`",
+        }),
+    )
+    .await;
 }

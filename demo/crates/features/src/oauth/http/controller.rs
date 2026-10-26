@@ -4,8 +4,8 @@ use crate::oauth::{
     AuthenticatedClient, Caller, ClientAuthnGuard, LoginDto, OAuthGuard, OAuthService,
 };
 use nest_rs::http::{
-    Ctx, Form, HeaderValue, HttpError, Json, Opaque, Path, Piped, Response, Result, StatusCode,
-    Valid, controller, header, routes,
+    Ctx, HeaderValue, HttpError, Json, Opaque, Path, Piped, Response, Result, StatusCode, Valid,
+    controller, header, routes,
 };
 use nest_rs::oauth::server::{AccessTokenRequest, AccessTokenResponse};
 use nest_rs::pipes::Lowercase;
@@ -30,11 +30,11 @@ impl OAuthController {
     async fn token(
         &self,
         client: Ctx<AuthenticatedClient>,
-        body: Form<AccessTokenRequest>,
+        request: AccessTokenRequest,
     ) -> Result<AccessTokenResponse> {
         let AccessTokenRequest {
             grant_type, scope, ..
-        } = body.0;
+        } = request;
         Ok(self
             .svc
             .grant_client_credentials(&grant_type, scope.as_deref(), &client)?)

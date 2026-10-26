@@ -320,6 +320,13 @@ A request that carried **no** credentials is told no reason — §3 says a
 server "SHOULD NOT include an error code or other error information"
 there, because an unauthenticated probe has learned nothing yet.
 
+Those challenges are a resource server's. A token endpoint authenticates a
+*client*, which RFC 6749 §5.2 refuses in its own words — `invalid_client`,
+with a `Basic` challenge when the client used the `Authorization` header —
+so its route binds `ClientAuthenticationGuard` over the same `Strategy`
+rather than `AuthnGuard`
+([Token endpoint errors](/security/authentication/oauth2/#token-endpoint-errors)).
+
 A password-login service that wants to refuse without distinguishing
 "wrong email" from "wrong password" returns `CredentialError` instead
 — an opaque `"invalid credentials"` for any miss. See

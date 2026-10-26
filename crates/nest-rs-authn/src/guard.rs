@@ -6,12 +6,13 @@ use std::sync::Arc;
 use nest_rs_core::__private::TenantId;
 use nest_rs_core::trace_context::field;
 use nest_rs_core::{
-    Container, ContainerBuilder, Discoverable, Layer, Net, Posture, ProviderResidency, Unanswered,
-    UnitContext, within,
+    AmbientValue, Container, ContainerBuilder, Discoverable, Layer, Net, Posture,
+    ProviderResidency, Unanswered, UnitContext, within,
 };
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardFor, GuardPhase, PrincipalClaim};
-use nest_rs_http::{HttpView, RejectedCredential, Request, async_trait};
+use nest_rs_http::{HttpView, RejectedCredential, async_trait};
 
+use crate::PrincipalIdentity;
 use crate::error::{AuthError, UNAVAILABLE};
 use crate::strategy::{AUTHENTICATE_TIMEOUT, Strategy};
 
@@ -96,44 +97,6 @@ impl<S: Strategy> AuthnGuard<S> {
             .expect("AuthnGuard.strategy: no provider registered for this dependency");
         Self::new(strategy)
     }
-
-    /// Run the strategy on `req`, waiting no longer than
-    /// [`AUTHENTICATE_TIMEOUT`] for its answer. `None` is a strategy that did
-    /// not answer in time, or that panicked, already said here — at `warn`, at
-    /// `error`.
-    ///
-    /// The JWT strategy answers at the first poll — against a static key, or a
-    /// JWK Set already held — so the common path pays no timer.
-    async fn authenticate(
-        &self,
-        strategy: &'static str,
-        req: &mut Request,
-    ) -> Option<Result<S::Principal, AuthError>> {
-        let authenticate = async { self.strategy.authenticate(req).await };
-        match within(AUTHENTICATE_TIMEOUT, authenticate).await {
-            Ok(outcome) => Some(outcome),
-            Err(Unanswered::Panicked(payload)) => {
-                nest_rs_core::contained_panic!(
-                    target: crate::TARGET,
-                    payload.as_ref(),
-                    "strategy panicked; denying (fail-closed)",
-                    strategy,
-                    transport = TRANSPORT,
-                );
-                None
-            }
-            Err(_) => {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    strategy,
-                    transport = TRANSPORT,
-                    waited_ms = u64::try_from(AUTHENTICATE_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
-                    "strategy did not answer within the guard's timeout; denying (fail-closed)",
-                );
-                None
-            }
-        }
-    }
 }
 
 impl<S: Strategy> Layer for AuthnGuard<S> {}
@@ -154,64 +117,20 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         let strategy = std::any::type_name::<S>();
         let posture = cx.reflector().posture();
         let is_public = posture == Posture::Public;
-        let outcome = self
-            .authenticate(strategy, HttpView::of(cx)?.request_mut())
-            .await;
-        // Nothing was decided about the credential: the same 503 as an
-        // unreachable store, on every route. `authenticate` already said why.
-        let Some(outcome) = outcome else {
-            return Err(Denial::unavailable(None, UNAVAILABLE));
-        };
-        match outcome {
-            Ok(principal) => {
-                // Record the audit identity on the request span. The field is
-                // declared by the kernel's `operation_span!`, never by the
-                // observability crate an app may not install.
-                if let Some(actor_id) = crate::PrincipalIdentity::actor_id(&principal) {
-                    tracing::Span::current().record(field::ACTOR_ID, actor_id.as_str());
-                    // …and into the ambient context for the layers below. Write-once.
-                    nest_rs_core::__private::set_actor_id(&actor_id);
-                }
-                // No `actor_id` field: every line carries it off the ambient context.
-                tracing::debug!(target: crate::TARGET, strategy, "authenticated");
-                // A principal that is not scope-aware attaches nothing, and the
-                // absence is what turns scope gating off.
-                if let Some(scopes) = crate::PrincipalIdentity::scopes(&principal) {
-                    cx.attach(GrantedScopes::new(scopes));
-                }
-                // The tenant comes off the verified principal and nothing else.
-                if let Some(tenant) =
-                    crate::PrincipalIdentity::tenant_id(&principal).and_then(TenantId::new)
-                {
-                    cx.attach(tenant);
-                }
-                cx.attach(principal);
-                Ok(())
-            }
+        match authenticate(&*self.strategy, cx).await? {
+            Verdict::Admitted => Ok(()),
             // The credential was never evaluated: fail closed on every route,
             // `#[public]` included, or an outage downgrades every session to anonymous.
-            Err(error @ AuthError::Unavailable { .. }) => {
-                tracing::error!(
-                    target: crate::TARGET,
-                    strategy,
-                    reason = error.reason(),
-                    error = %nest_rs_core::error_message(&error),
-                    "authentication unavailable — what the strategy asks did not answer",
-                );
-                Err(Denial::unavailable(
-                    error.retry_after_secs(),
-                    error.client_message(),
-                ))
-            }
-            Err(AuthError::MissingCredentials) if is_public => {
+            Verdict::Unavailable(denial) => Err(denial),
+            Verdict::Refused(AuthError::MissingCredentials) if is_public => {
                 tracing::debug!(target: crate::TARGET, strategy, "anonymous request on a public route");
                 Ok(())
             }
-            Err(AuthError::MissingCredentials) if posture == Posture::InBand => {
+            Verdict::Refused(AuthError::MissingCredentials) if posture == Posture::InBand => {
                 tracing::debug!(target: crate::TARGET, strategy, "anonymous request on an in-band endpoint");
                 Ok(())
             }
-            Err(error) if is_public => {
+            Verdict::Refused(error) if is_public => {
                 tracing::warn!(
                     target: crate::TARGET,
                     strategy,
@@ -231,7 +150,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                     ));
                 Ok(())
             }
-            Err(error) => {
+            Verdict::Refused(error) => {
                 tracing::warn!(
                     target: crate::TARGET,
                     strategy,
@@ -269,6 +188,115 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
     }
 }
 
+/// What running a [`Strategy`] on a request decided.
+#[doc(hidden)]
+#[derive(Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "each guard over a strategy matches every verdict, so one added fails its build rather than falling into a wildcard"
+)]
+pub enum Verdict {
+    /// The strategy authenticated the caller: its principal is attached, with
+    /// the scopes it was granted and the tenant it acts within, and its
+    /// `actor_id` recorded.
+    Admitted,
+    /// The strategy refused the credential, or found none; nothing is filed.
+    Refused(AuthError),
+    /// Nothing was decided about the credential — what the strategy asks did
+    /// not answer, it was silent past [`AUTHENTICATE_TIMEOUT`], or it panicked —
+    /// already filed: the `503` the request is refused with.
+    Unavailable(Denial),
+}
+
+/// Run `strategy` on the request `cx` dispatches, as every guard over a
+/// [`Strategy`] runs it: within [`AUTHENTICATE_TIMEOUT`], a panic contained,
+/// and on success the principal attached for the rest of the request — its
+/// granted scopes and its tenant beside it — and its `actor_id` recorded on
+/// the span and in the ambient context.
+///
+/// The JWT strategy answers at the first poll — against a static key, or a
+/// JWK Set already held — so the common path pays no timer. `Err` is a unit
+/// the HTTP edge did not dispatch.
+#[doc(hidden)]
+pub async fn authenticate<S: Strategy>(
+    strategy: &S,
+    cx: &mut UnitContext<'_>,
+) -> Result<Verdict, Denial> {
+    let name = std::any::type_name::<S>();
+    let request = HttpView::of(cx)?.request_mut();
+    let outcome = match within(AUTHENTICATE_TIMEOUT, strategy.authenticate(request)).await {
+        Ok(outcome) => outcome,
+        Err(Unanswered::Panicked(payload)) => {
+            nest_rs_core::contained_panic!(
+                target: crate::TARGET,
+                payload.as_ref(),
+                "strategy panicked; denying (fail-closed)",
+                strategy = name,
+                transport = TRANSPORT,
+            );
+            return Ok(Verdict::Unavailable(Denial::unavailable(None, UNAVAILABLE)));
+        }
+        Err(_) => {
+            tracing::warn!(
+                target: crate::TARGET,
+                strategy = name,
+                transport = TRANSPORT,
+                waited_ms = u64::try_from(AUTHENTICATE_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+                "strategy did not answer within the guard's timeout; denying (fail-closed)",
+            );
+            return Ok(Verdict::Unavailable(Denial::unavailable(None, UNAVAILABLE)));
+        }
+    };
+    match outcome {
+        Ok(principal) => {
+            attach(cx, principal, name);
+            Ok(Verdict::Admitted)
+        }
+        Err(error @ AuthError::Unavailable { .. }) => {
+            tracing::error!(
+                target: crate::TARGET,
+                strategy = name,
+                reason = error.reason(),
+                error = %nest_rs_core::error_message(&error),
+                "authentication unavailable — what the strategy asks did not answer",
+            );
+            Ok(Verdict::Unavailable(Denial::unavailable(
+                error.retry_after_secs(),
+                error.client_message(),
+            )))
+        }
+        Err(error) => Ok(Verdict::Refused(error)),
+    }
+}
+
+/// Make `principal` the request's: its `actor_id` on the span and in the
+/// ambient context, its granted scopes and its tenant beside it.
+fn attach<P: PrincipalIdentity + AmbientValue>(
+    cx: &mut UnitContext<'_>,
+    principal: P,
+    strategy: &'static str,
+) {
+    // The field is declared by the kernel's `operation_span!`, never by the
+    // observability crate an app may not install.
+    if let Some(actor_id) = principal.actor_id() {
+        tracing::Span::current().record(field::ACTOR_ID, actor_id.as_str());
+        // …and into the ambient context for the layers below. Write-once.
+        nest_rs_core::__private::set_actor_id(&actor_id);
+    }
+    // No `actor_id` field: every line carries it off the ambient context.
+    tracing::debug!(target: crate::TARGET, strategy, "authenticated");
+    // A principal that is not scope-aware attaches nothing, and the absence is
+    // what turns scope gating off.
+    if let Some(scopes) = principal.scopes() {
+        cx.attach(GrantedScopes::new(scopes));
+    }
+    // The tenant comes off the verified principal and nothing else.
+    if let Some(tenant) = principal.tenant_id().and_then(TenantId::new) {
+        cx.attach(tenant);
+    }
+    cx.attach(principal);
+}
+
 /// HTTP is the only edge this guard checks, and enough for all: the GraphQL
 /// POST, the `/mcp` request and the WS upgrade are HTTP requests, and what it
 /// attaches there is ambient for every operation they carry. The declaration
@@ -277,10 +305,9 @@ impl<S: Strategy> GuardFor<HttpView> for AuthnGuard<S> {}
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_core::AmbientValue;
+    use nest_rs_http::Request;
 
     use super::*;
-    use crate::PrincipalIdentity;
 
     #[derive(Clone)]
     struct Anyone;

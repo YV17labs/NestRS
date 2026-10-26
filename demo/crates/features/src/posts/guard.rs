@@ -42,7 +42,7 @@ impl Guard for PostAuthorGuard {
                 reason = "no_claims",
                 "post write denied",
             );
-            return Err(Self::subject_required());
+            return Err(Self::user_required());
         };
         Self::author(&claims).map(|_| ())
     }
@@ -62,18 +62,18 @@ impl GuardFor<GraphqlView> for PostAuthorGuard {}
 
 impl PostAuthorGuard {
     fn author(claims: &Claims) -> Result<Uuid, Denial> {
-        claims.sub.ok_or_else(|| {
+        claims.sub.user_id().ok_or_else(|| {
             tracing::warn!(
                 target: crate::posts::TARGET,
                 org_id = %claims.org_id,
-                reason = "no_subject",
+                reason = "not_a_user",
                 "post write denied",
             );
-            Self::subject_required()
+            Self::user_required()
         })
     }
 
-    fn subject_required() -> Denial {
-        Denial::forbidden("a bearer token with a subject is required to write posts")
+    fn user_required() -> Denial {
+        Denial::forbidden("writing a post takes a token naming a user")
     }
 }

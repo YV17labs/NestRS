@@ -1,8 +1,23 @@
 use features::{Claims, Role};
 use nest_rs::http::StatusCode;
+use nest_rs::testing::LogCapture;
 use serde_json::json;
 
 use super::harness::*;
+
+fn the_one_refusal_says_neither(logs: &LogCapture, reason: &str, email: &str, password: &str) {
+    let refusal = logs.expect_one(features::users::TARGET, "login failed");
+    assert_eq!(refusal.level, "warn");
+    assert_eq!(refusal.field("reason").as_deref(), Some(reason));
+    assert!(
+        refusal
+            .fields
+            .values()
+            .all(|value| !value.contains(email) && !value.contains(password)),
+        "{refusal:?}"
+    );
+    logs.expect_none(features::oauth::TARGET, "token request refused");
+}
 
 #[tokio::test]
 async fn login_issues_a_token_the_public_key_verifies() {
@@ -34,12 +49,14 @@ async fn login_issues_a_token_the_public_key_verifies() {
         .await
         .expect("the public key verifies the privately-signed token");
     assert_eq!(claims.org_id.to_string(), ORG_ID);
-    assert!(claims.sub.is_some());
+    assert!(claims.sub.user_id().is_some(), "{:?}", claims.sub);
+    assert_eq!(claims.client_id, None);
     assert!(claims.roles.contains(&Role::Admin));
 }
 
 #[tokio::test]
 async fn login_rejects_bad_credentials() {
+    let logs = LogCapture::install();
     let (db, app) = boot().await;
     seed_org_and_user(db.connection().as_ref()).await;
 
@@ -54,10 +71,12 @@ async fn login_rejects_bad_credentials() {
         .await;
     resp.assert_status(StatusCode::BAD_REQUEST);
     resp.assert_json(json!({ "error": "invalid_grant" })).await;
+    the_one_refusal_says_neither(&logs, "bad_password", LOGIN_EMAIL, "wrong-password");
 }
 
 #[tokio::test]
 async fn login_rejects_unknown_email() {
+    let logs = LogCapture::install();
     let (_db, app) = boot().await;
 
     let resp = app
@@ -71,6 +90,7 @@ async fn login_rejects_unknown_email() {
         .await;
     resp.assert_status(StatusCode::BAD_REQUEST);
     resp.assert_json(json!({ "error": "invalid_grant" })).await;
+    the_one_refusal_says_neither(&logs, "unknown_email", "nobody@example.com", LOGIN_PASSWORD);
 }
 
 #[tokio::test]

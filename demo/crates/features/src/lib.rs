@@ -15,4 +15,4 @@ pub mod posts;
 pub mod testing;
 pub mod users;
 
-pub use authn::{Claims, Role};
+pub use authn::{Claims, Role, Subject};

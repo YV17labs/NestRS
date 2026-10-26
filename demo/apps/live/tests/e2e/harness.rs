@@ -15,7 +15,7 @@ pub(crate) async fn test_token() -> String {
 }
 
 pub(crate) async fn token_for_org(org_id: Uuid, role: Role) -> String {
-    features::testing::token(org_id, vec![role], None)
+    features::testing::token(org_id, vec![role], features::testing::client())
 }
 
 pub(crate) async fn boot_builder() -> (EphemeralDatabase, TestAppBuilder) {

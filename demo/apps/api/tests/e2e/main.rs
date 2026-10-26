@@ -70,11 +70,11 @@ pub(crate) async fn login() -> String {
 }
 
 pub(crate) async fn token_for(org_id: &str, role: &str) -> String {
-    features::testing::token_for(org_id, role, None)
+    features::testing::token_for(org_id, role, features::testing::client())
 }
 
 pub(crate) async fn token_with_sub(org_id: &str, role: &str, sub: Uuid) -> String {
-    features::testing::token_for(org_id, role, Some(sub))
+    features::testing::token_for(org_id, role, features::Subject::User(sub))
 }
 
 pub(crate) async fn create_user(app: &TestApp, bearer: &str, name: &str, email: &str) -> String {

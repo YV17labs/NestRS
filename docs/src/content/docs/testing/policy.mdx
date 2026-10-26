@@ -37,7 +37,8 @@ fn ability_for(roles: Vec<Role>, org_id: Uuid) -> Ability {
 
 fn ability_scoped(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>) -> Ability {
     let claims = Claims {
-        sub: Some(Uuid::nil()),
+        sub: Subject::User(Uuid::nil()),
+        client_id: None,
         org_id,
         roles,
         scopes: scopes.clone(),

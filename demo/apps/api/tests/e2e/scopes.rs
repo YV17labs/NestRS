@@ -1,5 +1,6 @@
+use features::Subject;
 use features::authz::constants;
-use features::testing::{ORG_ID, token_with_scopes};
+use features::testing::{ORG_ID, client, token_with_scopes};
 use nest_rs::http::{StatusCode, header};
 use nest_rs::testing::TestApp;
 use serde_json::json;
@@ -7,13 +8,13 @@ use uuid::Uuid;
 
 use crate::*;
 
-fn narrow_bearer(org_id: &str, sub: impl Into<Option<Uuid>>, scopes: &[&str]) -> String {
+fn narrow_bearer(org_id: &str, sub: Subject, scopes: &[&str]) -> String {
     format!(
         "Bearer {}",
         token_with_scopes(
             Uuid::parse_str(org_id).expect("valid org uuid"),
             vec![features::Role::Admin],
-            sub.into(),
+            sub,
             scopes.iter().map(|s| (*s).to_owned()).collect(),
         )
     )
@@ -49,7 +50,7 @@ async fn a_read_only_delegation_reads_but_cannot_write() {
     let (_db, app) = boot().await;
     let (org, author) = org_with_author(&app, "ScopeAcme").await;
 
-    let read_only = narrow_bearer(&org, author, &[constants::POSTS_READ]);
+    let read_only = narrow_bearer(&org, Subject::User(author), &[constants::POSTS_READ]);
 
     app.http()
         .get("/posts")
@@ -58,10 +59,21 @@ async fn a_read_only_delegation_reads_but_cannot_write() {
         .await
         .assert_status_is_ok();
 
+    let refused = create_post_with(&app, &read_only).await;
     assert_eq!(
-        create_post_with(&app, &read_only).await.status(),
+        refused.status(),
         StatusCode::FORBIDDEN,
         "a read-only delegation must not be able to write",
+    );
+    let challenge = refused
+        .headers()
+        .get(header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        challenge.contains(r#"error="insufficient_scope""#)
+            && challenge.contains(&format!(r#"scope="{}""#, constants::POSTS_WRITE)),
+        "a user's write is refused for the scope a wider token carries: {challenge}"
     );
 }
 
@@ -72,7 +84,7 @@ async fn widening_the_delegation_is_what_unblocks_the_write() {
 
     let full = narrow_bearer(
         &org,
-        author,
+        Subject::User(author),
         &[constants::POSTS_READ, constants::POSTS_WRITE],
     );
 
@@ -88,7 +100,7 @@ async fn a_delegation_with_no_post_scope_reads_nothing() {
     let (_db, app) = boot().await;
     let (org, author) = org_with_author(&app, "ScopeInitech").await;
 
-    let unrelated = narrow_bearer(&org, author, &[constants::AUDIO_TRANSCODE]);
+    let unrelated = narrow_bearer(&org, Subject::User(author), &[constants::AUDIO_TRANSCODE]);
 
     assert_eq!(
         app.http()
@@ -108,12 +120,12 @@ async fn a_machine_token_delegated_reading_is_refused_a_write_by_an_insufficient
     let (org, author) = org_with_author(&app, "ScopeHooli").await;
     let writer = narrow_bearer(
         &org,
-        author,
+        Subject::User(author),
         &[constants::POSTS_READ, constants::POSTS_WRITE],
     );
     let post = create_post(&app, &writer, "Launch", "Big news").await;
 
-    let reader = narrow_bearer(&org, None, &[constants::POSTS_READ]);
+    let reader = narrow_bearer(&org, client(), &[constants::POSTS_READ]);
 
     app.http()
         .get(format!("/posts/{post}"))
@@ -156,7 +168,7 @@ async fn a_machine_token_delegated_reading_is_refused_a_write_by_an_insufficient
 async fn a_refused_read_names_the_one_scope_it_needs_on_every_edge() {
     let (_db, app) = boot().await;
     let (org, author) = org_with_author(&app, "ScopeVandelay").await;
-    let unrelated = narrow_bearer(&org, author, &[constants::AUDIO_TRANSCODE]);
+    let unrelated = narrow_bearer(&org, Subject::User(author), &[constants::AUDIO_TRANSCODE]);
 
     let refused = app
         .http()

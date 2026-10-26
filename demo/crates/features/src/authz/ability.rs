@@ -59,7 +59,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::authn::Role;
+    use crate::authn::{Role, Subject};
 
     fn ability_for(roles: Vec<Role>, org_id: Uuid) -> Ability {
         ability_scoped(roles, org_id, constants::all())
@@ -67,7 +67,8 @@ mod tests {
 
     fn ability_scoped(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>) -> Ability {
         let claims = Claims {
-            sub: Some(Uuid::nil()),
+            sub: Subject::User(Uuid::nil()),
+            client_id: None,
             org_id,
             roles,
             scopes: scopes.clone(),

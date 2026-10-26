@@ -11,7 +11,7 @@ use super::config::{ClientPayload, OAuthConfig};
 use super::scope::{granted_scopes, role_from_db};
 use crate::authz::constants;
 use crate::users::{SocialIdentity, UsersService};
-use crate::{Claims, Role};
+use crate::{Claims, Role, Subject};
 
 #[derive(Debug, Clone)]
 pub struct Caller {
@@ -59,11 +59,21 @@ impl OAuthService {
 
     pub fn issue(
         &self,
-        sub: Option<Uuid>,
+        user_id: Uuid,
         org_id: Uuid,
         roles: Vec<Role>,
     ) -> Result<AccessTokenResponse, TokenError> {
-        issue_with_jwt(&self.jwt_svc, sub, org_id, roles, constants::all())
+        issue_with_jwt(
+            &self.jwt_svc,
+            Claims {
+                sub: Subject::User(user_id),
+                client_id: None,
+                org_id,
+                roles,
+                scopes: constants::all(),
+                exp: self.jwt_svc.expiry(),
+            },
+        )
     }
 
     pub async fn grant_password(
@@ -77,7 +87,7 @@ impl OAuthService {
             .await
             .map_err(token_error_from_auth)?;
         let roles = vec![role_from_db(user.role)];
-        self.issue(Some(user.id), user.org_id, roles)
+        self.issue(user.id, user.org_id, roles)
     }
 
     pub fn grant_client_credentials(
@@ -144,25 +154,15 @@ fn social_identity(profile: SocialProfile) -> SocialIdentity {
 
 pub(crate) fn issue_with_jwt(
     jwt_svc: &JwtService,
-    sub: Option<Uuid>,
-    org_id: Uuid,
-    roles: Vec<Role>,
-    scopes: Vec<String>,
+    claims: Claims,
 ) -> Result<AccessTokenResponse, TokenError> {
-    let claims = Claims {
-        sub,
-        org_id,
-        roles,
-        scopes,
-        exp: jwt_svc.expiry(),
-    };
     let access_token = jwt_svc
         .sign(&claims)
         .map_err(|e| TokenError::Sign(e.into()))?;
     tracing::debug!(
         target: crate::oauth::TARGET,
-        ?sub,
-        %org_id,
+        sub = %claims.sub,
+        org_id = %claims.org_id,
         roles = ?claims.roles,
         scopes = ?claims.scopes,
         "issued access token"
@@ -193,10 +193,14 @@ pub(crate) fn grant_client_credentials_with_jwt(
     })?;
     issue_with_jwt(
         jwt_svc,
-        None,
-        client.payload.org_id,
-        client.payload.roles.clone(),
-        scopes,
+        Claims {
+            sub: Subject::Client(client.client_id.clone()),
+            client_id: Some(client.client_id.clone()),
+            org_id: client.payload.org_id,
+            roles: client.payload.roles.clone(),
+            scopes,
+            exp: jwt_svc.expiry(),
+        },
     )
 }
 
@@ -223,13 +227,22 @@ mod tests {
         JwtService::new(opts).expect("jwt service")
     }
 
+    fn user_claims(jwt_svc: &JwtService, roles: Vec<Role>, scopes: Vec<String>) -> Claims {
+        Claims {
+            sub: Subject::User(Uuid::now_v7()),
+            client_id: None,
+            org_id: Uuid::now_v7(),
+            roles,
+            scopes,
+            exp: jwt_svc.expiry(),
+        }
+    }
+
     #[test]
     fn issue_returns_a_bearer_token_envelope_with_the_jwt_ttl() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(900));
-        let org = Uuid::now_v7();
-        let sub = Uuid::now_v7();
-        let token = issue_with_jwt(&jwt_svc, Some(sub), org, vec![Role::User], constants::all())
-            .expect("issue");
+        let claims = user_claims(&jwt_svc, vec![Role::User], constants::all());
+        let token = issue_with_jwt(&jwt_svc, claims).expect("issue");
 
         assert_eq!(
             token.token_type, "Bearer",
@@ -248,37 +261,23 @@ mod tests {
     #[tokio::test]
     async fn issue_round_trips_user_subject_through_verify() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
-        let sub = Uuid::now_v7();
-        let org = Uuid::now_v7();
-        let token = issue_with_jwt(
-            &jwt_svc,
-            Some(sub),
-            org,
-            vec![Role::Admin],
-            constants::all(),
-        )
-        .expect("issue");
+        let issued = user_claims(&jwt_svc, vec![Role::Admin], constants::all());
+        let token = issue_with_jwt(&jwt_svc, issued.clone()).expect("issue");
 
         let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
-        assert_eq!(claims.sub, Some(sub));
-        assert_eq!(claims.org_id, org);
+        assert_eq!(claims.sub, issued.sub);
+        assert_eq!(claims.client_id, None);
+        assert_eq!(claims.org_id, issued.org_id);
         assert!(claims.is_admin());
     }
 
     #[tokio::test]
     async fn the_token_and_its_response_carry_the_scopes_granted() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
-        let token = issue_with_jwt(
-            &jwt_svc,
-            None,
-            Uuid::now_v7(),
-            vec![Role::User],
-            vec![POSTS_READ.to_owned()],
-        )
-        .expect("issue");
+        let issued = user_claims(&jwt_svc, vec![Role::User], vec![POSTS_READ.to_owned()]);
+        let token = issue_with_jwt(&jwt_svc, issued).expect("issue");
 
         let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
-        assert!(claims.sub.is_none(), "machine grant must omit sub");
         assert_eq!(claims.scopes, [POSTS_READ]);
         assert_eq!(token.scope, [POSTS_READ]);
     }
@@ -287,14 +286,8 @@ mod tests {
     fn issue_surfaces_signing_failure_as_server_error() {
         let verify_only_svc = JwtService::new(JwtOptions::eddsa_verify(test_ed25519_public_pem()))
             .expect("verify-only jwt");
-        let err = issue_with_jwt(
-            &verify_only_svc,
-            Some(Uuid::now_v7()),
-            Uuid::now_v7(),
-            vec![Role::User],
-            constants::all(),
-        )
-        .expect_err("sign without key ⇒ Sign(_)");
+        let claims = user_claims(&verify_only_svc, vec![Role::User], constants::all());
+        let err = issue_with_jwt(&verify_only_svc, claims).expect_err("sign without key ⇒ Sign(_)");
         assert!(matches!(err, TokenError::Sign(_)));
         assert_eq!(err.to_string(), "server_error");
     }
@@ -356,13 +349,23 @@ mod tests {
         .expect("happy path");
         assert_eq!(token.token_type, "Bearer");
         let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
-        assert!(
-            claims.sub.is_none(),
-            "client_credentials token must carry no sub",
-        );
+        assert_eq!(claims.sub, Subject::Client("ci".into()));
+        assert_eq!(claims.client_id.as_deref(), Some("ci"));
         assert_eq!(claims.org_id, client.payload.org_id);
         assert_eq!(claims.roles, [Role::Admin]);
         assert_eq!(claims.scopes, [POSTS_READ]);
+    }
+
+    #[tokio::test]
+    async fn a_machine_grant_names_its_client_as_its_subject() {
+        let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
+        let client = auth_client(vec![Role::User], &[POSTS_READ]);
+        let token =
+            grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", None, &client)
+                .expect("issue");
+        let claims: serde_json::Value = jwt_svc.verify(&token.access_token).await.expect("verify");
+        assert_eq!(claims["sub"], "ci", "{claims}");
+        assert_eq!(claims["client_id"], "ci", "{claims}");
     }
 
     #[tokio::test]
@@ -405,7 +408,7 @@ mod tests {
     fn a_first_party_login_is_delegated_every_scope() {
         let svc = oauth_service(Duration::from_secs(60));
         let token = svc
-            .issue(Some(Uuid::now_v7()), Uuid::now_v7(), vec![Role::User])
+            .issue(Uuid::now_v7(), Uuid::now_v7(), vec![Role::User])
             .expect("issue");
         assert_eq!(token.token_type, "Bearer");
         assert_eq!(token.scope, constants::all());
@@ -416,7 +419,7 @@ mod tests {
         let svc = oauth_service(Duration::from_secs(120));
         let sub = Uuid::now_v7();
         let org = Uuid::now_v7();
-        let token = svc.issue(Some(sub), org, vec![Role::Admin]).expect("issue");
+        let token = svc.issue(sub, org, vec![Role::Admin]).expect("issue");
         assert_eq!(token.expires_in, 120);
         assert!(!token.access_token.is_empty());
     }

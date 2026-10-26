@@ -38,7 +38,7 @@ impl PostsController {
     #[use_guards(PostAuthorGuard)]
     #[api(
         summary = "Create a post in the caller's org",
-        description = "Requires a bearer JWT with a subject. The org and author are taken from \
+        description = "Requires a bearer JWT naming a user. The org and author are taken from \
                        the token, never the body.",
         response = Post
     )]

@@ -30,7 +30,7 @@ impl PostsResolver {
     #[authorize(Update, PostEntity)]
     #[use_guards(PostAuthorGuard)]
     async fn publish_post(&self, ctx: &Context<'_>, id: String) -> Result<Option<Post>> {
-        let actor_id = ctx.data::<Claims>()?.sub.ok_or_else(|| {
+        let actor_id = ctx.data::<Claims>()?.sub.user_id().ok_or_else(|| {
             async_graphql::Error::new("PostAuthorGuard must run before publish_post")
         })?;
         match bind::<Update, PostsService>(ctx, &id).await? {

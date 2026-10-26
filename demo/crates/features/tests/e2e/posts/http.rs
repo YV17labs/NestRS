@@ -1,18 +1,21 @@
 use nest_rs::core::module;
+use nest_rs::core::problem::code;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::http::{StatusCode, header};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
-use nest_rs::testing::{EphemeralDatabase, TestApp};
+use nest_rs::testing::{EphemeralDatabase, TestApp, TestResponse};
 use serde_json::json;
 use uuid::Uuid;
 
 use features::authn::AuthnModule;
-use features::authn::Role;
-use features::authz::AuthzModule;
+use features::authn::{Role, Subject};
+use features::authz::{AuthzModule, constants};
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::{PostsHttpModule, publication};
-use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, arm_outbox, token};
+use features::testing::{
+    AUDIENCE, DEV_PUBLIC_KEY, arm_outbox, client, token, token_with_scopes, user,
+};
 use features::users::{ActiveModel as UserActive, UserRole};
 use nest_rs::authn::AuthnConfig;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
@@ -58,7 +61,7 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
     .await
     .expect("seed author");
 
-    let bearer = token(org_id, vec![Role::User], Some(author_id));
+    let bearer = token(org_id, vec![Role::User], Subject::User(author_id));
 
     let app = TestApp::builder()
         .module::<PostsHttpTestModule>()
@@ -76,7 +79,7 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
 }
 
 fn admin_bearer(org_id: Uuid) -> String {
-    token(org_id, vec![Role::Admin], Some(Uuid::now_v7()))
+    token(org_id, vec![Role::Admin], user())
 }
 
 #[tokio::test]
@@ -109,19 +112,86 @@ async fn posts_round_trip() {
     );
 }
 
-#[tokio::test]
-async fn create_without_a_subject_returns_403() {
-    let (_db, app, _, _) = boot().await;
-    let org_id = Uuid::now_v7();
-    let machine = token(org_id, vec![Role::Admin], None);
-
-    app.http()
-        .post("/posts")
-        .header(header::AUTHORIZATION, format!("Bearer {machine}"))
-        .body_json(&json!({ "title": "Hello", "body": "World" }))
-        .send()
+async fn assert_refused_to_a_client(refused: TestResponse) {
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let challenge = refused
+        .0
+        .headers()
+        .get(header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    assert!(!challenge.contains("insufficient_scope"), "{challenge}");
+    refused
+        .json()
         .await
-        .assert_status(StatusCode::FORBIDDEN);
+        .value()
+        .object()
+        .get("code")
+        .assert_string(code::FORBIDDEN.as_str());
+}
+
+#[tokio::test]
+async fn a_client_authors_no_post_whatever_its_scope() {
+    let (_db, app, bearer, org_id) = boot().await;
+    let draft = app
+        .http()
+        .post("/posts")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .body_json(&json!({ "title": "Draft", "body": "World" }))
+        .send()
+        .await;
+    draft.assert_status(StatusCode::CREATED);
+    let id = draft
+        .json()
+        .await
+        .value()
+        .object()
+        .get("id")
+        .string()
+        .to_owned();
+
+    for scopes in [constants::all(), vec![constants::POSTS_READ.to_owned()]] {
+        let machine = format!(
+            "Bearer {}",
+            token_with_scopes(org_id, vec![Role::Admin], client(), scopes)
+        );
+
+        assert_refused_to_a_client(
+            app.http()
+                .post("/posts")
+                .header(header::AUTHORIZATION, &machine)
+                .body_json(&json!({ "title": "Hello", "body": "World" }))
+                .send()
+                .await,
+        )
+        .await;
+        assert_refused_to_a_client(
+            app.http()
+                .post(format!("/posts/{id}/publish"))
+                .header(header::AUTHORIZATION, &machine)
+                .send()
+                .await,
+        )
+        .await;
+    }
+
+    let unpublished = app
+        .http()
+        .get(format!("/posts/{id}"))
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .send()
+        .await;
+    unpublished.assert_status_is_ok();
+    assert_eq!(
+        unpublished
+            .json()
+            .await
+            .value()
+            .object()
+            .get("status")
+            .string(),
+        "draft"
+    );
 }
 
 #[tokio::test]

@@ -61,11 +61,12 @@ Scopes reach the ability layer from the principal. Implement
 space-delimited `scope` claim with the `serde` helper the framework
 ships:
 
-```rust title="crates/features/src/authn/claims.rs (from the demo, abridged)" {7-13,22-24}
+```rust title="crates/features/src/authn/claims.rs (from the demo, abridged)" {8-14,23-25}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
+    pub sub: Subject,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sub: Option<Uuid>,
+    pub client_id: Option<String>,
     pub org_id: Uuid,
     pub roles: Vec<Role>,
     #[serde(
@@ -80,7 +81,7 @@ pub struct Claims {
 // …
 impl nest_rs::authn::PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
-        self.sub.map(|sub| sub.to_string())
+        Some(self.sub.to_string())
     }
     // …
     fn scopes(&self) -> Option<&[String]> {
@@ -142,8 +143,9 @@ its registration's `payload`, never from the scopes it asks for — the two
 answer different questions on the issuer's side too. The demo's
 `demo-service` client is an admin of its org: asking for `posts:read`
 alone, it reads posts, and an edit or a delete answers the challenge
-below. Creating a post answers a plain `403` instead, since a post needs
-an author and no scope makes a machine token one.
+below. Creating a post answers a plain `403` instead, whatever the scope:
+a post's author is a user, and no scope makes a client one, so a challenge
+naming `posts:write` would send it after a token refused all the same.
 
 ## What the refused caller receives
 

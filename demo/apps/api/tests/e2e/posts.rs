@@ -298,13 +298,13 @@ async fn a_publish_notifies_its_org_once_after_its_commit_and_never_after_its_ro
 #[tokio::test]
 async fn a_post_author_denial_files_one_line_on_every_edge() {
     let (_db, app) = boot().await;
-    let subjectless = format!("Bearer {}", login().await);
+    let client = format!("Bearer {}", login().await);
 
     let logs = nest_rs::testing::LogCapture::install();
     let refused = app
         .http()
         .post("/posts")
-        .header(header::AUTHORIZATION, &subjectless)
+        .header(header::AUTHORIZATION, &client)
         .body_json(&json!({ "title": "Launch", "body": "Big news" }))
         .send()
         .await;
@@ -317,7 +317,7 @@ async fn a_post_author_denial_files_one_line_on_every_edge() {
     });
     app.http()
         .post("/graphql")
-        .header(header::AUTHORIZATION, &subjectless)
+        .header(header::AUTHORIZATION, &client)
         .body_json(&mutation)
         .send()
         .await

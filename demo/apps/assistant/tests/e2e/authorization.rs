@@ -2,9 +2,10 @@ use nest_rs::core::problem::code;
 use nest_rs::http::{StatusCode, header};
 use nest_rs::testing::mcp::{call_method, initialize_request, open_session, post_message};
 use serde_json::{Value, json};
-use uuid::Uuid;
 
-use features::testing::{AUDIENCE as RESOURCE, ORG_ID, token_for};
+use features::Role;
+use features::authz::constants;
+use features::testing::{AUDIENCE as RESOURCE, ORG_ID, claims, client, signed, token_for, user};
 
 use crate::{SHARED_ENDPOINT, boot};
 
@@ -29,7 +30,7 @@ async fn an_unauthenticated_tool_call_points_at_the_metadata_document() {
         )),
         "the challenge must point at this deployment's document: {challenge}",
     );
-    let advertised = features::authz::constants::ALL.join(" ");
+    let advertised = constants::ALL.join(" ");
     assert!(
         challenge.contains(&advertised),
         "the challenge must advertise every scope the policy gates on \
@@ -80,18 +81,31 @@ async fn discovery_is_reachable_without_a_token_but_tools_are_not() {
 #[tokio::test]
 async fn a_token_naming_no_subject_opens_no_session() {
     let (_db, app) = boot().await;
-    let machine = format!("Bearer {}", token_for(ORG_ID, "admin", None));
+    let mut claim_set = serde_json::to_value(claims(
+        ORG_ID.parse().expect("a valid org uuid"),
+        vec![Role::Admin],
+        client(),
+        constants::all(),
+    ))
+    .expect("the claims serialize");
+    let named = format!("Bearer {}", signed(&claim_set));
+    claim_set
+        .as_object_mut()
+        .expect("a claim set is an object")
+        .remove("sub");
+    let subjectless = format!("Bearer {}", signed(&claim_set));
 
+    open_session(app.http(), SHARED_ENDPOINT, Some(&named)).await;
     let refused = post_message(
         app.http(),
         SHARED_ENDPOINT,
         None,
-        Some(&machine),
+        Some(&subjectless),
         &initialize_request(),
     )
     .await;
 
-    refused.assert_status(StatusCode::FORBIDDEN);
+    refused.assert_status(StatusCode::UNAUTHORIZED);
     refused.assert_header_is_not_exist("mcp-session-id");
     refused
         .json()
@@ -99,17 +113,14 @@ async fn a_token_naming_no_subject_opens_no_session() {
         .value()
         .object()
         .get("code")
-        .assert_string(code::FORBIDDEN.as_str());
+        .assert_string(code::UNAUTHENTICATED.as_str());
 }
 
 #[tokio::test]
 async fn another_users_bearer_reaches_no_session_it_did_not_open() {
     let (_db, app) = boot().await;
-    let owner = format!(
-        "Bearer {}",
-        token_for(ORG_ID, "admin", Some(Uuid::now_v7()))
-    );
-    let colleague = format!("Bearer {}", token_for(ORG_ID, "user", Some(Uuid::now_v7())));
+    let owner = format!("Bearer {}", token_for(ORG_ID, "admin", user()));
+    let colleague = format!("Bearer {}", token_for(ORG_ID, "user", user()));
     let session = open_session(app.http(), SHARED_ENDPOINT, Some(&owner)).await;
 
     post_message(

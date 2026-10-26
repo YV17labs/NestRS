@@ -6,6 +6,7 @@
     reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
 )]
 mod authorization;
+mod machine_client;
 mod posts_tool;
 mod shared_endpoint;
 mod tool;
@@ -124,7 +125,7 @@ pub(crate) async fn seed_org_with_post(
 pub(crate) fn bearer_for(org_id: &str) -> String {
     format!(
         "Bearer {}",
-        features::testing::token_for(org_id, "admin", Some(Uuid::now_v7()))
+        features::testing::token_for(org_id, "admin", features::testing::user())
     )
 }
 

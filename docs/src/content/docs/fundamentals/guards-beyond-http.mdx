@@ -24,7 +24,7 @@ impl Guard for PostAuthorGuard {
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let Some(claims) = cx.ambient::<Claims>() else {
             // …
-            return Err(Self::subject_required());
+            return Err(Self::user_required());
         };
         Self::author(&claims).map(|_| ())
     }
@@ -36,8 +36,8 @@ impl GuardFor<GraphqlView> for PostAuthorGuard {}
 ```
 
 On a route it reads the caller and attaches the author the handler writes
-with; on a GraphQL field it refuses a caller with no subject, reading what the
-`/graphql` request's guards made ambient.
+with; on a GraphQL field it refuses a caller whose token names no user, reading
+what the `/graphql` request's guards made ambient.
 
 ## Two entries, four edges
 

@@ -1,6 +1,6 @@
 use features::authz::constants::{POSTS_READ, POSTS_WRITE};
 use features::oauth::TARGET;
-use features::{Claims, Role};
+use features::{Claims, Role, Subject};
 use nest_rs::http::StatusCode;
 use nest_rs::testing::{LogCapture, TestApp, TestResponse};
 
@@ -71,7 +71,8 @@ async fn a_client_asking_for_no_scope_is_granted_exactly_its_registration() {
     assert_eq!(claims.scopes, [POSTS_READ]);
     assert_eq!(claims.roles, [Role::User]);
     assert_eq!(claims.org_id.to_string(), ORG_ID);
-    assert!(claims.sub.is_none());
+    assert_eq!(claims.sub, Subject::Client(READER_ID.into()));
+    assert_eq!(claims.client_id.as_deref(), Some(READER_ID));
 }
 
 #[tokio::test]

@@ -611,20 +611,32 @@ mod tests {
             .rsplit_once('@')
             .map(|(_, domain)| domain.to_owned())
             .expect("an address has a domain");
+        let hashed = user_row(Some(hash_password("hunter2").expect("hash")));
+        let hashed_id = hashed.id.to_string();
         verify_credentials(None, "anything").expect_err("no user ⇒ CredentialError");
         verify_credentials(Some(row), "anything").expect_err("no hash ⇒ CredentialError");
+        verify_credentials(Some(hashed), "anything").expect_err("wrong ⇒ CredentialError");
 
         let refused = logs.find(crate::users::TARGET, "login failed");
-        assert_eq!(refused.len(), 2, "{:#?}", logs.events());
+        assert_eq!(refused.len(), 3, "{:#?}", logs.events());
         for event in &refused {
+            assert_eq!(event.level, "warn");
             assert!(
-                !format!("{:?}", event.fields).contains(&domain),
+                !format!("{:?}", event.fields).contains(&domain)
+                    && !format!("{:?}", event.fields).contains("anything"),
                 "{:?}",
                 event.fields
             );
         }
         assert_eq!(refused[0].field("user_id"), None);
+        assert_eq!(refused[0].field("reason").as_deref(), Some("unknown_email"));
         assert_eq!(refused[1].field("user_id"), Some(id));
+        assert_eq!(
+            refused[1].field("reason").as_deref(),
+            Some("no_password_set")
+        );
+        assert_eq!(refused[2].field("user_id"), Some(hashed_id));
+        assert_eq!(refused[2].field("reason").as_deref(), Some("bad_password"));
     }
 
     #[test]

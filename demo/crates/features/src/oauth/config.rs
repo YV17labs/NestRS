@@ -4,8 +4,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors, ValidationErrorsKind};
 
-use crate::Role;
 use crate::authz::constants;
+use crate::{Role, Subject};
 
 const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
 
@@ -46,6 +46,12 @@ impl Validate for OAuthConfig {
                 errors.errors_mut().insert(
                     format!("clients[{}].scopes", client.client_id).into(),
                     ValidationErrorsKind::Field(vec![ValidationError::new("unknown_scope")]),
+                );
+            }
+            if Subject::from(client.client_id.clone()).user_id().is_some() {
+                errors.errors_mut().insert(
+                    format!("clients[{}].client_id", client.client_id).into(),
+                    ValidationErrorsKind::Field(vec![ValidationError::new("reads_as_a_user")]),
                 );
             }
         }
@@ -124,6 +130,25 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("s3cr3t"), "{rendered}");
+    }
+
+    #[test]
+    fn a_client_id_a_uuid_parses_fails_validation_naming_the_client() {
+        let user_shaped = Uuid::now_v7().to_string();
+        let cfg = OAuthConfig {
+            clients: vec![
+                client("ci-runner", &[constants::POSTS_READ]),
+                client(&user_shaped, &[constants::POSTS_READ]),
+            ],
+            default_org_id: Uuid::nil(),
+        };
+
+        let errors = cfg.validate().unwrap_err();
+
+        let refused: Vec<String> = errors.errors().keys().map(ToString::to_string).collect();
+        assert_eq!(refused, [format!("clients[{user_shaped}].client_id")]);
+        let rendered = nest_rs::config::ConfigError::validation("oauth", errors).to_string();
+        assert!(rendered.contains("reads_as_a_user"), "{rendered}");
     }
 
     #[test]

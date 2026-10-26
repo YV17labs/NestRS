@@ -5,10 +5,11 @@ use nest_rs::database::OutboxStore;
 use nest_rs::redis::{RedisConfig, RedisConnection};
 use nest_rs::storage::Storage;
 use nest_rs::testing::url_on;
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::audio::{AudioService, Transcodes};
-use crate::{Claims, Role};
+use crate::{Claims, Role, Subject};
 
 pub const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEYTRN4vmCuIfaUslO5G9pKyxkDJn3q3t9WDHo2FCfw3\n-----END PRIVATE KEY-----\n";
 pub const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHfPOjd2Y3m1BLM5nBJBMZFAlfWt69WL1NY8XyYeGfeo=\n-----END PUBLIC KEY-----\n";
@@ -19,30 +20,52 @@ pub const AUDIENCE: &str = "http://localhost:3003";
 
 pub const SUITES_BUCKET: &str = "nestrs-test";
 
-pub fn token(org_id: Uuid, roles: Vec<Role>, sub: Option<Uuid>) -> String {
+pub const CLIENT_ID: &str = "demo-service";
+
+pub fn client() -> Subject {
+    Subject::Client(CLIENT_ID.into())
+}
+
+pub fn user() -> Subject {
+    Subject::User(Uuid::now_v7())
+}
+
+fn issuer() -> JwtService {
+    let mut options = JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY);
+    options.audience = Some(AUDIENCE.into());
+    JwtService::new(options).expect("the dev keypair parses")
+}
+
+pub fn signed(claims: &impl Serialize) -> String {
+    issuer().sign(claims).expect("sign the test token")
+}
+
+pub fn token(org_id: Uuid, roles: Vec<Role>, sub: Subject) -> String {
     token_with_scopes(org_id, roles, sub, crate::authz::constants::all())
+}
+
+pub fn claims(org_id: Uuid, roles: Vec<Role>, sub: Subject, scopes: Vec<String>) -> Claims {
+    let client_id = sub.client_id().map(str::to_owned);
+    Claims {
+        sub,
+        client_id,
+        org_id,
+        roles,
+        scopes,
+        exp: issuer().expiry(),
+    }
 }
 
 pub fn token_with_scopes(
     org_id: Uuid,
     roles: Vec<Role>,
-    sub: Option<Uuid>,
+    sub: Subject,
     scopes: Vec<String>,
 ) -> String {
-    let mut options = JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY);
-    options.audience = Some(AUDIENCE.into());
-    let jwt = JwtService::new(options).expect("the dev keypair parses");
-    jwt.sign(&Claims {
-        sub,
-        org_id,
-        roles,
-        scopes,
-        exp: jwt.expiry(),
-    })
-    .expect("sign the test token")
+    signed(&claims(org_id, roles, sub, scopes))
 }
 
-pub fn token_for(org_id: &str, role: &str, sub: Option<Uuid>) -> String {
+pub fn token_for(org_id: &str, role: &str, sub: Subject) -> String {
     let roles = match role {
         "admin" => vec![Role::Admin],
         _ => vec![Role::User],

@@ -494,6 +494,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let param_types = param_types(&inputs);
         let probe_types: Vec<Type> = authorize_ty.iter().chain(&param_types).cloned().collect();
         let shaper_selection = shaper_selection(&probe_types);
+        let typed_body = documented_body(&param_types);
 
         let handler = RouteHandler {
             method: method_const.clone(),
@@ -637,7 +638,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
                     ))
                 },
-                None => quote! { ::core::option::Option::None },
+                None => typed_body,
             },
         };
         // Kept under a shaper: masking returns a subset of this shape, recorded as `masked`.
@@ -1054,6 +1055,25 @@ fn param_types(inputs: &[FnArg]) -> Vec<Type> {
             FnArg::Receiver(_) => None,
         })
         .collect()
+}
+
+/// The body an extractor that is the body itself documents, selected by type
+/// after name resolution like the shaper: the first parameter that is a
+/// `DocumentedBody`, which no spelling names.
+fn documented_body(param_types: &[Type]) -> TokenStream2 {
+    if param_types.is_empty() {
+        return quote! { ::core::option::Option::None };
+    }
+    quote! {{
+        let mut __nestrs_body: ::core::option::Option<::nest_rs_http::RequestBodyMeta> =
+            ::core::option::Option::None;
+        #(
+            if __nestrs_body.is_none() {
+                __nestrs_body = ::nest_rs_http::__body_of!(#param_types);
+            }
+        )*
+        __nestrs_body
+    }}
 }
 
 /// The route's class gates, selected by type after name resolution like its

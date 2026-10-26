@@ -27,6 +27,7 @@ mod cors;
 mod deadline;
 mod deprecation;
 mod detached;
+mod documented_body;
 mod drain;
 mod edge;
 mod endpoint;
@@ -253,6 +254,7 @@ pub mod __private {
         HttpRouteParts, http_controller_meta, http_route_meta, route_denial_statuses, schema_of,
     };
     pub use crate::deprecation::{deprecated_route, deprecation_meta};
+    pub use crate::documented_body::{BodyProbe, DocumentedBody, UndocumentedProbe};
     pub use crate::endpoint::{OriginCheck, checks_origin, guarded_by};
     pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};
     pub use crate::error::{OriginRefused, OriginRefusedReason};

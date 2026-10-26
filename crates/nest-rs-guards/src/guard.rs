@@ -134,7 +134,9 @@ pub trait Guard: Layer {
 
     /// The statuses [`check_http`](Self::check_http) can refuse a request
     /// with on a route that is `#[public]` (`public`) or not, each one a
-    /// [`Denial::http_status`]: what a route's document lists for this guard.
+    /// [`Denial::http_status`] or the status of the error a refusing guard
+    /// answers in its protocol's own words, which the HTTP edge serves in place
+    /// of the denial's rendering: what a route's document lists for this guard.
     /// A `500` is not declared — [`Denial::Internal`] is a wiring defect, and
     /// every route documents it.
     ///

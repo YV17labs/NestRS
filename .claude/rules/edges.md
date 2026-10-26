@@ -102,7 +102,10 @@ guard, filter or interceptor loop of its own.
    caller**, plus `#[force_guards]` on a method, which binds the guard there
    and re-runs it, composed once per site and deduplicated by `TypeId`; a
    denial renders through one `denial_to_<edge>_error`, so a guard's refusal
-   and a gate's look the same. **One denial files one line**, its decider's:
+   and a gate's look the same — on HTTP unless the refusing guard wrote an
+   error of its protocol's own into the view (`HttpView::respond`, a token
+   endpoint's RFC 6749 §5.2 answer), which the guard stage serves instead,
+   held by its tests. **One denial files one line**, its decider's:
    a guard that files its own says so (`Guard::files_its_denials`), as the
    framework's authentication, ability and throttler guards do, and the edge
    files the structural `guard denied …` on `nest_rs::layers` only for one

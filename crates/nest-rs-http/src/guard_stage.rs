@@ -1,7 +1,8 @@
 //! The HTTP guard stage: each guard's [`Guard::check_http`] on a request,
 //! read through the edge's [`HttpView`], then the site's class gates, as the
 //! pipeline's [`GuardStage`]; and a [`Denial`] rendered as the RFC 9457
-//! problem the edge answers.
+//! problem the edge answers, unless the guard refusing it wrote its own error
+//! into the view ([`HttpView::respond`]).
 //!
 //! What the guards attach is ambient once the whole stage passed, for the rest
 //! of the unit; a self-mount's stage also keeps it on the request for work the
@@ -47,6 +48,11 @@ async fn run_guards(
             .check_http(cx)
             .await
             .map_err(|denial| Refused::by(entry.name, guard, denial))?;
+        // An answer is a refusal's own: one a guard that admitted left is never
+        // served for a later refusal.
+        if let Some(view) = cx.switch_to_mut::<HttpView>() {
+            drop(view.take_response());
+        }
     }
     for gate in gates {
         gate(cx).map_err(|refused| Refused::Filed(denial_of(&refused)))?;
@@ -177,12 +183,19 @@ impl GuardStage for DeniedStage {
     }
 }
 
-/// The refused unit's answer: `denial` rendered into its view, and the unit
-/// failed with it, answered, so no exception filter maps it.
+/// The refused unit's answer, and the unit failed with `denial`, answered, so
+/// no exception filter maps it: the error a refusing guard wrote into its view
+/// in its protocol's own words (RFC 6749 §5.2's `400 invalid_client`, which no
+/// denial renders), else `denial` rendered.
 pub(crate) fn answer(cx: &mut UnitContext<'_>, denial: Denial) -> Failure {
-    let response = denial_response(&denial);
     match HttpView::of(cx) {
-        Ok(view) => Failure::from(denial).answered(view.respond(response)),
+        Ok(view) => {
+            let response = match view.take_response() {
+                Some(own) if crate::site::is_error(&own) => own,
+                _ => denial_response(&denial),
+            };
+            Failure::from(denial).answered(view.respond(response))
+        }
         Err(viewless) => Failure::from(viewless),
     }
 }
@@ -837,6 +850,127 @@ mod tests {
         async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             Ok(())
         }
+    }
+
+    /// Refuses in its protocol's own words: the answer `status` carries,
+    /// written into the view, beside the denial every edge reads.
+    struct OwnWords(StatusCode);
+
+    impl Layer for OwnWords {}
+
+    #[async_trait]
+    impl Guard for OwnWords {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let own = Response::builder()
+                .status(self.0)
+                .content_type(HeaderValue::from_static("application/json"))
+                .body(r#"{"error":"invalid_client"}"#);
+            drop(HttpView::of(cx)?.respond(own));
+            Err(Denial::unauthorized("the client did not authenticate"))
+        }
+    }
+
+    /// Writes an answer, then admits.
+    struct AdmitsAnswering;
+
+    impl Layer for AdmitsAnswering {}
+
+    #[async_trait]
+    impl Guard for AdmitsAnswering {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let stray = Response::builder()
+                .status(StatusCode::IM_A_TEAPOT)
+                .body("stray");
+            drop(HttpView::of(cx)?.respond(stray));
+            Ok(())
+        }
+    }
+
+    /// Refuses every request with a plain denial.
+    struct Refusing;
+
+    impl Layer for Refusing {}
+
+    #[async_trait]
+    impl Guard for Refusing {
+        async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Err(Denial::forbidden("not here"))
+        }
+    }
+
+    fn unreached() -> impl Endpoint {
+        crate::endpoint_fn(|_req: Request| async { Ok(Response::builder().body("reached")) })
+    }
+
+    /// A guard's refusal written as its protocol's error is what the client
+    /// reads, on a route as on a self-mount's request — RFC 6749 §5.2's token
+    /// endpoint answering `400 invalid_client`, a status no denial has.
+    #[tokio::test]
+    async fn a_guard_refusing_in_its_own_words_is_answered_with_them() {
+        for kind in [StageKind::Route { unmasked: false }, StageKind::SelfMount] {
+            for status in [StatusCode::BAD_REQUEST, StatusCode::SERVICE_UNAVAILABLE] {
+                let refused = guarded(chain(OwnWords(status)), kind, unreached())
+                    .call(Request::builder().finish())
+                    .await
+                    .expect("answers");
+                assert_eq!(refused.status(), status, "{kind:?}");
+                assert_eq!(
+                    refused.headers()[header::CONTENT_TYPE],
+                    "application/json",
+                    "{kind:?}"
+                );
+                assert_eq!(
+                    refused.into_body().into_string().await.expect("a body"),
+                    r#"{"error":"invalid_client"}"#,
+                );
+            }
+        }
+    }
+
+    /// An answer that refuses nothing never stands for a refusal: the denial
+    /// is rendered.
+    #[tokio::test]
+    async fn a_refusal_written_as_a_success_is_rendered_as_its_denial() {
+        let refused = guarded(
+            chain(OwnWords(StatusCode::OK)),
+            StageKind::Route { unmasked: false },
+            unreached(),
+        )
+        .call(Request::builder().finish())
+        .await
+        .expect("answers");
+        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            refused.headers()[header::CONTENT_TYPE],
+            "application/problem+json"
+        );
+    }
+
+    /// What a guard that admitted wrote is no refusal, so a later guard's
+    /// denial is rendered, never that answer.
+    #[tokio::test]
+    async fn an_answer_a_guard_that_admitted_left_is_never_served() {
+        let mut guards = chain(AdmitsAnswering);
+        guards.extend(chain(Refusing));
+        let refused = guarded(guards, StageKind::Route { unmasked: false }, unreached())
+            .call(Request::builder().finish())
+            .await
+            .expect("answers");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        let admitted = guarded(
+            chain(AdmitsAnswering),
+            StageKind::Route { unmasked: false },
+            unreached(),
+        )
+        .call(Request::builder().finish())
+        .await
+        .expect("answers");
+        assert_eq!(admitted.status(), StatusCode::OK);
+        assert_eq!(
+            admitted.into_body().into_string().await.expect("a body"),
+            "reached"
+        );
     }
 
     /// Whether what an unmasked route runs after `chain` sees the marker.

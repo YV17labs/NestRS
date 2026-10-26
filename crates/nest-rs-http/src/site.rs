@@ -219,7 +219,7 @@ impl<T: SiteTail> SiteEndpoint<T> {
 }
 
 /// Whether `response` answers an error: a `4xx` or a `5xx`.
-fn is_error(response: &Response) -> bool {
+pub(crate) fn is_error(response: &Response) -> bool {
     let status = response.status();
     status.is_client_error() || status.is_server_error()
 }

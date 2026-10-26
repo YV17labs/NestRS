@@ -143,6 +143,12 @@ impl HttpView {
 
     /// Answer the unit with `response`, in place of whatever it held: the proof
     /// an interceptor that answers instead of running the rest returns.
+    ///
+    /// A guard refusing in its protocol's own words — RFC 6749 §5.2's
+    /// `400 invalid_client`, which no [`Denial`] renders — writes its error
+    /// here and returns its denial: the guard stage serves a `4xx` or `5xx` it
+    /// finds, and renders the denial otherwise. What a guard that admits writes
+    /// is never served.
     pub fn respond(&mut self, response: Response) -> Settled {
         self.response = Some(response);
         nest_rs_core::__private::settled()

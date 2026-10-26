@@ -92,9 +92,17 @@ use nest_rs::core::AmbientValue;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum Subject {
+    User(Uuid),
+    Client(String),
+}
+// …
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: Option<Uuid>,
+    pub sub: Subject,
     pub org_id: Uuid,
     pub roles: Vec<Role>,
     pub exp: u64,
@@ -104,7 +112,7 @@ impl AmbientValue for Claims {}
 
 impl PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
-        self.sub.map(|id| id.to_string())
+        Some(self.sub.to_string())
     }
 }
 ```
@@ -114,11 +122,19 @@ request — every guard after it, `Ctx<Claims>` in a handler and a resolver belo
 `/graphql` read them there. `PrincipalIdentity` names the audit identity: on a
 successful authentication `AuthnGuard` records `actor_id` onto the request
 span, so every downstream event — denials included — is attributable without
-threading the identity through each call site. A conformant token always names
-its subject — RFC 9068 §2.2 requires `sub`, the client's own id for a machine
-token — so `actor_id` returns it; `None` is a token with no subject, which an
+threading the identity through each call site.
+
+Every access token names its subject: RFC 9068 §2.2 requires `sub`, the user's
+id, or the client's own when it acts on its own behalf (the
+`client_credentials` grant). So `sub` is never optional, a token without one is
+refused before any route, and `actor_id` always returns it — which is what an
 [MCP session](/mcp/configuration/#a-session-belongs-to-the-principal-that-opened-it)
-never opens for. `nestrs g auth` writes the struct and both impls.
+binds to. `Subject` keeps the two kinds apart: one string on the wire, read
+back by its shape, a UUID being a user. Whatever registers your clients
+therefore refuses a client id a UUID parses, so no client passes for a user
+(RFC 9068 §5). A route writing a user's row reads `claims.sub.user_id()`, which
+a client answers with `None`. `nestrs g auth` writes the enum, its conversions,
+the struct and both impls.
 
 The handler reads them back through `Ctx<Claims>`:
 
@@ -138,7 +154,7 @@ A login or OAuth callback injects `Arc<JwtService>` and calls `sign`:
 
 ```rust title="crates/features/src/authn/service.rs"
 let claims = Claims {
-    sub: Some(user.id),
+    sub: Subject::User(user.id),
     org_id: user.org_id,
     roles: user.roles.clone(),
     exp: self.jwt.expiry(),
@@ -156,8 +172,8 @@ issuer can return it alongside the token.
 lists the claims every JWT access token carries, and `sign` writes the ones
 only the signer knows: `iat`, the time it signs; `jti`, an identifier no other
 token shares; and the `aud` and `iss` you configured. Your claims name the
-rest — `sub`, `client_id` and `exp` — and a claim they already carry is kept
-as written.
+rest — `sub`, `exp`, and the `client_id` of the OAuth client the token is
+issued to — and a claim they already carry is kept as written.
 
 ## Verifying outside the guard
 

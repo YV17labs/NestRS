@@ -129,15 +129,17 @@ pub enum Predicate<E: EntityTrait> {
 `PredicateBuilder` exposes the constructors:
 
 ```rust title="crates/features/src/authz/ability.rs"
-ab.can(Action::Read, user::Entity).when(|p| {
-    p.all([
-        p.eq(user::Column::OrgId, actor.org_id),
-        p.any([
-            p.eq(user::Column::Role, "admin"),
-            p.eq(user::Column::Id, actor.sub),
-        ]),
-    ])
-});
+if let Some(user_id) = actor.sub.user_id() {
+    ab.can(Action::Read, user::Entity).when(|p| {
+        p.all([
+            p.eq(user::Column::OrgId, actor.org_id),
+            p.any([
+                p.eq(user::Column::Role, "admin"),
+                p.eq(user::Column::Id, user_id),
+            ]),
+        ])
+    });
+}
 ```
 
 | Builder method | Variant | Use |

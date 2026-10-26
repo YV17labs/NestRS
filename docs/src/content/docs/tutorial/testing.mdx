@@ -46,6 +46,7 @@ Add the dev-dependencies the test needs:
 nest-rs = { workspace = true, features = ["authn", "testing"] }
 migrations = { workspace = true }
 serde_json.workspace = true
+uuid.workspace = true
 ```
 
 `serde_json` also needs a `[workspace.dependencies]` pin (`serde_json = "1.0"`)
@@ -78,13 +79,17 @@ use nest_rs::http::StatusCode;
 use serde_json::json;
 
 use blog::BlogModule;
-use features::authn::{Claims, Role};
+use features::authn::{Claims, Role, Subject};
+use uuid::Uuid;
 
 fn bearer(app: &TestApp) -> String {
     let jwt = app.container().get::<JwtService>().expect("AuthnModule provides the JwtService");
-    let token = jwt
-        .sign(&Claims { sub: None, roles: vec![Role::User], exp: jwt.expiry() })
-        .expect("sign the test token");
+    let claims = Claims {
+        sub: Subject::User(Uuid::now_v7()),
+        roles: vec![Role::User],
+        exp: jwt.expiry(),
+    };
+    let token = jwt.sign(&claims).expect("sign the test token");
     format!("Bearer {token}")
 }
 

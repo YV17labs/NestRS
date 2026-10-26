@@ -9,7 +9,9 @@
 
 /// The principal. `JwtStrategy<Claims>` deserializes a verified token into it,
 /// and `AuthzAbility` reads it to build the caller's rules.
-pub(crate) const AUTHN_CLAIMS: &str = r#"use nest_rs::authn::PrincipalIdentity;
+pub(crate) const AUTHN_CLAIMS: &str = r#"use std::fmt;
+
+use nest_rs::authn::PrincipalIdentity;
 use nest_rs::core::AmbientValue;
 use nest_rs::seaorm::wire_enum;
 use serde::{Deserialize, Serialize};
@@ -24,12 +26,61 @@ pub enum Role {
     User,
 }
 
+/// Who a token speaks for: its `sub` claim, which RFC 9068 §2.2 requires in
+/// every access token — a user, or a client acting on its own behalf (the
+/// `client_credentials` grant), named by its client id.
+///
+/// One string on the wire, read back by its shape: a UUID is a user. Whatever
+/// registers your clients refuses a client id a UUID parses, so no client can
+/// pass for a user (RFC 9068 §5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum Subject {
+    User(Uuid),
+    Client(String),
+}
+
+impl Subject {
+    /// The user this token speaks for, `None` for a client — what a route
+    /// writing a user's row reads.
+    pub fn user_id(&self) -> Option<Uuid> {
+        match self {
+            Self::User(id) => Some(*id),
+            Self::Client(_) => None,
+        }
+    }
+}
+
+impl From<String> for Subject {
+    fn from(sub: String) -> Self {
+        match Uuid::try_parse(&sub) {
+            Ok(id) => Self::User(id),
+            Err(_) => Self::Client(sub),
+        }
+    }
+}
+
+impl From<Subject> for String {
+    fn from(sub: Subject) -> Self {
+        sub.to_string()
+    }
+}
+
+impl fmt::Display for Subject {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::User(id) => id.fmt(f),
+            Self::Client(id) => f.write_str(id),
+        }
+    }
+}
+
 /// The JWT payload this app verifies. Every field is read from the token, so
-/// whatever mints those tokens has to put them there.
+/// whatever mints those tokens has to put them there; a token without a `sub`
+/// is refused.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sub: Option<Uuid>,
+    pub sub: Subject,
     pub roles: Vec<Role>,
     pub exp: u64,
 }
@@ -48,7 +99,7 @@ impl AmbientValue for Claims {}
 // included — is attributable without threading the id through each call site.
 impl PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
-        self.sub.map(|sub| sub.to_string())
+        Some(self.sub.to_string())
     }
 }
 "#;
@@ -59,7 +110,7 @@ mod strategy;
 
 pub mod http;
 
-pub use claims::{Claims, Role};
+pub use claims::{Claims, Role, Subject};
 pub use http::AuthnHttpModule;
 pub use module::AuthnModule;
 pub use strategy::AuthnGuard;
@@ -107,7 +158,7 @@ use nest_rs::http::{Json, Opaque, Result, controller, input, routes};
 use uuid::Uuid;
 
 use super::guard::DevOnlyGuard;
-use crate::authn::{Claims, Role};
+use crate::authn::{Claims, Role, Subject};
 
 #[input]
 #[derive(Debug, Default)]
@@ -141,7 +192,7 @@ impl DevTokenController {
     async fn dev_token(&self, body: Json<DevTokenDto>) -> Result<Json<DevTokenResponseDto>> {
         let DevTokenDto { sub, roles } = body.0;
         let claims = Claims {
-            sub: sub.or_else(|| Some(Uuid::now_v7())),
+            sub: Subject::User(sub.unwrap_or_else(Uuid::now_v7)),
             roles: if roles.is_empty() { vec![Role::User] } else { roles },
             exp: self.jwt.expiry(),
         };
@@ -270,8 +321,9 @@ impl AbilityFactory for AuthzAbility {
     /// crosses the data layer.
     ///
     /// `nestrs g resource <name>` prints the grant to paste for the resource it
-    /// just generated, with `_ab` renamed `ab`; narrow it with
-    /// `.when(|p| p.eq(Column::AuthorId, actor.sub))` to the caller's own rows.
+    /// just generated, with `_ab` renamed `ab`; narrow it to a user's own rows
+    /// with `.when(|p| p.eq(Column::AuthorId, user_id))` under
+    /// `if let Some(user_id) = actor.sub.user_id()` — a client owns none.
     fn define(&self, _actor: &Claims, _ab: &mut AbilityBuilder) {}
 
     /// What an *unauthenticated* caller may do, on a `#[public]` route only.

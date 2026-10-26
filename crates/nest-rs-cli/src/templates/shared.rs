@@ -423,8 +423,10 @@ entity:
 
 ```rust
 ab.can(Action::Read, post::Entity);
-ab.can(Action::Manage, post::Entity)
-    .when(|p| p.eq(post::Column::AuthorId, actor.sub));
+if let Some(user_id) = actor.sub.user_id() {
+    ab.can(Action::Manage, post::Entity)
+        .when(|p| p.eq(post::Column::AuthorId, user_id));
+}
 ```
 
 `define` answers for an authenticated actor; `define_visitor` answers for a

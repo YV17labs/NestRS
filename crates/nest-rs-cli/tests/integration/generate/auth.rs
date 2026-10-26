@@ -32,7 +32,7 @@ fn generate_auth_scaffolds_the_adapter_once() {
     let lib = fs::read_to_string(src.join("lib.rs")).unwrap();
     assert!(lib.contains("pub mod authn;"));
     assert!(lib.contains("pub mod authz;"));
-    assert!(lib.contains("pub use authn::{Claims, Role};"));
+    assert!(lib.contains("pub use authn::{Claims, Role, Subject};"));
 
     // The dev token route is `#[public]` by necessity; the boot refusal keeps it
     // out of production.
@@ -225,6 +225,38 @@ fn generate_auth_dev_token_route_answers_no_store() {
         controller.contains(r#"#[response_header("cache-control", "no-store")]"#)
             && controller.contains(r#"#[response_header("pragma", "no-cache")]"#),
         "the dev-token route carries both directives:\n{controller}",
+    );
+}
+
+/// RFC 9068 §2.2: every access token names its subject — a user, or a client
+/// acting on its own behalf by its client id — so the claims hold either kind,
+/// and a token naming none is refused.
+#[test]
+fn generate_auth_claims_name_a_subject_of_either_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    run_ok(dir.path(), &["g", "auth"]);
+
+    let authn = dir.path().join("crates/features/src/authn");
+    let claims = fs::read_to_string(authn.join("claims.rs")).unwrap();
+    assert!(
+        claims.contains("pub sub: Subject,")
+            && claims.contains("User(Uuid),")
+            && claims.contains("Client(String),"),
+        "the subject is a user or a client:\n{claims}"
+    );
+    assert!(
+        !claims.contains("sub: Option<"),
+        "no subject is optional:\n{claims}"
+    );
+    assert!(
+        claims.contains("Some(self.sub.to_string())"),
+        "`actor_id` returns the subject:\n{claims}"
+    );
+    let controller = fs::read_to_string(authn.join("http/controller.rs")).unwrap();
+    assert!(
+        controller.contains("sub: Subject::User("),
+        "the development token names a user:\n{controller}"
     );
 }
 

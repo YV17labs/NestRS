@@ -85,7 +85,7 @@ impl OAuthController {
     async fn callback(&self, caller: Ctx<Caller>) -> Result<AccessTokenResponse> {
         Ok(self
             .issuer
-            .issue(Some(caller.user_id), caller.org_id, caller.roles.clone())?)
+            .issue(caller.user_id, caller.org_id, caller.roles.clone())?)
     }
 }
 ```

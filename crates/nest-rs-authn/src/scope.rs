@@ -6,7 +6,7 @@
 //! # use serde::{Deserialize, Serialize};
 //! #[derive(Serialize, Deserialize)]
 //! pub struct Claims {
-//!     pub sub: Option<String>,
+//!     pub sub: String,
 //!     #[serde(
 //!         default,
 //!         rename = "scope",
@@ -17,14 +17,15 @@
 //! }
 //!
 //! impl PrincipalIdentity for Claims {
-//!     fn actor_id(&self) -> Option<String> { self.sub.clone() }
+//!     fn actor_id(&self) -> Option<String> { Some(self.sub.clone()) }
 //!     fn scopes(&self) -> Option<&[String]> { Some(&self.scopes) }
 //! }
 //! # fn main() -> Result<(), serde_json::Error> {
 //!
-//! let claims: Claims = serde_json::from_str(r#"{ "scope": "posts:read posts:write" }"#)?;
+//! let claims: Claims =
+//!     serde_json::from_str(r#"{ "sub": "ci", "scope": "posts:read posts:write" }"#)?;
 //! assert_eq!(claims.scopes(), Some(&["posts:read".to_owned(), "posts:write".to_owned()][..]));
-//! assert_eq!(serde_json::to_string(&claims)?, r#"{"sub":null,"scope":"posts:read posts:write"}"#);
+//! assert_eq!(serde_json::to_string(&claims)?, r#"{"sub":"ci","scope":"posts:read posts:write"}"#);
 //! # Ok(())
 //! # }
 //! ```

@@ -57,7 +57,7 @@ pub(super) fn lib_decls() -> Vec<String> {
     [
         "pub mod authn;",
         "pub mod authz;",
-        "pub use authn::{Claims, Role};",
+        "pub use authn::{Claims, Role, Subject};",
     ]
     .map(str::to_owned)
     .to_vec()

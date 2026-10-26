@@ -347,8 +347,12 @@ async fn serve_connection<G, N, S>(
                         // The boundary case the protocol-layer cap lets through; framing is
                         // intact, so the socket survives and the refusal goes in band.
                         if text.len() > limits.max_message_bytes {
-                            let frame =
-                                refuse_oversize(conn_id, text.len(), limits.max_message_bytes);
+                            let frame = refuse_oversize(
+                                &wiring,
+                                conn_id,
+                                text.len(),
+                                limits.max_message_bytes,
+                            );
                             if outbox.try_send(frame.into()).is_err() {
                                 break stalled_outbox(conn_id);
                             }
@@ -367,7 +371,7 @@ async fn serve_connection<G, N, S>(
                     // RFC 6455 §7.4.1's 1003 is the other conformant answer; framing is
                     // intact, so the refusal goes in band.
                     Ok(Message::Binary(data)) => {
-                        let frame = refuse_binary(conn_id, data.len());
+                        let frame = refuse_binary(&wiring, conn_id, data.len());
                         if outbox.try_send(frame.into()).is_err() {
                             break stalled_outbox(conn_id);
                         }
@@ -557,30 +561,75 @@ where
 
 /// Refuse a message past the per-message cap, telling the client and, at
 /// `debug`, the operator.
-fn refuse_oversize(conn_id: ConnId, bytes: usize, max_message_bytes: usize) -> String {
-    tracing::debug!(
-        target: crate::TARGET,
+fn refuse_oversize(
+    wiring: &DispatchWiring,
+    conn_id: ConnId,
+    bytes: usize,
+    max_message_bytes: usize,
+) -> String {
+    refuse_unread(
+        wiring,
         conn_id,
-        bytes,
-        max_message_bytes,
-        "websocket message refused: over the per-message cap",
-    );
-    error_frame("error", &crate::WsError::new("message too large"))
+        || {
+            tracing::debug!(
+                target: crate::TARGET,
+                conn_id,
+                bytes,
+                max_message_bytes,
+                "websocket message refused: over the per-message cap",
+            );
+        },
+        &crate::WsError::new("message too large"),
+    )
 }
 
 /// Refuse a Binary frame (RFC 6455 §5.6), which carries no JSON envelope,
 /// telling the client and, at `debug`, the operator.
-fn refuse_binary(conn_id: ConnId, bytes: usize) -> String {
-    tracing::debug!(
-        target: crate::TARGET,
+fn refuse_binary(wiring: &DispatchWiring, conn_id: ConnId, bytes: usize) -> String {
+    refuse_unread(
+        wiring,
         conn_id,
-        bytes,
-        "websocket message refused: binary frames carry no envelope",
-    );
-    error_frame(
-        "error",
+        || {
+            tracing::debug!(
+                target: crate::TARGET,
+                conn_id,
+                bytes,
+                "websocket message refused: binary frames carry no envelope",
+            );
+        },
         &crate::WsError::new("binary frames are not supported"),
     )
+}
+
+/// Refuse a frame no handler could read — no envelope, a binary frame, one
+/// past the cap — as the message it is: its `ws.message` line files `error`
+/// under `_OTHER`, never what the client sent, with its span; `report` says
+/// why at `debug` inside it, and the client reads `refusal` on the `error`
+/// event. Nothing ran, so no unit of work opens.
+fn refuse_unread(
+    wiring: &DispatchWiring,
+    conn_id: ConnId,
+    report: impl FnOnce(),
+    refusal: &crate::WsError,
+) -> String {
+    let correlation = wiring.connection.child();
+    let span = nest_rs_core::operation_span!(
+        crate::unit::MESSAGE,
+        &correlation,
+        ws.event = operation_log::OTHER,
+        ws.connection_id = conn_id,
+    );
+    let line = UnitLine::open(
+        Unit::Message {
+            event: operation_log::OTHER,
+        },
+        conn_id,
+        correlation.clone(),
+        span.clone(),
+    );
+    RequestContinuation::new(None, correlation).enter(|| span.in_scope(report));
+    line.file(operation_log::ERROR);
+    error_frame("error", refusal)
 }
 
 /// Run one connection-lifecycle hook under the connection's identity, as a
@@ -841,15 +890,29 @@ async fn handle_text<G: Gateway>(
     client: &WsClient,
     text: &str,
 ) -> Option<String> {
+    let conn_id = client.id();
     let WsEnvelope { event, data } = match crate::envelope::decode_envelope(text) {
         Ok(envelope) => envelope,
-        Err(refused) => return Some(error_frame("error", &refused)),
+        Err(refused) => {
+            return Some(refuse_unread(
+                wiring,
+                conn_id,
+                || {
+                    tracing::debug!(
+                        target: crate::TARGET,
+                        conn_id,
+                        error = %refused,
+                        "websocket message refused: no envelope",
+                    );
+                },
+                &refused,
+            ));
+        }
     };
     let served = messages.get(&event);
     // What the lines and the span name: the event a handler declares, never
     // one only the client named.
     let named = served.map_or(operation_log::OTHER, |(event, _)| event);
-    let conn_id = client.id();
     let deadline = wiring
         .message_timeout
         .map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
@@ -1057,34 +1120,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_message_over_the_cap_is_refused_to_the_client_and_recorded_for_the_operator() {
+    async fn a_message_over_the_cap_is_refused_to_the_client_and_files_its_line() {
         let logs = nest_rs_testing::LogCapture::install();
-        let connection = nest_rs_core::Correlation::minted(None);
-        let trace_id = connection.trace_id();
+        let wiring = wiring();
+        let trace_id = wiring.connection.trace_id().to_string();
 
-        let frame = nest_rs_core::with_request_scope(None, connection, async {
-            let joined = nest_rs_core::current_trace_id();
-            assert_eq!(
-                joined,
-                Some(trace_id),
-                "the refusal joins the connection's conversation",
-            );
-            refuse_oversize(7, 4096, 1024)
-        })
-        .await;
+        let frame = refuse_oversize(&wiring, 7, 4096, 1024);
 
         assert!(
             frame.contains("message too large"),
             "the client is told why: {frame}",
         );
-        let event = logs.expect_one(
-            "nest_rs::ws",
-            "websocket message refused: over the per-message cap",
-        );
-        assert!(
-            event.field("trace_id").is_none(),
-            "the correlation is the line's, not the event's: {:?}",
-            event.fields,
+        let event =
+            assert_refused_unread(&logs, "websocket message refused: over the per-message cap");
+        assert_eq!(
+            event.trace_id.as_deref(),
+            Some(trace_id.as_str()),
+            "the refusal joins the connection's conversation: {event:#?}",
         );
         assert_eq!(event.field("conn_id").as_deref(), Some("7"));
         assert_eq!(event.field("bytes").as_deref(), Some("4096"));
@@ -1234,9 +1286,12 @@ mod tests {
     }
 
     /// A text message that is no envelope names the class HTTP's `400` names
-    /// for a body that does not decode, and says where, never the value.
+    /// for a body that does not decode, and says where, never the value. It is
+    /// a message all the same: its line files `error` under `_OTHER`, never
+    /// what the client sent, and the operator reads where it failed at
+    /// `debug`, with no `warn`.
     #[tokio::test]
-    async fn a_message_that_is_no_envelope_names_the_invalid_argument_class() {
+    async fn a_message_that_is_no_envelope_names_the_invalid_argument_class_and_files_its_line() {
         for (text, said) in [
             (
                 r#"{"data":"sk_live_secret"}"#,
@@ -1255,6 +1310,7 @@ mod tests {
                 "invalid envelope: EOF while parsing an object at line 1 column 25",
             ),
         ] {
+            let logs = nest_rs_testing::LogCapture::install();
             let frame = handle_text(
                 &Echo,
                 &MessageTable::new(),
@@ -1273,7 +1329,74 @@ mod tests {
                 }),
                 "{text}",
             );
+
+            let report = assert_refused_unread(&logs, "websocket message refused: no envelope");
+            assert_eq!(report.field("error").as_deref(), Some(said), "{text}");
         }
+    }
+
+    /// The `ws.message` line and span of a frame refused before any handler
+    /// read it, filed once under `_OTHER`; its report, `report`, at `debug`,
+    /// joined to the line's correlation, and returned; no `warn`; no value the
+    /// client sent.
+    fn assert_refused_unread(
+        logs: &nest_rs_testing::LogCapture,
+        report: &str,
+    ) -> nest_rs_testing::CapturedEvent {
+        let line = logs.expect_one(operation_log::TARGET, crate::unit::MESSAGE.name());
+        assert_eq!(line.field("outcome").as_deref(), Some(operation_log::ERROR));
+        assert_eq!(line.field("event").as_deref(), Some(operation_log::OTHER));
+        assert!(line.field("conn_id").is_some(), "{line:#?}");
+        let span = logs.expect_span(crate::TARGET, crate::unit::MESSAGE.name());
+        assert_eq!(
+            span.field("ws.event").as_deref(),
+            Some(operation_log::OTHER)
+        );
+        assert_eq!(
+            span.field("error.type").as_deref(),
+            Some(operation_log::ERROR),
+            "{:?}",
+            span.fields,
+        );
+        let reported = logs.expect_one(crate::TARGET, report);
+        assert_eq!(reported.level, "debug");
+        assert!(line.span_id.is_some(), "the line names its unit: {line:#?}");
+        assert_eq!(
+            (&reported.trace_id, &reported.span_id),
+            (&line.trace_id, &line.span_id),
+            "the report joins the message's line",
+        );
+        assert!(
+            logs.events_at(tracing::Level::WARN).is_empty(),
+            "a client's error is no denial: {:#?}",
+            logs.events(),
+        );
+        for event in logs.events() {
+            assert!(
+                event
+                    .fields
+                    .values()
+                    .all(|value| !value.contains("sk_live")),
+                "{event:#?}"
+            );
+        }
+        reported
+    }
+
+    #[tokio::test]
+    async fn a_binary_frame_is_refused_to_the_client_and_files_its_line() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let frame = refuse_binary(&wiring(), 7, 3);
+
+        assert!(
+            frame.contains("binary frames are not supported"),
+            "the client is told why: {frame}",
+        );
+        let event = assert_refused_unread(
+            &logs,
+            "websocket message refused: binary frames carry no envelope",
+        );
+        assert_eq!(event.field("bytes").as_deref(), Some("3"));
     }
 
     /// A handler whose future holds `N` bytes across an await.

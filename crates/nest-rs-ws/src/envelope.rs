@@ -168,7 +168,7 @@ pub enum WsReply {
     Reply(serde_json::Value),
     /// Send nothing — the handler returned `()` or chose to stay silent.
     None,
-    /// Send an error frame `{ event, data: { error, errors? } }` and log a `warn`.
+    /// Send an error frame `{ event, data: { error, errors? } }`.
     Error(WsError),
 }
 
@@ -187,11 +187,12 @@ impl WsReply {
         WsReply::Error(WsError::new(message))
     }
 
-    /// The error frame a rejected [`PipeError`] puts on
-    /// the wire, carrying its per-field detail, with a `warn` on `nest_rs::ws`.
+    /// The error frame a rejected [`PipeError`] puts on the wire, carrying its
+    /// per-field detail, reported at `debug` on `nest_rs::ws`: the client's
+    /// error, which the message's line files.
     pub fn pipe_error(event: &str, what: &str, error: nest_rs_pipes::PipeError) -> WsReply {
         let message = format!("invalid {what} for `{event}`: {}", error.message());
-        tracing::warn!(
+        tracing::debug!(
             target: crate::TARGET,
             event,
             kind = what,
@@ -205,7 +206,8 @@ impl WsReply {
     }
 
     /// The error frame a payload that does not deserialize puts on the wire,
-    /// under the `INVALID_ARGUMENT` code, with a `warn`. Both say where it
+    /// under the `INVALID_ARGUMENT` code, reported at `debug` on `nest_rs::ws`:
+    /// the client's error, which the message's line files. Both say where it
     /// failed — inside the payload when the report is
     /// [`located`](DecodeError::located) — what kind of value was found and
     /// what was expected ([`DecodeError`]), never the value.
@@ -215,7 +217,7 @@ impl WsReply {
             Some(path) => format!("at `{path}`: {error}"),
             None => error.to_string(),
         };
-        tracing::warn!(
+        tracing::debug!(
             target: crate::TARGET,
             event,
             error = %said,
@@ -230,10 +232,11 @@ impl WsReply {
 
     /// The reply for an event with no registered handler, so a client can tell
     /// a typo from an auth failure; the frame answers on the event it sent, and
-    /// neither its text nor the `warn` repeats it, the event being only the
-    /// client's word.
+    /// neither its text nor the report repeats it, the event being only the
+    /// client's word. The report is at `debug`: the client's error, which the
+    /// message's line files under `_OTHER`.
     pub fn unknown() -> WsReply {
-        tracing::warn!(
+        tracing::debug!(
             target: crate::TARGET,
             event = nest_rs_core::operation_log::OTHER,
             "subscribe_message dispatched to an unknown event",

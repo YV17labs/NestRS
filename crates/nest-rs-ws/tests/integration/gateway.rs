@@ -446,7 +446,8 @@ async fn unit_return_sends_none() {
 }
 
 /// An event no handler declares is the client's own word: refused as
-/// unknown, and neither the frame's text nor the line repeats it.
+/// unknown, and neither the frame's text nor the report repeats it; the
+/// report is at `debug`, a client's error being no denial.
 #[tokio::test]
 async fn unknown_event_returns_unknown_error() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -469,7 +470,7 @@ async fn unknown_event_returns_unknown_error() {
         "nest_rs::ws",
         "subscribe_message dispatched to an unknown event",
     );
-    assert_eq!(event.level, "warn");
+    assert_eq!(event.level, "debug");
     for (field, value) in &event.fields {
         assert!(!value.contains("marked"), "{field} = {value}");
     }
@@ -709,10 +710,11 @@ async fn an_error_that_is_not_send_logs_its_cause_chain() {
     }
 }
 
-/// `/websockets/messages/` promises a `warn!` on `nest_rs::ws` for every denied
-/// dispatch.
+/// A pipe's rejection is the client's error, which the message's line files:
+/// the operator reads the rejection at `debug` on `nest_rs::ws`, never a
+/// `warn`.
 #[tokio::test]
-async fn a_pipe_rejection_warns_on_the_ws_target() {
+async fn a_pipe_rejection_is_reported_at_debug_on_the_ws_target() {
     let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
         .dispatch(
@@ -724,12 +726,13 @@ async fn a_pipe_rejection_warns_on_the_ws_target() {
     assert!(matches!(reply, WsReply::Error(_)), "the frame is unchanged");
 
     let event = logs.expect_one("nest_rs::ws", "subscribe_message rejected by a pipe");
-    assert_eq!(event.level, "warn");
+    assert_eq!(event.level, "debug");
     assert_eq!(event.field("event").as_deref(), Some("checked"));
+    assert!(logs.events_at(tracing::Level::WARN).is_empty());
 }
 
 #[tokio::test]
-async fn a_structured_validation_rejection_warns_too() {
+async fn a_structured_validation_rejection_is_reported_at_debug_too() {
     let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
         .dispatch(
@@ -741,12 +744,15 @@ async fn a_structured_validation_rejection_warns_too() {
     assert!(matches!(reply, WsReply::Error(_)));
 
     let event = logs.expect_one("nest_rs::ws", "subscribe_message rejected by a pipe");
-    assert_eq!(event.level, "warn");
+    assert_eq!(event.level, "debug");
     assert_eq!(event.field("event").as_deref(), Some("named"));
+    assert!(logs.events_at(tracing::Level::WARN).is_empty());
 }
 
+/// A payload that does not decode is the client's error, which the message's
+/// line files: its report says where at `debug`, never a `warn`.
 #[tokio::test]
-async fn a_malformed_payload_warns_on_the_ws_target() {
+async fn a_malformed_payload_is_reported_at_debug_naming_where() {
     let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
         .dispatch(
@@ -768,8 +774,14 @@ async fn a_malformed_payload_warns_on_the_ws_target() {
         "nest_rs::ws",
         "subscribe_message payload failed to deserialize",
     );
-    assert_eq!(event.level, "warn");
+    assert_eq!(event.level, "debug");
     assert_eq!(event.field("event").as_deref(), Some("named"));
+    assert_eq!(event.field("error").as_deref(), Some("at `name`: missing"));
+    assert!(
+        logs.events_at(tracing::Level::WARN).is_empty(),
+        "{:#?}",
+        logs.events()
+    );
 }
 
 #[tokio::test]
@@ -1624,6 +1636,19 @@ async fn a_binary_frame_is_refused_in_band_and_the_socket_survives() {
         "websocket message refused: binary frames carry no envelope",
     );
     assert_eq!(event.field("bytes").as_deref(), Some("3"));
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE.name(),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+        "the frame is a message its edge refused: {line:#?}",
+    );
+    assert_eq!(
+        line.field("event").as_deref(),
+        Some(nest_rs_core::operation_log::OTHER),
+    );
 
     socket.send("echo", serde_json::json!("still here")).await;
     assert_eq!(socket.next_envelope().await["data"], "still here");

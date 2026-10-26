@@ -25,6 +25,10 @@ it failed and never what it held:
 { "event": "error", "data": { "error": "invalid envelope at `event`: missing", "errors": { "code": "INVALID_ARGUMENT" } } }
 ```
 
+It is a message all the same: its `ws.message` line files `outcome="error"`
+under `event="_OTHER"`, as a binary frame's does, since no handler declared
+what it named.
+
 ## A handler signature
 
 `#[subscribe_message("event")]` binds a method to that event name in the
@@ -261,15 +265,18 @@ too-short password never rides back out. `message` is `null` unless the
 `#[validate]` rule set one.
 
 `errors` is **absent**, not `null`, when the failure had nothing structured to
-say, so a client can branch on its presence. Every refused dispatch is filed
-alongside the frame — a pipe rejection, a payload that does not deserialize, an
-unknown event and a handler's answered `Err` at `warn` on `nest_rs::ws`, a
-guard's denial at `warn` on `nest_rs::layers`, an opaque failure at `error`, as
-is the chain behind a `5xx` problem — so a denied dispatch shows up in logs
-without extra instrumentation. A handler's `Err` is filed once its answer is
-final: an [exception filter](#interceptors-filters-and-pipes) that answers it
-as a refusal files nothing, and one answering a `5xx` files the chain it
-withholds.
+say, so a client can branch on its presence. Every refused dispatch files its
+`ws.message` line `outcome="error"`, so a denied dispatch shows up in logs
+without extra instrumentation, and says why beside it. What the gateway refuses
+of what the client sent — a frame that is no envelope, a payload that does not
+deserialize, a pipe rejection, an unknown event — is reported at `debug` on
+`nest_rs::ws`, where it failed included: a client can send one per frame, and
+none is a denial. A handler's answered `Err` is filed at `warn` on
+`nest_rs::ws`, a guard's denial at `warn` on `nest_rs::layers`, an opaque
+failure at `error`, as is the chain behind a `5xx` problem. A handler's `Err`
+is filed once its answer is final: an
+[exception filter](#interceptors-filters-and-pipes) that answers it as a
+refusal files nothing, and one answering a `5xx` files the chain it withholds.
 
 A type **alias** over `Result` behaves the same. `pub type ServiceResult<T> =
 Result<T, MyError>` produces the identical error frame and the identical

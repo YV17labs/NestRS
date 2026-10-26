@@ -143,8 +143,8 @@ kind and names the settings that would admit it, never the origin sent or the
 `Host` it was compared to. Once
 `<PREFIX>_HTTP__CORS_ORIGINS` is set, only the origins it lists get one — the
 server's own included, when it serves the page — and the CORS layer's `403`
-files no `warn` ([CORS](/http/configuration/#cors)). A client that sends no
-`Origin` — anything but a browser — is not concerned.
+files its one `warn` on `nest_rs::http` ([CORS](/http/configuration/#cors)). A
+client that sends no `Origin` — anything but a browser — is not concerned.
 
 <Aside type="caution">
 A browser cannot set headers on a WebSocket handshake. Deployments that

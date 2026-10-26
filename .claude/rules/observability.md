@@ -118,9 +118,12 @@ and declaring a field nothing fills is the same defect with the opposite sign.
 - **The span says what the line says, and neither says `ok` for a unit whose
   work rolled back.** Wherever an edge files a line it records
   the outcome on the unit's span, so anything but `ok` exports as `error.type`
-  with the same word and an `Error` status (an HTTP `5xx` records its status code
-  instead, and an MCP tool's error in band `tool_error`, as their conventions
-  ask). A request cut before it answered is
+  with the same word and an `Error` status, or with the finer class its
+  convention asks: an HTTP `5xx` its status code, an MCP tool's error in band
+  `tool_error`, a JSON-RPC error its code, which `rpc.response.status_code`
+  carries too. A failure the convention reads as the caller's own — an HTTP
+  `4xx`, a JSON-RPC code the MCP conventions name so — records its code
+  alone: the server failed nothing. A request cut before it answered is
   named for the template its route table entry recorded, never exported
   anonymous.
 

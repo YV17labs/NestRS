@@ -901,6 +901,12 @@ async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
         span.fields,
     );
     assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+    assert_eq!(
+        span.field("rpc.response.status_code").as_deref(),
+        Some("-32603"),
+        "the code its client is answered with: {:?}",
+        span.fields,
+    );
     let contained = logs.expect_one(
         nest_rs_mcp::TARGET,
         "mcp operation panicked; its client is answered with an internal error",
@@ -1024,6 +1030,158 @@ async fn a_tool_error_in_band_files_its_line_error_and_its_span_tool_error() {
         answered().and_then(|line| line.field("outcome")).as_deref(),
         Some(nest_rs_core::operation_log::OK),
         "a call its tool answered stays ok",
+    );
+}
+
+const FAILING: &str = "/mcp/failing";
+
+#[mcp(path = "/mcp/failing")]
+#[derive(Clone, Default)]
+struct FailingTools;
+
+#[tools]
+impl FailingTools {
+    #[tool(description = "Fails in a way its client is not told of.")]
+    #[public]
+    async fn broken(&self) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("the ledger at 10.0.0.1 refused"))
+    }
+
+    #[tool(description = "Refuses its call as a conflict.")]
+    #[public]
+    async fn taken(&self) -> Result<String, nest_rs_core::Problem> {
+        Err(nest_rs_core::Problem::new(
+            409,
+            nest_rs_core::problem::code::CONFLICT,
+        ))
+    }
+
+    /// Draft a note.
+    #[prompt]
+    #[public]
+    async fn draft(&self) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            "draft",
+        )]))
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [FailingTools])]
+struct FailingModule;
+
+/// An operation answered with a JSON-RPC error files its line `error`, its
+/// unit rolled back, and its span records the code as OpenTelemetry's MCP
+/// conventions ask: `rpc.response.status_code` always, and `error.type` with
+/// an `Error` status only for a code they read as the server's failure — a
+/// code they read as the caller's own (`-32600`, `-32601`, `-32602`) fails
+/// nothing on the server, as an HTTP `4xx` does not.
+#[tokio::test]
+async fn a_json_rpc_error_records_its_code_on_the_operations_span() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<FailingModule>()
+        .await
+        .expect("the module boots");
+    let session = open_session(app.http(), FAILING, None).await;
+    let call = |method: &'static str, params: serde_json::Value| {
+        call_method(app.http(), FAILING, &session, None, method, params)
+    };
+    let answered = [
+        (
+            "tools/call",
+            "broken",
+            json!({ "name": "broken", "arguments": {} }),
+            -32603,
+            true,
+        ),
+        (
+            "tools/call",
+            "taken",
+            json!({ "name": "taken", "arguments": {} }),
+            -32600,
+            false,
+        ),
+        (
+            "tools/call",
+            "missing",
+            json!({ "name": "missing", "arguments": {} }),
+            -32602,
+            false,
+        ),
+        (
+            "prompts/get",
+            "missing",
+            json!({ "name": "missing" }),
+            -32602,
+            false,
+        ),
+        (
+            "resources/read",
+            "missing://resource",
+            json!({ "uri": "missing://resource" }),
+            -32601,
+            false,
+        ),
+    ];
+    let calls = answered.len();
+    for (method, addressed, params, code, fails) in answered {
+        let body = call(method, params).await;
+        let answer = result(&body);
+        assert_eq!(answer["error"]["code"], json!(code), "{method}: {answer}");
+
+        let said = code.to_string();
+        let span = || {
+            logs.spans().into_iter().find(|span| {
+                span.name == nest_rs_mcp::unit::OPERATION.name()
+                    && span.field("mcp.method.name").as_deref() == Some(method)
+                    && span.field("mcp.operation.name").as_deref() == Some(addressed)
+                    && span.field("rpc.response.status_code").is_some()
+            })
+        };
+        nest_rs_testing::wait_until(Duration::from_secs(2), || span().is_some()).await;
+        let span = span().unwrap_or_else(|| panic!("{method} {addressed}: its span"));
+        assert_eq!(
+            span.field("rpc.response.status_code").as_deref(),
+            Some(said.as_str()),
+            "{method} {addressed}: {:?}",
+            span.fields,
+        );
+        let (error_type, status) = if fails {
+            (Some(said.as_str()), Some("error"))
+        } else {
+            (None, None)
+        };
+        assert_eq!(
+            span.field("error.type").as_deref(),
+            error_type,
+            "{method} {addressed}: {:?}",
+            span.fields,
+        );
+        assert_eq!(
+            span.field("otel.status_code").as_deref(),
+            status,
+            "{method} {addressed}: {:?}",
+            span.fields,
+        );
+    }
+    let lines = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_mcp::unit::OPERATION.name(),
+    );
+    let failed: Vec<_> = lines
+        .iter()
+        .filter(|line| {
+            matches!(
+                line.field("method").as_deref(),
+                Some("tools/call" | "prompts/get" | "resources/read")
+            )
+        })
+        .map(|line| line.field("outcome"))
+        .collect();
+    assert_eq!(
+        failed,
+        vec![Some(nest_rs_core::operation_log::ERROR.to_owned()); calls],
+        "every unit rolled back, and its line says so: {lines:#?}",
     );
 }
 

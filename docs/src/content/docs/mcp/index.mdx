@@ -389,6 +389,17 @@ gets that opaque answer instead of waiting out its own timeout, the
 `mcp.operation` line files `outcome="panic"`, and the panic's text goes to
 `nest_rs::mcp` at `error` — never to the model.
 
+Every operation answered with a JSON-RPC error is a failed one: its unit of
+work rolls back, and its `mcp.operation` line files `outcome="error"`. Its span
+records the code as OpenTelemetry's
+[MCP conventions](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/mcp.md)
+ask. The code is always in `rpc.response.status_code` (`"-32603"`). When the
+server failed, it is also the span's `error.type`, with an `Error` status.
+A code the conventions read as the caller's own fails nothing on the server's
+span, as an HTTP `4xx` does not: `-32700` (Parse error), `-32600` (Invalid
+Request, a refusal included), `-32601` (Method not found), `-32602` (Invalid
+params, a tool or prompt no host declares) and `-32002` (Resource not found).
+
 What the client named is never handed back either. rmcp refuses a prompt no
 host declares, a method no host serves, a task its `TaskManager` does not hold
 and a request its transport turns away — an `MCP-Protocol-Version` it does not

@@ -20,12 +20,13 @@
 //!
 //! An operation files `ok`, or `error` for an answer its unit would not
 //! commit — a tool's error in band among them, which its span records as
-//! `tool_error` — and for one outliving `McpConfig::operation_timeout`, which
-//! every request but `subscriptions/listen` runs under; `panic` when it unwinds
-//! (contained, the client answered with an internal error rather than left to
-//! its timeout); or `cancelled` when its client cancels it or the transport
-//! stops it. The line is filed by
-//! [`OperationLine`], so an end nobody saw still files one.
+//! `tool_error`, and a JSON-RPC error, whose code its span records as
+//! OpenTelemetry's MCP conventions ask ([`FailedAs`]) — and for one outliving
+//! `McpConfig::operation_timeout`, which every request but
+//! `subscriptions/listen` runs under; `panic` when it unwinds (contained, the
+//! client answered with an internal error rather than left to its timeout); or
+//! `cancelled` when its client cancels it or the transport stops it. The line
+//! is filed by [`OperationLine`], so an end nobody saw still files one.
 
 #![expect(
     deprecated,
@@ -51,18 +52,18 @@ use rmcp::model::{
     CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
     CancelTaskMethod, CancelTaskParams, CancelledNotificationMethod, CancelledNotificationParam,
     CompleteRequestMethod, CompleteRequestParams, CompleteResult, ConstString, CustomNotification,
-    CustomRequest, CustomResult, DiscoverRequestMethod, DiscoverResult, GetPromptRequestMethod,
-    GetPromptRequestParams, GetPromptResponse, GetTaskMethod, GetTaskParams, GetTaskResult,
-    InitializeRequestParams, InitializeResult, InitializeResultMethod,
-    InitializedNotificationMethod, ListPromptsRequestMethod, ListPromptsResult,
-    ListResourceTemplatesRequestMethod, ListResourceTemplatesResult, ListResourcesRequestMethod,
-    ListResourcesResult, ListToolsRequestMethod, ListToolsResult, PaginatedRequestParams,
-    PingRequestMethod, ProgressNotificationMethod, ProgressNotificationParam, ProtocolVersion,
-    ReadResourceRequestMethod, ReadResourceRequestParams, ReadResourceResponse, Reference,
-    RootsListChangedNotificationMethod, ServerConfig, SetLevelRequestMethod, SetLevelRequestParams,
-    SubscribeRequestMethod, SubscribeRequestParams, SubscriptionFilter,
-    SubscriptionsListenRequestMethod, Tool, UnsubscribeRequestMethod, UnsubscribeRequestParams,
-    UpdateTaskMethod, UpdateTaskParams,
+    CustomRequest, CustomResult, DiscoverRequestMethod, DiscoverResult, ErrorCode,
+    GetPromptRequestMethod, GetPromptRequestParams, GetPromptResponse, GetTaskMethod,
+    GetTaskParams, GetTaskResult, InitializeRequestParams, InitializeResult,
+    InitializeResultMethod, InitializedNotificationMethod, ListPromptsRequestMethod,
+    ListPromptsResult, ListResourceTemplatesRequestMethod, ListResourceTemplatesResult,
+    ListResourcesRequestMethod, ListResourcesResult, ListToolsRequestMethod, ListToolsResult,
+    PaginatedRequestParams, PingRequestMethod, ProgressNotificationMethod,
+    ProgressNotificationParam, ProtocolVersion, ReadResourceRequestMethod,
+    ReadResourceRequestParams, ReadResourceResponse, Reference, RootsListChangedNotificationMethod,
+    ServerConfig, SetLevelRequestMethod, SetLevelRequestParams, SubscribeRequestMethod,
+    SubscribeRequestParams, SubscriptionFilter, SubscriptionsListenRequestMethod, Tool,
+    UnsubscribeRequestMethod, UnsubscribeRequestParams, UpdateTaskMethod, UpdateTaskParams,
 };
 use rmcp::service::{
     MaybeSendFuture, NotificationContext, RequestContext, RoleServer, SubscriptionContext,
@@ -261,6 +262,7 @@ impl OperationUnits {
             &correlation,
             mcp.method.name = method.sent(),
             mcp.operation.name = addressed.spanned(),
+            rpc.response.status_code = tracing::field::Empty,
         );
         let named = method.named();
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
@@ -324,13 +326,14 @@ impl OperationUnits {
                 Some(Ok(answered)) => {
                     match answered.failed_as() {
                         None => line.file(operation_log::OK),
-                        Some(error_type) => line.failed(error_type),
+                        Some(failed_as) => line.failed(failed_as),
                     }
                     answered.answer
                 }
                 Some(Err(payload)) => {
-                    line.unwound(&*payload);
-                    Err(opaque_answer())
+                    let answer = opaque_answer();
+                    line.unwound(&*payload, Some(answer.code));
+                    Err(answer)
                 }
                 None => {
                     line.file(operation_log::CANCELLED);
@@ -415,17 +418,17 @@ impl<T: 'static> Answered<T> {
         Self { answer, commits }
     }
 
-    /// The class its unit failed in, read off what decided the commit, so the
-    /// line and the span never say `ok` for a unit that rolled back: `None`
-    /// when it commits, [`TOOL_ERROR`] for a tool's error in band, `error`
-    /// otherwise.
-    fn failed_as(&self) -> Option<&'static str> {
+    /// How its unit failed, read off what decided the commit, so the line and
+    /// the span never say `ok` for a unit that rolled back: `None` when it
+    /// commits.
+    fn failed_as(&self) -> Option<FailedAs> {
         if self.commits {
             return None;
         }
         Some(match &self.answer {
-            Ok(value) if reports_tool_error(value) => TOOL_ERROR,
-            _ => operation_log::ERROR,
+            Err(error) => FailedAs::Answered(error.code),
+            Ok(value) if reports_tool_error(value) => FailedAs::ToolError,
+            Ok(_) => FailedAs::Unit,
         })
     }
 
@@ -475,9 +478,45 @@ fn reports_tool_error(value: &dyn Any) -> bool {
     result.is_some_and(|result| result.is_error == Some(true))
 }
 
+/// How an operation whose unit rolled back failed, which its span records as
+/// OpenTelemetry's MCP semantic conventions ask; its line files `error`.
+enum FailedAs {
+    /// A tool call answered with its error in band, `isError: true`: the
+    /// conventions' `tool_error`.
+    ToolError,
+    /// Answered with a JSON-RPC error: its code, as `rpc.response.status_code`,
+    /// and as `error.type` unless the conventions read it as the caller's own
+    /// ([`is_the_callers`]).
+    Answered(ErrorCode),
+    /// Answered with a value, the unit failed around it by a layer: the
+    /// outcome word, `error`.
+    Unit,
+}
+
 /// The `error.type` OpenTelemetry's MCP semantic conventions give a
 /// `CallToolResult` answered with `isError: true`.
 const TOOL_ERROR: &str = "tool_error";
+
+/// The span attribute OpenTelemetry's MCP conventions record a JSON-RPC
+/// error's code under, as a string.
+const RPC_RESPONSE_STATUS_CODE: &str = "rpc.response.status_code";
+
+/// Whether OpenTelemetry's MCP conventions read `code`, answered by a server,
+/// as a request the caller sent that the server could not serve — a parse
+/// error, an invalid request, a method, tool, prompt or resource no host
+/// serves, arguments that do not decode — rather than the server's failure.
+/// Such an operation fails nothing on the server's span, as an HTTP `4xx`
+/// does not: it records its code alone.
+fn is_the_callers(code: ErrorCode) -> bool {
+    matches!(
+        code,
+        ErrorCode::PARSE_ERROR
+            | ErrorCode::INVALID_REQUEST
+            | ErrorCode::METHOD_NOT_FOUND
+            | ErrorCode::INVALID_PARAMS
+            | ErrorCode::RESOURCE_NOT_FOUND
+    )
+}
 
 /// The request's own site's tail: rmcp's routing, its answer written into the
 /// operation's slot. An error, or a tool error reported in band, fails the
@@ -684,19 +723,34 @@ impl<'a> OperationLine<'a> {
         self.emit(outcome);
     }
 
-    /// The operation failed in class `error_type`, which its span records in
+    /// The operation failed as `failed_as` says, which its span records in
     /// place of the outcome word its line files, `error`: `tracing-opentelemetry`
     /// keeps every value a field is recorded with, so the class is recorded once
     /// and the line files with the span taken out.
-    fn failed(mut self, error_type: &'static str) {
+    fn failed(mut self, failed_as: FailedAs) {
         let span = std::mem::replace(&mut self.span, tracing::Span::none());
-        operation_log::record_error(&span, error_type);
+        match failed_as {
+            FailedAs::ToolError => operation_log::record_error(&span, TOOL_ERROR),
+            FailedAs::Answered(code) => {
+                span.record(RPC_RESPONSE_STATUS_CODE, tracing::field::display(code.0));
+                if !is_the_callers(code) {
+                    operation_log::record_error(&span, &code.0.to_string());
+                }
+            }
+            FailedAs::Unit => operation_log::record_error(&span, operation_log::ERROR),
+        }
         self.emit(operation_log::ERROR);
     }
 
-    /// The operation unwound: file `panic`, and give the operator what the
+    /// The operation unwound: file `panic`, the word every edge's span gives an
+    /// unwind, beside `answered`, the code its client is answered with — a
+    /// notification is answered nothing — and give the operator what the
     /// client is not told.
-    fn unwound(mut self, payload: &(dyn std::any::Any + Send)) {
+    fn unwound(mut self, payload: &(dyn std::any::Any + Send), answered: Option<ErrorCode>) {
+        if let Some(code) = answered {
+            self.span
+                .record(RPC_RESPONSE_STATUS_CODE, tracing::field::display(code.0));
+        }
         self.emit(operation_log::PANIC);
         RequestContinuation::new(None, self.correlation.clone()).enter(|| {
             nest_rs_core::contained_panic!(
@@ -804,7 +858,7 @@ macro_rules! notification_method {
                     async move {
                         match self.units.detached.run(handled).await {
                             Some(Ok(())) => line.file(operation_log::OK),
-                            Some(Err(payload)) => line.unwound(&*payload),
+                            Some(Err(payload)) => line.unwound(&*payload, None),
                             None => line.file(operation_log::CANCELLED),
                         }
                     },
@@ -1034,6 +1088,28 @@ mod tests {
                 "code": nest_rs_core::problem::code::UNAVAILABLE.as_str(),
             })),
         );
+    }
+
+    /// The five codes OpenTelemetry's MCP conventions read as the caller's
+    /// fail nothing on the server's span; every other code is the server's
+    /// failure, as the conventions say of "any other error code".
+    #[test]
+    fn only_the_codes_the_conventions_name_are_the_callers() {
+        for callers in [
+            ErrorCode::PARSE_ERROR,
+            ErrorCode::INVALID_REQUEST,
+            ErrorCode::METHOD_NOT_FOUND,
+            ErrorCode::INVALID_PARAMS,
+            ErrorCode::RESOURCE_NOT_FOUND,
+        ] {
+            assert!(is_the_callers(callers), "{}", callers.0);
+        }
+        for servers in [
+            ErrorCode::INTERNAL_ERROR,
+            ErrorCode::UNSUPPORTED_PROTOCOL_VERSION,
+        ] {
+            assert!(!is_the_callers(servers), "{}", servers.0);
+        }
     }
 
     /// A direct call: rmcp reaches this through `initialize`, so no wire probe

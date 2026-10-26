@@ -643,9 +643,11 @@ async fn a_tool_call_answered_before_rmcp_files_its_operation_line() {
         "the conventions' tool name, as the handler's span records it",
     );
     assert_eq!(
-        span.field("error.type").as_deref(),
-        Some(nest_rs_core::operation_log::ERROR),
+        span.field("rpc.response.status_code").as_deref(),
+        Some("-32602"),
+        "the code it was answered, a tool no host declares the caller's own",
     );
+    assert_eq!(span.field("error.type"), None, "{:?}", span.fields);
     assert_eq!(span.field("parent_span_id"), request.span_id);
 }
 

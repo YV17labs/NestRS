@@ -6,8 +6,9 @@ use std::io::{self, Seek, SeekFrom};
 use std::ops::Range;
 use std::time::Duration;
 
+use nest_rs_http::__private::method_not_allowed;
 use nest_rs_http::header::{
-    ACCEPT, ACCEPT_RANGES, ALLOW, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
+    ACCEPT, ACCEPT_RANGES, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
     IF_RANGE, LAST_MODIFIED, RANGE, VARY,
 };
 use nest_rs_http::{
@@ -102,7 +103,7 @@ impl Endpoint for StaticFilesEndpoint {
                 let cache_control = self.cache_control(&asset);
                 answer(asset, &req, cache_control)?
             }
-            Found::Asset(_) => method_not_allowed(),
+            Found::Asset(_) => method_not_allowed(ALLOWED),
             Found::Fallback(index) => answer(index, &req, NO_CACHE)?,
             Found::Escaped => escaped(),
             Found::Missing => not_found(),
@@ -284,14 +285,6 @@ fn escaped() -> Response {
 /// what is mounted.
 fn not_found() -> Response {
     ProblemDetails::from_status(StatusCode::NOT_FOUND).into_response()
-}
-
-/// The router's own `405`, with the methods the files serve (RFC 9110
-/// §15.5.6).
-fn method_not_allowed() -> Response {
-    let mut resp = ProblemDetails::from_status(StatusCode::METHOD_NOT_ALLOWED).into_response();
-    resp.headers_mut().insert(ALLOW, ALLOWED);
-    resp
 }
 
 fn bare(status: StatusCode) -> Response {

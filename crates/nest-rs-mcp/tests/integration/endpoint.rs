@@ -299,10 +299,11 @@ async fn a_request_the_transport_refuses_is_answered_without_what_it_carried() {
 }
 
 /// rmcp's transport refuses some requests in constant sentences, quoting
-/// nothing the request carried — a missing `Accept`, a missing or unknown
-/// session, a body past the cap, the `_meta` keys the specification fixes:
-/// each is kept for the client, as the problem's `detail` or the JSON-RPC
-/// error's `message`.
+/// nothing the request carried — a missing `Accept`, a body not typed JSON, a
+/// missing or unknown session, a body past the cap, the `_meta` keys the
+/// specification fixes: each is kept for the client, as the problem's
+/// `detail` or the JSON-RPC error's `message`, a problem beside the class its
+/// status names.
 #[tokio::test]
 async fn a_transport_refusal_quoting_nothing_keeps_its_sentence() {
     let app = listening_on(nest_rs_mcp::McpConfig {
@@ -313,7 +314,7 @@ async fn a_transport_refusal_quoting_nothing_keeps_its_sentence() {
     let detail = |response: nest_rs_testing::TestResponse| async move {
         let body = response.0.into_body().into_string().await.expect("a body");
         let problem: serde_json::Value = serde_json::from_str(&body).expect("a problem document");
-        problem["detail"].clone()
+        (problem["detail"].clone(), problem["code"].clone())
     };
 
     let accepting_json_only = app
@@ -328,7 +329,28 @@ async fn a_transport_refusal_quoting_nothing_keeps_its_sentence() {
     accepting_json_only.assert_status(StatusCode::NOT_ACCEPTABLE);
     assert_eq!(
         detail(accepting_json_only).await,
-        "Not Acceptable: Client must accept both application/json and text/event-stream",
+        (
+            "Not Acceptable: Client must accept both application/json and text/event-stream".into(),
+            "NOT_ACCEPTABLE".into(),
+        ),
+    );
+
+    let typed_otherwise = app
+        .http()
+        .post(LISTENING)
+        .header("host", "localhost")
+        .header("content-type", "text/plain")
+        .header("accept", "application/json, text/event-stream")
+        .body(request("tools/list", serde_json::json!({})).to_string())
+        .send()
+        .await;
+    typed_otherwise.assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(
+        detail(typed_otherwise).await,
+        (
+            "Unsupported Media Type: Content-Type must be application/json".into(),
+            "UNSUPPORTED_MEDIA_TYPE".into(),
+        ),
     );
 
     let sessionless = app
@@ -341,7 +363,10 @@ async fn a_transport_refusal_quoting_nothing_keeps_its_sentence() {
     sessionless.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
         detail(sessionless).await,
-        "Bad Request: Session ID is required"
+        (
+            "Bad Request: Session ID is required".into(),
+            "INVALID_ARGUMENT".into(),
+        ),
     );
 
     let unknown_session = nest_rs_testing::mcp::post_message(
@@ -355,7 +380,7 @@ async fn a_transport_refusal_quoting_nothing_keeps_its_sentence() {
     unknown_session.assert_status(StatusCode::NOT_FOUND);
     assert_eq!(
         detail(unknown_session).await,
-        "Not Found: Session not found"
+        ("Not Found: Session not found".into(), "NOT_FOUND".into()),
     );
 
     let oversized = nest_rs_testing::mcp::post_message(
@@ -372,7 +397,10 @@ async fn a_transport_refusal_quoting_nothing_keeps_its_sentence() {
     oversized.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(
         detail(oversized).await,
-        "Payload Too Large: request body exceeds 256 bytes"
+        (
+            "Payload Too Large: request body exceeds 256 bytes".into(),
+            "CONTENT_TOO_LARGE".into(),
+        ),
     );
 
     let without_meta = nest_rs_testing::mcp::post_message_with(
@@ -406,6 +434,65 @@ async fn a_transport_refusal_quoting_nothing_keeps_its_sentence() {
          io.modelcontextprotocol/protocolVersion, io.modelcontextprotocol/clientCapabilities",
         "{refused}",
     );
+}
+
+/// A body typed JSON that is no JSON-RPC message is input the server cannot
+/// accept (MCP's Streamable HTTP transport, *Sending Messages*): `400`, and a
+/// JSON-RPC error carrying no id, since none could be read — JSON-RPC 2.0
+/// §5.1's parse error for a body that is not JSON, its invalid request for
+/// JSON that is no request object — in the code's words, under the
+/// `INVALID_ARGUMENT` class, never a `415`, whose media type is right.
+#[tokio::test]
+async fn a_body_that_is_no_json_rpc_message_is_400_in_json_rpc_s_words() {
+    let app = listening_on(nest_rs_mcp::McpConfig::default()).await;
+    let posted = |body: &'static str| {
+        app.http()
+            .post(LISTENING)
+            .header("host", "localhost")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(body)
+            .send()
+    };
+
+    for (body, code, message) in [
+        (
+            r#"{ "jsonrpc": "2.0", "id": 7, "method": "marked"#,
+            -32700,
+            "Parse error",
+        ),
+        ("not json marked", -32700, "Parse error"),
+        (
+            r#"[7, "tools/call", {"name": "marked"}]"#,
+            -32600,
+            "Invalid Request",
+        ),
+        (
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":["marked"]}"#,
+            -32600,
+            "Invalid Request",
+        ),
+        (r#""marked""#, -32600, "Invalid Request"),
+    ] {
+        let response = posted(body).await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        response.assert_content_type("application/json");
+        let said = response.0.into_body().into_string().await.expect("a body");
+        assert!(!said.contains("marked"), "{body}: {said}");
+        let refused: serde_json::Value = serde_json::from_str(&said).expect("a JSON-RPC error");
+        assert_eq!(
+            refused,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": code,
+                    "message": message,
+                    "data": { "code": "INVALID_ARGUMENT" },
+                },
+            }),
+            "{body}",
+        );
+    }
 }
 
 /// How many [`CountedTools`] hosts the mount built: one per session, and one

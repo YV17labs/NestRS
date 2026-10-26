@@ -8,7 +8,7 @@ use nest_rs_http::StatusCode;
 use nest_rs_static_files::StaticFilesConfig;
 use nest_rs_testing::LogCapture;
 
-use crate::{INDEX, NAVIGATION, SCRIPT, header, is_problem_404, serve, site, text};
+use crate::{INDEX, NAVIGATION, SCRIPT, assert_code, header, is_problem_404, serve, site, text};
 
 #[tokio::test]
 async fn a_file_is_served_with_its_type_validators_and_the_edge_s_headers() {
@@ -57,6 +57,7 @@ async fn another_method_is_refused_with_the_ones_allowed() {
     ] {
         resp.assert_status(StatusCode::METHOD_NOT_ALLOWED);
         resp.assert_header("allow", "GET, HEAD");
+        assert_code(resp, "METHOD_NOT_ALLOWED").await;
     }
     assert!(is_problem_404(app.http().post("/assets/missing.js").send().await).await);
 }
@@ -163,12 +164,14 @@ async fn a_current_copy_is_answered_not_modified() {
         .send()
         .await
         .assert_status_is_ok();
-    app.http()
+    let failed = app
+        .http()
         .get("/assets/app.js")
         .header("if-match", "\"stale\"")
         .send()
-        .await
-        .assert_status(StatusCode::PRECONDITION_FAILED);
+        .await;
+    failed.assert_status(StatusCode::PRECONDITION_FAILED);
+    assert_code(failed, "PRECONDITION_FAILED").await;
 }
 
 /// RFC 9110 §13.2.2's order: a date is read only where the entity tag
@@ -263,6 +266,7 @@ async fn a_range_is_answered_partially_or_refused_when_it_reaches_nothing() {
         .await;
     past.assert_status(StatusCode::RANGE_NOT_SATISFIABLE);
     past.assert_header("content-range", format!("bytes */{len}"));
+    assert_code(past, "RANGE_NOT_SATISFIABLE").await;
 
     let stale = app
         .http()

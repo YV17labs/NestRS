@@ -101,6 +101,16 @@ pub(crate) async fn text(resp: TestResponse) -> String {
     resp.0.into_body().into_string().await.unwrap()
 }
 
+/// That `resp` is a problem document naming `class` in its `code` member.
+pub(crate) async fn assert_code(resp: TestResponse, class: &str) {
+    resp.json()
+        .await
+        .value()
+        .object()
+        .get("code")
+        .assert_string(class);
+}
+
 /// Whether `resp` is the framework's `404` problem document, which an API
 /// client parses — never a page.
 pub(crate) async fn is_problem_404(resp: TestResponse) -> bool {

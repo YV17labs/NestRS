@@ -122,7 +122,7 @@ states the parts.
 
 - The [`max_body_bytes` cap](/http/configuration/#request-body-size-limit)
   gates **every** body, `Multipart` included. An upload declaring a length past
-  the cap — a browser's form does — is answered `413 Payload Too Large` unread;
+  the cap — a browser's form does — is answered `413 Content Too Large` unread;
   one that declares none is cut at the cap as it is read, and answered `413`
   too. The default cap is **2 MiB** — so a 3 MiB upload fails out of the box.
   Raising the ceiling is `<PREFIX>_HTTP__MAX_BODY_BYTES`, not a compensating

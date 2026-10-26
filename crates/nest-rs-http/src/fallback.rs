@@ -10,7 +10,6 @@ use std::any::TypeId;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use http::header::ALLOW;
 use http::{HeaderValue, StatusCode};
 use nest_rs_core::__private::{
     HandlerDeclaration, MetaLevels, Site, declare_handler, declare_site,
@@ -20,7 +19,7 @@ use nest_rs_core::{Container, Handler, Posture};
 use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::Result;
 use crate::matched::MatchedRoute;
-use crate::problem::ProblemDetails;
+use crate::problem::{ProblemDetails, method_not_allowed};
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 use crate::route_template::{segment_parameter, unescape};
@@ -64,9 +63,7 @@ impl SiteTail for Unrouted {
         let Some(NotAllowed(allow)) = req.extensions().get::<NotAllowed>() else {
             return Ok(ProblemDetails::from_status(StatusCode::NOT_FOUND).into_response());
         };
-        let mut resp = ProblemDetails::from_status(StatusCode::METHOD_NOT_ALLOWED).into_response();
-        resp.headers_mut().insert(ALLOW, allow.clone());
-        Ok(resp)
+        Ok(method_not_allowed(allow.clone()))
     }
 }
 

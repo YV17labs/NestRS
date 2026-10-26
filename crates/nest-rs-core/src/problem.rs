@@ -126,9 +126,20 @@ impl fmt::Display for Code {
     }
 }
 
-/// The codes the framework answers with, one per outcome class: the HTTP
-/// status's reason phrase when the class is an HTTP one, gRPC's canonical
-/// status name otherwise.
+/// The codes the framework answers with, one per outcome class, each read off
+/// the standard that names its class.
+///
+/// A class one HTTP status answers by its own name is that status's registered
+/// reason phrase in upper snake case (the IANA HTTP Status Code Registry,
+/// RFC 9110 §15.5): `FORBIDDEN`, `NOT_FOUND`, `CONFLICT` and every class from
+/// `METHOD_NOT_ALLOWED` to `UPGRADE_REQUIRED` below, and the next status the
+/// framework comes to answer. A class the reason phrases do not name is read
+/// off the standard that does: gRPC's canonical status names for a class
+/// several statuses answer, or one whose phrase misnames it —
+/// `INVALID_ARGUMENT` (a `400` or a `422`), `UNAUTHENTICATED` (a `401`,
+/// whose phrase says *Unauthorized*), `UNAVAILABLE` (a `503`), `INTERNAL` (any
+/// other `5xx`) —, RFC 6750 §3.1's error code for `INSUFFICIENT_SCOPE`, and
+/// RFC 6585 §4's *rate limiting* for `RATE_LIMITED`.
 pub mod code {
     use super::Code;
 
@@ -150,6 +161,24 @@ pub mod code {
     pub const CONFLICT: Code = Code::new("CONFLICT");
     /// The server failed; the reason is none of the client's business — a `500`.
     pub const INTERNAL: Code = Code::new("INTERNAL");
+    /// What was addressed does not serve the request's method — a `405`.
+    pub const METHOD_NOT_ALLOWED: Code = Code::new("METHOD_NOT_ALLOWED");
+    /// No representation the request accepts can be answered — a `406`.
+    pub const NOT_ACCEPTABLE: Code = Code::new("NOT_ACCEPTABLE");
+    /// The request did not arrive whole in the time the server waits — a `408`.
+    pub const REQUEST_TIMEOUT: Code = Code::new("REQUEST_TIMEOUT");
+    /// What was addressed is gone for good — a `410`.
+    pub const GONE: Code = Code::new("GONE");
+    /// A precondition the request states does not hold — a `412`.
+    pub const PRECONDITION_FAILED: Code = Code::new("PRECONDITION_FAILED");
+    /// The request's content is larger than the server takes — a `413`.
+    pub const CONTENT_TOO_LARGE: Code = Code::new("CONTENT_TOO_LARGE");
+    /// The request's content is in a format the server does not take — a `415`.
+    pub const UNSUPPORTED_MEDIA_TYPE: Code = Code::new("UNSUPPORTED_MEDIA_TYPE");
+    /// No range the request names overlaps what is addressed — a `416`.
+    pub const RANGE_NOT_SATISFIABLE: Code = Code::new("RANGE_NOT_SATISFIABLE");
+    /// The request is served only once the connection switches protocols — a `426`.
+    pub const UPGRADE_REQUIRED: Code = Code::new("UPGRADE_REQUIRED");
 }
 
 /// A client error every edge answers in its standard form.
@@ -471,10 +500,25 @@ mod tests {
             code::NOT_FOUND,
             code::CONFLICT,
             code::INTERNAL,
+            code::METHOD_NOT_ALLOWED,
+            code::NOT_ACCEPTABLE,
+            code::REQUEST_TIMEOUT,
+            code::GONE,
+            code::PRECONDITION_FAILED,
+            code::CONTENT_TOO_LARGE,
+            code::UNSUPPORTED_MEDIA_TYPE,
+            code::RANGE_NOT_SATISFIABLE,
+            code::UPGRADE_REQUIRED,
         ];
         let distinct: std::collections::BTreeSet<&str> = all.iter().map(|c| c.as_str()).collect();
         assert_eq!(distinct.len(), all.len(), "a code is declared twice");
         assert_eq!(code::NOT_FOUND.to_string(), "NOT_FOUND");
+        for (a, b) in all.iter().flat_map(|a| all.iter().map(move |b| (a, b))) {
+            assert!(
+                a == b || !b.as_str().starts_with(a.as_str()),
+                "{a} is a raw prefix of {b}: a filter on one matches the other",
+            );
+        }
     }
 
     #[test]

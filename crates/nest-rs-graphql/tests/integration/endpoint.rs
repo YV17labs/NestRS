@@ -54,10 +54,14 @@ async fn a_plain_get_without_the_playground_is_405_naming_post() {
         .expect("boots");
 
     for method in [Method::GET, Method::HEAD] {
-        let resp = app.http().request(method, "/graphql").send().await;
+        let resp = app.http().request(method.clone(), "/graphql").send().await;
 
         resp.assert_status(StatusCode::METHOD_NOT_ALLOWED);
         resp.assert_content_type("application/problem+json");
         resp.assert_header(header::ALLOW, "POST");
+        if method == Method::GET {
+            let problem: serde_json::Value = resp.json().await.value().deserialize();
+            assert_eq!(problem["code"], "METHOD_NOT_ALLOWED", "{problem}");
+        }
     }
 }

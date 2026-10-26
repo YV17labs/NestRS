@@ -842,6 +842,7 @@ mod tests {
             resp.headers()[header::CONTENT_TYPE],
             "application/problem+json"
         );
+        assert_eq!(crate::testing::code_of(resp).await, "CONTENT_TOO_LARGE");
     }
 
     /// Reads its body to the end and answers `200` whatever the read made of
@@ -886,6 +887,7 @@ mod tests {
             .expect("the edge answers");
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(crate::testing::code_of(resp).await, "CONTENT_TOO_LARGE");
     }
 
     #[tokio::test(start_paused = true)]
@@ -902,6 +904,7 @@ mod tests {
             resp.headers()[header::CONTENT_TYPE],
             "application/problem+json"
         );
+        assert_eq!(crate::testing::code_of(resp).await, "REQUEST_TIMEOUT");
     }
 
     #[tokio::test(start_paused = true)]

@@ -408,10 +408,20 @@ quoting the name, the id or the header. The endpoint answers each by kind:
 `prompt not found`, still listing the prompts under `available_prompts`;
 `unknown task`; JSON-RPC's own words for the error's code, such as `Method not
 found`, its id and code kept; or, for a refusal that is no JSON-RPC error, the
-status's problem document. A refusal rmcp words without quoting the request —
-`Not Acceptable: Client must accept both application/json and
-text/event-stream`, `Not Found: Session not found`, the `_meta` keys the
-specification requires — keeps its sentence, as the `detail` or the message.
+status's problem document, under the class its status names. A refusal rmcp
+words without quoting the request — `Not Acceptable: Client must accept both
+application/json and text/event-stream`, `Not Found: Session not found`, the
+`_meta` keys the specification requires — keeps its sentence, as the `detail`
+or the message.
+
+A body typed JSON that is no JSON-RPC message is input the server cannot
+accept, as MCP's Streamable HTTP transport says: it is answered `400` with a
+JSON-RPC error carrying no `id`, since none could be read — `-32700` (Parse
+error) for a body that is not JSON, `-32600` (Invalid Request) for JSON that is
+no message — under `{"code":"INVALID_ARGUMENT"}`, never what it held. A body
+typed otherwise is the `415` rmcp answers,
+`Unsupported Media Type: Content-Type must be application/json`, under
+`UNSUPPORTED_MEDIA_TYPE`.
 
 ## Trait-based DI
 

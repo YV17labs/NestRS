@@ -111,14 +111,32 @@ on GraphQL, WebSockets and MCP:
 | `401` | `UNAUTHENTICATED` |
 | `403` | `FORBIDDEN` |
 | `404` | `NOT_FOUND` |
+| `405` | `METHOD_NOT_ALLOWED` |
+| `406` | `NOT_ACCEPTABLE` |
+| `408` | `REQUEST_TIMEOUT` |
 | `409` | `CONFLICT` |
+| `410` | `GONE` |
+| `412` | `PRECONDITION_FAILED` |
+| `413` | `CONTENT_TOO_LARGE` |
+| `415` | `UNSUPPORTED_MEDIA_TYPE` |
+| `416` | `RANGE_NOT_SATISFIABLE` |
+| `426` | `UPGRADE_REQUIRED` |
 | `429` | `RATE_LIMITED` |
 | `503` | `UNAVAILABLE` |
 | any other `5xx` | `INTERNAL` |
 
-A status no class names — a `405`, a `413`, a `415` — carries no `code`. A
-client keys on the `status`, on that `code`, or on a `type` of your own set
-with `.with_type(…)`. Builders extend the body:
+Every status the framework answers has its class, and each `code` is read off
+the standard that names that class. Where one status answers a class by its
+own name, the `code` is that name as its `title` spells it — `413 Content Too
+Large` is `CONTENT_TOO_LARGE`. Where the reason phrases name no such class, the
+standard that does gives the `code`: gRPC's canonical names for a class several
+statuses share or one whose phrase misnames it (`INVALID_ARGUMENT` for both
+`400` and `422`, `UNAUTHENTICATED` for a `401` whose phrase says
+*Unauthorized*, `UNAVAILABLE` for `503`, `INTERNAL` for any other `5xx`), and
+RFC 6585's *rate limiting* for `429`'s `RATE_LIMITED`. A status the framework
+never writes, a `402` or a `451`, carries no `code`. A client keys on the
+`status`, on that `code`, or on a `type` of your own set with `.with_type(…)`.
+Builders extend the body:
 
 | Builder | Field |
 |---------|-------|

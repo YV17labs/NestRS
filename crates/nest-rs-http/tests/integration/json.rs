@@ -50,19 +50,22 @@ async fn each_refusal_answers_a_problem_that_never_quotes_the_request() {
             "text/plain; sk_live_51",
             r#"{"quantity":2}"#.to_owned(),
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "UNSUPPORTED_MEDIA_TYPE",
         ),
         (
             "application/json",
             r#"{"quantity":"sk_live_51"}"#.to_owned(),
             StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
         ),
         (
             "application/json",
             format!(r#"{{"quantity":2,"pad":"{}"}}"#, "x".repeat(64)),
             StatusCode::PAYLOAD_TOO_LARGE,
+            "CONTENT_TOO_LARGE",
         ),
     ];
-    for (content_type, body, status) in cases {
+    for (content_type, body, status, class) in cases {
         let resp = client
             .post("/orders")
             .content_type(content_type)
@@ -73,5 +76,7 @@ async fn each_refusal_answers_a_problem_that_never_quotes_the_request() {
         resp.assert_content_type("application/problem+json");
         let said = resp.0.into_body().into_string().await.expect("a body");
         assert!(!said.contains("sk_live"), "{status}: {said}");
+        let problem: serde_json::Value = serde_json::from_str(&said).expect("a problem");
+        assert_eq!(problem["code"], class, "{status}: {said}");
     }
 }

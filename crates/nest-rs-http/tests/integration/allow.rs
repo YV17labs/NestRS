@@ -46,6 +46,7 @@ async fn the_allow_header_survives_the_problem_details_rewrite() {
     resp.assert_content_type("application/problem+json");
     let body: serde_json::Value = resp.json().await.value().deserialize();
     assert_eq!(body["status"], 405);
+    assert_eq!(body["code"], "METHOD_NOT_ALLOWED");
 }
 
 // No `#[head]` is declared: the route table answers `HEAD` through the `GET` route.

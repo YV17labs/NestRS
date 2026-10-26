@@ -90,8 +90,14 @@ log line carries it.
 `extensions.code` is the stable class a client branches on without parsing the
 message. The framework's codes are constants in `nest_rs::core::problem::code`
 — `UNAUTHENTICATED`, `FORBIDDEN`, `INSUFFICIENT_SCOPE`, `RATE_LIMITED`,
-`UNAVAILABLE`, `INVALID_ARGUMENT`, `NOT_FOUND`, `CONFLICT`, `INTERNAL`: the HTTP
-reason phrase for an HTTP class, gRPC's canonical name otherwise. Every refusal
+`UNAVAILABLE`, `INVALID_ARGUMENT`, `NOT_FOUND`, `CONFLICT`, `INTERNAL`, and one
+per other status the framework answers, from `METHOD_NOT_ALLOWED` to
+`UPGRADE_REQUIRED`. Each is read off the standard that names its class: the
+HTTP status's reason phrase in upper snake case for a class one status answers
+by that name, gRPC's canonical name for a class several statuses share or
+whose phrase misnames it (`INVALID_ARGUMENT`, `UNAUTHENTICATED`,
+`UNAVAILABLE`, `INTERNAL`), RFC 6750's error code for `INSUFFICIENT_SCOPE`,
+and RFC 6585's *rate limiting* for `RATE_LIMITED`. Every refusal
 the framework writes reads them: a guard's denial, the by-id binding (a `bind`
 argument that is not a UUID v7 answers `"id must be a UUID v7"` under
 `INVALID_ARGUMENT`, the twin of the HTTP path's `400`), an opaque failure.

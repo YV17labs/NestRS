@@ -1424,6 +1424,21 @@ mod tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
+    /// A handshake refused for the protocol its connection speaks answers
+    /// the `426` class, one refused for its head the `400` one.
+    #[cfg(feature = "websocket")]
+    #[tokio::test]
+    async fn a_refused_handshake_names_the_class_of_its_status() {
+        for (refused, class) in [
+            (HandshakeRefused::VersionUnsupported, "UPGRADE_REQUIRED"),
+            (HandshakeRefused::NotUpgradable, "UPGRADE_REQUIRED"),
+            (HandshakeRefused::KeyMalformed, "INVALID_ARGUMENT"),
+        ] {
+            let problem = problem_of(refused.as_response()).await;
+            assert_eq!(problem["code"], class, "{refused:?}: {problem}");
+        }
+    }
+
     #[tokio::test]
     async fn extensions_on_an_error_overwrite_the_response_extension_when_rendered() {
         let ready = Response::builder()

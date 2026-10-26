@@ -674,6 +674,8 @@ mod the_answer_on_the_wire {
         resp.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
         resp.assert_content_type("application/problem+json");
         resp.assert_header_is_not_exist("x-graphql-tag");
+        let problem: serde_json::Value = resp.json().await.value().deserialize();
+        assert_eq!(problem["code"], "CONTENT_TOO_LARGE", "{problem}");
     }
 
     /// The GraphQL multipart request specification's three parts: the
@@ -735,11 +737,14 @@ mod the_answer_on_the_wire {
     async fn a_multipart_upload_over_the_cap_is_413() {
         let app = boot().await;
 
-        app.http()
+        let resp = app
+            .http()
             .post("/graphql")
             .multipart(upload_of(CAP * 16))
             .send()
-            .await
-            .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+            .await;
+        resp.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+        let problem: serde_json::Value = resp.json().await.value().deserialize();
+        assert_eq!(problem["code"], "CONTENT_TOO_LARGE", "{problem}");
     }
 }

@@ -263,7 +263,7 @@ pub mod __private {
         denial_to_http_response,
     };
     pub use crate::origin::OriginScheme;
-    pub use crate::problem::framework_sentence;
+    pub use crate::problem::{framework_sentence, method_not_allowed};
     pub use crate::response::IntoResult;
     pub use crate::route_site::{
         RouteGuards, RoutePipes, RouteWrapper, mount_controller, mount_route, route_guard_stage,

@@ -391,12 +391,44 @@ pub(crate) fn method_not_found() -> McpError {
 /// JSON-RPC 2.0's words for an unknown method (§5.1).
 const METHOD_NOT_FOUND: &str = "Method not found";
 
+/// JSON-RPC 2.0's words for a body that is not JSON (§5.1).
+const PARSE_ERROR: &str = "Parse error";
+
+/// JSON-RPC 2.0's words for JSON that is no request object (§5.1).
+const INVALID_REQUEST: &str = "Invalid Request";
+
+/// How rmcp 3.5 opens its refusal of a body it cannot read as a JSON-RPC
+/// message, serde's error after it.
+const UNREAD_MESSAGE: &str = "fail to deserialize request body ";
+
+/// How serde words a value that is none of an untagged enum's shapes: rmcp
+/// reads every message through one, so JSON of any other shape is said alike.
+const NO_MESSAGE_SHAPE: &str = "data did not match any variant of untagged enum ";
+
+/// The JSON-RPC error answering a body rmcp's transport could not read as a
+/// message, when `text` is rmcp's refusal of one: JSON-RPC 2.0 §5.1's parse
+/// error for a body that is not JSON, its invalid request for JSON that is no
+/// message, each in its code's words under the `INVALID_ARGUMENT` class.
+pub(crate) fn unread_message(text: &str) -> Option<McpError> {
+    let decoded = text.strip_prefix(UNREAD_MESSAGE)?;
+    let (refused, said) = if decoded.starts_with(NO_MESSAGE_SHAPE) {
+        (ErrorCode::INVALID_REQUEST, INVALID_REQUEST)
+    } else {
+        (ErrorCode::PARSE_ERROR, PARSE_ERROR)
+    };
+    Some(McpError::new(
+        refused,
+        said,
+        Some(serde_json::json!({ "code": code::INVALID_ARGUMENT.as_str() })),
+    ))
+}
+
 /// What a JSON-RPC error `code` says: JSON-RPC 2.0's words for its own codes
 /// (§5.1) and MCP's for the codes rmcp names; `None` for any other.
 pub(crate) fn said_by_code(code: ErrorCode) -> Option<&'static str> {
     Some(match code {
-        ErrorCode::PARSE_ERROR => "Parse error",
-        ErrorCode::INVALID_REQUEST => "Invalid Request",
+        ErrorCode::PARSE_ERROR => PARSE_ERROR,
+        ErrorCode::INVALID_REQUEST => INVALID_REQUEST,
         ErrorCode::METHOD_NOT_FOUND => METHOD_NOT_FOUND,
         ErrorCode::INVALID_PARAMS => "Invalid params",
         ErrorCode::INTERNAL_ERROR => "Internal error",
@@ -696,6 +728,51 @@ mod tests {
             Some(serde_json::json!({ "file": ["must not be empty"] })),
             "the field errors ride along so the model can correct the argument \
              it got wrong, exactly as the HTTP 400 carries them",
+        );
+    }
+
+    /// rmcp's refusal of a body it cannot read as a message, as its
+    /// transport words it for each body, is read by the category serde gives
+    /// the failure: a syntax error is no JSON, any other is JSON of no
+    /// message's shape. Its sentence, which may quote the body, is never kept.
+    #[test]
+    fn an_unread_message_is_said_by_the_category_of_its_failure() {
+        use rmcp::model::ClientJsonRpcMessage;
+
+        for body in [
+            "{ not json",
+            r#"{"jsonrpc":"2.0","id":7,"method":"marked""#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/list"} trailing"#,
+            r#"[7, "tools/call", {"name": "marked"}]"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":["marked"]}"#,
+            r#""marked""#,
+            "null",
+            r#"{"marked": true}"#,
+        ] {
+            let failed = serde_json::from_slice::<ClientJsonRpcMessage>(body.as_bytes())
+                .expect_err("no message");
+            let syntax = failed.classify() != serde_json::error::Category::Data;
+            let refused =
+                unread_message(&format!("{UNREAD_MESSAGE}{failed}")).expect("rmcp's refusal");
+            let (code, said) = if syntax {
+                (ErrorCode::PARSE_ERROR, PARSE_ERROR)
+            } else {
+                (ErrorCode::INVALID_REQUEST, INVALID_REQUEST)
+            };
+            assert_eq!(
+                (refused.code, refused.message.as_ref()),
+                (code, said),
+                "{body}"
+            );
+            assert_eq!(
+                refused.data,
+                Some(serde_json::json!({ "code": "INVALID_ARGUMENT" })),
+                "{body}",
+            );
+        }
+        assert!(
+            unread_message("Unsupported Media Type: Content-Type must be application/json")
+                .is_none()
         );
     }
 

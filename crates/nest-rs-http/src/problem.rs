@@ -136,8 +136,9 @@ impl ProblemDetails {
     /// the status names when core names one — the document
     /// [`from_problem`](Self::from_problem) gives that class's [`Problem`], so
     /// one class answers one document whoever answered it, a server failure
-    /// the framework does not describe included. A status no class names (a
-    /// `405`, a `413`, a `415`) carries no `code`.
+    /// the framework does not describe included. Core names a class for every
+    /// status the framework answers; a status it never writes (a `402`, a
+    /// `451`) carries no `code`.
     ///
     /// ```
     /// use nest_rs_http::{ProblemDetails, StatusCode};
@@ -149,7 +150,9 @@ impl ProblemDetails {
     /// assert_eq!(busy.extensions["code"], "UNAVAILABLE");
     /// let missing = ProblemDetails::from_status(StatusCode::NOT_FOUND);
     /// assert_eq!(missing.extensions["code"], "NOT_FOUND");
-    /// assert!(ProblemDetails::from_status(StatusCode::METHOD_NOT_ALLOWED).extensions.is_empty());
+    /// let large = ProblemDetails::from_status(StatusCode::PAYLOAD_TOO_LARGE);
+    /// assert_eq!((large.title.as_str(), &large.extensions["code"]), ("Content Too Large", &"CONTENT_TOO_LARGE".into()));
+    /// assert!(ProblemDetails::from_status(StatusCode::PAYMENT_REQUIRED).extensions.is_empty());
     /// ```
     pub fn from_status(status: StatusCode) -> Self {
         let problem = Self::about_blank(status);
@@ -250,24 +253,42 @@ impl ProblemDetails {
     }
 }
 
-/// The class `status` names, as core's codes each name their status:
-/// `INVALID_ARGUMENT` for a `400` or a `422`, `UNAUTHENTICATED` for a `401`,
-/// `FORBIDDEN` for a `403`, `NOT_FOUND` for a `404`, `CONFLICT` for a `409`,
-/// `RATE_LIMITED` for a `429`, `UNAVAILABLE` for a `503`, the server unable to
+/// The class `status` names, as core's codes each name their status: the
+/// class every status the framework answers is known by, `INVALID_ARGUMENT`
+/// for a `400` or a `422`, `UNAVAILABLE` for a `503`, the server unable to
 /// serve the request in time, and `INTERNAL` for any other `5xx`. `None` for a
-/// status no class names.
+/// status the framework never answers.
 fn status_class(status: StatusCode) -> Option<Code> {
     match status {
         StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => Some(code::INVALID_ARGUMENT),
         StatusCode::UNAUTHORIZED => Some(code::UNAUTHENTICATED),
         StatusCode::FORBIDDEN => Some(code::FORBIDDEN),
         StatusCode::NOT_FOUND => Some(code::NOT_FOUND),
+        StatusCode::METHOD_NOT_ALLOWED => Some(code::METHOD_NOT_ALLOWED),
+        StatusCode::NOT_ACCEPTABLE => Some(code::NOT_ACCEPTABLE),
+        StatusCode::REQUEST_TIMEOUT => Some(code::REQUEST_TIMEOUT),
         StatusCode::CONFLICT => Some(code::CONFLICT),
+        StatusCode::GONE => Some(code::GONE),
+        StatusCode::PRECONDITION_FAILED => Some(code::PRECONDITION_FAILED),
+        StatusCode::PAYLOAD_TOO_LARGE => Some(code::CONTENT_TOO_LARGE),
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => Some(code::UNSUPPORTED_MEDIA_TYPE),
+        StatusCode::RANGE_NOT_SATISFIABLE => Some(code::RANGE_NOT_SATISFIABLE),
+        StatusCode::UPGRADE_REQUIRED => Some(code::UPGRADE_REQUIRED),
         StatusCode::TOO_MANY_REQUESTS => Some(code::RATE_LIMITED),
         StatusCode::SERVICE_UNAVAILABLE => Some(code::UNAVAILABLE),
         status if status.is_server_error() => Some(code::INTERNAL),
         _ => None,
     }
+}
+
+/// The `405` an address answers a method it does not serve, with the
+/// methods it does serve as its `Allow` (RFC 9110 §15.5.6).
+pub fn method_not_allowed(allow: HeaderValue) -> crate::Response {
+    let mut refused = crate::ResponseError::as_response(&ProblemDetails::from_status(
+        StatusCode::METHOD_NOT_ALLOWED,
+    ));
+    refused.headers_mut().insert(header::ALLOW, allow);
+    refused
 }
 
 /// The reason phrase RFC 9110 gives `status`, where the `http` crate still
@@ -551,10 +572,15 @@ mod tests {
             (StatusCode::FORBIDDEN, "Forbidden"),
             (StatusCode::NOT_FOUND, "Not Found"),
             (StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed"),
+            (StatusCode::NOT_ACCEPTABLE, "Not Acceptable"),
             (StatusCode::REQUEST_TIMEOUT, "Request Timeout"),
             (StatusCode::CONFLICT, "Conflict"),
+            (StatusCode::GONE, "Gone"),
+            (StatusCode::PRECONDITION_FAILED, "Precondition Failed"),
             (StatusCode::PAYLOAD_TOO_LARGE, "Content Too Large"),
             (StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported Media Type"),
+            (StatusCode::RANGE_NOT_SATISFIABLE, "Range Not Satisfiable"),
+            (StatusCode::UPGRADE_REQUIRED, "Upgrade Required"),
             (StatusCode::UNPROCESSABLE_ENTITY, "Unprocessable Content"),
             (StatusCode::TOO_MANY_REQUESTS, "Too Many Requests"),
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
@@ -689,6 +715,21 @@ mod tests {
             (StatusCode::CONFLICT, code::CONFLICT),
             (StatusCode::UNPROCESSABLE_ENTITY, code::INVALID_ARGUMENT),
             (StatusCode::TOO_MANY_REQUESTS, code::RATE_LIMITED),
+            (StatusCode::METHOD_NOT_ALLOWED, code::METHOD_NOT_ALLOWED),
+            (StatusCode::NOT_ACCEPTABLE, code::NOT_ACCEPTABLE),
+            (StatusCode::REQUEST_TIMEOUT, code::REQUEST_TIMEOUT),
+            (StatusCode::GONE, code::GONE),
+            (StatusCode::PRECONDITION_FAILED, code::PRECONDITION_FAILED),
+            (StatusCode::PAYLOAD_TOO_LARGE, code::CONTENT_TOO_LARGE),
+            (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                code::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            (
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                code::RANGE_NOT_SATISFIABLE,
+            ),
+            (StatusCode::UPGRADE_REQUIRED, code::UPGRADE_REQUIRED),
         ] {
             let bare = serde_json::to_value(ProblemDetails::from_status(status)).unwrap();
             let problem = Problem::new(status.as_u16(), class);
@@ -714,16 +755,54 @@ mod tests {
             );
         }
         for classless in [
-            StatusCode::METHOD_NOT_ALLOWED,
-            StatusCode::NOT_ACCEPTABLE,
-            StatusCode::REQUEST_TIMEOUT,
-            StatusCode::GONE,
-            StatusCode::PAYLOAD_TOO_LARGE,
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            StatusCode::PAYMENT_REQUIRED,
+            StatusCode::LENGTH_REQUIRED,
+            StatusCode::URI_TOO_LONG,
+            StatusCode::EXPECTATION_FAILED,
+            StatusCode::MISDIRECTED_REQUEST,
+            StatusCode::PRECONDITION_REQUIRED,
+            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+            StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
         ] {
             let bare = ProblemDetails::from_status(classless);
             assert!(bare.extensions.get("code").is_none(), "{classless}");
         }
+    }
+
+    /// The code set's rule, as `nest_rs_core::problem::code` states it: a
+    /// class a status answers by its own name is that status's reason phrase
+    /// in upper snake case — the document's `title` — and every other class
+    /// is one a named standard reads off, listed here.
+    #[test]
+    fn a_class_a_status_names_is_its_reason_phrase_in_upper_snake_case() {
+        let read_off_another_standard = [
+            code::INVALID_ARGUMENT,
+            code::UNAUTHENTICATED,
+            code::INSUFFICIENT_SCOPE,
+            code::RATE_LIMITED,
+            code::UNAVAILABLE,
+            code::INTERNAL,
+        ];
+        let mut named = 0;
+        for status in (400..=599).filter_map(|status| StatusCode::from_u16(status).ok()) {
+            let Some(class) = status_class(status) else {
+                continue;
+            };
+            if read_off_another_standard.contains(&class) {
+                continue;
+            }
+            let title = ProblemDetails::from_status(status).title;
+            assert_eq!(
+                class.as_str(),
+                title.to_ascii_uppercase().replace(' ', "_"),
+                "{status}",
+            );
+            named += 1;
+        }
+        assert_eq!(
+            named, 12,
+            "the statuses the framework answers by their phrase"
+        );
     }
 
     /// A server failure answered from its status alone is its class's

@@ -153,7 +153,7 @@ Some handlers need the exact byte string before any parsing — a proxied
 protobuf body, a document stored as it was sent. `RawBody` reads the whole body
 into [`Bytes`](https://docs.rs/bytes), capped at the transport's
 `max_body_bytes` (`RawBody::DEFAULT_LIMIT`, 2 MiB, by default). Past the cap the
-request is answered `413 Payload Too Large` — never silently truncated, never
+request is answered `413 Content Too Large` — never silently truncated, never
 buffered unbounded. Like every extractor it reads after the guards, so a
 refused request never had its body read.
 

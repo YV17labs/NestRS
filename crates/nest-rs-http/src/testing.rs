@@ -212,6 +212,13 @@ pub(crate) async fn text(response: crate::Response) -> String {
         .expect("a text body")
 }
 
+/// The `code` member of the problem document `response` carries.
+pub(crate) async fn code_of(response: crate::Response) -> serde_json::Value {
+    let problem: serde_json::Value =
+        serde_json::from_str(&text(response).await).expect("a problem document");
+    problem["code"].clone()
+}
+
 /// The `detail` of the `400` problem document an extractor's refusal answers.
 pub(crate) async fn refusal_detail(refused: crate::HttpError) -> String {
     let response = refused.into_response();

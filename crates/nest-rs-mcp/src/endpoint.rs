@@ -28,6 +28,7 @@ use crate::ambient::McpAmbient;
 use crate::config::McpConfig;
 use crate::error::{
     SESSION_NOT_FOUND, is_transport_message, said_by_code, tool_not_found, transport_sentence,
+    unread_message,
 };
 use crate::propagate::{OperationUnits, PropagatingHandler, RequestChains};
 use crate::registry::MountIndex;
@@ -581,7 +582,11 @@ fn host_refused() {
 /// The status stays rmcp's; a JSON-RPC error keeps its id, code and data, and
 /// says its code's words; any other body is the status's problem document.
 /// A refusal in one of rmcp's sentences quoting nothing the request carried
-/// keeps it: the message, or the problem's `detail`.
+/// keeps it: the message, or the problem's `detail`. The one status changed
+/// is rmcp's `415` for a body typed JSON it could not read as a message: the
+/// media type is right and the body is not, so it is input the server cannot
+/// accept, answered `400` with a JSON-RPC error no id could be read for (MCP's
+/// Streamable HTTP transport, *Sending Messages*).
 async fn said_by_kind(response: Response) -> Response {
     if response.status().is_success() {
         return response;
@@ -596,6 +601,11 @@ async fn said_by_kind(response: Response) -> Response {
         Default::default()
     });
     head.headers.remove(header::CONTENT_LENGTH);
+    if head.status == StatusCode::UNSUPPORTED_MEDIA_TYPE
+        && let Some(unread) = std::str::from_utf8(&refusal).ok().and_then(unread_message)
+    {
+        return refused_call(None, unread);
+    }
     match jsonrpc_said_by_kind(&refusal, head.status) {
         Some(answer) => Response::from_parts(head, Body::from(answer)),
         None => {

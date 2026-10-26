@@ -2,7 +2,7 @@
 //!
 //! [`RawBody`] reads the whole body into [`Bytes`], capped at the transport's
 //! configured cap ([`current_body_limit`], [`RawBody::DEFAULT_LIMIT`] — 2 MiB —
-//! unless configured); past it, `413 Payload Too Large`.
+//! unless configured); past it, `413 Content Too Large`.
 //! For code that needs the exact bytes. It reads after routing and the guards,
 //! like every reader: the edge wraps the body and reads none of it, so a guard
 //! verifying a webhook's signature reads it the same way, under the same cap,

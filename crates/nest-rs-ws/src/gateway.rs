@@ -1289,25 +1289,38 @@ mod tests {
     /// for a body that does not decode, and says where, never the value. It is
     /// a message all the same: its line files `error` under `_OTHER`, never
     /// what the client sent, and the operator reads where it failed at
-    /// `debug`, with no `warn`.
+    /// `debug`, with no `warn`. Only an object is an envelope: an array is
+    /// never read by position, and the refusal names the shape, never a type.
     #[tokio::test]
     async fn a_message_that_is_no_envelope_names_the_invalid_argument_class_and_files_its_line() {
+        const NOT_AN_OBJECT: &str = "expected an object with `event` and `data`";
+        let refused =
+            |kind: &str| format!("invalid envelope: invalid type: {kind}, {NOT_AN_OBJECT}");
         for (text, said) in [
             (
-                r#"{"data":"sk_live_secret"}"#,
-                "invalid envelope at `event`: missing",
+                r#"{"data":"sk_live_secret"}"#.to_owned(),
+                "invalid envelope at `event`: missing".to_owned(),
             ),
             (
-                r#"{"event":7,"data":"sk_live_secret"}"#,
-                "invalid envelope at `event`: invalid type: an integer, expected a string",
+                r#"{"event":7,"data":"sk_live_secret"}"#.to_owned(),
+                "invalid envelope at `event`: invalid type: an integer, expected a string"
+                    .to_owned(),
             ),
             (
-                r#""sk_live_secret""#,
-                "invalid envelope: invalid type: a string, expected struct WsEnvelope",
+                r#"{"event":"open","data":1,"event":"sk_live_secret"}"#.to_owned(),
+                "invalid envelope at `event`: duplicate".to_owned(),
             ),
+            (r#""sk_live_secret""#.to_owned(), refused("a string")),
+            (r#"["sk_live_secret"]"#.to_owned(), refused("a sequence")),
             (
-                r#"{"event":"sk_live_secret""#,
-                "invalid envelope: EOF while parsing an object at line 1 column 25",
+                r#"["open", {"text":"sk_live_secret"}]"#.to_owned(),
+                refused("a sequence"),
+            ),
+            ("7".to_owned(), refused("an integer")),
+            ("null".to_owned(), refused("null")),
+            (
+                r#"{"event":"sk_live_secret""#.to_owned(),
+                "invalid envelope: EOF while parsing an object at line 1 column 25".to_owned(),
             ),
         ] {
             let logs = nest_rs_testing::LogCapture::install();
@@ -1316,7 +1329,7 @@ mod tests {
                 &MessageTable::new(),
                 &wiring(),
                 &WsClient::for_test(),
-                text,
+                &text,
             )
             .await
             .expect("an error frame");
@@ -1331,7 +1344,11 @@ mod tests {
             );
 
             let report = assert_refused_unread(&logs, "websocket message refused: no envelope");
-            assert_eq!(report.field("error").as_deref(), Some(said), "{text}");
+            assert_eq!(
+                report.field("error").as_deref(),
+                Some(said.as_str()),
+                "{text}"
+            );
         }
     }
 

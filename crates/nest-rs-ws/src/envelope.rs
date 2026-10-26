@@ -42,15 +42,54 @@ pub fn decode_payload<T: serde::de::DeserializeOwned>(
 
 /// `{ "event": ..., "data": ... }` — the wire shape every gateway message
 /// rides.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// It decodes from a JSON object alone: anything else, an array included, is
+/// refused as no envelope, never read by position
+/// (`.claude/decisions/wire-struct-never-by-position.md`).
+#[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct WsEnvelope {
     /// The message's event name, routing it and labelling its reply.
     pub event: String,
     /// The handler payload. Defaults to `null` when the frame omits `data`, so
     /// an argument-less event decodes without an explicit field.
-    #[serde(default)]
     pub data: serde_json::Value,
+}
+
+/// The envelope's fields, by the names its wire gives them: the names
+/// [`DecodeError::located`] places a failure at.
+const ENVELOPE_FIELDS: &[&str] = &["event", "data"];
+
+impl<'de> Deserialize<'de> for WsEnvelope {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_struct("WsEnvelope", ENVELOPE_FIELDS, EnvelopeVisitor)
+    }
+}
+
+/// Reads an envelope from an object, and from nothing else.
+struct EnvelopeVisitor;
+
+impl<'de> serde::de::Visitor<'de> for EnvelopeVisitor {
+    type Value = WsEnvelope;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an object with `event` and `data`")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<WsEnvelope, A::Error> {
+        let EnvelopeObject { event, data } =
+            EnvelopeObject::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+        Ok(WsEnvelope { event, data })
+    }
+}
+
+/// The envelope's object, its fields read by serde's derive once the frame is
+/// known to be one.
+#[derive(Deserialize)]
+struct EnvelopeObject {
+    event: String,
+    #[serde(default)]
+    data: serde_json::Value,
 }
 
 impl WsEnvelope {

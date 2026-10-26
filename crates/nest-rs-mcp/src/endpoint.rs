@@ -1,6 +1,8 @@
 //! The endpoint that serves an MCP handler over streamable HTTP.
 
 use std::borrow::Cow;
+use std::fmt;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use http::uri::Authority;
@@ -441,7 +443,7 @@ struct Addressing<'a> {
     #[serde(borrow)]
     method: Option<Cow<'a, str>>,
     #[serde(borrow)]
-    params: Option<CallParams<'a>>,
+    params: Option<JsonObject<CallParams<'a>>>,
 }
 
 /// A `tools/call`'s params, as far as the schema lookup reads them.
@@ -449,6 +451,32 @@ struct Addressing<'a> {
 struct CallParams<'a> {
     #[serde(borrow)]
     name: Option<Cow<'a, str>>,
+}
+
+/// `T` read from a JSON object alone, never from an array by position
+/// (`.claude/decisions/wire-struct-never-by-position.md`): rmcp reads no call
+/// in an array, so one is left to rmcp's own reading.
+struct JsonObject<T>(T);
+
+impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for JsonObject<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(JsonObjectVisitor(PhantomData))
+    }
+}
+
+/// Reads a [`JsonObject`] from a map, and from nothing else.
+struct JsonObjectVisitor<T>(PhantomData<T>);
+
+impl<'de, T: serde::Deserialize<'de>> serde::de::Visitor<'de> for JsonObjectVisitor<T> {
+    type Value = JsonObject<T>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an object")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+        T::deserialize(serde::de::value::MapAccessDeserializer::new(map)).map(JsonObject)
+    }
 }
 
 /// A `tools/call` naming a tool no host on the mount declares, as rmcp's
@@ -467,19 +495,19 @@ struct UndeclaredCall {
 /// looks up the tool of a call it reads no id in all the same.
 fn undeclared_call(body: &[u8], index: &MountIndex) -> Option<UndeclaredCall> {
     let undeclared = |name: &str| index.tools.declares(name) == Some(false);
-    match serde_json::from_slice::<Addressing<'_>>(body) {
-        Ok(request) => {
+    match serde_json::from_slice::<JsonObject<Addressing<'_>>>(body) {
+        Ok(JsonObject(request)) => {
             if request.method.as_deref() != Some(CallToolRequestMethod::VALUE) {
                 return None;
             }
-            let name = request.params?.name?;
+            let name = request.params?.0.name?;
             undeclared(&name).then(|| UndeclaredCall {
                 name: name.into_owned(),
                 id: request.id.and_then(|id| serde_json::from_value(id).ok()),
             })
         }
-        // A repeated key, or a field typed otherwise than here: rmcp may
-        // still read a call in it, so it is read as rmcp reads it.
+        // A repeated key, a field typed otherwise than here, or an array:
+        // rmcp may still read a call in it, so it is read as rmcp reads it.
         Err(_) => {
             let (name, id) = looked_up(body)?;
             undeclared(&name).then_some(UndeclaredCall { name, id })
@@ -770,6 +798,8 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":7}}"#,
             r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{},"params":{"name":"marked"}}"#,
             r#"[{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"marked"}}]"#,
+            r#"[7,"tools/call",{"name":"marked"}]"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":["marked"]}"#,
             "not json",
         ] {
             assert_eq!(call(passed), None, "{passed}");

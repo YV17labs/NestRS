@@ -614,9 +614,17 @@ lists what the boot, a log or the wire shows when one is missed.
     | `params.after_uuid()` | `params.cursor().map_err(\|refused\| nest_rs::http::pipe_error(&refused))?` |
     | `Page::next_cursor: Option<Uuid>`; `Repo::page`, `Repo::relation_pages`, `CrudService::page`, `RelationKey::after` taking `Option<Uuid>` | `Option<PageCursor>`: `PageCursor::from(uuid)` builds one, `cursor.to_string()` is its text |
     | a `Page { items, next_cursor, has_more }` literal | `Page::new(items, next_cursor, has_more)` |
-    | `nest_rs::seaorm::SeaOrmHealthIndicator` named in code | `SeaOrmHealthModule`, the import |
-    | a hand-written `#[readiness] async fn redis(&self)` sending `PING` over an injected `RedisConnection` | `RedisHealthModule` beside `RedisModule::for_root(None)` — a method named `redis` beside it fails the boot |
+    | `SeaOrmHealthModule` in `imports`; `nest_rs::seaorm::SeaOrmHealthIndicator` named in code | delete both: `SeaOrmModule::for_root` attaches the pool's indicator, and `HealthModule` checks every resource the app or its features opened |
+    | a hand-written `#[readiness] async fn redis(&self)` sending `PING` over an injected `RedisConnection` | delete it: `RedisModule::for_root` attaches each instance's `PING` — a method named `redis` beside it fails the boot |
     | `report.details.keys().copied()` as `&'static str`; `IndicatorReport { name: "x", .. }` | `&Cow<'static, str>` keys; `name: "x".into()` |
+
+    **Readiness waits on every resource the app opens.** 6.x checked the pool
+    only beside `SeaOrmHealthModule`, and no Valkey or store; an app importing
+    `HealthModule` now answers `/health/ready` and `/health/startup` `503` while
+    its own or a feature's database, any Valkey instance or the store is down,
+    so the orchestrator takes the replica out of rotation until it is back.
+    Each of those probes sends `SELECT 1`, a `PING` per instance and one page
+    of the bucket's listing — a request a store billing per request bills.
 
     **A GraphQL operation is a unit of work**, and each mutation root field a
     savepoint settled on the answer that field gives: a failed nullable root
@@ -1198,8 +1206,17 @@ lists what the boot, a log or the wire shows when one is missed.
   empty `after` is still the first page. Follow the `Link` header's `next`.
 - **A health probe or dashboard keyed on `db` or `db_ready`** reads nothing:
   the key is `seaorm`, beside `redis[:<instance>]` and `storage`. A readiness
-  method named `seaorm`, `redis` or `storage` beside the binding that claims it
-  fails the boot.
+  method named `seaorm`, `redis` or `storage` in an app that opens that
+  resource fails the boot.
+- **An import of `SeaOrmHealthModule`** fails to compile, rustc naming the
+  item `nest_rs::seaorm` no longer has, as does one of `RedisHealthModule` or
+  `StorageHealthModule`. Delete the import: the module opening each resource
+  attaches its check, and `HealthModule` runs it.
+- **A replica out of rotation while its database, a Valkey or the store is
+  down** — where 6.x kept it serving, unless `SeaOrmHealthModule` checked the
+  pool — is that resource's check: an app importing `HealthModule` checks every
+  resource it or its features open (step 10). The `503`'s `error` names it:
+  `seaorm`, `redis[:<instance>]` or `storage`.
 - **A log query on a renamed line or field** finds nothing: the 6.x line
   `shutdown signal received` is `app draining`, `transport listening` at `info`
   is `app ready`, `running lifecycle hook` is the `lifecycle.hook` line, a

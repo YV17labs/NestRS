@@ -399,23 +399,27 @@ password.
 
 ## Health
 
-A driver ships its readiness check behind its crate's `health` feature, a
-binding module attaching an `IndicatorEntry` under the crate's name:
+A driver ships its readiness check behind its crate's `health` feature, and
+the module that opens its connection attaches it — an `IndicatorEntry` under
+the crate's name, from the `register` of the module its `for_root` imports by
+type, so an app importing `HealthModule` checks it with no import of its own,
+once however many modules open the connection:
 
-```rust title="from nest-rs-seaorm's health binding"
-impl Module for SeaOrmHealthModule {
+```rust title="from nest-rs-seaorm's module.rs and health/indicator.rs"
+impl Module for SeaOrmOpening {
+    // …
+
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        if let Err(missing) = present(&builder.snapshot()) {
-            return builder.refuse(missing);
-        }
+        #[cfg(feature = "health")]
+        let builder = crate::health::register::<Self>(builder);
         builder
-            .provide_meta(IndicatorEntry::new::<Self>(
-                NAME,
-                ProbeKind::Readiness,
-                ping,
-            ))
-            .provide_meta(IndicatorEntry::new::<Self>(NAME, ProbeKind::Startup, ping))
     }
+}
+
+pub(crate) fn register<M: Module>(builder: ContainerBuilder) -> ContainerBuilder {
+    builder
+        .provide_meta(IndicatorEntry::new::<M>(NAME, ProbeKind::Readiness, ping))
+        .provide_meta(IndicatorEntry::new::<M>(NAME, ProbeKind::Startup, ping))
 }
 ```
 

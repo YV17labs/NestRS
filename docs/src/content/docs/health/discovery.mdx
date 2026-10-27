@@ -15,10 +15,10 @@ into the container; a container built by hand carries none, and the wiring
 refuses it (`UngatedDiscoveryError`) rather than running every indicator
 linked. The same
 module-gating every transport uses for `#[controller]`, `#[resolver]`,
-or `#[processor]` applies here. The checks a framework binding ships —
-`SeaOrmHealthModule`, `RedisHealthModule`, `StorageHealthModule` — are
-attached by the binding's module itself, so they exist only in an app that
-imports it.
+or `#[processor]` applies here. The checks the framework ships — the pool's,
+each Redis instance's, the store's — are attached by the module that opens
+the resource, so they exist only in an app that opens it, directly or
+through a feature.
 
 ## The rule
 

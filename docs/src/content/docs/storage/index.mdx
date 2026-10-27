@@ -110,8 +110,9 @@ ours runs against them.
 
 ### On every readiness probe
 
-`StorageHealthModule`, imported beside `HealthModule`, gates `/health/ready`
-and `/health/startup` on one attempt of that proof, under the key `storage`:
+`StorageModule` attaches the store's indicator, so an app importing
+`HealthModule` gates `/health/ready` and `/health/startup` on one attempt of
+that proof, under the key `storage`, with no import of its own:
 what the boot refuses reads `down`, what it boots on reads `up` — a store
 refusing the listing itself included, with the boot's `warn` filed by the
 probe that first meets the refusal, never by every probe — and what it would
@@ -323,8 +324,8 @@ carrying the SigV4 signature. Point it at an `https://` endpoint, or set
 ## Reference
 
 - `crates/nest-rs-storage/` — `Storage`, `SignedPut`, `PresignedRequest`,
-  `ObjectMetadata`, `ObjectEntry`, `StorageConfig`, `StorageModule`,
-  `StorageError`, and `StorageHealthModule` under the `health` feature.
+  `ObjectMetadata`, `ObjectEntry`, `StorageConfig`, `StorageModule`, and
+  `StorageError`; the store's indicator under the `health` feature.
 - [`audio` in the demo](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio)
   — mints the key, presigns an upload bound to `audio/mpeg`, and the worker
   reads the stored object and writes a derived one.

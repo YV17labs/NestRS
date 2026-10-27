@@ -15,8 +15,10 @@ finished booting?* The probes ship as routes on the
 each returning `200` and a JSON body when every indicator passes,
 `503` with the same shape and `error` populated when any indicator
 fails. Discovery uses [`inventory`](https://crates.io/crates/inventory)
-gated by the access graph, beside the checks the modules an app imports
-attach — the database's, each Redis instance's, the object store's.
+gated by the access graph, beside the check the module opening each resource
+attaches — the database's, each Redis instance's, the object store's — so
+every resource the app or its features open is probed with no import of its
+own.
 
 ## Install
 
@@ -52,7 +54,8 @@ $ curl -s http://localhost:3000/health/startup
 
 With no indicators registered every probe reports `up` with empty
 buckets — the right answer for a first boot, since there is nothing yet
-to be unhealthy. Register indicators to make the probes speak for your
+to be unhealthy. An app that opens the database, a Valkey or the object store
+reads each under its own key at once; write indicators for your other
 dependencies: see [Indicators](/health/indicators/) for the
 framework-shipped ones and how to write your own.
 
@@ -183,7 +186,7 @@ manifest at those.
   framework-shipped ones, writing a custom one with `#[indicators]`.
 - [Discovery](/health/discovery/) — how module-gating decides which
   indicators run in a given binary.
-- [Database / Health](/database/health/) — `SeaOrmHealthModule`,
-  the first framework-shipped indicator.
+- [Database / Health](/database/health/) — the pool's indicator,
+  which the module opening the pool attaches.
 - [HTTP](/http/) — the transport `HealthModule` mounts on; same
   `#[controller]` shape under the hood.

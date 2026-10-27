@@ -310,8 +310,10 @@ password.
 
 ## Health
 
-Ship the connection's readiness check as a binding module attaching an
-`IndicatorEntry` keyed `nestrs_<storage>` — see
+The module that opens the connection attaches its readiness check, never the
+queue's binding: an `IndicatorEntry` keyed `nestrs_<storage>`, from the
+`register` of the module its `for_root` imports by type, so an app importing
+`HealthModule` checks it once with no import of its own — see
 [an indicator a module attaches](/health/indicators/#an-indicator-a-module-attaches).
 It runs on the readiness and startup probes, never on liveness: an
 orchestrator should not restart a pod because the broker blinked.

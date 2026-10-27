@@ -24,7 +24,7 @@ graph from each app's root.
 The `redis-queue` feature compiles all three. Each Redis binding is a feature of
 its own — `redis-queue`, `redis-throttler`, `redis-schedule` — and `redis` is the
 connection alone, so an app that rate-limits on Redis compiles no queue; beside
-`health`, the connection's readiness check, `RedisHealthModule`, compiles too. Import
+`health`, `RedisModule` attaches each instance's readiness check too. Import
 `RedisQueueModule` without `redis-queue` and the build fails on the import, with
 rustc's note naming the `queue` feature of `nest-rs-redis`: `redis-queue` is the
 umbrella feature that turns it on, where the umbrella's own `queue` is the port
@@ -130,7 +130,7 @@ use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::schedule::ScheduleModule;
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 

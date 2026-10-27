@@ -1,6 +1,6 @@
 # nest-rs-storage
 
-Object storage for NestRS: an injectable `Storage` client (presigned PUT/GET, head, byte and streamed read/write, prefix listing) over the `object_store` crate. One URL names the store and its scheme picks the backend — `s3://<bucket>[/<prefix>]` for AWS S3 and the servers speaking its API (tested against RustFS over TLS), `memory:///` for development and tests — and the boot proves the bucket answers before the app serves. Beside `health`, `StorageHealthModule` gates the readiness and startup probes on one attempt of that proof, as `storage`.
+Object storage for NestRS: an injectable `Storage` client (presigned PUT/GET, head, byte and streamed read/write, prefix listing) over the `object_store` crate. One URL names the store and its scheme picks the backend — `s3://<bucket>[/<prefix>]` for AWS S3 and the servers speaking its API (tested against RustFS over TLS), `memory:///` for development and tests — and the boot proves the bucket answers before the app serves. Beside `health`, `StorageModule` attaches the store's indicator, so an app importing `HealthModule` gates the readiness and startup probes on one attempt of that proof, as `storage`, with no import of its own.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

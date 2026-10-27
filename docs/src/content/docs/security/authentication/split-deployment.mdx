@@ -128,7 +128,6 @@ for the namespace — so moving a service to EdDSA means removing its secret.
         OpenTelemetryModule,
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        SeaOrmHealthModule,
         ThrottlerModule::for_root(None),
         HealthModule,
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),

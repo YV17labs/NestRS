@@ -136,9 +136,10 @@ see the [queue driver page](/queue/writing-a-driver/#proof-at-boot).
 
 ## Health
 
-The connection's readiness check belongs to the module that opens it:
-`RedisHealthModule` for Redis, an `IndicatorEntry` keyed `nestrs_<storage>`
-for a client of your crate's —
+The connection's readiness check belongs to the module that opens it, never
+to the lock's binding: `RedisModule` attaches Redis's, and the module opening
+a client of your crate's attaches an `IndicatorEntry` keyed `nestrs_<storage>`
+from the `register` of the module its `for_root` imports by type —
 [an indicator a module attaches](/health/indicators/#an-indicator-a-module-attaches).
 
 ## Test it

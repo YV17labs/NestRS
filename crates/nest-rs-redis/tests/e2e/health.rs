@@ -1,12 +1,12 @@
-//! The indicator `RedisHealthModule` attaches, against the suite's Valkey: on
-//! every topology the default instance answers the readiness and startup
-//! probes as `redis`; on one server, an instance whose server is cut drops
-//! readiness to `503` naming it, while its sibling reads up and liveness
-//! waits on neither.
+//! The indicator `RedisModule::for_root` attaches for each instance it opens,
+//! against the suite's Valkey: on every topology the default instance answers
+//! the readiness and startup probes as `redis`; on one server, an instance
+//! whose server is cut drops readiness and startup to `503` naming it, while
+//! its sibling reads up and liveness waits on neither.
 
 use nest_rs_core::module;
 use nest_rs_health::HealthModule;
-use nest_rs_redis::{RedisHealthModule, RedisModule};
+use nest_rs_redis::RedisModule;
 use nest_rs_testing::TestApp;
 
 use crate::{at_default_budget, redis_config};
@@ -14,7 +14,6 @@ use crate::{at_default_budget, redis_config};
 #[module(imports = [
     HealthModule,
     RedisModule::for_root(at_default_budget(redis_config())),
-    RedisHealthModule,
 ])]
 struct Probed;
 
@@ -63,14 +62,12 @@ mod standalone {
     #[module(imports = [
         HealthModule,
         RedisModule::for_root(at_default_budget(redis_config())),
-        RedisHealthModule,
         RedisModule::for_root((Cache, cache_config())),
-        RedisHealthModule::<Cache>,
     ])]
     struct CacheBehindAProxy;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn an_instance_whose_server_is_cut_drops_readiness_naming_it_and_leaves_liveness_up() {
+    async fn an_instance_whose_server_is_cut_drops_readiness_and_startup_naming_it_not_liveness() {
         let proxy = SeveringProxy::start().await;
         CACHE_URL.set(proxy.url_on(0)).expect("set once");
         let app = TestApp::for_module::<CacheBehindAProxy>()
@@ -92,24 +89,26 @@ mod standalone {
         })
         .await;
 
-        let ready = app.http().get("/health/ready").send().await;
-        ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-        let body = ready.json().await;
-        let report = body.value().object();
-        report
-            .get("error")
-            .object()
-            .get("redis:cache")
-            .object()
-            .get("status")
-            .assert_string("down");
-        report
-            .get("info")
-            .object()
-            .get("redis")
-            .object()
-            .get("status")
-            .assert_string("up");
+        for probe in ["/health/ready", "/health/startup"] {
+            let answer = app.http().get(probe).send().await;
+            answer.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+            let body = answer.json().await;
+            let report = body.value().object();
+            report
+                .get("error")
+                .object()
+                .get("redis:cache")
+                .object()
+                .get("status")
+                .assert_string("down");
+            report
+                .get("info")
+                .object()
+                .get("redis")
+                .object()
+                .get("status")
+                .assert_string("up");
+        }
         app.http()
             .get("/health/live")
             .send()

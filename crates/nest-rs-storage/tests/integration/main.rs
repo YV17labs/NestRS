@@ -1,5 +1,6 @@
 //! `nest-rs-storage`'s suite in process: an app importing `StorageModule` over
-//! `memory:///`, which boots with no server and holds every object in memory.
+//! `memory:///`, which boots with no server and holds every object in memory,
+//! and the store's indicator answering the probes, in `health/`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -8,6 +9,7 @@
 )]
 
 mod client;
+mod health;
 mod module;
 
 use std::sync::Arc;

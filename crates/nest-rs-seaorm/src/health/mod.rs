@@ -1,4 +1,6 @@
-mod indicator;
-mod module;
+//! The pool's indicator (`health` feature), which the module opening the pool
+//! attaches from its `register`.
 
-pub use module::SeaOrmHealthModule;
+mod indicator;
+
+pub(crate) use indicator::register;

@@ -19,12 +19,12 @@
 //! - **schedule** — [`RedisScheduleModule`] binds the `dyn OccurrenceLock` a
 //!   scheduled job declared `replicas = "one"` claims each occurrence through,
 //!   so one replica of the deployment fires it.
-//! - **health** — [`RedisHealthModule`] attaches the instance's indicator,
-//!   which `HealthModule` runs on the readiness and startup probes: a `PING`,
-//!   answering as `redis`, or `redis:cache` for a named instance.
 //!
 //! A binding pulls its port's crate, which an app using Redis for another port
-//! does not compile.
+//! does not compile. Under the `health` feature, each instance
+//! [`RedisModule::for_root`] opens reports its own readiness: a `PING`, which
+//! an app importing `HealthModule` runs on the readiness and startup probes as
+//! `redis`, or `redis:cache` for a named instance — no import of its own.
 //!
 //! An app opening a second Valkey — the queue's refuses `allkeys-*` eviction, a
 //! cache's lives by it — names it with an instance marker:
@@ -82,8 +82,6 @@ mod url;
 pub use config::RedisConfig;
 pub use connection::RedisConnection;
 pub use error::RedisError;
-#[cfg(feature = "health")]
-pub use health::RedisHealthModule;
 pub use module::{RedisModule, RedisSetup};
 #[cfg(feature = "queue")]
 pub use queue::{RedisQueueConfig, RedisQueueModule, RedisQueueProducer, RedisQueueSetup};

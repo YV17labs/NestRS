@@ -22,6 +22,7 @@ mod events;
 mod executor;
 #[cfg(feature = "graphql")]
 mod graphql;
+mod health;
 mod lazy;
 mod lifecycle_hooks;
 mod mcp;

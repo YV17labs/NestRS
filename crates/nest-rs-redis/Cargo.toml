@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Redis for NestRS: one connection per instance (RedisModule) to a Valkey server, a Sentinel deployment or a Cluster, and one binding per port over it, each a feature — the job queue on Redis Streams (RedisQueueModule, feature `queue`), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`), and each instance's readiness indicator (RedisHealthModule, feature `health`)."
+description = "Redis for NestRS: one connection per instance (RedisModule) to a Valkey server, a Sentinel deployment or a Cluster, and one binding per port over it, each a feature — the job queue on Redis Streams (RedisQueueModule, feature `queue`), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), and the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`) — and each instance's readiness indicator, which RedisModule attaches (feature `health`)."
 keywords = ["framework", "nestrs", "redis", "queue", "streams"]
 categories = ["asynchronous", "database"]
 
@@ -86,12 +86,12 @@ health = ["dep:nest-rs-health"]
 # A dead-lettered job that logs nothing passes every outcome assertion —
 # `LogCapture` covers the event half of the worker's contract; `queue` is the
 # behaviour kit every queue backend runs.
-# `http` drives the probes the health binding gates, as an orchestrator reads
-# them.
+# `http` drives the probes each instance's indicator gates, as an orchestrator
+# reads them.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "queue", "tls"] }
 # Self dev-dependency: the suite runs with every binding on.
 nest-rs-redis = { path = ".", features = ["queue", "throttler", "schedule", "health"] }
-# The suite mounts the probes the health binding's indicators answer on.
+# The suite mounts the probes each instance's indicator answers on.
 nest-rs-health = { path = "../nest-rs-health" }
 nest-rs-core = { path = "../nest-rs-core" }
 # Per-argument pipe on a `#[process]` job argument (`Piped<P, T>` / `Valid<T>`).

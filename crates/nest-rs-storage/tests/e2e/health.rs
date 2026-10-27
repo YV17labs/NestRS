@@ -1,8 +1,8 @@
-//! The indicator `StorageHealthModule` attaches (`src/health/`), against the
-//! live store: a bucket removed under a running app drops readiness to `503`
-//! naming `storage`, and liveness waits on nothing. The bucket is the test's
-//! own, created and removed through the store's API: the suite's `nestrs`
-//! bucket holds every other test's objects.
+//! The indicator `StorageModule` attaches (`src/health/`), against the live
+//! store: a bucket removed under a running app drops readiness and startup to
+//! `503` naming `storage`, and liveness waits on nothing. The bucket is the
+//! test's own, created and removed through the store's API: the suite's
+//! `nestrs` bucket holds every other test's objects.
 
 use std::time::Duration;
 
@@ -10,7 +10,7 @@ use http::Method;
 use nest_rs_core::module;
 use nest_rs_health::HealthModule;
 use nest_rs_http::StatusCode;
-use nest_rs_storage::{StorageConfig, StorageHealthModule, StorageModule};
+use nest_rs_storage::{StorageConfig, StorageModule};
 use nest_rs_testing::{TestApp, wait_for};
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path;
@@ -19,7 +19,7 @@ use object_store::{Certificate, ClientOptions};
 
 use crate::{config, unique};
 
-#[module(imports = [HealthModule, StorageModule, StorageHealthModule])]
+#[module(imports = [HealthModule, StorageModule])]
 struct ProbedStore;
 
 /// Send `method` to the root of `bucket` — `PUT` creates it, `DELETE` removes
@@ -57,7 +57,7 @@ async fn at_the_root_of(bucket: &str, method: Method) -> u16 {
 }
 
 #[tokio::test]
-async fn a_bucket_removed_under_a_running_app_drops_readiness_naming_the_store() {
+async fn a_bucket_removed_under_a_running_app_drops_readiness_and_startup_naming_the_store() {
     let bucket = unique("health");
     let created = at_the_root_of(&bucket, Method::PUT).await;
     assert!(
@@ -101,19 +101,21 @@ async fn a_bucket_removed_under_a_running_app_drops_readiness_naming_the_store()
     })
     .await;
 
-    let ready = app.http().get("/health/ready").send().await;
-    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    ready
-        .json()
-        .await
-        .value()
-        .object()
-        .get("error")
-        .object()
-        .get("storage")
-        .object()
-        .get("status")
-        .assert_string("down");
+    for probe in ["/health/ready", "/health/startup"] {
+        let answer = app.http().get(probe).send().await;
+        answer.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        answer
+            .json()
+            .await
+            .value()
+            .object()
+            .get("error")
+            .object()
+            .get("storage")
+            .object()
+            .get("status")
+            .assert_string("down");
+    }
     app.http()
         .get("/health/live")
         .send()

@@ -18,9 +18,10 @@
 //!
 //! Indicators are declared with [`indicators`] on an `#[injectable]` provider's
 //! `impl` block; one whose provider lives in an unimported module does not run.
-//! A resource opened once per instance ships its check as an [`IndicatorEntry`]
-//! its binding module attaches from `register` (`RedisHealthModule::<I>`), so
-//! it runs only in an app importing that module.
+//! A resource the framework opens ships its check as an [`IndicatorEntry`] the
+//! module opening it attaches from `register` — the pool, each Redis
+//! instance, the object store — so an app importing `HealthModule` checks
+//! every resource it or its features opened, and writes nothing else.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

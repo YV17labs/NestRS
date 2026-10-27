@@ -165,8 +165,8 @@ mod dropped_at_the_end {
     }
 }
 
-/// An indicator a module attaches to the container — a resource the framework
-/// opens, once per instance — beside one `#[indicators]` submits to the
+/// An indicator a module attaches to the container — the module opening a
+/// resource, once per instance — beside one `#[indicators]` submits to the
 /// link-time registry: one probe runs both, and one name check covers both.
 mod attached_by_a_module {
     use nest_rs_core::{App, Container, ContainerBuilder, Module, Registering, injectable, module};
@@ -179,10 +179,10 @@ mod attached_by_a_module {
         Box::pin(async { Ok(()) })
     }
 
-    /// What a resource's health binding is: a module attaching its entry.
-    struct PoolHealthModule;
+    /// What the module opening a resource does: attach its entry.
+    struct PoolModule;
 
-    impl Module for PoolHealthModule {
+    impl Module for PoolModule {
         fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
             builder.provide_meta(IndicatorEntry::new::<Self>(
                 "pool",
@@ -202,7 +202,7 @@ mod attached_by_a_module {
         async fn upstream(&self) {}
     }
 
-    #[module(imports = [HealthModule, PoolHealthModule], providers = [Upstream])]
+    #[module(imports = [HealthModule, PoolModule], providers = [Upstream])]
     struct BothKinds;
 
     #[tokio::test]
@@ -234,10 +234,10 @@ mod attached_by_a_module {
         );
     }
 
-    /// A resource's binding claiming the name an app's own method claims.
-    struct ClashingHealthModule;
+    /// A resource's module claiming the name an app's own method claims.
+    struct ClashingCacheModule;
 
-    impl Module for ClashingHealthModule {
+    impl Module for ClashingCacheModule {
         fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
             builder.provide_meta(IndicatorEntry::new::<Self>(
                 "cache",
@@ -258,7 +258,7 @@ mod attached_by_a_module {
     }
 
     #[module(
-        imports = [HealthModule, ClashingHealthModule],
+        imports = [HealthModule, ClashingCacheModule],
         providers = [HandWrittenCache],
     )]
     struct Clashing;
@@ -269,7 +269,7 @@ mod attached_by_a_module {
             panic!("two verdicts under one key must not boot");
         };
         let sentence = format!("{refused:#}");
-        for named in ["\"cache\"", "ClashingHealthModule", module_path!()] {
+        for named in ["\"cache\"", "ClashingCacheModule", module_path!()] {
             assert!(
                 sentence.contains(named),
                 "the refusal names {named}: {sentence}"

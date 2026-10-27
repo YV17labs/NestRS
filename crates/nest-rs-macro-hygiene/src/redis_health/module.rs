@@ -1,9 +1,9 @@
-//! `#[module]` importing the Redis connection, the probes and the instance's
-//! indicator over it, each reached through the umbrella.
+//! `#[module]` importing the Redis connection and the probes, each reached
+//! through the umbrella: the connection's indicator needs no import of its own.
 
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::redis::{RedisHealthModule, RedisModule};
+use nest_rs::redis::RedisModule;
 
-#[module(imports = [RedisModule::for_root(None), HealthModule, RedisHealthModule])]
+#[module(imports = [RedisModule::for_root(None), HealthModule])]
 pub struct MacroHygieneRedisHealthModule;

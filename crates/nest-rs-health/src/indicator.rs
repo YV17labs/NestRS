@@ -1,5 +1,5 @@
 //! Health indicator contract: the link-time registry `#[indicators]` fills,
-//! and the container metadata a resource's binding attaches.
+//! and the container metadata the module opening a resource attaches.
 
 use std::any::TypeId;
 use std::borrow::Cow;
@@ -178,9 +178,10 @@ pub const fn health_indicator(
 ::nest_rs_core::inventory::collect!(HealthIndicator);
 
 /// An indicator a module attaches to the container from its `register` — how a
-/// resource the framework opens, once per instance, ships its check: an
-/// `inventory` entry cannot be generic, and metadata is gated by construction,
-/// since only an imported module registers.
+/// resource the framework opens, once per instance, ships its check: the
+/// module opening the resource attaches it, so no app imports a check of its
+/// own; an `inventory` entry cannot be generic, and metadata is gated by
+/// construction, since only an imported module registers.
 ///
 /// Its name is the probe body's key, read off the crate owning the resource
 /// and the instance, never chosen: `seaorm`, `redis`, `redis:cache`,
@@ -195,15 +196,15 @@ pub const fn health_indicator(
 ///     Box::pin(async { Ok(()) })
 /// }
 ///
-/// struct PoolHealthModule;
+/// struct PoolModule;
 ///
-/// impl Module for PoolHealthModule {
+/// impl Module for PoolModule {
 ///     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
 ///         builder.provide_meta(IndicatorEntry::new::<Self>("pool", ProbeKind::Readiness, ping))
 ///     }
 /// }
 ///
-/// #[module(imports = [HealthModule, PoolHealthModule])]
+/// #[module(imports = [HealthModule, PoolModule])]
 /// struct AppModule;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> anyhow::Result<()> {

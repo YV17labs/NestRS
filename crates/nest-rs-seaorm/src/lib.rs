@@ -4,14 +4,14 @@
 //! - [`SeaOrmModule::for_root`] resolves [`SeaOrmConfig`] (`<PREFIX>_SEAORM__*`)
 //!   and opens the one `sea_orm::DatabaseConnection` every binding shares,
 //!   closing it when the app ends, after every shutdown hook, without waiting
-//!   past the settle for a connection no unit holds.
+//!   past the settle for a connection no unit holds. Under the `health`
+//!   feature it attaches the pool's indicator, `seaorm`, which an app
+//!   importing `HealthModule` runs on the readiness and startup probes.
 //! - [`SeaOrmDatabaseModule`] (bare) binds the `nest-rs-database` port:
 //!   [`SeaOrmUnitOfWork`], which every edge — an HTTP request, a WS message, an
 //!   MCP operation, a queue attempt, a scheduled tick — and every lifecycle hook
 //!   runs its unit of work through, on an ambient [`Executor`]: the pool, or a
 //!   transaction opened on the unit's first data-layer touch.
-//! - [`SeaOrmHealthModule`] (bare, feature `health`) binds the health port: the
-//!   pool's indicator, `seaorm`, on the readiness and startup probes.
 //! - Under the `queue` feature, [`SeaOrmDatabaseModule`] also keeps the queue
 //!   port's outbox, [`queue::SeaOrmOutbox`]: a job pushed inside a unit's
 //!   transaction is written there and filed after its commit;
@@ -100,8 +100,6 @@ pub use soft_delete::{SoftDeletable, live_condition};
 pub use time::now;
 pub use unit::SeaOrmUnitOfWork;
 
-#[cfg(feature = "health")]
-pub use health::SeaOrmHealthModule;
 #[cfg(feature = "http")]
 pub use http::Bind;
 

@@ -1,17 +1,20 @@
 //! [`RedisModule`] — the substrate seam. `RedisModule::for_root(None)` opens
-//! the [`RedisConnection`] this crate's bindings share; each binding
-//! (`RedisQueueModule`, `RedisThrottlerModule`, `RedisScheduleModule`) is then a
-//! bare import beside it, or its own `for_root` when it owns a config. An app
-//! opening a second Redis names it with an instance marker:
-//! `RedisModule::for_root((Cache, None))`, and a binding over a named instance
-//! is a typed import, `RedisScheduleModule::<Locks>`.
+//! the [`RedisConnection`] this crate's bindings share, and under the `health`
+//! feature attaches its indicator; each binding (`RedisQueueModule`,
+//! `RedisThrottlerModule`, `RedisScheduleModule`) is then a bare import beside
+//! it, or its own `for_root` when it owns a config. An app opening a second
+//! Redis names it with an instance marker: `RedisModule::for_root((Cache,
+//! None))`, and a binding over a named instance is a typed import,
+//! `RedisScheduleModule::<Locks>`.
 
 use std::any::TypeId;
 use std::borrow::Borrow;
 use std::marker::PhantomData;
 
 use nest_rs_config::{ConfigModule, ForInstance};
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Instance, Unnamed};
+use nest_rs_core::{
+    Collecting, ContainerBuilder, DynamicModule, Instance, Module, Registering, Unnamed,
+};
 
 use crate::{RedisConfig, RedisConnection};
 
@@ -81,16 +84,36 @@ impl<I: Instance> DynamicModule for RedisSetup<I> {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        let builder = ConfigModule::provide_feature(
-            self.pinned.clone(),
-            builder.provide_meta(RedisConnection::<I>::declared_budget()),
-        );
-        builder.provide_factory_after::<RedisConnection<I>, (I::Of<RedisConfig>,), _, _>(
-            |container| async move {
-                let held = ConfigModule::resolved_for::<I, RedisConfig>(&container)?;
-                let config: &RedisConfig = (*held).borrow();
-                Ok(RedisConnection::<I>::open(config).await?)
-            },
-        )
+        ConfigModule::provide_feature(self.pinned.clone(), builder.import::<RedisOpening<I>>())
+    }
+
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<RedisOpening<I>>()
+    }
+}
+
+/// What [`RedisModule::for_root`] opens for the instance `I`: the connection,
+/// its budget and, under the `health` feature, its indicator — imported by
+/// type, so that two `for_root`s of one instance open and report one
+/// connection.
+struct RedisOpening<I>(PhantomData<fn() -> I>);
+
+impl<I: Instance> Module for RedisOpening<I> {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder
+            .provide_meta(RedisConnection::<I>::declared_budget())
+            .provide_factory_after::<RedisConnection<I>, (I::Of<RedisConfig>,), _, _>(
+                |container| async move {
+                    let held = ConfigModule::resolved_for::<I, RedisConfig>(&container)?;
+                    let config: &RedisConfig = (*held).borrow();
+                    Ok(RedisConnection::<I>::open(config).await?)
+                },
+            )
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        #[cfg(feature = "health")]
+        let builder = crate::health::register::<I, Self>(builder);
+        builder
     }
 }

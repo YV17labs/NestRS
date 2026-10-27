@@ -1,7 +1,6 @@
-//! The health port's indicator (`health` feature): [`StorageHealthModule`]
-//! attaches the store's listing, named `storage`.
+//! The store's indicator (`health` feature): a page of its bucket's listing,
+//! named `storage`, which [`StorageModule`](crate::StorageModule) attaches.
 
 mod indicator;
-mod module;
 
-pub use module::StorageHealthModule;
+pub(crate) use indicator::register;

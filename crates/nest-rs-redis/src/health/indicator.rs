@@ -3,14 +3,33 @@
 
 use std::borrow::Cow;
 
-use nest_rs_core::{Container, Instance};
-use nest_rs_health::IndicatorFuture;
+use nest_rs_core::{Container, ContainerBuilder, Instance, Module};
+use nest_rs_health::{IndicatorEntry, IndicatorFuture, ProbeKind};
 
 use crate::RedisConnection;
 
+/// `builder` with the instance `I`'s indicator on the readiness and startup
+/// probes, attached by `M`, the module opening its connection — so an app
+/// importing `HealthModule` checks it, and liveness never waits on it: a
+/// Valkey outage is no reason to restart the process.
+pub(crate) fn register<I: Instance, M: Module>(builder: ContainerBuilder) -> ContainerBuilder {
+    let name = name::<I>();
+    builder
+        .provide_meta(IndicatorEntry::new::<M>(
+            name.clone(),
+            ProbeKind::Readiness,
+            ping::<I>,
+        ))
+        .provide_meta(IndicatorEntry::new::<M>(
+            name,
+            ProbeKind::Startup,
+            ping::<I>,
+        ))
+}
+
 /// The probe body's key for the instance `I`: the crate owning the connection,
 /// then `:` and the instance's name for a named one.
-pub(crate) fn name<I: Instance>() -> Cow<'static, str> {
+fn name<I: Instance>() -> Cow<'static, str> {
     if I::NAME.is_empty() {
         Cow::Borrowed("redis")
     } else {
@@ -20,9 +39,9 @@ pub(crate) fn name<I: Instance>() -> Cow<'static, str> {
 
 /// `PING` the instance `I`'s connection, which answers or fails within its
 /// budget.
-pub(crate) fn ping<I: Instance>(container: &Container) -> IndicatorFuture<'_> {
+fn ping<I: Instance>(container: &Container) -> IndicatorFuture<'_> {
     Box::pin(async move {
-        let mut conn = RedisConnection::<I>::of(container, "RedisHealthModule")?;
+        let mut conn = RedisConnection::<I>::of(container, "the Redis indicator")?;
         redis::cmd("PING").query_async::<()>(&mut conn).await?;
         Ok(())
     })

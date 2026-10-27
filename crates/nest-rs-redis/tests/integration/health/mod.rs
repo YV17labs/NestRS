@@ -1,5 +1,5 @@
-//! The indicator `RedisHealthModule` attaches, in process: [`module`] for each
-//! instance answering the probes under its own name, against scripted servers,
-//! and for what the boot refuses.
+//! The indicator each instance `RedisModule::for_root` opens attaches, in
+//! process: [`indicator`] for each instance answering the probes under its
+//! own name, against scripted servers.
 
-mod module;
+mod indicator;

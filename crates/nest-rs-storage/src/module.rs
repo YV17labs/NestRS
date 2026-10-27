@@ -4,7 +4,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, module};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering, module};
 
 use crate::client::Storage;
 use crate::config::StorageConfig;
@@ -35,9 +35,10 @@ pub type StorageSetup = ConfigSetup<StorageModule, StorageConfig>;
 
 /// The import of [`StorageModule`]'s that opens the store in the factory
 /// phase, once the config resolved — so the boot proves it before any
-/// provider is built; a test overriding `Storage` opens none. Its output is
-/// this crate's alone: `Storage`, which a module lists, is what the access
-/// graph gates.
+/// provider is built — and, under the `health` feature, attaches its
+/// indicator; a test overriding `Storage` opens none and probes none. Its
+/// output is this crate's alone: `Storage`, which a module lists, is what the
+/// access graph gates.
 struct StorageOpening;
 
 impl StorageOpening {
@@ -53,7 +54,7 @@ impl DynamicModule for StorageOpening {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        if nest_rs_core::__private::overrides_any(&builder, &[TypeId::of::<Storage>()]) {
+        if overridden(&builder) {
             return builder;
         }
         builder.provide_factory_after::<Store, (StorageConfig,), _, _>(|container| async move {
@@ -61,6 +62,21 @@ impl DynamicModule for StorageOpening {
             Ok(Store::open(&config).await?)
         })
     }
+
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        if overridden(&builder) {
+            return builder;
+        }
+        #[cfg(feature = "health")]
+        let builder = crate::health::register::<StorageModule>(builder);
+        builder
+    }
+}
+
+/// Whether a test overrode `Storage`, so there is no store of the app's to
+/// open or probe.
+fn overridden(builder: &ContainerBuilder) -> bool {
+    nest_rs_core::__private::overrides_any(builder, &[TypeId::of::<Storage>()])
 }
 
 #[cfg(test)]

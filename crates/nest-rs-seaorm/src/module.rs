@@ -60,8 +60,9 @@ impl DynamicModule for SeaOrmSetup {
     }
 }
 
-/// What [`SeaOrmModule::for_root`] opens: the pool, its budgets and its close,
-/// imported by type so that two `for_root`s open and close one pool.
+/// What [`SeaOrmModule::for_root`] opens: the pool, its budgets, its close
+/// and, under the `health` feature, its indicator — imported by type so that
+/// two `for_root`s open, close and report one pool.
 struct SeaOrmOpening;
 
 impl Module for SeaOrmOpening {
@@ -79,6 +80,8 @@ impl Module for SeaOrmOpening {
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        #[cfg(feature = "health")]
+        let builder = crate::health::register::<Self>(builder);
         builder
     }
 }

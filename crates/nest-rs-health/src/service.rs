@@ -256,7 +256,7 @@ pub(crate) fn check_names<'a>(
                 "duplicate health indicator {name:?} on the {kind:?} probe: {first} and \
                  {second} both claim it. That name is the probe body's JSON key, so one \
                  verdict would silently replace the other — rename one of the two methods, or \
-                 drop the check a resource's health binding already runs",
+                 drop the check the module opening that resource already runs",
                 name = entry.name,
                 kind = entry.kind,
                 second = entry.origin,
@@ -571,7 +571,7 @@ mod tests {
             ..entry("seaorm", ok)
         };
         let theirs = Indicator {
-            origin: "nest_rs_seaorm::health::module::SeaOrmHealthModule",
+            origin: "nest_rs_seaorm::module::SeaOrmOpening",
             ..entry("seaorm", ok)
         };
         let err = check_names([&mine, &theirs])
@@ -579,7 +579,7 @@ mod tests {
         let sentence = format!("{err:#}");
         for named in [
             "features::billing::health",
-            "nest_rs_seaorm::health::module::SeaOrmHealthModule",
+            "nest_rs_seaorm::module::SeaOrmOpening",
             "seaorm",
         ] {
             assert!(

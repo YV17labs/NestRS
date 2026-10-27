@@ -84,8 +84,9 @@
 //!
 //! ## Health
 //!
-//! Under the `health` feature, [`StorageHealthModule`] gates the readiness and
-//! startup probes on one attempt of that proof, under the name `storage`: a
+//! Under the `health` feature, [`StorageModule`] attaches the store's
+//! indicator, which an app importing `HealthModule` runs on the readiness and
+//! startup probes: one attempt of that proof, under the name `storage`. A
 //! store reached over verified TLS reads up, even one refusing the listing
 //! itself, as it boots — and the probe that first meets that refusal files the
 //! boot's `warn`.
@@ -127,8 +128,6 @@ mod transfer;
 pub use client::{ObjectEntry, ObjectMetadata, PresignedRequest, SignedPut, Storage};
 pub use config::StorageConfig;
 pub use error::{Result, StorageError};
-#[cfg(feature = "health")]
-pub use health::StorageHealthModule;
 pub use module::{StorageModule, StorageSetup};
 
 #[doc(hidden)]

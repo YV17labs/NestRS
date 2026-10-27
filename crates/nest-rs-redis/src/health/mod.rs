@@ -1,7 +1,7 @@
-//! The health port's indicator (`health` feature): [`RedisHealthModule`]
-//! attaches each instance's `PING`, named for the crate and the instance.
+//! Each instance's indicator (`health` feature): a `PING`, named for the crate
+//! and the instance, which [`RedisModule::for_root`](crate::RedisModule::for_root)
+//! attaches for the instance it opens.
 
 mod indicator;
-mod module;
 
-pub use module::RedisHealthModule;
+pub(crate) use indicator::register;

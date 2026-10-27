@@ -134,6 +134,44 @@ pub fn spellings(namespace: &str, key: &str) -> String {
     )
 }
 
+/// Every way a setting read from one variable is given, as a refusal names it:
+/// [`var_name`], then `field`, the field a config built in code sets —
+/// `` <PREFIX>_<DOMAIN>__<KEY>, or `Type::field` in code ``.
+///
+/// ```
+/// use nest_rs_config::{var_name, var_name_or_field};
+///
+/// assert_eq!(
+///     var_name_or_field("storage", "OPERATION_TIMEOUT_SECS", "StorageConfig::operation_timeout"),
+///     format!(
+///         "{}, or `StorageConfig::operation_timeout` in code",
+///         var_name("storage", "OPERATION_TIMEOUT_SECS"),
+///     ),
+/// );
+/// ```
+pub fn var_name_or_field(namespace: &str, key: &str, field: &str) -> String {
+    format!("{}, or `{field}` in code", var_name(namespace, key))
+}
+
+/// [`var_name_or_field`] for a setting the deployment may give inline or
+/// through `<KEY>_FILE`: [`spellings`], then `field` —
+/// `` <PREFIX>_<DOMAIN>__<KEY> (or <PREFIX>_<DOMAIN>__<KEY>_FILE), or `Type::field` in code ``.
+///
+/// ```
+/// use nest_rs_config::{spellings, spellings_or_field};
+///
+/// assert_eq!(
+///     spellings_or_field("static_files", "ROOT", "StaticFilesConfig::root"),
+///     format!(
+///         "{}, or `StaticFilesConfig::root` in code",
+///         spellings("static_files", "ROOT"),
+///     ),
+/// );
+/// ```
+pub fn spellings_or_field(namespace: &str, key: &str, field: &str) -> String {
+    format!("{}, or `{field}` in code", spellings(namespace, key))
+}
+
 /// Which tiers of the environment outrank the value a field falls back to:
 /// `real env > pinned in code > .env cascade > in-code defaults`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

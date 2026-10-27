@@ -41,12 +41,10 @@ pub enum StaticFilesError {
 
 /// Every way [`StaticFilesConfig::root`] can be given, for a refusal to name.
 fn root_setting() -> String {
-    format!(
-        "{}, or `StaticFilesConfig::root` in code",
-        nest_rs_config::spellings(
-            <StaticFilesConfig as nest_rs_config::Namespaced>::NAMESPACE,
-            "ROOT"
-        ),
+    nest_rs_config::spellings_or_field(
+        <StaticFilesConfig as nest_rs_config::Namespaced>::NAMESPACE,
+        "ROOT",
+        "StaticFilesConfig::root",
     )
 }
 

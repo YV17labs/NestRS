@@ -56,7 +56,7 @@ pub use for_instance::ForInstance;
 pub use material::{Material, read_material};
 pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup, ConfigSetup};
 pub use namespace::instance_namespace;
-pub use service::{ConfigService, spellings, var_name};
+pub use service::{ConfigService, spellings, spellings_or_field, var_name, var_name_or_field};
 pub use setting::Setting;
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
 #[cfg(feature = "tls")]

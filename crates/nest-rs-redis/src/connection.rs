@@ -246,9 +246,9 @@ impl<I: Instance> RedisConnection<I> {
     pub(crate) fn declared_budget() -> nest_rs_core::Budget {
         nest_rs_core::Budget::of::<Self>(
             "the Redis connection",
-            format!(
-                "{}, or `{}` in code",
-                RedisInstance::of::<I>().connect_timeout_var(),
+            nest_rs_config::var_name_or_field(
+                RedisInstance::of::<I>().namespace(),
+                CONNECT_TIMEOUT.key(),
                 CONNECT_TIMEOUT.field(),
             ),
             |conn| Some(conn.budget()),

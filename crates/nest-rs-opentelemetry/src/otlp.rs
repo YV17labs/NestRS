@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{ClientTls, ConfigError, ConfigService, endpoint_shown, var_name};
+use nest_rs_config::{ClientTls, ConfigError, ConfigService, endpoint_shown, var_name_or_field};
 use opentelemetry::KeyValue;
 use opentelemetry::global;
 use opentelemetry::trace::TracerProvider as _;
@@ -141,9 +141,10 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
 
 /// The OTLP endpoint's variable, and the field a config built in code sets.
 fn otlp_endpoint_setting() -> String {
-    format!(
-        "{}, or `OpenTelemetryConfig::otlp_endpoint` in code",
-        var_name(crate::config::NAMESPACE, "OTLP_ENDPOINT")
+    var_name_or_field(
+        crate::config::NAMESPACE,
+        "OTLP_ENDPOINT",
+        "OpenTelemetryConfig::otlp_endpoint",
     )
 }
 
@@ -310,6 +311,7 @@ fn build_resource(config: &OpenTelemetryConfig) -> Resource {
     reason = "the tests shut the providers they built down best-effort"
 )]
 mod tests {
+    use nest_rs_config::var_name;
     use opentelemetry::Key;
 
     use super::*;

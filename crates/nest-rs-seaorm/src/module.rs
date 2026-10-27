@@ -96,11 +96,7 @@ pub(crate) enum BudgetReach {
 /// long a statement runs before Postgres cancels it.
 pub(crate) fn budgets(reach: BudgetReach) -> [Budget; 2] {
     let declare = |resource, bounds: &DurationBounds, read| {
-        let setting = format!(
-            "{}, or `{}` in code",
-            nest_rs_config::var_name(NAMESPACE, bounds.key()),
-            bounds.field(),
-        );
+        let setting = nest_rs_config::var_name_or_field(NAMESPACE, bounds.key(), bounds.field());
         match reach {
             BudgetReach::Injected => Budget::of::<DatabaseConnection>(resource, setting, read),
             BudgetReach::Ambient => Budget::ambient::<DatabaseConnection>(resource, setting, read),

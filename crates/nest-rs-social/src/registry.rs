@@ -13,7 +13,7 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use nest_rs_config::{Config, ConfigError, ConfigService};
+use nest_rs_config::{Config, ConfigService};
 use nest_rs_core::{Composition, Container, Module, injectable, inventory};
 
 use crate::provider::SocialProvider;
@@ -129,11 +129,7 @@ where
             config
         }
     };
-    // `validator`'s own `Display` lists each rule's parameters, the rejected
-    // value among them.
-    config
-        .validate()
-        .map_err(|errors| ConfigError::validation(C::NAMESPACE, errors))?;
+    config.check()?;
     Ok(Some(Arc::new(make(config)?)))
 }
 
@@ -259,6 +255,7 @@ fn build_registry(
 #[cfg(test)]
 mod tests {
     use nest_rs_authn::AuthError;
+    use nest_rs_config::ConfigError;
     use nest_rs_oauth_client::{OAuthClient, TokenSet};
     use validator::Validate;
 

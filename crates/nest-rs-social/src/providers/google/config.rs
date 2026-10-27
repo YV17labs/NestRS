@@ -1,5 +1,5 @@
 use nest_rs_authn::AuthError;
-use nest_rs_config::{ClientTls, Config, ConfigService, Namespaced, config, spellings};
+use nest_rs_config::{ClientTls, Config, ConfigService, Namespaced, config, spellings_or_field};
 use nest_rs_oauth_client::{OAuthClientConfig, refuse_plaintext_redirect};
 
 use crate::registry::SocialProviderConfig;
@@ -44,9 +44,10 @@ impl GoogleSocialConfig {
     pub(crate) fn oauth2_config(&self) -> Result<OAuthClientConfig, AuthError> {
         refuse_plaintext_redirect(
             &self.redirect_url,
-            &format!(
-                "{}, or `GoogleSocialConfig::redirect_url` in code",
-                spellings(Self::NAMESPACE, "REDIRECT_URL")
+            &spellings_or_field(
+                Self::NAMESPACE,
+                "REDIRECT_URL",
+                "GoogleSocialConfig::redirect_url",
             ),
         )?;
         Ok(OAuthClientConfig {

@@ -125,13 +125,11 @@ impl OAuthClientConfig {
 /// setting first, so a deployment reads the variable it set.
 ///
 /// ```
-/// use nest_rs_config::spellings;
+/// use nest_rs_config::spellings_or_field;
 /// use nest_rs_oauth_client::refuse_plaintext_redirect;
 ///
-/// let setting = format!(
-///     "{}, or `AcmeSocialConfig::redirect_url` in code",
-///     spellings("social__acme", "REDIRECT_URL"),
-/// );
+/// let setting =
+///     spellings_or_field("social__acme", "REDIRECT_URL", "AcmeSocialConfig::redirect_url");
 /// assert!(refuse_plaintext_redirect("https://app.example/callback", &setting).is_ok());
 /// let refused = refuse_plaintext_redirect("http://app.example/callback", &setting)
 ///     .expect_err("the authorization code would return in clear");
@@ -172,9 +170,10 @@ fn refuse_plaintext_redirect_in(
 /// under `variables`, by the field alone when its caller composed it.
 fn setting(variables: Option<&ConfigService>, key: &str, field: &str) -> String {
     match variables {
-        Some(variables) => format!(
-            "{}, or `OAuthClientConfig::{field}` in code",
-            variables.spellings(key)
+        Some(variables) => nest_rs_config::spellings_or_field(
+            variables.namespace(),
+            key,
+            &format!("OAuthClientConfig::{field}"),
         ),
         None => format!("`OAuthClientConfig::{field}`"),
     }

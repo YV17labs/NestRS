@@ -76,9 +76,9 @@ impl Discoverable for Storage {
             .provide(Self { config, store })
             .provide_meta(Budget::of::<Self>(
                 "the object store",
-                format!(
-                    "{}, or `{}` in code",
-                    nest_rs_config::var_name("storage", OPERATION_TIMEOUT.key()),
+                nest_rs_config::var_name_or_field(
+                    "storage",
+                    OPERATION_TIMEOUT.key(),
                     OPERATION_TIMEOUT.field(),
                 ),
                 |storage| Some(storage.config.operation_timeout),

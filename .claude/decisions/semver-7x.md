@@ -115,3 +115,16 @@ names and wire formats. The answer changes how `CLAUDE.md`'s "no breaking
 change inside a major" reads, so the policy holds no such clause until the
 owner gives it; until then such a fix is the owner's to schedule, never shipped
 in a 7.x on a session's judgement.
+
+## 2026-10-12 — answered: a security fix refusing an insecure configuration ships in a patch
+
+The owner's arbitration of 2026-10-12, written here on 2026-10-27, closes the
+open question above. A security fix that refuses a configuration 7.x used to
+accept — an insecure one, so a break by the rule above — is not a breaking
+change inside 7.x: it ships in a patch, under the changelog's `### Security`,
+with a line in the upgrading guide naming the refused configuration and the
+secure one to write instead. Security comes first, and "safe by default"
+cannot wait for 8.0. The hard "no" on breaks stays absolute for everything
+else — items, decorator grammar, names, variables and wire formats — and the
+exception is read narrowly: the configuration it refuses is insecure by a
+standard (an RFC, OWASP), never merely unusual.

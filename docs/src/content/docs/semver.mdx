@@ -53,6 +53,13 @@ for the whole line.
 may change anything in the `__private` tier. It never raises the minimum Rust
 version: a project held to its toolchain takes a patch without reading it.
 
+One fix is a patch although it refuses what used to boot: a security fix that
+turns away an insecure configuration — insecure by a standard, an RFC or
+OWASP, never merely unusual. Safe by default cannot wait for 8.0, so it ships
+under the changelog's **Security** heading, and the upgrading guide names the
+configuration refused and the secure one to write instead. Nothing else that
+used to compile or boot is refused before 8.0.
+
 ## Build a config the way it grows
 
 A `#[config]` struct gains fields in a minor, so name the fields you set and

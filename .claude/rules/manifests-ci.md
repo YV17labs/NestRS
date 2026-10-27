@@ -188,9 +188,11 @@ readers, and the two move in one change.
   complete literal not covered; a key, a variable, a feature, a unit, a
   `nest_rs::prelude` name; a public dependency's minor; the MSRV, named in the
   changelog. **A patch fixes** behaviour and tier 2, and never raises the MSRV.
-- **Whether a security fix refusing a configuration that used to boot ships in
-  7.x is the owner's open question** (`decisions/semver-7x.md`): ask, never
-  decide it in a change.
+- **A security fix refusing an insecure configuration that used to boot is a
+  patch** (`decisions/semver-7x.md`, 2026-10-12): it ships under the
+  changelog's `### Security`, with an upgrading line naming the refused
+  configuration and the secure one. Insecure by a standard (an RFC, OWASP),
+  never merely unusual; every other break waits for 8.0.
 - **Tier 2 is outside semver**, safe only under the `=` pins: no third party
   names it, even through `::nest_rs::<concern>::__private`.
 - **A package depends on `nest-rs = { version = "7.N", default-features =

@@ -147,8 +147,9 @@ A name and its path say the same thing, and a name is judged in its set.
 - No second way to configure a module: `Module::for_root(x)`, one value, an
   opaque `*Setup` — no builder chain, other constructor or env-only `#[config]`.
 - No breaking change inside a major (what is API: `manifests-ci.md`,
-  *Semver*); the API a break replaces goes in that major, never kept as an
-  alias. A detector for persisted data is not a shim.
+  *Semver*, which also holds its one exception, a security fix refusing an
+  insecure configuration); the API a break replaces goes in that major, never
+  kept as an alias. A detector for persisted data is not a shim.
 - No feature flag for a capability not built, no umbrella module re-exporting
   every edge of a feature, no mocked database in a test.
 - No third-party crate without a release in about 12 months, no version

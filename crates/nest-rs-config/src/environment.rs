@@ -33,14 +33,31 @@ impl Environment {
     /// A value that names no environment is read as
     /// [`Production`](Self::Production), and said once per process on stderr,
     /// by the variable's name alone.
+    pub fn from_env() -> Self {
+        let var = Self::var_name();
+        Self::from_raw(&var, real_env_var(&var).as_deref())
+    }
+
+    /// [`from_env`](Self::from_env) and [`declared`](Self::declared) off one
+    /// read of the variable, so the two cannot disagree.
+    pub(crate) fn read_declared() -> (Self, Option<Self>) {
+        let var = Self::var_name();
+        let raw = real_env_var(&var);
+        (
+            Self::from_raw(&var, raw.as_deref()),
+            declare(raw.as_deref()),
+        )
+    }
+
+    /// The environment `raw`, the value of `var`, names: an unrecognised one is
+    /// [`Production`](Self::Production), said once per process on stderr.
     #[expect(
         clippy::print_stderr,
         reason = "this runs at the top of main, before any subscriber exists; stderr is the one sink guaranteed visible"
     )]
-    pub fn from_env() -> Self {
+    fn from_raw(var: &str, raw: Option<&str>) -> Self {
         static WARNED: Once = Once::new();
-        let var = Self::var_name();
-        let (env, unrecognized) = classify(real_env_var(&var).as_deref());
+        let (env, unrecognized) = classify(raw);
         if unrecognized {
             WARNED.call_once(|| {
                 eprintln!(

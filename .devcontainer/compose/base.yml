@@ -9,6 +9,9 @@ services:
       - ../..:/workspaces/nestrs:cached
       - ${CERTS:-certs}:/certs:ro
     command: sleep infinity
+    # `sleep` as PID 1 reaps no child: the linkers a build forks pile up as
+    # zombies. Docker's init reaps them.
+    init: true
     # The database every process here shares. The services' certificate is
     # trusted through the system's store, where `postStartCommand` installs the
     # authority `certs` issued; a Redis URL stays each app's, which picks its

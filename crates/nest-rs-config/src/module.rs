@@ -310,8 +310,8 @@ struct ConfigRoot;
 
 impl Module for ConfigRoot {
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        let environment = Environment::from_env();
-        if Environment::declared().is_none() {
+        let (environment, declared) = Environment::read_declared();
+        if declared.is_none() {
             tracing::info!(
                 target: crate::TARGET,
                 environment = environment.as_str(),

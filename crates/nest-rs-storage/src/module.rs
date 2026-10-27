@@ -64,11 +64,10 @@ impl DynamicModule for StorageOpening {
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        if overridden(&builder) {
-            return builder;
-        }
         #[cfg(feature = "health")]
-        let builder = crate::health::register::<StorageModule>(builder);
+        if !overridden(&builder) {
+            return crate::health::register::<StorageModule>(builder);
+        }
         builder
     }
 }

@@ -415,21 +415,20 @@ rest is retried within the resource's budget, and the resource's crate says
 each attempt on its own target, naming the endpoint, never a URL; a resource
 exempt from the proof says why in its `//!`. **A resource the boot proves
 ships its indicator in its own crate**, behind a `health` feature the umbrella
-forwards weakly, and the module opening the resource attaches it: an
-`IndicatorEntry` from the `register` of the module that opens it, imported by
-type so it runs once per app however many modules open the resource — gated
-by construction, generic over the instance where the resource is — on the
-readiness and startup probes, never liveness, named for the crate subject
-owning the resource plus `:` and the instance for a named one (`seaorm`,
-`redis`, `redis:cache`, `storage`), and reading what the proof reads, one
-attempt per probe. An app importing `HealthModule` so checks every resource it
-or its features opened and writes nothing else; a health module it would
-import beside the resource is refused
-(`.claude/decisions/resource-reports-its-own-health.md`; held by each
-resource crate's `health` suites). A resource exempt
-from the proof ships none, for the reason its `//!` gives: an outage that must
-not stop the boot — the OTLP collector, an authorization server, a social
-provider — must not take every replica out of rotation either. **A loop
+forwards weakly: the module opening the resource — imported by type, so it
+runs once per app however many modules open the resource — attaches an
+`IndicatorEntry` from its `register`, gated by construction, generic over the
+instance where the resource is, on the readiness and startup probes, never
+liveness, named for the crate subject owning the resource plus `:` and the
+instance for a named one (`seaorm`, `redis`, `redis:cache`, `storage`), and
+reading what the proof reads, one attempt per probe. An app importing
+`HealthModule` so checks every resource it or its features opened and writes
+nothing else; a health module it would import beside the resource is refused
+(`.claude/decisions/resource-reports-its-own-health.md`; held by each resource
+crate's `health` suites). A resource exempt from the proof ships none, for the
+reason its `//!` gives: an outage that must not stop the boot — the OTLP
+collector, an authorization server, a social provider — must not take every
+replica out of rotation either. **A loop
 retrying a backend waits `nest_rs_core::Backoff`'s curve** — exponential,
 ±20 % jitter drawn from a seed, gRPC's connection backoff — never a doubling
 of its own: a reconnect loop seeds it with `process_seed()`, so replicas come

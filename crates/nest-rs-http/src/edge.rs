@@ -26,7 +26,8 @@ use std::time::Duration;
 use http::uri::{PathAndQuery, Uri};
 use http::{HeaderName, HeaderValue, Version, header};
 use http_body_util::combinators::BoxBody;
-use nest_rs_core::{Container, RequestContinuation, RequestScope};
+use nest_rs_core::__private::RequestScopes;
+use nest_rs_core::{Container, RequestContinuation};
 use tokio::time::Instant;
 
 use tracing::Instrument;
@@ -113,10 +114,7 @@ fn trim_trailing_slash(req: &mut Request) {
 /// compression, when configured, wrap outside it.
 pub(crate) struct EdgeEndpoint<E> {
     inner: E,
-    container: Container,
-    /// Present when no provider is request-scoped or transient: such a scope
-    /// caches nothing, so one shared instance stands in for a fresh one.
-    shared_scope: Option<Arc<RequestScope>>,
+    scopes: RequestScopes,
     timeout: Option<Duration>,
     /// The cap a body is held to, and what its readers read
     /// ([`current_body_limit`](crate::current_body_limit)).
@@ -160,8 +158,6 @@ impl<E> EdgeEndpoint<E> {
         known_methods: KnownMethods,
         drain: Arc<Drain>,
     ) -> Self {
-        let shared_scope = (!container.has_dynamic_scopes())
-            .then(|| Arc::new(RequestScope::new(container.clone())));
         // Read at boot: the edge runs before the request scope `ClientOrigin::of`
         // reads through. No `HttpConfig` means the defaults: line on, nothing trusted.
         let config = container.get::<crate::HttpConfig>();
@@ -172,8 +168,7 @@ impl<E> EdgeEndpoint<E> {
         );
         Self {
             inner,
-            container,
-            shared_scope,
+            scopes: RequestScopes::new(container),
             timeout,
             body_limit,
             body_read_timeout,
@@ -334,11 +329,7 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
         req.extensions_mut().insert(origin);
 
         // Built here, not in `handle`: a streaming body outlives that future.
-        let scope = match &self.shared_scope {
-            Some(shared) => Arc::clone(shared),
-            None => Arc::new(RequestScope::new(self.container.clone())),
-        };
-        let continuation = RequestContinuation::new(Some(scope), correlation.clone());
+        let continuation = RequestContinuation::new(Some(self.scopes.open()), correlation.clone());
         // Held across every await: a request dropped at one (shutdown, client reset)
         // still names its span, records the failure and files its line `cancelled`.
         let unanswered = Unanswered::hold(log, &continuation, &span, &method, &matched);

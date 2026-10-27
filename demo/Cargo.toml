@@ -16,7 +16,7 @@ homepage = "https://nestrs.dev"
 [workspace.dependencies]
 nest-rs = { path = "../crates/nest-rs", features = ["http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue", "redis-queue", "redis-throttler", "redis-schedule", "schedule", "events", "authn", "authz", "oauth-client", "oauth-server", "oauth-resource", "social", "opentelemetry", "openapi", "health", "throttler", "server-timing", "guards", "pipes", "storage"] }
 
-tokio = { version = "1.53", features = ["full"] }
+tokio = { version = "1.54", features = ["full"] }
 tracing = "0.1"
 thiserror = "2.0"
 anyhow = "1.0"
@@ -26,10 +26,10 @@ serde_json = "1.0"
 bytes = "1.12"
 futures-util = "0.3"
 async-trait = "0.1"
-parking_lot = "0.12"
+parking_lot = "0.13"
 async-graphql = { version = "=7.2.1", features = ["dataloader"] }
 validator = { version = "0.21", features = ["derive"] }
-uuid = { version = "1.27", features = ["v7", "serde"] }
+uuid = { version = "1.29", features = ["v7", "serde"] }
 sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
 sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
@@ -38,7 +38,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio-tungstenite = "0.30"
 # `=`: the framework's own pin, a public dependency of `nest-rs-redis` — the
 # command API a feature sends its own commands with over a `RedisConnection`.
-redis = { version = "=1.7", default-features = false, features = ["aio"] }
+redis = { version = "=1.8", default-features = false, features = ["aio"] }
 
 features = { path = "crates/features" }
 migrations = { path = "crates/migrations" }

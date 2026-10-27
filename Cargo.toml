@@ -16,7 +16,7 @@ homepage = "https://nestrs.dev"
 # `public`: a public dependency, whose types reach the public API, so its major
 # (a 0.x's minor) moves only with a nestrs major; every other library is private
 # and wrapped (.claude/decisions/public-dependencies.md).
-tokio = { version = "1.53", features = ["full"] }  # public
+tokio = { version = "1.54", features = ["full"] }  # public
 tokio-util = { version = "0.7", features = ["rt", "io"] }  # public
 
 tracing = "0.1"  # public
@@ -84,10 +84,9 @@ tokio-tungstenite = { version = "0.30", default-features = false }
 
 async-trait = "0.1"  # public
 
-# Past the 12-month bar (0.12.5, 2025-10-03): std's non-poisoning locks
-# (rust-lang/rust#134645) at their stabilisation, or no release by 2027-04-03 and
-# `std::sync` takes its place under one poisoning policy.
-parking_lot = "0.12"
+# 0.12 stays in the tree through tokio, object_store and sqlx's
+# futures-intrusive until they move; the bans allow the pair.
+parking_lot = "0.13"
 
 # Public. `=`: nest-rs-graphql reads async-graphql's registry internals.
 # `custom-error-conversion` removes the blanket `From<T: Display>` into its
@@ -99,7 +98,7 @@ inventory = "0.3"  # public
 argon2 = "0.6"
 getrandom = "0.4"
 validator = { version = "0.21", features = ["derive"] }  # public
-uuid = { version = "1.27", features = ["v4", "v7", "serde"] }  # public
+uuid = { version = "1.29", features = ["v4", "v7", "serde"] }  # public
 url = "2.5"
 
 # Public. `=`: sea-orm's types are `Repo`'s API, so even a minor is a reviewed
@@ -118,7 +117,7 @@ trybuild = "1.0"
 
 flate2 = "1.1"
 
-rmcp = { version = "3.5", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }  # public
+rmcp = { version = "3.8", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }  # public
 schemars = { version = "1.2", features = ["uuid1", "chrono04"] }  # public
 
 croner = { version = "4.0", default-features = false }
@@ -132,7 +131,7 @@ jiff-tzdb = "0.1"
 # `ClusterClient::get_async_generic_connection`, which is `#[doc(hidden)]`.
 # `cluster-async` brings crc16 0.4 (2018), the slot checksum, finished and
 # without an advisory; it leaves with `redis`.
-redis = { version = "=1.7", default-features = false, features = [
+redis = { version = "=1.8", default-features = false, features = [
     "aio",
     "cluster-async",
     "connection-manager",

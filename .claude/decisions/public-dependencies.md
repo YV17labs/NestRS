@@ -81,3 +81,20 @@ Held by review — a third-party type in a public signature is a public
 dependency listed here, or it is wrapped — and by each pin's marker in the root
 manifest; once 7.0 is published, `cargo-semver-checks` sees a public
 dependency's type change as the break it is.
+
+## 2026-10-27 — redis `=1.8`, rmcp 3.8, parking_lot 0.13
+
+7.0 builds on the latest release of each library it names (the owner's call for
+the release). Two rows above state a version that is no longer the pin:
+
+- **redis is pinned `=1.8`**, its reason unchanged: 1.8.0 keeps
+  `ClusterClient::get_async_generic_connection` `#[doc(hidden)]`, with the same
+  signature and body, and the `Connect` trait `nest-rs-redis`'s node connection
+  implements. An app naming `redis` itself requires `1.8`.
+- **rmcp's floor is 3.8**, a minor of a public dependency: 3.6 looks a tool's
+  schema up per request and keeps nothing, so the endpoint's gate in front of
+  the cache it kept (`every-refusal-carries-its-class.md`, this date) leaves.
+- **parking_lot moves to 0.13**, private as before. tokio, object_store and
+  sqlx's futures-intrusive still require 0.12, so both sit in the tree until
+  they move; `deny.toml`'s bans allow a duplicate, and no skip is needed. 0.13
+  (2026-10-21) is within the freshness bar, which 0.12.5 had crossed.

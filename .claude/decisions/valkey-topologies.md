@@ -79,3 +79,11 @@ Then two dev container environments rather than a profile, `valkey-sentinel/`
 and `valkey-cluster/` (`one-server-per-backend.md`).
 Then each node a host of its own, announcing its name, which the certificate
 names: the nodes announce `127.0.0.1` no longer (`one-server-per-backend.md`).
+
+## 2026-10-27 — the pin is `=1.8`
+
+The Cluster entry's pin moved to `=1.8` for the same seam: redis 1.8.0 keeps
+the doc-hidden generic connection, its signature and the `Connect` trait the
+node connection implements, read against its source before the move. The
+redis release still offers no setting to skip `CLIENT SETINFO` on a Cluster's
+nodes.

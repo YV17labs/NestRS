@@ -38,7 +38,7 @@ because a resource also gets the auth adapter its guards need.
 nest-rs = { version = "7.0", features = ["http", "seaorm", "authz", "authn"] }
 sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid", "with-chrono"] }
 serde = { version = "1.0", features = ["derive"] }
-uuid = { version = "1.27", features = ["v7", "serde"] }
+uuid = { version = "1.29", features = ["v7", "serde"] }
 ```
 
 `sea-orm` is already there — the `migrations` crate the workspace ships uses

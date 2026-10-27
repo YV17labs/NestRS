@@ -15,7 +15,7 @@ rust-version = "1.97"
 
 [workspace.dependencies]
 anyhow = "1.0"
-tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.54", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 features = { path = "crates/features" }
 migrations = { path = "crates/migrations" }

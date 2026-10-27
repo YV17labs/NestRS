@@ -44,6 +44,7 @@ pub async fn a_pushed_job_runs_once<B: KitBackend>(backend: B, logs: LogCapture)
     kit.until(|| kit.completed(OnceQueue::NAME, 0) == 1).await;
     worker.stop().await;
     assert_eq!(kit.attempts(OnceQueue::NAME, 0).len(), 1, "one attempt");
+    kit.end().await;
 }
 
 /// A method declaring `concurrency = 3` runs three of its jobs at once, and
@@ -66,6 +67,7 @@ pub async fn a_method_runs_no_more_attempts_at_once_than_its_concurrency<B: KitB
         3,
         "three at once, and never four"
     );
+    kit.end().await;
 }
 
 /// A retryable failure with budget left runs again, as the job's next attempt,
@@ -92,6 +94,7 @@ pub async fn a_retryable_failure_runs_again_as_the_next_attempt<B: KitBackend>(
         ["1", "2"],
         "both attempts at one job, numbered"
     );
+    kit.end().await;
 }
 
 /// A job failing every attempt is dead-lettered once its budget is spent —
@@ -120,6 +123,7 @@ pub async fn a_spent_budget_dead_letters_the_job<B: KitBackend>(backend: B, logs
         2,
         "two attempts, each with its line"
     );
+    kit.end().await;
 }
 
 /// A worker killed between handing a job to its attempt and settling it leaves
@@ -150,6 +154,7 @@ pub async fn a_job_whose_worker_died_mid_attempt_runs_on_another<B: KitBackend>(
         Some(operation_log::OK.to_owned()),
         "completed, never dead-lettered",
     );
+    kit.end().await;
 }
 
 /// A lease taken from a worker still running its attempt — frozen past its
@@ -191,6 +196,7 @@ pub async fn a_lease_lost_under_a_live_worker_cuts_its_attempt_and_the_holder_de
             .is_empty(),
         "the cut is said",
     );
+    kit.end().await;
 }
 
 /// A job whose every attempt takes its worker down — killed three times, never
@@ -231,6 +237,7 @@ pub async fn a_job_taking_its_worker_down_past_the_stall_limit_is_dead_lettered_
         usize::try_from(nest_rs_queue::STALL_LIMIT).unwrap_or(usize::MAX),
         "the delivery past the limit ran nothing",
     );
+    kit.end().await;
 }
 
 /// A stop lets an attempt that fits the window finish, cuts one that does not
@@ -273,6 +280,7 @@ pub async fn the_drain_finishes_what_fits_its_window_and_hands_back_the_rest<B: 
     second.stop().await;
     assert_eq!(kit.attempts(DrainQueue::NAME, 0).len(), 1);
     assert_eq!(kit.attempts(DrainQueue::NAME, 1).len(), 2);
+    kit.end().await;
 }
 
 /// An attempt running three leases long keeps its lease through renewals: a
@@ -301,6 +309,7 @@ pub async fn a_long_attempt_keeps_its_lease_and_runs_once<B: KitBackend>(
         .is_empty(),
         "no lease lapsed",
     );
+    kit.end().await;
 }
 
 /// A job pushed with a delay starts once the delay has passed, and not before —
@@ -340,6 +349,7 @@ pub async fn a_delayed_push_runs_once_its_delay_has_passed<B: KitBackend>(
         "started {:?} after the push, before its delay",
         started.duration_since(pushed_at)
     );
+    kit.end().await;
 }
 
 /// A job runs in the trace its push was made in.
@@ -355,6 +365,7 @@ pub async fn a_job_runs_in_the_trace_that_pushed_it<B: KitBackend>(backend: B, l
     worker.stop().await;
     assert!(pushed_in.is_some());
     assert_eq!(kit.attempts(TraceQueue::NAME, 0)[0].trace, pushed_in);
+    kit.end().await;
 }
 
 /// An envelope enqueued again while the backend holds its job — waiting, held
@@ -508,6 +519,7 @@ pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: K
         2,
         "sent again once its job ended, run again"
     );
+    kit.end().await;
 }
 
 /// One case's run against one backend, on the queue `C` marks.
@@ -612,6 +624,15 @@ impl<B: KitBackend, C: Queue + CaseModule> Kit<B, C> {
             run,
             case: PhantomData,
         }
+    }
+
+    /// End a case whose assertions were read: its queue's storage emptied, so
+    /// no run leaves a job, a lease or a dead letter on the backend.
+    async fn end(self) {
+        self.backend
+            .purge(&queue_name::<C>())
+            .await
+            .expect("the backend purges the case's queue");
     }
 
     /// An app over the backend, booted and initialised, draining nothing yet.

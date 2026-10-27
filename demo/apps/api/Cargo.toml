@@ -27,6 +27,8 @@ reqwest = { workspace = true }
 # with no connection to upgrade.
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
+# `LogCapture::events_at` reads a `tracing::Level`.
+tracing = { workspace = true }
 
 [lints]
 workspace = true

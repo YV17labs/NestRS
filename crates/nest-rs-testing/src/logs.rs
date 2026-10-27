@@ -60,6 +60,21 @@ impl CapturedEvent {
     pub fn field(&self, name: &str) -> Option<String> {
         self.fields.get(name).cloned()
     }
+
+    /// Whether `text` appears in the event's message or in any field's value:
+    /// what a test asserts a line never quotes — a client's value, a secret.
+    ///
+    /// ```
+    /// # use nest_rs_testing::LogCapture;
+    /// let logs = LogCapture::install();
+    /// tracing::warn!(target: "features::users", reason = "unknown_email", "login failed");
+    /// let event = &logs.events()[0];
+    /// assert!(event.quotes("unknown_email"));
+    /// assert!(!event.quotes("alice@example.com"));
+    /// ```
+    pub fn quotes(&self, text: &str) -> bool {
+        self.message.contains(text) || self.fields.values().any(|value| value.contains(text))
+    }
 }
 
 /// One recorded `tracing` span, with every field value it ever held.

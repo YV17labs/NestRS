@@ -123,7 +123,7 @@ async fn one_warn_names_an_undecidable_push_however_many_rows_it_drops() {
         event.fields,
     );
     assert!(
-        !format!("{:?}", event.fields).contains("post 1"),
+        !event.quotes("post 1"),
         "a refusal names no value: {:?}",
         event.fields,
     );

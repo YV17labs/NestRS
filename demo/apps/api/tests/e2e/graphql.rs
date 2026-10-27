@@ -541,9 +541,8 @@ async fn a_publish_the_database_refuses_answers_in_band_and_leaves_the_post_a_dr
     .await;
     assert_eq!(read["data"]["post"]["status"], "DRAFT", "{read}");
     let filed: Vec<String> = logs
-        .events()
+        .events_at(tracing::Level::ERROR)
         .into_iter()
-        .filter(|event| event.level == "error")
         .map(|event| format!("{} {}", event.target, event.message))
         .collect();
     assert_eq!(filed, Vec::<String>::new());

@@ -13,9 +13,7 @@ use serde_json::{Value, json};
 use crate::*;
 
 fn quoted_in_a_log(logs: &LogCapture, text: &str) -> bool {
-    logs.events()
-        .iter()
-        .any(|event| format!("{:?}", event.fields).contains(text))
+    logs.events().iter().any(|event| event.quotes(text))
 }
 
 #[tokio::test]

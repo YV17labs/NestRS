@@ -92,7 +92,7 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
                 .events()
                 .iter()
                 .filter(|event| !is_rmcp_own_event_below_info(event))
-                .all(|event| !format!("{:?}", event.fields).contains(&file)),
+                .all(|event| !event.quotes(&file)),
         "a poll for an unknown key replies and logs none of it: {body} {:#?}",
         logs.events(),
     );

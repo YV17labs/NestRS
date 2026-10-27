@@ -69,9 +69,9 @@ const SENT_SCOPE: &str = "posts:only-the-client-knows";
 
 fn the_one_refusal(logs: &LogCapture) -> CapturedEvent {
     let mut refusals: Vec<CapturedEvent> = logs
-        .events()
+        .events_at(tracing::Level::WARN)
         .into_iter()
-        .filter(|event| event.target == features::oauth::TARGET && event.level == "warn")
+        .filter(|event| event.target == features::oauth::TARGET)
         .collect();
     assert_eq!(refusals.len(), 1, "{refusals:?}");
     refusals.remove(0)

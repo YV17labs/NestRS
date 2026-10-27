@@ -488,7 +488,7 @@ impl State {
         match &self.failure {
             Some(failure) => AuthError::Unavailable {
                 retry_after: failure.retry_after.or(next_fetch),
-                cause: failure.cause.clone(),
+                __cause: failure.cause.clone(),
             },
             None => AuthError::unavailable(
                 format!("{endpoint} holds no set this verifier can use yet"),

@@ -76,7 +76,7 @@ pub enum ServiceError {
         /// dataloaders; read through [`Error::source`].
         #[doc(hidden)]
         #[source]
-        cause: OpaqueCause,
+        __cause: OpaqueCause,
     },
 }
 
@@ -106,7 +106,7 @@ impl ServiceError {
     /// names what failed, never a value the request carried.
     pub fn internal(detail: impl Into<Cow<'static, str>>) -> Self {
         Self::Internal {
-            cause: OpaqueCause::new(detail, None),
+            __cause: OpaqueCause::new(detail, None),
         }
     }
 
@@ -132,7 +132,7 @@ impl ServiceError {
         source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
     ) -> Self {
         Self::Internal {
-            cause: OpaqueCause::new(detail, Some(Arc::from(nest_rs_core::boxed_error(source)))),
+            __cause: OpaqueCause::new(detail, Some(Arc::from(nest_rs_core::boxed_error(source)))),
         }
     }
 

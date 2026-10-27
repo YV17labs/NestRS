@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Reusable Kubernetes-style liveness/readiness probe module for NestRS applications."
+description = "Kubernetes-style liveness, readiness and startup probes for NestRS apps: HealthModule serves them, and each resource the framework opens reports through its own indicator."
 keywords = ["framework", "nestrs", "health", "kubernetes", "readiness"]
 categories = ["web-programming"]
 

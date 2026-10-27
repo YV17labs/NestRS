@@ -116,7 +116,7 @@ pub struct CredentialError;
 /// use nest_rs_authn::AuthError;
 ///
 /// let err = AuthError::Failed {
-///     cause: nest_rs_core::__private::OpaqueCause::new("the provider answered 400", None),
+///     __cause: nest_rs_core::__private::OpaqueCause::new("the provider answered 400", None),
 /// };
 /// ```
 #[derive(Debug, thiserror::Error)]
@@ -159,7 +159,7 @@ pub enum AuthError {
         /// The detail, then the cause's chain, read through [`Error::source`].
         #[doc(hidden)]
         #[source]
-        cause: OpaqueCause,
+        __cause: OpaqueCause,
     },
     /// An identity store or an identity provider could not be reached, or did
     /// not answer — an infrastructure failure, **not** a credential signal: the
@@ -179,7 +179,7 @@ pub enum AuthError {
         /// The detail, then the cause's chain, read through [`Error::source`].
         #[doc(hidden)]
         #[source]
-        cause: OpaqueCause,
+        __cause: OpaqueCause,
     },
 }
 
@@ -198,7 +198,7 @@ impl AuthError {
     /// the caller reads `"authentication failed"` whatever it says.
     pub fn failed(detail: impl Into<Cow<'static, str>>) -> Self {
         Self::Failed {
-            cause: OpaqueCause::new(detail, None),
+            __cause: OpaqueCause::new(detail, None),
         }
     }
 
@@ -226,7 +226,7 @@ impl AuthError {
         source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
     ) -> Self {
         Self::Failed {
-            cause: OpaqueCause::new(detail, Some(shared(source))),
+            __cause: OpaqueCause::new(detail, Some(shared(source))),
         }
     }
 
@@ -240,7 +240,7 @@ impl AuthError {
     ) -> Self {
         Self::Unavailable {
             retry_after,
-            cause: OpaqueCause::new(detail, None),
+            __cause: OpaqueCause::new(detail, None),
         }
     }
 
@@ -254,7 +254,7 @@ impl AuthError {
     ) -> Self {
         Self::Unavailable {
             retry_after,
-            cause: OpaqueCause::new(detail, Some(shared(source))),
+            __cause: OpaqueCause::new(detail, Some(shared(source))),
         }
     }
 

@@ -16,6 +16,9 @@ concurrency:
   group: publish-crates-io
   cancel-in-progress: false
 
+env:
+  CARGO_INCREMENTAL: 0
+
 jobs:
   publish:
     name: crates.io

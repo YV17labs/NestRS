@@ -55,9 +55,11 @@ helpers — is `#[doc(hidden)]` and `__nestrs_`-prefixed: the macro ABI, which
 no developer and no framework crate calls by hand. Everything else
 is API or `pub(crate)` (`decisions/visibility-tiers.md`). A public doc names
 no `__private` item, linked or in code, and says what it does in words: rustdoc
-renders a link into a hidden module dead without a warning, so review holds
-that, the hygiene build an emitted path, and rustdoc's `-D warnings` a doc link
-that no longer resolves.
+renders a link into a hidden module as its bare path, dead and without a
+warning, so `just doc` holds the link (its public pass renders alone, and no
+`href` of it may name a `__private`), review the name in code, the hygiene
+build an emitted path, and rustdoc's `-D warnings` a doc link that no longer
+resolves.
 
 **An expansion builds no tier-1 struct by literal**: it lands in the
 developer's crate, where a `#[non_exhaustive]` one is refused. A registry

@@ -99,10 +99,16 @@ audit $base="":
 mod test
 
 # rustdoc over the private items, then as docs.rs builds it: each pass refuses
-# a broken link the other cannot see
+# a broken link the other cannot see. rustdoc renders a link into a hidden
+# `__private` module dead and without a warning, as the bare path
+# (`href="crate::__private::…"`), so the public pass renders alone and no page
+# of it may link there.
 doc:
     RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --keep-going --document-private-items
+    rm -rf "${CARGO_TARGET_DIR:-target}/doc"
     RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --keep-going
+    test -f "${CARGO_TARGET_DIR:-target}/doc/nest_rs/index.html"
+    ! grep -rlE 'href="[^"]*__private' "${CARGO_TARGET_DIR:-target}/doc" --include='*.html'
 
 # Every check CI runs: lint, docs and tests
 ci: lint doc test::all

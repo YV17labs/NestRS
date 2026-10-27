@@ -49,3 +49,14 @@ accessors hand the schema builders out, and nest-rs-openapi, its reader, named
 their type through `__private`: a hidden alias in a public signature leaves
 its reader nothing to look up. `nest_rs_http::SchemaFn` is tier 1;
 `schema_of`, which only `#[routes]` emits, stays in `__private`.
+
+**2026-10-27 — a public page's link into `__private` is a red check.**
+"Review alone holds that a public doc names no `__private` item" is narrowed:
+`just doc` now renders its public pass into an emptied doc folder, so no
+private-pass page survives beside it, and fails on any rendered page whose
+`href` names a `__private` path. rustdoc writes such a link as the bare path
+(`href="crate::__private::endpoint"`), never as a page's URL, in its own crate
+or across crates, so the check reads the name anywhere in the `href`. A link is
+held by the build; a name written in a code span or in words, which rustdoc
+renders as text, is still review's. The first run over the workspace found one
+such link, `nest_rs_mcp::PropagatingHandler`'s builder, now said in words.

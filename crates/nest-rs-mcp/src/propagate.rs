@@ -98,7 +98,7 @@ pub(crate) enum RequestChains {
 /// Wraps a tool host so each operation runs with the `/mcp` request's context
 /// installed, as a unit of its own on the pipeline.
 ///
-/// Built by [`endpoint`](crate::__private::endpoint), never by hand.
+/// Built by the endpoint an MCP path mounts, one per session, never by hand.
 pub struct PropagatingHandler<H> {
     inner: H,
     units: OperationUnits,

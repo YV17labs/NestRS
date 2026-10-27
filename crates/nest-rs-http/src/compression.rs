@@ -16,9 +16,9 @@ use async_compression::tokio::bufread::{
     ZstdDecoder, ZstdEncoder,
 };
 use http::header::{
-    ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
+    ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
 };
-use http::{HeaderValue, StatusCode};
+use http::{HeaderMap, HeaderValue, StatusCode};
 use tokio::io::AsyncRead;
 use tokio_util::io::{ReaderStream, StreamReader};
 
@@ -46,6 +46,15 @@ impl<E: Endpoint> Endpoint for Compression<E> {
         }
         let coding = AcceptEncoding::of(req.headers()).and_then(|offered| offered.negotiate());
         let mut resp = self.0.call(req).await?;
+        if resp.status() == StatusCode::NOT_MODIFIED {
+            // A `304` carries what its `200` would (RFC 9110 §15.4.5).
+            let headers = resp.headers_mut();
+            vary_on(headers, ACCEPT_ENCODING);
+            if coding.is_some() {
+                weaken_entity_tag(headers);
+            }
+            return Ok(resp);
+        }
         if !compressible(&resp) {
             return Ok(resp);
         }
@@ -54,10 +63,28 @@ impl<E: Endpoint> Endpoint for Compression<E> {
             let headers = resp.headers_mut();
             headers.append(CONTENT_ENCODING, HeaderValue::from_static(coding.token()));
             headers.remove(CONTENT_LENGTH);
+            weaken_entity_tag(headers);
             let body = resp.take_body();
             resp.set_body(encoded(body, coding));
         }
         Ok(resp)
+    }
+}
+
+/// A strong `ETag` made weak: a strong tag names one representation's exact
+/// bytes, which a content coding changes (RFC 9110 §8.8.3), while a weak one
+/// still matches the plain answer's under `If-None-Match`'s weak comparison
+/// (§13.1.2).
+fn weaken_entity_tag(headers: &mut HeaderMap) {
+    let Some(tag) = headers.get(ETAG) else {
+        return;
+    };
+    if tag.as_bytes().starts_with(b"\"") {
+        let mut weak = b"W/".to_vec();
+        weak.extend_from_slice(tag.as_bytes());
+        if let Ok(weak) = HeaderValue::from_bytes(&weak) {
+            headers.insert(ETAG, weak);
+        }
     }
 }
 
@@ -192,5 +219,62 @@ mod tests {
             .await
             .expect("brotli");
         assert_eq!(text, "- ");
+    }
+
+    /// An endpoint answering `status` under the entity tag `etag`.
+    fn tagged(status: StatusCode, etag: &'static str) -> Compression<impl Endpoint> {
+        Compression(crate::endpoint_fn(move |_: Request| async move {
+            let resp = Response::builder()
+                .status(status)
+                .header(ETAG, HeaderValue::from_static(etag));
+            Ok(if status == StatusCode::NOT_MODIFIED {
+                resp.finish()
+            } else {
+                resp.body(TEXT)
+            })
+        }))
+    }
+
+    async fn answered(
+        endpoint: Compression<impl Endpoint>,
+        accept_encoding: Option<&'static str>,
+    ) -> Response {
+        let mut request = Request::builder();
+        if let Some(offered) = accept_encoding {
+            request = request.header(ACCEPT_ENCODING, HeaderValue::from_static(offered));
+        }
+        endpoint.call(request.finish()).await.expect("answered")
+    }
+
+    /// An encoded body is another representation's bytes, so a strong entity
+    /// tag the handler set for the plain one is weakened (RFC 9110 §8.8.3); a
+    /// weak tag, and the plain answer's, stay as written.
+    #[tokio::test]
+    async fn an_encoded_answer_weakens_its_strong_entity_tag() {
+        let encoded = answered(tagged(StatusCode::OK, "\"v1\""), Some("gzip")).await;
+        assert_eq!(encoded.headers()[CONTENT_ENCODING], "gzip");
+        assert_eq!(encoded.headers()[ETAG], "W/\"v1\"");
+
+        let weak = answered(tagged(StatusCode::OK, "W/\"v1\""), Some("gzip")).await;
+        assert_eq!(weak.headers()[ETAG], "W/\"v1\"");
+
+        let plain = answered(tagged(StatusCode::OK, "\"v1\""), None).await;
+        assert!(!plain.headers().contains_key(CONTENT_ENCODING));
+        assert_eq!(plain.headers()[ETAG], "\"v1\"");
+    }
+
+    /// A `304` carries what its `200` would (RFC 9110 §15.4.5): the tag that
+    /// answer's coding gives, and `Vary: Accept-Encoding`, so a cache updates
+    /// the entry it stored.
+    #[tokio::test]
+    async fn a_not_modified_answer_carries_the_tag_its_encoded_answer_would() {
+        let encoded = answered(tagged(StatusCode::NOT_MODIFIED, "\"v1\""), Some("br")).await;
+        assert_eq!(encoded.headers()[ETAG], "W/\"v1\"");
+        assert_eq!(encoded.headers()[http::header::VARY], "accept-encoding");
+        assert!(!encoded.headers().contains_key(CONTENT_ENCODING));
+
+        let plain = answered(tagged(StatusCode::NOT_MODIFIED, "\"v1\""), None).await;
+        assert_eq!(plain.headers()[ETAG], "\"v1\"");
+        assert_eq!(plain.headers()[http::header::VARY], "accept-encoding");
     }
 }

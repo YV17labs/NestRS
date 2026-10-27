@@ -328,6 +328,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `HttpCors { .. }.into_middleware()` | nothing: set `HttpConfig::cors`, which the transport checks at boot |
    | `HttpCors { methods: vec!["TRACE".into()], .. }` | drop the forbidden method; list the methods a page sends (`PUT`, `DELETE`, …) |
    | a CORS policy without `max_age`, whose preflight a browser kept a day | `max_age: Some(Duration::from_secs(86_400))`, or `<PREFIX>_HTTP__CORS_MAX_AGE=86400` — not a compile error: a preflight otherwise carries no `Access-Control-Max-Age` |
+   | a write guarded by `If-Match` against the `ETag` of a read `compression` encoded | read the tag the write sends from an unencoded answer (a request without `Accept-Encoding`) — not a compile error: an encoded answer's strong tag is now sent weak (`W/"…"`, RFC 9110 §8.8.3), and a weak tag matches no `If-Match` |
    | `current_body_limit().unwrap_or(RawBody::DEFAULT_LIMIT)` | `current_body_limit()` |
    | `normalize_error_response(poem_response)` | `normalize_error_response(response)`, with a `nest_rs::http::Response` |
    | `use poem::test::{TestClient, TestForm, TestFormField, TestResponse, TestJson};` | `use nest_rs::testing::{TestClient, TestForm, TestFormField, TestResponse, TestJson};` |

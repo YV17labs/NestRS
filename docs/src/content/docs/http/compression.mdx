@@ -1,6 +1,6 @@
 ---
 title: Compression
-description: Negotiate gzip/brotli response compression from Accept-Encoding with a single HttpConfig flag.
+description: Negotiate zstd, brotli, gzip or deflate response compression from Accept-Encoding with one HttpConfig flag.
 sidebar:
   order: 8
 ---
@@ -51,6 +51,10 @@ content-type: application/json
   unencoded. A client sending no `Accept-Encoding` gets plain bytes.
 - Every response the layer could have encoded carries
   `Vary: Accept-Encoding`, so a shared cache keeps the encodings apart.
+- An encoded body is another representation's bytes, so a strong `ETag` the
+  handler set is sent weak (`W/"…"`, RFC 9110 §8.8.3). `If-None-Match`
+  compares weakly, so the tag still revalidates, and a `304` carries the tag
+  and the `Vary` its encoded `200` would.
 - A request body whose `Content-Encoding` names one of the four codings is
   decoded before the route reads it, still under the transport's body cap.
 
@@ -65,6 +69,10 @@ content-type: application/json
 - A partial answer — a `206`, or any response carrying `Content-Range` — is
   sent as written: its range counts bytes before any encoding (RFC 9110 §14.4),
   so an encoded part would name offsets its body does not have.
+- A weak tag never matches `If-Match` or `If-Range`, which compare strongly
+  (RFC 9110 §13.1.1, §13.1.5): a write guarded by the tag of an encoded read
+  is refused, and a resumed download restarts whole. A client guarding a write
+  reads the tag from an unencoded answer, sent without `Accept-Encoding`.
 - Turn it off (the default) when a proxy, CDN, or load balancer in front of
   the app compresses — doing it twice only burns CPU.
 

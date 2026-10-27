@@ -89,3 +89,10 @@ guards, the `EndpointGuards` a module declares for `/graphql` or `/mcp` — in
 class gate is one function, `nest_rs_authz::class_gate`, in no edge feature,
 coercing to the pipeline's `ClassGate`. No slot is left. No departure from the
 record.
+
+**2026-10-27 — the opening paragraph describes the tree this record started
+from.** `nest-rs-guards` depends on `nest-rs-core` alone (2026-10-12), the
+three layer crates are gone (2026-10-22, `one-execution-pipeline.md`), and poem
+is in no manifest or lockfile since 2026-10-23 (`http-server.md`): the HTTP
+transport is nestrs's own, on hyper. The *Refused* list's "typed over poem"
+reads as 6.x's contracts.

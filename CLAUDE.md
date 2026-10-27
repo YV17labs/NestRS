@@ -1,7 +1,7 @@
 # CLAUDE.md — nestrs
 
 NestRS is a NestJS-style framework for Rust: modules, dependency injection and
-decorators (proc macros) over poem, sea-orm, async-graphql, rmcp and redis.
+decorators (proc macros) over hyper, sea-orm, async-graphql, rmcp and redis.
 Public repo: no machine-local paths or private references.
 
 This file is the map. The rules for a part of the tree live in
@@ -203,8 +203,8 @@ that does not answer is an environment defect to fix, never a reason to skip a
 test. Any other backend shape is a dev container environment of its own —
 `.devcontainer/<backend>-<shape>/devcontainer.json`, layering
 `compose/<backend>-<shape>.yml` on `compose/base.yml` (Valkey's
-`valkey-sentinel` and `valkey-cluster`) — opened with *Reopen in Container* in
-place of the everyday one.
+`valkey-sentinel` and `valkey-cluster`, Postgres's `postgres-mutual-tls`) —
+opened with *Reopen in Container* in place of the everyday one.
 
 **We work encrypted**: every service, in the dev container and in CI, speaks
 TLS alone, presenting the one certificate a self-signed authority issues at

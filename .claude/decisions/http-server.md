@@ -411,3 +411,13 @@ parameter `file`: …`, `form field `grant_type`: missing`, `JSON body at
 `author.name`: …`. With `form field` in the sentence, `url decode` was a
 second word for one concept, so it left; nothing else of poem's wording is
 left to keep.
+
+## 2026-10-27 — the title and the opening describe the server this record started from
+
+The title ("poem, until a dated condition") and the paragraphs above the
+2026-10-09 entry state poem as the server, as it was on 2026-10-04. Since
+2026-10-23 the server is nestrs's own: hyper and hyper-util serve the
+connections, the transport routes on its own segment tree, answers CORS itself,
+decodes with serde_urlencoded and multer and encodes with async-compression,
+and poem is in no manifest or lockfile. The project map's opening line names
+hyper among the libraries the decorators sit over.

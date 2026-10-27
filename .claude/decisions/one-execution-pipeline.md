@@ -322,3 +322,11 @@ type to hand it — the input arrives as its kind, as NestJS hands its pipes an
 argument parsed at the edge into its own type, and a per-argument pipe stays
 typed. Refused: typing the global pipe per site, which would make one global
 pipe a generic per handler type, registered once per type the app decodes.
+
+**2026-10-27 — the opening paragraph describes 6.x.** The three crates typed
+over poem were removed on 2026-10-22
+(`refactor/retire-replaced-contracts-and-poem`: `Interceptor` and
+`ExceptionFilter` live in `nest-rs-core`, over the unit's context, and
+`ExceptionFilter` absorbed `Filter`), and poem left every lockfile on
+2026-10-23 (`http-server.md`): the HTTP transport runs on hyper, and every edge
+runs this pipeline.

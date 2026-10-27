@@ -129,17 +129,19 @@ impl Denial {
     }
 
     /// [`unavailable`](Self::unavailable), keeping what failed as the denial's
-    /// [`source`](Error::source). A source never quotes a value the caller sent:
+    /// [`source`](Error::source), every link as the type it is
+    /// ([`boxed_error`](nest_rs_core::boxed_error)), so a driver's own sayer
+    /// still claims its link. A source never quotes a value the caller sent:
     /// its chain reaches a log line.
     pub fn unavailable_because(
         retry_after_secs: Option<u32>,
         reason: impl Into<Cow<'static, str>>,
-        source: impl Into<Box<dyn Error + Send + Sync>>,
+        source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
     ) -> Self {
         Self::Unavailable {
             retry_after_secs,
             reason: reason.into(),
-            source: Some(Arc::from(source.into())),
+            source: Some(Arc::from(nest_rs_core::boxed_error(source))),
         }
     }
 
@@ -285,6 +287,36 @@ mod tests {
         assert!(
             Denial::unavailable(None, "down").source().is_none(),
             "a denial built without a cause has none",
+        );
+    }
+
+    /// A driver's error quoting a value, said without it by the driver's
+    /// [`SafeLink`](nest_rs_core::SafeLink).
+    #[derive(Debug)]
+    struct Quoting;
+
+    impl fmt::Display for Quoting {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("row refused: ada@example.com")
+        }
+    }
+
+    impl Error for Quoting {}
+
+    nest_rs_core::inventory::submit! {
+        nest_rs_core::SafeLink::new(|link| link.is::<Quoting>().then(|| "row refused".to_owned()))
+    }
+
+    /// A cause handed over as an `anyhow::Error` keeps its links' types, so
+    /// the driver's sayer still claims its own and the value stays out of the
+    /// line; anyhow's own conversion boxes a wrapper whose `source` skips them.
+    #[test]
+    fn an_anyhow_cause_is_said_by_its_links_own_sayers() {
+        let cause = nest_rs_core::anyhow::Error::new(Quoting);
+        let denial = Denial::unavailable_because(None, "the identity store is down", cause);
+        assert_eq!(
+            nest_rs_core::error_message(&denial),
+            "the identity store is down: row refused",
         );
     }
 

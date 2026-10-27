@@ -8,7 +8,6 @@
 
 use std::borrow::Cow;
 use std::error::Error;
-use std::sync::Arc;
 
 use nest_rs_core::__private::OpaqueCause;
 use nest_rs_core::DecodeError;
@@ -132,7 +131,7 @@ impl ServiceError {
         source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
     ) -> Self {
         Self::Internal {
-            __cause: OpaqueCause::new(detail, Some(Arc::from(nest_rs_core::boxed_error(source)))),
+            __cause: OpaqueCause::because(detail, source),
         }
     }
 

@@ -226,7 +226,7 @@ impl AuthError {
         source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
     ) -> Self {
         Self::Failed {
-            __cause: OpaqueCause::new(detail, Some(shared(source))),
+            __cause: OpaqueCause::because(detail, source),
         }
     }
 
@@ -254,7 +254,7 @@ impl AuthError {
     ) -> Self {
         Self::Unavailable {
             retry_after,
-            __cause: OpaqueCause::new(detail, Some(shared(source))),
+            __cause: OpaqueCause::because(detail, source),
         }
     }
 
@@ -314,13 +314,6 @@ impl AuthError {
             _ => "invalid token",
         }
     }
-}
-
-/// `source` shared, its chain kept readable link by link.
-fn shared(
-    source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
-) -> Arc<dyn Error + Send + Sync> {
-    Arc::from(nest_rs_core::boxed_error(source))
 }
 
 impl AuthError {

@@ -51,6 +51,16 @@ pub(crate) mod __private {
                 source,
             }
         }
+
+        /// [`new`](Self::new) over a failure's `source`, every link kept as the
+        /// type it is ([`boxed_error`](fn@crate::boxed_error)), so a driver's
+        /// sayer still claims its own.
+        pub fn because(
+            detail: impl Into<Cow<'static, str>>,
+            source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
+        ) -> Self {
+            Self::new(detail, Some(Arc::from(crate::boxed_error(source))))
+        }
     }
 
     impl fmt::Display for OpaqueCause {

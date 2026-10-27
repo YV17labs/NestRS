@@ -7,14 +7,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{injectable, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs_http::{EndpointGuards, HttpModule, StatusCode, controller, header};
 use nest_rs_seaorm::{CrudService, SeaOrmDatabaseModule, SeaOrmModule, expose};
 use nest_rs_testing::TestApp;
 use sea_orm::{ConnectOptions, Database};
 use serde_json::{Value, json};
+
+use crate::always_authenticated::AlwaysAuthenticated;
 
 const NOT_A_CURSOR: &str = "not-a-cursor";
 
@@ -96,22 +97,6 @@ impl AbilityFactory for EveryAlbum {
         ab.can(Action::Read, track::Entity);
     }
 }
-
-#[injectable]
-#[derive(Default)]
-struct AlwaysAuthenticated;
-
-impl Layer for AlwaysAuthenticated {}
-
-#[async_trait]
-impl Guard for AlwaysAuthenticated {
-    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        cx.attach(crate::Anyone);
-        Ok(())
-    }
-}
-
-impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
 #[controller(path = "/albums")]
 #[use_guards(AlwaysAuthenticated, AbilityGuard<EveryAlbum>)]

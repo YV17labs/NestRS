@@ -3,15 +3,16 @@
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{injectable, module};
 use nest_rs_graphql::GraphqlView;
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs_http::EndpointGuards;
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::{LogCapture, TestApp};
 use serde::{Deserialize, Serialize};
+
+use crate::always_authenticated::AlwaysAuthenticated;
 
 /// An entity whose table is never created, so every read is a driver error.
 mod ghost {
@@ -77,22 +78,6 @@ impl AbilityFactory for ReadEverything {
 }
 
 type GhostAbilityGuard = AbilityGuard<ReadEverything>;
-
-#[injectable]
-#[derive(Default)]
-struct AlwaysAuthenticated;
-
-impl Layer for AlwaysAuthenticated {}
-
-#[async_trait]
-impl Guard for AlwaysAuthenticated {
-    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        cx.attach(crate::Anyone);
-        Ok(())
-    }
-}
-
-impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
 #[resolver]
 struct GhostsResolver;

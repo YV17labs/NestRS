@@ -10,31 +10,9 @@ use nest_rs_database::{
     ExecutorScope, Settlement, TransactionPolicy, UnitOfWork, UnitSpec, run_unit,
 };
 use nest_rs_seaorm::{Executor, SeaOrmConfig, SeaOrmUnitOfWork, current_executor};
-use sea_orm::{ConnectionTrait, Statement};
+use sea_orm::ConnectionTrait;
 
-/// A table recreated per test, so a rollback is observable as a row count.
-async fn scratch_table(conn: &sea_orm::DatabaseConnection, name: &str) {
-    for sql in [
-        format!("DROP TABLE IF EXISTS {name}"),
-        format!("CREATE TABLE {name} (id serial PRIMARY KEY)"),
-    ] {
-        conn.execute_unprepared(&sql)
-            .await
-            .expect("the scratch table is created");
-    }
-}
-
-async fn row_count(conn: &sea_orm::DatabaseConnection, name: &str) -> i64 {
-    conn.query_one_raw(Statement::from_string(
-        conn.get_database_backend(),
-        format!("SELECT count(*)::bigint AS n FROM {name}"),
-    ))
-    .await
-    .expect("the count query runs")
-    .expect("count returns a row")
-    .try_get::<i64>("", "n")
-    .expect("the count is an integer")
-}
+use crate::harness::{committed_rows, fresh_table};
 
 /// A queue attempt's unit of work, as the queue edge declares it.
 const JOB: nest_rs_core::operation_log::Unit = nest_rs_core::__private::declare_unit(
@@ -80,7 +58,7 @@ fn context(conn: Arc<sea_orm::DatabaseConnection>) -> Attempts {
 #[tokio::test]
 async fn a_job_runs_in_a_transaction_by_default_and_its_writes_commit() {
     let conn = crate::harness::connect_arc().await;
-    scratch_table(&conn, "worker_commit_probe").await;
+    fresh_table(&conn, "worker_commit_probe").await;
     let ctx = context(conn.clone());
 
     assert!(
@@ -106,7 +84,7 @@ async fn a_job_runs_in_a_transaction_by_default_and_its_writes_commit() {
     );
 
     assert_eq!(
-        row_count(&conn, "worker_commit_probe").await,
+        committed_rows(&*conn, "worker_commit_probe").await,
         1,
         "a job that returned Ok commits what it wrote",
     );
@@ -119,7 +97,7 @@ async fn a_job_runs_in_a_transaction_by_default_and_its_writes_commit() {
 #[tokio::test]
 async fn a_failed_job_leaves_nothing_for_the_retry_to_repeat() {
     let conn = crate::harness::connect_arc().await;
-    scratch_table(&conn, "worker_rollback_probe").await;
+    fresh_table(&conn, "worker_rollback_probe").await;
     let ctx = context(conn.clone());
 
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async {
@@ -136,7 +114,7 @@ async fn a_failed_job_leaves_nothing_for_the_retry_to_repeat() {
     );
 
     assert_eq!(
-        row_count(&conn, "worker_rollback_probe").await,
+        committed_rows(&*conn, "worker_rollback_probe").await,
         0,
         "a job that returned Err rolls back, so its retry starts from a clean slate",
     );
@@ -145,7 +123,7 @@ async fn a_failed_job_leaves_nothing_for_the_retry_to_repeat() {
 #[tokio::test]
 async fn the_opt_out_runs_on_the_pool_and_each_statement_stands_alone() {
     let conn = crate::harness::connect_arc().await;
-    scratch_table(&conn, "worker_pool_probe").await;
+    fresh_table(&conn, "worker_pool_probe").await;
     let ctx = context(conn.clone());
 
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async {
@@ -166,7 +144,7 @@ async fn the_opt_out_runs_on_the_pool_and_each_statement_stands_alone() {
     );
 
     assert_eq!(
-        row_count(&conn, "worker_pool_probe").await,
+        committed_rows(&*conn, "worker_pool_probe").await,
         1,
         "on the pool a write survives the failure that follows it — which is why \
          such a job owns its own idempotency",
@@ -176,7 +154,7 @@ async fn the_opt_out_runs_on_the_pool_and_each_statement_stands_alone() {
 #[tokio::test]
 async fn a_job_that_swallows_a_db_error_and_returns_ok_is_not_reported_as_succeeding() {
     let conn = crate::harness::connect_arc().await;
-    scratch_table(&conn, "worker_poison_probe").await;
+    fresh_table(&conn, "worker_poison_probe").await;
     conn.execute_unprepared("INSERT INTO worker_poison_probe (id) VALUES (1)")
         .await
         .expect("the row the job will collide with");
@@ -207,7 +185,7 @@ async fn a_job_that_swallows_a_db_error_and_returns_ok_is_not_reported_as_succee
          attempt would hit again — so the budget buys nothing: {why}",
     );
     assert_eq!(
-        row_count(&conn, "worker_poison_probe").await,
+        committed_rows(&*conn, "worker_poison_probe").await,
         1,
         "only the pre-seeded row survives — the attempt wrote nothing, which is \
          precisely why it must not be reported as a success",
@@ -251,7 +229,7 @@ async fn a_commit_the_next_attempt_would_lose_too_is_not_retried() {
          outside the transaction, then dead-letters regardless: {why}",
     );
     assert_eq!(
-        row_count(&conn, "worker_deferred_probe").await,
+        committed_rows(&*conn, "worker_deferred_probe").await,
         0,
         "and nothing landed, which is what makes the failure honest",
     );
@@ -345,7 +323,7 @@ async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
     );
 
     assert_eq!(
-        row_count(&conn, "worker_deferred_children").await,
+        committed_rows(&*conn, "worker_deferred_children").await,
         0,
         "and nothing was written",
     );
@@ -417,7 +395,7 @@ async fn work_held_by_an_attempt_that_failed_never_runs() {
         ctx.scope(TransactionPolicy::PerUnit, job).await,
         Settlement::Settled
     );
-    assert_eq!(committed_rows(&conn, TABLE).await, 0);
+    assert_eq!(committed_rows(&*conn, TABLE).await, 0);
     assert!(sighted(&sightings).is_empty());
 }
 
@@ -471,7 +449,7 @@ async fn a_job_whose_listener_outlives_its_timeout_is_not_retried() {
     use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
 
     let conn = crate::harness::connect_arc().await;
-    scratch_table(&conn, "worker_deadline_probe").await;
+    fresh_table(&conn, "worker_deadline_probe").await;
     let unit: Arc<dyn UnitOfWork> = Arc::new(SeaOrmUnitOfWork::new(
         conn.clone(),
         &SeaOrmConfig::default(),
@@ -502,7 +480,7 @@ async fn a_job_whose_listener_outlives_its_timeout_is_not_retried() {
         matches!(outcome, AttemptOutcome::Ok),
         "a commit whose listener outlives the timeout is no timeout: {outcome:?}"
     );
-    assert_eq!(row_count(&conn, "worker_deadline_probe").await, 1);
+    assert_eq!(committed_rows(&*conn, "worker_deadline_probe").await, 1);
     LISTENER_RELEASED.notify_one();
     nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
         LISTENER_RUNS.load(std::sync::atomic::Ordering::SeqCst) == 1
@@ -552,7 +530,7 @@ async fn a_job_cut_while_its_atomic_block_commits_is_in_doubt_and_its_write_land
     use sea_orm::TransactionTrait;
 
     let conn = crate::harness::connect_arc().await;
-    scratch_table(&conn, "worker_atomic_in_doubt").await;
+    fresh_table(&conn, "worker_atomic_in_doubt").await;
     let gate = crate::harness::advisory_lock_key("worker_atomic_in_doubt_commit");
     // A deferred trigger runs at `COMMIT`, which then waits for the gate.
     for sql in [
@@ -618,7 +596,7 @@ async fn a_job_cut_while_its_atomic_block_commits_is_in_doubt_and_its_write_land
         .expect("the gate lets the commit through");
     nest_rs_testing::wait_for(std::time::Duration::from_secs(5), || {
         let conn = Arc::clone(&conn);
-        async move { row_count(&conn, "worker_atomic_in_doubt").await == 1 }
+        async move { committed_rows(&*conn, "worker_atomic_in_doubt").await == 1 }
     })
     .await;
 }

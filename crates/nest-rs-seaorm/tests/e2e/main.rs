@@ -11,6 +11,9 @@
 
 mod harness;
 
+#[cfg(feature = "graphql")]
+#[path = "../harness/always_authenticated.rs"]
+mod always_authenticated;
 mod atomic;
 mod create;
 mod database;

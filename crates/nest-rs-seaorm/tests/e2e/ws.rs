@@ -14,7 +14,7 @@ use nest_rs_seaorm::{
 use nest_rs_testing::TestApp;
 use nest_rs_testing::ws::WsApp;
 use nest_rs_ws::{WsModule, async_trait, gateway, messages};
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use sea_orm::ConnectionTrait;
 use serde_json::json;
 
 /// Attaches an ability to every upgrade, as the authorization guard does.
@@ -145,17 +145,6 @@ async fn boot() -> WsApp {
         .expect("the gateways boot over live Postgres")
 }
 
-async fn table(conn: &DatabaseConnection, name: &str) {
-    for sql in [
-        format!("DROP TABLE IF EXISTS {name}"),
-        format!("CREATE TABLE {name} (id INT PRIMARY KEY)"),
-    ] {
-        conn.execute_unprepared(&sql)
-            .await
-            .unwrap_or_else(|err| panic!("set up the probe table `{name}`: {err}"));
-    }
-}
-
 async fn ask(app: &WsApp, event: &str) -> serde_json::Value {
     let mut socket = app.socket("/ws/unit").connect().await;
     socket.send(event, json!(null)).await;
@@ -177,7 +166,7 @@ async fn a_gateway_listing_no_data_context_runs_each_message_in_a_lazy_transacti
 #[tokio::test]
 async fn a_success_reply_commits_the_messages_writes() {
     let conn = crate::harness::connect().await;
-    table(&conn, "ws_unit_commit").await;
+    crate::harness::fresh_table(&conn, "ws_unit_commit").await;
     let app = boot().await;
 
     let answer = ask(&app, "commit").await;
@@ -192,7 +181,7 @@ async fn a_success_reply_commits_the_messages_writes() {
 #[tokio::test]
 async fn an_error_reply_rolls_back_the_messages_writes() {
     let conn = crate::harness::connect().await;
-    table(&conn, "ws_unit_rollback").await;
+    crate::harness::fresh_table(&conn, "ws_unit_rollback").await;
     let app = boot().await;
 
     let answer = ask(&app, "fail").await;
@@ -239,7 +228,7 @@ async fn a_message_whose_commit_the_database_refuses_is_answered_with_an_error()
 #[tokio::test]
 async fn a_connect_hook_writes_in_a_unit_of_its_own_under_the_upgrade_ability() {
     let conn = crate::harness::connect().await;
-    table(&conn, "ws_unit_connect_commit").await;
+    crate::harness::fresh_table(&conn, "ws_unit_connect_commit").await;
     let app = boot().await;
 
     let mut socket = app.socket("/ws/unit/connect-writes").connect().await;
@@ -261,7 +250,7 @@ async fn a_connect_hook_writes_in_a_unit_of_its_own_under_the_upgrade_ability() 
 #[tokio::test]
 async fn a_connect_hook_that_panics_after_writing_leaves_nothing() {
     let conn = crate::harness::connect().await;
-    table(&conn, "ws_unit_connect_rollback").await;
+    crate::harness::fresh_table(&conn, "ws_unit_connect_rollback").await;
     let app = boot().await;
 
     let mut socket = app.socket("/ws/unit/connect-panics").connect().await;
@@ -319,7 +308,7 @@ struct DeadlineModule;
 async fn a_message_that_wrote_then_outlived_its_deadline_leaves_no_row() {
     let logs = nest_rs_testing::LogCapture::install();
     let conn = crate::harness::connect().await;
-    table(&conn, "ws_unit_deadline").await;
+    crate::harness::fresh_table(&conn, "ws_unit_deadline").await;
     let app = TestApp::builder()
         .module::<DeadlineModule>()
         .build_ws()
@@ -404,7 +393,7 @@ async fn a_message_whose_statement_is_blocked_is_answered_at_its_deadline() {
 
     let logs = nest_rs_testing::LogCapture::install();
     let conn = crate::harness::connect().await;
-    table(&conn, "ws_unit_blocked").await;
+    crate::harness::fresh_table(&conn, "ws_unit_blocked").await;
     let locker = conn.begin().await.expect("the locking transaction opens");
     locker
         .execute_unprepared("LOCK TABLE ws_unit_blocked IN ACCESS EXCLUSIVE MODE")

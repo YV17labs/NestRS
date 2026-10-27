@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
 use nest_rs_core::problem::code;
-use nest_rs_core::{Layer, OPAQUE_CLIENT_MESSAGE, injectable, module};
+use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, injectable, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, crud, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+
 use nest_rs_http::StatusCode;
 use nest_rs_seaorm::{
     Creatable, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, expose,
@@ -20,6 +20,8 @@ use nest_rs_testing::{LogCapture, TestApp};
 use sea_orm::prelude::Uuid;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use serde_json::{Value, json};
+
+use crate::always_authenticated::AlwaysAuthenticated;
 
 const TABLE: &str = "crud_probe_gizmos";
 const UNIQUE: &str = "crud_probe_gizmos_email_key";
@@ -73,22 +75,6 @@ impl AbilityFactory for EveryGizmo {
         ab.can(Action::Create, gizmo::Entity);
     }
 }
-
-#[injectable]
-#[derive(Default)]
-struct AlwaysAuthenticated;
-
-impl Layer for AlwaysAuthenticated {}
-
-#[async_trait]
-impl Guard for AlwaysAuthenticated {
-    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        cx.attach(crate::Anyone);
-        Ok(())
-    }
-}
-
-impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}
 
 #[resolver]
 struct GizmosResolver {

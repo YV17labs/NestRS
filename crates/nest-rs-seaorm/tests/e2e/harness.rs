@@ -139,11 +139,12 @@ pub(crate) struct Sighting {
 /// Where the probe's work records what it saw — empty while it has not run.
 pub(crate) type Sightings = Arc<std::sync::Mutex<Vec<Sighting>>>;
 
-/// A fresh one-column table for one test, so a row count is that test's alone.
+/// A fresh one-column table for one test, so a row count is that test's alone;
+/// its key fills itself when a row names none.
 pub(crate) async fn fresh_table(conn: &DatabaseConnection, table: &str) {
     for sql in [
         format!("DROP TABLE IF EXISTS {table}"),
-        format!("CREATE TABLE {table} (id INT PRIMARY KEY)"),
+        format!("CREATE TABLE {table} (id serial PRIMARY KEY)"),
     ] {
         conn.execute_unprepared(&sql)
             .await
@@ -151,9 +152,11 @@ pub(crate) async fn fresh_table(conn: &DatabaseConnection, table: &str) {
     }
 }
 
-pub(crate) async fn committed_rows(conn: &DatabaseConnection, table: &str) -> i64 {
+/// `table`'s rows, as `conn` sees them: the pool's committed rows, or a
+/// listener's executor's own.
+pub(crate) async fn committed_rows(conn: &impl ConnectionTrait, table: &str) -> i64 {
     conn.query_one_raw(sea_orm::Statement::from_string(
-        sea_orm::DatabaseBackend::Postgres,
+        conn.get_database_backend(),
         format!("SELECT count(*)::bigint AS n FROM {table}"),
     ))
     .await
@@ -179,7 +182,7 @@ pub(crate) async fn write_and_hold(
         .await
         .expect("the write lands in the boundary's transaction");
     nest_rs_database::after_commit(async move {
-        let committed = committed_rows(&observer, table).await;
+        let committed = committed_rows(&*observer, table).await;
         let on_pool = matches!(
             nest_rs_seaorm::current_executor(),
             Some(nest_rs_seaorm::Executor::Pool(_))

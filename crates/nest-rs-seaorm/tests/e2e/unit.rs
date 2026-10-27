@@ -582,7 +582,7 @@ async fn work_held_by_a_request_that_rolled_back_never_runs() {
     .await;
 
     assert_eq!(probe(&app).await, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(committed_rows(&conn, TABLE).await, 0);
+    assert_eq!(committed_rows(&*conn, TABLE).await, 0);
     assert!(
         sighted(&sightings).is_empty(),
         "nothing reacts to a write that never landed",

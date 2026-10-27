@@ -13,7 +13,7 @@ use nest_rs_seaorm::{
 };
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool;
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use sea_orm::ConnectionTrait;
 
 /// Attaches an ability to every request, as the authorization guard does,
 /// naming its caller as the authentication guard does.
@@ -103,17 +103,6 @@ async fn boot() -> TestApp {
         .expect("the tool host boots over live Postgres")
 }
 
-async fn table(conn: &DatabaseConnection, name: &str) {
-    for sql in [
-        format!("DROP TABLE IF EXISTS {name}"),
-        format!("CREATE TABLE {name} (id INT PRIMARY KEY)"),
-    ] {
-        conn.execute_unprepared(&sql)
-            .await
-            .unwrap_or_else(|err| panic!("set up the probe table `{name}`: {err}"));
-    }
-}
-
 /// The text a tool answered with, and whether it reported an error.
 async fn call(app: &TestApp, tool: &str) -> (String, bool) {
     let body = call_tool(app.http(), PATH, tool, None).await;
@@ -141,7 +130,7 @@ async fn a_host_listing_no_data_context_runs_each_operation_in_a_lazy_transactio
 #[tokio::test]
 async fn a_tool_that_succeeds_commits_what_it_wrote() {
     let conn = crate::harness::connect().await;
-    table(&conn, "mcp_unit_commit").await;
+    crate::harness::fresh_table(&conn, "mcp_unit_commit").await;
     let app = boot().await;
 
     assert_eq!(call(&app, "succeed").await, ("written".to_owned(), false));
@@ -154,7 +143,7 @@ async fn a_tool_that_succeeds_commits_what_it_wrote() {
 #[tokio::test]
 async fn a_tool_that_reports_its_own_error_leaves_nothing_it_wrote() {
     let conn = crate::harness::connect().await;
-    table(&conn, "mcp_unit_tool_error").await;
+    crate::harness::fresh_table(&conn, "mcp_unit_tool_error").await;
     let app = boot().await;
 
     assert_eq!(
@@ -209,7 +198,7 @@ async fn an_operation_whose_statement_is_blocked_is_answered_at_its_deadline() {
     use sea_orm::TransactionTrait;
 
     let conn = crate::harness::connect().await;
-    table(&conn, "mcp_unit_blocked").await;
+    crate::harness::fresh_table(&conn, "mcp_unit_blocked").await;
     let locker = conn.begin().await.expect("the locking transaction opens");
     locker
         .execute_unprepared("LOCK TABLE mcp_unit_blocked IN ACCESS EXCLUSIVE MODE")

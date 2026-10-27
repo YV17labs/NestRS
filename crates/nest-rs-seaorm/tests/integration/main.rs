@@ -11,6 +11,8 @@
     reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
 )]
 
+#[path = "../harness/always_authenticated.rs"]
+mod always_authenticated;
 mod database;
 mod error;
 mod expose;

@@ -22,7 +22,7 @@ use nest_rs_core::{
     Container, Failure, Handler, Outcome, Problem, UnitContext, UnresolvedLayerError,
 };
 use nest_rs_guards::__private::{
-    GlobalBucket, RefusalMark, Refused, SiteChainSources, compose_site_chain, failure_chain,
+    GlobalBucket, RefusalMark, SiteChainSources, check_guards, compose_site_chain, failure_chain,
 };
 use nest_rs_guards::{Denial, Guard, GuardSpec};
 use tracing::Instrument;
@@ -180,18 +180,14 @@ impl Floor {
 impl GuardStage for FieldGuardStage {
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
         Box::pin(async move {
-            for entry in &self.guards {
-                // `as_ref()`: dispatch on the erased guard — the `Guard for
-                // Arc<T>` blanket would nest a second boxed future per check.
-                let guard = entry.layer.as_ref();
-                if let Err(denial) = guard.check(cx).await {
+            check_guards(&self.guards, None, cx)
+                .await
+                .map_err(|refused| {
                     let field = cx.handler().address();
-                    let denial = Refused::by(entry.name, guard, denial)
-                        .into_denial(|guard, denial| self.floor.file(guard, field, denial));
-                    return Err(Failure::from(denial));
-                }
-            }
-            Ok(())
+                    Failure::from(
+                        refused.into_denial(|guard, denial| self.floor.file(guard, field, denial)),
+                    )
+                })
         })
     }
 }

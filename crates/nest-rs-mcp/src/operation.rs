@@ -18,7 +18,7 @@ use nest_rs_core::{
     Container, Deadline, Failure, Handler, Outcome, Posture, UnitContext, UnresolvedLayerError,
     anyhow,
 };
-use nest_rs_guards::__private::{RefusalMark, Refused, failure_chain, resolve_global_guards};
+use nest_rs_guards::__private::{RefusalMark, check_guards, failure_chain, resolve_global_guards};
 use nest_rs_guards::{Denial, Guard, GuardSpec};
 use rmcp::model::{CallToolRequestMethod, ConstString, GetPromptRequestMethod};
 
@@ -172,18 +172,14 @@ struct OperationGuardStage {
 impl GuardStage for OperationGuardStage {
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
         Box::pin(async move {
-            for entry in &self.guards {
-                // `as_ref()`: dispatch on the erased guard — the `Guard for
-                // Arc<T>` blanket would nest a second boxed future per check.
-                let guard = entry.layer.as_ref();
-                if let Err(denial) = guard.check(cx).await {
+            check_guards(&self.guards, None, cx)
+                .await
+                .map_err(|refused| {
                     let operation = cx.handler().address();
-                    let denial = Refused::by(entry.name, guard, denial)
-                        .into_denial(|guard, denial| self.file(guard, operation, denial));
-                    return Err(Failure::from(denial));
-                }
-            }
-            Ok(())
+                    Failure::from(
+                        refused.into_denial(|guard, denial| self.file(guard, operation, denial)),
+                    )
+                })
         })
     }
 }

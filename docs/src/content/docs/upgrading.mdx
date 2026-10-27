@@ -60,6 +60,10 @@ lists what the boot, a log or the wire shows when one is missed.
      operation of yours needs `features = ["uuid", "chrono"]` on your own
      `async-graphql` line, and a chrono type you serialize needs `serde` on your
      own `chrono` line. With `seaorm`, nothing changes.
+   - **Raise the libraries you name beside nestrs to the floors 7.0 builds
+     on**: `tokio` 1.54, `uuid` 1.29, `rmcp` 3.8 and `redis` 1.8. The framework
+     pins `redis` at `=1.8`, so a `redis = "=1.7"` line of yours no longer
+     resolves; a requirement such as `1.7` takes 1.8 with no edit.
    - **A library the framework re-exported for its own expansions** —
      `nest_rs::core::{serde, validator, schemars}`,
      `nest_rs::http::{serde, validator}`, `nest_rs::queue::serde_json` — is a
@@ -1023,7 +1027,14 @@ lists what the boot, a log or the wire shows when one is missed.
       `DELETE` of a session the endpoint does not hold; sessions stored before
       7.0 are refused on restore, so their clients open new ones once; a body
       that is no JSON-RPC message answers `400` with `-32700` or `-32600`, where
-      it answered `415`; an unknown tool answers `-32602` under `NOT_FOUND`.
+      it answered `415`, a message carrying a stray `result` or `error`, or a
+      repeated `id`, among them; an unknown tool answers `-32602` under
+      `NOT_FOUND`. A request naming no session that is no `initialize` answers
+      `400`, where it answered `422`; a JSON-RPC response sent with no session
+      answers `400` with `-32600`, where it was accepted `202`. A tool or prompt
+      asking its client for input at `2026-07-28` answers an
+      `InputRequiredResult`: the peer's `elicit` and `create_message` are refused
+      at that revision.
     - **A token endpoint answers RFC 6749 §5.2's JSON**: `401 invalid_client`
       with a `Basic` challenge for a client refused over the `Authorization`
       header, `400 invalid_client` for one that sent its credentials in the body
@@ -1053,6 +1064,8 @@ lists what the boot, a log or the wire shows when one is missed.
   `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`** is the one renamed variable
   the boot does not name: it reads `redis__worker` as another binary's
   namespace, and the drain runs on what `for_root` pins, or the default.
+- **A `redis` requirement of yours that excludes 1.8** — `=1.7` — fails to
+  resolve beside the framework's `=1.8` pin, cargo naming both requirements.
 - **A manifest naming a removed feature** — `worker`, `interceptors`,
   `filters`, `exception-filters` — fails to resolve, naming the feature `nest-rs`
   does not have; an import of `RedisQueueModule` under `redis` alone fails to

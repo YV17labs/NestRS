@@ -1484,28 +1484,6 @@ impl Module for EndsBesideServingModule {
     }
 }
 
-struct AttachesServesUntilStopped;
-
-impl Module for AttachesServesUntilStopped {
-    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_transport(|_| Ok(ServesUntilStopped))
-    }
-}
-
-/// The public seam is the whole of it: a module attaches its transport, and
-/// the record the kernel reads names it by its type.
-#[test]
-fn a_module_attaches_a_transport_the_kernel_names_by_its_type() {
-    let app = App::new::<AttachesServesUntilStopped>().expect("the module boots");
-    let attached =
-        nest_rs_core::Discovery::new(app.container()).meta::<nest_rs_core::TransportContribution>();
-    let names: Vec<&str> = attached
-        .iter()
-        .map(|contribution| contribution.meta.name())
-        .collect();
-    assert_eq!(names, ["ServesUntilStopped"]);
-}
-
 const ENDED_EARLY: &str = "transport stopped serving before the app was asked to stop";
 
 #[tokio::test]

@@ -350,8 +350,8 @@ resolve, or two `#[meta]` values of one type, refuse the boot. A field's
 the `/mcp` request's context — its scope, its trace, what its guards and layers
 made ambient — and a unit of work of its own: its own site runs the unit stage
 alone, once around whatever the request reaches, rmcp's decode and routing
-included, as around a `tools/call` naming no declared tool, which the endpoint
-answers before rmcp. A `#[tool]` or a `#[prompt]` `#[tools]` declares is a site inside it:
+included, a `tools/call` naming no declared tool among it. A `#[tool]` or a
+`#[prompt]` `#[tools]` declares is a site inside it:
 its guards' `check`, its class gate, the exception filters and the handler
 stage, never a second unit stage; `subscriptions/listen` and the
 notifications run none. Every operation's site is composed at the wiring step,

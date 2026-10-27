@@ -112,3 +112,28 @@ and the propagation's `said_by_kind` had no tool arm.
   handler runs; `StreamableHttpService` takes a `ServerHandler`, so no layer
   sits above that dispatch, and reading every frame of every stream is a cost
   on every answer.
+
+## 2026-10-27 — rmcp 3.8: the endpoint's gate leaves, and its words move
+
+rmcp's floor moved to 3.8 (`public-dependencies.md`, this date), and three
+facts the entries above read off 3.5 moved with it.
+
+- **The gate in front of rmcp's schema cache is gone.** rmcp 3.6 looks a
+  tool's schema up per request and keeps nothing
+  (`StreamableHttpService::tool_schema`, upstream #1349), so nothing grows on
+  a name a client chose.
+  A `tools/call` naming no declared tool now reaches rmcp's handler at every
+  protocol version, `2026-07-28` included, which refuses it as the entry
+  above classes it: `-32602` `tool not found` under `NOT_FOUND`, one
+  `mcp.operation` line. The gate's own limits go with it: an id-less call is a
+  notification rmcp accepts `202`, and no copy of rmcp's `Host` check is kept.
+- **JSON of no message's shape is said in rmcp's words**, `unrecognized
+  JSON-RPC message`, where 3.5 carried serde's untagged-enum sentence. rmcp
+  3.8 also refuses a message carrying a stray `result` or `error`, or a
+  repeated `id`, as no message (upstream #1283): each is `-32600` Invalid
+  Request, as the 2026-10-26 entry decided for that shape.
+- **A session-less request that is no `initialize` is `400`**, `Bad Request:
+  Session ID is required`, where 3.5 answered `422` with a sentence of its own;
+  a JSON-RPC response or error sent statelessly is `400` with `-32600`,
+  `stateless server does not accept JSON-RPC responses`, kept as a sentence
+  that quotes nothing, where 3.5 answered `202`.

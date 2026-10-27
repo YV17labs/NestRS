@@ -475,13 +475,13 @@ const PARSE_ERROR: &str = "Parse error";
 /// JSON-RPC 2.0's words for JSON that is no request object (§5.1).
 const INVALID_REQUEST: &str = "Invalid Request";
 
-/// How rmcp 3.5 opens its refusal of a body it cannot read as a JSON-RPC
+/// How rmcp 3.8 opens its refusal of a body it cannot read as a JSON-RPC
 /// message, serde's error after it.
 const UNREAD_MESSAGE: &str = "fail to deserialize request body ";
 
-/// How serde words a value that is none of an untagged enum's shapes: rmcp
-/// reads every message through one, so JSON of any other shape is said alike.
-const NO_MESSAGE_SHAPE: &str = "data did not match any variant of untagged enum ";
+/// How rmcp words JSON that is none of a message's shapes: it reads every
+/// message through one untagged enum, so JSON of any other shape is said alike.
+const NO_MESSAGE_SHAPE: &str = "unrecognized JSON-RPC message";
 
 /// The JSON-RPC error answering a body rmcp's transport could not read as a
 /// message, when `text` is rmcp's refusal of one: JSON-RPC 2.0 §5.1's parse
@@ -534,12 +534,12 @@ pub(crate) fn tool_not_found() -> McpError {
     McpError::invalid_params(TOOL_NOT_FOUND, ClassData::of(code::NOT_FOUND).into_data())
 }
 
-/// rmcp 3.5's answer to a session it does not hold, word for word.
+/// rmcp 3.8's answer to a session it does not hold, word for word.
 pub(crate) const SESSION_NOT_FOUND: &str = "Not Found: Session not found";
 
-/// rmcp 3.5's streamable-HTTP refusals written as text, word for word, that
+/// rmcp 3.8's streamable-HTTP refusals written as text, word for word, that
 /// quote nothing the request carried: what a client needs to fix its call.
-const TRANSPORT_SENTENCES: [&str; 15] = [
+const TRANSPORT_SENTENCES: [&str; 14] = [
     "Not Acceptable: Client must accept both application/json and text/event-stream",
     "Not Acceptable: Client must accept text/event-stream",
     "Unsupported Media Type: Content-Type must be application/json",
@@ -554,15 +554,14 @@ const TRANSPORT_SENTENCES: [&str; 15] = [
     "Forbidden: Invalid Origin header",
     "Forbidden: Origin header is not allowed",
     "Method Not Allowed",
-    "Unexpected message, expect initialize request",
 ];
 
 /// rmcp's refusal of a body past the cap, the configured cap between the two.
 const TOO_LARGE: (&str, &str) = ("Payload Too Large: request body exceeds ", " bytes");
 
-/// rmcp 3.5's JSON-RPC refusals, word for word, that quote nothing the request
+/// rmcp 3.8's JSON-RPC refusals, word for word, that quote nothing the request
 /// carried.
-const TRANSPORT_MESSAGES: [&str; 7] = [
+const TRANSPORT_MESSAGES: [&str; 8] = [
     "Invalid Request: MCP-Protocol-Version header is not valid UTF-8",
     "request _meta protocolVersion requires MCP-Protocol-Version header",
     "Missing MCP-Protocol-Version header for request requiring per-request protocol metadata",
@@ -570,6 +569,7 @@ const TRANSPORT_MESSAGES: [&str; 7] = [
     "multiple Mcp-Method header values supplied; initialize requires exactly one",
     "missing required Mcp-Method header",
     "Mcp-Name header is not valid Base64",
+    "stateless server does not accept JSON-RPC responses",
 ];
 
 /// rmcp's refusal of a request missing `_meta` keys, the keys it lists after.

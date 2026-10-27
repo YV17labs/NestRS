@@ -135,9 +135,7 @@ impl<H> PropagatingHandler<H> {
 }
 
 /// What one mount runs each request as: an operation unit — its own site, a
-/// unit of work, a deadline and a stop. Every session's handler shares it, and
-/// so does the endpoint, which answers a call naming no declared tool before
-/// rmcp sees it.
+/// unit of work, a deadline and a stop. Every session's handler shares it.
 #[derive(Clone)]
 pub(crate) struct OperationUnits {
     unit_of_work: Option<Arc<dyn UnitOfWork>>,
@@ -164,28 +162,6 @@ impl OperationUnits {
             index,
             chains,
         }
-    }
-
-    /// Answer a `tools/call` naming `name`, a tool no host on the mount
-    /// declares, as the operation the handler would have run: its unit stage,
-    /// its line `error` and the refusal the handler answers, `tool not found`
-    /// under the `NOT_FOUND` class, unless a layer around it answered otherwise.
-    pub(crate) async fn undeclared_call(&self, name: String) -> McpError {
-        let method = Method::from(CallToolRequestMethod::VALUE);
-        let addressed = Addressed::Tool(name);
-        let answered = self
-            .dispatch::<std::convert::Infallible, _, _>(
-                &method,
-                &addressed,
-                Some(operation_log::OTHER),
-                Some(McpAmbient::capture()),
-                true,
-                std::future::pending(),
-                async { Err(tool_not_found()) },
-            )
-            .await;
-        let Err(error) = answered;
-        error
     }
 
     /// Run `inner` as one operation, under the `/mcp` request's context
@@ -678,8 +654,7 @@ impl Addressed {
     /// host serves quote it, so each is said by kind, and its refusals that
     /// quote nothing — a tool no router declares, a protocol method no host
     /// serves — take the class every other refusal carries. Every handler's
-    /// answer passes here at every protocol version, where the endpoint
-    /// answers an undeclared tool itself only from `2026-07-28`.
+    /// answer passes here, at every protocol version.
     fn said_by_kind(&self, method: &Method, error: McpError) -> McpError {
         match (method, self) {
             (Method::Custom(sent), _) if refuses_method(&error, sent) => method_not_found(),

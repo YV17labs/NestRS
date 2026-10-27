@@ -859,9 +859,8 @@ fn tool_call_lines(logs: &LogCapture) -> Vec<nest_rs_testing::CapturedEvent> {
 }
 
 /// A tool no host declares is refused under the `NOT_FOUND` class at every
-/// version a client speaks — rmcp's handler refuses it below `2026-07-28`,
-/// the endpoint from there — on a path one host serves, one several share,
-/// and one whose host the mount cannot read. rmcp's code and message stay,
+/// version a client speaks, by rmcp's handler at each, on a path one host
+/// serves, one several share, and one whose host the mount cannot read. rmcp's code and message stay,
 /// the name sent is in no reply, and the call files one line.
 #[tokio::test]
 async fn a_tool_no_host_declares_names_the_not_found_class_at_every_version() {

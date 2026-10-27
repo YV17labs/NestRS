@@ -147,8 +147,9 @@ pub use rmcp::handler;
 pub use rmcp::model;
 /// Per-operation context and peer handles — `RequestContext`,
 /// `NotificationContext`, `SubscriptionContext`, `Peer`, `RoleServer`. A
-/// handler method takes one; a server-initiated call (sampling, elicitation,
-/// progress) goes out through the peer.
+/// handler method takes one; a notification (progress) goes out through the
+/// peer, and so does a request (sampling, elicitation) below protocol
+/// `2026-07-28`, which refuses it: there an `InputRequiredResult` asks.
 pub use rmcp::service;
 /// Transport plumbing, including the streamable-HTTP server this crate mounts.
 pub use rmcp::transport;

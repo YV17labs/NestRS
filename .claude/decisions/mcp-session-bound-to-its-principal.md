@@ -142,3 +142,15 @@ task: the framework sees no task created, so it has nothing to bind. Refused:
 binding task ids at the composite handler, which would read every
 `CreateTaskResult`, keep a map under a retention it does not own, and still
 miss a host answering task ids its own way.
+
+## 2026-10-27 — no `tools/call` is answered before rmcp
+
+**Correction.** The first entry's *Left as rmcp's* names a `tools/call` naming
+no declared tool as answered before rmcp, whatever session it names
+(`UndeclaredTools`). That gate existed for rmcp 3.5's unbounded schema cache;
+rmcp 3.8, the floor since this date, keeps no cache, and the gate left
+(`every-refusal-carries-its-class.md`, this date). Such a call now reaches the
+session it names, and is refused by the same rule as any request naming
+another principal's session. rmcp 3.8 still removes a failed restore's entry on
+a task of its own (`PendingRestoreGuard`), so the instant that entry describes
+stays.

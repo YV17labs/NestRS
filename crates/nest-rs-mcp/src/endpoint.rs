@@ -1,11 +1,7 @@
 //! The endpoint that serves an MCP handler over streamable HTTP.
 
-use std::borrow::Cow;
-use std::fmt;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
-use http::uri::Authority;
 use nest_rs_core::problem::code;
 use nest_rs_core::{Container, Correlation, Posture, Problem, current_request_scope};
 use nest_rs_http::__private::framework_sentence;
@@ -15,11 +11,8 @@ use nest_rs_http::{
     StatusCode, header, normalize_error_response,
 };
 use rmcp::ServerHandler;
-use rmcp::model::{
-    CallToolRequestMethod, ClientJsonRpcMessage, ClientRequest, ConstString, JsonRpcError,
-    ProtocolVersion, RequestId,
-};
-use rmcp::transport::common::http_header::{HEADER_MCP_PROTOCOL_VERSION, HEADER_SESSION_ID};
+use rmcp::model::{ClientJsonRpcMessage, ClientRequest, JsonRpcError};
+use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::store::SessionStore;
 
@@ -28,7 +21,7 @@ use crate::ambient::McpAmbient;
 use crate::config::McpConfig;
 use crate::error::{
     SESSION_NOT_FOUND, classed_method_not_found, is_transport_message, said_by_code,
-    tool_not_found, transport_sentence, unread_message,
+    transport_sentence, unread_message,
 };
 use crate::propagate::{OperationUnits, PropagatingHandler, RequestChains};
 use crate::registry::MountIndex;
@@ -39,7 +32,7 @@ use nest_rs_database::UnitOfWork;
 /// trying again.
 const SESSION_RETRY_AFTER_SECS: u32 = 5;
 
-// rmcp 3.5 quotes what a client sent at every level, `error` included: the
+// rmcp 3.8 quotes what a client sent at every level, `error` included: the
 // session id a client named, when the session store fails to load it. The
 // mount's sessions and store say its failure lines instead (`sessions.rs`).
 nest_rs_core::inventory::submit! {
@@ -198,15 +191,9 @@ where
         unit_of_work,
         detached.clone(),
         config.operation_timeout,
-        index.clone(),
+        index,
         chains,
     );
-    let undeclared = index.map(|index| UndeclaredTools {
-        index,
-        allowed_hosts: config.allowed_hosts.clone(),
-        max_request_body_bytes: config.max_request_body_bytes,
-        units: units.clone(),
-    });
 
     let session_store = session_store.map(|store| Arc::new(ReportedStore::new(store, posture)));
     let sessions = Arc::new(BoundedSessions::new(
@@ -234,7 +221,6 @@ where
             legacy: config.legacy_session_mode,
             max_request_body_bytes: config.max_request_body_bytes,
         },
-        undeclared,
         service,
     })
 }
@@ -243,8 +229,6 @@ where
 /// what its operations re-install on rmcp's own tasks.
 struct SessionEndpoint<H: ServerHandler> {
     session_cap: SessionCap,
-    /// `None` on a hand-built [`endpoint`], whose mount read no declarations.
-    undeclared: Option<UndeclaredTools>,
     service: StreamableHttpService<PropagatingHandler<H>, BoundedSessions>,
 }
 
@@ -327,236 +311,16 @@ impl SessionCap {
     }
 }
 
-/// What answers, before rmcp's transport sees it, a `tools/call` naming a tool
-/// no host on the mount declares.
-///
-/// rmcp 3.5 looks up the schema of the tool such a call names whenever its
-/// `MCP-Protocol-Version` is at least the standard-headers one, building a
-/// whole handler to ask, and keeps the answer — a miss included — in a map
-/// nothing bounds (`StreamableHttpService::tool_schema`): a caller naming a
-/// new tool per request would grow it for good. The call is answered as the
-/// handler answers it at every version, `tool not found` under the
-/// `NOT_FOUND` class, and runs as the operation that handler would have run.
-struct UndeclaredTools {
-    index: Arc<MountIndex>,
-    /// rmcp's DNS-rebinding allowlist: a request it refuses for its `Host`
-    /// never reaches the lookup, and is left to rmcp to refuse first.
-    allowed_hosts: Vec<String>,
-    /// What the body is read to, as rmcp would.
-    max_request_body_bytes: usize,
-    /// What a call answered on its id runs as.
-    units: OperationUnits,
-}
-
-impl UndeclaredTools {
-    /// The answer to `req`, when it calls a tool no host declares at a
-    /// version rmcp would look its schema up at — the body read and handed
-    /// back otherwise. A call answered on its id is the operation the
-    /// handler would have answered, a unit of `request`.
-    async fn refusal(&self, req: &mut Request, request: &Correlation) -> Option<Response> {
-        if req.method() != Method::POST
-            || !looks_up_schemas(req)
-            || !host_admitted(req, &self.allowed_hosts)
-        {
-            return None;
-        }
-        let body = match req
-            .take_body()
-            .into_bytes_limit(self.max_request_body_bytes)
-            .await
-        {
-            Ok(body) => body,
-            Err(unread) => return Some(unread.as_response()),
-        };
-        let undeclared = undeclared_call(&body, &self.index);
-        req.set_body(body);
-        let call = undeclared?;
-        let refused = match call.id {
-            Some(_) => {
-                nest_rs_core::with_request_scope(
-                    current_request_scope(),
-                    request.clone(),
-                    self.units.undeclared_call(call.name),
-                )
-                .await
-            }
-            None => tool_not_found(),
-        };
-        Some(refused_call(call.id, refused))
-    }
-}
-
-/// Whether rmcp 3.5 looks up the schema of the tool `req` calls: its
-/// `MCP-Protocol-Version` compares at least the standard-headers version's,
-/// as rmcp compares it.
-fn looks_up_schemas(req: &Request) -> bool {
-    req.headers()
-        .get(HEADER_MCP_PROTOCOL_VERSION)
-        .and_then(|version| version.to_str().ok())
-        .is_some_and(|version| version >= ProtocolVersion::STANDARD_HEADERS.as_str())
-}
-
-/// Whether rmcp 3.5's DNS-rebinding check admits `req`, read as it reads it:
-/// the `Host` field, else the target's authority, its host lowercased without
-/// IPv6 brackets, against each allowed entry's host and the port the entry
-/// names, if any; an empty list admits every host that parses.
-fn host_admitted(req: &Request, allowed_hosts: &[String]) -> bool {
-    let authority = match req.headers().get(header::HOST) {
-        Some(host) => host
-            .to_str()
-            .ok()
-            .and_then(|host| Authority::try_from(host).ok()),
-        None => req.uri().authority().cloned(),
-    };
-    let Some(authority) = authority else {
-        return false;
-    };
-    let host = unbracketed(authority.host());
-    let port = authority.port_u16();
-    let admits = |name: &str, entry_port: Option<u16>| {
-        unbracketed(name).eq_ignore_ascii_case(host)
-            && entry_port.is_none_or(|entry_port| port == Some(entry_port))
-    };
-    allowed_hosts.is_empty()
-        || allowed_hosts.iter().any(|allowed| {
-            let allowed = allowed.trim();
-            if allowed.is_empty() {
-                return false;
-            }
-            match Authority::try_from(allowed) {
-                Ok(entry) => admits(entry.host(), entry.port_u16()),
-                Err(_) => admits(allowed, None),
-            }
-        })
-}
-
-/// A host as rmcp compares it, ASCII case aside: without IPv6 brackets.
-fn unbracketed(host: &str) -> &str {
-    host.trim_matches('[').trim_matches(']')
-}
-
-/// The JSON-RPC request in a body, as far as the schema lookup reads it.
-#[derive(serde::Deserialize)]
-struct Addressing<'a> {
-    /// Whatever it holds: rmcp takes a call whose id it cannot read for a
-    /// notification, and looks its tool up all the same.
-    id: Option<serde_json::Value>,
-    #[serde(borrow)]
-    method: Option<Cow<'a, str>>,
-    #[serde(borrow)]
-    params: Option<JsonObject<CallParams<'a>>>,
-}
-
-/// A `tools/call`'s params, as far as the schema lookup reads them.
-#[derive(serde::Deserialize)]
-struct CallParams<'a> {
-    #[serde(borrow)]
-    name: Option<Cow<'a, str>>,
-}
-
-/// `T` read from a JSON object alone, never from an array by position
-/// (`.claude/decisions/wire-struct-never-by-position.md`): rmcp reads no call
-/// in an array, so one is left to rmcp's own reading.
-struct JsonObject<T>(T);
-
-impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for JsonObject<T> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_map(JsonObjectVisitor(PhantomData))
-    }
-}
-
-/// Reads a [`JsonObject`] from a map, and from nothing else.
-struct JsonObjectVisitor<T>(PhantomData<T>);
-
-impl<'de, T: serde::Deserialize<'de>> serde::de::Visitor<'de> for JsonObjectVisitor<T> {
-    type Value = JsonObject<T>;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("an object")
-    }
-
-    fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-        T::deserialize(serde::de::value::MapAccessDeserializer::new(map)).map(JsonObject)
-    }
-}
-
-/// A `tools/call` naming a tool no host on the mount declares, as rmcp's
-/// schema lookup reads it.
-#[derive(Debug, PartialEq)]
-struct UndeclaredCall {
-    /// The tool it names.
-    name: String,
-    /// `None` when rmcp reads no id in it.
-    id: Option<RequestId>,
-}
-
-/// The `tools/call` in `body`, when no host on the mount declares the tool it
-/// names; `None` when a host does, one the index could not read might, or
-/// rmcp would look no schema up for the body. The id decides nothing: rmcp
-/// looks up the tool of a call it reads no id in all the same.
-fn undeclared_call(body: &[u8], index: &MountIndex) -> Option<UndeclaredCall> {
-    let undeclared = |name: &str| index.tools.declares(name) == Some(false);
-    match serde_json::from_slice::<JsonObject<Addressing<'_>>>(body) {
-        Ok(JsonObject(request)) => {
-            if request.method.as_deref() != Some(CallToolRequestMethod::VALUE) {
-                return None;
-            }
-            let name = request.params?.0.name?;
-            undeclared(&name).then(|| UndeclaredCall {
-                name: name.into_owned(),
-                id: request.id.and_then(|id| serde_json::from_value(id).ok()),
-            })
-        }
-        // A repeated key, a field typed otherwise than here, or an array:
-        // rmcp may still read a call in it, so it is read as rmcp reads it.
-        Err(_) => {
-            let (name, id) = looked_up(body)?;
-            undeclared(&name).then_some(UndeclaredCall { name, id })
-        }
-    }
-}
-
-/// The tool rmcp 3.5 looks up the schema of for `body`, and the id it reads
-/// beside it: `validate_standard_headers`' own reading, through rmcp's types.
-fn looked_up(body: &[u8]) -> Option<(String, Option<RequestId>)> {
-    let message = serde_json::from_slice::<ClientJsonRpcMessage>(body).ok()?;
-    let id = match &message {
-        ClientJsonRpcMessage::Request(request)
-            if matches!(request.request, ClientRequest::InitializeRequest(_)) =>
-        {
-            return None;
-        }
-        ClientJsonRpcMessage::Request(request) => Some(request.id.clone()),
-        ClientJsonRpcMessage::Notification(_) => None,
-        _ => return None,
-    };
-    let message = serde_json::to_value(&message).ok()?;
-    if message.get("method").and_then(serde_json::Value::as_str)
-        != Some(CallToolRequestMethod::VALUE)
-    {
-        return None;
-    }
-    let name = message.get("params")?.get("name")?.as_str()?;
-    Some((name.to_owned(), id))
-}
-
-/// The answer to a call of a tool no host declares, `refused`, on the call's
-/// id. A call with no id rmcp reads is input the server cannot accept:
-/// refused `400`, its error carrying no id, as the streamable-HTTP transport
-/// answers it.
-fn refused_call(id: Option<RequestId>, refused: McpError) -> Response {
-    let status = if id.is_some() {
-        StatusCode::OK
-    } else {
-        StatusCode::BAD_REQUEST
-    };
-    let refusal = JsonRpcError::new(id, refused);
-    match serde_json::to_vec(&refusal) {
+/// The answer to a body rmcp could not read as a message, `refused`: input
+/// the server cannot accept, refused `400`, its error carrying no id, since
+/// none could be read.
+fn unread(refused: McpError) -> Response {
+    match serde_json::to_vec(&JsonRpcError::new(None, refused)) {
         Ok(body) => Response::builder()
-            .status(status)
+            .status(StatusCode::BAD_REQUEST)
             .content_type(HeaderValue::from_static("application/json"))
             .body(body),
-        // Unreachable: an id and an error always serialize.
+        // Unreachable: an error always serializes.
         Err(_) => Problem::new(500, code::INTERNAL).as_response(),
     }
 }
@@ -604,9 +368,9 @@ async fn said_by_kind(response: Response) -> Response {
     head.headers.remove(header::CONTENT_LENGTH);
     let text = std::str::from_utf8(&refusal).ok();
     if head.status == StatusCode::UNSUPPORTED_MEDIA_TYPE
-        && let Some(unread) = text.and_then(unread_message)
+        && let Some(refused) = text.and_then(unread_message)
     {
-        return refused_call(None, unread);
+        return unread(refused);
     }
     match jsonrpc_said_by_kind(&refusal, head.status) {
         Some(answer) => Response::from_parts(head, Body::from(answer)),
@@ -659,11 +423,6 @@ where
         if let Some(refused) = self.session_cap.refusal(&mut req, &correlation).await {
             return Ok(refused);
         }
-        if let Some(undeclared) = &self.undeclared
-            && let Some(refused) = undeclared.refusal(&mut req, &correlation).await
-        {
-            return Ok(refused);
-        }
 
         // Past the request's guards, so what they and its layers made ambient
         // is captured; rmcp forwards the extensions into every operation's
@@ -712,119 +471,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The hosts rmcp 3.5 admits against its default loopback list, as it
-    /// reads them, and the ones it refuses.
-    #[test]
-    fn a_host_is_admitted_as_rmcp_admits_it() {
-        let loopback = McpConfig::default().allowed_hosts;
-        let with_host = |host: &'static str| {
-            Request::builder()
-                .header(header::HOST, HeaderValue::from_static(host))
-                .finish()
-        };
-        for admitted in [
-            "localhost",
-            "LOCALHOST:8080",
-            "127.0.0.1:3000",
-            "[::1]",
-            "[::1]:3000",
-        ] {
-            assert!(host_admitted(&with_host(admitted), &loopback), "{admitted}");
-        }
-        for refused in [
-            "rebound.example",
-            "localhost.rebound.example",
-            "127.0.0.2",
-            "a b",
-        ] {
-            assert!(!host_admitted(&with_host(refused), &loopback), "{refused}");
-        }
-        assert!(
-            !host_admitted(&Request::builder().finish(), &loopback),
-            "no Host and no authority: rmcp refuses it 400"
-        );
-        let by_authority = Request::builder()
-            .uri(nest_rs_http::Uri::from_static("http://localhost:3000/mcp"))
-            .finish();
-        assert!(host_admitted(&by_authority, &loopback));
-
-        let pinned = vec!["api.example:8443".to_owned(), " ".to_owned()];
-        assert!(host_admitted(&with_host("API.example:8443"), &pinned));
-        assert!(!host_admitted(&with_host("api.example"), &pinned));
-        assert!(!host_admitted(&with_host("api.example:443"), &pinned));
-        assert!(host_admitted(&with_host("anything.example"), &[]));
-    }
-
-    /// The tool a body calls, as rmcp's lookup reads it, refused only when no
-    /// host declares it and every host was read, whatever id it carries.
-    #[test]
-    fn a_call_is_undeclared_only_when_the_index_can_say_so() {
-        let mut read = MountIndex::default();
-        read.tools.read(0, ["ping".to_owned()], true);
-        let call = |body: &str| undeclared_call(body.as_bytes(), &read);
-        let marked = |id: Option<RequestId>| {
-            Some(UndeclaredCall {
-                name: "marked".to_owned(),
-                id,
-            })
-        };
-
-        assert_eq!(
-            call(r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"marked"}}"#),
-            marked(Some(RequestId::Number(7))),
-        );
-        assert_eq!(
-            call(
-                r#"{"jsonrpc":"2.0","id":"a","method":"tools\/call","params":{"name":"m\u0061rked"}}"#
-            ),
-            marked(Some(RequestId::String("a".into()))),
-            "escapes decoded as rmcp decodes them",
-        );
-        assert_eq!(
-            call(
-                r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ping","name":"marked"}}"#
-            ),
-            marked(Some(RequestId::Number(7))),
-            "a repeated name read as rmcp reads it: the last",
-        );
-        for unread_id in [
-            r#"{"jsonrpc":"2.0","method":"tools/call","params":{"name":"marked"}}"#,
-            r#"{"jsonrpc":"2.0","id":{},"method":"tools/call","params":{"name":"marked"}}"#,
-            r#"{"jsonrpc":"2.0","id":null,"method":"tools/call","params":{"name":"marked"}}"#,
-            r#"{"jsonrpc":"2.0","id":1.5,"method":"tools/call","params":{"name":"marked"}}"#,
-            r#"{"jsonrpc":"2.0","id":7,"id":8,"method":"tools/call","params":{"name":"marked"}}"#,
-        ] {
-            assert_eq!(
-                call(unread_id),
-                marked(None),
-                "rmcp reads a notification, and looks its tool up: {unread_id}",
-            );
-        }
-        for passed in [
-            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ping"}}"#,
-            r#"{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{}}"#,
-            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":7}}"#,
-            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{},"params":{"name":"marked"}}"#,
-            r#"[{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"marked"}}]"#,
-            r#"[7,"tools/call",{"name":"marked"}]"#,
-            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":["marked"]}"#,
-            "not json",
-        ] {
-            assert_eq!(call(passed), None, "{passed}");
-        }
-
-        let mut unread = MountIndex::default();
-        unread.tools.read(0, Vec::new(), false);
-        assert_eq!(
-            undeclared_call(
-                br#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"marked"}}"#,
-                &unread,
-            ),
-            None,
-            "a host the index could not read may serve it",
-        );
-    }
 
     /// A session refused for a principal naming no subject reads why, in a
     /// sentence quoting nothing it sent, and carries no session.

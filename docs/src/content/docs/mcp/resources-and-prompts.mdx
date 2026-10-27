@@ -59,11 +59,14 @@ exactly that in `apps/assistant/tests/e2e/posts_tool.rs`.
 </Aside>
 
 Everything else the protocol defines — completion, logging levels,
-subscriptions, the `tasks/*` extension, elicitation, custom methods — is a
+subscriptions, the `tasks/*` extension, custom methods — is a
 `ServerHandler` method on the same struct, and gets the same treatment. The
 protocol types live under `nest_rs::mcp::model`, the per-operation handles
 under `nest_rs::mcp::service`, and anything newer than this page under
-`nest_rs::mcp::rmcp`.
+`nest_rs::mcp::rmcp`. A request the server sends the client — elicitation,
+sampling — goes out through the operation's peer on a session below protocol
+`2026-07-28`; that revision forbids one, so rmcp refuses it there, and the
+operation answers an `InputRequiredResult` instead.
 
 ## Going further
 

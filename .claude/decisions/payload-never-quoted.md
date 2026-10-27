@@ -273,3 +273,12 @@ job's payload and a structured config value the same.
   RFC 6455 §5.5 caps at 123 bytes — the report, kind and expectation, is on
   the `debug` line. GraphQL's arguments and variables are named by
   async-graphql itself.
+
+## 2026-10-27 — rmcp 3.8 quotes as 3.5 did
+
+The 2026-10-18 entries read rmcp 3.5; 3.8, the floor since this date, still
+writes a client's `initialize` params at `info`, the session id a failed
+store load names at `error` and each tool call's arguments at `debug`, so
+`rmcp=off` stays. Its events read against 3.5.1 add none on the server's
+paths. The schema-cache gate, whose `Host` check mirrored rmcp's, left with
+the cache (`every-refusal-carries-its-class.md`, this date).

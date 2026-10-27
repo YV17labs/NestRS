@@ -75,7 +75,7 @@ use crate::ambient::McpAmbient;
 use crate::error::{
     AVAILABLE_PROMPTS, ClassData, ToolReportedError, answer, classed_method_not_found,
     method_not_found, opaque_answer, prompt_not_found, refuses_method, refuses_prompt,
-    refuses_task, task_not_found, tool_not_found,
+    refuses_task, refuses_tool, task_not_found, tool_not_found,
 };
 use crate::guard::BoxFuture;
 use crate::operation::McpOperationKind;
@@ -168,8 +168,8 @@ impl OperationUnits {
 
     /// Answer a `tools/call` naming `name`, a tool no host on the mount
     /// declares, as the operation the handler would have run: its unit stage,
-    /// its line `error` and the refusal rmcp's own handler answers,
-    /// `tool not found`, unless a layer around it answered otherwise.
+    /// its line `error` and the refusal the handler answers, `tool not found`
+    /// under the `NOT_FOUND` class, unless a layer around it answered otherwise.
     pub(crate) async fn undeclared_call(&self, name: String) -> McpError {
         let method = Method::from(CallToolRequestMethod::VALUE);
         let addressed = Addressed::Tool(name);
@@ -675,12 +675,15 @@ impl Addressed {
     }
 
     /// `error` as the client is answered: rmcp's own refusals of a name no
-    /// host serves quote it, so each is said by kind, and its refusal of a
-    /// protocol method no host serves, which names the protocol's method,
-    /// takes the class every other refusal carries.
+    /// host serves quote it, so each is said by kind, and its refusals that
+    /// quote nothing — a tool no router declares, a protocol method no host
+    /// serves — take the class every other refusal carries. Every handler's
+    /// answer passes here at every protocol version, where the endpoint
+    /// answers an undeclared tool itself only from `2026-07-28`.
     fn said_by_kind(&self, method: &Method, error: McpError) -> McpError {
         match (method, self) {
             (Method::Custom(sent), _) if refuses_method(&error, sent) => method_not_found(),
+            (_, Self::Tool(_)) if error.data.is_none() && refuses_tool(&error) => tool_not_found(),
             (_, Self::Prompt(name)) if refuses_prompt(&error, name) => {
                 prompt_not_found(error.data.and_then(|mut data| {
                     data.get_mut(AVAILABLE_PROMPTS).map(serde_json::Value::take)
@@ -1116,6 +1119,35 @@ mod tests {
         ] {
             assert!(!is_the_callers(servers), "{}", servers.0);
         }
+    }
+
+    /// A `tools/call` rmcp refuses for a tool no host declares, with no
+    /// `data`, takes the `NOT_FOUND` class whoever answered it — a lone
+    /// host's router, the shared path's, a host written by hand — its code
+    /// and message kept; a refusal carrying `data` of its own keeps it, and a
+    /// host serving no tools answers the `-32601` every method no host serves
+    /// answers.
+    #[test]
+    fn a_tool_rmcp_refuses_takes_the_not_found_class() {
+        let call = Method::from(CallToolRequestMethod::VALUE);
+        let tool = || Addressed::Tool("marked".to_owned());
+
+        let refused = tool().said_by_kind(&call, McpError::invalid_params("tool not found", None));
+        assert_eq!(refused, tool_not_found());
+
+        let own = McpError::invalid_params(
+            "tool not found",
+            Some(serde_json::json!({ "reason": "the host's own" })),
+        );
+        assert_eq!(tool().said_by_kind(&call, own.clone()), own);
+
+        let unserved =
+            tool().said_by_kind(&call, McpError::method_not_found::<CallToolRequestMethod>());
+        assert_eq!(unserved.code, ErrorCode::METHOD_NOT_FOUND);
+        assert_eq!(
+            unserved.data,
+            Some(serde_json::json!({ "code": "NOT_FOUND" }))
+        );
     }
 
     /// A direct call: rmcp reaches this through `initialize`, so no wire probe

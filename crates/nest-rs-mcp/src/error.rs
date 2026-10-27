@@ -520,7 +520,13 @@ pub(crate) fn said_by_code(code: ErrorCode) -> Option<&'static str> {
 
 /// rmcp's refusal of a tool no router declares, a `-32602` read as *not
 /// found*.
-pub(crate) const TOOL_NOT_FOUND: &str = "tool not found";
+const TOOL_NOT_FOUND: &str = "tool not found";
+
+/// Whether `error` is rmcp's `ToolRouter` refusing a tool it does not
+/// declare, in words naming no tool, whatever `data` it carries.
+pub(crate) fn refuses_tool(error: &McpError) -> bool {
+    error.code == ErrorCode::INVALID_PARAMS && error.message == TOOL_NOT_FOUND
+}
 
 /// The refusal of a tool no host declares, in rmcp's own words, under the
 /// `NOT_FOUND` class.
@@ -846,6 +852,27 @@ mod tests {
             ),
         ] {
             assert_eq!(refused.data, Some(data), "{}", refused.message);
+        }
+    }
+
+    /// rmcp's `ToolRouter` refuses a tool it does not declare in one sentence
+    /// naming none, under `-32602`: that sentence is the refusal, whatever
+    /// `data` it carries, and no other is.
+    #[test]
+    fn a_tool_refusal_is_read_off_rmcp_s_sentence_alone() {
+        for refused in [
+            McpError::invalid_params("tool not found", None),
+            tool_not_found(),
+        ] {
+            assert!(refuses_tool(&refused), "{refused:?}");
+        }
+        for other in [
+            McpError::invalid_params("tool not found: marked", None),
+            McpError::invalid_params("Tool not found", None),
+            McpError::new(ErrorCode::METHOD_NOT_FOUND, "tool not found", None),
+            McpError::resource_not_found("tool not found", None),
+        ] {
+            assert!(!refuses_tool(&other), "{other:?}");
         }
     }
 

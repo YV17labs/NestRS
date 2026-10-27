@@ -39,7 +39,7 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
 
 use crate::McpError;
-use crate::error::{TOOL_NOT_FOUND, opaque_answer, prompt_not_found, refuses_task};
+use crate::error::{opaque_answer, prompt_not_found, refuses_task, refuses_tool};
 use crate::guard::BoxFuture;
 use crate::host::McpHost;
 use crate::identity::ResolvedIdentity;
@@ -180,11 +180,12 @@ fn no_hosts() -> McpError {
 }
 
 /// Whether an error means *this host does not serve that name*, which lets the
-/// merge try the next host; rmcp's `ToolRouter` misses with this exact `INVALID_PARAMS`.
+/// merge try the next host; rmcp's `ToolRouter` misses with an `INVALID_PARAMS`
+/// of its own words.
 fn is_not_found(err: &McpError) -> bool {
     err.code == ErrorCode::METHOD_NOT_FOUND
         || err.code == ErrorCode::RESOURCE_NOT_FOUND
-        || (err.code == ErrorCode::INVALID_PARAMS && err.message == TOOL_NOT_FOUND)
+        || refuses_tool(err)
 }
 
 /// Keep `answer` as what the path says when no host answers otherwise, unless

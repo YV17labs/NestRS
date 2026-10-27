@@ -537,6 +537,11 @@ async fn a_task_no_host_holds_is_refused_without_its_id() {
                 json!("unknown task"),
                 "{refused}"
             );
+            assert_eq!(
+                refused["error"]["data"],
+                json!({ "code": "NOT_FOUND" }),
+                "{refused}"
+            );
         }
     }
 }

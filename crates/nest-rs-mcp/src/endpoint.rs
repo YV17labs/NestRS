@@ -334,9 +334,9 @@ impl SessionCap {
 /// `MCP-Protocol-Version` is at least the standard-headers one, building a
 /// whole handler to ask, and keeps the answer — a miss included — in a map
 /// nothing bounds (`StreamableHttpService::tool_schema`): a caller naming a
-/// new tool per request would grow it for good. The call is answered as
-/// rmcp's own handler answers it, `tool not found`, and runs as the operation
-/// that handler would have run.
+/// new tool per request would grow it for good. The call is answered as the
+/// handler answers it at every version, `tool not found` under the
+/// `NOT_FOUND` class, and runs as the operation that handler would have run.
 struct UndeclaredTools {
     index: Arc<MountIndex>,
     /// rmcp's DNS-rebinding allowlist: a request it refuses for its `Host`

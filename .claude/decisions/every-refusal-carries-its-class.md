@@ -76,3 +76,39 @@ JSON-RPC message `415 Unsupported Media Type`, the answer of a wrong
   quote the body, so it is read by kind: rmcp reads every message through one
   untagged enum, so serde words any JSON of another shape in one sentence,
   and a unit test holds that reading against serde's own category.
+
+## 2026-10-27 — an undeclared tool, at every MCP protocol version
+
+An MCP address no host serves names `NOT_FOUND` in band, as HTTP's `404`
+does; for a tool, that held at `2026-07-28` alone. The endpoint answers a
+`tools/call` naming no declared tool before rmcp only where rmcp would look
+the tool's schema up, from its `STANDARD_HEADERS` version, `2026-07-28`;
+below it — `2025-06-18` and `2025-11-25`, today's clients — and on any path
+holding a host whose router the mount cannot read, the call reaches rmcp's
+handler, whose `ToolRouter` answers `-32602` `tool not found` with no `data`,
+and the propagation's `said_by_kind` had no tool arm.
+
+- **Decided**: the propagation classes it, where every handler's answer
+  passes at every version — a lone host's router, the shared path's merge, a
+  host written by hand, an endpoint built without an index. rmcp's
+  `-32602` in its own words, with no `data`, on a `tools/call`, becomes the
+  endpoint's own refusal: its code and message kept, `NOT_FOUND` added, the
+  name in no reply. One crate-private reading of rmcp's sentence serves it and
+  the merge's *not found*.
+- **Refused: widening the endpoint's gate to every version.** It would read
+  and parse the body of every `POST` below `2026-07-28` for a refusal the
+  handler already answers; the gate exists for rmcp's unbounded schema cache,
+  which only `2026-07-28` reaches.
+- **Refused: classing in the composite.** An endpoint built by hand serves a
+  host no composite wraps, and the propagation already holds every sibling's
+  arm.
+- **A refusal a host wrote with `data` of its own keeps it**, as does a
+  resource's `-32002`: neither rmcp nor the framework writes one — rmcp's
+  default `resources/read` is the `-32601` the class already reaches — so a
+  `-32002` is a host's own answer, as it built it.
+- **Left, as on `2026-10-26`**: rmcp's dispatch refuses `subscriptions/listen`
+  and a tasks method a server advertises no tasks for, inside a session
+  negotiated before `2026-07-28`, on the session's `200` stream before any
+  handler runs; `StreamableHttpService` takes a `ServerHandler`, so no layer
+  sits above that dispatch, and reading every frame of every stream is a cost
+  on every answer.

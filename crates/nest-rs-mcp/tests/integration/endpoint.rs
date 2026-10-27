@@ -590,6 +590,11 @@ async fn a_tool_call_naming_no_declared_tool_never_reaches_rmcp_s_schema_cache()
             "{refused}"
         );
         assert_eq!(refused["error"]["message"], "tool not found", "{refused}");
+        assert_eq!(
+            refused["error"]["data"],
+            serde_json::json!({ "code": "NOT_FOUND" }),
+            "{refused}"
+        );
     }
 
     let declared = standard_call(&app, "ping").await;
@@ -670,6 +675,11 @@ async fn a_tool_call_with_no_id_rmcp_reads_never_reaches_rmcp_s_schema_cache() {
             "{refused}"
         );
         assert_eq!(refused["error"]["message"], "tool not found", "{refused}");
+        assert_eq!(
+            refused["error"]["data"],
+            serde_json::json!({ "code": "NOT_FOUND" }),
+            "{refused}"
+        );
     }
     assert!(
         logs.find(

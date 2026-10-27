@@ -662,6 +662,316 @@ async fn a_method_no_host_serves_names_the_not_found_class() {
     );
 }
 
+/// A path one host serves.
+const CLASS_LONE: &str = "/mcp/class/lone";
+
+/// A path two hosts share, the mount reading what each declares.
+const CLASS_SHARED: &str = "/mcp/class/shared";
+
+/// A path two hosts share, one writing rmcp's handler by hand: the mount
+/// cannot read what it declares, so only its own handler says, and it holds
+/// tasks.
+const CLASS_UNREAD: &str = "/mcp/class/unread";
+
+/// The shapes of path a refusal reaches a client through.
+const CLASS_PATHS: [&str; 3] = [CLASS_LONE, CLASS_SHARED, CLASS_UNREAD];
+
+/// The versions a client speaks: today's two, each opening a session, and
+/// rmcp's latest, which carries its lifecycle in every request.
+const SPOKEN: [&str; 3] = ["2025-06-18", "2025-11-25", MODERN_VERSION];
+
+#[mcp(path = "/mcp/class/lone")]
+#[derive(Clone, Default)]
+struct LoneClass;
+
+#[tools]
+impl LoneClass {
+    #[tool(description = "Answers at once.")]
+    #[public]
+    async fn lone_ping(&self) -> Result<String, McpError> {
+        Ok("pong".to_owned())
+    }
+
+    /// Open a note.
+    #[prompt]
+    #[public]
+    async fn lone_prompt(&self) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            "lone",
+        )]))
+    }
+}
+
+#[mcp(path = "/mcp/class/shared")]
+#[derive(Clone, Default)]
+struct SharedClassFirst;
+
+#[tools]
+impl SharedClassFirst {
+    #[tool(description = "Answers at once.")]
+    #[public]
+    async fn first_ping(&self) -> Result<String, McpError> {
+        Ok("first".to_owned())
+    }
+
+    /// Open a note.
+    #[prompt]
+    #[public]
+    async fn first_prompt(&self) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            "first",
+        )]))
+    }
+}
+
+#[mcp(path = "/mcp/class/shared")]
+#[derive(Clone, Default)]
+struct SharedClassSecond;
+
+#[tools]
+impl SharedClassSecond {
+    #[tool(description = "Answers at once.")]
+    #[public]
+    async fn second_ping(&self) -> Result<String, McpError> {
+        Ok("second".to_owned())
+    }
+}
+
+#[mcp(path = "/mcp/class/unread")]
+#[derive(Clone, Default)]
+struct ReadClass;
+
+#[tools]
+impl ReadClass {
+    #[tool(description = "Answers at once.")]
+    #[public]
+    async fn read_ping(&self) -> Result<String, McpError> {
+        Ok("read".to_owned())
+    }
+}
+
+task_host!(UnreadClass, "/mcp/class/unread", "start_unread");
+
+#[module(
+    imports = [crate::open_mcp()],
+    providers = [LoneClass, SharedClassFirst, SharedClassSecond, ReadClass, UnreadClass],
+)]
+struct ClassModule;
+
+/// A client of one path, speaking one protocol version.
+struct Speaking<'a> {
+    app: &'a TestApp,
+    path: &'static str,
+    version: &'static str,
+    /// `None` from `2026-07-28`, whose requests open none.
+    session: Option<String>,
+}
+
+impl<'a> Speaking<'a> {
+    /// A client of `path` at `version`: below `2026-07-28` a session
+    /// `initialize` negotiated at that version, declaring the tasks extension.
+    async fn open(app: &'a TestApp, path: &'static str, version: &'static str) -> Self {
+        let session = if version < MODERN_VERSION {
+            let init = nest_rs_testing::mcp::post_message_with(
+                app.http(),
+                path,
+                None,
+                None,
+                &[],
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": version,
+                        "capabilities": tasks_client_capabilities(),
+                        "clientInfo": { "name": "nest-rs-mcp", "version": "0" },
+                    },
+                }),
+            )
+            .await;
+            init.assert_status_is_ok();
+            let session = init
+                .0
+                .headers()
+                .get("mcp-session-id")
+                .and_then(|value| value.to_str().ok())
+                .expect("initialize opens a session")
+                .to_owned();
+            let body = init.0.into_body().into_string().await.expect("a body");
+            assert_eq!(
+                result(&body)["result"]["protocolVersion"],
+                json!(version),
+                "{path}: the session speaks the version asked for",
+            );
+            nest_rs_testing::mcp::post_message_with(
+                app.http(),
+                path,
+                Some(&session),
+                None,
+                &[("mcp-protocol-version", version)],
+                &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+            )
+            .await;
+            Some(session)
+        } else {
+            None
+        };
+        Self {
+            app,
+            path,
+            version,
+            session,
+        }
+    }
+
+    /// Send `method` with `params` as a client at this version does, and
+    /// return the raw response body: from `2026-07-28` with the standard
+    /// headers and the lifecycle in `_meta`.
+    async fn send(&self, method: &str, mut params: serde_json::Value) -> String {
+        let named = ["name", "uri", "taskId"]
+            .into_iter()
+            .find_map(|key| params.get(key).and_then(serde_json::Value::as_str))
+            .map(str::to_owned);
+        let mut headers = vec![("mcp-protocol-version", self.version)];
+        if self.session.is_none() {
+            headers.push(("mcp-method", method));
+            if let Some(named) = &named {
+                headers.push(("mcp-name", named));
+            }
+            params["_meta"] = modern_meta();
+        }
+        nest_rs_testing::mcp::post_message_with(
+            self.app.http(),
+            self.path,
+            self.session.as_deref(),
+            None,
+            &headers,
+            &json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params }),
+        )
+        .await
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a JSON-RPC response body")
+    }
+}
+
+/// The `mcp.operation` lines a `tools/call` filed, in order.
+fn tool_call_lines(logs: &LogCapture) -> Vec<nest_rs_testing::CapturedEvent> {
+    logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_mcp::unit::OPERATION.name(),
+    )
+    .into_iter()
+    .filter(|line| line.field("method").as_deref() == Some("tools/call"))
+    .collect()
+}
+
+/// A tool no host declares is refused under the `NOT_FOUND` class at every
+/// version a client speaks — rmcp's handler refuses it below `2026-07-28`,
+/// the endpoint from there — on a path one host serves, one several share,
+/// and one whose host the mount cannot read. rmcp's code and message stay,
+/// the name sent is in no reply, and the call files one line.
+#[tokio::test]
+async fn a_tool_no_host_declares_names_the_not_found_class_at_every_version() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<ClassModule>()
+        .await
+        .expect("three paths of hosts boot");
+    for path in CLASS_PATHS {
+        for version in SPOKEN {
+            let client = Speaking::open(&app, path, version).await;
+            let filed = tool_call_lines(&logs).len();
+
+            let body = client
+                .send(
+                    "tools/call",
+                    json!({ "name": "marked_tool", "arguments": {} }),
+                )
+                .await;
+
+            assert!(!body.contains("marked"), "{path} at {version}: {body}");
+            let refused = result(&body);
+            assert_eq!(
+                refused["error"]["code"],
+                json!(-32602),
+                "{path} at {version}: {refused}"
+            );
+            assert_eq!(
+                refused["error"]["message"],
+                json!("tool not found"),
+                "{path} at {version}: {refused}"
+            );
+            assert_eq!(
+                refused["error"]["data"],
+                json!({ "code": "NOT_FOUND" }),
+                "{path} at {version}: {refused}"
+            );
+            let lines = tool_call_lines(&logs);
+            let [line] = &lines[filed..] else {
+                panic!("{path} at {version}: one line for the call: {lines:#?}");
+            };
+            assert_eq!(
+                line.field("outcome").as_deref(),
+                Some(nest_rs_core::operation_log::ERROR),
+                "{path} at {version}",
+            );
+            assert_eq!(
+                line.field("operation").as_deref(),
+                Some(nest_rs_core::operation_log::OTHER),
+                "{path} at {version}",
+            );
+        }
+    }
+}
+
+/// Every other address no host serves is refused under the `NOT_FOUND` class
+/// at every version a client speaks, on each shape of path: a prompt, a
+/// custom method, a protocol method no host serves, and a task on the path
+/// whose host holds tasks — never quoting what the client named.
+#[tokio::test]
+async fn every_address_no_host_serves_names_the_not_found_class_at_every_version() {
+    let app = TestApp::for_module::<ClassModule>()
+        .await
+        .expect("three paths of hosts boot");
+    for path in CLASS_PATHS {
+        for version in SPOKEN {
+            let client = Speaking::open(&app, path, version).await;
+            let mut addressed = vec![
+                ("prompts/get", json!({ "name": "marked-prompt" }), -32602),
+                ("marked/custom", json!({}), -32601),
+                ("resources/read", json!({ "uri": "file:///marked" }), -32601),
+            ];
+            if path == CLASS_UNREAD {
+                addressed.push(("tasks/get", json!({ "taskId": "marked-task" }), -32602));
+            }
+            for (method, params, code) in addressed {
+                let body = client.send(method, params).await;
+
+                assert!(
+                    !body.contains("marked"),
+                    "{path} at {version}, {method}: {body}"
+                );
+                let refused = result(&body);
+                assert_eq!(
+                    refused["error"]["code"],
+                    json!(code),
+                    "{path} at {version}, {method}: {refused}"
+                );
+                assert_eq!(
+                    refused["error"]["data"]["code"],
+                    json!("NOT_FOUND"),
+                    "{path} at {version}, {method}: {refused}"
+                );
+            }
+        }
+    }
+}
+
 /// POST one stateless `2026-07-28` request: no session id, the negotiated
 /// version in the header, and whatever SEP-2243 standard headers the case needs.
 async fn post_modern(

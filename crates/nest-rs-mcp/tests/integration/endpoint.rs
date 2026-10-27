@@ -452,24 +452,17 @@ async fn a_transport_refusal_quoting_nothing_keeps_its_sentence() {
         "{refused}",
     );
 
-    let stateless_answer = app
-        .http()
-        .post(LISTENING)
-        .header("host", "localhost")
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .header("mcp-protocol-version", "2026-07-28")
-        .body_json(&serde_json::json!({ "jsonrpc": "2.0", "id": 7, "result": {} }))
-        .send()
-        .await;
+    let stateless_answer = nest_rs_testing::mcp::post_message_with(
+        app.http(),
+        LISTENING,
+        None,
+        None,
+        &[("mcp-protocol-version", "2026-07-28")],
+        &serde_json::json!({ "jsonrpc": "2.0", "id": 7, "result": {} }),
+    )
+    .await;
     stateless_answer.assert_status(StatusCode::BAD_REQUEST);
-    let body = stateless_answer
-        .0
-        .into_body()
-        .into_string()
-        .await
-        .expect("a body");
-    let refused: serde_json::Value = serde_json::from_str(&body).expect("a JSON-RPC error");
+    let refused: serde_json::Value = stateless_answer.json().await.value().deserialize();
     assert_eq!(
         refused["error"]["code"],
         serde_json::json!(-32600),

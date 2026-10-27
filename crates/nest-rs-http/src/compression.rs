@@ -79,12 +79,10 @@ fn weaken_entity_tag(headers: &mut HeaderMap) {
     let Some(tag) = headers.get(ETAG) else {
         return;
     };
-    if tag.as_bytes().starts_with(b"\"") {
-        let mut weak = b"W/".to_vec();
-        weak.extend_from_slice(tag.as_bytes());
-        if let Ok(weak) = HeaderValue::from_bytes(&weak) {
-            headers.insert(ETAG, weak);
-        }
+    if tag.as_bytes().starts_with(b"\"")
+        && let Ok(weak) = HeaderValue::from_bytes(&[b"W/".as_slice(), tag.as_bytes()].concat())
+    {
+        headers.insert(ETAG, weak);
     }
 }
 

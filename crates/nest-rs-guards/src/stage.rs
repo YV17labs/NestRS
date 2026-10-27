@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_core::__private::{ClassGate, Pending, ResolvedLayer, take_pending};
+use nest_rs_core::__private::{ClassGate, ResolvedLayer};
 use nest_rs_core::{AmbientValue, Continuation, UnitContext};
 
 use crate::denial::denial_of;
@@ -69,34 +69,6 @@ impl AmbientValue for RefusalMark {
     fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
         matches!(into, Continuation::Batch | Continuation::Task).then_some(self)
     }
-}
-
-/// Run every guard of `chain` on the unit `cx` describes through its in-band
-/// entry, [`Guard::check`], in order, then the posture's class `gate` on the
-/// same unit: what the guards attached, for the edge to install once the stage
-/// passed. The first refusal stops the stage, and marks the unit around it
-/// ([`RefusalMark`]).
-pub async fn run_stage(
-    chain: &[ResolvedLayer<dyn Guard>],
-    gate: Option<ClassGate>,
-    cx: &mut UnitContext<'_>,
-) -> Result<Pending, Refused> {
-    let checked = check_stage(chain, gate, cx).await;
-    if checked.is_err()
-        && let Some(mark) = cx.ambient::<RefusalMark>()
-    {
-        mark.mark();
-    }
-    checked
-}
-
-async fn check_stage(
-    chain: &[ResolvedLayer<dyn Guard>],
-    gate: Option<ClassGate>,
-    cx: &mut UnitContext<'_>,
-) -> Result<Pending, Refused> {
-    check_guards(chain, gate, cx).await?;
-    Ok(take_pending(cx))
 }
 
 /// Run every guard of `chain` on the unit `cx` describes through

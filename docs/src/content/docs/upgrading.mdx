@@ -1,28 +1,74 @@
 ---
 title: Upgrading from 6.x to 7.0
-description: "The order that moves a 6.1 project to 7.0 — the manifest, sixteen renamed variables, the queue's calls and keys — and what the boot says when a step is missed."
+description: "The order that moves a 6.1 project to 7.0 — the manifest, the environment, the HTTP vocabulary, the layers, the data port, the deployment — and what fails when a step is missed."
 ---
 
 import { Steps } from '@astrojs/starlight/components';
 
-7.0 changes how a job is pushed and where Redis keeps it, renames fifteen OAuth
-variables, and renames a handful of types and signatures. This page is the order
-to take them in: a 6.1 workspace goes in, a 7.0 one comes out, and each step ends
-on something you can check. The
+7.0 is a major release, and the foundation every 7.x builds on: HTTP speaks the
+`http` crate's types on a server of nestrs's own, every edge runs one pipeline
+whose layers read the unit they wrap, a queue is pushed through its type and
+kept on Redis Streams, a resource opens once per named instance, and every edge
+runs its work through one unit-of-work port. This page is the order to take
+the changes in: a 6.1 workspace goes in, a 7.0 one comes out, and each step
+ends on something you can check. The
 [changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/7.0.md) says why each
 change was made; this page says what to do about it.
 
 You need the 6.1 project building, and — for a queue on Redis — its 6.x workers
-left running until they drain the 6.x jobs (step 7).
+left running until they drain the 6.x jobs (step 15). Most steps are compile
+errors, so the compiler finds every site; a step that changes behaviour alone
+says so, and [What fails if you get it wrong](#what-fails-if-you-get-it-wrong)
+lists what the boot, a log or the wire shows when one is missed.
 
 <Steps>
 
-1. **Move the CLI and the one manifest line.** `nestrs update` installs the 7.0
-   CLI, whose scaffolds, `lint` and `doctor` follow the release. In the root
+1. **Move the CLI and the manifest.** `nestrs update` installs the 7.0 CLI,
+   whose scaffolds, `lint` and `doctor` follow the release. In the root
    `Cargo.toml`, the `nest-rs` requirement under `[workspace.dependencies]` goes
-   from `6.1` to `7.0`; its features stay as they are. `redis-schedule` is the one
-   new feature, and only a job firing once across replicas needs it (step 4). Take
-   the patched rustls while the lockfile moves — 0.23.44 carries RUSTSEC-2026-0285:
+   from `6.1` to `7.0`, and a few features move with it — the umbrella counts
+   30 capabilities:
+
+   | 6.1 | 7.0 |
+   |---|---|
+   | `interceptors`, `exception-filters` | nothing: `nest_rs::core::{Interceptor, ExceptionFilter, interceptor}` |
+   | `filters` | nothing: an exception filter whose `Exception` is `dyn Error + Send + Sync` (step 7) |
+   | `worker` | nothing: `queue` and `schedule` carry what a job needs; the job deadline is `nest_rs::core::JOB_TIMEOUT` |
+   | `redis`, for a queue on Redis | `redis-queue` — `redis` alone is now the connection |
+   | `graphql`, with `#[authorize]` on a resolver | `graphql` and `authz` |
+   | `testing`, with `TestApp` and no other HTTP feature | `testing` and `http`, or `HeadlessApp` |
+   | `oauth-server` | unchanged; it now enables `authn` too, since its guard runs an authn `Strategy` |
+
+   ```toml title="Cargo.toml"
+   # before
+   nest-rs = { version = "6.1", features = ["queue", "redis"] }
+   # after
+   nest-rs = { version = "7.0", features = ["redis-queue"] }
+   ```
+
+   `redis-schedule` is new, and only a job firing once across replicas needs
+   it (step 5). Then, in the same pass:
+
+   - **Drop `poem`** from `[workspace.dependencies]` and from every member that
+     declares it, a test's `[dev-dependencies]` included: nothing a nestrs
+     application writes names it (step 6).
+   - **Move `testing` off the root line** that a pre-7.0 `nestrs new` wrote, onto
+     each app's `[dev-dependencies]`
+     (`nest-rs = { workspace = true, features = ["testing"] }`), so no release
+     binary links the harness.
+   - **Without `seaorm`**, a `Uuid` or a chrono `DateTime` on a GraphQL type or
+     operation of yours needs `features = ["uuid", "chrono"]` on your own
+     `async-graphql` line, and a chrono type you serialize needs `serde` on your
+     own `chrono` line. With `seaorm`, nothing changes.
+   - **A library the framework re-exported for its own expansions** —
+     `nest_rs::core::{serde, validator, schemars}`,
+     `nest_rs::http::{serde, validator}`, `nest_rs::queue::serde_json` — is a
+     dependency of your own
+     where your code names it; `#[input]`, `#[expose]` and `#[config]` still
+     need none.
+
+   Take the patched rustls while the lockfile moves — 0.23.44 carries
+   RUSTSEC-2026-0285:
 
    ```bash frame="terminal"
    nestrs update
@@ -30,19 +76,43 @@ left running until they drain the 6.x jobs (step 7).
    cargo check --workspace
    ```
 
-   The check now fails on the calls steps 3 to 6 change. A refusal beyond them
+   The check now fails on the calls steps 4 to 14 change. A refusal beyond them
    names the rule it applies: 7.0 judges every decorated method by one grammar,
    and the [changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/7.0.md)
-   lists what it refuses. One change no compiler finds: every binary's `main`
-   moves from `#[tokio::main]` to `#[nest_rs::main]`, in step 8.
+   lists what it refuses.
 
-2. **Rename the fifteen OAuth variables.** A crate in a family puts the family
+2. **Declare each process's environment, and let `main` load it.** A process
+   that declares no `<PREFIX>_ENV` runs as **production**, where 6.x took it for
+   development: it reads `.env.production` rather than `.env.development`,
+   serves no development surface, and refuses what production refuses. A local
+   run outside `nestrs run dev` — `cargo run`, an IDE's run configuration, a
+   script — declares `<PREFIX>_ENV=development` on the process; the variable
+   cannot live in `.env`. A deployment that never set it sets
+   `<PREFIX>_ENV=production`, which silences the boot's
+   `no environment declared; running as production` line.
+
+   | 6.x | 7.0 |
+   |---|---|
+   | `#[tokio::main]` on a binary's `main` — an app, a `migrate` or `seed` tool | `#[nest_rs::main]`, and the `tokio` line a crate carried only for it dropped (its tests keep theirs as a dev-dependency) |
+   | `let _environment = Environment::init();` on `main`'s first line | delete the line and its `use`: `#[nest_rs::main]` publishes the `.env` cascade before `main` runs; a binary without it calls `nest_rs::config::load_cascade(dir, Environment::from_env())` first thing |
+   | `Environment::default()` or `Environment::from_env()` expected to be `Development` when `<PREFIX>_ENV` is unset | `Production`; branch on `Environment::declared()` to tell an undeclared process apart, or on `is_deployed()` for a development convenience |
+   | `!matches!(Environment::from_env(), Environment::Production \| Environment::Staging)` in a `Config::defaults()` of your own | `!Environment::from_env().is_deployed()` |
+   | a scaffolded project's URLs in `.env` | move them to `.env.development` and `.env.test`; export `<PREFIX>_ENV := "development"` in `db.just` |
+   | a scaffolded project's `.env` holding `<PREFIX>_AUTHN__SECRET=dev-only-insecure-secret-change-me-32b` | delete that line; put `<PREFIX>_AUTHN__SECRET=` and the output of `openssl rand -hex 32` in `.env.local` (and another in `.env.test` if your suites sign tokens), and your own in every deployed environment |
+   | a scaffolded project's `.env.test` naming `redis://localhost:6379` | `redis://localhost:6379/1`, so the suites never push on the database the development app drains |
+
+   `#[nest_rs::main]` builds the same runtime as `#[tokio::main]` and ends the
+   process within the shutdown budget: under `#[tokio::main]`, the runtime's
+   drop waits for every blocking call still running, so a hook abandoned while
+   it waited on one held the exit past every bound. A second `SIGINT` or
+   `SIGTERM` during the way down now exits at once, with code 130 or 143.
+
+3. **Rename the variables that moved.** A crate in a family puts the family
    first in its namespace, so the OAuth client and resource server read
    `<PREFIX>_OAUTH__CLIENT__*` and `<PREFIX>_OAUTH__RESOURCE__*` — the same string as
-   their paths, `nest_rs::oauth::client` and `nest_rs::oauth::resource`. One other
-   variable moved, with the queue's worker: step 8 renames its drain window.
-   Rename them wherever the deployment sets them: the
-   `.env` files, the chart's values, the platform's secrets.
+   their paths, `nest_rs::oauth::client` and `nest_rs::oauth::resource`. Rename
+   them wherever the deployment sets them: the `.env` files, the chart's values,
+   the platform's secrets.
 
    | 6.x | 7.0 |
    |---|---|
@@ -61,6 +131,11 @@ left running until they drain the 6.x jobs (step 7).
    | `<PREFIX>_OAUTH_RESOURCE__RESOURCE_DOCUMENTATION` | `<PREFIX>_OAUTH__RESOURCE__RESOURCE_DOCUMENTATION` |
    | `<PREFIX>_OAUTH_RESOURCE__RESOURCE_POLICY_URI` | `<PREFIX>_OAUTH__RESOURCE__RESOURCE_POLICY_URI` |
    | `<PREFIX>_OAUTH_RESOURCE__RESOURCE_TOS_URI` | `<PREFIX>_OAUTH__RESOURCE__RESOURCE_TOS_URI` |
+   | `<PREFIX>_STORAGE__BUCKET=media` | `<PREFIX>_STORAGE__URL=s3://media` (or `s3://media/some/prefix`) |
+   | `<PREFIX>_STORAGE__ENDPOINT=` (empty for AWS) | unset |
+   | `<PREFIX>_STORAGE__TLS_CERT` / `TLS_KEY`, set and ignored | removed: the boot now fails naming them |
+   | `<PREFIX>_HTTP__FAIL_SECURE_STRICT` | removed: no mount is left for it to guard, and the boot reports it as read by no config |
+   | `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` (step 16) |
 
    Under a prefix of your own, the same holds with `ACME_` for `NESTRS_`. Every
    one of them — every namespaced variable, in fact — can now be given as a file
@@ -69,7 +144,7 @@ left running until they drain the 6.x jobs (step 7).
    silent: the boot names it and its new spelling, as shown
    [below](#what-fails-if-you-get-it-wrong).
 
-3. **Push through the queue's type.** `push_to::<Q>(job)` and the string-taking
+4. **Push through the queue's type.** `push_to::<Q>(job)` and the string-taking
    `push(name, job)` are gone. A push names the queue's `#[queue]` marker, takes
    `PushOptions` — `None` for an immediate push — and answers with a
    `PushReceipt` naming the job's id:
@@ -90,12 +165,30 @@ left running until they drain the 6.x jobs (step 7).
    `QueueError::PartiallyQueued`, carrying the receipts of the jobs already
    queued: a caller that retries the whole batch on any error leaves those out.
 
-4. **Check what each consumer declares.** A `#[process]` method compiles as it
-   did, and six things read differently now:
+   **A push inside a transaction is filed after its commit.** On an app binding
+   `seaorm` and a queue backend, a push in a mutating request, a GraphQL
+   mutation, a message or an attempt is written into the transaction and filed
+   once it commits — never lost, never left behind by a rollback. That table,
+   `nestrs_outbox`, is the framework's migration, created by
+   `nestrs g migration nestrs_outbox` then `nestrs run db up` (or
+   `Box::new(nest_rs::seaorm::queue::OutboxMigration)` in your migrator's
+   `migrations()`). An event whose listener pushed only to wait for the commit
+   pushes in the service, inside the transaction. A push meeting a unique key
+   another job holds answers `Ok` and is dropped at `info` after the commit,
+   where it answered `UniqueKeyHeld`. See
+   [Producing jobs](/queue/producing-jobs/).
+
+5. **Check what each consumer declares.** A `#[process]` method compiles as it
+   did, and these read differently now:
 
    - `retries = N` runs a failed attempt again **after a backoff** — one second
      after the first failure, doubling, at most five minutes — where 6.x ran it
      again at once. See [Retries and failure](/queue/retries-and-failure/).
+   - **A job failing with a client's error dead-letters at once.** A
+     `JobError::abort(…)`, or a `ServiceError` or a `Problem` with a `4xx`,
+     dead-letters on its first attempt, where 6.x retried it until the budget
+     was spent; return `JobError::retry` where a later attempt may succeed — a
+     row the producer has not committed yet.
    - **A delivery whose process died has a limit of its own.** An OOM kill or a
      pod killed mid-job still spends no retry: the job runs again at the same
      attempt, as in 6.x. But a job whose deliveries end that way three times in
@@ -108,9 +201,21 @@ left running until they drain the 6.x jobs (step 7).
      later, with a `warn`; 6.x failed such a job and spent its retries. A job
      still unread a day after its first hand-back — a rollout that stopped — is
      dead-lettered, naming both versions.
+   - **A job ends within its `timeout`**, ten minutes by default: a
+     `#[process]`, `#[every]`, `#[cron]` or `#[after]` method running longer
+     declares `timeout = "…"` covering its longest run, up to `"24h"`. An attempt
+     past its timeout is cut and fails retryably; a job whose commit does not
+     answer within the database's statement budget plus a second is
+     dead-lettered rather than retried, since its writes may have landed.
    - `concurrency = N` is accepted again, per method and per replica, and so are
      `throttle(limit, window)` and a `Checkpoint<S>` parameter; see
-     [Concurrency and scaling](/queue/scaling/).
+     [Concurrency and scaling](/queue/scaling/). A `#[process]` method may take
+     an `Attempt` — the job's id and attempt — beside its job.
+   - **The tenant travels with every job**, like the actor: a tenant id threaded
+     by hand into every payload becomes `fn tenant_id(&self) -> Option<String>`
+     on the claims' `PrincipalIdentity`, read with
+     `nest_rs::core::current_tenant_id()` in the service, in the request and in
+     every job it pushes.
    - **Delivery is at least once, so a handler stays idempotent.** On Redis a
      job runs again only once a delivery's lease lapses — its worker crashed,
      froze, or was cut off past the lease — and what the first delivery writes
@@ -118,7 +223,7 @@ left running until they drain the 6.x jobs (step 7).
      [At least once, and the fence](/queue/delivery/#at-least-once-and-the-fence).
    - A queue name is checked: 1 to 128 of `[A-Za-z0-9_.-]`. A name holding `:`
      or whitespace no longer compiles, so that queue takes a new name, and its
-     6.x jobs are drained in step 7 under the old one.
+     6.x jobs are drained in step 15 under the old one.
 
    A scheduled job that should fire on one replica rather than all of them can
    now say so with `replicas = "one"`, beside `RedisScheduleModule`: each
@@ -129,6 +234,24 @@ left running until they drain the 6.x jobs (step 7).
    its boot line names. See
    [Firing once across replicas](/schedule/#firing-once-across-replicas).
 
+   **An event emitted inside a transaction waits for it.** `EventBus::emit` in a
+   mutating request, a GraphQL mutation, a WebSocket message, an MCP operation, a
+   queue attempt, a scheduled tick or a lifecycle hook runs its listeners once
+   the transaction commits — outside it, each listener in a transaction of its
+   own, under the emitter's scope and ability — and never when it rolls back;
+   6.x ran them inline, inside it. A listener that relied on writing inside the
+   emitter's transaction now writes in its own, and code that opens a
+   transaction itself emits after its own commit. See
+   [What waits for the commit](/database/transactions/#what-waits-for-the-commit).
+
+   | 6.x | 7.0 |
+   |---|---|
+   | an `#[on_event]` method logging its own failure and returning `()` | return `Result<(), E>`: the bus rolls the call back and reports the error with its chain |
+   | a listener relying on its writes landing one statement at a time | `#[on_event(transactional = false)]` |
+   | a listener running past ten minutes | `#[on_event(timeout = "…")]`, at most `"24h"`, or a queue job it pushes |
+   | a cross-cutting concern around jobs written inside every `#[process]` method | an interceptor bound with `#[use_interceptors]` on the `#[processor]` block, reading `QueueView` (step 7) |
+   | `ListenerMethod::wire(container, bus)` | `wire(container, bus)?` — it answers a `Result` |
+
    A GraphQL operation returning a bare value — `i32`, `Vec<T>`, an
    `impl Stream` subscription — now runs its resolver's guards and the app-wide
    ones, where 6.x served it past a deny-all `#[use_guards]`. An operation that
@@ -137,290 +260,747 @@ left running until they drain the 6.x jobs (step 7).
    GqlResult`, or a type alias — is read as one, so its error is a field error
    where 6.x served it as data.
 
-   **An event emitted inside a transaction waits for it.** `EventBus::emit` in a
-   mutating request, a GraphQL mutation, a WebSocket message, an MCP operation, a
-   queue attempt or a scheduled tick runs its listeners once the transaction
-   commits — outside it, on the pool, under the emitter's scope and ability —
-   and never when it rolls back; 6.x ran them inline, inside it. A listener that
-   relied on writing inside the emitter's transaction now writes in its own, and
-   code that opens a transaction itself emits after its own commit. A push, a
-   broadcast or a storage write in a service still happens where it is written:
-   to push after the commit, push from a listener. See
-   [What waits for the commit](/database/transactions/#what-waits-for-the-commit).
+6. **Write HTTP code on nestrs's HTTP vocabulary.** 6.x's HTTP surface was
+   poem's; 7.0's is `nest_rs::http` — `Request`, `Response`, `Body`,
+   `HttpError`, `Endpoint`, the extractors — over the `http` crate's head
+   types, which it re-exports, and the server underneath is nestrs's own on
+   hyper. A route's path is OpenAPI's path templating. Each row is a compile
+   error unless it says otherwise:
 
-   **An identity provider or store that does not answer is a `503`**, with the
-   provider's `Retry-After` when it gave one, on every edge — where 6.x answered
-   `401` for an OAuth provider that timed out or failed, and `500` for an
-   unreachable identity store. A dashboard or a client that read those codes as
-   a failed sign-in reads an outage now.
-
-   **A payload that does not decode is answered without the value it sent** — an
-   HTTP `400`'s `detail`, an MCP tool error, a GraphQL error, a WebSocket error
-   frame — and with where it failed and what kind of value was found: a client
-   matching poem's or serde's sentence meets the framework's.
-
-5. **Follow the renamed types and signatures.** Each row is a compile error, so
-   the compiler finds every site:
+   **Routes and handlers**
 
    | 6.x | 7.0 |
    |---|---|
-   | `env.get("KEY")` and `env.list("KEY", default)` in a `from_env` | `env.get("KEY")?` and `env.list("KEY", default)?` — a `_FILE` read can fail |
-   | `Correlation::mint()` | `Correlation::minted(None)` |
-   | `TlsConfig`, `CorsConfig`, `SecurityHeadersConfig` | `HttpTls`, `HttpCors`, `HttpSecurityHeaders` |
-   | `ServerInfo`, returned by a host's `get_info` | `nest_rs::mcp::ServerConfig` |
-   | `RedisConnection::connect(url)`, `connect_within(url, budget)` | `RedisConnection::connect(&config)` |
-   | `conn.manager()` | the connection itself — it is `ConnectionLike` and `Clone` |
-   | `OpenTelemetryConfig::from_env(name)` | `OpenTelemetryConfig::from_env(name)?` |
-   | `method.retries`, `method.queue` on a `ProcessMethod` | `method.options().retries()`, `method.queue()` |
-   | the queue's `Processor` trait | nothing: a consumer is a `#[processor]` host and its `#[process]` methods |
-   | `envelope::seal(payload)` and `envelope::open(value)` from the queue crate, in a driver | the port seals before `enqueue` and opens in its worker; the type is `Envelope` at the crate's root — see [Writing a driver](/queue/writing-a-driver/) |
-   | a driver's own worker `Transport`, its fetch loop and its retries | a `JobConsumer` bound as a `BoundConsumer`: the port's `QueueWorker` runs the loop, the attempt and the drain — see [Writing a driver](/queue/writing-a-driver/) |
-   | `CheckpointStore::clear` | nothing: the backend lets a job's checkpoint go in the settle that ends the job |
-   | `check_duplicate_queue_claims(&methods)` | nothing: the port's worker refuses two methods on one queue at boot |
-   | `RedisWorkerModule::for_root(cfg)`, from `nest_rs::redis` | `QueueModule::for_root(cfg)`, from `nest_rs::queue`, beside `RedisQueueModule`, which now binds the consumer too |
-   | `RedisWorkerConfig { shutdown_timeout }` | `QueueConfig { shutdown_timeout }`; the lease is `RedisQueueModule::for_root(RedisQueueConfig { lease })` |
-   | `RedisWorker::new()`, spawned in a test | `QueueWorker::new()`, from `nest_rs::queue` |
-   | the queue crate's `tracing` re-export | a `tracing` dependency of your own |
-   | `WsReply::payload_error(event, &error)` with any `Display` | the same with the `serde_json::Error`, which it reports without the value |
-   | `MaskReplyError::Irreconcilable(serde_json::Error)` | `MaskReplyError::Irreconcilable(DecodeError)` |
-   | `ProblemDetails::from_error(status, title, err)` with any `Display` | the same with `&err`, an error, whose decode failure it says without the value; a sentence of your own is `.with_detail(…)` |
-   | `panic_message(payload)` borrowed as a `&str` | an owned `String`, any decode failure in it said without the value |
-   | `Throttle { limit, window }` and its fields, on the rate limiter | `Throttle::new(limit, window)`, `.limit()`, `.window()` — a window under a millisecond is refused |
-   | `ThrottlerGuard::new(store, limit)` | gone: `ThrottlerModule::for_root` builds the guard; a `ThrottlerConfig` literal gains `pseudonym_key` |
-   | `JwtConfig`, from the authn crate | `nest_rs::authn::AuthnConfig`, with the same fields and variables |
-   | `jwt.verify(token)?` | the same with `.await` before the `?` — a verification may fetch an issuer's JWK Set; `verify_handshake` stays synchronous |
-   | `JwtOptions { algorithm: …, ..JwtOptions::new(secret) }`, or `options.algorithm = …` | `let mut options = JwtOptions::new(secret);` then `options.algorithms = vec![…]` — `JwtOptions` is `#[non_exhaustive]`, so a literal is refused |
-   | a `match` on `JwtKey` naming every variant | the same with a `_` arm — `JwtKey` is `#[non_exhaustive]` and gains `Jwks` |
-   | an `AuthnConfig { … }` written out whole | the same, ending in `..Default::default()` — `AuthnConfig` gains `jwks_uri`, `algorithms` and `tls` |
-   | `AuthError::Unavailable(detail)` | `AuthError::Unavailable { detail, retry_after }`, rendered `503` |
-   | `env.seconds("KEY", base)` in a `from_env` | a `DurationBounds::secs(…)` declared beside the config, read with `BOUNDS.read(env, base)?` or `read_optional`; see [Configuration](/configuration/#configservice-api) |
-   | `env.get`, `env.parse` or any other `env.*` reader asked for a key ending in `_SECS` or `_MS` | a `DurationBounds::secs(…)` or `DurationBounds::millis(…)` read the same way — the readers now refuse a duration's key at boot, naming `DurationBounds` |
-   | an `impl Transport` written by hand | the same with `fn stop_bound(&self) -> Duration` — the longest `serve` takes to return once it is told to stop |
-   | rmcp's `Parameters`, named from rmcp in an operation's signature | `nest_rs::mcp::Parameters`, which is the framework's own type now, with rmcp's shape |
+   | `#[get("/:id")]` | `#[get("/{id}")]` |
+   | `#[get("/files/*rest")]` | `#[get("/files/{*rest}")]` |
+   | `#[get("/@:handle")]` | `#[get("/@{handle}")]` |
+   | `#[get("/:id<\\d+>")]` | `#[get("/{id}")]` with `Path<u64>`, or a pipe |
+   | `#[controller(path = "/orgs/:org")]` | `#[controller(path = "/orgs/{org}")]` |
+   | a root catch-all (`/*rest`) that also served `/` | the catch-all (`/{*rest}`) and a route at `/` beside it (`#[get("/")]`) — not a compile error: `/` otherwise answers the fallback's `404` |
+   | a handler reading an empty parameter: `/a//b` matched `/a/{x}/b` with `x` empty | nothing reaches it — `/a//b` answers the fallback's `404`; a value that may be absent travels in the query string |
+   | `use poem::web::{Json, Path, Query}` in a controller | `use nest_rs::http::{Json, Path, Query}` — and `Form`, `Multipart`, `Header<T>`, `ClientIp`, `RawBody` |
+   | `-> poem::Result<T>`, `poem::Error::from_status(s)` | `-> nest_rs::http::Result<T>`, `HttpError::from_status(s)` |
+   | `impl poem::error::ResponseError for MyError` | `impl nest_rs::http::ResponseError for MyError` — `status()`, and `as_response()` for a body of its own; render only, since the edge files a `5xx`'s chain |
+   | `req: &poem::Request` as a handler parameter | `req: &nest_rs::http::Request`, or the extractor for what it reads |
+   | `poem::web::Data<&T>` | an `#[inject]` field on the controller, or `Scoped<T>` for a request-scoped provider |
+   | `use nest_rs::http::poem::…` | `nest_rs::http::{Request, Response, Json, IntoResponse}`; `ProblemDetails` answers through `nest_rs::http::ResponseError` / `IntoResponse` |
+   | `field.into_byte_stream()` through `nest_rs::http::PartExt` | `Field::into_byte_stream()` on `nest_rs::http::Multipart`'s field |
+   | `RawBody::extract_with_limit(&mut poem_body, n)` in an extractor of your own | the extractor implements `nest_rs::http::FromRequest`, whose `RequestBody` `extract_with_limit` takes; a handler reads `body.into_bytes_limit(n)` |
+   | `SseEvent::retry(ms)` | `SseEvent::message("").retry(Duration::from_millis(ms))` |
+   | `match event { SseEvent::Message { .. } => … }` | none: an event is written, never read back |
    | `SseSettings::respond(stream)`, answering poem's `SSE` | the same, answering a `Response` marked to end at the shutdown signal |
-   | an `impl McpHost` written by hand | the same with `negotiate_initialize`, which rmcp 3.4 added |
-   | `report_inert_host!(target: …, what: …, origin: …)`, in an edge of your own | the same with `host:` — the host's `TypeId` — and `container:`, so the line names its cause |
-   | a `ContestedDeclarationError { … }` pattern naming every field | the same with `first: _` and `second: _` — the two imports that made it — or ending in `..` |
-   | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()`, `timeout: nest_rs::schedule::nest_rs_worker::JOB_TIMEOUT`, `replicas: Replicas::Each` and `key: None`, which fire it on every replica as 6.x did |
+   | `PATCH /<resource>/{id}` on a `#[crud]` controller | `PUT /<resource>/{id}` — a wire change, no compile error |
+   | `impl RouteResponseShaper` / `ResponseShaping` on `poem::Request`, `poem::Response`, `poem::Result` | the same impl on `nest_rs::http::{Request, Response, Result}` |
+   | `set_created_location`, `set_next_link`, `challenge::stamp_bearer_error` on a `poem::Response`; `caller_path` on a `poem::Request` | the same call on `nest_rs::http::Response` / `nest_rs::http::Request` |
+   | `ClientOrigin::of(&poem::Request)` | `ClientOrigin::of(&nest_rs::http::Request)` |
    | Rust's `#[deprecated]` on a `#[routes]` handler or a `#[controller]` struct | `#[api(deprecated = "YYYY-MM-DD")]` on each route's handler, the date its `Deprecation` header states — see [OpenAPI operations](/openapi/operations/#deprecate-a-route) |
-   | an `HttpRouteMeta { … }` built by hand | the same with `error_responses: &[]`, `sets_next_link: false`, `response_headers: &[]` and `deprecation: None` — `#[routes]` is what builds it |
-   | a `#[process]`, `#[every]`, `#[cron]` or `#[after]` method that runs longer than ten minutes | the same with `timeout = "…"` covering its longest run, up to `"24h"` — an attempt past its timeout is now cut and fails retryably |
-   | an `HttpConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout` |
-   | a `StorageConfig { … }` written out whole | the same, ending in `..Default::default()` — `StorageConfig` gains `operation_timeout`, `read_timeout` and `tls` |
-   | a `<PREFIX>_SEAORM__URL` naming no `sslmode`, or `allow`, `prefer`, `require` or `verify-ca` | `sslmode=verify-full` is now the default and the others fail the boot: a server with TLS needs its certificate trusted — by the system's store, or the file `sslrootcert` names — and one without it needs `sslmode=disable` written |
-   | a `rediss://` Valkey whose certificate chains to an authority only Mozilla's roots held | install the authority in the system's store, or name it in `<PREFIX>_REDIS__TLS_CA_CERT`: the connection now trusts the system's authorities rather than the roots compiled into the client |
+
+   **Route records, self-mounts and the fallback**
+
+   | 6.x | 7.0 |
+   |---|---|
+   | `HttpVerb::Get`, `HttpVerb::Post`, … | `Method::GET`, `Method::POST`, … (`nest_rs::http::Method`) |
+   | `route.verb`, `route.path`, `route.handler`, any field of an `HttpRouteMeta` | the accessor of the same name: `route.method()`, `route.path()`, `route.handler()` |
+   | `meta.routes`, `meta.path`, `meta.controller`, `meta.token`, `meta.versions` on an `HttpControllerMeta` | `meta.routes()`, `meta.path()`, `meta.controller()`, `meta.token()`, `meta.versions()` |
+   | an `HttpRouteMeta { … }` or `HttpControllerMeta::new(…)` built by hand | none: a `#[controller]` struct and a `#[routes]` block record each route |
+   | `route.throttled` on an `HttpRouteMeta` | none: a guard declares the `429` it answers in `Guard::denial_statuses`, and the route's OpenAPI document lists it |
+   | `fn mount(c: &Container, route: poem::Route) -> poem::Route` on a hand-written `Controller` | a `#[controller]` struct and a `#[routes]` block; a surface registering entries of its own is a self-mount, below |
+   | `HttpEndpointMeta::new(path, label, mount)`, with `.exempt()` | `HttpEndpointMeta::new(&SITE, path, label, \|c, routes\| { routes.route(Method::GET, &path, ep); })` over `static SITE: Handler = nest_rs::http::declare_endpoint::<M>("M", path, posture)`, `M` the type that mounts it: `.exempt()` becomes `Posture::Public`, a mount the global pool gates `Posture::Gated`; `meta.handler().posture()` reads a mount's posture |
+   | `route.nest(path, ep)` in a self-mount | `routes.route_any(&path, ep)`, at exactly `path`; its subtree is registered as `{path}/{*rest}` |
+   | `HttpFallbackMeta::new(path, owner, \|c, route\| route.at(…))` | `HttpFallbackMeta::new(path, owner, \|c\| BoxEndpoint::new(ep))` |
+   | `MethodTable::new().get(ep).into_endpoint()` | `routes.route(Method::GET, &path, ep)`; the table answers `405` with `Allow` and `HEAD` |
+   | `nest_rs::http::matched(ep)` | nothing: every entry records its template |
+   | `view.route()` as a `Cow<str>` | `view.route()`, an `Option<&str>` |
+   | `nest_rs::graphql::async_graphql_poem::…` | gone: `GraphqlModule` mounts the schema; an app serving a schema of its own over poem depends on async-graphql-poem itself |
+   | `nest_rs::ws::poem::…`, `nest_rs::ws::GatewayEndpoint` | gone: a gateway names no poem type, and `#[messages]` mounts it |
+   | `nest_rs::ws::CloseCode` matched exhaustively | the same with a `_` arm: it is nestrs's own `#[non_exhaustive]` enum, with the same variants |
+
+   **The transport and its tests**
+
+   | 6.x | 7.0 |
+   |---|---|
+   | `TestApp::builder().http(HttpTransport::new().compression(true))` | `TestApp::builder().provide(HttpConfig { compression: true, ..Default::default() })`, or nothing when the app's `HttpModule::for_root` already pins the value |
+   | `HttpTransport::new().bind(addr)` handed to `HeadlessApp::spawn_transport` | `HttpTransport::from_config(&HttpConfig { host, port, ..config })?`, `config` read from the app's container |
+   | `HttpTransport::new().mount(path, \|container\| endpoint)` | an `HttpEndpointMeta` attached by the providing module's `Discoverable::register`, as above |
+   | `VersionSelector::new(strategy, header, default)` | `HttpConfig { versioning, version_header, default_version, .. }` |
+   | `Box::new(http_transport).serve(cancel)` driven by hand | `http_transport.listen().await?` first; the port it bound is in `Listening::addresses` |
+   | `TestClient::new(transport.take_endpoint()?)` on a hand-booted transport | `transport.take_endpoint()?.call(request)`, or `TestApp` |
+   | `HttpCors { .. }.into_middleware()` | nothing: set `HttpConfig::cors`, which the transport checks at boot |
+   | `HttpCors { methods: vec!["TRACE".into()], .. }` | drop the forbidden method; list the methods a page sends (`PUT`, `DELETE`, …) |
+   | a CORS policy without `max_age`, whose preflight a browser kept a day | `max_age: Some(Duration::from_secs(86_400))`, or `<PREFIX>_HTTP__CORS_MAX_AGE=86400` — not a compile error: a preflight otherwise carries no `Access-Control-Max-Age` |
+   | `current_body_limit().unwrap_or(RawBody::DEFAULT_LIMIT)` | `current_body_limit()` |
+   | `normalize_error_response(poem_response)` | `normalize_error_response(response)`, with a `nest_rs::http::Response` |
+   | `use poem::test::{TestClient, TestForm, TestFormField, TestResponse, TestJson};` | `use nest_rs::testing::{TestClient, TestForm, TestFormField, TestResponse, TestJson};` |
+   | `use poem::http::{StatusCode, header};` in a suite | `use nest_rs::http::{StatusCode, header};` |
+   | `TestClient<BoxEndpoint<'static, poem::Response>>`, `TestClient::new(poem_endpoint)` | `TestClient`, `TestClient::new(endpoint)` over a `nest_rs::http::Endpoint` |
+   | `resp.0.into_body().into_vec().await?` | `resp.0.into_body().into_bytes().await?` |
+   | `resp.0.into_body().into_json::<T>().await?` | `resp.json().await.value().deserialize::<T>()` |
+   | `resp.0.header("x-name")` | `resp.0.headers().get("x-name")` |
+   | `.filter(\|event\| event.level == "error")` over `logs.events()` | `logs.events_at(tracing::Level::ERROR)` |
+   | a test catching a request's unwind (`catch_unwind` around `TestApp::http()…send()`) | the `500` the request now answers: a handler that panics is answered and its connection serves on |
+
+   A response header a route sets — a `#[response_header]`, a handler, a
+   surface setting a security header or `Server` — now wins over the
+   deployment's `<PREFIX>_HTTP__*` default, which fills only a response that
+   sets none: a deployment relying on its global value to override a route's
+   removes the route's header. A `Scoped<T>` or a `Bind<A, S>` whose module the
+   app does not import fails the boot.
+
+7. **Move every layer onto the unit context.** One pipeline runs every unit
+   on every edge, and every layer reads it through `UnitContext` — see
+   [Execution context](/fundamentals/execution-context/) and
+   [the request lifecycle](/fundamentals/request-lifecycle/). Each row is a
+   compile error unless it says otherwise; work through them in this order,
+   guards first, since an interceptor or a filter often reads what a guard
+   attached.
+
+   **Guards**
+
+   | 6.x | 7.0 |
+   |---|---|
    | a guard's `async fn check_http(&self, req: &mut Request)` | `async fn check_http(&self, cx: &mut UnitContext<'_>)`: the request through `HttpView::of(cx)?.request()` — `request_mut()` to read the body and set it back — and the route's `#[meta]` and posture through `cx.reflector()` |
    | a guard's `check_graphql`, `check_ws_message` or `check_mcp` | one `async fn check(&self, cx: &mut UnitContext<'_>)`: the field, message or operation through `cx.switch_to::<GraphqlView>()`, `WsView` or `McpView`, its name through `cx.handler().address()` |
    | `impl HttpGuard for X {}`, `GraphqlGuard`, `WsGuard`, `McpGuard` | `impl GuardFor<HttpView> for X {}`, `GuardFor<GraphqlView>`, `GuardFor<WsView>`, `GuardFor<McpView>` |
    | `req.extensions_mut().insert(value)` in a guard, read back with `Ctx<T>` | `cx.attach(value)`, with `impl AmbientValue for T {}` beside the type; a guard after it reads `cx.ambient::<T>()` |
    | a `Strategy::Principal` or an `AbilityFactory::Actor` that is not your own type (`()`, `&'static str`) | a type of your own implementing `AmbientValue` and `Clone` — the guard attaches it; a `Claims` gains `impl AmbientValue for Claims {}` |
-   | `nest_rs::http::Reflector`, `HandlerMetadata`, `Reflector::new(req)` | `cx.reflector()` |
+   | `if Reflector::new(req).is_public() { return Ok(()) }` in an authentication guard | `if matches!(cx.reflector().posture(), Posture::Public \| Posture::InBand) { return Ok(()) }` — `/graphql` is `InBand`, each operation declaring its own posture |
    | `nest_rs::guards::prelude::HttpRequest` | `HttpView`, and `nest_rs::http::Request` for the type it holds |
-   | `GraphqlOperationContext`, `McpOperationContext` | `GraphqlView`, `McpView` |
+   | a `Denial::Unavailable { retry_after_secs, reason }` built or matched in full | `Denial::unavailable(retry_after_secs, reason)` — or `Denial::unavailable_because(…, source)` to keep what failed — and a pattern ending in `..` |
    | the `graphql`, `mcp` or `ws` feature of `nest-rs-throttler` or `nest-rs-guards` | nothing: a guard's edges are its `GuardFor` declarations, and `ThrottlerGuard` declares every view |
-   | `HttpEndpointMeta::new(path, label, mount)`, with `.exempt()` | a self-mount is a seam the framework's own decorators and modules fill — `#[mcp]`, `#[gateway]`, `GraphqlModule`, `OpenApiModule` — each declaring the `Handler` whose posture says how the guard pool meets the mount; an app or a package mounts through one of those, and reads a mount's posture with `meta.handler().posture()` |
-   | a `Denial::Unavailable { retry_after_secs, reason }` built or matched in full | `Denial::unavailable(retry_after_secs, reason)` — or `Denial::unavailable_because(…, source)` to keep what failed, whose chain the edge's denial line files — and a pattern ending in `..`: the variant gained `source` |
-   | `ClientOrigin::of(&poem::Request)` | `ClientOrigin::of(&nest_rs::http::Request)` |
-   | a value an interceptor, a middleware or a test put in the request's extensions, read back with `Ctx<T>` | the value made ambient around what reads it — `nest_rs::core::with_ambient(Arc::new(value), next)` — or attached by a guard; `Ctx<T>` no longer reads the extensions |
    | `nest_rs::guards::{GuardEndpoint, GuardExt}`, a guard wrapped around an endpoint by hand | `#[use_guards]` on the controller or gateway, or the app's global pool: each edge runs its own guard stage |
+   | `#[use_guards(X)] #[force_guards(X)]` on a method | `#[force_guards(X)]` |
+   | a guard, interceptor, filter or pipe overriding `Layer::priority` to run before a broader scope's layers | declare it at that broader scope, or list it first there: a priority orders within one scope |
+   | `#[use_guards(…)]` beside a handler listing an authorization guard before the authentication guard it reads | list the authentication guard first, or declare the pair on the controller |
+   | `nest_rs::authz::graphql::authorize::<A, E>(ctx)?`, `ws::authorize::<A, E>(event)`, `mcp::authorize::<A, E>()?` in a hand-written body | `#[authorize(A, E)]` on the operation, or `nest_rs::authz::class_gate::<A, E>` on its unit's context |
+   | `nest_rs::authz::gate::<A, E>(&ability)` and `GateVerdict` | `nest_rs::authz::class_gate::<A, E>(cx)` |
+
+   **What a site declared, and what a unit carries**
+
+   | 6.x | 7.0 |
+   |---|---|
+   | `nest_rs::http::Reflector`, `HandlerMetadata`, `Reflector::new(req)` | `cx.reflector()` |
+   | `req.extensions().get::<Throttle>()` in a guard, for a route's `#[meta(Throttle(..))]` | `cx.reflector().get::<Throttle>()` — the method's value over its controller's |
+   | `req.extensions().get::<Public>()` in a guard | `cx.reflector().is_public()` |
+   | a `#[meta(..)]` repeated on every route of a controller | one `#[meta(..)]` under `#[controller]`, a route's own overriding it |
+   | `GraphqlOperationContext`, `McpOperationContext` | `GraphqlView`, `McpView` |
+   | a value an interceptor, a middleware or a test put in the request's extensions, read back with `Ctx<T>` | the value made ambient around what reads it — `nest_rs::core::with_ambient(Arc::new(value), next.run(cx))`, or `cx.attach(value)` before `next.run(cx)` — or attached by a guard; `Ctx<T>` no longer reads the extensions |
+   | a value of your own in a `tokio::task_local!` carried by hand | `impl AmbientValue for T {}`, added with `with_ambient` or `cx.attach`, read with `ambient::<T>()` |
+   | `RequestContinuation::current()` | `RequestContinuation::capture(Continuation::Task)`, or the continuation the work is |
+   | another driver's `after_commit` re-installing the scope and the ability around held work | capture `RequestContinuation::capture(Continuation::Commit)` and read `current_executor_scope()` where the work is registered; run it inside the capture |
+
+   **The guards in front of `/graphql`, `/mcp` and a socket**
+
+   | 6.x | 7.0 |
+   |---|---|
+   | `GraphqlAbilityBridge<AuthnGuard, AuthzGuard> as dyn GraphqlOperationGuard` in a module's `providers` | `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` |
+   | `McpAbilityBridge<AuthnGuard, AuthzGuard> as dyn McpOperationGuard` in a module's `providers` | `EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>` |
+   | an `impl GraphqlOperationGuard` / `impl McpOperationGuard` of your own | a `Guard` with `check_http` and `impl GuardFor<HttpView>`, listed in `EndpointGuards<…>` |
+   | `AllowAllMcpGuard as dyn McpOperationGuard` | `McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })` in the app's root |
+   | `GlobalPoolOperationGuard`, `GlobalPoolMcpGuard` | nothing: the transport runs the global pool at the `/graphql` and `/mcp` requests |
+   | `LoaderScope as dyn GraphqlBatchContext` in a module's `providers`, `use nest_rs::seaorm::graphql::LoaderScope;` | nothing: a DataLoader batch carries the request's ambient values itself |
+   | `impl McpToolContext for X` (`capture`, `around`), provided `as dyn McpToolContext` | an `#[interceptor]` or `#[interceptor(stage = unit)]` making the value ambient (`cx.attach`, `with_ambient`), read with `nest_rs::core::ambient::<T>()` |
+   | `#[use_guards(G)]` beside an `#[mcp]` host writing rmcp's `ServerHandler` | `EndpointGuards<McpView, G>` declared by a module, or the host's tools under `#[tools]` |
+   | `impl SocketContext for MyBridge` listed `as dyn SocketContext`, carrying a value from the upgrade into each message | a guard on the gateway (or the app's pool) attaching the value with `cx.attach(value)` in `check_http`: the connection carries it into every message and hook |
+   | `nest_rs::ws::{SocketContext, Captured, BoxFuture}` | nothing: the seam is gone |
+   | `app.graphql_socket().data(ability)` to subscribe as a caller | `app.graphql_socket().attach(ability)`, an `Arc<Ability>`; `data(..)` adds a context value alone |
+
+   **Pipes**
+
+   | 6.x | 7.0 |
+   |---|---|
+   | `fn transform_body(&self, v: &mut Value) -> Result<(), PipeError>` on a global pipe | `fn transform(&self, cx: &UnitContext<'_>, argument: ArgumentKind, v: &mut Value) -> Result<(), PipeError>`, acting when `argument == ArgumentKind::Body` |
+   | `fn transform_graphql_variables(&self, v: &mut Value)` | the same `transform`, on `ArgumentKind::Variables` |
+   | `fn transform_ws_data(&self, event: &str, v: &mut Value)` | the same `transform`, on `ArgumentKind::Data`; the event is `cx.handler().address()`, or `cx.switch_to::<WsView>()`'s `event()` |
+   | `use nest_rs::guards::{AppBuilderPipesExt, pipe};` | `use nest_rs::pipes::{AppBuilderPipesExt, pipe};` |
+   | `nest_rs::guards::{PipeSpec, PipeSpecs}` | `nest_rs::pipes::{PipeSpec, PipeSpecs}` |
+
+   **Interceptors and exception filters**
+
+   | 6.x | 7.0 |
+   |---|---|
+   | `impl Interceptor` from `nest_rs::interceptors`, `async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>` | `nest_rs::core::Interceptor`, `async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome`: run the rest with `next.run(cx).await`, the request through `HttpView::of(cx)?.request()`, the reply through `response_mut()` once it returned — see [Interceptors](/fundamentals/interceptors/) |
+   | `impl ExceptionFilter` from `nest_rs::exception_filters`, `async fn catch(&self, err: E) -> Response` | `nest_rs::core::ExceptionFilter`, `async fn catch(&self, err: &E, cx: &mut UnitContext<'_>) -> Caught`: `match HttpView::of(cx) { Ok(view) => Caught::Answered(view.respond(response)), Err(_) => Caught::Declined }`, `Caught::Problem(problem)` or `Caught::Declined` — see [Error handling](/fundamentals/exception-filters/) |
+   | `impl Filter` from `nest_rs::filters`, `#[use_filters(F)]`, `use_filters_global([filter::<F>()])` | an exception filter whose `type Exception = dyn Error + Send + Sync`, bound with `#[use_exception_filters(F)]` or `use_exception_filters_global([exception_filter::<F>()])`; `#[use_filters]` is refused naming it |
+   | `LayerKind::Filter` | `LayerKind::ExceptionFilter` |
+   | `use nest_rs::interceptors::AppBuilderInterceptorsExt;`, `AppBuilderExceptionFiltersExt`, `AppBuilderFiltersExt` | nothing: `use_interceptors_global` and `use_exception_filters_global` are `AppBuilder`'s own methods, taking `nest_rs::core::{interceptor, exception_filter}` specs |
+   | `#[nest_rs::http::interceptor(priority = n)]` | `#[nest_rs::core::interceptor]`, at the handler stage, or `#[interceptor(stage = unit)]` around the guards; the order within a stage is `Layer::priority` on the struct's `Layer` impl |
+   | `#[use_interceptors]` / `#[use_exception_filters]` on a `#[controller]` only | also on a `#[resolver]` and beside its fields, a `#[gateway]` and beside a `#[subscribe_message]`, an `#[mcp]` host and beside its `#[tool]` and `#[prompt]` methods, a `#[processor]`, `#[scheduled]` or `#[listeners]` block |
+   | an interceptor or exception filter written around a gateway's handler bodies by hand | `#[use_interceptors(...)]` / `#[use_exception_filters(...)]` on the `#[gateway]` or beside a `#[subscribe_message]` |
+   | a global interceptor or filter written for HTTP requests alone | the same with `fn serves(&self, unit: Unit) -> bool { unit == nest_rs::http::unit::REQUEST }` on its `Layer` impl — not a compile error: without it, it now runs around every unit on every edge |
+
+   **The unit of work and the framework's internals**
+
+   | 6.x | 7.0 |
+   |---|---|
+   | `nest_rs::seaorm::DbContext`, listed or built by hand | nothing: importing `SeaOrmDatabaseModule` makes every edge run each unit as a unit of work |
+   | `nest_rs::http::MappedError` on a filter's response | nothing: a failed unit never commits, whatever a filter answered |
+   | `nest_rs::http::{CarriedUnits, carried_units}` | nothing: the transport runs a `/graphql` or `/mcp` request on the pool itself |
+   | `const GATE: Option<fn(&poem::Request) -> Option<poem::Response>>` on a `RouteResponseShaper` | `const GATE: Option<for<'b> fn(&mut UnitContext<'b>) -> Result<(), Failure>>`, refusing with a `Denial` (`Err(denial.into())`) |
+   | `HttpBootCheck::new(\|container\| …)` listed as a provider's metadata | a step on `ContainerBuilder::provide_wiring`: it runs in every app importing the module |
    | `nest_rs::guards::layer_chain` | `nest_rs::core::layer_chain` |
    | `nest_rs::guards::{dispatch, RouteShaper, GraphqlSite, run_layered_graphql_chain, run_layered_mcp_chain, GuardAsWsMessageCheck}`, `nest_rs::http::{GlobalGuardsActive, Public}`, `nest_rs::ws::{WsMessageCheck, EventLayerTable, gateway_endpoint}`, `nest_rs::graphql::GraphqlFederationGuard`, `nest_rs::authz::run_ability_chain` | nothing: the decorators' expansions call each edge's own stage, which is no API |
    | `nest_rs::guards::denial_to_graphql_error`, `denial_to_ws_error`, `denial_to_mcp_error` | `nest_rs::graphql::denial_to_graphql_error`, `nest_rs::ws::denial_to_ws_error`, `nest_rs::mcp::denial_to_mcp_error` |
    | `nest_rs::guards::denial_to_http_response`, `denial_to_http_error` | a guard returns its `Denial`; an extractor answers a `ProblemDetails` or an error of its own implementing `ResponseError` |
-   | `impl Interceptor` from `nest_rs::interceptors`, `async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>` | `nest_rs::core::Interceptor`, `async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome`: run the rest with `next.run(cx).await`, the request through `HttpView::of(cx)?.request()`, the reply through `response_mut()` once it returned — see [Interceptors](/fundamentals/interceptors/) |
-   | `impl ExceptionFilter` from `nest_rs::exception_filters`, `async fn catch(&self, err: E) -> Response` | `nest_rs::core::ExceptionFilter`, `async fn catch(&self, err: &E, cx: &mut UnitContext<'_>) -> Caught`: `Caught::Answered(HttpView::of(cx)?.respond(response))`, `Caught::Problem(problem)` or `Caught::Declined` — see [Error handling](/fundamentals/exception-filters/) |
-   | `impl Filter` from `nest_rs::filters`, `#[use_filters(F)]`, `use_filters_global([filter::<F>()])` | an exception filter whose `type Exception = dyn Error + Send + Sync`, bound with `#[use_exception_filters(F)]` or `use_exception_filters_global([exception_filter::<F>()])`; `#[use_filters]` is refused naming it |
-   | `use nest_rs::interceptors::AppBuilderInterceptorsExt;`, `AppBuilderExceptionFiltersExt`, `AppBuilderFiltersExt` | nothing: `use_interceptors_global` and `use_exception_filters_global` are `AppBuilder`'s own methods, taking `nest_rs::core::{interceptor, exception_filter}` specs |
-   | `#[nest_rs::http::interceptor(priority = n)]` | `#[nest_rs::core::interceptor]`, at the handler stage, or `#[interceptor(stage = unit)]` around the guards; the order within a stage is `Layer::priority` on the struct's `Layer` impl |
-   | `nest_rs::seaorm::DbContext`, listed or built by hand | nothing: importing `SeaOrmDatabaseModule` makes the HTTP edge run every request as a unit of work |
-   | `nest_rs::http::MappedError` on a filter's response | nothing: a failed unit never commits, whatever a filter answered |
-   | `nest_rs::http::{CarriedUnits, carried_units}` | nothing: the transport runs a `/graphql` or `/mcp` request on the pool itself |
-   | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, never `M::register(builder)` or `M::collect(builder)`, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` — the import runs each phase once, `collect` first |
+   | `nest_rs::guards::NoBearerChallenge` | `nest_rs::http::challenge::NoBearerChallenge` |
+   | two `#[meta(Tag::new(..))]` on one method or one host | one: the boot refuses the second |
 
-   `.opaque()` now takes an owned error that converts into `Box<dyn Error +
-   Send + Sync>`, so it logs the whole cause chain; an error type that was only
-   `Display` implements `std::error::Error` first, and a `&str` borrowed from a
-   local becomes an owned `String`. `JobError::retry` / `abort`,
-   `WsReply::from_handler_error` and `OccurrenceLockError::new` take the same.
-   Do the same for your own `error` fields, through the framework's one walk of
-   a chain — and name the target by the constant the feature declares, as a
-   7.0 scaffold does (`pub const TARGET: &str = "features::chat";` in
-   `chat/mod.rs`):
+   An anonymous caller of an `#[authorize]` route that is not `#[public]` is
+   refused `401`, where the visitor's rules used to decide it: mark the route
+   `#[public]` and take `Authorize<A, E>` by hand to serve visitors.
 
-   ```rust title="crates/features/src/chat/ws/gateway.rs" ins={1,3} del={2}
-   use nest_rs::core::error_message;
-   tracing::warn!(target: "features::chat", error = %e, "broadcast failed");
-   tracing::warn!(target: crate::chat::TARGET, error = %error_message(&e), "broadcast failed");
-   ```
+8. **Pin a module's config as a struct literal, and open an instance by its
+   type.** A module's config is one value, pinned through `for_root` as a
+   struct literal over its base: every `with_*` helper is gone. A config's
+   `Default` opens nothing in any profile — no loopback URL, no development
+   credential, no surface — while `Config::defaults()` is the profile's base,
+   and a pinned config reads the process environment, never `.env`. A struct
+   gaining fields within 7.x keeps a literal ending in `..Default::default()`
+   compiling, as the [semver policy](/semver/) promises.
 
-   A `from_env` of your own that decodes a structured value with
-   `serde_json::from_str` quotes the value back when it fails, a client secret
-   included. Decode it with `env.json::<T>("KEY")?`, which refuses it naming the
-   variable, where it failed and the type it expected, never the value.
+   | 6.x | 7.0 |
+   |---|---|
+   | `HttpConfig::default().with_global_prefix(p)` (and every config `with_*`) | the field in a struct literal over `..Default::default()` |
+   | `HealthConfig::default().with_probe_deadline(Duration::from_millis(400))` | `HealthConfig { probe_deadline_ms: 400, ..Default::default() }` |
+   | `RedisModule::for_root(RedisConfig { …, ..Default::default() })` relying on the loopback | `..RedisConfig::defaults()` (with `use nest_rs::config::Config;`) for the loopback in a declared development or test profile, or `url` written in the pin, or `<PREFIX>_REDIS__URL` in the deployment |
+   | `StorageModule::for_root(StorageConfig { …, ..Default::default() })` relying on the development pair or on plain HTTP | `..StorageConfig::defaults()` for the profile's pair and plain HTTP in development and test, or the pair from the deployment's environment |
+   | `OpenApiModule::for_root(OpenApiConfig { …, ..OpenApiConfig::default() })` expecting `/api` served | `..OpenApiConfig::defaults()` to serve it in development and test only, or `enabled: true` written in the pin |
+   | an `HttpConfig`, `StorageConfig`, `AuthnConfig`, `GraphqlConfig`, `WsConfig`, `McpConfig`, `OAuthClientConfig` or `OpenTelemetryConfig` literal written out whole | the same, ending in `..Default::default()` — each gained fields (`shutdown_timeout`; `operation_timeout`, `read_timeout`, `tls`; `jwks_uri`, `algorithms`, `tls`; the graphql-ws bounds; `message_timeout`, `connect_timeout`, `disconnect_timeout`; `operation_timeout`, `max_concurrent_sessions`, `session_idle_timeout`; `tls`) |
+   | `McpOptions { config, server }`, every field named | `McpOptions { config, server, ..Default::default() }` |
+   | `env.get("KEY")` and `env.list("KEY", default)` in a `from_env` | `env.get("KEY")?` and `env.list("KEY", default)?` — a `_FILE` read can fail |
+   | `env.seconds("KEY", base)`, or any `env.*` reader asked for a key ending in `_SECS` or `_MS` | a `DurationBounds::secs(…)` or `DurationBounds::millis(…)` declared beside the config, read with `BOUNDS.read(env, base)?` or `read_optional`; see [Configuration](/configuration/#configservice-api) |
+   | `serde_json::from_str` over a structured variable in a `from_env` of your own | `env.json::<T>("KEY")?`, which refuses it naming the variable, where it failed and the type it expected, never the value |
+   | `setting.shown()` in a refusal of your own | `setting.refuse("<what was expected>")` — the variable is named, the value never |
+   | `OpenTelemetryConfig::from_env(name)` returning `Result<_, ConfigError>` | it returns `Result<_, OpenTelemetryError>`; a `ConfigError` of its own variables is inside `OpenTelemetryError::Config` |
+   | `Err(OpenTelemetryError::InvalidLogFilter { value, .. })` | `Err(OpenTelemetryError::LogSettings(error))` — it names the variable or `OpenTelemetryConfig::log_filter`, never the directive |
+   | `LogFormat::resolve(raw)` | `LogSettings::from_env()?.format`, or `LogFormat::parse` with `LogFormat::by_profile` |
+   | `tracing_subscriber::fmt().with_env_filter(…).with_writer(ConsoleWriter::get()).init()` in a binary with no `App` | `nest_rs::core::logging::install_console(&LogSettings::from_env()?)` |
+   | `nest_rs::config::crypto_provider()` | nothing to call: the framework installs the provider its clients and listeners use |
+   | `let opts = config.connect_options();` | `let opts = config.connect_options()?;`, refused for an empty URL, an unverified `sslmode` or a connect budget out of range |
+   | `RedisConnection::connect(url)`, `connect_within(url, budget)` | `RedisConnection::connect(&config)` |
+   | `conn.manager()` | the connection itself — it is `ConnectionLike` and `Clone` |
+   | `Material { bytes, path: None }` | `Material::inline(bytes)` |
+   | `Throttle { limit, window }` and its fields, on the rate limiter | `Throttle::new(limit, window)`, `.limit()`, `.window()` — a window under a millisecond is refused |
+   | `ThrottlerGuard::new(store, limit)` | gone: `ThrottlerModule::for_root` builds the guard; a `ThrottlerConfig` literal gains `pseudonym_key` |
 
-6. **If you write decorators on `nest_rs_codegen`**, read their arguments
-   through `Grammar`. A `key = value` grammar is one
-   `const G: Grammar = Grammar::new("attr", &["key", …])`, and `G.parse2(args,
-   |arg| …)` refuses an unknown key, a repeated one and a bare one before the
-   closure sees a key — `reject_duplicate_argument` and `unmatched_meta` are
-   gone with the per-decorator loops they served, and the repository's
-   `clippy.toml` refuses `syn::meta::parser` and
-   `syn::Attribute::parse_nested_meta`, so copy that file if your crate should
-   hold the same line. A job member's grammar is `JobDecorator::grammar()`, and
-   `job_key(member, &arg)` reads the key it handed over. `transactional_value`
-   and `job_argument_needs_a_value` take the `JobDecorator` they word for.
-   `DecoratorPair` is no longer built outside `nest_rs_codegen`: read an edge's
-   pair from `nest_rs_codegen::pair` (`pair::HTTP`, `pair::PROCESSOR`, …).
-   `must_be_async` is gone with the rule it worded — a method may be
-   synchronous, and `await_if_async` emits the call either way; `CrudConfig` is
-   `CrudDeclaration`.
+   **Two values of one type are two types.** String-keyed injection is gone: a
+   second Redis, or a second value your app builds, is a named instance — a
+   type of its own, declared `#[instance] pub struct Cache;` — and a resource
+   opened more than once takes the instance in its `for_root` value. A second
+   Valkey reads `<PREFIX>_REDIS__CACHE__*`. See
+   [Instances](/fundamentals/providers/#instances--one-resource-opened-twice).
 
-   ```rust title="nest_rs_codegen::transactional_value" del={1} ins={2}
-   let transactional = nest_rs_codegen::transactional_value(&meta.value)?;
-   let transactional = nest_rs_codegen::transactional_value(JobDecorator::Every, &meta.value)?;
-   ```
+   | 6.x | 7.0 |
+   |---|---|
+   | `#[inject(key = "cache")] cache: Arc<RedisConnection>` | `#[inject] cache: Arc<RedisConnection<Cache>>` |
+   | `App::builder().provide_keyed("cache", RedisConnection::connect(&cfg).await?)` | `RedisModule::for_root((Cache, cfg))` in the root's `imports` — `(Cache, None)` to read the environment |
+   | `#[inject(key = "x")] client: Arc<T>`, a value your app builds | `#[inject] client: Arc<XClient>`, a newtype, or `Arc<Instanced<X, T>>` |
+   | `.provide_keyed("x", value)`, a value your app builds | `.provide(XClient(value))`, or `.provide(Instanced::<X, _>::from(value))` |
+   | `container.get_keyed::<T>("x")` | `container.get::<XClient>()`, or `container.get::<Instanced<X, T>>()` |
+   | `KeyedDependencyError`, matched after a boot | nothing: a missing type is `AccessGraphError` or `MissingDependencyError` |
+   | `RedisError::InvalidUrl { endpoint, source }`, `ConfigNotResolvedError { type_name }` in a pattern | the same ending in `..`: each holds more |
 
-7. **Drain each Redis queue's 6.x jobs.** 6.x kept a queue's jobs at the root of
-   the keyspace; 7.0 keeps them on a stream under `nestrs:queue:{<queue>}` and
-   reads nothing 6.x left, so keep the 6.x workers running until those keys are
-   empty — [Upgrading queues from 6.x](/queue/upgrading/).
+   A module of your own that owns a config, written by hand:
 
-8. **Update the deployment around Redis and shutdown.**
+   | 6.x | 7.0 |
+   |---|---|
+   | `fn for_root(config: impl Into<Option<C>>) -> CSetup { ConfigModule::setup(config) }` | `… { ConfigModule::setup(config.into()) }` |
+   | `ConfigModule::setup::<M, C>(cfg)` | `ConfigModule::setup::<M, C, Unnamed>(cfg)`, or no turbofish |
+   | `ConfigModule::provide_feature::<C>(None, builder)` | `ConfigModule::provide_feature(None::<C>, builder)` |
+   | a hand-written `Namespaced` impl setting `DECLARATION` | leave it out: a hand-written impl answers by its type name |
 
-   - **KEDA** reads the stream's length now: a `redis-streams` trigger on
-     `nestrs:queue:{<queue>}:jobs`, with `streamLength` where a list trigger had
-     `listLength`, counting the jobs waiting and running. A trigger
-     naming the 6.x list reads zero forever. Keep `minReplicaCount: 1` on a queue
-     that takes delayed pushes or retries — they wait off the stream, and only a
-     running worker files them back; see
-     [On queue depth, with KEDA](/queue/scaling/#on-queue-depth-with-keda).
-   - **An ACL** confined to the framework's prefix now runs every Redis binding,
-     and each page gives its rule whole — the commands a binding sends, those
-     inside its Lua scripts included, since Redis checks them against the
-     caller's ACL as well: [the queue](/queue/delivery/#where-a-queue-lives)
-     under `~nestrs:queue:*`, [the rate limiter](/rate-limiting/#redis-shipped)
-     under `~nestrs:throttler:*` and [a schedule's claims](/schedule/#the-keys)
-     under `~nestrs:schedule:*`; an app running several gives one user each rule.
-     A dashboard or an ACL written for the rate limiter's 6.x keys
-     follows it to `nestrs:throttler:buckets:*`.
-   - **The rate limiter on Redis** counts each bucket under a pseudonym keyed by
-     `<PREFIX>_THROTTLER__PSEUDONYM_KEY`: set it, the same 32 bytes or more on
-     every replica, or the boot refuses. 6.x's buckets, named by the client's
-     address, expire with their window; see
-     [Redis, shipped](/rate-limiting/#redis-shipped).
-   - **TLS**: `rediss://` is verified against the URL's host.
-     `<PREFIX>_REDIS__TLS_CA_CERT` names a private authority, `TLS_CERT` and
-     `TLS_KEY` a client certificate, each with its `_FILE` form, and `#insecure`
-     fails the boot — see the [Redis variables](/configuration/env-reference/#redis--prefix_redis__).
-   - **Shutdown** now ends within bounds you can read. HTTP stops waiting for
-     open connections once `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` runs out, 20
-     seconds by default, where 6.x waited for every one: a request still running
-     is dropped unanswered and a download is cut, while a stream with no end of
-     its own — an `#[sse]` stream, an MCP session's `GET` stream — ends at the
-     signal, a gateway's WebSocket closes with `1001 Going Away` after the
-     message it is answering, and a graphql-ws socket completes each
-     subscription, then closes the same way. A socket a hand-built endpoint
-     upgraded ends with its handler or the process; half a second more lets what
-     it stopped unwind. The worker hands back what still runs before its drain
-     window closes — **20 by default, down from 30**, which did not fit the grace
-     period with what follows it, and read from
-     `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` where 6.x read
-     `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`: the window is the queue
-     port's now, so it survives a backend swap. A running attempt gets all of it
-     but a reserve of one connection budget, so
-     10 seconds by default to finish where 6.x let it run the whole 30. A
-     scheduled tick still running gets 5 seconds and is then stopped, where 6.x
-     waited for it to end. The shutdown hooks — `OnModuleDestroy`,
-     `BeforeApplicationShutdown`, `OnApplicationShutdown` — then share one
-     5-second budget, a hook still waiting past it abandoned with a `warn`, and
-     OpenTelemetry's final flush takes 3 seconds at most: 28.5 seconds, inside
-     the 30 Kubernetes grants by default. A window you widen — HTTP's or the
-     worker's — needs `terminationGracePeriodSeconds` at least 8.5 seconds above
-     it; a worker pod you gave 45 seconds for the old 30-second drain can keep
-     its drain and its grace, or drop both to the defaults. See
-     [the way down](/fundamentals/shutdown/#the-way-down).
-   - **`main` is `#[nest_rs::main]`.** Replace `#[tokio::main]` on every
-     binary's `main` — the apps, and the `migrate` and `seed` tools — and drop
-     the `tokio` line a crate carried only for it (its tests keep theirs as a
-     dev-dependency). The decorator builds the same runtime and ends the process
-     within the shutdown budget: under `#[tokio::main]`, the runtime's drop
-     waits for every blocking call still running, so a hook abandoned while it
-     waited on one held the exit past every bound. A second `SIGINT` or
-     `SIGTERM` during the way down now exits at once, with code 130 or 143 and
-     one `error` naming what it abandons; in 6.x it was ignored.
-   - **Operation lines can end unanswered.** A request dropped at the window, or
-     by a client that reset its connection, files its `http.request` line with
-     `outcome="cancelled"` and no `status` or `bytes`, and a handler that panics
-     files `outcome="panic"`; a stream ended at the signal or cut at the window
-     files `outcome="cancelled"` beside its `status`. Every other edge files both
-     words too — an MCP operation the shutdown or its client cancels, a queue
-     attempt a worker stops, a tick the scheduler stops; see the table in
-     [Logs](/opentelemetry/logs/). A client that closes its connection the
-     ordinary way is not seen while the handler runs, so its line carries the
-     answer's `status`. A log query or a dashboard that reads every
-     `http.request` line's `status` meets lines without one, and one that reads
-     only `ok` lines of `graphql.subscription` meets the sockets a shutdown ended
-     as `cancelled`; every operation span that did not end `ok` now exports with
-     `error.type` and an `Error` status.
-   - **A panic is answered at every edge that runs off its request.** An MCP tool
-     that panics answers its client a JSON-RPC internal error, where 6.x left it
-     waiting for its own timeout; a WebSocket handler answers an error frame and
-     the socket goes on, where 6.x lost the socket.
-   - **The worker asks for as many jobs as a method has permits free**, with a
-     blocking read a pushed job wakes at once: there is no poll to tune, and a
-     replica never holds a job it has not started; see
-     [Fetching on Redis](/queue/scaling/#fetching-on-redis).
-   - **Every duration has a range**, checked at boot whether it comes from the
-     environment or is pinned in code, and a value outside it fails the boot
-     naming the variable: the queue's `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` and
-     `<PREFIX>_REDIS__QUEUE__LEASE_SECS` from 1 second to an hour; HTTP's
-     `SHUTDOWN_TIMEOUT_SECS` from 1 to 3600;
-     `<PREFIX>_AUTHN__EXPIRES_IN_SECS` from 1 second to thirty days and
-     `<PREFIX>_AUTHN__LEEWAY_SECS` from 0 to 300 seconds;
-     `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS` and `<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`
-     from 1 second to an hour; `<PREFIX>_THROTTLER__WINDOW_SECS` from 1 second to a
-     day; `<PREFIX>_HEALTH__INDICATOR_TIMEOUT_MS` and `PROBE_DEADLINE_MS` from 1
-     millisecond to a minute; `<PREFIX>_OPENTELEMETRY__METRIC_INTERVAL_SECS` from 1
-     second to an hour, where `0` used to keep the default and now fails the
-     boot. Where `0` is off it still is, and a value is held to a range:
-     `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS` up to an hour; the connection ceilings
-     `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`, `<PREFIX>_WS__MAX_CONNECTION_SECS`
-     and `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` up to a day;
-     `<PREFIX>_HTTP__SSE_KEEP_ALIVE_SECS`, `<PREFIX>_MCP__SSE_KEEP_ALIVE_SECS` and
-     `<PREFIX>_MCP__SSE_RETRY_SECS` up to an hour; `<PREFIX>_HTTP__TLS_RELOAD_SECS`
-     up to a day. In code, off is `None`: a pinned `Some(Duration::ZERO)` fails
-     the boot, and so does a pinned value under a second where the floor is one.
-     A value 6.x accepted there — a worker drain window of `0` or above an hour,
-     a zero connect timeout or window, a token lifetime past thirty days, a
-     connection ceiling past a day — has to move; see the
-     [env-var reference](/configuration/env-reference/).
-   - **Valkey 9.1, on one server, Sentinel or Cluster** — Redis is no longer a
-     supported server, and the scheme of `<PREFIX>_REDIS__URL` declares the
-     topology: `rediss://`, `rediss-sentinel://` or `rediss-cluster://` (see
-     [Valkey topologies](/queue/topologies/)). Run `noeviction` or a
-     `volatile-*` policy, never `allkeys-*`, which can evict a job — see the
-     [delivery page](/queue/delivery/#limits).
+9. **Compose the container, and follow the lifecycle's order.** The boot now
+   refuses what 6.x left to chance — a provider listed and never built, a
+   binding made twice, an override nothing reads — and a lifecycle hook runs
+   its dependencies first. Each row is a compile error or a boot refusal naming
+   what to fix:
 
-9. **Boot every app, and read its first lines.** A 7.0 boot names what it cannot
-   use rather than falling back in silence. No `nest_rs::config` warning means
-   no variable under a namespace the app reads went unread, and none spells such
-   a namespace with other separators, in another case or one misspelled segment
-   away; a namespace nowhere near any the app reads is taken for another
-   binary's and stays silent, so check the names the app should read against
-   the [env-var reference](/configuration/env-reference/). A host the app links
-   but never reaches — a scheduled method, a `#[process]` method, a listener, a
-   lifecycle hook, a health indicator — is a `warn` naming its `cause` and the
-   remedy when it is this app's own code, and a `debug` line when it belongs to
-   another binary of the workspace: read the edge's target at `debug` when a
-   handler in a shared crate does not run.
+   **Providers and modules**
 
-10. **Regenerate every client from the 7.0 document**, and move what it read off
+   | 6.x | 7.0 |
+   |---|---|
+   | `providers = [Foo, Foo as dyn Trait]` | `providers = [Foo as dyn Trait]`: the binding holds `Foo` under its own type too |
+   | `Foo` listed in one module and `Foo as dyn Trait` in another | list it once, as the binding, and import that module where `Arc<Foo>` is injected |
+   | a `scope = request` or `scope = transient` provider, or an edge host, bound `as dyn Trait` | bind a plain `#[injectable]` singleton; reach a scoped provider through the edge's `Scoped<T>` |
+   | a request-scoped or transient provider listed in two modules, or one type registered under two scopes | register it once |
+   | two modules importing each other, a provider of one injecting the other's | move what both need into a module both import |
+   | a provider injecting a type a hand-written module or a `for_root` registers, from a module that does not import it | import that module in the provider's module |
+   | an `Option<Arc<T>>` field whose `T` a module the app imports provides, outside the consumer's imports | import that module in the consumer's module |
+   | a singleton holding `Option<Arc<T>>` of a request-scoped or transient `T` | reach it through the edge's `Scoped<T>`, or make the consumer request-scoped |
+   | request-scoped or transient providers injecting each other | move what both need into a third provider, pass the value as an argument, or publish an event |
+   | `#[injectable(scope = transient)]` on a layer a `#[process]`, `#[scheduled]` or `#[on_event]` site binds | `#[injectable]`, a singleton: the site builds it once |
+   | `T::from_container(&container)` on a decorated type | none: the container builds `T`; read it with `container.get::<T>()`, or register it with `<T as Discoverable>::register(builder)` in a test |
+   | `T::from_scope(&scope)` on a request-scoped or transient provider | `scope.get::<T>()` |
+   | `AuthnGuard::from_container(&c)`, `Storage::from_container(&c)`, `McpMount::from_container(&c)` | `AuthnGuard::new(strategy)`, `Storage::connect(&config)`, the container's; the boot builds an MCP mount when it serves the path |
+   | `provide_factory_after::<T, A, _, _>(f)`, and the same for the declared and `dyn` forms | `provide_factory_after::<T, (A,), _, _>(f)` |
+   | a module filling a registry the app reads from an `OnApplicationBootstrap` hook | `ContainerBuilder::provide_wiring("<crate>::<registry>", wire)` in its `register` |
+   | `builder.provide_meta(TransportContribution { name: "MyTransport", build: \|c\| Ok(Box::new(MyTransport::new(c)?)) })` | `builder.provide_transport(\|c\| MyTransport::new(c))` — named `MyTransport`, read off the type |
+   | a feature module importing `HttpModule::for_root(None)` (or GraphQL's, OpenAPI's) to declare it serves over HTTP | a bare `HttpModule` (`GraphqlModule`, `OpenApiModule`) in its `imports`; the app keeps the one `for_root` |
+   | `McpModule::for_root(..)` declaring `server` or opening the posture at two imports | declare it at one; the other imports leave it unset |
+   | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` |
+   | `ReachableProviders::reaches(Some(&set), id)`, `ReachableProviders(set)` built by hand | `ReachableProviders::of(container, "<what you discover>")?.reaches(id)`; a test boots the modules it means through `TestApp`, `HeadlessApp` or `App::builder`, which seal the set they reach |
+   | a `match` on `InertHost::BoundUnderAnotherKey`, or on `DuplicateProviderError { type_name }` | drop the arm; read `DuplicateProviderError`'s `first`, `second` and `scopes` with `..`, and match `InertHost` with a `_` arm |
+   | `ProviderCycleError { module, type_names }`, `ContestedDeclarationError { … }` naming every field | read `chain` and `scope`; `first` and `second`; each with `..` |
+   | `nest_rs::core::is_framework_owned(origin)` | `nest_rs::core::inert_host(container, origin, host).is_the_apps()`, which reads the composition |
+   | `report_inert_host!(target: …, what: …, origin: …)`, in an edge of your own | the same with `host:` and `container:`, so the line names its cause |
+
+   **A container built by hand, and a test's overrides**
+
+   | 6.x | 7.0 |
+   |---|---|
+   | `let container = Container::builder().provide(x).build();` | `.build()?` in a function returning a `Result`, `.build().expect("…")` in a test: `build` returns what it refuses |
+   | a test building a module by hand (`Container::builder().import::<M>()`) whose `collect` queues a config | provide the config first (`.provide(C::default())`), or boot `M` through `TestApp` — `build` otherwise returns `ContainerError::LateFactory` naming it |
+   | a test configuring a transport or running a wiring over `Container::builder()` | boot through `TestApp` or `HeadlessApp`, importing the modules whose entries the test means |
+   | `override_arc::<RecordingMailer>(mailer)` where the app binds `SmtpMailer as dyn Mailer` | `override_dyn::<dyn Mailer>(mailer.clone())` — override the key the consumers inject |
+   | an override of a type no module, factory or seed provides, read back with `container().get` | provide it with `provide` / `provide_arc` instead: a seed, not a double |
+   | an override of a `#[controller]` (or another edge host) | override the provider the controller injects |
+   | a seeded config outside its ranges or its `validate()` rules | seed a value a read would accept |
+   | `TestApp::builder()` … `.build_headless()` in a suite without `http`, and in a `KitBackend`'s `fn app` | `HeadlessApp::builder()` … `.build_headless()` |
+
+   **Lifecycle hooks and the way down**
+
+   | 6.x | 7.0 |
+   |---|---|
+   | hosts named so their hooks run in the wanted order (`AaFirst`, `ZzLast`) | inject the provider whose hooks must run first: its hooks then run before yours at init and after yours at shutdown |
+   | a hook reaching another provider through `Container::get` and relying on that provider's hook having run | inject that provider, so the graph orders the two |
+   | `app.init().await?` on a `TestApp` | delete it: `TestApp::builder().build()` already ran the init phases, which run once per app |
+   | a shutdown hook that `expect`s what its init filled | `if let Some(..)`: it now also runs after a failed or interrupted init |
+   | a one-shot command reaching the pool around the container, its teardown skipped | `let app = App::builder()…build().await?; app.init().await?;` … `app.close().await;` |
+   | a test that could not run the shutdown hooks | `TestApp::close()`, `HeadlessApp::close()`, `WsApp::close()` |
+   | a module ending its resource in a `Drop` | `builder.provide_close::<T, _, _>(\|t\| async move { … })` beside the factory |
+   | a provider injecting `Arc<DatabaseConnection>` only for a lifecycle hook | go through its service and `Repo`: the hook runs in a unit of work, its writes committing together on its `Ok` |
+   | an emit from a task spawned at construction, relied on to be dropped silently | emit from an `#[on_module_init]` hook or later: the listeners are live before the first hook |
+   | a test matching a factory's error at the top of a boot error | the boot error is `FactoryFailedError`; find `E` in its chain (`err.chain()`) or read `{err:#}` |
+   | an `impl Transport` written by hand | the same with `fn stop_bound(&self) -> Duration` — its drain window plus `SHUTDOWN_SETTLE_TIMEOUT`, at most `MAX_STOP_BOUND` (a day) — and `async fn listen(&mut self) -> anyhow::Result<Listening>` binding its socket, which `serve` then serves on |
+
+   `App::run` and `App::close` need a runtime with its time driver, as
+   `#[nest_rs::main]` and `#[tokio::test]` build it. A `#[nest_rs::main]`
+   program that built an app and never serves it (a one-shot command) keeps
+   running at the first `SIGTERM`, its app `Draining`: read
+   `AppLifecycle::stopping()` to stop, or a second signal exits it.
+
+10. **Move data onto the unit of work.** Every edge — a request, a GraphQL
+    operation, a WebSocket message, an MCP operation, a job, a tick, a
+    listener, a lifecycle hook — runs its work through one port,
+    `nest_rs::database::UnitOfWork`, which `SeaOrmDatabaseModule` binds. Delete
+    the data contexts from your authz modules first: `WsDataContext as dyn
+    SocketContext` leaves `authz/ws/module.rs` (`#[module(imports =
+    [AuthzModule, WsModule])]`) and `McpDataContext as dyn McpToolContext`
+    leaves `authz/mcp/module.rs`; the edges open their units themselves.
+
+    | 6.x | 7.0 |
+    |---|---|
+    | `nest_rs::worker::JobContext` | `nest_rs::database::UnitOfWork` (with `OpenUnit`) |
+    | `nest_rs::worker::JobTransaction` (`PerAttempt`, `Pool`), `ScheduledMethod::transaction`, `CronJobMeta::transaction` | `nest_rs::database::TransactionPolicy` (`PerUnit`, `Pool`) |
+    | `nest_rs::worker::JobSettlement`, `Unhonoured`, `BACKEND_REMEDY` | `nest_rs::database::{Settlement, Unhonoured, BACKEND_REMEDY}` |
+    | `nest_rs::worker::run_in_job_context(ctx, transaction, fut, ok, unhonoured)` | `nest_rs::database::run_unit(unit_of_work, UnitSpec::new(unit, scope, policy), fut, ok, unhonoured)` |
+    | `nest_rs::worker::TARGET`, `nest_rs::worker::context`, `nest_rs::schedule::nest_rs_worker::JOB_TIMEOUT` | gone; the job bound is `nest_rs::core::JOB_TIMEOUT`, and nothing files on `nest_rs::worker` any more |
+    | `nest_rs::seaorm::WorkerDbContext`; `nest_rs::seaorm::ws::WsDataContext`, `mcp::McpDataContext`; the seaorm `ws` and `mcp` features | `nest_rs::seaorm::SeaOrmUnitOfWork`; nothing: delete them |
+    | a database driver's request interceptor and `JobContext` | one `UnitOfWork`, bound through `nest_rs::database::provide_unit_of_work`, which also runs every lifecycle hook in a unit; it implements `settle_net`, and `Executor::atomic` to offer an atomic block (*Writing a driver*) |
+    | a `match` on `ExecutorScope`, `TransactionPolicy`, `nest_rs::seaorm::Executor`, `FinalizeOutcome` or `DbOutcome` outside its crate | add a `_` arm that fails closed |
+    | `Unhonoured { reason, retryable }`, `JobTimedOut { timeout }` | `Unhonoured::new(reason, retryable)` (or `::retryable`, `::deterministic`), `JobTimedOut::new(timeout)` |
+    | a service catching a unique violation on the request's transaction (`Err(e) if DbOutcome::of(&e) == DbOutcome::Conflict`) and querying on | run the statement in `nest_rs::database::atomic` and match `ServiceError::Conflict` |
+    | `matches!(err.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))` to tell a taken key | `nest_rs::seaorm::DbOutcome::of(&err) == DbOutcome::Conflict` |
+    | `fn soft_delete_column() -> Option<Column> { Some(Column::DeletedAt) }` on a `CrudService` | delete it: `#[expose(..., soft_delete)]` alone stamps and hides |
+    | `.filter(live_condition::<E>())` after a `Repo` read, `CrudService::live_read_filter()`, `audit_soft_delete_bindings()` | delete them: every `Repo` read carries the condition; `live_condition::<E>()` stays for a query outside `Repo` |
+    | a `Repo` read meant to see deleted rows (admin, retention) | `Repo::<E>::with_tombstones(action)` |
+    | a restore through `Repo::update` (clearing `deleted_at`) | not offered in 7.0: `update` hides the row |
+    | `impl SoftDeletable for Entity` by hand | `#[expose(..., soft_delete)]` on the entity |
+    | a unique column on a `soft_delete` table, `unique_key()` | a partial unique index, `… WHERE deleted_at IS NULL` |
+    | `params.after_uuid()` | `params.cursor().map_err(\|refused\| nest_rs::http::pipe_error(&refused))?` |
+    | `Page::next_cursor: Option<Uuid>`; `Repo::page`, `Repo::relation_pages`, `CrudService::page`, `RelationKey::after` taking `Option<Uuid>` | `Option<PageCursor>`: `PageCursor::from(uuid)` builds one, `cursor.to_string()` is its text |
+    | a `Page { items, next_cursor, has_more }` literal | `Page::new(items, next_cursor, has_more)` |
+    | `nest_rs::seaorm::SeaOrmHealthIndicator` named in code | `SeaOrmHealthModule`, the import |
+    | a hand-written `#[readiness] async fn redis(&self)` sending `PING` over an injected `RedisConnection` | `RedisHealthModule` beside `RedisModule::for_root(None)` — a method named `redis` beside it fails the boot |
+    | `report.details.keys().copied()` as `&'static str`; `IndicatorReport { name: "x", .. }` | `&Cow<'static, str>` keys; `name: "x".into()` |
+
+    **A GraphQL operation is a unit of work**, and each mutation root field a
+    savepoint settled on the answer that field gives: a failed nullable root
+    field answers `null` and rolls back alone; a Non-Null root field's `null`
+    reaching `data` rolls the whole operation back and runs no later root
+    field; a mutation naming one root field twice is refused. Return
+    `Result<Option<T>>` from a mutation whose work must stand beside a
+    sibling's failure, and put the writes that stand or fall together in one
+    field. A batch's operations no longer share one transaction. A driver whose
+    executor offers no atomic block answers every GraphQL mutation `INTERNAL`.
+
+11. **Follow the error and authentication types.** An error nobody meant for
+    the client is answered opaquely and its chain logged, on every edge: a
+    client reads a sentence only from a deliberate client error — a
+    `ToProblem` type, `WsError`, a `Problem` — and every failure names its class
+    by one `code`. An error carries its cause as a source chain rather than a
+    `format!`ted string.
+
+    | 6.x | 7.0 |
+    |---|---|
+    | `async fn f(&self) -> async_graphql::Result<T> { Ok(self.svc.f().await?) }` over a foreign error | return the error, `-> Result<T, MyError>`, and implement `nest_rs::core::ToProblem` for what the client may read; or convert explicitly: `async_graphql::Error::new(..)`, `nest_rs::graphql::problem_error(&e)` |
+    | a `Result` alias over a foreign error as a resolver's return | spell `Result<T, MyError>` |
+    | a WebSocket client reading a handler error's text | the handler returns `WsError::new(..)` or an error implementing `ToProblem`; anything else answers `"internal error"` |
+    | `McpError::internal_error(e.to_string(), None)` over an error you did not build | `nest_rs::mcp::problem_error(&e)` (a `ToProblem` error), `.opaque()?`, or the `ToProblem` error returned from an operation spelled `Result<T, E>` |
+    | `.opaque()` over a borrowed error, or one that is only `Display` | an owned `std::error::Error` that converts into `Box<dyn Error + Send + Sync>`: it logs the whole chain; `JobError::retry` / `abort`, `WsReply::from_handler_error` and `OccurrenceLockError::new` take the same |
+    | `ServiceError::internal(format!("password hashing failed: {e}"))` | `ServiceError::internal_because("password hashing failed", e)` |
+    | `ServiceError::internal(&reason)`, `reason` a local `String` or a borrowed `&str` | `ServiceError::internal(reason.clone())` or `.to_owned()`: the detail is `'static`; a `String` or a `&'static str` passes unchanged |
+    | `ServiceError::Internal(msg)` / `ServiceError::Masking(msg)` built or matched | `ServiceError::internal(msg)`; match `ServiceError::Internal { .. }` and `Masking { .. }` (built by the relation loaders alone), the detail read as `err.source()`'s `Display` |
+    | `AuthError::Failed(format!("…: {e}"))`, `AuthError::Failed(msg)` | `AuthError::failed_because("…", e)`, `AuthError::failed(msg)` |
+    | `AuthError::Unavailable(detail)` or `AuthError::Unavailable { detail, retry_after }` built | `AuthError::unavailable(detail, retry_after)`, or `AuthError::unavailable_because(detail, retry_after, e)` |
+    | `match err { AuthError::Failed(msg) => … }`, `AuthError::Unavailable { detail, retry_after }` matched | `AuthError::Failed { .. }`, `AuthError::Unavailable { retry_after, .. }`, the detail read as `err.source()`'s `Display` or the chain as `nest_rs::core::error_message(&err)` |
+    | `err.to_string()` on an `AuthError::Failed` or `Unavailable`, read for its detail | `nest_rs::core::error_message(&err)`: the `Display` is `"authentication failed"` or `"authentication unavailable"` alone |
+    | `async fn authenticate(&self, req: &mut poem::Request)` in a `Strategy` | `async fn authenticate(&self, req: &mut nest_rs::http::Request)` |
+    | `req.raw_path_param("provider")`, `req.params::<Q>()` in a strategy | `req.path_param("provider")`, and `Query::<Q>::from_request(req, &mut RequestBody::new(Body::empty())).await` |
+    | `bearer_token(req)`, `basic_credentials(req)` | `bearer_token(req.headers())`, `basic_credentials(req.headers())` |
+    | `jwt.verify(token)?` | the same with `.await` before the `?` — a verification may fetch an issuer's JWK Set; `verify_handshake` stays synchronous |
+    | `JwtConfig`, from the authn crate | `nest_rs::authn::AuthnConfig`, with the same fields and variables |
+    | `JwtOptions { algorithm: …, ..JwtOptions::new(secret) }`, or `options.algorithm = …` | `let mut options = JwtOptions::new(secret);` then `options.algorithms = vec![…]` |
+    | `jsonwebtoken::Algorithm` passed to `JwtOptions::algorithms` or `AuthnConfig::algorithms` | `nest_rs::authn::Algorithm`, the same variants; `"RS256".parse::<Algorithm>()` fails with `UnknownAlgorithmError` |
+    | `Algorithm::default()`; `#[derive(Serialize, Deserialize)]` over a field holding an `Algorithm`; `algorithm.family()` | name the algorithm (`Algorithm::HS256`); store `algorithm.as_str()` and read it back with `parse::<Algorithm>()`; match the variants |
+    | a `match` on `JwtKey` naming every variant | the same with a `_` arm: it gains `Jwks` |
+    | `PasswordError::InvalidHash(e)` with `e: argon2::password_hash::Error`; `error == other` | `e: Arc<dyn Error + Send + Sync>` — downcast it, or read the chain; match with a pattern |
+    | `#[inject] meter: Arc<OpenTelemetryMeter>` | `#[inject] metrics: Arc<Metrics>` |
+    | `meter.u64_counter("x").build().add(1, &[KeyValue::new("k", "v")])` | `metrics.counter("x").add(1, &[Attribute::new("k", "v")])` |
+    | `meter.f64_histogram("x").with_unit("ms").with_boundaries(b).build()` | `metrics.histogram_with("x", Describe::default().with_unit("ms"), &B)`, `B` a `&'static [f64]` |
+    | `AccessTokenResponse { access_token, token_type: "Bearer".into(), expires_in }` | `AccessTokenResponse::bearer(access_token, expires_in)`, plus `.with_scope(granted)` when the issuer grants another scope than the one requested |
+    | a token handler returning `Result<Json<AccessTokenResponse>>`, `Ok(Json(…))` | `Result<AccessTokenResponse>`, `Ok(…)`, with `#[api(response = AccessTokenResponse)]` on the route: it answers `Cache-Control: no-store` |
+    | a token endpoint authenticating its clients through `AuthnGuard<S>` | `ClientAuthenticationGuard<S>` over the same strategy: §5.2's `invalid_client`, `401` with the `Basic` challenge over the `Authorization` header, `400` without |
+    | a token route reading `Form<AccessTokenRequest>`, or code decoding it with serde | `request: AccessTokenRequest`, the handler parameter: the type derives no `Deserialize`, and its refusals are `invalid_request` |
+    | `TokenError::InvalidClient` built or matched | `TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretBasic)` for a client refused over the `Authorization` header, `ClientSecretPost` for credentials in the body, `None` for none; matched as `InvalidClient(_)` |
+    | `TokenError::InvalidClient` answered for a rejected resource-owner password | `TokenError::InvalidGrant` (`400 invalid_grant`) |
+    | `RegisteredClient { client_id, client_secret, scopes, payload }` / `AuthenticatedClient { payload, scopes }` | `RegisteredClient::new(client_id, client_secret, scopes, payload)` / `AuthenticatedClient::new(client_id, scopes, payload)` |
+    | `AuthenticatedClient::actor_id()` read as `None` | it is the client's `client_id` — not a compile error; code keying "a machine caller" on `None` reads the principal's type |
+    | `PrincipalIdentity::actor_id` returning `None` for a machine principal | its subject — the client id when it acts for itself (RFC 9068 §2.2) |
+    | a hand-written `Set-Cookie` for `authorization.transaction` on the OAuth redirect | `.header(header::SET_COOKIE, authorization.set_cookie())`, before `Location` takes `authorization.url` |
+    | the callback's own parsing of the transaction cookie | `OAuthClient::transaction_from(req.headers().get_all(header::COOKIE).iter().filter_map(\|field\| field.to_str().ok()))` |
+    | `#[module(imports = [SocialModule, …])]`, providers enabled by their credentials | add each provider's module beside it: `SocialModule, GithubSocialModule, GoogleSocialModule` |
+    | a `SocialProviderEntry { … }` of your own | `SocialProviderEntry::new::<AcmeProvider, AcmeSocialModule>(key, AcmeSocialConfig::NAMESPACE, build)`, and a `#[module(imports = [SocialModule])] pub struct AcmeSocialModule;` the app imports |
+    | `Ability::can(action, &model)` under a grant resting on a relation, which answered `true` | `false`: `Repo::<E>::can(action, &model).await?` asks SQL, one indexed query |
+    | `Predicate::matches` on a relational predicate | `false`: `Ability::can` is the instance check |
+    | `nest_rs::authz::graphql::ability(ctx)?`, `ctx.data::<Arc<Ability>>()` | `nest_rs::authz::graphql::ability()?`, `nest_rs::authz::current_ability()` |
+    | `masked_item_for::<A, E, _>(ctx, item)` | `masked_item_for::<A, E, _>(ctx, &nest_rs::authz::graphql::ability()?, item)` |
+    | a hand-written `impl WireModelDefaults` | it lives at `nest_rs::authz::WireModelDefaults`, and adds `fn is_placeholdered(column)` for each column `fill_wire_defaults` fills and `fn wire_key(column)` for a key other than the column's name |
+    | a subscription or a `masked_reply` push whose grant is a relation, or reads a column the pushed type leaves out | refused: expose the column the rule reads, read-only, and send it |
+
+    A project scaffolded by an earlier `nestrs g auth` keeps
+    `sub: Option<Uuid>` in its claims, which cannot hold a client's own id; the
+    [JWT page](/security/authentication/jwt/) shows the claims a 7.0 scaffold
+    writes, whose subject is always present. An `http://localhost` OAuth or
+    social-login redirect, a protected resource's or an issuer's loopback
+    `http` URI, serve a declared development or test profile alone.
+
+12. **Follow each edge's own moves: storage, GraphQL, WebSocket and MCP.**
+
+    | 6.x | 7.0 |
+    |---|---|
+    | `Storage::new(Arc::new(config))` | `Storage::connect(&config).await?`, which opens and proves the store |
+    | `storage.bucket_name()` | `storage.url()`, the URL shown without credentials |
+    | `StorageConfig { bucket: "media".into(), endpoint: "https://…".into(), .. }` | `StorageConfig { url: "s3://media".into(), endpoint: Some("https://…".into()), .. }`; `endpoint: None` is AWS |
+    | `storage.list(prefix)?` | `storage.list(prefix)`, the stream itself |
+    | `StorageError::Get(e)` and its siblings, `e` an `object_store::Error` | `StorageError::Get { store, source }`, `source` boxed: `source.downcast_ref::<object_store::Error>()` |
+    | `StorageError::Presign { method: String, .. }` | `method` is an `http::Method` |
+    | `ObjectMetadata { byte_size }` / `ObjectEntry { .. }` built by hand | both are `#[non_exhaustive]`: read them, never build them; `byte_size` is `u64` |
+    | `let url: String = storage.presign_put(&key, ttl).await?` | `let put = storage.presign_put(&key, &SignedPut::new("audio/mpeg"), ttl).await?`, then hand the client `put.url`, `put.method` and `put.headers`, which it sends verbatim |
+    | `let url: String = storage.presign_get(&key, ttl).await?` | `storage.presign_get(&key, ttl).await?.url` |
+    | a presign `ttl` past 7 days, or under 1 second | a `ttl` within SigV4's bounds: anything else is `StorageError::Unsignable` |
+    | keeping the content type supplied at upload, since `head` could not read it | `storage.head(&key).await?.and_then(\|meta\| meta.content_type)` |
+    | `Scoped::<T>::from_context(ctx)?` in a resolver, a message or a tool body | a `cache: Scoped<T>` parameter on the method; a miss is answered opaquely and filed |
+    | `nest_rs::ws::WsScopeError` | nothing |
+    | `#[query]` + `#[graphql(entity)]` | `#[entity]`, with `GraphqlConfig::federation` |
+    | `GraphqlContextSeed { owner_type_id: \|\| Some(TypeId::of::<R>()), lifetime, seed }` | `GraphqlContextSeed::new(Some(TypeId::of::<R>), lifetime, seed)` |
+    | `ErrorReport(error).into_frame(event)` | `ErrorReport::new(error).into_failure().into_reply(event)` |
+    | `impl Gateway for X { async fn dispatch(..) }` written by hand | `#[subscribe_message]` methods in a `#[messages]` block: `#[messages]` alone writes a `Gateway` |
+    | `WsReply::unknown(event)` | `WsReply::unknown()` |
+    | `WsReply::payload_error(event, &error)` with any `Display` | the same with any `Into<DecodeError>` — a `serde_json::Error` among them — reported without the value |
+    | `WsError::with_details(message, map)`; the class read off `WsError::errors` | `WsError::new(message).with_errors(map)` for a field map; the class at `frame.code` (and `reason`, `required_scopes`, `retry_after_secs`); a class from a `Problem`, `WsError::from_problem` |
+    | `refused.origin()`, `refused.expected()` on an `OriginRefused` | `refused.reason()`, `refused.scheme()`, `refused.trusted_proxy()`, `refused.hint()` |
+    | `ServerInfo`, returned by a host's `get_info` | `nest_rs::mcp::ServerConfig` |
+    | rmcp's `Parameters`, named from rmcp in an operation's signature | `nest_rs::mcp::Parameters`, the framework's own type with rmcp's shape |
+    | an `impl McpHost` written by hand | the same with `negotiate_initialize` |
+    | `McpIdentity::declared(name, title)` | `#[mcp(name = …, title = …)]`, or `McpIdentity::new` for the app's own |
+    | `.map_err(\|e\| problem_error(&e))?` in an operation answering `McpError` | return the `ToProblem` error itself from an operation spelled `Result<T, E>` |
+    | `#[mcp] struct Host<T>`, `#[tools] impl<T> Host<T>` | a non-generic host type per instantiation |
+    | `nest_rs::mcp::McpMount`, `endpoint`, `resolve_operation_guard` | the `#[mcp]` host; a request's guards are the transport's |
+    | a suite calling `nest_rs::testing::mcp::call_tool` on a gated endpoint whose guard names no subject | `call_tool_statelessly`, or have the guard name its caller: the handshake is otherwise refused `403` |
+    | two `#[mcp]` hosts on one path declaring one prompt name | rename one, or give each host its own `path`: the boot refuses the pair |
+
+13. **Follow the remaining renamed types and signatures.** Each row is a compile
+    error, so the compiler finds every site:
+
+    | 6.x | 7.0 |
+    |---|---|
+    | an exhaustive `match` on a framework enum (`ApiVersioning`, `Action`, `WsReply`, …) | the same ending in `_ =>`, its arm the default your code means |
+    | `nest_rs::resource::{expose, wire_enum}` | `nest_rs::seaorm::{expose, wire_enum}` |
+    | `nest_rs::resource::{PkLoadable, RelatedTo, RelationKey, RelationPage, SoleForeignKey}` | `nest_rs::seaorm::graphql::{…}` |
+    | `nest_rs::resource::sea_orm` | `nest_rs::seaorm::sea_orm` |
+    | `nest_rs::resource::{serde, validator, schemars, chrono, uuid, serde_json, tracing, async_trait}`, `nest_rs::resource::graphql::{async_graphql, dataloader}` | a dependency of your own on that library, or `nest_rs::graphql::{async_graphql, dataloader}` |
+    | `nest_rs_seaorm::TARGET`, `nest_rs::resource::TARGET` | `nest_rs_seaorm::target::ORM`, `nest_rs::seaorm::target::LOADER` (the strings are unchanged) |
+    | `nest_rs::health::unresolved_host` | `nest_rs::core::unresolved_host` |
+    | `nest_rs::core::operation_log::EDGES` | `nest_rs::core::Edge::ALL`, each word through `Edge::as_str` |
+    | `EventBus::subscribe(listener)` on a bus of your own | a `#[listeners]` host with an `#[on_event]` method |
+    | `nest_rs::pipes::{ValidateProbe, MaybeValidateFallback}`, `nest_rs::graphql::{ValidateProbe, MaybeValidateFallback}`, `nest_rs::ws::resolve_ws_data_pipe` | nothing public: the decorators emit them; a hand-written check runs `nest_rs::pipes::ValidationPipe`, or `validator::Validate` itself |
+    | any other item that was `#[doc(hidden)]` at a crate's root | nothing public: `__private` is not API |
+    | `Correlation::mint()` | `Correlation::minted(None)` |
+    | `TlsConfig`, `CorsConfig`, `SecurityHeadersConfig` | `HttpTls`, `HttpCors`, `HttpSecurityHeaders` |
+    | `method.retries`, `method.queue` on a `ProcessMethod` | `method.options().retries()`, `method.queue()` |
+    | `entry.provider`, `entry.method`, `entry.replicas` on a `ScheduledMethod` (likewise `ListenerMethod`, `HealthIndicator`, `SocialProviderEntry`) | `entry.provider()`, `entry.method()`, `entry.replicas()` |
+    | `entry.run`, `entry.wire`, `entry.build`, `entry.declaration_index`, `entry.provider_type_name` or `entry.module` on a registry entry | none: only the boot runs a discovered entry |
+    | a `CronJobMeta { … }` registered by hand | `CronJobMeta::new(module_path!(), provider, method, trigger, run)`, then `.with_timeout(…)`, `.with_transaction(TransactionPolicy::Pool)`, `.with_replicas(Replicas::One)`, `.with_key(…)` for each field you set away from its default |
+    | `Bound { count, why }` | `Bound::new(count, why)` |
+    | `OpenApiLicense { name, identifier: Some(id), url: None }` | `OpenApiLicense::new(name).with_identifier(id)` |
+    | the queue's `Processor` trait | nothing: a consumer is a `#[processor]` host and its `#[process]` methods |
+    | `envelope::seal(payload)` and `envelope::open(value)` from the queue crate, in a driver | the port seals before `enqueue` and opens in its worker; the type is `Envelope` at the crate's root — see [Writing a driver](/queue/writing-a-driver/) |
+    | a driver's own worker `Transport`, its fetch loop and its retries | a `JobConsumer` bound as a `BoundConsumer`: the port's `QueueWorker` runs the loop, the attempt and the drain |
+    | `CheckpointStore::clear` | nothing: the backend lets a job's checkpoint go in the settle that ends the job |
+    | `check_duplicate_queue_claims(&methods)` | nothing: the port's worker refuses two methods on one queue at boot |
+    | `RedisWorkerModule::for_root(cfg)`, from `nest_rs::redis` | `QueueModule::for_root(cfg)`, from `nest_rs::queue`, beside `RedisQueueModule`, which now binds the consumer too |
+    | `RedisWorkerConfig { shutdown_timeout }` | `QueueConfig { shutdown_timeout }`; the lease is `RedisQueueModule::for_root(RedisQueueConfig { lease })` |
+    | `RedisWorker::new()`, spawned in a test | `QueueWorker::new()`, from `nest_rs::queue` |
+    | the queue crate's `tracing` re-export | a `tracing` dependency of your own |
+    | `async fn hit(&self, key: &str, limit: Throttle) -> Decision` on a rate-limit store of your own | `-> Result<Decision, ThrottlerStoreError>`: your client's failure as `Err(ThrottlerStoreError::new(error))`, never a decision of your own, and no log line |
+    | `MaskReplyError::Irreconcilable(serde_json::Error)` | `MaskReplyError::Irreconcilable(DecodeError)` |
+    | `ProblemDetails::from_error(status, title, err)` with any `Display` | the same with `&err`, an error, whose decode failure it says without the value; a sentence of your own is `.with_detail(…)` |
+    | `panic_message(payload)` borrowed as a `&str` | an owned `String`, any decode failure in it said without the value |
+
+    Name your own log target by the constant the feature declares, as a 7.0
+    scaffold does (`pub const TARGET: &str = "features::chat";` in
+    `chat/mod.rs`), and file an `error` field through the framework's one walk of
+    a chain:
+
+    ```rust title="crates/features/src/chat/ws/gateway.rs" ins={1,3} del={2}
+    use nest_rs::core::error_message;
+    tracing::warn!(target: "features::chat", error = %e, "broadcast failed");
+    tracing::warn!(target: crate::chat::TARGET, error = %error_message(&e), "broadcast failed");
+    ```
+
+14. **If you write decorators on `nest-rs-codegen`**, depend on it from a
+    `proc-macro` crate only, and use its root items alone, the kit semver
+    covers. Read a decorator's arguments through `Grammar`: a `key = value`
+    grammar is one `const G: Grammar = Grammar::new("attr", &["key", …])`, and
+    `G.parse2(args, |arg| …)` refuses an unknown key and a repeated one before
+    the closure sees a key; the closure reads the key's value through `Arg`,
+    which refuses a bare key that needs one, and reads a key that takes no
+    value through `arg.input()`. Collect an item's refusals in `Refusals` and
+    report them at once; read a duration with `duration_millis`, derive a name
+    with `pascal_case` or `snake_case`, take a marker attribute off an item
+    with `take_flag_attr`, `take_single_attr` or `take_path_list`, and pass
+    the finished expansion through `reroot`. Emit a framework path as
+    `::nest_rs_<concern>::<item>`, an item the docs show, and your own as
+    `::<your_crate>::…`. Everything else in `nest_rs_codegen` moved to
+    `__private` and is not API — the job and pair tables, `JobDecorator`,
+    `job_key`, `transactional_value`, `CrudDeclaration`, `RoutePath`,
+    `MountPath`, `VersionedEdge` among them. The repository's `clippy.toml`
+    refuses `syn::meta::parser`, `syn::Attribute::parse_nested_meta` and
+    `syn::MetaList::parse_nested_meta`; copy those three entries if your crate
+    should hold the same line.
+
+15. **Drain each Redis queue's 6.x jobs.** 6.x kept a queue's jobs at the root of
+    the keyspace; 7.0 keeps them on a stream under `nestrs:queue:{<queue>}` and
+    reads nothing 6.x left, so keep the 6.x workers running until those keys are
+    empty — [Upgrading queues from 6.x](/queue/upgrading/).
+
+16. **Update the deployment.**
+
+    - **HTTP has bounds of its own.** A replica holds at most
+      `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS` open connections, 10 000 by
+      default — WebSockets included: raise it, with the file limit (`ulimit -n`),
+      for a replica holding more, and keep it at or above a proxy's upstream
+      cap. An HTTP/2 connection runs at most 200 streams, and a head past 64 KiB
+      answers `431`. A connection that sends no complete head within
+      `<PREFIX>_HTTP__HEADER_READ_TIMEOUT_SECS` (30 s) is closed; a kept-alive one
+      idle past `<PREFIX>_HTTP__IDLE_TIMEOUT_SECS` (75 s) is closed — **behind a
+      load balancer whose backend keep-alive is longer** (Google Cloud's is
+      600 s), set it above the balancer's (`620`), or the balancer reuses a
+      connection as it closes and answers `502`; a peer that stops reading is
+      dropped after `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s).
+    - **A request runs 20 seconds by default**, down from 30
+      (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`), counted from its arrival, its
+      body's reading included; a body that stops arriving answers `408` after
+      `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS` (10 s). A WebSocket message and an
+      MCP operation are cut at 20 s too (`<PREFIX>_WS__MESSAGE_TIMEOUT_SECS`,
+      `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS`), and a WebSocket connection hook
+      has `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` and `DISCONNECT_TIMEOUT_SECS`.
+      **Handlers longer than 20 s** raise their timeout, the window and the pod's
+      grace period together. A Redis budget, a statement bound or a storage
+      operation set at 18 s or more under an authentication guard, a queue or a
+      rate limiter is refused at boot: keep it under the 18-second net.
+    - **MCP sessions are capped**: 1 024 per endpoint
+      (`<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS`, about 110 KiB each), idling out
+      after `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS` (five minutes); a session
+      is served to the principal that opened it alone, and a principal naming no
+      subject opens none on a gated endpoint (`initialize` answered `403`). The
+      graphql-ws socket waits 3 s for `connection_init`
+      (`<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS`, up to 60, for a client
+      fetching a token first), and caps a message at 64 KiB and a socket at 100
+      operations (`<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES`,
+      `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS`).
+    - **A browser's `Origin` is checked** at both WebSocket upgrades and at
+      `/mcp`, CORS on or off: a browser app on another origin is listed in
+      `<PREFIX>_HTTP__CORS_ORIGINS`, and behind a proxy that terminates TLS or
+      rewrites `Host`, a same-origin browser is refused until the proxy is
+      listed in `<PREFIX>_HTTP__TRUSTED_PROXIES` and sends `Forwarded` or
+      `X-Forwarded-Proto` and `X-Forwarded-Host`. With CORS origins set, the
+      server's own origin is listed too. A `*` admits every origin; the list is
+      read as origins, so `null`, a path, a trailing `/` or a Unicode host fails
+      the boot at that entry — write the ASCII form, `https://xn--9ca.example`.
+    - **Server-Timing is off outside development**: a staging dashboard or a
+      synthetic check reading it sets `<PREFIX>_SERVER_TIMING__ENABLED=true`.
+    - **OAuth and OpenTelemetry follow the outbound policy**: every
+      `<PREFIX>_OAUTH__CLIENT__*_URL` of a provider is `https`, and
+      `REDIRECT_URL` `https` — loopback `http` in a declared development or test
+      profile alone; a provider or an `https://` collector signed by a private
+      authority is trusted through `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` or
+      `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT`. A flow begun before the deploy that
+      renames the OAuth transaction cookie to `__Host-oauth_tx` fails its
+      callback once; the user signs in again.
+    - **KEDA** reads the stream's length now: a `redis-streams` trigger on
+      `nestrs:queue:{<queue>}:jobs`, with `streamLength` where a list trigger had
+      `listLength`, counting the jobs waiting and running. A trigger
+      naming the 6.x list reads zero forever. Keep `minReplicaCount: 1` on a queue
+      that takes delayed pushes or retries — they wait off the stream, and only a
+      running worker files them back; see
+      [On queue depth, with KEDA](/queue/scaling/#on-queue-depth-with-keda).
+    - **An ACL** confined to the framework's prefix now runs every Redis binding,
+      and each page gives its rule whole — the commands a binding sends, those
+      inside its Lua scripts included, since Redis checks them against the
+      caller's ACL as well: [the queue](/queue/delivery/#where-a-queue-lives)
+      under `~nestrs:queue:*`, [the rate limiter](/rate-limiting/#redis-shipped)
+      under `~nestrs:throttler:*` and [a schedule's claims](/schedule/#the-keys)
+      under `~nestrs:schedule:*`; an app running several gives one user each rule.
+      A dashboard or an ACL written for the rate limiter's 6.x keys
+      follows it to `nestrs:throttler:buckets:*`.
+    - **The rate limiter on Redis** counts each bucket under a pseudonym keyed by
+      `<PREFIX>_THROTTLER__PSEUDONYM_KEY`: set it, the same 32 bytes or more on
+      every replica, or the boot refuses. 6.x's buckets, named by the client's
+      address, expire with their window; see
+      [Redis, shipped](/rate-limiting/#redis-shipped).
+    - **TLS**: `rediss://` is verified against the URL's host, and a Valkey whose
+      certificate chains to an authority only Mozilla's roots held needs it in
+      the system's store or in `<PREFIX>_REDIS__TLS_CA_CERT`;
+      `TLS_CERT` and `TLS_KEY` name a client certificate, each with its `_FILE`
+      form, and `#insecure` fails the boot — see the
+      [Redis variables](/configuration/env-reference/#redis--prefix_redis__).
+      Postgres connects with `sslmode=verify-full` unless the URL says
+      otherwise: `allow`, `prefer`, `require` and `verify-ca` fail the boot, and
+      a server without TLS needs `sslmode=disable` written.
+    - **Shutdown** ends within bounds you can read. HTTP stops waiting for open
+      connections once `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` runs out, 20
+      seconds by default, where 6.x waited for every one: a request still running
+      is dropped unanswered and a download is cut, while a stream with no end of
+      its own — an `#[sse]` stream, an MCP session's `GET` stream — ends at the
+      signal, a gateway's WebSocket closes with `1001 Going Away` after the
+      message it is answering, and a graphql-ws socket completes each
+      subscription, then closes the same way. A socket a hand-built self-mount
+      upgraded ends with its handler or the process; half a second more lets
+      what it stopped unwind. The worker hands back what still runs before its
+      drain window closes — **20 by default, down from 30**, read from
+      `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` where 6.x read
+      `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`: the window is the queue
+      port's now, so it survives a backend swap. A running attempt gets all of it
+      but a reserve of one connection budget, so 10 seconds by default to finish
+      where 6.x let it run the whole 30. A scheduled tick still running gets 5
+      seconds and is then stopped. The shutdown hooks — `OnModuleDestroy`,
+      `BeforeApplicationShutdown`, `OnApplicationShutdown` — then share one
+      5-second budget, OpenTelemetry's final flush takes 3 seconds at most, and
+      the console's 1: **29.5 seconds**, inside the 30 Kubernetes grants by
+      default. A window you widen — HTTP's or the worker's — needs
+      `terminationGracePeriodSeconds` at least 9.5 seconds above it **plus any
+      `preStop` delay**, which Kubernetes counts inside the grace; a worker pod
+      you gave 45 seconds for the old 30-second drain can keep its drain and its
+      grace, or drop both to the defaults. See
+      [the way down](/fundamentals/shutdown/#the-way-down).
+    - **Deregistration** is the platform's: on Kubernetes, give each serving
+      container a `preStop` hook with the `sleep` action (Kubernetes 1.30 or
+      later) and raise its grace by as much, since the HTTP transport stops
+      accepting at the signal and Kubernetes removes the endpoint at the same
+      time. See
+      [leaving the load balancer first](/fundamentals/shutdown/#leaving-the-load-balancer-first).
+    - **Operation lines say how each unit ended.** A request dropped at the
+      window, or by a client that reset its connection, files its `http.request`
+      line with `outcome="cancelled"` and no `status` or `bytes`, a handler that
+      panics `outcome="panic"` with `status=500`, and a stream ended at the
+      signal `outcome="cancelled"` beside its `status`; every other edge files
+      both words too, and an MCP tool that answered `isError: true` files
+      `outcome="error"`. The request line names its `route` template
+      (`/posts/{id}`), not the path; a method outside RFC 9110's is `_OTHER`; a
+      WebSocket event no handler serves is `_OTHER`; `user_agent`,
+      `operation_name` and an MCP operation's name moved to the spans
+      (`user_agent.original`, `graphql.operation.name`, `mcp.operation.name`). A
+      root field files `graphql.field`, an operation `graphql.operation`, a
+      lifecycle hook `lifecycle.hook`. A `5xx` is filed once, by the edge:
+      `service error surfaced as 500` and `token request failed` read
+      `request failed` / `request unavailable` on `nest_rs::http`, a handler's
+      `503` at `warn`. See the table in [Logs](/opentelemetry/logs/).
+    - **A library's own lines are clamped.** rmcp's, h2's, rustls's,
+      tungstenite's, sqlx-postgres's and the OTLP exporter's lines are written
+      only once `<PREFIX>_LOG` names the library (`info,rmcp=info`), and that
+      directive writes what the library quotes; see
+      [the libraries the framework wires](/opentelemetry/logs/#the-libraries-the-framework-wires).
+    - **Every duration has a range**, checked at boot whether it comes from the
+      environment or is pinned in code, and a value outside it fails the boot
+      naming the variable — the [env-var reference](/configuration/env-reference/)
+      gives each one. Where `0` is off it still is; in code, off is `None`, and
+      a pinned `Some(Duration::ZERO)` fails the boot. A value 6.x accepted — a
+      worker drain window of `0` or above an hour, a zero connect timeout or
+      window, a token lifetime past thirty days, a connection ceiling past a day
+      — has to move.
+    - **Valkey 9.1, on one server, Sentinel or Cluster** — Redis is no longer a
+      supported server, and the scheme of `<PREFIX>_REDIS__URL` declares the
+      topology: `rediss://`, `rediss-sentinel://` or `rediss-cluster://` (see
+      [Valkey topologies](/queue/topologies/)). Run `noeviction` on a server
+      holding the rate limiter or the schedule, whose keys carry an expiry; a
+      server holding the queue alone may run a `volatile-*` policy, never
+      `allkeys-*`, which can evict a job — see
+      [Eviction](/queue/topologies/#eviction).
+
+17. **Boot every app, and read its first lines.** A 7.0 boot names what it cannot
+    use rather than falling back in silence. No `nest_rs::config` warning means
+    no variable under a namespace the app reads went unread, and none spells such
+    a namespace with other separators, in another case or one misspelled segment
+    away; a namespace nowhere near any the app reads is taken for another
+    binary's and stays silent, so check the names the app should read against
+    the [env-var reference](/configuration/env-reference/). Every resource the
+    framework opens is proved at boot, each attempt a `warn`: a Postgres not
+    listening yet, starting or full is waited for within
+    `<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`, a refused login fails at once naming
+    the host and the SQLSTATE; a bucket that does not exist fails the boot
+    naming `<PREFIX>_STORAGE__URL`, and credentials the store refuses leave one
+    `warn`. A host the app links but never reaches — a scheduled method, a
+    `#[process]` method, a listener, a lifecycle hook, a health indicator — is a
+    `warn` naming its `cause` and the remedy when it is this app's own code, and
+    a `debug` line when it belongs to a dependency (`cause="dependency"`). A
+    configuration refusal's first line reads ``the factory for
+    `<crate>::…Config` failed``, the variable and the rule under `Caused by:`.
+    The boot's last line is `app ready` at `info`, naming the addresses bound.
+
+18. **Regenerate every client from the 7.0 document**, and move what it read off
     the wire:
 
+    - **Every problem document names its class** in `code` — `INVALID_ARGUMENT`,
+      `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`,
+      `UNAVAILABLE`, `INTERNAL` and the classes of `405` to `426` — and its
+      `type` is `about:blank`. An opaque `5xx` carries `code` and no `detail`,
+      where it said `"internal error"`; read the code. On WebSocket, the class
+      sits beside the field map: `data.code`, `data.reason`,
+      `data.requiredScopes`, `data.retryAfterSeconds` where they were under
+      `data.errors`, which is now the field map alone; on MCP, a pipe's field
+      map is under `error.data.errors`, its class at `error.data.code`; GraphQL
+      reads `extensions.code`.
+    - **A value that does not decode is answered naming where**, never what was
+      sent: ``query parameter `p`: …``, ``form field `p`: …``,
+      ``JSON body at `p`: …``, and the same place in a WebSocket frame, an MCP
+      argument refusal and a job's dead-letter reason. A client matching poem's
+      or serde's sentence meets the framework's.
+    - **A failed GraphQL field is present as `null`** beside its error, whose
+      `path` names it; a Non-Null field's `null` climbs to its nearest nullable
+      parent, `data` itself from a root field. A client branching on a missing
+      key reads `null`.
+    - **A refusal never hands a client's value back**: a GraphQL error names the
+      argument and the type, an MCP `unknown task` names no id.
     - **A paginated `#[crud]` list links its next page** in
       `Link: </posts?first=20&after=…>; rel="next"` (RFC 8288), where 6.x sent
       the cursor alone in `x-next-cursor`; follow the link, or read `after` off
-      its query. The last page has no `Link`.
+      its query. The last page has no `Link`. A stale or mangled cursor answers
+      `400` (a field error on GraphQL) instead of the first page.
+    - **A `#[crud]` update is `PUT /{id}`**, where it was `PATCH`.
+    - **A route's document lists what its guards answer**: `401` and `503` on an
+      authenticated route, `403` where an ability can refuse, `429` under a rate
+      limit, and `security` read off the guards.
     - **A route's default tag is its controller's token** — `posts`, not
       `PostsController` — and a `#[crud]` route no longer takes its entity's
       name (`Post`). A generator grouping by tag renames its classes or files;
@@ -428,6 +1008,26 @@ left running until they drain the 6.x jobs (step 7).
     - **An `#[expose]`d timestamp reads `…Z` at UTC**, where an unmasked route
       wrote `+00:00`: one instant, now spelled as a masked route already spelled
       it. A client parsing RFC 3339 sees no change; one comparing strings does.
+    - **Sockets close by their standard**: a frame past the cap closes `1009
+      Message Too Big` on a gateway and on graphql-ws, where it closed `1011`; an
+      admitted upgrade an in-process test drives answers `426`; a handshake
+      offering no graphql-ws subprotocol answers `400` naming the two it accepts.
+      A WebSocket envelope is the object `{ "event": …, "data": … }`; an array is
+      refused as no envelope.
+    - **The GraphQL path answers `405` with `Allow`** — `POST` for a plain `GET`
+      with the playground off, `POST, GET, HEAD` for another method — and a
+      sub-path of it is `404`.
+    - **MCP**: a session shared across principals answers `404`, as does a
+      `DELETE` of a session the endpoint does not hold; sessions stored before
+      7.0 are refused on restore, so their clients open new ones once; a body
+      that is no JSON-RPC message answers `400` with `-32700` or `-32600`, where
+      it answered `415`; an unknown tool answers `-32602` under `NOT_FOUND`.
+    - **A token endpoint answers RFC 6749 §5.2's JSON**: `401 invalid_client`
+      with a `Basic` challenge for a client refused over the `Authorization`
+      header, `400 invalid_client` for one that sent its credentials in the body
+      or none, `400 invalid_request` for a request that does not parse, and
+      `400 invalid_grant` for a rejected password; a `503` authentication answer
+      carries `Retry-After: 1` at least.
 
 </Steps>
 
@@ -451,20 +1051,74 @@ left running until they drain the 6.x jobs (step 7).
   `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`** is the one renamed variable
   the boot does not name: it reads `redis__worker` as another binary's
   namespace, and the drain runs on what `for_root` pins, or the default.
-  Rename it as step 8 says.
-- **A 6.x job left at the root never runs**: 7.0 does not read it. Finish step 7.
+- **A manifest naming a removed feature** — `worker`, `interceptors`,
+  `filters`, `exception-filters` — fails to resolve, naming the feature `nest-rs`
+  does not have; an import of `RedisQueueModule` under `redis` alone fails to
+  compile, its note naming the `queue` feature, which `redis-queue` turns on.
+- **A process that declares no environment** runs as production: its boot
+  files `no environment declared; running as production`, and each development
+  convenience it relied on is refused naming its variable
+  (`<PREFIX>_REDIS__URL`, `<PREFIX>_STORAGE__ACCESS_KEY`, a loopback `http`
+  redirect or resource).
+- **A configuration refusal** opens on ``the factory for `<crate>::…Config`
+  failed``; the variable, the rule and the place are under `Caused by:`, never
+  the value. A log setting that does not parse — `<PREFIX>_LOG_FORMAT=jsno`, a
+  `<PREFIX>_LOG` directive with a wrong level — stops the boot naming the
+  variable, where 6.x took the default in silence.
 - **A bounded duration outside its range** — a zero lease, a drain window
-  above an hour, a zero Redis connect timeout — fails the boot naming the
-  variable and why the bound is there, whether the value came from the
-  environment or was pinned in code (then naming the field too).
-- **Two `#[config]` structs declaring one namespace** fail the boot at the read
-  of either, naming both (`ConfigError::SharedNamespace`), where 6.x let both read
-  it. Give each its own namespace. Two imports binding one port, or pinning one
-  config twice, fail it naming both imports and where each sits:
+  above an hour, a body-read gap at `0`, a request or message timeout past 3600
+  — fails the boot naming the variable and why the bound is there, whether the
+  value came from the environment or was pinned in code (then naming the field
+  too). A timeout past the shutdown window boots, and says so once at `warn`.
+- **Two declarations of one thing** fail the boot naming both: two `#[config]`
+  structs on one namespace (`ConfigError::SharedNamespace`), two imports
+  binding one port or pinning one config, two modules attaching one transport
+  type, two MCP imports declaring a server or opening the posture:
 
   ```text frame="terminal"
   contested declaration: `X` is declared twice — by `A::for_root(..)` at `imports[0]` of `AppModule`, and by …
   ```
+- **A composition with a hole** fails the boot naming it:
+  `UnbuiltProviderError` for a provider listed and never built,
+  `DuplicateProviderError` for a type registered twice, `AccessGraphError` or
+  `ScopeViolationError` for a dependency outside the imports or of a narrower
+  scope, `LateOptionalDependencyError`, `ProviderCycleError` for a
+  request-scoped or transient cycle, `UnclaimedOverrideError` and
+  `OverriddenDependencyError` for an override nothing reads, `ScopedLayerError`
+  for a transient layer on a job, a tick or a listener, `UngatedDiscoveryError`
+  for a container built by hand that a transport discovers from, and a
+  `Scoped<T>` or `Bind<A, S>` whose module the app does not import.
+- **Layers.** The compile refuses every name step 7's left column lists, a
+  guard listed by both `#[use_guards]` and `#[force_guards]`, a layer attribute
+  an edge does not run — each with a sentence saying why — and a `#[meta]`
+  value that is not `Send + Sync`. The boot refuses a layer a site declares
+  that no imported module provides (`UnresolvedLayerError`), a global guard,
+  pipe, interceptor or exception filter no module provides, a pool listing an
+  authorization guard before the authentication one — in every app, workers
+  included — and two `#[meta]` values of one type at one level
+  (`DuplicateMetaError`). The app's global interceptors and exception filters
+  now run around every unit on every edge; a layer written for HTTP requests
+  alone declares `serves`. `#[authorize]`'s class gate runs with the guards,
+  before any interceptor or filter a route declares, so a filter that counted
+  its refusals sees none. A global guard a bridge used to keep off `/graphql`
+  or `/mcp` now refuses there what it refuses everywhere, and an `/mcp` endpoint
+  with no guard denies every request. A filter that answered `Ok` for a failed
+  unit changes what the client reads, never whether the unit rolls back.
+- **A 6.x job left at the root never runs**: 7.0 does not read it. Finish
+  step 15.
+- **An app binding SeaORM and a queue backend over a database without
+  `nestrs_outbox`** refuses to boot: ``the outbox table `nestrs_outbox` is
+  missing: run `nestrs g migration nestrs_outbox`, then `nestrs run db up` ``.
+- **A second unit-of-work binding** refuses the boot naming
+  `nest_rs::database::BACKEND_REMEDY`.
+- **A listener running past its timeout** — ten minutes unless
+  `#[on_event(timeout = "…")]` declares one, where 6.x set none — is cut inside
+  its unit, which rolls back, so nothing it wrote stands. The bus logs `event
+  listener failed — dispatch continues with the next listener` at `error` on
+  `nest_rs::events`, its `error` reading ``the listener did not end within its
+  600s timeout, and was cut — `#[on_event(timeout = …)]` sets it``, and the next
+  listener runs. Declare a longer `timeout`, at most `"24h"`, or push a queue
+  job.
 - **A job firing once, renamed without `key`**, is a new job: through the
   rolling deploy that ships the rename, the old build and the new one claim each
   occurrence under two identities, and both fire it. Pin the old identity with
@@ -472,47 +1126,97 @@ left running until they drain the 6.x jobs (step 7).
 - **A Redis URL ending in `#insecure`** fails the boot — it
   ``asks to skip certificate verification (`#insecure`), which is refused`` —
   where 6.x never spoke TLS to Redis at all. Trust the authority that signed
-  Redis's certificate with `<PREFIX>_REDIS__TLS_CA_CERT` instead.
+  Redis's certificate with `<PREFIX>_REDIS__TLS_CA_CERT` instead. TLS material
+  no handshake could use fails the boot naming its variable.
 - **A Valkey Cluster named with `rediss://`**, the one scheme 6.x read, reaches
   one node: a command for a slot another node serves answers `MOVED`, said once
   at `error` on `nest_rs::redis`. Name the Cluster's nodes with
   `rediss-cluster://`, and a Sentinel deployment's sentinels with
-  `rediss-sentinel://` rather than a name the DNS moves at a failover — see
-  [Valkey topologies](/queue/topologies/).
-- **Half a storage credential pair** — `<PREFIX>_STORAGE__ACCESS_KEY` without
-  `SECRET_KEY`, or the reverse — fails the boot where 6.x paired it with a
-  default. **An HMAC secret shorter than its hash** fails `JwtService::new`: a
-  `JwtOptions` choosing HS384 needs 48 bytes, HS512 64. **An unparseable
+  `rediss-sentinel://` — see [Valkey topologies](/queue/topologies/).
+- **A Postgres URL** with an unverified `sslmode`, an OAuth provider endpoint
+  over plain `http`, a non-loopback `http` redirect, or a loopback one outside a
+  development or test profile, fails the boot naming its variable and the RFC.
+- **Storage**: `<PREFIX>_STORAGE__BUCKET` fails the boot naming
+  `<PREFIX>_STORAGE__URL`, a bucket that does not exist fails it at once, and
+  half a credential pair fails it where 6.x paired it with a default. A client
+  uploading through a presigned URL with another content type than the one
+  signed, or none, is refused `403` by the store.
+- **A CORS list** with `null`, a path, a trailing `/`, a Unicode host or a
+  forbidden method (`CONNECT`, `TRACE`, `TRACK`) fails the boot naming the list
+  and the entry's place, never the entry. A preflight for a method no route
+  serves is refused `403`, and each refused cross-origin request files one
+  `warn` on `nest_rs::http`.
+- **A cap or a deadline of `0`** — `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`,
+  `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS`, an idle or send timeout — fails the
+  boot naming the variable. A replica at its connection cap files
+  `connection cap reached; new connections wait in the listen backlog` once.
+  Intermittent `502`s from a balancer are an idle deadline below its own: the
+  `transport listening` line names the value in `idle_timeout_secs`.
+- **An MCP `initialize` past `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS`** — 1 024
+  live sessions per endpoint, where 6.x opened every one it was asked for — is
+  refused `503` with `Retry-After: 5` and the `UNAVAILABLE` class, and
+  `nest_rs::mcp` files `mcp session refused: the mount holds its maximum` at
+  `warn`, naming the cap. A client opening a session per call fills it within
+  `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS`: reuse the session, or raise the
+  cap.
+- **An HMAC secret shorter than its hash** fails `JwtService::new`: a
+  `JwtOptions` choosing HS384 needs 48 bytes, HS512 64. A deployment that kept
+  the old scaffold's public secret and sets none of its own refuses to boot with
+  `no JWT key configured`, naming the variable. **An unparseable
   `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO` or `METRIC_INTERVAL_SECS`** fails
   `OpenTelemetry::init` where 6.x kept the default.
-
-- **A global interceptor** — `use_interceptors_global` or a module's
-  `#[interceptor]` — now runs after the guards, around a route's handler: it
-  no longer sees a `404`, a `405` or a refusal, nor a self-mount's request
-  (`/graphql`, `/mcp`, a WS upgrade). One that must, such as a timing or an
-  access record, is declared `#[interceptor(stage = unit)]`.
-- **A failed mutation answered `2xx` by a filter** rolls back, as a handler
-  that answered `404` on purpose does: a unit commits on its own success
-  alone.
+- **A social provider whose module the app does not import** is closed: its
+  `/social/<provider>/…` routes answer `404`, said at `debug` only, since a
+  provider left out on purpose is not a fault.
+- **A relation-gated `Ability::can`** answers `false`: a service guarding a
+  write with it refuses until the check moves to `Repo::can`. A subscriber stops
+  receiving the items a relation or a hidden column alone admitted, and
+  `nest_rs::authz` logs `an ability rule cannot be decided on a pushed value`
+  once per entity and action.
+- **A `Repo` read that relied on seeing deleted rows** compiles and returns
+  fewer rows; read them through `with_tombstones`.
+- **A stale or mangled page cursor** — an `after` no page issued — is refused
+  where 6.x served the first page: a `#[crud]` list answers `400`, its problem
+  ``query parameter `after`: not a cursor this endpoint issued`` under
+  `INVALID_ARGUMENT`, and GraphQL a field error, `Invalid value for argument
+  "after", not a cursor this endpoint issued`. Neither quotes the cursor; an
+  empty `after` is still the first page. Follow the `Link` header's `next`.
+- **A health probe or dashboard keyed on `db` or `db_ready`** reads nothing:
+  the key is `seaorm`, beside `redis[:<instance>]` and `storage`. A readiness
+  method named `seaorm`, `redis` or `storage` beside the binding that claims it
+  fails the boot.
+- **A log query on a renamed line or field** finds nothing: the 6.x line
+  `shutdown signal received` is `app draining`, `transport listening` at `info`
+  is `app ready`, `running lifecycle hook` is the `lifecycle.hook` line, a
+  WebSocket deadline's `message_timeout_secs` is `timeout_secs`, `cause="framework"`
+  or `cause="another_app"` is `cause="dependency"`, and an authentication line's
+  `detail` is `error`, the whole chain.
+- **A tool that scrapes stderr for `panicked at`** finds nothing under
+  `#[nest_rs::main]`: read the `error` events on `nest_rs::app`, or the unit's
+  own line for a panic it contains.
 
 ## Reference
 
 - `crates/nest-rs-config/src/unclaimed.rs` — the boot's report of a variable
   nothing reads, and `tests/integration/unclaimed.rs` beside it.
 - `demo/crates/features/src/audio/service.rs` and
-  `demo/crates/features/src/chat/ws/gateway.rs` — the 7.0 lines of steps 3
-  and 5, as the demo writes them.
+  `demo/crates/features/src/chat/ws/gateway.rs` — the 7.0 lines of steps 4
+  and 13, as the demo writes them.
 - `crates/nest-rs-queue/src/producer.rs` — `push`, `push_many`, `push_json` and
   the receipt; `crates/nest-rs-queue/tests/integration/diagnostics/` — each
   `#[queue]` and `#[process]` refusal, pinned.
-- `crates/nest-rs-schedule-macros/src/scheduled.rs` — `transactional_value`
-  called with the `JobDecorator` it words for, as step 6 writes it.
 - `crates/nest-rs-redis/src/error.rs` — the boot's refusals: an `#insecure`
   URL, TLS that cannot work.
+- `crates/nest-rs-macro-hygiene/tests/integration/diagnostics/` — every
+  decorator's refusal, worded as the compiler prints it.
 
 ## Going further
 
+- [Changelog 7.0](https://github.com/YV17labs/NestRS/blob/main/changelog/7.0.md)
+  — why each change was made, grouped by what it makes true.
 - [Upgrading queues from 6.x](/queue/upgrading/) — draining a queue's 6.x jobs.
+- [Execution context](/fundamentals/execution-context/) — what every layer
+  reads, on every edge.
 - [Env-var reference](/configuration/env-reference/) — every variable 7.0 reads.
 - [Delivery on Redis](/queue/delivery/) — where a 7.0 queue keeps what, and what
   it guarantees.

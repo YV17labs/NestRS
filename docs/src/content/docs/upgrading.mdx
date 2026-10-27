@@ -729,6 +729,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::resource::{expose, wire_enum}` | `nest_rs::seaorm::{expose, wire_enum}` |
     | `nest_rs::resource::{PkLoadable, RelatedTo, RelationKey, RelationPage, SoleForeignKey}` | `nest_rs::seaorm::graphql::{…}` |
     | `nest_rs::resource::sea_orm` | `nest_rs::seaorm::sea_orm` |
+    | a `pub use` re-exporting an entity's relation marker beside it, `By<Column>` (`posts::ByAuthorId`) | `posts::__ByAuthorId`, the marker `#[expose]` emits for a `via` relation, hidden like the rest of its expansion |
     | `nest_rs::resource::{serde, validator, schemars, chrono, uuid, serde_json, tracing, async_trait}`, `nest_rs::resource::graphql::{async_graphql, dataloader}` | a dependency of your own on that library, or `nest_rs::graphql::{async_graphql, dataloader}` |
     | `nest_rs_seaorm::TARGET`, `nest_rs::resource::TARGET` | `nest_rs_seaorm::target::ORM`, `nest_rs::seaorm::target::LOADER` (the strings are unchanged) |
     | `nest_rs::health::unresolved_host` | `nest_rs::core::unresolved_host` |

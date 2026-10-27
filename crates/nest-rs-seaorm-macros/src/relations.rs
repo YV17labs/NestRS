@@ -361,16 +361,17 @@ fn emit_fk_loaders(
     Ok(quote! { #(#blocks)* })
 }
 
-/// The parent-facing name of a foreign-key column: `author_id` → `ByAuthorId`.
+/// The parent-facing name of a foreign-key column: `author_id` → `__ByAuthorId`,
+/// the `__` of the macro ABI no developer writes.
 fn via_marker_ident(column: &Ident) -> Ident {
-    format_ident!("By{}", pascal_case(column), span = column.span())
+    format_ident!("__By{}", pascal_case(column), span = column.span())
 }
 
 /// `RelatedTo<Entity, Via>` for one `HasMany`, as the trait-path half of a
 /// `<Child as …>::Loader` projection.
 ///
 /// The marker is reached beside the child entity as written
-/// (`crate::posts::ByAuthorId`), so a module re-exporting the entity must
+/// (`crate::posts::__ByAuthorId`), so a module re-exporting the entity must
 /// re-export the marker too.
 fn related_to_path(target: &syn::Path, via: Option<&syn::LitStr>) -> syn::Result<TokenStream2> {
     let Some(via) = via else {

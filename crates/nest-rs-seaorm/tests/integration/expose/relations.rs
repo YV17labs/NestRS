@@ -92,8 +92,10 @@ fn two_foreign_keys_to_one_parent_resolve_through_separate_loaders() {
     use nest_rs_seaorm::graphql::RelatedTo;
     use std::any::TypeId;
 
-    type ByReporter = <tickets::Entity as RelatedTo<people::Entity, tickets::ByReporterId>>::Loader;
-    type ByAssignee = <tickets::Entity as RelatedTo<people::Entity, tickets::ByAssigneeId>>::Loader;
+    type ByReporter =
+        <tickets::Entity as RelatedTo<people::Entity, tickets::__ByReporterId>>::Loader;
+    type ByAssignee =
+        <tickets::Entity as RelatedTo<people::Entity, tickets::__ByAssigneeId>>::Loader;
 
     assert_ne!(
         TypeId::of::<ByReporter>(),

@@ -774,24 +774,11 @@ impl<'a> Speaking<'a> {
     /// `initialize` negotiated at that version, declaring the tasks extension.
     async fn open(app: &'a TestApp, path: &'static str, version: &'static str) -> Self {
         let session = if version < MODERN_VERSION {
-            let init = nest_rs_testing::mcp::post_message_with(
-                app.http(),
-                path,
-                None,
-                None,
-                &[],
-                &json!({
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": version,
-                        "capabilities": tasks_client_capabilities(),
-                        "clientInfo": { "name": "nest-rs-mcp", "version": "0" },
-                    },
-                }),
-            )
-            .await;
+            let mut handshake =
+                nest_rs_testing::mcp::initialize_request_with(tasks_client_capabilities());
+            handshake["params"]["protocolVersion"] = json!(version);
+            let init =
+                nest_rs_testing::mcp::post_message(app.http(), path, None, None, &handshake).await;
             init.assert_status_is_ok();
             let session = init
                 .0

@@ -597,8 +597,15 @@ async fn a_tool_call_naming_no_declared_tool_never_reaches_rmcp_s_schema_cache()
         );
     }
 
-    let declared = standard_call(&app, "ping").await;
-    let body = declared.0.into_body().into_string().await.expect("a body");
+    let body = nest_rs_testing::mcp::call_tool_statelessly(
+        app.http(),
+        COUNTED,
+        "ping",
+        None,
+        &[],
+        serde_json::json!({}),
+    )
+    .await;
     assert!(
         body.contains("pong"),
         "a declared tool still reaches rmcp: {body}"
@@ -800,8 +807,15 @@ async fn a_tool_call_answered_before_rmcp_runs_the_unit_stage() {
         ["tools/call marked_tool"],
     );
 
-    let declared = standard_call(&app, "ping").await;
-    let body = declared.0.into_body().into_string().await.expect("a body");
+    let body = nest_rs_testing::mcp::call_tool_statelessly(
+        app.http(),
+        COUNTED,
+        "ping",
+        None,
+        &[],
+        serde_json::json!({}),
+    )
+    .await;
     assert!(body.contains("pong"), "{body}");
     assert_eq!(
         std::mem::take(&mut *WATCHED.lock().expect("the log")),

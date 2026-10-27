@@ -142,7 +142,7 @@ Two decorators, one per item shape:
   [Layers around an operation](#layers-around-an-operation). An operation
   answers a `Result`, known by its type: it fails with whatever error it
   holds — an `McpError`, a domain error — answered by that type, an alias
-  such as `type Ledgered<T> = Result<T, LedgerError>` serves as well as the
+  such as `type Publishing<T> = Result<T, PublishError>` serves as well as the
   spelled one, and a `String` is refused at the return type. Two readings go
   by the spelling: a *masked* operation spells its `Result<…>`, since the mask
   reads `Json<T>` off it, and rmcp derives a tool's output schema only from a
@@ -196,40 +196,40 @@ provider.
 Each `#[tool]` method becomes its own callable. Share state through `&self` —
 `#[inject]` once, every tool reuses it.
 
-```rust title="crates/features/src/weather/mcp/tool.rs"
-#[mcp(path = "/mcp/weather")]
+```rust title="crates/features/src/posts/mcp/tool.rs"
+#[mcp(path = "/mcp/posts")]
 #[derive(Clone)]
-pub struct WeatherTool {
+pub struct PostsTool {
     #[inject]
-    svc: Arc<dyn WeatherService>,
+    svc: Arc<PostsService>,
 }
 
 #[tools]
-impl WeatherTool {
-    #[tool(description = "Return the current temperature for a city.")]
+impl PostsTool {
+    #[tool(description = "List the titles of the latest published posts.")]
     #[public]
-    async fn current_temperature(
+    async fn latest_titles(
         &self,
-        Parameters(p): Parameters<CityParams>,
+        Parameters(p): Parameters<LatestParams>,
     ) -> Result<String, McpError> {
-        let t = self.svc.current(&p.city).await.opaque()?;
-        Ok(format!("{t:.1}°C"))
+        let titles = self.svc.latest_titles(p.limit).await.opaque()?;
+        Ok(titles.join("\n"))
     }
 
-    #[tool(description = "Return the forecast for a city, N days out.")]
+    #[tool(description = "Return a published post's summary, found by its slug.")]
     #[public]
-    async fn forecast(
+    async fn post_summary(
         &self,
-        Parameters(p): Parameters<ForecastParams>,
+        Parameters(p): Parameters<SlugParams>,
     ) -> Result<String, McpError> {
-        let f = self.svc.forecast(&p.city, p.days).await.opaque()?;
-        Ok(f.summary())
+        let post = self.svc.by_slug(&p.slug).await.opaque()?;
+        Ok(post.summary())
     }
 }
 ```
 
-The client now sees two tools — `current_temperature` and `forecast` — both
-sharing the injected `WeatherService`. The `description` is what the model
+The client now sees two tools — `latest_titles` and `post_summary` — both
+sharing the injected `PostsService`. The `description` is what the model
 reads to decide when to call each.
 
 ## A validated tool
@@ -237,7 +237,7 @@ reads to decide when to call each.
 Tool inputs are deserialized to a typed struct, so the schema the client reads
 is already typed. Arguments that do not decode are refused before the body runs
 as a tool error the model can correct — ``failed to deserialize parameters:
-argument `latitude`: invalid type: a string, expected f64`` — naming the
+argument `limit`: invalid type: a string, expected u8`` — naming the
 argument, the kind of value found and what was expected, and never the value,
 which would otherwise land in the model's transcript. `Parameters` is the
 framework's own for that reason, with rmcp's shape and schema. A prompt's
@@ -254,48 +254,48 @@ For extra checks beyond shape — ranges, enums, mutual exclusion — add
 `validate(...)` attributes: `#[input]` already carries the `validator` derive,
 so no extra import and no extra manifest line.
 
-```rust title="crates/features/src/weather/coords.rs"
+```rust title="crates/features/src/posts/dtos/search_posts_dto.rs"
 use nest_rs::mcp::input;
 
 #[derive(Debug)]
 #[input]
-pub struct Coords {
-    #[validate(range(min = -90.0, max = 90.0))]
-    pub latitude: f64,
+pub struct SearchPostsDto {
+    #[validate(length(min = 1, max = 100))]
+    pub query: String,
 
-    #[validate(range(min = -180.0, max = 180.0))]
-    pub longitude: f64,
+    #[validate(range(min = 1, max = 50))]
+    pub limit: u8,
 }
 ```
 
 Wrap the arguments in `Valid<T>` and the check runs before the body — the same
 [pipe](/fundamentals/pipes/) binding GraphQL, WebSockets and queue handlers use:
 
-```rust title="crates/features/src/weather/mcp/tool.rs (abridged)"
-#[tool(description = "Return the current weather at the given GPS coordinates (Open-Meteo).")]
+```rust title="crates/features/src/posts/mcp/tool.rs (abridged)"
+#[tool(description = "Search the published posts' titles, most recent first.")]
 #[public]
-async fn current_weather(
+async fn search_posts(
     &self,
-    Parameters(params): Parameters<Valid<Coords>>,
+    Parameters(params): Parameters<Valid<SearchPostsDto>>,
 ) -> Result<String, McpError> {
     let params = params.into_inner();
-    let report = self.svc
-        .current(params.latitude, params.longitude)
+    let titles = self.svc
+        .search_titles(&params.query, params.limit)
         .await
         .opaque()?;
 
-    Ok(report.summary())
+    Ok(titles.join("\n"))
 }
 ```
 
-`JsonSchema` derives the schema sent to the client — from `Coords`, not from the
+`JsonSchema` derives the schema sent to the client — from `SearchPostsDto`, not from the
 carrier, so a client never sees `Valid` — and a rejection answers
 `invalid_params` carrying its class and the field errors under `errors`, which
 is the one MCP error a model can act on:
 
 ```json
 {"code":-32602,"message":"validation failed",
- "data":{"code":"INVALID_ARGUMENT","errors":{"latitude":[{"code":"range"}]}}}
+ "data":{"code":"INVALID_ARGUMENT","errors":{"query":[{"code":"length"}]}}}
 ```
 
 `Piped<P, T>` runs any [pipe](/fundamentals/pipes/) in the same slot when the
@@ -310,30 +310,30 @@ each family once: the guards' `check`, the posture's gate, the exception
 filters, the interceptors, then the pipes, the `Scoped<T>` parameters, the body
 and the mask. A layer reads the operation through `McpView`:
 
-```rust title="crates/features/src/billing/mcp/tool.rs"
-#[mcp(path = "/mcp/billing")]
+```rust title="crates/features/src/posts/mcp/tool.rs"
+#[mcp(path = "/mcp/posts")]
 #[use_interceptors(ToolMetrics)]
 #[derive(Clone)]
-pub struct BillingTool {
+pub struct PostsTool {
     #[inject]
-    svc: Arc<BillingService>,
+    svc: Arc<PostsService>,
 }
 
 #[tools]
-impl BillingTool {
-    #[tool(description = "Charge the caller's account for one report.")]
-    #[public]
-    #[use_exception_filters(LedgerConflictFilter)]
-    async fn charge(&self, basket: Scoped<Basket>) -> Result<String, LedgerError> {
-        self.svc.charge(&basket).await
+impl PostsTool {
+    #[tool(description = "Publish the caller's open draft under its slug.")]
+    #[authorize(Create, PostEntity, unmasked)]
+    #[use_exception_filters(SlugTakenFilter)]
+    async fn publish_draft(&self, draft: Scoped<Draft>) -> Result<String, PublishError> {
+        self.svc.publish(&draft).await
     }
 }
 ```
 
 `cx.switch_to::<McpView>()` answers the JSON-RPC method (`method()`), the
 router serving it (`kind()`), the tool or prompt it names (`name()`) and the
-host declaring it (`host()`). `charge` fails with the domain's own
-`LedgerError`: `LedgerConflictFilter` reads it as that type and may answer a
+host declaring it (`host()`). `publish_draft` fails with the domain's own
+`PublishError`: `SlugTakenFilter` reads it as that type and may answer a
 problem — a `409` is `invalid_request` with `data.code: "CONFLICT"` — and an
 error no filter answers is rendered by its type: a `ToProblem` error says its
 problem, any other is answered opaquely, its chain filed at `error`. A filter
@@ -363,7 +363,7 @@ A tool body talks to a **language model**, and an error's `Display` is handed to
 it verbatim: a `DbErr` carries schema, column names and sometimes row values.
 So a failure the model has no business reading goes through `opaque`:
 
-```rust title="crates/features/src/weather/mcp/tool.rs"
+```rust title="crates/features/src/posts/mcp/tool.rs"
 let rows = self.svc.list().await.opaque()?;
 ```
 
@@ -431,9 +431,9 @@ typed otherwise is the `415` rmcp answers,
 
 ## Trait-based DI
 
-Injecting `Arc<dyn WeatherService>` keeps the concrete provider
-module-private — a test app swaps in a stub with
-`override_dyn::<dyn WeatherService>(…)`, which every consumer then injects,
+Injecting a trait — `Arc<dyn Upstream>` for a service the tool calls out to —
+keeps the concrete provider module-private: a test app swaps in a stub with
+`override_dyn::<dyn Upstream>(…)`, which every consumer then injects,
 the tool host and any service built at boot alike. Same hexagonal pattern as the rest of the
 framework: the tool depends on the trait, the impl lives behind the module,
 the access graph rejects accidental coupling at boot.

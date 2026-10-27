@@ -54,6 +54,12 @@ fn generate_resource_creates_crud_slice_and_deps() {
         );
     }
 
+    // The order `/tutorial/entity/` prints: the generator's own, never re-sorted.
+    assert!(
+        features_cargo.contains(r#"["seaorm", "authz", "http", "authn"]"#),
+        "the features crate lists its features as the tutorial prints them: {features_cargo}",
+    );
+
     let lib = fs::read_to_string(dir.path().join("crates/features/src/lib.rs")).unwrap();
     assert!(lib.contains("pub mod posts;"));
 }

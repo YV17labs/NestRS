@@ -119,7 +119,7 @@ field marking the header optional. Lookup is case-insensitive, as HTTP
 header names are, and values are parsed into the field's type — a
 `u32` field is an integer, not a string you parse in the handler.
 
-```rust title="crates/features/src/notify/http/controller.rs"
+```rust title="crates/features/src/notifications/http/controller.rs"
 use nest_rs::http::{Header, SseStream};
 use serde::Deserialize;
 use schemars::JsonSchema;

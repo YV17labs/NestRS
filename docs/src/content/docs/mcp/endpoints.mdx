@@ -20,17 +20,14 @@ A `#[mcp]` path is not a namespace the host owns the way a `#[controller]`'s
 is — nothing nests under it. It names the one endpoint the host joins, which is
 exactly why peers share it.
 
-```rust title="apps/api/src/module.rs"
-#[module(imports = [WeatherModule, AuthzMcpModule], providers = [WeatherTool])]
-pub struct WeatherMcpModule;   // #[mcp]
-
-#[module(imports = [HelloModule, AuthzMcpModule], providers = [HelloTool])]
-pub struct HelloMcpModule;     // #[mcp]
+```rust title="apps/assistant/src/module.rs"
+use features::audio::AudioMcpModule;
+use features::users::UsersMcpModule;
 
 #[module(imports = [
     HttpModule::for_root(None),
-    WeatherMcpModule,
-    HelloMcpModule,
+    AudioMcpModule,
+    UsersMcpModule,
 ])]
 pub struct AssistantModule;
 ```
@@ -39,8 +36,8 @@ One client, one URL, both features' tools:
 
 ```text frame="terminal"
 INFO nest_rs::routes: mounted endpoint kind="mcp" path="/mcp"
-INFO nest_rs::routes: mounted mcp host kind="mcp" path="/mcp" host="WeatherTool" tools="current_weather"
-INFO nest_rs::routes: mounted mcp host kind="mcp" path="/mcp" host="HelloTool" tools="hello"
+INFO nest_rs::routes: mounted mcp host kind="mcp" path="/mcp" host="AudioTool" tools="transcode_status"
+INFO nest_rs::routes: mounted mcp host kind="mcp" path="/mcp" host="UsersTool" tools="list_people"
 ```
 
 Nothing in a host changes: it stays a plain `ServerHandler` and never learns
@@ -61,7 +58,7 @@ endpoint, so the loser would be unreachable — it is a boot error naming the
 name and both hosts:
 
 ```text frame="terminal"
-duplicate MCP tool name on "/mcp": search (WeatherTool and HelloTool) — a tool is
+duplicate MCP tool name on "/mcp": search (AudioTool and UsersTool) — a tool is
 addressed by bare name within an endpoint, so rename one of them or give each
 host its own path
 ```
@@ -83,7 +80,7 @@ when it mounts children. Two declarations answer for it, each owned by whoever c
 **The app says who it is and how its server is used**, once, for every endpoint
 it exposes:
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/assistant/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
 
@@ -97,8 +94,9 @@ use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
         ),
         ..Default::default()
     }),
-    WeatherMcpModule,
-    HelloMcpModule,
+    AudioMcpModule,
+    UsersMcpModule,
+    PostsMcpModule,
 ])]
 pub struct AssistantModule;
 ```
@@ -120,10 +118,10 @@ change together. Every other import of the module leaves `server` unset.
 
 **A host says which endpoint stands apart**, on the file that serves it:
 
-```rust title="crates/features/src/weather/mcp/tool.rs"
-#[mcp(path = "/mcp/weather", name = "acme-weather")]
+```rust title="crates/features/src/posts/mcp/tool.rs"
+#[mcp(path = "/mcp/posts", name = "acme-posts")]
 #[derive(Clone)]
-pub struct WeatherTool { /* … */ }
+pub struct PostsTool { /* … */ }
 ```
 
 `name` and `title` are optional and each overrides the app's per field, so the

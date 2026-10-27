@@ -70,7 +70,7 @@ A handler that reads headers binds them as a DTO — `Header<T>`, the header-map
 twin of `Query<T>` — and each property becomes an `in: header` parameter, an
 `Option<_>` field being an optional one:
 
-```rust title="crates/features/src/notify/http/controller.rs"
+```rust title="crates/features/src/notifications/http/controller.rs"
 #[derive(Deserialize, JsonSchema)]
 pub struct StreamResumeDto {
     #[serde(rename = "Last-Event-ID")]

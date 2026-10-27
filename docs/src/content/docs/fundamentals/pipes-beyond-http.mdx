@@ -41,15 +41,15 @@ async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
 }
 ```
 
-```rust title="crates/features/src/weather/mcp/tool.rs"
-// MCP — the tool's schema is `Coords`; the body sees it validated.
+```rust title="crates/features/src/posts/mcp/tool.rs"
+// MCP — the tool's schema is `SearchPostsDto`; the body sees it validated.
 #[tool]
 #[public]
-async fn current_weather(
+async fn search_posts(
     &self,
-    Parameters(coords): Parameters<Valid<Coords>>,
+    Parameters(search): Parameters<Valid<SearchPostsDto>>,
 ) -> Result<String, McpError> {
-    let coords = coords.into_inner();
+    let search = search.into_inner();
     /* ... */
 }
 ```

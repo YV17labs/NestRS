@@ -228,19 +228,19 @@ operation answering a `Result<T, E>`: it answers the problem's sentence,
 its chain filed at `error` — and an exception filter reads it as its type
 first:
 
-```rust title="crates/features/src/weather/mcp/tool.rs"
-async fn forecast(&self, Parameters(p): Parameters<CityParams>) -> Result<String, WeatherError> {
-    Ok(self.svc.forecast(&p.city).await?.summary())
+```rust title="crates/features/src/posts/mcp/tool.rs"
+async fn summarize(&self, Parameters(p): Parameters<PostParams>) -> Result<String, PostError> {
+    Ok(self.svc.find(p.id).await?.summary())
 }
 ```
 
 Where the operation answers `McpError`, `problem_error` converts one at the
 call site the same way:
 
-```rust title="crates/features/src/weather/mcp/tool.rs"
+```rust title="crates/features/src/posts/mcp/tool.rs"
 use nest_rs::mcp::{McpError, problem_error};
 
-let report = self.svc.forecast(&city).await.map_err(|error| problem_error(&error))?;
+let post = self.svc.find(id).await.map_err(|error| problem_error(&error))?;
 ```
 
 Never `McpError::internal_error(e.to_string(), …)` over an error you did not

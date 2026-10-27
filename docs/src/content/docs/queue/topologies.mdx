@@ -12,7 +12,10 @@ when it fails, and **Cluster**, where primaries share the keyspace by hash slot.
 The queue, the rate limiter and the schedule's lock work the same on all three;
 the scheme of `<PREFIX>_REDIS__URL` is the one line that changes. The connection
 is written on the [`redis`](https://docs.rs/redis) client, whose cluster
-connection carries the Cluster topology.
+connection carries the Cluster topology. The server is Valkey 9.1, on each of
+the three topologies and over TLS on each — CI runs the one-server shape, and
+each Sentinel and Cluster suite runs whenever the connection or a binding
+changes — and Redis is not a supported server.
 
 | Topology | Scheme | Encrypted |
 |---|---|---|

@@ -192,7 +192,7 @@ shape an off-canon feature leaks in as.
 | WebSockets | `chat` / the `notifications` ws edge (`demo/crates/features`, served by `demo/apps/live`) |
 | Queue + Schedule | `audio` / `TranscodeCommand` (`demo/apps/worker`) |
 | Events | `PostPublishedEvent` (the `posts` feed listener) |
-| MCP | `weather` (+ `hello` tool) (`demo/apps/assistant`) |
+| MCP | `posts` (`PostsTool`, its own `/mcp/posts`), beside `users` and `audio` on `/mcp` (`demo/apps/assistant`); `hello` for the first tool |
 | OpenAPI, Health, Rate limiting, OTel, Testing | the `api` app over `users`/`posts` |
 | Storage | the `audio` slice's uploads (`demo/crates/features/src/audio`) |
 

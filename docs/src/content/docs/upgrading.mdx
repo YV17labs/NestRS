@@ -550,7 +550,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `let container = Container::builder().provide(x).build();` | `.build()?` in a function returning a `Result`, `.build().expect("…")` in a test: `build` returns what it refuses |
    | a test building a module by hand (`Container::builder().import::<M>()`) whose `collect` queues a config | provide the config first (`.provide(C::default())`), or boot `M` through `TestApp` — `build` otherwise returns `ContainerError::LateFactory` naming it |
    | a test configuring a transport or running a wiring over `Container::builder()` | boot through `TestApp` or `HeadlessApp`, importing the modules whose entries the test means |
-   | `override_arc::<RecordingMailer>(mailer)` where the app binds `SmtpMailer as dyn Mailer` | `override_dyn::<dyn Mailer>(mailer.clone())` — override the key the consumers inject |
+   | `override_arc::<RecordingUpstream>(upstream)` where the app binds `HttpUpstream as dyn Upstream` | `override_dyn::<dyn Upstream>(upstream.clone())` — override the key the consumers inject |
    | an override of a type no module, factory or seed provides, read back with `container().get` | provide it with `provide` / `provide_arc` instead: a seed, not a double |
    | an override of a `#[controller]` (or another edge host) | override the provider the controller injects |
    | a seeded config outside its ranges or its `validate()` rules | seed a value a read would accept |

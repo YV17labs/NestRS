@@ -246,25 +246,19 @@ guard.
 | `override_dyn::<T>(Arc<T>)` | `Arc<dyn Trait>` | The provider is registered behind a `pub trait` |
 | `override_arc::<T>(Arc<T>)` | `Arc<T>` (concrete) | The test still holds the fake to read its state |
 
-```rust title="apps/api/tests/e2e/weather.rs"
-struct StubWeather;
+```rust title="apps/api/tests/e2e/upstream.rs"
+struct StubUpstream;
 
 #[async_trait]
-impl WeatherProvider for StubWeather {
-    async fn current(&self, _lat: f64, _lon: f64) -> Result<Report> {
-        Ok(Report {
-            temperature_c: 20.0,
-            wind_speed_kmh: 0.0,
-            wind_direction_deg: 0.0,
-            weather_code: 0,
-            observed_at: "2026-06-03T10:00:00Z".into(),
-        })
+impl Upstream for StubUpstream {
+    async fn verify(&self, _email: &str) -> Result<Verdict> {
+        Ok(Verdict::Deliverable)
     }
 }
 
 let app = TestApp::builder()
     .module::<AppModule>()
-    .override_dyn::<dyn WeatherProvider>(Arc::new(StubWeather))
+    .override_dyn::<dyn Upstream>(Arc::new(StubUpstream))
     .build()
     .await?;
 ```
@@ -272,9 +266,9 @@ let app = TestApp::builder()
 When the test needs to observe what the double recorded, keep a handle
 to it: build it in an `Arc` once, hand a clone to the container, and
 assert against the shared state after the request. The app binds
-`SmtpMailer as dyn Mailer`, so the double replaces `dyn Mailer` — the key
-`UsersService` injects — and the `Arc<RecordingMailer>` coerces on the way
-in:
+`HttpUpstream as dyn Upstream`, so the double replaces `dyn Upstream` — the
+key `UsersService` injects — and the `Arc<RecordingUpstream>` coerces on the
+way in:
 
 ```rust title="apps/api/tests/e2e/users.rs"
 use std::sync::Arc;
@@ -283,27 +277,28 @@ use nest_rs::http::StatusCode;
 use parking_lot::Mutex;
 
 #[derive(Default)]
-struct RecordingMailer {
-    sent: Mutex<Vec<String>>,
+struct RecordingUpstream {
+    asked: Mutex<Vec<String>>,
 }
 
-impl RecordingMailer {
-    fn sent(&self) -> Vec<String> { self.sent.lock().clone() }
+impl RecordingUpstream {
+    fn asked(&self) -> Vec<String> { self.asked.lock().clone() }
 }
 
-impl Mailer for RecordingMailer {
-    fn send(&self, to: &str) -> Result<(), MailError> {
-        self.sent.lock().push(to.to_owned());
-        Ok(())
+#[async_trait]
+impl Upstream for RecordingUpstream {
+    async fn verify(&self, email: &str) -> Result<Verdict> {
+        self.asked.lock().push(email.to_owned());
+        Ok(Verdict::Deliverable)
     }
 }
 
 #[tokio::test]
-async fn signup_emails_the_new_user() {
-    let mailer = Arc::new(RecordingMailer::default());
+async fn signup_verifies_the_address_upstream() {
+    let upstream = Arc::new(RecordingUpstream::default());
     let app = TestApp::builder()
         .module::<UsersModule>()
-        .override_dyn::<dyn Mailer>(mailer.clone())
+        .override_dyn::<dyn Upstream>(upstream.clone())
         .build()
         .await
         .unwrap();
@@ -315,7 +310,7 @@ async fn signup_emails_the_new_user() {
         .await
         .assert_status(StatusCode::CREATED);
 
-    assert_eq!(mailer.sent(), vec!["ada@example.com".to_string()]);
+    assert_eq!(upstream.asked(), vec!["ada@example.com".to_string()]);
 }
 ```
 
@@ -330,7 +325,8 @@ The double stands in for the whole provider:
 
 - **The real provider is never built.** Its constructor never runs and
   its own dependencies need not exist, so a test of `UsersService` can
-  override its mailer without wiring what the mailer would have needed.
+  override its upstream client without wiring what that client would have
+  needed.
   An overridden factory output — a connection, a config — skips its
   factory: no connection opens, and the module's close never runs on the
   double.

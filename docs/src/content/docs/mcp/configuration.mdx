@@ -214,9 +214,10 @@ Six constructors cover the common cases:
 | Constructor | When |
 |---|---|
 | `McpError::invalid_params(msg, data)` | The tool input was syntactically valid JSON but semantically wrong — range, missing required field, mutual exclusion |
+| `McpError::invalid_params("tool not found", Some(json!({ "code": "NOT_FOUND" })))` | The client called a tool this server doesn't declare: the specification's `-32602`, which the endpoint already answers for every `#[tools]` host, so only a hand-written `ServerHandler` writes it |
 | `McpError::invalid_request(msg, data)` | The whole request shape was off |
 | `McpError::parse_error(msg, data)` | The JSON itself couldn't be parsed |
-| `McpError::method_not_found::<MethodName>()` | The client asked for a tool that doesn't exist on this server |
+| `McpError::method_not_found::<MethodName>()` | The client called a protocol method this host doesn't serve — never an unknown tool, which is `-32602` above |
 | `McpError::resource_not_found(msg, data)` | An identified resource isn't there (when you ship resources) |
 | `McpError::internal_error(msg, data)` | Anything else — wrap an upstream failure |
 

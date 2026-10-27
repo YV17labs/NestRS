@@ -169,7 +169,8 @@ Skeletons live in `docs/templates/`.
 One product universe — **Publish** — with one canonical feature per concern. Never invent a
 feature. A docs example is either (a) a quote/abridgement of a real demo file (fence title = real
 path, "(abridged)" when trimmed), or (b) a minimal fictional snippet **inside the canon domain**
-with a generic `src/…` title.
+with a workspace-shaped title (§C: `crates/features/src/<module>/<role>.rs`, `apps/<app>/src/…`)
+and no `(from the demo)` marker, which is what tells it from a quote.
 
 **The one escape — a concept with no canon home.** Some pages teach a shape the Publish universe
 has no feature for: the app's own claims module, an external service you depend on. Those name a

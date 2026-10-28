@@ -50,7 +50,6 @@ reaches the database is one `Repo` built — filtered, unless a service
 rewrote it through the `query()` SeaORM's builder traits hand out:
 
 ```rust title="from nest-rs-seaorm's executor"
-#[derive(Clone)]
 pub(crate) struct Installed(pub(crate) SeaOrmExecutor);
 
 impl nest_rs_database::Executor for Installed {

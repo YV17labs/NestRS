@@ -483,11 +483,7 @@ mod tests {
     }
 
     fn seaorm(executor: &Arc<dyn nest_rs_database::Executor>) -> &SeaOrmExecutor {
-        &executor
-            .as_any()
-            .downcast_ref::<Installed>()
-            .expect("the unit installs a SeaORM executor")
-            .0
+        Installed::of(&**executor).expect("the unit installs a SeaORM executor")
     }
 
     #[test]

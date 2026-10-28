@@ -813,9 +813,7 @@ impl SeaOrmExecutor {
     async fn remove_kept(&self, removal: Statement) -> Result<bool, nest_rs_database::OutboxError> {
         crate::queue::removed(self.execute_raw(removal).await)
     }
-}
 
-impl SeaOrmExecutor {
     /// Only a lazy transaction **nothing has opened yet** yields a pool handle:
     /// once `BEGIN` went out, stepping out would split the request's view of
     /// the data.
@@ -920,8 +918,17 @@ impl SeaOrmExecutor {
 /// `as_any` hands out: private to this crate, so a service downcasting
 /// [`nest_rs_database::current_executor`] finds no handle it could run a
 /// statement on outside [`Repo`](crate::Repo).
-#[derive(Clone)]
 pub(crate) struct Installed(pub(crate) SeaOrmExecutor);
+
+impl Installed {
+    /// The SeaORM executor `handle` holds, when this crate installed it.
+    pub(crate) fn of(handle: &dyn nest_rs_database::Executor) -> Option<&SeaOrmExecutor> {
+        handle
+            .as_any()
+            .downcast_ref::<Self>()
+            .map(|installed| &installed.0)
+    }
+}
 
 impl nest_rs_database::Executor for Installed {
     fn as_any(&self) -> &dyn Any {
@@ -984,8 +991,8 @@ impl From<SeaOrmExecutor> for Arc<dyn nest_rs_database::Executor> {
 /// surfaces as `None`.
 pub fn current_executor() -> Option<SeaOrmExecutor> {
     let dynamic = nest_rs_database::current_executor()?;
-    match dynamic.as_any().downcast_ref::<Installed>() {
-        Some(installed) => Some(installed.0.clone()),
+    match Installed::of(&*dynamic) {
+        Some(executor) => Some(executor.clone()),
         None => {
             tracing::error!(
                 target: crate::target::ORM,
@@ -1011,11 +1018,7 @@ mod tests {
     }
 
     fn as_seaorm(executor: &Arc<dyn nest_rs_database::Executor>) -> &SeaOrmExecutor {
-        &executor
-            .as_any()
-            .downcast_ref::<Installed>()
-            .expect("the handle is a SeaORM executor")
-            .0
+        Installed::of(&**executor).expect("the handle is a SeaORM executor")
     }
 
     #[test]
@@ -1271,8 +1274,8 @@ mod after_commit_tests {
             })
         };
         assert!(matches!(
-            handle.as_any().downcast_ref::<Installed>(),
-            Some(Installed(SeaOrmExecutor::Pool(_)))
+            Installed::of(handle),
+            Some(SeaOrmExecutor::Pool(_))
         ));
         assert!(handle.write_outbox(&mut unread()).is_none());
         assert!(handle.remove_outbox("notify", uuid::Uuid::nil()).is_some());

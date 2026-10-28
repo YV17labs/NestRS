@@ -86,9 +86,10 @@ the unit tests beside each.
 Singletons read per-request state from core's one ambient context, never from
 a task-local of their own: the **executor** (`nest-rs-database` owns the seam,
 the `Executor` trait and the one install and read API, `nest-rs-seaorm` the
-pool-or-transaction `SeaOrmExecutor`) and the **ability** (`nest-rs-authz`) are two of its values,
-and a package adds its own by implementing `AmbientValue`, whose `carry` says
-how far the value travels (`.claude/decisions/ambient-carry.md`).
+pool-or-transaction `SeaOrmExecutor`) and the **ability** (`nest-rs-authz`)
+are two of its values, and a package adds its own by implementing
+`AmbientValue`, whose `carry` says how far the value travels
+(`.claude/decisions/ambient-carry.md`).
 
 **A continuation that can outlive the transaction never holds it.** Where a
 unit continues after the future that accepted it, the executor steps down to
@@ -165,12 +166,12 @@ deadline**: opened through the binding its emitter ran under
   lifecycle hook.
 - **Runs at once:** a pool — a safe request, a GraphQL query, a subscription,
   `transactional = false`.
-- **Not waited for:** a transaction the caller opened itself (`SeaOrmExecutor::Txn`,
-  or one held privately like `retry_on_conflict`'s) — its commit is the
-  caller's, so the caller emits after its own `commit`. Inside a unit of
-  work, a listener reached sooner runs in a unit of its own beside it, never
-  inside it; outside every unit it runs bare, inside the caller's
-  (`.claude/decisions/listener-transaction-of-its-own.md`).
+- **Not waited for:** a transaction the caller opened itself
+  (`SeaOrmExecutor::Txn`, or one held privately like `retry_on_conflict`'s) —
+  its commit is the caller's, so the caller emits after its own `commit`.
+  Inside a unit of work, a listener reached sooner runs in a unit of its own
+  beside it, never inside it; outside every unit it runs bare, inside the
+  caller's (`.claude/decisions/listener-transaction-of-its-own.md`).
 - **Handed on:** an atomic block (`nest_rs_database::atomic`) hands its
   after-commit work to the enclosing unit on release and drops it on
   rollback; on the pool it is a transaction of its own and settles its work

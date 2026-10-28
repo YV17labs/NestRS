@@ -59,14 +59,12 @@ impl<E: EntityTrait> RepoSelect<E> {
 
     /// Every row the query matches.
     pub async fn all(self) -> Result<Vec<E::Model>, DbErr> {
-        let conn = Repo::<E>::conn()?;
-        self.select.all(&conn).await
+        self.select.all(&Repo::<E>::conn()?).await
     }
 
     /// The first row the query matches, or `None`.
     pub async fn one(self) -> Result<Option<E::Model>, DbErr> {
-        let conn = Repo::<E>::conn()?;
-        self.select.one(&conn).await
+        self.select.one(&Repo::<E>::conn()?).await
     }
 
     /// How many rows the query matches.
@@ -74,14 +72,12 @@ impl<E: EntityTrait> RepoSelect<E> {
     where
         E::Model: Sync,
     {
-        let conn = Repo::<E>::conn()?;
-        self.select.count(&conn).await
+        self.select.count(&Repo::<E>::conn()?).await
     }
 
     /// Whether the query matches any row.
     pub async fn exists(self) -> Result<bool, DbErr> {
-        let conn = Repo::<E>::conn()?;
-        self.select.exists(&conn).await
+        self.select.exists(&Repo::<E>::conn()?).await
     }
 }
 

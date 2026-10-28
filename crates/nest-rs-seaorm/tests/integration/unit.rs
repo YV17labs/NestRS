@@ -117,7 +117,7 @@ impl SealedController {
             *HELD.lock().unwrap() = Some(reachable());
         })
         .await;
-        format!("{} {} {outside}", reachable(), reachable_in_a_block().await,)
+        format!("{} {} {outside}", reachable(), reachable_in_a_block().await)
     }
 }
 

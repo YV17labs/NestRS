@@ -89,9 +89,7 @@ fn issued_inside_a_block_of(turn: &Turn) -> bool {
     let Some(ambient) = nest_rs_database::current_executor() else {
         return false;
     };
-    let Some(Installed(SeaOrmExecutor::Savepoint(block))) =
-        ambient.as_any().downcast_ref::<Installed>()
-    else {
+    let Some(SeaOrmExecutor::Savepoint(block)) = Installed::of(&*ambient) else {
         return false;
     };
     block.sits_in(turn)

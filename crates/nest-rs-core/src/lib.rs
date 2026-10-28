@@ -221,11 +221,11 @@ pub mod __private {
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{check_stop_bound, close_after, init_tearing_down_after};
-    pub use crate::app_dir::in_app_dir;
+    pub use crate::app_dir::{app_dir, in_app_dir};
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,
-        enter_import, leave_import, overrides_any, record_absent_optional, record_stall,
-        refuse_site, register_dynamic_import, site_chains, take_site_refusal,
+        declaring_site, enter_import, leave_import, overrides_any, record_absent_optional,
+        record_stall, refuse_site, register_dynamic_import, site_chains, take_site_refusal,
     };
     pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};
     pub use crate::error_message::__private::find_in_chain;

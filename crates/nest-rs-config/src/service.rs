@@ -25,6 +25,26 @@ thread_local! {
     static READING: RefCell<Option<BTreeSet<String>>> = const { RefCell::new(None) };
 }
 
+thread_local! {
+    /// The import whose `for_root` pinned the config resolving on this thread,
+    /// so the variables the pin shadows are reported naming it. Set across the
+    /// one synchronous call that resolves it.
+    static PINNED_BY: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Run `resolve` with `site` as the import that pinned the config it resolves.
+pub(crate) fn pinned_by<T>(site: Option<String>, resolve: impl FnOnce() -> T) -> T {
+    /// Restores the outer site even if `resolve` unwinds.
+    struct Site(Option<String>);
+    impl Drop for Site {
+        fn drop(&mut self) {
+            PINNED_BY.with(|cell| *cell.borrow_mut() = self.0.take());
+        }
+    }
+    let _outer = Site(PINNED_BY.with(|cell| cell.replace(site)));
+    resolve()
+}
+
 /// Which config type owns each variable read so far in this process.
 static CLAIMED: Mutex<BTreeMap<String, Owner>> = Mutex::new(BTreeMap::new());
 
@@ -192,6 +212,9 @@ pub struct ConfigService {
     /// Whether this reader answers from the deployment's environment, the one
     /// kind that triggers the unclaimed-variable report ([`crate::unclaimed`]).
     environment: bool,
+    /// The import whose `for_root` pinned the value this reader overlays, as
+    /// a shadowed variable's report names it.
+    pinned_by: Option<String>,
 }
 
 impl ConfigService {
@@ -211,13 +234,17 @@ impl ConfigService {
             source,
             precedence: Precedence::OverDefaults,
             environment: false,
+            pinned_by: None,
         }
     }
 
     /// Narrow this reader to the tiers that outrank a **code-pinned** value: the
-    /// deployment still wins, the `.env` cascade defers to the pin.
+    /// deployment still wins, the `.env` cascade defers to the pin — and each
+    /// variable the cascade sets that the pin thereby shadows is reported,
+    /// once, by name ([`SHADOWED_CONFIG_VARIABLE`](crate::unclaimed::SHADOWED_CONFIG_VARIABLE)).
     pub fn over_pinned(mut self) -> Self {
         self.precedence = Precedence::OverPinned;
+        self.pinned_by = PINNED_BY.with(|cell| cell.borrow().clone());
         self
     }
 
@@ -370,9 +397,17 @@ impl ConfigService {
         let (var, file_var) = (self.var_name(key), self.var_name(&file_key));
         self.record(&var);
         self.record(&file_var);
-        let deployment_only = self.precedence == Precedence::OverPinned
-            || self.source.in_deployment(&var)
-            || self.source.in_deployment(&file_var);
+        let pinned = self.precedence == Precedence::OverPinned;
+        let deployed = self.source.in_deployment(&var) || self.source.in_deployment(&file_var);
+        if pinned && !deployed && self.environment {
+            // What the cascade sets here lands nowhere: said, never swallowed.
+            for name in [&var, &file_var] {
+                if self.source.get(name).is_some_and(|value| !value.is_empty()) {
+                    crate::unclaimed::shadowed(name, &self.namespace, self.pinned_by.as_deref());
+                }
+            }
+        }
+        let deployment_only = pinned || deployed;
         let read = |name: &str| {
             let value = if deployment_only {
                 self.source.get_from_deployment(name)

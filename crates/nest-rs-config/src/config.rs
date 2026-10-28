@@ -52,13 +52,20 @@ pub fn read<C: Config>(env: &ConfigService, base: C) -> Result<C> {
 /// instance's `C`: the default instance through [`Config::resolve`], a named
 /// one the same way under the namespace its name derives — every sentence
 /// names the namespace read.
-pub(crate) fn resolve_instance<C: Config, I: Instance>(pinned: Option<C>) -> Result<I::Of<C>> {
-    if I::NAME.is_empty() {
-        return C::resolve(pinned).map(Into::into);
-    }
-    let namespace = crate::namespace::instance_namespace::<I>(C::NAMESPACE);
-    crate::namespace::sole_instance::<I>(&namespace)?;
-    resolve_under(namespace, pinned).map(Into::into)
+/// `pinned_by` is the import whose `for_root` pinned it, named by the report
+/// of each variable the pin shadows.
+pub(crate) fn resolve_instance<C: Config, I: Instance>(
+    pinned: Option<C>,
+    pinned_by: Option<String>,
+) -> Result<I::Of<C>> {
+    crate::service::pinned_by(pinned_by, || {
+        if I::NAME.is_empty() {
+            return C::resolve(pinned).map(Into::into);
+        }
+        let namespace = crate::namespace::instance_namespace::<I>(C::NAMESPACE);
+        crate::namespace::sole_instance::<I>(&namespace)?;
+        resolve_under(namespace, pinned).map(Into::into)
+    })
 }
 
 /// The checks a read of `namespace` runs, on `value` nobody read: every bound
@@ -103,15 +110,21 @@ fn resolve_under<C: Config>(namespace: Cow<'static, str>, pinned: Option<C>) -> 
 /// `<PREFIX>_<NAMESPACE>__<KEY>` variables over a base value — the single place
 /// to look for the env contract of a feature.
 ///
-/// # The environment can always override, per field
+/// # The deployment can always override, per field
 ///
 /// A config pinned in code (`HttpModule::for_root(cfg)`) is the **base**, not
 /// the answer: [`resolve`](Self::resolve) still runs `from_env` over it, per
-/// **field**:
+/// **field**, reading the real process environment alone:
 ///
 /// ```text
 /// real env  >  pinned in code  >  .env cascade  >  Config::defaults()
 /// ```
+///
+/// A pin cuts its whole namespace off the `.env` cascade, the fields
+/// `..Default::default()` filled included: a committed file never undoes what
+/// the code chose, and each key a cascade file sets there is reported at boot,
+/// by name and the import that pinned it
+/// ([`SHADOWED_CONFIG_VARIABLE`](crate::unclaimed::SHADOWED_CONFIG_VARIABLE)).
 ///
 /// The one hard pin is seeding the value on the builder
 /// (`App::builder().provide(cfg)`), for hermetic tests. A seed pins the value,

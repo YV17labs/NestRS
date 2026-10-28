@@ -5,11 +5,13 @@
 //! reads the events for its own variables only: the first read also checks the
 //! ambient environment.
 
-use nest_rs_config::unclaimed::{MISSPELLED_CONFIG_NAMESPACE, UNREAD_CONFIG_VARIABLE};
-use nest_rs_config::{
-    Config, ConfigModule, ConfigService, Environment, ForInstance, config, var_name,
+use nest_rs_config::unclaimed::{
+    MISSPELLED_CONFIG_NAMESPACE, SHADOWED_CONFIG_VARIABLE, UNREAD_CONFIG_VARIABLE,
 };
-use nest_rs_core::{Container, EnvPrefix};
+use nest_rs_config::{
+    Config, ConfigModule, ConfigService, ConfigSetup, Environment, ForInstance, config, var_name,
+};
+use nest_rs_core::{App, Container, EnvPrefix, module};
 use nest_rs_testing::{CapturedEvent, LogCapture};
 
 #[config(namespace = "unclaimed_keys")]
@@ -116,6 +118,33 @@ impl Config for SingleConfig {
     }
 }
 
+/// The module owning [`KeysConfig`], whose `for_root` pins it.
+#[module]
+struct KeysModule;
+
+impl KeysModule {
+    fn for_root(config: impl Into<Option<KeysConfig>>) -> ConfigSetup<Self, KeysConfig> {
+        ConfigModule::setup(config.into())
+    }
+}
+
+/// An app pinning one field of [`KeysConfig`], as an app pins its port.
+#[module(imports = [KeysModule::for_root(KeysConfig { port: 8080, ..Default::default() })])]
+struct PinningApp;
+
+/// Boot [`PinningApp`] and hand back the `KeysConfig` it resolved.
+fn boot_pinned() -> KeysConfig {
+    let app = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime")
+        .block_on(async { App::builder().module::<PinningApp>().build().await })
+        .expect("the pinning app boots");
+    app.container()
+        .get::<KeysConfig>()
+        .map(|config| (*config).clone())
+        .expect("the pinned config resolved")
+}
+
 /// Register the instance [`Spare`] of [`VendorConfig`], as its module's
 /// `collect` does before any factory reads a config.
 fn register_spare() {
@@ -147,13 +176,104 @@ fn report(logs: &LogCapture, message: &str, variable: &str) -> CapturedEvent {
 
 /// Neither event, for `variable`.
 fn assert_silent(logs: &LogCapture, variable: &str) {
-    for message in [UNREAD_CONFIG_VARIABLE, MISSPELLED_CONFIG_NAMESPACE] {
+    for message in [
+        UNREAD_CONFIG_VARIABLE,
+        MISSPELLED_CONFIG_NAMESPACE,
+        SHADOWED_CONFIG_VARIABLE,
+    ] {
         assert!(
             reports(logs, message, variable).is_empty(),
             "{variable} must not be reported: {:#?}",
             logs.events(),
         );
     }
+}
+
+/// A pin cuts its whole namespace off the `.env` cascade, so each key a file
+/// sets there lands nowhere: each is said once, by name and where the pin was
+/// written, never by value — the one the pin chose and the ones
+/// `..Default::default()` filled alike.
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn a_cascade_key_a_pin_shadows_is_reported_by_name_and_where_it_was_pinned() {
+    figment::Jail::expect_with(|jail| {
+        let label = var_name("unclaimed_keys", "LABEL");
+        let port = var_name("unclaimed_keys", "PORT");
+        jail.create_file(".env", &format!("{label}=sk_live_label\n{port}=9000\n"))?;
+        let logs = LogCapture::install();
+
+        let config = boot_pinned();
+
+        assert_eq!(config.port, 8080, "the pin stands");
+        assert_eq!(config.label, "", "the file's value reached nothing");
+        for variable in [&label, &port] {
+            let event = report(&logs, SHADOWED_CONFIG_VARIABLE, variable);
+            assert_eq!(event.level, "warn");
+            assert_eq!(event.field("namespace").as_deref(), Some("unclaimed_keys"));
+            let pinned_by = event.field("pinned_by").unwrap_or_default();
+            assert!(
+                pinned_by.contains("KeysModule::for_root(..)") && pinned_by.contains("PinningApp"),
+                "names the import that pinned it: {event:?}",
+            );
+            assert!(
+                !format!("{event:?}").contains("sk_live") && !format!("{event:?}").contains("9000"),
+                "never the value: {event:?}",
+            );
+            assert!(
+                reports(&logs, UNREAD_CONFIG_VARIABLE, variable).is_empty(),
+                "a key the config reads is not called unread",
+            );
+        }
+        Ok(())
+    });
+}
+
+/// The `_FILE` spelling a file sets beside a pin is shadowed under its own name.
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn a_file_spelling_a_pin_shadows_is_reported_under_its_own_name() {
+    figment::Jail::expect_with(|jail| {
+        let label_file = var_name("unclaimed_keys", "LABEL_FILE");
+        jail.create_file("label", "from-a-file")?;
+        jail.create_file(".env", &format!("{label_file}=label\n"))?;
+        let logs = LogCapture::install();
+
+        assert_eq!(boot_pinned().label, "");
+        report(&logs, SHADOWED_CONFIG_VARIABLE, &label_file);
+        Ok(())
+    });
+}
+
+/// The deployment outranks a pin, so its variable is read and nothing is
+/// shadowed; a namespace nothing pins reads the cascade, so nothing is either.
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn a_key_the_pin_does_not_shadow_is_read_and_not_reported() {
+    figment::Jail::expect_with(|jail| {
+        let label = var_name("unclaimed_keys", "LABEL");
+        let url = var_name("unclaimed__member", "URL");
+        jail.set_env(&label, "from-the-deployment");
+        jail.create_file(
+            ".env",
+            &format!("{label}=from-the-file\n{url}=from-the-file\n"),
+        )?;
+        let logs = LogCapture::install();
+
+        assert_eq!(boot_pinned().label, "from-the-deployment");
+        assert_eq!(MemberConfig::load().expect("loads").url, "from-the-file");
+        assert_silent(&logs, &label);
+        assert_silent(&logs, &url);
+        Ok(())
+    });
 }
 
 /// The typo the report exists for: the value lands nowhere, and the event names

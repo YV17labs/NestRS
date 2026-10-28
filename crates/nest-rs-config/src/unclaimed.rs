@@ -1,6 +1,6 @@
 //! Variables set under the framework's prefix that no config claims.
 //!
-//! Two shapes are reported, at `warn`, once per variable, by name and never by
+//! Three shapes are reported, at `warn`, once per variable, by name and never by
 //! value:
 //!
 //! - **An unread key** — [`UNREAD_CONFIG_VARIABLE`]. The variable sits under a
@@ -14,6 +14,10 @@
 //!   of six letters or more (`PORBE_KEYS` for `probe_keys`, [`is_near_miss`]) —
 //!   **and the key after it is one that namespace reads**, or one edit from
 //!   one. The linked spelling comes back as `suggestion`.
+//! - **A shadowed key** — [`SHADOWED_CONFIG_VARIABLE`]. The `.env` cascade sets
+//!   a key its config reads, but that config is pinned in code, which cuts its
+//!   whole namespace off the cascade: the value lands nowhere. The import that
+//!   pinned it comes back as `pinned_by`.
 //!
 //! Everything else is silent: one `.env` serves several binaries, so a namespace
 //! this binary does not know, and no near miss of one it does, is another
@@ -64,6 +68,14 @@ pub const UNREAD_CONFIG_VARIABLE: &str = "config variable read by no config";
 /// variable under that spelling.
 pub const MISSPELLED_CONFIG_NAMESPACE: &str = "config variable under a misspelled namespace";
 
+/// The event for a variable the `.env` cascade sets in a namespace whose config
+/// is pinned in code (`Module::for_root(config)`): a pin cuts its whole
+/// namespace off the cascade, so the value lands nowhere. Fields: `variable`,
+/// `namespace`, and `pinned_by` — the import that pinned it — when a module's
+/// `for_root` did.
+pub const SHADOWED_CONFIG_VARIABLE: &str = "config variable from the .env cascade shadowed by a \
+     config pinned in code; export it into the real environment, or set it in the pin";
+
 /// A variable set under the framework's prefix that no config claims, and why.
 #[derive(Debug, PartialEq, Eq)]
 enum Unclaimed {
@@ -80,12 +92,20 @@ enum Unclaimed {
         namespace: String,
         suggestion: String,
     },
+    /// Set by the `.env` cascade in a namespace a pin in code cut off it.
+    Shadowed {
+        variable: String,
+        namespace: String,
+        pinned_by: Option<String>,
+    },
 }
 
 impl Unclaimed {
     fn variable(&self) -> &str {
         match self {
-            Self::Key { variable, .. } | Self::Namespace { variable, .. } => variable,
+            Self::Key { variable, .. }
+            | Self::Namespace { variable, .. }
+            | Self::Shadowed { variable, .. } => variable,
         }
     }
 
@@ -114,6 +134,17 @@ impl Unclaimed {
                 suggestion = suggestion.as_str(),
                 "{MISSPELLED_CONFIG_NAMESPACE}",
             ),
+            Self::Shadowed {
+                variable,
+                namespace,
+                pinned_by,
+            } => tracing::warn!(
+                target: crate::TARGET,
+                variable = variable.as_str(),
+                namespace = namespace.as_str(),
+                pinned_by = pinned_by.as_deref(),
+                "{SHADOWED_CONFIG_VARIABLE}",
+            ),
         }
     }
 }
@@ -133,6 +164,9 @@ struct Ledger {
     claimed: BTreeSet<String>,
     /// Namespaces whose unread keys were looked for.
     keys_checked: BTreeSet<String>,
+    /// Variables the cascade sets that a pin shadowed, with their namespace
+    /// and the import that pinned it ([`shadowed`]).
+    shadowed: BTreeMap<String, (String, Option<String>)>,
     /// Variables already reported — the once-per-variable guarantee.
     reported: BTreeSet<String>,
 }
@@ -145,6 +179,7 @@ impl Ledger {
             complete: BTreeSet::new(),
             claimed: BTreeSet::new(),
             keys_checked: BTreeSet::new(),
+            shadowed: BTreeMap::new(),
             reported: BTreeSet::new(),
         }
     }
@@ -186,6 +221,15 @@ impl Ledger {
             out.extend(unread_keys(namespace, names, &self.known, &owners));
         }
         out.extend(run_together(names, &self.known, &owners));
+        out.extend(
+            self.shadowed
+                .iter()
+                .map(|(variable, (namespace, pinned_by))| Unclaimed::Shadowed {
+                    variable: variable.clone(),
+                    namespace: namespace.clone(),
+                    pinned_by: pinned_by.clone(),
+                }),
+        );
 
         let keys: Vec<String> = keys.iter().map(|ns| (*ns).to_owned()).collect();
         self.keys_checked.extend(keys);
@@ -219,6 +263,19 @@ pub(crate) fn witness(name: &str) {
     let mut ledger = LEDGER.lock().unwrap_or_else(PoisonError::into_inner);
     if !ledger.known.contains(name) {
         ledger.known.insert(name.to_owned());
+    }
+}
+
+/// Record that the `.env` cascade sets `variable`, which the config of
+/// `namespace` reads but a pin in code shadows — `pinned_by` the import that
+/// pinned it, when a module's `for_root` did.
+pub(crate) fn shadowed(variable: &str, namespace: &str, pinned_by: Option<&str>) {
+    let mut ledger = LEDGER.lock().unwrap_or_else(PoisonError::into_inner);
+    if !ledger.shadowed.contains_key(variable) {
+        ledger.shadowed.insert(
+            variable.to_owned(),
+            (namespace.to_owned(), pinned_by.map(ToOwned::to_owned)),
+        );
     }
 }
 

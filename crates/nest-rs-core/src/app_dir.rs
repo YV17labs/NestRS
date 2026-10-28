@@ -15,11 +15,17 @@ pub(crate) fn capture(dir: &'static str) {
     APP_DIR.get_or_init(|| Path::new(dir));
 }
 
+/// The app crate's directory, once a `#[nest_rs::main]` ran: where the `.env`
+/// cascade reads the app's own files.
+pub fn app_dir() -> Option<&'static Path> {
+    APP_DIR.get().copied()
+}
+
 /// `path` under the app crate's directory when it is relative and a
 /// `#[nest_rs::main]` ran; as given otherwise — an absolute path, or a process
 /// no `main` started, whose working directory then resolves it.
 pub fn in_app_dir(path: &Path) -> PathBuf {
-    under(APP_DIR.get().copied(), path)
+    under(app_dir(), path)
 }
 
 fn under(dir: Option<&Path>, path: &Path) -> PathBuf {

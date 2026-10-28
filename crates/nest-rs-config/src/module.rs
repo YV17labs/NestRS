@@ -72,17 +72,19 @@ impl ConfigModule {
             check_seed::<C, I>,
         );
         match config.into().into_pinned() {
-            Some(base) => builder.provide_declared_factory::<I::Of<C>, _, _>(
-                "A config has one seam — pin it once, on the `for_root` of the module that owns \
-                 it, and let every other import of that module stay bare.",
-                |_| async move {
-                    resolve_instance::<C, I>(Some(base))
-                        .map_err(anyhow::Error::from)
-                },
-            ),
+            Some(base) => {
+                let site = nest_rs_core::__private::declaring_site(&builder);
+                builder.provide_declared_factory::<I::Of<C>, _, _>(
+                    "A config has one seam — pin it once, on the `for_root` of the module that \
+                     owns it, and let every other import of that module stay bare.",
+                    |_| async move {
+                        resolve_instance::<C, I>(Some(base), Some(site))
+                            .map_err(anyhow::Error::from)
+                    },
+                )
+            }
             None => builder.provide_factory::<I::Of<C>, _, _>(|_| async move {
-                resolve_instance::<C, I>(None)
-                    .map_err(anyhow::Error::from)
+                resolve_instance::<C, I>(None, None).map_err(anyhow::Error::from)
             }),
         }
     }

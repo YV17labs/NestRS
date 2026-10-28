@@ -1802,6 +1802,13 @@ pub(crate) mod __private {
         builder
     }
 
+    /// The import whose phase is running, as a contested declaration names it:
+    /// what a seam declaring a value records so a later report can say where
+    /// the value was written.
+    pub fn declaring_site(builder: &ContainerBuilder) -> String {
+        builder.declaring_site()
+    }
+
     /// Leave the import [`enter_import`] entered last.
     pub fn leave_import(builder: ContainerBuilder) -> ContainerBuilder {
         builder.leave_import()

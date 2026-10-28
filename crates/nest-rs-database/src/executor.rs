@@ -258,6 +258,15 @@ pub fn with_request_executor<F: Future>(
 
 /// Install `executor` and tag the scope as a worker job — the path on
 /// which a `Repo` runs unscoped (no principal ⇒ system work).
+///
+/// It never widens the unit it runs in: inside a request, a continuation of
+/// one or an untagged install, `fut` runs under the request scope, so a unit
+/// that fails closed stays closed. Outside every unit — a test, a task
+/// spawned off one — it grants the job scope to whatever handle it is given.
+///
+/// Bar: a test running a service as system work, and a driver re-installing
+/// its pool for held work under the scope that work was registered in — never
+/// a service, whose system work is a queue attempt or a tick of its own.
 pub fn with_job_executor<F: Future>(
     executor: Arc<dyn Executor>,
     fut: F,
@@ -266,7 +275,8 @@ pub fn with_job_executor<F: Future>(
 }
 
 /// Install `executor` under `scope`, keeping the binding of the unit it runs
-/// in.
+/// in, or under [`Request`](ExecutorScope::Request) inside a unit not tagged
+/// [`Job`](ExecutorScope::Job).
 fn install<F: Future>(
     executor: Arc<dyn Executor>,
     scope: ExecutorScope,
@@ -274,10 +284,15 @@ fn install<F: Future>(
 ) -> impl Future<Output = F::Output> {
     nest_rs_core::__private::with_ambient_from(
         move || {
+            let running = nest_rs_core::ambient::<AmbientExecutor>();
+            let scope = match running.as_ref().map(|ambient| ambient.scope) {
+                None | Some(Some(ExecutorScope::Job)) => scope,
+                Some(_) => ExecutorScope::Request,
+            };
             Arc::new(AmbientExecutor {
                 executor: Handle::Installed(executor),
                 scope: Some(scope),
-                bound: current_bound(),
+                bound: running.and_then(|ambient| ambient.bound.clone()),
             })
         },
         fut,
@@ -301,6 +316,8 @@ pub(crate) fn install_unit<F: Future>(
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::RequestContinuation;
+
     use super::*;
 
     struct StubExecutor;
@@ -366,16 +383,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn nested_scope_shadows_outer() {
-        with_request_executor(stub(), async {
-            assert_eq!(current_executor_scope(), Some(ExecutorScope::Request));
-            with_job_executor(stub(), async {
-                assert_eq!(current_executor_scope(), Some(ExecutorScope::Job));
+    async fn a_nested_install_shadows_then_restores_the_outer_scope() {
+        with_job_executor(stub(), async {
+            with_request_executor(Arc::new(OnPool), async {
+                assert_eq!(current_executor_scope(), Some(ExecutorScope::Request));
+                assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
             })
             .await;
-            assert_eq!(current_executor_scope(), Some(ExecutorScope::Request));
+            assert_eq!(current_executor_scope(), Some(ExecutorScope::Job));
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn a_job_install_never_widens_a_unit_that_fails_closed() {
+        let job = || {
+            with_job_executor(Arc::new(OnPool), async {
+                assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
+                current_executor_scope()
+            })
+        };
+        let streamed = with_request_executor(stub(), async {
+            RequestContinuation::capture(Continuation::Body).expect("a request carries a body")
+        })
+        .await;
+
+        let ran = [
+            ("a request", with_request_executor(stub(), job()).await),
+            ("an untagged install", with_executor(stub(), job()).await),
+            ("a request's streaming body", streamed.scope(job()).await),
+            ("a job", with_job_executor(stub(), job()).await),
+            ("no unit", job().await),
+        ];
+
+        assert_eq!(
+            ran,
+            [
+                ("a request", Some(ExecutorScope::Request)),
+                ("an untagged install", Some(ExecutorScope::Request)),
+                ("a request's streaming body", Some(ExecutorScope::Request)),
+                ("a job", Some(ExecutorScope::Job)),
+                ("no unit", Some(ExecutorScope::Job)),
+            ],
+        );
     }
 
     #[tokio::test]

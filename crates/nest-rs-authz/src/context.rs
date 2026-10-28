@@ -25,7 +25,13 @@ pub fn current_ability() -> Option<Arc<Ability>> {
     nest_rs_core::ambient::<Ability>()
 }
 
-/// Run `fut` with `ability` installed as the ambient capability set.
+/// Run `fut` with `ability` installed as the ambient capability set, in place
+/// of the one the running unit carries.
+///
+/// Bar: the framework's edges installing the caller's ability (route-model
+/// binding, the response shaper), a job narrowing its system work to a
+/// principal's, and a test. A service never runs a request's reads under an
+/// ability it built: `Repo` filters by whatever is installed here.
 pub fn with_ability<F: Future>(ability: Arc<Ability>, fut: F) -> impl Future<Output = F::Output> {
     nest_rs_core::with_ambient(ability, fut)
 }

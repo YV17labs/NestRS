@@ -132,7 +132,9 @@ context of their own.
 `current_executor_scope()` distinguishes Request from Job — `Repo` uses it
 to fail closed when a request runs with no ambient ability, while a job — a
 worker's attempt, a tick, a lifecycle hook — runs unscoped (no caller ⇒ no
-scope to apply). See
+scope to apply). An install never widens the unit it runs in:
+`with_job_executor` inside a request, or a body that continues one, runs as
+the request, so a read that fails closed there stays closed. See
 [Security](/security/) for the ability half.
 
 An anonymous caller is a request, not a job: on a `#[public]` route the

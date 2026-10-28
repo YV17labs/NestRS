@@ -1107,19 +1107,19 @@ mod tests {
 
     #[tokio::test]
     async fn nested_scope_shadows_then_restores_the_outer_scope() {
-        with_request_executor(pool().into(), async {
-            assert_eq!(current_executor_scope(), Some(ExecutorScope::Request));
-            with_job_executor(pool().into(), async {
+        with_job_executor(pool().into(), async {
+            assert_eq!(current_executor_scope(), Some(ExecutorScope::Job));
+            with_request_executor(pool().into(), async {
                 assert_eq!(
                     current_executor_scope(),
-                    Some(ExecutorScope::Job),
+                    Some(ExecutorScope::Request),
                     "the inner scope wins",
                 );
             })
             .await;
             assert_eq!(
                 current_executor_scope(),
-                Some(ExecutorScope::Request),
+                Some(ExecutorScope::Job),
                 "the outer scope must be restored",
             );
         })

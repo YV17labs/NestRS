@@ -1224,6 +1224,10 @@ lists what the boot, a log or the wire shows when one is missed.
   executor** compiles and answers `None`: the handle a unit installs is private
   to `nest-rs-seaorm`. Run the statement through `Repo`, which filters it, or
   a named escape whose bar it clears.
+- **A `with_job_executor` inside a request**, or a body continuing one, runs
+  as the request: with no ability its `Repo` reads match no row, and
+  `nest_rs::orm` says `no ambient Ability outside a worker job — denying all
+  rows` at `warn`. System work runs in a queue attempt or a tick of its own.
 - **A stale or mangled page cursor** — an `after` no page issued — is refused
   where 6.x served the first page: a `#[crud]` list answers `400`, its problem
   ``query parameter `after`: not a cursor this endpoint issued`` under

@@ -19,7 +19,7 @@ use nest_rs_core::{
 use nest_rs_database::{
     BACKEND_REMEDY, Executor, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured,
     UnitOfWork, UnitSpec, current_executor, current_executor_scope, current_unit_of_work,
-    provide_unit_of_work, run_unit,
+    provide_unit_of_work, run_unit, with_job_executor,
 };
 
 const MESSAGE: Unit =
@@ -171,6 +171,25 @@ async fn the_body_runs_on_the_units_executor_under_the_specs_scope() {
             current_executor().is_none(),
             "the unit's executor ends with it"
         );
+    }
+}
+
+#[tokio::test]
+async fn a_job_install_inside_a_unit_keeps_the_units_scope() {
+    for scope in [ExecutorScope::Request, ExecutorScope::Job] {
+        let (binding, _) = Stub::answering(Settlement::Settled);
+        let reinstalled = run_unit(
+            Some(&binding),
+            spec(scope),
+            async {
+                let own = current_executor().expect("the unit's executor");
+                with_job_executor(own, async { current_executor_scope() }).await
+            },
+            |_| true,
+            |_| None,
+        )
+        .await;
+        assert_eq!(reinstalled, Some(scope), "a {scope:?} unit");
     }
 }
 

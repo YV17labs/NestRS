@@ -172,9 +172,13 @@ read:
 1. **Grep for `Repo::unscoped`, `unscoped_by_id`, `insert_unscoped` and
    `with_tombstones`** in feature code. Confirm each call site clears the bar
    the method's rustdoc states, and is not a forgotten scope.
-2. **Grep for `.query()`** in feature code. On a `Repo` select it hands out
-   the statement itself, and one rewritten there runs past the filter: chain
-   the builder methods instead.
+2. **Grep for `.query()`, `with_ability` and `with_job_executor`** in
+   feature code. A `.query()` on a `Repo` select hands out the statement
+   itself, and one rewritten there runs past the filter: chain the builder
+   methods instead. `with_ability` runs `Repo` under the ability it is
+   handed, not the caller's — in a service, only a job narrowing its reads to
+   a principal. `with_job_executor` belongs in a test: inside a request it
+   runs as the request, but in a task spawned off one it reads unscoped.
 3. **Grep for `Arc<DatabaseConnection>`** outside the framework crates.
    Each injection should be a contextless path (a one-shot command), never
    a request handler or a lifecycle hook, which runs in a unit of work.

@@ -67,6 +67,15 @@ its `__private`, the in-unit swap the driver's carry path calls.
   would not close it, since `QueryFilter::query` is the same handle. A
   `.query()` on a `Repo` select is a review trigger, grepped like an escape's
   name.
+- **The ambient installers.** `nest_rs::authz::with_ability` runs `Repo`
+  under the ability it is handed, and `nest_rs::database::with_job_executor`
+  grants the job scope to its handle outside every unit — a test, a task
+  spawned off one. Inside a unit the installer never widens it: a request,
+  or a body continuing one, stays a request, held by the port's tests, since
+  a re-install of the unit's own handle under the job scope turned a read
+  that failed closed into an unscoped one. Both are named in the data-layer
+  rule's escapes; closing them is taking them out of the public API once a
+  service test opens its unit under an ability through the testing harness.
 
 Implementing sea-orm's builder traits is not the wrapper
 `public-dependencies.md` refuses: the builder methods are sea-orm's own, with

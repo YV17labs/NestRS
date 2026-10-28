@@ -30,8 +30,8 @@ out as `&mut`, through which a statement replaced, cleared or `union`ed runs
 past the filter — a `.query()` on a `Repo` select is read as an escape.
 
 **The named exceptions — there are no others.** The ability filter is dropped
-only through a named `Repo` escape, and each escape's rustdoc states the bar
-its callers must clear; the method's doc is the authority, not this list.
+only through a named escape, and each escape's rustdoc states the bar its
+callers must clear; the method's doc is the authority, not this list.
 
 - **`Repo::unscoped` / `unscoped_by_id`** — reads with no ability:
   pre-authentication credential lookup, `CrudService::access` (which must tell
@@ -52,6 +52,14 @@ its callers must clear; the method's doc is the authority, not this list.
   on its own table, `nestrs_outbox`: a push's record and a cancel's removal
   join the transaction the caller's unit already holds, and the relay claims
   on a transaction of its own. No developer row is read or written.
+- **The ambient installers** — `nest_rs::authz::with_ability` runs `Repo`
+  under the ability it is handed: the framework's edges installing the
+  caller's, a job narrowing its system work to a principal's, a test.
+  `nest_rs::database::with_job_executor` never widens the unit it runs in (a
+  request stays a request, held by the port's tests), but outside every unit
+  — a test, a task spawned off one — it grants the job scope to the handle
+  it is given. Review holds both while a service test installs them by hand,
+  until the testing harness opens its unit under an ability.
 
 No webhook ingress exists; `Repo::unscoped`'s rustdoc states the bar a
 signature-authenticated one must clear before it ships. Auditing the escapes

@@ -418,7 +418,7 @@
   "paths": {
     "/audio/download": {
       "get": {
-        "description": "Given the source object `key` (query param `file`, a UUID), streams the derived object's bytes chunk by chunk as the response body — the large file never sits whole in server memory — or `404` while the worker has not produced it yet. The presigned `GET /audio/results` URL is the zero-proxy alternative; this endpoint is the streamed proxy. Requires a bearer JWT and the admin capability.",
+        "description": "Given the source object `key` (query param `file`, a UUID), streams the derived object's bytes chunk by chunk as the response body — the large file never sits whole in server memory — or `404` while the worker has not produced it yet. The presigned `GET /audio/results` URL is the zero-proxy alternative; this endpoint is the streamed proxy. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability.",
         "operationId": "audio_download",
         "parameters": [
           {
@@ -546,7 +546,7 @@
     },
     "/audio/events": {
       "get": {
-        "description": "Opens a `text/event-stream` that polls the transcode — the derived object first, then the record the worker files once it has produced it — and emits a `transcode` event (`{state: pending|ready}`) until it is produced, then ends — a live progress feed the browser reads with `EventSource`. Each event carries the poll attempt as its SSE id, so a browser reconnecting sends it back as `Last-Event-ID` and is not re-sent the progress ticks it already displayed; the terminal state is always sent. Requires a bearer JWT and the admin capability.",
+        "description": "Opens a `text/event-stream` that polls the transcode — the derived object first, then the record the worker files once it has produced it — and emits a `transcode` event (`{state: pending|ready}`) until it is produced, then ends — a live progress feed the browser reads with `EventSource`. Each event carries the poll attempt as its SSE id, so a browser reconnecting sends it back as `Last-Event-ID` and is not re-sent the progress ticks it already displayed; the terminal state is always sent. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability.",
         "operationId": "audio_events",
         "parameters": [
           {
@@ -686,7 +686,7 @@
     },
     "/audio/results": {
       "get": {
-        "description": "Given the source object `key` an upload returned (query param `file`, a UUID), returns a short-lived presigned GET URL for the derived object the worker produced, or `404` while it does not exist yet. Requires a bearer JWT and the admin capability.",
+        "description": "Given the source object `key` an upload returned (query param `file`, a UUID), returns a short-lived presigned GET URL for the derived object the worker produced, or `404` while it does not exist yet. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability.",
         "operationId": "audio_result",
         "parameters": [
           {
@@ -813,7 +813,7 @@
     },
     "/audio/transcode": {
       "post": {
-        "description": "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the shared `audio` queue, answering `202` once it is queued; the separate worker deployable consumes it over Redis (two apps exchanging, no RPC). Requires a bearer JWT, is admin-only (`Manage` on the caller's org, enforced by `TranscodeGuard`) and rate-limited by `ThrottlerGuard`; its `file` is the key an upload returned, a UUID, so no client names a storage path.",
+        "description": "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the shared `audio` queue, answering `202` once it is queued; the separate worker deployable consumes it over Redis (two apps exchanging, no RPC). Requires a bearer JWT granted the `audio:transcode` scope, is admin-only (`Manage` on the caller's org; `TranscodeGuard` enforces both) and rate-limited by `ThrottlerGuard`; its `file` is the key an upload returned, a UUID, so no client names a storage path.",
         "operationId": "audio_transcode",
         "requestBody": {
           "content": {
@@ -942,7 +942,7 @@
     },
     "/audio/uploads": {
       "post": {
-        "description": "Returns a short-lived presigned PUT URL, the method and headers the upload sends verbatim, and the object key the server minted for it. The URL binds `Content-Type: audio/mpeg`: object storage refuses an upload sending another type, or none. The client pushes the file bytes straight to object storage (the server never proxies the payload), then calls `POST /audio/transcode` with the returned key. Requires a bearer JWT and the admin capability (`Manage` on the caller's org).",
+        "description": "Returns a short-lived presigned PUT URL, the method and headers the upload sends verbatim, and the object key the server minted for it. The URL binds `Content-Type: audio/mpeg`: object storage refuses an upload sending another type, or none. The client pushes the file bytes straight to object storage (the server never proxies the payload), then calls `POST /audio/transcode` with the returned key. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability (`Manage` on the caller's org).",
         "operationId": "audio_create_upload",
         "responses": {
           "200": {
@@ -1048,7 +1048,7 @@
     },
     "/audio/uploads/direct": {
       "post": {
-        "description": "The single-round-trip alternative to the presigned flow: the client posts a `multipart/form-data` body with a `file` part, which streams straight into the object store — the file never sits whole in server memory — and the response carries the object key the server minted plus a presigned GET URL. The part's filename is never read: no client names a storage key. Requires a bearer JWT and the admin capability.",
+        "description": "The single-round-trip alternative to the presigned flow: the client posts a `multipart/form-data` body with a `file` part, which streams straight into the object store — the file never sits whole in server memory — and the response carries the object key the server minted plus a presigned GET URL. The part's filename is never read: no client names a storage key. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability.",
         "operationId": "audio_upload_direct",
         "requestBody": {
           "content": {

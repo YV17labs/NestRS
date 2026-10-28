@@ -217,14 +217,41 @@ happening.
 ## Raising a scope refusal from your own guard
 
 A [non-CRUD route](/security/authorization/policies/) gated by a
-capability-only guard raises the same denial directly:
+capability-only guard raises the same denial directly. The demo's
+`TranscodeGuard` refuses a caller with no admin grant outright, and an admin
+whose token was not granted `audio:transcode` with the challenge naming it —
+a wider token is the remedy in the second case alone:
 
-```rust title="crates/features/src/audio/guard.rs"
-Err(Denial::insufficient_scope(["audio:transcode"], "forbidden"))
+```rust title="crates/features/src/audio/guard.rs (from the demo, abridged)"
+impl TranscodeGuard {
+    // …
+    fn decide(ability: &Ability, granted: Option<&GrantedScopes>) -> Result<(), Denial> {
+        if !ability.can_class(Action::Manage, TypeId::of::<OrgEntity>()) {
+            // …
+            return Err(Denial::forbidden(
+                "transcoding requires the admin capability",
+            ));
+        }
+        if granted.is_none_or(|granted| granted.as_slice().iter().any(|s| s == AUDIO_TRANSCODE)) {
+            return Ok(());
+        }
+
+        // …
+        Err(Denial::insufficient_scope(
+            [AUDIO_TRANSCODE],
+            "the request requires higher privileges than provided by the access token",
+        ))
+    }
+}
 ```
 
-Every transport renders it the same way — the challenge is written once,
-at the transport edge, so a guard never formats a header itself.
+The guard reads the token's scopes from the `GrantedScopes` that
+`AuthnGuard` attaches beside the principal (`cx.ambient::<GrantedScopes>()`).
+Its absence means the principal is not scope-aware — a session, an mTLS
+identity — and the guard gates on the role alone, as `requires_scope` does.
+
+Every transport renders the denial the same way — the challenge is written
+once, at the transport edge, so a guard never formats a header itself.
 
 ## Going further
 

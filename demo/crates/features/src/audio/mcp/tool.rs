@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use nest_rs::authz::Manage;
 use nest_rs::mcp::{McpError, Opaque, Parameters, Valid, mcp, tools};
 
 use crate::audio::{AudioService, TranscodeDto, TranscodeGuard};
+use crate::orgs::Entity as OrgEntity;
 
 #[mcp]
 #[derive(Clone)]
@@ -19,7 +21,7 @@ impl AudioTool {
                        worker has not produced the derived object, or `ready` with a short-lived \
                        download URL once it has."
     )]
-    #[public]
+    #[authorize(Manage, OrgEntity, unmasked)]
     #[use_guards(TranscodeGuard)]
     async fn transcode_status(
         &self,

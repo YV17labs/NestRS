@@ -36,8 +36,9 @@ impl AudioController {
                        `Content-Type: audio/mpeg`: object storage refuses an upload sending \
                        another type, or none. The client pushes the file bytes straight to object \
                        storage (the server never proxies the payload), then calls \
-                       `POST /audio/transcode` with the returned key. Requires a bearer JWT and \
-                       the admin capability (`Manage` on the caller's org)."
+                       `POST /audio/transcode` with the returned key. Requires a bearer JWT granted \
+                       the `audio:transcode` scope and the admin capability (`Manage` on the \
+                       caller's org)."
     )]
     async fn create_upload(&self) -> Result<Json<PresignedUrlDto>> {
         Ok(Json(self.svc.presign_upload().await?))
@@ -50,7 +51,7 @@ impl AudioController {
         description = "Given the source object `key` an upload returned (query param `file`, a \
                        UUID), returns a short-lived presigned GET URL for the derived object the \
                        worker produced, or `404` while it does not exist yet. Requires a bearer \
-                       JWT and the admin capability."
+                       JWT granted the `audio:transcode` scope and the admin capability."
     )]
     async fn result(&self, query: Valid<Query<TranscodeDto>>) -> Result<Json<PresignedUrlDto>> {
         let file = query.into_inner().file;
@@ -69,7 +70,8 @@ impl AudioController {
                        the object store — the file never sits whole in server memory — and the \
                        response carries the object key the server minted plus a presigned GET \
                        URL. The part's filename is never read: no client names a storage key. \
-                       Requires a bearer JWT and the admin capability.",
+                       Requires a bearer JWT granted the `audio:transcode` scope and the admin \
+                       capability.",
         multipart = DirectUploadDto
     )]
     async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> {
@@ -89,7 +91,7 @@ impl AudioController {
                        file never sits whole in server memory — or `404` while the worker has not \
                        produced it yet. The presigned `GET /audio/results` URL is the zero-proxy \
                        alternative; this endpoint is the streamed proxy. Requires a bearer JWT \
-                       and the admin capability.",
+                       granted the `audio:transcode` scope and the admin capability.",
         response_content_type = "audio/mpeg"
     )]
     async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
@@ -113,7 +115,7 @@ impl AudioController {
                        event carries the poll attempt as its SSE id, so a browser reconnecting \
                        sends it back as `Last-Event-ID` and is not re-sent the progress ticks it \
                        already displayed; the terminal state is always sent. Requires a bearer \
-                       JWT and the admin capability."
+                       JWT granted the `audio:transcode` scope and the admin capability."
     )]
     async fn events(
         &self,
@@ -153,8 +155,9 @@ impl AudioController {
         description = "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the \
                        shared `audio` queue, answering `202` once it is queued; the separate \
                        worker deployable consumes it over Redis (two apps exchanging, no RPC). \
-                       Requires a bearer JWT, is admin-only (`Manage` on the caller's org, \
-                       enforced by `TranscodeGuard`) and rate-limited by `ThrottlerGuard`; its \
+                       Requires a bearer JWT granted the `audio:transcode` scope, is admin-only \
+                       (`Manage` on the caller's org; `TranscodeGuard` enforces both) and \
+                       rate-limited by `ThrottlerGuard`; its \
                        `file` is the key an upload returned, a UUID, so no client names a \
                        storage path."
     )]

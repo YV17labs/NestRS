@@ -189,3 +189,32 @@ async fn a_refused_read_names_the_one_scope_it_needs_on_every_edge() {
         "{refused}"
     );
 }
+
+#[tokio::test]
+async fn a_service_token_narrowed_to_reading_posts_is_challenged_on_the_audio_routes() {
+    let (_db, app) = boot().await;
+    let reader = narrow_bearer(ORG_ID, client(), &[constants::POSTS_READ]);
+
+    let refusals = [
+        app.http()
+            .post("/audio/uploads")
+            .header(header::AUTHORIZATION, &reader)
+            .send()
+            .await,
+        app.http()
+            .post("/audio/transcode")
+            .header(header::AUTHORIZATION, &reader)
+            .body_json(&json!({ "file": Uuid::now_v7() }))
+            .send()
+            .await,
+    ];
+    for refused in refusals {
+        refused.assert_status(StatusCode::FORBIDDEN);
+        let challenge = www_authenticate(&refused.0);
+        assert!(
+            challenge.contains(r#"error="insufficient_scope""#)
+                && challenge.contains(&format!(r#"scope="{}""#, constants::AUDIO_TRANSCODE)),
+            "the advertised scope gates what it names, and the refusal says so: {challenge}",
+        );
+    }
+}

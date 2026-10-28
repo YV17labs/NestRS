@@ -1,8 +1,11 @@
+use features::Role;
+use features::authz::constants;
+use features::testing::{client, token_with_scopes};
 use nest_rs::core::Discovery;
 use nest_rs::http::HttpEndpointMeta;
 use nest_rs::http::StatusCode;
 use nest_rs::storage::Storage;
-use nest_rs::testing::mcp::{initialize_request, open_session, post_message};
+use nest_rs::testing::mcp::{call_tool_with, initialize_request, open_session, post_message};
 use nest_rs::testing::{CapturedEvent, LogCapture};
 use serde_json::json;
 
@@ -125,4 +128,36 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
     );
 
     delete_transcode(app.container(), source).await;
+}
+
+#[tokio::test]
+async fn a_service_token_narrowed_to_reading_posts_is_refused_the_transcode_tool() {
+    let (_db, app) = boot().await;
+    let reader = format!(
+        "Bearer {}",
+        token_with_scopes(
+            ORG_ID.parse().expect("a valid org uuid"),
+            vec![Role::Admin],
+            client(),
+            vec![constants::POSTS_READ.to_owned()],
+        )
+    );
+
+    let body = call_tool_with(
+        app.http(),
+        SHARED_ENDPOINT,
+        "transcode_status",
+        Some(&reader),
+        json!({ "file": Uuid::now_v7() }),
+    )
+    .await;
+
+    assert!(
+        body.contains("insufficient_scope") && body.contains(constants::AUDIO_TRANSCODE),
+        "the advertised scope gates the tool, and the refusal names it: {body}",
+    );
+    assert!(
+        !body.contains("pending"),
+        "the tool's body never ran: {body}"
+    );
 }

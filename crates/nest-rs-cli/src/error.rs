@@ -40,6 +40,32 @@ pub enum CliError {
     )]
     EntitiesFolderRequired { feature: String, stem: String },
 
+    /// `g entity` on a port whose `subject.rs` declares the entity's name.
+    ///
+    /// The subject's explicit `pub use` would shadow the wire type the entity's
+    /// glob re-exports; re-gating the operations is left to the developer
+    /// (`commands::generate::entity`).
+    #[error(
+        "feature `{feature}` declares `{name}` in `subject.rs`, the capability its \
+         operations are gated on, and the entity's wire type takes that name: \
+         `pub use subject::{name};` would shadow it. Retire the subject first, then \
+         re-run:\n  \
+         1. delete crates/features/src/{feature}/subject.rs, and `mod subject;` / \
+         `pub use subject::{name};` in `{feature}/mod.rs`\n  \
+         2. nestrs g entity {target}\n  \
+         3. re-gate on the entity every operation gated on `{name}`, with \
+         `use crate::{feature}::Entity as {name}Entity;` and \
+         `#[authorize(Read, {name}Entity)]` (`g graphql` wrote one in \
+         `graphql/resolver.rs`, `g mcp` in `mcp/tool.rs`), and grant \
+         `crate::{feature}::Entity` in `authz/ability.rs` where you granted \
+         `crate::{feature}::{name}`"
+    )]
+    EntityNameTakenBySubject {
+        feature: String,
+        name: String,
+        target: String,
+    },
+
     #[error(
         "`{0}` is not a `<feature>` or `<feature>/<entity>` target — one optional `/`, no more"
     )]

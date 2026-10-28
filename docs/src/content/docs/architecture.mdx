@@ -173,6 +173,14 @@ neither word has to add one. The file names the kind in
 `pipes/src/pipes/validation.rs` → `ValidationPipe`, and the file names the
 subject.
 
+A [`#[subject]`](/security/authorization/policies/#subjects-no-table-holds) —
+a capability no table holds — follows the same rule. One named for what it
+grants is a file of its own, `audio/transcoding.rs` → `Transcoding`. The one
+named for its port, which `nestrs g` gates a GraphQL operation or an MCP tool on
+over a port with no entity, is `subject.rs`: `cities/subject.rs` → `City`, the
+folder naming the subject and the file its kind, since `blog/blog.rs` would be a
+module inside its namesake.
+
 **One shape is refused, and only one: a stem that appears nowhere in what the
 file declares.** No example of it appears above, and that is the point — the
 framework holds none, because a real one is a defect to fix rather than a case
@@ -187,7 +195,8 @@ outside: both names read perfectly well alone, and only the pair is wrong.
 Everything short of that passes, and the tolerance is deliberate. The shared
 word may come from the folder rather than the file — `throttler/store.rs` holds
 `RedisThrottler`, because a binding file names the seam and the type names the
-thing that fills it. An inflection is the same word, and so is a word in the
+thing that fills it — and a folder reaches its singular, read the way `nestrs g`
+reads it: `cities/subject.rs` holds `City`. An inflection is the same word, and so is a word in the
 middle: `scope.rs` holds `Scoped`, `token.rs` holds `AccessTokenRequest`.
 
 A file whose principal export is **not** a type is a namespace instead, and

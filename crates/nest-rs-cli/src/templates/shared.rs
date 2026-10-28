@@ -380,7 +380,7 @@ pub(crate) static AGENTS_BODY: &str = concat!(
 
 Every query, message and tool declares its posture, or it does not compile; an
 HTTP route a guard covers may leave it to the guard, and one no guard covers
-declares it or refuses the boot. There are two declarations, and the answer
+declares it or refuses the boot. There are three declarations, and the answer
 picks between them — not the caller:
 
 - `#[authorize(Action, Entity)]` — the class-level gate **plus** automatic
@@ -401,9 +401,11 @@ WebSocket gateway is guarded already — `nestrs g http` and `g ws` bind the two
 guards and write the auth adapter they come from — a GraphQL operation or an
 MCP tool `nestrs g graphql|mcp` writes over a port with no entity is gated on
 the `#[subject]` it writes beside the service, and an operation that declares
-`#[public]` answers no entity data. Before an operation serves real
-rows, it declares `#[authorize]` and its edge is wired — the guards on the
-struct, and the edge's authz module imported in that adapter's `module.rs`:
+`#[public]` answers no entity data. Before an operation serves real rows, it
+declares `#[authorize]` on the entity they come from — one gated on the port's
+`#[subject]` re-points its posture to the entity, since a subject masks
+nothing — and its edge is wired: the guards on the struct, and the edge's authz
+module imported in that adapter's `module.rs`:
 
 | Edge | `#[use_guards(…)]` on the struct | Imported in `module.rs` |
 |---|---|---|

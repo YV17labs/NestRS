@@ -83,6 +83,13 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
 
     let root = ws.feature_root(&target.feature.snake);
     let placement = placement(&root, &target.feature)?;
+    if placement == Placement::Lone && subject_declares(&root, &target.entity.entity()) {
+        return Err(CliError::EntityNameTakenBySubject {
+            feature: target.feature.snake.clone(),
+            name: target.entity.entity(),
+            target: opts.target.clone(),
+        });
+    }
     let stem = target.stem();
 
     let r = Renderer::new(&target.entity).with("stem", stem.clone());
@@ -167,6 +174,20 @@ fn existing_stem(entity_rs: &Path) -> Option<String> {
     let (_, rest) = source.split_once("table_name = \"")?;
     let (table, _) = rest.split_once('"')?;
     (!table.is_empty()).then(|| table.to_owned())
+}
+
+/// Whether the port's `subject.rs`, written by `g graphql|mcp` over a port with
+/// no entity, declares `name`: a lone entity's glob re-export of its wire type
+/// would then lose to the subject's explicit one, with no error.
+fn subject_declares(root: &Path, name: &str) -> bool {
+    std::fs::read_to_string(root.join("subject.rs"))
+        .ok()
+        .and_then(|source| syn::parse_file(&source).ok())
+        .is_some_and(|file| {
+            file.items
+                .iter()
+                .any(|item| matches!(item, syn::Item::Struct(s) if s.ident == name))
+        })
 }
 
 /// Whether `mod.rs` already declares `name` as a child module, in any

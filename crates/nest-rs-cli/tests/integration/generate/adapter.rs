@@ -535,6 +535,14 @@ fn generate_graphql_adapter_enables_the_guards_graphql_feature() {
         src.join("authz/ability.rs").is_file(),
         "the guards' adapter lands"
     );
+    assert_fits_the_margin(&resolver);
+}
+
+/// A generated line, comments included, keeps within rustfmt's margin.
+fn assert_fits_the_margin(source: &str) {
+    for line in source.lines() {
+        assert!(line.chars().count() <= 100, "{line}\n{source}");
+    }
 }
 
 /// An MCP tool over a port with no entity is gated on the port's `#[subject]`,
@@ -566,9 +574,18 @@ fn generate_mcp_over_a_feature_port_gates_the_tool_on_the_ports_subject() {
         "the second adapter reuses the subject: {mod_rs}"
     );
     assert!(
-        printed.contains("ab.can(Action::Read, Post)"),
-        "the next step names the grant: {printed}"
+        printed.contains("ab.can(nest_rs::authz::Action::Read, crate::posts::Post)"),
+        "the next step names the grant as `authz/ability.rs` resolves it: {printed}"
     );
+    // A posture on a `#[subject]` masks nothing, so the tool says it is re-gated
+    // on the entity before it answers with rows, never that its rows are masked.
+    assert!(
+        !tool.contains("arms the field-level mask")
+            && tool.contains("re-gated on that entity")
+            && tool.contains("#[authorize(Read, PostEntity)]"),
+        "{tool}"
+    );
+    assert_fits_the_margin(&tool);
 }
 
 /// Over a port that has an entity but no `CrudService`, the operation gates on
@@ -581,7 +598,7 @@ fn generate_mcp_over_a_port_with_an_entity_gates_the_tool_on_the_entity() {
 
     run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
     run_ok(dir.path(), &["g", "entity", "posts", "-p", path]);
-    run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+    let printed = run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
 
     let src = dir.path().join("crates/features/src");
     let tool = fs::read_to_string(src.join("posts/mcp/tool.rs")).unwrap();
@@ -590,7 +607,13 @@ fn generate_mcp_over_a_port_with_an_entity_gates_the_tool_on_the_entity() {
             && tool.contains("use crate::posts::{Entity as PostEntity, PostsService};"),
         "{tool}"
     );
+    assert!(tool.contains("arms the field-level mask"), "{tool}");
+    assert_fits_the_margin(&tool);
     assert!(!src.join("posts/subject.rs").exists());
+    assert!(
+        printed.contains("ab.can(nest_rs::authz::Action::Read, crate::posts::Entity)"),
+        "the resolver's alias resolves nowhere in `authz/ability.rs`: {printed}"
+    );
 }
 
 /// A port named by its own singular (`blog`) holds its subject in `subject.rs`
@@ -614,6 +637,32 @@ fn the_subject_of_a_port_named_by_its_own_singular_never_repeats_its_folder() {
         mod_rs.contains("pub use subject::Blog;") && !mod_rs.contains("mod blog;"),
         "{mod_rs}"
     );
+}
+
+/// Every file an adapter generator writes at a port passes the `nestrs lint`
+/// the scaffold's `lint` and `ci` recipes run, whatever the port's plural:
+/// `cities` names its types `City`, which only the singular of its folder
+/// reaches.
+#[test]
+fn every_adapter_over_a_port_whose_plural_hides_its_singular_passes_the_lint() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "cities", "-p", path]);
+    for transport in [
+        "http", "graphql", "ws", "queue", "schedule", "mcp", "events",
+    ] {
+        run_ok(dir.path(), &["g", transport, "cities", "-p", path]);
+    }
+
+    assert!(
+        dir.path()
+            .join("crates/features/src/cities/subject.rs")
+            .is_file()
+    );
+    let linted = run_ok(dir.path(), &["lint", "-p", path]);
+    assert!(linted.contains("named for what it declares"), "{linted}");
 }
 
 /// The GraphQL twin of `generate_resource_emits_the_guarded_form_…`: over a
@@ -683,6 +732,27 @@ fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_endpoint_guards(
         );
     }
     assert!(features_cargo.contains("authz"), "{features_cargo}");
+}
+
+/// Over a `#[crud]` port the resolver holds an operation per action, so the next
+/// step grants them all, on the entity's path as `authz/ability.rs` names it.
+#[test]
+fn generate_graphql_over_a_resource_prints_the_grant_its_crud_operations_wait_for() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "resource", "articles", "-p", path]);
+    let printed = run_ok(dir.path(), &["g", "graphql", "articles", "-p", path]);
+
+    assert!(
+        printed.contains("ab.can(nest_rs::authz::Action::Manage, crate::articles::Entity)"),
+        "{printed}"
+    );
+    assert!(
+        !printed.contains("ArticleEntity") && !printed.contains("Action::Read"),
+        "a single read grant leaves the writes FORBIDDEN: {printed}"
+    );
 }
 
 /// A second GraphQL adapter reuses the authz adapter the first one created rather

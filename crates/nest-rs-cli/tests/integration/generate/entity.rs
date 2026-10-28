@@ -184,6 +184,35 @@ fn generate_entity_refuses_to_leave_a_feature_with_two_entity_homes() {
     );
 }
 
+/// `g graphql|mcp` over a port with no entity wrote its `#[subject]` under the
+/// port's singular, the name the entity's wire type takes: `pub use subject::Post;`
+/// would silently shadow the `Post` that `pub use entity::*;` exports, so the
+/// generator refuses and names the re-gating. An entity of another name joins.
+#[test]
+fn generate_entity_refuses_a_port_whose_subject_holds_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+    let before = files_under(dir.path());
+
+    let refused = run_err(dir.path(), &["g", "entity", "posts", "-p", path]);
+
+    assert!(
+        refused.contains("crates/features/src/posts/subject.rs")
+            && refused.contains("#[authorize(Read, PostEntity)]")
+            && refused.contains("crate::posts::Entity"),
+        "the refusal names the subject and the re-gating: {refused}"
+    );
+    assert_eq!(files_under(dir.path()), before, "a refusal writes nothing");
+
+    run_ok(dir.path(), &["g", "entity", "posts/comments", "-p", path]);
+    let entity =
+        fs::read_to_string(dir.path().join("crates/features/src/posts/entity.rs")).unwrap();
+    assert!(entity.contains("name = \"Comment\""), "{entity}");
+}
+
 #[test]
 fn generate_entity_requires_an_existing_feature() {
     let dir = tempfile::tempdir().unwrap();

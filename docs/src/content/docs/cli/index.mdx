@@ -365,10 +365,18 @@ its service — `crates/features/src/posts/subject.rs`, `pub struct Post;`,
 written once by whichever adapter comes first — and gate the query or the tool
 on it with `#[authorize(Read, Post)]`, behind the same guards and authz module
 as the resource form. It answers `FORBIDDEN` until your policy grants it,
-`ab.can(Action::Read, Post)`, which the printed next step spells. A port with
-an entity but no service gates on that entity instead. The file is
+`ab.can(nest_rs::authz::Action::Read, crate::posts::Post)`, which the printed
+next step spells.
+A port with an entity but no service gates on that entity instead. The file is
 `subject.rs` whatever the port's name, so `subject` is one of the words
 [no module takes](/architecture/#what-a-folder-may-not-be-called).
+
+A subject masks nothing, so an operation that starts answering with rows is
+re-gated on their entity, `#[authorize(Read, PostEntity)]`. `g entity posts`
+refuses while `subject.rs` declares `Post`: the entity's wire type takes that
+name, and the subject's re-export would quietly shadow it. The refusal lists the
+steps — retire the subject, run `g entity` again, re-gate the operations and
+their grant on the entity.
 
 ### A generated route or socket is never open
 
@@ -428,7 +436,8 @@ is invisible from outside, because both names read perfectly well alone and
 only the pair is wrong.
 
 Everything short of that passes. The word may come from the folder rather than the file —
-`throttler/store.rs` holding `RedisThrottler`. An inflection is the same
+`throttler/store.rs` holding `RedisThrottler` — or from the folder's singular,
+read the way `nestrs g` reads it: `cities/subject.rs` holding `City`. An inflection is the same
 word (`scope.rs` holding `Scoped`), and so is an abbreviation (`context.rs`
 holding `Ctx`). And a file whose principal export is a function is a
 namespace that owes no pairing at all: `queue/consume.rs` exporting

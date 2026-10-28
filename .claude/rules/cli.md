@@ -45,8 +45,11 @@ review. Change a table, a heading or the fence with them.
 — the note above the GraphQL adapter's generated query, naming the grant it
 waits for, is the case. A generated route or gateway is guarded, and a
 generated GraphQL operation or MCP tool is gated on its port's entity or the
-`#[subject]` the generator writes beside a port with none, so an opening is
-always the developer's line, never the generator's. Prose the framework compiles into behaviour is still an argument
+`#[subject]` the generator writes beside a port with none (`subject.rs`, placed
+by `architecture.md`), so an opening is always the developer's line, never the
+generator's. A grant a next step prints names its subject by the path
+`authz/ability.rs` resolves, and `g entity` refuses a port whose subject holds
+the entity's name, which the subject's re-export would shadow. Prose the framework compiles into behaviour is still an argument
 there, as in `demo/` (`demo.md`).
 
 ## Scaffolds emit exactly what the rules mandate

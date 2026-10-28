@@ -190,10 +190,16 @@ they are, never folded into `service.rs`, a recognised word first.
 **Vocabulary** (an enum, struct, alias or constants) is named for what it
 declares, no role suffix: **the file and its folder, read together, spell the
 type** — `seaorm/src/repo.rs` is `Repo`, `redis/src/connection.rs` is
-`RedisConnection`, `authn/src/strategies/jwt.rs` is `JwtStrategy`. **`nestrs
-lint` refuses one shape: a stem that appears nowhere in what the file
-declares**, a file named for a slot rather than a subject. A word shared through
-the folder (`throttler/store.rs` holds `RedisThrottler`), an inflection
+`RedisConnection`, `authn/src/strategies/jwt.rs` is `JwtStrategy`. A
+`#[subject]` is vocabulary: a capability named for what it grants is a file of
+its own (`audio/transcoding.rs` is `Transcoding`), and the one named for its
+port, which `nestrs g` gates an operation on over a port with no entity, is
+`subject.rs` (`cities/subject.rs` is `City`), never `blog/blog.rs`, a module
+inside its namesake. **`nestrs lint` refuses one shape: a stem that appears
+nowhere in what the file declares**, a file named for a slot rather than a
+subject. A word shared through the folder or its singular
+(`throttler/store.rs` holds `RedisThrottler`, `cities/subject.rs` holds
+`City`), an inflection
 (`scope.rs` holds `Scoped`), a namespace file (`consume::attempt`) and the
 recognised provider words — `registry.rs`, `client.rs`, `store.rs`,
 `factory.rs`, `source.rs`, `bridge.rs`, `inventory.rs` — pass. Vocabulary sits

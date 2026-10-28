@@ -61,6 +61,27 @@ impl {{controller}} {
 }
 "#;
 
+/// The note above a single operation gated on the port's entity: the grant it
+/// waits for, by the path `authz/ability.rs` resolves.
+pub(crate) const GATED_ON_ENTITY: &str =
+    "    // Gated on the port's entity: it answers FORBIDDEN until AuthzAbility grants
+    // `ab.can(nest_rs::authz::Action::Read, crate::{{snake}}::Entity)`.";
+
+/// The MCP tool's addition over an entity: rmcp needs the typed value back, so
+/// the mask works on the wire type the tool returns.
+pub(crate) const ROWS_MASKED_AS_JSON: &str =
+    "    // An answer made of its rows returns the `#[expose]`d wire type wrapped in
+    // `Json<...>`, which is what arms the field-level mask.";
+
+/// The note above a single operation gated on the port's `#[subject]`, which
+/// masks nothing: rows wait for the posture on their entity.
+pub(crate) const GATED_ON_SUBJECT: &str =
+    "    // Gated on {{entity}}, this port's #[subject]: a capability no table holds, so
+    // the posture masks nothing. It answers FORBIDDEN until AuthzAbility grants
+    // `ab.can(nest_rs::authz::Action::Read, crate::{{snake}}::{{entity}})`. Before it
+    // answers with an entity's rows, it is re-gated on that entity,
+    // `#[authorize(Read, {{entity}}Entity)]`, the posture that masks them.";
+
 /// The GraphQL adapter for a port with no `CrudService`: guarded like its
 /// `#[crud]` twin, its operation gated on `{{subject}}` — the port's entity, or
 /// the `#[subject]` the generator writes for a port with none.
@@ -86,8 +107,7 @@ pub struct {{resolver}} {
 
 #[operations]
 impl {{resolver}} {
-    // Gated on {{subject_said}}, so it answers FORBIDDEN until AuthzAbility
-    // grants `ab.can(Action::Read, {{subject}})`.
+{{posture_note}}
     #[query]
     #[authorize(Read, {{subject}})]
     async fn {{snake}}_count(&self) -> Result<usize> {
@@ -122,8 +142,8 @@ pub struct {{resolver}} {
 
 // Every operation declares #[authorize(Action, Entity)], so each is
 // authenticated, ability-filtered, transactional and field-masked — generated
-// by #[crud], the same way the HTTP controller is. They answer FORBIDDEN until
-// AuthzAbility grants a rule for {{entity}}.
+// by #[crud], the same way the HTTP controller is. Each answers FORBIDDEN until
+// AuthzAbility grants its action on `crate::{{snake}}::Entity`.
 #[crud(
     service = svc,
     entity = {{entity}}Entity,
@@ -354,10 +374,7 @@ impl {{tool}} {
     // compiles in rather than prose a cleanup could delete. `#[tool]` accepts a
     // doc comment as a fallback; an operation with neither does not compile.
     #[tool(description = "{{op_description}}")]
-    // Gated on {{subject_said}}, so it answers FORBIDDEN until AuthzAbility
-    // grants `ab.can(Action::Read, {{subject}})`. An answer made of an entity's
-    // rows returns its `#[expose]`d wire type wrapped in `Json<...>`, which is
-    // what arms the field-level mask.
+{{posture_note}}
     #[authorize(Read, {{subject}})]
     async fn {{op}}(&self) -> Result<String, McpError> {
 {{op_body}}

@@ -78,17 +78,20 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let subject_file = feature_root.join("subject.rs");
     let writes_subject = gated_operation && !port_entity && !subject_file.exists();
     r = if port_entity {
+        let note = if transport == Transport::Mcp {
+            [adapter::GATED_ON_ENTITY, adapter::ROWS_MASKED_AS_JSON].join("\n")
+        } else {
+            adapter::GATED_ON_ENTITY.to_owned()
+        };
         r.with("subject", "{{entity}}Entity")
             .with("subject_use", "Entity as {{entity}}Entity")
-            .with("subject_said", "the port's entity")
+            .with("granted", "crate::{{snake}}::Entity")
+            .with("posture_note", note)
     } else {
         r.with("subject", "{{entity}}")
             .with("subject_use", "{{entity}}")
-            .with(
-                "subject_said",
-                "this port's #[subject], a capability no table holds that the posture gates \
-                 without masking",
-            )
+            .with("granted", "crate::{{snake}}::{{entity}}")
+            .with("posture_note", adapter::GATED_ON_SUBJECT)
     };
     let (handler_tmpl, module_tmpl) = templates_for(transport, crud_port);
     let mut s = Scaffold::new();
@@ -224,6 +227,13 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         &ws.root,
         &format!("the {} adapter for `{}`", transport.folder(), names.snake),
     )?;
+    let grant = gated_operation.then(|| {
+        if is_graphql && crud_port {
+            Grant::EveryAction(r.render("crate::{{snake}}::Entity"))
+        } else {
+            Grant::Read(r.render("{{granted}}"))
+        }
+    });
     print_next_steps(
         &ctx,
         transport,
@@ -231,7 +241,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         &tmodule,
         wired_app.is_some(),
         authz,
-        &r.render("{{subject}}"),
+        grant,
     );
     if outbox {
         println!(
@@ -289,6 +299,15 @@ fn host_module(transport: Transport) -> &'static str {
     }
 }
 
+/// What a generated GraphQL or MCP adapter waits for in `authz/ability.rs`,
+/// its subject named by the path that resolves there.
+enum Grant {
+    /// The one operation of a single-operation template, under `Read`.
+    Read(String),
+    /// The `#[crud]` resolver's operations, each under its own action.
+    EveryAction(String),
+}
+
 fn print_next_steps(
     ctx: &Context,
     transport: Transport,
@@ -296,7 +315,7 @@ fn print_next_steps(
     tmodule: &str,
     wired: bool,
     authz: Option<&'static auth::AuthzAdapter>,
-    subject: &str,
+    grant: Option<Grant>,
 ) {
     println!();
     println!("Next steps:");
@@ -329,11 +348,19 @@ fn print_next_steps(
             names.queue()
         );
     }
-    if matches!(transport, Transport::Graphql | Transport::Mcp) {
-        println!(
+    match grant {
+        Some(Grant::Read(subject)) => println!(
             "  The operation is gated on `{subject}`: it answers FORBIDDEN until \
-             AuthzAbility grants `ab.can(Action::Read, {subject})`.",
-        );
+             AuthzAbility grants it in crates/features/src/authz/ability.rs, \
+             `ab.can(nest_rs::authz::Action::Read, {subject});`."
+        ),
+        Some(Grant::EveryAction(entity)) => println!(
+            "  Each operation #[crud] writes is gated on `{entity}` under its own action: \
+             each answers FORBIDDEN until AuthzAbility grants that action in \
+             crates/features/src/authz/ability.rs, and \
+             `ab.can(nest_rs::authz::Action::Manage, {entity});` grants them all."
+        ),
+        None => {}
     }
     if let Some(authz) = authz {
         println!();

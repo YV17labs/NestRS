@@ -3,7 +3,7 @@ use std::path::Path;
 use syn::Item;
 
 use super::Finding;
-use crate::naming::{reserved_category, to_kebab};
+use crate::naming::{Names, reserved_category, to_kebab};
 
 /// Stems that are not vocabulary, so are not this rule's business.
 /// The role words and pluralized role folders are not listed: they are derived
@@ -111,9 +111,13 @@ fn inspect(path: &Path, root: &Path, out: &mut Scan) {
     }
     out.checked += 1;
 
+    // A folder also reaches its singular, read by the singularizer a generator
+    // names a port's types with: `cities/subject.rs` holds `City`.
+    let singular = Names::parse(folder).table();
     let mut subject: Vec<&str> = stem.split('_').collect();
     if folder != "src" {
         subject.extend(folder.split('_'));
+        subject.extend(singular.split('_'));
     }
     let paired = declared.iter().any(|ty| {
         words_of(ty)
@@ -241,6 +245,39 @@ mod tests {
         let scan = scan_one(dir.path(), "registry.rs", "pub struct GuardSpec;");
         assert_eq!(scan.checked, 0);
         assert!(scan.findings.is_empty());
+    }
+
+    fn scan_at(dir: &Path, folder: &str, name: &str, body: &str) -> Scan {
+        let at = dir.join("src").join(folder);
+        std::fs::create_dir_all(&at).unwrap();
+        std::fs::write(at.join(name), body).unwrap();
+        scan(dir)
+    }
+
+    #[test]
+    fn a_plural_folder_reaches_the_singular_a_generator_names_its_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let scan = scan_at(
+            dir.path(),
+            "cities",
+            "subject.rs",
+            "#[subject]\npub struct City;",
+        );
+        assert_eq!(scan.checked, 1);
+        assert!(scan.findings.is_empty(), "{:?}", scan.findings);
+    }
+
+    #[test]
+    fn a_capability_named_for_what_it_grants_is_not_its_ports_subject() {
+        let dir = tempfile::tempdir().unwrap();
+        let scan = scan_at(
+            dir.path(),
+            "audio",
+            "subject.rs",
+            "#[subject]\npub struct Transcoding;",
+        );
+        assert_eq!(scan.findings.len(), 1);
+        assert_eq!(scan.findings[0].path, Path::new("src/audio/subject.rs"));
     }
 
     #[test]

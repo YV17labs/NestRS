@@ -33,12 +33,14 @@ impl Default for HygieneController {
 impl HygieneController {
     /// `body` is the wrapper's `RequestBody` local, which `ClientIp` reads after it.
     #[post("/body")]
+    #[public]
     async fn body_named_body(&self, Json(body): Json<Probe>, ip: ClientIp) -> String {
         format!("{} {}", body.name, ip.ip)
     }
 
     /// `req` is the wrapper's `Request` local, which `Query` reads after it.
     #[get("/req/{req}")]
+    #[public]
     async fn param_named_req(&self, Path(req): Path<String>, filter: Query<Filter>) -> String {
         format!("{req} {}", filter.0.limit)
     }
@@ -46,6 +48,7 @@ impl HygieneController {
     /// `__ctrl` is the wrapper's `&Arc<Self>` local; `marker` proves the real
     /// instance is called.
     #[get("/ctrl/{value}")]
+    #[public]
     async fn param_named_ctrl(&self, Path(__ctrl): Path<String>) -> String {
         format!("{} {__ctrl}", self.marker)
     }
@@ -53,6 +56,7 @@ impl HygieneController {
     /// A response shaper re-forwards every parameter and binds `__out`,
     /// `__response` and `res` of its own.
     #[post("/shaped/{tag}")]
+    #[public]
     #[http_code(201)]
     #[response_header("x-hygiene", "ok")]
     async fn shaped(
@@ -141,6 +145,7 @@ struct ShadowedController;
 #[routes]
 impl ShadowedController {
     #[get("/")]
+    #[public]
     fn named_like_a_trait(&self) -> String {
         "the handler".into()
     }
@@ -163,28 +168,33 @@ struct AddressController;
 #[routes]
 impl AddressController {
     #[get("/versioned")]
+    #[public]
     #[version("1")]
     async fn versioned_one(&self) -> String {
         "one".into()
     }
 
     #[get("/versioned")]
+    #[public]
     #[version("2")]
     async fn versioned_two(&self) -> String {
         "two".into()
     }
 
     #[get("/parcels/{id}")]
+    #[public]
     async fn read_parcel(&self, Path(id): Path<String>) -> String {
         format!("read {id}")
     }
 
     #[delete("parcels/{id}/")]
+    #[public]
     async fn drop_parcel(&self, Path(id): Path<String>) -> String {
         format!("dropped {id}")
     }
 
     #[get("/slashed/")]
+    #[public]
     async fn slashed(&self) -> String {
         "slashed".into()
     }
@@ -231,6 +241,7 @@ struct MembersController;
 #[routes]
 impl MembersController {
     #[get("/members/{id}")]
+    #[public]
     async fn member(&self, ids: Path<(String, String)>) -> String {
         let Path((org, id)) = ids;
         format!("{org}/{id}")
@@ -270,6 +281,7 @@ struct RosterController;
 #[routes]
 impl RosterController {
     #[get("/members/{id}")]
+    #[public]
     async fn member(&self, ids: Path<(String, u64)>, Path(member): Path<Member>) -> String {
         let Path((org, id)) = ids;
         format!("{org}#{id} {}#{}", member.org, member.id)

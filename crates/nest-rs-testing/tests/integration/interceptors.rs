@@ -64,12 +64,14 @@ struct PerHandlerController;
 #[routes]
 impl PerHandlerController {
     #[get("/traced")]
+    #[public]
     #[use_interceptors(Tracer)]
     async fn traced(&self) -> &'static str {
         "ok"
     }
 
     #[get("/plain")]
+    #[public]
     async fn plain(&self) -> &'static str {
         "ok"
     }
@@ -89,11 +91,13 @@ struct PerControllerController;
 #[routes]
 impl PerControllerController {
     #[get("/one")]
+    #[public]
     async fn one(&self) -> &'static str {
         "ok"
     }
 
     #[get("/two")]
+    #[public]
     async fn two(&self) -> &'static str {
         "ok"
     }
@@ -173,6 +177,7 @@ struct DupGlobalCtrl;
 #[routes]
 impl DupGlobalCtrl {
     #[get("/echo")]
+    #[public]
     async fn echo_dup_global_ctrl(&self) -> &'static str {
         "ok"
     }
@@ -184,6 +189,7 @@ struct DupGlobalMethod;
 #[routes]
 impl DupGlobalMethod {
     #[get("/echo")]
+    #[public]
     #[use_interceptors(CounterInterceptor)]
     async fn echo_dup_global_method(&self) -> &'static str {
         "ok"
@@ -197,6 +203,7 @@ struct DupCtrlMethod;
 #[routes]
 impl DupCtrlMethod {
     #[get("/echo")]
+    #[public]
     #[use_interceptors(CounterInterceptor)]
     async fn echo_dup_ctrl_method(&self) -> &'static str {
         "ok"
@@ -321,6 +328,7 @@ struct CountedController;
 #[routes]
 impl CountedController {
     #[get("/")]
+    #[public]
     async fn counted(&self) -> &'static str {
         "ok"
     }
@@ -390,6 +398,7 @@ struct EdgeBandController;
 #[routes]
 impl EdgeBandController {
     #[get("/ok")]
+    #[public]
     async fn ok(&self) -> &'static str {
         "ok"
     }

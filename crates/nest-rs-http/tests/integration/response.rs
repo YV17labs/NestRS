@@ -16,11 +16,13 @@ struct DecoratorProbeController;
 #[routes]
 impl DecoratorProbeController {
     #[get("/")]
+    #[public]
     async fn hello(&self) -> &'static str {
         "Hello World"
     }
 
     #[post("/echo")]
+    #[public]
     #[http_code(201)]
     #[response_header("x-powered-by", "nestrs")]
     async fn echo(&self) -> &'static str {
@@ -30,10 +32,12 @@ impl DecoratorProbeController {
     // No `#[allow(dead_code)]`: the macro emits it, and this suite compiles
     // under `-D warnings`.
     #[get("/docs")]
+    #[public]
     #[redirect("https://docs.nestrs.dev", 301)]
     async fn docs(&self) {}
 
     #[post("/forbidden")]
+    #[public]
     #[http_code(201)]
     async fn forbidden(&self) -> Result<&'static str, ForbiddenError> {
         Err(ForbiddenError)
@@ -41,6 +45,7 @@ impl DecoratorProbeController {
 
     /// The same refusal through a `Result` renamed on import.
     #[post("/forbidden-by-import")]
+    #[public]
     #[http_code(201)]
     #[response_header("x-created", "yes")]
     async fn forbidden_by_import(&self) -> NestResult<&'static str> {
@@ -50,12 +55,14 @@ impl DecoratorProbeController {
     /// Through a type alias whose error is only a `ResponseError`: no
     /// `Result<T, E>: IntoResponse` bound is asked of it.
     #[post("/forbidden-by-alias")]
+    #[public]
     #[http_code(201)]
     async fn forbidden_by_alias(&self) -> Refusable<&'static str> {
         Err(ForbiddenError)
     }
 
     #[post("/created-by-alias")]
+    #[public]
     #[http_code(201)]
     #[response_header("x-created", "yes")]
     async fn created_by_alias(&self) -> Refusable<&'static str> {
@@ -64,6 +71,7 @@ impl DecoratorProbeController {
 
     /// The shapers written path-qualified, as an exported attribute macro may be.
     #[post("/qualified")]
+    #[public]
     #[nest_rs_http::http_code(201)]
     #[nest_rs_http::response_header("x-probe", "yes")]
     async fn qualified(&self) -> &'static str {
@@ -71,10 +79,12 @@ impl DecoratorProbeController {
     }
 
     #[get("/qualified-redirect")]
+    #[public]
     #[nest_rs_http::redirect("https://example.com", 301)]
     async fn qualified_redirect(&self) {}
 
     #[get("/xml-as-json")]
+    #[public]
     #[response_header("content-type", "application/json")]
     async fn xml_as_json(&self) -> Response {
         let mut resp = "<root/>".into_response();

@@ -16,21 +16,25 @@ struct KitchenController;
 #[routes]
 impl KitchenController {
     #[get("/")]
+    #[public]
     async fn index(&self) -> &'static str {
         "kitchen"
     }
 
     #[get("/items/{id}")]
+    #[public]
     async fn item(&self, id: nest_rs_http::Path<String>) -> String {
         format!("item {}", id.0)
     }
 
     #[get("/search")]
+    #[public]
     async fn search(&self, req: &nest_rs_http::Request) -> String {
         req.uri().query().unwrap_or("none").to_owned()
     }
 
     #[get("/shelves/{n}")]
+    #[public]
     async fn shelf(&self, n: nest_rs_http::Path<u32>) -> String {
         format!("shelf {}", n.0)
     }
@@ -102,11 +106,13 @@ struct OvenController;
 #[routes]
 impl OvenController {
     #[get("/")]
+    #[public]
     async fn bake(&self) -> &'static str {
         panic!("the oven caught fire")
     }
 
     #[get("/timer")]
+    #[public]
     async fn timer(&self) -> &'static str {
         "ding"
     }

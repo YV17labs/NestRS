@@ -17,6 +17,7 @@ struct HomeController;
 #[routes]
 impl HomeController {
     #[get("/")]
+    #[public]
     async fn home(&self) -> &'static str {
         "home"
     }
@@ -28,11 +29,13 @@ struct PostsController;
 #[routes]
 impl PostsController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> &'static str {
         "posts"
     }
 
     #[get("/{id}")]
+    #[public]
     async fn one(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(StatusCode::NOT_FOUND))
     }
@@ -235,6 +238,7 @@ async fn a_version_selector_in_front_still_leaves_the_rest_to_the_fallback() {
     #[routes]
     impl ItemsController {
         #[get("/")]
+        #[public]
         async fn list(&self) -> &'static str {
             "items v1"
         }

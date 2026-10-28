@@ -39,27 +39,32 @@ struct DecodeController;
 #[routes]
 impl DecodeController {
     #[post("/json")]
+    #[public]
     async fn json(&self, body: Json<Charge>) -> String {
         body.0.amount.to_string()
     }
 
     #[post("/valid")]
+    #[public]
     async fn valid(&self, body: Valid<Json<Charge>>) -> String {
         body.amount.to_string()
     }
 
     #[get("/query")]
+    #[public]
     async fn query(&self, filter: Query<Filter>) -> String {
         format!("{:?}", filter.0.card)
     }
 
     #[post("/form")]
+    #[public]
     async fn form(&self, filter: Form<Filter>) -> String {
         format!("{:?}", filter.0.card)
     }
 
     /// A body the handler decodes itself, failing as a `400` it names.
     #[post("/own")]
+    #[public]
     async fn own(&self, body: RawBody) -> Result<String> {
         let amount: u64 = serde_json::from_slice(&body)
             .map_err(|err| HttpError::new(err, StatusCode::BAD_REQUEST))?;
@@ -68,6 +73,7 @@ impl DecodeController {
 
     /// The same decode, through an error of the handler's own that knows its status.
     #[post("/bad-request")]
+    #[public]
     async fn bad_request(&self, body: RawBody) -> std::result::Result<String, BadAmount> {
         let amount: u64 = serde_json::from_slice(&body)?;
         Ok(amount.to_string())
@@ -75,6 +81,7 @@ impl DecodeController {
 
     /// A problem built from the error by the framework's own constructor.
     #[post("/problem")]
+    #[public]
     async fn problem(&self, body: RawBody) -> std::result::Result<String, ProblemDetails> {
         let amount: u64 = serde_json::from_slice(&body).map_err(|err| {
             ProblemDetails::from_error(StatusCode::BAD_REQUEST, "Bad Request", &err)
@@ -84,6 +91,7 @@ impl DecodeController {
 
     /// A developer's own sentence in serde's vocabulary reaches the client as written.
     #[get("/own-words")]
+    #[public]
     async fn own_words(&self) -> Result<String> {
         Err(HttpError::new(MustBePositive, StatusCode::BAD_REQUEST))
     }
@@ -91,6 +99,7 @@ impl DecodeController {
     /// A failure the client must not read, carrying a decode failure in an
     /// anyhow chain: the operator's line says it without the value.
     #[post("/opaque")]
+    #[public]
     async fn opaque(&self, body: RawBody) -> Result<String> {
         let amount: u64 = serde_json::from_slice(&body)
             .map_err(anyhow::Error::from)
@@ -124,12 +133,14 @@ struct FailureController;
 impl FailureController {
     /// An error nobody meant for the client.
     #[get("/leaky")]
+    #[public]
     async fn leaky(&self) -> anyhow::Result<String> {
         Err(anyhow::anyhow!("secret 42"))
     }
 
     /// The same, wrapped with its status.
     #[get("/wrapped")]
+    #[public]
     async fn wrapped(&self) -> Result<String> {
         Err(HttpError::new(
             std::io::Error::other("secret 42"),
@@ -139,6 +150,7 @@ impl FailureController {
 
     /// A `Problem` an anyhow chain carries answers itself.
     #[get("/carried")]
+    #[public]
     async fn carried(&self) -> anyhow::Result<String> {
         Err(anyhow::Error::from(nest_rs_core::Problem::new(
             404,
@@ -149,6 +161,7 @@ impl FailureController {
 
     /// A `Problem` returned through the edge's own error.
     #[get("/taken")]
+    #[public]
     async fn taken(&self) -> Result<String> {
         let taken = nest_rs_core::Problem::new(409, nest_rs_core::problem::code::CONFLICT)
             .with_detail("the handle is taken")
@@ -158,6 +171,7 @@ impl FailureController {
 
     /// An `anyhow` chain returned as an `HttpError`.
     #[get("/ledger")]
+    #[public]
     async fn ledger(&self) -> Result<String> {
         Err(HttpError::from(anyhow::anyhow!(
             "the ledger at 10.0.0.1 refused"
@@ -167,12 +181,14 @@ impl FailureController {
     /// A server `Problem` an anyhow chain carries, behind what the chain says
     /// of the failure.
     #[get("/outage")]
+    #[public]
     async fn outage(&self) -> anyhow::Result<String> {
         Err(anyhow::Error::from(server_problem()).context("the search index at 10.0.0.1 refused"))
     }
 
     /// The same chain, returned as an `HttpError`.
     #[get("/outage-carried")]
+    #[public]
     async fn outage_carried(&self) -> Result<String> {
         Err(HttpError::from(
             anyhow::Error::from(server_problem()).context("the search index at 10.0.0.1 refused"),
@@ -181,24 +197,28 @@ impl FailureController {
 
     /// A server `Problem` returned through the edge's own error.
     #[get("/unavailable")]
+    #[public]
     async fn unavailable(&self) -> Result<String> {
         Err(HttpError::from(server_problem()))
     }
 
     /// A deliberate `500` with no cause: nothing withheld, nothing filed.
     #[get("/status")]
+    #[public]
     async fn status(&self) -> Result<String> {
         Err(HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR))
     }
 
     /// A failure the handler says is none of the client's business.
     #[get("/opaque")]
+    #[public]
     async fn opaque(&self) -> Result<String> {
         Err::<String, _>(std::io::Error::other("secret 42")).opaque()
     }
 
     /// A `500` the handler wrote as raw text.
     #[get("/raw")]
+    #[public]
     async fn raw(&self) -> nest_rs_http::Response {
         nest_rs_http::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -207,6 +227,7 @@ impl FailureController {
 
     /// A handler that unwinds.
     #[get("/panic")]
+    #[public]
     async fn panic(&self) -> String {
         panic!("secret 42")
     }
@@ -214,12 +235,14 @@ impl FailureController {
     /// An error of the handler's own whose status is a `500`, rendered by
     /// `ResponseError`'s default.
     #[get("/typed")]
+    #[public]
     async fn typed(&self) -> std::result::Result<String, LedgerDown> {
         Err(LedgerDown)
     }
 
     /// The same, over a decode failure quoting what the request sent.
     #[post("/typed-decode")]
+    #[public]
     async fn typed_decode(&self, body: RawBody) -> std::result::Result<String, LedgerUnreadable> {
         let amount: u64 = serde_json::from_slice(&body)?;
         Ok(amount.to_string())
@@ -227,6 +250,7 @@ impl FailureController {
 
     /// An error of the handler's own whose status is a `503`.
     #[get("/typed-busy")]
+    #[public]
     async fn typed_busy(&self) -> std::result::Result<String, LedgerBusy> {
         Err(LedgerBusy(std::io::Error::other(
             "the ledger at 10.0.0.1 timed out",
@@ -235,18 +259,21 @@ impl FailureController {
 
     /// An error of the handler's own whose status is a `4xx`.
     #[get("/typed-refusal")]
+    #[public]
     async fn typed_refusal(&self) -> std::result::Result<String, Overdrawn> {
         Err(Overdrawn)
     }
 
     /// The problem document itself returned as the error.
     #[get("/document")]
+    #[public]
     async fn document(&self) -> std::result::Result<String, ProblemDetails> {
         Err(ProblemDetails::internal())
     }
 
     /// The class's own problem, as `#[crud]` answers an opaque failure.
     #[get("/problem")]
+    #[public]
     async fn problem(&self) -> Result<String> {
         Err(HttpError::from(nest_rs_core::Problem::new(
             500,
@@ -256,18 +283,21 @@ impl FailureController {
 
     /// A bare `503`, the server unable to serve the request.
     #[get("/busy")]
+    #[public]
     async fn busy(&self) -> Result<String> {
         Err(HttpError::from_status(StatusCode::SERVICE_UNAVAILABLE))
     }
 
     /// A bare `404`, the handler's own.
     #[get("/missing")]
+    #[public]
     async fn missing(&self) -> Result<String> {
         Err(HttpError::from_status(StatusCode::NOT_FOUND))
     }
 
     /// A `404` the handler wrote as raw text.
     #[get("/raw-missing")]
+    #[public]
     async fn raw_missing(&self) -> nest_rs_http::Response {
         nest_rs_http::Response::builder()
             .status(StatusCode::NOT_FOUND)

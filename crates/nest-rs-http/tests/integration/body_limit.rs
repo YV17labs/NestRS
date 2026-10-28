@@ -36,23 +36,27 @@ struct BodyController;
 #[routes]
 impl BodyController {
     #[post("/json")]
+    #[public]
     async fn take_json(&self, body: Json<Payload>) -> String {
         body.0.value
     }
 
     #[post("/string")]
+    #[public]
     async fn take_string(&self, body: Body) -> nest_rs_http::Result<String> {
         let text = body.into_string().await?;
         Ok(format!("{} bytes", text.len()))
     }
 
     #[post("/raw")]
+    #[public]
     async fn take_raw(&self, body: RawBody) -> String {
         format!("{} bytes", body.len())
     }
 
     // A streamed body has no extractor limit: its only bound is the edge's.
     #[post("/stream")]
+    #[public]
     async fn take_stream(&self, body: Body) -> nest_rs_http::Result<String> {
         let mut stream = std::pin::pin!(body.into_stream());
         let mut seen = 0usize;

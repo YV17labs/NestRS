@@ -4,7 +4,7 @@
 
 use nest_rs_core::{
     Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, exception_filter,
-    injectable, interceptor, module, target,
+    injectable, interceptor, module,
 };
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::{async_trait, controller, routes};
@@ -245,8 +245,8 @@ async fn a_controller_guard_no_module_provides_fails_the_boot_naming_it_and_the_
     );
 }
 
-/// A controller route with no guard and no `#[public]` marker: an *implicit*
-/// access decision.
+/// Controller routes with no guard and no `#[public]` marker: an opening no
+/// line declares.
 #[controller(path = "/")]
 struct OpenController;
 
@@ -256,34 +256,57 @@ impl OpenController {
     async fn create(&self) -> String {
         "made".into()
     }
+
+    #[get("/thing")]
+    async fn read(&self) -> String {
+        "read".into()
+    }
+
+    #[get("/open")]
+    #[public]
+    async fn open(&self) -> String {
+        "open on purpose".into()
+    }
 }
 
 #[module(providers = [OpenController])]
 struct OpenModule;
 
 #[tokio::test]
-async fn an_unguarded_non_public_route_warns_but_boots_without_a_global_pool() {
-    let logs = nest_rs_testing::LogCapture::install();
-    let app = TestApp::for_module::<OpenModule>()
-        .await
-        .expect("an implicit access decision is a warning, not a boot failure");
-    app.http().post("/thing").send().await.assert_status_is_ok();
+async fn a_route_with_no_guard_and_no_public_refuses_the_boot_naming_every_such_route() {
+    let err = boot_error(
+        TestApp::for_module::<OpenModule>().await,
+        "a route no guard covers and no #[public] opens would serve every caller",
+    );
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("POST /thing (create)") && chain.contains("GET /thing (read)"),
+        "one refusal names every such route, not the first one: {chain}",
+    );
+    assert!(
+        !chain.contains("/open"),
+        "a route marked #[public] is open on purpose: {chain}",
+    );
+    assert!(
+        chain.contains("#[use_guards(") && chain.contains("use_guards_global"),
+        "the remedy names both ways to bind a guard: {chain}",
+    );
+    assert!(
+        chain.contains("#[public]"),
+        "…and the explicit opening: {chain}",
+    );
+}
 
-    let event = logs
-        .find(target::LAYERS, "unguarded routes detected")
-        .into_iter()
-        .next()
-        .expect("a route deciding access implicitly is named at boot");
-    assert_eq!(event.level, "warn");
-    assert!(
-        event.field("routes").is_some_and(|r| r.contains("/thing")),
-        "and the line names the routes, not just how many: a count sends the \
-         reader looking through the whole table: {event:?}",
-    );
-    assert!(
-        event.field("hint").is_some(),
-        "with the remedy, since a warning that cannot be acted on is noise: {event:?}",
-    );
+#[tokio::test]
+async fn the_global_guard_pool_covers_a_route_declaring_no_posture() {
+    let app = TestApp::builder()
+        .module::<OpenModule>()
+        .module::<GuardOnlyModule>()
+        .use_guards_global([guard::<WiredGuard>()])
+        .build()
+        .await
+        .expect("a route the app's pool guards declares its posture there");
+    app.http().post("/thing").send().await.assert_status_is_ok();
 }
 
 /// Two controllers claiming the same prefix: a boot refusal naming both, never

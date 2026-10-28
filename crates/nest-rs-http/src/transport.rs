@@ -572,13 +572,10 @@ impl Transport for HttpTransport {
         }
 
         if !unguarded.is_empty() {
-            tracing::warn!(
-                target: nest_rs_core::target::LAYERS,
-                count = unguarded.len(),
-                routes = unguarded.join(", ").as_str(),
-                hint = "bind a guard or mark them #[public]",
-                "unguarded routes detected",
-            );
+            return Err(RouteError::Unguarded {
+                routes: unguarded.join(", "),
+            }
+            .into());
         }
         // A warning, not a fail-secure stop: a gateway whose messages are all
         // `#[public]` is a legitimate shape.

@@ -81,9 +81,11 @@ guard, filter or interceptor loop of its own.
    `PostureRules` in `nest-rs-codegen` where it is the same grammar: `#[tools]`
    and `#[messages]` take it verbatim. `#[operations]` parses its own because only
    GraphQL can synthesise an id argument and an `Authorized<A, E>` proof
-   (`bind = Service`, `id_arg`); `#[routes]`' posture is optional, because a
-   route may be gated by `#[use_guards]` alone, and it refuses `#[authorize]` on
-   `#[sse]` and a posture bound to a handler parameter. An edge whose units
+   (`bind = Service`, `id_arg`); `#[routes]`' posture is optional on a route a
+   guard covers, which the guard decides, and a route no guard covers — the
+   app's pool included — says `#[public]` or refuses the boot, one error naming
+   every such route and both remedies; it refuses `#[authorize]` on `#[sse]` and
+   a posture bound to a handler parameter. An edge whose units
    have no caller (a job, a tick, an event) declares `Posture::System` and
    runs no guard stage.
 6. **A class gate the posture emits** — `nest_rs_authz::class_gate::<A, E>`,

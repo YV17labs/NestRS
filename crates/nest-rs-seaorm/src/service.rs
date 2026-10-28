@@ -92,7 +92,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable};
 /// # use nest_rs_core::{Discovery, module};
 /// # use nest_rs_http::{HttpControllerMeta, Method};
-/// # use nest_rs_testing::TestApp;
+/// # use nest_rs_testing::HeadlessApp;
 /// # mod users {
 /// #     use nest_rs_seaorm::expose;
 /// #     use sea_orm::entity::prelude::*;
@@ -144,7 +144,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// # struct UsersModule;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> anyhow::Result<()> {
-/// # let app = TestApp::for_module::<UsersModule>().await?;
+/// # let app = HeadlessApp::builder().module::<UsersModule>().build_headless().await?;
 /// # let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
 /// # let routes: Vec<_> = controllers[0]
 /// #     .meta

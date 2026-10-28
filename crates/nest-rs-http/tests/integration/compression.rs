@@ -16,11 +16,13 @@ struct EchoController;
 #[routes]
 impl EchoController {
     #[get("/")]
+    #[public]
     async fn echo(&self) -> String {
         "nestrs compression payload ".repeat(64)
     }
 
     #[get("/slow")]
+    #[public]
     async fn slow(&self) -> String {
         tokio::time::sleep(Duration::from_secs(30)).await;
         "unreachable".into()
@@ -29,6 +31,7 @@ impl EchoController {
     /// The first part of a 4000-byte representation, as a range request is
     /// answered.
     #[get("/part")]
+    #[public]
     async fn part(&self) -> nest_rs_http::Response {
         nest_rs_http::Response::builder()
             .status(StatusCode::PARTIAL_CONTENT)
@@ -40,6 +43,7 @@ impl EchoController {
     }
 
     #[sse("/events")]
+    #[public]
     async fn events(&self) -> SseStream {
         SseStream::new(futures_util::stream::iter([SseEvent::message("one")]))
     }

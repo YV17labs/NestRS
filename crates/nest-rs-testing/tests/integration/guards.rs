@@ -64,6 +64,7 @@ impl HandlerScope {
     }
 
     #[get("/open")]
+    #[public]
     async fn open(&self) -> &'static str {
         "ok"
     }
@@ -121,11 +122,13 @@ struct PublicEverywhere;
 #[routes]
 impl PublicEverywhere {
     #[get("/a")]
+    #[public]
     async fn a(&self) -> &'static str {
         "ok"
     }
 
     #[get("/b")]
+    #[public]
     async fn b(&self) -> &'static str {
         "ok"
     }
@@ -491,6 +494,7 @@ struct CtxUnguarded;
 #[routes]
 impl CtxUnguarded {
     #[get("/whoami")]
+    #[public]
     async fn bare_whoami(&self, tenant: Ctx<Tenant>) -> String {
         tenant.into_inner().0
     }

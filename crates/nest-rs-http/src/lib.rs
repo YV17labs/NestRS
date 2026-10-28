@@ -310,6 +310,7 @@ pub use async_trait::async_trait;
 /// #[routes]
 /// impl UsersController {
 ///     #[get("/")]
+///     #[public]
 ///     async fn list(&self) -> &'static str {
 ///         "[]"
 ///     }
@@ -334,6 +335,7 @@ pub use nest_rs_http_macros::controller;
 /// #[routes]
 /// impl UsersController {
 ///     #[get("/")]
+///     #[public]
 ///     async fn list(&self) -> Json<Vec<String>> {
 ///         Json(vec!["ada".into()])
 ///     }

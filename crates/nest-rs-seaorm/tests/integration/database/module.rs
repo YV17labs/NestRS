@@ -60,12 +60,14 @@ struct ProbeController;
 #[routes]
 impl ProbeController {
     #[post("/quick")]
+    #[public]
     async fn quick(&self) -> StatusCode {
         tokio::time::sleep(Duration::from_millis(500)).await;
         StatusCode::CREATED
     }
 
     #[post("/slow")]
+    #[public]
     async fn slow(&self) -> StatusCode {
         tokio::time::sleep(Duration::from_secs(30)).await;
         StatusCode::CREATED

@@ -10,6 +10,7 @@ struct UsersController;
 #[routes]
 impl UsersController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> &'static str {
         "users"
     }

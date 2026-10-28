@@ -105,6 +105,7 @@ struct GlobalScope;
 #[routes]
 impl GlobalScope {
     #[get("/domain")]
+    #[public]
     async fn fail_domain_global(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::new(
             DomainError("bad input".into()),
@@ -113,6 +114,7 @@ impl GlobalScope {
     }
 
     #[get("/infra")]
+    #[public]
     async fn fail_infra_global(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::new(
             InfraError("db down".into()),
@@ -128,6 +130,7 @@ struct ControllerScope;
 #[routes]
 impl ControllerScope {
     #[get("/domain")]
+    #[public]
     async fn fail_domain_ctrl(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::new(
             DomainError("at controller scope".into()),
@@ -142,6 +145,7 @@ struct MethodScope;
 #[routes]
 impl MethodScope {
     #[get("/domain")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
     async fn fail_domain_method(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::new(
@@ -157,6 +161,7 @@ struct DupGlobalMethod;
 #[routes]
 impl DupGlobalMethod {
     #[get("/domain")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
     async fn fail_domain_dup(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::new(
@@ -173,6 +178,7 @@ struct DupCtrlMethod;
 #[routes]
 impl DupCtrlMethod {
     #[get("/domain")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
     async fn fail_domain_ctrl_method(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::new(
@@ -190,12 +196,14 @@ struct OrdinaryRaise;
 #[routes]
 impl OrdinaryRaise {
     #[get("/filtered")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
     async fn filtered(&self) -> Result<&'static str, DomainError> {
         Err(DomainError("boom".into()))
     }
 
     #[get("/unfiltered")]
+    #[public]
     async fn unfiltered(&self) -> Result<&'static str, DomainError> {
         Err(DomainError("boom".into()))
     }
@@ -209,12 +217,14 @@ struct ClosestScope;
 #[routes]
 impl ClosestScope {
     #[get("/typed")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
     async fn typed(&self) -> Result<&'static str, DomainError> {
         Err(DomainError("closest".into()))
     }
 
     #[get("/other")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
     async fn other(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::new(
@@ -492,6 +502,7 @@ struct HeadController;
 #[routes]
 impl HeadController {
     #[get("/")]
+    #[public]
     #[use_exception_filters(EchoesAccept)]
     async fn conflict(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(StatusCode::CONFLICT))
@@ -578,6 +589,7 @@ struct FiledController;
 #[routes]
 impl FiledController {
     #[get("/as-a-4xx")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
     async fn as_a_4xx(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::new(
@@ -587,41 +599,48 @@ impl FiledController {
     }
 
     #[get("/as-a-503")]
+    #[public]
     #[use_exception_filters(AsUnavailable)]
     async fn as_a_503(&self) -> nest_rs_http::Result<&'static str> {
         Err(anyhow::anyhow!("db down").into())
     }
 
     #[get("/as-its-own-500")]
+    #[public]
     #[use_exception_filters(AsItsOwn500)]
     async fn as_its_own_500(&self) -> nest_rs_http::Result<&'static str> {
         Err(anyhow::anyhow!("db down").into())
     }
 
     #[get("/unfiltered")]
+    #[public]
     async fn unfiltered(&self) -> nest_rs_http::Result<&'static str> {
         Err(anyhow::anyhow!("db down").into())
     }
 
     #[get("/typed/as-a-4xx")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
     async fn typed_as_a_4xx(&self) -> Result<&'static str, DomainError> {
         Err(DomainError("db down".into()))
     }
 
     #[get("/typed/as-a-503")]
+    #[public]
     #[use_exception_filters(AsUnavailable)]
     async fn typed_as_a_503(&self) -> Result<&'static str, DomainError> {
         Err(DomainError("db down".into()))
     }
 
     #[get("/typed/as-its-own-500")]
+    #[public]
     #[use_exception_filters(AsItsOwn500)]
     async fn typed_as_its_own_500(&self) -> Result<&'static str, DomainError> {
         Err(DomainError("db down".into()))
     }
 
     #[get("/typed/unfiltered")]
+    #[public]
     async fn typed_unfiltered(&self) -> Result<&'static str, DomainError> {
         Err(DomainError("db down".into()))
     }

@@ -11,6 +11,7 @@ struct ThingController;
 #[routes]
 impl ThingController {
     #[get("/thing")]
+    #[public]
     async fn thing(&self) -> &'static str {
         "ok"
     }

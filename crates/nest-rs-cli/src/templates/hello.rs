@@ -35,7 +35,7 @@ pub struct {{controller}} {
 
 #[routes]
 impl {{controller}} {
-    // Every route declares a posture, and an unguarded one is flagged at boot.
+    // A route no guard covers is refused at boot unless it says #[public].
     // This greeting is deliberately open, so it says so.
     #[get("/")]
     #[public]

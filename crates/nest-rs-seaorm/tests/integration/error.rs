@@ -253,6 +253,7 @@ struct LedgerController;
 #[routes]
 impl LedgerController {
     #[get("/db")]
+    #[public]
     async fn db(&self) -> Result<String, ServiceError> {
         Err(ServiceError::from(refused(
             "22P02",
@@ -261,12 +262,14 @@ impl LedgerController {
     }
 
     #[get("/masking")]
+    #[public]
     async fn masking(&self) -> Result<String, ServiceError> {
         let failure = serde_json::from_str::<u64>(r#""secret-123""#).expect_err("not a number");
         Err(nest_rs_seaorm::__private::masking(&failure))
     }
 
     #[get("/internal")]
+    #[public]
     async fn internal(&self) -> Result<String, ServiceError> {
         Err(ServiceError::internal_because(
             "could not sign the export",
@@ -275,6 +278,7 @@ impl LedgerController {
     }
 
     #[get("/cancelled")]
+    #[public]
     async fn cancelled(&self) -> Result<String, ServiceError> {
         Err(ServiceError::from(refused(
             "57014",
@@ -283,6 +287,7 @@ impl LedgerController {
     }
 
     #[get("/missing")]
+    #[public]
     async fn missing(&self) -> Result<String, ServiceError> {
         Err(ServiceError::not_found("no such entry"))
     }

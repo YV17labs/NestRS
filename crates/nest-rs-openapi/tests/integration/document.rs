@@ -15,6 +15,7 @@ struct PostsV1Controller;
 #[routes]
 impl PostsV1Controller {
     #[get("/")]
+    #[public]
     async fn list(&self) -> String {
         "v1".into()
     }
@@ -26,11 +27,13 @@ struct PostsV2Controller;
 #[routes]
 impl PostsV2Controller {
     #[get("/")]
+    #[public]
     async fn list(&self) -> String {
         "v2".into()
     }
 
     #[get("/drafts")]
+    #[public]
     async fn drafts(&self) -> String {
         "[]".into()
     }
@@ -42,6 +45,7 @@ struct ReportsController;
 #[routes]
 impl ReportsController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> String {
         "reports".into()
     }
@@ -53,6 +57,7 @@ struct ProbeController;
 #[routes]
 impl ProbeController {
     #[get("/type")]
+    #[public]
     async fn r#type(&self) -> String {
         "raw".into()
     }
@@ -64,6 +69,7 @@ struct HealthController;
 #[routes]
 impl HealthController {
     #[get("/")]
+    #[public]
     async fn live(&self) -> String {
         "ok".into()
     }

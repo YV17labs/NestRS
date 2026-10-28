@@ -88,9 +88,9 @@ impl BlogController {
 
 A controller is also a provider. `#[inject]` fields are resolved by type
 from the container; `#[routes]` mounts the verb methods on the
-controller's path. `#[public]` is the route's **posture** — every route declares
-one, and an unguarded route with no posture is flagged at boot
-(`unguarded routes detected`). This tagline is open on purpose, so it says so;
+controller's path. `#[public]` is the route's **posture**: a route no guard
+covers either says `#[public]` or refuses the boot, which names it. This
+tagline is open on purpose, so it says so;
 [Guards](/fundamentals/guards/) covers the other half.
 
 ```rust title="apps/blog/src/module.rs"

@@ -12,12 +12,14 @@ struct PagesController;
 #[routes]
 impl PagesController {
     #[get("/")]
+    #[public]
     async fn index(&self) -> &'static str {
         "a page worth framing"
     }
 
     /// An image other origins embed: it states its own resource policy.
     #[get("/badge")]
+    #[public]
     #[response_header("cross-origin-resource-policy", "cross-origin")]
     async fn badge(&self) -> &'static str {
         "an embeddable badge"

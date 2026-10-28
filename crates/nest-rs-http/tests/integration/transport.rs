@@ -1250,6 +1250,7 @@ struct PlainController;
 #[routes]
 impl PlainController {
     #[post("/")]
+    #[public]
     async fn plain(&self) -> &'static str {
         "plain"
     }

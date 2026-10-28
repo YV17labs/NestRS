@@ -17,11 +17,13 @@ pub struct HelloController {
 #[routes]
 impl HelloController {
     #[get("/ping")]
+    #[public]
     async fn ping(&self) -> &'static str {
         "pong"
     }
 
     #[get("/hello")]
+    #[public]
     async fn hello(&self) -> Json<HelloDto> {
         Json(HelloDto {
             message: self.svc.greeting(),
@@ -38,6 +40,7 @@ impl HelloController {
     }
 
     #[get("/stream")]
+    #[public]
     async fn stream(&self) -> Response {
         let chunks =
             stream::iter((0..16).map(|_| Ok::<_, std::io::Error>(Bytes::from_static(b"chunk\n"))));
@@ -47,11 +50,13 @@ impl HelloController {
     }
 
     #[post("/echo")]
+    #[public]
     async fn echo(&self, body: Json<HelloDto>) -> Json<HelloDto> {
         body
     }
 
     #[get("/large")]
+    #[public]
     async fn large(&self) -> Json<Vec<ItemDto>> {
         Json(self.svc.items())
     }

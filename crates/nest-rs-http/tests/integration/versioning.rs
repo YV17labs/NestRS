@@ -14,6 +14,7 @@ struct FundV1Controller;
 #[routes]
 impl FundV1Controller {
     #[get("/ping")]
+    #[public]
     async fn ping(&self) -> String {
         "v1".into()
     }
@@ -26,6 +27,7 @@ struct FundV2Controller;
 #[routes]
 impl FundV2Controller {
     #[get("/ping")]
+    #[public]
     async fn ping(&self) -> String {
         "v2".into()
     }
@@ -37,6 +39,7 @@ struct UnversionedController;
 #[routes]
 impl UnversionedController {
     #[get("/ping")]
+    #[public]
     async fn ping(&self) -> String {
         "none".into()
     }
@@ -49,11 +52,13 @@ struct ReportsController;
 #[routes]
 impl ReportsController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> String {
         "list".into()
     }
 
     #[post("/")]
+    #[public]
     #[version("2")]
     async fn create(&self) -> String {
         "created".into()
@@ -414,6 +419,7 @@ struct RootV2Controller;
 #[routes]
 impl RootV2Controller {
     #[get("/root-ping")]
+    #[public]
     async fn ping(&self) -> String {
         "root-v2".into()
     }
@@ -425,6 +431,7 @@ struct FundDraftsController;
 #[routes]
 impl FundDraftsController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> String {
         "drafts".into()
     }
@@ -517,6 +524,7 @@ struct OverlapAController;
 #[routes]
 impl OverlapAController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> String {
         "a".into()
     }
@@ -528,6 +536,7 @@ struct OverlapBController;
 #[routes]
 impl OverlapBController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> String {
         "b".into()
     }
@@ -569,6 +578,7 @@ struct MixV2Controller;
 #[routes]
 impl MixV2Controller {
     #[get("/@{handle}")]
+    #[public]
     async fn handle(&self) -> String {
         "mix-v2".into()
     }
@@ -580,6 +590,7 @@ struct MixNeutralController;
 #[routes]
 impl MixNeutralController {
     #[get("/@{handle}")]
+    #[public]
     async fn handle(&self) -> String {
         "mix-neutral".into()
     }
@@ -591,6 +602,7 @@ struct RootCatchAllController;
 #[routes]
 impl RootCatchAllController {
     #[get("/{*rest}")]
+    #[public]
     async fn any(&self) -> String {
         "root-catchall".into()
     }
@@ -602,6 +614,7 @@ struct LiveController;
 #[routes]
 impl LiveController {
     #[get("/probe")]
+    #[public]
     async fn probe(&self) -> String {
         "live".into()
     }

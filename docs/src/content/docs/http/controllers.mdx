@@ -49,8 +49,8 @@ impl HelloController {
   builds the controller.
 - **`#[routes]`** generates the route table; one entry per verb attribute.
 - **`#[public]`** declares the route open on purpose. A route with neither a
-  guard nor `#[public]` is named at boot in one `warn`,
-  `unguarded routes detected` — see [Security](/security/).
+  guard nor `#[public]` refuses the boot, which names every such route — see
+  [Security](/security/).
 - **`async fn hello(&self) -> String`** — any type that implements
   `IntoResponse` is a valid return. `String`, `&'static str`, `Json<T>`,
   `StatusCode`, `(StatusCode, Body)`, a built `Response` … all work, and so does

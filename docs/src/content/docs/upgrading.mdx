@@ -1002,6 +1002,10 @@ lists what the boot, a log or the wire shows when one is missed.
     configuration refusal's first line reads ``the factory for
     `<crate>::…Config` failed``, the variable and the rule under `Caused by:`.
     The boot's last line is `app ready` at `info`, naming the addresses bound.
+    An HTTP route no guard covers and no `#[public]` opens, which 6.x served
+    after one `unguarded routes detected` warning, now stops the boot naming
+    every such route: bind a guard on its controller, the route or the app's
+    global pool, or mark it `#[public]` where it is open on purpose.
 
 18. **Regenerate every client from the 7.0 document**, and move what it read off
     the wire:
@@ -1075,6 +1079,14 @@ lists what the boot, a log or the wire shows when one is missed.
 
 ## What fails if you get it wrong
 
+- **A route 6.x served unguarded** stops the boot:
+
+  ```text frame="terminal"
+  Error: routes no guard covers and none marks `#[public]`: POST /thing (create), GET /thing (read) — a route runs a guard or is open on purpose; bind a guard with `#[use_guards(...)]` on the controller or the route, or list the app's global pool (`App::builder().use_guards_global([...])`), or mark a route open on purpose with `#[public]`
+  ```
+
+  Bind a guard where the route should be closed, and write `#[public]` where it
+  is open on purpose.
 - **A variable kept under its 6.x name** is read by nothing, and the boot says so
   once per variable, at `warn`, before a missing required value stops it. The
   demo's `assistant`, started with a 6.x `.env`:

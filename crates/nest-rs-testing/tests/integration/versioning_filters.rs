@@ -52,11 +52,13 @@ struct WidgetController;
 #[routes]
 impl WidgetController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> &'static str {
         "widgets"
     }
 
     #[get("/boom")]
+    #[public]
     #[use_exception_filters(TeapotFilter)]
     async fn boom(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(
@@ -65,6 +67,7 @@ impl WidgetController {
     }
 
     #[get("/raw-boom")]
+    #[public]
     async fn raw_boom(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -79,6 +82,7 @@ struct GadgetController;
 #[routes]
 impl GadgetController {
     #[get("/boom")]
+    #[public]
     async fn gadget_boom(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -161,6 +165,7 @@ struct DupGlobalCtrl;
 #[routes]
 impl DupGlobalCtrl {
     #[get("/boom")]
+    #[public]
     async fn dup_global_ctrl_boom(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -174,6 +179,7 @@ struct DupGlobalMethod;
 #[routes]
 impl DupGlobalMethod {
     #[get("/boom")]
+    #[public]
     #[use_exception_filters(CountingFilter)]
     async fn dup_global_method_boom(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(
@@ -189,6 +195,7 @@ struct DupCtrlMethod;
 #[routes]
 impl DupCtrlMethod {
     #[get("/boom")]
+    #[public]
     #[use_exception_filters(CountingFilter)]
     async fn dup_ctrl_method_boom(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(

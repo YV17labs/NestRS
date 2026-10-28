@@ -252,6 +252,7 @@ pub(crate) struct ProbeController {
 #[nest_rs_http::routes]
 impl ProbeController {
     #[post("/")]
+    #[public]
     async fn run(&self) -> nest_rs_http::Result<nest_rs_http::Response> {
         (self.handler.0)().await
     }

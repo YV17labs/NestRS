@@ -54,6 +54,7 @@ struct GlobalScope;
 #[routes]
 impl GlobalScope {
     #[post("/echo")]
+    #[public]
     async fn echo_global(&self, body: Json<Value>) -> Json<Value> {
         Json(body.0)
     }
@@ -66,6 +67,7 @@ struct ControllerScope;
 #[routes]
 impl ControllerScope {
     #[post("/echo")]
+    #[public]
     async fn echo_ctrl(&self, body: Json<Value>) -> Json<Value> {
         Json(body.0)
     }
@@ -77,6 +79,7 @@ struct MethodScope;
 #[routes]
 impl MethodScope {
     #[post("/echo")]
+    #[public]
     #[use_pipes(StripPassword)]
     async fn echo_method(&self, body: Json<Value>) -> Json<Value> {
         Json(body.0)
@@ -89,6 +92,7 @@ struct NoPipesScope;
 #[routes]
 impl NoPipesScope {
     #[post("/echo")]
+    #[public]
     #[no_pipes]
     async fn echo_no_pipes(&self, body: Json<Value>) -> Json<Value> {
         Json(body.0)
@@ -101,6 +105,7 @@ struct DupGlobalMethod;
 #[routes]
 impl DupGlobalMethod {
     #[post("/echo")]
+    #[public]
     #[use_pipes(StripPassword)]
     async fn echo_dup_global_method(&self, body: Json<Value>) -> Json<Value> {
         Json(body.0)
@@ -114,6 +119,7 @@ struct DupCtrlMethod;
 #[routes]
 impl DupCtrlMethod {
     #[post("/echo")]
+    #[public]
     #[use_pipes(StripPassword)]
     async fn echo_dup_ctrl_method(&self, body: Json<Value>) -> Json<Value> {
         Json(body.0)
@@ -157,6 +163,7 @@ struct RecordedScope;
 #[routes]
 impl RecordedScope {
     #[post("/echo/{id}")]
+    #[public]
     #[use_pipes(RecordingPipe)]
     async fn echo_recorded(&self, body: Json<Value>) -> Json<Value> {
         Json(body.0)

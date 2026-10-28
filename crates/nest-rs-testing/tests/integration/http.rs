@@ -39,6 +39,7 @@ struct GreeterController {
 #[routes]
 impl GreeterController {
     #[get("/")]
+    #[public]
     async fn hello(&self) -> String {
         self.greeter.greet()
     }

@@ -49,6 +49,7 @@ use crate::error::HeaderError;
 /// # impl ThingsController {
 ///
 /// #[get("/things")]
+/// #[public]
 /// async fn list(&self, tracing: Header<Tracing>) -> Json<Vec<Thing>> {
 ///     Json(vec![Thing { request_id: tracing.into_inner().request_id }])
 /// }

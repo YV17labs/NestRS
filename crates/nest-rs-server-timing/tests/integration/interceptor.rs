@@ -127,6 +127,7 @@ struct PrivateController;
 #[routes]
 impl PrivateController {
     #[get("/")]
+    #[public]
     async fn index(&self) -> String {
         "secret".into()
     }

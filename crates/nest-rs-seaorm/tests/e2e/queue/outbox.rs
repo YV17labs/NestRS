@@ -232,11 +232,13 @@ struct OutboxController {
 #[nest_rs_http::routes]
 impl OutboxController {
     #[get("/")]
+    #[public]
     async fn read(&self) -> nest_rs_http::Result<Response> {
         (self.pushing.0)().await
     }
 
     #[post("/")]
+    #[public]
     async fn write(&self) -> nest_rs_http::Result<Response> {
         (self.pushing.0)().await
     }

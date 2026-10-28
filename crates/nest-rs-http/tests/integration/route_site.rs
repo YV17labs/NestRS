@@ -37,6 +37,7 @@ struct PipedController;
 #[routes]
 impl PipedController {
     #[post("/")]
+    #[public]
     #[use_pipes(KeepBody)]
     async fn take(&self, body: RawBody) -> String {
         format!("{} bytes", body.len())

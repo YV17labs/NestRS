@@ -196,11 +196,13 @@ struct WritesController;
 #[routes]
 impl WritesController {
     #[post("/")]
+    #[public]
     async fn write(&self) -> &'static str {
         "written"
     }
 
     #[post("/slow")]
+    #[public]
     async fn slow(&self) -> &'static str {
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         "written"

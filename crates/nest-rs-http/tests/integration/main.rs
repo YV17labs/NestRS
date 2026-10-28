@@ -79,31 +79,37 @@ pub(crate) struct MethodsController;
 #[routes]
 impl MethodsController {
     #[get("/")]
+    #[public]
     async fn read(&self) -> String {
         String::new()
     }
 
     #[post("/")]
+    #[public]
     async fn create(&self) -> String {
         String::new()
     }
 
     #[put("/")]
+    #[public]
     async fn replace(&self) -> String {
         String::new()
     }
 
     #[delete("/")]
+    #[public]
     async fn remove(&self) -> String {
         String::new()
     }
 
     #[patch("/")]
+    #[public]
     async fn amend(&self) -> String {
         String::new()
     }
 
     #[sse("/events")]
+    #[public]
     async fn events(&self) -> nest_rs_http::SseStream {
         nest_rs_http::SseStream::new(futures_util::stream::empty())
     }

@@ -79,6 +79,7 @@ impl MethodGuarded {
 
     // Used only under a global guard.
     #[get("/none")]
+    #[public]
     async fn none(&self) -> &'static str {
         "ok"
     }
@@ -220,6 +221,7 @@ impl EdgeController {
     }
 
     #[get("/boom")]
+    #[public]
     #[use_exception_filters(MapToOk)]
     async fn boom(&self) -> nest_rs_http::Result<&'static str> {
         Err(nest_rs_http::HttpError::from_status(

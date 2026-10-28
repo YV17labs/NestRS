@@ -25,6 +25,7 @@ struct ProbeController;
 #[routes]
 impl ProbeController {
     #[post("/")]
+    #[public]
     async fn write(&self) -> StatusCode {
         nest_rs_database::after_commit(async {
             tokio::time::sleep(Duration::from_secs(2)).await;
@@ -100,11 +101,13 @@ struct SealedController;
 #[routes]
 impl SealedController {
     #[get("/")]
+    #[public]
     async fn read(&self) -> String {
         format!("{} {}", reachable(), reachable_in_a_block().await)
     }
 
     #[post("/")]
+    #[public]
     async fn write(&self) -> String {
         let outside = current_executor()
             .expect("the handler runs in a unit")

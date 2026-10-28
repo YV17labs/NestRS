@@ -437,6 +437,7 @@ impl CallerFeedController {
     /// Three events, each naming the caller the stream reads off the ambient
     /// context when the body is polled, long after the handler returned.
     #[sse("/events")]
+    #[public]
     #[use_interceptors(CallerInterceptor)]
     async fn events(&self) -> SseStream {
         SseStream::new(stream::iter(1..=3).map(|n| {

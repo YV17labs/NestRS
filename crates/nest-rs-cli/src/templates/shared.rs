@@ -378,8 +378,9 @@ pub(crate) static AGENTS_BODY: &str = concat!(
     r#"
 ## Access posture — declared per operation, never inferred
 
-Every route, query, message and tool declares its posture, and an operation that
-declares none is flagged at boot. There are two declarations, and the answer
+Every query, message and tool declares its posture, or it does not compile; an
+HTTP route a guard covers may leave it to the guard, and one no guard covers
+declares it or refuses the boot. There are two declarations, and the answer
 picks between them — not the caller:
 
 - `#[authorize(Action, Entity)]` — the class-level gate **plus** automatic

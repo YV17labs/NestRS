@@ -39,6 +39,7 @@ struct ScopeController;
 #[routes]
 impl ScopeController {
     #[get("/id")]
+    #[public]
     async fn id(&self, a: Scoped<RequestId>, b: Scoped<RequestId>) -> String {
         format!("{}-{}-{}", a.id(), b.id(), Arc::ptr_eq(&a.0, &b.0))
     }

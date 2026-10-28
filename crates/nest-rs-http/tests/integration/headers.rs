@@ -29,6 +29,7 @@ struct HeadersController;
 #[routes]
 impl HeadersController {
     #[get("/trace")]
+    #[public]
     async fn trace(&self, trace: Header<Trace>) -> String {
         let trace = trace.into_inner();
         format!("{} {}", trace.request_id, trace.retry.unwrap_or_default())
@@ -36,6 +37,7 @@ impl HeadersController {
 
     /// A header DTO validated through the same carrier as every extractor.
     #[get("/tenant")]
+    #[public]
     async fn tenant(&self, tenant: Valid<Header<Tenant>>) -> String {
         tenant.into_inner().tenant
     }
@@ -128,11 +130,13 @@ struct EdgeController;
 #[routes]
 impl EdgeController {
     #[get("/bad-name")]
+    #[public]
     async fn bad_name(&self, headers: Header<BadName>) -> String {
         headers.into_inner().request_id.unwrap_or_default()
     }
 
     #[get("/flat")]
+    #[public]
     async fn flat(&self, headers: Header<Wrapper>) -> String {
         headers.into_inner().inner.request_id.unwrap_or_default()
     }

@@ -65,6 +65,7 @@ struct PingController;
 #[routes]
 impl PingController {
     #[get("/ping")]
+    #[public]
     async fn ping(&self) -> Result<&'static str> {
         Ok("pong")
     }

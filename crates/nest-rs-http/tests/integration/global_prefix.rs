@@ -16,6 +16,7 @@ struct UsersController;
 #[routes]
 impl UsersController {
     #[get("/")]
+    #[public]
     async fn list_users(&self) -> &'static str {
         "users"
     }
@@ -27,12 +28,14 @@ struct OrgsController;
 #[routes]
 impl OrgsController {
     #[get("/")]
+    #[public]
     async fn list_orgs(&self) -> &'static str {
         "orgs"
     }
 
     /// What `#[crud]`'s generated create does, by hand.
     #[post("/")]
+    #[public]
     async fn create_org(&self, req: &nest_rs_http::Request) -> nest_rs_http::Response {
         let mut resp = nest_rs_http::Response::builder()
             .status(StatusCode::CREATED)

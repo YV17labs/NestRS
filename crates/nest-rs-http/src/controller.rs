@@ -277,8 +277,8 @@ impl HttpRouteMeta {
         self.parts.scoped_guarded
     }
 
-    /// `#[public]` — an explicit, intentional public surface. Suppresses the
-    /// posture warning.
+    /// `#[public]` — an explicit, intentional public surface: a route no guard
+    /// covers boots only with it.
     pub fn public(&self) -> bool {
         self.parts.public
     }
@@ -291,7 +291,7 @@ impl HttpRouteMeta {
 
     /// The route's access decision is **implicit**: no global guard pool covers
     /// it, it binds no controller/method guard, and it is not marked
-    /// `#[public]`. The HTTP transport warns on these at boot.
+    /// `#[public]`. The HTTP transport refuses to boot with one.
     pub fn access_is_implicit(&self, global_guards: bool) -> bool {
         !global_guards && !self.parts.scoped_guarded && !self.parts.public
     }

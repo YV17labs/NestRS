@@ -24,11 +24,13 @@ struct WidgetsController;
 #[routes]
 impl WidgetsController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> String {
         "[]".into()
     }
 
     #[get("/legacy")]
+    #[public]
     #[redirect("/widgets", 301)]
     async fn legacy(&self) {}
 
@@ -47,11 +49,13 @@ impl WidgetsController {
     }
 
     #[post("/token")]
+    #[public]
     async fn token(&self, body: nest_rs_http::Form<TokenForm>) -> String {
         body.0.grant_type
     }
 
     #[post("/import")]
+    #[public]
     #[api(multipart = ImportForm, response_content_type = "text/csv")]
     async fn import(&self, trace: Header<Trace>, form: Multipart) -> String {
         let _ = form;
@@ -461,6 +465,7 @@ struct RootCatchAllController;
 #[routes]
 impl RootCatchAllController {
     #[get("/{*rest}")]
+    #[public]
     async fn anything(&self) -> String {
         "root-catch-all".into()
     }

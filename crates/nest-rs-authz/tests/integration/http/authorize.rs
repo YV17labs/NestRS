@@ -302,4 +302,31 @@ mod gate_order {
         granted.assert_status_is_ok();
         granted.assert_text(STORED).await;
     }
+
+    /// Declares the posture and binds no guard: nothing attaches the ability
+    /// its class gate reads.
+    #[controller(path = "/unguarded")]
+    struct UnguardedController;
+
+    #[routes]
+    impl UnguardedController {
+        #[get("/")]
+        #[authorize(Read, secret::Entity)]
+        async fn list(&self) -> Json<Vec<SecretDto>> {
+            Json(Vec::new())
+        }
+    }
+
+    #[module(providers = [UnguardedController])]
+    struct UnguardedModule;
+
+    #[tokio::test]
+    async fn a_posture_no_guard_backs_refuses_the_boot() {
+        let Err(refused) = TestApp::for_module::<UnguardedModule>().await else {
+            panic!("a gate with no guard to attach its ability would answer every call 500");
+        };
+        let chain = format!("{refused:#}");
+        assert!(chain.contains("GET /unguarded (list)"), "{chain}");
+        assert!(chain.contains("#[use_guards("), "{chain}");
+    }
 }

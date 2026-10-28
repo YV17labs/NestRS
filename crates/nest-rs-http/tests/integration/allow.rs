@@ -11,16 +11,19 @@ struct PostsController;
 #[routes]
 impl PostsController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> &'static str {
         "posts"
     }
 
     #[post("/")]
+    #[public]
     async fn create(&self) -> &'static str {
         "created"
     }
 
     #[delete("/{id}")]
+    #[public]
     async fn remove(&self) -> &'static str {
         "gone"
     }
@@ -62,11 +65,13 @@ struct DraftsController;
 #[routes]
 impl DraftsController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> &'static str {
         "drafts"
     }
 
     #[post("/")]
+    #[public]
     #[version("2")]
     async fn create(&self) -> &'static str {
         "created"

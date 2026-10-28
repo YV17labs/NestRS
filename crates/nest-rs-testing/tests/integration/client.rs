@@ -20,6 +20,7 @@ struct WhoController;
 #[routes]
 impl WhoController {
     #[get("/who")]
+    #[public]
     async fn who(&self, ip: ClientIp) -> String {
         format!("{} forwarded={}", ip.ip, ip.forwarded)
     }

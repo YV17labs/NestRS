@@ -185,20 +185,21 @@ every posture stays greppable as one `#[authorize]` or `#[public]` site — but
 forgetting the filter on a query is a category error the framework prevents,
 not a review catch.
 
-## Globals are declared twice on purpose
+## A forgotten guard refuses the boot
 
 `APP_GUARD` binds a NestJS guard once, in a module, for the whole app — and a
-controller has no way to say it depends on that binding. NestRS binds globals in
-`main` with `App::builder().use_guards_global([...])`, but the convention is to
-**also** declare the guard on the controller, resolver or gateway that needs it.
-That is not double work: the Layer System dedups every layer by `TypeId` across
-scopes, so a guard listed twice resolves once and runs once per unit.
+controller has no way to say it depends on that binding, so the app that forgets
+it serves the controller open. NestRS binds globals in `main` with
+`App::builder().use_guards_global([...])`, and an HTTP route no guard covers —
+not the global pool, not a `#[use_guards]` on its controller or itself — refuses
+the boot unless it says `#[public]`. The refusal names every such route, so the
+omission is a failed start, never an open route.
 
-The redundancy buys portability. A feature crate travels between binaries, and
-the app that forgets a global would otherwise leave a controller silently
-unprotected. Declared on the provider, the requirement travels with the code —
-and in a binary with no global pool the boot names, in one `warn`, every route
-that binds no guard and is not `#[public]`.
+Declaring the guard on the controller, resolver or gateway that needs it is still
+the convention, because it lets a feature crate travel to a binary with no global
+pool and boot there. Listing it at both scopes costs nothing: the Layer System
+dedups every layer by `TypeId`, so a guard listed twice resolves once and runs
+once per unit.
 
 ## There is no `forwardRef`
 

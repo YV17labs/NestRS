@@ -11,15 +11,11 @@ use uuid::Uuid;
 pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID};
 
 pub(crate) fn user_token(user: Uuid) -> String {
-    features::testing::token(
-        Uuid::parse_str(ORG_ID).expect("valid org uuid"),
-        vec![Role::User],
-        Subject::User(user),
-    )
+    features::testing::token_for(ORG_ID, "user", Subject::User(user))
 }
 
-pub(crate) async fn machine_token() -> String {
-    token_for_org(Uuid::parse_str(ORG_ID).expect("valid org uuid"), Role::User).await
+pub(crate) fn machine_token() -> String {
+    features::testing::token_for(ORG_ID, "user", features::testing::client())
 }
 
 pub(crate) async fn token_for_org(org_id: Uuid, role: Role) -> String {

@@ -152,7 +152,7 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_refuses_a_token_
     let (_db, app) = serve().await;
     let mut alice = open(&app, "/ws").await;
     wait_for_presence(&mut alice, 1).await;
-    let mut bot = open_as(&app, "/ws", &machine_token().await).await;
+    let mut bot = open_as(&app, "/ws", &machine_token()).await;
     wait_for_presence(&mut alice, 2).await;
 
     for event in ["message", "typing"] {

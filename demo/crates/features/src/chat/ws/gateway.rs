@@ -5,10 +5,10 @@ use nest_rs::ws::{Opaque, Scoped, WsClient, WsError, gateway, messages};
 
 use super::guard::ModerationGuard;
 use super::request_seq::RequestSeq;
-use crate::Claims;
 use crate::authn::AuthnGuard;
 use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 use crate::chat::service::ChatService;
+use crate::{Claims, Subject};
 
 #[gateway(path = "/ws")]
 #[use_guards(AuthnGuard)]
@@ -34,8 +34,7 @@ impl ChatGateway {
     #[public]
     #[use_guards(ModerationGuard)]
     async fn on_message(&self, message: SendMessageDto) -> Result<(), WsError> {
-        let caller = Self::caller()?;
-        self.svc.record(caller.sub.clone(), message).opaque()?;
+        self.svc.record(Self::author()?, message).opaque()?;
         Ok(())
     }
 
@@ -62,7 +61,7 @@ impl ChatGateway {
     #[use_guards(ModerationGuard)]
     async fn typing(&self, message: SendMessageDto, client: &WsClient) -> Result<(), WsError> {
         let typing = ChatMessageDto {
-            author: Self::caller()?.sub.clone(),
+            author: Self::author()?,
             text: message.text,
         };
         if let Err(e) = client.broadcast("typing", &typing) {
@@ -73,8 +72,9 @@ impl ChatGateway {
 }
 
 impl ChatGateway {
-    fn caller() -> Result<Arc<Claims>, WsError> {
+    fn author() -> Result<Subject, WsError> {
         ambient::<Claims>()
+            .map(|caller| caller.sub.clone())
             .ok_or("no principal reached the message: AuthnGuard did not run at the upgrade")
             .opaque()
     }

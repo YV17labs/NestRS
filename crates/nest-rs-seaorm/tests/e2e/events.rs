@@ -12,7 +12,8 @@ use std::time::Duration;
 use nest_rs_core::{App, injectable, module};
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_events::{EventBus, EventsModule, listeners};
-use nest_rs_seaorm::{SeaOrmConfig, SeaOrmUnitOfWork, current_executor};
+use nest_rs_seaorm::__private::current_executor;
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmUnitOfWork};
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
 
 /// A queue attempt's unit, the emitter's here.

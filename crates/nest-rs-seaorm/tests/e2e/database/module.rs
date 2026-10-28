@@ -231,7 +231,7 @@ impl CountsAtShutdown {
     async fn report(&self) -> anyhow::Result<()> {
         let counted = Repo::<row::Entity>::scoped(Action::Read)
             .filter(row::Column::Label.eq(COUNTED))
-            .count(&Repo::<row::Entity>::conn()?)
+            .count()
             .await?;
         *self
             .reading

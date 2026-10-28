@@ -6,11 +6,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use nest_rs_core::module;
+use nest_rs_database::with_request_executor;
 use nest_rs_database::{AtomicError, atomic};
-use nest_rs_seaorm::{
-    DbOutcome, Executor, FinalizeOutcome, LazyTransaction, current_executor, with_executor,
-    with_request_executor,
-};
+use nest_rs_seaorm::__private::current_executor;
+use nest_rs_seaorm::{DbOutcome, FinalizeOutcome, LazyTransaction, SeaOrmExecutor};
 use sea_orm::prelude::Uuid;
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
@@ -53,7 +52,7 @@ async fn insert(id: Uuid) -> Result<(), DbErr> {
     insert_on(&executor, id).await
 }
 
-async fn insert_on(executor: &Executor, id: Uuid) -> Result<(), DbErr> {
+async fn insert_on(executor: &SeaOrmExecutor, id: Uuid) -> Result<(), DbErr> {
     executor
         .execute_raw(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,
@@ -91,12 +90,12 @@ async fn committed(lazy: Arc<LazyTransaction>) {
 async fn a_unique_violation_inside_a_block_leaves_the_request_free_to_write_and_commit() {
     let conn = db().await;
     let (taken, after) = (Uuid::now_v7(), Uuid::now_v7());
-    insert_on(&Executor::Pool(conn.clone()), taken)
+    insert_on(&SeaOrmExecutor::Pool(conn.clone()), taken)
         .await
         .expect("the clashing row is seeded");
 
     let lazy = boundary(&conn);
-    with_request_executor(Executor::Lazy(Arc::clone(&lazy)), async {
+    with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         let clash = atomic(async { Ok::<_, Failure>(insert(taken).await?) }).await;
         assert!(
             matches!(&clash, Err(Failure::Db(err)) if DbOutcome::of(err) == DbOutcome::Conflict),
@@ -119,7 +118,7 @@ async fn a_block_returning_err_after_writing_leaves_no_row() {
 
     let lazy = boundary(&conn);
     let outcome = with_request_executor(
-        Executor::Lazy(Arc::clone(&lazy)),
+        SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
         atomic(async {
             insert(written).await?;
             Err::<(), _>(Failure::Refused)
@@ -138,7 +137,7 @@ async fn a_block_on_the_pool_commits_on_its_own() {
     let written = Uuid::now_v7();
 
     let outcome = with_request_executor(
-        Executor::Pool(conn.clone()),
+        SeaOrmExecutor::Pool(conn.clone()).into(),
         atomic(async { Ok::<_, Failure>(insert(written).await?) }),
     )
     .await;
@@ -156,7 +155,7 @@ async fn a_block_on_the_pool_returning_err_leaves_no_row() {
     let written = Uuid::now_v7();
 
     let outcome = with_request_executor(
-        Executor::Pool(conn.clone()),
+        SeaOrmExecutor::Pool(conn.clone()).into(),
         atomic(async {
             insert(written).await?;
             Err::<(), _>(Failure::Refused)
@@ -175,7 +174,7 @@ async fn a_nested_block_rolls_back_alone() {
 
     let lazy = boundary(&conn);
     let outcome = with_request_executor(
-        Executor::Lazy(Arc::clone(&lazy)),
+        SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
         atomic(async {
             insert(kept).await?;
             let inner = atomic(async {
@@ -199,13 +198,13 @@ async fn a_nested_block_rolls_back_alone() {
 async fn a_block_returning_ok_over_a_swallowed_failure_is_poisoned_and_keeps_nothing() {
     let conn = db().await;
     let (taken, written) = (Uuid::now_v7(), Uuid::now_v7());
-    insert_on(&Executor::Pool(conn.clone()), taken)
+    insert_on(&SeaOrmExecutor::Pool(conn.clone()), taken)
         .await
         .expect("the clashing row is seeded");
 
     let lazy = boundary(&conn);
     let outcome = with_request_executor(
-        Executor::Lazy(Arc::clone(&lazy)),
+        SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
         atomic(async {
             insert(written).await?;
             let _ = insert(taken).await;
@@ -231,7 +230,7 @@ async fn the_unit_waits_for_an_open_block_and_keeps_its_own_write() {
     let (inside, beside) = (Uuid::now_v7(), Uuid::now_v7());
 
     let lazy = boundary(&conn);
-    with_request_executor(Executor::Lazy(Arc::clone(&lazy)), async {
+    with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         let (block, parent) = tokio::join!(
             atomic(async {
                 insert(inside).await?;
@@ -259,7 +258,7 @@ async fn a_panicking_block_rolls_back_and_the_request_continues() {
     let (inside, after) = (Uuid::now_v7(), Uuid::now_v7());
 
     let lazy = boundary(&conn);
-    with_request_executor(Executor::Lazy(Arc::clone(&lazy)), async {
+    with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let unwound = nest_rs_core::panic::contain(atomic(async {
@@ -291,7 +290,7 @@ async fn a_statement_on_the_unit_from_inside_its_block_is_refused_rather_than_wa
     let written = Uuid::now_v7();
 
     let lazy = boundary(&conn);
-    with_request_executor(Executor::Lazy(Arc::clone(&lazy)), async {
+    with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         let unit = current_executor().expect("the unit's executor");
         let outcome = tokio::time::timeout(
             Duration::from_secs(10),
@@ -319,7 +318,7 @@ async fn a_unit_statement_issued_while_its_block_waits_to_open_is_refused() {
     let (beside, inside, refused) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
 
     let lazy = boundary(&conn);
-    with_request_executor(Executor::Lazy(Arc::clone(&lazy)), async {
+    with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         let unit = current_executor().expect("the unit's executor");
         let (parent, block) = tokio::join!(
             insert(beside),
@@ -353,10 +352,10 @@ async fn a_unit_statement_issued_while_its_block_waits_to_open_is_refused() {
 async fn a_block_whose_executor_escapes_keeps_nothing_and_refuses_the_late_write() {
     let conn = db().await;
     let (inside, late) = (Uuid::now_v7(), Uuid::now_v7());
-    let escaped: Arc<Mutex<Option<Executor>>> = Arc::default();
+    let escaped: Arc<Mutex<Option<SeaOrmExecutor>>> = Arc::default();
 
     let lazy = boundary(&conn);
-    with_request_executor(Executor::Lazy(Arc::clone(&lazy)), async {
+    with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         let outcome = atomic(async {
             insert(inside).await?;
             *escaped.lock().unwrap_or_else(PoisonError::into_inner) = current_executor();
@@ -390,7 +389,7 @@ async fn a_block_dropped_before_it_settles_leaves_its_unit_unable_to_commit() {
     let (before, inside) = (Uuid::now_v7(), Uuid::now_v7());
 
     let lazy = boundary(&conn);
-    with_request_executor(Executor::Lazy(Arc::clone(&lazy)), async {
+    with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         insert(before).await.expect("the unit writes first");
         let (wrote, written) = tokio::sync::oneshot::channel();
         let block = atomic(async {
@@ -421,7 +420,7 @@ async fn inside_a_callers_own_transaction_a_block_nests_and_the_caller_commits()
     let (kept, dropped, beside) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
 
     let txn = Arc::new(conn.begin().await.expect("the caller opens its own"));
-    with_executor(Executor::Txn(Arc::clone(&txn)), async {
+    with_request_executor(SeaOrmExecutor::Txn(Arc::clone(&txn)).into(), async {
         let released = atomic(async { Ok::<_, Failure>(insert(kept).await?) }).await;
         assert!(released.is_ok(), "{released:?}");
         let rolled_back = atomic(async {
@@ -499,7 +498,7 @@ async fn an_event_emitted_in_a_block_waits_for_the_outer_commit_and_dies_with_a_
     };
 
     let lazy = boundary(&conn);
-    with_request_executor(Executor::Lazy(Arc::clone(&lazy)), async {
+    with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         let released = atomic(async {
             insert(Uuid::now_v7()).await?;
             bus.emit(Announced("released")).await;

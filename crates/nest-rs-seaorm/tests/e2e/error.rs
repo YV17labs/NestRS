@@ -145,7 +145,7 @@ async fn a_route_whose_statement_is_cancelled_answers_its_pools_bound_as_the_wai
     let app = TestApp::builder()
         .provide(crate::module::bounding_statements(Duration::from_secs(1)))
         .provide(ProbeHandler::new(|| async {
-            nest_rs_seaorm::current_executor()
+            nest_rs_seaorm::__private::current_executor()
                 .expect("the handler runs with an ambient executor")
                 .execute_unprepared("SELECT pg_sleep(3)")
                 .await

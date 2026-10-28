@@ -98,3 +98,16 @@ the release). Two rows above state a version that is no longer the pin:
   sqlx's futures-intrusive still require 0.12, so both sit in the tree until
   they move; `deny.toml`'s bans allow a duplicate, and no skip is needed. 0.13
   (2026-10-21) is within the freshness bar, which 0.12.5 had crossed.
+
+## 2026-10-28 — `RepoSelect` implements sea-orm's builder traits
+
+"A wrapper over … sea-orm's query builder is a second framework" was put to the
+test by `Repo`'s select, which stopped handing out a connection
+(`repo-hands-out-no-connection.md`). `RepoSelect<E>` implements sea-orm's own
+`QueryFilter`, `QueryOrder`, `QuerySelect` and `QueryTrait` by delegating
+`query()` to the `Select<E>` it holds: every builder method is sea-orm's, with
+its documentation, and the developer writes sea-orm's vocabulary as before. What
+the framework owns is where the statement runs — `all`, `one`, `count` and
+`exists` on the ambient executor — which is no copy of the library. The refusal
+stands for a wrapper that re-implements the builder; sea-orm stays a public
+dependency, and its next major is still a nestrs major.

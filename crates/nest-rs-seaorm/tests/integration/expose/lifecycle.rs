@@ -4,8 +4,10 @@
 //! proves the rows in the e2e suite; this proves the declaration.
 
 use nest_rs_authz::Action;
-use nest_rs_seaorm::sea_orm::{DatabaseBackend, QueryTrait, Select};
-use nest_rs_seaorm::{Executor, Repo, SoftDeletable, live_condition, with_job_executor};
+use nest_rs_database::with_job_executor;
+use nest_rs_seaorm::sea_orm::sea_query::SelectStatement;
+use nest_rs_seaorm::sea_orm::{DatabaseBackend, QueryTrait};
+use nest_rs_seaorm::{Repo, SeaOrmExecutor, SoftDeletable, live_condition};
 use sea_orm::entity::prelude::*;
 
 mod ledger {
@@ -29,7 +31,7 @@ mod ledger {
     }
 }
 
-fn sql(select: Select<ledger::Entity>) -> String {
+fn sql(select: impl QueryTrait<QueryStatement = SelectStatement>) -> String {
     select.build(DatabaseBackend::Postgres).to_string()
 }
 
@@ -37,8 +39,8 @@ const LIVE: &str = r#""ledger_lines"."removed_at" IS NULL"#;
 
 #[tokio::test]
 async fn an_entity_declared_soft_delete_without_a_service_hides_its_tombstones() {
-    let pool = Executor::Pool(nest_rs_seaorm::sea_orm::DatabaseConnection::default());
-    with_job_executor(pool, async {
+    let pool = SeaOrmExecutor::Pool(nest_rs_seaorm::sea_orm::DatabaseConnection::default());
+    with_job_executor(pool.into(), async {
         let read = sql(Repo::<ledger::Entity>::scoped(Action::Read));
         assert!(read.contains(LIVE), "{read}");
         let escape = sql(Repo::<ledger::Entity>::with_tombstones(Action::Read));

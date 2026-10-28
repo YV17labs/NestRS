@@ -60,7 +60,7 @@ nest-rs-core.workspace = true
 nest-rs-seaorm-macros.workspace = true
 # The ORM-agnostic unit-of-work port: `SeaOrmUnitOfWork` implements
 # `nest_rs_database::UnitOfWork`, which every edge opens its units through, and
-# SeaORM's `Executor` enum implements `nest_rs_database::Executor`.
+# `SeaOrmExecutor` is installed as a `nest_rs_database::Executor`.
 nest-rs-database.workspace = true
 # `SeaOrmModule` owns the crate's one `#[config]`, `SeaOrmConfig` (namespace
 # `seaorm`), loaded from `<PREFIX>_SEAORM__*`; `validator` backs its `#[validate]` rules.

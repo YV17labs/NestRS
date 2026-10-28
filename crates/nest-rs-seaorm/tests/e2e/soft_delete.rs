@@ -6,8 +6,9 @@
 use std::sync::Arc;
 
 use nest_rs_authz::{Ability, AbilityBuilder, Action, with_ability};
+use nest_rs_database::with_request_executor;
 use nest_rs_seaorm::{
-    Access, Creatable, CrudService, Deletable, Executor, Repo, SoftDeletable, with_request_executor,
+    Access, Creatable, CrudService, Deletable, Repo, SeaOrmExecutor, SoftDeletable,
 };
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
@@ -88,14 +89,12 @@ async fn a_soft_deleted_row_is_hidden_from_every_read_and_update_but_with_tombst
     let row = seed(&conn).await;
     let id = row.id;
 
-    with_request_executor(Executor::Pool(conn.clone()), async {
+    with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
         with_ability(manage(), async {
             GravestonesService
                 .delete(row.clone())
                 .await
                 .expect("the entity's declaration makes the delete a soft one");
-            let c = Repo::<gravestone::Entity>::conn().expect("an executor");
-
             assert!(
                 Repo::<gravestone::Entity>::find_by_id(id)
                     .await
@@ -112,14 +111,14 @@ async fn a_soft_deleted_row_is_hidden_from_every_read_and_update_but_with_tombst
             assert!(
                 Repo::<gravestone::Entity>::scoped(Action::Read)
                     .filter(this(id))
-                    .one(&c)
+                    .one()
                     .await
                     .unwrap()
                     .is_none()
             );
             assert!(
                 Repo::<gravestone::Entity>::unscoped_by_id(id)
-                    .one(&c)
+                    .one()
                     .await
                     .unwrap()
                     .is_none()
@@ -135,7 +134,7 @@ async fn a_soft_deleted_row_is_hidden_from_every_read_and_update_but_with_tombst
 
             let tombstone = Repo::<gravestone::Entity>::with_tombstones(Action::Read)
                 .filter(this(id))
-                .one(&c)
+                .one()
                 .await
                 .unwrap()
                 .expect("the escape reads the tombstone");
@@ -177,7 +176,7 @@ async fn a_soft_deleted_row_is_hidden_from_every_read_and_update_but_with_tombst
             assert!(
                 Repo::<gravestone::Entity>::with_tombstones(Action::Read)
                     .filter(this(id))
-                    .one(&c)
+                    .one()
                     .await
                     .unwrap()
                     .is_none()
@@ -194,7 +193,7 @@ async fn a_row_inserted_already_deleted_passes_the_create_check_and_reads_as_abs
     seed(&conn).await;
     let id = Uuid::now_v7();
 
-    with_request_executor(Executor::Pool(conn.clone()), async {
+    with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
         with_ability(manage(), async {
             let archived = gravestone::ActiveModel {
                 id: Set(id),

@@ -28,8 +28,7 @@ impl NotificationsService {
             message: Set(command.message),
             created_at: Set(chrono::Utc::now().fixed_offset()),
         };
-        let conn = Repo::<Notifications>::conn()?;
-        let model = Repo::<Notifications>::insert_unscoped(active, &conn).await?;
+        let model = Repo::<Notifications>::insert_unscoped(active).await?;
         tracing::debug!(
             target: crate::notifications::TARGET,
             id = %model.id,
@@ -41,11 +40,10 @@ impl NotificationsService {
 
     pub async fn purge_expired(&self) -> Result<u64, ServiceError> {
         let cutoff = chrono::Utc::now().fixed_offset() - RETENTION;
-        let conn = Repo::<Notifications>::conn()?;
         let expired = Repo::<Notifications>::scoped(Action::Delete)
             .filter(entity::Column::CreatedAt.lt(cutoff))
             .limit(PURGE_BATCH)
-            .all(&conn)
+            .all()
             .await?;
         let mut purged = 0;
         for model in expired {

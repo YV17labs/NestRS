@@ -4,7 +4,8 @@
 use std::sync::Arc;
 
 use nest_rs_authz::{AbilityBuilder, Action, with_ability};
-use nest_rs_seaorm::{Executor, Repo, with_request_executor};
+use nest_rs_database::with_request_executor;
+use nest_rs_seaorm::{Repo, SeaOrmExecutor};
 use sea_orm::prelude::{DateTimeWithTimeZone, Uuid};
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseConnection, EntityTrait, Set};
 
@@ -88,7 +89,7 @@ async fn repo_update_runs_active_model_behavior_so_updated_at_moves() {
     // Timestamps are microsecond-precision; leave room for a strict `>`.
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
-    with_request_executor(Executor::Pool(conn.clone()), async {
+    with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
         with_ability(allow_everything(), async {
             let updated = Repo::<stamped::Entity>::update(stamped::ActiveModel {
                 id: ActiveValue::Unchanged(id),

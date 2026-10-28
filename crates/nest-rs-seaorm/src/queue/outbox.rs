@@ -25,7 +25,7 @@ use sea_orm::{
 use tokio::sync::Notify;
 
 use crate::atomic::AtomicExecutor;
-use crate::executor::Executor;
+use crate::executor::{Installed, SeaOrmExecutor};
 
 /// The table the store keeps its records in.
 pub(crate) const TABLE: &str = "nestrs_outbox";
@@ -94,7 +94,7 @@ impl SeaOrmOutbox {
 /// pool, while a block of its own keeps its pushes until it commits and a
 /// cancel deletes a record no relay has filed, as on a pool unit.
 pub(crate) struct KeepingPool {
-    pool: Executor,
+    pool: Installed,
     outbox: Arc<SeaOrmOutbox>,
 }
 
@@ -102,7 +102,7 @@ impl KeepingPool {
     /// `pool`, keeping `outbox`.
     pub(crate) fn new(pool: DatabaseConnection, outbox: Arc<SeaOrmOutbox>) -> Self {
         Self {
-            pool: Executor::Pool(pool),
+            pool: Installed(SeaOrmExecutor::Pool(pool)),
             outbox,
         }
     }
@@ -121,6 +121,7 @@ impl nest_rs_database::Executor for KeepingPool {
     fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
         let own = self
             .pool
+            .0
             .own_block()?
             .keeping(Some(Arc::clone(&self.outbox)));
         Some(Arc::new(AtomicExecutor::own(Arc::new(own))))

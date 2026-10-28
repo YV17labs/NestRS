@@ -4,7 +4,8 @@
 use std::sync::Arc;
 
 use nest_rs_authz::{AbilityBuilder, Action, with_ability};
-use nest_rs_seaorm::{Creatable, CreateModel, CrudService, Executor, with_request_executor};
+use nest_rs_database::with_request_executor;
+use nest_rs_seaorm::{Creatable, CreateModel, CrudService, SeaOrmExecutor};
 use sea_orm::prelude::Uuid;
 use sea_orm::{
     ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set, TransactionTrait,
@@ -82,7 +83,7 @@ async fn out_of_scope_create_over_the_pool_executor_persists_nothing() {
 
     // The WS-message shape: the pool, with no surrounding transaction.
     let result = with_request_executor(
-        Executor::Pool(conn.clone()),
+        SeaOrmExecutor::Pool(conn.clone()).into(),
         with_ability(org_scoped_ability(1), async {
             GadgetsService.create(CreateGadget { id, org_id: 2 }).await
         }),
@@ -127,7 +128,7 @@ async fn a_create_that_cannot_open_its_savepoint_poisons_the_boundary() {
 
     let lazy = Arc::new(nest_rs_seaorm::LazyTransaction::new(starved, "test"));
     let result = with_request_executor(
-        Executor::Lazy(Arc::clone(&lazy)),
+        SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
         with_ability(org_scoped_ability(1), async {
             GadgetsService
                 .create(CreateGadget {
@@ -166,7 +167,7 @@ async fn in_scope_create_over_the_pool_executor_commits() {
     let id = Uuid::now_v7();
 
     let result = with_request_executor(
-        Executor::Pool(conn.clone()),
+        SeaOrmExecutor::Pool(conn.clone()).into(),
         with_ability(org_scoped_ability(7), async {
             GadgetsService.create(CreateGadget { id, org_id: 7 }).await
         }),
@@ -261,7 +262,7 @@ async fn a_create_whose_undo_cannot_be_issued_says_so() {
     let ability = Arc::new(ability.build().expect("a valid ability"));
 
     let outcome = with_request_executor(
-        Executor::Pool(crate::harness::connect().await),
+        SeaOrmExecutor::Pool(crate::harness::connect().await).into(),
         with_ability(ability, async {
             FragileService
                 .create(CreateFragile {

@@ -5,12 +5,11 @@
 
 use nest_rs_authz::{AbilityBuilder, current_ability};
 use nest_rs_core::{Layer, injectable, module};
+use nest_rs_database::{ExecutorScope, current_executor_scope};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_mcp::{CallToolResult, ContentBlock, McpError, mcp, tools};
-use nest_rs_seaorm::{
-    Executor, ExecutorScope, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, current_executor,
-    current_executor_scope,
-};
+use nest_rs_seaorm::__private::current_executor;
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmExecutor, SeaOrmModule};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool;
 use sea_orm::ConnectionTrait;
@@ -58,7 +57,7 @@ impl UnitTools {
     async fn inspect(&self) -> Result<CallToolResult, McpError> {
         let seen = format!(
             "lazy={} request={} ability={}",
-            matches!(current_executor(), Some(Executor::Lazy(_))),
+            matches!(current_executor(), Some(SeaOrmExecutor::Lazy(_))),
             current_executor_scope() == Some(ExecutorScope::Request),
             current_ability().is_some(),
         );

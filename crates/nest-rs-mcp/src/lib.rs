@@ -52,7 +52,7 @@
 //! app's global guard pool and the `EndpointGuards<McpView, _>` its modules
 //! declare, each once — and with neither, **deny-all**, unless the app opens
 //! the endpoint in code ([`McpOptions::posture`]). Without a bound unit of work
-//! a `Repo`-backed body fails closed (`Repo::conn` errors), and without an
+//! a `Repo`-backed body fails closed (every `Repo` call errors), and without an
 //! ability `scope_for` denies every row.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

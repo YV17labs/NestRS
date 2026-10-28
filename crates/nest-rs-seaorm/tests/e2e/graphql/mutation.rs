@@ -12,9 +12,8 @@ use nest_rs_core::{injectable, module};
 use nest_rs_events::{EventBus, EventsModule, listeners};
 use nest_rs_graphql::async_graphql::{self, Object};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_seaorm::{
-    SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError, current_executor,
-};
+use nest_rs_seaorm::__private::current_executor;
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError};
 use nest_rs_testing::{LogCapture, TestApp};
 use sea_orm::prelude::Uuid;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};

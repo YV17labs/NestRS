@@ -31,7 +31,9 @@
 //!    edge then opens its units through it, and every lifecycle hook runs in
 //!    one.
 //! 3. Provide your own `Repo`-equivalent query API that calls
-//!    [`current_executor`] and downcasts to your concrete type.
+//!    [`current_executor`] and downcasts to your concrete type — a type private
+//!    to your crate, so a service reading [`current_executor`] finds no handle
+//!    it could run a statement on that your row filter never saw.
 //! 4. Override [`Executor::after_commit`] on every handle a unit settles a
 //!    transaction for: hold the work, run it after the commit — or after a
 //!    unit that succeeded without opening one — and drop it otherwise. The
@@ -68,7 +70,7 @@ pub use atomic::{AtomicBlock, atomic};
 pub use error::{AtomicError, OutboxError, Unhonoured};
 pub use executor::{
     Deferred, Executor, ExecutorScope, after_commit, current_executor, current_executor_scope,
-    with_executor, with_job_executor, with_request_executor,
+    with_job_executor, with_request_executor,
 };
 pub use outbox::{ClaimedRecord, OutboxClaim, OutboxRecord, OutboxStore};
 pub use unit::{
@@ -81,5 +83,6 @@ pub mod __private {
     //! Called by this framework's sibling crates. Not API: may change in any
     //! release.
 
+    pub use crate::executor::with_executor;
     pub use crate::unit::run_unit_bounded;
 }

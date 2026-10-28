@@ -2,7 +2,8 @@
 //! ability, asserted on executed queries rather than rendered SQL.
 
 use nest_rs_authz::Action;
-use nest_rs_seaorm::{Executor, scope_for, with_request_executor};
+use nest_rs_database::with_request_executor;
+use nest_rs_seaorm::{SeaOrmExecutor, scope_for};
 use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter};
 
 mod widget {
@@ -42,7 +43,7 @@ async fn db() -> DatabaseConnection {
 async fn request_scope_without_ability_denies_all_rows() {
     let conn = db().await;
 
-    with_request_executor(Executor::Pool(conn.clone()), async {
+    with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
         let rows = widget::Entity::find()
             .filter(scope_for::<widget::Entity>(Action::Read))
             .all(&conn)
@@ -61,7 +62,7 @@ async fn request_scope_without_ability_denies_all_rows() {
 async fn job_scope_without_ability_remains_unscoped() {
     let conn = db().await;
 
-    nest_rs_seaorm::with_job_executor(Executor::Pool(conn.clone()), async {
+    nest_rs_database::with_job_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
         let rows = widget::Entity::find()
             .filter(scope_for::<widget::Entity>(Action::Read))
             .all(&conn)

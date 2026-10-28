@@ -430,7 +430,7 @@ fn unavailable() -> nest_rs_core::Problem {
     let problem = Problem::new(503, code::UNAVAILABLE);
     let bound = crate::executor::current_executor()
         .as_ref()
-        .and_then(crate::executor::Executor::pool)
+        .and_then(crate::executor::SeaOrmExecutor::pool)
         .and_then(crate::module::statement_bound);
     match bound {
         Some(bound) => problem.with_retry_after(retry_after_secs(bound)),
@@ -1141,8 +1141,11 @@ pub(crate) mod tests {
         let pool = sea_orm::Database::connect(options)
             .await
             .expect("a lazy pool dials nothing");
-        crate::executor::with_executor(crate::executor::Executor::Pool(pool), async move { read() })
-            .await
+        nest_rs_database::__private::with_executor(
+            crate::executor::SeaOrmExecutor::Pool(pool).into(),
+            async move { read() },
+        )
+        .await
     }
 
     /// The bound every edge's test below runs its unit's pool under: a wait of

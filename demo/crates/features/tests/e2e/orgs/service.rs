@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use features::orgs::{ActiveModel, Column, Entity, OrgsService};
 use nest_rs::authz::{Ability, AbilityBuilder, Action, with_ability};
-use nest_rs::seaorm::{Access, CrudService, Executor, with_request_executor};
+use nest_rs::database::with_request_executor;
+use nest_rs::seaorm::{Access, CrudService, SeaOrmExecutor};
 use nest_rs::testing::EphemeralDatabase;
 use sea_orm::{ActiveModelTrait, Set};
 use uuid::Uuid;
@@ -32,7 +33,8 @@ async fn list_returns_seeded_orgs_for_an_unrestricted_reader() {
     let org_id = Uuid::now_v7();
     seed_org(db.connection().as_ref(), org_id, "Acme").await;
 
-    with_request_executor(Executor::Pool((*db.connection()).clone()), async {
+    let pool = SeaOrmExecutor::Pool((*db.connection()).clone());
+    with_request_executor(pool.into(), async {
         with_ability(read_all_ability(), async {
             let rows = OrgsService.list().await.expect("list succeeds");
             assert!(
@@ -62,7 +64,8 @@ async fn access_hides_out_of_scope_orgs() {
         b.build().expect("valid test ability")
     });
 
-    with_request_executor(Executor::Pool((*db.connection()).clone()), async {
+    let pool = SeaOrmExecutor::Pool((*db.connection()).clone());
+    with_request_executor(pool.into(), async {
         with_ability(ability, async {
             let service = OrgsService;
             assert!(matches!(

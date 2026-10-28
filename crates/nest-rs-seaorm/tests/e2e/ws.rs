@@ -6,11 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use nest_rs_authz::{AbilityBuilder, current_ability};
 use nest_rs_core::{Layer, injectable, module};
+use nest_rs_database::{ExecutorScope, current_executor_scope};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_seaorm::{
-    Executor, ExecutorScope, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, current_executor,
-    current_executor_scope,
-};
+use nest_rs_seaorm::__private::current_executor;
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmExecutor, SeaOrmModule};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::ws::WsApp;
 use nest_rs_ws::{WsModule, async_trait, gateway, messages};
@@ -56,7 +55,7 @@ impl UnitGateway {
     #[public]
     async fn inspect(&self) -> serde_json::Value {
         json!({
-            "lazy": matches!(current_executor(), Some(Executor::Lazy(_))),
+            "lazy": matches!(current_executor(), Some(SeaOrmExecutor::Lazy(_))),
             "request": current_executor_scope() == Some(ExecutorScope::Request),
             "ability": current_ability().is_some(),
         })

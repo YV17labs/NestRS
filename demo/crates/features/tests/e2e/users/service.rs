@@ -4,7 +4,8 @@ use std::time::Duration;
 use features::orgs::ActiveModel as OrgActiveModel;
 use features::users::{ActiveModel as UserActiveModel, SocialIdentity, UserRole, UsersService};
 use nest_rs::authn::AuthError;
-use nest_rs::seaorm::{Executor, FinalizeOutcome, LazyTransaction, with_request_executor};
+use nest_rs::database::with_request_executor;
+use nest_rs::seaorm::{FinalizeOutcome, LazyTransaction, SeaOrmExecutor};
 use nest_rs::testing::{EphemeralDatabase, wait_for};
 use sea_orm::{
     ActiveModelTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, Set, Statement,
@@ -142,7 +143,7 @@ async fn a_known_identity_wins_over_a_drifted_email() {
     let org_id = Uuid::now_v7();
     seed_org(conn.as_ref(), org_id).await;
 
-    with_request_executor(Executor::Pool((*conn).clone()), async {
+    with_request_executor(SeaOrmExecutor::Pool((*conn).clone()).into(), async {
         let svc = UsersService;
 
         let created = svc
@@ -185,7 +186,7 @@ async fn a_verified_email_links_to_an_existing_account_exactly_once() {
     seed_org(conn.as_ref(), org_id).await;
     let carol = seed_user(conn.as_ref(), org_id, "carol@example.com").await;
 
-    with_request_executor(Executor::Pool((*conn).clone()), async {
+    with_request_executor(SeaOrmExecutor::Pool((*conn).clone()).into(), async {
         let svc = UsersService;
 
         let first = svc
@@ -224,7 +225,7 @@ async fn an_unverified_email_never_links_to_an_existing_account() {
     seed_org(conn.as_ref(), org_id).await;
     seed_user(conn.as_ref(), org_id, "dave@example.com").await;
 
-    with_request_executor(Executor::Pool((*conn).clone()), async {
+    with_request_executor(SeaOrmExecutor::Pool((*conn).clone()).into(), async {
         let svc = UsersService;
 
         let outcome = svc
@@ -258,7 +259,7 @@ async fn an_unknown_verified_identity_provisions_a_user_and_its_identity() {
     let org_id = Uuid::now_v7();
     seed_org(conn.as_ref(), org_id).await;
 
-    with_request_executor(Executor::Pool((*conn).clone()), async {
+    with_request_executor(SeaOrmExecutor::Pool((*conn).clone()).into(), async {
         let svc = UsersService;
 
         let user = svc
@@ -299,7 +300,7 @@ async fn concurrent_first_logins_resolve_to_a_single_user() {
     let (p1, p2) = (pool.clone(), pool);
 
     let t1 = tokio::spawn(async move {
-        with_request_executor(Executor::Pool(p1), async move {
+        with_request_executor(SeaOrmExecutor::Pool(p1).into(), async move {
             UsersService
                 .resolve_social_identity(&github("999", "frank@example.com", true), org_id)
                 .await
@@ -307,7 +308,7 @@ async fn concurrent_first_logins_resolve_to_a_single_user() {
         .await
     });
     let t2 = tokio::spawn(async move {
-        with_request_executor(Executor::Pool(p2), async move {
+        with_request_executor(SeaOrmExecutor::Pool(p2).into(), async move {
             UsersService
                 .resolve_social_identity(&github("999", "frank@example.com", true), org_id)
                 .await
@@ -355,7 +356,7 @@ async fn resolve_in_a_mutating_request(
     let resolving = tokio::spawn({
         let request = Arc::clone(&request);
         async move {
-            with_request_executor(Executor::Lazy(request), async move {
+            with_request_executor(SeaOrmExecutor::Lazy(request).into(), async move {
                 UsersService
                     .resolve_social_identity(&identity, org_id)
                     .await

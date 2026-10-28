@@ -9,7 +9,8 @@ use std::sync::Arc;
 use nest_rs_database::{
     ExecutorScope, Settlement, TransactionPolicy, UnitOfWork, UnitSpec, run_unit,
 };
-use nest_rs_seaorm::{Executor, SeaOrmConfig, SeaOrmUnitOfWork, current_executor};
+use nest_rs_seaorm::__private::current_executor;
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmExecutor, SeaOrmUnitOfWork};
 use sea_orm::ConnectionTrait;
 
 use crate::harness::{committed_rows, fresh_table};
@@ -69,7 +70,7 @@ async fn a_job_runs_in_a_transaction_by_default_and_its_writes_commit() {
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async {
         let executor = current_executor().expect("the job runs with an ambient executor installed");
         assert!(
-            matches!(executor, Executor::Lazy(_)),
+            matches!(executor, SeaOrmExecutor::Lazy(_)),
             "a worker job runs in a per-attempt transaction by default",
         );
         executor
@@ -129,7 +130,7 @@ async fn the_opt_out_runs_on_the_pool_and_each_statement_stands_alone() {
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async {
         let executor = current_executor().expect("ambient executor");
         assert!(
-            matches!(executor, Executor::Pool(_)),
+            matches!(executor, SeaOrmExecutor::Pool(_)),
             "the opt-out runs on the connection pool, with no transaction to settle",
         );
         executor

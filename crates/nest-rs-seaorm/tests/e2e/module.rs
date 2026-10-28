@@ -351,7 +351,7 @@ struct ReadsAtShutdown;
 impl ReadsAtShutdown {
     #[on_application_shutdown]
     async fn read(&self) -> anyhow::Result<()> {
-        nest_rs_seaorm::current_executor()
+        nest_rs_seaorm::__private::current_executor()
             .ok_or_else(|| anyhow::anyhow!("the hook runs outside its unit"))?
             .execute_unprepared("SELECT 1")
             .await?;
@@ -413,7 +413,7 @@ async fn the_pool_closes_promptly_while_a_cut_unit_still_holds_a_connection() {
                 nest_rs_database::TransactionPolicy::Pool,
             ),
             async {
-                nest_rs_seaorm::current_executor()
+                nest_rs_seaorm::__private::current_executor()
                     .expect("the unit's pool")
                     .execute_unprepared("SELECT pg_sleep(10)")
                     .await

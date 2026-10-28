@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use sea_orm::DbErr;
 use tokio::sync::{Semaphore, SemaphorePermit};
 
-use crate::executor::Executor;
+use crate::executor::{Installed, SeaOrmExecutor};
 
 /// What a statement issued on a unit from inside one of that unit's own blocks
 /// is refused with: the block holds the unit's turn, or will once it opens, so
@@ -89,7 +89,9 @@ fn issued_inside_a_block_of(turn: &Turn) -> bool {
     let Some(ambient) = nest_rs_database::current_executor() else {
         return false;
     };
-    let Some(Executor::Savepoint(block)) = ambient.as_any().downcast_ref::<Executor>() else {
+    let Some(Installed(SeaOrmExecutor::Savepoint(block))) =
+        ambient.as_any().downcast_ref::<Installed>()
+    else {
         return false;
     };
     block.sits_in(turn)

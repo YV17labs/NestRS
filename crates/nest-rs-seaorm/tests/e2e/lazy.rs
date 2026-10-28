@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use nest_rs_seaorm::{Executor, LazyTransaction, current_executor, with_request_executor};
+use nest_rs_database::with_request_executor;
+use nest_rs_seaorm::__private::current_executor;
+use nest_rs_seaorm::{LazyTransaction, SeaOrmExecutor};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
 #[tokio::test]
@@ -12,7 +14,7 @@ async fn no_data_layer_touch_opens_no_transaction() {
     let conn = crate::harness::connect_arc().await;
     let lazy = Arc::new(LazyTransaction::new((*conn).clone(), "test"));
 
-    with_request_executor(Executor::Lazy(lazy.clone()), async {
+    with_request_executor(SeaOrmExecutor::Lazy(lazy.clone()).into(), async {
         // Simulates a guard denial: the request scope exists, nothing queries.
     })
     .await;
@@ -28,7 +30,7 @@ async fn first_query_opens_the_transaction_once() {
     let conn = crate::harness::connect_arc().await;
     let lazy = Arc::new(LazyTransaction::new((*conn).clone(), "test"));
 
-    with_request_executor(Executor::Lazy(lazy.clone()), async {
+    with_request_executor(SeaOrmExecutor::Lazy(lazy.clone()).into(), async {
         let executor = current_executor().expect("ambient executor installed");
         executor
             .execute_unprepared("SELECT 1")
@@ -63,13 +65,14 @@ async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
         .expect("hold the only connection");
 
     let lazy = Arc::new(LazyTransaction::new(pool.clone(), "test"));
-    let reported_success = with_request_executor(Executor::Lazy(lazy.clone()), async {
-        let executor = current_executor().expect("ambient executor installed");
-        // Swallowed, and success reported: the shape `Poisoned` exists for.
-        let _ = executor.execute_unprepared("SELECT 1").await;
-        true
-    })
-    .await;
+    let reported_success =
+        with_request_executor(SeaOrmExecutor::Lazy(lazy.clone()).into(), async {
+            let executor = current_executor().expect("ambient executor installed");
+            // Swallowed, and success reported: the shape `Poisoned` exists for.
+            let _ = executor.execute_unprepared("SELECT 1").await;
+            true
+        })
+        .await;
 
     match lazy.finalize(reported_success).await {
         nest_rs_seaorm::FinalizeOutcome::Poisoned { retryable } => assert!(
@@ -118,20 +121,21 @@ async fn a_backend_terminated_mid_attempt_is_retryable() {
     .await;
 
     let lazy = Arc::new(LazyTransaction::new(pool.clone(), "test"));
-    let reported_success = with_request_executor(Executor::Lazy(lazy.clone()), async {
-        let executor = current_executor().expect("ambient executor installed");
-        executor
-            .execute_unprepared(&format!(
-                "INSERT INTO {TERMINATED_PROBE_TABLE} (id) VALUES (1) ON CONFLICT DO NOTHING"
-            ))
-            .await
-            .expect("the first statement opens the transaction and writes");
-        let pid = crate::harness::backend_pid(&executor).await;
-        crate::harness::terminate_backend(&killer, pid).await;
-        let _ = executor.execute_unprepared("SELECT 1").await;
-        true
-    })
-    .await;
+    let reported_success =
+        with_request_executor(SeaOrmExecutor::Lazy(lazy.clone()).into(), async {
+            let executor = current_executor().expect("ambient executor installed");
+            executor
+                .execute_unprepared(&format!(
+                    "INSERT INTO {TERMINATED_PROBE_TABLE} (id) VALUES (1) ON CONFLICT DO NOTHING"
+                ))
+                .await
+                .expect("the first statement opens the transaction and writes");
+            let pid = crate::harness::backend_pid(&executor).await;
+            crate::harness::terminate_backend(&killer, pid).await;
+            let _ = executor.execute_unprepared("SELECT 1").await;
+            true
+        })
+        .await;
 
     match lazy.finalize(reported_success).await {
         nest_rs_seaorm::FinalizeOutcome::Poisoned { retryable } => assert!(
@@ -168,16 +172,19 @@ async fn a_boundary_abandoned_mid_statement_says_so() {
     let conn = crate::harness::connect().await;
     let lazy = Arc::new(LazyTransaction::new(conn.clone(), "worker"));
     {
-        let attempt = nest_rs_seaorm::with_job_executor(Executor::Lazy(Arc::clone(&lazy)), async {
-            let executor = current_executor().expect("ambient executor installed");
-            executor
-                .execute_unprepared("SELECT 1")
-                .await
-                .expect("the first statement opens the transaction");
-            // In flight when dropped: the rollback cannot go out until it drains.
-            let _ = executor.execute_unprepared("SELECT pg_sleep(1)").await;
-            true
-        });
+        let attempt = nest_rs_database::with_job_executor(
+            SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
+            async {
+                let executor = current_executor().expect("ambient executor installed");
+                executor
+                    .execute_unprepared("SELECT 1")
+                    .await
+                    .expect("the first statement opens the transaction");
+                // In flight when dropped: the rollback cannot go out until it drains.
+                let _ = executor.execute_unprepared("SELECT pg_sleep(1)").await;
+                true
+            },
+        );
         // What a shutdown timeout does: drop the job future where it stands.
         let elapsed = tokio::time::timeout(std::time::Duration::from_millis(200), attempt).await;
         assert!(elapsed.is_err(), "the attempt is abandoned, not finished");
@@ -210,7 +217,7 @@ async fn a_commit_whose_outcome_is_unknown_stays_deterministic() {
     let killer = crate::harness::connect().await;
 
     let lazy = Arc::new(LazyTransaction::new(pool.clone(), "test"));
-    let pid = with_request_executor(Executor::Lazy(Arc::clone(&lazy)), async {
+    let pid = with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         let executor = current_executor().expect("ambient executor installed");
         executor
             .execute_unprepared("SELECT 1")

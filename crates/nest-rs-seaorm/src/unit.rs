@@ -23,7 +23,7 @@ use tokio_util::task::TaskTracker;
 use crate::SeaOrmConfig;
 use crate::atomic::{AtomicExecutor, PoolCommit};
 use crate::error::CommitError;
-use crate::executor::{Executor, FinalizeOutcome, LazyTransaction};
+use crate::executor::{FinalizeOutcome, Installed, LazyTransaction, SeaOrmExecutor};
 
 // What could not be done, never why the database refused: `finalize` already
 // logs that, with the error.
@@ -50,7 +50,7 @@ const UNSUPPORTED_POLICY: &str = "this driver does not support the unit's transa
 pub struct SeaOrmUnitOfWork {
     db: DatabaseConnection,
     /// The handle every pool unit installs, shared.
-    pool: Arc<Executor>,
+    pool: Arc<Installed>,
     observe_conflicts: bool,
     settle_net: Duration,
     settles: Settles,
@@ -78,7 +78,7 @@ impl SeaOrmUnitOfWork {
     ) -> Self {
         let db = (*db).clone();
         Self {
-            pool: Arc::new(Executor::Pool(db.clone())),
+            pool: Arc::new(Installed(SeaOrmExecutor::Pool(db.clone()))),
             db,
             observe_conflicts: config.observe_serialization_conflicts,
             settle_net: settle_net(config),
@@ -198,7 +198,7 @@ impl OpenUnit for OnPool {
 /// The handle a pool unit installs: the pool, on which an atomic block is a
 /// transaction of its own committed on the binding's settle task.
 pub(crate) struct PoolUnit {
-    pool: Arc<Executor>,
+    pool: Arc<Installed>,
     settles: Settles,
     /// The commits of the blocks the body opened whose answer it has not seen;
     /// allocated by the first block.
@@ -231,7 +231,7 @@ impl nest_rs_database::Executor for PoolUnit {
     }
 
     fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-        let own = self.pool.own_block()?;
+        let own = self.pool.0.own_block()?;
         #[cfg(feature = "queue")]
         let own = own.keeping(self.outbox.clone());
         let unseen = Arc::clone(self.unseen.get_or_init(Arc::default));
@@ -293,7 +293,7 @@ struct InTransaction {
 
 impl OpenUnit for InTransaction {
     fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
-        Arc::new(Executor::Lazy(Arc::clone(&self.lazy)))
+        SeaOrmExecutor::Lazy(Arc::clone(&self.lazy)).into()
     }
 
     fn settle(self: Box<Self>, ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>> {
@@ -482,21 +482,22 @@ mod tests {
             .unwrap_or_else(|why| panic!("SeaORM opens every policy it knows: {why}"))
     }
 
-    fn seaorm(executor: &Arc<dyn nest_rs_database::Executor>) -> &Executor {
-        executor
+    fn seaorm(executor: &Arc<dyn nest_rs_database::Executor>) -> &SeaOrmExecutor {
+        &executor
             .as_any()
-            .downcast_ref::<Executor>()
+            .downcast_ref::<Installed>()
             .expect("the unit installs a SeaORM executor")
+            .0
     }
 
     #[test]
     fn a_pool_unit_runs_on_the_pool_and_a_unit_of_its_own_in_a_lazy_transaction() {
         assert!(matches!(
             seaorm(&opened(TransactionPolicy::Pool).executor()),
-            Executor::Pool(_)
+            SeaOrmExecutor::Pool(_)
         ));
         let executor = opened(TransactionPolicy::PerUnit).executor();
-        let Executor::Lazy(lazy) = seaorm(&executor) else {
+        let SeaOrmExecutor::Lazy(lazy) = seaorm(&executor) else {
             panic!("a unit of its own runs in a lazy transaction");
         };
         assert!(!lazy.is_opened(), "opening a unit sends nothing");
@@ -528,7 +529,9 @@ mod tests {
             (Some(1), false, Settlement::Unhonoured(Unhonoured::IN_DOUBT)),
         ] {
             let unit = Arc::new(PoolUnit {
-                pool: Arc::new(Executor::Pool(DatabaseConnection::default())),
+                pool: Arc::new(Installed(SeaOrmExecutor::Pool(
+                    DatabaseConnection::default(),
+                ))),
                 settles: Settles::default(),
                 unseen: OnceLock::new(),
                 #[cfg(feature = "queue")]
@@ -537,7 +540,7 @@ mod tests {
             if let Some(unseen) = blocks_unseen {
                 let block = nest_rs_database::Executor::atomic(&*unit)
                     .expect("a pool unit offers a block of its own");
-                assert!(matches!(seaorm(&(block as _)), Executor::Lazy(_)));
+                assert!(matches!(seaorm(&(block as _)), SeaOrmExecutor::Lazy(_)));
                 let count = unit.unseen.get().expect("the block counts its commit");
                 count.fetch_add(unseen, Ordering::Relaxed);
             }
@@ -747,9 +750,10 @@ mod tests {
             open.executor().write_outbox(&mut unread()).is_none(),
             "a pool files at once"
         );
-        let caller = Executor::Pool(DatabaseConnection::default());
+        let caller: Arc<dyn nest_rs_database::Executor> =
+            SeaOrmExecutor::Pool(DatabaseConnection::default()).into();
         assert!(
-            nest_rs_database::Executor::write_outbox(&caller, &mut unread()).is_none(),
+            caller.write_outbox(&mut unread()).is_none(),
             "a handle the caller built keeps no outbox"
         );
     }

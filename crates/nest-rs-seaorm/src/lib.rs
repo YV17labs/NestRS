@@ -10,7 +10,7 @@
 //! - [`SeaOrmDatabaseModule`] (bare) binds the `nest-rs-database` port:
 //!   [`SeaOrmUnitOfWork`], which every edge — an HTTP request, a WS message, an
 //!   MCP operation, a queue attempt, a scheduled tick — and every lifecycle hook
-//!   runs its unit of work through, on an ambient [`Executor`]: the pool, or a
+//!   runs its unit of work through, on an ambient [`SeaOrmExecutor`]: the pool, or a
 //!   transaction opened on the unit's first data-layer touch.
 //! - Under the `queue` feature, [`SeaOrmDatabaseModule`] also keeps the queue
 //!   port's outbox, [`queue::SeaOrmOutbox`]: a job pushed inside a unit's
@@ -63,6 +63,7 @@ mod page;
 mod repo;
 pub mod retry;
 mod savepoint;
+mod select;
 mod service;
 mod slug;
 mod soft_delete;
@@ -83,14 +84,12 @@ pub mod queue;
 pub use config::SeaOrmConfig;
 pub use database::SeaOrmDatabaseModule;
 pub use error::{CommitError, DbOutcome, ServiceError};
-pub use executor::{
-    Executor, ExecutorScope, FinalizeOutcome, LazyTransaction, current_executor,
-    current_executor_scope, with_executor, with_job_executor, with_request_executor,
-};
+pub use executor::{FinalizeOutcome, LazyTransaction, SeaOrmExecutor};
 pub use module::{SeaOrmModule, SeaOrmSetup, connect_from_env};
 pub use page::{DEFAULT_PAGE_SIZE, LIST_CAP, Page, PageCursor, PageParams, clamp_page_size};
 pub use repo::{Repo, scope_for};
 pub use savepoint::Savepoint;
+pub use select::RepoSelect;
 pub use service::{
     Access, Authorized, Creatable, CreateModel, CrudService, Deletable, Updatable, UpdateModel,
     model_uuid,
@@ -114,6 +113,7 @@ pub mod __private {
     #[cfg(feature = "http")]
     pub use crate::error::http_crud_error;
     pub use crate::error::masking;
+    pub use crate::executor::current_executor;
     #[cfg(feature = "graphql")]
     pub use crate::graphql::relations::__private::{relation_key, relation_page};
     #[cfg(feature = "graphql")]

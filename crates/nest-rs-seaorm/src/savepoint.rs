@@ -342,13 +342,11 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use nest_rs_database::{AtomicError, after_commit, atomic};
+    use nest_rs_database::{AtomicError, after_commit, atomic, with_request_executor};
     use nest_rs_testing::LogCapture;
     use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr};
 
-    use crate::executor::{
-        Executor, FinalizeOutcome, LazyTransaction, current_executor, with_request_executor,
-    };
+    use crate::executor::{FinalizeOutcome, LazyTransaction, SeaOrmExecutor, current_executor};
 
     #[derive(Debug)]
     enum Failure {
@@ -377,9 +375,12 @@ mod tests {
     async fn a_block_that_never_queries_sends_nothing() {
         let unit = unreachable_unit();
         let outcome = with_request_executor(
-            Executor::Lazy(Arc::clone(&unit)),
+            SeaOrmExecutor::Lazy(Arc::clone(&unit)).into(),
             atomic(async {
-                Ok::<_, Failure>(matches!(current_executor(), Some(Executor::Savepoint(_))))
+                Ok::<_, Failure>(matches!(
+                    current_executor(),
+                    Some(SeaOrmExecutor::Savepoint(_))
+                ))
             }),
         )
         .await;
@@ -396,10 +397,10 @@ mod tests {
     async fn a_block_on_the_pool_that_never_queries_opens_nothing() {
         let (ran, work) = flag();
         let outcome = with_request_executor(
-            Executor::Pool(DatabaseConnection::default()),
+            SeaOrmExecutor::Pool(DatabaseConnection::default()).into(),
             atomic(async {
                 after_commit(work).await;
-                Ok::<_, Failure>(matches!(current_executor(), Some(Executor::Lazy(_))))
+                Ok::<_, Failure>(matches!(current_executor(), Some(SeaOrmExecutor::Lazy(_))))
             }),
         )
         .await;
@@ -416,7 +417,7 @@ mod tests {
         let unit = unreachable_unit();
         let (ran, work) = flag();
         let outcome = with_request_executor(
-            Executor::Lazy(Arc::clone(&unit)),
+            SeaOrmExecutor::Lazy(Arc::clone(&unit)).into(),
             atomic(async {
                 after_commit(work).await;
                 Ok::<_, Failure>(())
@@ -441,7 +442,7 @@ mod tests {
         let unit = unreachable_unit();
         let (ran, work) = flag();
         let outcome = with_request_executor(
-            Executor::Lazy(Arc::clone(&unit)),
+            SeaOrmExecutor::Lazy(Arc::clone(&unit)).into(),
             atomic(async {
                 after_commit(work).await;
                 Err::<(), _>(Failure::Refused)
@@ -463,7 +464,7 @@ mod tests {
         let unit = unreachable_unit();
         let (kept, kept_work) = flag();
         let (dropped, dropped_work) = flag();
-        with_request_executor(Executor::Lazy(Arc::clone(&unit)), async {
+        with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&unit)).into(), async {
             let released = atomic(async {
                 atomic(async {
                     after_commit(kept_work).await;
@@ -501,7 +502,7 @@ mod tests {
         let unit = unreachable_unit();
         let (ran, work) = flag();
         let released = with_request_executor(
-            Executor::Lazy(Arc::clone(&unit)),
+            SeaOrmExecutor::Lazy(Arc::clone(&unit)).into(),
             atomic(async {
                 after_commit(work).await;
                 Ok::<_, Failure>(())
@@ -526,7 +527,7 @@ mod tests {
     ) -> Result<(), Failure> {
         let escaped = std::sync::Mutex::new(None);
         with_request_executor(
-            Executor::Lazy(Arc::clone(unit)),
+            SeaOrmExecutor::Lazy(Arc::clone(unit)).into(),
             atomic(async {
                 *escaped
                     .lock()
@@ -569,15 +570,16 @@ mod tests {
     #[tokio::test]
     async fn a_statement_on_the_unit_from_inside_its_block_is_refused_before_the_block_opens() {
         let unit = unreachable_unit();
-        let outcome = with_request_executor(Executor::Lazy(Arc::clone(&unit)), async {
-            let enclosing = current_executor().expect("the unit's executor");
-            atomic(async {
-                let refused = enclosing.execute_unprepared("SELECT 1").await;
-                Ok::<_, Failure>(refused)
+        let outcome =
+            with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&unit)).into(), async {
+                let enclosing = current_executor().expect("the unit's executor");
+                atomic(async {
+                    let refused = enclosing.execute_unprepared("SELECT 1").await;
+                    Ok::<_, Failure>(refused)
+                })
+                .await
             })
-            .await
-        })
-        .await;
+            .await;
 
         let refused = outcome.expect("the block itself sent nothing");
         assert!(
@@ -590,20 +592,21 @@ mod tests {
     #[tokio::test]
     async fn a_statement_from_inside_a_nested_block_is_refused_on_every_unit_it_sits_in() {
         let unit = unreachable_unit();
-        let outcome = with_request_executor(Executor::Lazy(Arc::clone(&unit)), async {
-            let outermost = current_executor().expect("the unit's executor");
-            atomic(async {
-                let enclosing = current_executor().expect("the outer block's executor");
+        let outcome =
+            with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&unit)).into(), async {
+                let outermost = current_executor().expect("the unit's executor");
                 atomic(async {
-                    let on_unit = outermost.execute_unprepared("SELECT 1").await;
-                    let on_block = enclosing.execute_unprepared("SELECT 1").await;
-                    Ok::<_, Failure>((on_unit, on_block))
+                    let enclosing = current_executor().expect("the outer block's executor");
+                    atomic(async {
+                        let on_unit = outermost.execute_unprepared("SELECT 1").await;
+                        let on_block = enclosing.execute_unprepared("SELECT 1").await;
+                        Ok::<_, Failure>((on_unit, on_block))
+                    })
+                    .await
                 })
                 .await
             })
-            .await
-        })
-        .await;
+            .await;
 
         let (on_unit, on_block) = outcome.expect("the blocks themselves sent nothing");
         for refused in [on_unit, on_block] {

@@ -13,9 +13,8 @@ use nest_rs_core::{
 };
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::{HttpConfig, HttpError, HttpModule, HttpView, StatusCode};
-use nest_rs_seaorm::{
-    Executor, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, current_executor,
-};
+use nest_rs_seaorm::__private::current_executor;
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmExecutor, SeaOrmModule};
 use nest_rs_testing::TestApp;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
@@ -182,7 +181,7 @@ impl Layer for Refusing {}
 impl Guard for Refusing {
     async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let unopened =
-            matches!(current_executor(), Some(Executor::Lazy(lazy)) if !lazy.is_opened());
+            matches!(current_executor(), Some(SeaOrmExecutor::Lazy(lazy)) if !lazy.is_opened());
         GUARD_SAW_UNOPENED_UNIT.store(unopened, Ordering::SeqCst);
         Err(Denial::forbidden("refused before the handler"))
     }

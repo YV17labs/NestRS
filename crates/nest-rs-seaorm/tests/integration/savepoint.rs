@@ -6,7 +6,8 @@
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::HttpModule;
-use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, ServiceError, current_executor};
+use nest_rs_seaorm::__private::current_executor;
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, ServiceError};
 use nest_rs_testing::TestApp;
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 use serde_json::{Value, json};

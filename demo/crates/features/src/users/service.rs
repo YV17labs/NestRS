@@ -7,10 +7,9 @@ use nest_rs::core::{error_message, hooks, injectable};
 use nest_rs::database::atomic;
 use nest_rs::graphql::dataloader;
 use nest_rs::seaorm::{
-    Creatable, CreateModel, CrudService, DbOutcome, Deletable, Executor, Repo, ServiceError,
-    Updatable,
+    Creatable, CreateModel, CrudService, DbOutcome, Deletable, Repo, ServiceError, Updatable,
 };
-use sea_orm::{ColumnTrait, DbErr, PaginatorTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DbErr, QueryFilter, Set};
 use uuid::Uuid;
 use validator::Validate;
 
@@ -47,10 +46,7 @@ impl UsersService {
         password: &str,
     ) -> Result<entity::Model, AuthError> {
         burn_verify(password);
-        let conn = Repo::<Users>::conn().map_err(store_unavailable)?;
-        let user = find_by_email(email, &conn)
-            .await
-            .map_err(store_unavailable)?;
+        let user = find_by_email(email).await.map_err(store_unavailable)?;
         verify_credentials(user, password).map_err(AuthError::from)
     }
 
@@ -98,10 +94,7 @@ impl UsersService {
         identity: &SocialIdentity,
         default_org_id: Uuid,
     ) -> Result<entity::Model, AuthError> {
-        let conn =
-            Repo::<Users>::conn().map_err(|e| social_store_unavailable(identity.provider, e))?;
-
-        if let Some(user) = self.find_by_identity(identity, &conn).await? {
+        if let Some(user) = self.find_by_identity(identity).await? {
             return Ok(user);
         }
 
@@ -115,7 +108,7 @@ impl UsersService {
             return Err(AuthError::failed("no verified email"));
         };
 
-        if let Some(user) = find_by_email(email, &conn)
+        if let Some(user) = find_by_email(email)
             .await
             .map_err(|e| social_store_unavailable(identity.provider, e))?
         {
@@ -132,19 +125,18 @@ impl UsersService {
     async fn find_by_identity(
         &self,
         identity: &SocialIdentity,
-        conn: &Executor,
     ) -> Result<Option<entity::Model>, AuthError> {
         let row = Repo::<UserIdentities>::unscoped()
             .filter(user_identity::Column::Provider.eq(identity.provider))
             .filter(user_identity::Column::Subject.eq(identity.subject.clone()))
-            .one(conn)
+            .one()
             .await
             .map_err(|e| social_store_unavailable(identity.provider, e))?;
         let Some(row) = row else {
             return Ok(None);
         };
         Repo::<Users>::unscoped_by_id(row.user_id)
-            .one(conn)
+            .one()
             .await
             .map_err(|e| social_store_unavailable(identity.provider, e))
     }
@@ -155,13 +147,9 @@ impl UsersService {
         identity: &SocialIdentity,
     ) -> Result<(), ServiceError> {
         let linked = atomic(async {
-            let conn = Repo::<UserIdentities>::conn()?;
             Ok::<_, ServiceError>(
-                Repo::<UserIdentities>::insert_unscoped(
-                    new_identity_active(user_id, identity),
-                    &conn,
-                )
-                .await?,
+                Repo::<UserIdentities>::insert_unscoped(new_identity_active(user_id, identity))
+                    .await?,
             )
         })
         .await;
@@ -201,8 +189,7 @@ impl UsersService {
 
         atomic(async {
             let inserted = atomic(async {
-                let conn = Repo::<Users>::conn()?;
-                Ok::<_, ServiceError>(Repo::<Users>::insert_unscoped(active, &conn).await?)
+                Ok::<_, ServiceError>(Repo::<Users>::insert_unscoped(active).await?)
             })
             .await;
             let user = match inserted {
@@ -211,9 +198,7 @@ impl UsersService {
                     user
                 }
                 Err(conflict @ ServiceError::Conflict(_)) => {
-                    find_by_email(email, &Repo::<Users>::conn()?)
-                        .await?
-                        .ok_or(conflict)?
+                    find_by_email(email).await?.ok_or(conflict)?
                 }
                 Err(e) => return Err(e),
             };
@@ -283,10 +268,10 @@ fn social_store_unavailable(
     AuthError::unavailable_because("the social identity store is unreachable", None, err)
 }
 
-async fn find_by_email(email: &str, conn: &Executor) -> Result<Option<entity::Model>, DbErr> {
+async fn find_by_email(email: &str) -> Result<Option<entity::Model>, DbErr> {
     Repo::<Users>::unscoped()
         .filter(entity::Column::Email.eq(email.to_owned()))
-        .one(conn)
+        .one()
         .await
 }
 
@@ -363,7 +348,7 @@ impl UsersService {
         tracing::debug!(target: crate::users::TARGET, count = names.len(), "loading users by name");
         let rows = Repo::<Users>::scoped(Action::Read)
             .filter(entity::Column::Name.is_in(names.iter().cloned()))
-            .all(&Repo::<Users>::conn()?)
+            .all()
             .await?;
         Ok(group_users_by_name(names, rows))
     }
@@ -373,9 +358,7 @@ impl UsersService {
 impl UsersService {
     #[on_application_shutdown]
     async fn report(&self) -> Result<()> {
-        let count = Repo::<Users>::scoped(Action::Read)
-            .count(&Repo::<Users>::conn()?)
-            .await?;
+        let count = Repo::<Users>::scoped(Action::Read).count().await?;
         tracing::debug!(target: crate::users::TARGET, count, "users present at shutdown");
         Ok(())
     }

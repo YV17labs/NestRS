@@ -1,6 +1,7 @@
 use chrono::{TimeDelta, Utc};
 use features::notifications::{ActiveModel, Entity, NotificationsService};
-use nest_rs::seaorm::{Executor, with_job_executor, with_request_executor};
+use nest_rs::database::{with_job_executor, with_request_executor};
+use nest_rs::seaorm::SeaOrmExecutor;
 use nest_rs::testing::EphemeralDatabase;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use uuid::Uuid;
@@ -37,7 +38,7 @@ async fn the_purge_deletes_what_is_past_retention_and_keeps_the_rest() {
     let kept = seed_notification(conn.as_ref(), TimeDelta::days(29)).await;
 
     let purged = with_job_executor(
-        Executor::Pool((*conn).clone()),
+        SeaOrmExecutor::Pool((*conn).clone()).into(),
         NotificationsService.purge_expired(),
     )
     .await
@@ -57,7 +58,7 @@ async fn the_purge_deletes_nothing_for_a_request_without_an_ability() {
     let expired = seed_notification(conn.as_ref(), TimeDelta::days(31)).await;
 
     let purged = with_request_executor(
-        Executor::Pool((*conn).clone()),
+        SeaOrmExecutor::Pool((*conn).clone()).into(),
         NotificationsService.purge_expired(),
     )
     .await

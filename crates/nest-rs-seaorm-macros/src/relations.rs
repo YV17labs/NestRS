@@ -94,7 +94,6 @@ fn emit_pk_loader(
                     count = __keys.len(),
                     #target_label,
                 );
-                let __conn = ::nest_rs_seaorm::Repo::<Entity>::conn()?;
                 let __rows = ::nest_rs_seaorm::Repo::<Entity>::scoped(
                     ::nest_rs_authz::Action::Read,
                 )
@@ -104,7 +103,7 @@ fn emit_pk_loader(
                             __keys.iter().cloned(),
                         ),
                     )
-                    .all(&__conn)
+                    .all()
                     .await?;
                 // `scoped(Read)` filters rows only; columns are masked here.
                 let mut __map: ::std::collections::HashMap<#pk_ty, #wire> =

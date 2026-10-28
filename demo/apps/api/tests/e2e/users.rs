@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use nest_rs::authz::{AbilityBuilder, Action, with_ability};
+use nest_rs::database::with_request_executor;
 use nest_rs::http::{StatusCode, header};
-use nest_rs::seaorm::{Executor, Repo, with_executor};
+use nest_rs::seaorm::{Repo, SeaOrmExecutor};
 use sea_orm::{EntityTrait, IntoActiveModel, Set};
 use serde_json::json;
 use uuid::Uuid;
@@ -161,8 +162,8 @@ async fn writes_are_scoped_to_the_callers_ability() {
             .when(move |p| p.eq(user_row::Column::OrgId, org_b_id));
         b.build().expect("valid test ability")
     });
-    let (update, delete) = with_executor(
-        Executor::Pool((*conn).clone()),
+    let (update, delete) = with_request_executor(
+        SeaOrmExecutor::Pool((*conn).clone()).into(),
         with_ability(blocked, async move {
             let model = user_row::Entity::find_by_id(user_a_id)
                 .one(&*conn)

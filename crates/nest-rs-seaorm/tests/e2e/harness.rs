@@ -176,7 +176,7 @@ pub(crate) async fn write_and_hold(
     observer: Arc<DatabaseConnection>,
     sightings: Sightings,
 ) {
-    nest_rs_seaorm::current_executor()
+    nest_rs_seaorm::__private::current_executor()
         .expect("the body runs with an ambient executor")
         .execute_unprepared(&format!("INSERT INTO {table} (id) VALUES (1)"))
         .await
@@ -184,8 +184,8 @@ pub(crate) async fn write_and_hold(
     nest_rs_database::after_commit(async move {
         let committed = committed_rows(&*observer, table).await;
         let on_pool = matches!(
-            nest_rs_seaorm::current_executor(),
-            Some(nest_rs_seaorm::Executor::Pool(_))
+            nest_rs_seaorm::__private::current_executor(),
+            Some(nest_rs_seaorm::SeaOrmExecutor::Pool(_))
         );
         sightings
             .lock()

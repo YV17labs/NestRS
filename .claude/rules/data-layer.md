@@ -21,6 +21,14 @@ and filters reads **and** by-id writes by the ambient ability's condition — no
 ability means system work, unscoped. Route-model binding (`Bind`) goes through
 `CrudService::access`.
 
+**`Repo` hands out no connection**, held by types: its selects run on the
+ambient executor themselves, and the handle a unit installs is private to its
+driver, so a downcast of the port's reader finds nothing to run a statement
+on (`.claude/decisions/repo-hands-out-no-connection.md`). Review holds the
+one way past it the types leave: the `query()` sea-orm's builder traits hand
+out as `&mut`, through which a statement replaced, cleared or `union`ed runs
+past the filter — a `.query()` on a `Repo` select is read as an escape.
+
 **The named exceptions — there are no others.** The ability filter is dropped
 only through a named `Repo` escape, and each escape's rustdoc states the bar
 its callers must clear; the method's doc is the authority, not this list.
@@ -29,9 +37,9 @@ its callers must clear; the method's doc is the authority, not this list.
   pre-authentication credential lookup, `CrudService::access` (which must tell
   `Denied` from `Missing`, so it filters explicitly after the load), and global
   uniqueness probes such as `resolve_unique_slug`.
-- **`Repo::insert_unscoped`** — the write pendant, on an explicit connection:
-  pre-principal provisioning (a social-login user) and principal-less system
-  work. An authorized create stays on `Creatable`.
+- **`Repo::insert_unscoped`** — the write pendant: pre-principal provisioning
+  (a social-login user) and principal-less system work. An authorized create
+  stays on `Creatable`.
 - **`Repo::with_tombstones`** — the ability-scoped read that keeps
   soft-deleted rows: an administrator's view of deleted records, a retention
   job. Every other read hides them. It reads only: no `Repo` write un-deletes
@@ -47,7 +55,7 @@ its callers must clear; the method's doc is the authority, not this list.
 
 No webhook ingress exists; `Repo::unscoped`'s rustdoc states the bar a
 signature-authenticated one must clear before it ships. Auditing the escapes
-is one grep per method name.
+is one grep per name, `.query()` included.
 
 **A soft-deleted row is hidden by `Repo`, declared once on the entity.**
 `#[expose(..., soft_delete)]` registers the entity, and every `Repo` read and
@@ -76,9 +84,9 @@ the unit tests beside each.
 ## The ambient context
 
 Singletons read per-request state from core's one ambient context, never from
-a task-local of their own: the **executor** (`nest-rs-database` owns the seam
-and the `Executor` trait, `nest-rs-seaorm` the pool-or-transaction
-implementation) and the **ability** (`nest-rs-authz`) are two of its values,
+a task-local of their own: the **executor** (`nest-rs-database` owns the seam,
+the `Executor` trait and the one install and read API, `nest-rs-seaorm` the
+pool-or-transaction `SeaOrmExecutor`) and the **ability** (`nest-rs-authz`) are two of its values,
 and a package adds its own by implementing `AmbientValue`, whose `carry` says
 how far the value travels (`.claude/decisions/ambient-carry.md`).
 
@@ -157,7 +165,7 @@ deadline**: opened through the binding its emitter ran under
   lifecycle hook.
 - **Runs at once:** a pool — a safe request, a GraphQL query, a subscription,
   `transactional = false`.
-- **Not waited for:** a transaction the caller opened itself (`Executor::Txn`,
+- **Not waited for:** a transaction the caller opened itself (`SeaOrmExecutor::Txn`,
   or one held privately like `retry_on_conflict`'s) — its commit is the
   caller's, so the caller emits after its own `commit`. Inside a unit of
   work, a listener reached sooner runs in a unit of its own beside it, never

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use sea_orm::sea_query::Condition;
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 use crate::{Repo, ServiceError};
 
@@ -17,20 +17,15 @@ const MAX_ATTEMPTS: u32 = 100;
 /// Returns the first free candidate (`base`, then `base-2`, `base-3`, …), or a
 /// [`ServiceError`] after `MAX_ATTEMPTS` collisions.
 ///
-/// Probes through [`Repo::unscoped`] on the explicit `conn`: a slug must be free
-/// across every live row, including those the caller cannot see, and a
+/// Probes through [`Repo::unscoped`] on the ambient executor: a slug must be
+/// free across every live row, including those the caller cannot see, and a
 /// soft-deleted row frees its slug.
-pub async fn resolve_unique_slug<E, C>(
-    conn: &C,
+pub async fn resolve_unique_slug<E: EntityTrait>(
     slug_column: E::Column,
     source: &str,
     fallback: &str,
     extra: Condition,
-) -> Result<String, ServiceError>
-where
-    E: EntityTrait,
-    C: ConnectionTrait,
-{
+) -> Result<String, ServiceError> {
     let slug = slugify(source);
     let base: &str = if slug.is_empty() { fallback } else { &slug };
 
@@ -39,9 +34,9 @@ where
         let taken = Repo::<E>::unscoped()
             .filter(extra.clone())
             .filter(slug_column.eq(candidate.clone()))
-            .one(conn)
+            .exists()
             .await?;
-        if taken.is_none() {
+        if !taken {
             return Ok(candidate);
         }
     }

@@ -79,16 +79,12 @@ impl PostsService {
         };
         let receipt = self.queue.push(NotifyQueue, notification, None).await?;
 
-        let conn = Repo::<publication::Entity>::conn().map_err(ServiceError::from)?;
-        Repo::<publication::Entity>::insert_unscoped(
-            publication::ActiveModel {
-                id: Set(Uuid::now_v7()),
-                post_id: Set(post_id),
-                actor_id: Set(actor_id),
-                published_at: Set(chrono::Utc::now().fixed_offset()),
-            },
-            &conn,
-        )
+        Repo::<publication::Entity>::insert_unscoped(publication::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            post_id: Set(post_id),
+            actor_id: Set(actor_id),
+            published_at: Set(chrono::Utc::now().fixed_offset()),
+        })
         .await
         .map_err(|err| match ServiceError::from(err) {
             ServiceError::Conflict(_) => PostError::AlreadyPublished { id: post_id },

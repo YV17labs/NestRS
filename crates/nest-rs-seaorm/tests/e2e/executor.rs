@@ -102,7 +102,7 @@ impl ItemsController {
     #[post("/stream")]
     #[public]
     async fn stream(&self, _authz: Authorize<Read, item::Entity>) -> Response {
-        nest_rs_seaorm::current_executor()
+        nest_rs_seaorm::__private::current_executor()
             .expect("a mutating route runs in a transaction")
             .execute_unprepared(&format!(
                 "INSERT INTO {TABLE} (id, published) VALUES (3, true)"
@@ -243,9 +243,9 @@ struct Recorded;
 impl TxnListeners {
     #[on_event]
     async fn on_recorded(&self, _event: Recorded) {
-        let ran_on = match nest_rs_seaorm::current_executor() {
-            Some(nest_rs_seaorm::Executor::Txn(_)) => RanOn::TheCallersTransaction,
-            Some(nest_rs_seaorm::Executor::Lazy(_)) => RanOn::ItsOwnTransaction,
+        let ran_on = match nest_rs_seaorm::__private::current_executor() {
+            Some(nest_rs_seaorm::SeaOrmExecutor::Txn(_)) => RanOn::TheCallersTransaction,
+            Some(nest_rs_seaorm::SeaOrmExecutor::Lazy(_)) => RanOn::ItsOwnTransaction,
             _ => RanOn::Another,
         };
         self.probe
@@ -303,8 +303,8 @@ async fn a_listener_run_at_once_under_a_callers_own_transaction_runs_in_a_unit_o
                 .begin()
                 .await
                 .expect("the caller opens its own transaction");
-            nest_rs_seaorm::with_executor(
-                nest_rs_seaorm::Executor::Txn(std::sync::Arc::new(txn)),
+            nest_rs_database::with_request_executor(
+                nest_rs_seaorm::SeaOrmExecutor::Txn(std::sync::Arc::new(txn)).into(),
                 bus.emit(Recorded),
             )
             .await;
@@ -351,7 +351,7 @@ async fn a_rollback_after_a_statement_postgres_cancelled_is_said_at_warn() {
         .get::<sea_orm::DatabaseConnection>()
         .expect("the pool");
     let lazy = std::sync::Arc::new(nest_rs_seaorm::LazyTransaction::new((*db).clone(), "ws"));
-    let executor = nest_rs_seaorm::Executor::Lazy(std::sync::Arc::clone(&lazy));
+    let executor = nest_rs_seaorm::SeaOrmExecutor::Lazy(std::sync::Arc::clone(&lazy));
     let cut = tokio::time::timeout(
         std::time::Duration::from_millis(200),
         executor.execute_unprepared("SELECT pg_sleep(3)"),

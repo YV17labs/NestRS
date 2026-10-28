@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, ConnectionTrait, DbErr, EntityName, EntityTrait,
-    IntoActiveModel, PrimaryKeyTrait, QueryFilter,
+    ActiveModelBehavior, ActiveModelTrait, DbErr, EntityName, EntityTrait, IntoActiveModel,
+    PrimaryKeyTrait, QueryFilter,
 };
 
 use nest_rs_authz::{Action, ActionMarker};
@@ -272,10 +272,9 @@ where
     async fn list(&self) -> Result<Vec<<Self::Entity as EntityTrait>::Model>, DbErr> {
         use sea_orm::QuerySelect;
         tracing::debug!(target: crate::target::ORM, entity = Self::entity_name(), "listing rows");
-        let conn = Repo::<Self::Entity>::conn()?;
         let rows = Repo::<Self::Entity>::scoped(Action::Read)
             .limit(crate::LIST_CAP + 1)
-            .all(&conn)
+            .all()
             .await?;
         let (rows, capped) = crate::page::split_overfetched(rows, crate::LIST_CAP);
         if capped {
@@ -315,20 +314,16 @@ where
     where
         <Self::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     {
-        let conn = Repo::<Self::Entity>::conn()?;
         let entity = Self::entity_name();
         if let Some(model) = Repo::<Self::Entity>::unscoped_by_id(id)
             .filter(ability_scope::<Self::Entity>(action))
-            .one(&conn)
+            .one()
             .await?
         {
             tracing::debug!(target: crate::target::ORM, entity, %id, ?action, "access granted");
             return Ok(Access::Found(model));
         }
-        let exists = Repo::<Self::Entity>::unscoped_by_id(id)
-            .one(&conn)
-            .await?
-            .is_some();
+        let exists = Repo::<Self::Entity>::unscoped_by_id(id).exists().await?;
         if exists {
             tracing::warn!(target: crate::target::ORM, entity, %id, ?action, "access denied");
             Ok(Access::Denied)
@@ -358,8 +353,7 @@ pub trait Creatable: CrudService {
 
     /// Insert a **prepared** `ActiveModel` through the same audited path as
     /// [`create`](Creatable::create), for a service stamping server-side
-    /// columns first; a raw `ActiveModel::insert(&Repo::conn()?)` bypasses the
-    /// ability check.
+    /// columns first.
     async fn create_from_active(
         &self,
         active: <Self::Entity as EntityTrait>::ActiveModel,
@@ -369,8 +363,7 @@ pub trait Creatable: CrudService {
         // A swallowed `RecordNotInserted` must not leave the row to commit with
         // the request.
         atomic(async move {
-            let conn = Repo::<Self::Entity>::conn()?;
-            Ok::<_, AtomicDbError>(insert_in_scope::<Self::Entity, _>(active, entity, &conn).await?)
+            Ok::<_, AtomicDbError>(insert_in_scope::<Self::Entity>(active, entity).await?)
         })
         .await
         .map_err(DbErr::from)
@@ -378,24 +371,18 @@ pub trait Creatable: CrudService {
 }
 
 /// Insert, then re-check the fresh row against `condition_for(Create)` in SQL
-/// on the same connection.
-async fn insert_in_scope<E, C>(
-    active: E::ActiveModel,
-    entity: &'static str,
-    conn: &C,
-) -> Result<E::Model, DbErr>
+/// on the same executor.
+async fn insert_in_scope<E>(active: E::ActiveModel, entity: &'static str) -> Result<E::Model, DbErr>
 where
     E: EntityTrait,
     E::ActiveModel: ActiveModelBehavior + Send,
     E::Model: IntoActiveModel<E::ActiveModel>,
-    C: ConnectionTrait,
 {
-    let model = active.insert(conn).await?;
+    let model = active.insert(&Repo::<E>::conn()?).await?;
     let in_scope = Repo::<E>::scoped(Action::Create)
         .filter(pk_condition::<E>(&model))
-        .one(conn)
-        .await?
-        .is_some();
+        .exists()
+        .await?;
     if !in_scope {
         tracing::warn!(
             target: crate::target::ORM,

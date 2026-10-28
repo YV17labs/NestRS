@@ -8,14 +8,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use nest_rs_core::{Continuation, TaskContext};
 use nest_rs_database::{AtomicBlock, AtomicError, Deferred};
 
-use crate::executor::{Executor, FinalizeOutcome, LazyTransaction};
+use crate::executor::{FinalizeOutcome, Installed, LazyTransaction, SeaOrmExecutor};
 use crate::savepoint::Savepoint;
 use crate::unit::Settles;
 
 /// The executor an atomic block installs: a [`Repo`](crate::Repo) reads the
 /// SeaORM executor inside, and the block settles it once.
 pub(crate) struct AtomicExecutor {
-    executor: Executor,
+    executor: Installed,
     /// Where a block of its own on a framework pool unit commits.
     on_pool: Option<PoolCommit>,
 }
@@ -24,7 +24,7 @@ impl AtomicExecutor {
     /// A block running on a transaction of its own.
     pub(crate) fn own(transaction: Arc<LazyTransaction>) -> Self {
         Self {
-            executor: Executor::Lazy(transaction),
+            executor: Installed(SeaOrmExecutor::Lazy(transaction)),
             on_pool: None,
         }
     }
@@ -33,7 +33,7 @@ impl AtomicExecutor {
     /// whose commit runs where `on_pool` says.
     pub(crate) fn own_on_pool(transaction: Arc<LazyTransaction>, on_pool: PoolCommit) -> Self {
         Self {
-            executor: Executor::Lazy(transaction),
+            executor: Installed(SeaOrmExecutor::Lazy(transaction)),
             on_pool: Some(on_pool),
         }
     }
@@ -41,7 +41,7 @@ impl AtomicExecutor {
     /// A block running inside a savepoint of its enclosing unit.
     pub(crate) fn savepoint(savepoint: Arc<Savepoint>) -> Self {
         Self {
-            executor: Executor::Savepoint(savepoint),
+            executor: Installed(SeaOrmExecutor::Savepoint(savepoint)),
             on_pool: None,
         }
     }
@@ -53,15 +53,15 @@ impl nest_rs_database::Executor for AtomicExecutor {
     }
 
     fn non_transactional(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
-        self.executor.non_transactional()
+        self.executor.0.non_transactional()
     }
 
     fn after_commit(&self, work: Deferred) -> Option<Deferred> {
-        nest_rs_database::Executor::after_commit(&self.executor, work)
+        self.executor.0.after_commit(work)
     }
 
     fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-        self.executor.atomic()
+        self.executor.0.atomic()
     }
 
     #[cfg(feature = "queue")]
@@ -70,7 +70,7 @@ impl nest_rs_database::Executor for AtomicExecutor {
         records: &mut dyn Iterator<Item = nest_rs_database::OutboxRecord>,
     ) -> Option<futures_util::future::BoxFuture<'_, Result<(), nest_rs_database::OutboxError>>>
     {
-        nest_rs_database::Executor::write_outbox(&self.executor, records)
+        self.executor.0.write_outbox(records)
     }
 
     #[cfg(feature = "queue")]
@@ -80,7 +80,7 @@ impl nest_rs_database::Executor for AtomicExecutor {
         id: uuid::Uuid,
     ) -> Option<futures_util::future::BoxFuture<'a, Result<bool, nest_rs_database::OutboxError>>>
     {
-        nest_rs_database::Executor::remove_outbox(&self.executor, queue, id)
+        self.executor.0.remove_outbox(queue, id)
     }
 
     #[cfg(feature = "queue")]
@@ -90,7 +90,7 @@ impl nest_rs_database::Executor for AtomicExecutor {
         key: &'a str,
     ) -> Option<futures_util::future::BoxFuture<'a, Result<bool, nest_rs_database::OutboxError>>>
     {
-        nest_rs_database::Executor::remove_outbox_unique(&self.executor, queue, key)
+        self.executor.0.remove_outbox_unique(queue, key)
     }
 }
 
@@ -99,17 +99,17 @@ impl AtomicBlock for AtomicExecutor {
         self: Arc<Self>,
         ok: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), AtomicError>> + Send>> {
-        let (executor, on_pool) = (self.executor.clone(), self.on_pool.clone());
+        let (executor, on_pool) = (self.executor.0.clone(), self.on_pool.clone());
         // A handle still held past this point is one that escaped the block.
         drop(self);
         Box::pin(async move {
             match executor {
-                Executor::Savepoint(savepoint) => savepoint.settle(ok).await,
-                Executor::Lazy(own) => match on_pool {
+                SeaOrmExecutor::Savepoint(savepoint) => savepoint.settle(ok).await,
+                SeaOrmExecutor::Lazy(own) => match on_pool {
                     Some(on_pool) if ok && own.is_opened() => on_pool.commit(own).await,
                     _ => settled(own.finalize(ok).await),
                 },
-                Executor::Pool(_) | Executor::Txn(_) => Ok(()),
+                SeaOrmExecutor::Pool(_) | SeaOrmExecutor::Txn(_) => Ok(()),
             }
         })
     }

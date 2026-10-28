@@ -813,7 +813,7 @@
     },
     "/audio/transcode": {
       "post": {
-        "description": "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the shared `audio` queue, answering `202` once it is queued; the separate worker deployable consumes it over Redis (two apps exchanging, no RPC). Requires a bearer JWT granted the `audio:transcode` scope, is admin-only (`Manage` on the caller's org; `TranscodeGuard` enforces both) and rate-limited by `ThrottlerGuard`; its `file` is the key an upload returned, a UUID, so no client names a storage path.",
+        "description": "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the shared `audio` queue, answering `202` once it is queued; the separate worker deployable consumes it over Redis (two apps exchanging, no RPC). Requires a bearer JWT granted the `audio:transcode` scope, is admin-only (`Manage` on `Transcoding`, which `#[authorize]` gates with the scope) and rate-limited by `ThrottlerGuard`; its `file` is the key an upload returned, a UUID, so no client names a storage path.",
         "operationId": "audio_transcode",
         "requestBody": {
           "content": {
@@ -942,7 +942,7 @@
     },
     "/audio/uploads": {
       "post": {
-        "description": "Returns a short-lived presigned PUT URL, the method and headers the upload sends verbatim, and the object key the server minted for it. The URL binds `Content-Type: audio/mpeg`: object storage refuses an upload sending another type, or none. The client pushes the file bytes straight to object storage (the server never proxies the payload), then calls `POST /audio/transcode` with the returned key. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability (`Manage` on the caller's org).",
+        "description": "Returns a short-lived presigned PUT URL, the method and headers the upload sends verbatim, and the object key the server minted for it. The URL binds `Content-Type: audio/mpeg`: object storage refuses an upload sending another type, or none. The client pushes the file bytes straight to object storage (the server never proxies the payload), then calls `POST /audio/transcode` with the returned key. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability (`Manage` on `Transcoding`).",
         "operationId": "audio_create_upload",
         "responses": {
           "200": {

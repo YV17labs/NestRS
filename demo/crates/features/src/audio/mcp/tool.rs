@@ -3,8 +3,7 @@ use std::sync::Arc;
 use nest_rs::authz::Manage;
 use nest_rs::mcp::{McpError, Opaque, Parameters, Valid, mcp, tools};
 
-use crate::audio::{AudioService, TranscodeDto, TranscodeGuard};
-use crate::orgs::Entity as OrgEntity;
+use crate::audio::{AudioService, TranscodeDto, Transcoding};
 
 #[mcp]
 #[derive(Clone)]
@@ -21,8 +20,7 @@ impl AudioTool {
                        worker has not produced the derived object, or `ready` with a short-lived \
                        download URL once it has."
     )]
-    #[authorize(Manage, OrgEntity, unmasked)]
-    #[use_guards(TranscodeGuard)]
+    #[authorize(Manage, Transcoding)]
     async fn transcode_status(
         &self,
         Parameters(params): Parameters<Valid<TranscodeDto>>,
@@ -43,7 +41,7 @@ mod tests {
     use nest_rs::core::Discoverable;
 
     use super::AudioTool;
-    use crate::audio::{AudioService, TranscodeGuard};
+    use crate::audio::AudioService;
 
     #[test]
     fn mcp_tool_declares_its_injected_service_for_the_access_graph() {
@@ -51,16 +49,6 @@ mod tests {
         assert!(
             AudioTool::injected().contains(&TypeId::of::<AudioService>()),
             "the MCP tool's injected AudioService is recorded for the access graph",
-        );
-    }
-
-    #[test]
-    fn the_operation_guard_is_recorded_for_the_access_graph_too() {
-        assert!(
-            AudioTool::injected().contains(&TypeId::of::<TranscodeGuard>()),
-            "a guard bound beside a #[tool] is a dependency the boot must be able \
-             to resolve, exactly as on a controller — otherwise a missing module \
-             would surface as an ungated tool instead of a boot error",
         );
     }
 }

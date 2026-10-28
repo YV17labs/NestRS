@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::future::ready;
 
 use futures_util::StreamExt;
+use nest_rs::authz::Manage;
 use nest_rs::core::error_message;
 use nest_rs::http::{
     Body, Header, HeaderValue, HttpError, Json, Query, Response, Result, SseEvent, SseStream,
@@ -11,15 +12,15 @@ use nest_rs::http::{
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
 use super::uploaded_audio::UploadedAudio;
-use crate::audio::TranscodeGuard;
 use crate::audio::{
     AudioService, DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeState,
+    Transcoding,
 };
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 
 #[controller(path = "/audio")]
-#[use_guards(ThrottlerGuard, AuthnGuard, AuthzGuard, TranscodeGuard)]
+#[use_guards(ThrottlerGuard, AuthnGuard, AuthzGuard)]
 pub struct AudioController {
     #[inject]
     svc: Arc<AudioService>,
@@ -28,6 +29,7 @@ pub struct AudioController {
 #[routes]
 impl AudioController {
     #[post("/uploads")]
+    #[authorize(Manage, Transcoding)]
     #[meta(Throttle::per_minute(20))]
     #[api(
         summary = "Mint a presigned PUT URL for a direct audio upload",
@@ -37,14 +39,15 @@ impl AudioController {
                        another type, or none. The client pushes the file bytes straight to object \
                        storage (the server never proxies the payload), then calls \
                        `POST /audio/transcode` with the returned key. Requires a bearer JWT granted \
-                       the `audio:transcode` scope and the admin capability (`Manage` on the \
-                       caller's org)."
+                       the `audio:transcode` scope and the admin capability (`Manage` on \
+                       `Transcoding`)."
     )]
     async fn create_upload(&self) -> Result<Json<PresignedUrlDto>> {
         Ok(Json(self.svc.presign_upload().await?))
     }
 
     #[get("/results")]
+    #[authorize(Manage, Transcoding)]
     #[meta(Throttle::per_minute(60))]
     #[api(
         summary = "Fetch a presigned GET URL for a transcoded object",
@@ -62,6 +65,7 @@ impl AudioController {
     }
 
     #[post("/uploads/direct")]
+    #[authorize(Manage, Transcoding)]
     #[meta(Throttle::per_minute(20))]
     #[api(
         summary = "Upload an audio file directly as multipart/form-data",
@@ -83,6 +87,7 @@ impl AudioController {
     }
 
     #[get("/download")]
+    #[authorize(Manage, Transcoding)]
     #[meta(Throttle::per_minute(60))]
     #[api(
         summary = "Stream a transcoded object back through the server",
@@ -105,6 +110,7 @@ impl AudioController {
     }
 
     #[sse("/events")]
+    #[authorize(Manage, Transcoding)]
     #[meta(Throttle::per_minute(60))]
     #[api(
         summary = "Stream transcode progress as Server-Sent Events",
@@ -149,6 +155,7 @@ impl AudioController {
     }
 
     #[post("/transcode")]
+    #[authorize(Manage, Transcoding)]
     #[meta(Throttle::per_minute(20))]
     #[api(
         summary = "Enqueue a transcode job for the worker to process",
@@ -156,8 +163,8 @@ impl AudioController {
                        shared `audio` queue, answering `202` once it is queued; the separate \
                        worker deployable consumes it over Redis (two apps exchanging, no RPC). \
                        Requires a bearer JWT granted the `audio:transcode` scope, is admin-only \
-                       (`Manage` on the caller's org; `TranscodeGuard` enforces both) and \
-                       rate-limited by `ThrottlerGuard`; its \
+                       (`Manage` on `Transcoding`, which `#[authorize]` gates with the scope) \
+                       and rate-limited by `ThrottlerGuard`; its \
                        `file` is the key an upload returned, a UUID, so no client names a \
                        storage path."
     )]

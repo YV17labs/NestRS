@@ -36,8 +36,7 @@ scheme: https
 # prefix; the chart prepends `envPrefix`. Anything set here wins over the values
 # the chart derives from the app hostnames (see `templates/_helpers.tpl`).
 config:
-  # Mirrors `features::authz::constants` — the scopes the demo's rules and its
-  # `TranscodeGuard` gate on.
+  # Mirrors `features::authz::constants` — the scopes the demo's rules gate on.
   # A scope a rule requires but this list omits is a dead end the framework
   # reports at warn on boot.
   OAUTH__RESOURCE__SCOPES_SUPPORTED: posts:read,posts:write,audio:transcode

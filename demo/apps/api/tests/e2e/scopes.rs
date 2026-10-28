@@ -219,10 +219,14 @@ async fn a_service_token_narrowed_to_reading_posts_is_challenged_on_the_audio_ro
         );
     }
 
-    let denied = logs.find(
-        features::audio::TARGET,
-        "transcode denied: the token does not carry the transcode scope",
-    );
+    let denied = logs.find("nest_rs::authz", "authorization denied");
     assert_eq!(denied.len(), 2, "one line per denial: {denied:#?}");
+    for line in &denied {
+        assert_eq!(line.field("reason").as_deref(), Some("insufficient_scope"));
+        assert_eq!(
+            line.field("subject").as_deref(),
+            Some(std::any::type_name::<features::audio::Transcoding>()),
+        );
+    }
     logs.expect_none("nest_rs::layers", "guard denied the request");
 }

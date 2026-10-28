@@ -3,6 +3,7 @@ use nest_rs::core::injectable;
 
 use super::constants;
 use crate::Claims;
+use crate::audio::Transcoding;
 use crate::notifications as notification;
 use crate::orgs as org;
 use crate::posts as post;
@@ -22,6 +23,8 @@ impl AbilityFactory for AuthzAbility {
             ab.can(Action::Manage, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
             ab.can(Action::Manage, org::Entity);
+            ab.can(Action::Manage, Transcoding)
+                .requires_scope(constants::AUDIO_TRANSCODE);
             ab.can(Action::Read, post::Entity)
                 .when(|p| p.eq(post::Column::OrgId, actor.org_id))
                 .requires_scope(constants::POSTS_READ);
@@ -293,6 +296,52 @@ mod tests {
             ),
             "the withheld rule must not leak through the row check either",
         );
+    }
+
+    #[test]
+    fn an_admin_token_granted_the_transcode_scope_may_transcode() {
+        let ab = ability_scoped(vec![Role::Admin], Uuid::now_v7(), constants::all());
+        assert!(ab.can_class(Action::Manage, TypeId::of::<Transcoding>()));
+    }
+
+    #[test]
+    fn a_member_may_not_transcode_and_no_wider_token_would_change_it() {
+        let ab = member(Uuid::now_v7());
+        assert!(!ab.can_class(Action::Manage, TypeId::of::<Transcoding>()));
+        assert!(
+            ab.missing_scopes(Action::Manage, TypeId::of::<Transcoding>())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_admin_token_narrowed_to_reading_posts_lacks_the_transcode_scope() {
+        let ab = ability_scoped(
+            vec![Role::Admin],
+            Uuid::now_v7(),
+            vec![constants::POSTS_READ.to_owned()],
+        );
+        assert!(!ab.can_class(Action::Manage, TypeId::of::<Transcoding>()));
+        assert_eq!(
+            ab.missing_scopes(Action::Manage, TypeId::of::<Transcoding>()),
+            [constants::AUDIO_TRANSCODE],
+        );
+    }
+
+    #[test]
+    fn an_admin_whose_credential_is_not_scope_aware_may_transcode() {
+        let claims = Claims {
+            sub: Subject::User(Uuid::nil()),
+            client_id: None,
+            org_id: Uuid::now_v7(),
+            roles: vec![Role::Admin],
+            scopes: Vec::new(),
+            exp: 0,
+        };
+        let mut b = AbilityBuilder::new();
+        AuthzAbility.define(&claims, &mut b);
+        let ab = b.build().expect("valid test ability");
+        assert!(ab.can_class(Action::Manage, TypeId::of::<Transcoding>()));
     }
 
     #[test]

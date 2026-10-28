@@ -791,11 +791,13 @@ lists what the boot, a log or the wire shows when one is missed.
     | `MaskReplyError::Irreconcilable(serde_json::Error)` | `MaskReplyError::Irreconcilable(DecodeError)` |
     | `ProblemDetails::from_error(status, title, err)` with any `Display` | the same with `&err`, an error, whose decode failure it says without the value; a sentence of your own is `.with_detail(…)` |
     | `panic_message(payload)` borrowed as a `&str` | an owned `String`, any decode failure in it said without the value |
-    | `post: Bind<Update, PostsService>` on a route, `nest_rs::seaorm::Bind` | `#[authorize(Update, bind = PostsService)]` on the route and `post: Authorized<Update, PostEntity>` as its parameter, `nest_rs::seaorm::Authorized`; the route's path names the id alone (`/{id}`, `/{id}/publish`) |
+    | `post: Bind<Update, PostsService>` on a route, `nest_rs::seaorm::Bind` | `#[authorize(Update, bind = PostsService)]` on the route and `post: Authorized<Update, PostEntity>` as its parameter, `nest_rs::seaorm::Authorized`; the route's whole path, its controller's included, names the id alone (`/{id}`, `/{id}/publish`) |
     | `nest_rs::seaorm::graphql::bind::<A, S>(ctx, &id)` or `bind_required::<A, S>(ctx, &id)` in a resolver | `#[authorize(A, bind = S)]` on the operation and an `Authorized<A, E>` parameter, its `id` argument synthesised; a nullable lookup is `#[crud]`'s generated query, or `CrudService::access` in the body |
     | a hand-written `Authorize<A, E>` parameter on a route that is not `#[public]` | `#[authorize(A, E)]` on the route, the parameter dropped |
     | `nest_rs::authz::http::AbilityShaping` | nothing public: `#[authorize]` arms the mask |
     | a hand-written `get` or `user` override on a `#[crud]` block, kept only for its `#[api]` text | `api(get(summary = "…", description = "…"))` in the `#[crud]` arguments, the override deleted |
+    | `paginate = …` on a `#[crud]` block that writes its list operation by hand | the key dropped: nothing generated read it, and your method bounds its own list |
+    | a `#[crud]` block generating `get`, `update` or `delete` under a controller path naming a parameter (`/orgs/{org}/users`) | those operations written by hand, reading every parameter, or the resource mounted under a path naming none: the generated ones answered `500` on every request |
 
     Name your own log target by the constant the feature declares, as a 7.0
     scaffold does (`pub const TARGET: &str = "features::chat";` in

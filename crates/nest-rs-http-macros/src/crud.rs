@@ -10,7 +10,7 @@ use quote::quote;
 use syn::{ImplItem, ItemImpl, parse_quote};
 
 use nest_rs_codegen::__private::{
-    CrudDeclaration, CrudOp, Paginate, impl_self_ident, parse_crud_args,
+    CrudDeclaration, CrudOp, GeneratedOps, Paginate, impl_self_ident, parse_crud_args,
 };
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -26,7 +26,6 @@ pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
 
 pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let cfg = parse_crud_args(args)?;
-    let ops = cfg.generated_ops()?;
     let self_ty = item.self_ty.clone();
     // Kept for the diagnostic it raises on a non-path `impl` target.
     let _ = impl_self_ident(&self_ty, "#[crud]")?;
@@ -39,6 +38,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             _ => None,
         })
         .collect();
+    let ops = cfg.generated_ops(&existing, |op| op.name().to_owned())?;
+    let prefix_check = by_id_path_check(&self_ty, &ops);
 
     let service = &cfg.service;
     let entity = &cfg.entity;
@@ -71,7 +72,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
 
     let mut generated: Vec<ImplItem> = Vec::new();
 
-    if ops.list && !existing.contains("list") {
+    if ops.list {
         let api = api_args(&cfg, CrudOp::List, format!("List {noun}"));
         let list_method: ImplItem = match cfg.paginate {
             Paginate::None => parse_quote! {
@@ -133,7 +134,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         generated.push(list_method);
     }
 
-    if ops.get && !existing.contains("get") {
+    if ops.get {
         let api = api_args(&cfg, CrudOp::Get, format!("Fetch {noun} by id"));
         generated.push(parse_quote! {
             #[get("/{id}")]
@@ -161,9 +162,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         });
     }
 
-    if let Some(create) = ops.create
-        && !existing.contains("create")
-    {
+    if let Some(create) = ops.create {
         let api = api_args(&cfg, CrudOp::Create, format!("Create {noun}"));
         generated.push(parse_quote! {
             #[post("/")]
@@ -205,9 +204,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         });
     }
 
-    if let Some(update) = ops.update
-        && !existing.contains("update")
-    {
+    if let Some(update) = ops.update {
         let api = api_args(&cfg, CrudOp::Update, format!("Update {noun} by id"));
         generated.push(parse_quote! {
             // RFC 9110 §9.3.4: `Update<E>` carries every writable field, which
@@ -246,7 +243,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         });
     }
 
-    if ops.delete && !existing.contains("delete") {
+    if ops.delete {
         let api = api_args(&cfg, CrudOp::Delete, format!("Delete {noun} by id"));
         generated.push(parse_quote! {
             #[delete("/{id}")]
@@ -286,6 +283,38 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     Ok(quote! {
         #[::nest_rs_http::routes]
         #item
+
+        #prefix_check
+    })
+}
+
+/// The assertion that the controller's path names no parameter of its own
+/// when a generated op reads the id — `#[crud]` never sees that path, and
+/// each by-id op reads one parameter, its route's.
+fn by_id_path_check(self_ty: &syn::Type, ops: &GeneratedOps<'_>) -> Option<TokenStream2> {
+    let by_id: Vec<String> = [
+        (ops.get, CrudOp::Get),
+        (ops.update.is_some(), CrudOp::Update),
+        (ops.delete, CrudOp::Delete),
+    ]
+    .into_iter()
+    .filter(|&(generated, _)| generated)
+    .map(|(_, op)| format!("`{}`", op.name()))
+    .collect();
+    if by_id.is_empty() {
+        return None;
+    }
+    let ops = by_id.join(", ");
+    let message = format!(
+        "#[crud] reads the id of {ops} from the route's one path parameter, and the \
+         `#[controller]` path names parameters of its own — mount the resource under a path \
+         naming none, or write {ops} by hand",
+    );
+    Some(quote! {
+        const _: () = ::core::assert!(
+            <#self_ty>::__nestrs_controller_path_parameters() == 0,
+            #message,
+        );
     })
 }
 
@@ -420,6 +449,34 @@ mod tests {
             err.contains("`get`") && err.contains("`ops` leaves out"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn a_key_configuring_an_op_the_block_writes_by_hand_fails_to_expand() {
+        for (args, refusal) in [
+            (
+                quote! {
+                    service = svc, entity = E, output = Thing, ops = [list, get],
+                    api(get(summary = "Get a thing")),
+                },
+                "#[crud] `api` configures the `get` op, which this block writes by hand as \
+                 `fn get` — drop `get(…)`: give that method its own `#[api]`",
+            ),
+            (
+                quote! { service = svc, entity = E, output = Thing, paginate = none },
+                "#[crud] `paginate` configures the `list` op, which this block writes by hand \
+                 as `fn list` — drop `paginate = …`: the method bounds its own list",
+            ),
+        ] {
+            let item: ItemImpl = parse_quote! {
+                impl Things {
+                    async fn list(&self) {}
+                    async fn get(&self) {}
+                }
+            };
+            let err = crud(args, item).expect_err("a key no generated op reads is refused");
+            assert_eq!(err.to_string(), refusal);
+        }
     }
 
     #[test]

@@ -147,3 +147,39 @@ async fn a_bound_route_is_documented_as_masked() {
         "the subject's id is no `Path<T>` the document types"
     );
 }
+
+/// The subject's id is the one parameter of the controller's path; the
+/// route's own names none.
+#[controller(path = "/notes/{id}")]
+#[use_guards(Grants)]
+struct NoteSummaryController;
+
+#[routes]
+impl NoteSummaryController {
+    #[get("/summary")]
+    #[authorize(Read, bind = NotesService)]
+    async fn summary(&self, note: Authorized<Read, note::Entity>) -> String {
+        note.id.to_string()
+    }
+}
+
+#[module(imports = [NotesModule], providers = [Grants, NoteSummaryController])]
+struct NoteSummaryModule;
+
+#[tokio::test]
+async fn a_bound_route_reads_the_id_its_controller_path_names() {
+    let app = TestApp::for_module::<NoteSummaryModule>()
+        .await
+        .expect("a route bound on its controller's one parameter boots");
+
+    let refused = app
+        .http()
+        .get(format!("/notes/{}/summary", uuid::Uuid::new_v4()))
+        .header("x-read", "")
+        .send()
+        .await;
+
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    let body = refused.0.into_body().into_string().await.expect("a body");
+    assert!(body.contains(nest_rs_core::UUID_V7_REQUIRED), "{body}");
+}

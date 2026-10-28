@@ -8,6 +8,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned as _;
 use syn::{
     Attribute, FnArg, GenericArgument, Ident, ImplItem, ItemImpl, ItemStruct, LitStr, Path,
     PathArguments, Signature, Token, Type, parse_quote,
@@ -861,6 +862,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let mut mutation_methods: Vec<TokenStream2> = Vec::new();
     let mut subscription_methods: Vec<TokenStream2> = Vec::new();
     let mut entity_claims: Vec<TokenStream2> = Vec::new();
+    // One per operation writing an entity beside `bind`: the service's own.
+    let mut bound_entities: Vec<TokenStream2> = Vec::new();
     // Each field's handler and site, and the sites the boot composes.
     let mut site_items: Vec<TokenStream2> = Vec::new();
     let mut site_refs: Vec<(Vec<TokenStream2>, TokenStream2)> = Vec::new();
@@ -1157,6 +1160,17 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     cfgs.clone(),
                     parse_quote!(::nest_rs_graphql::Scoped<#service>),
                 ));
+            }
+            if let Some(AuthorizeSpec {
+                entity: Some(entity),
+                bind: Some(service),
+                ..
+            }) = &authorize_spec
+            {
+                bound_entities.push(quote_spanned! {entity.span()=>
+                    #(#cfgs)*
+                    const _: () = ::nest_rs_seaorm::__private::bound_entity::<#service, #entity>();
+                });
             }
             let piped = piped_args(&sig);
             let scoped = scoped_args(&sig);
@@ -1501,6 +1515,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         #capability_bounds
 
         #markers
+
+        #(#bound_entities)*
 
         #query_block
         #mutation_block

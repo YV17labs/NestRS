@@ -81,9 +81,11 @@ guard, filter or interceptor loop of its own.
    `PostureRules` in `nest-rs-codegen` where it is the same grammar: `#[tools]`
    and `#[messages]` take it verbatim. `#[operations]` and `#[routes]` parse
    their own because only they bind a subject by id — `bind = Service`, read
-   from a synthesised id argument (`id_arg` renames it) or from the route's one
-   path parameter — into an `Authorized<A, E>` parameter, which carries the row
-   and never the posture: either without the other is a compile error.
+   from a synthesised id argument (`id_arg` renames it) or from the one
+   parameter the route's path names, its controller's included — into an
+   `Authorized<A, E>` parameter, which carries the row and never the posture:
+   either without the other is a compile error, as is an entity written
+   beside `bind` other than the service's.
    `#[routes]`' posture is optional on a route a guard covers, which the guard
    decides, and a route no guard covers — the app's pool included — says
    `#[public]` or refuses the boot, one error naming every such route and both

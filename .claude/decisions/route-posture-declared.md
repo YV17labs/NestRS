@@ -28,9 +28,16 @@ other public-API changes.
   grammar instead, and the GraphQL `bind`/`bind_required` helpers leave the
   API for the expansion's private seam. A `Bind<A, S>` resolver parameter, the
   audit's other proposal, is refused for the same reason.
-- **`id_arg` on a route**: the subject's id is the route's one path parameter,
-  which the path already names; a bound route whose path names other than one
-  parameter is a compile error rather than a `500` on its first request.
+- **`id_arg` on a route**: the subject's id is the one parameter the route's
+  path names, which the path already names; a bound route whose path — its
+  controller's included, which `#[controller]` counts for `#[routes]` to
+  assert — names other than one parameter is a compile error rather than a
+  `500` on its first request, and so is a generated `#[crud]` by-id operation
+  under a controller path naming a parameter of its own.
+- **An entity written beside `bind` other than the service's**: the class gate
+  and the mask read the written entity, the load the service's, so the two
+  would decide on different entities. The written one is optional and, when
+  written, must be `S::Entity`, on both edges.
 - **A hand-written `Authorize<A, E>` anywhere but beside `#[public]`**: there
   it is the public-reads spelling, the opposite posture's plumbing; elsewhere it
   would be a gate no attribute shows. Refused by spelling at compile time and
@@ -39,7 +46,9 @@ other public-API changes.
   an OpenAPI operation has a summary and a description, and a route overridden
   only to carry them was the redundancy the exemplar taught. `api(<op>(…))`
   takes `#[api]`'s two keys; a resolver refuses it, since a field's description
-  is a hand-written operation's doc comment.
+  is a hand-written operation's doc comment, and so does a controller beside
+  the operation it writes by hand, as `paginate` beside a hand-written list:
+  nothing generated would read the key.
 
 **Open:** whether the app-wide guard pool should be declared by a module the
 test harness boots, replacing `use_guards_global` in `main.rs`, so an e2e suite

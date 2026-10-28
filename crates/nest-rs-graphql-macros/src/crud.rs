@@ -10,7 +10,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl, parse_quote};
 
-use nest_rs_codegen::__private::{Paginate, parse_crud_args, singular_of};
+use nest_rs_codegen::__private::{CrudOp, Paginate, parse_crud_args, singular_of};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = match pair::GRAPHQL.parse_operations(input.into()) {
@@ -35,8 +35,6 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ),
         ));
     }
-    let ops = cfg.generated_ops()?;
-
     let existing: HashSet<String> = item
         .items
         .iter()
@@ -50,11 +48,12 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let entity = &cfg.entity;
     let output = &cfg.output;
     let singular = singular_of(output);
-    let list_op = format_ident!("{}s", singular);
-    let get_op = format_ident!("{}", singular);
-    let create_op = format_ident!("create_{}", singular);
-    let update_op = format_ident!("update_{}", singular);
-    let delete_op = format_ident!("delete_{}", singular);
+    let ops = cfg.generated_ops(&existing, |op| op.resolver_method(&singular))?;
+    let list_op = format_ident!("{}", CrudOp::List.resolver_method(&singular));
+    let get_op = format_ident!("{}", CrudOp::Get.resolver_method(&singular));
+    let create_op = format_ident!("{}", CrudOp::Create.resolver_method(&singular));
+    let update_op = format_ident!("{}", CrudOp::Update.resolver_method(&singular));
+    let delete_op = format_ident!("{}", CrudOp::Delete.resolver_method(&singular));
 
     let parse_id: TokenStream2 = quote! {
         let __id = ::nest_rs_seaorm::graphql::parse_v7(&id)?;
@@ -76,7 +75,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
     let mut generated: Vec<ImplItem> = Vec::new();
 
-    if ops.list && !existing.contains(&list_op.to_string()) {
+    if ops.list {
         let list_method: ImplItem = match cfg.paginate {
             // A plain `Vec`, so the automatic response mask applies unchanged.
             Paginate::Cursor => parse_quote! {
@@ -121,7 +120,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         generated.push(list_method);
     }
 
-    if ops.get && !existing.contains(&get_op.to_string()) {
+    if ops.get {
         generated.push(parse_quote! {
             #[query]
             #[authorize(::nest_rs_authz::Read, #entity)]
@@ -150,9 +149,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         });
     }
 
-    if let Some(create) = ops.create
-        && !existing.contains(&create_op.to_string())
-    {
+    if let Some(create) = ops.create {
         generated.push(parse_quote! {
             #[mutation]
             #[authorize(::nest_rs_authz::Create, #entity)]
@@ -169,9 +166,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         });
     }
 
-    if let Some(update) = ops.update
-        && !existing.contains(&update_op.to_string())
-    {
+    if let Some(update) = ops.update {
         generated.push(parse_quote! {
             #[mutation]
             #[authorize(::nest_rs_authz::Update, #entity)]
@@ -211,7 +206,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         });
     }
 
-    if ops.delete && !existing.contains(&delete_op.to_string()) {
+    if ops.delete {
         generated.push(parse_quote! {
             #[mutation]
             #[authorize(::nest_rs_authz::Delete, #entity)]
@@ -308,6 +303,25 @@ mod tests {
             err.to_string()
                 .contains("`paginate` configures the `list` op"),
             "names the key and the op: {err}",
+        );
+    }
+
+    #[test]
+    fn a_paginate_beside_a_hand_written_list_fails_to_expand() {
+        let item: ItemImpl = parse_quote! {
+            impl Things {
+                async fn things(&self) -> Vec<Thing> { Vec::new() }
+            }
+        };
+        let err = crud(
+            quote! { service = svc, entity = E, output = Thing, paginate = none },
+            item,
+        )
+        .expect_err("a `paginate` beside a hand-written list must fail to expand");
+        assert_eq!(
+            err.to_string(),
+            "#[crud] `paginate` configures the `list` op, which this block writes by hand as \
+             `fn things` — drop `paginate = …`: the method bounds its own list",
         );
     }
 

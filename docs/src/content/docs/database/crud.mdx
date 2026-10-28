@@ -127,12 +127,19 @@ impl OrgsController {}
   GraphQL). `paginate = none` opts out into the full collection (backstopped
   by `CrudService::list`'s hard cap). It configures `list` and nothing else, so
   writing it beside an `ops` that leaves `list` out fails the build for the
-  same reason an input type for an excluded op does.
+  same reason an input type for an excluded op does, and so does writing it
+  beside a `list` you write by hand.
 - `api(<op>(summary = "…", description = "…"))` gives a generated route the
   OpenAPI text a hand-written one carries in `#[api]`; an operation it does
   not name keeps its default summary (`Fetch Org by id`). Naming an op `ops`
-  leaves out fails the build, and a resolver refuses the key: a GraphQL field
-  you want described is one you write, with its doc comment.
+  leaves out or one you write by hand fails the build — give your method its
+  own `#[api]` — and a resolver refuses the key: a GraphQL field you want
+  described is one you write, with its doc comment.
+- The generated `get`, `update` and `delete` read the id from their route's
+  one path parameter, `/{id}`, so a controller whose path names a parameter
+  of its own (`/orgs/{org}/users`) fails the build rather than answering `500`
+  on every request: mount the resource under a path naming none, or write
+  those operations by hand.
 
 ## Override one handler, keep the rest
 
@@ -184,7 +191,9 @@ The `create` method takes over its generated counterpart, because it reads
 the caller's org; the default `list`, `get`, `update` and `delete` are still
 emitted, and `api(get(…))` gives the generated `get` its document text rather
 than an override that would change nothing else. Names match by ident — a
-hand-written `delete` cancels the generated one. An override
+hand-written `delete` cancels the generated one, and a key configuring only a
+cancelled op (`api(delete(…))`, or `paginate` for a hand-written `list`) fails
+the build, since nothing generated reads it. An override
 answers what the generated method does: this `create` keeps the `201` and
 its `Location` with `#[http_code(201)]` and `set_created_location`, built on
 the path `caller_path` reads.
@@ -328,7 +337,8 @@ parameter of its own: writing `id: String` alongside it is `E0415: identifier
 'id' is bound more than once in this parameter list`, reported against the
 `#[crud(…)]` attribute on the impl block rather than the method — drop the
 parameter, not the attribute; `id_arg = …` renames the argument. On HTTP the
-id is the route's one path parameter, so the path names it alone.
+id is the one parameter the route's path names, its controller's included, so
+the whole path names it alone.
 
 ## Pagination
 

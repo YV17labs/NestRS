@@ -337,6 +337,26 @@ where
     }
 }
 
+/// The entity a bound service loads, held by its one impl to the one
+/// `#[authorize(A, E, bind = S)]` writes, which the class gate and the mask
+/// read.
+#[diagnostic::on_unimplemented(
+    message = "`#[authorize]` names `{E}` beside `bind`, and the service loads `{Self}`",
+    label = "the service loads another entity",
+    note = "the class gate and the response mask read the entity written, the load reads the service's: write `{Self}`, or drop it — `bind = Service` derives it"
+)]
+pub trait SameEntity<E> {}
+
+impl<E> SameEntity<E> for E {}
+
+/// Compiles only when `S` loads `E`, asserted where both are written.
+pub const fn bound_entity<S, E>()
+where
+    S: CrudService,
+    S::Entity: SameEntity<E>,
+{
+}
+
 /// Opt-in write capability: the resource accepts **inserts**.
 #[async_trait]
 pub trait Creatable: CrudService {

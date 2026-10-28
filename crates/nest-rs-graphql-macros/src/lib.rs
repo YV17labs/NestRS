@@ -104,7 +104,8 @@ pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `#[crud(service = svc, entity = …::Entity, output = Dto, create = CreateDto,
 /// update = UpdateDto, ops = [list, get, ...], paginate = cursor|none)]`, where
 /// `service` names the injected `CrudService` field. Write a matching
-/// operation method to override it — the macro keeps yours and skips its own.
+/// operation method to override it — the macro keeps yours and skips its own,
+/// and refuses a `paginate` beside your list, which nothing generated reads.
 ///
 /// `ops` selects which operations to generate (omit for all five). A `create`/
 /// `update` op needs its input type and the service's `Creatable`/`Updatable`

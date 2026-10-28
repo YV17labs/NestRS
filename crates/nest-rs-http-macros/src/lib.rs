@@ -45,7 +45,10 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   gate `nest_rs_authz::http::Authorize<A, E>` declares
 ///   (`nest_rs_authz::class_gate`), run right after the guards and before any
 ///   interceptor or filter the route declares, and its response masking.
-///   Mutually exclusive with `#[public]`.
+///   Mutually exclusive with `#[public]`. `#[authorize(Action, bind = Service)]`
+///   also loads the subject its path's one parameter names — the
+///   controller's path included — into an `Authorized<Action, E>` parameter;
+///   an entity written beside `bind` is the service's.
 /// - `#[public]` — the route is reachable anonymously; global guards still run
 ///   and read the marker.
 /// - `#[use_guards(...)]` — container-resolved guards, first listed outermost.
@@ -105,7 +108,10 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Guards are declared once on the controller (`#[use_guards(...)]` on the
 /// struct) and every generated route inherits them. A hand-written
 /// `list`/`get`/`create`/`update`/`delete` method overrides its generated
-/// counterpart.
+/// counterpart, and `api(<op>(…))` or `paginate` beside it is refused, since
+/// nothing generated reads it. The generated `get`, `update` and `delete` read
+/// the id from their route's one path parameter, so a controller whose path
+/// names one of its own refuses them at compile time.
 ///
 /// # Expands to
 ///

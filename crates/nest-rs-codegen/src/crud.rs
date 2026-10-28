@@ -1,6 +1,8 @@
 //! Shared parser for `#[crud(...)]`, consumed by the HTTP and GraphQL CRUD
 //! generators; each reads every key [`CrudDeclaration`] carries.
 
+use std::collections::HashSet;
+
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Path, Token};
@@ -40,6 +42,33 @@ pub enum CrudOp {
     Delete,
 }
 
+impl CrudOp {
+    /// The name `ops` and `api` give the op, and the method a controller
+    /// writes to take it over.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::Get => "get",
+            Self::Create => "create",
+            Self::Update => "update",
+            Self::Delete => "delete",
+        }
+    }
+
+    /// The method a resolver writes to take the op over, over the output's
+    /// [`singular_of`]: `users`, `user`, `create_user`, `update_user`,
+    /// `delete_user`.
+    pub fn resolver_method(self, singular: &str) -> String {
+        match self {
+            Self::List => format!("{singular}s"),
+            Self::Get => singular.to_owned(),
+            Self::Create => format!("create_{singular}"),
+            Self::Update => format!("update_{singular}"),
+            Self::Delete => format!("delete_{singular}"),
+        }
+    }
+}
+
 /// What `api(<op>(summary = "…", description = "…"))` documents one generated
 /// operation with, each `None` keeping the default.
 #[derive(Default)]
@@ -62,8 +91,9 @@ pub enum OpsSelection {
     Explicit(Vec<CrudOp>, Span),
 }
 
-/// Resolved per-op generation decision — the answer the generators consume;
-/// a write op is generated when its input type is `Some`.
+/// Resolved per-op generation decision — the answer the generators consume:
+/// an op selected and not written by hand; a write op is generated when its
+/// input type is `Some`.
 pub struct GeneratedOps<'a> {
     /// Generate the collection read.
     pub list: bool,
@@ -117,10 +147,60 @@ impl CrudDeclaration {
         self.api_written
     }
 
-    /// Resolve which ops to generate, validating that any explicitly requested
-    /// `create`/`update` op has its input type. A `create`/`update` op without
-    /// `create = ` / `update = ` is a hard error — never a silently dropped op.
-    pub fn generated_ops(&self) -> syn::Result<GeneratedOps<'_>> {
+    /// Resolve which ops to generate beside the block's own methods —
+    /// `written` holds their names, `method_of` names the method that takes an
+    /// op over on this edge. A selected op the block writes is not generated.
+    ///
+    /// Refused, never a silently dropped declaration: a `create`/`update` op
+    /// without `create = ` / `update = `, a key configuring an op `ops` leaves
+    /// out, and `api(<op>(…))` or `paginate` beside the op written by hand,
+    /// which nothing generated would read.
+    pub fn generated_ops(
+        &self,
+        written: &HashSet<String>,
+        method_of: impl Fn(CrudOp) -> String,
+    ) -> syn::Result<GeneratedOps<'_>> {
+        let selected = self.selected_ops()?;
+        let by_hand = |op: CrudOp| {
+            let method = method_of(op);
+            written.contains(&method).then_some(method)
+        };
+        if let (Some(at), Some(method)) = (self.paginate_written, by_hand(CrudOp::List)) {
+            return Err(hand_written_op_key(
+                at,
+                "paginate",
+                CrudOp::List,
+                &method,
+                "drop `paginate = …`: the method bounds its own list",
+            ));
+        }
+        for (op, _, at) in &self.api {
+            if let Some(method) = by_hand(*op) {
+                return Err(hand_written_op_key(
+                    *at,
+                    "api",
+                    *op,
+                    &method,
+                    &format!("drop `{}(…)`: give that method its own `#[api]`", op.name()),
+                ));
+            }
+        }
+        Ok(GeneratedOps {
+            list: selected.list && by_hand(CrudOp::List).is_none(),
+            get: selected.get && by_hand(CrudOp::Get).is_none(),
+            create: selected
+                .create
+                .filter(|_| by_hand(CrudOp::Create).is_none()),
+            update: selected
+                .update
+                .filter(|_| by_hand(CrudOp::Update).is_none()),
+            delete: selected.delete && by_hand(CrudOp::Delete).is_none(),
+        })
+    }
+
+    /// The ops the declaration selects, validating that any explicitly
+    /// requested `create`/`update` op has its input type.
+    fn selected_ops(&self) -> syn::Result<GeneratedOps<'_>> {
         match &self.ops {
             OpsSelection::Default => Ok(GeneratedOps {
                 list: true,
@@ -135,7 +215,7 @@ impl CrudDeclaration {
                     return Err(excluded_op_key(written, "paginate", "list", "paginate = …"));
                 }
                 if let Some((op, _, written)) = self.api.iter().find(|(op, ..)| !wants(*op)) {
-                    let name = op_name(*op);
+                    let name = op.name();
                     return Err(excluded_op_key(
                         *written,
                         "api",
@@ -212,6 +292,26 @@ fn excluded_op_key(written: Span, key: &str, op: &str, drop: &str) -> syn::Error
     )
 }
 
+/// The refusal of a key that configures one op, declared beside the method
+/// the block writes to take that op over: nothing generated would read it.
+fn hand_written_op_key(
+    written: Span,
+    key: &str,
+    op: CrudOp,
+    method: &str,
+    remedy: &str,
+) -> syn::Error {
+    syn::Error::new(
+        written,
+        format!(
+            "{} configures the `{}` op, which this block writes by hand as `fn {method}` — \
+             {remedy}",
+            crate::args::site("crud", Some(key)),
+            op.name(),
+        ),
+    )
+}
+
 /// Every key `#[crud]` takes, in declaration order.
 const CRUD: Grammar = Grammar::new(
     "crud",
@@ -238,17 +338,6 @@ fn op_named(name: &str) -> Option<CrudOp> {
         "update" => Some(CrudOp::Update),
         "delete" => Some(CrudOp::Delete),
         _ => None,
-    }
-}
-
-/// The name `ops` and `api` give `op`.
-fn op_name(op: CrudOp) -> &'static str {
-    match op {
-        CrudOp::List => "list",
-        CrudOp::Get => "get",
-        CrudOp::Create => "create",
-        CrudOp::Update => "update",
-        CrudOp::Delete => "delete",
     }
 }
 
@@ -476,7 +565,8 @@ pub fn parse_crud_args(args: TokenStream2) -> syn::Result<CrudDeclaration> {
 /// is `<base>s`), which async-graphql camelCases.
 ///
 /// Pluralization is naive (`Category` → `categorys`); hand-write the operation
-/// when that matters — `#[crud]` skips any op a method of that name defines.
+/// when that matters — `#[crud]` skips any op a method of that name defines
+/// ([`CrudOp::resolver_method`]).
 pub fn singular_of(output: &Path) -> String {
     output
         .segments
@@ -495,6 +585,84 @@ mod tests {
         parse_crud_args(args)
     }
 
+    /// The ops a controller block writing none by hand generates.
+    fn resolve(cfg: &CrudDeclaration) -> syn::Result<GeneratedOps<'_>> {
+        cfg.generated_ops(&HashSet::new(), |op| op.name().to_owned())
+    }
+
+    #[test]
+    fn a_key_beside_the_op_written_by_hand_is_refused_naming_the_method() {
+        let written: HashSet<String> = ["users".to_owned(), "user".to_owned()].into();
+        let resolver = |op: CrudOp| op.resolver_method("user");
+        let paginated = parse(quote! { service = svc, entity = E, output = User, paginate = none })
+            .expect("the arguments parse");
+        let Err(refusal) = paginated.generated_ops(&written, resolver) else {
+            panic!("a `paginate` beside the hand-written list is refused");
+        };
+        assert_eq!(
+            refusal.to_string(),
+            "#[crud] `paginate` configures the `list` op, which this block writes by hand as \
+             `fn users` — drop `paginate = …`: the method bounds its own list",
+        );
+        let documented = parse(quote! {
+            service = svc, entity = E, output = User, api(get(summary = "Get a user")),
+        })
+        .expect("the arguments parse");
+        let Err(refusal) = documented.generated_ops(&written, resolver) else {
+            panic!("an `api` for the hand-written op is refused");
+        };
+        assert!(
+            refusal
+                .to_string()
+                .contains("`api` configures the `get` op")
+                && refusal.to_string().contains("`fn user`"),
+            "{refusal}",
+        );
+    }
+
+    #[test]
+    fn an_op_written_by_hand_is_not_generated_beside_its_selection_keys() {
+        let written: HashSet<String> = ["create".to_owned(), "delete".to_owned()].into();
+        let cfg = parse(quote! { service = svc, entity = E, output = O, create = C, update = U })
+            .expect("parses");
+        let ops = cfg
+            .generated_ops(&written, |op| op.name().to_owned())
+            .expect("selection keys beside an override resolve");
+        assert!(ops.list && ops.get && ops.update.is_some());
+        assert!(
+            ops.create.is_none() && !ops.delete,
+            "the block's own methods win"
+        );
+    }
+
+    #[test]
+    fn each_op_is_named_as_ops_names_it_and_as_a_resolver_writes_it() {
+        let ops = [
+            CrudOp::List,
+            CrudOp::Get,
+            CrudOp::Create,
+            CrudOp::Update,
+            CrudOp::Delete,
+        ];
+        assert_eq!(
+            ops.map(CrudOp::name),
+            ["list", "get", "create", "update", "delete"]
+        );
+        assert_eq!(
+            ops.map(|op| op.resolver_method("artist_exhibition")),
+            [
+                "artist_exhibitions",
+                "artist_exhibition",
+                "create_artist_exhibition",
+                "update_artist_exhibition",
+                "delete_artist_exhibition",
+            ]
+        );
+        for op in ops {
+            assert_eq!(op_named(op.name()), Some(op), "{op:?}");
+        }
+    }
+
     #[test]
     fn singular_of_snake_cases_compound_entity_names() {
         let compound: syn::Path = syn::parse_quote!(ArtistExhibition);
@@ -509,7 +677,7 @@ mod tests {
             service = svc, entity = E, output = O, create = C, update = U, ops = [list, get]
         })
         .expect("the arguments parse");
-        let Err(refusal) = cfg.generated_ops() else {
+        let Err(refusal) = resolve(&cfg) else {
             panic!("an input type for an excluded op is refused");
         };
         let refusal = refusal.to_string();
@@ -526,7 +694,7 @@ mod tests {
                 service = svc, entity = E, output = O, ops = [get], paginate = #mode
             })
             .expect("the arguments parse");
-            let Err(refusal) = cfg.generated_ops() else {
+            let Err(refusal) = resolve(&cfg) else {
                 panic!("a `paginate` for an excluded `list` is refused");
             };
             assert_eq!(
@@ -539,15 +707,15 @@ mod tests {
             service = svc, entity = E, output = O, paginate = none, ops = [get, delete]
         })
         .expect("the arguments parse");
-        assert!(reversed.generated_ops().is_err());
+        assert!(resolve(&reversed).is_err());
         let unwritten = parse(quote! { service = svc, entity = E, output = O, ops = [get] })
             .expect("the arguments parse");
-        assert!(unwritten.generated_ops().is_ok());
+        assert!(resolve(&unwritten).is_ok());
         let listed = parse(quote! {
             service = svc, entity = E, output = O, ops = [list], paginate = none
         })
         .expect("the arguments parse");
-        assert!(listed.generated_ops().is_ok_and(|ops| ops.list));
+        assert!(resolve(&listed).is_ok_and(|ops| ops.list));
     }
 
     #[test]
@@ -556,7 +724,7 @@ mod tests {
             service = svc, entity = E, output = O, create = C, update = U
         })
         .expect("parses");
-        let ops = cfg.generated_ops().expect("resolves");
+        let ops = resolve(&cfg).expect("resolves");
         assert!(ops.list && ops.get && ops.delete);
         assert!(ops.create.is_some() && ops.update.is_some());
     }
@@ -564,7 +732,7 @@ mod tests {
     #[test]
     fn default_without_inputs_skips_create_and_update() {
         let cfg = parse(quote! { service = svc, entity = E, output = O }).expect("parses");
-        let ops = cfg.generated_ops().expect("resolves");
+        let ops = resolve(&cfg).expect("resolves");
         assert!(ops.list && ops.get && ops.delete);
         assert!(ops.create.is_none() && ops.update.is_none());
     }
@@ -575,7 +743,7 @@ mod tests {
             service = svc, entity = E, output = O, ops = [list, get, delete]
         })
         .expect("parses");
-        let ops = cfg.generated_ops().expect("resolves");
+        let ops = resolve(&cfg).expect("resolves");
         assert!(ops.list && ops.get && ops.delete);
         assert!(ops.create.is_none() && ops.update.is_none());
     }
@@ -586,7 +754,7 @@ mod tests {
             service = svc, entity = E, output = O, ops = [list, create]
         })
         .expect("parses");
-        let err = match cfg.generated_ops() {
+        let err = match resolve(&cfg) {
             Ok(_) => panic!("create without an input type must fail"),
             Err(e) => e,
         };
@@ -599,7 +767,7 @@ mod tests {
             service = svc, entity = E, output = O, ops = [update]
         })
         .expect("parses");
-        let err = match cfg.generated_ops() {
+        let err = match resolve(&cfg) {
             Ok(_) => panic!("update without an input type must fail"),
             Err(e) => e,
         };
@@ -612,7 +780,7 @@ mod tests {
             service = svc, entity = E, output = O, create = C, ops = [get, create]
         })
         .expect("parses");
-        let ops = cfg.generated_ops().expect("resolves");
+        let ops = resolve(&cfg).expect("resolves");
         assert!(ops.get && ops.create.is_some());
         assert!(!ops.list && ops.update.is_none() && !ops.delete);
     }

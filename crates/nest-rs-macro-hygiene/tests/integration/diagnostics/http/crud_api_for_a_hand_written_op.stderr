@@ -1,0 +1,5 @@
+error: #[crud] `api` configures the `get` op, which this block writes by hand as `fn get` — drop `get(…)`: give that method its own `#[api]`
+  --> tests/integration/diagnostics/http/crud_api_for_a_hand_written_op.rs:16:9
+   |
+16 |     api(get(summary = "Get an org by id")),
+   |         ^^^

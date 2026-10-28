@@ -346,6 +346,26 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(subject) => subject,
             Err(err) => return err.to_compile_error().into(),
         };
+        if subject.is_some() {
+            wrappers.push(bound_path_check(
+                &self_ty,
+                &route_path,
+                parsed_path.parameter_count(),
+                &cfgs,
+            ));
+        }
+        if let Some(AuthorizeSpec {
+            entity,
+            bind: Some(service),
+            entity_written: true,
+            ..
+        }) = &authorize
+        {
+            wrappers.push(quote_spanned! {entity.span()=>
+                #(#cfgs)*
+                const _: () = ::nest_rs_seaorm::__private::bound_entity::<#service, #entity>();
+            });
+        }
         let method_versions = match take_version_attr(&mut method.attrs) {
             Ok(versions) => versions,
             Err(err) => return err.to_compile_error().into(),
@@ -977,6 +997,9 @@ struct AuthorizeSpec {
     action: Path,
     /// The entity written, or under `bind = Service` alone the service's.
     entity: Type,
+    /// Whether the entity was written, which beside `bind` must be the
+    /// service's own.
+    entity_written: bool,
     /// `bind = Service`: the service that loads the subject into the route's
     /// `Authorized<Action, E>` parameter.
     bind: Option<Path>,
@@ -993,8 +1016,8 @@ struct BoundSubject {
 
 /// The route's bound subject, refusing a `bind` with no `Authorized`
 /// parameter to receive it, an `Authorized` parameter no `bind` fills, and a
-/// route whose path does not name the subject's id alone (`parameters` is how
-/// many it declares).
+/// route whose own path names more than the subject's id (`parameters` is how
+/// many it declares); [`bound_path_check`] adds its controller's.
 fn bound_subject(
     authorize: Option<&AuthorizeSpec>,
     inputs: &[FnArg],
@@ -1019,14 +1042,11 @@ fn bound_subject(
         (None, Some((_, param))) => Err(syn::Error::new_spanned(param, AUTHORIZED_NEEDS_BIND)),
         (Some(_), None) => Err(syn::Error::new_spanned(method, BIND_NEEDS_AUTHORIZED)),
         (Some((spec, service)), Some((index, _))) => {
-            if parameters != 1 {
+            if parameters > 1 {
                 return Err(syn::Error::new_spanned(
                     path,
                     format!(
-                        "`#[authorize(.., bind = Service)]` loads the subject from the route's \
-                         one path parameter, and `{}` declares {parameters} — bind on a route \
-                         whose path names the subject's id alone, as `/{{id}}` or \
-                         `/{{id}}/publish`",
+                        "{BOUND_PATH} and `{}` declares {parameters} — {BOUND_PATH_REMEDY}",
                         path.value(),
                     ),
                 ));
@@ -1037,6 +1057,39 @@ fn bound_subject(
                 service: service.clone(),
             }))
         }
+    }
+}
+
+/// What a bound route's path refusal opens with.
+const BOUND_PATH: &str =
+    "`#[authorize(.., bind = Service)]` loads the subject from the route's one path parameter,";
+
+/// What a bound route's path refusal asks for.
+const BOUND_PATH_REMEDY: &str = "bind on a route whose path, its controller's included, names \
+                                 the subject's id alone, as `/{id}` or `/{id}/publish`";
+
+/// The assertion that a bound route's whole path — its controller's, then its
+/// own, which declares `parameters` — names one parameter: `#[routes]` never
+/// sees the controller's path, so the sum is checked where both are known.
+fn bound_path_check(
+    self_ty: &Type,
+    path: &LitStr,
+    parameters: usize,
+    cfgs: &[TokenStream2],
+) -> TokenStream2 {
+    let message = format!(
+        "{BOUND_PATH} and `{}` under its `#[controller]` path does not name exactly one — \
+         {BOUND_PATH_REMEDY}",
+        path.value(),
+    );
+    // A literal message is a format string: its braces are the template's.
+    let message = LitStr::new(&message.replace('{', "{{").replace('}', "}}"), path.span());
+    quote_spanned! {path.span()=>
+        #(#cfgs)*
+        const _: () = ::core::assert!(
+            <#self_ty>::__nestrs_controller_path_parameters() + #parameters == 1,
+            #message,
+        );
     }
 }
 
@@ -1137,6 +1190,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     let (Some(action), written, None) = (paths.next(), paths.next(), paths.next()) else {
         return Err(malformed_authorize(&attr));
     };
+    let entity_written = written.is_some();
     let entity: Type = match (written, &bind) {
         (Some(entity), _) => parse_quote!(#entity),
         (None, Some(service)) => parse_quote!(<#service as ::nest_rs_seaorm::CrudService>::Entity),
@@ -1145,6 +1199,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     Ok(Some(AuthorizeSpec {
         action,
         entity,
+        entity_written,
         bind,
     }))
 }

@@ -394,7 +394,11 @@ mod tests {
             ),
         ] {
             let refusal = crate::crud::parse_crud_args(args)
-                .and_then(|declaration| declaration.generated_ops().map(drop))
+                .and_then(|declaration| {
+                    declaration
+                        .generated_ops(&std::collections::HashSet::new(), |op| op.name().to_owned())
+                        .map(drop)
+                })
                 .expect_err("a refused value")
                 .to_string();
             assert!(

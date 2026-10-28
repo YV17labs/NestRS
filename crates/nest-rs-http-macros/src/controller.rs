@@ -10,14 +10,14 @@ use syn::LitStr;
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
-    InjectableBody, MountPath, build_injectable_body, from_container_method,
+    InjectableBody, MountPath, RoutePath, build_injectable_body, from_container_method,
     guard_capability_bounds, host_meta_fn, injected_keys_with_layers, injected_names_with_layers,
     injected_optional_fns, layer_deps, missing_argument, refuse_rust_deprecated, reject_path,
     scoped_specs,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
-    let (path_lit, versions) = match parse_controller_args(args.into()) {
+    let (path_lit, path_parameters, versions) = match parse_controller_args(args.into()) {
         Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -98,6 +98,13 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// `#[controller(version = …)]`. Empty if unversioned.
             pub const VERSIONS: &'static [&'static str] = #versions_slice;
 
+            /// How many parameters the controller's path names, read by
+            /// `#[routes]` and `#[crud]` where a route reads its id.
+            #[doc(hidden)]
+            pub const fn __nestrs_controller_path_parameters() -> usize {
+                #path_parameters
+            }
+
             #from_container
 
             #host_meta
@@ -156,7 +163,8 @@ const CONTROLLER: nest_rs_codegen::Grammar =
         "to serve several, write one `version = [\"1\", \"2\"]`",
     )]);
 
-fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>)> {
+/// The path, how many parameters it names, and the versions served.
+fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, usize, Vec<LitStr>)> {
     let mut path = None;
     let mut versions = Vec::new();
     CONTROLLER.parse2(args, |arg| {
@@ -177,5 +185,8 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>
         )
     })?;
     reject_path("controller", &path, MountPath::Prefix)?;
-    Ok((path, versions))
+    let parameters = RoutePath::parse(&path.value())
+        .map_err(|why| syn::Error::new_spanned(&path, why))?
+        .parameter_count();
+    Ok((path, parameters, versions))
 }

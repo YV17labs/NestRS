@@ -54,14 +54,17 @@ use nest_rs::seaorm::Authorized;
 for `Update` on that row, refuse with 404 or 403 otherwise". The action
 comes first and the **service** (not the entity) after `bind =`; the entity
 is `PostsService::Entity`, or written beside the action when you want it
-spelled out. The service is what the framework calls `access` on.
+spelled out — the service's own: another one does not compile, since the
+gate and the mask would read it while the load reads the service's. The service is what the framework calls `access` on.
 
 `Authorized<Update, PostEntity>` carries the row and nothing else: it
 derefs to the entity's `Model`, and `into_inner()` takes ownership. It is
 never a posture of its own — written without `bind = Service` beside it,
 it does not compile, and neither does a `bind` with no such parameter to
-fill. The id is the route's one path parameter, so a bound route's path
-names it alone (`/{id}`, `/{id}/publish`).
+fill. The id is the one parameter the route's path names, its
+controller's included: a bound route's whole path names it alone (`/{id}`,
+`/{id}/publish`, or `/summary` under `#[controller(path = "/posts/{id}")]`),
+and any other count does not compile.
 
 GraphQL takes the same attribute on a `#[query]` or `#[mutation]`: the
 operation's `Authorized<A, E>` parameter becomes an `id: String` argument

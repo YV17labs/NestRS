@@ -215,7 +215,8 @@ traits a resource implements when it genuinely offers the operation:
 five when omitted), over HTTP and GraphQL alike. An op listed without its input
 type is a compile error, and an op whose trait the service lacks fails to
 resolve: a forgotten operation is a build break, never a no-op mutation on the
-wire.
+wire. A method the block writes takes its op over, and a key only that op
+reads (`api(<op>(…))`, `paginate`) is then refused, never dropped.
 
 ## Response masking — one core, every transport
 

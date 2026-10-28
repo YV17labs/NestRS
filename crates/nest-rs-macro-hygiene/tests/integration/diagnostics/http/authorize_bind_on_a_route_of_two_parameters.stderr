@@ -1,4 +1,4 @@
-error: `#[authorize(.., bind = Service)]` loads the subject from the route's one path parameter, and `/{org}/posts/{id}/publish` declares 2 — bind on a route whose path names the subject's id alone, as `/{id}` or `/{id}/publish`
+error: `#[authorize(.., bind = Service)]` loads the subject from the route's one path parameter, and `/{org}/posts/{id}/publish` declares 2 — bind on a route whose path, its controller's included, names the subject's id alone, as `/{id}` or `/{id}/publish`
   --> tests/integration/diagnostics/http/authorize_bind_on_a_route_of_two_parameters.rs:17:12
    |
 17 |     #[post("/{org}/posts/{id}/publish")]

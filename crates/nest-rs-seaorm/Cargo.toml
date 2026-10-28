@@ -56,7 +56,8 @@ queue = ["dep:nest-rs-queue", "dep:sea-orm-migration", "dep:futures-util"]
 full = ["http", "graphql", "health", "queue"]
 
 [dependencies]
-nest-rs-core.workspace = true
+# `seaorm`: `nest_rs_core::Secret` as a column type.
+nest-rs-core = { workspace = true, features = ["seaorm"] }
 # `#[expose]` and `#[wire_enum]`, re-exported at the root.
 nest-rs-seaorm-macros.workspace = true
 # The ORM-agnostic unit-of-work port: `SeaOrmUnitOfWork` implements

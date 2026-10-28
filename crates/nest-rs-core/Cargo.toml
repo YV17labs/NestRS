@@ -19,6 +19,10 @@ default = ["logging"]
 # `nest-rs-opentelemetry`, which enables this feature for the formatters and
 # depends on `tracing-subscriber` itself either way.
 logging = ["dep:tracing-subscriber"]
+# `Secret<T>` as a sea-orm column type over its value's own. `nest-rs-seaorm`
+# enables it: the column traits are sea-orm's and the type is this crate's, so
+# the impls can live only here.
+seaorm = ["dep:sea-orm"]
 
 [dependencies]
 thiserror.workspace = true
@@ -51,6 +55,9 @@ parking_lot.workspace = true
 # the value is a conformant W3C trace-id. In the kernel because the correlation
 # primitive cannot be optional — see `trace_context.rs`.
 uuid.workspace = true
+# `Secret`'s `==`: constant-time over the bytes.
+constant_time_eq.workspace = true
+sea-orm = { workspace = true, optional = true }
 
 [dev-dependencies]
 # `LogCapture`: what the kernel says only in a line — an inert host, a hook or

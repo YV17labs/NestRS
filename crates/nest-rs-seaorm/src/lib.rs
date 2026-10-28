@@ -156,6 +156,7 @@ pub mod __private {
 /// # }
 /// # mod user {
 /// #     use super::*;
+/// #     use nest_rs_core::Secret;
 /// #     use sea_orm::entity::prelude::*;
 /// #[expose(name = "User", service = super::service::UsersService)]
 /// #[sea_orm::model]
@@ -171,7 +172,7 @@ pub mod __private {
 ///     pub name: String,
 ///     #[expose(input(create), validate(email))]                  // read + create-only
 ///     pub email: String,
-///     pub password_hash: Option<String>,                         // no #[expose] ⇒ hidden
+///     pub password_hash: Option<Secret<String>>,                 // no #[expose] ⇒ hidden
 /// }
 /// # impl ActiveModelBehavior for ActiveModel {}
 /// # }

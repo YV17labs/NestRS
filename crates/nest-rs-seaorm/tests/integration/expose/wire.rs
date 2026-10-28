@@ -193,6 +193,233 @@ mod ledger {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+// Hidden secret columns, bare and optional: a secret never crosses the wire, so
+// the rebuild fills each with its value's own placeholder.
+mod vault {
+    use super::*;
+    use nest_rs_core::Secret;
+    use serde::{Deserialize, Serialize};
+
+    #[expose(name = "Vault")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "vaults")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[expose]
+        pub name: String,
+        pub api_key_hash: Secret<String>,
+        pub recovery_hash: Option<Secret<String>>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+// Hidden byte-like secret columns: outside the narrow set, so each is filled
+// from the value its `#[wire_default]` holds, or `null` where it is optional.
+mod keyring {
+    use super::*;
+    use nest_rs_core::Secret;
+    use serde::{Deserialize, Serialize};
+
+    #[expose(name = "Keyring")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "keyrings")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[wire_default]
+        pub seed: Secret<Vec<u8>>,
+        #[wire_default(Secret::new(vec![7]))]
+        pub pepper: Secret<Vec<u8>>,
+        pub backup: Option<Secret<Vec<u8>>>,
+        #[wire_default(Some(Secret::new(vec![9])))]
+        pub spare: Option<Secret<Vec<u8>>>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+// A hidden byte-like secret with no `#[wire_default]`: no placeholder exists.
+mod sealed {
+    use super::*;
+    use nest_rs_core::Secret;
+    use serde::{Deserialize, Serialize};
+
+    #[expose(name = "Sealed")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[sea_orm(table_name = "sealeds")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        pub seed: Secret<Vec<u8>>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+/// What the mask's rebuild does with a wire object: fill, then deserialize.
+fn rebuilt<E>(wire: serde_json::Value) -> (serde_json::Value, Result<E::Model, serde_json::Error>)
+where
+    E: nest_rs_authz::WireModelDefaults,
+    E::Model: serde::de::DeserializeOwned,
+{
+    let serde_json::Value::Object(mut row) = wire else {
+        panic!("a row is an object");
+    };
+    E::fill_wire_defaults(&mut row);
+    let filled = serde_json::Value::Object(row);
+    let model = serde_json::from_value(filled.clone());
+    (filled, model)
+}
+
+/// A secret column is never exposed, so a masked reply rebuilds it: bare, it
+/// takes its value's placeholder, and optional, `null` — never a 500 for want
+/// of one.
+#[test]
+fn a_hidden_secret_column_is_rebuilt_from_its_value_s_placeholder() {
+    use nest_rs_authz::WireModelDefaults;
+    use vault::{Column, Entity, Model};
+
+    let mut row = serde_json::Map::new();
+    row.insert("id".into(), serde_json::json!(Uuid::nil()));
+    row.insert("name".into(), serde_json::json!("ops"));
+    Entity::fill_wire_defaults(&mut row);
+    assert_eq!(row.get("api_key_hash"), Some(&serde_json::json!("")));
+    assert_eq!(row.get("recovery_hash"), Some(&serde_json::Value::Null));
+    let rebuilt: Model =
+        serde_json::from_value(serde_json::Value::Object(row)).expect("the row rebuilds");
+    assert_eq!(rebuilt.api_key_hash.expose_secret(), "");
+    assert!(Entity::is_placeholdered(Column::ApiKeyHash));
+    assert!(Entity::is_placeholdered(Column::RecoveryHash));
+    assert_eq!(Entity::wire_key(Column::ApiKeyHash), None);
+}
+
+/// A byte-like secret's `#[wire_default]` fills the value the column holds —
+/// its type's `Default` or the expression's — never the `"<redacted>"` a
+/// `Secret` serializes as, which its value type does not read back.
+#[test]
+fn a_hidden_byte_like_secret_is_rebuilt_from_its_wire_default_s_value() {
+    use keyring::{Column, Entity};
+    use nest_rs_authz::WireModelDefaults;
+
+    let (filled, model) = rebuilt::<Entity>(serde_json::json!({ "id": Uuid::nil() }));
+    assert_eq!(
+        filled,
+        serde_json::json!({
+            "id": Uuid::nil(),
+            "seed": [],
+            "pepper": [7],
+            "backup": null,
+            "spare": [9],
+        })
+    );
+    let model = model.expect("the row rebuilds");
+    assert!(model.seed.expose_secret().is_empty());
+    assert_eq!(model.pepper.expose_secret(), &[7]);
+    assert!(model.backup.is_none());
+    assert_eq!(
+        model
+            .spare
+            .as_ref()
+            .map(|spare| spare.expose_secret().as_slice()),
+        Some([9].as_slice())
+    );
+    for column in [Column::Seed, Column::Pepper, Column::Backup, Column::Spare] {
+        assert!(Entity::is_placeholdered(column), "{column:?}");
+    }
+}
+
+/// A handler returning the raw `Model` sends each secret as `"<redacted>"`:
+/// the fill writes over it, so the row still rebuilds, whatever the value type.
+#[test]
+fn a_raw_model_s_redacted_secrets_are_written_over_before_the_rebuild() {
+    let keys = keyring::Model {
+        id: Uuid::nil(),
+        seed: vec![1, 2, 3].into(),
+        pepper: vec![4].into(),
+        backup: Some(vec![5].into()),
+        spare: None,
+    };
+    let (filled, model) =
+        rebuilt::<keyring::Entity>(serde_json::to_value(&keys).expect("the row serializes"));
+    assert_eq!(
+        filled,
+        serde_json::json!({
+            "id": Uuid::nil(),
+            "seed": [],
+            "pepper": [7],
+            "backup": null,
+            "spare": [9],
+        })
+    );
+    model.expect("the row rebuilds");
+
+    let vault = vault::Model {
+        id: Uuid::nil(),
+        name: "ops".into(),
+        api_key_hash: "$argon2id$v=19$key".into(),
+        recovery_hash: Some("$argon2id$v=19$recovery".into()),
+    };
+    let (filled, model) =
+        rebuilt::<vault::Entity>(serde_json::to_value(&vault).expect("the row serializes"));
+    assert_eq!(filled["api_key_hash"], serde_json::json!(""));
+    assert_eq!(filled["recovery_hash"], serde_json::Value::Null);
+    assert_eq!(filled["name"], serde_json::json!("ops"));
+    model.expect("the row rebuilds");
+}
+
+/// A byte-like secret has no placeholder of its own: with no `#[wire_default]`
+/// the fill invents nothing, and the rebuild fails closed.
+#[test]
+fn a_hidden_byte_like_secret_without_a_wire_default_fails_closed() {
+    use nest_rs_authz::WireModelDefaults;
+    use sealed::{Column, Entity};
+
+    let (filled, model) = rebuilt::<Entity>(serde_json::json!({ "id": Uuid::nil() }));
+    assert_eq!(filled, serde_json::json!({ "id": Uuid::nil() }));
+    let refused = model.expect_err("a missing column fails the rebuild");
+    assert!(
+        refused.to_string().contains("missing field `seed`"),
+        "{refused}"
+    );
+    assert!(!Entity::is_placeholdered(Column::Seed));
+}
+
+/// The row's own derives say nothing of a secret column: `Debug` and its
+/// serialization print the placeholder.
+#[test]
+fn a_secret_column_prints_and_serializes_as_its_placeholder() {
+    let model = vault::Model {
+        id: Uuid::nil(),
+        name: "ops".into(),
+        api_key_hash: "$argon2id$v=19$key".into(),
+        recovery_hash: Some("$argon2id$v=19$recovery".into()),
+    };
+    let active = vault::ActiveModel::from(model.clone());
+    for printed in [
+        format!("{model:?}"),
+        format!("{active:?}"),
+        serde_json::to_string(&model).expect("the row serializes"),
+    ] {
+        assert!(!printed.contains("argon2id"), "{printed}");
+        assert!(printed.contains("<redacted>"), "{printed}");
+        assert!(printed.contains("ops"), "the other columns stay: {printed}");
+    }
+}
+
 /// A rule reading a column the rebuilt row invented cannot be decided there, so
 /// the derive names exactly the columns its fill may invent.
 #[test]

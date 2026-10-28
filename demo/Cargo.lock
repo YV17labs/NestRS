@@ -981,6 +981,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "constant_time_eq"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb6feb175df65d0a3ccd3e73484e940d0ac664e8034f0519fd49a93db3071d9"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2673,11 +2682,13 @@ version = "7.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "constant_time_eq",
  "inventory",
  "nest-rs-core-macros",
  "parking_lot 0.13.0",
  "pin-project-lite",
  "schemars",
+ "sea-orm",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

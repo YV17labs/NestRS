@@ -2,7 +2,8 @@
 //! annotations so the ORM macros see a clean entity.
 
 use nest_rs_codegen::__private::{
-    missing_argument, require_str_lit, site, takes_value, ungrouped_expr, unknown_value,
+    generic_args, missing_argument, require_str_lit, site, takes_value, ungrouped_expr,
+    unknown_value,
 };
 use nest_rs_codegen::{Arg, Grammar};
 use proc_macro2::TokenStream as TokenStream2;
@@ -321,6 +322,20 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             Ok(())
         })?;
 
+        // Read by spelling, the one reading a macro has: an alias still meets
+        // `Secret`'s missing `JsonSchema` in the wire DTO's derive.
+        if read && holds_secret(&ty) {
+            return Err(syn::Error::new_spanned(
+                &field.ident,
+                format!(
+                    "{}: `{}` holds a `Secret`, which never crosses the wire — drop its \
+                     `#[expose]`, and let its service read the column with `expose_secret()`",
+                    site("expose", None),
+                    ident.unraw(),
+                ),
+            ));
+        }
+
         field.attrs.retain(|a| !a.path().is_ident("expose"));
 
         let mut wire_default: Option<Option<Expr>> = None;
@@ -550,6 +565,32 @@ fn listed(arg: &Arg<'_>, takes: &str) -> syn::Result<Vec<Expr>> {
         .parse_terminated(Expr::parse, Token![,])
         .map_err(|stopped| refused(stopped.span()))?;
     Ok(listed.into_iter().collect())
+}
+
+/// Whether `ty` names `Secret` anywhere: bare, or inside another type's
+/// arguments (`Option<Secret<String>>`).
+pub(crate) fn holds_secret(ty: &Type) -> bool {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return false;
+    };
+    path.segments.iter().any(|segment| {
+        segment.ident == "Secret"
+            || match &segment.arguments {
+                PathArguments::AngleBracketed(args) => args
+                    .args
+                    .iter()
+                    .any(|arg| matches!(arg, GenericArgument::Type(inner) if holds_secret(inner))),
+                _ => false,
+            }
+    })
+}
+
+/// The type a `Secret<T>` holds, `T`; `None` for any other type.
+pub(crate) fn secret_inner(ty: &Type) -> Option<&Type> {
+    match generic_args(ty)? {
+        (ident, args) if ident == "Secret" => args.first().copied(),
+        _ => None,
+    }
 }
 
 /// Match `HasOne<T>` / `HasMany<T>` on the last path segment.

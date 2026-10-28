@@ -97,6 +97,7 @@ inventory = "0.3"  # public
 
 argon2 = "0.6"
 getrandom = "0.4"
+constant_time_eq = "0.6"
 validator = { version = "0.21", features = ["derive"] }  # public
 uuid = { version = "1.29", features = ["v4", "v7", "serde"] }  # public
 url = "2.5"

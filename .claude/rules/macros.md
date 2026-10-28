@@ -82,7 +82,8 @@ module satisfies with `use nest_rs::seaorm::sea_orm;`.
 Held by the compile witness `nest-rs-macro-hygiene` (one dependency, one
 feature per capability — `manifests-ci.md`, *Shipping a capability*), which holds a
 real entity, so `#[expose]`, `#[crud]` and `#[authorize(Action, Entity)]` are
-witnessed there like every other decorator. The CLI's scaffold tests witness
+witnessed there like every other decorator, and a `#[subject]` gated on every
+edge beside them. The CLI's scaffold tests witness
 the generated tree, and **a generated tree witnesses only what it does not also
 supply by accident**: the test strips everything else that would pull a crate
 in, so what compiles rests on the decorator alone.

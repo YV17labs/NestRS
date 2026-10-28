@@ -160,10 +160,12 @@ let mut response: Response = events.into_response();
 response.extensions_mut().insert(OpenEndedBody);
 ```
 
-Gate a stream with a **capability-only guard**
-(`#[use_guards(TranscodeGuard)]`), never `#[authorize]`: the posture masks
-the response against the entity model, and an event stream is no wire model
-to reconcile. That combination is a compile error saying so.
+Gate a stream on a **capability**: `#[authorize(Manage, Transcoding)]`, on a
+subject [`#[subject]`](/security/authorization/policies/#subjects-no-table-holds)
+declares, runs the class gate and arms no mask. An entity's posture would mask
+the response against the entity model, and an event stream is no wire model to
+reconcile, so `#[authorize]` naming an entity on an `#[sse]` route is a
+compile error saying so, decided by the subject's type.
 
 ## Limits
 

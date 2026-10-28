@@ -135,6 +135,11 @@ reads the same on every edge, each answering in its own form. The gate is no
 feature of an edge: a package's decorator emits it for its own posture as the
 framework's do.
 
+The subject need not be a table. A capability — may transcode, may export —
+is a [subject `#[subject]` declares](/security/authorization/policies/#subjects-no-table-holds):
+`#[authorize(Manage, Transcoding)]` runs this same gate, scope challenge
+included, and arms no mask, since there is no row to mask.
+
 ## Three places the framework reads it
 
 1. **`Repo::scoped(Action)` — the query pre-filter.**

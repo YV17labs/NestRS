@@ -8,7 +8,7 @@
 //! response).
 //!
 //! A rule names a [`Subject`]: an entity, or a capability no table holds that
-//! [`#[subject]`](subject) declares, which a rule grants whole and a posture
+//! [`#[subject]`](macro@subject) declares, which a rule grants whole and a posture
 //! gates without masking.
 //!
 //! [`AbilityGuard`] is the one guard, answering all four edges.

@@ -65,7 +65,7 @@ shares the stem** (`OAuthResourceModule`, `OAuthResourceSetup`,
 provider gets a file named for it. `posts/http/controller.rs` is
 `PostsController`; an edge folder right under a framework crate's `src/` adapts
 the crate, and under a product crate's is refused. **The one precedence**: a
-role file whose subject is a capability keeps its name (`TranscodeGuard`),
+role file whose subject is a capability keeps its name (`PostAuthorGuard`),
 never a `module.rs`. Nothing below the root carries the project's or the app's
 name. A module is plural for enumerable things (`users`), singular for a
 capability (`auth`) — the generator singularizes it into the entity.

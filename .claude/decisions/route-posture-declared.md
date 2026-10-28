@@ -54,3 +54,12 @@ other public-API changes.
 test harness boots, replacing `use_guards_global` in `main.rs`, so an e2e suite
 stops rebuilding it by hand, is the owner's question; this decision leaves the
 pool where `apps.md` puts it.
+
+## 2026-10-28 — a capability has a posture of its own
+
+A route a guard covers still needs no posture, and the boot still refuses one
+no guard covers. What changed is the case this decision named as the reason a
+posture stays optional: a route gated on a capability rather than an entity no
+longer needs a hand-written guard to say so. It declares
+`#[authorize(Action, Subject)]` on a `#[subject]` (`subject-no-table-holds.md`),
+the class gate every edge runs, so `#[public]` stays an honest opening.

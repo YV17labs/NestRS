@@ -214,44 +214,50 @@ first time such a refusal is emitted; keeping the names in one
 `constants.rs` and reading them from both sides is what stops it
 happening.
 
-## Raising a scope refusal from your own guard
+## A scope on a capability no table holds
 
-A [non-CRUD route](/security/authorization/policies/) gated by a
-capability-only guard raises the same denial directly. The demo's
-`TranscodeGuard` refuses a caller with no admin grant outright, and an admin
-whose token was not granted `audio:transcode` with the challenge naming it —
-a wider token is the remedy in the second case alone:
+Not every scope names rows. The demo advertises `audio:transcode`, and
+transcoding is a capability: there is no table to filter and no reply to
+mask. Declare it as a [subject no table
+holds](/security/authorization/policies/#subjects-no-table-holds) and gate
+it like any other rule — the scope goes on the rule, never in a guard:
 
-```rust title="crates/features/src/audio/guard.rs (from the demo, abridged)"
-impl TranscodeGuard {
-    // …
-    fn decide(ability: &Ability, granted: Option<&GrantedScopes>) -> Result<(), Denial> {
-        if !ability.can_class(Action::Manage, TypeId::of::<OrgEntity>()) {
-            // …
-            return Err(Denial::forbidden(
-                "transcoding requires the admin capability",
-            ));
-        }
-        if granted.is_none_or(|granted| granted.as_slice().iter().any(|s| s == AUDIO_TRANSCODE)) {
-            return Ok(());
-        }
+```rust title="crates/features/src/audio/transcoding.rs"
+use nest_rs::authz::subject;
 
-        // …
-        Err(Denial::insufficient_scope(
-            [AUDIO_TRANSCODE],
-            "the request requires higher privileges than provided by the access token",
-        ))
-    }
+#[subject]
+pub struct Transcoding;
+```
+
+```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
+if actor.is_admin() {
+    ab.can(Action::Manage, Transcoding)
+        .requires_scope(AUDIO_TRANSCODE);
 }
 ```
 
-The guard reads the token's scopes from the `GrantedScopes` that
-`AuthnGuard` attaches beside the principal (`cx.ambient::<GrantedScopes>()`).
-Its absence means the principal is not scope-aware — a session, an mTLS
-identity — and the guard gates on the role alone, as `requires_scope` does.
+```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)"
+#[post("/transcode")]
+#[authorize(Manage, Transcoding)]
+#[http_code(202)]
+async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<()> {
+    self.svc.enqueue_transcode(body.into_inner().file).await?;
+    Ok(())
+}
+```
+
+The class gate answers exactly as above: a member, whom no rule grants,
+gets `403 FORBIDDEN` with no challenge, since no wider token would change
+it; an admin whose token was not delegated `audio:transcode` gets the
+`insufficient_scope` challenge naming it; a credential that is not
+scope-aware — a session, an mTLS identity — is gated on the role alone.
+The same `#[authorize(Manage, Transcoding)]` sits on the MCP tool and on
+the progress stream, so `audio:transcode` gates every edge it is
+advertised for.
 
 Every transport renders the denial the same way — the challenge is written
-once, at the transport edge, so a guard never formats a header itself.
+once, at the transport edge, so neither a rule nor a guard formats a header
+itself.
 
 ## Going further
 

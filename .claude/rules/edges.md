@@ -75,7 +75,7 @@ guard, filter or interceptor loop of its own.
    into the view. A failure no exception filter answered is rendered by the
    edge's one rule (*Error opacity*, below) before the unit stage returns,
    so a unit-stage interceptor reads what goes out.
-5. **A mandatory posture per operation** — `#[authorize(Action, Entity)]` or
+5. **A mandatory posture per operation** — `#[authorize(Action, Subject)]` or
    `#[public]`; no posture is a compile error with a trybuild snapshot. This is
    what keeps *no authn/authz decision outside a guard* true. The grammar is one
    `PostureRules` in `nest-rs-codegen` where it is the same grammar: `#[tools]`
@@ -89,15 +89,20 @@ guard, filter or interceptor loop of its own.
    `#[routes]`' posture is optional on a route a guard covers, which the guard
    decides, and a route no guard covers — the app's pool included — says
    `#[public]` or refuses the boot, one error naming every such route and both
-   remedies; it refuses `#[authorize]` on `#[sse]`, and a hand-written
-   `Authorize<A, E>` anywhere but beside `#[public]` — by spelling at compile
-   time, by its type at boot (`.claude/decisions/route-posture-declared.md`).
+   remedies; it refuses `#[authorize]` naming an entity on `#[sse]` — by the
+   subject's type, a stream taking a subject no table holds — and a
+   hand-written `Authorize<A, E>` anywhere but beside `#[public]` — by
+   spelling at compile time, by its type at boot
+   (`.claude/decisions/route-posture-declared.md`).
    An edge whose units have no caller (a job, a tick, an event) declares
    `Posture::System` and runs no guard stage.
-6. **A class gate the posture emits** — `nest_rs_authz::class_gate::<A, E>`,
+6. **A class gate the posture emits** — `nest_rs_authz::class_gate::<A, S>`,
    one function for every edge and ungated by any edge feature, run on the unit
    right after its guards, so `#[authorize]` cannot mean several things; a
-   missing ambient ability fails closed. Off a `#[public]` site it refuses a
+   missing ambient ability fails closed. `S` is any subject: an entity, or a
+   capability no table holds that `#[subject]` declares, gated the same way —
+   its scope challenge included — and never by a hand-written guard
+   (`.claude/decisions/subject-no-table-holds.md`). Off a `#[public]` site it refuses a
    caller no principal backs (`Ability::is_visitor`) whatever the visitor's
    rules grant, on HTTP as elsewhere; a hand-written `Authorize<A, E>` on a
    `#[public]` route reads the visitor's grant, the public-reads pattern. One
@@ -105,7 +110,8 @@ guard, filter or interceptor loop of its own.
    files one `warn`; an edge renders the `Denial` it carries.
 7. **Response masking armed by the posture**, never hand-written in a body,
    chosen by the protocol rather than by symmetry (`data-layer.md`, *Response
-   masking*).
+   masking*), and by the subject's type: an entity's posture masks, a
+   `#[subject]`'s arms none, and an HTTP route it gates reads as unmasked.
 8. **Guards at two scopes, and their `GuardFor` bound when the unit has a
    caller**, plus `#[force_guards]` on a method, which binds the guard there
    and re-runs it, composed once per site and deduplicated by `TypeId`; a
@@ -444,9 +450,10 @@ router parses. The rewrite is skipped when nothing is versioned.
   `.transport(...)`.
 - **`#[sse]` is a verb, not an edge.** It collapses to `GET` before the route
   table is built and carries the route's guards, pipes, posture and document; it
-  owns only the response. It refuses `#[authorize]`, a shaper parameter
-  (`Authorize<A, E>`), the response decorators (`#[http_code]`,
-  `#[redirect]`, `#[response_header]`) and `#[api(response_content_type)]`.
+  owns only the response. It refuses `#[authorize]` on an entity (a
+  `#[subject]`'s gates it), a shaper parameter (`Authorize<A, E>`), the
+  response decorators (`#[http_code]`, `#[redirect]`, `#[response_header]`)
+  and `#[api(response_content_type)]`.
   Correlation is the streaming body's, not the decorator's (`observability.md`).
   Its connection ceiling lives in `HttpConfig`: SSE is not a module, so it owns no
   namespace, and it takes its peers' reading and `0`-is-off spelling.

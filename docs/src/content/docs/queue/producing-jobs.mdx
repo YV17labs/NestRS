@@ -324,21 +324,22 @@ client chose is a `400` before the service runs.
 ```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)"
 use std::sync::Arc;
 
+use nest_rs::authz::Manage;
 use nest_rs::http::{
     Body, Header, HeaderValue, HttpError, Json, Query, Response, Result, SseEvent, SseStream,
     StatusCode, Valid, controller, routes,
 };
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
-use crate::audio::TranscodeGuard;
 use crate::audio::{
     AudioService, DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeState,
+    Transcoding,
 };
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 
 #[controller(path = "/audio")]
-#[use_guards(ThrottlerGuard, AuthnGuard, AuthzGuard, TranscodeGuard)]
+#[use_guards(ThrottlerGuard, AuthnGuard, AuthzGuard)]
 pub struct AudioController {
     #[inject]
     svc: Arc<AudioService>,
@@ -347,6 +348,7 @@ pub struct AudioController {
 #[routes]
 impl AudioController {
     #[post("/transcode")]
+    #[authorize(Manage, Transcoding)]
     #[meta(Throttle::per_minute(20))]
     // … #[api(…)]
     #[http_code(202)]

@@ -137,8 +137,8 @@ no transaction at all.
 
 **The ability** is what `AbilityGuard` attaches (`cx.attach`): ambient for the
 rest of the unit once its guard stage passed. A route no response mask shapes,
-an `#[sse]` stream among them, runs under the `UnmaskedReply` marker its
-guard stage attaches, and
+an `#[sse]` stream and a route gated on a `#[subject]` among them, runs under
+the `UnmaskedReply` marker its guard stage attaches, and
 `current_ability` withholds the ability there, so a read the mask would have
 scoped fails closed — and `nest-rs-http` knows nothing of authz or the ORM
 (`.claude/decisions/unmasked-reply-withholds-the-ability.md`).
@@ -246,7 +246,9 @@ which is the limit (`.claude/decisions/mask-provenance.md`).
 `#[authorize(Action, Entity)]` beside the operation is the arming declaration
 on every edge; the decorator emits the gate and the mask, and that is what
 makes posture greppable. **The gate is one function**, `class_gate`, on every
-edge; the mask is each edge's, chosen by its protocol:
+edge; the mask is each edge's, chosen by its protocol, and only an entity's: a
+subject `#[subject]` declares has no rows, so its posture gates and arms no
+mask, decided by the subject's type:
 
 - **HTTP** (`#[routes]`, which `#[crud]` emits under) — `Authorize<A, E>`'s
   class gate, run with the guards, plus the response shaper. A masked-out key

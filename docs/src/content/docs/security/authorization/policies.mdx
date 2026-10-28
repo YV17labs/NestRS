@@ -56,12 +56,54 @@ impl<E: sea_orm::EntityTrait> Subject for E {}
 
 So a SeaORM entity (`user::Entity`, `org::Entity`) is the canonical
 subject — the bridge isolates the ORM coupling to one impl block.
-Introducing a second data layer moves one impl, not the engine.
+Introducing a second data layer moves one impl, not the engine. A
+capability no table holds is the other kind, which `#[subject]` declares
+([below](#subjects-no-table-holds)).
 
 `Subject` is used as a type-system guardrail in `Authorize<A, S>` and
 in the `condition_for::<E>` calls. Subjects are keyed by `TypeId`
 under the hood; `Action::Manage` on a subject acts as a wildcard for
 every other action on that same subject.
+
+### Subjects no table holds
+
+Some decisions are about a capability, not rows: may this caller transcode
+audio, export the org's reports, trigger a reindex? Declare the capability
+with `#[subject]` on a unit struct, beside the feature that owns it:
+
+```rust title="crates/features/src/audio/transcoding.rs"
+use nest_rs::authz::subject;
+
+#[subject]
+pub struct Transcoding;
+```
+
+A rule grants it whole, with the scope a token must carry when the
+capability is delegated:
+
+```rust title="crates/features/src/authz/ability.rs"
+if actor.is_admin() {
+    ab.can(Action::Manage, Transcoding)
+        .requires_scope(AUDIO_TRANSCODE);
+}
+```
+
+and every operation that exercises it declares the posture on it —
+`#[authorize(Manage, Transcoding)]` on an HTTP route, an `#[sse]` stream,
+a GraphQL field, a WebSocket message or an MCP tool alike. It is the
+same [class gate](/security/authorization/#one-class-gate-on-every-edge)
+as on an entity, with the same refusals and the same RFC 6750 scope
+challenge, and it arms **no mask**: the subject has no model, so the
+reply goes out as written. An HTTP route gated this way still withholds
+the ability from its reads, as every route no mask shapes does.
+
+The type system keeps the two kinds apart. `when` and `fields` narrow an
+entity's rows and columns, so they do not exist on a subject no table
+holds; neither does `cannot`, because the class gate is that subject's one
+layer and a grant you do not write is already the denial. Don't borrow an
+entity for a capability (`Manage` on `org::Entity` to mean "may
+transcode"): a rule on the entity then grants or withholds the capability
+by accident, and a grep for the capability finds nothing.
 
 ## Actions
 
@@ -233,6 +275,8 @@ impl AbilityFactory for AuthzAbility {
             ab.can(Action::Manage, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
             ab.can(Action::Manage, org::Entity);
+            ab.can(Action::Manage, Transcoding)
+                .requires_scope(constants::AUDIO_TRANSCODE);
         } else {
             ab.can(Action::Read, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id))
@@ -249,7 +293,9 @@ impl AbilityFactory for AuthzAbility {
 What this buys:
 
 - **Admin** reads and manages every user in their org; reads and
-  manages every org unconditionally.
+  manages every org unconditionally; may transcode audio when the token
+  carries `audio:transcode` (a [subject no table
+  holds](#subjects-no-table-holds)).
 - **Member** reads users in their org but only `id` and `name`; can
   create users in their org; reads their own org only.
 - **No role at all** (or unknown role) falls into the member branch

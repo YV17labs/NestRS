@@ -144,8 +144,9 @@ deep on each.
 - **[Ability](/security/authorization/)** — the policy object the authz
   guard installs for the request; answers "may this caller take this
   action on this subject?" against rules, predicates, and field grants.
-- **[Subject](/security/authorization/policies/)** — the entity an
-  ability rule targets (`users::Entity`); how an action is scoped to a
+- **[Subject](/security/authorization/policies/)** — what an ability
+  rule targets: an entity (`users::Entity`), or a capability no table holds
+  that `#[subject]` declares (`Transcoding`); how an action is scoped to a
   type. Note the vocabulary: the subject is the *resource type* acted upon,
   never the caller — the caller is the principal.
 - **[Action](/security/authorization/policies/)** — the verb a rule

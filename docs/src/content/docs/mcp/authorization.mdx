@@ -93,30 +93,26 @@ writes neither. `#[public]` is the other half: no gate, no mask, and the
 endpoint's own guards still authenticated the request.
 
 For an answer that is a **capability** rather than a row — a presigned URL, a
-computed report — the decision is a guard's, bound beside the operation.
-`#[use_guards(...)]` works per host and per operation, and the app-wide pool
-joins them in one chain deduplicated by type, so a guard declared at two
-scopes still checks the operation once. The operation still declares its
-posture, and `#[public]` would declare it open to every caller the endpoint
-admits, which an admin-only tool is not: gate it on the grant the capability
-rests on, `unmasked`, since its answer is no row to mask:
+computed report — the posture names the capability itself: a subject
+[`#[subject]`](/security/authorization/policies/#subjects-no-table-holds)
+declares, which no table holds. `#[public]` would declare the tool open to
+every caller the endpoint admits, which an admin-only tool is not; on such a
+subject `#[authorize]` runs the same class gate and arms no mask, since its
+answer is no row:
 
 ```rust title="crates/features/src/audio/mcp/tool.rs"
     #[tool(description = "Report whether an uploaded file has been transcoded.")]
-    #[authorize(Manage, OrgEntity, unmasked)]
-    #[use_guards(TranscodeGuard)]
+    #[authorize(Manage, Transcoding)]
     async fn transcode_status(&self, /* … */) -> Result<String, McpError> { /* … */ }
 ```
 
-The guards run before the gate, so `TranscodeGuard` answers first: it refuses
-a caller with no admin grant, and an admin whose token was not granted
-`audio:transcode` with the challenge naming that scope
-([OAuth scopes](/security/authorization/scopes/#raising-a-scope-refusal-from-your-own-guard)).
-
-One `Guard` impl serves both transports: `check_http` reads the ability
-`AuthzGuard` attached earlier in the route's stage, `check` the one the
-endpoint's guards attached to the `/mcp` request — both through `cx.ambient::<Ability>()`,
-and the guard declares `GuardFor<HttpView>` and `GuardFor<McpView>`.
+The policy grants it to admins behind a scope,
+`ab.can(Action::Manage, Transcoding).requires_scope(AUDIO_TRANSCODE)`, so the
+gate refuses a caller with no admin grant, and an admin whose token was not
+granted `audio:transcode` with the challenge naming that scope
+([OAuth scopes](/security/authorization/scopes/#a-scope-on-a-capability-no-table-holds)).
+The same posture gates the HTTP routes that mint the upload URLs: one rule,
+one gate, on every edge.
 
 Masking round-trips the value through the entity model, so it needs the full
 `#[expose]` shape to reconcile against — and MCP has no selection set to excuse

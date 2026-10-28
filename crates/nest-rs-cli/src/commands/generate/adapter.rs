@@ -94,15 +94,12 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let mut s = Scaffold::new();
     s.create(dir.join(transport.handler_file()), r.render(handler_tmpl));
 
-    // A guarded handler imports its transport's authz adapter, or the access
-    // graph fails the boot on the guards it names.
+    // Every transport with an authz adapter scaffolds a guarded handler, which
+    // imports that adapter, or the access graph fails the boot on the guards it
+    // names.
     let mut module_rs = r.render(module_tmpl);
-    let guarded_handler = matches!(
-        transport,
-        Transport::Http | Transport::Ws | Transport::Graphql | Transport::Mcp
-    );
-    if guarded_handler
-        && let Some(b) = auth::authz_for(transport)
+    let guarded = auth::authz_for(transport);
+    if let Some(b) = guarded
         && let Some(wired) = ensure_module_imports(&[(b.feature_path, b.module)])(&module_rs)
     {
         module_rs = wired;
@@ -112,8 +109,8 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
 
     // The transport's authz adapter, whenever the workspace has a policy to enforce:
     // without it `/graphql` installs no ability and `/mcp` is deny-all.
-    let scaffolded_auth = guarded_handler && !auth::exists(&ws);
-    let authz = auth::authz_for(transport).filter(|b| {
+    let scaffolded_auth = guarded.is_some() && !auth::exists(&ws);
+    let authz = guarded.filter(|b| {
         !b.written_by_g_auth && (scaffolded_auth || auth::exists(&ws)) && !b.exists(&ws)
     });
     let decls = authz.map(auth::AuthzAdapter::decls).unwrap_or_default();
@@ -129,15 +126,15 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         s.edit(ws.features_root().join("authz/mod.rs"), ensure_lines(decls));
     }
 
-    // The payload and its `#[queue]` marker are a producer↔worker contract, so
-    // they live at the port; re-exporting the marker keeps the typed
-    // `push(Q, job, ..)` reachable from outside the private `queue::processor`.
     let mut port_lines = Vec::new();
     if writes_subject {
         s.create(subject_file, r.render(crate::templates::feature::SUBJECT));
         port_lines.push("mod subject;".to_string());
         port_lines.push(format!("pub use subject::{};", names.entity()));
     }
+    // The payload and its `#[queue]` marker are a producer↔worker contract, so
+    // they live at the port; re-exporting the marker keeps the typed
+    // `push(Q, job, ..)` reachable from outside the private `queue::processor`.
     if transport == Transport::Queue {
         s.create(
             feature_root.join(command_file(&opts.name, 1)),
@@ -334,9 +331,8 @@ fn print_next_steps(
     }
     if matches!(transport, Transport::Graphql | Transport::Mcp) {
         println!(
-            "  The operation is gated on `{}`: it answers FORBIDDEN until AuthzAbility \
-             grants `ab.can(Action::Read, {})`.",
-            subject, subject,
+            "  The operation is gated on `{subject}`: it answers FORBIDDEN until \
+             AuthzAbility grants `ab.can(Action::Read, {subject})`.",
         );
     }
     if let Some(authz) = authz {

@@ -113,14 +113,35 @@ pub struct RuleSpec<'a, S: Subject> {
     builder: &'a mut AbilityBuilder,
     action: Action,
     inverted: bool,
-    /// The rows [`when`](Self::when) narrowed the rule to: its typed predicate
-    /// and the SQL it lowers to, `None` while the rule holds for every row.
-    rows: Option<(Box<dyn Any + Send + Sync>, Condition)>,
-    /// Whether that predicate is the `Deny` a rejected relation leaves.
-    malformed: bool,
+    /// The predicate [`when`](Self::when) narrowed the rule's rows to, `None`
+    /// while the rule holds for every row.
+    rows: Option<Box<dyn ErasedPredicate>>,
     fields: FieldSet,
     required_scopes: Vec<String>,
     subject: PhantomData<fn() -> S>,
+}
+
+/// A [`when`](RuleSpec::when) predicate with its entity erased, so a rule on
+/// any [`Subject`] carries one; lowered to SQL only when its rule materializes.
+trait ErasedPredicate: Any + Send + Sync {
+    /// Whether it is the `Deny` a rejected relation leaves.
+    fn is_deny(&self) -> bool;
+
+    fn condition(&self) -> Condition;
+}
+
+impl<E> ErasedPredicate for Predicate<E>
+where
+    E: EntityTrait,
+    E::Column: Send + Sync + 'static,
+{
+    fn is_deny(&self) -> bool {
+        matches!(self, Predicate::Deny)
+    }
+
+    fn condition(&self) -> Condition {
+        self.to_condition()
+    }
 }
 
 impl<'a, S: Subject> RuleSpec<'a, S> {
@@ -130,7 +151,6 @@ impl<'a, S: Subject> RuleSpec<'a, S> {
             action,
             inverted,
             rows: None,
-            malformed: false,
             fields: FieldSet::All,
             required_scopes: Vec::new(),
             subject: PhantomData,
@@ -195,10 +215,7 @@ where
 {
     /// `.when(|p| p.eq(users::Column::OrgId, actor.org_id))`.
     pub fn when(mut self, build: impl FnOnce(PredicateBuilder<E>) -> Predicate<E>) -> Self {
-        let predicate = build(PredicateBuilder::new());
-        self.malformed = matches!(predicate, Predicate::Deny);
-        let condition = predicate.to_condition();
-        self.rows = Some((Box::new(predicate), condition));
+        self.rows = Some(Box::new(build(PredicateBuilder::new())));
         self
     }
 
@@ -214,7 +231,7 @@ impl<S: Subject> Drop for RuleSpec<'_, S> {
     fn drop(&mut self) {
         // A `Deny` predicate only comes from a rejected `related(...)`. Checked
         // before the scope gate, so a developer error surfaces whatever the token.
-        if self.malformed {
+        if self.rows.as_deref().is_some_and(|rows| rows.is_deny()) {
             self.builder.malformed.push(MalformedRuleError {
                 action: self.action,
                 subject: std::any::type_name::<S>(),
@@ -242,9 +259,9 @@ impl<S: Subject> Drop for RuleSpec<'_, S> {
             return;
         }
 
-        let (predicate, condition) = match self.rows.take() {
-            Some((predicate, condition)) => (Some(predicate), condition),
-            None => (None, Condition::all()),
+        let condition = match self.rows.as_deref() {
+            Some(rows) => rows.condition(),
+            None => Condition::all(),
         };
         self.builder.ability.add_rule(
             self.action,
@@ -252,7 +269,10 @@ impl<S: Subject> Drop for RuleSpec<'_, S> {
             Rule {
                 inverted: self.inverted,
                 condition,
-                predicate,
+                predicate: self
+                    .rows
+                    .take()
+                    .map(|rows| rows as Box<dyn Any + Send + Sync>),
                 fields: std::mem::take(&mut self.fields),
             },
         );

@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn an_admin_token_granted_the_transcode_scope_may_transcode() {
-        let ab = ability_scoped(vec![Role::Admin], Uuid::now_v7(), constants::all());
+        let ab = admin(Uuid::now_v7());
         assert!(ab.can_class(Action::Manage, TypeId::of::<Transcoding>()));
     }
 

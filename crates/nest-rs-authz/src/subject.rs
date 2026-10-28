@@ -23,7 +23,12 @@ use std::marker::PhantomData;
 /// assert!(ability.can_class(Action::Manage, TypeId::of::<Exporting>()));
 /// # Ok::<(), nest_rs_authz::MalformedRuleError>(())
 /// ```
-pub trait Subject: 'static {}
+pub trait Subject: 'static {
+    /// Whether the subject has rows a posture masks: `false` for a
+    /// `#[subject]`, so an extractor naming it owes the masking probe nothing.
+    #[doc(hidden)]
+    const __ROWS: bool = true;
+}
 
 impl<E: sea_orm::EntityTrait> Subject for E {}
 

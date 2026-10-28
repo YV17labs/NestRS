@@ -116,7 +116,11 @@ where
     S: Subject,
 {
     async fn from_request(_req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        nest_rs_http::__private::MaskProbe::mark();
+        // Only a masking extractor owes the probe: on a subject no table holds
+        // there is nothing a shaper would have masked.
+        if S::__ROWS {
+            nest_rs_http::__private::MaskProbe::mark();
+        }
         checked::<A, S>().map_err(denial_to_http_error)?;
         Ok(Authorize(PhantomData))
     }

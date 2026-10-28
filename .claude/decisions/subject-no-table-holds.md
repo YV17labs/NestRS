@@ -14,10 +14,12 @@ developers to write that guard. The identity audit's agreement
 grants it whole with `ab.can(action, Subject)`, `requires_scope` included;
 `#[authorize(Action, Subject)]` runs the same `class_gate` on every edge and
 arms no mask, since the subject has no model. The edges cannot tell an entity
-from a capability by spelling, so the choice is by type: `Subject` has a hidden
-companion naming how a posture masks — an entity's rows, or nothing — and each
-edge's mask dispatches on it; on HTTP a route gated this way reads as unmasked,
-so its reads are still withheld the ability
+from a capability by spelling, so the choice is by type: `Subject` says whether
+the subject has rows, and a hidden companion names how a posture masks — an
+entity's rows, or nothing — which each edge's mask dispatches on; a
+hand-written `Authorize<A, S>` beside `#[public]` reads the grant and, on a
+capability, owes the masking probe nothing. On HTTP a route gated this way
+reads as unmasked, so its reads are still withheld the ability
 (`unmasked-reply-withholds-the-ability.md` stands). An `#[sse]` route takes
 such a posture and refuses an entity's, by the same type.
 

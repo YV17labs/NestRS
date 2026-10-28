@@ -5,7 +5,8 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::{Ability, AbilityBuilder, Action, Manage, current_ability, subject};
+use nest_rs_authz::http::Authorize;
+use nest_rs_authz::{Ability, AbilityBuilder, Action, Manage, Read, current_ability, subject};
 use nest_rs_core::{Layer, UnitContext, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
@@ -94,6 +95,14 @@ impl ExportsController {
             queued: true,
             reads_scoped: current_ability().is_some(),
         })
+    }
+
+    /// The public-reads spelling on a capability: the parameter reads the
+    /// caller's grant, and shapes nothing.
+    #[get("/catalog")]
+    #[public]
+    async fn catalog(&self, _grant: Authorize<Read, Exporting>) -> String {
+        "catalog".to_owned()
     }
 
     #[sse("/progress")]
@@ -354,4 +363,20 @@ async fn a_token_without_the_scope_is_challenged_for_it_on_every_edge() {
         serde_json::json!([EXPORTS_RUN]),
         "WS: {ws}"
     );
+}
+
+#[tokio::test]
+async fn a_public_route_naming_the_capability_by_hand_admits_a_grant_and_shapes_nothing() {
+    let app = app().await;
+    let read = |grant: &'static str| {
+        app.http()
+            .get("/exports/catalog")
+            .header(GRANT, grant)
+            .send()
+    };
+
+    let granted = read("full").await.0;
+    assert_eq!(granted.status(), StatusCode::OK);
+    assert_eq!(body(granted).await, "catalog");
+    assert_eq!(read("none").await.0.status(), StatusCode::FORBIDDEN);
 }

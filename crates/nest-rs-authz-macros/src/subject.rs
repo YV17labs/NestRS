@@ -41,7 +41,9 @@ fn expand(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     Ok(quote! {
         #item
 
-        impl ::nest_rs_authz::Subject for #ident {}
+        impl ::nest_rs_authz::Subject for #ident {
+            const __ROWS: bool = false;
+        }
 
         impl ::nest_rs_authz::__private::SubjectMask for #ident {
             type Mask = ::nest_rs_authz::__private::NoRows;

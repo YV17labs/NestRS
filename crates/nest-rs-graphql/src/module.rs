@@ -111,9 +111,9 @@ fn mount(
     let schema = build_schema(container.clone(), options, mounted)?;
     let bridge = Arc::new(OperationBridge::new(container.clone())?);
     if options.emit {
-        let dest = &nest_rs_core::__private::in_app_dir(&options.emit_path);
+        let dest = nest_rs_core::__private::in_app_dir(&options.emit_path);
         let sdl = crate::resolver::render_sdl(&schema, options);
-        match std::fs::write(dest, &sdl) {
+        match std::fs::write(&dest, &sdl) {
             Ok(()) => tracing::info!(
                 target: crate::TARGET,
                 path = %dest.display(),

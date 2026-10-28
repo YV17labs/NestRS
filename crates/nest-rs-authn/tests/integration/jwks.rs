@@ -1,6 +1,6 @@
 //! Covers `src/jwks.rs` — an issuer's JWK Set, served over TLS by an in-process
 //! double whose certificate a `TestAuthority` issued, verified through
-//! `JwtService` and through a booted guard.
+//! `JwtService`, through a booted guard and under a resource binding.
 //!
 //! The clock moves past the refresh floor only between fetches (`elapse`): a
 //! fetch is real I/O, and a paused clock would jump its deadline.
@@ -22,7 +22,7 @@ use nest_rs_authn::{
     JWKS_MAX_BYTES, JWKS_REFRESH_FLOOR, JWKS_STALE_CEILING, JwtService, JwtStrategy,
     PrincipalIdentity,
 };
-use nest_rs_core::module;
+use nest_rs_core::{App, module};
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_http::{StatusCode, header};
 use nest_rs_testing::{LogCapture, TestApp, TestAuthority, TestCertificate, wait_until};
@@ -106,14 +106,28 @@ fn unbound(mut jwk: Jwk) -> Jwk {
 
 /// An access token `key` signed with `algorithm`, naming `kid`.
 fn token(key: &EncodingKey, algorithm: Algorithm, kid: Option<&str>) -> String {
+    signed(
+        key,
+        algorithm,
+        kid,
+        &Claims {
+            sub: "ada".into(),
+            exp: get_current_timestamp() + 3600,
+        },
+    )
+}
+
+/// `claims` as an access token `key` signed with `algorithm`, naming `kid`.
+fn signed(
+    key: &EncodingKey,
+    algorithm: Algorithm,
+    kid: Option<&str>,
+    claims: &impl Serialize,
+) -> String {
     let mut header = Header::new(algorithm);
     header.kid = kid.map(str::to_owned);
     header.typ = Some("at+jwt".into());
-    let claims = Claims {
-        sub: "ada".into(),
-        exp: get_current_timestamp() + 3600,
-    };
-    jsonwebtoken::encode(&header, &claims, key).expect("the token signs")
+    jsonwebtoken::encode(&header, claims, key).expect("the token signs")
 }
 
 /// What the double answers every fetch with.
@@ -918,4 +932,90 @@ async fn an_unreachable_set_answers_503_on_a_guarded_and_a_public_route() {
         .send()
         .await
         .assert_status_is_ok();
+}
+
+// The set behind the resource an app serves, as `OAuthResourceModule` binds it.
+
+/// What the resource binding names: the resource, and the authorization
+/// servers it advertises.
+const RESOURCE: &str = "https://api.example";
+const ADVERTISED: [&str; 2] = ["https://as-1.example", "https://as-2.example"];
+
+#[module(imports = [AuthnModule::for_root(None)])]
+struct BoundJwksHost;
+
+/// A token from `iss`, when it names one, for `aud`, signed by the key the set
+/// publishes for `algorithm` under `kid`.
+fn minted(
+    (key, algorithm, kid): (&Signing, Algorithm, &str),
+    iss: Option<&str>,
+    aud: &str,
+) -> String {
+    let mut claims = serde_json::json!({
+        "sub": "ada",
+        "exp": get_current_timestamp() + 3600,
+        "aud": aud,
+    });
+    if let Some(iss) = iss {
+        claims["iss"] = iss.into();
+    }
+    signed(&key.key, algorithm, Some(kid), &claims)
+}
+
+/// RFC 9068 §4 over a JWK Set, the external issuer's case: bound to a
+/// resource, the verifier requires that resource as `aud` and an advertised
+/// authorization server as `iss`, for every algorithm the set serves.
+#[tokio::test]
+async fn a_bound_jwk_set_verifier_requires_the_resource_and_an_advertised_issuer() {
+    let issuer = Issuer::serving(Answer::keys(&[
+        jwk(&ED25519, Algorithm::EdDSA, "ed"),
+        jwk(&P256, Algorithm::ES256, "p256"),
+    ]))
+    .await;
+    let app = App::builder()
+        .provide(config(issuer.uri()))
+        .provide(nest_rs_authn::__private::ResourceBinding {
+            audience: RESOURCE.into(),
+            issuers: ADVERTISED.iter().map(|&issuer| issuer.to_owned()).collect(),
+        })
+        .module::<BoundJwksHost>()
+        .build()
+        .await
+        .expect("the bound module boots without fetching the set");
+    let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
+
+    for key in [
+        (&*ED25519, Algorithm::EdDSA, "ed"),
+        (&*P256, Algorithm::ES256, "p256"),
+    ] {
+        for advertised in ADVERTISED {
+            let claims = jwt
+                .verify::<Claims>(&minted(key, Some(advertised), RESOURCE))
+                .await
+                .unwrap_or_else(|refused| {
+                    panic!("{:?} from {advertised} must verify: {refused:?}", key.1)
+                });
+            assert_eq!(claims.sub, "ada");
+        }
+    }
+    let ed = (&*ED25519, Algorithm::EdDSA, "ed");
+    for (label, token) in [
+        (
+            "another resource",
+            minted(ed, Some(ADVERTISED[0]), "https://billing.example"),
+        ),
+        (
+            "an issuer the resource does not advertise",
+            minted(ed, Some("https://as-3.example"), RESOURCE),
+        ),
+        ("no issuer", minted(ed, None, RESOURCE)),
+    ] {
+        assert!(
+            matches!(
+                jwt.verify::<Claims>(&token).await,
+                Err(AuthError::InvalidToken)
+            ),
+            "a token from {label} must not verify"
+        );
+    }
 }

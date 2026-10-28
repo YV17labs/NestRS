@@ -447,7 +447,8 @@ pub(crate) const ENV_AUTHN: &str = r#"
 # app, `{{env_prefix}}_AUTHN__PUBLIC_KEY` alone on the resource servers — each inline, or as
 # a path in its `_FILE` form. A secret beside either key fails the boot, so
 # switching to EdDSA means deleting the secret from `.env.local` and `.env.test`.
-# (A config pinned in code stops these files being read for the namespace.)
+# (A config pinned in code stops these files being read for the namespace; the
+# boot names each key it then ignores.)
 "#;
 
 /// Appended to the git-ignored `.env.local`: the developer's own key.

@@ -60,6 +60,7 @@ pub(super) fn scaffold_root(
         &root.join("apps").join(&hello_names.kebab),
         &hello_names,
         HELLO_APP_PORT,
+        env_prefix,
     );
 
     let report = s.apply(dry_run)?;
@@ -103,10 +104,11 @@ pub(super) fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -
             format!("pub use {}::{};", names.snake, names.http_module()),
         ]),
     );
-    queue_app(&mut s, &root, names, port);
     // The prefix belongs to the environment that runs the app, so it is read
     // from there.
-    queue_root_files(&mut s, &ws.root, names, &crate::context::env_prefix());
+    let env_prefix = crate::context::env_prefix();
+    queue_app(&mut s, &root, names, port, &env_prefix);
+    queue_root_files(&mut s, &ws.root, names, &env_prefix);
 
     let report = s.apply(dry_run)?;
     if !dry_run {
@@ -119,10 +121,10 @@ pub(super) fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -
         names.kebab,
         root.display()
     );
-    // The pin is a claim about a file on disk, so it is only true once one is.
+    // A claim about a file on disk, so it is only true once one is.
     println!(
-        "HTTP port: {port} ({} in src/module.rs)",
-        report.verb("pinned", "would be pinned"),
+        "HTTP port: {port} ({} in .env)",
+        report.verb("set", "would be set"),
     );
     report.print(&ws.root);
     print_app_next_steps(ws, names, port);
@@ -153,9 +155,10 @@ fn queue_hello_feature(s: &mut Scaffold, feature_root: &Path, names: &Names) {
     );
 }
 
-fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, port: u16) {
-    let r = Renderer::new(names).with("port", port.to_string());
+fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, port: u16, env_prefix: &str) {
+    let r = with_env_prefix(Renderer::new(names), env_prefix).with("port", port.to_string());
     s.create(app_root.join("Cargo.toml"), r.render(workspace::APP_CARGO));
+    s.create(app_root.join(".env"), r.render(workspace::APP_ENV));
     s.create(app_root.join("src/lib.rs"), r.render(workspace::APP_LIB));
     s.create(app_root.join("src/main.rs"), r.render(workspace::APP_MAIN));
     s.create(

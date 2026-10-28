@@ -129,11 +129,12 @@ pub(crate) const GITIGNORE: &str = r#"/target
 
 pub(crate) const ENV: &str = r#"# nestrs workspace — committed base config (`.env` cascade).
 #
-# Each app's root `module.rs` sets its own HTTP defaults
-# (`HttpConfig { port: …, ..Default::default() }`). Those are defaults, not a
-# lock: any `{{env_prefix}}_HTTP__*` key set in the real environment still wins, field
-# by field — so a deployment moves the port or turns on TLS without touching
-# the code.
+# Every app reads this file. What tells one app apart — its port — lives in its
+# own `apps/<app>/.env`, read over these under a declared development or test
+# profile only; a deployment sets its own. A config pinned in code
+# (`Module::for_root(config)`) cuts its whole `{{env_prefix}}_<NAMESPACE>__*` namespace off
+# these files, and the boot names each key it then ignores: the scaffold pins
+# none.
 #
 # No database or queue URL here: this file is read in production too. The
 # plaintext URLs of `compose.yml`'s services live in `.env.development` and
@@ -141,8 +142,9 @@ pub(crate) const ENV: &str = r#"# nestrs workspace — committed base config (`.
 # {{env_prefix}}_SEAORM__URL and {{env_prefix}}_REDIS__URL, over TLS.
 #
 # Precedence (highest first):
-#   real env  >  pinned in `module.rs`  >  .env.<{{env_prefix}}_ENV>.local  >  .env.local
-#   >  .env.<{{env_prefix}}_ENV>  >  .env
+#   real env  >  apps/<app>/.env.<{{env_prefix}}_ENV>.local  >  apps/<app>/.env.local
+#   >  apps/<app>/.env.<{{env_prefix}}_ENV>  >  apps/<app>/.env
+#   >  .env.<{{env_prefix}}_ENV>.local  >  .env.local  >  .env.<{{env_prefix}}_ENV>  >  .env
 "#;
 
 pub(crate) const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-only overrides, read only when the process declares

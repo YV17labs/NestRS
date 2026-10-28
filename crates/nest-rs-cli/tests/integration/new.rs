@@ -6,6 +6,7 @@ use crate::harness::{
     write_fake_workspace,
 };
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 /// The `cov` recipe asks for no manual install.
@@ -169,7 +170,7 @@ fn new_workspace_greenfield() {
     let module = fs::read_to_string(root.join("apps/hello/src/module.rs")).unwrap();
     assert!(module.contains("HelloHttpModule"));
     assert!(module.contains("features::hello"));
-    assert!(module.contains("port: 3000"));
+    assert_the_port_is_the_app_s_own_setting(&root.join("apps/hello"), 3000);
 
     // The service URLs are read in development and test, so `nestrs run db up`
     // and the e2e suites work out of the box; production reads none.
@@ -231,8 +232,7 @@ fn new_app_inside_nestrs_workspace() {
     assert!(!app.join("src/controller.rs").exists());
 
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
-    assert!(module.contains("HttpConfig { port: 3000"));
-    assert!(!module.contains("for_root(None)"));
+    assert_the_port_is_the_app_s_own_setting(&app, 3000);
 
     let feature = dir.path().join("crates/features/src/demo_api");
     assert!(feature.join("service.rs").is_file());
@@ -278,7 +278,12 @@ fn new_app_picks_next_http_port() {
     fs::create_dir_all(dir.path().join("apps/auth/src")).unwrap();
     fs::write(
         dir.path().join("apps/auth/src/module.rs"),
-        "HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() })",
+        "HttpModule::for_root(None)",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("apps/auth/.env"),
+        "NESTRS_HTTP__PORT=3001\n",
     )
     .unwrap();
 
@@ -294,8 +299,7 @@ fn new_app_picks_next_http_port() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let module = fs::read_to_string(dir.path().join("apps/blog/src/module.rs")).unwrap();
-    assert!(module.contains("HttpConfig { port: 3002"));
+    assert_the_port_is_the_app_s_own_setting(&dir.path().join("apps/blog"), 3002);
 }
 
 #[test]
@@ -347,8 +351,22 @@ fn new_workspace_app_scaffold() {
     assert!(!env.contains("NESTRS_HTTP__PORT"));
 
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
-    assert!(module.contains("HttpConfig { port: 3000"));
     assert!(!module.contains("OpenTelemetryModule"));
+    assert_the_port_is_the_app_s_own_setting(&app, 3000);
+}
+
+/// The port sits in the app's own `.env`, never pinned in code: a pin would cut
+/// the app's whole HTTP namespace off the cascade.
+#[track_caller]
+fn assert_the_port_is_the_app_s_own_setting(app: &Path, port: u16) {
+    let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
+    assert!(module.contains("HttpModule::for_root(None)"), "{module}");
+    assert!(!module.contains("HttpConfig"), "{module}");
+    let own = fs::read_to_string(app.join(".env")).unwrap();
+    assert!(
+        own.contains(&format!("NESTRS_HTTP__PORT={port}\n")),
+        "{own}"
+    );
 }
 
 /// The smoke test boots the narrowest module that serves the greeting, so a

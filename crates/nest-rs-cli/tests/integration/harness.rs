@@ -45,9 +45,9 @@ pub(crate) fn write_fake_app(root: &Path, name: &str) -> PathBuf {
     .unwrap();
     fs::write(
         app.join("src/module.rs"),
-        "use nest_rs_core::module;\nuse nest_rs_http::{HttpConfig, HttpModule};\n\n\
+        "use nest_rs_core::module;\nuse nest_rs_http::HttpModule;\n\n\
          #[module(\n    imports = [\n        \
-         HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),\n    ],\n)]\n\
+         HttpModule::for_root(None),\n    ],\n)]\n\
          pub struct AppModule;\n",
     )
     .unwrap();

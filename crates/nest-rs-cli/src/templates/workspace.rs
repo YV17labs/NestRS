@@ -107,17 +107,24 @@ async fn main() -> Result<()> {
 /// serves share a snake name, in two different crates (`BlogModule` in
 /// `apps/blog/src/module.rs`, `BlogModule` in `crates/features/src/blog/`).
 pub(crate) const APP_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 
 use features::{{snake}}::{{http_module}};
 
 #[module(
     imports = [
-        HttpModule::for_root(HttpConfig { port: {{port}}, ..Default::default() }),
+        HttpModule::for_root(None),
         {{http_module}},
     ],
 )]
 pub struct {{module}};
+"#;
+
+/// The app's own `.env`: what tells it apart from the workspace's other apps,
+/// read over the root's files under a development or test profile.
+pub(crate) const APP_ENV: &str = r#"# `{{kebab}}`'s own settings, read over the workspace's `.env*` under a
+# declared development or test profile only; a deployment sets its own.
+{{env_prefix}}_HTTP__PORT={{port}}
 "#;
 
 pub(crate) const README: &str = r#"# {{kebab}}
@@ -135,8 +142,10 @@ nestrs run build --all        # every app
 ```
 
 Open **http://localhost:3000/** in your browser — `Hello World` from
-`crates/features/src/hello/`. `apps/hello/` only wires modules; the listen
-port is set in `apps/hello/src/module.rs`, not in `.env`.
+`crates/features/src/hello/`. `apps/hello/` only wires modules; its listen
+port is its own setting, in `apps/hello/.env`, read over the workspace's
+`.env*` under the development and test profiles. `nestrs run start` runs under
+production, which reads no app's own file: a deployment names the port.
 
 ## Grow the workspace
 

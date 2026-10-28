@@ -387,15 +387,21 @@ picks between them — not the caller:
   field-level masking of the value returned. Reach for it whenever the answer is
   entity data, and return the `#[expose]`d wire type (wrapped in `Json<T>` where
   the transport needs it) so the mask has a shape to work on.
-- `#[public]` — no gate and no mask. It says *this operation* has no entity to
-  gate; it does not say the caller is unauthenticated.
+- `#[authorize(Action, Subject)]` on a `#[subject]` — the same gate, with its
+  scope challenge, on a capability no table holds (`#[subject] pub struct
+  Exporting;`, granted with `ab.can(Action::Manage, Exporting)`), and no mask:
+  the answer is no row.
+- `#[public]` — no gate and no mask: any caller the guards admitted, a visitor
+  included where the edge admits one. It is an opening, written on purpose.
 
 **Rows are ability-scoped, and the guards are what install the scope.** `Repo`
 filters every read by the caller's ambient `Ability`; with none installed a read
 denies every row rather than returning them unscoped. A scaffolded HTTP route or
 WebSocket gateway is guarded already — `nestrs g http` and `g ws` bind the two
-guards and write the auth adapter they come from — and an operation that
-declares `#[public]` answers no entity data. Before an operation serves real
+guards and write the auth adapter they come from — a GraphQL operation or an
+MCP tool `nestrs g graphql|mcp` writes over a port with no entity is gated on
+the `#[subject]` it writes beside the service, and an operation that declares
+`#[public]` answers no entity data. Before an operation serves real
 rows, it declares `#[authorize]` and its edge is wired — the guards on the
 struct, and the edge's authz module imported in that adapter's `module.rs`:
 
@@ -409,8 +415,9 @@ struct, and the edge's authz module imported in that adapter's `module.rs`:
 A guard bound where its check never runs is a compile error naming the edge it
 does check: `AuthnGuard` checks HTTP requests only, so a resolver refuses it.
 `nestrs g auth` writes the guards and `AuthzModule`, `nestrs g graphql|ws|mcp`
-writes that edge's module once auth exists, and `g http` / `g ws` — and
-`g graphql` on a `g resource` port — emit the wiring already done.
+writes that edge's module, and `g http`, `g ws`, `g graphql` and `g mcp` emit
+the wiring already done, writing the auth adapter first when the workspace has
+none.
 
 Two edges answer differently, by design. A **scheduled** tick is system work:
 its unit of work runs on `SeaOrmDatabaseModule`'s executor with no ability, so `Repo`

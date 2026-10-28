@@ -506,17 +506,91 @@ fn generate_graphql_adapter_enables_the_guards_graphql_feature() {
         "the guards crate has to gain the graphql feature: {features_cargo}"
     );
 
-    // A port with no entity stays the `#[public]` stand-in — nothing to guard.
-    let resolver = fs::read_to_string(
-        dir.path()
-            .join("crates/features/src/posts/graphql/resolver.rs"),
-    )
-    .unwrap();
-    assert!(resolver.contains("#[public]"), "{resolver}");
+    // A port with no entity gates its operation on the `#[subject]` written
+    // beside its service, behind the guards its auth adapter brings.
+    let src = dir.path().join("crates/features/src");
+    let resolver = fs::read_to_string(src.join("posts/graphql/resolver.rs")).unwrap();
     assert!(
-        !dir.path().join("crates/features/src/authz").exists(),
-        "a workspace with no policy does not get one from a public count query",
+        resolver.contains("#[authorize(Read, Post)]")
+            && resolver.contains("#[use_guards(AuthzGuard)]"),
+        "{resolver}"
     );
+    assert!(
+        !resolver.lines().any(|line| line.trim() == "#[public]"),
+        "an opening is the developer's line, never the generator's: {resolver}"
+    );
+    let subject = fs::read_to_string(src.join("posts/post.rs")).unwrap();
+    assert!(
+        subject.contains("#[subject]") && subject.contains("pub struct Post;"),
+        "{subject}"
+    );
+    let mod_rs = fs::read_to_string(src.join("posts/mod.rs")).unwrap();
+    assert!(
+        mod_rs.contains("mod post;") && mod_rs.contains("pub use post::Post;"),
+        "{mod_rs}"
+    );
+    let module = fs::read_to_string(src.join("posts/graphql/module.rs")).unwrap();
+    assert!(module.contains("AuthzGraphqlModule"), "{module}");
+    assert!(
+        src.join("authz/ability.rs").is_file(),
+        "the guards' adapter lands"
+    );
+}
+
+/// An MCP tool over a port with no entity is gated on the port's `#[subject]`,
+/// written once whichever adapter comes first, and `/mcp` gets the guards that
+/// attach the ability its gate reads.
+#[test]
+fn generate_mcp_over_a_feature_port_gates_the_tool_on_the_ports_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+    let printed = run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+
+    let src = dir.path().join("crates/features/src");
+    let tool = fs::read_to_string(src.join("posts/mcp/tool.rs")).unwrap();
+    assert!(tool.contains("#[authorize(Read, Post)]"), "{tool}");
+    assert!(
+        !tool.lines().any(|line| line.trim() == "#[public]"),
+        "an opening is the developer's line, never the generator's: {tool}"
+    );
+    let module = fs::read_to_string(src.join("posts/mcp/module.rs")).unwrap();
+    assert!(module.contains("AuthzMcpModule"), "{module}");
+    let mod_rs = fs::read_to_string(src.join("posts/mod.rs")).unwrap();
+    assert_eq!(
+        mod_rs.matches("pub use post::Post;").count(),
+        1,
+        "the second adapter reuses the subject: {mod_rs}"
+    );
+    assert!(
+        printed.contains("ab.can(Action::Read, Post)"),
+        "the next step names the grant: {printed}"
+    );
+}
+
+/// Over a port that has an entity but no `CrudService`, the operation gates on
+/// the entity, and no `#[subject]` is written beside it.
+#[test]
+fn generate_mcp_over_a_port_with_an_entity_gates_the_tool_on_the_entity() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "entity", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+
+    let src = dir.path().join("crates/features/src");
+    let tool = fs::read_to_string(src.join("posts/mcp/tool.rs")).unwrap();
+    assert!(
+        tool.contains("#[authorize(Read, PostEntity)]")
+            && tool.contains("use crate::posts::{Entity as PostEntity, PostsService};"),
+        "{tool}"
+    );
+    assert!(!src.join("posts/post.rs").exists());
 }
 
 /// The GraphQL twin of `generate_resource_emits_the_guarded_form_…`: over a

@@ -61,14 +61,24 @@ impl {{controller}} {
 }
 "#;
 
+/// The GraphQL adapter for a port with no `CrudService`: guarded like its
+/// `#[crud]` twin, its operation gated on `{{subject}}` — the port's entity, or
+/// the `#[subject]` the generator writes for a port with none.
 pub(crate) const GRAPHQL_RESOLVER: &str = r#"use std::sync::Arc;
 
 use async_graphql::Result;
+use nest_rs::authz::Read;
 use nest_rs::graphql::{operations, resolver};
 
-use crate::{{snake}}::{{service}};
+use crate::authz::AuthzGuard;
+use crate::{{snake}}::{{{subject_use}}, {{service}}};
 
+// `/graphql` authenticates at its request, through the guards
+// AuthzGraphqlModule declares for it, so the resolver binds the ability guard
+// alone — AuthnGuard has no GraphQL check, and binding it here is a compile
+// error.
 #[resolver]
+#[use_guards(AuthzGuard)]
 pub struct {{resolver}} {
     #[inject]
     svc: Arc<{{service}}>,
@@ -76,16 +86,10 @@ pub struct {{resolver}} {
 
 #[operations]
 impl {{resolver}} {
-    // SECURITY: scaffolded as #[public] because this port holds no entity.
-    // Before serving real rows, declare #[authorize(Action, Entity)] instead
-    // (class gate + automatic response masking), bind #[use_guards(AuthzGuard)]
-    // on the struct, and import AuthzGraphqlModule in this adapter's module.rs.
-    // `/graphql` authenticates at its request, through the guards that module
-    // declares for it, so AuthnGuard is not bound here — it has no GraphQL
-    // check, and binding it is a compile error. `nestrs g graphql` on a
-    // `g resource` port emits all three.
+    // Gated on {{subject_said}}, so it answers FORBIDDEN until AuthzAbility
+    // grants `ab.can(Action::Read, {{subject}})`.
     #[query]
-    #[public]
+    #[authorize(Read, {{subject}})]
     async fn {{snake}}_count(&self) -> Result<usize> {
         Ok(self.svc.count())
     }
@@ -318,9 +322,9 @@ pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!   field-level masking of the value you return. Reach for it whenever the
 //!   answer is entity data, and return the `#[expose]`d wire type (`Json<T>`)
 //!   so the mask has a shape to work on.
-//! * `#[public]` — no gate and no mask. The endpoint still authenticated the
-//!   caller; this says only that *this* operation has no entity to gate. Pair it
-//!   with `#[use_guards(...)]` when the answer is a capability rather than a row.
+//! * `#[authorize(Action, Subject)]` on a `#[subject]` — the same gate on a
+//!   capability no table holds, and no mask: the answer is no row.
+//! * `#[public]` — no gate and no mask: any caller the endpoint admitted.
 //!
 //! Arguments validate through the same pipes every other transport uses:
 //! `Parameters<Valid<T>>` runs `validator` before the body and answers a
@@ -331,9 +335,10 @@ use std::sync::Arc;
 // A fallible service call goes through `Opaque` — `use nest_rs::mcp::Opaque;`
 // then `.opaque()?` — which logs the real error for the operator and hands the
 // model a constant one. An error's `Display` reaches a language model verbatim.
+use nest_rs::authz::Read;
 use nest_rs::mcp::{McpError, mcp, tools};
 
-use crate::{{snake}}::{{service}};
+use crate::{{snake}}::{{{subject_use}}, {{service}}};
 
 #[mcp]
 #[derive(Clone)]
@@ -349,11 +354,11 @@ impl {{tool}} {
     // compiles in rather than prose a cleanup could delete. `#[tool]` accepts a
     // doc comment as a fallback; an operation with neither does not compile.
     #[tool(description = "{{op_description}}")]
-    // This operation answers with a plain summary, so there is no entity to gate
-    // or mask. The moment it returns rows, swap this for
-    // `#[authorize(Read, <Entity>)]` and return the `#[expose]`d wire type
-    // wrapped in `Json<...>`, which is what arms the field-level mask.
-    #[public]
+    // Gated on {{subject_said}}, so it answers FORBIDDEN until AuthzAbility
+    // grants `ab.can(Action::Read, {{subject}})`. An answer made of an entity's
+    // rows returns its `#[expose]`d wire type wrapped in `Json<...>`, which is
+    // what arms the field-level mask.
+    #[authorize(Read, {{subject}})]
     async fn {{op}}(&self) -> Result<String, McpError> {
 {{op_body}}
         Ok({{op_value}})

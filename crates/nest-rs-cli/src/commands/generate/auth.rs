@@ -398,8 +398,9 @@ static GRAPHQL_AUTHZ: AuthzAdapter = AuthzAdapter {
     ],
     rationale: &[
         "AuthzGraphqlModule runs authn and the ability at the /graphql request, and",
-        "every operation runs under what they attach. Every resolver serving rows",
-        "imports it and declares #[authorize(Action, Entity)] or #[public].",
+        "every operation runs under what they attach. Every resolver imports it, and",
+        "each operation declares #[authorize(Action, Subject)] — an entity, or a",
+        "#[subject] no table holds — or #[public].",
     ],
     deps: &[
         &super::cargo::AUTHZ,
@@ -448,7 +449,7 @@ static MCP_AUTHZ: AuthzAdapter = AuthzAdapter {
     rationale: &[
         "/mcp denies every request until a guard runs at it. AuthzMcpModule declares",
         "its guards: callers are authenticated and the ambient Ability is attached, so",
-        "a tool can return entity rows through nest_rs::authz::masked_output_ambient.",
+        "each tool's #[authorize(Action, Subject)] gate reads it.",
     ],
     deps: &[
         &super::cargo::AUTHZ,

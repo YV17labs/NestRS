@@ -354,9 +354,19 @@ the endpoint guards that authenticate the `/graphql` request:
 `crates/features/src/authz/graphql/` plus the `AuthzGraphqlModule` import in the
 adapter's `module.rs`. That folder is not optional decoration — no controller
 owns `/graphql`, so the guards its module declares are the only thing that
-authenticates the caller and attaches the ability the resolvers read. Over a
-plain `g feature` port there are no rows to guard, so the resolver stays the
-`#[public]` stand-in and nothing else is generated.
+authenticates the caller and attaches the ability the resolvers read.
+
+### A generated operation is never open
+
+Over a port with no entity, `g graphql` and `g mcp` still write a gated
+operation: they declare the port's capability with
+[`#[subject]`](/security/authorization/policies/#subjects-no-table-holds) beside
+its service — `crates/features/src/posts/post.rs`, `pub struct Post;`, written
+once by whichever adapter comes first — and gate the query or the tool on it
+with `#[authorize(Read, Post)]`, behind the same guards and authz module as the
+resource form. It answers `FORBIDDEN` until your policy grants it,
+`ab.can(Action::Read, Post)`, which the printed next step spells. A port with
+an entity but no service gates on that entity instead.
 
 ### A generated route or socket is never open
 

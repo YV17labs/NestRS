@@ -125,13 +125,15 @@ pub(super) fn migrations_deps() -> Vec<&'static Dep> {
 pub(super) fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
     match transport {
         Transport::Http => vec![&HTTP],
-        Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL],
+        // `AUTHZ`: the operation's posture names its action and, over a port
+        // with no entity, the `#[subject]` written beside the service.
+        Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL, &AUTHZ],
         Transport::Ws => vec![&WS, &TRACING],
         // `SERDE`: the payload carries plain derives, not `#[input]`, whose
         // `deny_unknown_fields` would dead-letter a newer producer's jobs.
         Transport::Queue => vec![&REDIS_QUEUE, &ANYHOW, &SERDE],
         Transport::Schedule => vec![&SCHEDULE, &ANYHOW],
-        Transport::Mcp => vec![&MCP],
+        Transport::Mcp => vec![&MCP, &AUTHZ],
         Transport::Events => vec![&EVENTS, &ANYHOW],
     }
 }

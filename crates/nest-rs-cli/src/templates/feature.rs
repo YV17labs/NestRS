@@ -23,6 +23,16 @@ use super::service::{{service}};
 pub struct {{module}};
 "#;
 
+/// The port's `#[subject]`, written by the first adapter over a port with no
+/// entity that gates an operation on it.
+pub(crate) const SUBJECT: &str = r#"use nest_rs::authz::subject;
+
+/// What an operation over this port is gated on until the port serves rows: a
+/// capability no table holds.
+#[subject]
+pub struct {{entity}};
+"#;
+
 pub(crate) const SERVICE: &str = r#"use nest_rs::core::injectable;
 
 #[injectable]

@@ -42,9 +42,11 @@ under `## Reserved vocabulary`, and the scaffold test asserts its headings; the
 review. Change a table, a heading or the fence with them.
 
 **A template is the developer's own repository, so it may teach in a comment**
-— the `// SECURITY:` note above the GraphQL adapter's generated `#[public]`
-query is the case that decided it. A generated route or gateway is guarded, so
-an opening is always the developer's line, never the generator's. Prose the framework compiles into behaviour is still an argument
+— the note above the GraphQL adapter's generated query, naming the grant it
+waits for, is the case. A generated route or gateway is guarded, and a
+generated GraphQL operation or MCP tool is gated on its port's entity or the
+`#[subject]` the generator writes beside a port with none, so an opening is
+always the developer's line, never the generator's. Prose the framework compiles into behaviour is still an argument
 there, as in `demo/` (`demo.md`).
 
 ## Scaffolds emit exactly what the rules mandate

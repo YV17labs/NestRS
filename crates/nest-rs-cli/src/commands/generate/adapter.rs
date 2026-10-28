@@ -8,8 +8,10 @@
 //! GraphQL and HTTP over one take the `#[crud]` template, and each transport
 //! gets its `authz/` adapter ([`auth::authz_for`]) whenever the workspace has a
 //! policy to enforce. An HTTP controller and a WebSocket gateway bind the guards
-//! over either port shape, so a generated route or socket is never open by
-//! default: the workspace gets its auth adapter first when it has none.
+//! over either port shape, and a GraphQL operation and an MCP tool gate on the
+//! port's subject — its entity, or a `#[subject]` written beside the service
+//! for a port with none — so no generated operation is open by default: the
+//! workspace gets its auth adapter first when it has none.
 
 use std::path::PathBuf;
 
@@ -67,6 +69,25 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     for (key, value) in crate::templates::crud::crud_vars(crud_port, transport) {
         r = r.with(key, value);
     }
+    // What an operation's posture names: the port's entity, or the capability
+    // a port with none declares, written once by the first adapter gating on it.
+    let gated_operation = matches!(transport, Transport::Graphql | Transport::Mcp);
+    let port_entity = crud_port || feature_root.join("entity.rs").is_file();
+    let subject_file = feature_root.join(format!("{}.rs", names.table()));
+    let writes_subject = gated_operation && !port_entity && !subject_file.exists();
+    r = if port_entity {
+        r.with("subject", "{{entity}}Entity")
+            .with("subject_use", "Entity as {{entity}}Entity")
+            .with("subject_said", "the port's entity")
+    } else {
+        r.with("subject", "{{entity}}")
+            .with("subject_use", "{{entity}}")
+            .with(
+                "subject_said",
+                "this port's #[subject], a capability no table holds that the posture gates \
+                 without masking",
+            )
+    };
     let (handler_tmpl, module_tmpl) = templates_for(transport, crud_port);
     let mut s = Scaffold::new();
     s.create(dir.join(transport.handler_file()), r.render(handler_tmpl));
@@ -74,8 +95,10 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     // A guarded handler imports its transport's authz adapter, or the access
     // graph fails the boot on the guards it names.
     let mut module_rs = r.render(module_tmpl);
-    let guarded_handler =
-        matches!(transport, Transport::Http | Transport::Ws) || (crud_port && is_graphql);
+    let guarded_handler = matches!(
+        transport,
+        Transport::Http | Transport::Ws | Transport::Graphql | Transport::Mcp
+    );
     if guarded_handler
         && let Some(b) = auth::authz_for(transport)
         && let Some(wired) = ensure_module_imports(&[(b.feature_path, b.module)])(&module_rs)
@@ -108,6 +131,11 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     // they live at the port; re-exporting the marker keeps the typed
     // `push(Q, job, ..)` reachable from outside the private `queue::processor`.
     let mut port_lines = Vec::new();
+    if writes_subject {
+        s.create(subject_file, r.render(crate::templates::feature::SUBJECT));
+        port_lines.push(format!("mod {};", names.table()));
+        port_lines.push(format!("pub use {}::{};", names.table(), names.entity()));
+    }
     if transport == Transport::Queue {
         s.create(
             feature_root.join(command_file(&opts.name, 1)),
@@ -204,6 +232,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         &tmodule,
         wired_app.is_some(),
         authz,
+        &r.render("{{subject}}"),
     );
     if outbox {
         println!(
@@ -268,6 +297,7 @@ fn print_next_steps(
     tmodule: &str,
     wired: bool,
     authz: Option<&'static auth::AuthzAdapter>,
+    subject: &str,
 ) {
     println!();
     println!("Next steps:");
@@ -300,12 +330,11 @@ fn print_next_steps(
             names.queue()
         );
     }
-    if matches!(transport, Transport::Mcp) && authz.is_none() {
+    if matches!(transport, Transport::Graphql | Transport::Mcp) {
         println!(
-            "  Security: the MCP endpoint denies all requests until a guard runs at \
-             its request. Run `nestrs g auth`, then `nestrs g mcp` again — it \
-             writes the AuthzMcpModule that declares the guards authenticating \
-             callers and attaching the ambient Ability."
+            "  The operation is gated on `{}`: it answers FORBIDDEN until AuthzAbility \
+             grants `ab.can(Action::Read, {})`.",
+            subject, subject,
         );
     }
     if let Some(authz) = authz {

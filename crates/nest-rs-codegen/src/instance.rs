@@ -46,6 +46,7 @@ pub const RESERVED_VOCABULARY: &[&str] = &[
     "dto",
     "command",
     "event",
+    "subject",
     "services",
     "entities",
     "dtos",

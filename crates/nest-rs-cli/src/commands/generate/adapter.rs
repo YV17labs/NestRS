@@ -73,7 +73,9 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     // a port with none declares, written once by the first adapter gating on it.
     let gated_operation = matches!(transport, Transport::Graphql | Transport::Mcp);
     let port_entity = crud_port || feature_root.join("entity.rs").is_file();
-    let subject_file = feature_root.join(format!("{}.rs", names.table()));
+    // Named for its kind, never its type: a port named by its own singular would
+    // hold `blog/blog.rs`, a module of its own name.
+    let subject_file = feature_root.join("subject.rs");
     let writes_subject = gated_operation && !port_entity && !subject_file.exists();
     r = if port_entity {
         r.with("subject", "{{entity}}Entity")
@@ -133,8 +135,8 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let mut port_lines = Vec::new();
     if writes_subject {
         s.create(subject_file, r.render(crate::templates::feature::SUBJECT));
-        port_lines.push(format!("mod {};", names.table()));
-        port_lines.push(format!("pub use {}::{};", names.table(), names.entity()));
+        port_lines.push("mod subject;".to_string());
+        port_lines.push(format!("pub use subject::{};", names.entity()));
     }
     if transport == Transport::Queue {
         s.create(

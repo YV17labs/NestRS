@@ -488,6 +488,18 @@ mod tests {
         assert!(validate_not_reserved("programs").is_ok());
     }
 
+    /// A port of the same name would hold a module of its own name, which the
+    /// scaffold's clippy refuses (`module_inception`).
+    #[test]
+    fn every_file_a_generator_writes_at_a_port_takes_a_word_no_port_may_take() {
+        for stem in ["module", "service", "entity", "command", "event", "subject"] {
+            assert!(
+                validate_feature_name(stem).is_err(),
+                "a generator writes `<port>/{stem}.rs`, so no port may be `{stem}`",
+            );
+        }
+    }
+
     /// `#[instance]` cannot read the rules file, so it refuses from a list of
     /// its own: the same words, or an instance takes one a module may not.
     #[test]

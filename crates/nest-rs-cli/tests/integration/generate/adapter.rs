@@ -519,14 +519,14 @@ fn generate_graphql_adapter_enables_the_guards_graphql_feature() {
         !resolver.lines().any(|line| line.trim() == "#[public]"),
         "an opening is the developer's line, never the generator's: {resolver}"
     );
-    let subject = fs::read_to_string(src.join("posts/post.rs")).unwrap();
+    let subject = fs::read_to_string(src.join("posts/subject.rs")).unwrap();
     assert!(
         subject.contains("#[subject]") && subject.contains("pub struct Post;"),
         "{subject}"
     );
     let mod_rs = fs::read_to_string(src.join("posts/mod.rs")).unwrap();
     assert!(
-        mod_rs.contains("mod post;") && mod_rs.contains("pub use post::Post;"),
+        mod_rs.contains("mod subject;") && mod_rs.contains("pub use subject::Post;"),
         "{mod_rs}"
     );
     let module = fs::read_to_string(src.join("posts/graphql/module.rs")).unwrap();
@@ -561,7 +561,7 @@ fn generate_mcp_over_a_feature_port_gates_the_tool_on_the_ports_subject() {
     assert!(module.contains("AuthzMcpModule"), "{module}");
     let mod_rs = fs::read_to_string(src.join("posts/mod.rs")).unwrap();
     assert_eq!(
-        mod_rs.matches("pub use post::Post;").count(),
+        mod_rs.matches("pub use subject::Post;").count(),
         1,
         "the second adapter reuses the subject: {mod_rs}"
     );
@@ -590,7 +590,30 @@ fn generate_mcp_over_a_port_with_an_entity_gates_the_tool_on_the_entity() {
             && tool.contains("use crate::posts::{Entity as PostEntity, PostsService};"),
         "{tool}"
     );
-    assert!(!src.join("posts/post.rs").exists());
+    assert!(!src.join("posts/subject.rs").exists());
+}
+
+/// A port named by its own singular (`blog`) holds its subject in `subject.rs`
+/// too: a file named for the subject would be `blog/blog.rs`, a module inside
+/// one of the same name, which the scaffold's `clippy -D warnings` refuses.
+#[test]
+fn the_subject_of_a_port_named_by_its_own_singular_never_repeats_its_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "blog", "-p", path]);
+    run_ok(dir.path(), &["g", "mcp", "blog", "-p", path]);
+
+    let src = dir.path().join("crates/features/src");
+    let subject = fs::read_to_string(src.join("blog/subject.rs")).unwrap();
+    assert!(subject.contains("pub struct Blog;"), "{subject}");
+    assert!(!src.join("blog/blog.rs").exists());
+    let mod_rs = fs::read_to_string(src.join("blog/mod.rs")).unwrap();
+    assert!(
+        mod_rs.contains("pub use subject::Blog;") && !mod_rs.contains("mod blog;"),
+        "{mod_rs}"
+    );
 }
 
 /// The GraphQL twin of `generate_resource_emits_the_guarded_form_…`: over a

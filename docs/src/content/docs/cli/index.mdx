@@ -361,12 +361,14 @@ authenticates the caller and attaches the ability the resolvers read.
 Over a port with no entity, `g graphql` and `g mcp` still write a gated
 operation: they declare the port's capability with
 [`#[subject]`](/security/authorization/policies/#subjects-no-table-holds) beside
-its service — `crates/features/src/posts/post.rs`, `pub struct Post;`, written
-once by whichever adapter comes first — and gate the query or the tool on it
-with `#[authorize(Read, Post)]`, behind the same guards and authz module as the
-resource form. It answers `FORBIDDEN` until your policy grants it,
+its service — `crates/features/src/posts/subject.rs`, `pub struct Post;`,
+written once by whichever adapter comes first — and gate the query or the tool
+on it with `#[authorize(Read, Post)]`, behind the same guards and authz module
+as the resource form. It answers `FORBIDDEN` until your policy grants it,
 `ab.can(Action::Read, Post)`, which the printed next step spells. A port with
-an entity but no service gates on that entity instead.
+an entity but no service gates on that entity instead. The file is
+`subject.rs` whatever the port's name, so `subject` is one of the words
+[no module takes](/architecture/#what-a-folder-may-not-be-called).
 
 ### A generated route or socket is never open
 

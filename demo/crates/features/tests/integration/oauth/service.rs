@@ -65,7 +65,7 @@ fn grant_client_credentials_issues_for_valid_scope() {
         .grant_client_credentials("client_credentials", Some(POSTS_READ), &[], &client)
         .expect("token issued");
     assert_eq!(token.token_type, "Bearer");
-    assert!(!token.access_token.is_empty());
+    assert!(!token.access_token.expose_secret().is_empty());
 }
 
 const SENT_GRANT: &str = "urn:example:grant-only-the-client-knows";

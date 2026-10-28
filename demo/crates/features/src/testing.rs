@@ -116,12 +116,12 @@ impl RedisDatabase {
         nest_rs::testing::load_project_env();
         let suites = RedisConfig::load().expect("the suites' Redis config parses");
         assert!(
-            Self::held(&suites.url) == Some(Self::SUITES),
+            Self::held(suites.url.expose_secret()) == Some(Self::SUITES),
             "the e2e suites' Redis URL must name database {}, the one nothing drains",
             Self::SUITES,
         );
         RedisConfig {
-            url: url_on(&suites.url, index),
+            url: url_on(suites.url.expose_secret(), index).into(),
             ..suites
         }
     }

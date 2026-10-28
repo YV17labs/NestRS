@@ -1,3 +1,4 @@
+use nest_rs::core::Secret;
 use nest_rs::seaorm::{expose, wire_enum};
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -14,34 +15,6 @@ pub enum UserRole {
     Admin,
 }
 
-#[derive(Clone, PartialEq, Eq, DeriveValueType, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct PasswordHash(String);
-
-impl PasswordHash {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for PasswordHash {
-    fn from(hash: String) -> Self {
-        Self(hash)
-    }
-}
-
-impl From<&str> for PasswordHash {
-    fn from(hash: &str) -> Self {
-        Self(hash.to_owned())
-    }
-}
-
-impl std::fmt::Debug for PasswordHash {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("<redacted>")
-    }
-}
-
 #[expose(
     name = "User",
     service = super::super::service::UsersService,
@@ -50,7 +23,7 @@ impl std::fmt::Debug for PasswordHash {
     timestamps
 )]
 #[sea_orm::model]
-#[derive(Clone, DeriveEntityModel)]
+#[derive(Clone, Debug, DeriveEntityModel)]
 #[sea_orm(
     table_name = "user",
     model_attrs(derive(PartialEq, Serialize, Deserialize))
@@ -67,7 +40,7 @@ pub struct Model {
     pub email: String,
     #[wire_default]
     pub role: UserRole,
-    pub password_hash: Option<PasswordHash>,
+    pub password_hash: Option<Secret<String>>,
     #[expose]
     pub created_at: DateTimeWithTimeZone,
     #[expose]
@@ -79,64 +52,6 @@ pub struct Model {
     #[sea_orm(has_many)]
     #[expose]
     pub posts: HasMany<crate::posts::Entity>,
-}
-
-impl std::fmt::Debug for Model {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self {
-            id,
-            org_id,
-            name,
-            email,
-            role,
-            password_hash: _,
-            created_at,
-            updated_at,
-            deleted_at,
-        } = self;
-        f.debug_struct("Model")
-            .field("id", id)
-            .field("org_id", org_id)
-            .field("name", name)
-            .field("email", email)
-            .field("role", role)
-            .field("password_hash", &"<redacted>")
-            .field("created_at", created_at)
-            .field("updated_at", updated_at)
-            .field("deleted_at", deleted_at)
-            .finish()
-    }
-}
-
-impl std::fmt::Debug for ModelEx {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self {
-            id,
-            org_id,
-            name,
-            email,
-            role,
-            password_hash: _,
-            created_at,
-            updated_at,
-            deleted_at,
-            org,
-            posts,
-        } = self;
-        f.debug_struct("ModelEx")
-            .field("id", id)
-            .field("org_id", org_id)
-            .field("name", name)
-            .field("email", email)
-            .field("role", role)
-            .field("password_hash", &"<redacted>")
-            .field("created_at", created_at)
-            .field("updated_at", updated_at)
-            .field("deleted_at", deleted_at)
-            .field("org", org)
-            .field("posts", posts)
-            .finish()
-    }
 }
 
 #[cfg(test)]
@@ -184,11 +99,30 @@ mod tests {
         for printed in [format!("{model:?}"), format!("{:?}", ModelEx::from(model))] {
             assert!(!printed.contains("argon2id"), "{printed}");
             assert!(
-                printed.contains("password_hash: \"<redacted>\""),
+                printed.contains("password_hash: Some(<redacted>)"),
                 "{printed}"
             );
             assert!(printed.contains("ada@example.com"), "{printed}");
         }
+    }
+
+    #[test]
+    fn serializing_a_row_never_writes_the_password_hash() {
+        let model = Model {
+            id: Uuid::nil(),
+            org_id: Uuid::nil(),
+            name: "Ada".into(),
+            email: "ada@example.com".into(),
+            role: UserRole::User,
+            password_hash: Some("$argon2id$v=19$secret".into()),
+            created_at: DateTimeWithTimeZone::default(),
+            updated_at: DateTimeWithTimeZone::default(),
+            deleted_at: None,
+        };
+
+        let written = serde_json::to_string(&model).expect("the row serializes");
+        assert!(!written.contains("argon2id"), "{written}");
+        assert!(written.contains("ada@example.com"), "{written}");
     }
 
     #[test]

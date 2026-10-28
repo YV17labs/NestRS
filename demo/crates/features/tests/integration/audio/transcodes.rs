@@ -24,7 +24,7 @@ fn development_files_the_transcodes_on_no_database_a_suite_holds() {
     );
 
     assert_eq!(
-        RedisDatabase::held(&transcodes().url),
+        RedisDatabase::held(transcodes().url.expose_secret()),
         None,
         "development files the transcode records on a database an e2e suite writes to"
     );
@@ -37,8 +37,8 @@ fn the_suites_file_the_transcodes_on_a_database_of_their_own_apart_from_the_queu
 
     assert_eq!(
         (
-            RedisDatabase::held(&queue.url),
-            RedisDatabase::held(&transcodes().url)
+            RedisDatabase::held(queue.url.expose_secret()),
+            RedisDatabase::held(transcodes().url.expose_secret())
         ),
         (Some(RedisDatabase::SUITES), Some(RedisDatabase::TRANSCODES)),
         "the e2e suites file the queue and the transcode records on databases of their own"

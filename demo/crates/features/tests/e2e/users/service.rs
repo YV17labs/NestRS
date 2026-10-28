@@ -44,9 +44,9 @@ fn github(subject: &str, email: &str, verified: bool) -> SocialIdentity {
     SocialIdentity {
         provider: "github",
         subject: subject.to_owned(),
-        email: Some(email.to_owned()),
+        email: Some(email.into()),
         email_verified: verified,
-        name: Some("Test User".to_owned()),
+        name: Some("Test User".into()),
     }
 }
 

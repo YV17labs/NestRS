@@ -287,7 +287,7 @@ mod tests {
             "expires_in must mirror the JWT TTL (seconds)",
         );
         assert!(
-            !token.access_token.is_empty(),
+            !token.access_token.expose_secret().is_empty(),
             "access_token must be the signed JWT, not an empty placeholder",
         );
     }
@@ -299,7 +299,7 @@ mod tests {
         let token = issue_with_jwt(&jwt_svc, RESOURCE, issued.clone()).expect("issue");
 
         let claims: Claims = verifier(RESOURCE)
-            .verify(&token.access_token)
+            .verify(token.access_token.expose_secret())
             .await
             .expect("verify");
         assert_eq!(claims.sub, issued.sub);
@@ -315,7 +315,7 @@ mod tests {
         let token = issue_with_jwt(&jwt_svc, RESOURCE, issued).expect("issue");
 
         let claims: Claims = verifier(RESOURCE)
-            .verify(&token.access_token)
+            .verify(token.access_token.expose_secret())
             .await
             .expect("verify");
         assert_eq!(claims.scopes, [POSTS_READ]);
@@ -394,7 +394,7 @@ mod tests {
         .expect("happy path");
         assert_eq!(token.token_type, "Bearer");
         let claims: Claims = verifier(RESOURCE)
-            .verify(&token.access_token)
+            .verify(token.access_token.expose_secret())
             .await
             .expect("verify");
         assert_eq!(claims.sub, Subject::Client("ci".into()));
@@ -412,7 +412,7 @@ mod tests {
             grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", None, &[], &client)
                 .expect("issue");
         let claims: serde_json::Value = verifier(RESOURCE)
-            .verify(&token.access_token)
+            .verify(token.access_token.expose_secret())
             .await
             .expect("verify");
         assert_eq!(claims["sub"], "ci", "{claims}");
@@ -427,7 +427,7 @@ mod tests {
             grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", None, &[], &client)
                 .expect("absent scope ok");
         let claims: Claims = verifier(RESOURCE)
-            .verify(&token.access_token)
+            .verify(token.access_token.expose_secret())
             .await
             .expect("verify");
         assert_eq!(claims.scopes, [POSTS_READ]);
@@ -477,7 +477,7 @@ mod tests {
         let org = Uuid::now_v7();
         let token = svc.issue(None, sub, org, vec![Role::Admin]).expect("issue");
         assert_eq!(token.expires_in, 120);
-        assert!(!token.access_token.is_empty());
+        assert!(!token.access_token.expose_secret().is_empty());
     }
 
     #[test]
@@ -558,12 +558,12 @@ mod tests {
         .expect("issue");
 
         verifier(OTHER_RESOURCE)
-            .verify::<Claims>(&token.access_token)
+            .verify::<Claims>(token.access_token.expose_secret())
             .await
             .expect("the resource requested accepts it");
         assert!(
             verifier(RESOURCE)
-                .verify::<Claims>(&token.access_token)
+                .verify::<Claims>(token.access_token.expose_secret())
                 .await
                 .is_err(),
             "another resource the client is registered for refuses it"
@@ -592,7 +592,7 @@ mod tests {
                 .issue(resource, Uuid::now_v7(), Uuid::now_v7(), vec![Role::User])
                 .expect("issue");
             verifier(audience)
-                .verify::<Claims>(&token.access_token)
+                .verify::<Claims>(token.access_token.expose_secret())
                 .await
                 .expect("minted for the resource asked for");
         }

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use nest_rs::authn::{AuthError, CredentialError, burn_verify, hash_password, verify_password};
 use nest_rs::authz::Action;
-use nest_rs::core::{error_message, hooks, injectable};
+use nest_rs::core::{Secret, error_message, hooks, injectable};
 use nest_rs::database::atomic;
 use nest_rs::graphql::dataloader;
 use nest_rs::seaorm::{
@@ -14,9 +14,7 @@ use uuid::Uuid;
 use validator::Validate;
 
 use super::entities::user as entity;
-use super::entities::user::{
-    CreateUser, Entity as Users, PasswordHash, UpdateUser, User, UserRole,
-};
+use super::entities::user::{CreateUser, Entity as Users, UpdateUser, User, UserRole};
 use super::entities::user_identity::{self, Entity as UserIdentities};
 
 const DEFAULT_ROLE: UserRole = UserRole::User;
@@ -210,32 +208,22 @@ impl UsersService {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SocialIdentity {
     pub provider: &'static str,
     pub subject: String,
-    pub email: Option<String>,
+    pub email: Option<Secret<String>>,
     pub email_verified: bool,
-    pub name: Option<String>,
-}
-
-impl std::fmt::Debug for SocialIdentity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact = |v: &Option<String>| v.as_ref().map(|_| "<redacted>");
-        f.debug_struct("SocialIdentity")
-            .field("provider", &self.provider)
-            .field("subject", &self.subject)
-            .field("email", &redact(&self.email))
-            .field("email_verified", &self.email_verified)
-            .field("name", &redact(&self.name))
-            .finish()
-    }
+    pub name: Option<Secret<String>>,
 }
 
 impl SocialIdentity {
     fn verified_email(&self) -> Option<&str> {
         if self.email_verified {
-            self.email.as_deref().filter(|e| !e.is_empty())
+            self.email
+                .as_ref()
+                .map(|email| email.expose_secret().as_str())
+                .filter(|e| !e.is_empty())
         } else {
             None
         }
@@ -243,8 +231,10 @@ impl SocialIdentity {
 
     fn display_name(&self) -> String {
         self.name
-            .clone()
+            .as_ref()
+            .map(Secret::expose_secret)
             .filter(|n| !n.is_empty())
+            .cloned()
             .unwrap_or_else(|| format!("{}-{}", self.provider, self.subject))
     }
 }
@@ -255,7 +245,10 @@ fn new_identity_active(user_id: Uuid, identity: &SocialIdentity) -> user_identit
         user_id: Set(user_id),
         provider: Set(identity.provider.to_owned()),
         subject: Set(identity.subject.clone()),
-        email: Set(identity.email.clone()),
+        email: Set(identity
+            .email
+            .as_ref()
+            .map(|email| email.expose_secret().clone())),
         ..Default::default()
     }
 }
@@ -312,7 +305,7 @@ pub(crate) fn verify_credentials(
         return Err(CredentialError);
     };
 
-    match verify_password(hash.as_str(), password) {
+    match verify_password(hash.expose_secret(), password) {
         Ok(true) => Ok(user),
         Ok(false) => {
             tracing::warn!(target: crate::users::TARGET, user_id = %user.id, reason = "bad_password", "login failed");
@@ -334,7 +327,7 @@ pub(crate) fn active_for_new_user(
     active.org_id = Set(org_id);
     active.role = Set(DEFAULT_ROLE);
     if password_hash.is_some() {
-        active.password_hash = Set(password_hash.map(PasswordHash::from));
+        active.password_hash = Set(password_hash.map(Secret::new));
     }
     active
 }
@@ -556,7 +549,7 @@ mod tests {
             name: "ada".into(),
             email: "ada@example.com".into(),
             role: UserRole::User,
-            password_hash: password_hash.map(PasswordHash::from),
+            password_hash: password_hash.map(Secret::new),
             created_at: now,
             updated_at: now,
             deleted_at: None,
@@ -737,7 +730,7 @@ mod tests {
         assert_eq!(verified.verified_email(), Some("x@example.com"));
 
         let blank = SocialIdentity {
-            email: Some(String::new()),
+            email: Some(String::new().into()),
             email_verified: true,
             ..unverified
         };

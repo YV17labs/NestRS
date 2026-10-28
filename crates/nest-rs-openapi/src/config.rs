@@ -36,11 +36,13 @@ pub struct OpenApiConfig {
     pub contact: Option<OpenApiContact>,
     /// The license the API is offered under.
     pub license: Option<OpenApiLicense>,
-    /// (Re)write [`emit_path`](Self::emit_path) with the built document once
-    /// at boot — the committed copy a pull request diffs. `Default` keeps it
-    /// off, and only a development profile's [`Config::defaults`] turns it on:
-    /// under test, parallel suites would rewrite a committed file. A write
-    /// failure is logged, never fatal.
+    /// (Re)write [`emit_path`](Self::emit_path) with the document `/api-json`
+    /// serves once at boot — the committed copy a pull request diffs. `Default`
+    /// keeps it off, and only a development profile's [`Config::defaults`]
+    /// turns it on: under test, parallel suites would rewrite a committed
+    /// file. With [`enabled`](Self::enabled) off no document is built, so
+    /// nothing is written and the boot says so at `warn`; a write failure is
+    /// logged, never fatal.
     pub emit: bool,
     /// Where [`emit`](Self::emit) writes the JSON document. Default
     /// `openapi.json`; a relative path is the app crate's — the one

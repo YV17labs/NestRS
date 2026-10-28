@@ -27,7 +27,7 @@ $ NESTRS_OPENAPI__TITLE="Publish API" \
 | `terms_of_service` | `<PREFIX>_OPENAPI__TERMS_OF_SERVICE` | none | `info.termsOfService`, a URL. |
 | `contact` | `<PREFIX>_OPENAPI__CONTACT_NAME`, `__CONTACT_URL`, `__CONTACT_EMAIL` | none | `info.contact`; any one key makes it. |
 | `license` | `<PREFIX>_OPENAPI__LICENSE_NAME`, `__LICENSE_IDENTIFIER`, `__LICENSE_URL` | none | `info.license`: the name, then an SPDX identifier **or** a URL — both is a boot error, as OpenAPI 3.1 makes them exclusive, and either without a name is one too. |
-| `emit` | `<PREFIX>_OPENAPI__EMIT` | declared dev only | Writes the document to `emit_path` once at boot — the committed copy a pull request diffs. Off under test, so parallel suites never rewrite it. |
+| `emit` | `<PREFIX>_OPENAPI__EMIT` | declared dev only | Writes the document `/api-json` serves to `emit_path` once at boot — the committed copy a pull request diffs. Off under test, so parallel suites never rewrite it. With `enabled` off no document is built: nothing is written, and the boot says so at `warn`. |
 | `emit_path` | `<PREFIX>_OPENAPI__EMIT_PATH` | `openapi.json` | Where `emit` writes; a relative path is the app crate's — the one `#[nest_rs::main]` expanded in — whatever directory the process runs from. |
 
 ## Pin it in code

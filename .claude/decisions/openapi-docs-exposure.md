@@ -44,3 +44,9 @@ stays behind a router. The two committed copies — this
 document and the SDL — share one key pair, `EMIT` and `EMIT_PATH`, written by a
 development run alone and resolved against the directory of the crate
 `#[nest_rs::main]` expanded in, so each app of a workspace writes its own.
+Each is a copy of what its endpoint serves: the SDL whatever the playground
+says, since `/graphql` is the API, and this document only while `/api-json`
+is served — a set `EMIT` with the documentation off writes nothing, and the
+boot says so at `warn`. Writing it anyway was refused: the document is built
+from the assembled container when the endpoint mounts, and no other boot step
+both sees that container and may write a file.

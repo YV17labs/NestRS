@@ -66,6 +66,13 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
             spec_path = SPEC_PATH,
             "openapi documentation disabled",
         );
+        if options.emit {
+            tracing::warn!(
+                target: crate::TARGET,
+                path = %nest_rs_core::__private::in_app_dir(&options.emit_path).display(),
+                "OpenAPI document not written: the documentation is disabled",
+            );
+        }
         return builder;
     }
     builder.provide_meta(
@@ -189,6 +196,41 @@ mod tests {
             mount_count(true),
             1,
             "enabled must self-mount the docs edge"
+        );
+    }
+
+    #[test]
+    fn an_emit_with_the_documentation_off_writes_nothing_and_says_so() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let builder = register(
+            ContainerBuilder::default(),
+            OpenApiConfig {
+                emit: true,
+                ..OpenApiConfig::default()
+            },
+        );
+        assert!(
+            Discovery::new(&builder.snapshot())
+                .meta::<HttpEndpointMeta>()
+                .is_empty()
+        );
+        let event = logs.expect_one(
+            crate::TARGET,
+            "OpenAPI document not written: the documentation is disabled",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("path").as_deref(), Some("openapi.json"));
+
+        let silent = nest_rs_testing::LogCapture::install();
+        register(ContainerBuilder::default(), OpenApiConfig::default());
+        assert!(
+            silent
+                .find(
+                    crate::TARGET,
+                    "OpenAPI document not written: the documentation is disabled"
+                )
+                .is_empty(),
+            "no emit asked, nothing to say",
         );
     }
 

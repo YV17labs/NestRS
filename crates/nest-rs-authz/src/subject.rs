@@ -23,6 +23,11 @@ use std::marker::PhantomData;
 /// assert!(ability.can_class(Action::Manage, TypeId::of::<Exporting>()));
 /// # Ok::<(), nest_rs_authz::MalformedRuleError>(())
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an authorization subject",
+    label = "neither an entity nor a `#[subject]`",
+    note = "a posture names a SeaORM entity, whose rows it masks, or a capability no table holds, declared with `#[subject]` on a unit struct: `#[subject] pub struct Exporting;`"
+)]
 pub trait Subject: 'static {
     /// Whether the subject has rows a posture masks: `false` for a
     /// `#[subject]`, so an extractor naming it owes the masking probe nothing.
@@ -35,6 +40,11 @@ impl<E: sea_orm::EntityTrait> Subject for E {}
 /// How a posture on a subject masks the reply of the operation it gates:
 /// against an entity's rows, or not at all for a subject no table holds.
 /// Implemented for every entity here and by `#[subject]`, never by hand.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an authorization subject",
+    label = "neither an entity nor a `#[subject]`",
+    note = "a posture names a SeaORM entity, whose rows it masks, or a capability no table holds, declared with `#[subject]` on a unit struct: `#[subject] pub struct Exporting;`"
+)]
 pub trait SubjectMask: Subject {
     /// [`Rows<E>`] for an entity, [`NoRows`] for a `#[subject]`.
     type Mask;

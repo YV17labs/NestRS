@@ -97,6 +97,7 @@ pub mod access;
 mod ambient;
 mod answer;
 pub mod app;
+mod app_dir;
 mod app_lifecycle;
 mod backoff;
 mod budget;
@@ -218,6 +219,7 @@ pub mod __private {
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{check_stop_bound, close_after, init_tearing_down_after};
+    pub use crate::app_dir::in_app_dir;
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,
         enter_import, leave_import, overrides_any, record_absent_optional, record_stall,
@@ -241,7 +243,7 @@ pub mod __private {
     pub use crate::lifecycle::__private::{HookFuture, LifecycleHook, LifecycleUnitOfWork};
     #[cfg(feature = "logging")]
     pub use crate::logging::__private::{
-        ConsoleLayer, LibraryClamp, LogFilter, TextFormat, filter_dispatch,
+        ConsoleLayer, LibraryClamp, LogFilter, ProfileSource, TextFormat, filter_dispatch,
         install_global_subscriber, log_filter,
     };
     pub use crate::module::__private::{dynamic_import_module, module_registered};

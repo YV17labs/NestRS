@@ -398,13 +398,15 @@ fn teardown_budget() -> Duration {
     })
 }
 
-/// What `#[nest_rs::main]` expands to: install the process panic hook, run the
-/// process steps while no runtime exists, build the runtime, install the
-/// signal handlers on it, run `main` on it, tear it down within what remains
-/// of the shutdown hooks' budget, and write what the console still queues.
+/// What `#[nest_rs::main]` expands to: record `app_dir`, the directory of the
+/// crate it expanded in, install the process panic hook, run the process steps
+/// while no runtime exists, build the runtime, install the signal handlers on
+/// it, run `main` on it, tear it down within what remains of the shutdown
+/// hooks' budget, and write what the console still queues.
 ///
 /// The runtime is what `#[tokio::main]` builds; only its teardown is bounded.
-pub fn main<T, F: Future<Output = T>>(main: F) -> T {
+pub fn main<T, F: Future<Output = T>>(app_dir: &'static str, main: F) -> T {
+    crate::app_dir::capture(app_dir);
     UNDER_MAIN.store(true, Ordering::Relaxed);
     std::panic::set_hook(Box::new(crate::panic::hook));
     crate::process_start::run_all();
@@ -471,7 +473,7 @@ mod tests {
         hooks_deadline(left);
         let started = Instant::now();
 
-        main(leave_blocking_work_behind());
+        main(env!("CARGO_MANIFEST_DIR"), leave_blocking_work_behind());
 
         let took = started.elapsed();
         assert!(
@@ -496,7 +498,7 @@ mod tests {
         let started = Instant::now();
 
         let unwound = std::panic::catch_unwind(|| {
-            main::<(), _>(async {
+            main::<(), _>(env!("CARGO_MANIFEST_DIR"), async {
                 leave_blocking_work_behind().await;
                 panic!("main gave up");
             })
@@ -523,7 +525,7 @@ mod tests {
         hooks_deadline(Duration::ZERO);
         let started = Instant::now();
 
-        main(leave_blocking_work_behind());
+        main(env!("CARGO_MANIFEST_DIR"), leave_blocking_work_behind());
 
         let took = started.elapsed();
         assert!(took < Duration::from_secs(1), "took {took:?}");
@@ -536,7 +538,7 @@ mod tests {
         let written = Arc::new(AtomicBool::new(false));
         let writes = Arc::clone(&written);
 
-        main(async move {
+        main(env!("CARGO_MANIFEST_DIR"), async move {
             tokio::task::spawn_blocking(move || {
                 std::thread::sleep(Duration::from_millis(100));
                 writes.store(true, Ordering::SeqCst);

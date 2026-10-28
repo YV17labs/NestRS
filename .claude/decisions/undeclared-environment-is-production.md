@@ -41,3 +41,34 @@ default, and the opening is one visible line on the process.
 
 Reopened only with a fifth profile, which says on which side of
 `is_deployed` it falls.
+
+**2026-10-28 — a development profile arms what no address can say, never an
+address.** Two conveniences this decision moved behind `is_deployed` were
+addresses: storage's dev-container RustFS with its public pair, and Redis's
+plaintext loopback. Neither is what `nestrs new` runs — its `compose.yml`
+serves Postgres and Redis on `localhost`, which its `.env.development` and
+`.env.test` already name, and no S3 server — so a scaffolded app with storage
+dialled a host nothing starts, and Redis's loopback dialled in plaintext what
+the dev container serves over TLS alone; SeaORM never had one, since no
+framework can know an app's database. One policy now holds for every
+resource: no `Config::defaults()` names an endpoint, a URL or a credential,
+in any profile, and the profile's `.env` file does — the demo's moved its
+services out of the `.env` production reads. What a development profile still
+arms is what a URL cannot say: storage's plain HTTP, the documentation,
+GraphQL's playground and introspection, Server-Timing, an artifact's emit, a
+seed. The console's format joins them: text under a declared development or
+test profile, JSON otherwise, where it followed the cargo build profile and
+gave `development` a second meaning — a release build under it wrote JSON, a
+debug build in production text. The kernel reads the profile through the
+config crate the binary links, when it builds the console.
+
+**Refused:**
+
+- **Every resource defaulting to the scaffold's local services.** SeaORM
+  cannot — the database's name and credentials are the app's — and a hostname
+  compiled into the framework dials what the developer's compose file may not
+  run.
+- **`#[nest_rs::main]` handing the profile to the kernel.** A test process and
+  a binary calling `load_cascade` run no `main` macro, and would log JSON while
+  declaring `test` or `development`; the kernel asks the linked config crate
+  instead, as late as it builds the console.

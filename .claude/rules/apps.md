@@ -75,7 +75,10 @@ variables (`architecture.md`, *Configuration*).
 
 **A deployed app exports OTLP**: `main` holds the `OpenTelemetry::init` guard
 and the root imports `OpenTelemetryModule`, which refuses to register without
-it. The console format follows the build profile (`nest_rs_core::logging`).
+it. The console format follows the declared profile — text under development
+and test, JSON otherwise (`nest_rs_core::logging`).
 
-**A GraphQL app commits its SDL** (`apps/<app>/schema.graphql`), regenerated as
-a side effect of the dev run — there is no standalone generator.
+**A GraphQL app commits its SDL** (`apps/<app>/schema.graphql`), and an
+OpenAPI one its document (`apps/<app>/openapi.json`), each regenerated as a
+side effect of a development run — the profile arms the emit, and its path is
+the app crate's — there is no standalone generator.

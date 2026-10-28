@@ -53,15 +53,11 @@ impl RedisModule {
     ///     RedisModule::for_root((Cache, None)),
     ///     RedisModule::for_root((Limits, RedisConfig {
     ///         connect_timeout: Duration::from_secs(2),
-    ///         ..RedisConfig::defaults()
+    ///         ..RedisConfig::default()
     ///     })),
     ///     RedisThrottlerModule::<Limits>,
     /// ])]
     /// pub struct AppModule;
-    ///
-    /// #[module(imports = [RedisModule::for_root(RedisConfig::defaults())])]
-    /// pub struct PinnedModule;
-    /// # use nest_rs_config::Config;
     /// ```
     pub fn for_root<I: Instance>(config: impl Into<ForInstance<I, RedisConfig>>) -> RedisSetup<I> {
         RedisSetup {

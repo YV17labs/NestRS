@@ -218,11 +218,12 @@ Two consequences:
 - The `.env` cascade skips `.env.local` (per-machine secrets stay out of
   the test).
 - The development conveniences the framework keys on the profile are on,
-  as in development: the OpenAPI documentation serves `/api`, Server-Timing
-  stamps its header, storage adds the dev container's credentials and
-  allows plain HTTP, and Redis defaults to the loopback. What lives only in
-  `.env.development` stays off: the GraphQL playground doesn't mount, and
-  SDL emission doesn't fire.
+  as in development: the OpenAPI documentation serves `/api`, the GraphQL
+  playground mounts and introspection answers, Server-Timing stamps its
+  header, and storage allows plain HTTP. The emit of a committed artifact —
+  the SDL, the OpenAPI document — waits for development alone, so parallel
+  suites never rewrite a committed file. No profile names a database, a
+  Redis or a store: `.env.test` does.
 
 A test that wants to assert prod behavior overrides this explicitly
 before building the app — `unsafe { std::env::set_var("<PREFIX>_ENV",

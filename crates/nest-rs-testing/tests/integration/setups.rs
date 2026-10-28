@@ -216,7 +216,7 @@ fn pinned_http() -> HttpConfig {
 fn pinned_openapi() -> OpenApiConfig {
     OpenApiConfig {
         enabled: true,
-        emit_document: false,
+        emit: false,
         ..OpenApiConfig::default()
     }
 }

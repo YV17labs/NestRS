@@ -12,6 +12,7 @@
 )]
 mod access;
 mod app;
+mod app_dir;
 mod app_lifecycle;
 mod close;
 mod container;

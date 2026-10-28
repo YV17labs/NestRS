@@ -151,9 +151,9 @@ pub(crate) const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-o
 # refused at boot.
 # Committed; layered on top of `.env`, below `.env.local` and the real environment.
 
-# Verbose, human-readable logs while developing.
+# Verbose logs, each line naming where it was emitted. The console already
+# writes text under this profile, JSON under any other.
 {{env_prefix}}_LOG=debug
-{{env_prefix}}_LOG_FORMAT=text
 {{env_prefix}}_LOG_SOURCE_LOCATION=true
 "#;
 

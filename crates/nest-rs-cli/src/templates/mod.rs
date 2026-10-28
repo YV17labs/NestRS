@@ -74,6 +74,14 @@ mod tests {
         );
     }
 
+    /// The declared profile picks the console's format: a development file
+    /// restating `text` would read as the reason the console writes it.
+    #[test]
+    fn the_development_file_leaves_the_console_format_to_the_profile() {
+        let development = super::shared::ENV_DEVELOPMENT;
+        assert!(!development.contains("_LOG_FORMAT="), "{development}");
+    }
+
     /// `container.md`, *Every wait the framework owns is bounded*: a scaffolded
     /// binary's `main` is `#[nest_rs::main]`, never `#[tokio::main]`.
     #[test]

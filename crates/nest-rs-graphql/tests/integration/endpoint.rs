@@ -1,5 +1,6 @@
 //! What `GET` on the GraphQL path answers when it opens no socket: the
-//! playground, or a method refusal naming what the path serves.
+//! playground, or a method refusal naming what the path serves — and which
+//! development surfaces the bare import opens under the suites' profile.
 
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
@@ -18,8 +19,11 @@ impl PingResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [PingResolver])]
+#[module(imports = [GraphqlModule::for_root(GraphqlConfig::default())], providers = [PingResolver])]
 struct NoPlaygroundModule;
+
+#[module(imports = [GraphqlModule::for_root(None)], providers = [PingResolver])]
+struct BareModule;
 
 #[module(
     imports = [GraphqlModule::for_root(GraphqlConfig {
@@ -64,4 +68,28 @@ async fn a_plain_get_without_the_playground_is_405_naming_post() {
             assert_eq!(problem["code"], "METHOD_NOT_ALLOWED", "{problem}");
         }
     }
+}
+
+/// The suites declare the test profile, whose `Config::defaults()` opens both
+/// development surfaces on the bare import, as it opens the documentation.
+#[tokio::test]
+async fn the_bare_import_serves_the_playground_and_introspection_in_the_test_profile() {
+    let app = TestApp::for_module::<BareModule>().await.expect("boots");
+
+    let page = app.http().get("/graphql").send().await;
+    page.assert_status_is_ok();
+    page.assert_content_type("text/html; charset=utf-8");
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ __schema { queryType { name } } }" }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+    assert_eq!(
+        body["data"]["__schema"]["queryType"]["name"], "Query",
+        "{body}"
+    );
 }

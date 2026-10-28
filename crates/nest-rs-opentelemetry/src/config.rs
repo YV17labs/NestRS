@@ -58,7 +58,7 @@ pub struct OpenTelemetryConfig {
     /// narrowed by the clamps of the libraries the framework wires, and checked
     /// at [`init_with`](crate::OpenTelemetry::init_with).
     pub log_filter: String,
-    /// Console output shape; defaults by build profile (see [`new`](Self::new)).
+    /// Console output shape; defaults by the declared profile (see [`new`](Self::new)).
     /// The OTLP appender is unaffected.
     pub log_format: LogFormat,
     /// Append the emitting `file:line` to every console event; off by default,
@@ -114,8 +114,8 @@ pub use nest_rs_core::logging::LogFormat;
 
 impl OpenTelemetryConfig {
     /// Config with framework defaults and the given `service.name`. `log_format`
-    /// is chosen by build profile (Text in debug, Json in release); everything
-    /// else is off/absent.
+    /// is chosen by the declared profile ([`LogFormat::by_profile`]: text under
+    /// development and test, JSON otherwise); everything else is off/absent.
     pub fn new(service_name: impl Into<String>) -> Self {
         Self {
             service_name: service_name.into(),
@@ -190,7 +190,7 @@ impl OpenTelemetryConfig {
         self
     }
 
-    /// Pin the console [`LogFormat`], overriding the build-profile default.
+    /// Pin the console [`LogFormat`], overriding the profile's default.
     pub fn with_log_format(mut self, format: LogFormat) -> Self {
         self.log_format = format;
         self
@@ -245,7 +245,7 @@ mod tests {
         assert_eq!(cfg.trace_sample_ratio, 1.0);
         assert!(cfg.otlp_endpoint.is_none());
         assert_eq!(cfg.log_filter, "info");
-        assert_eq!(cfg.log_format, LogFormat::Text);
+        assert_eq!(cfg.log_format, LogFormat::by_profile());
     }
 
     #[test]
@@ -338,7 +338,7 @@ mod tests {
             assert!(cfg.service_instance_id.is_none());
             assert!(cfg.otlp_endpoint.is_none());
             assert_eq!(cfg.log_filter, "info");
-            assert_eq!(cfg.log_format, LogFormat::Text);
+            assert_eq!(cfg.log_format, LogFormat::by_profile());
             assert!(!cfg.log_source_location);
             assert_eq!(cfg.trace_sample_ratio, 1.0);
             Ok(())

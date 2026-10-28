@@ -235,34 +235,36 @@ on — and the demo's `.env` lists it beside the variable.
 
 `from_env` overlays the environment onto a **base**, and that base is
 `Config::defaults()` when nothing was pinned at the import site. `Default` is
-the production-safe value, in every profile; a development convenience — a
-credential the dev container accepts, plain HTTP, public documentation — lives
-in `defaults()`, armed only by a declared development or test profile. A
-process that declares no `<PREFIX>_ENV` runs as production, so it gets
-`Default`. The framework does this for its own storage, Redis and OpenAPI
+the production-safe value, in every profile; a development convenience — plain
+HTTP, public documentation, a committed artifact's emit, a seed — lives in
+`defaults()`, armed only by a declared development or test profile. A process
+that declares no `<PREFIX>_ENV` runs as production, so it gets `Default`. The
+framework does this for its own storage, OpenAPI, GraphQL and Server-Timing
 configs:
 
-```rust title="apps/auth/src/config.rs"
+```rust title="crates/nest-rs-graphql/src/config.rs (abridged)"
 use nest_rs::config::Environment;
 
-impl Config for StorageConfig {
+impl Config for GraphqlConfig {
     fn defaults() -> Self {
-        let safe = Self::default();
-        if Environment::from_env().is_deployed() { return safe; }
-        // Development and test: the dev container's bucket and pair, plain HTTP allowed.
+        let environment = Environment::from_env();
+        let open = !environment.is_deployed();
         Self {
-            url: "s3://nestrs".into(),
-            endpoint: Some("https://rustfs:9000".into()),
-            access_key: "nestrs".into(),
-            secret_key: "nestrs".into(),
-            allow_http: true,
-            ..safe
+            playground: open,
+            disable_introspection: !open,
+            emit: environment == Environment::Development,
+            ..Self::default()
         }
     }
 
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> { /* … */ }
 }
 ```
+
+An address or a credential is never one, in any profile: no `defaults()` names
+a database, a Redis, a store or the pair to reach it. The profile's `.env` file
+does — `nestrs new` writes `compose.yml`'s services into `.env.development` and
+`.env.test` — and a deployment names its own.
 
 It belongs here rather than inside `from_env`: `from_env` also runs over a
 value pinned in code, and a profile rule there would silently rewrite a

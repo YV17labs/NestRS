@@ -48,8 +48,11 @@ else is committed.
 ## The active environment
 
 The `<environment>` segment is the variant of `Environment`, read from
-the reserved `<PREFIX>_ENV` variable. This is the one framework variable
-**outside** the `<PREFIX>_<DOMAIN>__<KEY>` scheme — it selects which `.env`
+the reserved `<PREFIX>_ENV` variable. It sits **outside** the
+`<PREFIX>_<DOMAIN>__<KEY>` scheme, as the kernel's
+[logging family](/configuration/env-reference/#logging--prefix_log),
+`<PREFIX>_LOG`, `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION`, does —
+the four are read before any config exists. `<PREFIX>_ENV` selects which `.env`
 files to load, so it must come from the real process environment, not a
 `.env` file. Writing it into one is a **boot error** naming the fix, the
 same refusal `NESTRS_ENV_PREFIX` gets: the value arrives after the
@@ -75,8 +78,13 @@ pub enum Environment {
 
 The default is `Production`. A process that declares nothing reads
 `.env.production`, never `.env.development`, and arms no development
-convenience: the OpenAPI documentation stays closed, storage refuses plain
-HTTP and has no credential, Redis has no loopback URL. An app importing
+convenience: the OpenAPI documentation, GraphQL's playground and
+introspection and Server-Timing stay closed, no committed artifact is
+rewritten, storage refuses plain HTTP, and the console writes JSON. No
+profile names a database, a Redis or a store, nor the credentials to reach
+them: the profile's `.env` file does — `nestrs new` writes `compose.yml`'s
+services into `.env.development` and `.env.test` — and a deployment names its
+own. An app importing
 `ConfigModule::for_root()` says so once at boot, at `info` on
 `nest_rs::config` — `no environment declared; running as production` — and an
 unrecognized value is said once on stderr, by the variable's name.

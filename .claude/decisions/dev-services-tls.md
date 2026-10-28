@@ -62,3 +62,10 @@ Postgres is the exception on purpose: its pool reads libpq's URL parameters
 Postgres tool and managed console shares, and a standard beats a second
 spelling of the same three settings. No `<PREFIX>_SEAORM__TLS_*` variable is
 added, and none of those parameters is refused.
+
+**2026-10-28 — no framework default dials plaintext.** Redis's development
+default was the plaintext loopback `redis://127.0.0.1/`, which no service here
+answers. It is gone, with every address a default held
+(`undeclared-environment-is-production.md`): each profile's `.env` file names
+its Redis, the demo's over TLS, the scaffold's the plaintext server its
+`compose.yml` runs.

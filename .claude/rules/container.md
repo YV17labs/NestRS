@@ -190,13 +190,20 @@ variables or tiers.
   constructor every path reaches — config-driven or built in code — naming what
   is set, never settled by picking one.
 - **A `#[config]` type's `Default` is the production-safe value, and an
-  undeclared environment is production**: a development convenience — a
-  credential the dev container accepts, plain HTTP, a public surface — lives
+  undeclared environment is production**: a development convenience — plain
+  HTTP, a public surface (the documentation, GraphQL's playground and
+  introspection, Server-Timing), a committed artifact's emit, a seed — lives
   in `Config::defaults()`, armed only by a declared development or test
-  profile (`Environment::is_deployed` is the one test), never in `Default`, so
-  a pin over `..Default::default()` opens nothing in any profile and neither
-  does a process that forgot `<PREFIX>_ENV`. Held by each member's unit test,
-  and review.
+  profile (`Environment::is_deployed` is the one test; an emit waits for
+  development alone, since parallel suites would rewrite the file), never in
+  `Default` nor by the cargo build profile, so a pin over
+  `..Default::default()` opens nothing in any profile and neither does a
+  process that forgot `<PREFIX>_ENV`. **An address or a credential is never a
+  default**, in any profile: the deployment names it, or the profile's `.env`
+  file — the scaffold's for its `compose.yml`, the demo's for the dev
+  container. The kernel's console, built before any config, reads the same
+  profile through the config crate it links (`ProfileSource`). Held by each
+  member's unit test, and review.
 - **A seed pins the value, never the checks**: a seeded config passes every
   bound and `validate()` before anything reads it (`Config::check`, run where
   the seed makes its factory skip), on every boot that drains factories, and

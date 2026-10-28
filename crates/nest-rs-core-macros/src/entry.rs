@@ -30,8 +30,12 @@ pub(crate) fn main(args: TokenStream, input: TokenStream) -> TokenStream {
         ReturnType::Type(_, ty) => quote! { #ty },
     };
     let body = &item.block;
+    // Expanded in the app crate, so the manifest directory is the app's own.
     let wrapped: Block = syn::parse_quote! {{
-        ::nest_rs_core::__private::main::<#output, _>(async move #body)
+        ::nest_rs_core::__private::main::<#output, _>(
+            ::core::env!("CARGO_MANIFEST_DIR"),
+            async move #body,
+        )
     }};
     *item.block = wrapped;
     quote! { #refused #item }.into()

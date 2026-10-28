@@ -102,6 +102,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | `Environment::default()` or `Environment::from_env()` expected to be `Development` when `<PREFIX>_ENV` is unset | `Production`; branch on `Environment::declared()` to tell an undeclared process apart, or on `is_deployed()` for a development convenience |
    | `!matches!(Environment::from_env(), Environment::Production \| Environment::Staging)` in a `Config::defaults()` of your own | `!Environment::from_env().is_deployed()` |
    | a scaffolded project's URLs in `.env` | move them to `.env.development` and `.env.test`; export `<PREFIX>_ENV := "development"` in `db.just` |
+   | a development or test run reaching Redis on `redis://127.0.0.1/`, or storage on `https://rustfs:9000` with the `nestrs` pair, with no variable set | name them in `.env.development` and `.env.test` — `<PREFIX>_REDIS__URL`, `<PREFIX>_STORAGE__URL`, `ENDPOINT`, `ACCESS_KEY`, `SECRET_KEY`: no profile names an address or a credential |
+   | `<PREFIX>_GRAPHQL__PLAYGROUND=true`, `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION=false` or `<PREFIX>_LOG_FORMAT=text` in `.env.development` | delete the lines: a declared development or test profile serves the playground, answers introspection and writes text logs; a deployment writes JSON |
    | a scaffolded project's `.env` holding `<PREFIX>_AUTHN__SECRET=dev-only-insecure-secret-change-me-32b` | delete that line; put `<PREFIX>_AUTHN__SECRET=` and the output of `openssl rand -hex 32` in `.env.local` (and another in `.env.test` if your suites sign tokens), and your own in every deployed environment |
    | a scaffolded project's `.env.test` naming `redis://localhost:6379` | `redis://localhost:6379/1`, so the suites never push on the database the development app drains |
 
@@ -140,6 +142,10 @@ lists what the boot, a log or the wire shows when one is missed.
    | `<PREFIX>_STORAGE__TLS_CERT` / `TLS_KEY`, set and ignored | removed: the boot now fails naming them |
    | `<PREFIX>_HTTP__FAIL_SECURE_STRICT` | removed: no mount is left for it to guard, and the boot reports it as read by no config |
    | `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` (step 16) |
+   | `<PREFIX>_GRAPHQL__EMIT_SDL` | `<PREFIX>_GRAPHQL__EMIT` — on by default under a declared development profile, so a `.env.development` setting it drops the line |
+   | `<PREFIX>_GRAPHQL__SCHEMA_PATH` | `<PREFIX>_GRAPHQL__EMIT_PATH`, a relative path now the app crate's: `apps/api/schema.graphql` becomes `schema.graphql`, the default |
+   | `<PREFIX>_OPENAPI__EMIT_DOCUMENT` | `<PREFIX>_OPENAPI__EMIT` — on by default under a declared development profile |
+   | `<PREFIX>_OPENAPI__DOCUMENT_PATH` | `<PREFIX>_OPENAPI__EMIT_PATH`, relative to the app crate: `apps/api/openapi.json` becomes `openapi.json`, the default |
 
    Under a prefix of your own, the same holds with `ACME_` for `NESTRS_`. Every
    one of them — every namespaced variable, in fact — can now be given as a file
@@ -466,8 +472,11 @@ lists what the boot, a log or the wire shows when one is missed.
    |---|---|
    | `HttpConfig::default().with_global_prefix(p)` (and every config `with_*`) | the field in a struct literal over `..Default::default()` |
    | `HealthConfig::default().with_probe_deadline(Duration::from_millis(400))` | `HealthConfig { probe_deadline_ms: 400, ..Default::default() }` |
-   | `RedisModule::for_root(RedisConfig { …, ..Default::default() })` relying on the loopback | `..RedisConfig::defaults()` (with `use nest_rs::config::Config;`) for the loopback in a declared development or test profile, or `url` written in the pin, or `<PREFIX>_REDIS__URL` in the deployment |
-   | `StorageModule::for_root(StorageConfig { …, ..Default::default() })` relying on the development pair or on plain HTTP | `..StorageConfig::defaults()` for the profile's pair and plain HTTP in development and test, or the pair from the deployment's environment |
+   | `RedisModule::for_root(RedisConfig { …, ..Default::default() })` relying on the loopback | `url` written in the pin, or `<PREFIX>_REDIS__URL` in the deployment: no profile holds a URL, and a pinned config reads the process environment, never `.env` |
+   | `StorageModule::for_root(StorageConfig { …, ..Default::default() })` relying on the development pair or on plain HTTP | `..StorageConfig::defaults()` for plain HTTP in development and test (with `use nest_rs::config::Config;`); the pair from the deployment's environment in every profile |
+   | `GraphqlConfig { emit_sdl, schema_path, .. }`, `OpenApiConfig { emit_document, document_path, .. }` | `emit` and `emit_path` on both; a relative `emit_path` is resolved against the app crate's directory |
+   | `GraphqlModule::for_root(GraphqlConfig { …, ..Default::default() })` expecting the playground or introspection in development | `..GraphqlConfig::defaults()` for the profile's surfaces, or `playground: true` / `disable_introspection: false` written in the pin |
+   | a suite asserting that the bare `GraphqlModule` answers a plain `GET` with `405`, or refuses introspection, under the test profile | pin `GraphqlModule::for_root(GraphqlConfig::default())`: the test profile opens both |
    | `OpenApiModule::for_root(OpenApiConfig { …, ..OpenApiConfig::default() })` expecting `/api` served | `..OpenApiConfig::defaults()` to serve it in development and test only, or `enabled: true` written in the pin |
    | an `HttpConfig`, `StorageConfig`, `AuthnConfig`, `GraphqlConfig`, `WsConfig`, `McpConfig`, `OAuthClientConfig` or `OpenTelemetryConfig` literal written out whole | the same, ending in `..Default::default()` — each gained fields (`shutdown_timeout`; `operation_timeout`, `read_timeout`, `tls`; `jwks_uri`, `algorithms`, `tls`; the graphql-ws bounds; `message_timeout`, `connect_timeout`, `disconnect_timeout`; `operation_timeout`, `max_concurrent_sessions`, `session_idle_timeout`; `tls`) |
    | `McpOptions { config, server }`, every field named | `McpOptions { config, server, ..Default::default() }` |
@@ -1091,8 +1100,18 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A process that declares no environment** runs as production: its boot
   files `no environment declared; running as production`, and each development
   convenience it relied on is refused naming its variable
-  (`<PREFIX>_REDIS__URL`, `<PREFIX>_STORAGE__ACCESS_KEY`, a loopback `http`
-  redirect or resource).
+  (`<PREFIX>_STORAGE__ALLOW_HTTP`, a loopback `http` redirect or resource).
+- **A run relying on the framework's development Redis or store** — the
+  loopback, the dev container's RustFS — fails its boot naming
+  `<PREFIX>_REDIS__URL`, `<PREFIX>_STORAGE__URL` or
+  `<PREFIX>_STORAGE__ACCESS_KEY`, in every profile: name them in
+  `.env.development` and `.env.test`.
+- **A `.env.development` still setting `<PREFIX>_GRAPHQL__EMIT_SDL` or
+  `<PREFIX>_OPENAPI__DOCUMENT_PATH`** is read by nothing, and the boot says so
+  at `warn`; the development run writes `schema.graphql` and `openapi.json`
+  beside the app's `Cargo.toml` anyway. A path the old key gave relative to
+  the workspace root, kept under the new name, now lands under the app crate:
+  drop it, or make it relative to the app.
 - **A configuration refusal** opens on ``the factory for `<crate>::…Config`
   failed``; the variable, the rule and the place are under `Caused by:`, never
   the value. A log setting that does not parse — `<PREFIX>_LOG_FORMAT=jsno`, a

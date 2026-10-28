@@ -6,8 +6,8 @@
 //!   default `info`, narrowed by the clamp of each library the framework wires
 //!   that quotes a client's payload or a secret: a clamp never opens what the
 //!   filter closes, and a directive naming such a library replaces its clamp.
-//! - `<PREFIX>_LOG_FORMAT` — `text` or `json`; defaults by build profile
-//!   (text in debug, JSON in release).
+//! - `<PREFIX>_LOG_FORMAT` — `text` or `json`; defaults by the declared
+//!   profile (text under development and test, JSON otherwise).
 //! - `<PREFIX>_LOG_SOURCE_LOCATION` — append the emitting `file:line` to each
 //!   event; off by default (it leaks source paths).
 //!
@@ -61,10 +61,12 @@ pub mod var {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LogFormat {
-    /// Human-readable text; the default in debug builds.
+    /// Human-readable text; the console's default under a declared
+    /// development or test profile.
     #[default]
     Text,
-    /// One JSON object per event; the default in release builds.
+    /// One JSON object per event; the console's default in every other
+    /// process, a deployment and an undeclared one alike.
     Json,
 }
 
@@ -79,9 +81,13 @@ impl LogFormat {
         }
     }
 
-    /// Text in debug, JSON in release.
+    /// Text when the process declares a development or test profile, JSON
+    /// otherwise — the cargo build profile has no say. The profile is the one
+    /// `<PREFIX>_ENV` declares, read by the configuration crate the binary
+    /// links; a binary linking none runs as production.
     pub fn by_profile() -> Self {
-        if cfg!(debug_assertions) {
+        let mut sources = inventory::iter::<ProfileSource>().peekable();
+        if sources.peek().is_some() && sources.all(|source| !(source.deployed)()) {
             Self::Text
         } else {
             Self::Json
@@ -343,6 +349,18 @@ pub(crate) mod __private {
         }
     }
 
+    /// Whether the process runs a deployed profile, answered by the crate that
+    /// reads `<PREFIX>_ENV`: the console writes text under a declared
+    /// development or test profile, JSON otherwise.
+    ///
+    /// That crate declares it with `inventory::submit!`, so the subscriber —
+    /// which starts before any config exists — asks it as it starts.
+    #[derive(Clone, Copy, Debug)]
+    pub struct ProfileSource {
+        /// `false` under a declared development or test profile alone.
+        pub deployed: fn() -> bool,
+    }
+
     /// The filter every subscriber the framework ships applies under a
     /// directive: an event is written when the directive writes it and the
     /// [`LibraryClamp`]s let it through, so a clamp narrows the directive and
@@ -539,9 +557,11 @@ pub(crate) mod __private {
     }
 }
 
-use __private::{ConsoleLayer, LibraryClamp, TextFormat, log_filter};
+use __private::{ConsoleLayer, LibraryClamp, ProfileSource, TextFormat, log_filter};
 
 inventory::collect!(LibraryClamp);
+
+inventory::collect!(ProfileSource);
 
 /// Whether every subscriber the framework ships writes, under the filter
 /// `$directive`, an event on `$target` at `$level` — a `tracing::Level`

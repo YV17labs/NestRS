@@ -49,8 +49,8 @@ config:
   # the ecosystem's unprefixed RUST_LOG). `nest_rs::operation=off` silences
   # every edge's one-line-per-unit-of-work at once.
   LOG: info
-  # `text` or `json`. Release builds already default to json; stated because a
-  # log shipper reads it and nobody should have to know the build profile.
+  # `text` or `json`. A production process already defaults to json; stated
+  # because a log shipper reads it and nobody should have to know the profile.
   LOG_FORMAT: json
 
 # Secret settings, written into a Secret this chart owns. Same spelling rule as

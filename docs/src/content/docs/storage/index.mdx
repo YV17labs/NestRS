@@ -48,11 +48,14 @@ use crate::audio::AudioService;
 pub struct AudioModule;
 ```
 
-Then name the store:
+Then name the store, in the file of the profile that runs beside it — the
+demo's names the dev container's RustFS:
 
-```bash title=".env"
+```bash title=".env.development"
 NESTRS_STORAGE__URL=s3://nestrs
 NESTRS_STORAGE__ENDPOINT=https://rustfs:9000
+NESTRS_STORAGE__ACCESS_KEY=nestrs
+NESTRS_STORAGE__SECRET_KEY=nestrs
 ```
 
 ## Name the store
@@ -273,26 +276,26 @@ StorageModule::for_root(StorageConfig {
 
 `StorageConfig::defaults()` is the profile's base, the one the bare import
 starts from. `..Default::default()` is the production-safe value in every
-profile — no store, no credential, no plain HTTP — so the rest comes from the
-deployment. Only a declared development or test profile names the dev
-container's bucket and credentials and allows plain HTTP; an unset key elsewhere
-fails the boot by name instead of reaching a default.
+profile — no store, no credential, no plain HTTP. A declared development or
+test profile allows plain HTTP and names nothing more: the store, its endpoint
+and its pair are the deployment's, or the profile's `.env` file's, in every
+profile, so an unset one fails the boot by name instead of reaching a default.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `URL` | `s3://nestrs` in dev/test, **none otherwise** | the store, whose scheme picks the backend |
-| `ENDPOINT` | `https://rustfs:9000` in dev/test, **unset otherwise** | S3 only: the server's endpoint; unset ⇒ AWS |
+| `URL` | **none** | the store, whose scheme picks the backend |
+| `ENDPOINT` | unset | S3 only: the server's endpoint; unset ⇒ AWS |
 | `TLS_CA_CERT` | unset | S3 only: the authorities the endpoint's certificate must chain to, replacing the system's (`TLS_CA_CERT_FILE` for a path), read at the start: a renewed file takes effect at the next one |
 | `TLS_CERT` / `TLS_KEY` | unset | refused: `object_store` presents no client certificate, so setting one fails the boot |
 | `REGION` | `us-east-1` | S3 only: the region requests are signed for |
-| `ACCESS_KEY` / `SECRET_KEY` | `nestrs` in dev/test, **none otherwise** | S3 only: static credentials |
+| `ACCESS_KEY` / `SECRET_KEY` | **none** | S3 only: static credentials |
 | `FORCE_PATH_STYLE` | `true` | S3 only: `true` ⇒ `endpoint/bucket/key`; `false` ⇒ virtual-hosted |
 | `ALLOW_HTTP` | `true` in dev/test, **`false` otherwise** | S3 only: reach the endpoint over plain `http://` — see the caution below |
 | `OPERATION_TIMEOUT_SECS` | `15` | the most a call, and the boot's proof, wait for the store, retries included |
 | `READ_TIMEOUT_SECS` | `30` | the most a download waits for its next bytes while it is read |
 
-So a staging or production deployment sets three keys at minimum —
-`URL`, `ACCESS_KEY` and `SECRET_KEY` — and `ENDPOINT` unless it is AWS.
+So every profile sets three keys at minimum — `URL`, `ACCESS_KEY` and
+`SECRET_KEY` — and `ENDPOINT` unless it is AWS.
 
 <Aside type="caution">
 `ALLOW_HTTP=false` — its value outside a declared development or test

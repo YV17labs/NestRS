@@ -1,6 +1,6 @@
 ---
 title: GraphQL configuration
-description: GraphqlConfig — mount path, playground, SDL emission, with production-safe defaults and the env / pinned dual path.
+description: GraphqlConfig — mount path, playground, introspection, SDL emission, with production-safe defaults, development surfaces armed by the declared profile, and the env / pinned dual path.
 sidebar:
   order: 2
 ---
@@ -11,8 +11,12 @@ import { Aside } from '@astrojs/starlight/components';
 environment; `GraphqlModule::for_root(config)` pins a *base* those
 variables still overlay, field by field. Every field is settable both ways —
 pin host behaviour in code, leave secrets and per-environment toggles to env.
-Defaults are production-safe: the playground stays off, the SDL emit
-stays off, the mount path is `/graphql`.
+`Default` is production-safe: the playground, introspection and the SDL
+emit stay off, the mount path is `/graphql`. The bare import starts from
+`Config::defaults()` instead, which a declared development or test profile
+opens: the playground serves and introspection answers, and a development
+run writes the schema beside the app's manifest. A process that declares no
+`<PREFIX>_ENV` runs as production and opens none of them.
 
 ## The config struct
 
@@ -21,20 +25,22 @@ stays off, the mount path is `/graphql`.
 pub struct GraphqlConfig {
     /// Default `/graphql`.
     pub path: String,
-    /// Default `false` (production-safe).
+    /// Serve the playground. Off in `Default`; on in development and test.
     pub playground: bool,
-    /// Where the committed SDL lives. Default `schema.graphql`.
-    pub schema_path: PathBuf,
-    /// (Re)write `schema_path` from the live schema once at boot.
-    /// Default `false`. A write failure is logged, never fatal.
-    pub emit_sdl: bool,
+    /// (Re)write `emit_path` from the live schema once at boot.
+    /// Off in `Default`; on in development. A write failure is logged, never fatal.
+    pub emit: bool,
+    /// Where the committed SDL lives, relative to the app crate.
+    /// Default `schema.graphql`.
+    pub emit_path: PathBuf,
     /// Reject queries nesting deeper than this. Default `Some(15)`
     /// (production-safe); set `None` to disable. See Query limits.
     pub max_depth: Option<usize>,
     /// Reject queries whose complexity score exceeds this. Default
     /// `Some(2000)` (production-safe); set `None` to disable. See Query limits.
     pub max_complexity: Option<usize>,
-    /// Disable GraphQL introspection. Default `true` (production-safe).
+    /// Refuse introspection queries. `true` in `Default`; `false` in
+    /// development and test.
     pub disable_introspection: bool,
     /// Maximum operations in a single HTTP batch request. Default `10`.
     pub max_batch_size: usize,
@@ -58,12 +64,12 @@ pub struct GraphqlConfig {
 | Field | Env var | Default | Effect |
 |---|---|---|---|
 | `path` | `<PREFIX>_GRAPHQL__PATH` | `/graphql` | Mount point for both `POST` (operations) and `GET` (playground, when enabled). One literal path: template syntax (`{` `}`) or what the router reads as a parameter (`:` `*` `<`) fails the boot. |
-| `playground` | `<PREFIX>_GRAPHQL__PLAYGROUND` | `false` | When `true`, `GET <path>` serves the GraphQL Playground page, which loads its scripts, styles and fonts from third-party hosts ([The playground](#the-playground)). |
-| `schema_path` | `<PREFIX>_GRAPHQL__SCHEMA_PATH` | `schema.graphql` | Where the SDL gets written. |
-| `emit_sdl` | `<PREFIX>_GRAPHQL__EMIT_SDL` | `false` | When `true`, the running app writes its live SDL to `schema_path` once at boot. |
+| `playground` | `<PREFIX>_GRAPHQL__PLAYGROUND` | `false`; `true` in development and test | When `true`, `GET <path>` serves the GraphQL Playground page, which loads its scripts, styles and fonts from third-party hosts ([The playground](#the-playground)). |
+| `emit` | `<PREFIX>_GRAPHQL__EMIT` | `false`; `true` in development | When `true`, the running app writes its live SDL to `emit_path` once at boot. |
+| `emit_path` | `<PREFIX>_GRAPHQL__EMIT_PATH` | `schema.graphql` | Where the SDL gets written; a relative path is the app crate's ([SDL emission](#sdl-emission)). |
 | `max_depth` | `<PREFIX>_GRAPHQL__MAX_DEPTH` | `15` | Bound on AST nesting depth; `None` disables. See [Query limits](/graphql/query-limits/). |
 | `max_complexity` | `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` | `2000` | Bound on query complexity score; `None` disables. See [Query limits](/graphql/query-limits/). |
-| `disable_introspection` | `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION` | `true` | When `true`, the schema rejects introspection queries (production-safe). |
+| `disable_introspection` | `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION` | `true`; `false` in development and test | When `true`, the schema rejects introspection queries. |
 | `max_batch_size` | `<PREFIX>_GRAPHQL__MAX_BATCH_SIZE` | `10` | Maximum operations in a single HTTP batch request. |
 | `max_connection` | `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` | `14400` (4 h) | Ceiling on a subscription's lifetime. A **security** control: a socket authenticates once and replays those privileges for as long as it stays open. `0` disables it. |
 | `max_message_bytes` | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | `65536` (64 KiB) | Byte cap on one graphql-ws message, held at the protocol layer: a larger frame is never buffered, and the socket closes. |
@@ -74,10 +80,12 @@ pub struct GraphqlConfig {
 | `federation` | `<PREFIX>_GRAPHQL__FEDERATION` | `false` | Serve as an Apollo subgraph: declares the federation directives and exports the subgraph SDL form. An `#[entity]` declared while this is `false` fails the boot. See [Federation](/graphql/federation/). |
 
 <Aside type="caution">
-**`playground = true` in production is a CVE.** It exposes the full
-schema (introspection) to anyone hitting `GET /graphql`. The default
-is `false` for a reason — flip it in `.env.development` and leave it
-off in `.env.production`.
+**The playground and introspection are the API's documentation**, public to
+anyone reaching `/graphql` (OWASP API9:2023), so only a declared development
+or test profile opens them. A deployment that opens either —
+`<PREFIX>_GRAPHQL__PLAYGROUND=true`, `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION=false`,
+or the same in a pinned config — is honoured, and its boot says so once at
+`warn` on `nest_rs::graphql`, naming the `environment`.
 </Aside>
 
 ## The dual path
@@ -92,29 +100,28 @@ use nest_rs::graphql::GraphqlModule;
 pub struct AppModule;
 ```
 
-```bash title=".env.development"
-NESTRS_GRAPHQL__PLAYGROUND=true
-NESTRS_GRAPHQL__EMIT_SDL=true
-NESTRS_GRAPHQL__SCHEMA_PATH=./schema.graphql
+```bash title=".env.production"
+NESTRS_GRAPHQL__MAX_COMPLEXITY=1200
 ```
 
 ```rust title="apps/api/src/module.rs — pinned at the import site"
 use nest_rs::core::module;
+use nest_rs::config::Config;
 use nest_rs::graphql::{GraphqlConfig, GraphqlModule};
-use std::path::PathBuf;
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
         path: "/api/graphql".into(),
-        schema_path: PathBuf::from("./schema.graphql"),
-        ..Default::default()
+        ..GraphqlConfig::defaults()
     }),
 ])]
 pub struct AppModule;
 ```
 
 Mix both freely — pin the mount path in code (the reverse proxy
-depends on it), leave `playground` and `emit_sdl` to env.
+depends on it), leave the limits to env. A pin chooses its base in sight:
+`..GraphqlConfig::defaults()` keeps the profile's surfaces,
+`..Default::default()` opens none of them in any profile.
 
 ## Mount path
 
@@ -125,7 +132,7 @@ depends on it), leave `playground` and `emit_sdl` to env.
   `413`), or a [GraphQL multipart request](https://github.com/jaydenseric/graphql-multipart-request-spec)
   carrying file uploads, each held to the transport's body cap.
 - `GET <path>` — the [subscription socket](/graphql/subscriptions/) when the
-  request asks to upgrade; otherwise the playground HTML, when `playground = true`.
+  request asks to upgrade; otherwise the playground HTML, when `playground` is on.
   With the playground off, a plain `GET` is answered `405` with `Allow: POST`:
   a GraphQL request travels as a `POST` here.
 
@@ -142,7 +149,7 @@ The path is a route on the HTTP transport, so the surrounding
 
 ## The playground
 
-When `playground = true`, `GET <path>` serves
+When `playground` is on, `GET <path>` serves
 `async_graphql::http::playground_source`, the GraphQL Playground page. The
 app serves only its shell: the playground's script, stylesheet and icon load
 from `cdn.jsdelivr.net`, and its fonts from Google Fonts
@@ -155,55 +162,48 @@ The page hits the same mount path for its requests, so a
 reverse proxy or a `path = "/api/graphql"` override needs no extra
 playground setting.
 
-In dev, the playground is the fastest way to read the schema, run a
-query, and inspect the response with field-level docs. In production,
-keep it off and rely on the committed SDL plus introspection-aware
-clients reading from a sandbox environment.
-
-<Aside type="tip">
-**Introspection is disabled by default** (`disable_introspection =
-true`). Flip it to `false` (or set
-`<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION=false`) in a dev profile when a
-client tool needs the schema. The playground toggle is independent:
-the playground needs introspection on to be useful, so enable both in
-`.env.development`.
-</Aside>
+In development, the playground is the fastest way to read the schema, run a
+query, and inspect the response with field-level docs — the profile serves it
+and answers its introspection, with nothing to set. In production, both stay
+off: rely on the committed SDL, and on introspection-aware clients reading
+from a development or test environment.
 
 ## SDL emission
 
-`emit_sdl = true` rewrites `schema_path` from the live schema once at
-boot. The SDL gets sorted (types, fields, arguments, enum values) so
-two builds of the same schema produce byte-identical files — the diff
-in git tells you what changed.
+A development run rewrites `emit_path` from the live schema once at
+boot: the profile turns `emit` on, and only that one — under test, parallel
+suites would rewrite a committed file. The SDL gets sorted (types, fields,
+arguments, enum values) so two builds of the same schema produce
+byte-identical files — the diff in git tells you what changed.
 
 ```bash title="dev workflow"
-$ NESTRS_GRAPHQL__EMIT_SDL=true nestrs run dev api
-# schema.graphql is rewritten before the app starts serving
-$ git diff schema.graphql                    # see the wire change
+$ nestrs run dev api
+# apps/api/schema.graphql is rewritten before the app starts serving
+$ git diff apps/api/schema.graphql           # see the wire change
 ```
 
-Apps commit `schema.graphql` next to `Cargo.toml`. A schema change
-shows up in a code review without a separate generator pass or a CI
-drift-check.
+Apps commit `schema.graphql` next to `Cargo.toml`. A relative `emit_path` is
+resolved against the directory of the crate `#[nest_rs::main]` expanded in,
+whatever directory the process runs from, so each app of a workspace writes
+its own file; an absolute one is written as given. A schema change shows up in
+a code review without a separate generator pass or a CI drift-check.
 
 A write failure is logged at `warn` level (`nest_rs::graphql`
-target), never fatal — the app still starts. The path is resolved
-relative to the working directory the app was launched from.
+target), never fatal — the app still starts.
 
 ## Production checklist
 
 Before shipping:
 
-- `<PREFIX>_GRAPHQL__PLAYGROUND` unset or `false`.
-- `<PREFIX>_GRAPHQL__EMIT_SDL` unset or `false` — production apps don't
-  rewrite their own SDL.
+- `<PREFIX>_ENV=production` declared, or left unset: the playground,
+  introspection and the SDL emit stay off. A boot that opens a surface says
+  so at `warn`.
 - `<PREFIX>_GRAPHQL__MAX_DEPTH` set (a value of 15 fits most apps).
 - `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` set after calibrating against
   observed legitimate traffic. See [Query limits](/graphql/query-limits/).
 - `path` matches what your gateway / ingress routes to.
-- The SDL committed in git is the one the production binary serves
-  (the CI build runs with `emit_sdl=true` against a known database and
-  diffs against the committed file).
+- The SDL committed in git is the one the production binary serves: a
+  development run rewrites it, and the diff is committed with the change.
 
 ## Reference
 

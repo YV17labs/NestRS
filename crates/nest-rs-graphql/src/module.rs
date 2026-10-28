@@ -28,9 +28,10 @@ use crate::view::GraphqlView;
 /// The app imports [`GraphqlModule::for_root`]; a feature serving resolvers
 /// may import `GraphqlModule` bare beside it, and the endpoint mounts once.
 ///
-/// [`GraphqlConfig::default`] keeps the playground + boot-time SDL emit
-/// **off**; a dev run opts them in via `<PREFIX>_GRAPHQL__PLAYGROUND=true` /
-/// `…__EMIT_SDL=true`.
+/// The bare import serves the playground and answers introspection under a
+/// declared development or test profile, and writes the schema's SDL beside the
+/// app's manifest under development; [`GraphqlConfig::default`] opens none of
+/// them, in any profile.
 ///
 /// ```
 /// use nest_rs_core::module;
@@ -44,7 +45,7 @@ use crate::view::GraphqlView;
 /// # assert!(app.container().get::<GraphqlConfig>().is_some());
 ///
 /// let defaults = GraphqlConfig::default();
-/// assert!(!defaults.playground && !defaults.emit_sdl);
+/// assert!(!defaults.playground && defaults.disable_introspection && !defaults.emit);
 /// # Ok(())
 /// # }
 /// ```
@@ -109,8 +110,8 @@ fn mount(
 ) -> anyhow::Result<()> {
     let schema = build_schema(container.clone(), options, mounted)?;
     let bridge = Arc::new(OperationBridge::new(container.clone())?);
-    if options.emit_sdl {
-        let dest = &options.schema_path;
+    if options.emit {
+        let dest = &nest_rs_core::__private::in_app_dir(&options.emit_path);
         let sdl = crate::resolver::render_sdl(&schema, options);
         match std::fs::write(dest, &sdl) {
             Ok(()) => tracing::info!(

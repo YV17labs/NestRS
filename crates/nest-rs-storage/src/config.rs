@@ -15,13 +15,6 @@ const DEFAULT_OPERATION_TIMEOUT_SECS: u64 = 15;
 /// object_store waits for a request by default.
 const DEFAULT_READ_TIMEOUT_SECS: u64 = 30;
 
-/// The dev container's RustFS, its bucket and the pair it accepts: the base of
-/// a development or test profile's [`Config::defaults`], never of `Default`.
-const DEV_URL: &str = "s3://nestrs";
-const DEV_ENDPOINT: &str = "https://rustfs:9000";
-const DEV_ACCESS_KEY: &str = "nestrs";
-const DEV_SECRET_KEY: &str = "nestrs";
-
 /// The operation budget's range, the variable that sets it, and why.
 pub(crate) const OPERATION_TIMEOUT: DurationBounds = DurationBounds::secs(
     "OPERATION_TIMEOUT_SECS",
@@ -51,11 +44,13 @@ pub(crate) const READ_TIMEOUT: DurationBounds = DurationBounds::secs(
 ///
 /// `Default` is the production-safe value: no store named, no credential,
 /// plain HTTP refused, AWS's own endpoint. A declared development or test
-/// profile's [`Config::defaults`] names the dev container's RustFS bucket,
-/// its pair, and allows plain HTTP; a config pinned over `..Default::default()`
-/// gets none of it in any profile, and one pinned over
-/// `..StorageConfig::defaults()` gets the profile's. The S3 settings are read
-/// for an `s3://` store alone: set beside `memory:///`, the boot refuses them.
+/// profile's [`Config::defaults`] allows plain HTTP and names no store either:
+/// the store, its endpoint and its pair are the deployment's, or the profile's
+/// `.env` file's, in every profile. A config pinned over `..Default::default()`
+/// refuses plain HTTP in any profile, and one pinned over
+/// `..StorageConfig::defaults()` allows it in development and test. The S3
+/// settings are read for an `s3://` store alone: set beside `memory:///`, the
+/// boot refuses them.
 #[config(namespace = "storage")]
 #[derive(Clone)]
 pub struct StorageConfig {
@@ -139,21 +134,12 @@ impl Default for StorageConfig {
 }
 
 impl Config for StorageConfig {
-    /// In a declared development or test profile, the dev container's RustFS
-    /// bucket, its pair and plain HTTP over `Default`. Here rather than in
-    /// `from_env`, so it never rewrites a pinned struct.
+    /// In a declared development or test profile, plain HTTP over `Default`.
+    /// Here rather than in `from_env`, so it never rewrites a pinned struct.
     fn defaults() -> Self {
-        let safe = Self::default();
-        if Environment::from_env().is_deployed() {
-            return safe;
-        }
         Self {
-            url: DEV_URL.into(),
-            endpoint: Some(DEV_ENDPOINT.into()),
-            access_key: DEV_ACCESS_KEY.into(),
-            secret_key: DEV_SECRET_KEY.into(),
-            allow_http: true,
-            ..safe
+            allow_http: !Environment::from_env().is_deployed(),
+            ..Self::default()
         }
     }
 
@@ -324,23 +310,19 @@ fn refuse_half_a_credential(
     access_key: Option<&Setting>,
     secret_key: Option<&Setting>,
 ) -> nest_rs_config::Result<()> {
-    let (set, other, other_value, built_in_value) = match (access_key, secret_key) {
-        (Some(set), None) => (set, "SECRET_KEY", &base.secret_key, DEV_SECRET_KEY),
-        (None, Some(set)) => (set, "ACCESS_KEY", &base.access_key, DEV_ACCESS_KEY),
+    let (set, other, other_value) = match (access_key, secret_key) {
+        (Some(set), None) => (set, "SECRET_KEY", &base.secret_key),
+        (None, Some(set)) => (set, "ACCESS_KEY", &base.access_key),
         _ => return Ok(()),
     };
     let (set_var, other_file_var) = (set.var(), env.var_name(&format!("{other}_FILE")));
     let message = if other_value.trim().is_empty() {
         format!("is not set, nor is {other_file_var}, beside {set_var} — set both")
     } else {
-        let source = if other_value == built_in_value {
-            "the built-in development default"
-        } else {
-            "the value pinned in code"
-        };
         format!(
             "is not set, nor is {other_file_var}, beside {set_var}, so the other half of the pair \
-             would be {source} — set {} too, so the pair is replaced whole rather than mixed",
+             would be the value pinned in code — set {} too, so the pair is replaced whole rather \
+             than mixed",
             env.spellings(other),
         )
     };
@@ -375,9 +357,8 @@ pub(crate) fn is_plaintext(endpoint: &str) -> bool {
 }
 
 /// Why an unset credential is refused rather than defaulted.
-const PAIR_WHY: &str = "`StorageConfig::defaults()` holds the development pair in a declared \
-                        development or test profile alone, `StorageConfig::default()` never, and \
-                        a config pinned in code reads the pair from the deployment, not `.env`";
+const PAIR_WHY: &str = "the pair is deployment data, which no default holds in any profile, and a \
+                        config pinned in code reads it from the deployment, not `.env`";
 
 /// The resolved credential, refusing a blank one under the spelling that set
 /// it, or its variable when unset.
@@ -424,29 +405,24 @@ mod tests {
         clippy::result_large_err,
         reason = "figment::Jail fixes the closure's error type"
     )]
-    fn the_development_pair_and_plain_http_come_with_a_development_profile_alone() {
+    fn a_development_profile_opens_plain_http_and_names_no_store() {
         figment::Jail::expect_with(|jail| {
             for profile in ["development", "test"] {
                 jail.set_env(Environment::var_name(), profile);
                 let d = <StorageConfig as Config>::defaults();
-                assert_eq!(
-                    (d.access_key.as_str(), d.secret_key.as_str(), d.allow_http),
-                    (DEV_ACCESS_KEY, DEV_SECRET_KEY, true),
-                    "{profile}"
-                );
-                assert_eq!(
-                    (d.url.as_str(), d.endpoint.as_deref()),
-                    (DEV_URL, Some(DEV_ENDPOINT)),
-                    "{profile}"
+                assert!(d.allow_http, "{profile}");
+                assert!(
+                    d.url.is_empty()
+                        && d.endpoint.is_none()
+                        && d.access_key.is_empty()
+                        && d.secret_key.is_empty(),
+                    "a store and its pair are the profile file's, never the framework's: \
+                     {profile}"
                 );
             }
             for profile in ["staging", "production", ""] {
                 jail.set_env(Environment::var_name(), profile);
                 let d = <StorageConfig as Config>::defaults();
-                assert!(
-                    d.access_key.is_empty() && d.secret_key.is_empty() && !d.allow_http,
-                    "{profile:?}"
-                );
                 assert_eq!(
                     format!("{d:?}"),
                     format!("{:?}", StorageConfig::default()),
@@ -462,27 +438,22 @@ mod tests {
         clippy::result_large_err,
         reason = "figment::Jail fixes the closure's error type"
     )]
-    fn a_pin_over_the_profiles_defaults_keeps_the_pair_in_development_alone() {
+    fn a_pin_over_the_profiles_defaults_takes_its_pair_from_the_deployment_in_every_profile() {
         figment::Jail::expect_with(|jail| {
             let pin = || StorageConfig {
                 url: "s3://acme-media".into(),
                 ..StorageConfig::defaults()
             };
-            jail.set_env(Environment::var_name(), "development");
-            let resolved =
-                StorageConfig::from_env(&unset(), pin()).expect("the pair is the profile's");
-            assert_eq!(
-                (resolved.url.as_str(), resolved.access_key.as_str()),
-                ("s3://acme-media", DEV_ACCESS_KEY)
-            );
-            jail.set_env(Environment::var_name(), "production");
-            let refused = StorageConfig::from_env(&unset(), pin())
-                .expect_err("production has no pair to give")
-                .to_string();
-            assert!(
-                refused.contains(&nest_rs_config::var_name("storage", "ACCESS_KEY")),
-                "{refused}"
-            );
+            for profile in ["development", "test", "production"] {
+                jail.set_env(Environment::var_name(), profile);
+                let refused = StorageConfig::from_env(&unset(), pin())
+                    .expect_err("no profile has a pair to give")
+                    .to_string();
+                assert!(
+                    refused.contains(&nest_rs_config::var_name("storage", "ACCESS_KEY")),
+                    "{profile}: {refused}"
+                );
+            }
             Ok(())
         });
     }
@@ -520,7 +491,7 @@ mod tests {
             refused.starts_with(&format!(
                 "invalid value for {}",
                 nest_rs_config::var_name("storage", "ACCESS_KEY")
-            )) && refused.contains("StorageConfig::defaults()"),
+            )) && refused.contains("no default holds in any profile"),
             "{refused}"
         );
     }
@@ -803,30 +774,6 @@ mod tests {
                 "names {missing}: {rendered}"
             );
             assert!(rendered.contains("pinned in code"), "{rendered}");
-        }
-    }
-
-    #[test]
-    fn half_a_credential_beside_the_development_pair_is_refused_saying_so() {
-        let development = StorageConfig {
-            access_key: DEV_ACCESS_KEY.into(),
-            secret_key: DEV_SECRET_KEY.into(),
-            ..s3()
-        };
-        for (set, missing) in [("ACCESS_KEY", "SECRET_KEY"), ("SECRET_KEY", "ACCESS_KEY")] {
-            let err = StorageConfig::from_env(
-                &ConfigService::with_vars("storage", [(set, "from-the-deployment")]),
-                development.clone(),
-            )
-            .expect_err("half a credential beside the development pair is refused")
-            .to_string();
-            assert!(
-                err.starts_with(&format!(
-                    "invalid value for {}",
-                    nest_rs_config::var_name("storage", missing)
-                )) && err.contains("the built-in development default"),
-                "names {missing}: {err}"
-            );
         }
     }
 

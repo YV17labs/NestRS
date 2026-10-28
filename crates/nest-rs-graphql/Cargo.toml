@@ -72,6 +72,9 @@ nest-rs-ws = { path = "../nest-rs-ws" }
 # being approximated by a wall-clock sleep nobody would keep honest.
 tokio = { workspace = true, features = ["test-util"] }
 serde_json.workspace = true
+# `figment::Jail` isolates `<PREFIX>_ENV` for the profile `Config::defaults()`
+# reads from the *process* environment rather than a `ConfigService`.
+figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

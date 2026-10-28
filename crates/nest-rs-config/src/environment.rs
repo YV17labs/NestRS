@@ -110,6 +110,16 @@ impl Environment {
     }
 }
 
+/// Whether the process runs a deployed profile, for the kernel's console,
+/// which picks its format before any config exists.
+fn deployed() -> bool {
+    Environment::from_env().is_deployed()
+}
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::ProfileSource { deployed }
+}
+
 /// Classify a raw `<PREFIX>_ENV` value into an [`Environment`], with `true`
 /// in the second slot when the value was **set but unrecognized** (so the
 /// caller can surface it) — never for unset or empty, which are production
@@ -216,5 +226,29 @@ mod tests {
         let (env, unrecognized) = classify(Some("prd"));
         assert_eq!(env, Environment::Production);
         assert!(unrecognized, "the value is reported as unrecognised");
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn the_console_writes_text_under_a_declared_development_or_test_profile_alone() {
+        use nest_rs_core::logging::LogFormat;
+
+        figment::Jail::expect_with(|jail| {
+            for (profile, format) in [
+                ("development", LogFormat::Text),
+                ("dev", LogFormat::Text),
+                ("test", LogFormat::Text),
+                ("staging", LogFormat::Json),
+                ("production", LogFormat::Json),
+                ("", LogFormat::Json),
+            ] {
+                jail.set_env(Environment::var_name(), profile);
+                assert_eq!(LogFormat::by_profile(), format, "{profile:?}");
+            }
+            Ok(())
+        });
     }
 }

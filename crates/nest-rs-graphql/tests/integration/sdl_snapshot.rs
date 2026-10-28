@@ -54,7 +54,7 @@ struct AlphaModule;
 #[module(providers = [BetaResolver])]
 struct BetaModule;
 
-/// Per-process temp file the boot-time `emit_sdl` writes to: `render_sdl` is
+/// Per-process temp file the boot-time `emit` writes to: `render_sdl` is
 /// `pub(crate)`, so the SDL is captured through the production path.
 fn snapshot_path(stem: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -65,8 +65,8 @@ fn snapshot_path(stem: &str) -> PathBuf {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        emit_sdl: true,
-        schema_path: snapshot_path("merged"),
+        emit: true,
+        emit_path: snapshot_path("merged"),
         ..GraphqlConfig::default()
     }),
     AlphaModule,
@@ -115,7 +115,7 @@ async fn merged_schema_sdl_matches_committed_snapshot() {
         .await
         .expect("the two-resolver schema boots and emits SDL");
 
-    let sdl = std::fs::read_to_string(&path).expect("emit_sdl wrote the schema file at boot");
+    let sdl = std::fs::read_to_string(&path).expect("emit wrote the schema file at boot");
     let _ = std::fs::remove_file(&path);
 
     assert_eq!(
@@ -125,7 +125,7 @@ async fn merged_schema_sdl_matches_committed_snapshot() {
     );
 }
 
-// A failed `emit_sdl` write never stops the boot, so its event is the only signal.
+// A failed `emit` write never stops the boot, so its event is the only signal.
 
 /// A path under a directory that does not exist, so `std::fs::write` fails.
 fn unwritable_path() -> PathBuf {
@@ -136,8 +136,8 @@ fn unwritable_path() -> PathBuf {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        emit_sdl: true,
-        schema_path: unwritable_path(),
+        emit: true,
+        emit_path: unwritable_path(),
         ..GraphqlConfig::default()
     }),
     AlphaModule,
@@ -218,8 +218,8 @@ impl GadgetResolver {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        emit_sdl: true,
-        schema_path: snapshot_path("subgraph"),
+        emit: true,
+        emit_path: snapshot_path("subgraph"),
         federation: true,
         ..GraphqlConfig::default()
     }),
@@ -264,7 +264,7 @@ async fn subgraph_sdl_matches_committed_snapshot() {
         .await
         .expect("a subgraph boots and emits its SDL");
 
-    let sdl = std::fs::read_to_string(&path).expect("emit_sdl wrote the schema file at boot");
+    let sdl = std::fs::read_to_string(&path).expect("emit wrote the schema file at boot");
     let _ = std::fs::remove_file(&path);
 
     assert_eq!(

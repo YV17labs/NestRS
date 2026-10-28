@@ -1,10 +1,13 @@
 //! [`GraphqlConfig`] — loaded from `<PREFIX>_GRAPHQL__*`, every field
-//! defaulting production-safe.
+//! defaulting production-safe, the development surfaces armed by the declared
+//! profile alone.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
+use nest_rs_config::{
+    Bound, Config, ConfigService, DurationBounds, Environment, Floor, Result, config,
+};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
@@ -46,9 +49,21 @@ const DEFAULT_MAX_SOCKET_OPERATIONS: usize = 100;
 /// A hundred entity references per `_entities` call — a page of parents.
 const DEFAULT_MAX_REPRESENTATIONS: usize = 100;
 
+/// What the boot says when a deployment serves the playground.
+const PLAYGROUND_OPEN: &str = "GraphQL playground is enabled and public outside a dev profile";
+
+/// What the boot says when a deployment answers introspection.
+const INTROSPECTION_OPEN: &str =
+    "GraphQL introspection is enabled and public outside a dev profile";
+
 /// GraphQL endpoint options, settable via `<PREFIX>_GRAPHQL__*` or pinned through
-/// [`GraphqlModule::for_root`](crate::GraphqlModule::for_root). Every field
-/// defaults production-safe.
+/// [`GraphqlModule::for_root`](crate::GraphqlModule::for_root).
+///
+/// `Default` is the production-safe value: no playground, no introspection, no
+/// schema written. A declared development or test profile's
+/// [`Config::defaults`] serves the playground and answers introspection, and a
+/// development profile's writes the schema; a config pinned over
+/// `..Default::default()` gets none of it in any profile.
 #[config(namespace = "graphql")]
 #[derive(Clone, Debug)]
 pub struct GraphqlConfig {
@@ -56,13 +71,22 @@ pub struct GraphqlConfig {
     /// `}`, or a `:`, `*` or `<` the router reads as a parameter, fails the
     /// boot.
     pub path: String,
-    /// Default `false` (production-safe).
+    /// Serve the GraphQL Playground on `GET` for a browser's request.
+    ///
+    /// The page is public, so `Default` keeps it off and only a development or
+    /// test profile's [`Config::defaults`] turns it on. Serving it outside such
+    /// a profile is honoured and logged at `warn`.
     pub playground: bool,
-    /// Where the committed SDL lives. Default `schema.graphql`.
-    pub schema_path: PathBuf,
-    /// (Re)write `schema_path` from the live schema once at boot. Default
-    /// `false`. A write failure is logged, never fatal.
-    pub emit_sdl: bool,
+    /// (Re)write [`emit_path`](Self::emit_path) with the schema's SDL once at
+    /// boot — the committed copy a pull request diffs. `Default` keeps it off,
+    /// and only a development profile's [`Config::defaults`] turns it on: under
+    /// test, parallel suites would rewrite a committed file. A write failure is
+    /// logged, never fatal.
+    pub emit: bool,
+    /// Where [`emit`](Self::emit) writes the SDL. Default `schema.graphql`; a
+    /// relative path is the app crate's — the one `#[nest_rs::main]` expanded
+    /// in — so each app of a workspace writes its own.
+    pub emit_path: PathBuf,
     /// Maximum nesting depth of an incoming query AST. Defaults to `Some(15)`;
     /// `None` disables the check.
     ///
@@ -76,7 +100,10 @@ pub struct GraphqlConfig {
     /// as for `max_depth`.
     #[validate(range(min = 1))]
     pub max_complexity: Option<usize>,
-    /// Disable GraphQL introspection. Default `true` (production-safe).
+    /// Refuse introspection queries. The schema is the API's documentation,
+    /// so `Default` keeps this `true` and only a development or test profile's
+    /// [`Config::defaults`] answers them. Answering them outside such a
+    /// profile is honoured and logged at `warn`.
     pub disable_introspection: bool,
     /// Maximum number of operations in a single HTTP batch request.
     /// Default `10`.
@@ -147,8 +174,8 @@ impl Default for GraphqlConfig {
         Self {
             path: DEFAULT_PATH.into(),
             playground: false,
-            schema_path: "schema.graphql".into(),
-            emit_sdl: false,
+            emit: false,
+            emit_path: "schema.graphql".into(),
             max_depth: Some(15),
             max_complexity: Some(2000),
             disable_introspection: true,
@@ -165,19 +192,50 @@ impl Default for GraphqlConfig {
 }
 
 impl Config for GraphqlConfig {
+    // Not in `from_env`: overlaying it would rewrite a pinned value.
+    fn defaults() -> Self {
+        let environment = Environment::from_env();
+        let open = !environment.is_deployed();
+        Self {
+            playground: open,
+            disable_introspection: !open,
+            emit: environment == Environment::Development,
+            ..Self::default()
+        }
+    }
+
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let d = base;
+        let playground = env.flag("PLAYGROUND", d.playground)?;
+        let disable_introspection = env.flag("DISABLE_INTROSPECTION", d.disable_introspection)?;
+        let environment = Environment::from_env();
+        if environment.is_deployed() {
+            if playground {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    environment = environment.as_str(),
+                    "{PLAYGROUND_OPEN}",
+                );
+            }
+            if !disable_introspection {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    environment = environment.as_str(),
+                    "{INTROSPECTION_OPEN}",
+                );
+            }
+        }
         Ok(Self {
             path: env.get("PATH")?.unwrap_or(d.path),
-            playground: env.flag("PLAYGROUND", d.playground)?,
-            schema_path: env
-                .get("SCHEMA_PATH")?
+            playground,
+            emit: env.flag("EMIT", d.emit)?,
+            emit_path: env
+                .get("EMIT_PATH")?
                 .map(PathBuf::from)
-                .unwrap_or(d.schema_path),
-            emit_sdl: env.flag("EMIT_SDL", d.emit_sdl)?,
+                .unwrap_or(d.emit_path),
             max_depth: env.parse("MAX_DEPTH")?.or(d.max_depth),
             max_complexity: env.parse("MAX_COMPLEXITY")?.or(d.max_complexity),
-            disable_introspection: env.flag("DISABLE_INTROSPECTION", d.disable_introspection)?,
+            disable_introspection,
             max_batch_size: env.parse("MAX_BATCH_SIZE")?.unwrap_or(d.max_batch_size),
             max_connection: MAX_CONNECTION
                 .read_optional(env, d.max_connection)?
@@ -207,8 +265,8 @@ mod tests {
         let d = GraphqlConfig::default();
         assert_eq!(d.path, "/graphql");
         assert!(!d.playground, "playground exposed in prod is a CVE");
-        assert!(!d.emit_sdl, "writing SDL from prod is unwanted side effect");
-        assert_eq!(d.schema_path, PathBuf::from("schema.graphql"));
+        assert!(!d.emit, "writing SDL from prod is unwanted side effect");
+        assert_eq!(d.emit_path, PathBuf::from("schema.graphql"));
         assert_eq!(d.max_depth, Some(15));
         assert_eq!(d.max_complexity, Some(2000));
         assert!(d.disable_introspection);
@@ -219,6 +277,105 @@ mod tests {
              can switch off — so being one is opted into, and an `#[entity]` \
              declared without it fails the boot rather than inheriting it",
         );
+    }
+
+    /// `profile` declared on the process for `read`, `""` declaring none.
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn in_profile<T>(profile: &str, read: impl FnOnce() -> T) -> T {
+        let mut out = None;
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(nest_rs_config::Environment::var_name(), profile);
+            out = Some(read());
+            Ok(())
+        });
+        out.expect("the jailed read ran")
+    }
+
+    #[test]
+    fn the_unpinned_default_opens_the_playground_and_introspection_in_development_and_test_alone() {
+        for (profile, open) in [
+            ("development", true),
+            ("test", true),
+            ("staging", false),
+            ("production", false),
+            ("", false),
+        ] {
+            let d = in_profile(profile, <GraphqlConfig as Config>::defaults);
+            assert_eq!(d.playground, open, "{profile:?}");
+            assert_eq!(d.disable_introspection, !open, "{profile:?}");
+        }
+    }
+
+    #[test]
+    fn the_unpinned_default_emits_the_schema_under_development_alone() {
+        for (profile, emits) in [
+            ("development", true),
+            ("test", false),
+            ("staging", false),
+            ("production", false),
+            ("", false),
+        ] {
+            let d = in_profile(profile, <GraphqlConfig as Config>::defaults);
+            assert_eq!(d.emit, emits, "{profile:?}");
+        }
+    }
+
+    #[test]
+    fn a_pin_over_the_struct_default_opens_nothing_in_development() {
+        let cfg = in_profile("development", || {
+            GraphqlConfig::from_env(
+                &ConfigService::with_vars("graphql", []),
+                GraphqlConfig {
+                    max_depth: Some(9),
+                    ..GraphqlConfig::default()
+                },
+            )
+            .expect("ok")
+        });
+        assert!(!cfg.playground && cfg.disable_introspection && !cfg.emit);
+    }
+
+    #[test]
+    fn a_surface_opened_outside_a_dev_profile_is_reported_by_name() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let cfg = in_profile("production", || {
+            GraphqlConfig::from_env(
+                &ConfigService::with_vars(
+                    "graphql",
+                    [("PLAYGROUND", "true"), ("DISABLE_INTROSPECTION", "false")],
+                ),
+                GraphqlConfig::default(),
+            )
+            .expect("an explicit opening is honoured")
+        });
+        assert!(cfg.playground && !cfg.disable_introspection);
+        for surface in [PLAYGROUND_OPEN, INTROSPECTION_OPEN] {
+            let event = logs.expect_one("nest_rs::graphql", surface);
+            assert_eq!(event.level, "warn");
+            assert_eq!(event.field("environment").as_deref(), Some("production"));
+        }
+    }
+
+    #[test]
+    fn the_surfaces_open_in_development_are_silent() {
+        let logs = nest_rs_testing::LogCapture::install();
+        in_profile("development", || {
+            GraphqlConfig::from_env(
+                &ConfigService::with_vars("graphql", []),
+                <GraphqlConfig as Config>::defaults(),
+            )
+        })
+        .expect("the profile's defaults resolve");
+        for surface in [PLAYGROUND_OPEN, INTROSPECTION_OPEN] {
+            assert!(
+                logs.find("nest_rs::graphql", surface).is_empty(),
+                "the default posture is not an incident: {:#?}",
+                logs.events(),
+            );
+        }
     }
 
     #[test]
@@ -253,8 +410,8 @@ mod tests {
         let d = GraphqlConfig::default();
         assert_eq!(cfg.path, d.path);
         assert_eq!(cfg.playground, d.playground);
-        assert_eq!(cfg.schema_path, d.schema_path);
-        assert_eq!(cfg.emit_sdl, d.emit_sdl);
+        assert_eq!(cfg.emit_path, d.emit_path);
+        assert_eq!(cfg.emit, d.emit);
         assert_eq!(cfg.max_depth, d.max_depth);
         assert_eq!(cfg.max_complexity, d.max_complexity);
         assert_eq!(cfg.disable_introspection, d.disable_introspection);
@@ -292,8 +449,8 @@ mod tests {
             [
                 ("PATH", "/api/graphql"),
                 ("PLAYGROUND", "true"),
-                ("SCHEMA_PATH", "./schema-out.graphql"),
-                ("EMIT_SDL", "true"),
+                ("EMIT_PATH", "./schema-out.graphql"),
+                ("EMIT", "true"),
                 ("MAX_DEPTH", "15"),
                 ("MAX_COMPLEXITY", "2000"),
             ],
@@ -301,8 +458,8 @@ mod tests {
         let cfg = GraphqlConfig::from_env(&service, Default::default()).expect("ok");
         assert_eq!(cfg.path, "/api/graphql");
         assert!(cfg.playground);
-        assert_eq!(cfg.schema_path, PathBuf::from("./schema-out.graphql"));
-        assert!(cfg.emit_sdl);
+        assert_eq!(cfg.emit_path, PathBuf::from("./schema-out.graphql"));
+        assert!(cfg.emit);
         assert_eq!(cfg.max_depth, Some(15));
         assert_eq!(cfg.max_complexity, Some(2000));
     }

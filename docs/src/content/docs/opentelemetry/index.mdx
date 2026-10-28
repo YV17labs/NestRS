@@ -103,7 +103,7 @@ pinned `OpenTelemetryConfig`.
 | `<PREFIX>_OPENTELEMETRY__SERVICE_ENVIRONMENT` | `deployment_environment` | `None` |
 | `<PREFIX>_OPENTELEMETRY__SERVICE_INSTANCE_ID` | `service_instance_id` | fresh UUIDv7 per process |
 | `<PREFIX>_LOG` | `log_filter` | `info` (the framework-wide logging family) |
-| `<PREFIX>_LOG_FORMAT` | `log_format` | `text` in debug, `json` in release |
+| `<PREFIX>_LOG_FORMAT` | `log_format` | `text` under a declared development or test profile, `json` otherwise |
 | `<PREFIX>_LOG_SOURCE_LOCATION` | `log_source_location` | `false` |
 | `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` | `otlp_endpoint` | `None` (console-only) |
 | `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO` | `trace_sample_ratio` | `1.0` |

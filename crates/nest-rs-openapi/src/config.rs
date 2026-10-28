@@ -36,12 +36,17 @@ pub struct OpenApiConfig {
     pub contact: Option<OpenApiContact>,
     /// The license the API is offered under.
     pub license: Option<OpenApiLicense>,
-    /// (Re)write [`document_path`](Self::document_path) with the built document
-    /// once at boot. Default `false`.
-    pub emit_document: bool,
-    /// Where [`emit_document`](Self::emit_document) writes the JSON document,
-    /// relative to the process working directory. Default `openapi.json`.
-    pub document_path: PathBuf,
+    /// (Re)write [`emit_path`](Self::emit_path) with the built document once
+    /// at boot — the committed copy a pull request diffs. `Default` keeps it
+    /// off, and only a development profile's [`Config::defaults`] turns it on:
+    /// under test, parallel suites would rewrite a committed file. A write
+    /// failure is logged, never fatal.
+    pub emit: bool,
+    /// Where [`emit`](Self::emit) writes the JSON document. Default
+    /// `openapi.json`; a relative path is the app crate's — the one
+    /// `#[nest_rs::main]` expanded in — so each app of a workspace writes its
+    /// own.
+    pub emit_path: PathBuf,
 }
 
 impl Default for OpenApiConfig {
@@ -55,17 +60,19 @@ impl Default for OpenApiConfig {
             terms_of_service: None,
             contact: None,
             license: None,
-            emit_document: false,
-            document_path: "openapi.json".into(),
+            emit: false,
+            emit_path: "openapi.json".into(),
         }
     }
 }
 
 impl Config for OpenApiConfig {
-    // Not in `from_env`: overlaying it would rewrite a pinned `enabled: true`.
+    // Not in `from_env`: overlaying it would rewrite a pinned value.
     fn defaults() -> Self {
+        let environment = Environment::from_env();
         Self {
-            enabled: !Environment::from_env().is_deployed(),
+            enabled: !environment.is_deployed(),
+            emit: environment == Environment::Development,
             ..Self::default()
         }
     }
@@ -90,11 +97,11 @@ impl Config for OpenApiConfig {
             terms_of_service: env.get("TERMS_OF_SERVICE")?.or(d.terms_of_service),
             contact: contact_from_env(env, d.contact)?,
             license: license_from_env(env, d.license)?,
-            emit_document: env.flag("EMIT_DOCUMENT", d.emit_document)?,
-            document_path: env
-                .get("DOCUMENT_PATH")?
+            emit: env.flag("EMIT", d.emit)?,
+            emit_path: env
+                .get("EMIT_PATH")?
                 .map(PathBuf::from)
-                .unwrap_or(d.document_path),
+                .unwrap_or(d.emit_path),
         })
     }
 }
@@ -310,6 +317,31 @@ mod tests {
                 assert_eq!(
                     <OpenApiConfig as Config>::defaults().enabled,
                     enabled,
+                    "{profile:?}"
+                );
+            }
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn the_unpinned_default_emits_the_document_under_development_alone() {
+        figment::Jail::expect_with(|jail| {
+            for (profile, emits) in [
+                ("development", true),
+                ("test", false),
+                ("staging", false),
+                ("production", false),
+                ("", false),
+            ] {
+                jail.set_env(nest_rs_config::Environment::var_name(), profile);
+                assert_eq!(
+                    <OpenApiConfig as Config>::defaults().emit,
+                    emits,
                     "{profile:?}"
                 );
             }

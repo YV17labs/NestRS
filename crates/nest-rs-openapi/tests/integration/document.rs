@@ -73,7 +73,7 @@ impl HealthController {
 fn openapi() -> OpenApiSetup {
     OpenApiModule::for_root(OpenApiConfig {
         enabled: true,
-        emit_document: false,
+        emit: false,
         ..OpenApiConfig::default()
     })
 }

@@ -80,7 +80,7 @@ fn openapi(enabled: bool) -> OpenApiSetup {
         title: "Widget API".into(),
         version: "9.9.9".into(),
         // An enabled emit would write `openapi.json` into the runner's directory.
-        emit_document: false,
+        emit: false,
         ..OpenApiConfig::default()
     })
 }
@@ -556,8 +556,8 @@ async fn a_form_encoded_body_is_described_as_one() {
     imports = [
         OpenApiModule::for_root(OpenApiConfig {
             enabled: true,
-            emit_document: true,
-            document_path: unwritable_document_path(),
+            emit: true,
+            emit_path: unwritable_document_path(),
             ..OpenApiConfig::default()
         }),
     ],

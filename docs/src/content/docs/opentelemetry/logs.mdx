@@ -343,11 +343,13 @@ envelope, the consumer continues from it.
 
 ## Text vs JSON
 
-The console layer ships both formats. Default is `text` (pretty for dev). For
-prod, set:
+The console layer ships both formats, and the declared profile picks one:
+`text` under `<PREFIX>_ENV=development` or `test`, `json` under any other —
+production and an undeclared process alike, whatever the cargo build profile.
+Either is set on the process when a run wants the other:
 
 ```bash
-NESTRS_LOG_FORMAT=json
+NESTRS_LOG_FORMAT=text
 ```
 
 A value that is neither stops the boot, naming the variable: a typo never

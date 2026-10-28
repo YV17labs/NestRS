@@ -1,7 +1,8 @@
 //! `nest-rs-storage`'s suite against a live S3-compatible server over TLS: the
 //! dev container's RustFS and its `nestrs` bucket, which the environment
 //! creates as it does the database, or the store `<PREFIX>_STORAGE__URL` and
-//! `<PREFIX>_STORAGE__ENDPOINT` name.
+//! `<PREFIX>_STORAGE__ENDPOINT` name. No profile names a store, so the suite
+//! pins the dev container's as its own base.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -34,16 +35,23 @@ static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
 static PROXY: LazyLock<TestCertificate> =
     LazyLock::new(|| AUTHORITY.server(&["127.0.0.1", "localhost"]));
 
-/// The suite's store as an app resolves it: `<PREFIX>_STORAGE__*` over the
-/// test profile's defaults — the dev container's RustFS and the pair it
-/// accepts, unless the environment names others.
+/// The suite's store as an app pinning it resolves it: `<PREFIX>_STORAGE__*`
+/// over the dev container's RustFS, its bucket and the pair it starts with,
+/// unless the environment names others.
 fn config() -> StorageConfig {
     nest_rs_testing::load_project_env();
-    StorageConfig::load().expect("the suite's storage config resolves")
+    StorageConfig::resolve(Some(StorageConfig {
+        url: "s3://nestrs".into(),
+        endpoint: Some("https://rustfs:9000".into()),
+        access_key: "nestrs".into(),
+        secret_key: "nestrs".into(),
+        ..StorageConfig::defaults()
+    }))
+    .expect("the suite's storage config resolves")
 }
 
 /// The store's endpoint, which `<PREFIX>_STORAGE__ENDPOINT` names, or the
-/// test profile names the dev container's RustFS.
+/// suite's base names the dev container's RustFS.
 fn endpoint() -> String {
     config()
         .endpoint

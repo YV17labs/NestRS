@@ -73,8 +73,8 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
             // One ledger for every document, so a route collision is reported once.
             let mut reported = Reported::default();
             let default = spec(container, &options, None, &mut reported);
-            if options.emit_document {
-                let dest = options.document_path.clone();
+            if options.emit {
+                let dest = nest_rs_core::__private::in_app_dir(&options.emit_path);
                 let contents = format!("{default}\n");
                 tokio::task::spawn_blocking(move || match std::fs::write(&dest, &contents) {
                     Ok(()) => tracing::info!(

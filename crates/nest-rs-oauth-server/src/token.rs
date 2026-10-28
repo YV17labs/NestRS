@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use nest_rs_core::Secret;
 use nest_rs_http::__private::{DocumentedBody, schema_of};
 use nest_rs_http::{
     Form, FromRequest, HeaderValue, HttpError, IntoResponse, Json, Request, RequestBody,
@@ -255,12 +256,13 @@ impl DocumentedBody for AccessTokenRequest {
 ///
 /// let cacheable = Json(AccessTokenResponse::bearer("t", 60)).into_response();
 /// ```
-#[derive(JsonSchema)]
+#[derive(Debug, JsonSchema)]
 #[non_exhaustive]
 #[schemars(description = "RFC 6749 §5.1 — the successful access token response.")]
 pub struct AccessTokenResponse {
-    /// §5.1 REQUIRED — the token itself.
-    pub access_token: String,
+    /// §5.1 REQUIRED — the token itself, a bearer credential until it expires.
+    #[schemars(with = "String")]
+    pub access_token: Secret<String>,
     /// §5.1 REQUIRED — `Bearer` for RFC 6750.
     pub token_type: String,
     /// §5.1 RECOMMENDED — lifetime in seconds, from the moment of the response.
@@ -291,7 +293,7 @@ impl AccessTokenResponse {
     /// A `Bearer` token (RFC 6750) living `expires_in` seconds, its scope unstated.
     pub fn bearer(access_token: impl Into<String>, expires_in: u64) -> Self {
         Self {
-            access_token: access_token.into(),
+            access_token: Secret::new(access_token.into()),
             token_type: "Bearer".to_owned(),
             expires_in,
             scope: Vec::new(),
@@ -306,25 +308,6 @@ impl AccessTokenResponse {
     }
 }
 
-impl fmt::Debug for AccessTokenResponse {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Destructured, so a member added later is a compile error here until
-        // it says whether it is a credential.
-        let Self {
-            access_token: _,
-            token_type,
-            expires_in,
-            scope,
-        } = self;
-        f.debug_struct("AccessTokenResponse")
-            .field("access_token", &"<redacted>")
-            .field("token_type", token_type)
-            .field("expires_in", expires_in)
-            .field("scope", scope)
-            .finish()
-    }
-}
-
 impl IntoResponse for AccessTokenResponse {
     fn into_response(self) -> Response {
         let Self {
@@ -334,7 +317,7 @@ impl IntoResponse for AccessTokenResponse {
             scope,
         } = &self;
         let mut response = Json(Wire {
-            access_token,
+            access_token: access_token.expose_secret(),
             token_type,
             expires_in: *expires_in,
             scope,

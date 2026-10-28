@@ -43,7 +43,10 @@ impl SocialProvider for GoogleSocialProvider {
 
     fn profile<'a>(&'a self, tokens: &'a TokenSet) -> ProfileFuture<'a> {
         Box::pin(async move {
-            let info: GoogleUserinfo = self.client.userinfo(&tokens.access_token).await?;
+            let info: GoogleUserinfo = self
+                .client
+                .userinfo(tokens.access_token.expose_secret())
+                .await?;
             Ok::<_, AuthError>(
                 SocialProfile::new(Self::KEY, info.sub)
                     .with_email(info.email, info.email_verified)
@@ -83,7 +86,13 @@ mod tests {
             .with_email(info.email, info.email_verified)
             .with_name(info.name);
         assert_eq!(profile.subject, "1");
-        assert_eq!(profile.email.as_deref(), Some("ada@example.com"));
+        assert_eq!(
+            profile
+                .email
+                .as_ref()
+                .map(|email| email.expose_secret().as_str()),
+            Some("ada@example.com")
+        );
         assert!(profile.email_verified);
     }
 

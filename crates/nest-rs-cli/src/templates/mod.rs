@@ -163,37 +163,50 @@ mod tests {
         );
     }
 
-    /// `CLAUDE.md` hard "no": a `Debug` over a credential is one `?field` away
-    /// from a log line, so no scaffolded struct derives it over one.
-    #[test]
-    fn no_scaffolded_struct_derives_debug_over_a_credential() {
+    /// The structs of `src` deriving `Debug`, and the fields among theirs named
+    /// for a credential and not typed as a `Secret`.
+    fn credentials_under_debug(src: &str) -> (usize, Vec<&str>) {
         const CREDENTIALS: [&str; 4] = ["token", "password", "secret", "credential"];
 
+        let mut derives = 0;
+        let mut exposed = Vec::new();
+        let mut debug = false;
+        let mut fields = false;
+        for line in src.lines().map(str::trim) {
+            if line.starts_with("#[derive(") {
+                debug |= line.contains("Debug");
+            } else if fields {
+                if line == "}" {
+                    fields = false;
+                } else if let Some((name, ty)) = line.trim_start_matches("pub ").split_once(':')
+                    && name.split('_').any(|word| CREDENTIALS.contains(&word))
+                    && !ty.contains("Secret<")
+                {
+                    exposed.push(line);
+                }
+            } else if line.starts_with("pub struct ") || line.starts_with("struct ") {
+                derives += usize::from(debug);
+                fields = debug && line.ends_with('{');
+                debug = false;
+            } else if !line.starts_with("#[") {
+                debug = false;
+            }
+        }
+        (derives, exposed)
+    }
+
+    /// `CLAUDE.md` hard "no": a `Debug` over a credential is one `?field` away
+    /// from a log line, so a scaffolded struct deriving it holds a credential
+    /// only as a `Secret`, whose `Debug` prints `<redacted>`.
+    #[test]
+    fn no_scaffolded_struct_derives_debug_over_a_credential() {
         let scanned = sources();
         let mut derives = 0;
         let mut exposed = Vec::new();
         for (file, src) in &scanned {
-            let mut debug = false;
-            let mut fields = false;
-            for line in src.lines().map(str::trim) {
-                if line.starts_with("#[derive(") {
-                    debug |= line.contains("Debug");
-                } else if fields {
-                    if line == "}" {
-                        fields = false;
-                    } else if let Some((name, _)) = line.trim_start_matches("pub ").split_once(':')
-                        && name.split('_').any(|word| CREDENTIALS.contains(&word))
-                    {
-                        exposed.push(format!("{file}: `{line}`"));
-                    }
-                } else if line.starts_with("pub struct ") || line.starts_with("struct ") {
-                    derives += usize::from(debug);
-                    fields = debug && line.ends_with('{');
-                    debug = false;
-                } else if !line.starts_with("#[") {
-                    debug = false;
-                }
-            }
+            let (found, lines) = credentials_under_debug(src);
+            derives += found;
+            exposed.extend(lines.into_iter().map(|line| format!("{file}: `{line}`")));
         }
         assert!(
             derives >= 2,
@@ -203,6 +216,19 @@ mod tests {
             exposed.is_empty(),
             "a scaffolded `Debug` prints these credentials:\n{}",
             exposed.join("\n"),
+        );
+    }
+
+    /// The scan refuses a credential by its type, not its name alone: a
+    /// `Secret` passes, a `String` does not.
+    #[test]
+    fn the_credential_scan_passes_a_secret_and_refuses_a_plain_string() {
+        let src = "#[derive(Clone, Debug)]\npub struct Account {\n    pub password_hash: \
+                   Option<Secret<String>>,\n    pub api_secret: Secret<String>,\n    pub \
+                   reset_token: String,\n}\n";
+        assert_eq!(
+            credentials_under_debug(src),
+            (1, vec!["pub reset_token: String,"])
         );
     }
 

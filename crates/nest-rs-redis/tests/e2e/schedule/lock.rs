@@ -83,7 +83,7 @@ fn now_ms() -> u64 {
 
 fn schedule_config() -> RedisConfig {
     RedisConfig {
-        url: crate::redis_url_on(crate::DB_SCHEDULE),
+        url: crate::redis_url_on(crate::DB_SCHEDULE).into(),
         ..crate::redis_config()
     }
 }

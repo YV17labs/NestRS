@@ -126,7 +126,7 @@ impl ConnectPanicsGateway {
 #[module(
     imports = [
         SeaOrmModule::for_root(SeaOrmConfig {
-            url: crate::harness::url(),
+            url: crate::harness::url().into(),
             ..Default::default()
         }),
         SeaOrmDatabaseModule,
@@ -287,7 +287,7 @@ impl DeadlineGateway {
 #[module(
     imports = [
         SeaOrmModule::for_root(SeaOrmConfig {
-            url: crate::harness::url(),
+            url: crate::harness::url().into(),
             ..Default::default()
         }),
         SeaOrmDatabaseModule,
@@ -370,7 +370,7 @@ impl BlockedGateway {
 #[module(
     imports = [
         SeaOrmModule::for_root(SeaOrmConfig {
-            url: crate::harness::url(),
+            url: crate::harness::url().into(),
             ..Default::default()
         }),
         SeaOrmDatabaseModule,

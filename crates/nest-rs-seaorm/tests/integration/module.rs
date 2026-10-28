@@ -72,7 +72,7 @@ async fn the_pool_never_logs_in_to_a_server_whose_certificate_no_trusted_authori
 
     let Err(refused) = App::builder()
         .provide(SeaOrmConfig {
-            url,
+            url: url.into(),
             connect_timeout_secs: Some(60),
             ..Default::default()
         })
@@ -121,7 +121,7 @@ async fn a_host_whose_name_does_not_resolve_is_retried_within_the_budget_then_re
 
     let Err(refused) = App::builder()
         .provide(SeaOrmConfig {
-            url: "postgres://nestrs:s3cret@nestrs-boot-proof.invalid:5432/app".to_owned(),
+            url: "postgres://nestrs:s3cret@nestrs-boot-proof.invalid:5432/app".into(),
             connect_timeout_secs: Some(2),
             ..Default::default()
         })
@@ -214,7 +214,7 @@ async fn unreachable_after_retrying(url: String) -> (String, Vec<String>) {
     let began = Instant::now();
     let Err(refused) = App::builder()
         .provide(SeaOrmConfig {
-            url,
+            url: url.into(),
             connect_timeout_secs: Some(1),
             ..Default::default()
         })

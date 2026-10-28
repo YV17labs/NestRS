@@ -4,6 +4,7 @@ use nest_rs_config::{
     Bound, ClientTls, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor,
     Namespaced, Setting, config, endpoint_shown,
 };
+use nest_rs_core::Secret;
 
 use crate::backend::{Backend, Unopened};
 
@@ -70,9 +71,9 @@ pub struct StorageConfig {
     /// (`bucket.endpoint/key`), AWS's.
     pub force_path_style: bool,
     /// S3 only: the access key id requests are signed with.
-    pub access_key: String,
+    pub access_key: Secret<String>,
     /// S3 only: the secret access key requests are signed with.
-    pub secret_key: String,
+    pub secret_key: Secret<String>,
     /// S3 only: allow reaching the endpoint over plain `http://`
     /// (`<PREFIX>_STORAGE__ALLOW_HTTP`): `false` by default, and `true` only in
     /// a declared development or test profile's [`Config::defaults`].
@@ -106,8 +107,8 @@ impl std::fmt::Debug for StorageConfig {
             .field("endpoint", &self.endpoint.as_deref().map(endpoint_shown))
             .field("region", &self.region)
             .field("force_path_style", &self.force_path_style)
-            .field("access_key", &"<redacted>")
-            .field("secret_key", &"<redacted>")
+            .field("access_key", &self.access_key)
+            .field("secret_key", &self.secret_key)
             .field("allow_http", &self.allow_http)
             .field("operation_timeout", &self.operation_timeout)
             .field("read_timeout", &self.read_timeout)
@@ -123,8 +124,8 @@ impl Default for StorageConfig {
             endpoint: None,
             region: "us-east-1".into(),
             force_path_style: true,
-            access_key: String::new(),
-            secret_key: String::new(),
+            access_key: Secret::default(),
+            secret_key: Secret::default(),
             allow_http: false,
             operation_timeout: Duration::from_secs(DEFAULT_OPERATION_TIMEOUT_SECS),
             read_timeout: Duration::from_secs(DEFAULT_READ_TIMEOUT_SECS),
@@ -209,7 +210,7 @@ impl StorageConfig {
             ("ACCESS_KEY", &self.access_key),
             ("SECRET_KEY", &self.secret_key),
         ] {
-            if value.trim().is_empty() {
+            if value.expose_secret().trim().is_empty() {
                 return Err(ConfigError::unset(Self::NAMESPACE, key, PAIR_WHY));
             }
         }
@@ -316,6 +317,7 @@ fn refuse_half_a_credential(
         _ => return Ok(()),
     };
     let (set_var, other_file_var) = (set.var(), env.var_name(&format!("{other}_FILE")));
+    let other_value = other_value.expose_secret();
     let message = if other_value.trim().is_empty() {
         format!("is not set, nor is {other_file_var}, beside {set_var} — set both")
     } else {
@@ -365,14 +367,14 @@ const PAIR_WHY: &str = "the pair is deployment data, which no default holds in a
 fn resolve_credential(
     key: &str,
     setting: Option<Setting>,
-    base: String,
-) -> nest_rs_config::Result<String> {
+    base: Secret<String>,
+) -> nest_rs_config::Result<Secret<String>> {
     match setting {
         Some(setting) if setting.value.trim().is_empty() => {
             Err(setting.refuse("is blank — it must hold the credential"))
         }
-        Some(setting) => Ok(setting.value),
-        None if base.trim().is_empty() => {
+        Some(setting) => Ok(Secret::new(setting.value)),
+        None if base.expose_secret().trim().is_empty() => {
             Err(ConfigError::unset(StorageConfig::NAMESPACE, key, PAIR_WHY))
         }
         None => Ok(base),
@@ -391,7 +393,7 @@ mod tests {
             "plain HTTP is opened by the profile or in sight"
         );
         assert!(
-            d.access_key.is_empty() && d.secret_key.is_empty(),
+            d.access_key.expose_secret().is_empty() && d.secret_key.expose_secret().is_empty(),
             "a pair anyone can read is no credential"
         );
         assert!(
@@ -414,8 +416,8 @@ mod tests {
                 assert!(
                     d.url.is_empty()
                         && d.endpoint.is_none()
-                        && d.access_key.is_empty()
-                        && d.secret_key.is_empty(),
+                        && d.access_key.expose_secret().is_empty()
+                        && d.secret_key.expose_secret().is_empty(),
                     "a store and its pair are the profile file's, never the framework's: \
                      {profile}"
                 );
@@ -603,7 +605,7 @@ mod tests {
     fn credential_blank_aborts_naming_both_its_spellings() {
         // The struct default holds no pair, so an unset variable over it
         // arrives here blank.
-        let err = resolve_credential("SECRET_KEY", None, String::new())
+        let err = resolve_credential("SECRET_KEY", None, Secret::default())
             .expect_err("must abort")
             .to_string();
         assert!(
@@ -625,7 +627,9 @@ mod tests {
         let env = ConfigService::with_vars("storage", [("ACCESS_KEY", "AKIAREAL")]);
         let setting = env.setting("ACCESS_KEY").expect("reads");
         assert_eq!(
-            resolve_credential("ACCESS_KEY", setting, String::new()).expect("set ⇒ ok"),
+            resolve_credential("ACCESS_KEY", setting, Secret::default())
+                .expect("set ⇒ ok")
+                .expose_secret(),
             "AKIAREAL",
         );
     }
@@ -679,6 +683,19 @@ mod tests {
             ..StorageConfig::default()
         };
         assert!(!format!("{pinned:?}").contains("s3cr3t"), "{pinned:?}");
+    }
+
+    #[test]
+    fn debug_never_prints_the_credentials() {
+        let pinned = StorageConfig {
+            access_key: "AKIAPINNED".into(),
+            secret_key: "pinned-secret".into(),
+            ..StorageConfig::default()
+        };
+        let printed = format!("{pinned:?}");
+        assert!(!printed.contains("AKIAPINNED"), "{printed}");
+        assert!(!printed.contains("pinned-secret"), "{printed}");
+        assert!(printed.contains("secret_key: <redacted>"), "{printed}");
     }
 
     #[test]
@@ -748,8 +765,12 @@ mod tests {
         )
         .expect("a whole pair over a whole pin resolves");
         assert_eq!(cfg.endpoint.as_deref(), Some("https://s3.example"));
-        assert_eq!(cfg.access_key, "AKIAREAL");
-        assert_eq!(cfg.secret_key, "real-secret", "the pair is replaced whole");
+        assert_eq!(cfg.access_key.expose_secret(), "AKIAREAL");
+        assert_eq!(
+            cfg.secret_key.expose_secret(),
+            "real-secret",
+            "the pair is replaced whole"
+        );
         assert_eq!(
             cfg.url, "s3://pinned-bucket",
             "the pin survives where the env is silent"
@@ -1063,7 +1084,7 @@ mod tests {
     #[test]
     fn a_config_built_in_code_is_refused_what_the_read_refuses_naming_the_variables() {
         let blank_pair = StorageConfig {
-            access_key: String::new(),
+            access_key: Secret::default(),
             ..paired()
         }
         .backend()

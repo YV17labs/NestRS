@@ -127,7 +127,7 @@ impl PostsResolver {
 #[module(
     imports = [
         SeaOrmModule::for_root(SeaOrmConfig {
-            url: crate::harness::url(),
+            url: crate::harness::url().into(),
             ..Default::default()
             }),
             SeaOrmDatabaseModule,

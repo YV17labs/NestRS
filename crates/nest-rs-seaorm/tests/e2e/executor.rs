@@ -145,7 +145,7 @@ impl ItemsController {
 #[module(
     imports = [
         SeaOrmModule::for_root(SeaOrmConfig {
-            url: crate::harness::url(),
+            url: crate::harness::url().into(),
             ..Default::default()
         }),
         SeaOrmDatabaseModule,
@@ -338,7 +338,7 @@ async fn a_rollback_after_a_statement_postgres_cancelled_is_said_at_warn() {
     let logs = nest_rs_testing::LogCapture::install();
     let app = nest_rs_core::App::builder()
         .provide(SeaOrmConfig {
-            url: crate::harness::url(),
+            url: crate::harness::url().into(),
             statement_timeout_secs: Some(1),
             ..SeaOrmConfig::default()
         })

@@ -5,6 +5,7 @@ use std::time::Duration;
 use nest_rs_config::{
     Bound, Config, ConfigError, ConfigService, DurationBounds, Floor, Result, config, var_name,
 };
+use nest_rs_core::Secret;
 
 use crate::pseudonym::MIN_KEY_BYTES;
 
@@ -29,11 +30,8 @@ const PSEUDONYM_KEY: &str = "PSEUDONYM_KEY";
 
 /// Rate-limit settings, settable via `<PREFIX>_THROTTLER__*` or pinned through
 /// [`ThrottlerModule::for_root`](crate::ThrottlerModule::for_root).
-///
-/// No `Debug` derive: the pseudonym key is a secret, and its `Debug` says only
-/// whether it is set.
 #[config(namespace = "throttler")]
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ThrottlerConfig {
     /// Requests allowed per window. Unset ⇒ module default (60).
     pub limit: Option<u32>,
@@ -45,20 +43,7 @@ pub struct ThrottlerConfig {
     /// never reaches it. At least 32 bytes, the same on every replica sharing
     /// the store; required beside one (`RedisThrottlerModule`), unused by the
     /// in-process default. `<PREFIX>_THROTTLER__PSEUDONYM_KEY`, or its `_FILE`.
-    pub pseudonym_key: Option<String>,
-}
-
-impl std::fmt::Debug for ThrottlerConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ThrottlerConfig")
-            .field("limit", &self.limit)
-            .field("window_secs", &self.window_secs)
-            .field(
-                "pseudonym_key",
-                &self.pseudonym_key.as_ref().map(|_| "<redacted>"),
-            )
-            .finish()
-    }
+    pub pseudonym_key: Option<Secret<String>>,
 }
 
 /// Why a pseudonym key shorter than [`MIN_KEY_BYTES`] is refused, without its
@@ -76,9 +61,9 @@ impl Config for ThrottlerConfig {
             Some(setting) if setting.value.len() < MIN_KEY_BYTES => {
                 return Err(setting.refuse(SHORT_KEY));
             }
-            Some(setting) => Some(setting.value),
+            Some(setting) => Some(Secret::new(setting.value)),
             None => match base.pseudonym_key {
-                Some(pinned) if pinned.len() < MIN_KEY_BYTES => {
+                Some(pinned) if pinned.expose_secret().len() < MIN_KEY_BYTES => {
                     return Err(ConfigError::parse(
                         var_name("throttler", PSEUDONYM_KEY),
                         format!("`ThrottlerConfig::pseudonym_key` set in code {SHORT_KEY}"),
@@ -209,7 +194,7 @@ mod tests {
         let pinned = ThrottlerConfig::from_env(
             &ConfigService::with_vars("throttler", []),
             ThrottlerConfig {
-                pseudonym_key: Some(short.to_owned()),
+                pseudonym_key: Some(short.into()),
                 ..ThrottlerConfig::default()
             },
         )
@@ -231,7 +216,13 @@ mod tests {
             Default::default(),
         )
         .expect("a 32-byte key is read");
-        assert_eq!(cfg.pseudonym_key.as_deref(), Some(key));
+        assert_eq!(
+            cfg.pseudonym_key
+                .as_ref()
+                .map(Secret::expose_secret)
+                .map(String::as_str),
+            Some(key)
+        );
         let shown = format!("{cfg:?}");
         assert!(
             !shown.contains(key) && shown.contains("<redacted>"),

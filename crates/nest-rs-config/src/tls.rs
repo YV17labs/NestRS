@@ -7,7 +7,6 @@
 //! turns it off, and `clippy.toml` refuses the libraries' own switches.
 
 use std::error::Error;
-use std::fmt;
 use std::io;
 use std::sync::Arc;
 
@@ -15,6 +14,8 @@ use rustls::crypto::{CryptoProvider, KeyProvider};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
+
+use nest_rs_core::Secret;
 
 use crate::{ConfigError, ConfigService, Material, Result, Setting, system_authorities};
 
@@ -44,26 +45,20 @@ pub struct ClientTls {
 }
 
 /// A certificate chain, leaf first, and the private key it certifies, both PEM.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TlsIdentity {
     cert: Material,
-    key: Material,
+    key: Secret<Material>,
 }
 
 impl TlsIdentity {
     /// The chain in `cert` presented with the key in `key`; whether they belong
     /// together is [`ClientTls::check`]'s to judge.
     pub fn new(cert: Material, key: Material) -> Self {
-        Self { cert, key }
-    }
-}
-
-impl fmt::Debug for TlsIdentity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TlsIdentity")
-            .field("cert", &self.cert)
-            .field("key", &"<redacted>")
-            .finish()
+        Self {
+            cert,
+            key: Secret::new(key),
+        }
     }
 }
 
@@ -135,7 +130,7 @@ impl ClientTls {
             let provider = crypto_provider();
             certified_key(
                 &identity.cert.bytes,
-                &identity.key.bytes,
+                &identity.key.expose_secret().bytes,
                 provider.key_provider,
             )
             .map_err(|refused| refused.naming(env, identity))?;
@@ -193,7 +188,7 @@ impl ClientTls {
         self.identity.as_ref().map(|identity| {
             (
                 identity.cert.bytes.as_slice(),
-                identity.key.bytes.as_slice(),
+                identity.key.expose_secret().bytes.as_slice(),
             )
         })
     }
@@ -377,14 +372,19 @@ pub fn reqwest_tls(tls: &ClientTls, env: &ConfigService) -> Result<ReqwestTls> {
         .as_ref()
         .map(|identity| {
             reqwest::Identity::from_pem(
-                &[&identity.cert.bytes[..], b"\n", &identity.key.bytes].concat(),
+                &[
+                    &identity.cert.bytes[..],
+                    b"\n",
+                    &identity.key.expose_secret().bytes,
+                ]
+                .concat(),
             )
             .map_err(|error| {
                 ConfigError::parse(
                     named(env, "TLS_CERT", &identity.cert),
                     format!(
                         "and {} could not be presented: {}",
-                        named(env, "TLS_KEY", &identity.key),
+                        named(env, "TLS_KEY", identity.key.expose_secret()),
                         nest_rs_core::error_message(&error)
                     ),
                 )
@@ -458,7 +458,7 @@ impl PairRefusal {
     /// The refusal of `identity`, naming `env`'s variable for the half refused.
     fn naming(self, env: &ConfigService, identity: &TlsIdentity) -> ConfigError {
         let cert = || named(env, "TLS_CERT", &identity.cert);
-        let key = || named(env, "TLS_KEY", &identity.key);
+        let key = || named(env, "TLS_KEY", identity.key.expose_secret());
         match self {
             Self::CertificateNotPem => ConfigError::parse(cert(), NOT_PEM),
             Self::NoCertificate => ConfigError::parse(cert(), "holds no CERTIFICATE block"),
@@ -575,6 +575,26 @@ mod tests {
         tls.check(&redis())
             .expect_err("the material is refused")
             .to_string()
+    }
+
+    #[test]
+    fn debug_never_prints_the_key_nor_where_it_was_read() {
+        let key = Material {
+            bytes: CLIENT.key.as_bytes().to_vec(),
+            path: Some("/run/secrets/client-key.pem".into()),
+        };
+        let tls = ClientTls::new(
+            None,
+            Some(TlsIdentity::new(
+                Material::inline(CLIENT.cert.as_bytes()),
+                key,
+            )),
+        );
+        let printed = format!("{tls:?}");
+        let line = CLIENT.key.lines().nth(1).expect("a base64 line of the key");
+        assert!(!printed.contains(line), "{printed}");
+        assert!(!printed.contains("client-key.pem"), "{printed}");
+        assert!(printed.contains("key: <redacted>"), "{printed}");
     }
 
     #[cfg(feature = "reqwest")]

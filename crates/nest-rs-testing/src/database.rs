@@ -184,7 +184,7 @@ fn unique_name() -> String {
 /// `url`'s connect options, as the app's pool opens its connections.
 fn options(url: &str) -> Result<ConnectOptions> {
     Ok(SeaOrmConfig {
-        url: url.to_owned(),
+        url: url.into(),
         ..SeaOrmConfig::default()
     }
     .connect_options()?)

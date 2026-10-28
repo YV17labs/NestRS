@@ -19,7 +19,7 @@ use crate::module::{CACHE_URL, Cache, cache_config};
 /// `<PREFIX>_REDIS__URL` would outrank a pin.
 fn default_on(server: &DemotedRedis) -> RedisConfig {
     RedisConfig {
-        url: server.url(),
+        url: server.url().into(),
         connect_timeout: Duration::from_secs(2),
         tls: trusting_the_test_authority(),
     }

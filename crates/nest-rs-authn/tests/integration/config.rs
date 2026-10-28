@@ -396,7 +396,13 @@ fn the_eddsa_keys_are_read_from_the_files_their_file_variables_name() {
     let _ = std::fs::remove_dir_all(&dir);
 
     let config = config.expect("from_env");
-    assert_eq!(config.private_key.as_deref(), Some(crate::DEV_PRIVATE_KEY));
+    assert_eq!(
+        config
+            .private_key
+            .as_ref()
+            .map(|key| key.expose_secret().as_str()),
+        Some(crate::DEV_PRIVATE_KEY)
+    );
     assert_eq!(config.public_key.as_deref(), Some(crate::DEV_PUBLIC_KEY));
 }
 
@@ -735,7 +741,7 @@ async fn a_secret_signs_with_the_hmac_algorithm_named() {
 
     let jwt = JwtService::new(
         AuthnConfig {
-            secret: Some("x".repeat(64)),
+            secret: Some("x".repeat(64).into()),
             algorithms: Some(vec![Algorithm::HS512]),
             ..Default::default()
         }
@@ -754,4 +760,28 @@ async fn a_secret_signs_with_the_hmac_algorithm_named() {
         jsonwebtoken::Algorithm::HS512
     );
     jwt.verify::<Claims>(&token).await.expect("verifies");
+}
+
+/// The signing material is a `Secret` and the JWK Set URI is shown without its
+/// userinfo or query, so a `{:?}` of the config in a log line holds no key.
+#[test]
+fn debug_prints_no_signing_material_and_no_credential_in_the_jwks_uri() {
+    let printed = format!(
+        "{:?}",
+        AuthnConfig {
+            secret: Some(STRONG_SECRET.into()),
+            private_key: Some(crate::DEV_PRIVATE_KEY.into()),
+            jwks_uri: Some("https://user:URLSECRET1@idp.example/jwks?key=URLSECRET2".into()),
+            ..Default::default()
+        }
+    );
+    for material in [STRONG_SECRET, "PRIVATE KEY", "URLSECRET"] {
+        assert!(!printed.contains(material), "{material} in {printed}");
+    }
+    assert!(
+        printed.contains("secret: Some(<redacted>)")
+            && printed.contains("private_key: Some(<redacted>)")
+            && printed.contains("jwks_uri: Some(\"https://idp.example/jwks\")"),
+        "{printed}"
+    );
 }

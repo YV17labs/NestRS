@@ -74,7 +74,7 @@ fn redis_url() -> String {
 /// suite would fail on connect instead of measuring anything.
 fn redis_config() -> RedisConfig {
     RedisConfig {
-        url: redis_url(),
+        url: redis_url().into(),
         connect_timeout: BUDGET,
         ..Default::default()
     }
@@ -84,7 +84,7 @@ fn redis_config() -> RedisConfig {
 /// certificate is issued by.
 fn through(url: String) -> RedisConfig {
     RedisConfig {
-        url,
+        url: url.into(),
         tls: harness::tls::trusting_the_test_authority(),
         ..redis_config()
     }
@@ -183,7 +183,7 @@ fn redis_url_on(db: u8) -> String {
 /// [`redis_config`] on database `db`.
 fn redis_config_on(db: u8) -> RedisConfig {
     RedisConfig {
-        url: redis_url_on(db),
+        url: redis_url_on(db).into(),
         ..redis_config()
     }
 }
@@ -687,7 +687,7 @@ async fn requiring_client_certificates(body: impl std::future::Future<Output = (
 async fn a_client_certificate_is_required_at(url: String) {
     let logs = nest_rs_testing::LogCapture::install();
     let presenting = RedisConfig {
-        url: url.clone(),
+        url: url.clone().into(),
         tls: presenting_the_development_certificate(),
         ..redis_config()
     };
@@ -718,7 +718,7 @@ async fn a_client_certificate_is_required_at(url: String) {
     }
 
     let absent = RedisConfig {
-        url: url.clone(),
+        url: url.clone().into(),
         connect_timeout: Duration::from_secs(30),
         ..redis_config()
     };
@@ -1366,7 +1366,7 @@ async fn documented_user(page: &str, role: &str, user: &str, db: u8) -> RedisCon
     forget_user(user).await;
     let _: Vec<()> = on_every_node(&create).await;
     RedisConfig {
-        url: url_as(&redis_url_on(db), user, ACL_PASSWORD),
+        url: url_as(&redis_url_on(db), user, ACL_PASSWORD).into(),
         ..redis_config()
     }
 }

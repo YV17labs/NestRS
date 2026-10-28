@@ -708,6 +708,8 @@ pub struct ObjectEntry {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    use nest_rs_core::Secret;
+
     use super::*;
 
     impl Storage {
@@ -1111,7 +1113,7 @@ mod tests {
             ),
             (
                 StorageConfig {
-                    secret_key: String::new(),
+                    secret_key: Secret::default(),
                     ..s3_at("https://s3.example", false)
                 },
                 "SECRET_KEY",

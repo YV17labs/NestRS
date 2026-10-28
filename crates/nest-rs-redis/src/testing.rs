@@ -48,7 +48,7 @@ pub(crate) fn unnamed() -> crate::instance::RedisInstance {
 /// `url` under `budget`, everything else at its default.
 pub(crate) fn config(url: &str, budget: Duration) -> RedisConfig {
     RedisConfig {
-        url: url.to_owned(),
+        url: url.into(),
         connect_timeout: budget,
         ..RedisConfig::default()
     }

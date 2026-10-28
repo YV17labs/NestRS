@@ -82,7 +82,7 @@ fn policy() -> ThrottlerSetup {
     ThrottlerModule::for_root(ThrottlerConfig {
         limit: Some(60),
         window_secs: Some(WINDOW_SECS),
-        pseudonym_key: Some("nest-rs-redis integration pseudonym key".to_owned()),
+        pseudonym_key: Some("nest-rs-redis integration pseudonym key".into()),
     })
 }
 
@@ -111,7 +111,7 @@ async fn a_redis_that_stops_denies_with_one_line_from_the_guard_and_none_from_th
     let server = StoppingRedis::start().await;
     let app = App::builder()
         .provide(RedisConfig {
-            url: server.url(),
+            url: server.url().into(),
             connect_timeout: Duration::from_secs(1),
             tls: crate::harness::tls::trusting_the_test_authority(),
             ..RedisConfig::default()

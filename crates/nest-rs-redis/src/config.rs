@@ -6,6 +6,7 @@ use std::time::Duration;
 use nest_rs_config::{
     Bound, ClientTls, Config, ConfigError, ConfigService, DurationBounds, Floor, Result, config,
 };
+use nest_rs_core::Secret;
 
 /// Default boot budget for reaching Redis: 10s.
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
@@ -29,14 +30,13 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
 );
 
 /// Redis settings, settable via `<PREFIX>_REDIS__*` or pinned through
-/// [`RedisModule::for_root`](crate::RedisModule::for_root). The URL and the
-/// private key are redacted in `Debug` output — the URL may embed credentials.
+/// [`RedisModule::for_root`](crate::RedisModule::for_root).
 ///
 /// No profile names a Redis: the boot refuses an unset `<PREFIX>_REDIS__URL`
 /// by name in every one, and the deployment — or the profile's `.env` file,
 /// as `nestrs new` writes it — names the server to dial.
 #[config(namespace = "redis")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RedisConfig {
     /// The Redis connection URL, whose scheme declares the topology:
     /// `redis://valkey:6379/2` one server;
@@ -44,8 +44,8 @@ pub struct RedisConfig {
     /// the primary the sentinels name (`sentinelUsername` and
     /// `sentinelPassword` for sentinels holding users); and
     /// `redis-cluster://n1:6379/2?node=n2:6379` a Cluster. Each `rediss…://`
-    /// form connects over TLS.
-    pub url: String,
+    /// form connects over TLS. A [`Secret`], since it may carry a password.
+    pub url: Secret<String>,
     /// How long boot may spend reaching Redis before failing with a named
     /// error, and afterwards the most any command a caller waits on may take
     /// from end to end — past it the command fails as a timeout. Read from
@@ -66,20 +66,10 @@ pub struct RedisConfig {
     pub tls: ClientTls,
 }
 
-impl std::fmt::Debug for RedisConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RedisConfig")
-            .field("url", &"<redacted>")
-            .field("connect_timeout", &self.connect_timeout)
-            .field("tls", &self.tls)
-            .finish()
-    }
-}
-
 impl Default for RedisConfig {
     fn default() -> Self {
         Self {
-            url: String::new(),
+            url: Secret::default(),
             connect_timeout: Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS),
             tls: ClientTls::default(),
         }
@@ -100,13 +90,13 @@ impl Config for RedisConfig {
 /// The deployment's URL, else the base's — a pin — refusing a blank one under
 /// the spelling that set it, or the variable of the instance `env` reads when
 /// neither holds one.
-fn resolve_url(env: &ConfigService, base: String) -> Result<String> {
+fn resolve_url(env: &ConfigService, base: Secret<String>) -> Result<Secret<String>> {
     match env.setting("URL")? {
         Some(setting) if setting.value.trim().is_empty() => {
             Err(setting.refuse("is blank — it must hold the Redis URL"))
         }
-        Some(setting) => Ok(setting.value),
-        None if base.trim().is_empty() => Err(ConfigError::unset(
+        Some(setting) => Ok(Secret::new(setting.value)),
+        None if base.expose_secret().trim().is_empty() => Err(ConfigError::unset(
             env.namespace(),
             "URL",
             "the URL is deployment data, which no default holds in any profile, and a config \
@@ -125,7 +115,7 @@ mod tests {
     #[test]
     fn the_struct_default_holds_no_url() {
         assert!(
-            RedisConfig::default().url.is_empty(),
+            RedisConfig::default().url.expose_secret().is_empty(),
             "an address is deployment data, never a default"
         );
     }
@@ -150,7 +140,7 @@ mod tests {
         for profile in ["development", "test", "staging", "production", ""] {
             let d = in_profile(profile, <RedisConfig as Config>::defaults);
             assert!(
-                d.url.is_empty(),
+                d.url.expose_secret().is_empty(),
                 "an address is the profile file's, never the framework's: {profile:?}"
             );
             assert_eq!(
@@ -159,6 +149,17 @@ mod tests {
                 "{profile:?}"
             );
         }
+    }
+
+    #[test]
+    fn debug_never_prints_the_url() {
+        let config = RedisConfig {
+            url: "rediss://app:s3cret@valkey:6379/2".into(),
+            ..RedisConfig::default()
+        };
+        let printed = format!("{config:?}");
+        assert!(!printed.contains("s3cret"), "{printed}");
+        assert!(printed.contains("url: <redacted>"), "{printed}");
     }
 
     #[test]
@@ -225,7 +226,8 @@ mod tests {
         )
         .expect("the overlay resolves");
         assert_eq!(
-            cfg.url, "redis://from-env:6379/",
+            cfg.url.expose_secret(),
+            "redis://from-env:6379/",
             "the env outranks the pin"
         );
         assert_eq!(
@@ -347,7 +349,11 @@ mod tests {
                 )
             })
             .expect("set ⇒ ok");
-            assert_eq!(cfg.url, "redis://redis:6379/1", "{profile:?}");
+            assert_eq!(
+                cfg.url.expose_secret(),
+                "redis://redis:6379/1",
+                "{profile:?}"
+            );
         }
     }
 
@@ -358,6 +364,6 @@ mod tests {
             Default::default(),
         )
         .expect("ok");
-        assert_eq!(cfg.url, "redis://redis.staging:6379/2");
+        assert_eq!(cfg.url.expose_secret(), "redis://redis.staging:6379/2");
     }
 }

@@ -1,17 +1,18 @@
 use nest_rs::config::{ClientTls, Config, ConfigService, config};
+use nest_rs::core::Secret;
 use nest_rs::oauth::client::OAuthClientConfig;
 use nest_rs::social::SocialProviderConfig;
 
 /// The probe's credentials, complete by default: a probe the app holds is never inert.
 #[config(namespace = "social_probe")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ProbeSocialConfig {
     /// The OAuth client id.
     #[validate(length(min = 1))]
     pub client_id: String,
     /// The OAuth client secret.
     #[validate(length(min = 1))]
-    pub client_secret: String,
+    pub client_secret: Secret<String>,
 }
 
 impl Default for ProbeSocialConfig {
@@ -42,13 +43,16 @@ impl Config for ProbeSocialConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
         Ok(Self {
             client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
-            client_secret: env.get("CLIENT_SECRET")?.unwrap_or(base.client_secret),
+            client_secret: env
+                .get("CLIENT_SECRET")?
+                .map(Secret::new)
+                .unwrap_or(base.client_secret),
         })
     }
 }
 
 impl SocialProviderConfig for ProbeSocialConfig {
     fn is_unconfigured(&self) -> bool {
-        self.client_id.is_empty() && self.client_secret.is_empty()
+        self.client_id.is_empty() && self.client_secret.expose_secret().is_empty()
     }
 }

@@ -1,30 +1,31 @@
 //! The social-login provider contract.
 
-use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
 use nest_rs_authn::{AuthError, JwtService};
+use nest_rs_core::Secret;
 use nest_rs_oauth_client::{AuthorizationRedirect, OAuthClient, TokenSet};
 
 /// The normalized profile a provider reports for the authenticated caller.
 ///
 /// Identity resolution keys on [`subject`](SocialProfile::subject), never the
-/// email. [`Debug`] redacts `email` and `name`, printing only their presence.
+/// email. The email and the name are personal data, so each is a [`Secret`]:
+/// `Debug` prints only whether it is there.
 #[non_exhaustive]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SocialProfile {
     /// Provider key, e.g. `"github"` — must match [`SocialProvider::key`].
     pub provider: &'static str,
     /// Provider-side stable identifier (GitHub numeric id, OIDC `sub`).
     pub subject: String,
     /// The account email, if the provider returned one.
-    pub email: Option<String>,
+    pub email: Option<Secret<String>>,
     /// Whether the provider attests the email. Drives the linking rule: only a
     /// verified email may match an existing account.
     pub email_verified: bool,
     /// The account display name, if the provider returned one.
-    pub name: Option<String>,
+    pub name: Option<Secret<String>>,
 }
 
 impl SocialProfile {
@@ -43,28 +44,15 @@ impl SocialProfile {
     /// Set the email and whether the provider attests it in one call — the two
     /// travel together so a caller cannot mark an absent email verified.
     pub fn with_email(mut self, email: Option<String>, verified: bool) -> Self {
-        self.email = email.filter(|e| !e.is_empty());
+        self.email = email.filter(|e| !e.is_empty()).map(Secret::new);
         self.email_verified = verified && self.email.is_some();
         self
     }
 
     /// Set the display name, treating an empty string as absent.
     pub fn with_name(mut self, name: Option<String>) -> Self {
-        self.name = name.filter(|n| !n.is_empty());
+        self.name = name.filter(|n| !n.is_empty()).map(Secret::new);
         self
-    }
-}
-
-impl fmt::Debug for SocialProfile {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let redact = |v: &Option<String>| v.as_ref().map(|_| "<redacted>");
-        f.debug_struct("SocialProfile")
-            .field("provider", &self.provider)
-            .field("subject", &self.subject)
-            .field("email", &redact(&self.email))
-            .field("email_verified", &self.email_verified)
-            .field("name", &redact(&self.name))
-            .finish()
     }
 }
 
@@ -115,4 +103,29 @@ pub trait SocialProvider: Send + Sync + 'static {
     /// so an OIDC provider may read identity from the id_token rather than a
     /// userinfo endpoint. No default — this is the per-provider code.
     fn profile<'a>(&'a self, tokens: &'a TokenSet) -> ProfileFuture<'a>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_prints_whether_the_personal_data_is_there_and_never_what() {
+        let profile = SocialProfile::new("github", "42")
+            .with_email(Some("ada@example.com".into()), true)
+            .with_name(Some("Ada Lovelace".into()));
+        let printed = format!("{profile:?}");
+        assert!(!printed.contains("ada@example.com"), "{printed}");
+        assert!(!printed.contains("Lovelace"), "{printed}");
+        assert!(printed.contains("email: Some(<redacted>)"), "{printed}");
+        assert!(printed.contains("42"), "the subject stays: {printed}");
+        assert_eq!(
+            profile
+                .email
+                .as_ref()
+                .map(Secret::expose_secret)
+                .map(String::as_str),
+            Some("ada@example.com")
+        );
+    }
 }

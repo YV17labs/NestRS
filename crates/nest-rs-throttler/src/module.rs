@@ -76,7 +76,11 @@ impl DynamicModule for ThrottlerSetup {
                 )
             })?;
             let config = ConfigModule::resolved::<ThrottlerConfig>(&container)?;
-            ThrottlerGuard::new(store, *default, config.pseudonym_key.as_deref())
+            let pseudonym_key = config
+                .pseudonym_key
+                .as_ref()
+                .map(|key| key.expose_secret().as_str());
+            ThrottlerGuard::new(store, *default, pseudonym_key)
         })
     }
 }

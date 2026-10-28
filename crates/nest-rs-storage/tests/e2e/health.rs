@@ -35,8 +35,8 @@ async fn at_the_root_of(bucket: &str, method: Method) -> u16 {
     let mut builder = AmazonS3Builder::new()
         .with_client_options(options)
         .with_region(&suite.region)
-        .with_access_key_id(&suite.access_key)
-        .with_secret_access_key(&suite.secret_key)
+        .with_access_key_id(suite.access_key.expose_secret())
+        .with_secret_access_key(suite.secret_key.expose_secret())
         .with_bucket_name(bucket)
         .with_virtual_hosted_style_request(!suite.force_path_style);
     if let Some(endpoint) = &suite.endpoint {

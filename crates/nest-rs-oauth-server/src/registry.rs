@@ -5,21 +5,20 @@ use aws_lc_rs::constant_time::verify_slices_are_equal;
 
 use nest_rs_authn::AuthError;
 use nest_rs_authn::PrincipalIdentity;
-use nest_rs_core::AmbientValue;
+use nest_rs_core::{AmbientValue, Secret};
 
 use crate::TokenError;
 
 /// A machine client permitted to use the `client_credentials` grant, as loaded
 /// from configuration. Generic over the principal payload `P` the app attaches
 /// (deserialized from the `payload` field next to the credentials).
-/// [`Debug`] is hand-written and redacts `client_secret`.
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize)]
 #[non_exhaustive]
 pub struct RegisteredClient<P> {
     /// The client's public identifier, matched in constant time.
     pub client_id: String,
     /// The client's shared secret, matched in constant time.
-    pub client_secret: String,
+    pub client_secret: Secret<String>,
     /// Scopes granted to this client, copied onto the authenticated principal.
     pub scopes: Vec<String>,
     /// The resources (RFC 8707) a token minted for this client may name as
@@ -44,23 +43,11 @@ impl<P> RegisteredClient<P> {
     ) -> Self {
         Self {
             client_id: client_id.into(),
-            client_secret: client_secret.into(),
+            client_secret: Secret::new(client_secret.into()),
             scopes: scopes.into_iter().map(Into::into).collect(),
             resources: resources.into_iter().map(Into::into).collect(),
             payload,
         }
-    }
-}
-
-impl<P: std::fmt::Debug> std::fmt::Debug for RegisteredClient<P> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RegisteredClient")
-            .field("client_id", &self.client_id)
-            .field("client_secret", &"<redacted>")
-            .field("scopes", &self.scopes)
-            .field("resources", &self.resources)
-            .field("payload", &self.payload)
-            .finish()
     }
 }
 
@@ -155,9 +142,11 @@ pub fn authenticate_against_registry<P: Clone>(
     for client in clients {
         let id_ok =
             verify_slices_are_equal(client.client_id.as_bytes(), client_id.as_bytes()).is_ok();
-        let secret_ok =
-            verify_slices_are_equal(client.client_secret.as_bytes(), client_secret.as_bytes())
-                .is_ok();
+        let secret_ok = verify_slices_are_equal(
+            client.client_secret.expose_secret().as_bytes(),
+            client_secret.as_bytes(),
+        )
+        .is_ok();
         if id_ok & secret_ok && matched.is_none() {
             matched = Some(client);
         }

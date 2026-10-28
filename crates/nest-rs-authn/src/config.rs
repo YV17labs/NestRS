@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use nest_rs_config::{
     Bound, ClientTls, Config, ConfigService, DurationBounds, Floor, Namespaced, config,
+    endpoint_shown,
 };
+use nest_rs_core::Secret;
 
 use crate::algorithm::{Family, algorithms_of};
 use crate::error::AuthError;
@@ -42,17 +44,19 @@ pub(crate) const LEEWAY: DurationBounds = DurationBounds::secs(
 
 /// Env-driven JWT key material (namespace `authn`). The combination of keys
 /// present selects the signing mode; see [`into_options`](Self::into_options).
-/// No `Debug` derive: secrets must not leak through a format.
+///
+/// `Debug` shows `jwks_uri` through [`endpoint_shown`]: its userinfo or query
+/// may carry the issuer's credential.
 #[config(namespace = "authn")]
 #[derive(Clone, Default)]
 pub struct AuthnConfig {
     /// HS256 shared secret (key `SECRET`); must be ≥ 32 bytes. A verifier
     /// holding it can also mint tokens. Refused beside either EdDSA key.
-    pub secret: Option<String>,
+    pub secret: Option<Secret<String>>,
     /// EdDSA signing key, PEM (key `PRIVATE_KEY`, or a path in
     /// `PRIVATE_KEY_FILE`). Set only on the app that issues tokens, beside the
     /// `public_key` of its own pair.
-    pub private_key: Option<String>,
+    pub private_key: Option<Secret<String>>,
     /// EdDSA verification key, PEM (key `PUBLIC_KEY`, or a path in
     /// `PUBLIC_KEY_FILE`). A resource server holds only this — it can verify
     /// but not sign.
@@ -111,11 +115,46 @@ pub struct AuthnConfig {
     pub explicit_typing: Option<bool>,
 }
 
+impl std::fmt::Debug for AuthnConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            secret,
+            private_key,
+            public_key,
+            jwks_uri,
+            algorithms,
+            tls,
+            leeway_secs,
+            audience,
+            issuer,
+            expires_in_secs,
+            allow_any_audience,
+            explicit_typing,
+        } = self;
+        f.debug_struct("AuthnConfig")
+            .field("secret", secret)
+            .field("private_key", private_key)
+            .field("public_key", public_key)
+            .field("jwks_uri", &jwks_uri.as_deref().map(endpoint_shown))
+            .field("algorithms", algorithms)
+            .field("tls", tls)
+            .field("leeway_secs", leeway_secs)
+            .field("audience", audience)
+            .field("issuer", issuer)
+            .field("expires_in_secs", expires_in_secs)
+            .field("allow_any_audience", allow_any_audience)
+            .field("explicit_typing", explicit_typing)
+            .finish()
+    }
+}
+
 impl Config for AuthnConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            secret: env.get("SECRET")?.or(base.secret),
-            private_key: pem_text(env, "PRIVATE_KEY")?.or(base.private_key),
+            secret: env.get("SECRET")?.map(Secret::new).or(base.secret),
+            private_key: pem_text(env, "PRIVATE_KEY")?
+                .map(Secret::new)
+                .or(base.private_key),
             public_key: pem_text(env, "PUBLIC_KEY")?.or(base.public_key),
             jwks_uri: env.get("JWKS_URI")?.or(base.jwks_uri),
             algorithms: algorithms(env)?.or(base.algorithms),
@@ -227,8 +266,8 @@ pub(crate) fn tls_setting() -> String {
 /// The key a secret, a private key and a public key make, or why they make
 /// none — every combination named, the order of the arms deciding nothing.
 fn static_key(
-    secret: Option<String>,
-    private: Option<String>,
+    secret: Option<Secret<String>>,
+    private: Option<Secret<String>>,
     public: Option<String>,
 ) -> Result<JwtKey, AuthError> {
     match (secret, private, public) {

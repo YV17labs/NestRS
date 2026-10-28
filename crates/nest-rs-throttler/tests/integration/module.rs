@@ -86,7 +86,7 @@ mod pseudonym_key {
 
     #[module(imports = [
         ThrottlerModule::for_root(ThrottlerConfig {
-            pseudonym_key: Some("thirty-two bytes, exactly enough".to_owned()),
+            pseudonym_key: Some("thirty-two bytes, exactly enough".into()),
             ..ThrottlerConfig::default()
         }),
         ElsewhereModule,

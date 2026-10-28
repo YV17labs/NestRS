@@ -263,7 +263,7 @@ async fn the_ceiling_budget_connects_and_serves() {
     let dialled = tokio::time::timeout(
         Duration::from_secs(30),
         RedisConnection::connect(&RedisConfig {
-            url: crate::redis_url(),
+            url: crate::redis_url().into(),
             connect_timeout: Duration::from_secs(60 * 60),
             ..RedisConfig::default()
         }),
@@ -314,7 +314,7 @@ async fn every_holder_answers(
 async fn the_connection_answers_again_once_redis_drops_it() {
     let url = crate::redis_url_on(crate::DB_CONNECTION_DROP);
     let conn = RedisConnection::connect(&RedisConfig {
-        url: url.clone(),
+        url: url.clone().into(),
         ..RedisConfig::default()
     })
     .await
@@ -467,7 +467,7 @@ mod standalone {
     async fn a_command_redis_holds_fails_at_the_budget_and_the_connection_outlives_it() {
         let budget = Duration::from_millis(300);
         let mut conn = crate::connected(&RedisConfig {
-            url: crate::redis_url(),
+            url: crate::redis_url().into(),
             connect_timeout: budget,
             ..RedisConfig::default()
         })

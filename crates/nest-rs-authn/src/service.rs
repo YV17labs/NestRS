@@ -6,7 +6,8 @@ use jsonwebtoken::{
     DecodingKey, EncodingKey, Header, Validation, decode, decode_header, encode, errors::ErrorKind,
     get_current_timestamp,
 };
-use nest_rs_config::{Namespaced, var_name};
+use nest_rs_config::{Namespaced, endpoint_shown, var_name};
+use nest_rs_core::Secret;
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
@@ -100,16 +101,19 @@ const AT_JWT: &str = "at+jwt";
 const AT_JWT_LONG: &str = "application/at+jwt";
 
 /// Key material backing a [`JwtService`].
+///
+/// `Debug` shows a JWK Set's `uri` through [`endpoint_shown`]: its userinfo or
+/// query may carry the issuer's credential.
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum JwtKey {
     /// Shared secret: the same key signs and verifies. Every verifier can also mint.
-    Hmac(String),
+    Hmac(Secret<String>),
     /// Asymmetric PEM keys. `private_pem` is `None` on a verify-only resource server.
     Pem {
         /// EdDSA private key, PEM. `None` on a verify-only resource server —
         /// then [`sign`](JwtService::sign) refuses.
-        private_pem: Option<String>,
+        private_pem: Option<Secret<String>>,
         /// EdDSA public key, PEM. Always present — verification needs it.
         public_pem: String,
     },
@@ -126,9 +130,30 @@ pub enum JwtKey {
     },
 }
 
+impl std::fmt::Debug for JwtKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Hmac(secret) => f.debug_tuple("Hmac").field(secret).finish(),
+            Self::Pem {
+                private_pem,
+                public_pem,
+            } => f
+                .debug_struct("Pem")
+                .field("private_pem", private_pem)
+                .field("public_pem", public_pem)
+                .finish(),
+            Self::Jwks { uri, tls } => f
+                .debug_struct("Jwks")
+                .field("uri", &endpoint_shown(uri))
+                .field("tls", tls)
+                .finish(),
+        }
+    }
+}
+
 /// Runtime JWT settings passed to [`JwtService::new`]; a field added in a minor
 /// release is set by assignment after a constructor, never in a literal.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct JwtOptions {
     /// The key material — an HMAC secret, an EdDSA PEM pair, or an issuer's
@@ -200,13 +225,13 @@ impl JwtOptions {
     /// HS256 options from a shared secret. Audience/issuer are unset (no
     /// claim check) and TTL defaults to 1 hour — layer on via the fields.
     pub fn new(secret: impl Into<String>) -> Self {
-        Self::with_key(JwtKey::Hmac(secret.into()))
+        Self::with_key(JwtKey::Hmac(Secret::new(secret.into())))
     }
 
     /// EdDSA options with both keys — a token *issuer* that can sign and verify.
     pub fn eddsa(private_pem: impl Into<String>, public_pem: impl Into<String>) -> Self {
         Self::with_key(JwtKey::Pem {
-            private_pem: Some(private_pem.into()),
+            private_pem: Some(Secret::new(private_pem.into())),
             public_pem: public_pem.into(),
         })
     }
@@ -407,6 +432,7 @@ impl JwtService {
 
         let (signer, verifier) = match &options.key {
             JwtKey::Hmac(secret) => {
+                let secret = secret.expose_secret();
                 // Fail closed at the derivation point every constructor reaches.
                 if secret.trim().is_empty() {
                     return Err(AuthError::failed(format!(
@@ -453,15 +479,16 @@ impl JwtService {
                 })?;
                 let signer = match private_pem {
                     Some(pem) => {
-                        let encoding = EncodingKey::from_ed_pem(pem.as_bytes()).map_err(|e| {
-                            AuthError::failed_because(
-                                format!(
-                                    "{}, is not an EdDSA private key in PEM form",
-                                    crate::config::spellings("PRIVATE_KEY", "private_key"),
-                                ),
-                                e,
-                            )
-                        })?;
+                        let encoding = EncodingKey::from_ed_pem(pem.expose_secret().as_bytes())
+                            .map_err(|e| {
+                                AuthError::failed_because(
+                                    format!(
+                                        "{}, is not an EdDSA private key in PEM form",
+                                        crate::config::spellings("PRIVATE_KEY", "private_key"),
+                                    ),
+                                    e,
+                                )
+                            })?;
                         prove_one_pair(&encoding, &decoding, signing)?;
                         Some(Signer {
                             key: encoding,

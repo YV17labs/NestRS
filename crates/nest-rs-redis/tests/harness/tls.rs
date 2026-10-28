@@ -158,7 +158,7 @@ async fn close_gracefully(mut refused: TcpStream) {
 
 pub(crate) fn config(url: String, tls: ClientTls) -> RedisConfig {
     RedisConfig {
-        url,
+        url: url.into(),
         tls,
         ..RedisConfig::default()
     }

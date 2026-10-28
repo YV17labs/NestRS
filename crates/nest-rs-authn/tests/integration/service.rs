@@ -689,3 +689,38 @@ async fn a_token_signed_for_a_resource_carries_the_signers_stamps() {
     assert!(stamped["iat"].is_u64(), "{stamped}");
     assert!(stamped["jti"].as_str().is_some_and(|id| !id.is_empty()));
 }
+
+/// Every key a `JwtKey` holds prints as `<redacted>` and a JWK Set's URI
+/// without its userinfo or query; `JwtOptions` prints its key the same way.
+#[test]
+fn debug_prints_no_key_material_and_no_credential_in_the_jwks_uri() {
+    use nest_rs_authn::JwtKey;
+
+    let secret = "an-hmac-secret-padded-to-thirty-two-bytes";
+    let keys = [
+        JwtKey::Hmac(secret.into()),
+        JwtKey::Pem {
+            private_pem: Some(crate::DEV_PRIVATE_KEY.into()),
+            public_pem: crate::DEV_PUBLIC_KEY.into(),
+        },
+        JwtKey::Jwks {
+            uri: "https://user:URLSECRET1@idp.example/jwks?key=URLSECRET2".into(),
+            tls: nest_rs_config::ClientTls::default(),
+        },
+    ];
+    let shown = [
+        "Hmac(<redacted>)",
+        "private_pem: Some(<redacted>)",
+        "uri: \"https://idp.example/jwks\"",
+    ];
+    for (key, shown) in keys.into_iter().zip(shown) {
+        let mut options = JwtOptions::new(secret);
+        options.key = key.clone();
+        for printed in [format!("{key:?}"), format!("{options:?}")] {
+            for material in [secret, "PRIVATE KEY", "URLSECRET"] {
+                assert!(!printed.contains(material), "{material} in {printed}");
+            }
+            assert!(printed.contains(shown), "{shown} in {printed}");
+        }
+    }
+}

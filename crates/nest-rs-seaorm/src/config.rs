@@ -5,6 +5,7 @@ use std::str::FromStr;
 use nest_rs_config::{
     Bound, Config, ConfigError, ConfigService, DurationBounds, Floor, Namespaced, Result, config,
 };
+use nest_rs_core::Secret;
 use sea_orm::ConnectOptions;
 use sea_orm::sqlx::postgres::{PgConnectOptions, PgSslMode};
 
@@ -65,10 +66,11 @@ pub(crate) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// settable via a `<PREFIX>_SEAORM__*` env var (see `from_env`) or pinned through
 /// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
 #[config(namespace = "seaorm")]
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct SeaOrmConfig {
-    /// e.g. `postgres://user:pass@host/db`. Empty aborts the build.
-    pub url: String,
+    /// e.g. `postgres://user:pass@host/db`, a [`Secret`] since it may carry the
+    /// password. Empty aborts the build.
+    pub url: Secret<String>,
     /// Upper bound on pooled connections; `None` uses SeaORM's default.
     pub max_connections: Option<u32>,
     /// Lower bound on idle pooled connections; `None` uses SeaORM's default.
@@ -103,7 +105,7 @@ pub struct SeaOrmConfig {
 impl Config for SeaOrmConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            url: env.get("URL")?.unwrap_or(base.url),
+            url: env.get("URL")?.map(Secret::new).unwrap_or(base.url),
             max_connections: env.parse("MAX_CONNECTIONS")?.or(base.max_connections),
             min_connections: env.parse("MIN_CONNECTIONS")?.or(base.min_connections),
             connect_timeout_secs: CONNECT_TIMEOUT
@@ -118,23 +120,6 @@ impl Config for SeaOrmConfig {
                 base.observe_serialization_conflicts,
             )?,
         })
-    }
-}
-
-impl std::fmt::Debug for SeaOrmConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SeaOrmConfig")
-            .field("url", &"<redacted>")
-            .field("max_connections", &self.max_connections)
-            .field("min_connections", &self.min_connections)
-            .field("connect_timeout_secs", &self.connect_timeout_secs)
-            .field("statement_timeout_secs", &self.statement_timeout_secs)
-            .field("sqlx_logging", &self.sqlx_logging)
-            .field(
-                "observe_serialization_conflicts",
-                &self.observe_serialization_conflicts,
-            )
-            .finish()
     }
 }
 
@@ -171,7 +156,7 @@ impl SeaOrmConfig {
             clippy::map_err_ignore,
             reason = "sqlx's parse error can quote the URL, which carries the password"
         )]
-        let url = PgConnectOptions::from_str(&self.url)
+        let url = PgConnectOptions::from_str(self.url.expose_secret())
             .map_err(|_| Self::refuse_url("is not a Postgres URL"))?;
         Ok(tls(url))
     }
@@ -209,7 +194,7 @@ impl SeaOrmConfig {
             clippy::map_err_ignore,
             reason = "sqlx's parse error can quote the URL, which carries the password"
         )]
-        let parsed = PgConnectOptions::from_str(&self.url)
+        let parsed = PgConnectOptions::from_str(self.url.expose_secret())
             .map_err(|_| Self::refuse_url("is not a Postgres URL"))?;
         match parsed.get_ssl_mode() {
             PgSslMode::Prefer if !named => Ok(PgSslMode::VerifyFull),
@@ -244,7 +229,7 @@ impl SeaOrmConfig {
 
     /// The value the URL's query gives the first of `keys` it names.
     fn query(&self, keys: &[&str]) -> Option<&str> {
-        let (_, query) = self.url.split_once('?')?;
+        let (_, query) = self.url.expose_secret().split_once('?')?;
         query.split('&').find_map(|pair| {
             let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
             keys.contains(&key).then_some(value)
@@ -263,7 +248,7 @@ impl SeaOrmConfig {
     /// checked. A refusal names its variable, and never quotes the URL, which
     /// carries the password.
     pub fn connect_options(&self) -> Result<ConnectOptions> {
-        if self.url.is_empty() {
+        if self.url.expose_secret().is_empty() {
             return Err(ConfigError::unset(
                 Self::NAMESPACE,
                 "URL",
@@ -280,7 +265,7 @@ impl SeaOrmConfig {
             )?,
             None => DEFAULT_CONNECT_TIMEOUT,
         };
-        let mut opts = ConnectOptions::new(self.url.clone());
+        let mut opts = ConnectOptions::new(self.url.expose_secret().clone());
         opts.map_sqlx_postgres_opts(tls);
         if let Some(n) = self.max_connections {
             opts.max_connections(n);
@@ -315,9 +300,17 @@ mod tests {
         .expect("the overlay resolves");
         assert_eq!(cfg.max_connections, Some(25), "the env outranks the pin");
         assert_eq!(
-            cfg.url, "postgres://pinned/app",
+            cfg.url.expose_secret(),
+            "postgres://pinned/app",
             "and the untouched pin survives",
         );
+    }
+
+    #[test]
+    fn debug_never_prints_the_url() {
+        let printed = format!("{:?}", pinned("postgres://app:s3cret@db/app"));
+        assert!(!printed.contains("s3cret"), "{printed}");
+        assert!(printed.contains("url: <redacted>"), "{printed}");
     }
 
     #[test]
@@ -531,7 +524,7 @@ mod tests {
             ],
         );
         let cfg = SeaOrmConfig::from_env(&service, Default::default()).expect("ok");
-        assert_eq!(cfg.url, "postgres://u@h/d");
+        assert_eq!(cfg.url.expose_secret(), "postgres://u@h/d");
         assert_eq!(cfg.max_connections, Some(25));
         assert_eq!(cfg.min_connections, Some(2));
         assert_eq!(cfg.connect_timeout_secs, Some(12));
@@ -646,7 +639,7 @@ mod tests {
         let cfg =
             SeaOrmConfig::from_env(&ConfigService::with_vars("seaorm", []), Default::default())
                 .expect("ok");
-        assert!(cfg.url.is_empty());
+        assert!(cfg.url.expose_secret().is_empty());
         assert!(cfg.max_connections.is_none());
         assert!(!cfg.sqlx_logging, "off by default — never noisy in prod");
         assert!(

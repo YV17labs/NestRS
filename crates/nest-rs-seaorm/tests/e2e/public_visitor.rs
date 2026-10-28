@@ -144,7 +144,7 @@ macro_rules! visitor_app {
             #[module(
                 imports = [
                     SeaOrmModule::for_root(SeaOrmConfig {
-                        url: crate::harness::url(),
+                        url: crate::harness::url().into(),
                         ..Default::default()
                     }),
                     SeaOrmDatabaseModule,

@@ -88,10 +88,17 @@ impl SocialProvider for GithubSocialProvider {
 
     fn profile<'a>(&'a self, tokens: &'a TokenSet) -> ProfileFuture<'a> {
         Box::pin(async move {
-            let user: GithubUser = self.client.userinfo(&tokens.access_token).await?;
+            let user: GithubUser = self
+                .client
+                .userinfo(tokens.access_token.expose_secret())
+                .await?;
             let display_name = user.name.or(user.login);
             let (email, verified) = self
-                .resolve_email(Self::EMAILS_URL, user.email, &tokens.access_token)
+                .resolve_email(
+                    Self::EMAILS_URL,
+                    user.email,
+                    tokens.access_token.expose_secret(),
+                )
                 .await;
             Ok::<_, AuthError>(
                 SocialProfile::new(Self::KEY, user.id.to_string())
@@ -253,7 +260,13 @@ mod tests {
     fn profile_email_maps_to_unverified_when_it_is_the_only_source() {
         let profile = SocialProfile::new(GithubSocialProvider::KEY, "42")
             .with_email(Some("ada@example.com".into()), false);
-        assert_eq!(profile.email.as_deref(), Some("ada@example.com"));
+        assert_eq!(
+            profile
+                .email
+                .as_ref()
+                .map(|email| email.expose_secret().as_str()),
+            Some("ada@example.com")
+        );
         assert!(!profile.email_verified);
     }
 }

@@ -299,7 +299,7 @@ impl StalledController {
         ThrottlerModule::for_root(ThrottlerConfig {
             limit: Some(60),
             window_secs: Some(WINDOW_SECS),
-            pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
+            pseudonym_key: Some(PSEUDONYM_KEY.into()),
         }),
         StalledStoreModule,
     ],
@@ -313,7 +313,7 @@ struct StalledHttpModule;
         ThrottlerModule::for_root(ThrottlerConfig {
             limit: Some(60),
             window_secs: Some(WINDOW_SECS),
-            pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
+            pseudonym_key: Some(PSEUDONYM_KEY.into()),
         }),
         SlowStoreModule,
     ],
@@ -327,7 +327,7 @@ struct SlowHttpModule;
         ThrottlerModule::for_root(ThrottlerConfig {
             limit: Some(60),
             window_secs: Some(WINDOW_SECS),
-            pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
+            pseudonym_key: Some(PSEUDONYM_KEY.into()),
         }),
         PanickingStoreModule,
     ],
@@ -341,7 +341,7 @@ struct PanickingHttpModule;
         ThrottlerModule::for_root(ThrottlerConfig {
             limit: Some(60),
             window_secs: Some(WINDOW_SECS),
-            pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
+            pseudonym_key: Some(PSEUDONYM_KEY.into()),
         }),
         FailingStoreModule,
     ],
@@ -492,7 +492,7 @@ fn generous() -> ThrottlerConfig {
     ThrottlerConfig {
         limit: Some(1_000),
         window_secs: Some(60),
-        pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
+        pseudonym_key: Some(PSEUDONYM_KEY.into()),
     }
 }
 

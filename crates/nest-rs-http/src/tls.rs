@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use nest_rs_config::__private::{PairRefusal, certified_key as checked_pair, crypto_provider};
 use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Setting};
+use nest_rs_core::Secret;
 use rustls::ServerConfig;
 use rustls::crypto::aws_lc_rs;
 use rustls::server::{ClientHello, ResolvesServerCert};
@@ -70,17 +71,17 @@ enum TlsSource {
 #[derive(Clone)]
 pub struct HttpTls {
     cert: Vec<u8>,
-    key: Vec<u8>,
+    key: Secret<Vec<u8>>,
     source: TlsSource,
     reload_secs: u64,
 }
 
-/// Prints sizes only, so `HttpConfig`'s derived `Debug` cannot log the key.
+/// The certificate by its size, not its PEM.
 impl std::fmt::Debug for HttpTls {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpTls")
             .field("cert", &format_args!("<{} bytes>", self.cert.len()))
-            .field("key", &format_args!("<{} bytes redacted>", self.key.len()))
+            .field("key", &self.key)
             .field("source", &self.source)
             .field("reload_secs", &self.reload_secs)
             .finish()
@@ -93,7 +94,7 @@ impl HttpTls {
     pub fn new(cert: impl Into<Vec<u8>>, key: impl Into<Vec<u8>>) -> Self {
         Self {
             cert: cert.into(),
-            key: key.into(),
+            key: Secret::new(key.into()),
             source: TlsSource::Inline,
             reload_secs: 0,
         }
@@ -108,7 +109,7 @@ impl HttpTls {
         let key = read_pem(&key_path)?;
         Ok(Self {
             cert,
-            key,
+            key: Secret::new(key),
             source: TlsSource::Files {
                 cert: cert_path,
                 key: key_path,
@@ -155,7 +156,7 @@ impl HttpTls {
                 let config = match (cert.path, key.path) {
                     (Some(cert_path), Some(key_path)) => Self {
                         cert: cert.bytes,
-                        key: key.bytes,
+                        key: Secret::new(key.bytes),
                         source: TlsSource::Files {
                             cert: cert_path,
                             key: key_path,
@@ -178,7 +179,7 @@ impl HttpTls {
     ///
     /// The pair is refused here when it cannot serve, before the port is bound.
     pub(crate) fn into_listener(self) -> Result<ListenerTls> {
-        let current = certified_key(&self.cert, &self.key)?;
+        let current = certified_key(&self.cert, self.key.expose_secret())?;
         // A pair built in code reaches here without a config read.
         if self.reload_secs > 0 {
             RELOAD.check(
@@ -309,7 +310,7 @@ struct Watcher {
     cert_path: PathBuf,
     key_path: PathBuf,
     cert: Vec<u8>,
-    key: Vec<u8>,
+    key: Secret<Vec<u8>>,
     interval: Duration,
 }
 
@@ -325,7 +326,7 @@ impl Watcher {
                 pending = None;
                 continue;
             };
-            if cert == self.cert && key == self.key {
+            if cert == self.cert && key == *self.key.expose_secret() {
                 pending = None;
                 continue;
             }
@@ -339,7 +340,7 @@ impl Watcher {
             // reported once rather than every interval.
             let (cert, key) = current;
             self.cert = cert.clone();
-            self.key = key.clone();
+            self.key = Secret::new(key.clone());
             return (cert, key);
         }
     }
@@ -534,7 +535,7 @@ mod tests {
             cert_path: dir.join("tls.pem"),
             key_path: dir.join("tls.key.pem"),
             cert: b"--IN-USE-CERT--".to_vec(),
-            key: b"--IN-USE-KEY--".to_vec(),
+            key: b"--IN-USE-KEY--".to_vec().into(),
             interval: Duration::from_millis(5),
         }
     }
@@ -640,7 +641,7 @@ mod tests {
     fn new_round_trips_bytes() {
         let cfg = HttpTls::new(b"--CERT--".to_vec(), b"--KEY--".to_vec());
         assert_eq!(cfg.cert, b"--CERT--");
-        assert_eq!(cfg.key, b"--KEY--");
+        assert_eq!(cfg.key.expose_secret(), b"--KEY--");
     }
 
     #[test]
@@ -687,7 +688,7 @@ mod tests {
         .expect("no error")
         .expect("Some");
         assert_eq!(cfg.cert, b"--ENV-CERT--");
-        assert_eq!(cfg.key, b"--ENV-KEY--");
+        assert_eq!(cfg.key.expose_secret(), b"--ENV-KEY--");
     }
 
     /// Half a pair is named as the deployment spelled it: a certificate given
@@ -729,7 +730,7 @@ mod tests {
         .expect("no error")
         .expect("Some");
         assert_eq!(cfg.cert, b"--CERT--");
-        assert_eq!(cfg.key, b"--KEY--");
+        assert_eq!(cfg.key.expose_secret(), b"--KEY--");
     }
 
     #[test]
@@ -867,7 +868,7 @@ mod tests {
             cert_path: cert_path.clone(),
             key_path: key_path.clone(),
             cert: b"cert-v1".to_vec(),
-            key: b"key-v1".to_vec(),
+            key: b"key-v1".to_vec().into(),
             interval: Duration::from_millis(4),
         };
 
@@ -910,7 +911,7 @@ mod tests {
             cert_path: cert_path.clone(),
             key_path: key_path.clone(),
             cert: b"cert-v1".to_vec(),
-            key: b"key-v1".to_vec(),
+            key: b"key-v1".to_vec().into(),
             interval: Duration::from_millis(5),
         };
 
@@ -927,7 +928,7 @@ mod tests {
         watcher.next_settled().await;
         writer.await.expect("writer task");
         assert_eq!(watcher.cert, b"cert-v2");
-        assert_eq!(watcher.key, b"key-v2");
+        assert_eq!(watcher.key.expose_secret(), b"key-v2");
     }
 
     /// A key whose line breaks were collapsed is one line the parser's error
@@ -1090,7 +1091,7 @@ mod tests {
             .expect("no error")
             .expect("Some");
             assert_eq!(cfg.cert, b"file-cert-bytes");
-            assert_eq!(cfg.key, b"file-key-bytes");
+            assert_eq!(cfg.key.expose_secret(), b"file-key-bytes");
             Ok(())
         });
     }

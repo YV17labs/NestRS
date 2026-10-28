@@ -14,7 +14,7 @@ pub(crate) fn url() -> String {
 
 pub(crate) fn options(url: String) -> sea_orm::ConnectOptions {
     nest_rs_seaorm::SeaOrmConfig {
-        url,
+        url: url.into(),
         ..nest_rs_seaorm::SeaOrmConfig::default()
     }
     .connect_options()
@@ -262,7 +262,7 @@ impl ProbeController {
 #[nest_rs_core::module(
     imports = [
         nest_rs_seaorm::SeaOrmModule::for_root(nest_rs_seaorm::SeaOrmConfig {
-            url: url(),
+            url: url().into(),
             ..Default::default()
         }),
         nest_rs_seaorm::SeaOrmDatabaseModule,

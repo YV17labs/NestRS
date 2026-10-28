@@ -65,7 +65,7 @@ struct UnboundPoolModule;
 /// Seeded rather than pinned, so the suite's own variables cannot move it.
 pub(crate) fn config(budget: Option<Duration>) -> SeaOrmConfig {
     SeaOrmConfig {
-        url: crate::harness::url(),
+        url: crate::harness::url().into(),
         connect_timeout_secs: budget.map(|budget| budget.as_secs()),
         ..Default::default()
     }
@@ -215,7 +215,7 @@ async fn refused_at(url: String) -> (anyhow::Error, Duration) {
     let began = std::time::Instant::now();
     let Err(refused) = App::builder()
         .provide(SeaOrmConfig {
-            url,
+            url: url.into(),
             connect_timeout_secs: Some(60),
             ..Default::default()
         })
@@ -302,7 +302,7 @@ async fn closing_the_app_closes_every_connection_its_pool_opened() {
     let name = format!("nestrs-close-{}", std::process::id());
     let app = App::builder()
         .provide(SeaOrmConfig {
-            url: with_application_name(&crate::harness::url(), &name),
+            url: with_application_name(&crate::harness::url(), &name).into(),
             ..config(None)
         })
         .module::<PoolModule>()
@@ -391,7 +391,7 @@ async fn the_pool_closes_promptly_while_a_cut_unit_still_holds_a_connection() {
     let name = format!("nestrs-cut-close-{}", std::process::id());
     let app = App::builder()
         .provide(SeaOrmConfig {
-            url: with_application_name(&crate::harness::url(), &name),
+            url: with_application_name(&crate::harness::url(), &name).into(),
             ..config(None)
         })
         .module::<ClosingModule>()

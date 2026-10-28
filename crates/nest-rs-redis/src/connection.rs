@@ -189,7 +189,7 @@ impl<I: Instance> RedisConnection<I> {
                 config.connect_timeout,
             )
             .map_err(RedisError::Budget)?;
-        let link = match RedisUrl::parse(&config.url, &instance)? {
+        let link = match RedisUrl::parse(config.url.expose_secret(), &instance)? {
             RedisUrl::Standalone(info) => Link::Standalone(
                 StandaloneLink::connect(info, &config.tls, instance, budget).await?,
             ),

@@ -169,7 +169,7 @@ mod module {
         ThrottlerModule::for_root(ThrottlerConfig {
             limit: Some(2),
             window_secs: Some(30),
-            pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
+            pseudonym_key: Some(PSEUDONYM_KEY.into()),
         })
     }
 

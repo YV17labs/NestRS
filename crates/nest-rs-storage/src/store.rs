@@ -222,8 +222,8 @@ fn s3<C: HttpConnector>(
         .with_client_options(options)
         .with_retry(retries)
         .with_region(&config.region)
-        .with_access_key_id(&config.access_key)
-        .with_secret_access_key(&config.secret_key)
+        .with_access_key_id(config.access_key.expose_secret())
+        .with_secret_access_key(config.secret_key.expose_secret())
         .with_bucket_name(bucket)
         .with_virtual_hosted_style_request(!config.force_path_style);
     if let Some(endpoint) = &config.endpoint {

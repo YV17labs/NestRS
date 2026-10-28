@@ -17,7 +17,7 @@ async fn the_sentinels_own_users_are_dialled_as_the_page_prescribes() {
         .append_pair("sentinelUsername", &user)
         .append_pair("sentinelPassword", crate::ACL_PASSWORD);
     let mut conn = RedisConnection::connect(&RedisConfig {
-        url: url.to_string(),
+        url: url.to_string().into(),
         ..crate::redis_config()
     })
     .await
@@ -44,7 +44,7 @@ async fn a_service_the_sentinels_do_not_know_fails_the_boot_naming_it() {
         .extend_pairs(kept)
         .append_pair("sentinelServiceName", "nestrs-e2e-unknown");
     let Err(refused) = RedisConnection::connect(&RedisConfig {
-        url: url.to_string(),
+        url: url.to_string().into(),
         connect_timeout: Duration::from_millis(500),
         ..crate::redis_config()
     })

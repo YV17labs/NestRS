@@ -67,7 +67,7 @@ async fn a_script_redis_never_keeps_fails_after_a_bounded_number_of_loads() {
 async fn the_bindings_producer_loads_its_scripts_at_boot() {
     let server = ForgetfulRedis::start(0).await;
     let redis = RedisConfig {
-        url: format!("rediss://{}/", server.addr),
+        url: format!("rediss://{}/", server.addr).into(),
         connect_timeout: Duration::from_secs(2),
         tls: crate::harness::tls::trusting_the_test_authority(),
         ..RedisConfig::default()
@@ -117,7 +117,7 @@ impl ForgetfulRedis {
 
     async fn connect(&self) -> RedisConnection {
         RedisConnection::connect(&RedisConfig {
-            url: format!("rediss://{}/", self.addr),
+            url: format!("rediss://{}/", self.addr).into(),
             connect_timeout: Duration::from_secs(2),
             tls: crate::harness::tls::trusting_the_test_authority(),
             ..RedisConfig::default()

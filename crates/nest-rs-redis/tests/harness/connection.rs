@@ -19,7 +19,7 @@ use super::tls;
 /// trusting what the framework trusts by default: Valkey itself.
 pub(crate) fn config(url: String) -> RedisConfig {
     RedisConfig {
-        url,
+        url: url.into(),
         connect_timeout: Duration::from_secs(10),
         ..RedisConfig::default()
     }

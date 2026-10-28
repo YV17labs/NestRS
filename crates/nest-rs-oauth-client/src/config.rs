@@ -1,16 +1,20 @@
 //! [`OAuthClientConfig`] — env-driven OAuth2 provider endpoints.
 
 use nest_rs_authn::AuthError;
-use nest_rs_config::{ClientTls, Config, ConfigService, Environment, config};
+use nest_rs_config::{ClientTls, Config, ConfigService, Environment, config, endpoint_shown};
+use nest_rs_core::Secret;
 use oauth2::url::{Host, Url};
 
 /// Env-driven OAuth2 provider endpoints (namespace `oauth__client`); every URL and
-/// credential is required. No `Debug`: `client_secret` must not leak through a format.
+/// credential is required.
 ///
 /// The provider's endpoints are `https` URLs, and the redirect an `https` URL,
 /// or `http` on a loopback address in a declared development or test profile:
 /// [`OAuthClient::new`](crate::OAuthClient::new) refuses any other, naming the
 /// setting and the RFC that requires TLS there.
+///
+/// `Debug` shows each URL through [`endpoint_shown`]: a userinfo or query part
+/// may carry a provider's API key.
 #[config(namespace = "oauth__client")]
 #[derive(Clone, Default)]
 pub struct OAuthClientConfig {
@@ -18,8 +22,8 @@ pub struct OAuthClientConfig {
     #[validate(length(min = 1), custom(function = "not_blank"))]
     pub client_id: String,
     /// The registered OAuth2 client secret.
-    #[validate(length(min = 1), custom(function = "not_blank"))]
-    pub client_secret: String,
+    #[validate(length(min = 1), custom(function = "not_blank_secret"))]
+    pub client_secret: Secret<String>,
     /// Provider authorization endpoint (where the user is redirected to consent).
     #[validate(length(min = 1), custom(function = "not_blank"))]
     pub auth_url: String,
@@ -41,6 +45,31 @@ pub struct OAuthClientConfig {
     pub tls: ClientTls,
 }
 
+impl std::fmt::Debug for OAuthClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            client_id,
+            client_secret,
+            auth_url,
+            token_url,
+            redirect_url,
+            userinfo_url,
+            scopes,
+            tls,
+        } = self;
+        f.debug_struct("OAuthClientConfig")
+            .field("client_id", client_id)
+            .field("client_secret", client_secret)
+            .field("auth_url", &endpoint_shown(auth_url))
+            .field("token_url", &endpoint_shown(token_url))
+            .field("redirect_url", &endpoint_shown(redirect_url))
+            .field("userinfo_url", &endpoint_shown(userinfo_url))
+            .field("scopes", scopes)
+            .field("tls", tls)
+            .finish()
+    }
+}
+
 /// A required value holding only whitespace is refused like an empty one.
 fn not_blank(value: &str) -> Result<(), validator::ValidationError> {
     if value.trim().is_empty() {
@@ -49,11 +78,19 @@ fn not_blank(value: &str) -> Result<(), validator::ValidationError> {
     Ok(())
 }
 
+/// [`not_blank`] for a credential held as a [`Secret`].
+fn not_blank_secret(value: &Secret<String>) -> Result<(), validator::ValidationError> {
+    not_blank(value.expose_secret())
+}
+
 impl Config for OAuthClientConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
             client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
-            client_secret: env.get("CLIENT_SECRET")?.unwrap_or(base.client_secret),
+            client_secret: env
+                .get("CLIENT_SECRET")?
+                .map(Secret::new)
+                .unwrap_or(base.client_secret),
             auth_url: env.get("AUTH_URL")?.unwrap_or(base.auth_url),
             token_url: env.get("TOKEN_URL")?.unwrap_or(base.token_url),
             redirect_url: env.get("REDIRECT_URL")?.unwrap_or(base.redirect_url),
@@ -406,6 +443,38 @@ mod tests {
     }
 
     #[test]
+    fn debug_never_prints_the_client_secret() {
+        let printed = format!("{:?}", complete());
+        assert!(printed.contains("client_secret: <redacted>"), "{printed}");
+        assert!(!printed.contains("\"secret\""), "{printed}");
+    }
+
+    /// A provider URL may carry a key in its userinfo or query: `Debug` shows
+    /// each one's scheme, host and path alone.
+    #[test]
+    fn debug_shows_each_url_without_its_userinfo_or_query() {
+        let printed = format!(
+            "{:?}",
+            OAuthClientConfig {
+                auth_url: "https://u:URLSECRET1@auth.example/authorize?key=URLSECRET2".into(),
+                token_url: "https://auth.example/token?api_key=URLSECRET3".into(),
+                redirect_url: "https://u:URLSECRET4@app.example/callback?k=URLSECRET5".into(),
+                userinfo_url: "https://user:URLSECRET6@auth.example/userinfo".into(),
+                ..complete()
+            }
+        );
+        assert!(!printed.contains("URLSECRET"), "{printed}");
+        for shown in [
+            "auth_url: \"https://auth.example/authorize\"",
+            "token_url: \"https://auth.example/token\"",
+            "redirect_url: \"https://app.example/callback\"",
+            "userinfo_url: \"https://auth.example/userinfo\"",
+        ] {
+            assert!(printed.contains(shown), "{shown} in {printed}");
+        }
+    }
+
+    #[test]
     fn default_is_invalid_until_every_url_is_filled() {
         let err = OAuthClientConfig::default().validate().unwrap_err();
         let fields = err.field_errors();
@@ -438,7 +507,7 @@ mod tests {
         type Setter = fn(&mut OAuthClientConfig);
         let setters: [(Setter, &str); 6] = [
             (|c| c.client_id = String::new(), "client_id"),
-            (|c| c.client_secret = String::new(), "client_secret"),
+            (|c| c.client_secret = Secret::default(), "client_secret"),
             (|c| c.auth_url = String::new(), "auth_url"),
             (|c| c.token_url = String::new(), "token_url"),
             (|c| c.redirect_url = String::new(), "redirect_url"),

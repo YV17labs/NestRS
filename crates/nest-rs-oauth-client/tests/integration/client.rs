@@ -749,7 +749,7 @@ async fn a_token_endpoint_behind_a_private_authority_is_trusted_only_with_its_au
     let Ok(tokens) = exchange(&OAuthClient::new(configured).expect("client builds")).await else {
         panic!("the authority the deployment named is trusted");
     };
-    assert_eq!(tokens.access_token, "issued");
+    assert_eq!(tokens.access_token.expose_secret(), "issued");
     assert_eq!(provider.requests(), 1);
 }
 

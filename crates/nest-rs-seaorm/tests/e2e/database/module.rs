@@ -133,7 +133,7 @@ async fn booted<M: Module>(conn: &Arc<DatabaseConnection>) -> App {
     App::builder()
         .provide_arc(Arc::clone(conn))
         .provide(SeaOrmConfig {
-            url: crate::harness::url(),
+            url: crate::harness::url().into(),
             ..SeaOrmConfig::default()
         })
         .module::<M>()

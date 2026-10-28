@@ -416,7 +416,7 @@ async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
 #[module(
     imports = [
         SeaOrmModule::for_root(SeaOrmConfig {
-            url: crate::harness::url(),
+            url: crate::harness::url().into(),
             observe_serialization_conflicts: true,
             ..Default::default()
         }),

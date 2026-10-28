@@ -19,6 +19,13 @@ pub(crate) fn not_blank(value: &str) -> Result<(), validator::ValidationError> {
     Ok(())
 }
 
+/// [`not_blank`] for a credential held as a [`Secret`](nest_rs_core::Secret).
+pub(crate) fn not_blank_secret(
+    value: &nest_rs_core::Secret<String>,
+) -> Result<(), validator::ValidationError> {
+    not_blank(value.expose_secret())
+}
+
 /// First-party GitHub OAuth provider.
 pub mod github;
 /// First-party Google OIDC provider.

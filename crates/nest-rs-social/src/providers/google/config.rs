@@ -1,10 +1,16 @@
 use nest_rs_authn::AuthError;
-use nest_rs_config::{ClientTls, Config, ConfigService, Namespaced, config, spellings_or_field};
+use nest_rs_config::{
+    ClientTls, Config, ConfigService, Namespaced, config, endpoint_shown, spellings_or_field,
+};
+use nest_rs_core::Secret;
 use nest_rs_oauth_client::{OAuthClientConfig, refuse_plaintext_redirect};
 
 use crate::registry::SocialProviderConfig;
 
-/// Google OIDC deployment config. No `Debug`: `client_secret` must not leak.
+/// Google OIDC deployment config.
+///
+/// `Debug` shows `redirect_url` through [`endpoint_shown`]: its userinfo or
+/// query may carry a credential.
 #[config(namespace = "social__google")]
 #[derive(Clone, Default)]
 pub struct GoogleSocialConfig {
@@ -12,8 +18,11 @@ pub struct GoogleSocialConfig {
     #[validate(length(min = 1), custom(function = "crate::providers::not_blank"))]
     pub client_id: String,
     /// The Google OAuth client secret.
-    #[validate(length(min = 1), custom(function = "crate::providers::not_blank"))]
-    pub client_secret: String,
+    #[validate(
+        length(min = 1),
+        custom(function = "crate::providers::not_blank_secret")
+    )]
+    pub client_secret: Secret<String>,
     /// The registered redirect URL the callback returns to.
     #[validate(length(min = 1), custom(function = "crate::providers::not_blank"))]
     pub redirect_url: String,
@@ -63,11 +72,31 @@ impl GoogleSocialConfig {
     }
 }
 
+impl std::fmt::Debug for GoogleSocialConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            client_id,
+            client_secret,
+            redirect_url,
+            scopes,
+        } = self;
+        f.debug_struct("GoogleSocialConfig")
+            .field("client_id", client_id)
+            .field("client_secret", client_secret)
+            .field("redirect_url", &endpoint_shown(redirect_url))
+            .field("scopes", scopes)
+            .finish()
+    }
+}
+
 impl Config for GoogleSocialConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
             client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
-            client_secret: env.get("CLIENT_SECRET")?.unwrap_or(base.client_secret),
+            client_secret: env
+                .get("CLIENT_SECRET")?
+                .map(Secret::new)
+                .unwrap_or(base.client_secret),
             redirect_url: env.get("REDIRECT_URL")?.unwrap_or(base.redirect_url),
             scopes: env.list("SCOPES", base.scopes)?,
         })
@@ -78,7 +107,9 @@ impl SocialProviderConfig for GoogleSocialConfig {
     /// `scopes` alone does not count as configuration — it has a default, so a
     /// deployment that sets only scopes still has no Google app to talk to.
     fn is_unconfigured(&self) -> bool {
-        self.client_id.is_empty() && self.client_secret.is_empty() && self.redirect_url.is_empty()
+        self.client_id.is_empty()
+            && self.client_secret.expose_secret().is_empty()
+            && self.redirect_url.is_empty()
     }
 }
 
@@ -148,6 +179,30 @@ mod tests {
             ..complete()
         };
         assert!(config.oauth2_config().is_ok());
+    }
+
+    #[test]
+    fn debug_never_prints_the_client_secret() {
+        let printed = format!("{:?}", complete());
+        assert!(!printed.contains("\"secret\""), "{printed}");
+        assert!(printed.contains("client_secret: <redacted>"), "{printed}");
+        assert!(printed.contains("\"id\""), "the client id stays: {printed}");
+    }
+
+    #[test]
+    fn debug_shows_the_redirect_without_its_userinfo_or_query() {
+        let printed = format!(
+            "{:?}",
+            GoogleSocialConfig {
+                redirect_url: "https://u:URLSECRET1@app.example/callback?k=URLSECRET2".into(),
+                ..complete()
+            }
+        );
+        assert!(!printed.contains("URLSECRET"), "{printed}");
+        assert!(
+            printed.contains("redirect_url: \"https://app.example/callback\""),
+            "{printed}"
+        );
     }
 
     #[test]

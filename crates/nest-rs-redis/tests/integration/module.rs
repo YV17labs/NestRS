@@ -29,7 +29,7 @@ pub(crate) static CACHE_URL: OnceLock<String> = OnceLock::new();
 
 pub(crate) fn cache_config() -> RedisConfig {
     RedisConfig {
-        url: CACHE_URL.get().cloned().unwrap_or_default(),
+        url: CACHE_URL.get().cloned().unwrap_or_default().into(),
         connect_timeout: Duration::from_secs(2),
         tls: trusting_the_test_authority(),
     }
@@ -50,7 +50,7 @@ async fn two_instances_open_two_connections_each_to_its_own_server() {
     CACHE_URL.set(cache.url()).expect("set once");
     let app = App::builder()
         .provide(RedisConfig {
-            url: primary.url(),
+            url: primary.url().into(),
             connect_timeout: Duration::from_secs(2),
             tls: trusting_the_test_authority(),
         })
@@ -97,7 +97,7 @@ async fn a_named_instance_s_budget_at_its_binding_s_net_is_refused_naming_its_va
     let cache = DemotedRedis::start().await;
     let Err(refused) = App::builder()
         .provide(Instanced::<Cache, RedisConfig>::from(RedisConfig {
-            url: cache.url(),
+            url: cache.url().into(),
             connect_timeout: nest_rs_throttler::HIT_TIMEOUT,
             tls: trusting_the_test_authority(),
         }))
@@ -136,7 +136,7 @@ async fn a_named_instance_s_budget_at_the_scheduler_s_net_is_refused_naming_its_
     let cache = DemotedRedis::start().await;
     let Err(refused) = App::builder()
         .provide(Instanced::<Cache, RedisConfig>::from(RedisConfig {
-            url: cache.url(),
+            url: cache.url().into(),
             connect_timeout: nest_rs_schedule::LOCK_TIMEOUT,
             tls: trusting_the_test_authority(),
         }))
@@ -182,7 +182,7 @@ async fn a_queue_pinned_on_a_named_instance_holds_its_config_under_that_instance
     let cache = DemotedRedis::start().await;
     let app = App::builder()
         .provide(Instanced::<Cache, RedisConfig>::from(RedisConfig {
-            url: cache.url(),
+            url: cache.url().into(),
             connect_timeout: Duration::from_secs(2),
             tls: trusting_the_test_authority(),
         }))
@@ -252,7 +252,7 @@ async fn an_instance_whose_namespace_a_linked_config_declares_is_refused() {
 
 /// The cache pinned at a port nothing listens on.
 #[module(imports = [RedisModule::for_root((Cache, RedisConfig {
-    url: "rediss://127.0.0.1:1/".to_owned(),
+    url: "rediss://127.0.0.1:1/".into(),
     connect_timeout: Duration::from_millis(300),
     tls: trusting_the_test_authority(),
 }))])]

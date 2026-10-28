@@ -26,7 +26,7 @@ async fn a_redis_that_stays_busy_fails_at_the_budget_naming_its_answer() {
     let budget = Duration::from_millis(1500);
     let started = Instant::now();
     let Err(error) = RedisConnection::connect(&RedisConfig {
-        url: proxy.url(),
+        url: proxy.url().into(),
         connect_timeout: budget,
         tls: crate::harness::tls::trusting_the_test_authority(),
         ..RedisConfig::default()
@@ -107,7 +107,7 @@ async fn a_connection_to_a_demoted_primary_is_reopened() {
     let logs = nest_rs_testing::LogCapture::install_global();
     let server = DemotedRedis::start().await;
     let mut conn = RedisConnection::connect(&RedisConfig {
-        url: server.url(),
+        url: server.url().into(),
         connect_timeout: Duration::from_secs(2),
         tls: crate::harness::tls::trusting_the_test_authority(),
         ..RedisConfig::default()

@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use aws_lc_rs::constant_time::verify_slices_are_equal;
 use nest_rs_config::{ClientTls, ConfigError, ConfigService, Environment, Namespaced};
+use nest_rs_core::Secret;
 use oauth2::basic::{BasicClient, BasicErrorResponse};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpClientError,
@@ -52,16 +53,18 @@ impl AuthorizationRedirect {
     }
 }
 
-/// Outcome of the Authorization-Code exchange.
+/// Outcome of the Authorization-Code exchange: three bearer credentials, so
+/// each is a [`Secret`].
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct TokenSet {
     /// The bearer access token used to call the provider's APIs (e.g. userinfo).
-    pub access_token: String,
+    pub access_token: Secret<String>,
     /// The OIDC id_token; `None` unless an OIDC provider fills it by overriding
     /// `SocialProvider::exchange`.
-    pub id_token: Option<String>,
+    pub id_token: Option<Secret<String>>,
     /// The refresh token, when the provider issued one; `None` otherwise.
-    pub refresh_token: Option<String>,
+    pub refresh_token: Option<Secret<String>>,
 }
 
 /// The transaction cookie's handshake purpose (RFC 8725 §3.11): a resource server
@@ -504,7 +507,9 @@ impl OAuthClient {
             }
         };
         Ok(BasicClient::new(ClientId::new(config.client_id.clone()))
-            .set_client_secret(ClientSecret::new(config.client_secret.clone()))
+            .set_client_secret(ClientSecret::new(
+                config.client_secret.expose_secret().clone(),
+            ))
             .set_auth_uri(AuthUrl::new(config.auth_url.clone()).map_err(parse("auth_url"))?)
             .set_token_uri(TokenUrl::new(config.token_url.clone()).map_err(parse("token_url"))?)
             .set_redirect_uri(
@@ -643,9 +648,11 @@ impl OAuthClient {
             exchange_failed(&endpoint, answered, error)
         })?;
         Ok(TokenSet {
-            access_token: token.access_token().secret().clone(),
+            access_token: Secret::new(token.access_token().secret().clone()),
             id_token: None,
-            refresh_token: token.refresh_token().map(|t| t.secret().clone()),
+            refresh_token: token
+                .refresh_token()
+                .map(|t| Secret::new(t.secret().clone())),
         })
     }
 
@@ -785,7 +792,7 @@ mod tests {
         let material = |pem: &str| nest_rs_config::Material::inline(pem);
         let var = |key| nest_rs_config::var_name(OAuthClientConfig::NAMESPACE, key);
         let invalid = OAuthClientConfig {
-            client_secret: String::new(),
+            client_secret: Secret::default(),
             ..valid_config()
         };
         let unusable = OAuthClientConfig {
@@ -881,6 +888,20 @@ mod tests {
             msg.contains("relative URL without a base") && !msg.contains("not a url"),
             "{msg}"
         );
+    }
+
+    #[test]
+    fn debug_never_prints_a_token() {
+        let tokens = TokenSet {
+            access_token: "gho_access".into(),
+            id_token: Some("eyJ.id.token".into()),
+            refresh_token: Some("ghr_refresh".into()),
+        };
+        let printed = format!("{tokens:?}");
+        for token in ["gho_access", "eyJ.id.token", "ghr_refresh"] {
+            assert!(!printed.contains(token), "{printed}");
+        }
+        assert!(printed.contains("access_token: <redacted>"), "{printed}");
     }
 
     /// A rule failing on a value `validator` would list among its parameters.

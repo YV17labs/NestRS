@@ -39,7 +39,7 @@ fn as_the_role(query: Option<&str>) -> String {
 async fn booted(url: String) -> anyhow::Result<nest_rs_core::App> {
     App::builder()
         .provide(SeaOrmConfig {
-            url,
+            url: url.into(),
             connect_timeout_secs: Some(60),
             ..Default::default()
         })

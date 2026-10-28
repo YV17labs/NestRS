@@ -1,4 +1,5 @@
 use nest_rs::http::StatusCode;
+use nest_rs::testing::LogCapture;
 use nest_rs::ws::CloseCode;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -155,6 +156,7 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_refuses_a_token_
     let mut bot = open_as(&app, "/ws", &machine_token()).await;
     wait_for_presence(&mut alice, 2).await;
 
+    let logs = LogCapture::install();
     for event in ["message", "typing"] {
         bot.send(event, json!({ "text": "hi" })).await;
         let denied = bot.next_envelope().await;
@@ -168,6 +170,9 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_refuses_a_token_
         );
     }
     alice.expect_silence(QUIET).await;
+    let refused = logs.find(features::chat::TARGET, "message denied");
+    assert_eq!(refused.len(), 2, "one line per denial: {refused:#?}");
+    logs.expect_none("nest_rs::layers", "guard denied the message");
 
     bot.close(CloseCode::Normal, "done").await;
     wait_for_presence(&mut alice, 1).await;

@@ -2,7 +2,7 @@ use features::Subject;
 use features::authz::constants;
 use features::testing::{ORG_ID, client, token_with_scopes};
 use nest_rs::http::{StatusCode, header};
-use nest_rs::testing::TestApp;
+use nest_rs::testing::{LogCapture, TestApp};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -195,6 +195,7 @@ async fn a_service_token_narrowed_to_reading_posts_is_challenged_on_the_audio_ro
     let (_db, app) = boot().await;
     let reader = narrow_bearer(ORG_ID, client(), &[constants::POSTS_READ]);
 
+    let logs = LogCapture::install();
     let refusals = [
         app.http()
             .post("/audio/uploads")
@@ -217,4 +218,11 @@ async fn a_service_token_narrowed_to_reading_posts_is_challenged_on_the_audio_ro
             "the advertised scope gates what it names, and the refusal says so: {challenge}",
         );
     }
+
+    let denied = logs.find(
+        features::audio::TARGET,
+        "transcode denied: the token does not carry the transcode scope",
+    );
+    assert_eq!(denied.len(), 2, "one line per denial: {denied:#?}");
+    logs.expect_none("nest_rs::layers", "guard denied the request");
 }

@@ -75,14 +75,26 @@ mod tests {
 
     #[test]
     fn a_token_naming_no_user_is_refused() {
+        let logs = nest_rs::testing::LogCapture::install();
         let refused =
             verdict(Subject::Client("demo-service".into())).expect_err("a machine never posts");
         assert_eq!(refused.http_status(), 403);
+
+        let line = logs.expect_one(crate::chat::TARGET, "message denied");
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("reason").as_deref(), Some("not_a_user"));
     }
 
     #[test]
     fn a_message_no_principal_reached_fails_closed() {
+        let logs = nest_rs::testing::LogCapture::install();
         let refused = ModerationGuard::decide(None).expect_err("an unwired upgrade admits no one");
         assert_eq!(refused.http_status(), 500);
+
+        let line = logs.expect_one(
+            crate::chat::TARGET,
+            "message denied: AuthnGuard did not run at the upgrade",
+        );
+        assert_eq!(line.level, "error");
     }
 }

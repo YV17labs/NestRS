@@ -132,6 +132,7 @@ mod tests {
 
     #[test]
     fn an_admin_token_narrowed_to_reading_posts_is_challenged_for_the_transcode_scope() {
+        let logs = nest_rs::testing::LogCapture::install();
         let refused = verdict(vec![Role::Admin], &[constants::POSTS_READ])
             .expect_err("the advertised scope gates what it names");
         assert_eq!(refused.http_status(), 403);
@@ -141,5 +142,16 @@ mod tests {
             "{refused:?}"
         );
         assert_eq!(refused.required_scopes(), [constants::AUDIO_TRANSCODE]);
+
+        let line = logs.expect_one(
+            crate::audio::TARGET,
+            "transcode denied: the token does not carry the transcode scope",
+        );
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("reason").as_deref(), Some("insufficient_scope"));
+        assert_eq!(
+            line.field("scope").as_deref(),
+            Some(constants::AUDIO_TRANSCODE)
+        );
     }
 }

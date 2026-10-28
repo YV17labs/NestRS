@@ -143,6 +143,7 @@ async fn a_service_token_narrowed_to_reading_posts_is_refused_the_transcode_tool
         )
     );
 
+    let logs = LogCapture::install();
     let body = call_tool_with(
         app.http(),
         SHARED_ENDPOINT,
@@ -160,4 +161,9 @@ async fn a_service_token_narrowed_to_reading_posts_is_refused_the_transcode_tool
         !body.contains("pending"),
         "the tool's body never ran: {body}"
     );
+    logs.expect_one(
+        features::audio::TARGET,
+        "transcode denied: the token does not carry the transcode scope",
+    );
+    logs.expect_none("nest_rs::layers", "guard denied the operation");
 }

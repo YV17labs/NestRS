@@ -17,6 +17,7 @@ use serde::de::DeserializeOwned;
 
 use crate::ability::{Provenance, mask_reason};
 use crate::gate::{Refusal, reason};
+use crate::subject::{NoRows, Rows, SubjectMask};
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker, WireModelDefaults, current_ability};
 
@@ -125,6 +126,41 @@ where
     });
     // The gate's own vocabulary: a mask refusal tells no more than a gate's.
     denial_to_mcp_error(Denial::forbidden("forbidden"))
+}
+
+/// How an operation's posture masks its value on a subject's
+/// [`SubjectMask::Mask`]: an entity's rows mask it, a subject no table holds
+/// lets it through untouched.
+pub trait McpMask<A, O> {
+    /// [`masked_value_for`]'s answer on an entity; the value itself otherwise.
+    fn masked_value(value: O) -> Result<O, McpError>;
+}
+
+impl<A, E, O> McpMask<A, O> for Rows<E>
+where
+    A: ActionMarker,
+    E: EntityTrait + WireModelDefaults,
+    E::Model: Serialize + DeserializeOwned,
+    O: Serialize + DeserializeOwned,
+{
+    fn masked_value(value: O) -> Result<O, McpError> {
+        masked_value_for::<A, E, O>(value)
+    }
+}
+
+impl<A, O> McpMask<A, O> for NoRows {
+    fn masked_value(value: O) -> Result<O, McpError> {
+        Ok(value)
+    }
+}
+
+/// The value an `#[authorize(A, S)]` operation answers, masked as `S` masks it.
+pub fn mcp_masked_value<A, S, O>(value: O) -> Result<O, McpError>
+where
+    S: SubjectMask,
+    S::Mask: McpMask<A, O>,
+{
+    <S::Mask as McpMask<A, O>>::masked_value(value)
 }
 
 /// One shape for every fail-closed masking exit: the queryable `warn` plus an

@@ -58,6 +58,12 @@ pub trait RouteResponseShaper {
         ) -> std::result::Result<(), nest_rs_core::Failure>,
     > = None;
 
+    /// Whether a route declaring this type has its reply shaped. `false` for a
+    /// type that only declares [`GATE`](Self::GATE) — a posture on a subject
+    /// with no rows — so the route reads as one no shaper arms, its reads
+    /// withheld the ability its guards attached, and `capture` never runs.
+    const SHAPES: bool = true;
+
     /// Snapshot what the shaper needs off the request before the handler takes
     /// ownership of it, or `None` to leave this request's response untouched.
     fn capture(req: &Request) -> Option<Box<dyn ResponseShaping>>;
@@ -76,7 +82,8 @@ pub type GateFn = nest_rs_core::__private::ClassGate;
 /// Both arms below answer `select()`; the inherent one is reachable only when
 /// its bound holds, and inherent methods win over trait methods at the same
 /// autoref step. So [`__shaper_of`](crate::__shaper_of) answers `Some` exactly when
-/// `T: RouteResponseShaper`, decided after name resolution.
+/// `T: RouteResponseShaper` shapes, decided after name resolution, and
+/// [`__gate_of`](crate::__gate_of) the gate such a type declares, shaping or not.
 pub struct ShaperProbe<T>(PhantomData<fn() -> T>);
 
 impl<T> Default for ShaperProbe<T> {
@@ -93,9 +100,9 @@ impl<T> ShaperProbe<T> {
 }
 
 impl<T: RouteResponseShaper> ShaperProbe<T> {
-    /// The armed arm.
+    /// The armed arm: the type's capture step, unless it only gates.
     pub fn select(&self) -> Option<CaptureFn> {
-        Some(T::capture)
+        T::SHAPES.then_some(T::capture as CaptureFn)
     }
 
     /// The class gate the armed type declares.
@@ -485,6 +492,31 @@ mod tests {
             "a shaper declares no gate unless it says so"
         );
         assert!(__gate_of!(NotAShaper).is_none());
+    }
+
+    /// A type that only gates: a posture on a subject with no rows.
+    struct GatesOnly;
+
+    impl RouteResponseShaper for GatesOnly {
+        const GATE: Option<GateFn> = Gated::GATE;
+        const SHAPES: bool = false;
+
+        fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_type_that_only_gates_selects_its_gate_and_arms_no_shaper() {
+        assert!(
+            __gate_of!(GatesOnly).is_some(),
+            "its gate runs with the guards"
+        );
+        assert!(
+            __shaper_of!(GatesOnly).is_none(),
+            "nothing shapes its route, so the route reads as unmasked"
+        );
+        assert!(__shaper_of!(Gated).is_some(), "a type shapes by default");
     }
 
     #[tokio::test]

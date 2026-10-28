@@ -637,14 +637,14 @@ fn masked(posture: &Posture, sig: &Signature) -> syn::Result<TokenStream2> {
     if let Some(inner) = nth_generic_type(ok_ty, "Json", 0) {
         return Ok(quote! {{
             let ::nest_rs_mcp::Json(__nestrs_out) = __nestrs_value;
-            ::nest_rs_authz::mcp::masked_value_for::<#action, #entity, #inner>(__nestrs_out)
+            ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, #inner>(__nestrs_out)
                 .map(::nest_rs_mcp::Json)
                 .map_err(::nest_rs_mcp::__private::OperationFailure::from)
         }});
     }
 
     Ok(quote! {
-        ::nest_rs_authz::mcp::masked_value_for::<#action, #entity, _>(__nestrs_value)
+        ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, _>(__nestrs_value)
             .map_err(::nest_rs_mcp::__private::OperationFailure::from)
     })
 }

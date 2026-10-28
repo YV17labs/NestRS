@@ -1,0 +1,5 @@
+error: unknown #[subject] argument `name`; expected no arguments
+ --> tests/integration/diagnostics/authz/subject_with_an_argument.rs:5:11
+  |
+5 | #[subject(name = "exporting")]
+  |           ^^^^

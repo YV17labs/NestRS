@@ -128,6 +128,13 @@ impl HygieneTool {
         Ok("0".into())
     }
 
+    #[cfg(feature = "authz")]
+    #[tool(description = "Start the export.")]
+    #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
+    fn export(&self) -> Result<String, McpError> {
+        Ok("queued".into())
+    }
+
     /// An operation compiled out takes its wrapper, route and guard with it.
     #[cfg(any())]
     #[tool(description = "Not in this build.")]

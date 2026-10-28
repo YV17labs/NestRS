@@ -205,3 +205,53 @@ fn no_grant_for_a_subject_produces_a_one_equals_zero_filter() {
         "absent grant ⇒ matches nothing: {sql}"
     );
 }
+
+/// May export the org's reports: a capability no table holds.
+#[nest_rs_authz::subject]
+struct Exporting;
+
+#[test]
+fn a_subject_no_table_holds_is_granted_whole_by_class() {
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Manage, Exporting);
+    let ability = b.build().expect("valid test ability");
+
+    assert!(ability.can_class(Action::Manage, TypeId::of::<Exporting>()));
+    assert!(
+        ability.can_class(Action::Read, TypeId::of::<Exporting>()),
+        "`Manage` is the wildcard on a subject no table holds as on an entity",
+    );
+    assert!(
+        !ability.can_class(Action::Read, TypeId::of::<widget::Entity>()),
+        "a grant on the capability reaches no entity",
+    );
+}
+
+#[test]
+fn a_capability_a_token_was_not_granted_names_the_scope_it_lacks() {
+    let narrow: std::sync::Arc<[String]> = std::sync::Arc::from(["reports:read".to_owned()]);
+    let mut b = AbilityBuilder::new().with_granted_scopes(Some(narrow));
+    b.can(Action::Manage, Exporting)
+        .requires_scope("reports:export");
+    let ability = b.build().expect("valid test ability");
+
+    let exporting = TypeId::of::<Exporting>();
+    assert!(!ability.can_class(Action::Manage, exporting));
+    assert_eq!(
+        ability.missing_scopes(Action::Manage, exporting),
+        ["reports:export"],
+        "the refusal names what a wider token would carry",
+    );
+}
+
+#[test]
+fn a_capability_beside_an_entity_leaves_the_entitys_rows_unwidened() {
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Manage, Exporting);
+    b.can(Action::Read, widget::Entity)
+        .when(|p| p.eq(widget::Column::OrgId, 7));
+    let ability = b.build().expect("valid test ability");
+
+    assert!(ability.can::<widget::Entity>(Action::Read, &model(1, 7)));
+    assert!(!ability.can::<widget::Entity>(Action::Read, &model(1, 8)));
+}

@@ -9,6 +9,7 @@
 //! `graphql` alone for what a build without `authz` and `seaorm` says.
 
 #[cfg(all(
+    feature = "authz",
     feature = "config",
     feature = "events",
     feature = "graphql",
@@ -27,6 +28,7 @@
 #[test]
 fn every_decorator_refuses_in_the_words_pinned() {
     let t = trybuild::TestCases::new();
+    t.compile_fail("tests/integration/diagnostics/authz/*.rs");
     t.compile_fail("tests/integration/diagnostics/config/*.rs");
     t.compile_fail("tests/integration/diagnostics/core/*.rs");
     t.compile_fail("tests/integration/diagnostics/events/*.rs");

@@ -430,16 +430,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 entity,
                 unmasked: false,
             } => quote! {
-                match ::nest_rs_authz::ws::masked_reply_for::<#action, #entity, _>(
-                    #event, &__ret,
-                ) {
-                    ::core::result::Result::Ok(__masked) => {
-                        ::core::result::Result::Ok(::nest_rs_ws::WsReply::Reply(__masked))
-                    }
-                    ::core::result::Result::Err(__failed) => {
-                        ::core::result::Result::Ok(::nest_rs_ws::WsReply::Error(__failed))
-                    }
-                }
+                ::core::result::Result::Ok(
+                    ::nest_rs_authz::__private::ws_masked_reply::<#action, #entity, _>(
+                        #event, &__ret,
+                    ),
+                )
             },
             _ => quote! { ::core::result::Result::Ok(::nest_rs_ws::WsReply::reply(&__ret)) },
         };

@@ -116,6 +116,13 @@ impl HygieneGateway {
         Ok(0)
     }
 
+    #[cfg(feature = "authz")]
+    #[subscribe_message("hygiene.export")]
+    #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
+    fn export(&self) -> Result<String, std::fmt::Error> {
+        Ok("queued".into())
+    }
+
     #[on_connect]
     #[meta(HygieneLimit(1))]
     fn connected(&self) {}

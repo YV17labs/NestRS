@@ -1,0 +1,16 @@
+error[E0599]: the method `when` exists for struct `RuleSpec<'_, Exporting>`, but its trait bounds were not satisfied
+  --> tests/integration/diagnostics/authz/subject_rule_narrowed_by_when.rs:11:39
+   |
+ 7 | pub struct Exporting;
+   | -------------------- doesn't satisfy `Exporting: EntityTrait`
+...
+11 |     ab.can(Action::Manage, Exporting).when(|_| unreachable!());
+   |                                       ^^^^ method cannot be called on `RuleSpec<'_, Exporting>` due to unsatisfied trait bounds
+   |
+   = note: the following trait bounds were not satisfied:
+           `Exporting: EntityTrait`
+note: the trait `EntityTrait` must be implemented
+  --> $CARGO/sea-orm-$VERSION/src/entity/base_entity.rs
+   |
+   | pub trait EntityTrait: EntityName {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

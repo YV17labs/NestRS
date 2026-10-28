@@ -108,6 +108,21 @@ impl HygieneController {
         "0".into()
     }
 
+    /// A gate-only posture, on a route and on a stream alike.
+    #[cfg(feature = "authz")]
+    #[post("/exports")]
+    #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
+    fn export(&self) -> String {
+        "queued".into()
+    }
+
+    #[cfg(feature = "authz")]
+    #[sse("/exports/progress")]
+    #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
+    fn export_progress(&self) -> SseStream {
+        SseStream::new(stream::iter([SseEvent::message("done")]))
+    }
+
     /// A route compiled out takes its endpoint, mount, document entry and
     /// guard with it; the paths below do not exist.
     #[cfg(any())]

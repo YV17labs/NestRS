@@ -178,6 +178,7 @@ nest-rs-config-macros = { version = "=7.0.0", path = "crates/nest-rs-config-macr
 nest-rs-events = { version = "=7.0.0", path = "crates/nest-rs-events" }
 nest-rs-events-macros = { version = "=7.0.0", path = "crates/nest-rs-events-macros" }
 nest-rs-authz = { version = "=7.0.0", path = "crates/nest-rs-authz" }
+nest-rs-authz-macros = { version = "=7.0.0", path = "crates/nest-rs-authz-macros" }
 nest-rs-codegen = { version = "=7.0.0", path = "crates/nest-rs-codegen" }
 nest-rs-core-macros = { version = "=7.0.0", path = "crates/nest-rs-core-macros" }
 nest-rs-graphql = { version = "=7.0.0", path = "crates/nest-rs-graphql" }

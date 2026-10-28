@@ -1300,7 +1300,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                                         ::nest_rs_core::__private::Answer(&__out).mapper()(
                                             __out,
                                             |__value| {
-                                                ::nest_rs_authz::graphql::masked_value_for::<
+                                                ::nest_rs_authz::__private::graphql_masked_value::<
                                                     #action, #entity, _,
                                                 >(#gctx, __value)
                                             },
@@ -1327,7 +1327,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                                             move |__item| ::core::future::ready(
                                                 ::nest_rs_graphql::__private::keep_masked_item(
                                                     #route_label_lit,
-                                                    ::nest_rs_authz::graphql::masked_item_for::<
+                                                    ::nest_rs_authz::__private::graphql_masked_item::<
                                                         #action, #entity, _,
                                                     >(#gctx, &__ability, __item),
                                                 ),

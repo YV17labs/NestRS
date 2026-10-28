@@ -105,6 +105,6 @@
 //! task with no context value, so the endpoint re-installs what the request's
 //! guards attached around each operation.
 
-mod mask;
+pub(crate) mod mask;
 
 pub use mask::masked_value_for;

@@ -101,7 +101,7 @@
 //! ```
 
 mod context;
-mod mask;
+pub(crate) mod mask;
 
 pub use context::{ability, forbidden};
 pub use mask::{masked_item_for, masked_value_for};

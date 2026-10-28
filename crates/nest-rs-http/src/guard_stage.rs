@@ -141,7 +141,9 @@ impl GuardStage for HttpGuardStage {
         })
     }
 
-    /// The union of what each guard declares, the chain the stage runs.
+    /// The union of what each guard declares, the chain the stage runs, and
+    /// what its class gates refuse: a caller no principal backs at a gated
+    /// site, one whose ability lacks the grant or its scope anywhere.
     fn denial_statuses(&self, public: bool) -> Vec<u16> {
         let mut statuses: Vec<u16> = self
             .guards
@@ -149,6 +151,12 @@ impl GuardStage for HttpGuardStage {
             .flat_map(|entry| entry.layer.denial_statuses(public))
             .copied()
             .collect();
+        if !self.gates.is_empty() {
+            statuses.push(403);
+            if !public {
+                statuses.push(401);
+            }
+        }
         statuses.sort_unstable();
         statuses.dedup();
         statuses
@@ -680,6 +688,23 @@ mod tests {
         let stage = HttpGuardStage::new(guards, Vec::new(), StageKind::Route { unmasked: true });
         assert_eq!(stage.denial_statuses(false), [401, 403, 503]);
         assert_eq!(stage.denial_statuses(true), [403, 503]);
+    }
+
+    #[test]
+    fn a_stage_running_a_class_gate_declares_what_the_gate_refuses() {
+        let admit: GateFn = |_| Ok(());
+        let stage =
+            HttpGuardStage::new(Vec::new(), vec![admit], StageKind::Route { unmasked: true });
+        assert_eq!(
+            stage.denial_statuses(false),
+            [401, 403],
+            "an anonymous caller, and one without the grant or its scope"
+        );
+        assert_eq!(
+            stage.denial_statuses(true),
+            [403],
+            "a public site reads the visitor's grants"
+        );
     }
 
     fn tenant_request() -> Request {

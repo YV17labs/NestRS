@@ -12,14 +12,15 @@
 
 use nest_rs_core::Edge;
 use nest_rs_guards::Denial;
-use nest_rs_ws::WsError;
 use nest_rs_ws::denial_to_ws_error;
+use nest_rs_ws::{WsError, WsReply};
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::ability::{Provenance, mask_reason};
+use crate::subject::{NoRows, Rows, SubjectMask};
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
 use crate::{Action, ActionMarker, WireModelDefaults, current_ability};
 
@@ -73,6 +74,45 @@ where
             Some(&err),
         )),
     }
+}
+
+/// How a message's posture masks its reply on a subject's
+/// [`SubjectMask::Mask`]: an entity's rows mask it, a subject no table holds
+/// lets it through as any reply.
+pub trait WsMask<A, O: ?Sized> {
+    /// The frame the reply puts on the wire.
+    fn masked_reply(event: &'static str, value: &O) -> WsReply;
+}
+
+impl<A, E, O> WsMask<A, O> for Rows<E>
+where
+    A: ActionMarker,
+    E: EntityTrait + WireModelDefaults,
+    E::Model: Serialize + DeserializeOwned,
+    O: Serialize + ?Sized,
+{
+    fn masked_reply(event: &'static str, value: &O) -> WsReply {
+        match masked_reply_for::<A, E, O>(event, value) {
+            Ok(masked) => WsReply::Reply(masked),
+            Err(failed) => WsReply::Error(failed),
+        }
+    }
+}
+
+impl<A, O: Serialize> WsMask<A, O> for NoRows {
+    fn masked_reply(_event: &'static str, value: &O) -> WsReply {
+        WsReply::reply(value)
+    }
+}
+
+/// The frame an `#[authorize(A, S)]` message answers, masked as `S` masks it.
+pub fn ws_masked_reply<A, S, O>(event: &'static str, value: &O) -> WsReply
+where
+    S: SubjectMask,
+    S::Mask: WsMask<A, O>,
+    O: ?Sized,
+{
+    <S::Mask as WsMask<A, O>>::masked_reply(event, value)
 }
 
 /// One shape for every fail-closed masking exit: the queryable `warn` plus a

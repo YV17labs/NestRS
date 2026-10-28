@@ -69,6 +69,13 @@ impl GreetingResolver {
         0
     }
 
+    #[cfg(feature = "authz")]
+    #[mutation]
+    #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
+    fn export(&self) -> bool {
+        true
+    }
+
     /// An operation compiled out takes its root field and guard with it.
     #[cfg(any())]
     #[query]

@@ -2623,6 +2623,7 @@ dependencies = [
 name = "nest-rs-authz"
 version = "7.0.0"
 dependencies = [
+ "nest-rs-authz-macros",
  "nest-rs-core",
  "nest-rs-graphql",
  "nest-rs-guards",
@@ -2634,6 +2635,16 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tracing",
+]
+
+[[package]]
+name = "nest-rs-authz-macros"
+version = "7.0.0"
+dependencies = [
+ "nest-rs-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]

@@ -15,6 +15,7 @@ use super::ability;
 use super::context::forbidden_fields;
 use crate::ability::{Provenance, mask_reason};
 use crate::gate::{Refusal, reason};
+use crate::subject::{NoRows, Rows, SubjectMask};
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker, WireModelDefaults};
 
@@ -140,6 +141,66 @@ where
             &err,
         )),
     }
+}
+
+/// How an operation's posture masks its value on a subject's
+/// [`SubjectMask::Mask`]: an entity's rows mask it, a subject no table holds
+/// lets it through untouched.
+pub trait GraphqlMask<A, O> {
+    /// [`masked_value_for`]'s answer on an entity; the value itself otherwise.
+    fn masked_value(ctx: &Context<'_>, value: O) -> Result<O, Error>;
+
+    /// [`masked_item_for`]'s answer on an entity; the item itself otherwise.
+    fn masked_item(ctx: &Context<'_>, ability: &Ability, item: O) -> Result<Option<O>, Error>;
+}
+
+impl<A, E, O> GraphqlMask<A, O> for Rows<E>
+where
+    A: ActionMarker,
+    E: EntityTrait + WireModelDefaults,
+    E::Model: Serialize + DeserializeOwned,
+    O: Serialize + DeserializeOwned,
+{
+    fn masked_value(ctx: &Context<'_>, value: O) -> Result<O, Error> {
+        masked_value_for::<A, E, O>(ctx, value)
+    }
+
+    fn masked_item(ctx: &Context<'_>, ability: &Ability, item: O) -> Result<Option<O>, Error> {
+        masked_item_for::<A, E, O>(ctx, ability, item)
+    }
+}
+
+impl<A, O> GraphqlMask<A, O> for NoRows {
+    fn masked_value(_ctx: &Context<'_>, value: O) -> Result<O, Error> {
+        Ok(value)
+    }
+
+    fn masked_item(_ctx: &Context<'_>, _ability: &Ability, item: O) -> Result<Option<O>, Error> {
+        Ok(Some(item))
+    }
+}
+
+/// The value an `#[authorize(A, S)]` operation answers, masked as `S` masks it.
+pub fn graphql_masked_value<A, S, O>(ctx: &Context<'_>, value: O) -> Result<O, Error>
+where
+    S: SubjectMask,
+    S::Mask: GraphqlMask<A, O>,
+{
+    <S::Mask as GraphqlMask<A, O>>::masked_value(ctx, value)
+}
+
+/// One subscription item an `#[authorize(A, S)]` operation streams, masked as
+/// `S` masks it through the ability its opening's gate checked.
+pub fn graphql_masked_item<A, S, O>(
+    ctx: &Context<'_>,
+    ability: &Ability,
+    item: O,
+) -> Result<Option<O>, Error>
+where
+    S: SubjectMask,
+    S::Mask: GraphqlMask<A, O>,
+{
+    <S::Mask as GraphqlMask<A, O>>::masked_item(ctx, ability, item)
 }
 
 /// The masked value did not fit the operation's own type: decide by selection

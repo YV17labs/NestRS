@@ -50,6 +50,9 @@ struct RouteHandler {
     /// `Authorize<..>`, kept so one not implementing the shaper trait is a
     /// spanned compile error.
     named_shaper: Option<Type>,
+    /// On an `#[sse]` route, the assertion that its posture's subject shapes
+    /// nothing, spanned on the subject `#[authorize]` names.
+    stream_posture: TokenStream2,
     /// Whether the handler declares any extractor; without one, no mask probe is emitted.
     has_extractors: bool,
     /// The route's declaration, read through `Reflector`.
@@ -238,17 +241,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(spec) => spec,
             Err(err) => return err.to_compile_error().into(),
         };
-        if is_sse && let Some(spec) = &authorize {
-            return syn::Error::new_spanned(
-                &spec.action,
-                "`#[authorize(...)]` cannot arm a `#[sse]` route: the posture masks the \
-                 response against the entity model, and an event stream is no wire model to \
-                 reconcile. Gate the stream with a capability-only guard instead — \
-                 `#[use_guards(YourGuard)]` checking `ability.can_class(...)`",
-            )
-            .to_compile_error()
-            .into();
-        }
         // A hand-written `Authorize<A, E>` arms the shaper too, and the mask
         // passes `text/event-stream` through untouched.
         if is_sse && let Some(ty) = named_shaper_type(&inputs) {
@@ -257,8 +249,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 "a response shaper cannot arm a `#[sse]` route: masking reconciles the body \
                  against the entity model, and an event stream is no wire model to reconcile — \
                  it would be waved through unmasked while the document claims otherwise. Gate \
-                 the stream with a capability-only guard instead, and load what it needs inside \
-                 the handler",
+                 the stream with `#[authorize(Action, Subject)]` on a subject `#[subject]` \
+                 declares — a capability no table holds, whose posture masks nothing — and load \
+                 what it needs inside the handler",
             )
             .to_compile_error()
             .into();
@@ -269,6 +262,17 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Some(Ok(ty)) => Some(ty),
             Some(Err(err)) => return err.to_compile_error().into(),
             None => None,
+        };
+        // Decided by the posture's type, after name resolution: on a stream,
+        // only a subject whose posture shapes nothing — one no table holds.
+        let stream_posture = match (&authorize, &authorize_ty) {
+            (Some(spec), Some(ty)) if is_sse => quote_spanned! {spec.entity.span()=>
+                const _: () = ::core::assert!(
+                    !<#ty as ::nest_rs_http::RouteResponseShaper>::SHAPES,
+                    #SSE_NAMES_AN_ENTITY,
+                );
+            },
+            _ => quote! {},
         };
         let return_type = match &method.sig.output {
             ReturnType::Default => quote! { () },
@@ -577,6 +581,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             probe_types,
             param_types,
             named_shaper: authorize_ty.or_else(|| named_shaper_type(&inputs)),
+            stream_posture,
             has_extractors: !inputs.is_empty(),
             handler: handler_ref(&self_ty, &method_name),
             no_pipes,
@@ -1204,6 +1209,12 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     }))
 }
 
+/// What an `#[sse]` route's `#[authorize]` naming an entity is told.
+const SSE_NAMES_AN_ENTITY: &str = "an `#[sse]` route's `#[authorize]` names a subject no table \
+     holds: an entity's posture masks the reply against its rows, and an event stream is no wire \
+     model to reconcile. Declare the capability with `#[subject]` on a unit struct and gate the \
+     stream with `#[authorize(Action, ThatSubject)]`, then load what it needs inside the handler";
+
 /// The keys a route's `#[authorize]` takes beside its action and entity.
 const AUTHORIZE: nest_rs_codegen::Grammar = nest_rs_codegen::Grammar::new("authorize", &["bind"]);
 
@@ -1367,6 +1378,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
         interceptors,
         probe_types,
         named_shaper,
+        stream_posture,
         has_extractors,
         handler,
         no_pipes,
@@ -1395,6 +1407,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
         },
         None => quote! {},
     };
+
     let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
     let force_guard_typeids = force_guard_typeids(force_guards);
     let method_pipe_specs = scoped_specs(method_pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
@@ -1487,6 +1500,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
             },
             {
                 #named_shaper_assert
+                #stream_posture
                 ::nest_rs_http::__private::shaped(#wrapper_expr, #shaper_selection, #probe)
             },
             #deprecated,

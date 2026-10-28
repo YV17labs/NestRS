@@ -60,6 +60,8 @@ pub mod redis_throttler;
 pub mod resolver;
 #[cfg(feature = "authn")]
 pub mod strategy;
+#[cfg(feature = "authz")]
+pub mod subject;
 #[cfg(feature = "schedule")]
 pub mod tasks;
 #[cfg(feature = "mcp")]

@@ -145,11 +145,12 @@ impl FieldSet {
 
 /// One grant or denial. The condition is precomputed at build time (the actor's
 /// values are known then); the typed [`Predicate`] is kept type-erased for the
-/// in-memory check, downcast at the call site where the subject type is known.
+/// in-memory check, downcast at the call site where the subject type is known,
+/// and absent from a rule no `when` narrowed, which holds for every row.
 pub(crate) struct Rule {
     pub(crate) inverted: bool,
     pub(crate) condition: Condition,
-    pub(crate) predicate: Box<dyn Any + Send + Sync>,
+    pub(crate) predicate: Option<Box<dyn Any + Send + Sync>>,
     pub(crate) fields: FieldSet,
 }
 
@@ -295,13 +296,19 @@ impl Ability {
         let mut undecided_grants: Option<FieldSet> = None;
         let mut undecided_denial = false;
         for rule in self.rules_for(action, TypeId::of::<E>()) {
-            let Some(predicate) = predicate_of::<E>(rule) else {
-                // Unreachable type mismatch (see `predicate_of`) — fail
-                // closed: a broken denial denies, a broken grant never widens.
-                denied |= rule.inverted;
-                continue;
+            let truth = match rule.predicate.as_deref() {
+                None => Truth::True,
+                Some(predicate) => match predicate_of::<E>(predicate) {
+                    Some(predicate) => predicate.decide(model, invented),
+                    None => {
+                        // Unreachable type mismatch (see `predicate_of`) — fail
+                        // closed: a broken denial denies, a broken grant never widens.
+                        denied |= rule.inverted;
+                        continue;
+                    }
+                },
             };
-            match (predicate.decide(model, invented), rule.inverted) {
+            match (truth, rule.inverted) {
                 // `NOT UNKNOWN` is `UNKNOWN`, so SQL's filter drops a row its
                 // denial cannot compare as surely as one it matches.
                 (Truth::True | Truth::Unknown, true) => denied = true,
@@ -455,8 +462,8 @@ pub(crate) struct Verdict {
 
 /// Recover a rule's typed predicate. A mismatch cannot happen (rules are keyed
 /// by `TypeId::of::<E>()`), and fails closed at the call sites, never panics.
-fn predicate_of<E: EntityTrait>(rule: &Rule) -> Option<&Predicate<E>> {
-    let predicate = rule.predicate.downcast_ref::<Predicate<E>>();
+fn predicate_of<E: EntityTrait>(predicate: &(dyn Any + Send + Sync)) -> Option<&Predicate<E>> {
+    let predicate = predicate.downcast_ref::<Predicate<E>>();
     if predicate.is_none() {
         tracing::error!(
             target: crate::TARGET,
@@ -773,7 +780,7 @@ mod tests {
         Rule {
             inverted: false,
             condition: Condition::all(),
-            predicate: Box::new(Predicate::<gadget::Entity>::Always),
+            predicate: Some(Box::new(Predicate::<gadget::Entity>::Always)),
             fields: FieldSet::All,
         }
     }
@@ -784,7 +791,8 @@ mod tests {
         let rule = mismatched_rule();
 
         assert!(
-            predicate_of::<widget::Entity>(&rule).is_none(),
+            predicate_of::<widget::Entity>(rule.predicate.as_deref().expect("a narrowed rule"))
+                .is_none(),
             "a predicate that is not this subject's grants nothing — reading it \
              as unrestricted is the one answer that opens rows",
         );
@@ -808,11 +816,14 @@ mod tests {
         let rule = Rule {
             inverted: false,
             condition: Condition::all(),
-            predicate: Box::new(Predicate::<widget::Entity>::Always),
+            predicate: Some(Box::new(Predicate::<widget::Entity>::Always)),
             fields: FieldSet::All,
         };
 
-        assert!(predicate_of::<widget::Entity>(&rule).is_some());
+        assert!(
+            predicate_of::<widget::Entity>(rule.predicate.as_deref().expect("a narrowed rule"))
+                .is_some()
+        );
         logs.expect_none(
             "nest_rs::authz",
             "ability rule predicate does not match its keyed subject — failing closed",

@@ -11,7 +11,7 @@
 //! loader lives in `nest-rs-seaorm`.
 
 mod authorize;
-mod mask;
+pub(crate) mod mask;
 mod scope;
 
 pub use authorize::Authorize;

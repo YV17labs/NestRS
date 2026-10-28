@@ -74,6 +74,6 @@
 //! A gateway is `Gated`, so the HTTP guards run on the upgrade, and the
 //! ability they attach crosses the connection into each message.
 
-mod mask;
+pub(crate) mod mask;
 
 pub use mask::masked_reply_for;

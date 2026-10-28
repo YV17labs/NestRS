@@ -4,11 +4,14 @@
 //! A [`RuleSpec`] commits on drop — the rule is finalized by ending the
 //! statement, with no terminal call to forget.
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
+use std::marker::PhantomData;
 use std::sync::Arc;
 
+use sea_orm::sea_query::Condition;
 use sea_orm::{EntityTrait, IdenStatic};
 
+use crate::Subject;
 use crate::ability::{Ability, FieldSet, Rule};
 use crate::action::Action;
 use crate::error::MalformedRuleError;
@@ -65,16 +68,17 @@ impl AbilityBuilder {
             .collect()
     }
 
-    /// Begin a grant. Narrow with [`when`](RuleSpec::when) / [`fields`](RuleSpec::fields).
-    pub fn can<E>(&mut self, action: Action, _subject: E) -> RuleSpec<'_, E>
-    where
-        E: EntityTrait,
-        E::Column: Send + Sync + 'static,
-    {
+    /// Begin a grant on `subject`: an entity, narrowed with
+    /// [`when`](RuleSpec::when) / [`fields`](RuleSpec::fields), or a subject
+    /// `#[subject]` declares, which no table holds and the grant covers whole.
+    pub fn can<S: Subject>(&mut self, action: Action, _subject: S) -> RuleSpec<'_, S> {
         RuleSpec::new(self, action, false)
     }
 
     /// Begin a denial — a matching denial overrides a matching grant.
+    ///
+    /// An entity's alone: a denial narrows the rows a grant reaches, and a
+    /// subject no table holds has none — a grant not written is its denial.
     pub fn cannot<E>(&mut self, action: Action, _subject: E) -> RuleSpec<'_, E>
     where
         E: EntityTrait,
@@ -105,46 +109,32 @@ impl AbilityBuilder {
 
 /// One in-progress rule. Commits on drop — binding to a variable defers the
 /// commit, and the builder cannot be reused while a spec is still alive.
-pub struct RuleSpec<'a, E>
-where
-    E: EntityTrait,
-    E::Column: Send + Sync + 'static,
-{
+pub struct RuleSpec<'a, S: Subject> {
     builder: &'a mut AbilityBuilder,
     action: Action,
     inverted: bool,
-    predicate: Predicate<E>,
+    /// The rows [`when`](Self::when) narrowed the rule to: its typed predicate
+    /// and the SQL it lowers to, `None` while the rule holds for every row.
+    rows: Option<(Box<dyn Any + Send + Sync>, Condition)>,
+    /// Whether that predicate is the `Deny` a rejected relation leaves.
+    malformed: bool,
     fields: FieldSet,
     required_scopes: Vec<String>,
+    subject: PhantomData<fn() -> S>,
 }
 
-impl<'a, E> RuleSpec<'a, E>
-where
-    E: EntityTrait,
-    E::Column: Send + Sync + 'static,
-{
+impl<'a, S: Subject> RuleSpec<'a, S> {
     fn new(builder: &'a mut AbilityBuilder, action: Action, inverted: bool) -> Self {
         Self {
             builder,
             action,
             inverted,
-            predicate: Predicate::Always,
+            rows: None,
+            malformed: false,
             fields: FieldSet::All,
             required_scopes: Vec::new(),
+            subject: PhantomData,
         }
-    }
-
-    /// `.when(|p| p.eq(users::Column::OrgId, actor.org_id))`.
-    pub fn when(mut self, build: impl FnOnce(PredicateBuilder<E>) -> Predicate<E>) -> Self {
-        self.predicate = build(PredicateBuilder::new());
-        self
-    }
-
-    /// Restrict the rule to these columns — the response masker keeps only
-    /// these fields. Without this, every field is permitted.
-    pub fn fields(mut self, columns: impl IntoIterator<Item = E::Column>) -> Self {
-        self.fields = FieldSet::Only(columns.into_iter().map(|c| c.as_str()).collect());
-        self
     }
 
     /// Gate this rule behind an OAuth scope: it materializes only when the
@@ -198,18 +188,36 @@ where
     }
 }
 
-impl<'a, E> Drop for RuleSpec<'a, E>
+impl<E> RuleSpec<'_, E>
 where
     E: EntityTrait,
     E::Column: Send + Sync + 'static,
 {
+    /// `.when(|p| p.eq(users::Column::OrgId, actor.org_id))`.
+    pub fn when(mut self, build: impl FnOnce(PredicateBuilder<E>) -> Predicate<E>) -> Self {
+        let predicate = build(PredicateBuilder::new());
+        self.malformed = matches!(predicate, Predicate::Deny);
+        let condition = predicate.to_condition();
+        self.rows = Some((Box::new(predicate), condition));
+        self
+    }
+
+    /// Restrict the rule to these columns — the response masker keeps only
+    /// these fields. Without this, every field is permitted.
+    pub fn fields(mut self, columns: impl IntoIterator<Item = E::Column>) -> Self {
+        self.fields = FieldSet::Only(columns.into_iter().map(|c| c.as_str()).collect());
+        self
+    }
+}
+
+impl<S: Subject> Drop for RuleSpec<'_, S> {
     fn drop(&mut self) {
         // A `Deny` predicate only comes from a rejected `related(...)`. Checked
         // before the scope gate, so a developer error surfaces whatever the token.
-        if matches!(self.predicate, Predicate::Deny) {
+        if self.malformed {
             self.builder.malformed.push(MalformedRuleError {
                 action: self.action,
-                subject: std::any::type_name::<E>(),
+                subject: std::any::type_name::<S>(),
                 kind: if self.inverted { "denial" } else { "grant" },
             });
         }
@@ -222,29 +230,30 @@ where
                 tracing::debug!(
                     target: crate::TARGET,
                     action = ?self.action,
-                    subject = std::any::type_name::<E>(),
+                    subject = std::any::type_name::<S>(),
                     scopes = ?missing,
                     reason = "missing_scope",
                     "rule withheld",
                 );
                 self.builder
                     .ability
-                    .withhold(self.action, TypeId::of::<E>(), missing);
+                    .withhold(self.action, TypeId::of::<S>(), missing);
             }
             return;
         }
 
-        let condition = self.predicate.to_condition();
-        let predicate = std::mem::take(&mut self.predicate);
-        let fields = std::mem::take(&mut self.fields);
+        let (predicate, condition) = match self.rows.take() {
+            Some((predicate, condition)) => (Some(predicate), condition),
+            None => (None, Condition::all()),
+        };
         self.builder.ability.add_rule(
             self.action,
-            TypeId::of::<E>(),
+            TypeId::of::<S>(),
             Rule {
                 inverted: self.inverted,
                 condition,
-                predicate: Box::new(predicate),
-                fields,
+                predicate,
+                fields: std::mem::take(&mut self.fields),
             },
         );
     }

@@ -1,6 +1,7 @@
 //! `Authorize<A, S>` as a [`RouteResponseShaper`] declares the route's class
-//! gate, run with its guards, and arms the route's response mask, keyed on the
-//! ability the guard attached:
+//! gate, run with its guards, and — on an entity subject — arms the route's
+//! response mask, keyed on the ability the guard attached; a subject no table
+//! holds arms none, so its route reads as unmasked:
 //!
 //! 1. A masked route is one whose reads run under that ability: the data layer
 //!    scopes every query via `current_ability()` — no hand-written filter.
@@ -29,22 +30,54 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::authorize::Authorize;
+use crate::subject::{NoRows, Rows, SubjectMask};
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker, WireModelDefaults};
 
 impl<A, S> RouteResponseShaper for Authorize<A, S>
 where
     A: ActionMarker,
-    S: EntityTrait + WireModelDefaults,
-    S::Model: DeserializeOwned + Serialize,
+    S: SubjectMask,
+    S::Mask: RouteMask,
 {
     const GATE: Option<nest_rs_http::__private::GateFn> = Some(crate::class_gate::<A, S>);
+    const SHAPES: bool = <S::Mask as RouteMask>::SHAPES;
 
     fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
         // A missing ability means the class gate already answered 500, so there
         // is nothing to shape.
         let ability = nest_rs_core::ambient::<Ability>()?;
-        Some(Box::new(AbilityShaping::<S>::new(ability, A::ACTION)))
+        <S::Mask as RouteMask>::shaping(ability, A::ACTION)
+    }
+}
+
+/// How a route's posture shapes the reply on a subject's [`SubjectMask::Mask`]:
+/// an entity's rows mask it, a subject no table holds leaves it unshaped.
+pub trait RouteMask {
+    /// Whether the posture shapes the reply at all.
+    const SHAPES: bool;
+
+    /// The shaping step for `action`, keyed on the ability the guard attached.
+    fn shaping(ability: Arc<Ability>, action: Action) -> Option<Box<dyn ResponseShaping>>;
+}
+
+impl<E> RouteMask for Rows<E>
+where
+    E: EntityTrait + WireModelDefaults,
+    E::Model: DeserializeOwned + Serialize,
+{
+    const SHAPES: bool = true;
+
+    fn shaping(ability: Arc<Ability>, action: Action) -> Option<Box<dyn ResponseShaping>> {
+        Some(Box::new(AbilityShaping::<E>::new(ability, action)))
+    }
+}
+
+impl RouteMask for NoRows {
+    const SHAPES: bool = false;
+
+    fn shaping(_ability: Arc<Ability>, _action: Action) -> Option<Box<dyn ResponseShaping>> {
+        None
     }
 }
 

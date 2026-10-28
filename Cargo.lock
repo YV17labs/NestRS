@@ -2653,6 +2653,7 @@ version = "7.0.0"
 dependencies = [
  "async-graphql",
  "nest-rs-authz",
+ "nest-rs-authz-macros",
  "nest-rs-core",
  "nest-rs-graphql",
  "nest-rs-guards",
@@ -2668,6 +2669,16 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "nest-rs-authz-macros"
+version = "7.0.0"
+dependencies = [
+ "nest-rs-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]

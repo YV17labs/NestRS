@@ -84,6 +84,8 @@ nest-rs-core.workspace = true
 # The class gate answers with the guards' `Denial`, which every edge renders;
 # the guard contract depends on the kernel alone, so the gate stays ungated.
 nest-rs-guards.workspace = true
+# `#[subject]`, re-exported at the root beside the trait it implements.
+nest-rs-authz-macros.workspace = true
 
 # Optional dependencies — pulled in by the feature flags above.
 nest-rs-http = { workspace = true, optional = true }

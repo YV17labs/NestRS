@@ -1,15 +1,28 @@
-//! `#[authorize]` arms response masking, which reconciles the body against the
-//! entity model. An event stream is no wire model, so the mask could only fail
-//! closed at 500 on every request — the refusal names the pattern that does
-//! work instead.
+//! An entity's posture masks the reply against its rows, and an event stream is
+//! no wire model to reconcile, so `#[authorize]` on an `#[sse]` route names a
+//! subject no table holds — decided by the posture's type, after name
+//! resolution — and the refusal names that remedy.
 
-// The macro bails before emitting the item, so every import is unused by the
-// time rustc looks — noise the snapshot should not carry.
-#![allow(unused_imports)]
-
+use nest_rs::authz::{Read, WireModelDefaults};
 use nest_rs::http::{SseEvent, SseStream, controller, futures_util::stream, routes};
 
-struct Post;
+mod post {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[sea_orm(table_name = "streamed_posts")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+impl WireModelDefaults for post::Entity {}
 
 #[controller(path = "/feed")]
 struct FeedController;
@@ -17,7 +30,7 @@ struct FeedController;
 #[routes]
 impl FeedController {
     #[sse("/ticks")]
-    #[authorize(Read, Post)]
+    #[authorize(Read, post::Entity)]
     async fn ticks(&self) -> SseStream {
         SseStream::new(stream::iter([SseEvent::message("tick")]))
     }

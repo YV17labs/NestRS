@@ -22,6 +22,10 @@ mod gate;
 #[cfg(feature = "http")]
 mod http;
 
+// A subject no table holds, gated on every edge: its suite needs all four.
+#[cfg(all(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+mod subject;
+
 #[cfg(feature = "graphql")]
 mod graphql;
 

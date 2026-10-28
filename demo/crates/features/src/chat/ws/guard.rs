@@ -1,7 +1,8 @@
 use nest_rs::core::{Layer, UnitContext, injectable};
 use nest_rs::guards::{Denial, Guard, GuardFor};
-use nest_rs::ws::serde_json::Value;
 use nest_rs::ws::{WsView, async_trait};
+
+use crate::Claims;
 
 #[injectable]
 #[derive(Default)]
@@ -12,17 +13,7 @@ impl Layer for ModerationGuard {}
 #[async_trait]
 impl Guard for ModerationGuard {
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let Some(view) = cx.switch_to::<WsView>() else {
-            tracing::error!(
-                target: crate::chat::TARGET,
-                reason = "not_a_message",
-                "message denied: the guard checks WebSocket messages only",
-            );
-            return Err(Denial::internal(
-                "ModerationGuard checks WebSocket messages only",
-            ));
-        };
-        Self::decide(view.event(), view.data())
+        Self::decide(cx.ambient::<Claims>().as_deref())
     }
 
     fn files_its_denials(&self) -> bool {
@@ -33,40 +24,65 @@ impl Guard for ModerationGuard {
 impl GuardFor<WsView> for ModerationGuard {}
 
 impl ModerationGuard {
-    fn decide(event: &str, data: Option<&Value>) -> Result<(), Denial> {
-        match data
-            .and_then(|data| data.get("author"))
-            .and_then(Value::as_str)
-        {
-            Some("banned") => {
-                tracing::warn!(
-                    target: crate::chat::TARGET,
-                    action = "post",
-                    subject = event,
-                    reason = "banned_author",
-                    "message denied: author is not allowed to post",
-                );
-                Err(Denial::forbidden("author `banned` is not allowed to post"))
-            }
-            _ => Ok(()),
+    fn decide(caller: Option<&Claims>) -> Result<(), Denial> {
+        let Some(caller) = caller else {
+            tracing::error!(
+                target: crate::chat::TARGET,
+                reason = "no_claims",
+                "message denied: AuthnGuard did not run at the upgrade",
+            );
+            return Err(Denial::internal(
+                "ModerationGuard requires AuthnGuard at the upgrade",
+            ));
+        };
+        if caller.sub.user_id().is_some() {
+            return Ok(());
         }
+        tracing::warn!(
+            target: crate::chat::TARGET,
+            action = "post",
+            org_id = %caller.org_id,
+            reason = "not_a_user",
+            "message denied",
+        );
+        Err(Denial::forbidden("posting takes a token naming a user"))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
+    use uuid::Uuid;
 
-    #[test]
-    fn rejects_a_banned_author() {
-        let data = json!({ "author": "banned", "text": "x" });
-        assert!(ModerationGuard::decide("message", Some(&data)).is_err());
+    use super::*;
+    use crate::Subject;
+
+    fn verdict(sub: Subject) -> Result<(), Denial> {
+        let caller = Claims {
+            sub,
+            client_id: None,
+            org_id: Uuid::now_v7(),
+            roles: Vec::new(),
+            scopes: Vec::new(),
+            exp: 0,
+        };
+        ModerationGuard::decide(Some(&caller))
     }
 
     #[test]
-    fn allows_everyone_else() {
-        let data = json!({ "author": "ada", "text": "x" });
-        assert!(ModerationGuard::decide("message", Some(&data)).is_ok());
+    fn a_user_posts() {
+        assert!(verdict(Subject::User(Uuid::now_v7())).is_ok());
+    }
+
+    #[test]
+    fn a_token_naming_no_user_is_refused() {
+        let refused =
+            verdict(Subject::Client("demo-service".into())).expect_err("a machine never posts");
+        assert_eq!(refused.http_status(), 403);
+    }
+
+    #[test]
+    fn a_message_no_principal_reached_fails_closed() {
+        let refused = ModerationGuard::decide(None).expect_err("an unwired upgrade admits no one");
+        assert_eq!(refused.http_status(), 500);
     }
 }

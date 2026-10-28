@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use nest_rs::core::error_message;
-use nest_rs::ws::{Scoped, WsClient, gateway, messages, serde_json};
+use nest_rs::core::{ambient, error_message};
+use nest_rs::ws::{Opaque, Scoped, WsClient, WsError, gateway, messages};
 
 use super::guard::ModerationGuard;
 use super::request_seq::RequestSeq;
+use crate::Claims;
 use crate::authn::AuthnGuard;
 use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 use crate::chat::service::ChatService;
@@ -32,8 +33,9 @@ impl ChatGateway {
     #[subscribe_message("message")]
     #[public]
     #[use_guards(ModerationGuard)]
-    async fn on_message(&self, message: SendMessageDto) -> Result<(), serde_json::Error> {
-        self.svc.record(message)?;
+    async fn on_message(&self, message: SendMessageDto) -> Result<(), WsError> {
+        let caller = Self::caller()?;
+        self.svc.record(caller.sub.clone(), message).opaque()?;
         Ok(())
     }
 
@@ -57,10 +59,24 @@ impl ChatGateway {
 
     #[subscribe_message("typing")]
     #[public]
-    async fn typing(&self, message: SendMessageDto, client: &WsClient) {
-        if let Err(e) = client.broadcast("typing", &message) {
+    #[use_guards(ModerationGuard)]
+    async fn typing(&self, message: SendMessageDto, client: &WsClient) -> Result<(), WsError> {
+        let typing = ChatMessageDto {
+            author: Self::caller()?.sub.clone(),
+            text: message.text,
+        };
+        if let Err(e) = client.broadcast("typing", &typing) {
             tracing::warn!(target: crate::chat::TARGET, error = %error_message(&e), "broadcast failed");
         }
+        Ok(())
+    }
+}
+
+impl ChatGateway {
+    fn caller() -> Result<Arc<Claims>, WsError> {
+        ambient::<Claims>()
+            .ok_or("no principal reached the message: AuthnGuard did not run at the upgrade")
+            .opaque()
     }
 }
 

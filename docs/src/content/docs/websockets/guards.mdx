@@ -85,8 +85,9 @@ handler the guard is attached to:
 ```rust title="crates/features/src/chat/ws/guard.rs"
 use nest_rs::core::{Layer, UnitContext, injectable};
 use nest_rs::guards::{Denial, Guard, GuardFor};
-use nest_rs::ws::serde_json::Value;
 use nest_rs::ws::{WsView, async_trait};
+
+use crate::Claims;
 
 #[injectable]
 #[derive(Default)]
@@ -97,12 +98,12 @@ impl Layer for ModerationGuard {}
 #[async_trait]
 impl Guard for ModerationGuard {
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let view = cx
-            .switch_to::<WsView>()
-            .ok_or_else(|| Denial::internal("ModerationGuard checks WebSocket messages only"))?;
-        match view.data().and_then(|data| data.get("author")).and_then(Value::as_str) {
-            Some("banned") => Err(Denial::forbidden("author `banned` is not allowed to post")),
-            _ => Ok(()),
+        let caller = cx
+            .ambient::<Claims>()
+            .ok_or_else(|| Denial::internal("ModerationGuard requires AuthnGuard at the upgrade"))?;
+        match caller.sub.user_id() {
+            Some(_) => Ok(()),
+            None => Err(Denial::forbidden("posting takes a token naming a user")),
         }
     }
 }
@@ -110,8 +111,11 @@ impl Guard for ModerationGuard {
 impl GuardFor<WsView> for ModerationGuard {}
 ```
 
-`WsView` is the message as the gateway dispatches it: `event()`, `data()` and
-the `client()` that sent it, whose connection `cx.peer()` names too.
+The guard decides on the caller the upgrade authenticated, which every
+message on the connection carries — never on a name the payload states, which
+the client writes. A guard that needs the message itself switches to
+`WsView`: `event()`, `data()` and the `client()` that sent it, whose
+connection `cx.peer()` names too.
 
 <Aside type="caution" title="A per-message guard must declare `GuardFor<WsView>`">
 Both entries admit by default, which is right — "this guard does not apply to
@@ -149,19 +153,27 @@ impl ChatGateway {
     #[subscribe_message("message")]
     #[public]
     #[use_guards(ModerationGuard)]
-    async fn on_message(&self, msg: SendMessageDto) {
-        self.svc.record(msg);
+    async fn on_message(&self, msg: SendMessageDto) -> Result<(), WsError> {
+        let caller = ambient::<Claims>().ok_or("no principal reached the message").opaque()?;
+        self.svc.record(caller.sub.clone(), msg).opaque()?;
+        Ok(())
     }
 }
 ```
 
+The handler names the author from the same principal,
+`nest_rs::core::ambient::<Claims>()`, so `SendMessageDto` carries the text
+alone: it is an `#[input]`, and a payload naming an author is refused as an
+unknown field before the handler runs.
+
 A denial surfaces as a wire-shaped error frame on the rejected event,
 the class a client branches on beside its sentence — `code`, the member a
-`Problem` answers under too, and the same class as `reason`:
+`Problem` answers under too, and the same class as `reason`. Here a service
+token, which names no user, tries to post:
 
 ```text frame="terminal"
-> {"event":"message","data":{"author":"banned","text":"hi"}}
-< {"event":"message","data":{"error":"author `banned` is not allowed to post","code":"FORBIDDEN","reason":"forbidden"}}
+> {"event":"message","data":{"text":"hi"}}
+< {"event":"message","data":{"error":"posting takes a token naming a user","code":"FORBIDDEN","reason":"forbidden"}}
 ```
 
 The connection stays open; the client can fire other events.

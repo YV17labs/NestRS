@@ -125,8 +125,9 @@ impl ChatGateway {
     #[subscribe_message("message")]
     #[public]
     #[use_guards(ModerationGuard)]
-    async fn on_message(&self, message: SendMessageDto) -> Result<(), serde_json::Error> {
-        self.svc.record(message)?;
+    async fn on_message(&self, message: SendMessageDto) -> Result<(), WsError> {
+        let caller = Self::caller()?;
+        self.svc.record(caller.sub.clone(), message).opaque()?;
         Ok(())
     }
 
@@ -138,30 +139,48 @@ impl ChatGateway {
 
     #[subscribe_message("typing")]
     #[public]
-    async fn typing(&self, message: SendMessageDto, client: &WsClient) {
-        if let Err(e) = client.broadcast("typing", &message) {
+    #[use_guards(ModerationGuard)]
+    async fn typing(&self, message: SendMessageDto, client: &WsClient) -> Result<(), WsError> {
+        let typing = ChatMessageDto {
+            author: Self::caller()?.sub.clone(),
+            text: message.text,
+        };
+        if let Err(e) = client.broadcast("typing", &typing) {
             tracing::warn!(target: crate::chat::TARGET, error = %error_message(&e), "broadcast failed");
         }
+        Ok(())
+    }
+}
+
+impl ChatGateway {
+    fn caller() -> Result<Arc<Claims>, WsError> {
+        ambient::<Claims>()
+            .ok_or("no principal reached the message: AuthnGuard did not run at the upgrade")
+            .opaque()
     }
 }
 ```
 
-Drive it from two terminals at once and the picture comes through:
+Each client sends its text alone, `{"text":"hi"}`. Drive it from two
+terminals at once, each holding a user's token, and the picture comes
+through:
 
 ```text frame="terminal"
-$ websocat ws://localhost:3000/ws       # tab A
-{"event":"message","data":{"author":"ada","text":"hi"}}
-{"event":"typing","data":{"author":"bob","text":"..."}}
+$ websocat ws://localhost:3000/ws       # tab A, Ada
+{"event":"message","data":{"author":"0192b6f0-7c1e-7a40-9d3e-5f1c2a8b4d61","text":"hi"}}
+{"event":"typing","data":{"author":"0192b6f1-02aa-7f13-8c55-1d9e7b3c0a42","text":"..."}}
 
-$ websocat ws://localhost:3000/ws       # tab B
-{"event":"typing","data":{"author":"bob","text":"..."}}
-{"event":"message","data":{"author":"ada","text":"hi"}}
+$ websocat ws://localhost:3000/ws       # tab B, Bob
+{"event":"typing","data":{"author":"0192b6f1-02aa-7f13-8c55-1d9e7b3c0a42","text":"..."}}
+{"event":"message","data":{"author":"0192b6f0-7c1e-7a40-9d3e-5f1c2a8b4d61","text":"hi"}}
 ```
 
-`message` is recorded by the service, which calls
-`WsServer::broadcast("message", ...)` from outside the handler — see
-[Server-side push](/websockets/server-push/). `typing` broadcasts
-through the client handle directly because there is no state to
+The author is the subject of the token the upgrade verified, read from the
+principal every message on the connection carries — never a name the payload
+states, so no client speaks as another. `message` is recorded by the
+service, which calls `WsServer::broadcast("message", ...)` from outside the
+handler — see [Server-side push](/websockets/server-push/). `typing`
+broadcasts through the client handle directly because there is no state to
 record.
 
 ## When `&WsClient` is not enough

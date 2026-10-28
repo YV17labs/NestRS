@@ -141,8 +141,8 @@ pub struct RoomService {
 }
 
 impl RoomService {
-    pub fn record(&self, msg: SendMessage) -> ChatMessage {
-        let stored = ChatMessage { author: msg.author, text: msg.text };
+    pub fn record(&self, author: Subject, msg: SendMessage) -> ChatMessage {
+        let stored = ChatMessage { author, text: msg.text };
         self.history.lock().push(stored.clone());
         let _ = self.server.broadcast("message", &stored);
         stored
@@ -150,7 +150,9 @@ impl RoomService {
 }
 ```
 
-The gateway handler is two lines; the service owns the side effect.
+The gateway handler is two lines — it reads the author off the caller the
+upgrade authenticated and hands the message over; the service owns the side
+effect.
 
 ## Backpressure
 

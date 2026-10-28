@@ -1,5 +1,5 @@
-use features::Role;
 use features::authn::AuthnGuard;
+use features::{Role, Subject};
 use live::LiveModule;
 use nest_rs::authn::AuthnConfig;
 use nest_rs::guards::guard;
@@ -10,7 +10,15 @@ use uuid::Uuid;
 
 pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID};
 
-pub(crate) async fn test_token() -> String {
+pub(crate) fn user_token(user: Uuid) -> String {
+    features::testing::token(
+        Uuid::parse_str(ORG_ID).expect("valid org uuid"),
+        vec![Role::User],
+        Subject::User(user),
+    )
+}
+
+pub(crate) async fn machine_token() -> String {
     token_for_org(Uuid::parse_str(ORG_ID).expect("valid org uuid"), Role::User).await
 }
 
@@ -53,7 +61,11 @@ pub(crate) async fn serve() -> (EphemeralDatabase, WsApp) {
 }
 
 pub(crate) async fn open(app: &WsApp, path: &str) -> WsSocket {
-    app.socket(path).bearer(&test_token().await).connect().await
+    open_as(app, path, &user_token(Uuid::now_v7())).await
+}
+
+pub(crate) async fn open_as(app: &WsApp, path: &str, token: &str) -> WsSocket {
+    app.socket(path).bearer(token).connect().await
 }
 
 pub(crate) async fn wait_for_presence(socket: &mut WsSocket, want: u64) {

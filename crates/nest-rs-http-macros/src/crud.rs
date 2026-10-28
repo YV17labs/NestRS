@@ -297,10 +297,10 @@ fn api_args(cfg: &CrudDeclaration, op: CrudOp, summary: String) -> TokenStream2 
         Some(written) => quote!(#written),
         None => quote!(#summary),
     };
-    match api.and_then(|api| api.description.as_ref()) {
-        Some(description) => quote!(summary = #summary, description = #description),
-        None => quote!(summary = #summary),
-    }
+    let description = api
+        .and_then(|api| api.description.as_ref())
+        .map(|description| quote!(, description = #description));
+    quote!(summary = #summary #description)
 }
 
 #[cfg(test)]

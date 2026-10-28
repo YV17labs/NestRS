@@ -21,7 +21,7 @@ all-features = true
 default = []
 # HTTP surface: the extractors (`Authorize`, `Scope`), the `AbilityGuard`'s
 # HTTP entry, and the `RouteResponseShaper` that masks responses transparently.
-# The `Bind` route-model extractor lives in `nest_rs_seaorm::Bind` (it must use
+# The row `#[authorize(A, bind = S)]` loads is `nest-rs-seaorm`'s (it must use
 # the data layer). `AbilityGuard` itself is at the crate root and every
 # transport feature turns it on, because it answers all four; its
 # `GuardFor<HttpView>` comes with it, since every edge runs `check_http` on an
@@ -31,7 +31,7 @@ http = [
 ]
 # GraphQL surface: the `ability` accessor, reading the field's unit, and the
 # response mask. The class gate is `class_gate`, every edge's, at the crate
-# root. The resolver-side `bind` helper lives in `nest_rs_seaorm::graphql`.
+# root. The row `bind = S` loads for a field is `nest-rs-seaorm`'s.
 graphql = [
     "dep:nest-rs-graphql",
     # The root `AbilityGuard` is what `/graphql`'s request runs, through its

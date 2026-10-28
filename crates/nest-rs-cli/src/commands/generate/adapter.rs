@@ -74,8 +74,8 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     // A guarded handler imports its transport's authz adapter, or the access
     // graph fails the boot on the guards it names.
     let mut module_rs = r.render(module_tmpl);
-    let guarded_handler = matches!(transport, Transport::Http | Transport::Ws)
-        || (crud_port && transport == Transport::Graphql);
+    let guarded_handler =
+        matches!(transport, Transport::Http | Transport::Ws) || (crud_port && is_graphql);
     if guarded_handler
         && let Some(b) = auth::authz_for(transport)
         && let Some(wired) = ensure_module_imports(&[(b.feature_path, b.module)])(&module_rs)

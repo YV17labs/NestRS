@@ -41,17 +41,16 @@ fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
     problem_error(&Problem::new(500, code::INTERNAL))
 }
 
-/// The row a by-id argument names, loaded and authorized: no row → `Ok(None)`;
-/// denied → `FORBIDDEN` (existence not hidden); else `Ok(Some(model))`.
+/// The subject `#[authorize(A, bind = S)]` loads for an operation, handed to
+/// its `Authorized<A, E>` parameter: the row a by-id argument names, loaded
+/// and authorized. No row → `NOT_FOUND`; denied → `FORBIDDEN` (existence not
+/// hidden).
 ///
 /// The service resolves through the request's scope — the container's over a
 /// graphql-ws socket, which carries none. A wiring defect — no provider for
 /// it, no ability on the field's unit — answers the opaque internal error and
 /// is filed at `error`, never as anonymous.
-async fn bind<A, S>(
-    ctx: &Context<'_>,
-    id: &str,
-) -> Result<Option<<S::Entity as EntityTrait>::Model>>
+pub async fn graphql_bind<A, S>(ctx: &Context<'_>, id: &str) -> Result<Authorized<A, S::Entity>>
 where
     S: CrudService + 'static,
     <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
@@ -69,15 +68,6 @@ where
         );
         return Err(problem_error(&Problem::new(500, code::INTERNAL)));
     };
-    bind_with::<A, S>(&service, id).await
-}
-
-async fn bind_with<A, S>(service: &S, id: &str) -> Result<Option<<S::Entity as EntityTrait>::Model>>
-where
-    S: CrudService + 'static,
-    <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
-    A: ActionMarker,
-{
     nest_rs_authz::graphql::ability()?;
     let id = parse_v7(id)?;
     match service
@@ -85,29 +75,8 @@ where
         .await
         .map_err(|err| internal(std::any::type_name::<S>(), &err))?
     {
-        Access::Found(model) => Ok(Some(model)),
+        Access::Found(model) => Ok(Authorized::new(model)),
         Access::Denied => Err(forbidden()),
-        Access::Missing => Ok(None),
-    }
-}
-
-/// The subject `#[authorize(A, bind = S)]` loads for an operation, handed to
-/// its `Authorized<A, E>` parameter: like `bind`, but a missing row is a
-/// `NOT_FOUND` error.
-pub async fn graphql_bind<A, S>(ctx: &Context<'_>, id: &str) -> Result<Authorized<A, S::Entity>>
-where
-    S: CrudService + 'static,
-    <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
-    A: ActionMarker,
-{
-    not_found_to_err(bind::<A, S>(ctx, id).await?)
-}
-
-fn not_found_to_err<A: ActionMarker, E: EntityTrait>(
-    model: Option<E::Model>,
-) -> Result<Authorized<A, E>> {
-    match model {
-        Some(model) => Ok(Authorized::new(model)),
-        None => Err(problem_error(&Problem::new(404, code::NOT_FOUND))),
+        Access::Missing => Err(problem_error(&Problem::new(404, code::NOT_FOUND))),
     }
 }

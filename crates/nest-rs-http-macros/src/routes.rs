@@ -336,11 +336,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
-        let subject =
-            match bound_subject(authorize.as_ref(), &inputs, &method.sig.ident, &route_path) {
-                Ok(subject) => subject,
-                Err(err) => return err.to_compile_error().into(),
-            };
+        let subject = match bound_subject(
+            authorize.as_ref(),
+            &inputs,
+            &method.sig.ident,
+            &route_path,
+            parsed_path.parameter_count(),
+        ) {
+            Ok(subject) => subject,
+            Err(err) => return err.to_compile_error().into(),
+        };
         let method_versions = match take_version_attr(&mut method.attrs) {
             Ok(versions) => versions,
             Err(err) => return err.to_compile_error().into(),
@@ -531,21 +536,17 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         // The compiler selects the arming type, so this crate needs no authz
         // dependency and a renamed import still arms.
-        let param_types = param_types(&inputs);
+        let mut param_types = param_types(&inputs);
         let probe_types: Vec<Type> = authorize_ty.iter().chain(&param_types).cloned().collect();
         let shaper_selection = shaper_selection(&probe_types);
         let typed_body = documented_body(&param_types);
 
         // Checked like a `Scoped<T>` parameter's: an unimported service fails
         // the boot.
-        let per_request: Vec<Type> = param_types
-            .iter()
-            .cloned()
-            .chain(subject.as_ref().map(|bound| {
-                let service = &bound.service;
-                parse_quote!(::nest_rs_http::Scoped<#service>)
-            }))
-            .collect();
+        param_types.extend(subject.as_ref().map(|bound| -> Type {
+            let service = &bound.service;
+            parse_quote!(::nest_rs_http::Scoped<#service>)
+        }));
         let handler = RouteHandler {
             method: method_const.clone(),
             deprecation_header: deprecation.as_ref().map(|(_, header)| header.clone()),
@@ -554,7 +555,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             guards,
             interceptors,
             probe_types,
-            param_types: per_request,
+            param_types,
             named_shaper: authorize_ty.or_else(|| named_shaper_type(&inputs)),
             has_extractors: !inputs.is_empty(),
             handler: handler_ref(&self_ty, &method_name),
@@ -992,12 +993,14 @@ struct BoundSubject {
 
 /// The route's bound subject, refusing a `bind` with no `Authorized`
 /// parameter to receive it, an `Authorized` parameter no `bind` fills, and a
-/// route whose path does not name the subject's id alone.
+/// route whose path does not name the subject's id alone (`parameters` is how
+/// many it declares).
 fn bound_subject(
     authorize: Option<&AuthorizeSpec>,
     inputs: &[FnArg],
     method: &syn::Ident,
     path: &LitStr,
+    parameters: usize,
 ) -> syn::Result<Option<BoundSubject>> {
     let mut subjects = inputs
         .iter()
@@ -1016,7 +1019,6 @@ fn bound_subject(
         (None, Some((_, param))) => Err(syn::Error::new_spanned(param, AUTHORIZED_NEEDS_BIND)),
         (Some(_), None) => Err(syn::Error::new_spanned(method, BIND_NEEDS_AUTHORIZED)),
         (Some((spec, service)), Some((index, _))) => {
-            let parameters = path_parameters(&path.value());
             if parameters != 1 {
                 return Err(syn::Error::new_spanned(
                     path,
@@ -1036,23 +1038,6 @@ fn bound_subject(
             }))
         }
     }
-}
-
-/// How many parameters a route template declares, a doubled brace being a
-/// literal one.
-fn path_parameters(template: &str) -> usize {
-    let mut count = 0;
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '{' {
-            if chars.peek() == Some(&'{') {
-                chars.next();
-            } else {
-                count += 1;
-            }
-        }
-    }
-    count
 }
 
 /// Take `#[version("2")]` / `#[version("1", "2")]` off a route method.

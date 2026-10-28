@@ -26,6 +26,7 @@ pub struct RoutePath {
     identity: String,
     template: String,
     catch_all: bool,
+    parameter_count: usize,
 }
 
 /// The parameter a segment ends with.
@@ -62,6 +63,7 @@ impl RoutePath {
             identity: String::with_capacity(address.len()),
             template: String::with_capacity(address.len()),
             catch_all: false,
+            parameter_count: 0,
         };
         let mut segments = address.split('/').skip(1).peekable();
         while let Some(text) = segments.next() {
@@ -71,6 +73,7 @@ impl RoutePath {
                 out.push('/');
                 out.push_str(literal);
             }
+            route.parameter_count += usize::from(parameter.is_some());
             match parameter {
                 Some(Parameter::Named(name)) => {
                     route.identity.push_str("{}");
@@ -106,6 +109,11 @@ impl RoutePath {
     /// Whether the template ends with a `{*name}` catch-all.
     pub(crate) fn has_catch_all(&self) -> bool {
         self.catch_all
+    }
+
+    /// How many parameters the template declares, its catch-all included.
+    pub fn parameter_count(&self) -> usize {
+        self.parameter_count
     }
 }
 
@@ -283,6 +291,21 @@ mod tests {
         assert_eq!(read("/f/{*rest}").1, "/f/{*rest}");
         assert_eq!(read("/b/{{x}}").1, "/b/{{x}}");
         assert_eq!(read("//").1, "/");
+    }
+
+    #[test]
+    fn every_parameter_counts_and_a_literal_brace_does_not() {
+        for (path, count) in [
+            ("/users", 0),
+            ("/users/{id}", 1),
+            ("/posts/{id}/publish", 1),
+            ("/@{handle}/{*rest}", 2),
+            ("/b/{{id}}", 0),
+            ("/b/{{x}}/{id}", 1),
+        ] {
+            let route = RoutePath::parse(path).unwrap_or_else(|why| panic!("{why}"));
+            assert_eq!(route.parameter_count(), count, "{path}");
+        }
     }
 
     #[test]

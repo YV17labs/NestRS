@@ -50,16 +50,21 @@ The framework does not pretend the choke point is inescapable. Two
 paths reach the database around the ambient scope. Each exists for a
 reason, and each is a place a reviewer must look.
 
-### 1. `Repo::conn()` and injected `Arc<DatabaseConnection>`
+### 1. The named `Repo` escapes and injected `Arc<DatabaseConnection>`
 
-`Repo::conn()` is `pub`. It hands you the ambient executor for a custom
-query. A `find()` against it that skips `scope_for` runs **unfiltered**:
+`Repo` hands out no connection, so a service cannot run a query of its own on
+the unit's executor. A read that drops the ability goes through a method named
+for it — `Repo::unscoped`, `unscoped_by_id`, `insert_unscoped`,
+`with_tombstones` — whose rustdoc states the bar its caller must clear. The
+credential lookup before sign-in is one, and it reads **across every tenant**:
 
-```rust title="crates/features/src/posts/service.rs"
-// Escape hatch: an unfiltered read across every tenant. A review trigger.
-let every_post = posts::Entity::find()
-    .all(&Repo::<posts::Entity>::conn()?)
-    .await?;
+```rust title="crates/features/src/users/service.rs (from the demo)"
+async fn find_by_email(email: &str) -> Result<Option<entity::Model>, DbErr> {
+    Repo::<Users>::unscoped()
+        .filter(entity::Column::Email.eq(email.to_owned()))
+        .one()
+        .await
+}
 ```
 
 An injected `Arc<DatabaseConnection>` goes one step further — it has no
@@ -146,8 +151,7 @@ pub async fn persist(&self, command: NotifyCommand) -> Result<(), ServiceError> 
         message: Set(command.message),
         created_at: Set(chrono::Utc::now().fixed_offset()),
     };
-    let conn = Repo::<Notifications>::conn()?;
-    let model = Repo::<Notifications>::insert_unscoped(active, &conn).await?;
+    let model = Repo::<Notifications>::insert_unscoped(active).await?;
     // …
     Ok(())
 }
@@ -165,15 +169,19 @@ predicate is the bug to grep for.
 Run this before a tenant-facing release. Each step is one `grep` or one
 read:
 
-1. **Grep for `Repo::conn()`** in feature code. Confirm each call site
-   is a sanctioned unfiltered read, not a forgotten scope.
-2. **Grep for `Arc<DatabaseConnection>`** outside the framework crates.
+1. **Grep for `Repo::unscoped`, `unscoped_by_id`, `insert_unscoped` and
+   `with_tombstones`** in feature code. Confirm each call site clears the bar
+   the method's rustdoc states, and is not a forgotten scope.
+2. **Grep for `.query()`** in feature code. On a `Repo` select it hands out
+   the statement itself, and one rewritten there runs past the filter: chain
+   the builder methods instead.
+3. **Grep for `Arc<DatabaseConnection>`** outside the framework crates.
    Each injection should be a contextless path (a one-shot command), never
    a request handler or a lifecycle hook, which runs in a unit of work.
-3. **Confirm every `#[processor]` re-scopes.** Trace the tenant —
+4. **Confirm every `#[processor]` re-scopes.** Trace the tenant —
    `current_tenant_id()`, or the id a tick puts in the payload — into the
    service's query. A load-by-id with no `org_id` predicate is the bug.
-4. **Confirm every controller carries `#[use_guards(AuthnGuard,
+5. **Confirm every controller carries `#[use_guards(AuthnGuard,
    AuthzGuard)]`.** A missing binding fails closed to empty results, but
    a [negative-path test](/testing/negative-path/) pins it.
 

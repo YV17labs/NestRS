@@ -95,7 +95,7 @@ event has no caller, so `#[use_guards]` there is a compile error naming why.
 ## A transaction you opened yourself
 
 A transaction you open yourself — `db.begin()` inside `retry_on_conflict`, an
-`Executor::Txn` you install — is committed by you, out of the framework's
+`SeaOrmExecutor::Txn` you install — is committed by you, out of the framework's
 sight, so nothing waits for it: emit after your own `commit`. Inside a unit of
 work, a listener you reach sooner still runs in a transaction of its own,
 never in yours, and that has a price. It runs on another connection, so it

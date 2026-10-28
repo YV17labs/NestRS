@@ -146,7 +146,7 @@ impl PostsService {
     pub async fn find_by_title(&self, title: &str) -> Result<Option<Post>, ServiceError> {
         let row = Repo::<Posts>::scoped(Action::Read)
             .filter(entity::Column::Title.eq(title.to_owned()))
-            .one(&Repo::<Posts>::conn()?)
+            .one()
             .await?;
         Ok(row.as_ref().map(Post::from))
     }

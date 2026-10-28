@@ -155,27 +155,8 @@ framework's do.
 
 ## Reading the ambient ability
 
-A handler that builds its own query (rare — prefer letting `Repo`
-scope itself) reads the `Condition` via `Scope<E, A>`:
-
-```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::authz::{Read, http::Scope};
-
-#[get("/users/search")]
-async fn search(
-    &self,
-    scope: Scope<user::Entity, Read>,
-    q: Query<String>,
-) -> Result<Json<Vec<User>>> {
-    let rows = user::Entity::find()
-        .filter(scope.into_inner())
-        .filter(user::Column::Name.contains(&q.0))
-        .all(&conn)
-        .await?;
-    Ok(Json(rows.into_iter().map(User::from).collect()))
-}
-```
-
+A query of a service's own starts from `Repo::scoped`, which joins the
+`Condition` for it ([a custom query](/security/authorization/row-level-filtering/#when-you-really-do-need-a-custom-query)).
 A service method or any code the request reaches — a streaming body and
 a dataloader batch included — reads the ability directly:
 

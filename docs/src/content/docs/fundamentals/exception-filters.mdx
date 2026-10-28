@@ -81,12 +81,12 @@ handler returning `Result<Json<T>>` propagates any of them with no
 once, every feature reuses them.
 
 ```rust title="crates/features/src/users/service.rs"
-use nest_rs::seaorm::ServiceError;
+use nest_rs::seaorm::{Creatable, ServiceError};
 
 impl UsersService {
     pub async fn create(&self, input: CreateUser) -> Result<User, ServiceError> {
         input.validate()?;                              // → ServiceError::Validation
-        let row = active_for_new_user(input).insert(&Repo::<Users>::conn()?).await?;  // → ServiceError::Conflict on a taken email
+        let row = self.create_from_active(active_for_new_user(input)).await?;  // → ServiceError::Conflict on a taken email
         Ok(User::from(&row))
     }
 }

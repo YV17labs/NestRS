@@ -601,7 +601,13 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::worker::TARGET`, `nest_rs::worker::context`, `nest_rs::schedule::nest_rs_worker::JOB_TIMEOUT` | gone; the job bound is `nest_rs::core::JOB_TIMEOUT`, and nothing files on `nest_rs::worker` any more |
     | `nest_rs::seaorm::WorkerDbContext`; `nest_rs::seaorm::ws::WsDataContext`, `mcp::McpDataContext`; the seaorm `ws` and `mcp` features | `nest_rs::seaorm::SeaOrmUnitOfWork`; nothing: delete them |
     | a database driver's request interceptor and `JobContext` | one `UnitOfWork`, bound through `nest_rs::database::provide_unit_of_work`, which also runs every lifecycle hook in a unit; it implements `settle_net`, and `Executor::atomic` to offer an atomic block (*Writing a driver*) |
-    | a `match` on `ExecutorScope`, `TransactionPolicy`, `nest_rs::seaorm::Executor`, `FinalizeOutcome` or `DbOutcome` outside its crate | add a `_` arm that fails closed |
+    | a `match` on `ExecutorScope`, `TransactionPolicy`, `nest_rs::seaorm::SeaOrmExecutor`, `FinalizeOutcome` or `DbOutcome` outside its crate | add a `_` arm that fails closed |
+    | `Repo::<E>::conn()`, and a query run on it (`Entity::find()….all(&conn)`, `active.insert(&conn)`) | `Repo::<E>::scoped(action)` with SeaORM's builders, then `.all()`; an ability-less read `Repo::unscoped`, an insert `Creatable::create_from_active` or `Repo::insert_unscoped(active)` |
+    | `.all(&conn)`, `.one(&conn)`, `.count(&conn)`, `.exists(&conn)` on `Repo::scoped`, `with_tombstones`, `unscoped`, `unscoped_by_id` | `.all()`, `.one()`, `.count()`, `.exists()`: a `RepoSelect<E>` runs on the ambient executor |
+    | `Repo::insert_unscoped(active, &conn)`, `resolve_unique_slug(&conn, column, …)` | `Repo::insert_unscoped(active)`, `resolve_unique_slug::<E>(column, …)` |
+    | `nest_rs::seaorm::Executor` | `nest_rs::seaorm::SeaOrmExecutor` |
+    | `nest_rs::seaorm::{with_request_executor, with_job_executor}(executor, fut)`; `nest_rs::seaorm::with_executor` or `nest_rs::database::with_executor` | `nest_rs::database::{with_request_executor, with_job_executor}(executor.into(), fut)`, which name the scope |
+    | `nest_rs::seaorm::{current_executor, ExecutorScope, current_executor_scope}` | `nest_rs::database::{ExecutorScope, current_executor_scope}`; a statement of a service's own goes through `Repo` |
     | `Unhonoured { reason, retryable }`, `JobTimedOut { timeout }` | `Unhonoured::new(reason, retryable)` (or `::retryable`, `::deterministic`), `JobTimedOut::new(timeout)` |
     | a service catching a unique violation on the request's transaction (`Err(e) if DbOutcome::of(&e) == DbOutcome::Conflict`) and querying on | run the statement in `nest_rs::database::atomic` and match `ServiceError::Conflict` |
     | `matches!(err.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))` to tell a taken key | `nest_rs::seaorm::DbOutcome::of(&err) == DbOutcome::Conflict` |
@@ -1214,6 +1220,10 @@ lists what the boot, a log or the wire shows when one is missed.
   once per entity and action.
 - **A `Repo` read that relied on seeing deleted rows** compiles and returns
   fewer rows; read them through `with_tombstones`.
+- **A downcast of `nest_rs::database::current_executor()` to the SeaORM
+  executor** compiles and answers `None`: the handle a unit installs is private
+  to `nest-rs-seaorm`. Run the statement through `Repo`, which filters it, or
+  a named escape whose bar it clears.
 - **A stale or mangled page cursor** — an `after` no page issued — is refused
   where 6.x served the first page: a `#[crud]` list answers `400`, its problem
   ``query parameter `after`: not a cursor this endpoint issued`` under

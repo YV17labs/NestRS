@@ -101,10 +101,10 @@ deep on each.
 - **[CrudService](/database/crud/)** — the entity's API choke point
   (`list`/`page`/`access`/`create`/`update`/`delete`); controllers,
   resolvers, and gateways delegate, never touch `Repo` directly.
-- **[Executor](/database/repo-and-executor/)** — the SeaORM connection
-  installed per request in the ambient context (pool on safe routes, a
-  transaction on mutations); `Repo` reads it back through
-  `Repo::<E>::conn()`.
+- **[Executor](/database/repo-and-executor/)** — the data layer's trait
+  for the handle a unit of work installs in the ambient context; SeaORM's is
+  `SeaOrmExecutor`, the pool on safe routes or a transaction on mutations.
+  Every `Repo` call runs on it, and nothing hands it to a service.
 - **[Ambient context](/fundamentals/execution-context/#what-a-unit-carries)** —
   the values a unit of work carries for the code it calls (the executor,
   the ability, a package's own), so singletons read per-request state

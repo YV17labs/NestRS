@@ -253,9 +253,7 @@ any handler:
 impl UsersService {
     #[on_application_shutdown]
     async fn report(&self) -> Result<()> {
-        let count = Repo::<Users>::scoped(Action::Read)
-            .count(&Repo::<Users>::conn()?)
-            .await?;
+        let count = Repo::<Users>::scoped(Action::Read).count().await?;
         tracing::debug!(target: crate::users::TARGET, count, "users present at shutdown");
         Ok(())
     }

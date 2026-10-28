@@ -5,8 +5,6 @@ sidebar:
   order: 3
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 The first layer of authorization runs at the query. `Repo::scoped(action)`
 reads the ambient `Ability` and joins its `condition_for::<E>(action)`
 into the `WHERE` clause of every query. A member who calls
@@ -80,11 +78,11 @@ and `can` grants nothing on it while a denial it cannot decide refuses:
 `Repo<E>` is the single audited choke point for data access. Every
 `CrudService` method reaches the DB through it:
 
-- `Repo::all()` / `Repo::list()` — `scoped(Read)` + `find().all()`
-- `Repo::page(first, after)` — `scoped(Read)` + keyset pagination
-- `Repo::find_by_id(id)` — `scoped(Read)` + `find_by_id`
-- `Repo::scoped(Update).update_by_id(id, fn)` — by-id update with the
-  filter joined, so a denied-but-existing row updates **zero** rows.
+- `Repo::all()` — `scoped(Read)`, every readable row
+- `Repo::page(first, after, extra)` — `scoped(Read)` + keyset pagination
+- `Repo::find_by_id(id)` — `scoped(Read)` + the primary key
+- `Repo::update(active)` / `Repo::delete(model)` — by-id writes with the
+  filter joined, so a denied-but-existing row is never touched.
 
 The handler never writes `WHERE org_id = …`. The pipeline writes it
 once, the service goes through `Repo`, the controller calls the
@@ -168,50 +166,43 @@ predicate, so it cannot get it wrong.
 ```rust title="crates/features/src/users/service.rs"
 // What this prevents — a hand-written list query that forgets the org filter.
 let everyone = user::Entity::find().all(&conn).await?;
-//                              ^^^^ leaks every row across every tenant
+//                                       ^^^^ no connection reaches a service
 ```
 
 The framework's posture: handlers do not write SQL. They call
-services. Services go through `Repo`. `Repo::scoped(...)` adds the
-filter. The path of "leak rows" never opens.
+services. Services go through `Repo`, which hands out no connection, and
+`Repo::scoped(...)` adds the filter. The path of "leak rows" stays closed
+unless a service rewrites the select's statement itself, through the
+`query()` SeaORM's builder traits hand out — which review reads as an escape.
 
 ## When you really do need a custom query
 
-Sometimes a handler builds a query the `CrudService` cannot express
-(complex joins, aggregate, a special index). Pull the ability's
-condition as a handler parameter via `Scope<E, A>` and join it
-yourself:
+Sometimes a read needs what `CrudService` does not offer — a join, an extra
+condition, an order. Write it as a service method on `Repo::scoped`: the
+select it returns takes SeaORM's own filters, joins, orders and limits, and
+runs on the ambient executor with the ability's condition already in it.
 
-```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::authz::{Read, http::Scope};
+```rust title="crates/features/src/users/service.rs"
+use nest_rs::authz::Action;
+use nest_rs::seaorm::{Repo, ServiceError};
+use sea_orm::{ColumnTrait, QueryFilter, QueryOrder};
 
-#[get("/users/search")]
-async fn search(
-    &self,
-    scope: Scope<user::Entity, Read>,
-    Query(q): Query<String>,
-) -> Result<Json<Vec<User>>> {
-    let conn = current_executor().expect("ambient executor");
-    let rows = user::Entity::find()
-        .filter(scope.into_inner())
-        .filter(user::Column::Name.contains(&q))
-        .all(&conn)
-        .await?;
-    Ok(Json(rows.into_iter().map(User::from).collect()))
+impl UsersService {
+    pub async fn search(&self, q: &str) -> Result<Vec<user::Model>, ServiceError> {
+        Ok(Repo::<Users>::scoped(Action::Read)
+            .filter(user::Column::Name.contains(q))
+            .order_by_asc(user::Column::Name)
+            .all()
+            .await?)
+    }
 }
 ```
 
-`Scope<E, A>` deref-targets to `&Condition` so you can compose it
-with other filters. Routes that use `Scope` still need
-`AbilityGuard` bound — the access graph enforces it.
-
-<Aside type="caution">
-Prefer extending the service. A custom query in a handler is a
-maintenance liability: the next reviewer must reconfirm that
-`scope.into_inner()` was joined. Adding the query to the
-`CrudService` puts it back behind `Repo::scoped(...)` and the audit
-disappears.
-</Aside>
+The handler calls `search` and never sees a connection. A condition on
+another entity — a subquery over `orgs` — takes that entity's own filter from
+`scope_for::<Orgs>(Action::Read)`, so every table the query reads is
+filtered. Chain the builder methods, never `.query()`: a statement replaced,
+cleared or `union`ed through it runs past the ability's condition.
 
 ## Going further
 

@@ -116,7 +116,7 @@ impl PostsService {
         }
         let rows = Repo::<Posts>::scoped(Action::Read)
             .filter(entity::Column::Title.is_in(names.iter().cloned()))
-            .all(&Repo::<Posts>::conn()?)
+            .all()
             .await?;
         Ok(group_by_name(names, rows))
     }
@@ -126,8 +126,7 @@ impl PostsService {
 Three properties make this loader correct:
 
 - **Empty-keys short-circuit.** A frame with no keys returns the empty
-  map without touching the executor — `Repo::conn()` would otherwise
-  error outside scope.
+  map without touching the database — no query, no connection drawn.
 - **Result, not silent empty.** A DB error returns `Err(_)`. **Never**
   map a DB error to an empty `HashMap` — that turns a failure into a
   silent miss, the worst kind.
@@ -196,8 +195,8 @@ with it, as a field that panics itself does.
 ## Going further
 
 - [Database](/database/) — the slice the loader hangs off.
-- [Repo and executor](/database/repo-and-executor/) — what `Repo::conn`
-  reads, what `Repo::scoped` filters.
+- [Repo and executor](/database/repo-and-executor/) — the executor a
+  `Repo` query runs on, what `Repo::scoped` filters.
 - [GraphQL](/graphql/) — `#[resolver]`, `#[field_resolver]`, the
   schema-discovery seam.
 - [Security](/security/) — the ability that drives `Repo::scoped`'s

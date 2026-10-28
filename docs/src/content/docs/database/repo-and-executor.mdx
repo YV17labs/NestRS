@@ -7,12 +7,12 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Two pieces carry the data layer's transparency: the ambient `Executor`
+Two pieces carry the data layer's transparency: the ambient `SeaOrmExecutor`
 installed per request (or per job), and the `Repo<E>` handle every service
 uses to reach it. They are built on
-[SeaORM](https://www.sea-ql.org/SeaORM/) — `Executor` implements SeaORM's
-`ConnectionTrait`, so any SeaORM query runs through it unchanged — and on
-the seam from [`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database),
+[SeaORM](https://www.sea-ql.org/SeaORM/) — a query `Repo` hands you is
+chained with SeaORM's own filters, joins and orders — and on the seam from
+[`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database),
 which is what keeps the same seam open to a non-SeaORM driver.
 
 The invariant: **every data access goes through a service, and a service
@@ -32,10 +32,9 @@ executor, every read carries the ambient ability filter, and every read and
 update of an entity declared `soft_delete` leaves its deleted rows out:
 
 ```rust title="nest_rs::seaorm::Repo"
-Repo::<Posts>::conn()?;                    // raw handle for a custom query
 Repo::<Posts>::all().await?;               // every readable row
 Repo::<Posts>::find_by_id(id).await?;      // None if absent OR out of scope
-Repo::<Posts>::scoped(Action::Read);       // Select<E> pre-filtered, chain freely
+Repo::<Posts>::scoped(Action::Read);       // RepoSelect<E> pre-filtered, chain freely
 Repo::<Posts>::with_tombstones(Action::Read);  // the same, deleted rows kept
 Repo::<Posts>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope or deleted
 Repo::<Posts>::delete(model).await?;       // 0 rows if out of scope; purges a deleted row too
@@ -63,15 +62,43 @@ read that keeps them, for an administrator's view or a retention job. It
 reads only: no `Repo` write brings a deleted row back yet — `Repo::restore`
 is planned for 7.x.
 
+### A custom query
+
+`scoped` returns a `RepoSelect<E>`, a query the ability already filters. It
+takes SeaORM's own `QueryFilter`, `QueryOrder` and `QuerySelect` builders,
+and runs on the ambient executor through `all`, `one`, `count` or `exists` —
+it takes no connection, so what runs is the statement `Repo` filtered:
+
+```rust title="crates/features/src/posts/service.rs"
+let row = Repo::<Posts>::scoped(Action::Read)
+    .filter(Column::Title.eq(name))
+    .one()
+    .await?;
+```
+
+Chain the builder methods, never the statement itself. Each of those traits
+also hands out `query()`, the statement as a `&mut`, and a trait's method
+cannot be sealed: a statement replaced, cleared or `union`ed with another
+`SELECT` through it runs past the filter, so a `.query()` on a `Repo` select
+is reviewed as an escape.
+
+`Repo` hands out no connection. A read that drops the ability goes through a
+method named for it — `unscoped`, `unscoped_by_id`, `insert_unscoped`,
+`with_tombstones` — whose rustdoc states the bar its caller must clear, so
+auditing the escapes is one search per name, `.query()` among them. Outside a
+unit of work, every `Repo` call returns an error naming the bindings that
+install one — a service called with no ambient executor is a wiring bug, not
+a silent miss.
+
 ## Under the hood: the ambient executor
 
-`Executor` is a SeaORM connection — the pool or the request's transaction —
-installed in the request's ambient context for the duration of the handler.
-Four variants:
+`SeaOrmExecutor` is a SeaORM connection — the pool or the request's
+transaction — installed in the request's ambient context for the duration of
+the handler. Four variants:
 
-```rust title="nest_rs::seaorm::Executor"
+```rust title="nest_rs::seaorm::SeaOrmExecutor"
 #[non_exhaustive]
-pub enum Executor {
+pub enum SeaOrmExecutor {
     Pool(DatabaseConnection),
     Txn(Arc<DatabaseTransaction>),
     Lazy(Arc<LazyTransaction>),
@@ -85,15 +112,9 @@ that never queries — costs no round-trip at all. `Txn` is the eager handle,
 for a transaction something already opened. `Savepoint` is what an
 [atomic block](/database/transactions/#atomic-blocks) runs on inside a
 transaction. The enum can grow within 7.x, so a `match` on it keeps a `_` arm.
-
-`Repo::<E>::conn()` reads it back. Outside the scope it returns an error
-naming the bindings that install one — a service called with no ambient
-executor is a wiring bug, not a silent miss.
-
-```rust title="crates/features/src/posts/service.rs"
-let conn = Repo::<Posts>::conn()?;
-let row = Posts::find().filter(Column::Title.eq(name)).one(&conn).await?;
-```
+A test installs one it built through `nest_rs::database::with_request_executor`
+or `with_job_executor`, as `SeaOrmExecutor::Pool(pool).into()`; the one a unit
+installs is never handed back to a service.
 
 Three scopes coexist:
 
@@ -101,7 +122,7 @@ Three scopes coexist:
 |----------|-------------------------------------------------------|---------------------------------------|
 | Request  | an HTTP request, a GraphQL operation, a WS message or hook, an MCP operation | Pool on safe routes and queries, txn otherwise |
 | Job      | a queue attempt, a scheduled tick, a lifecycle hook   | One transaction per attempt (or pool) |
-| Unscoped | nothing                                               | `Repo::conn()` errors                 |
+| Unscoped | nothing                                               | every `Repo` call errors              |
 
 Every edge installs it the same way: it runs each unit of work through
 `nest_rs::database::run_unit`, over the `SeaOrmUnitOfWork` that
@@ -139,8 +160,8 @@ guards and handlers resolve the same ambient executor through `Repo`:
 ```text
 HTTP request
   ↓
-unit of work          ──→ installs Executor::Pool (GET/HEAD/OPTIONS/TRACE)
-                      ──→ installs Executor::Lazy (POST/PUT/PATCH/DELETE)
+unit of work          ──→ installs SeaOrmExecutor::Pool (GET/HEAD/OPTIONS/TRACE)
+                      ──→ installs SeaOrmExecutor::Lazy (POST/PUT/PATCH/DELETE)
   ↓
 guards (AuthnGuard, AbilityGuard, ...)
   ↓
@@ -186,7 +207,7 @@ classify, no response to inspect. The worker transport (`#[scheduled]`,
 ```text
 job
   ↓
-SeaOrmUnitOfWork  ──→ installs Executor::Lazy, settled on the job's Ok/Err
+SeaOrmUnitOfWork  ──→ installs SeaOrmExecutor::Lazy, settled on the job's Ok/Err
   ↓
 processor body
 ```
@@ -278,4 +299,4 @@ reaching for it in a request handler or a hook, something else is wrong.
 - [Row-level filtering](/security/authorization/row-level-filtering/) —
   the ability condition `Repo::scoped` joins in.
 - [Writing a driver](/database/writing-a-driver/) — implementing
-  `Executor` for a non-SeaORM store on the same seam.
+  the port's `Executor` for a non-SeaORM store on the same seam.

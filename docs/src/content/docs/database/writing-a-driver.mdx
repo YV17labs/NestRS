@@ -37,26 +37,48 @@ its binding instead of `SeaOrmDatabaseModule`.
 ### The executor
 
 The executor is what a unit's body reads: an enum of your store's handles, so
-one query helper returns one type whichever mode the unit is in. SeaORM's has
-a variant for the pool, a transaction opened on the unit's first statement,
-and an atomic block's savepoint. Its one obligation beside `as_any` is to keep
-the work an emitted event holds for the commit:
+one query helper returns one type whichever mode the unit is in. SeaORM's,
+`SeaOrmExecutor`, has a variant for the pool, a transaction opened on the
+unit's first statement, and an atomic block's savepoint.
+
+What `as_any` hands out is private to your crate. `current_executor` is
+public, so whatever it downcasts to is in every service's reach: a public
+handle there is a connection a service could run a query on that your row
+filter never saw. SeaORM installs its executor inside a crate-private
+wrapper, and its `Repo` hands out no connection, so every statement that
+reaches the database is one `Repo` built — filtered, unless a service
+rewrote it through the `query()` SeaORM's builder traits hand out:
+
+```rust title="from nest-rs-seaorm's executor"
+#[derive(Clone)]
+pub(crate) struct Installed(pub(crate) SeaOrmExecutor);
+
+impl nest_rs_database::Executor for Installed {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    // …
+}
+```
+
+Its other obligation is to keep the work an emitted event holds for the
+commit, which the wrapper forwards to the enum:
 
 ```rust title="from nest-rs-seaorm's executor"
 /// A lazy transaction or a block's savepoint holds the work for its
-/// settling; a pool and a caller's [`Txn`](Executor::Txn) hand it back to
-/// run at once.
-fn after_commit(&self, work: Deferred) -> Option<Deferred> {
+/// settling; a pool and a caller's [`Txn`](SeaOrmExecutor::Txn) hand it
+/// back to run at once.
+pub(crate) fn after_commit(&self, work: Deferred) -> Option<Deferred> {
     match self {
-        Executor::Lazy(lazy) => {
+        SeaOrmExecutor::Lazy(lazy) => {
             lazy.hold(work);
             None
         }
-        Executor::Savepoint(block) => {
+        SeaOrmExecutor::Savepoint(block) => {
             block.hold(work);
             None
         }
-        Executor::Pool(_) | Executor::Txn(_) => Some(work),
+        SeaOrmExecutor::Pool(_) | SeaOrmExecutor::Txn(_) => Some(work),
     }
 }
 ```
@@ -164,19 +186,18 @@ GraphQL mutation with it: each root field runs in a block. SeaORM's nests one
 in whatever the handle holds:
 
 ```rust title="from nest-rs-seaorm's executor"
-fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
+pub(crate) fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
     let block = match self {
-        Executor::Pool(pool) => {
+        SeaOrmExecutor::Pool(pool) => {
             AtomicExecutor::own(Arc::new(LazyTransaction::new(pool.clone(), ATOMIC)))
         }
-        Executor::Txn(caller) => AtomicExecutor::own(Arc::new(LazyTransaction::nested_in(
-            Arc::clone(caller),
-            ATOMIC,
-        ))),
-        Executor::Lazy(lazy) => {
+        SeaOrmExecutor::Txn(caller) => AtomicExecutor::own(Arc::new(
+            LazyTransaction::nested_in(Arc::clone(caller), ATOMIC),
+        )),
+        SeaOrmExecutor::Lazy(lazy) => {
             AtomicExecutor::savepoint(Arc::new(Savepoint::in_boundary(Arc::clone(lazy))))
         }
-        Executor::Savepoint(block) => {
+        SeaOrmExecutor::Savepoint(block) => {
             AtomicExecutor::savepoint(Arc::new(Savepoint::in_block(Arc::clone(block))))
         }
     };

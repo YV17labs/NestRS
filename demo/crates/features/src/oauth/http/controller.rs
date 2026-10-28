@@ -35,6 +35,7 @@ impl OAuthController {
         Ok(self.svc.grant_client_credentials(
             &request.grant_type,
             request.scope.as_deref(),
+            &request.resource,
             &client,
         )?)
     }
@@ -73,7 +74,7 @@ impl OAuthController {
     async fn social_callback(&self, caller: Ctx<Caller>) -> Result<AccessTokenResponse> {
         Ok(self
             .svc
-            .issue(caller.user_id, caller.org_id, caller.roles.clone())?)
+            .issue(None, caller.user_id, caller.org_id, caller.roles.clone())?)
     }
 
     #[post("/login")]
@@ -89,7 +90,7 @@ impl OAuthController {
         let input = body.into_inner();
         Ok(self
             .svc
-            .grant_password(&input.email, &input.password)
+            .grant_password(&input.email, &input.password, input.resource.as_deref())
             .await?)
     }
 }

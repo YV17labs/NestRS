@@ -39,16 +39,22 @@ sets variables — `.env` is a local convenience the image does not carry.
 - `config` — non-secret keys, spelled **without** the prefix, written to a
   ConfigMap. `LOG: info` becomes `NESTRS_LOG`.
 - `secrets` — same spelling, written to a Secret this chart owns. Bring your own
-  with `existingSecret` instead; the two are alternatives, not layers.
+  with `existingSecret` instead; the two are alternatives, not layers. The
+  signing key, `AUTHN__PRIVATE_KEY`, goes into a Secret of its own that only
+  `auth` reads: a resource server holding it could mint a token for any app.
+  With `existingSecret`, every app reads yours, so keep the key out of it and
+  hand it to `auth` alone through its `extraEnv`.
 - `envPrefix` — renames every framework variable at once. It is set on the
   process, which is why it is a pod env var and never a file.
 
 **Set the hostnames rather than the URLs.** The demo's apps address each other
-by URL — the issuer a token is signed by, the audience it is minted for, the
-resource identifier RFC 9728 discovery serves, the MCP `Host` allowlist, the
-social redirect URIs — and every one of those is some app's public origin. The
-chart derives them from `apps.<name>.host`, so renaming a hostname cannot leave
-half the pair behind. Anything in `config` still wins.
+by URL — the issuer a token is signed by, the audience each app requires, the
+resource identifier RFC 9728 discovery serves, the resources a sign-in may be
+minted a token for, the social redirect URIs — and every one of those is some
+app's public origin. The chart derives them from `apps.<name>.host`, so renaming
+a hostname cannot leave half the pair behind. Each app requires its own origin
+as a token's audience, so a token `auth` mints for one app is refused by every
+other (RFC 8707). Anything in `config` still wins.
 
 ## Scaling the queue worker
 

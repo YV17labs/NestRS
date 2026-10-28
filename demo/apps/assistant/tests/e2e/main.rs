@@ -18,7 +18,7 @@ use sea_orm::sea_query::Query;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
 use uuid::Uuid;
 
-use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, delete_transcode};
+use features::testing::{DEV_PUBLIC_KEY, ORG_ID, delete_transcode};
 
 pub(crate) const SHARED_ENDPOINT: &str = "/mcp";
 
@@ -33,7 +33,6 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(AUDIENCE.into()),
             ..Default::default()
         })
         .build()

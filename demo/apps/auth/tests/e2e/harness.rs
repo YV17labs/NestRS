@@ -9,7 +9,11 @@ use sea_orm::sea_query::{OnConflict, Query};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
 use uuid::Uuid;
 
-pub(crate) use features::testing::{DEV_PRIVATE_KEY, DEV_PUBLIC_KEY, ORG_ID};
+pub(crate) use features::testing::{
+    AUDIENCE as ASSISTANT, DEV_PRIVATE_KEY, DEV_PUBLIC_KEY, ORG_ID,
+};
+
+pub(crate) const API: &str = "http://localhost:3002";
 
 pub(crate) const LOGIN_EMAIL: &str = "alice@example.com";
 pub(crate) const LOGIN_PASSWORD: &str = "correct-horse";
@@ -58,15 +62,18 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
                     CLIENT_ID,
                     CLIENT_SECRET,
                     constants::all(),
+                    [API, ASSISTANT],
                     payload(Role::Admin),
                 ),
                 RegisteredClient::new(
                     READER_ID,
                     READER_SECRET,
                     [constants::POSTS_READ],
+                    [API],
                     payload(Role::User),
                 ),
             ],
+            sign_in_resources: vec![API.into(), ASSISTANT.into()],
             default_org_id: ORG_ID.parse().expect("a valid org uuid"),
         })
         .build()
@@ -82,8 +89,10 @@ fn payload(role: Role) -> ClientPayload {
     }
 }
 
-pub(crate) fn resource_server_verifier() -> JwtService {
-    JwtService::new(JwtOptions::eddsa_verify(DEV_PUBLIC_KEY)).expect("the dev public key parses")
+pub(crate) fn resource_server_verifier(resource: &str) -> JwtService {
+    let mut options = JwtOptions::eddsa_verify(DEV_PUBLIC_KEY);
+    options.audience = Some(resource.into());
+    JwtService::new(options).expect("the dev public key parses")
 }
 
 pub(crate) async fn seed_org_and_user(db: &DatabaseConnection) {

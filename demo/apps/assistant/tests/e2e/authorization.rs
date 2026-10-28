@@ -5,7 +5,9 @@ use serde_json::{Value, json};
 
 use features::Role;
 use features::authz::constants;
-use features::testing::{AUDIENCE as RESOURCE, ORG_ID, claims, client, signed, token_for, user};
+use features::testing::{
+    AUDIENCE as RESOURCE, ORG_ID, claims, client, signed, signed_by, signed_for, token_for, user,
+};
 
 use crate::{SHARED_ENDPOINT, boot};
 
@@ -154,4 +156,55 @@ async fn another_users_bearer_reaches_no_session_it_did_not_open() {
         listed.contains("list_people"),
         "the session still serves the user who opened it: {listed}"
     );
+}
+
+const ANOTHER_RESOURCE: &str = "http://localhost:3002";
+
+const ANOTHER_ISSUER: &str = "https://auth.elsewhere.example";
+
+fn admin_claims() -> features::Claims {
+    claims(
+        ORG_ID.parse().expect("a valid org uuid"),
+        vec![Role::Admin],
+        client(),
+        constants::all(),
+    )
+}
+
+#[tokio::test]
+async fn a_token_minted_for_another_resource_opens_no_session() {
+    let (_db, app) = boot().await;
+    let for_another = format!("Bearer {}", signed_for(ANOTHER_RESOURCE, &admin_claims()));
+
+    let refused = post_message(
+        app.http(),
+        SHARED_ENDPOINT,
+        None,
+        Some(&for_another),
+        &initialize_request(),
+    )
+    .await;
+
+    refused.assert_status(StatusCode::UNAUTHORIZED);
+    refused.assert_header_is_not_exist("mcp-session-id");
+}
+
+#[tokio::test]
+async fn a_token_from_an_issuer_the_document_does_not_name_opens_no_session() {
+    let (_db, app) = boot().await;
+    let foreign = format!("Bearer {}", signed_by(ANOTHER_ISSUER, &admin_claims()));
+    let own = format!("Bearer {}", signed(&admin_claims()));
+
+    open_session(app.http(), SHARED_ENDPOINT, Some(&own)).await;
+    let refused = post_message(
+        app.http(),
+        SHARED_ENDPOINT,
+        None,
+        Some(&foreign),
+        &initialize_request(),
+    )
+    .await;
+
+    refused.assert_status(StatusCode::UNAUTHORIZED);
+    refused.assert_header_is_not_exist("mcp-session-id");
 }

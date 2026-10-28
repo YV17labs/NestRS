@@ -18,6 +18,8 @@ pub const ORG_ID: &str = "018f0000-0000-7000-8000-000000000000";
 
 pub const AUDIENCE: &str = "http://localhost:3003";
 
+pub const ISSUER: &str = "http://localhost:3001";
+
 pub const SUITES_BUCKET: &str = "nestrs-test";
 
 pub const CLIENT_ID: &str = "demo-service";
@@ -30,14 +32,30 @@ pub fn user() -> Subject {
     Subject::User(Uuid::now_v7())
 }
 
-fn issuer() -> JwtService {
+fn issuer_named(name: &str) -> JwtService {
     let mut options = JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY);
-    options.audience = Some(AUDIENCE.into());
+    options.issuer = Some(name.into());
     JwtService::new(options).expect("the dev keypair parses")
 }
 
+fn issuer() -> JwtService {
+    issuer_named(ISSUER)
+}
+
 pub fn signed(claims: &impl Serialize) -> String {
-    issuer().sign(claims).expect("sign the test token")
+    signed_for(AUDIENCE, claims)
+}
+
+pub fn signed_for(resource: &str, claims: &impl Serialize) -> String {
+    issuer()
+        .sign_for(resource, claims)
+        .expect("sign the test token")
+}
+
+pub fn signed_by(issuer: &str, claims: &impl Serialize) -> String {
+    issuer_named(issuer)
+        .sign_for(AUDIENCE, claims)
+        .expect("sign the test token")
 }
 
 pub fn token(org_id: Uuid, roles: Vec<Role>, sub: Subject) -> String {

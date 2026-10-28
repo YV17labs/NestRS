@@ -34,7 +34,9 @@ metadata:
 type: Opaque
 stringData:
   {{- range $key, $value := .Values.secrets }}
+  {{- if ne $key (include "demo.issuerKey" $) }}
   {{ printf "%s_%s" $.Values.envPrefix $key }}: {{ $value | quote }}
+  {{- end }}
   {{- end }}
 {{- end }}
 {{- range $app, $cfg := $jobs }}

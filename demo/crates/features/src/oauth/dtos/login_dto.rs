@@ -10,6 +10,7 @@ pub struct LoginDto {
         message = "password must be between 8 and 1024 characters"
     ))]
     pub password: String,
+    pub resource: Option<String>,
 }
 
 #[cfg(test)]
@@ -21,6 +22,7 @@ mod tests {
         LoginDto {
             email: email.into(),
             password: password.into(),
+            resource: None,
         }
     }
 

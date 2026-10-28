@@ -62,7 +62,10 @@ config:
 #   REDIS__TRANSCODES__URL   rediss://cache:6379 — the audio feature's records,
 #                            each expiring on its own; a server evicting them is
 #                            never REDIS__URL's, whose schedule needs `noeviction`
-#   AUTHN__PRIVATE_KEY       PEM, Ed25519 — generate your own, never the repo's
+#   AUTHN__PRIVATE_KEY       PEM, Ed25519 — generate your own, never the repo's;
+#                            written into a Secret of its own that only `auth`
+#                            reads (with `existingSecret`, keep it out of yours
+#                            and hand it to `auth` alone through its `extraEnv`)
 #   AUTHN__PUBLIC_KEY        PEM, its matching half
 #   STORAGE__ACCESS_KEY      the object store's access key id
 #   STORAGE__SECRET_KEY      and its secret
@@ -170,8 +173,9 @@ defaults:
 #        it, so this value is authoritative and the code default is only a
 #        local-run convenience
 # `host` public hostname. Also what the chart derives the cross-app URLs from
-#        (issuer, audience, MCP allowed hosts, social redirect URLs) — set them
-#        rather than copying those URLs into `config` by hand.
+#        (issuer, each app's own audience, the assistant's resource, the
+#        resources a sign-in may name, social redirect URLs) — set them rather
+#        than copying those URLs into `config` by hand.
 apps:
   # Schema migrations. An app like any other — the same image, another binary —
   # that runs to completion before any deployment is updated.

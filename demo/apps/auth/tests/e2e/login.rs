@@ -44,10 +44,17 @@ async fn login_issues_a_token_the_public_key_verifies() {
         .get("access_token")
         .string()
         .to_owned();
-    let claims: Claims = resource_server_verifier()
+    let claims: Claims = resource_server_verifier(API)
         .verify(&token)
         .await
         .expect("the public key verifies the privately-signed token");
+    assert!(
+        resource_server_verifier(ASSISTANT)
+            .verify::<Claims>(&token)
+            .await
+            .is_err(),
+        "a sign-in naming no resource is minted for the first served, and only for it"
+    );
     assert_eq!(claims.org_id.to_string(), ORG_ID);
     assert!(claims.sub.user_id().is_some(), "{:?}", claims.sub);
     assert_eq!(claims.client_id, None);
@@ -114,4 +121,63 @@ async fn login_refuses_another_media_type_naming_only_json() {
     let body = resp.0.into_body().into_string().await.expect("a body");
     assert!(!body.contains("x-quoted-marker"), "{body}");
     assert!(body.contains("application/json"), "{body}");
+}
+
+#[tokio::test]
+async fn login_names_the_resource_its_token_is_for() {
+    let (db, app) = boot().await;
+    seed_org_and_user(db.connection().as_ref()).await;
+
+    let resp = app
+        .http()
+        .post("/login")
+        .body_json(&json!({
+            "email": LOGIN_EMAIL,
+            "password": LOGIN_PASSWORD,
+            "resource": ASSISTANT,
+        }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let json = resp.json().await;
+    let token = json
+        .value()
+        .object()
+        .get("access_token")
+        .string()
+        .to_owned();
+
+    resource_server_verifier(ASSISTANT)
+        .verify::<Claims>(&token)
+        .await
+        .expect("the resource asked for accepts it");
+    assert!(
+        resource_server_verifier(API)
+            .verify::<Claims>(&token)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn login_for_a_resource_the_issuer_does_not_serve_is_an_invalid_target() {
+    let logs = LogCapture::install();
+    let (db, app) = boot().await;
+    seed_org_and_user(db.connection().as_ref()).await;
+
+    let resp = app
+        .http()
+        .post("/login")
+        .body_json(&json!({
+            "email": LOGIN_EMAIL,
+            "password": LOGIN_PASSWORD,
+            "resource": "https://billing.example.com",
+        }))
+        .send()
+        .await;
+
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    resp.assert_json(json!({ "error": "invalid_target" })).await;
+    let refusal = logs.expect_one(features::oauth::TARGET, "token request refused");
+    assert_eq!(refusal.field("reason").as_deref(), Some("invalid_target"));
 }

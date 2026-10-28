@@ -63,6 +63,21 @@ app.kubernetes.io/component: {{ .app }}
 {{- default (printf "%s-env" (include "demo.fullname" .)) .Values.existingSecret }}
 {{- end }}
 
+{{/*
+The Secret only the issuer reads: the key that signs every token, which no
+other app may hold (a resource server holding it could mint for any app).
+*/}}
+{{- define "demo.issuerSecretName" -}}
+{{- printf "%s-issuer" (include "demo.fullname" .) }}
+{{- end }}
+
+{{/*
+The one secret setting the issuer alone receives.
+*/}}
+{{- define "demo.issuerKey" -}}
+AUTHN__PRIVATE_KEY
+{{- end }}
+
 {{- define "demo.configMapName" -}}
 {{- printf "%s-env" (include "demo.fullname" .) }}
 {{- end }}
@@ -93,10 +108,12 @@ The public origin of an app, or "" when it has no hostname.
 {{/*
 The settings the chart derives from the hostnames rather than having them typed
 twice. The demo's apps address each other by URL — the issuer an app trusts, the
-audience a token is minted for, the resource identifier RFC 9728 discovery
-serves, the MCP Host allowlist, the social redirect URIs — and every one of them
-is the same string as some app's public origin. Deriving them is what keeps a
-rename of one hostname from silently breaking the pair.
+resource identifier RFC 9728 discovery serves, the resources a sign-in may be
+minted a token for, the social redirect URIs — and every one of them is the
+same string as some app's public origin. Deriving them is what keeps a rename of
+one hostname from silently breaking the pair. The audience is no shared setting:
+each app requires its own (`demo.env`), and the assistant's MCP endpoint admits
+its resource's host by itself.
 
 `.Values.config` is laid over the result, so any of these can still be pinned.
 */}}
@@ -111,9 +128,19 @@ rename of one hostname from silently breaking the pair.
 {{- $_ := set $derived "SOCIAL__GOOGLE__REDIRECT_URL" (printf "%s/social/google/callback" $auth) -}}
 {{- end -}}
 {{- if $assistant -}}
-{{- $_ := set $derived "AUTHN__AUDIENCE" $assistant -}}
 {{- $_ := set $derived "OAUTH__RESOURCE__RESOURCE" $assistant -}}
-{{- $_ := set $derived "MCP__ALLOWED_HOSTS" (index .Values.apps "assistant").host -}}
+{{- end -}}
+{{- $resources := list -}}
+{{- range $app := list "api" "assistant" "live" -}}
+{{- if hasKey $.Values.apps $app -}}
+{{- $origin := include "demo.origin" (dict "ctx" $ "app" $app) -}}
+{{- if $origin -}}
+{{- $resources = append $resources $origin -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $resources -}}
+{{- $_ := set $derived "OAUTH__SIGN_IN_RESOURCES" (join "," $resources) -}}
 {{- end -}}
 {{- $derived | toYaml -}}
 {{- end }}
@@ -131,10 +158,13 @@ own `config` over them, every key wearing the deployment's prefix.
 
 {{/*
 The env of one app: the prefix itself (the one name no prefix renames), the
-environment, the port this chart owns, then the ConfigMap and Secret wholesale.
+environment, the port this chart owns, the audience a token must carry to be
+accepted here — this app's own origin, so a token minted for one app is refused
+by every other (RFC 8707) — then the ConfigMap and Secret wholesale.
 */}}
 {{- define "demo.env" -}}
 {{- $cfg := fromYaml (include "demo.appConfig" (dict "ctx" .ctx "app" .app)) -}}
+{{- $origin := include "demo.origin" (dict "ctx" .ctx "app" .app) -}}
 - name: NESTRS_ENV_PREFIX
   value: {{ .ctx.Values.envPrefix | quote }}
 - name: {{ printf "%s_ENV" .ctx.Values.envPrefix }}
@@ -142,6 +172,10 @@ environment, the port this chart owns, then the ConfigMap and Secret wholesale.
 {{- if eq $cfg.kind "deployment" }}
 - name: {{ printf "%s_HTTP__PORT" .ctx.Values.envPrefix }}
   value: {{ $cfg.port | quote }}
+{{- end }}
+{{- if and $origin (not (hasKey .ctx.Values.config "AUTHN__AUDIENCE")) }}
+- name: {{ printf "%s_AUTHN__AUDIENCE" .ctx.Values.envPrefix }}
+  value: {{ $origin | quote }}
 {{- end }}
 {{- with $cfg.extraEnv }}
 {{ toYaml . }}
@@ -153,6 +187,10 @@ environment, the port this chart owns, then the ConfigMap and Secret wholesale.
     name: {{ include "demo.configMapName" .ctx }}
 - secretRef:
     name: {{ include "demo.secretName" .ctx }}
+{{- if and (eq .app "auth") (not .ctx.Values.existingSecret) (hasKey .ctx.Values.secrets (include "demo.issuerKey" .ctx)) }}
+- secretRef:
+    name: {{ include "demo.issuerSecretName" .ctx }}
+{{- end }}
 {{- end }}
 
 {{/*

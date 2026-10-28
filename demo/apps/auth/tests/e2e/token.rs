@@ -27,7 +27,10 @@ async fn token_endpoint_issues_a_token_the_public_key_verifies() {
     let resp = request_token(
         &app,
         (CLIENT_ID, CLIENT_SECRET),
-        &format!("grant_type=client_credentials&scope={POSTS_READ}+{POSTS_WRITE}"),
+        &format!(
+            "grant_type=client_credentials&scope={POSTS_READ}+{POSTS_WRITE}&resource={}",
+            encoded(API)
+        ),
     )
     .await;
     resp.assert_status_is_ok();
@@ -39,7 +42,7 @@ async fn token_endpoint_issues_a_token_the_public_key_verifies() {
     assert_eq!(obj.get("token_type").string(), "Bearer");
     assert!(obj.get("expires_in").i64() > 0);
 
-    let claims: Claims = resource_server_verifier()
+    let claims: Claims = resource_server_verifier(API)
         .verify(obj.get("access_token").string())
         .await
         .expect("the public key verifies the privately-signed token");
@@ -64,10 +67,10 @@ async fn a_client_asking_for_no_scope_is_granted_exactly_its_registration() {
     let obj = json.value().object();
     assert_eq!(obj.get("scope").string(), POSTS_READ);
 
-    let claims: Claims = resource_server_verifier()
+    let claims: Claims = resource_server_verifier(API)
         .verify(obj.get("access_token").string())
         .await
-        .expect("the public key verifies the privately-signed token");
+        .expect("the client's one resource is its tokens' audience");
     assert_eq!(claims.scopes, [POSTS_READ]);
     assert_eq!(claims.roles, [Role::User]);
     assert_eq!(claims.org_id.to_string(), ORG_ID);
@@ -81,6 +84,92 @@ async fn token_endpoint_rejects_an_unsupported_grant() {
     request_token(&app, (CLIENT_ID, CLIENT_SECRET), "grant_type=password")
         .await
         .assert_status(StatusCode::BAD_REQUEST);
+}
+
+fn encoded(value: &str) -> String {
+    value.replace(':', "%3A").replace('/', "%2F")
+}
+
+#[tokio::test]
+async fn a_token_names_the_resource_requested_and_no_other() {
+    let (_db, app) = boot().await;
+
+    let resp = request_token(
+        &app,
+        (CLIENT_ID, CLIENT_SECRET),
+        &format!(
+            "grant_type=client_credentials&resource={}",
+            encoded(ASSISTANT)
+        ),
+    )
+    .await;
+    resp.assert_status_is_ok();
+    let json = resp.json().await;
+    let token = json
+        .value()
+        .object()
+        .get("access_token")
+        .string()
+        .to_owned();
+
+    resource_server_verifier(ASSISTANT)
+        .verify::<Claims>(&token)
+        .await
+        .expect("the resource requested accepts it");
+    assert!(
+        resource_server_verifier(API)
+            .verify::<Claims>(&token)
+            .await
+            .is_err(),
+        "another resource the client is registered for refuses it"
+    );
+}
+
+#[tokio::test]
+async fn a_resource_outside_the_registration_or_none_among_several_is_an_invalid_target() {
+    let logs = LogCapture::install();
+    let (_db, app) = boot().await;
+
+    for (client, body) in [
+        (
+            (READER_ID, READER_SECRET),
+            format!(
+                "grant_type=client_credentials&resource={}",
+                encoded(ASSISTANT)
+            ),
+        ),
+        (
+            (CLIENT_ID, CLIENT_SECRET),
+            "grant_type=client_credentials".to_owned(),
+        ),
+        (
+            (CLIENT_ID, CLIENT_SECRET),
+            format!(
+                "grant_type=client_credentials&resource={}&resource={}",
+                encoded(API),
+                encoded(ASSISTANT)
+            ),
+        ),
+    ] {
+        assert_token_error(
+            request_token(&app, client, &body).await,
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "error": "invalid_target" }),
+        )
+        .await;
+    }
+    let refusals: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.target == TARGET && event.level == "warn")
+        .collect();
+    assert_eq!(refusals.len(), 3, "{refusals:?}");
+    assert!(
+        refusals
+            .iter()
+            .all(|event| event.field("reason").as_deref() == Some("invalid_target")),
+        "{refusals:?}"
+    );
 }
 
 async fn assert_token_error(resp: TestResponse, status: StatusCode, expected: serde_json::Value) {

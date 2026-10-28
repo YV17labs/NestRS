@@ -18,6 +18,7 @@ fn oauth_service() -> OAuthService {
     let users_svc = Arc::new(features::users::UsersService);
     let config = Arc::new(OAuthConfig {
         clients: vec![],
+        sign_in_resources: vec![RESOURCE.into()],
         default_org_id: Uuid::nil(),
     });
     OAuthService::new(jwt_svc, providers, users_svc, config)
@@ -25,10 +26,13 @@ fn oauth_service() -> OAuthService {
 
 const ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_00a1);
 
+const RESOURCE: &str = "https://api.example.com";
+
 fn read_only_client() -> AuthenticatedClient {
     AuthenticatedClient::new(
         "reporting",
         [POSTS_READ],
+        [RESOURCE],
         ClientPayload {
             org_id: ORG,
             roles: vec![Role::User],
@@ -40,7 +44,7 @@ fn read_only_client() -> AuthenticatedClient {
 fn grant_client_credentials_rejects_unknown_grant_type() {
     let client = read_only_client();
     let err = oauth_service()
-        .grant_client_credentials("password", None, &client)
+        .grant_client_credentials("password", None, &[], &client)
         .unwrap_err();
     assert!(matches!(err, TokenError::UnsupportedGrant));
 }
@@ -49,7 +53,7 @@ fn grant_client_credentials_rejects_unknown_grant_type() {
 fn grant_client_credentials_rejects_invalid_scope() {
     let client = read_only_client();
     let err = oauth_service()
-        .grant_client_credentials("client_credentials", Some(POSTS_WRITE), &client)
+        .grant_client_credentials("client_credentials", Some(POSTS_WRITE), &[], &client)
         .unwrap_err();
     assert!(matches!(err, TokenError::InvalidScope));
 }
@@ -58,7 +62,7 @@ fn grant_client_credentials_rejects_invalid_scope() {
 fn grant_client_credentials_issues_for_valid_scope() {
     let client = read_only_client();
     let token = oauth_service()
-        .grant_client_credentials("client_credentials", Some(POSTS_READ), &client)
+        .grant_client_credentials("client_credentials", Some(POSTS_READ), &[], &client)
         .expect("token issued");
     assert_eq!(token.token_type, "Bearer");
     assert!(!token.access_token.is_empty());
@@ -82,7 +86,7 @@ fn an_unsupported_grant_is_logged_by_its_reason_never_by_the_grant_sent() {
     let logs = LogCapture::install();
     let client = read_only_client();
 
-    let refused = oauth_service().grant_client_credentials(SENT_GRANT, None, &client);
+    let refused = oauth_service().grant_client_credentials(SENT_GRANT, None, &[], &client);
 
     assert!(matches!(refused, Err(TokenError::UnsupportedGrant)));
     let refusal = the_one_refusal(&logs);
@@ -104,8 +108,12 @@ fn a_refused_scope_is_logged_by_its_reason_never_by_the_scope_sent() {
     let logs = LogCapture::install();
     let client = read_only_client();
 
-    let refused =
-        oauth_service().grant_client_credentials("client_credentials", Some(SENT_SCOPE), &client);
+    let refused = oauth_service().grant_client_credentials(
+        "client_credentials",
+        Some(SENT_SCOPE),
+        &[],
+        &client,
+    );
 
     assert!(matches!(refused, Err(TokenError::InvalidScope)));
     let refusal = the_one_refusal(&logs);
@@ -119,6 +127,32 @@ fn a_refused_scope_is_logged_by_its_reason_never_by_the_scope_sent() {
             .fields
             .values()
             .all(|value| !value.contains(SENT_SCOPE)),
+        "{refusal:?}"
+    );
+}
+
+const SENT_RESOURCE: &str = "https://only-the-client-knows.example";
+
+#[test]
+fn a_refused_resource_is_logged_by_its_reason_never_by_the_resource_sent() {
+    let logs = LogCapture::install();
+    let client = read_only_client();
+
+    let refused = oauth_service().grant_client_credentials(
+        "client_credentials",
+        None,
+        &[SENT_RESOURCE.to_owned()],
+        &client,
+    );
+
+    assert!(matches!(refused, Err(TokenError::InvalidTarget)));
+    let refusal = the_one_refusal(&logs);
+    assert_eq!(refusal.field("reason").as_deref(), Some("invalid_target"));
+    assert!(
+        refusal
+            .fields
+            .values()
+            .all(|value| !value.contains(SENT_RESOURCE)),
         "{refusal:?}"
     );
 }

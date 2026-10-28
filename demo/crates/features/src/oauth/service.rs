@@ -59,12 +59,14 @@ impl OAuthService {
 
     pub fn issue(
         &self,
+        resource: Option<&str>,
         user_id: Uuid,
         org_id: Uuid,
         roles: Vec<Role>,
     ) -> Result<AccessTokenResponse, TokenError> {
         issue_with_jwt(
             &self.jwt_svc,
+            self.sign_in_audience(resource)?,
             Claims {
                 sub: Subject::User(user_id),
                 client_id: None,
@@ -80,23 +82,36 @@ impl OAuthService {
         &self,
         email: &str,
         password: &str,
+        resource: Option<&str>,
     ) -> Result<AccessTokenResponse, TokenError> {
+        self.sign_in_audience(resource)?;
         let user = self
             .users_svc
             .authenticate(email, password)
             .await
             .map_err(token_error_from_auth)?;
         let roles = vec![role_from_db(user.role)];
-        self.issue(user.id, user.org_id, roles)
+        self.issue(resource, user.id, user.org_id, roles)
     }
 
     pub fn grant_client_credentials(
         &self,
         grant_type: &str,
         scope: Option<&str>,
+        resource: &[String],
         client: &AuthenticatedClient,
     ) -> Result<AccessTokenResponse, TokenError> {
-        grant_client_credentials_with_jwt(&self.jwt_svc, grant_type, scope, client)
+        grant_client_credentials_with_jwt(&self.jwt_svc, grant_type, scope, resource, client)
+    }
+
+    fn sign_in_audience(&self, resource: Option<&str>) -> Result<&str, TokenError> {
+        let resources = &self.config.sign_in_resources;
+        match resource {
+            None => resources.first(),
+            Some(requested) => resources.iter().find(|served| *served == requested),
+        }
+        .map(String::as_str)
+        .ok_or_else(|| refused(TokenError::InvalidTarget, "invalid_target"))
     }
 
     pub fn authorize(&self, provider: &str) -> Option<Result<AuthorizationRedirect, AuthError>> {
@@ -154,13 +169,15 @@ fn social_identity(profile: SocialProfile) -> SocialIdentity {
 
 pub(crate) fn issue_with_jwt(
     jwt_svc: &JwtService,
+    audience: &str,
     claims: Claims,
 ) -> Result<AccessTokenResponse, TokenError> {
     let access_token = jwt_svc
-        .sign(&claims)
+        .sign_for(audience, &claims)
         .map_err(|e| TokenError::Sign(e.into()))?;
     tracing::debug!(
         target: crate::oauth::TARGET,
+        audience,
         sub = %claims.sub,
         org_id = %claims.org_id,
         roles = ?claims.roles,
@@ -174,25 +191,23 @@ pub(crate) fn grant_client_credentials_with_jwt(
     jwt_svc: &JwtService,
     grant_type: &str,
     scope: Option<&str>,
+    resource: &[String],
     client: &AuthenticatedClient,
 ) -> Result<AccessTokenResponse, TokenError> {
     if grant_type != "client_credentials" {
-        tracing::warn!(
-            target: crate::oauth::TARGET,
-            reason = "unsupported_grant_type",
-            "token request refused"
-        );
-        return Err(TokenError::UnsupportedGrant);
+        return Err(refused(
+            TokenError::UnsupportedGrant,
+            "unsupported_grant_type",
+        ));
     }
-    let scopes = granted_scopes(scope, &client.scopes).inspect_err(|_| {
-        tracing::warn!(
-            target: crate::oauth::TARGET,
-            reason = "invalid_scope",
-            "token request refused"
-        );
-    })?;
+    let scopes =
+        granted_scopes(scope, &client.scopes).map_err(|error| refused(error, "invalid_scope"))?;
+    let audience = client
+        .audience_for(resource)
+        .map_err(|error| refused(error, "invalid_target"))?;
     issue_with_jwt(
         jwt_svc,
+        audience,
         Claims {
             sub: Subject::Client(client.client_id.clone()),
             client_id: Some(client.client_id.clone()),
@@ -202,6 +217,15 @@ pub(crate) fn grant_client_credentials_with_jwt(
             exp: jwt_svc.expiry(),
         },
     )
+}
+
+fn refused(error: TokenError, reason: &'static str) -> TokenError {
+    tracing::warn!(
+        target: crate::oauth::TARGET,
+        reason,
+        "token request refused"
+    );
+    error
 }
 
 fn token_error_from_auth(err: AuthError) -> TokenError {
@@ -221,10 +245,20 @@ mod tests {
 
     use crate::authz::constants::{POSTS_READ, POSTS_WRITE};
 
+    const SECRET: &str = "test-secret-padded-to-thirty-two-b";
+    const RESOURCE: &str = "https://api.example.com";
+    const OTHER_RESOURCE: &str = "https://mcp.example.com";
+
     fn jwt_with_ttl(ttl: Duration) -> JwtService {
-        let mut opts = JwtOptions::new("test-secret-padded-to-thirty-two-b");
+        let mut opts = JwtOptions::new(SECRET);
         opts.expires_in = ttl;
         JwtService::new(opts).expect("jwt service")
+    }
+
+    fn verifier(resource: &str) -> JwtService {
+        let mut opts = JwtOptions::new(SECRET);
+        opts.audience = Some(resource.into());
+        JwtService::new(opts).expect("verifier")
     }
 
     fn user_claims(jwt_svc: &JwtService, roles: Vec<Role>, scopes: Vec<String>) -> Claims {
@@ -242,7 +276,7 @@ mod tests {
     fn issue_returns_a_bearer_token_envelope_with_the_jwt_ttl() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(900));
         let claims = user_claims(&jwt_svc, vec![Role::User], constants::all());
-        let token = issue_with_jwt(&jwt_svc, claims).expect("issue");
+        let token = issue_with_jwt(&jwt_svc, RESOURCE, claims).expect("issue");
 
         assert_eq!(
             token.token_type, "Bearer",
@@ -262,9 +296,12 @@ mod tests {
     async fn issue_round_trips_user_subject_through_verify() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let issued = user_claims(&jwt_svc, vec![Role::Admin], constants::all());
-        let token = issue_with_jwt(&jwt_svc, issued.clone()).expect("issue");
+        let token = issue_with_jwt(&jwt_svc, RESOURCE, issued.clone()).expect("issue");
 
-        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
+        let claims: Claims = verifier(RESOURCE)
+            .verify(&token.access_token)
+            .await
+            .expect("verify");
         assert_eq!(claims.sub, issued.sub);
         assert_eq!(claims.client_id, None);
         assert_eq!(claims.org_id, issued.org_id);
@@ -275,9 +312,12 @@ mod tests {
     async fn the_token_and_its_response_carry_the_scopes_granted() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let issued = user_claims(&jwt_svc, vec![Role::User], vec![POSTS_READ.to_owned()]);
-        let token = issue_with_jwt(&jwt_svc, issued).expect("issue");
+        let token = issue_with_jwt(&jwt_svc, RESOURCE, issued).expect("issue");
 
-        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
+        let claims: Claims = verifier(RESOURCE)
+            .verify(&token.access_token)
+            .await
+            .expect("verify");
         assert_eq!(claims.scopes, [POSTS_READ]);
         assert_eq!(token.scope, [POSTS_READ]);
     }
@@ -287,7 +327,8 @@ mod tests {
         let verify_only_svc = JwtService::new(JwtOptions::eddsa_verify(test_ed25519_public_pem()))
             .expect("verify-only jwt");
         let claims = user_claims(&verify_only_svc, vec![Role::User], constants::all());
-        let err = issue_with_jwt(&verify_only_svc, claims).expect_err("sign without key ⇒ Sign(_)");
+        let err = issue_with_jwt(&verify_only_svc, RESOURCE, claims)
+            .expect_err("sign without key ⇒ Sign(_)");
         assert!(matches!(err, TokenError::Sign(_)));
         assert_eq!(err.to_string(), "server_error");
     }
@@ -302,6 +343,7 @@ mod tests {
         AuthenticatedClient::new(
             "ci",
             scopes.iter().copied(),
+            [RESOURCE],
             ClientPayload {
                 org_id: Uuid::now_v7(),
                 roles,
@@ -316,6 +358,7 @@ mod tests {
             &jwt_svc,
             "password",
             None,
+            &[],
             &auth_client(vec![Role::User], &[POSTS_READ]),
         )
         .expect_err("non-CC grant rejected");
@@ -330,6 +373,7 @@ mod tests {
             &jwt_svc,
             "client_credentials",
             Some(POSTS_WRITE),
+            &[],
             &auth_client(vec![Role::User], &[POSTS_READ]),
         )
         .expect_err("scope mismatch rejected");
@@ -344,11 +388,15 @@ mod tests {
             &jwt_svc,
             "client_credentials",
             Some(POSTS_READ),
+            &[],
             &client,
         )
         .expect("happy path");
         assert_eq!(token.token_type, "Bearer");
-        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
+        let claims: Claims = verifier(RESOURCE)
+            .verify(&token.access_token)
+            .await
+            .expect("verify");
         assert_eq!(claims.sub, Subject::Client("ci".into()));
         assert_eq!(claims.client_id.as_deref(), Some("ci"));
         assert_eq!(claims.org_id, client.payload.org_id);
@@ -361,9 +409,12 @@ mod tests {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(vec![Role::User], &[POSTS_READ]);
         let token =
-            grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", None, &client)
+            grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", None, &[], &client)
                 .expect("issue");
-        let claims: serde_json::Value = jwt_svc.verify(&token.access_token).await.expect("verify");
+        let claims: serde_json::Value = verifier(RESOURCE)
+            .verify(&token.access_token)
+            .await
+            .expect("verify");
         assert_eq!(claims["sub"], "ci", "{claims}");
         assert_eq!(claims["client_id"], "ci", "{claims}");
     }
@@ -373,9 +424,12 @@ mod tests {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(vec![Role::User], &[POSTS_READ]);
         let token =
-            grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", None, &client)
+            grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", None, &[], &client)
                 .expect("absent scope ok");
-        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
+        let claims: Claims = verifier(RESOURCE)
+            .verify(&token.access_token)
+            .await
+            .expect("verify");
         assert_eq!(claims.scopes, [POSTS_READ]);
         assert_eq!(claims.roles, [Role::User]);
         assert_eq!(token.scope, [POSTS_READ]);
@@ -394,11 +448,13 @@ mod tests {
                 "ci",
                 "s3cret",
                 [POSTS_READ],
+                [RESOURCE],
                 ClientPayload {
                     org_id: Uuid::now_v7(),
                     roles: vec![Role::User],
                 },
             )],
+            sign_in_resources: vec![RESOURCE.into(), OTHER_RESOURCE.into()],
             default_org_id: Uuid::now_v7(),
         });
         OAuthService::new(jwt_svc, providers, Arc::new(UsersService), config)
@@ -408,7 +464,7 @@ mod tests {
     fn a_first_party_login_is_delegated_every_scope() {
         let svc = oauth_service(Duration::from_secs(60));
         let token = svc
-            .issue(Uuid::now_v7(), Uuid::now_v7(), vec![Role::User])
+            .issue(None, Uuid::now_v7(), Uuid::now_v7(), vec![Role::User])
             .expect("issue");
         assert_eq!(token.token_type, "Bearer");
         assert_eq!(token.scope, constants::all());
@@ -419,7 +475,7 @@ mod tests {
         let svc = oauth_service(Duration::from_secs(120));
         let sub = Uuid::now_v7();
         let org = Uuid::now_v7();
-        let token = svc.issue(sub, org, vec![Role::Admin]).expect("issue");
+        let token = svc.issue(None, sub, org, vec![Role::Admin]).expect("issue");
         assert_eq!(token.expires_in, 120);
         assert!(!token.access_token.is_empty());
     }
@@ -428,7 +484,7 @@ mod tests {
     fn oauth_service_grant_client_credentials_rejects_non_cc_grant() {
         let svc = oauth_service(Duration::from_secs(60));
         let err = svc
-            .grant_client_credentials("password", None, &auth_client(vec![Role::User], &[]))
+            .grant_client_credentials("password", None, &[], &auth_client(vec![Role::User], &[]))
             .expect_err("password grant on CC endpoint ⇒ unsupported");
         assert!(matches!(err, TokenError::UnsupportedGrant));
     }
@@ -438,7 +494,7 @@ mod tests {
         let svc = oauth_service(Duration::from_secs(60));
         let client = auth_client(vec![Role::User], &[POSTS_READ]);
         let token = svc
-            .grant_client_credentials("client_credentials", None, &client)
+            .grant_client_credentials("client_credentials", None, &[], &client)
             .expect("happy CC path");
         assert_eq!(token.token_type, "Bearer");
     }
@@ -483,6 +539,71 @@ mod tests {
         assert!(matches!(
             token_error_from_auth(AuthError::failed("invalid credentials")),
             TokenError::InvalidGrant,
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_client_token_names_the_resource_it_was_requested_for() {
+        let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
+        let mut client = auth_client(vec![Role::User], &[POSTS_READ]);
+        client.resources = vec![RESOURCE.into(), OTHER_RESOURCE.into()];
+
+        let token = grant_client_credentials_with_jwt(
+            &jwt_svc,
+            "client_credentials",
+            None,
+            &[OTHER_RESOURCE.into()],
+            &client,
+        )
+        .expect("issue");
+
+        verifier(OTHER_RESOURCE)
+            .verify::<Claims>(&token.access_token)
+            .await
+            .expect("the resource requested accepts it");
+        assert!(
+            verifier(RESOURCE)
+                .verify::<Claims>(&token.access_token)
+                .await
+                .is_err(),
+            "another resource the client is registered for refuses it"
+        );
+    }
+
+    #[test]
+    fn a_client_token_for_a_resource_outside_its_registration_is_refused() {
+        let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
+        let err = grant_client_credentials_with_jwt(
+            &jwt_svc,
+            "client_credentials",
+            None,
+            &[OTHER_RESOURCE.into()],
+            &auth_client(vec![Role::User], &[POSTS_READ]),
+        )
+        .expect_err("unregistered resource");
+        assert!(matches!(err, TokenError::InvalidTarget));
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_names_the_resource_it_asks_for_or_the_first_served() {
+        let svc = oauth_service(Duration::from_secs(60));
+        for (resource, audience) in [(None, RESOURCE), (Some(OTHER_RESOURCE), OTHER_RESOURCE)] {
+            let token = svc
+                .issue(resource, Uuid::now_v7(), Uuid::now_v7(), vec![Role::User])
+                .expect("issue");
+            verifier(audience)
+                .verify::<Claims>(&token.access_token)
+                .await
+                .expect("minted for the resource asked for");
+        }
+        assert!(matches!(
+            svc.issue(
+                Some("https://billing.example.com"),
+                Uuid::now_v7(),
+                Uuid::now_v7(),
+                vec![Role::User]
+            ),
+            Err(TokenError::InvalidTarget)
         ));
     }
 }

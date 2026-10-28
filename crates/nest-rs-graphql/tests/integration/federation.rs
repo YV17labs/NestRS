@@ -90,7 +90,7 @@ impl SprocketsResolver {
 
 #[module(imports = [GraphqlModule::for_root(GraphqlConfig {
     federation: true,
-    disable_introspection: false,
+    introspection: true,
     ..GraphqlConfig::default()
 })], providers = [WidgetsResolver, SprocketsResolver])]
 struct FederatedModule;
@@ -286,7 +286,7 @@ async fn a_pooled_guard_refuses_a_reference_before_any_member_answers() {
 }
 
 /// `_service` publishes the whole SDL and is not covered by
-/// `disable_introspection`.
+/// `introspection`.
 #[tokio::test]
 async fn a_pooled_guard_refuses_the_subgraph_sdl() {
     let app = TestApp::builder()

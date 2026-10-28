@@ -45,7 +45,7 @@ use crate::view::GraphqlView;
 /// # assert!(app.container().get::<GraphqlConfig>().is_some());
 ///
 /// let defaults = GraphqlConfig::default();
-/// assert!(!defaults.playground && defaults.disable_introspection && !defaults.emit);
+/// assert!(!defaults.playground && !defaults.introspection && !defaults.emit);
 /// # Ok(())
 /// # }
 /// ```
@@ -174,7 +174,7 @@ fn wire_schema(container: &Container) -> anyhow::Result<()> {
     if let Some(resolver) = check_operations(&reachable).map_err(anyhow::Error::msg)?
         && !config.federation
     {
-        let introspection = nest_rs_config::var_name("graphql", "DISABLE_INTROSPECTION");
+        let introspection = nest_rs_config::var_name("graphql", "INTROSPECTION");
         let federation_var = nest_rs_config::var_name("graphql", "FEDERATION");
         anyhow::bail!(
             "`{resolver}` keys an entity — an `#[entity]`, or an object it returns carrying \

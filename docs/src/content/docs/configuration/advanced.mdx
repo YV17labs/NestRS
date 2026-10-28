@@ -251,7 +251,7 @@ impl Config for GraphqlConfig {
         let open = !environment.is_deployed();
         Self {
             playground: open,
-            disable_introspection: !open,
+            introspection: open,
             emit: environment == Environment::Development,
             ..Self::default()
         }

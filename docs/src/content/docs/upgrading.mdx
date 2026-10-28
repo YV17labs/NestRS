@@ -144,6 +144,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` (step 16) |
    | `<PREFIX>_GRAPHQL__EMIT_SDL` | `<PREFIX>_GRAPHQL__EMIT` — on by default under a declared development profile, so a `.env.development` setting it drops the line |
    | `<PREFIX>_GRAPHQL__SCHEMA_PATH` | `<PREFIX>_GRAPHQL__EMIT_PATH`, a relative path now the app crate's: `apps/api/schema.graphql` becomes `schema.graphql`, the default |
+   | `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION` | `<PREFIX>_GRAPHQL__INTROSPECTION`, its opposite: `DISABLE_INTROSPECTION=false` is `INTROSPECTION=true`. On by default under a declared development or test profile, so a `.env.development` setting it drops the line |
    | `<PREFIX>_OPENAPI__EMIT_DOCUMENT` | `<PREFIX>_OPENAPI__EMIT` — on by default under a declared development profile |
    | `<PREFIX>_OPENAPI__DOCUMENT_PATH` | `<PREFIX>_OPENAPI__EMIT_PATH`, relative to the app crate: `apps/api/openapi.json` becomes `openapi.json`, the default |
 
@@ -475,7 +476,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | `RedisModule::for_root(RedisConfig { …, ..Default::default() })` relying on the loopback | `url` written in the pin, or `<PREFIX>_REDIS__URL` in the deployment: no profile holds a URL, and a pinned config reads the process environment, never `.env` |
    | `StorageModule::for_root(StorageConfig { …, ..Default::default() })` relying on the development pair or on plain HTTP | `..StorageConfig::defaults()` for plain HTTP in development and test (with `use nest_rs::config::Config;`); the pair from the deployment's environment in every profile |
    | `GraphqlConfig { emit_sdl, schema_path, .. }`, `OpenApiConfig { emit_document, document_path, .. }` | `emit` and `emit_path` on both; a relative `emit_path` is resolved against the app crate's directory |
-   | `GraphqlModule::for_root(GraphqlConfig { …, ..Default::default() })` expecting the playground or introspection in development | `..GraphqlConfig::defaults()` for the profile's surfaces, or `playground: true` / `disable_introspection: false` written in the pin |
+   | `GraphqlConfig { disable_introspection: false, .. }` | `introspection: true`: the field says what it serves, as `playground` does |
+   | `GraphqlModule::for_root(GraphqlConfig { …, ..Default::default() })` expecting the playground or introspection in development | `..GraphqlConfig::defaults()` for the profile's surfaces, or `playground: true` / `introspection: true` written in the pin |
    | a suite asserting that the bare `GraphqlModule` answers a plain `GET` with `405`, or refuses introspection, under the test profile | pin `GraphqlModule::for_root(GraphqlConfig::default())`: the test profile opens both |
    | `OpenApiModule::for_root(OpenApiConfig { …, ..OpenApiConfig::default() })` expecting `/api` served | `..OpenApiConfig::defaults()` to serve it in development and test only, or `enabled: true` written in the pin |
    | an `HttpConfig`, `StorageConfig`, `AuthnConfig`, `GraphqlConfig`, `WsConfig`, `McpConfig`, `OAuthClientConfig` or `OpenTelemetryConfig` literal written out whole | the same, ending in `..Default::default()` — each gained fields (`shutdown_timeout`; `operation_timeout`, `read_timeout`, `tls`; `jwks_uri`, `algorithms`, `tls`; the graphql-ws bounds; `message_timeout`, `connect_timeout`, `disconnect_timeout`; `operation_timeout`, `max_concurrent_sessions`, `session_idle_timeout`; `tls`) |
@@ -1112,6 +1114,10 @@ lists what the boot, a log or the wire shows when one is missed.
   beside the app's `Cargo.toml` anyway. A path the old key gave relative to
   the workspace root, kept under the new name, now lands under the app crate:
   drop it, or make it relative to the app.
+- **A deployment still opening introspection with
+  `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION=false`** keeps it closed: the key is
+  read by nothing, and the boot says so at `warn`. `<PREFIX>_GRAPHQL__INTROSPECTION=true`
+  opens it, and that boot says so at `warn` too.
 - **A configuration refusal** opens on ``the factory for `<crate>::…Config`
   failed``; the variable, the rule and the place are under `Caused by:`, never
   the value. A log setting that does not parse — `<PREFIX>_LOG_FORMAT=jsno`, a

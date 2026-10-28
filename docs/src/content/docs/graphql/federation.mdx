@@ -172,10 +172,10 @@ Two consequences worth reading twice:
   multiplier on a pooled check is not a number the caller picks.
 
 <Aside type="danger" title="A subgraph sits behind a router, not on the internet">
-**`_service` is not covered by `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION`** — that
+**`_service` is not covered by `<PREFIX>_GRAPHQL__INTROSPECTION`** — that
 switch gates `__schema`, and `_service`'s field is unconditionally visible. A
 subgraph with no guards therefore publishes its own SDL to anyone who can reach
-it, introspection disabled or not. Guards close that (above); the network is
+it, introspection on or off. Guards close that (above); the network is
 still the outer answer — serve a subgraph where the router is, and let the
 router be the thing clients reach.
 

@@ -759,7 +759,7 @@ pub(crate) fn build_schema(
     if let Some(c) = config.max_complexity {
         builder = builder.limit_complexity(c);
     }
-    if config.disable_introspection {
+    if !config.introspection {
         builder = builder.disable_introspection();
     }
     if config.federation {

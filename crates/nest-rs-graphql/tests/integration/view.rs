@@ -76,7 +76,7 @@ impl GadgetsResolver {
 
 #[module(imports = [GraphqlModule::for_root(GraphqlConfig {
     federation: true,
-    disable_introspection: false,
+    introspection: true,
     ..GraphqlConfig::default()
 })], providers = [GadgetsResolver, Witness])]
 struct GadgetsModule;

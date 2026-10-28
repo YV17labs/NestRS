@@ -39,9 +39,9 @@ pub struct GraphqlConfig {
     /// Reject queries whose complexity score exceeds this. Default
     /// `Some(2000)` (production-safe); set `None` to disable. See Query limits.
     pub max_complexity: Option<usize>,
-    /// Refuse introspection queries. `true` in `Default`; `false` in
-    /// development and test.
-    pub disable_introspection: bool,
+    /// Answer introspection queries. Off in `Default`; on in development
+    /// and test.
+    pub introspection: bool,
     /// Maximum operations in a single HTTP batch request. Default `10`.
     pub max_batch_size: usize,
     /// Ceiling on a subscription's lifetime. Default 4 hours; `None` unlimited.
@@ -69,7 +69,7 @@ pub struct GraphqlConfig {
 | `emit_path` | `<PREFIX>_GRAPHQL__EMIT_PATH` | `schema.graphql` | Where the SDL gets written; a relative path is the app crate's ([SDL emission](#sdl-emission)). |
 | `max_depth` | `<PREFIX>_GRAPHQL__MAX_DEPTH` | `15` | Bound on AST nesting depth; `None` disables. See [Query limits](/graphql/query-limits/). |
 | `max_complexity` | `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` | `2000` | Bound on query complexity score; `None` disables. See [Query limits](/graphql/query-limits/). |
-| `disable_introspection` | `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION` | `true`; `false` in development and test | When `true`, the schema rejects introspection queries. |
+| `introspection` | `<PREFIX>_GRAPHQL__INTROSPECTION` | `false`; `true` in development and test | When `true`, the schema answers introspection queries (`__schema`, `__type`). |
 | `max_batch_size` | `<PREFIX>_GRAPHQL__MAX_BATCH_SIZE` | `10` | Maximum operations in a single HTTP batch request. |
 | `max_connection` | `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` | `14400` (4 h) | Ceiling on a subscription's lifetime. A **security** control: a socket authenticates once and replays those privileges for as long as it stays open. `0` disables it. |
 | `max_message_bytes` | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | `65536` (64 KiB) | Byte cap on one graphql-ws message, held at the protocol layer: a larger frame is never buffered, and the socket closes. |
@@ -83,7 +83,7 @@ pub struct GraphqlConfig {
 **The playground and introspection are the API's documentation**, public to
 anyone reaching `/graphql` (OWASP API9:2023), so only a declared development
 or test profile opens them. A deployment that opens either —
-`<PREFIX>_GRAPHQL__PLAYGROUND=true`, `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION=false`,
+`<PREFIX>_GRAPHQL__PLAYGROUND=true`, `<PREFIX>_GRAPHQL__INTROSPECTION=true`,
 or the same in a pinned config — is honoured, and its boot says so once at
 `warn` on `nest_rs::graphql`, naming the `environment`.
 </Aside>

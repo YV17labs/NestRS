@@ -136,7 +136,7 @@ struct TickModule;
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        disable_introspection: false,
+        introspection: true,
         ..GraphqlConfig::default()
     }),
     TickModule,

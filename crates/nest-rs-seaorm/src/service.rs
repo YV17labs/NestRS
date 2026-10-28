@@ -224,7 +224,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// impl UsersResolver {}
 /// # #[module(
 /// #     imports = [GraphqlModule::for_root(GraphqlConfig {
-/// #         disable_introspection: false,
+/// #         introspection: true,
 /// #         ..GraphqlConfig::default()
 /// #     })],
 /// #     providers = [UsersService, UsersResolver],

@@ -25,7 +25,7 @@ struct AppWithLoose;
 
 // Linked into this binary, but unreachable here.
 #[module(imports = [GraphqlModule::for_root(Some(GraphqlConfig {
-    disable_introspection: false,
+    introspection: true,
     ..GraphqlConfig::default()
 }))])]
 struct AppWithoutLoose;
@@ -402,7 +402,7 @@ struct OracleFeatureModule;
 
 #[module(imports = [
     GraphqlModule::for_root(Some(GraphqlConfig {
-        disable_introspection: false,
+        introspection: true,
         ..GraphqlConfig::default()
     })),
     OracleFeatureModule,

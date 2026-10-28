@@ -34,10 +34,13 @@ playground on and left introspection off, a page with no schema to read.
 introspection in the development and test profiles, as the documentation and
 Server-Timing are served; `Default` keeps both closed, and a deployment
 opening either (`<PREFIX>_GRAPHQL__PLAYGROUND=true`,
-`<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION=false`) is said once at `warn`. Their
-keys stay as named: renaming the second to an `ENABLED`-shaped one is a break
-nobody asked for. A subgraph's `_service` still publishes its SDL whatever
-introspection says, and stays behind a router. The two committed copies — this
+`<PREFIX>_GRAPHQL__INTROSPECTION=true`) is said once at `warn`. Each key takes
+the shape `server-timing-exposure.md` gives a development surface — on in
+development and test, off in `Default`, saying what it serves — so
+`DISABLE_INTROSPECTION` became `INTROSPECTION`, its opposite; one `ENABLED`
+would name the endpoint itself, which is the API and always served. A
+subgraph's `_service` still publishes its SDL whatever introspection says, and
+stays behind a router. The two committed copies — this
 document and the SDL — share one key pair, `EMIT` and `EMIT_PATH`, written by a
 development run alone and resolved against the directory of the crate
 `#[nest_rs::main]` expanded in, so each app of a workspace writes its own.

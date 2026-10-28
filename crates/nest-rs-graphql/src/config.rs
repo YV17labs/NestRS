@@ -100,11 +100,11 @@ pub struct GraphqlConfig {
     /// as for `max_depth`.
     #[validate(range(min = 1))]
     pub max_complexity: Option<usize>,
-    /// Refuse introspection queries. The schema is the API's documentation,
-    /// so `Default` keeps this `true` and only a development or test profile's
-    /// [`Config::defaults`] answers them. Answering them outside such a
-    /// profile is honoured and logged at `warn`.
-    pub disable_introspection: bool,
+    /// Answer introspection queries. The schema is the API's documentation,
+    /// so `Default` keeps this off and only a development or test profile's
+    /// [`Config::defaults`] turns it on. Answering them outside such a profile
+    /// is honoured and logged at `warn`.
+    pub introspection: bool,
     /// Maximum number of operations in a single HTTP batch request.
     /// Default `10`.
     #[validate(range(min = 1))]
@@ -145,7 +145,7 @@ pub struct GraphqlConfig {
     /// this is `false` **fails the boot**.
     ///
     /// Default `false`: **`_service` cannot be switched off** —
-    /// `disable_introspection` does not cover it — so a subgraph publishes its
+    /// `introspection` does not cover it — so a subgraph publishes its
     /// SDL to anyone who can reach it, and belongs behind a router.
     ///
     /// Read from `<PREFIX>_GRAPHQL__FEDERATION`.
@@ -178,7 +178,7 @@ impl Default for GraphqlConfig {
             emit_path: "schema.graphql".into(),
             max_depth: Some(15),
             max_complexity: Some(2000),
-            disable_introspection: true,
+            introspection: false,
             max_batch_size: 10,
             max_connection: Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
@@ -198,7 +198,7 @@ impl Config for GraphqlConfig {
         let open = !environment.is_deployed();
         Self {
             playground: open,
-            disable_introspection: !open,
+            introspection: open,
             emit: environment == Environment::Development,
             ..Self::default()
         }
@@ -207,7 +207,7 @@ impl Config for GraphqlConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let d = base;
         let playground = env.flag("PLAYGROUND", d.playground)?;
-        let disable_introspection = env.flag("DISABLE_INTROSPECTION", d.disable_introspection)?;
+        let introspection = env.flag("INTROSPECTION", d.introspection)?;
         let environment = Environment::from_env();
         if environment.is_deployed() {
             if playground {
@@ -217,7 +217,7 @@ impl Config for GraphqlConfig {
                     "{PLAYGROUND_OPEN}",
                 );
             }
-            if !disable_introspection {
+            if introspection {
                 tracing::warn!(
                     target: crate::TARGET,
                     environment = environment.as_str(),
@@ -235,7 +235,7 @@ impl Config for GraphqlConfig {
                 .unwrap_or(d.emit_path),
             max_depth: env.parse("MAX_DEPTH")?.or(d.max_depth),
             max_complexity: env.parse("MAX_COMPLEXITY")?.or(d.max_complexity),
-            disable_introspection,
+            introspection,
             max_batch_size: env.parse("MAX_BATCH_SIZE")?.unwrap_or(d.max_batch_size),
             max_connection: MAX_CONNECTION
                 .read_optional(env, d.max_connection)?
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(d.emit_path, PathBuf::from("schema.graphql"));
         assert_eq!(d.max_depth, Some(15));
         assert_eq!(d.max_complexity, Some(2000));
-        assert!(d.disable_introspection);
+        assert!(!d.introspection);
         assert_eq!(d.max_batch_size, 10);
         assert!(
             !d.federation,
@@ -305,7 +305,7 @@ mod tests {
         ] {
             let d = in_profile(profile, <GraphqlConfig as Config>::defaults);
             assert_eq!(d.playground, open, "{profile:?}");
-            assert_eq!(d.disable_introspection, !open, "{profile:?}");
+            assert_eq!(d.introspection, open, "{profile:?}");
         }
     }
 
@@ -335,7 +335,7 @@ mod tests {
             )
             .expect("ok")
         });
-        assert!(!cfg.playground && cfg.disable_introspection && !cfg.emit);
+        assert!(!cfg.playground && !cfg.introspection && !cfg.emit);
     }
 
     #[test]
@@ -345,13 +345,13 @@ mod tests {
             GraphqlConfig::from_env(
                 &ConfigService::with_vars(
                     "graphql",
-                    [("PLAYGROUND", "true"), ("DISABLE_INTROSPECTION", "false")],
+                    [("PLAYGROUND", "true"), ("INTROSPECTION", "true")],
                 ),
                 GraphqlConfig::default(),
             )
             .expect("an explicit opening is honoured")
         });
-        assert!(cfg.playground && !cfg.disable_introspection);
+        assert!(cfg.playground && cfg.introspection);
         for surface in [PLAYGROUND_OPEN, INTROSPECTION_OPEN] {
             let event = logs.expect_one("nest_rs::graphql", surface);
             assert_eq!(event.level, "warn");
@@ -414,7 +414,7 @@ mod tests {
         assert_eq!(cfg.emit, d.emit);
         assert_eq!(cfg.max_depth, d.max_depth);
         assert_eq!(cfg.max_complexity, d.max_complexity);
-        assert_eq!(cfg.disable_introspection, d.disable_introspection);
+        assert_eq!(cfg.introspection, d.introspection);
         assert_eq!(cfg.max_batch_size, d.max_batch_size);
     }
 

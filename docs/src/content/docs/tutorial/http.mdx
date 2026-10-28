@@ -209,7 +209,7 @@ scaffold wired on page 1.
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 
 use features::authn::AuthnModule;
 use features::authz::AuthzModule;
@@ -217,7 +217,7 @@ use features::blog::BlogHttpModule;
 use features::posts::PostsHttpModule;
 
 #[module(imports = [
-    HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
+    HttpModule::for_root(None),
     AuthnModule,
     AuthzModule,
     BlogHttpModule,

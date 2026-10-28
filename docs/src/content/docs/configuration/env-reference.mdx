@@ -10,9 +10,11 @@ Every framework module reads its config from a namespaced env prefix
 ([Configuration](/configuration/#the-dual-path-rule)). The variable name is
 `<PREFIX>_<NAMESPACE>__<KEY>` (double underscore between namespace and key). This
 page lists the variables; each maps one-to-one to a field on the module's
-config struct, so anything here is also settable in code — and, because the
-override is per field, setting one here works even when the app pins its
-neighbours in `module.rs`.
+config struct, so anything here is also settable in code. Exported into the
+real environment, one works even when the app pins its neighbours in
+`module.rs`, field by field; written in a `.env` file, it reaches no config
+whose namespace the app pins in code at all, and the boot names it as
+shadowed ([the dual-path rule](/configuration/#the-dual-path-rule)).
 
 `NESTRS` is the default prefix. An app that declared its own
 ([Your own prefix](/configuration/#your-own-prefix)) reads every name below
@@ -333,10 +335,13 @@ default in place and nothing said so. The boot now does, once per variable, at
 | Message | When | Fields |
 |---|---|---|
 | `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough |
+| `config variable from the .env cascade shadowed by a config pinned in code; export it into the real environment, or set it in the pin` | a `.env` file sets a key a config reads, but the app pinned that config in code (`Module::for_root(cfg)`), which cuts its whole namespace off the cascade | `variable`, `namespace`, and `pinned_by` — the import that pinned it, `` `HttpModule::for_root(..)` at `imports[4]` of `ApiModule` `` |
 | `config variable under a misspelled namespace` | the variable's namespace is a near miss of one this binary read — other separators (`<PREFIX>_OAUTH_RESOURCE__RESOURCE` for `oauth__resource`, `<PREFIX>_SEAORM_URL` for `seaorm`), another case, the prefix's included, since the loader folds none (`<PREFIX>_Seaorm__URL`, `nestrs_seaorm__url`), or one misspelled segment of six letters or more, a family member's included (`<PREFIX>_SEAROM__URL`, `<PREFIX>_OAUTH__RESOURSE__RESOURCE`) — **and its key is one that namespace reads**, or one edit from one | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
 
 Everything else stays silent, and that is the design. One `.env` serves several
-binaries, so a namespace this binary does not read, and that is no near miss of
+binaries (what is one app's alone sits in its own
+[`apps/<app>/.env`](/configuration/env-cascade/#an-apps-own-files)), so a
+namespace this binary does not read, and that is no near miss of
 one it does, is another binary's — and a near miss is held to both halves of the
 variable for that reason. A namespace under six letters has no room for a typo
 that is not also a word (`auth` and `authz` beside `authn`, `es` beside `ws`), so
@@ -363,9 +368,10 @@ prints for a boot that kept a renamed variable.
 
 ## The `.env` cascade
 
-Values resolve highest-first: real env > pinned in `module.rs` >
-`.env.<<PREFIX>_ENV>.local` > `.env.local` > `.env.<<PREFIX>_ENV>` > `.env`, and a
-process that leaves `<PREFIX>_ENV` unset runs as production. See
+Values resolve highest-first: real env > pinned in `module.rs` (for its whole
+namespace) > the app's own `apps/<app>/.env*`, under `development` and `test`
+alone > `.env.<<PREFIX>_ENV>.local` > `.env.local` > `.env.<<PREFIX>_ENV>` >
+`.env`, and a process that leaves `<PREFIX>_ENV` unset runs as production. See
 [the env cascade](/configuration/env-cascade/#the-active-environment) for the files and
 [the dual-path rule](/configuration/#the-dual-path-rule) for where a pinned
 value sits.

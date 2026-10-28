@@ -74,14 +74,14 @@ Wire it in like any other provider:
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 use nest_rs::ws::WsModule;
 
 use features::chat::PingGateway;
 
 #[module(
     imports = [
-        HttpModule::for_root(HttpConfig { port: 3004, ..Default::default() }),
+        HttpModule::for_root(None),
         WsModule,
     ],
     providers = [PingGateway],

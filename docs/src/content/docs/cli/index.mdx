@@ -43,7 +43,7 @@ current directory (or `-o` path) and reads that manifest.
 | Where you run | Command | Result |
 |---|---|---|
 | Outside a nestrs workspace | `nestrs new hello` | Monorepo at `./hello/` + `apps/hello/` on port **3000** |
-| Inside a nestrs workspace | `nestrs new blog` | Thin app at `apps/blog/` — **next free port** in `module.rs` |
+| Inside a nestrs workspace | `nestrs new blog` | Thin app at `apps/blog/` — **next free port** in `apps/blog/.env` |
 
 If `apps/blog/` already exists, the CLI stops with **`app blog already
 exists`** — it does not overwrite.
@@ -95,6 +95,7 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
     - seed/ the `seed` binary
   - apps/
     - hello/
+      - .env the port
       - src/
         - lib.rs
         - main.rs
@@ -148,13 +149,19 @@ someone looking at a browser — so there is no routeless variant to pick. Delet
 the feature once you have a real one; `nestrs new blog` refuses if a `blog`
 feature already exists, rather than overwriting it.
 
-Ports: the CLI scans existing `apps/*/src/module.rs` and pins the next free one
-in code (same pattern as `auth` → 3001, `api` → 3002, …). Workspace `.env` files
-do **not** set `<PREFIX>_HTTP__PORT` — ports live in each app's `module.rs`:
+Ports: the CLI reads the port each existing app listens on and writes the next
+free one into the new app's own `.env` (same pattern as `auth` → 3001, `api` →
+3002, …). The workspace's root `.env` files do **not** set
+`<PREFIX>_HTTP__PORT`, and no `module.rs` pins it — a pin would take the app's
+whole HTTP namespace off the `.env` cascade:
 
-```rust title="apps/api/src/module.rs"
-HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })
+```bash title="apps/api/.env" frame="terminal"
+NESTRS_HTTP__PORT=3002
 ```
+
+An app's own files are read over the root's under the `development` and `test`
+profiles ([an app's own files](/configuration/env-cascade/#an-apps-own-files));
+a deployment sets the port on the process.
 
 Optional: **`--check`** runs `cargo check` after generation.
 
@@ -404,6 +411,11 @@ Checks:
   the app would refuse at boot — a `_FILE` naming a file it cannot read, a
   variable given both ways — is a blocking issue, and a `_FILE` naming a file
   that holds nothing is `not set`.
+
+`nestrs doctor -p apps/<app>` reads one app as `nestrs run` starts it: from the
+workspace's root, its own `apps/<app>/.env*` over the root's files under the
+`development` and `test` profiles
+([an app's own files](/configuration/env-cascade/#an-apps-own-files)).
 
 Use it after install and before running DB- or Redis-backed apps.
 

@@ -39,11 +39,47 @@ second pass.
 | `.env` | committed | Non-secret defaults shared across environments |
 
 A value **pinned in code** (`Module::for_root(cfg)`) slots in between: below the
-real process env, above every file. The reasoning and the full chain live with
+real process env, above every file — and it takes its whole namespace off the
+files, so the boot names each key a file sets there that it no longer reads.
+The reasoning and the full chain live with
 [the dual-path rule](/configuration/#the-dual-path-rule).
 
 The convention: anything ending in `.local` is gitignored, everything
 else is committed.
+
+## An app's own files
+
+A workspace starts every binary from its root, so the files above are shared:
+every app reads them. What tells one app apart — its port, the audience it
+requires, a signing key only the issuer may hold — goes in that app's own
+directory, beside its `Cargo.toml` (`apps/<app>/` in the workspace
+`nestrs new` scaffolds). Under a declared `development` or `test` profile,
+its four files are read whole over the root's, the order Nx gives a project's
+files over its workspace's:
+
+```
+real env  >  apps/<app>/.env.<environment>.local  >  apps/<app>/.env.local
+          >  apps/<app>/.env.<environment>  >  apps/<app>/.env
+          >  .env.<environment>.local  >  .env.local  >  .env.<environment>  >  .env
+```
+
+```bash title="apps/api/.env"
+NESTRS_HTTP__PORT=3002
+NESTRS_AUTHN__AUDIENCE=http://localhost:3002
+```
+
+So an app's committed `.env` outranks the root's `.env.local`: to change one
+app's key on your machine, write it in that app's own `.env.local`. Its
+`.env.local` stays unread under `test`, as the root's does, and `<PREFIX>_ENV`
+and `NESTRS_ENV_PREFIX` are refused in its files as in the root's.
+
+A deployed profile — `staging`, `production`, or none declared — reads the
+root's files alone. A deployment's binary runs far from the directory it was
+built in, so it names its own port and audience on the process, as
+[the demo's chart](/publish/) does. The directory is the one
+`#[nest_rs::main]` captures where it expands; the test harness reads the
+package under test the same way, and `nestrs doctor -p apps/<app>` reports
+what that app reads.
 
 ## The active environment
 
@@ -131,7 +167,8 @@ Exactly once per process, before your `main` runs:
 
 <Aside type="caution">
 A binary that does not run on `#[nest_rs::main]` calls
-`nest_rs::config::load_cascade(dir, environment)` itself, as its first line:
+`nest_rs::config::load_cascade(dir, environment)` itself, as its first line —
+it reads `dir`'s files alone, no app's own:
 `std::env::set_var` is unsound if it races a read on another thread, so it
 belongs before any runtime or thread exists — never in a task. A tool that only
 needs a database connection can skip it and use

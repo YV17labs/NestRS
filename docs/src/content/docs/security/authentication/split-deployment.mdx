@@ -117,7 +117,8 @@ and so does a private key beside the public key of another pair. A
 `<PREFIX>_AUTHN__SECRET` left beside either key fails the boot as well, naming
 both — whether both come from the environment, from a `.env` file or from code,
 or the environment beside code; a config pinned in code stops `.env` being read
-for the namespace — so moving a service to EdDSA means removing its secret.
+for the namespace, and the boot names each key it shadows — so moving a service
+to EdDSA means removing its secret.
 
 ## Two `main` files, one feature set
 
@@ -130,7 +131,7 @@ for the namespace — so moving a service to EdDSA means removing its secret.
         SeaOrmDatabaseModule,
         ThrottlerModule::for_root(None),
         HealthModule,
-        HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
+        HttpModule::for_root(None),
         AuthnModule::for_root(None),
         SocialModule,
         GithubSocialModule,
@@ -152,11 +153,7 @@ mints tokens, not users.
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
         HealthModule,
-        HttpModule::for_root(HttpConfig {
-            port: 3002,
-            compression: true,
-            ..Default::default()
-        }),
+        HttpModule::for_root(None),
         AuthnModule,
         AuthzModule,
         AuthzGraphqlModule,
@@ -258,13 +255,14 @@ TOKEN=$(curl -sX POST http://localhost:3001/login \
     | jq -r .access_token)
 ```
 
-Deployed, that token opens the assistant and every other resource server
-refuses it, because each app requires an audience of its own — which takes a
-configuration of each app's own: a deployment's per-process environment is one,
-and the demo's chart sets `AUTHN__AUDIENCE` to each app's origin and hands the
-signing key to `auth` alone. Run locally, the demo's apps still read one `.env`,
-so there they share one audience, and one key, until each app has a file of its
-own.
+That token opens the assistant and every other resource server refuses it,
+because each app requires an audience of its own — which takes a configuration
+of each app's own. Deployed, a per-process environment is one: the demo's chart
+sets `AUTHN__AUDIENCE` to each app's origin and hands the signing key to `auth`
+alone. Run locally, each app's own `apps/<app>/.env` is
+([an app's own files](/configuration/env-cascade/#an-apps-own-files)): the
+demo's api requires `http://localhost:3002`, the live app `:3004`, and the
+signing key sits in `apps/auth/.env` alone.
 
 ## Telling clients where the issuer is
 

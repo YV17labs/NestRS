@@ -30,7 +30,7 @@ The data layer crates are
 
 ```rust title="apps/blog/src/module.rs" {3, 10}
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
 use features::authn::AuthnModule;
@@ -40,7 +40,7 @@ use features::posts::PostsHttpModule;
 #[module(imports = [
     SeaOrmModule::for_root(None),
     SeaOrmDatabaseModule,
-    HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
+    HttpModule::for_root(None),
     AuthnModule,
     AuthzModule,
     PostsHttpModule,

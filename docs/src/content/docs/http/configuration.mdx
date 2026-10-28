@@ -7,32 +7,46 @@ sidebar:
 
 Importing `HttpModule::for_root(...)` in `AppModule.imports` attaches the
 HTTP transport at boot. Pass `None` to read every option from the
-environment, or pin `HttpConfig` in code:
+environment — what `nestrs new` scaffolds, the port in the app's own `.env`:
 
 ```rust title="apps/hello/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 
 use features::hello::HelloHttpModule;
 
 #[module(
     imports = [
-        HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
+        HttpModule::for_root(None),
         HelloHttpModule,
     ],
 )]
 pub struct HelloModule;
 ```
 
+```bash title="apps/hello/.env" frame="terminal"
+NESTRS_HTTP__PORT=3000
+```
+
+Or pin `HttpConfig` in code, for what the code means whatever the machine:
+
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 
 #[module(imports = [
-    HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
+    HttpModule::for_root(HttpConfig { compression: true, ..Default::default() }),
 ])]
 pub struct ApiModule;
 ```
+
+A pin takes the whole `<PREFIX>_HTTP__*` namespace off the `.env` cascade —
+every field, the ones `..Default::default()` filled included. The real
+environment still overrides any field, but a key in a `.env` file no longer
+reaches this config, and the boot names each such key at `warn`
+([the dual-path rule](/configuration/#the-dual-path-rule)). So the `.env`
+examples on this page reach an app that pins nothing — the scaffold's —
+and a pinning app reads them from the real environment alone.
 
 The app configures HTTP once. A feature crate that serves over HTTP — one
 another app may compose — declares the dependency with a bare `HttpModule`
@@ -48,7 +62,8 @@ window, the access log and the default security headers on.
 
 Every field of `HttpConfig` is settable both by env var and in the pinned
 struct — the same dual-path rule every config in the framework follows.
-Real env always wins over the `.env` cascade.
+Real env always wins over the `.env` cascade, and a pinned struct over every
+`.env` file.
 
 | Field | Env variable | Default | Pinned form |
 |-------|--------------|---------|-------------|
@@ -149,7 +164,8 @@ keeps one origin's answer from another.
 
 CORS activates only when `cors.origins` is non-empty, whatever else the
 policy sets — the default is no CORS layer. Set the origins (and any other
-knob you need) via either path:
+knob you need) via either path — a file's, below, reaches an app that pins
+no `HttpConfig`:
 
 ```bash title=".env.production" frame="terminal"
 NESTRS_HTTP__CORS_ORIGINS=https://app.example.com,https://admin.example.com
@@ -167,7 +183,6 @@ use nest_rs::http::{HttpCors, HttpConfig, HttpModule};
 
 #[module(imports = [
     HttpModule::for_root(HttpConfig {
-        port: 3002,
         cors: Some(HttpCors {
             origins: vec!["https://app.example.com".into()],
             methods: vec!["GET".into(), "POST".into()],
@@ -286,7 +301,7 @@ the variable.
 Off by default — a production-safe choice: no fingerprint of the
 framework or its version is exposed. Flip on for local development to see
 `Server: nestrs/<crate version>` on every response (the same shape Apache
-and nginx use):
+and nginx use) — from a file when the app pins no `HttpConfig`:
 
 ```bash title=".env.development" frame="terminal"
 NESTRS_HTTP__SERVER_HEADER=true
@@ -594,7 +609,8 @@ Every value is tunable through the dual path. Disable the whole set with
 the master switch, or drop one header by setting its variable to `off` — in
 code, by setting its field to `None`, or `content_type_options` to `false`. A
 blank value is refused at boot, and an empty one counts as unset, as it does for
-every variable, so that header keeps its default:
+every variable, so that header keeps its default. In a file, as here, they reach
+an app that pins no `HttpConfig`:
 
 ```bash title=".env" frame="terminal"
 NESTRS_HTTP__SECURITY_HEADERS=false                    # all off

@@ -9,9 +9,9 @@ import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 
 You add the **`blog`** app to your workspace with the [`nestrs` CLI](/cli/) —
 the same tool from [Getting started](/getting-started/). By the end of this
-page, `nestrs run dev blog` listens on the port pinned in `module.rs` and
-answers `Hello World` on `GET /` — the scaffold proves itself before you write
-a line.
+page, `nestrs run dev blog` listens on the port written into the app's own
+`.env` and answers `Hello World` on `GET /` — the scaffold proves itself before
+you write a line.
 
 <Aside type="note">
 The tutorial is **workspace-only**: shared features under `crates/features/`,
@@ -35,8 +35,8 @@ From the workspace root:
    nestrs new blog
    ```
 
-   Inside an existing workspace this writes `apps/blog/` and picks the
-   **next free HTTP port** in `module.rs` (see
+   Inside an existing workspace this writes `apps/blog/` and the
+   **next free HTTP port** into `apps/blog/.env` (see
    [`nestrs new blog`](/cli/#add-an-app-to-an-existing-workspace) in the CLI
    docs). The command refuses to overwrite if the folder already exists.
 
@@ -46,7 +46,7 @@ From the workspace root:
    nestrs run dev blog
    ```
 
-3. Hit the root route — use the port from `apps/blog/src/module.rs`.
+3. Hit the root route — use the port from `apps/blog/.env`.
 
    ```bash frame="terminal"
    $ curl -i http://localhost:3005/
@@ -71,6 +71,7 @@ there is no `controller.rs` or `service.rs` in the app crate — those live in
 
 <FileTree>
 - apps/blog/
+  - .env the port
   - Cargo.toml
   - src/
     - lib.rs
@@ -117,27 +118,35 @@ harness, to the tests alone, so no release binary carries it. `anyhow` is there
 because `main.rs` writes it, and `tokio` only for the tests, which write
 `#[tokio::test]`: `#[nest_rs::main]` builds the runtime `main` runs on itself.
 
-The root module is where transports come in. `HttpModule::for_root` pins
-the listen port in code — not in `.env`:
+The root module is where transports come in. `HttpModule::for_root(None)`
+pins nothing, so every `<PREFIX>_HTTP__*` setting comes from the environment —
+the listen port from the app's own `.env`:
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 
 use features::blog::BlogHttpModule;
 
 #[module(
     imports = [
-        HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
+        HttpModule::for_root(None),
         BlogHttpModule,
     ],
 )]
 pub struct BlogModule;
 ```
 
-The reference workspace pins `3005` for `blog`. When you scaffold with
+```bash title="apps/blog/.env" frame="terminal"
+NESTRS_HTTP__PORT=3005
+```
+
+The reference workspace gives `blog` port `3005`. When you scaffold with
 `nestrs new blog`, the CLI picks the next free port — yours may differ
-if other apps already exist in the workspace.
+if other apps already exist in the workspace. The workspace's own `.env*`
+files are shared by every app; `apps/blog/.env` is read over them under the
+`development` and `test` profiles, so a value that is `blog`'s alone lives
+there ([an app's own files](/configuration/env-cascade/#an-apps-own-files)).
 
 `BlogModule` has no `providers = [...]` list. A root module composes
 feature modules and lets each own its providers — the
@@ -189,7 +198,7 @@ nextest rejects a filterset naming a binary the workspace does not have.
    ```
 
    The route table prints on every boot, and `app ready` shows the port
-   from your `module.rs`.
+   from your `apps/blog/.env`.
 
 2. In another terminal:
 

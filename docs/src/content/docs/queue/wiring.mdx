@@ -127,7 +127,7 @@ inventory, no read of any queue.
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::schedule::ScheduleModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
@@ -143,11 +143,7 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
         RedisQueueModule,
         ScheduleModule,
         RedisScheduleModule,
-        HttpModule::for_root(HttpConfig {
-            port: 3002,
-            compression: true,
-            ..Default::default()
-        }),
+        HttpModule::for_root(None),
         AudioHttpModule,
         AudioScheduleModule,
     ],

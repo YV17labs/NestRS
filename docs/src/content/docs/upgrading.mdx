@@ -473,6 +473,7 @@ lists what the boot, a log or the wire shows when one is missed.
    |---|---|
    | `HttpConfig::default().with_global_prefix(p)` (and every config `with_*`) | the field in a struct literal over `..Default::default()` |
    | `HealthConfig::default().with_probe_deadline(Duration::from_millis(400))` | `HealthConfig { probe_deadline_ms: 400, ..Default::default() }` |
+   | `HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })` — a pin of what varies by machine or by app — beside `<PREFIX>_HTTP__*` keys in `.env` files | `HttpModule::for_root(None)` and `<PREFIX>_HTTP__PORT=3002` in the app's own `apps/<app>/.env`, read over the root's under `development` and `test`; the deployment sets it on the process. A pin takes its whole namespace off every `.env` file, and the boot names each key it shadows |
    | `RedisModule::for_root(RedisConfig { …, ..Default::default() })` relying on the loopback | `url` written in the pin, or `<PREFIX>_REDIS__URL` in the deployment: no profile holds a URL, and a pinned config reads the process environment, never `.env` |
    | `StorageModule::for_root(StorageConfig { …, ..Default::default() })` relying on the development pair or on plain HTTP | `..StorageConfig::defaults()` for plain HTTP in development and test (with `use nest_rs::config::Config;`); the pair from the deployment's environment in every profile |
    | `GraphqlConfig { emit_sdl, schema_path, .. }`, `OpenApiConfig { emit_document, document_path, .. }` | `emit` and `emit_path` on both; a relative `emit_path` is resolved against the app crate's directory |
@@ -1000,7 +1001,8 @@ lists what the boot, a log or the wire shows when one is missed.
 
 17. **Boot every app, and read its first lines.** A 7.0 boot names what it cannot
     use rather than falling back in silence. No `nest_rs::config` warning means
-    no variable under a namespace the app reads went unread, and none spells such
+    no variable under a namespace the app reads went unread, none sits in a
+    `.env` file beside a config the app pins in code, and none spells such
     a namespace with other separators, in another case or one misspelled segment
     away; a namespace nowhere near any the app reads is taken for another
     binary's and stays silent, so check the names the app should read against
@@ -1116,6 +1118,16 @@ lists what the boot, a log or the wire shows when one is missed.
   Rename what the `suggestion` names. The report, and what it leaves silent, is
   described under
   [A variable nothing reads](/configuration/env-reference/#a-variable-nothing-reads).
+- **A `.env` key beside a config the app pins in code** reaches nothing — the
+  pin takes its whole namespace off the cascade — and the boot names it once,
+  at `warn`, with the import that pinned it. An app still pinning its port:
+
+  ```text frame="terminal"
+   WARN nest_rs::config: config variable from the .env cascade shadowed by a config pinned in code; export it into the real environment, or set it in the pin variable="NESTRS_HTTP__CORS_ORIGINS" namespace="http" pinned_by="`HttpModule::for_root(..)` at `imports[4]` of `ApiModule`"
+  ```
+
+  Pin nothing (`HttpModule::for_root(None)`) and write the port in the app's
+  own `apps/<app>/.env`, or move the key's value into the pin.
 - **The worker's drain window kept under
   `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`** is the one renamed variable
   the boot does not name: it reads `redis__worker` as another binary's

@@ -65,8 +65,8 @@ used to compile or boot is refused before 8.0.
 A `#[config]` struct gains fields in a minor, so name the fields you set and
 end on `..Default::default()`:
 
-```rust title="apps/auth/src/module.rs (from the demo, abridged)"
-HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
+```rust title="apps/api/src/module.rs"
+HttpModule::for_root(HttpConfig { compression: true, ..Default::default() }),
 ```
 
 A literal naming every field stops compiling when a field arrives, and 7.x

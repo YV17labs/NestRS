@@ -173,8 +173,18 @@ setups table, which imports every first-party `for_root` twice.
 `nest-rs-config` resolves each variable through the tiers — deployment, the
 `.env` cascade, defaults — except that a config pinned in code switches its
 whole namespace to deployment-over-pin, and the cascade is not read beside a
-pin. It hands values over, assigns them no meaning, and never arbitrates between
-variables or tiers.
+pin: a field set to its default cannot be told from one `..Default::default()`
+filled, so the cut is the namespace's, and each cascade key it shadows is
+reported (below). It hands values over, assigns them no meaning, and never
+arbitrates between variables or tiers.
+
+- **The cascade has two layers**: the root's files, and under a declared
+  development or test profile the app crate's own directory (the one
+  `#[nest_rs::main]` captures, `apps/<bin>/` in a workspace), read whole over
+  the root's. What identifies one binary of a workspace — its port, its
+  audience, the issuer's key — lives in that layer, never in a pin made to
+  dodge the shared file; a deployed profile reads the root alone. The loader,
+  the test harness and `nestrs doctor` read it alike, each held by its tests.
 
 - **`<KEY>_FILE` is a spelling of `<KEY>`, never a second variable**, and every
   namespaced variable has it (the kernel's pre-container `<PREFIX>_LOG*` and
@@ -219,9 +229,11 @@ variables or tiers.
   mechanics, including the hand-built path through `DurationBounds::check`.
 - **A variable no config claims is reported, never ignored** — at `warn`, once,
   by name and never by value: a key under a namespace this binary read that no
-  config read, and a near miss of such a namespace. Everything else is silent by
-  design: one `.env` serves several binaries, and a namespace this binary does
-  not read is another binary's. The near-miss tests are narrow for that reason
+  config read, a near miss of such a namespace, and a cascade key in a
+  namespace a pin in code cut off the cascade, naming the import that pinned
+  it. Everything else is silent by design: the root's `.env` serves several
+  binaries (what is one app's alone sits in its own layer), and a namespace
+  this binary does not read is another binary's. The near-miss tests are narrow for that reason
   (the algorithm is `unclaimed.rs`'s `//!`); a diagnostic that fires on correct
   configuration teaches operators to filter its target out. *One namespace, one
   type* (`architecture.md`) is refused at the read as

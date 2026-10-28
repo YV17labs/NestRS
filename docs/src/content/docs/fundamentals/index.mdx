@@ -95,12 +95,12 @@ tagline is open on purpose, so it says so;
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 use features::blog::BlogController;
 use features::blog::BlogService;
 
 #[module(
-    imports = [HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() })],
+    imports = [HttpModule::for_root(None)],
     providers = [BlogService, BlogController],
 )]
 pub struct BlogModule;

@@ -13,9 +13,8 @@ response body is encoded with
 process. Off by default — in
 most deployments a reverse proxy already does this.
 
-```rust title="apps/api/src/module.rs (from the demo, abridged)" {3}
+```rust title="apps/api/src/module.rs" {2}
 HttpModule::for_root(HttpConfig {
-    port: 3002,
     compression: true,
     ..Default::default()
 }),
@@ -24,10 +23,12 @@ HttpModule::for_root(HttpConfig {
 ## Wire it in
 
 Like every `HttpConfig` field, the flag is dual-path — pin it in code as
-above, or set it in the environment:
+above, or set it in the environment. The demo's api pins no `HttpConfig`: its
+flag sits in its own `.env` beside its port, and its chart sets it for a
+deployment:
 
-```bash frame="terminal"
-NESTRS_HTTP__COMPRESSION=true nestrs run dev api
+```bash title="apps/api/.env" frame="terminal"
+NESTRS_HTTP__COMPRESSION=true
 ```
 
 A client that advertises support gets an encoded body; one that does not

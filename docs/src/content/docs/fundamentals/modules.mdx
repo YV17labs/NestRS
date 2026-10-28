@@ -32,12 +32,12 @@ At the smallest scale, handlers live in the app itself:
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 use features::blog::BlogController;
 use features::blog::BlogService;
 
 #[module(
-    imports = [HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() })],
+    imports = [HttpModule::for_root(None)],
     providers = [BlogService, BlogController],
 )]
 pub struct BlogModule;
@@ -141,8 +141,7 @@ with configuration at the import site:
 SeaOrmModule::for_root(None)
 
 HttpModule::for_root(HttpConfig {
-    host: "0.0.0.0".into(),
-    port: 4000,
+    compression: true,
     ..Default::default()
 })
 ```
@@ -172,7 +171,8 @@ beside the default's `for_root(None)`, and a static one as a type argument,
 <Aside type="tip">
 Env vars (`<PREFIX>_<NAMESPACE>__<KEY>`) fill a dynamic import's config at boot.
 Pass `None` for env-only; pass a config to set defaults in code that the
-environment can still override **per field** — never a lock, see
+real environment can still override **per field** — never a lock — while
+the `.env` files no longer reach that namespace at all, see
 [the dual-path rule](/configuration/#the-dual-path-rule). For the imports above:
 
 ```rust title="apps/blog/src/module.rs"
@@ -204,7 +204,7 @@ providers — it only composes imports:
         ConfigModule::for_root(),
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
+        HttpModule::for_root(None),
         PostsHttpModule,
     ],
 )]

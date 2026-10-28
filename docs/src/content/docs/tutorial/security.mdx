@@ -200,17 +200,14 @@ use features::authn::AuthnModule;
 use features::authz::AuthzModule;
 use features::users::UsersHttpModule;
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
 #[module(
     imports = [
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        HttpModule::for_root(HttpConfig {
-            port: 3002,
-            ..Default::default()
-        }),
+        HttpModule::for_root(None),
         AuthnModule,
         AuthzModule,
         UsersHttpModule,

@@ -142,8 +142,10 @@ point of reaching for one.
 
 It is **not** the case that a test leaves `std::env` untouched. No config *read*
 writes there, but `TestApp::builder()` calls `load_project_env`, which publishes
-the nearest project `.env` cascade set-if-absent — the harness needs backend
-URLs before any `ConfigService` exists. The merge is bounded (once per process,
+the project's `.env` cascade set-if-absent — the files of the package's Cargo
+workspace root, where `nestrs run` starts the binary, under the package's own
+([an app's own files](/configuration/env-cascade/#an-apps-own-files)) — the
+harness needs backend URLs before any `ConfigService` exists. The merge is bounded (once per process,
 real env still wins, and `.env.local` is skipped under `<PREFIX>_ENV=test`), and a
 `for_root` pin still outranks every cascade value, but a test asserting on a
 variable a committed `.env` happens to define will read the file. Use

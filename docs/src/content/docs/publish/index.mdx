@@ -46,6 +46,12 @@ crate; the worker shares Redis with the API's queue producer. Tokens are
 self-contained JWTs — the API verifies with a public key, never calls the
 issuer over HTTP.
 
+Every app reads the workspace's `.env` files, and what is one app's alone sits
+in its own `apps/<app>/.env`: its port, the audience it requires — its own
+origin, so a token minted for one app is refused by the others — and, for
+`auth` alone, the signing key
+([an app's own files](/configuration/env-cascade/#an-apps-own-files)).
+
 ## Deploy it
 
 The workspace ships a container and a Helm chart. One image holds every binary,

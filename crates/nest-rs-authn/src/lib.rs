@@ -30,6 +30,7 @@
 pub const TARGET: &str = "nest_rs::authn";
 
 mod algorithm;
+mod binding;
 mod config;
 mod credentials;
 mod error;
@@ -64,5 +65,6 @@ pub use strategy::{AUTHENTICATE_TIMEOUT, Strategy};
 pub mod __private {
     //! Called by sibling crates. Not API: may change in any release.
 
+    pub use crate::binding::ResourceBinding;
     pub use crate::guard::{Verdict, authenticate};
 }

@@ -5,11 +5,14 @@ use std::any::TypeId;
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule};
 
+use crate::binding::ResourceBinding;
 use crate::{AuthnConfig, JwtService};
 
 /// DI module that builds a [`JwtService`] from [`AuthnConfig`] and provides it as
 /// global infrastructure (factory phase), so any strategy or handler can inject
-/// `Arc<JwtService>`.
+/// `Arc<JwtService>`. Under a module describing the resource this app serves
+/// (`OAuthResourceModule`), the service is bound to it: the resource is the
+/// audience a token must carry, and its authorization servers the issuers.
 pub struct AuthnModule;
 
 impl AuthnModule {
@@ -35,13 +38,20 @@ impl DynamicModule for AuthnSetup {
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        builder.provide_factory_after::<JwtService, (AuthnConfig,), _, _>(|container| async move {
-            let config = ConfigModule::resolved::<AuthnConfig>(&container)?;
-            let options = (*config)
-                .clone()
-                .into_options()
-                .map_err(anyhow::Error::new)?;
-            JwtService::new(options).map_err(anyhow::Error::new)
-        })
+        // A binding no import provides is waited on by nothing.
+        builder.provide_factory_after::<JwtService, (AuthnConfig, ResourceBinding), _, _>(
+            |container| async move {
+                let config = ConfigModule::resolved::<AuthnConfig>(&container)?;
+                let options = (*config)
+                    .clone()
+                    .into_options()
+                    .map_err(anyhow::Error::new)?;
+                match container.get::<ResourceBinding>() {
+                    Some(binding) => JwtService::bound(options, &binding),
+                    None => JwtService::new(options),
+                }
+                .map_err(anyhow::Error::new)
+            },
+        )
     }
 }

@@ -76,14 +76,20 @@ pub struct AuthnConfig {
     /// Clock skew leeway in seconds (key `LEEWAY_SECS`, default 30), at most
     /// 300 — RFC 7519 §4.1.4's "a few minutes".
     pub leeway_secs: Option<u64>,
-    /// Expected `aud` claim (key `AUDIENCE`). Set ⇒ the claim is **mandatory**
-    /// and must name this service.
+    /// The `aud` this app requires of every token it verifies (key
+    /// `AUDIENCE`), and the one a token it mints for itself carries — a token
+    /// it mints for another resource names that resource instead
+    /// ([`JwtService::sign_for`](crate::JwtService::sign_for)).
     ///
-    /// Unset, a token whose `aud` does not name this service is still refused
-    /// (RFC 7519 §4.1.3); set, a token with no `aud` is refused too. The opt-out
-    /// is [`allow_any_audience`](Self::allow_any_audience), and only that.
+    /// Unset, a token whose `aud` does not name this app is still refused
+    /// (RFC 7519 §4.1.3); set, a token with no `aud` is refused too. Under
+    /// `OAuthResourceModule`, unset is the resource it serves. The opt-out is
+    /// [`allow_any_audience`](Self::allow_any_audience), and only that.
     pub audience: Option<String>,
-    /// Expected `iss` claim (key `ISSUER`). Omitted ⇒ no issuer check.
+    /// The `iss` every token this app mints carries and every token it
+    /// verifies must name (key `ISSUER`). Omitted ⇒ no issuer check — but
+    /// under `OAuthResourceModule` a token's `iss` must be one of its
+    /// authorization servers (RFC 9068 §4), and a set one must be among them.
     pub issuer: Option<String>,
     /// Token lifetime in seconds (key `EXPIRES_IN_SECS`, default 3600), at
     /// least 1 and at most thirty days.
@@ -92,7 +98,8 @@ pub struct AuthnConfig {
     /// accept a token whose `aud` names a service this one is not.
     ///
     /// Restores the confused deputy, so it is refused beside
-    /// [`audience`](Self::audience) and reports itself at `warn` once per boot.
+    /// [`audience`](Self::audience) and beside `OAuthResourceModule`, and
+    /// reports itself at `warn` once per boot.
     pub allow_any_audience: bool,
     /// RFC 9068 explicit typing — stamp `typ: at+jwt` when minting and refuse a
     /// token typed anything else when verifying. Defaults to **on**: §4 states

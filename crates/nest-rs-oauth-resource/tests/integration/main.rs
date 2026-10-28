@@ -8,8 +8,10 @@
     reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
 )]
 
+mod binding;
 mod controller;
 mod interceptor;
+mod module;
 
 use nest_rs_core::{Layer, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};

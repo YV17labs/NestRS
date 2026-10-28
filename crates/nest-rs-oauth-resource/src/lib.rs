@@ -14,10 +14,10 @@
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — RFC 9728 discovery: the metadata document, the
-/// challenge stamped onto a `401`, and the boot-time audience binding.
+/// challenge stamped onto a `401`, and the boot-time token binding.
 pub const TARGET: &str = "nest_rs::oauth::resource";
 
-mod audience;
+mod binding;
 mod config;
 mod controller;
 mod interceptor;

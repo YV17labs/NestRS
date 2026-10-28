@@ -76,3 +76,133 @@ async fn for_root_pins_the_config_and_provides_a_service_built_from_it() {
         "the issuer the seam pinned is the one the service stamps",
     );
 }
+
+/// What `OAuthResourceModule` resolves for the resource this app serves.
+const RESOURCE: &str = "https://api.example";
+const TRUSTED: [&str; 2] = ["https://as-1.example", "https://as-2.example"];
+const SECRET: &str = "binding-secret-padded-to-thirty-2";
+
+#[module(imports = [AuthnModule::for_root(AuthnConfig {
+    secret: Some(SECRET.into()),
+    ..AuthnConfig::default()
+})])]
+struct BoundAuthnHost;
+
+/// A token a sibling issuer on the same key mints as `iss`, for `aud`.
+fn minted(iss: Option<&str>, aud: &str) -> String {
+    let mut options = nest_rs_authn::JwtOptions::new(SECRET);
+    options.issuer = iss.map(str::to_owned);
+    nest_rs_authn::JwtService::new(options)
+        .expect("issuer")
+        .sign_for(
+            aud,
+            &Claims {
+                sub: "user-1".into(),
+                exp: jsonwebtoken::get_current_timestamp() + 3600,
+            },
+        )
+        .expect("sign")
+}
+
+/// RFC 9068 §4: with a resource binding in the container, the verifier the
+/// module builds requires the resource as `aud` and one of the bound issuers
+/// as `iss`, exactly.
+#[tokio::test]
+async fn a_resource_binding_is_the_audience_and_the_issuers_a_token_must_name() {
+    let app = App::builder()
+        .provide(nest_rs_authn::__private::ResourceBinding {
+            audience: RESOURCE.into(),
+            issuers: TRUSTED.iter().map(|&issuer| issuer.to_owned()).collect(),
+        })
+        .module::<BoundAuthnHost>()
+        .build()
+        .await
+        .expect("the bound module boots");
+    let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
+
+    for issuer in TRUSTED {
+        let verified: Claims = jwt
+            .verify(&minted(Some(issuer), RESOURCE))
+            .await
+            .expect("a trusted issuer's token for this resource verifies");
+        assert_eq!(verified.sub, "user-1");
+    }
+    for (label, token) in [
+        (
+            "another resource",
+            minted(Some(TRUSTED[0]), "https://billing.example"),
+        ),
+        (
+            "an untrusted issuer",
+            minted(Some("https://as-3.example"), RESOURCE),
+        ),
+        (
+            "a trusted issuer but for a trailing slash",
+            minted(Some("https://as-1.example/"), RESOURCE),
+        ),
+        ("no issuer", minted(None, RESOURCE)),
+    ] {
+        assert!(
+            matches!(
+                jwt.verify::<Claims>(&token).await,
+                Err(nest_rs_authn::AuthError::InvalidToken)
+            ),
+            "a token from {label} must not verify"
+        );
+    }
+}
+
+/// Without a binding the module builds what the config says, as before.
+#[tokio::test]
+async fn without_a_binding_the_config_alone_decides() {
+    let app = App::builder()
+        .module::<BoundAuthnHost>()
+        .build()
+        .await
+        .expect("boots");
+    let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
+    let token = jwt
+        .sign(&Claims {
+            sub: "user-1".into(),
+            exp: jwt.expiry(),
+        })
+        .expect("sign");
+    jwt.verify::<Claims>(&token)
+        .await
+        .expect("no audience and no issuer configured, none required");
+}
+
+/// A handshake is this service's own: a binding never widens what it meets,
+/// so the client half of an app serving a resource keeps its transactions
+/// with no issuer configured.
+#[tokio::test]
+async fn a_bound_service_still_verifies_its_own_handshakes() {
+    let app = App::builder()
+        .provide(nest_rs_authn::__private::ResourceBinding {
+            audience: RESOURCE.into(),
+            issuers: TRUSTED.iter().map(|&issuer| issuer.to_owned()).collect(),
+        })
+        .module::<BoundAuthnHost>()
+        .build()
+        .await
+        .expect("boots");
+    let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
+
+    let transaction = jwt
+        .sign_handshake(
+            "oauth-tx",
+            &Claims {
+                sub: "state".into(),
+                exp: jwt.expiry_in(600),
+            },
+        )
+        .expect("sign");
+    let back: Claims = jwt
+        .verify_handshake("oauth-tx", &transaction)
+        .expect("its own handshake verifies");
+    assert_eq!(back.sub, "state");
+    assert!(
+        jwt.verify::<Claims>(&transaction).await.is_err(),
+        "and is never an access token"
+    );
+}

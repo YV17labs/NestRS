@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use nest_rs_core::problem::code;
 use nest_rs_core::{Container, Correlation, Posture, Problem, current_request_scope};
-use nest_rs_http::__private::framework_sentence;
+use nest_rs_http::__private::{CanonicalHost, framework_sentence};
 use nest_rs_http::ResponseError as _;
 use nest_rs_http::{
     Body, BoxEndpoint, DetachedWork, Endpoint, HeaderValue, Method, Request, Response, Result,
@@ -91,15 +91,27 @@ impl McpMount {
     ///   step composed;
     /// * the bound `dyn UnitOfWork` each request operation runs its unit of work
     ///   through — without one a `Repo`-backed handler fails **closed**;
-    /// * [`McpConfig`], if `McpModule` was imported, else its defaults;
+    /// * [`McpConfig`], if `McpModule` was imported, else its defaults, its
+    ///   host allowlist admitting the host a module names the deployment by
+    ///   (`OAuthResourceModule`'s resource) unless the list was emptied;
     /// * a registered `dyn SessionStore` (rmcp 3.x cross-instance session
     ///   recovery), if the app provides one;
     /// * the posture the app declared, `McpOptions::posture`.
     pub(crate) fn from_container(container: &Container) -> Self {
-        let config = container
+        let mut config = container
             .get::<McpConfig>()
             .map(|cfg| (*cfg).clone())
             .unwrap_or_default();
+        // An emptied list is an opening the deployment wrote: never closed here.
+        if let Some(host) = container.get::<CanonicalHost>()
+            && !config.allowed_hosts.is_empty()
+            && !config
+                .allowed_hosts
+                .iter()
+                .any(|allowed| allowed == host.as_str())
+        {
+            config.allowed_hosts.push(host.as_str().to_owned());
+        }
 
         if config.allowed_hosts.is_empty() {
             // An empty allowlist turns off rmcp's DNS-rebinding defence.

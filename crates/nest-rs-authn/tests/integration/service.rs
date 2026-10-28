@@ -606,3 +606,86 @@ fn an_expiry_past_the_end_of_time_saturates() {
     assert_eq!(jwt.expiry_in(u64::MAX), u64::MAX);
     assert!(jwt.expiry() > get_current_timestamp());
 }
+
+/// RFC 8707 §2: a token minted for a resource names that resource as its
+/// audience — whatever audience the signer requires of its own — so only a
+/// verifier serving that resource accepts it.
+#[tokio::test]
+async fn a_token_signed_for_a_resource_names_it_and_verifies_only_there() {
+    let secret = "resource-bound-secret-padded-32-b";
+    let with_audience = |audience: &str| {
+        let mut options = JwtOptions::new(secret);
+        options.audience = Some(audience.into());
+        JwtService::new(options).expect("service")
+    };
+    let issuer = with_audience("https://auth.example");
+    let api = with_audience("https://api.example");
+    let assistant = with_audience("https://assistant.example");
+
+    let token = issuer
+        .sign_for("https://api.example", &claims(issuer.expiry(), None))
+        .expect("sign for the api");
+
+    let decoded: TestClaims = api.verify(&token).await.expect("the api accepts it");
+    assert_eq!(decoded.aud.as_deref(), Some("https://api.example"));
+    for elsewhere in [&assistant, &issuer] {
+        assert!(
+            matches!(
+                elsewhere.verify::<TestClaims>(&token).await,
+                Err(AuthError::InvalidToken)
+            ),
+            "a token minted for the api is refused by every other audience",
+        );
+    }
+}
+
+/// A token for a resource names it and nothing else: a blank resource names
+/// none, and claims carrying an `aud` of their own would contradict it.
+#[test]
+fn signing_for_a_resource_refuses_a_blank_one_and_claims_naming_another() {
+    let jwt = service("resource-refusals");
+    for blank in ["", "  "] {
+        let Err(refused @ AuthError::Failed { .. }) =
+            jwt.sign_for(blank, &claims(jwt.expiry(), None))
+        else {
+            panic!("a blank resource must be refused");
+        };
+        assert!(
+            nest_rs_core::error_message(&refused).contains("names no resource"),
+            "{refused:?}"
+        );
+    }
+
+    let mut naming_another = claims(jwt.expiry(), None);
+    naming_another.aud = Some("https://billing.example".into());
+    let Err(refused @ AuthError::Failed { .. }) =
+        jwt.sign_for("https://api.example", &naming_another)
+    else {
+        panic!("claims naming another audience must be refused");
+    };
+    let refused = nest_rs_core::error_message(&refused);
+    assert!(refused.contains("`aud` of their own"), "{refused}");
+    assert!(!refused.contains("billing"), "{refused}");
+}
+
+/// The signer's own issuer, issue time and identifier are stamped on a token
+/// minted for a resource as on one minted for itself.
+#[tokio::test]
+async fn a_token_signed_for_a_resource_carries_the_signers_stamps() {
+    let secret = "resource-stamps-secret-padded-32b";
+    let mut options = JwtOptions::new(secret);
+    options.issuer = Some("https://auth.example".into());
+    let issuer = JwtService::new(options).expect("issuer");
+    let mut options = JwtOptions::new(secret);
+    options.audience = Some("https://api.example".into());
+    options.issuer = Some("https://auth.example".into());
+    let api = JwtService::new(options).expect("api");
+
+    let token = issuer
+        .sign_for("https://api.example", &claims(issuer.expiry(), None))
+        .expect("sign");
+    let stamped: serde_json::Value = api.verify(&token).await.expect("verify");
+    assert_eq!(stamped["iss"], "https://auth.example");
+    assert!(stamped["iat"].is_u64(), "{stamped}");
+    assert!(stamped["jti"].as_str().is_some_and(|id| !id.is_empty()));
+}

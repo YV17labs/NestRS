@@ -30,7 +30,8 @@ use nest_rs_testing::{HeadlessApp, TestAppBuilder};
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerModule};
 use nest_rs_ws::{WsConfig, WsModule};
 
-/// What a row seeds into every app it boots, so its resource opens in process.
+/// What a row seeds into every app it boots, so its resource opens in process,
+/// and the root a module requires beside it.
 type Seeds = fn(TestAppBuilder) -> TestAppBuilder;
 
 /// What an app wired once per app: the kernel's steps and the HTTP surfaces.
@@ -377,9 +378,19 @@ imported_twice!(
     pinned = [OAuthClientModule::for_root(pinned_oauth_client())],
 );
 
+/// The token verifier `OAuthResourceModule` binds to its resource, which an app
+/// imports beside it: a second root, so the row's contest stays at its own
+/// imports.
+#[module(imports = [AuthnModule::for_root(None)])]
+struct ProtectedVerifier;
+
 imported_twice!(
     oauth_resource,
-    seeds = |app| app.provide(pinned_oauth_resource()),
+    seeds = |app| {
+        app.provide(pinned_oauth_resource())
+            .provide(pinned_authn())
+            .module::<ProtectedVerifier>()
+    },
     unpinned = [OAuthResourceModule::for_root(None)],
     pinned = [OAuthResourceModule::for_root(pinned_oauth_resource())],
 );

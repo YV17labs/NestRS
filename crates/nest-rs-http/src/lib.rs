@@ -16,6 +16,7 @@ mod accept_encoding;
 mod access_log;
 mod allow;
 mod body;
+mod canonical_host;
 mod capped;
 pub mod challenge;
 mod client_ip;
@@ -250,6 +251,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::canonical_host::CanonicalHost;
     pub use crate::controller::{
         HttpRouteParts, http_controller_meta, http_route_meta, route_denial_statuses, schema_of,
     };

@@ -222,25 +222,6 @@ async fn a_deployment_that_cannot_name_itself_fails_boot() {
     );
 }
 
-#[tokio::test]
-async fn an_unbound_audience_fails_boot() {
-    #[module(imports = [
-        AuthnModule::for_root(AuthnConfig { secret: Some(SECRET.into()), ..AuthnConfig::default() }),
-        OAuthResourceModule::for_root(resource()),
-    ])]
-    struct Unbound;
-
-    let err = boot_error::<Unbound>("an unbound audience must not boot").await;
-    let text = format!("{err:#}");
-    assert!(
-        text.contains(&nest_rs_config::var_name(
-            <AuthnConfig as nest_rs_config::Namespaced>::NAMESPACE,
-            "AUDIENCE",
-        )),
-        "got: {text}",
-    );
-}
-
 /// RFC 9728 §1.2: a resource identifier uses the https scheme.
 #[tokio::test]
 async fn a_non_https_resource_identifier_is_refused() {

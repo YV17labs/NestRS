@@ -24,8 +24,9 @@ nest-rs-config.workspace = true
 nest-rs-http.workspace = true
 # `RequiredScopes` carries the refused operation's scopes to the edge.
 nest-rs-guards.workspace = true
-# The boot check binds the advertised `resource` to `AuthnConfig.audience`
-# (RFC 8707), and a misconfiguration is an `AuthError`.
+# The verifier `AuthnModule` builds is bound to the advertised resource: its
+# audience (RFC 8707) and its issuers (RFC 9068 §4), and a misconfiguration is
+# an `AuthError`.
 nest-rs-authn.workspace = true
 serde.workspace = true
 # The RFC 9728 document is serialized by hand so zero-valued members are

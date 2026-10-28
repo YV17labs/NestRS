@@ -9,16 +9,22 @@
 //!    declared `#[public]`.
 //! 3. Attaches [`ResourceChallenge`], so every `401` carries `resource_metadata`.
 //!
-//! It also makes `<PREFIX>_AUTHN__AUDIENCE`, optional in
-//! [`AuthnConfig`](nest_rs_authn::AuthnConfig), required — the MCP authorization
-//! spec's confused-deputy defence — and boot fails naming it.
+//! It also binds the token verifier [`AuthnModule`](nest_rs_authn::AuthnModule)
+//! builds to this resource — the MCP authorization spec's confused-deputy
+//! defence: a token is accepted only when its `aud` is the resource (RFC 8707;
+//! `<PREFIX>_AUTHN__AUDIENCE` when set) and its `iss` one of the authorization
+//! servers (RFC 9068 §4). The boot fails when the verifier is missing, or when
+//! what it is configured with contradicts the binding, naming the settings.
+//! And the MCP endpoint's `Host` allowlist admits the host the resource names.
 
 use std::any::TypeId;
 
+use nest_rs_authn::__private::ResourceBinding;
+use nest_rs_authn::AuthnConfig;
 use nest_rs_config::{ConfigModule, endpoint_shown};
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering, module};
+use nest_rs_http::__private::CanonicalHost;
 
-use crate::audience::AudienceBinding;
 use crate::config::OAuthResourceConfig;
 use crate::controller::OAuthResourceController;
 use crate::interceptor::ResourceChallenge;
@@ -28,7 +34,7 @@ use crate::metadata::ProtectedResourceMetadata;
 /// factory only [`OAuthResourceSetup`] queues, so `for_root` is the single seam.
 #[module(
     imports = [ConfigModule::for_feature::<OAuthResourceConfig>()],
-    providers = [OAuthResourceController, ResourceChallenge, AudienceBinding],
+    providers = [OAuthResourceController, ResourceChallenge],
 )]
 struct OAuthResourceHost;
 
@@ -60,12 +66,29 @@ impl DynamicModule for OAuthResourceSetup {
             self.pinned.clone(),
             builder.import::<OAuthResourceHost>(),
         );
-        builder.provide_factory_after::<ProtectedResourceMetadata, (OAuthResourceConfig,), _, _>(
-            |container| async move {
-                let config = ConfigModule::resolved::<OAuthResourceConfig>(&container)?;
-                frozen((*config).clone())
-            },
-        )
+        builder
+            .provide_factory_after::<ProtectedResourceMetadata, (OAuthResourceConfig,), _, _>(
+                |container| async move {
+                    let config = ConfigModule::resolved::<OAuthResourceConfig>(&container)?;
+                    frozen((*config).clone())
+                },
+            )
+            .provide_factory_after::<ResourceBinding, (AuthnConfig, ProtectedResourceMetadata), _, _>(
+                |container| async move {
+                    let metadata = container.get::<ProtectedResourceMetadata>().ok_or_else(|| {
+                        anyhow::anyhow!("the protected resource metadata did not resolve")
+                    })?;
+                    crate::binding::bind(container.get::<AuthnConfig>().as_deref(), &metadata)
+                },
+            )
+            .provide_factory_after::<CanonicalHost, (ProtectedResourceMetadata,), _, _>(
+                |container| async move {
+                    container
+                        .get::<ProtectedResourceMetadata>()
+                        .and_then(|metadata| CanonicalHost::of(metadata.resource()))
+                        .ok_or_else(|| anyhow::anyhow!("the protected resource names no host"))
+                },
+            )
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {

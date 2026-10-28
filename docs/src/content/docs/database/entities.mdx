@@ -151,21 +151,40 @@ response. Because exposure is opt-in, they stay off the wire by
 default, and a column a future migration adds never leaks until someone
 deliberately exposes it.
 
-The wire is not the only place a secret prints: sea-orm derives `Debug` for
-the `ActiveModel`, so a `Set` hash shows up in any `{:?}` of it. Give a secret
-column a value type whose `Debug` says nothing — the demo stores its hash as
-`PasswordHash`, a `DeriveValueType` over `String` that prints `<redacted>`.
+The wire is not the only place a secret prints: the `Model` and the
+`ActiveModel` derive `Debug`, and a reply or a log line can serialize a row.
+Type a secret column as `nest_rs::core::Secret` — its `Debug` and its
+serialization both say `<redacted>`, and the column stores and reads its
+value's own type:
+
+```rust title="crates/features/src/users/entities/user.rs (from the demo, abridged)"
+use nest_rs::core::Secret;
+// …
+#[derive(Clone, Debug, DeriveEntityModel)]
+// …
+pub struct Model {
+    // …
+    pub password_hash: Option<Secret<String>>,
+    // …
+}
+```
+
+The service that verifies the hash reads it with `expose_secret()`, and
+`#[expose]` refuses a `Secret` column at compile time: a secret never crosses
+the wire.
 
 <Aside type="caution">
 Response masking reconstructs the full row from the wire body to apply
 `Ability::mask`, which needs a default for every unexposed column. The
 macro provides one for the trivial scalar types (`String`, `Option`,
-`bool`, numbers). A hidden column of a type it can't default — `Uuid`,
-a timestamp, `Decimal`, a custom enum — takes `#[wire_default]` (its
+`bool`, numbers), and a `Secret` column takes its value's. A hidden
+column of a type it can't default — `Uuid`, a timestamp, `Decimal`, a
+custom enum, a `Secret<Vec<u8>>` — takes `#[wire_default]` (its
 type's `Default`) or `#[wire_default(expr)]`; without one, a masked
-response fails closed with a **500**. A rule reading a hidden column
-decides no pushed row, so a column an ability rule predicates on is best
-left **exposed**, read-only.
+response fails closed with a **500**. A `Secret` column is filled with
+the value it holds, never the `<redacted>` it serializes as. A rule
+reading a hidden column decides no pushed row, so a column an ability
+rule predicates on is best left **exposed**, read-only.
 See [Response masking](/security/authorization/response-masking/).
 </Aside>
 

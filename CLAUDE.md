@@ -119,7 +119,9 @@ A name and its path say the same thing, and a name is judged in its set.
   `false` or a default in its place, nor a log while the caller hears success.
 - **No exposure outside `#[expose]`**, and no serializer-shaped third place.
 - **No payload value or secret in an error, log line, stored record or reply**:
-  a decode failure says where, what kind and what was expected, never the value.
+  a decode failure says where, what kind and what was expected, never the value;
+  a secret a field holds is a `nest_rs::core::Secret`, which prints and
+  serializes `<redacted>` (`decisions/secret-redacted-by-type.md`).
 - **No discovery without module-gating**: what an `inventory` entry mounts or
   exposes serves only through an app importing its module
   (`decisions/forward-principal.md`).

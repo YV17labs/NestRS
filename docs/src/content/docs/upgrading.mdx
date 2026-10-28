@@ -497,6 +497,9 @@ lists what the boot, a log or the wire shows when one is missed.
    | `Material { bytes, path: None }` | `Material::inline(bytes)` |
    | `Throttle { limit, window }` and its fields, on the rate limiter | `Throttle::new(limit, window)`, `.limit()`, `.window()` — a window under a millisecond is refused |
    | `ThrottlerGuard::new(store, limit)` | gone: `ThrottlerModule::for_root` builds the guard; a `ThrottlerConfig` literal gains `pseudonym_key` |
+   | a `String` or a `format!` given to `SeaOrmConfig::url`, `RedisConfig::url`, `StorageConfig::access_key` / `secret_key`, `ThrottlerConfig::pseudonym_key`, `AuthnConfig::secret` / `private_key`, or `client_secret` on `OAuthClientConfig`, `GithubSocialConfig`, `GoogleSocialConfig` | the same with `.into()`: each is a `nest_rs::core::Secret<String>` (in an `Option` where it was one); a literal `"…".into()` compiles as it was |
+   | `config.url`, `config.secret`, `config.client_secret` read as a string | `config.url.expose_secret()`: `Debug` prints `<redacted>` in its place |
+   | a secret field of your own config, kept out of logs by a hand-written `Debug` or by no `Debug` | `pub api_key: Secret<String>` and `#[derive(Debug)]`, read with `expose_secret()`; a `custom(function = …)` rule on it takes `&Secret<String>` |
 
    **Two values of one type are two types.** String-keyed injection is gone: a
    second Redis, or a second value your app builds, is a named instance — a
@@ -616,6 +619,9 @@ lists what the boot, a log or the wire shows when one is missed.
     | `Repo::<E>::conn()`, and a query run on it (`Entity::find()….all(&conn)`, `active.insert(&conn)`) | `Repo::<E>::scoped(action)` with SeaORM's builders, then `.all()`; an ability-less read `Repo::unscoped`, an insert `Creatable::create_from_active` or `Repo::insert_unscoped(active)` |
     | `.all(&conn)`, `.one(&conn)`, `.count(&conn)`, `.exists(&conn)` on `Repo::scoped`, `with_tombstones`, `unscoped`, `unscoped_by_id` | `.all()`, `.one()`, `.count()`, `.exists()`: a `RepoSelect<E>` runs on the ambient executor |
     | `Repo::insert_unscoped(active, &conn)`, `resolve_unique_slug(&conn, column, …)` | `Repo::insert_unscoped(active)`, `resolve_unique_slug::<E>(column, …)` |
+    | a secret column typed as a newtype with a hand-written `Debug` (`PasswordHash`), and an `impl Debug for Model` / `ModelEx` restating every column to hide it | `pub password_hash: Option<Secret<String>>` and `#[derive(Clone, Debug, DeriveEntityModel)]`; the service reads `hash.expose_secret()` |
+    | `#[expose]` on a secret column | refused at compile time: drop the `#[expose]` — a `Secret` never crosses the wire |
+    | a row or a struct serialized with its secret and read back (a cache, a payload) | a `Secret` serializes as `"<redacted>"`: store the value itself, read through `expose_secret()`, where you mean to keep it |
     | `nest_rs::seaorm::Executor` | `nest_rs::seaorm::SeaOrmExecutor` |
     | `nest_rs::seaorm::{with_request_executor, with_job_executor}(executor, fut)`; `nest_rs::seaorm::with_executor` or `nest_rs::database::with_executor` | `nest_rs::database::{with_request_executor, with_job_executor}(executor.into(), fut)`, which name the scope |
     | `nest_rs::seaorm::{current_executor, ExecutorScope, current_executor_scope}` | `nest_rs::database::{ExecutorScope, current_executor_scope}`; a statement of a service's own goes through `Repo` |
@@ -694,6 +700,8 @@ lists what the boot, a log or the wire shows when one is missed.
     | `TokenError::InvalidClient` built or matched | `TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretBasic)` for a client refused over the `Authorization` header, `ClientSecretPost` for credentials in the body, `None` for none; matched as `InvalidClient(_)` |
     | `TokenError::InvalidClient` answered for a rejected resource-owner password | `TokenError::InvalidGrant` (`400 invalid_grant`) |
     | `RegisteredClient { client_id, client_secret, scopes, payload }` / `AuthenticatedClient { payload, scopes }` | `RegisteredClient::new(client_id, client_secret, scopes, resources, payload)` / `AuthenticatedClient::new(client_id, scopes, resources, payload)`: the RFC 8707 resources the client's tokens may be minted for |
+    | `client.client_secret`, `response.access_token`, `tokens.access_token` / `id_token` / `refresh_token`, `JwtKey::Hmac(secret)` or `JwtKey::Pem { private_pem, .. }` read as a string | `.expose_secret()` on each: they are `nest_rs::core::Secret<String>` |
+    | `profile.email.as_deref()`, `profile.name.clone()` on a `SocialProfile` | `profile.email.as_ref().map(\|e\| e.expose_secret().as_str())`: a provider's email and name are `Option<Secret<String>>`, which `Debug` prints as `Some(<redacted>)` |
     | a client registry in configuration, `[{"client_id": …, "scopes": […], "payload": …}]` | each client lists `"resources": [...]`, the URIs of the resource servers it calls; a registry without it fails the boot |
     | `jwt.sign(&claims)` minting an access token another app verifies | `jwt.sign_for(audience, &claims)`, `audience` the resource it is for — at a token endpoint `client.audience_for(&request.resource)?`, which answers RFC 8707's `invalid_target` for a resource the client is not registered for; `sign` stamps this app's own audience, for what it mints for itself |
     | `<PREFIX>_AUTHN__AUDIENCE` set to `<PREFIX>_OAUTH__RESOURCE__RESOURCE` beside `OAuthResourceModule` | delete it: the resource is the audience. Keep it only for an audience your authorization server mints by policy |
@@ -1300,6 +1308,11 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A tool that scrapes stderr for `panicked at`** finds nothing under
   `#[nest_rs::main]`: read the `error` events on `nest_rs::app`, or the unit's
   own line for a panic it contains.
+- **A secret field given a `String`** fails to compile, `expected Secret<String>,
+  found String`, and one read as a string `no method named … found for struct
+  Secret`: add `.into()`, or read it with `.expose_secret()`. An `#[expose]` left
+  on a secret column fails with ``#[expose]: `password_hash` holds a `Secret`,
+  which never crosses the wire``.
 
 ## Reference
 

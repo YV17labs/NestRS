@@ -283,6 +283,17 @@ through `nest_rs::config::endpoint_shown`, which keeps its scheme, host, port
 and path and leaves out the userinfo, query and fragment a credential travels
 in.
 
+**A credential is a `Secret`.** Type a field holding a password, a key or a
+URL that carries one as `nest_rs::core::Secret<String>`: its `Debug` prints
+`<redacted>`, so the config derives `Debug` and a `{:?}` of it in a log line
+holds nothing to steal. A literal still reads `"…".into()`, a value read from
+the environment is `env.get("API_KEY")?.map(Secret::new)`, and the call that
+needs the value reads it with `expose_secret()`. A `#[validate(length(…))]`
+rule judges the value, and its refusal names the field with the placeholder
+where `validator` would list the value. The framework's own configs hold their
+credentials this way: `SeaOrmConfig::url`, `RedisConfig::url`, the storage
+pair, the JWT secret and private key, every OAuth client secret.
+
 **A structured value is refused without its content, whichever spelling gave
 it.** `env.json::<T>("KEY")?` decodes a JSON value as any `Deserialize` type, and
 a value that does not decode fails the boot saying where in it it failed, the

@@ -247,7 +247,7 @@ each with its `_FILE` spelling:
 
 ```rust title="from nest-rs-redis's config, abridged"
 #[config(namespace = "redis")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RedisConfig {
     // …
     pub tls: ClientTls,

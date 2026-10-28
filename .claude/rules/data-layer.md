@@ -231,9 +231,11 @@ column. An irreconcilable body or a missing ambient ability fails closed on
 every transport.
 
 Rebuilding needs a value for every unexposed column. The macro defaults the
-safe scalars, any other hidden column takes `#[wire_default(…)]` (a placeholder
-stripped before the body ships), and the macro names every column it may
-invent and the key of every column it exposes. **A rule
+safe scalars and a `Secret` of one (a secret column is never exposed, held by
+`#[expose]`'s refusal), any other hidden column takes `#[wire_default(…)]` (a
+placeholder stripped before the body ships), a `Secret` filled with its
+value's, over the `<redacted>` a raw `Model` carries; and the macro names
+every column it may invent and the key of every column it exposes. **A rule
 the in-memory mask cannot decide — a relation, an unexposed column, one the
 value left out — is trusted to the `Repo` read on a decorated reply and refused
 on a pushed value** (a subscription item, `masked_reply`): only the read

@@ -234,7 +234,7 @@ struct GoogleUser {
     name: String,
 }
 
-let profile: GoogleUser = self.client.userinfo(&tokens.access_token).await?;
+let profile: GoogleUser = self.client.userinfo(tokens.access_token.expose_secret()).await?;
 ```
 
 Mapping the provider profile into your principal (looking the user up

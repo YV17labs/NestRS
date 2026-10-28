@@ -193,7 +193,8 @@ impl SocialProvider for AcmeProvider {
 
     fn profile<'a>(&'a self, tokens: &'a TokenSet) -> ProfileFuture<'a> {
         Box::pin(async move {
-            let me: AcmeUser = self.client.fetch("https://api.acme.dev/me", &tokens.access_token).await?;
+            let token = tokens.access_token.expose_secret();
+            let me: AcmeUser = self.client.fetch("https://api.acme.dev/me", token).await?;
             Ok(SocialProfile::new("acme", me.id.to_string())
                 .with_email(me.email, me.email_verified)
                 .with_name(me.name))
@@ -214,14 +215,18 @@ registry asks before it separates *inert* from *misconfigured*:
 impl SocialProviderConfig for AcmeSocialConfig {
     fn is_unconfigured(&self) -> bool {
         self.client_id.is_empty()
-            && self.client_secret.is_empty()
+            && self.client_secret.expose_secret().is_empty()
             && self.redirect_url.is_empty()
     }
 }
 ```
 
 Report `false` for a *partially* set config — that is what makes it fail
-`validate` and abort boot instead of vanishing.
+`validate` and abort boot instead of vanishing. The client secret is a
+`nest_rs::core::Secret<String>`, as `OAuthClientConfig`'s is, so no `Debug`
+prints it. The redirect is a URL whose userinfo or query may carry a
+credential, so the GitHub and Google configs write their `Debug` and show it
+through `nest_rs::config::endpoint_shown`; yours does the same.
 
 The config also composes the `OAuthClientConfig` the shared client takes:
 your provider's endpoints, the deployment's credentials and its redirect.

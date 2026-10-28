@@ -50,12 +50,14 @@ is handed — `Default`, or the value an app pinned:
 
 ```rust title="from nestrs-social-probe, a package-shaped fixture, abridged"
 #[config(namespace = "social_probe")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ProbeSocialConfig {
     /// The OAuth client id.
     #[validate(length(min = 1))]
     pub client_id: String,
-    // …
+    /// The OAuth client secret.
+    #[validate(length(min = 1))]
+    pub client_secret: Secret<String>,
 }
 // …
 
@@ -63,11 +65,18 @@ impl Config for ProbeSocialConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
         Ok(Self {
             client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
-            client_secret: env.get("CLIENT_SECRET")?.unwrap_or(base.client_secret),
+            client_secret: env
+                .get("CLIENT_SECRET")?
+                .map(Secret::new)
+                .unwrap_or(base.client_secret),
         })
     }
 }
 ```
+
+A credential is a `nest_rs::core::Secret`, so the struct derives `Debug` and
+still prints `<redacted>` in its place; the code that needs the value reads it
+with `expose_secret()`.
 
 Every field is settable both ways — from `<PREFIX>_SOCIAL_PROBE__CLIENT_ID`
 and from a pinned struct — and a field your users can only reach one way is a

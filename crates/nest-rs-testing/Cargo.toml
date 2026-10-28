@@ -69,6 +69,9 @@ tokio.workspace = true
 tokio-util.workspace = true
 # Every e2e boot loads the project's `.env` via `load_project_env` — normal dep.
 nest-rs-config.workspace = true
+# `load_project_env` reads the package's Cargo workspace root off its manifests,
+# with the TOML parser the CLI reads them with.
+toml_edit.workspace = true
 # Behind `tls`.
 rcgen = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
@@ -180,6 +183,9 @@ nest-rs-server-timing = { path = "../nest-rs-server-timing" }
 nest-rs-static-files = { path = "../nest-rs-static-files" }
 nest-rs-storage = { path = "../nest-rs-storage" }
 nest-rs-throttler = { path = "../nest-rs-throttler" }
+# `env.rs`'s unit test lays out a repository of packages to find the
+# project's root in, removed when it drops.
+tempfile.workspace = true
 
 [lints]
 workspace = true

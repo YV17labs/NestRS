@@ -88,6 +88,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::dotenv::load_app_cascade;
     pub use crate::namespace::ConfigNamespace;
     #[cfg(feature = "tls")]
     pub use crate::tls::{PairRefusal, certified_key, crypto_provider};

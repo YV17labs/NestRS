@@ -200,6 +200,47 @@ fn a_cascade_naming_its_own_selector_blocks() {
     );
 }
 
+/// `nestrs doctor -p apps/<bin>` reads the app as `nestrs run` starts it: its
+/// own files over its workspace root's, under a development or test profile.
+#[test]
+fn doctor_reads_an_app_s_own_files_over_its_workspace_root() {
+    let workspace = tempfile::tempdir().expect("a workspace");
+    let root = workspace.path();
+    let app = root.join("apps/api");
+    std::fs::create_dir_all(&app).expect("the app's directory");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/*\", \"apps/*\"]\n",
+    )
+    .expect("write the workspace manifest");
+    std::fs::write(root.join(".env"), "NESTRS_SEAORM__URL=postgres://x\n").expect("write");
+    std::fs::write(app.join(".env"), "NESTRS_HTTP__PORT=3002\n").expect("write");
+
+    let development = stdout(&doctor_from(
+        root,
+        Some(&app),
+        &[("NESTRS_ENV", "development")],
+    ));
+    assert!(
+        development.contains("NESTRS_HTTP__PORT: set"),
+        "{development}"
+    );
+    assert!(
+        development.contains("NESTRS_SEAORM__URL: set"),
+        "{development}"
+    );
+
+    let deployed = stdout(&doctor_from(root, Some(&app), &[]));
+    assert!(!deployed.contains("NESTRS_HTTP__PORT: set"), "{deployed}");
+    assert!(deployed.contains("NESTRS_SEAORM__URL: set"), "{deployed}");
+
+    let at_the_root = stdout(&doctor_from(root, None, &[("NESTRS_ENV", "development")]));
+    assert!(
+        !at_the_root.contains("NESTRS_HTTP__PORT: set"),
+        "{at_the_root}"
+    );
+}
+
 const NAMESPACE: &str = "mirror";
 const KEY: &str = "URL";
 

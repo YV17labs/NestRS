@@ -90,22 +90,32 @@ pub(crate) fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
         ..Default::default()
     };
 
-    match crate::context::NestrsWorkspace::discover(&start) {
-        Ok(Some(_)) => report.in_nestrs_workspace = true,
-        Ok(None) => {}
-        Err(e) => report.workspace_error = Some(e.to_string()),
-    }
+    // Examining an app's own directory reads it as `nestrs run` starts the app:
+    // from its workspace's root, its own files layered over the root's.
+    let (root, app) = match crate::context::NestrsWorkspace::discover(&start) {
+        Ok(Some(ws)) => {
+            report.in_nestrs_workspace = true;
+            let own = start.canonicalize().is_ok_and(|start| start != ws.root);
+            let app = own.then(|| start.clone());
+            (ws.root, app)
+        }
+        Ok(None) => (start.clone(), None),
+        Err(e) => {
+            report.workspace_error = Some(e.to_string());
+            (start.clone(), None)
+        }
+    };
 
     report.env_prefix_source = EnvPrefixSource::detect();
 
-    let cascade = cascade_text(&start, report.env_prefix(), process_env);
+    let cascade = cascade_text(&root, app.as_deref(), report.env_prefix(), process_env);
     report.cascade_refusals = cascade_refusals(process_env, &cascade, report.env_prefix());
     report.env_vars = CHECKED
         .iter()
         .map(|&(namespace, key, always_reported)| {
             let name = crate::context::var_name(report.env_prefix(), namespace, key);
             EnvVar {
-                resolution: resolve_variable(process_env, &cascade, &name, &start),
+                resolution: resolve_variable(process_env, &cascade, &name, &root),
                 name,
                 always_reported,
             }
@@ -345,10 +355,16 @@ pub fn cascade_refusals(
     refused
 }
 
-/// Every cascade file rooted at `dir`, concatenated most specific first, as
+/// Every cascade file rooted at `root`, under `app`'s own under a development
+/// or test profile, concatenated most specific first, as
 /// `nest_rs_config::dotenv` reads them — `.env.local` skipped under `test`.
 /// `real` is the environment the selector is read from.
-fn cascade_text(dir: &Path, env_prefix: &str, real: impl Fn(&str) -> Option<OsString>) -> String {
+fn cascade_text(
+    root: &Path,
+    app: Option<&Path>,
+    env_prefix: &str,
+    real: impl Fn(&str) -> Option<OsString>,
+) -> String {
     let declared = real(&format!("{env_prefix}_ENV")).and_then(|value| value.into_string().ok());
     let env = cascade_environment(declared.as_deref());
     let mut files = vec![format!(".env.{env}.local")];
@@ -357,9 +373,11 @@ fn cascade_text(dir: &Path, env_prefix: &str, real: impl Fn(&str) -> Option<OsSt
     }
     files.push(format!(".env.{env}"));
     files.push(".env".to_owned());
-    files
-        .iter()
-        .filter_map(|file| std::fs::read_to_string(dir.join(file)).ok())
+    let app = app.filter(|_| matches!(env, "development" | "test"));
+    app.into_iter()
+        .chain([root])
+        .flat_map(|dir| files.iter().map(move |file| dir.join(file)))
+        .filter_map(|path| std::fs::read_to_string(path).ok())
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -595,10 +613,55 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nestrs-doctor-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         std::fs::write(dir.join(".env"), "NESTRS_SEAORM__URL=postgres://x\n").expect("write");
-        let cascade = cascade_text(&dir, "NESTRS", real(&[]));
+        let cascade = cascade_text(&dir, None, "NESTRS", real(&[]));
         assert!(present(real(&[]), &cascade, "NESTRS_SEAORM__URL"));
         assert!(!present(real(&[]), &cascade, "NESTRS_REDIS__URL"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An app's own files are read whole over the root's under development and
+    /// test, and never under a deployed profile — the loader's app layer.
+    #[test]
+    fn an_app_s_own_files_are_read_over_the_root_under_development_and_test() {
+        let workspace = tempfile::tempdir().expect("a workspace");
+        let root = workspace.path();
+        let app = root.join("apps/api");
+        std::fs::create_dir_all(&app).expect("the app's directory");
+        std::fs::write(
+            root.join(".env"),
+            "NESTRS_HTTP__PORT=3000\nNESTRS_SEAORM__URL=postgres://x\n",
+        )
+        .expect("write");
+        std::fs::write(root.join(".env.local"), "NESTRS_HTTP__HOST=0.0.0.0\n").expect("write");
+        std::fs::write(
+            app.join(".env"),
+            "NESTRS_HTTP__PORT=3002\nNESTRS_HTTP__HOST=::1\n",
+        )
+        .expect("write");
+
+        for profile in ["development", "test"] {
+            let cascade =
+                cascade_text(root, Some(&app), "NESTRS", real(&[("NESTRS_ENV", profile)]));
+            assert_eq!(
+                cascade_value(&cascade, "NESTRS_HTTP__PORT").as_deref(),
+                Some("3002")
+            );
+            assert_eq!(
+                cascade_value(&cascade, "NESTRS_HTTP__HOST").as_deref(),
+                Some("::1"),
+                "the app's committed file outranks the root's `.local` ({profile})",
+            );
+            assert!(present(real(&[]), &cascade, "NESTRS_SEAORM__URL"));
+        }
+        for profile in ["production", "staging"] {
+            let cascade =
+                cascade_text(root, Some(&app), "NESTRS", real(&[("NESTRS_ENV", profile)]));
+            assert_eq!(
+                cascade_value(&cascade, "NESTRS_HTTP__PORT").as_deref(),
+                Some("3000"),
+                "a deployed profile reads the root alone ({profile})",
+            );
+        }
     }
 
     /// The selector is the handed environment's, classified as the loader
@@ -612,12 +675,12 @@ mod tests {
             .expect("write");
         std::fs::write(dir.join(".env.local"), "NESTRS_SEAORM__URL=postgres://x\n").expect("write");
 
-        let prod = cascade_text(&dir, "NESTRS", real(&[("NESTRS_ENV", "prod")]));
+        let prod = cascade_text(&dir, None, "NESTRS", real(&[("NESTRS_ENV", "prod")]));
         assert!(
             present(real(&[]), &prod, "NESTRS_REDIS__URL"),
             "prod reads .env.production"
         );
-        let test = cascade_text(&dir, "NESTRS", real(&[("NESTRS_ENV", "test")]));
+        let test = cascade_text(&dir, None, "NESTRS", real(&[("NESTRS_ENV", "test")]));
         assert!(
             !present(real(&[]), &test, "NESTRS_SEAORM__URL"),
             "test skips .env.local"
@@ -627,7 +690,7 @@ mod tests {
             "NESTRS_STORAGE__URL=s3://dev\n",
         )
         .expect("write");
-        let unset = cascade_text(&dir, "NESTRS", real(&[]));
+        let unset = cascade_text(&dir, None, "NESTRS", real(&[]));
         assert!(
             present(real(&[]), &unset, "NESTRS_REDIS__URL"),
             "an undeclared process reads .env.production"
@@ -799,7 +862,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nestrs-doctor-acme-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         std::fs::write(dir.join(".env"), "ACME_SEAORM__URL=postgres://x\n").expect("write");
-        let cascade = cascade_text(&dir, "ACME", real(&[]));
+        let cascade = cascade_text(&dir, None, "ACME", real(&[]));
         assert!(present(real(&[]), &cascade, "ACME_SEAORM__URL"));
         assert!(
             !present(real(&[]), &cascade, "NESTRS_SEAORM__URL"),

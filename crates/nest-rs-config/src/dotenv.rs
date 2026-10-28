@@ -6,6 +6,12 @@
 //!
 //! `.env.local` is skipped under [`Environment::Test`] so tests stay hermetic.
 //!
+//! Under a declared development or test profile, the app's own directory — the
+//! crate `#[nest_rs::main]` expanded in, `apps/<bin>/` in a workspace — holds a
+//! layer of the same four files, read whole over the root's (Nx's order): the
+//! one place a value that identifies one binary of a workspace is written for
+//! it alone. A deployed profile reads the root alone.
+//!
 //! The cascade is parsed once into an in-crate map that `env_var` consults under
 //! the real process env, so resolving config **never mutates the process
 //! environment** (`set_var` is unsound against a concurrent `getenv`). Two
@@ -23,15 +29,27 @@ use nest_rs_core::EnvPrefix;
 use crate::environment::Environment;
 
 /// The parsed `.env` cascade for the active [`Environment`], rooted at the
-/// current directory. Built once, lazily, without mutating the process env.
+/// current directory under the app's own layer. Built once, lazily, without
+/// mutating the process env.
 pub(crate) fn dotenv_values() -> &'static HashMap<String, String> {
     static VALUES: OnceLock<HashMap<String, String>> = OnceLock::new();
-    VALUES.get_or_init(|| cascade_map(Path::new("."), Environment::from_env()))
+    VALUES.get_or_init(|| {
+        cascade_map(
+            Path::new("."),
+            nest_rs_core::__private::app_dir(),
+            Environment::from_env(),
+        )
+    })
 }
 
-/// Parse the `.env` cascade rooted at `dir` into a map (most-specific file
-/// wins), without touching the process environment.
-pub(crate) fn cascade_map(dir: &Path, env: Environment) -> HashMap<String, String> {
+/// Parse the `.env` cascade rooted at `root` into a map (most-specific file
+/// wins), under `app`'s own files when the profile reads them, without
+/// touching the process environment.
+pub(crate) fn cascade_map(
+    root: &Path,
+    app: Option<&Path>,
+    env: Environment,
+) -> HashMap<String, String> {
     let e = env.as_str();
     // Most specific first: `or_insert` makes the first writer win.
     let mut files = vec![format!(".env.{e}.local")];
@@ -42,12 +60,26 @@ pub(crate) fn cascade_map(dir: &Path, env: Environment) -> HashMap<String, Strin
     files.push(".env".to_owned());
 
     let mut values = HashMap::new();
-    for file in files {
-        merge_file(&dir.join(file), &mut values);
+    for dir in app_layer(root, app, env).into_iter().chain([root]) {
+        for file in &files {
+            merge_file(&dir.join(file), &mut values);
+        }
     }
     assert_prefix_not_from_cascade(&values);
     assert_environment_not_from_cascade(&values);
     values
+}
+
+/// `app`, when its files form a layer of their own: under a development or
+/// test profile only — a deployment's binary runs far from the directory it
+/// was built in — and never the root itself, read once.
+fn app_layer<'a>(root: &Path, app: Option<&'a Path>, env: Environment) -> Option<&'a Path> {
+    let app = app.filter(|_| !env.is_deployed())?;
+    let same = matches!(
+        (app.canonicalize(), root.canonicalize()),
+        (Ok(app), Ok(root)) if app == root
+    );
+    (!same).then_some(app)
 }
 
 /// Abort if the cascade tries to name the env prefix: the prefix chose the
@@ -157,7 +189,14 @@ fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
 /// }
 /// ```
 pub fn load_cascade(dir: &Path, env: Environment) {
-    publish(&cascade_map(dir, env));
+    publish(&cascade_map(dir, None, env));
+}
+
+/// [`load_cascade`] for the app whose own directory is `app`, its files read
+/// over `root`'s under a development or test profile: what the test harness
+/// runs for the package under test.
+pub fn load_app_cascade(root: &Path, app: &Path, env: Environment) {
+    publish(&cascade_map(root, Some(app), env));
 }
 
 /// Publish the cascade already parsed into the in-crate map.
@@ -493,6 +532,132 @@ mod tests {
         });
     }
 
+    /// The app's four files, then the root's: a value that identifies one
+    /// binary of a workspace is written in its own directory alone.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn an_app_layer_is_read_whole_over_the_root_under_development() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_dir("apps/api")?;
+            jail.create_file(".env", "LAYER_A=root\nLAYER_B=root\nLAYER_C=root")?;
+            jail.create_file(".env.local", "LAYER_C=root_local")?;
+            jail.create_file(".env.development", "LAYER_D=root_dev")?;
+            jail.create_file("apps/api/.env", "LAYER_A=app\nLAYER_C=app\nLAYER_D=app")?;
+            let map = cascade_map(
+                Path::new("."),
+                Some(Path::new("apps/api")),
+                Environment::Development,
+            );
+            assert_eq!(map.get("LAYER_A").map(String::as_str), Some("app"));
+            assert_eq!(map.get("LAYER_B").map(String::as_str), Some("root"));
+            assert_eq!(
+                map.get("LAYER_C").map(String::as_str),
+                Some("app"),
+                "the app's committed file outranks every file of the root, its `.local` included",
+            );
+            assert_eq!(map.get("LAYER_D").map(String::as_str), Some("app"));
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn the_test_profile_reads_the_app_layer_without_its_local_file() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_dir("apps/api")?;
+            jail.create_file(".env", "LAYER_E=root\nLAYER_F=root")?;
+            jail.create_file("apps/api/.env", "LAYER_E=app")?;
+            jail.create_file("apps/api/.env.local", "LAYER_F=app_local")?;
+            let map = cascade_map(
+                Path::new("."),
+                Some(Path::new("apps/api")),
+                Environment::Test,
+            );
+            assert_eq!(map.get("LAYER_E").map(String::as_str), Some("app"));
+            assert_eq!(
+                map.get("LAYER_F").map(String::as_str),
+                Some("root"),
+                "`.env.local` stays unread under test, in the app's layer as in the root's",
+            );
+            Ok(())
+        });
+    }
+
+    /// A deployment's binary runs far from the directory it was built in: its
+    /// own files are a development convenience, never a deployed one's input.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_deployed_profile_reads_no_app_layer() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_dir("apps/api")?;
+            jail.create_file(".env", "LAYER_G=root")?;
+            jail.create_file("apps/api/.env", "LAYER_G=app\nLAYER_H=app")?;
+            for env in [Environment::Production, Environment::Staging] {
+                let map = cascade_map(Path::new("."), Some(Path::new("apps/api")), env);
+                assert_eq!(
+                    map.get("LAYER_G").map(String::as_str),
+                    Some("root"),
+                    "{env:?}"
+                );
+                assert_eq!(map.get("LAYER_H"), None, "{env:?}");
+            }
+            Ok(())
+        });
+    }
+
+    /// The app's files choose no cascade either: they are read after the
+    /// selector picked them.
+    #[test]
+    #[should_panic(expected = "is set in the `.env` cascade")]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn the_environment_written_into_the_app_layer_aborts() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_dir("apps/api")?;
+            jail.create_file(
+                "apps/api/.env",
+                &format!("{}=development", Environment::var_name()),
+            )?;
+            cascade_map(
+                Path::new("."),
+                Some(Path::new("apps/api")),
+                Environment::Development,
+            );
+            Ok(())
+        });
+    }
+
+    /// The harness's entry: the package's own files reach the process
+    /// environment over the root's, and are marked as the cascade's.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn load_app_cascade_publishes_the_app_layer_over_the_root() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_dir("apps/api")?;
+            jail.create_file(".env", "LAYER_I=root\nLAYER_J=root")?;
+            jail.create_file("apps/api/.env", "LAYER_I=app")?;
+            load_app_cascade(Path::new("."), Path::new("apps/api"), Environment::Test);
+            assert_eq!(std::env::var("LAYER_I").unwrap(), "app");
+            assert_eq!(std::env::var("LAYER_J").unwrap(), "root");
+            assert!(published_from_cascade("LAYER_I"));
+            Ok(())
+        });
+    }
+
     #[test]
     #[expect(
         clippy::result_large_err,
@@ -503,7 +668,7 @@ mod tests {
             jail.create_file(".env", "MAP_A=base\nMAP_B=base")?;
             jail.create_file(".env.development", "MAP_B=dev")?;
             jail.create_file(".env.development.local", "MAP_B=dev_local")?;
-            let map = cascade_map(Path::new("."), Environment::Development);
+            let map = cascade_map(Path::new("."), None, Environment::Development);
             assert_eq!(map.get("MAP_A").map(String::as_str), Some("base"));
             assert_eq!(map.get("MAP_B").map(String::as_str), Some("dev_local"));
             assert!(std::env::var("MAP_A").is_err());

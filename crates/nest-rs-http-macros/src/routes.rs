@@ -6,6 +6,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned as _;
 use syn::{
     Attribute, Expr, FnArg, ImplItem, LitStr, Meta, Path, ReturnType, Token, Type, parse_quote,
 };
@@ -13,14 +14,14 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
-    Collision, Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta,
-    ID_ARG_UNSUPPORTED_BECAUSE, RoutePath, SitePosture, at_most_one_authorize, await_if_async,
-    cfg_attrs, concrete_signature, deprecation_header, force_guard_typeids,
-    guard_capability_bounds, handler_const, handler_ref, impl_self_ident,
+    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Collision, Conditional, DispatchKeys,
+    HandlerSite, HostBorrow, HostMeta, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath, SitePosture,
+    at_most_one_authorize, await_if_async, cfg_attrs, concrete_signature, deprecation_header,
+    force_guard_typeids, guard_capability_bounds, handler_const, handler_ref, impl_self_ident,
     injected_methods_with_layers, injected_per_request_method, layer_deps, mixed_site_ident,
     normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
     refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
-    takes_value, ungrouped_expr,
+    takes_value, ungrouped_expr, unknown_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -42,12 +43,12 @@ struct RouteHandler {
     /// The type `#[authorize]` declares, then every parameter type, in order:
     /// arming a shaper and selecting a class gate are type-directed.
     probe_types: Vec<Type>,
-    /// Every parameter type, in order: the providers an extractor resolves per
-    /// request are read off them.
+    /// Every parameter type, in order, then the service a bound subject loads
+    /// through: the providers resolved per request are read off them.
     param_types: Vec<Type>,
     /// The type `#[authorize]` declares, or a parameter *spelled*
-    /// `Authorize<..>` / `Bind<..>`, kept so one not implementing the shaper
-    /// trait is a spanned compile error.
+    /// `Authorize<..>`, kept so one not implementing the shaper trait is a
+    /// spanned compile error.
     named_shaper: Option<Type>,
     /// Whether the handler declares any extractor; without one, no mask probe is emitted.
     has_extractors: bool,
@@ -67,6 +68,8 @@ struct RouteHandler {
     cfgs: Vec<TokenStream2>,
     /// The route as the mask probe's line names it: the verb and the path.
     route_label: String,
+    /// Whether the route declares `#[authorize]`.
+    authorized: bool,
     /// The handler method, which names the route's site.
     method_name: syn::Ident,
 }
@@ -246,8 +249,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
-        // A hand-written `Authorize<A, E>` or `Bind<A, S>` arms the shaper too, and
-        // the mask passes `text/event-stream` through untouched.
+        // A hand-written `Authorize<A, E>` arms the shaper too, and the mask
+        // passes `text/event-stream` through untouched.
         if is_sse && let Some(ty) = named_shaper_type(&inputs) {
             return syn::Error::new_spanned(
                 &ty,
@@ -318,6 +321,26 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
+        // The public-reads spelling: elsewhere a gate written as a parameter
+        // would be a posture no `#[authorize]` shows.
+        if !is_public
+            && authorize.is_none()
+            && let Some(param) = inputs.iter().find(|arg| spelled(arg, "Authorize"))
+        {
+            return syn::Error::new_spanned(
+                param,
+                "a hand-written `Authorize<Action, Entity>` parameter is the public-reads \
+                 spelling, written beside `#[public]` alone — declare this route's posture with \
+                 `#[authorize(Action, Entity)]`, which arms the same gate and mask",
+            )
+            .to_compile_error()
+            .into();
+        }
+        let subject =
+            match bound_subject(authorize.as_ref(), &inputs, &method.sig.ident, &route_path) {
+                Ok(subject) => subject,
+                Err(err) => return err.to_compile_error().into(),
+            };
         let method_versions = match take_version_attr(&mut method.attrs) {
             Ok(versions) => versions,
             Err(err) => return err.to_compile_error().into(),
@@ -419,15 +442,32 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // the controller `Arc` is a captured field.
         let extractor_stmts: Vec<TokenStream2> = inputs
             .iter()
-            .filter_map(|arg| match arg {
+            .enumerate()
+            .filter_map(|(index, arg)| match arg {
                 FnArg::Typed(pt) => {
                     let pat = &pt.pat;
                     let ty = &pt.ty;
-                    Some(quote! {
-                        let #pat = <#ty as ::nest_rs_http::FromRequest>::from_request(
-                            #req_var, &mut #body_var,
-                        )
-                        .await?;
+                    Some(match &subject {
+                        // The subject loads where the handler lists it, after the
+                        // class gate the guard stage ran.
+                        Some(bound) if bound.index == index => {
+                            let BoundSubject {
+                                action, service, ..
+                            } = bound;
+                            quote_spanned! {ty.span()=>
+                                let #pat: #ty = ::nest_rs_seaorm::__private::http_bind::<
+                                    #action,
+                                    #service,
+                                >(#req_var, &mut #body_var)
+                                .await?;
+                            }
+                        }
+                        _ => quote! {
+                            let #pat = <#ty as ::nest_rs_http::FromRequest>::from_request(
+                                #req_var, &mut #body_var,
+                            )
+                            .await?;
+                        },
                     })
                 }
                 FnArg::Receiver(_) => None,
@@ -496,6 +536,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let shaper_selection = shaper_selection(&probe_types);
         let typed_body = documented_body(&param_types);
 
+        // Checked like a `Scoped<T>` parameter's: an unimported service fails
+        // the boot.
+        let per_request: Vec<Type> = param_types
+            .iter()
+            .cloned()
+            .chain(subject.as_ref().map(|bound| {
+                let service = &bound.service;
+                parse_quote!(::nest_rs_http::Scoped<#service>)
+            }))
+            .collect();
         let handler = RouteHandler {
             method: method_const.clone(),
             deprecation_header: deprecation.as_ref().map(|(_, header)| header.clone()),
@@ -504,7 +554,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             guards,
             interceptors,
             probe_types,
-            param_types,
+            param_types: per_request,
             named_shaper: authorize_ty.or_else(|| named_shaper_type(&inputs)),
             has_extractors: !inputs.is_empty(),
             handler: handler_ref(&self_ty, &method_name),
@@ -515,6 +565,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             versions: method_versions.clone(),
             cfgs: cfgs.clone(),
             route_label: format!("{} {}", verb_ident, route_path.value()),
+            authorized: authorize.is_some(),
             method_name: method_name.clone(),
         };
         // Two handlers for one (verb, path) would leave one unreachable; refused
@@ -777,7 +828,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     );
     let injected_methods = injected_methods_with_layers(&self_ty, &route_layers);
     // A provider a parameter resolves per request is checked like an `#[inject]`
-    // one: an unimported `Scoped<T>` or `Bind<A, S>` target fails the boot.
+    // one: an unimported `Scoped<T>` or bound service fails the boot.
     let injected_per_request = injected_per_request_method(
         routes_by_path
             .iter()
@@ -923,7 +974,85 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 /// A route's `#[authorize(Action, Entity)]` posture.
 struct AuthorizeSpec {
     action: Path,
-    entity: Path,
+    /// The entity written, or under `bind = Service` alone the service's.
+    entity: Type,
+    /// `bind = Service`: the service that loads the subject into the route's
+    /// `Authorized<Action, E>` parameter.
+    bind: Option<Path>,
+}
+
+/// The parameter `#[authorize(Action, bind = Service)]` fills: where the
+/// handler lists it, and what loads it.
+struct BoundSubject {
+    /// Its position among the handler's parameters, the receiver left out.
+    index: usize,
+    action: Path,
+    service: Path,
+}
+
+/// The route's bound subject, refusing a `bind` with no `Authorized`
+/// parameter to receive it, an `Authorized` parameter no `bind` fills, and a
+/// route whose path does not name the subject's id alone.
+fn bound_subject(
+    authorize: Option<&AuthorizeSpec>,
+    inputs: &[FnArg],
+    method: &syn::Ident,
+    path: &LitStr,
+) -> syn::Result<Option<BoundSubject>> {
+    let mut subjects = inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, arg)| spelled(arg, "Authorized"));
+    let first = subjects.next();
+    if let Some((_, second)) = subjects.next() {
+        return Err(syn::Error::new_spanned(
+            second,
+            "a route binds one subject, so it takes one `Authorized<Action, E>` parameter",
+        ));
+    }
+    let service = authorize.and_then(|spec| spec.bind.as_ref().map(|service| (spec, service)));
+    match (service, first) {
+        (None, None) => Ok(None),
+        (None, Some((_, param))) => Err(syn::Error::new_spanned(param, AUTHORIZED_NEEDS_BIND)),
+        (Some(_), None) => Err(syn::Error::new_spanned(method, BIND_NEEDS_AUTHORIZED)),
+        (Some((spec, service)), Some((index, _))) => {
+            let parameters = path_parameters(&path.value());
+            if parameters != 1 {
+                return Err(syn::Error::new_spanned(
+                    path,
+                    format!(
+                        "`#[authorize(.., bind = Service)]` loads the subject from the route's \
+                         one path parameter, and `{}` declares {parameters} — bind on a route \
+                         whose path names the subject's id alone, as `/{{id}}` or \
+                         `/{{id}}/publish`",
+                        path.value(),
+                    ),
+                ));
+            }
+            Ok(Some(BoundSubject {
+                index,
+                action: spec.action.clone(),
+                service: service.clone(),
+            }))
+        }
+    }
+}
+
+/// How many parameters a route template declares, a doubled brace being a
+/// literal one.
+fn path_parameters(template: &str) -> usize {
+    let mut count = 0;
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            if chars.peek() == Some(&'{') {
+                chars.next();
+            } else {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 /// Take `#[version("2")]` / `#[version("1", "2")]` off a route method.
@@ -964,36 +1093,48 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
         .map_err(|_| malformed_authorize(&attr))?
         .into_iter()
         .collect();
-    for meta in &metas {
-        let Meta::NameValue(nv) = meta else {
-            continue;
-        };
-        if nv.path.is_ident("bind") {
-            return Err(syn::Error::new_spanned(
-                meta,
-                posture_key_unsupported(
-                    "bind = Service",
-                    "HTTP",
-                    "a route's subject is loaded by a `Bind<Service, Action>` parameter, which \
-                     the handler declares and the compiler arms — so the binding is a *type* \
-                     here, not an argument to this attribute",
-                ),
-            ));
-        }
-        if nv.path.is_ident("id_arg") {
-            return Err(syn::Error::new_spanned(
-                meta,
-                posture_key_unsupported("id_arg = argument", "HTTP", ID_ARG_UNSUPPORTED_BECAUSE),
-            ));
+    let mut bind: Option<Path> = None;
+    let mut paths: Vec<Path> = Vec::new();
+    // A repeated key is refused, never last-write-wins: `bind` picks the loading service.
+    let mut keys: Vec<syn::Ident> = Vec::new();
+    for meta in metas {
+        match meta {
+            Meta::Path(path) => paths.push(path),
+            Meta::NameValue(nv) if nv.path.is_ident("bind") => {
+                keys.extend(nv.path.get_ident().cloned());
+                let Expr::Path(service) = &nv.value else {
+                    return Err(syn::Error::new_spanned(
+                        &nv.value,
+                        takes_value(
+                            "authorize",
+                            Some("bind"),
+                            "the path of the service that loads the subject, e.g. \
+                             `bind = FilesService`",
+                        ),
+                    ));
+                };
+                bind = Some(service.path.clone());
+            }
+            Meta::NameValue(nv) if nv.path.is_ident("id_arg") => {
+                return Err(syn::Error::new_spanned(
+                    &nv,
+                    posture_key_unsupported(
+                        "id_arg = argument",
+                        "HTTP",
+                        ID_ARG_UNSUPPORTED_BECAUSE,
+                    ),
+                ));
+            }
+            Meta::NameValue(ref nv) if let Some(key) = nv.path.get_ident() => {
+                return Err(syn::Error::new_spanned(
+                    key,
+                    unknown_argument("authorize", &key.to_string(), AUTHORIZE.keys()),
+                ));
+            }
+            other => return Err(syn::Error::new_spanned(other, malformed_authorize(&attr))),
         }
     }
-    let paths: Vec<Path> = metas
-        .into_iter()
-        .map(|meta| match meta {
-            Meta::Path(path) => Ok(path),
-            other => Err(syn::Error::new_spanned(other, malformed_authorize(&attr))),
-        })
-        .collect::<syn::Result<_>>()?;
+    AUTHORIZE.take_all(&keys)?;
     if let Some(unmasked) = paths.iter().find(|p| p.is_ident("unmasked")) {
         return Err(syn::Error::new_spanned(
             unmasked,
@@ -1002,49 +1143,67 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
                 "HTTP",
                 "there is no value-level mask here to switch off. A route's response is \
                  shaped by a `RouteResponseShaper` the compiler arms from the *type* of \
-                 the posture parameter `#[authorize]` emits, so what a body carries is \
-                 decided by which extractor the handler declares",
+                 the posture `#[authorize]` declares, so what a body carries is decided by \
+                 the attribute",
             ),
         ));
     }
-    let [action, entity] = <[Path; 2]>::try_from(paths).map_err(|_| malformed_authorize(&attr))?;
-    Ok(Some(AuthorizeSpec { action, entity }))
+    let mut paths = paths.into_iter();
+    let (Some(action), written, None) = (paths.next(), paths.next(), paths.next()) else {
+        return Err(malformed_authorize(&attr));
+    };
+    let entity: Type = match (written, &bind) {
+        (Some(entity), _) => parse_quote!(#entity),
+        (None, Some(service)) => parse_quote!(<#service as ::nest_rs_seaorm::CrudService>::Entity),
+        (None, None) => return Err(malformed_authorize(&attr)),
+    };
+    Ok(Some(AuthorizeSpec {
+        action,
+        entity,
+        bind,
+    }))
 }
+
+/// The keys a route's `#[authorize]` takes beside its action and entity.
+const AUTHORIZE: nest_rs_codegen::Grammar = nest_rs_codegen::Grammar::new("authorize", &["bind"]);
 
 /// The `#[authorize]` shape refusal.
 fn malformed_authorize(attr: &Attribute) -> syn::Error {
     syn::Error::new_spanned(
         attr,
         "expected `#[authorize(Action, Entity)]` — e.g. \
-         `#[authorize(Read, users::Entity)]`. Bind the subject with a \
-         `Bind<Service, Action>` parameter when the route loads one",
+         `#[authorize(Read, users::Entity)]`. `bind = Service` loads the subject from the \
+         route's path parameter into an `Authorized<Action, E>` parameter, and lets the entity \
+         be omitted (derived from `Service::Entity`): `#[authorize(Update, bind = PostsService)]`",
     )
 }
 
 /// The type `#[authorize(Action, Entity)]` declares, the same one `#[crud]`
-/// writes: probed for its class gate and its shaper, never extracted.
+/// writes: probed for its class gate and its shaper, never extracted. Under
+/// `bind = Service` alone, the entity is the service's.
 fn authorize_type(spec: &AuthorizeSpec, inputs: &[FnArg]) -> syn::Result<Type> {
-    if let Some(param) = inputs.iter().find(|arg| is_authorize_param(arg)) {
+    if let Some(param) = inputs.iter().find(|arg| spelled(arg, "Authorize")) {
         return Err(syn::Error::new_spanned(
             param,
             "this route already declares its posture with `#[authorize(...)]` — \
              drop the `Authorize<...>` parameter (the decorator emits it)",
         ));
     }
-    let AuthorizeSpec { action, entity } = spec;
+    let AuthorizeSpec { action, entity, .. } = spec;
     Ok(syn::parse_quote! {
         ::nest_rs_authz::http::Authorize<#action, #entity>
     })
 }
 
-/// Whether a parameter is a hand-written `Authorize<..>`; a `Bind<..>` loads
-/// the subject and stays.
-fn is_authorize_param(arg: &FnArg) -> bool {
+/// Whether a parameter's type is spelled `name<..>`, read for a diagnostic or,
+/// for `Authorized`, the parameter `bind = Service` fills — the spelling
+/// `#[operations]` reads too.
+fn spelled(arg: &FnArg, name: &str) -> bool {
     let FnArg::Typed(pt) = arg else { return false };
     let Type::Path(tp) = pt.ty.as_ref() else {
         return false;
     };
-    tp.path.segments.iter().any(|s| s.ident == "Authorize")
+    tp.path.segments.last().is_some_and(|s| s.ident == name)
 }
 
 fn param_types(inputs: &[FnArg]) -> Vec<Type> {
@@ -1115,8 +1274,8 @@ fn shaper_selection(param_types: &[Type]) -> TokenStream2 {
     }}
 }
 
-/// A parameter *spelled* `Authorize<..>` / `Bind<..>`, for the diagnostic
-/// only: arming is [`shaper_selection`]'s.
+/// A parameter *spelled* `Authorize<..>`, for the diagnostic only: arming is
+/// [`shaper_selection`]'s.
 fn named_shaper_type(inputs: &[FnArg]) -> Option<Type> {
     inputs.iter().find_map(|arg| {
         let FnArg::Typed(pt) = arg else { return None };
@@ -1133,13 +1292,7 @@ fn shaper_param_type(tp: &syn::TypePath) -> bool {
         .segments
         .last()
         .is_some_and(|s| matches!(s.arguments, syn::PathArguments::AngleBracketed(_)));
-    if !angled {
-        return false;
-    }
-    tp.path
-        .segments
-        .iter()
-        .any(|s| s.ident == "Authorize" || s.ident == "Bind")
+    angled && tp.path.segments.iter().any(|s| s.ident == "Authorize")
 }
 
 /// One routed handler, as its route's site declares it and its mount mounts
@@ -1181,6 +1334,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
         pipes: method_pipes,
         exception_filters: method_exception_filters,
         route_label,
+        authorized,
         method_name,
     } = handler;
     let route_label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
@@ -1243,6 +1397,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
                     method: #method_guard_specs,
                     force: #force_guard_typeids,
                     gates: #gate_selection,
+                    authorized: #authorized,
                     masked: ::core::option::Option::is_some(&#shaper_selection),
                 },
             )

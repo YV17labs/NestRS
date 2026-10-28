@@ -99,9 +99,6 @@ pub use soft_delete::{SoftDeletable, live_condition};
 pub use time::now;
 pub use unit::SeaOrmUnitOfWork;
 
-#[cfg(feature = "http")]
-pub use http::Bind;
-
 #[doc(hidden)]
 pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
@@ -115,7 +112,11 @@ pub mod __private {
     pub use crate::error::masking;
     pub use crate::executor::current_executor;
     #[cfg(feature = "graphql")]
+    pub use crate::graphql::bind::graphql_bind;
+    #[cfg(feature = "graphql")]
     pub use crate::graphql::relations::__private::{relation_key, relation_page};
+    #[cfg(feature = "http")]
+    pub use crate::http::http_bind;
     #[cfg(feature = "graphql")]
     pub use crate::page::graphql_page_cursor;
 

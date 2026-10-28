@@ -157,8 +157,9 @@ or a module it imports. One reached through no import fails the boot with an
 `AccessGraphError`, and one no module provides with a
 `MissingDependencyError` naming it — never a `500` at the first request. A
 request-scoped provider is the point of the parameter, so the boot checks where
-it comes from, never its scope. `nest_rs::seaorm::Bind<A, S>` is held the same
-way for the service `S` it loads through.
+it comes from, never its scope. A route or an operation declaring
+`#[authorize(A, bind = S)]` is held the same way for the service `S` it loads
+through.
 
 HTTP, WebSockets, GraphQL, and MCP each install a fresh request scope per call
 (one per request for HTTP and MCP — every operation one `/mcp` request or one

@@ -119,7 +119,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
 
     /// None: a request is refused here only for a wiring defect, a `500`. The
     /// `403` an ability earns is answered by what reads it — the route's class
-    /// gate, its `Bind`, its service.
+    /// gate, the row its `bind` loads, its service.
     fn denial_statuses(&self, _public: bool) -> &'static [u16] {
         &[]
     }

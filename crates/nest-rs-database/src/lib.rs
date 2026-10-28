@@ -14,7 +14,7 @@
 //! It is what every ORM integration plugs into — not an ORM itself.
 //!
 //! The first-class implementation is `nest-rs-seaorm` (SeaORM): it ships
-//! `Repo` (row-level filter), `CrudService`, `Bind`, the HTTP mask shaper,
+//! `Repo` (row-level filter), `CrudService`, the loader `bind = Service` runs,
 //! and `SeaOrmDatabaseModule`, which binds its `UnitOfWork`.
 //!
 //! ## Extension contract
@@ -56,7 +56,7 @@
 //!    is filed at once, and a rollback leaves its job behind.
 //!
 //! A new ORM integration ships its own row-level-filter equivalent: the
-//! SeaORM pieces (`Repo`, `condition_for`, `Bind<A, S>`) are unreachable from it.
+//! SeaORM pieces (`Repo`, `condition_for`, the bound-subject loader) are unreachable from it.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

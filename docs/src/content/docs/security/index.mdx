@@ -57,7 +57,7 @@ ability they attached — see [Endpoint guards](/security/authorization/endpoint
   [`condition_for`](/security/authorization/row-level-filtering/) into
   the SQL — a member querying `Users::find()` gets
   `WHERE org_id = $caller_org_id` appended.
-- **Every by-id write checks access.** `Bind<A, S>` calls
+- **Every by-id write checks access.** `#[authorize(A, bind = S)]` calls
   `Service::access(id)`; missing rows return `404`, denied rows return
   `403` — see [By-id binding](/security/authorization/by-id-binding/).
 - **Every response is masked.** The
@@ -110,7 +110,7 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
     - [index.mdx](/security/authorization/) — `Ability`, `AuthzAbility`, where it runs
     - [policies.mdx](/security/authorization/policies/) — `Subject`, `Action`, `RuleSpec`, predicates, fields
     - [row-level-filtering.mdx](/security/authorization/row-level-filtering/) — `condition_for`, `Repo::scoped`
-    - [by-id-binding.mdx](/security/authorization/by-id-binding/) — `Bind<A, S>`, the `Access` outcome
+    - [by-id-binding.mdx](/security/authorization/by-id-binding/) — `#[authorize(A, bind = S)]`, the `Access` outcome
     - [response-masking.mdx](/security/authorization/response-masking/) — `Authorize`, `mask`, `WireModelDefaults`
     - [endpoint-guards.mdx](/security/authorization/endpoint-guards/) — HTTP / GraphQL / WS / MCP
   - [threat-model.mdx](/security/threat-model/) — the boundary each layer enforces (read before production, not needed for your first feature)

@@ -467,8 +467,9 @@ database a deployment's URL names.
 ## What the seam carries, and what stays store-native
 
 The SeaORM-typed primitives — `Repo<E>`'s row-level filter through
-`Ability::condition_for`, the `#[expose]` response mask, `Bind<A, S>`,
-`CrudService` — read SeaORM's typed `Column` and `EntityTrait`, so a driver
+`Ability::condition_for`, the `#[expose]` response mask, the subject
+`bind = Service` loads, `CrudService` — read SeaORM's typed `Column` and
+`EntityTrait`, so a driver
 ships their equivalents in its store's terms: Postgres RLS, an
 ability-derived filter document, a per-collection helper. What every driver
 keeps is the seam's: a transaction per unit of work on every edge, the

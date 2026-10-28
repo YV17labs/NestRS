@@ -41,15 +41,14 @@ fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
     problem_error(&Problem::new(500, code::INTERNAL))
 }
 
-/// Turn a by-id argument into the loaded, authorized entity (the resolver
-/// analog of [`crate::Bind`]). Outcomes: no row → `Ok(None)`; denied →
-/// `FORBIDDEN` (existence not hidden); else `Ok(Some(model))`.
+/// The row a by-id argument names, loaded and authorized: no row → `Ok(None)`;
+/// denied → `FORBIDDEN` (existence not hidden); else `Ok(Some(model))`.
 ///
-/// The service resolves as [`crate::Bind`]'s does, through the request's scope
-/// — the container's over a graphql-ws socket, which carries none. A wiring
-/// defect — no provider for it, no ability on the field's unit — answers the
-/// opaque internal error and is filed at `error`, never as anonymous.
-pub async fn bind<A, S>(
+/// The service resolves through the request's scope — the container's over a
+/// graphql-ws socket, which carries none. A wiring defect — no provider for
+/// it, no ability on the field's unit — answers the opaque internal error and
+/// is filed at `error`, never as anonymous.
+async fn bind<A, S>(
     ctx: &Context<'_>,
     id: &str,
 ) -> Result<Option<<S::Entity as EntityTrait>::Model>>
@@ -92,9 +91,10 @@ where
     }
 }
 
-/// Bind a **mutation subject** as an [`Authorized`] proof: like [`bind`], but a
-/// missing row is a `NOT_FOUND` error.
-pub async fn bind_required<A, S>(ctx: &Context<'_>, id: &str) -> Result<Authorized<A, S::Entity>>
+/// The subject `#[authorize(A, bind = S)]` loads for an operation, handed to
+/// its `Authorized<A, E>` parameter: like `bind`, but a missing row is a
+/// `NOT_FOUND` error.
+pub async fn graphql_bind<A, S>(ctx: &Context<'_>, id: &str) -> Result<Authorized<A, S::Entity>>
 where
     S: CrudService + 'static,
     <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,

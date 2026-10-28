@@ -1,44 +1,33 @@
-use std::any::{TypeId, type_name};
-use std::marker::PhantomData;
-use std::ops::Deref;
+use std::any::type_name;
 
 use nest_rs_authz::{Ability, ActionMarker, with_ability};
-use nest_rs_core::ResolvesProvider;
 use nest_rs_http::{HttpError, ProblemDetails, StatusCode};
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
-use crate::{Access, CrudService, ServiceError};
+use crate::{Access, Authorized, CrudService, ServiceError};
 
-/// The loaded, authorized entity bound from a path id, through service `S`.
-/// Declare as a handler parameter (`user: Bind<Read, UsersService>`); read the
-/// model via [`Deref`] or own it with [`into_inner`](Bind::into_inner).
+/// The subject `#[authorize(A, bind = S)]` loads for a route: the row its
+/// path's id names, through service `S` under the request's ability, handed to
+/// the handler's `Authorized<A, E>` parameter.
 ///
 /// A non-v7 id answers 400, an absent row 404, a denied one 403 (existence is
-/// not hidden). The service is part of the boot's access contract
-/// ([`ResolvesProvider`]); a route that still reaches none — no ability guard,
-/// no request scope, `S` offered by no module — answers an opaque `500` and
-/// files what was missing at `error`.
-pub struct Bind<A, S: CrudService>(<S::Entity as EntityTrait>::Model, PhantomData<fn() -> A>);
-
-impl<A, S: CrudService> Bind<A, S> {
-    /// Take ownership of the loaded, authorized model.
-    pub fn into_inner(self) -> <S::Entity as EntityTrait>::Model {
-        self.0
-    }
-}
-
-impl<A, S: CrudService> Deref for Bind<A, S> {
-    type Target = <S::Entity as EntityTrait>::Model;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<A, S: CrudService + 'static> ResolvesProvider for Bind<A, S> {
-    fn provider() -> (TypeId, &'static str) {
-        (TypeId::of::<S>(), type_name::<S>())
-    }
+/// not hidden). The decorator puts `S` in the boot's access contract; a route
+/// that still reaches none — no ability guard, no request scope — answers an
+/// opaque `500` and files what was missing at `error`.
+pub async fn http_bind<A, S>(
+    req: &nest_rs_http::Request,
+    body: &mut nest_rs_http::RequestBody,
+) -> nest_rs_http::Result<Authorized<A, S::Entity>>
+where
+    S: CrudService + 'static,
+    <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
+    A: ActionMarker,
+{
+    nest_rs_http::__private::MaskProbe::mark();
+    let nest_rs_http::Path(id) =
+        <nest_rs_http::Path<Uuid> as nest_rs_http::FromRequest>::from_request(req, body).await?;
+    load::<A, S>(id).await.map_err(Unbound::into_http)
 }
 
 /// Why no entity is handed over.
@@ -56,47 +45,45 @@ enum Unbound {
     Missing,
 }
 
-impl<A, S> Bind<A, S>
+/// The row `id` names, loaded through `S` under the request's ability.
+async fn load<A, S>(id: Uuid) -> Result<Authorized<A, S::Entity>, Unbound>
 where
     S: CrudService + 'static,
     <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     A: ActionMarker,
 {
-    /// The row `id` names, loaded through `S` under the request's ability.
-    async fn load(id: Uuid) -> Result<Self, Unbound> {
-        if id.get_version_num() != 7 {
-            return Err(Unbound::NotV7);
-        }
-        let Some(ability) = nest_rs_core::ambient::<Ability>() else {
-            tracing::error!(
-                target: crate::target::ORM,
-                provider = type_name::<S>(),
-                "missing request `Ability` — is the ability guard applied to this route?",
-            );
-            return Err(Unbound::Unwired);
-        };
-        let Some(scope) = nest_rs_http::current_request_scope() else {
-            tracing::error!(
-                target: crate::target::ORM,
-                provider = type_name::<S>(),
-                "request scope not installed — the transport edge must wrap the route tree",
-            );
-            return Err(Unbound::Unwired);
-        };
-        let Some(service) = scope.get::<S>() else {
-            tracing::error!(
-                target: crate::target::ORM,
-                provider = type_name::<S>(),
-                "no provider for the bound service — add it to a module's providers",
-            );
-            return Err(Unbound::Unwired);
-        };
-        match with_ability(ability.clone(), service.access(A::ACTION, id)).await {
-            Ok(Access::Found(model)) => Ok(Bind(model, PhantomData)),
-            Ok(Access::Denied) => Err(Unbound::Denied),
-            Ok(Access::Missing) => Err(Unbound::Missing),
-            Err(err) => Err(Unbound::Failed(ServiceError::Db(err))),
-        }
+    if id.get_version_num() != 7 {
+        return Err(Unbound::NotV7);
+    }
+    let Some(ability) = nest_rs_core::ambient::<Ability>() else {
+        tracing::error!(
+            target: crate::target::ORM,
+            provider = type_name::<S>(),
+            "missing request `Ability` — is the ability guard applied to this route?",
+        );
+        return Err(Unbound::Unwired);
+    };
+    let Some(scope) = nest_rs_http::current_request_scope() else {
+        tracing::error!(
+            target: crate::target::ORM,
+            provider = type_name::<S>(),
+            "request scope not installed — the transport edge must wrap the route tree",
+        );
+        return Err(Unbound::Unwired);
+    };
+    let Some(service) = scope.get::<S>() else {
+        tracing::error!(
+            target: crate::target::ORM,
+            provider = type_name::<S>(),
+            "no provider for the bound service — add it to a module's providers",
+        );
+        return Err(Unbound::Unwired);
+    };
+    match with_ability(ability.clone(), service.access(A::ACTION, id)).await {
+        Ok(Access::Found(model)) => Ok(Authorized::new(model)),
+        Ok(Access::Denied) => Err(Unbound::Denied),
+        Ok(Access::Missing) => Err(Unbound::Missing),
+        Err(err) => Err(Unbound::Failed(ServiceError::Db(err))),
     }
 }
 
@@ -114,26 +101,9 @@ impl Unbound {
     }
 }
 
-impl<'a, A, S> nest_rs_http::FromRequest<'a> for Bind<A, S>
-where
-    S: CrudService + 'static,
-    <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
-    A: ActionMarker,
-{
-    async fn from_request(
-        req: &'a nest_rs_http::Request,
-        body: &mut nest_rs_http::RequestBody,
-    ) -> nest_rs_http::Result<Self> {
-        nest_rs_http::__private::MaskProbe::mark();
-        let nest_rs_http::Path(id) = nest_rs_http::Path::<Uuid>::from_request(req, body).await?;
-        Self::load(id).await.map_err(Unbound::into_http)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use nest_rs_authz::Read;
-    use nest_rs_core::__private::{ParamProbe, ParamProbeResolves as _};
     use nest_rs_testing::LogCapture;
     use sea_orm::DbErr;
 
@@ -161,21 +131,10 @@ mod tests {
         type Entity = note::Entity;
     }
 
-    /// The probe `#[routes]` asks per parameter, at the reference depth its
-    /// expansion calls it.
-    #[test]
-    fn the_handler_probe_reads_the_service_bind_resolves() {
-        let resolved = (&&ParamProbe::<Bind<Read, NotesService>>::new()).resolved_provider();
-        assert_eq!(
-            resolved.map(|(id, _)| id),
-            Some(TypeId::of::<NotesService>())
-        );
-    }
-
     #[tokio::test]
     async fn a_route_with_no_ability_answers_an_opaque_500_and_files_it_at_error() {
         let logs = LogCapture::install();
-        let Err(unbound) = Bind::<Read, NotesService>::load(Uuid::now_v7()).await else {
+        let Err(unbound) = load::<Read, NotesService>(Uuid::now_v7()).await else {
             panic!("no ability is ambient");
         };
         let response = unbound.into_http().into_response();
@@ -204,7 +163,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_id_that_is_not_v7_is_refused_before_anything_is_read() {
-        let Err(unbound) = Bind::<Read, NotesService>::load(Uuid::new_v4()).await else {
+        let Err(unbound) = load::<Read, NotesService>(Uuid::new_v4()).await else {
             panic!("a v4 id is refused");
         };
         let response = unbound.into_http().into_response();

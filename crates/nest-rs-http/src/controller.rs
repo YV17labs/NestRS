@@ -221,7 +221,7 @@ impl HttpRouteMeta {
 
     /// Schema builders for the handler's `Path<T>` extractor components, in
     /// path order (a `Path<(A, B)>` tuple yields one per element); empty when
-    /// the handler binds its id another way (`Bind<_, _>`).
+    /// the handler binds its id another way (`#[authorize(A, bind = S)]`).
     pub fn path_params(&self) -> &'static [SchemaFn] {
         self.parts.path_params
     }

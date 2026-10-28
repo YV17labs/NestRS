@@ -111,12 +111,13 @@ deep on each.
   without an argument on every method; each value's `AmbientValue::carry`
   says how far it travels — into a streaming body, a DataLoader batch, a
   spawned task, after-commit work, a socket's next messages.
-- **[Bind (extractor)](/security/authorization/by-id-binding/)** —
-  parses the id from the URL, calls `Service::access(id)` through the
-  ambient ability, returns the loaded + authorized entity (404
-  absent, 403 denied).
+- **[Bound subject](/security/authorization/by-id-binding/)** —
+  `#[authorize(Action, bind = Service)]`: parses the id from the URL (an
+  `id` argument on GraphQL), calls `Service::access(id)` through the
+  ambient ability, and hands the loaded + authorized entity to the
+  operation's `Authorized<Action, E>` parameter (404 absent, 403 denied).
 - **[Scope (extractor)](/security/authorization/row-level-filtering/)**
-  — the explicit-condition counterpart to `Bind`; hands a hand-built
+  — the explicit-condition counterpart to a bound subject; hands a hand-built
   query a SeaORM `Condition` derived from the ambient ability.
 - **[`#[expose]`](/database/entities/)** — the opt-in read-side
   exposure attribute on an entity column or relation: a column crosses

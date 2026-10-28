@@ -1,6 +1,6 @@
 ---
 title: Authenticate and authorize
-description: AuthnGuard verifies the JWT, AuthzAbility decides what the caller may do, Repo filters every read, Bind enforces by-id access.
+description: AuthnGuard verifies the JWT, AuthzAbility decides what the caller may do, Repo filters every read, and a by-id load checks access.
 sidebar:
   order: 9
 ---
@@ -108,17 +108,17 @@ Two patterns to read here:
 ## Bind the guards on the controller
 
 The controller gains two attributes — the guard chain on the struct, the
-posture on the route — and an extractor for the by-id load.
+posture on the route. The by-id read is `#[crud]`'s generated `get`, which
+declares its own.
 
-```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)" {3, 8, 10-12, 16, 28, 30-39, 47}
+```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)" {3, 9-11, 15, 27, 29-38}
 use std::sync::Arc;
 
-use nest_rs::authz::{Create, Read};
+use nest_rs::authz::Create;
 use nest_rs::http::{
     Ctx, IntoResponse, Json, Request, Response, Result, Valid, caller_path, controller, crud,
     set_created_location,
 };
-use nest_rs::seaorm::Bind;
 
 use crate::Claims;
 use crate::authn::AuthnGuard;
@@ -154,12 +154,6 @@ impl UsersController {
         set_created_location(&mut res, caller_path(req), user.id);
         Ok(res)
     }
-
-    #[get("/{id}")]
-    // … #[api(…)]
-    async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
-        Json(User::from(&*user))
-    }
 }
 ```
 
@@ -170,7 +164,7 @@ Four things changed:
 | `#[use_guards(AuthnGuard, AuthzGuard)]` | Run authn then authz on every route in the controller |
 | `auth: Ctx<Claims>` | Read the principal that `AuthnGuard` attached to the request |
 | `#[authorize(Create, UserEntity)]` | Check the ability allows `Create` on `UserEntity` before the body runs |
-| `user: Bind<Read, UsersService>` | Parse the `{id}`, load the row through the service, return `403` if the ability refuses it |
+| `#[crud]`'s generated `get` | Declares `#[authorize(Read, UserEntity)]`: parse the `{id}`, load the row through the service, `404` if absent, `403` if the ability refuses it |
 
 The org id comes from the caller's claims, never from the body — there
 is no placeholder to fill in and no way to spoof the tenant.
@@ -234,9 +228,11 @@ Three behaviours land without writing them in the handler.
 SQL — the `Repo::scoped(Action::Read)` `CrudService::list` uses joins
 the ambient ability's `condition_for(Read)`.
 
-**By-id load checks access.** `Bind<Read, UsersService>` parses the
-`{id}` path segment, loads the row through the service, runs the
-ability check. Three failure shapes:
+**By-id load checks access.** The generated `get` parses the `{id}`
+path segment, loads the row through the service, runs the ability check
+— as a route of yours does when it declares
+`#[authorize(Read, bind = UsersService)]` and takes the row as an
+`Authorized<Read, UserEntity>`. Three failure shapes:
 
 | Caller's view | Status |
 |---------------|--------|
@@ -319,7 +315,7 @@ this page just walked through, at the size your domain is.
   route requires a valid JWT and a matching ability.
 - An `AuthzAbility` policy that scopes reads to the caller's org and
   masks the email column for plain users.
-- `Bind<Read, UsersService>` on the by-id route — `403` on a denied
+- A by-id route that loads through the service — `403` on a denied
   row, `404` on a missing one, both without manual checks.
 
 ## Going further

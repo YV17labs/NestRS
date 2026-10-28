@@ -581,7 +581,7 @@ fn operation_object(
 }
 
 /// Path parameters typed positionally from the handler's `Path<T>`, only when
-/// every segment has one: a `Bind<_, _>` leaves fewer and would misalign.
+/// every segment has one: a bound subject's id leaves fewer and would misalign.
 fn typed_path_parameters(
     path: &RouteTemplate,
     path_params: &[nest_rs_http::SchemaFn],
@@ -665,11 +665,11 @@ fn error_statuses(
         out.insert(413);
     }
     // An ability that does not grant the action is refused where the mask's
-    // shaper reads it: the class gate `Authorize` runs, or `Bind`'s load.
+    // shaper reads it: the class gate `Authorize` runs, or a bound subject's load.
     if route.masked() {
         out.insert(403);
     }
-    // Off the path, not `path_params`: a `Bind<_, _>` route can 404 and has none.
+    // Off the path, not `path_params`: a bound route can 404 and has none.
     if full_path.parameters().next().is_some() {
         out.insert(404);
     }

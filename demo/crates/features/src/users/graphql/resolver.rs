@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use async_graphql::{Context, Result};
-use nest_rs::authz::{Create, Read};
+use nest_rs::authz::Create;
 use nest_rs::graphql::{crud, resolver};
-use nest_rs::seaorm::graphql::bind;
 
 use crate::Claims;
 use crate::authz::AuthzGuard;
@@ -30,14 +29,5 @@ impl UsersResolver {
         let actor = ctx.data::<Claims>()?;
         let user = self.svc.create_in_org(input, actor.org_id).await?;
         Ok(User::from(&user))
-    }
-
-    #[query]
-    #[authorize(Read, UserEntity)]
-    async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        Ok(bind::<Read, UsersService>(ctx, &id)
-            .await?
-            .as_ref()
-            .map(User::from))
     }
 }

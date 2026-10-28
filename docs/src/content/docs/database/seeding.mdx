@@ -20,7 +20,7 @@ more than one table to fill.
 One factory per table, each a `seed(db)` function that inserts its demo rows
 and returns how many landed. Organizations use fixed UUIDs so other factories
 — and tests — can reference them by constant. The ids are UUID **v7** (version
-nibble `7`, variant `8`): the `Bind` / `#[crud]` by-id routes reject any
+nibble `7`, variant `8`): the bound (`bind = Service`) and `#[crud]` by-id routes reject any
 non-v7 path id, so a seeded row has to be v7 to be reachable by id.
 
 ```rust title="crates/seed/src/factories/org.rs (from the demo)"

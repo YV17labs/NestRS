@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`<PREFIX>_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`SeaOrmUnitOfWork`, the unit of work every edge runs through, and `Repo` on its ambient executor); `#[expose]` and `#[wire_enum]` make an entity its wire DTO, inputs and GraphQL object. The HTTP binding (the route-model binder `Bind`) lives behind the `http` feature, so a headless app links no HTTP stack."
+description = "SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`<PREFIX>_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`SeaOrmUnitOfWork`, the unit of work every edge runs through, and `Repo` on its ambient executor); `#[expose]` and `#[wire_enum]` make an entity its wire DTO, inputs and GraphQL object. The HTTP binding (the loader `#[authorize(A, bind = S)]` runs on a route) lives behind the `http` feature, so a headless app links no HTTP stack."
 keywords = ["framework", "nestrs", "seaorm", "database", "orm"]
 categories = ["database"]
 
@@ -19,17 +19,18 @@ all-features = true
 
 [features]
 default = []
-# The HTTP binding: `Bind<S, A>` (the extractor that loads + authorizes through
-# `CrudService::access`), the response mask and `#[crud]`'s error mapping. The
-# HTTP edge runs each request's unit of work through the port itself. A
-# headless app — a worker, a scheduler — leaves it off and links no HTTP stack.
-# `nest-rs-authz/http` is forwarded because `src/http/shape.rs` uses
-# `nest_rs_authz::http`.
+# The HTTP binding: the loader `#[authorize(A, bind = S)]` runs on a route
+# (through `CrudService::access`) and `#[crud]`'s error mapping. The HTTP edge
+# runs each request's unit of work through the port itself. A headless app — a
+# worker, a scheduler — leaves it off and links no HTTP stack.
+# `nest-rs-authz/http` is forwarded because a bound route arms
+# `nest_rs_authz::http::Authorize`, its class gate and its mask.
 http = [
     "dep:nest-rs-http",
     "nest-rs-authz/http",
 ]
-# GraphQL transport extractors: the `bind` resolver helper, and what
+# GraphQL transport extractors: the loader `#[authorize(A, bind = S)]` runs on
+# an operation, and what
 # `#[expose(…, graphql)]` emits: the object derives, the relation bridges and
 # their dataloaders.
 # `nest-rs-authz/graphql` is forwarded because `src/graphql/bind.rs` refuses
@@ -92,7 +93,7 @@ async-trait.workspace = true
 # `#[expose(..., soft_delete)]` registers its entity here at link time, so
 # every `Repo` read of it hides its tombstoned rows.
 inventory.workspace = true
-# `Bind` validates UUID v7 path ids, and an exposed entity's write DTO mints
+# A bound route validates UUID v7 path ids, and an exposed entity's write DTO mints
 # its `Uuid` primary key.
 uuid.workspace = true
 thiserror.workspace = true

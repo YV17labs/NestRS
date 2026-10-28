@@ -1,7 +1,7 @@
 //! Per-route, type-directed response shaping.
 //!
-//! A route whose handler declares a masking extractor (in practice the
-//! `Authorize<_, _>` gate or the `Bind<_, _>` binding) runs inside a
+//! A route whose posture declares a masking type (in practice the
+//! `Authorize<_, _>` an `#[authorize]` emits) runs inside a
 //! [`ResponseShaping`]: the extractor's crate captures what it needs off the
 //! request, installs ambient state around the handler, and rewrites the body
 //! before it ships.

@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
-use nest_rs::authz::{Create, Read};
+use nest_rs::authz::Create;
 use nest_rs::http::{
     Ctx, IntoResponse, Json, Request, Response, Result, Valid, caller_path, controller, crud,
     set_created_location,
 };
-use nest_rs::seaorm::Bind;
 
 use crate::Claims;
 use crate::authn::AuthnGuard;
@@ -25,6 +24,10 @@ pub struct UsersController {
     output = User,
     create = CreateUser,
     update = UpdateUser,
+    api(get(
+        summary = "Get a user in the caller's org by id",
+        description = "A user outside the caller's org answers 403, an absent one 404."
+    )),
 )]
 impl UsersController {
     #[post("/")]
@@ -49,15 +52,5 @@ impl UsersController {
         let mut res = Json(User::from(&user)).into_response();
         set_created_location(&mut res, caller_path(req), user.id);
         Ok(res)
-    }
-
-    #[get("/{id}")]
-    #[api(
-        summary = "Get a user in the caller's org by id",
-        description = "The id is bound to the loaded, authorized user through the \
-                       service — a row outside the caller's scope is 403, absent 404."
-    )]
-    async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
-        Json(User::from(&*user))
     }
 }

@@ -1,14 +1,15 @@
-//! `src/graphql/bind.rs`: a by-id load the database refuses logs the `DbErr`
-//! and answers a bare `internal error`, GraphQL having no rendering choke point.
+//! `src/graphql/bind.rs`: a by-id load `#[authorize(A, bind = S)]` runs, which
+//! the database refuses, logs the `DbErr` and answers a bare `internal error`,
+//! GraphQL having no rendering choke point.
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
 use nest_rs_core::{injectable, module};
 use nest_rs_graphql::GraphqlView;
-use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
+use nest_rs_graphql::async_graphql::SimpleObject;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_http::EndpointGuards;
-use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs_seaorm::{Authorized, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::{LogCapture, TestApp};
 use serde::{Deserialize, Serialize};
 
@@ -84,16 +85,12 @@ struct GhostsResolver;
 
 #[operations]
 impl GhostsResolver {
-    /// Calls `bind`, which owns the `Found`/`Denied`/`Missing` answer and the
+    /// Bound, so the load owns the `Found`/`Denied`/`Missing` answer and the
     /// error branch under test.
     #[query]
-    #[authorize(Read, ghost::Entity)]
-    async fn ghost(&self, ctx: &Context<'_>, id: String) -> GqlResult<Option<Ghost>> {
-        Ok(
-            nest_rs_seaorm::graphql::bind::<Read, GhostsService>(ctx, &id)
-                .await?
-                .map(Ghost::from),
-        )
+    #[authorize(Read, bind = GhostsService)]
+    async fn ghost(&self, ghost: Authorized<Read, ghost::Entity>) -> Ghost {
+        Ghost::from(ghost.into_inner())
     }
 }
 
@@ -178,16 +175,15 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
     );
 }
 
-/// The ability a field's own guard attaches is the one `bind` loads under:
+/// The ability a field's own guard attaches is the one the bound load runs under:
 /// the unit's, which the class gate checked — never one off the GraphQL
 /// context.
 mod ability_of_the_unit {
     use nest_rs_authz::{AbilityBuilder, Action, Read};
     use nest_rs_core::{Layer, UnitContext, injectable, module};
-    use nest_rs_graphql::async_graphql::{Context, Result as GqlResult};
     use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, operations, resolver};
     use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
-    use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
+    use nest_rs_seaorm::{Authorized, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
     use nest_rs_testing::{LogCapture, TestApp};
 
     use super::{Ghost, GhostsService, QUERY, ghost};
@@ -217,14 +213,10 @@ mod ability_of_the_unit {
     #[operations]
     impl FieldGhostsResolver {
         #[query]
-        #[authorize(Read, ghost::Entity)]
+        #[authorize(Read, bind = GhostsService)]
         #[use_guards(FieldAbility)]
-        async fn ghost(&self, ctx: &Context<'_>, id: String) -> GqlResult<Option<Ghost>> {
-            Ok(
-                nest_rs_seaorm::graphql::bind::<Read, GhostsService>(ctx, &id)
-                    .await?
-                    .map(Ghost::from),
-            )
+        async fn ghost(&self, ghost: Authorized<Read, ghost::Entity>) -> Ghost {
+            Ghost::from(ghost.into_inner())
         }
     }
 

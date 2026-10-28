@@ -53,12 +53,16 @@ pub enum Access<M> {
 /// [`CrudService::access`]; only the crate mints one. Read the model through
 /// [`Deref`](std::ops::Deref), or own it with
 /// [`into_inner`](Authorized::into_inner).
+///
+/// An HTTP route or a GraphQL operation receives it as a parameter when it
+/// declares `#[authorize(A, bind = S)]`: the attribute is the posture, and this
+/// type carries the row it loaded, nothing more.
 pub struct Authorized<A: ActionMarker, E: EntityTrait>(E::Model, PhantomData<fn() -> A>);
 
 impl<A: ActionMarker, E: EntityTrait> Authorized<A, E> {
     /// Crate-private: only a seam passing through [`CrudService::access`] mints
-    /// the proof, and the `graphql` bridge is the only one.
-    #[cfg(feature = "graphql")]
+    /// the proof — `#[authorize(A, bind = S)]`'s loader on each edge.
+    #[cfg(any(feature = "graphql", feature = "http"))]
     pub(crate) fn new(model: E::Model) -> Self {
         Self(model, PhantomData)
     }
@@ -249,7 +253,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a resource service",
     label = "expected a service implementing `CrudService`",
-    note = "`Bind<A, S>` and `bind::<A, S>` name the action FIRST and the service SECOND. If this type is an action marker, the two type parameters are swapped."
+    note = "`#[authorize(Action, bind = Service)]` names the service after `bind =`, and the action first. If this type is an action marker, the two are swapped."
 )]
 #[async_trait]
 pub trait CrudService: Send + Sync

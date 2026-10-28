@@ -355,8 +355,8 @@ lists what the boot, a log or the wire shows when one is missed.
    surface setting a security header or `Server` — now wins over the
    deployment's `<PREFIX>_HTTP__*` default, which fills only a response that
    sets none: a deployment relying on its global value to override a route's
-   removes the route's header. A `Scoped<T>` or a `Bind<A, S>` whose module the
-   app does not import fails the boot.
+   removes the route's header. A `Scoped<T>` or a service `bind = S` loads
+   through whose module the app does not import fails the boot.
 
 7. **Move every layer onto the unit context.** One pipeline runs every unit
    on every edge, and every layer reads it through `UnitContext` — see
@@ -791,6 +791,11 @@ lists what the boot, a log or the wire shows when one is missed.
     | `MaskReplyError::Irreconcilable(serde_json::Error)` | `MaskReplyError::Irreconcilable(DecodeError)` |
     | `ProblemDetails::from_error(status, title, err)` with any `Display` | the same with `&err`, an error, whose decode failure it says without the value; a sentence of your own is `.with_detail(…)` |
     | `panic_message(payload)` borrowed as a `&str` | an owned `String`, any decode failure in it said without the value |
+    | `post: Bind<Update, PostsService>` on a route, `nest_rs::seaorm::Bind` | `#[authorize(Update, bind = PostsService)]` on the route and `post: Authorized<Update, PostEntity>` as its parameter, `nest_rs::seaorm::Authorized`; the route's path names the id alone (`/{id}`, `/{id}/publish`) |
+    | `nest_rs::seaorm::graphql::bind::<A, S>(ctx, &id)` or `bind_required::<A, S>(ctx, &id)` in a resolver | `#[authorize(A, bind = S)]` on the operation and an `Authorized<A, E>` parameter, its `id` argument synthesised; a nullable lookup is `#[crud]`'s generated query, or `CrudService::access` in the body |
+    | a hand-written `Authorize<A, E>` parameter on a route that is not `#[public]` | `#[authorize(A, E)]` on the route, the parameter dropped |
+    | `nest_rs::authz::http::AbilityShaping` | nothing public: `#[authorize]` arms the mask |
+    | a hand-written `get` or `user` override on a `#[crud]` block, kept only for its `#[api]` text | `api(get(summary = "…", description = "…"))` in the `#[crud]` arguments, the override deleted |
 
     Name your own log target by the constant the feature declares, as a 7.0
     scaffold does (`pub const TARGET: &str = "features::chat";` in
@@ -1157,7 +1162,7 @@ lists what the boot, a log or the wire shows when one is missed.
   `OverriddenDependencyError` for an override nothing reads, `ScopedLayerError`
   for a transient layer on a job, a tick or a listener, `UngatedDiscoveryError`
   for a container built by hand that a transport discovers from, and a
-  `Scoped<T>` or `Bind<A, S>` whose module the app does not import.
+  `Scoped<T>` or a `bind = S` service whose module the app does not import.
 - **Layers.** The compile refuses every name step 7's left column lists, a
   guard listed by both `#[use_guards]` and `#[force_guards]`, a layer attribute
   an edge does not run — each with a sentence saying why — and a `#[meta]`

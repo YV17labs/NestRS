@@ -9,7 +9,8 @@
 //! a `#[query]`/`#[mutation]` makes `#[resolver]` emit the class gate
 //! ([`class_gate`](crate::class_gate), every edge's) and the response mask.
 //!
-//! Data-coupled bindings live in `nest_rs_seaorm::graphql` (`bind`).
+//! The row an operation loads by id, `#[authorize(A, bind = S)]`, is
+//! `nest-rs-seaorm`'s.
 //!
 //! ```
 //! # use nest_rs_authz::{AbilityBuilder, Action, Read};

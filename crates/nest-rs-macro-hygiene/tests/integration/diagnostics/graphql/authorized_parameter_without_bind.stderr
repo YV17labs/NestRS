@@ -1,0 +1,5 @@
+error: an `Authorized<Action, E>` parameter receives the subject `#[authorize(Action, bind = Service)]` loads, and this operation binds none — declare `bind = Service` in its `#[authorize]`, or drop the parameter: the type carries the row, the attribute the posture
+  --> tests/integration/diagnostics/graphql/authorized_parameter_without_bind.rs:32:34
+   |
+32 |     async fn archive_user(&self, user: Authorized<Update, users::Entity>) -> bool {
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

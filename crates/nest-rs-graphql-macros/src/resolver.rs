@@ -15,16 +15,16 @@ use syn::{
 
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
-    Collision, Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, InjectableBody,
-    PipeWrapper, SitePosture, VersionedEdge, answer_span, at_most_one_authorize, await_if_async,
-    build_injectable_body, cfg_attrs, concrete_signature, delegated_attrs, force_guard_typeids,
-    forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
-    handler_const, handler_ref, host_meta_fn, impl_self_ident, injected_keys_with_layers,
-    injected_methods_with_layers, injected_names_with_layers, injected_optional_fns,
-    injected_per_request_method, key_as_written, layer_deps, normalize_forwarded_args,
-    one_role_per_method, pipe_wrapper, posture_contradiction, posture_required,
-    reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident, site_fn_ident,
-    site_ref, takes_value, type_label, unknown_argument,
+    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Collision, Conditional, DispatchKeys,
+    HandlerSite, HostBorrow, HostMeta, InjectableBody, PipeWrapper, SitePosture, VersionedEdge,
+    answer_span, at_most_one_authorize, await_if_async, build_injectable_body, cfg_attrs,
+    concrete_signature, delegated_attrs, force_guard_typeids, forwarded_arg_idents,
+    forwarded_idents, from_container_method, guard_capability_bounds, handler_const, handler_ref,
+    host_meta_fn, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
+    injected_names_with_layers, injected_optional_fns, injected_per_request_method, key_as_written,
+    layer_deps, normalize_forwarded_args, one_role_per_method, pipe_wrapper, posture_contradiction,
+    posture_required, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
+    site_fn_ident, site_ref, takes_value, type_label, unknown_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -338,19 +338,29 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     }))
 }
 
+/// The parameter typed `Authorized<A, E>`, matched on the last path segment.
+fn authorized_param(sig: &Signature) -> Option<&FnArg> {
+    sig.inputs.iter().find(|arg| {
+        let FnArg::Typed(pt) = arg else { return false };
+        let Type::Path(tp) = &*pt.ty else {
+            return false;
+        };
+        tp.path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "Authorized")
+    })
+}
+
 /// The ident of the parameter typed `Authorized<A, E>`, matched on the last path segment.
 fn authorized_param_ident(sig: &Signature) -> Option<Ident> {
-    sig.inputs.iter().find_map(|arg| {
-        let FnArg::Typed(pt) = arg else { return None };
-        let Type::Path(tp) = &*pt.ty else { return None };
-        if tp.path.segments.last()?.ident != "Authorized" {
-            return None;
-        }
-        match &*pt.pat {
-            syn::Pat::Ident(pi) => Some(pi.ident.clone()),
-            _ => None,
-        }
-    })
+    let FnArg::Typed(pt) = authorized_param(sig)? else {
+        return None;
+    };
+    match &*pt.pat {
+        syn::Pat::Ident(pi) => Some(pi.ident.clone()),
+        _ => None,
+    }
 }
 
 /// Grouping key for a `#[field_resolver]`'s parent type — its **last path
@@ -1123,13 +1133,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             {
                 Some((spec, service)) => {
                     let Some(subject_ident) = authorized_param_ident(&sig) else {
-                        return Err(syn::Error::new_spanned(
-                            &method_name,
-                            "`#[authorize(Action, bind = Service)]` needs a parameter of type \
-                             `Authorized<Action, E>` to receive the bound subject — the action in \
-                             the type must match the one in the attribute (e.g. \
-                             `#[authorize(Update, bind = FilesService)]` ⇒ `Authorized<Update, FileEntity>`)",
-                        ));
+                        return Err(syn::Error::new_spanned(&method_name, BIND_NEEDS_AUTHORIZED));
                     };
                     let id_ident = spec.id_arg.clone().unwrap_or_else(|| format_ident!("id"));
                     Some((
@@ -1139,7 +1143,12 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         spec.action.clone(),
                     ))
                 }
-                None => None,
+                None => {
+                    if let Some(param) = authorized_param(&sig) {
+                        return Err(syn::Error::new_spanned(param, AUTHORIZED_NEEDS_BIND));
+                    }
+                    None
+                }
             };
             // The bound service resolves per call, so the boot checks its
             // provider as it checks a `Scoped<T>` parameter's.
@@ -1255,7 +1264,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // After the class gate, so a class-denied caller never reaches the database.
             let bind_prelude = bind_info.as_ref().map(|(service, _, id_ident, action)| {
                 quote! {
-                    let __subject = ::nest_rs_seaorm::graphql::bind_required::<#action, #service>(
+                    let __subject = ::nest_rs_seaorm::__private::graphql_bind::<#action, #service>(
                         #gctx, &#id_ident,
                     )
                     .await

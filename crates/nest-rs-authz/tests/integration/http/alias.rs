@@ -1,5 +1,7 @@
 //! A **renamed** `Authorize` alias (`use Authorize as Az`) arms the response
-//! shaper exactly like the canonical spelling.
+//! shaper exactly like the canonical spelling, on the public-reads route that
+//! writes the parameter by hand; on a route declaring no posture, the boot
+//! refuses it by its type, as the macro refuses the canonical spelling.
 //!
 //! `#[routes]` hands each parameter type to `nest_rs_http::__private::ShaperProbe`, so a
 //! rename changes the spelling, not the type.
@@ -93,12 +95,14 @@ fn probe_model(id: i32) -> gadget::Model {
 impl GadgetController {
     // Aliased parameter.
     #[get("/aliased/probe")]
+    #[public]
     async fn aliased_probe(&self, _authz: Az<Read, gadget::Entity>) -> Json<gadget::Model> {
         Json(probe_model(1))
     }
 
     // Literal-name control: identical posture with the canonical path.
     #[get("/literal/probe")]
+    #[public]
     async fn literal_probe(
         &self,
         _authz: nest_rs_authz::http::Authorize<Read, gadget::Entity>,
@@ -109,6 +113,7 @@ impl GadgetController {
     // Raw-`Model` body under the alias: the shaper is what strips the
     // unexposed `secret`.
     #[get("/aliased/raw")]
+    #[public]
     async fn aliased_raw(&self, _authz: Az<Read, gadget::Entity>) -> Json<gadget::Model> {
         Json(gadget::Model {
             id: 1,
@@ -185,5 +190,39 @@ async fn an_aliased_authorize_masks_a_raw_model_body() {
     assert!(
         !body.contains("secret") && !body.contains("s1"),
         "the unexposed column is stripped: {body}",
+    );
+}
+
+/// The alias on a route declaring no posture: the spelling the macro reads is
+/// gone, the type is not.
+#[controller(path = "/undeclared")]
+struct UndeclaredController;
+
+#[routes]
+impl UndeclaredController {
+    #[get("/")]
+    async fn probe(&self, _authz: Az<Read, gadget::Entity>) -> Json<gadget::Model> {
+        Json(probe_model(3))
+    }
+}
+
+#[module(providers = [GrantInjector, UndeclaredController])]
+struct UndeclaredModule;
+
+#[tokio::test]
+async fn an_aliased_gate_on_a_route_declaring_no_posture_refuses_the_boot() {
+    let Err(refused) = TestApp::builder()
+        .module::<UndeclaredModule>()
+        .use_guards_global([guard::<GrantInjector>()])
+        .build()
+        .await
+    else {
+        panic!("a gate a parameter's type declares is a posture no attribute shows");
+    };
+    let chain = format!("{refused:#}");
+    assert!(
+        chain.contains("UndeclaredController::probe")
+            && chain.contains("declares its posture by a parameter's type"),
+        "{chain}",
     );
 }

@@ -9,7 +9,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{ImplItem, ItemImpl, parse_quote};
 
-use nest_rs_codegen::__private::{Paginate, impl_self_ident, parse_crud_args};
+use nest_rs_codegen::__private::{
+    CrudDeclaration, CrudOp, Paginate, impl_self_ident, parse_crud_args,
+};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = match pair::HTTP.parse_operations(input.into()) {
@@ -47,8 +49,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         .map(|s| s.ident.to_string())
         .unwrap_or_else(|| "Resource".to_owned());
 
-    // Emitted as a path, not interpolated: `Bind<S, A>` and the GraphQL `bind`
-    // helper enforce the same rule and must read the same sentence.
+    // Emitted as a path, not interpolated: the loader `bind = Service` runs on
+    // every edge enforces the same rule and must read the same sentence.
     let id_v7_check: TokenStream2 = quote! {
         if __id.0.get_version_num() != 7 {
             return ::core::result::Result::Err(::nest_rs_http::HttpError::from(
@@ -70,11 +72,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     let mut generated: Vec<ImplItem> = Vec::new();
 
     if ops.list && !existing.contains("list") {
-        let summary = format!("List {noun}");
+        let api = api_args(&cfg, CrudOp::List, format!("List {noun}"));
         let list_method: ImplItem = match cfg.paginate {
             Paginate::None => parse_quote! {
                 #[get("/")]
-                #[api(summary = #summary)]
+                #[api(#api)]
                 #[authorize(::nest_rs_authz::Read, #entity)]
                 async fn list(
                     &self,
@@ -90,7 +92,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             Paginate::Cursor => parse_quote! {
                 #[get("/")]
                 // A built `Response` hides the payload from the signature: declared here.
-                #[api(summary = #summary, response = ::std::vec::Vec<#output>)]
+                #[api(#api, response = ::std::vec::Vec<#output>)]
                 // Read by `#[routes]` to declare the `Link` in the document.
                 #[crud_next_link]
                 #[authorize(::nest_rs_authz::Read, #entity)]
@@ -132,10 +134,10 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     }
 
     if ops.get && !existing.contains("get") {
-        let summary = format!("Fetch {noun} by id");
+        let api = api_args(&cfg, CrudOp::Get, format!("Fetch {noun} by id"));
         generated.push(parse_quote! {
             #[get("/{id}")]
-            #[api(summary = #summary)]
+            #[api(#api)]
             #[authorize(::nest_rs_authz::Read, #entity)]
             async fn get(
                 &self,
@@ -162,11 +164,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     if let Some(create) = ops.create
         && !existing.contains("create")
     {
-        let summary = format!("Create {noun}");
+        let api = api_args(&cfg, CrudOp::Create, format!("Create {noun}"));
         generated.push(parse_quote! {
             #[post("/")]
             // A built `Response` hides the payload from the signature: declared here.
-            #[api(summary = #summary, response = #output)]
+            #[api(#api, response = #output)]
             #[crud_write]
             // Read by `#[routes]` to declare the `Location` header in the document.
             #[crud_location]
@@ -206,12 +208,12 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     if let Some(update) = ops.update
         && !existing.contains("update")
     {
-        let summary = format!("Update {noun} by id");
+        let api = api_args(&cfg, CrudOp::Update, format!("Update {noun} by id"));
         generated.push(parse_quote! {
             // RFC 9110 §9.3.4: `Update<E>` carries every writable field, which
             // replace the row's — a replacement, not RFC 5789's partial patch.
             #[put("/{id}")]
-            #[api(summary = #summary)]
+            #[api(#api)]
             #[crud_write]
             #[authorize(::nest_rs_authz::Update, #entity)]
             async fn update(
@@ -245,10 +247,10 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     }
 
     if ops.delete && !existing.contains("delete") {
-        let summary = format!("Delete {noun} by id");
+        let api = api_args(&cfg, CrudOp::Delete, format!("Delete {noun} by id"));
         generated.push(parse_quote! {
             #[delete("/{id}")]
-            #[api(summary = #summary)]
+            #[api(#api)]
             #[crud_write]
             // Via `#[http_code]`, not a returned status, so the document advertises it.
             #[http_code(204)]
@@ -285,6 +287,20 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         #[::nest_rs_http::routes]
         #item
     })
+}
+
+/// The `summary` and `description` an operation's `#[api]` carries: what
+/// `api(<op>(…))` gives it, the default summary otherwise.
+fn api_args(cfg: &CrudDeclaration, op: CrudOp, summary: String) -> TokenStream2 {
+    let api = cfg.api(op);
+    let summary = match api.and_then(|api| api.summary.as_ref()) {
+        Some(written) => quote!(#written),
+        None => quote!(#summary),
+    };
+    match api.and_then(|api| api.description.as_ref()) {
+        Some(description) => quote!(summary = #summary, description = #description),
+        None => quote!(summary = #summary),
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +390,36 @@ mod tests {
         });
         assert!(out.contains("# [put (\"/{id}\")]"), "{out}");
         assert!(!out.contains("patch"), "{out}");
+    }
+
+    #[test]
+    fn api_documents_the_operation_it_names_and_leaves_the_others_their_default() {
+        let out = generated_methods(quote! {
+            service = svc, entity = E, output = Thing, ops = [list, get],
+            api(get(summary = "Get a thing in the caller's org", description = "Absent: 404.")),
+        });
+        assert!(
+            out.contains(
+                "# [api (summary = \"Get a thing in the caller's org\" , description = \"Absent: 404.\")]"
+            ),
+            "{out}",
+        );
+        assert!(out.contains("summary = \"List Thing\""), "{out}");
+    }
+
+    #[test]
+    fn api_naming_an_op_ops_leaves_out_fails_to_expand() {
+        let item: ItemImpl = parse_quote! { impl Things {} };
+        let err = crud(
+            quote! { service = svc, entity = E, output = Thing, ops = [list], api(get(summary = "x")) },
+            item,
+        )
+        .expect_err("docs for an op that is not generated must fail");
+        let err = err.to_string();
+        assert!(
+            err.contains("`get`") && err.contains("`ops` leaves out"),
+            "{err}"
+        );
     }
 
     #[test]

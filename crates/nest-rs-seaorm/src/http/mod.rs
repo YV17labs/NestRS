@@ -1,4 +1,3 @@
 mod bind;
-mod shape;
 
-pub use bind::Bind;
+pub use bind::http_bind;

@@ -104,6 +104,7 @@ that is the one knob, and it makes the field nullable on the wire too.
     update = UpdateOrg,
     paginate = cursor,    // optional — cursor is already the default; `none` opts out
     ops = [list, get, create, update, delete],  // optional — omit for all five
+    api(get(summary = "Get an org by id")),     // optional — one operation's OpenAPI text
 )]
 impl OrgsController {}
 ```
@@ -127,6 +128,11 @@ impl OrgsController {}
   by `CrudService::list`'s hard cap). It configures `list` and nothing else, so
   writing it beside an `ops` that leaves `list` out fails the build for the
   same reason an input type for an excluded op does.
+- `api(<op>(summary = "…", description = "…"))` gives a generated route the
+  OpenAPI text a hand-written one carries in `#[api]`; an operation it does
+  not name keeps its default summary (`Fetch Org by id`). Naming an op `ops`
+  leaves out fails the build, and a resolver refuses the key: a GraphQL field
+  you want described is one you write, with its doc comment.
 
 ## Override one handler, keep the rest
 
@@ -147,6 +153,10 @@ pub struct UsersController {
     output = User,
     create = CreateUser,
     update = UpdateUser,
+    api(get(
+        summary = "Get a user in the caller's org by id",
+        description = "A user outside the caller's org answers 403, an absent one 404."
+    )),
 )]
 impl UsersController {
     #[post("/")]
@@ -167,18 +177,14 @@ impl UsersController {
         set_created_location(&mut res, caller_path(req), user.id);
         Ok(res)
     }
-
-    #[get("/{id}")]
-    // … #[api(…)]
-    async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
-        Json(User::from(&*user))
-    }
 }
 ```
 
-The `create` and `get` methods take over their generated counterparts; the
-default `list`, `update` and `delete` are still emitted. Names match by
-ident — a hand-written `delete` cancels the generated one. An override
+The `create` method takes over its generated counterpart, because it reads
+the caller's org; the default `list`, `get`, `update` and `delete` are still
+emitted, and `api(get(…))` gives the generated `get` its document text rather
+than an override that would change nothing else. Names match by ident — a
+hand-written `delete` cancels the generated one. An override
 answers what the generated method does: this `create` keeps the `201` and
 its `Location` with `#[http_code(201)]` and `set_created_location`, built on
 the path `caller_path` reads.
@@ -212,15 +218,6 @@ impl UsersResolver {
         let user = self.svc.create_in_org(input, actor.org_id).await?;
         Ok(User::from(&user))
     }
-
-    #[query]
-    #[authorize(Read, UserEntity)]
-    async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        Ok(bind::<Read, UsersService>(ctx, &id)
-            .await?
-            .as_ref()
-            .map(User::from))
-    }
 }
 ```
 
@@ -229,8 +226,8 @@ Every operation — generated or hand-written — declares its posture with
 `#[public]`; an operation with none does not compile. Posture is **always**
 a visible attribute — a parameter type never stands in for it.
 
-Same override rule — the GraphQL `create_user` and `user` you wrote take
-over; `users`, `update_user`, `delete_user` are generated.
+Same override rule — the GraphQL `create_user` you wrote takes over;
+`users`, `user`, `update_user`, `delete_user` are generated.
 
 ## When the database refuses
 
@@ -257,74 +254,81 @@ is Non-Null, whose `null` reaches `data` and rolls the whole operation back
 ## Bound mutations
 
 A **bound mutation** acts on one existing row the caller already named by
-id — `publish`, `archive`, `confirm`. It declares its posture like any
-other operation — a **visible `#[authorize(Action, Entity)]`** — then loads
-the row in the body with `bind_required`, which returns the
-`Authorized<A, E>` proof to hand straight to the service:
+id — `publish`, `archive`, `confirm`. It declares its posture and the row it
+loads in one attribute, `#[authorize(Action, bind = Service)]`, and receives
+the row as an `Authorized<Action, E>` parameter to hand straight to the
+service — on HTTP, from the route's path:
 
-```rust title="crates/features/src/posts/graphql/resolver.rs"
-#[crud(service = svc, entity = PostEntity, output = Post, /* … */)]
-impl PostsResolver {
-    #[mutation]
-    #[authorize(Update, PostEntity)]
-    async fn publish_post(&self, ctx: &Context<'_>, id: String) -> Result<Post> {
-        let post = bind_required::<Update, PostsService>(ctx, &id).await?;
-        Ok(Post::from(&self.svc.publish(post).await?))
+```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
+    #[post("/{id}/publish")]
+    #[authorize(Update, bind = PostsService)]
+    #[use_guards(PostAuthorGuard)]
+    // …
+    async fn publish(
+        &self,
+        post: Authorized<Update, PostEntity>,
+        actor: Ctx<PostAuthor>,
+    ) -> Result<Json<Post>> {
+        let PostAuthor(actor_id) = *actor;
+        Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
     }
-}
+```
+
+and on GraphQL, from an `id: String!` argument the attribute synthesises:
+
+```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo, abridged)"
+    #[mutation]
+    #[authorize(Update, bind = PostsService)]
+    #[use_guards(PostAuthorGuard)]
+    async fn publish_post(
+        &self,
+        ctx: &Context<'_>,
+        post: Authorized<Update, PostEntity>,
+    ) -> Result<Post> {
+        // …
+        self.svc
+            .publish(post.into_inner(), actor_id)
+            .await
+            .map_err(|error| problem_error(&error))
+    }
 ```
 
 Two pieces, each with one job:
 
-- `#[authorize(Update, PostEntity)]` is the **posture** — the class gate
-  before the body and the response mask after it. This is the only thing
+- `#[authorize(Update, bind = PostsService)]` is the **posture** — the class
+  gate before the body and the response mask after it, the entity derived
+  from `PostsService::Entity` — and the **binding**: it parses the id, runs
+  the row-level access check for `Update` (404 on a missing row, `FORBIDDEN`
+  on a denied one) after the gate, and loads the row. This is the only thing
   that decides authorization, and it is greppable.
-- `bind_required::<Update, PostsService>(ctx, &id)` is the **binding** —
-  it parses the id, runs the row-level access check for `Update` (404 on a
-  missing row, `FORBIDDEN` on a denied one), and returns the loaded
-  `Authorized<Update, PostEntity>`.
+- `Authorized<Update, PostEntity>` is the **value** — the loaded row, which
+  derefs to the `Model` and gives it up with `into_inner()`.
 
 The action lives **in the type**, so the proof is action-true: a service
 method that takes `Authorized<Update, E>` cannot be handed an
 `Authorized<Read, E>` — a compile error, not a runtime surprise. The
 `Authorized<A, E>` value is also *proof of authorization*: its constructor
-is sealed, mintable only by the binding seams, so the mutation body can
-neither reach a row the caller could not load nor act under an action it
-was not granted.
+is sealed, mintable only by the binding, so the mutation body can neither
+reach a row the caller could not load nor act under an action it was not
+granted.
 
 <Aside type="caution">
-Posture is **always** the visible `#[authorize]`/`#[public]` — a bare
-`Authorized<A, E>` parameter is never accepted as a standalone posture.
-Only a guard, via the attribute, decides authn/authz; `bind_required` and
-the `Authorized` proof are enforcement plumbing the decision flows into.
+Posture is **always** the visible `#[authorize]`/`#[public]` — an
+`Authorized<A, E>` parameter is never a posture of its own: written without
+`bind = Service` beside it, it does not compile. Only a guard, via the
+attribute, decides authn/authz; the `Authorized` value is what the decision
+loaded.
 </Aside>
 
-The `#[authorize(Update, bind = PostsService)]` form is a shorthand: it keeps
-the posture explicit **and** binds the `Authorized<A, E>` subject for you from
-the service, so the body never calls `bind_required` itself. The service is
-resolved as the HTTP `Bind<A, S>` resolves it, through the request's scope, and
-the boot checks it like an injected one: a resolver whose module does not import
-the service's own fails the boot rather than its first call.
-It also **synthesises the `id: String!` SDL argument** — so the method must not
-declare an `id` parameter of its own:
-
-```rust title="crates/features/src/posts/graphql/resolver.rs"
-use nest_rs::seaorm::Authorized;
-
-#[mutation]
-#[authorize(Update, bind = PostsService)]
-async fn publish_post(
-    &self,
-    _ctx: &Context<'_>,
-    subject: Authorized<Update, PostEntity>,   // the proof, already loaded
-) -> Result<Post> {
-    Ok(Post::from(&self.svc.publish(subject).await?))
-}
-```
-
-Writing `id: String` alongside it is `E0415: identifier 'id' is bound more than
-once in this parameter list`, reported against the `#[crud(…)]` attribute on the
-impl block rather than the method — drop the parameter, not the attribute.
+The service is resolved through the request's scope, and the boot checks it
+like an injected one: a controller or resolver whose module does not import
+the service's own fails the boot rather than its first call. On GraphQL the
+synthesised `id` argument means the method must not declare an `id`
+parameter of its own: writing `id: String` alongside it is `E0415: identifier
+'id' is bound more than once in this parameter list`, reported against the
+`#[crud(…)]` attribute on the impl block rather than the method — drop the
+parameter, not the attribute; `id_arg = …` renames the argument. On HTTP the
+id is the route's one path parameter, so the path names it alone.
 
 ## Pagination
 
@@ -433,7 +437,7 @@ impl Deletable for PostsService {}
 
 | Concern | Behaviour |
 |---------|-----------|
-| Every `Repo` read and update — `list`, `page`, `access`, `Bind`, relation batches, a custom `Repo::scoped` query, `Repo::unscoped` | ANDs `deleted_at IS NULL` after the ability scope: a deleted row reads as absent |
+| Every `Repo` read and update — `list`, `page`, `access`, a bound subject, relation batches, a custom `Repo::scoped` query, `Repo::unscoped` | ANDs `deleted_at IS NULL` after the ability scope: a deleted row reads as absent |
 | `delete` (via `Deletable`) | `UPDATE … SET deleted_at = now()` — idempotent |
 | Reading a deleted row | `Repo::<E>::with_tombstones(action)` — the one way (admin, retention) |
 | Restoring a deleted row | Not offered in 7.0: `Repo::update` hides a tombstone too; `Repo::restore` is planned for 7.x |

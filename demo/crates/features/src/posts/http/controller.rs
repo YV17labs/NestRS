@@ -5,7 +5,7 @@ use nest_rs::http::{
     Ctx, IntoResponse, Json, Request, Response, Result, Valid, caller_path, controller, crud,
     set_created_location,
 };
-use nest_rs::seaorm::Bind;
+use nest_rs::seaorm::Authorized;
 
 use super::exception_filter::PostProblemFilter;
 use super::interceptor::PostAuditInterceptor;
@@ -60,19 +60,19 @@ impl PostsController {
     }
 
     #[post("/{id}/publish")]
-    #[authorize(Update, PostEntity)]
+    #[authorize(Update, bind = PostsService)]
     #[use_guards(PostAuthorGuard)]
     #[use_exception_filters(PostProblemFilter)]
     #[api(
         summary = "Publish a draft post",
         description = "Transitions a draft to published and writes a publication audit row in the \
-                       same transaction. The id is bound to the loaded, `Update`-authorized post \
-                       through the service. Re-publishing an already published post returns RFC \
-                       9457 `application/problem+json` (409)."
+                       same transaction. The id loads the `Update`-authorized post through the \
+                       service. Re-publishing an already published post returns RFC 9457 \
+                       `application/problem+json` (409)."
     )]
     async fn publish(
         &self,
-        post: Bind<Update, PostsService>,
+        post: Authorized<Update, PostEntity>,
         actor: Ctx<PostAuthor>,
     ) -> Result<Json<Post>> {
         let PostAuthor(actor_id) = *actor;

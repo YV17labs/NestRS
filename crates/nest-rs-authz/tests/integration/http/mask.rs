@@ -109,6 +109,7 @@ struct WidgetController;
 #[routes]
 impl WidgetController {
     #[get("/{id}")]
+    #[public]
     async fn one(&self, _authz: Authorize<Read, widget::Entity>) -> Json<WidgetDto> {
         Json(WidgetDto {
             id: 1,
@@ -116,7 +117,7 @@ impl WidgetController {
         })
     }
 
-    // The decorator form arms exactly what the hand-written `Authorize<..>` parameter arms.
+    // The decorator form arms exactly what the public-reads `Authorize<..>` parameter arms.
     #[get("/decorated")]
     #[authorize(Read, widget::Entity)]
     async fn decorated(&self) -> Json<widget::Model> {
@@ -128,7 +129,8 @@ impl WidgetController {
     }
 
     #[get("/")]
-    async fn list(&self, _authz: Authorize<Read, widget::Entity>) -> Json<Vec<WidgetDto>> {
+    #[authorize(Read, widget::Entity)]
+    async fn list(&self) -> Json<Vec<WidgetDto>> {
         Json(vec![
             WidgetDto {
                 id: 1,
@@ -145,7 +147,8 @@ impl WidgetController {
     // `secret`. The shaper must still strip it: masking keys on the entity's
     // static wire-key set, not on whatever the body shipped.
     #[get("/raw/one")]
-    async fn raw_one(&self, _authz: Authorize<Read, widget::Entity>) -> Json<widget::Model> {
+    #[authorize(Read, widget::Entity)]
+    async fn raw_one(&self) -> Json<widget::Model> {
         Json(widget::Model {
             id: 1,
             name: "ada".into(),
@@ -157,7 +160,8 @@ impl WidgetController {
     // returns fewer rows than the body) under an unrestricted grant on id=1.
     // The dropped-row branch must still strip `secret` from the survivor.
     #[get("/raw/list")]
-    async fn raw_list(&self, _authz: Authorize<Read, widget::Entity>) -> Json<Vec<widget::Model>> {
+    #[authorize(Read, widget::Entity)]
+    async fn raw_list(&self) -> Json<Vec<widget::Model>> {
         Json(vec![
             widget::Model {
                 id: 1,
@@ -174,34 +178,39 @@ impl WidgetController {
 
     /// RFC 6839: `+json` is a structured syntax suffix, so this **is** JSON.
     #[get("/vendor")]
-    async fn vendor(&self, _authz: Authorize<Read, widget::Entity>) -> nest_rs_http::Response {
+    #[authorize(Read, widget::Entity)]
+    async fn vendor(&self) -> nest_rs_http::Response {
         raw_widget_response(Some("application/vnd.api+json"))
     }
 
     /// RFC 9110 §8.3.1: type and subtype are case-insensitive, so this is the
     /// *same* media type as `application/json`.
     #[get("/upper")]
-    async fn upper(&self, _authz: Authorize<Read, widget::Entity>) -> nest_rs_http::Response {
+    #[authorize(Read, widget::Entity)]
+    async fn upper(&self) -> nest_rs_http::Response {
         raw_widget_response(Some("Application/JSON"))
     }
 
     /// Parameters are not part of the media type.
     #[get("/charset")]
-    async fn charset(&self, _authz: Authorize<Read, widget::Entity>) -> nest_rs_http::Response {
+    #[authorize(Read, widget::Entity)]
+    async fn charset(&self) -> nest_rs_http::Response {
         raw_widget_response(Some("application/json; charset=utf-8"))
     }
 
     /// Nothing declared at all — the shaper cannot classify it, so it must not
     /// guess in the direction that ships the body.
     #[get("/untyped")]
-    async fn untyped(&self, _authz: Authorize<Read, widget::Entity>) -> nest_rs_http::Response {
+    #[authorize(Read, widget::Entity)]
+    async fn untyped(&self) -> nest_rs_http::Response {
         raw_widget_response(None)
     }
 
     /// A declared non-JSON type still passes through untouched: the handler said
     /// what it was returning, and there is no entity in it to mask.
     #[get("/csv")]
-    async fn csv(&self, _authz: Authorize<Read, widget::Entity>) -> nest_rs_http::Response {
+    #[authorize(Read, widget::Entity)]
+    async fn csv(&self) -> nest_rs_http::Response {
         nest_rs_http::Response::builder()
             .content_type(nest_rs_http::HeaderValue::from_static("text/csv"))
             .body("id,name\n1,ada\n")
@@ -483,6 +492,7 @@ async fn a_non_json_response_passes_through() {
     #[routes]
     impl PlainController {
         #[get("/")]
+        #[public]
         async fn plain(&self, _authz: Authorize<Read, widget::Entity>) -> String {
             "hello".into()
         }

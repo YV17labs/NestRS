@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `Authorize<u8>: FromRequest<'_>` is not satisfied
-  --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:19:34
+  --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:20:34
    |
-19 |     async fn list(&self, _authz: Authorize<u8>) -> Result<Json<u8>> {
+20 |     async fn list(&self, _authz: Authorize<u8>) -> Result<Json<u8>> {
    |                                  ^^^^^^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
@@ -11,13 +11,13 @@ help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
    | ^^^^^^^^^^^^^^^^^^^
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::nest_rs_http::Request
-             Bind<A, S>
              ClientIp
              Ctx<T>
              RawBody
              Result<T, HttpError>
              nest_rs::nest_rs_authz::http::Authorize<A, S>
              nest_rs::nest_rs_authz::http::Scope<E, A>
+             nest_rs::nest_rs_http::Body
            and $N others
 
 error[E0277]: the trait bound `Authorize<u8>: FromRequest<'_>` is not satisfied
@@ -33,20 +33,20 @@ help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
    | ^^^^^^^^^^^^^^^^^^^
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::nest_rs_http::Request
-             Bind<A, S>
              ClientIp
              Ctx<T>
              RawBody
              Result<T, HttpError>
              nest_rs::nest_rs_authz::http::Authorize<A, S>
              nest_rs::nest_rs_authz::http::Scope<E, A>
+             nest_rs::nest_rs_http::Body
            and $N others
    = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `Authorize<u8>: RouteResponseShaper` is not satisfied
-  --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:19:34
+  --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:20:34
    |
-19 |     async fn list(&self, _authz: Authorize<u8>) -> Result<Json<u8>> {
+20 |     async fn list(&self, _authz: Authorize<u8>) -> Result<Json<u8>> {
    |                                  ^^^^^^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `RouteResponseShaper` is not implemented for `Authorize<u8>`
@@ -54,25 +54,15 @@ help: the trait `RouteResponseShaper` is not implemented for `Authorize<u8>`
    |
 11 | struct Authorize<T>(T);
    | ^^^^^^^^^^^^^^^^^^^
-help: the following other types implement trait `RouteResponseShaper`
-  --> $WORKSPACE/crates/nest-rs-seaorm/src/http/shape.rs
-   |
-   | / impl<A, S> RouteResponseShaper for Bind<A, S>
-   | | where
-   | |     S: CrudService,
-   | |     A: ActionMarker,
-   | |     S::Entity: EntityTrait + WireModelDefaults,
-   | |     <S::Entity as EntityTrait>::Model: DeserializeOwned + Serialize,
-   | |____________________________________________________________________^ `Bind<A, S>`
-   |
-  ::: $WORKSPACE/crates/nest-rs-authz/src/http/mask.rs
+help: the trait `RouteResponseShaper` is implemented for `nest_rs::nest_rs_authz::http::Authorize<A, S>`
+  --> $WORKSPACE/crates/nest-rs-authz/src/http/mask.rs
    |
    | / impl<A, S> RouteResponseShaper for Authorize<A, S>
    | | where
    | |     A: ActionMarker,
    | |     S: EntityTrait + WireModelDefaults,
    | |     S::Model: DeserializeOwned + Serialize,
-   | |___________________________________________^ `nest_rs::nest_rs_authz::http::Authorize<A, S>`
+   | |___________________________________________^
 note: required by a bound in `__nestrs_assert_route_shaper`
   --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:16:1
    |

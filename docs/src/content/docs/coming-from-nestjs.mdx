@@ -21,7 +21,8 @@ pub struct UsersController {
 #[routes]
 impl UsersController {
     #[get("/{id}")]
-    async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
+    #[authorize(Read, bind = UsersService)]
+    async fn get(&self, user: Authorized<Read, UserEntity>) -> Json<User> {
         Json(User::from(&*user))
     }
 }
@@ -276,9 +277,11 @@ context](/fundamentals/execution-context/) is the reference.
 job they do is already done by the parameter's **type**. A handler declares
 `Path<Uuid>`, `Query<Filters>`, `Json<CreatePost>` or `Valid<Json<CreatePost>>`,
 and the extraction, the parse and the `400` on malformed input come from that
-type. The same applies to the request-scoped `Scoped<T>`, the guard-attached
-`Ctx<T>`, and `Bind<Action, Service>` — [Extractors](/http/extractors/) is the
-full list.
+type. The same applies to the request-scoped `Scoped<T>` and the
+guard-attached `Ctx<T>` — [Extractors](/http/extractors/) is the full list. A
+type never declares who may call: `Authorized<Action, E>` receives the row an
+`#[authorize(Action, bind = Service)]` beside it loaded, and only the attribute
+is the posture.
 
 Interceptors follow the same move. There is no RxJS: `intercept` is an
 `async fn` receiving `Next<'_>`, and "after the handler" is the code you write
@@ -334,12 +337,15 @@ export class UsersController {
 
 The NestRS equivalent is the snippet that opened this page. The guard binding,
 the injected service and the route decorator each have a direct counterpart —
-the one line with no counterpart is the parameter. `@Param('id') id: string`
-hands you a string to look up; `Bind<Read, UsersService>` hands you the row.
+the lines with no counterpart are the posture and the parameter.
+`@Param('id') id: string` hands you a string to look up;
+`#[authorize(Read, bind = UsersService)]` hands you the row, as an
+`Authorized<Read, UserEntity>`.
 
 The org scoping is not an argument you thread through by hand. The guard
-established the principal, and `Bind` resolves the id to a row the caller is
-authorized to read — outside the caller's org is a 403, absent is a 404.
+established the principal, and the bound load resolves the id to a row the
+caller is authorized to read — outside the caller's org is a 403, absent is a
+404.
 
 ## Going further
 

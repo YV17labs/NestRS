@@ -4,7 +4,7 @@ use async_graphql::futures_util::stream::Stream;
 use async_graphql::{Context, Error, Result};
 use nest_rs::authz::{Read, Update};
 use nest_rs::graphql::{crud, problem_error, resolver};
-use nest_rs::seaorm::graphql::bind;
+use nest_rs::seaorm::Authorized;
 
 use crate::Claims;
 use crate::authz::AuthzGuard;
@@ -27,21 +27,20 @@ pub struct PostsResolver {
 )]
 impl PostsResolver {
     #[mutation]
-    #[authorize(Update, PostEntity)]
+    #[authorize(Update, bind = PostsService)]
     #[use_guards(PostAuthorGuard)]
-    async fn publish_post(&self, ctx: &Context<'_>, id: String) -> Result<Option<Post>> {
+    async fn publish_post(
+        &self,
+        ctx: &Context<'_>,
+        post: Authorized<Update, PostEntity>,
+    ) -> Result<Post> {
         let actor_id = ctx.data::<Claims>()?.sub.user_id().ok_or_else(|| {
             async_graphql::Error::new("PostAuthorGuard must run before publish_post")
         })?;
-        match bind::<Update, PostsService>(ctx, &id).await? {
-            Some(model) => self
-                .svc
-                .publish(model, actor_id)
-                .await
-                .map(Some)
-                .map_err(|error| problem_error(&error)),
-            None => Ok(None),
-        }
+        self.svc
+            .publish(post.into_inner(), actor_id)
+            .await
+            .map_err(|error| problem_error(&error))
     }
 
     #[subscription]

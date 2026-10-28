@@ -96,6 +96,7 @@ fn hand_route_guard_stage(
             method: Vec::new(),
             force: Vec::new(),
             gates: Vec::new(),
+            authorized: false,
             masked: false,
         },
     )
@@ -122,6 +123,10 @@ pub struct RouteGuards {
     /// The posture's class gates, selected by type off what the route
     /// declares.
     pub gates: Vec<GateFn>,
+    /// The route declares `#[authorize]`, so a gate is its posture's; on a
+    /// route declaring neither it nor `#[public]`, a gate can only come from a
+    /// parameter's type, and the boot refuses it.
+    pub authorized: bool,
     /// Whether a response shaper masks the route's reply.
     pub masked: bool,
 }
@@ -137,6 +142,13 @@ pub fn route_guard_stage(
     declared: RouteGuards,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
     let label = route_label(handler);
+    if !declared.authorized && handler.posture() != Posture::Public && !declared.gates.is_empty() {
+        anyhow::bail!(
+            "{label} declares its posture by a parameter's type, which arms a class gate no \
+             attribute shows — declare it with `#[authorize(Action, Entity)]`, or write the \
+             `Authorize<Action, Entity>` parameter beside `#[public]` alone"
+        );
+    }
     let host = resolve_scoped(container, &declared.host, LayerSite::Host, &label)
         .inspect_err(report_unresolved)?;
     let method = resolve_scoped(container, &declared.method, LayerSite::Method, &label)

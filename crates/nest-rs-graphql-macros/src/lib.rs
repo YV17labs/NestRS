@@ -116,6 +116,9 @@ pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
 /// UUID-v7 keys being time-ordered); `paginate = none` opts out into the
 /// full collection, backstopped by `CrudService::list`'s hard cap.
 ///
+/// `api(…)`, which documents a controller's generated routes, is refused: an
+/// operation that needs a description is one you write, with its doc comment.
+///
 /// # Expands to
 ///
 /// The missing operation methods — each delegating to the entity's

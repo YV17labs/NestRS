@@ -76,7 +76,8 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// the `HttpControllerMeta` route table the transport mounts — its mount
 /// registering each route on the transport's `HttpRoutes`, its site's chains
 /// composed against the container — and declaring, per parameter type, the
-/// provider an extractor resolves per request (`Scoped<T>`, `Bind<A, S>`),
+/// provider an extractor resolves per request (`Scoped<T>`, the service an
+/// `#[authorize(A, bind = S)]` loads through),
 /// which the boot's access graph checks.
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -84,7 +85,11 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Grammar: `#[crud(entity = …::Entity, output = Dto, create = CreateDto,
-/// update = UpdateDto, ops = [list, get, ...], paginate = cursor|none)]`.
+/// update = UpdateDto, ops = [list, get, ...], paginate = cursor|none,
+/// api(get(summary = "…", description = "…"), ...))]`.
+///
+/// `api` gives a generated route the OpenAPI text a hand-written one carries in
+/// `#[api]`; an operation it does not name keeps its default summary.
 ///
 /// `ops` selects which operations to generate; omit it for all five. A write
 /// op is generated only when the resource offers it: `create`/`update` require

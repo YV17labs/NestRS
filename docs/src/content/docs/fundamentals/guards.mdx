@@ -143,12 +143,12 @@ graph must reach.
 use std::sync::Arc;
 use nest_rs::authz::Read;
 use nest_rs::http::{Json, Path, Result, controller, routes};
-use nest_rs::seaorm::Bind;
+use nest_rs::seaorm::Authorized;
 use uuid::Uuid;
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
-use crate::posts::{AdminGuard, Post, PostsService};
+use crate::posts::{AdminGuard, Entity as PostEntity, Post, PostsService};
 
 #[controller(path = "/posts")]
 #[use_guards(AuthnGuard, AuthzGuard)]
@@ -160,7 +160,8 @@ pub struct PostsController {
 #[routes]
 impl PostsController {
     #[get("/{id}")]
-    async fn get(&self, post: Bind<Read, PostsService>) -> Json<Post> {
+    #[authorize(Read, bind = PostsService)]
+    async fn get(&self, post: Authorized<Read, PostEntity>) -> Json<Post> {
         Json(Post::from(&*post))
     }
 
@@ -230,7 +231,7 @@ flowchart TB
 
 Solid arrows are the guard chain on `GET /posts/{id}`. `DELETE` adds
 `AdminGuard` on top. `AuthnGuard` attaches `Claims`; `AuthzGuard` builds
-the ambient `Ability` handlers and `Bind` read through.
+the ambient `Ability` the route's class gate and its bound load read.
 
 ## The three scopes
 
@@ -512,8 +513,8 @@ compiler refuses that second listing:
 ```rust title="crates/features/src/posts/http/controller.rs"
 #[post("/{id}/publish")]
 #[force_guards(FreshTokenGuard)]        // replay, even though the pool ran it
-#[authorize(Update, PostEntity)]
-async fn publish(&self, post: Bind<Update, PostsService>) -> Result<Json<Post>> { /* ... */ }
+#[authorize(Update, bind = PostsService)]
+async fn publish(&self, post: Authorized<Update, PostEntity>) -> Result<Json<Post>> { /* ... */ }
 ```
 
 Reach for it when a guard's answer can go stale between the pool's site and

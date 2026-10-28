@@ -1,7 +1,9 @@
-//! The 1.1.x parameter order: service first, action second.
+//! `bind =` names the service that loads the subject; an action marker there —
+//! the action and the service swapped — is refused with the note saying so.
 
 use nest_rs::authz::Read;
-use nest_rs::seaorm::{Bind, CrudService};
+use nest_rs::http::{controller, routes};
+use nest_rs::seaorm::{Authorized, CrudService};
 
 mod widget {
     use sea_orm::entity::prelude::*;
@@ -25,6 +27,16 @@ impl CrudService for WidgetsService {
     type Entity = widget::Entity;
 }
 
-fn swapped(_bound: Bind<WidgetsService, Read>) {}
+#[controller(path = "/widgets")]
+struct WidgetsController;
+
+#[routes]
+impl WidgetsController {
+    #[get("/{id}")]
+    #[authorize(Read, bind = Read)]
+    async fn get(&self, widget: Authorized<Read, widget::Entity>) -> String {
+        widget.id.to_string()
+    }
+}
 
 fn main() {}

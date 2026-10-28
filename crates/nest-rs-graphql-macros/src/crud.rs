@@ -25,6 +25,16 @@ pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
 
 fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let cfg = parse_crud_args(args)?;
+    if let Some(written) = cfg.api_written() {
+        return Err(syn::Error::new(
+            written,
+            format!(
+                "{} documents the generated routes' OpenAPI operations, and a resolver serves \
+                 none — write the operation by hand, with its doc comment as its description",
+                nest_rs_codegen::__private::site("crud", Some("api")),
+            ),
+        ));
+    }
     let ops = cfg.generated_ops()?;
 
     let existing: HashSet<String> = item

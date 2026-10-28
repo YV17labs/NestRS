@@ -1,0 +1,5 @@
+error: a hand-written `Authorize<Action, Entity>` parameter is the public-reads spelling, written beside `#[public]` alone — declare this route's posture with `#[authorize(Action, Entity)]`, which arms the same gate and mask
+  --> tests/integration/diagnostics/http/authorize_parameter_off_a_public_route.rs:31:26
+   |
+31 |     async fn list(&self, _authz: Authorize<Read, posts::Entity>) -> String {
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

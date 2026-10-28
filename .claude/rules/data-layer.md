@@ -18,8 +18,8 @@ paths:
 Controllers, resolvers, gateways, tools and dataloader code **delegate**; they
 never touch `Repo` or the ORM. `Repo` runs every query on the ambient executor
 and filters reads **and** by-id writes by the ambient ability's condition — no
-ability means system work, unscoped. Route-model binding (`Bind`) goes through
-`CrudService::access`.
+ability means system work, unscoped. Binding a subject by id (`bind = S`) goes
+through `CrudService::access`.
 
 **`Repo` hands out no connection**, held by types: its selects run on the
 ambient executor themselves, and the handle a unit installs is private to its
@@ -269,9 +269,10 @@ handler they bypass the posture nobody can then `rg` for.
 
 ## Extractors and the carried ability
 
-**`Bind<A, S>`** loads and authorizes through the service (404 absent, 403
-denied) and needs an `AbilityGuard` on the route; **`Scope<E, A>`** hands a
-hand-built query the explicit `Condition`.
+**`#[authorize(A, bind = S)]`** loads and authorizes through the service (404
+absent, 403 denied) into the operation's `Authorized<A, E>` parameter, on HTTP
+and GraphQL alike, and needs an `AbilityGuard` on the route; **`Scope<E, A>`**
+hands a hand-built query the explicit `Condition`.
 
 Each edge's authz half lives in `nest-rs-authz` and its data-layer half in
 `nest-rs-seaorm`, each behind the matching edge feature — **the split avoids a

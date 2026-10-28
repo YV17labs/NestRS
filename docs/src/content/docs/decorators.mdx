@@ -63,7 +63,7 @@ host or a worker's impl block, and a method one of its handlers.
 | `#[interceptor]` | struct | Makes a struct an interceptor its module's import brings to every unit — at the handler stage, or around the guards with `stage = unit` | [Interceptors](/fundamentals/interceptors/#brought-by-a-module-interceptor) |
 | `#[meta]` | host or method | Declares typed metadata, the method's over its host's (repeatable); read back by a layer through `cx.reflector()` | [Execution context](/fundamentals/execution-context/#read-what-the-site-declared) |
 | `#[public]` | method | Access posture: the unit admits an anonymous caller — guards relax, no mask | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
-| `#[authorize]` | method | Access posture: gates the unit by ability (`Action`, `Entity`) and masks the response | [Authorization](/security/authorization/) |
+| `#[authorize]` | method | Access posture: gates the unit by ability (`Action`, `Entity`) and masks the response; `bind = Service` also loads the row an id names into an `Authorized<Action, E>` parameter, on a route or a GraphQL operation | [Authorization](/security/authorization/), [Route model binding](/security/authorization/by-id-binding/) |
 
 ## Layer attributes, pair by pair
 

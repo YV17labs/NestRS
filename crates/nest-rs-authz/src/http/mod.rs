@@ -7,12 +7,13 @@
 //! on [`Authorize`] installs the ability as ambient state (data-layer scoping)
 //! and masks the response — no `mask` call in the handler.
 //!
-//! By-id route-model binding lives in `nest_rs_seaorm::Bind`.
+//! A route loads its subject by id with `#[authorize(A, bind = S)]`, whose
+//! loader lives in `nest-rs-seaorm`.
 
 mod authorize;
 mod mask;
 mod scope;
 
 pub use authorize::Authorize;
-pub use mask::{AbilityShaping, mask_entity_response};
+pub use mask::mask_entity_response;
 pub use scope::Scope;

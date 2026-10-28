@@ -167,10 +167,11 @@ every input of the app at once — a body, a GraphQL operation's variables, a
 WebSocket message's `data` — is a [global pipe](/fundamentals/global-pipes/),
 registered in `main`.
 
-## Pipes vs `Bind`
+## Pipes vs a bound subject
 
 A pipe converts a *primitive* input — an ID string into a `Uuid`, a JSON
-blob into a validated DTO. A [`Bind<A, S>`](/database/) extractor goes
+blob into a validated DTO. A route declaring
+[`#[authorize(A, bind = S)]`](/security/authorization/by-id-binding/) goes
 further: it parses the id, **loads the row through a service**, and
 **authorizes** it — returning `404` if the row doesn't exist within the
 caller's scope, `403` if denied.
@@ -182,17 +183,18 @@ async fn validate(&self, id: Piped<ParseUuidV7, Path<String>>) -> String {
     format!("{} is valid", *id)
 }
 
-// Bind — convert + load + authorize
+// Bound — convert + load + authorize
 #[get("/{id}")]
-async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
+#[authorize(Read, bind = UsersService)]
+async fn get(&self, user: Authorized<Read, UserEntity>) -> Json<User> {
     Json(User::from(&*user))
 }
 ```
 
-`Bind` depends on the data layer (its GraphQL analog is `bind` — see
-[By-id binding](/security/authorization/by-id-binding/)). `Pipe` is
-transport-agnostic — the same `ParseUuidV7` binds identically on HTTP,
-GraphQL, WebSockets, and queues.
+A bound subject depends on the data layer, and GraphQL takes the same
+attribute (see [By-id binding](/security/authorization/by-id-binding/)). A
+pipe is transport-agnostic — the same `ParseUuidV7` binds identically on
+HTTP, GraphQL, WebSockets, and queues.
 
 ## Writing a pipe
 
@@ -249,8 +251,8 @@ apps belongs in `crates/nest-rs-pipes/`.
 - [Global pipes](/fundamentals/global-pipes/) — one pipe over every body,
   set of variables and message.
 - [Guards](/fundamentals/guards/) — gate access; pipes don't.
-- [Database / `Bind`](/database/) — pipes are for primitives, `Bind`
-  loads and authorizes a row.
+- [By-id binding](/security/authorization/by-id-binding/) — pipes are for
+  primitives, `bind = Service` loads and authorizes a row.
 - [`oauth/http/controller.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/oauth/http/controller.rs)
   in the demo — binds `Piped<Lowercase, Path<String>>` so the OAuth provider
   segment is case-insensitive.

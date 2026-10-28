@@ -113,7 +113,8 @@ pub mod __private {
     pub use crate::attrs::{Conditional, cfg_attrs, delegated_attrs};
     pub use crate::capability::guard_capability_bounds;
     pub use crate::crud::{
-        CrudDeclaration, CrudOp, GeneratedOps, OpsSelection, Paginate, parse_crud_args, singular_of,
+        CrudDeclaration, CrudOp, CrudOpApi, GeneratedOps, OpsSelection, Paginate, parse_crud_args,
+        singular_of,
     };
     pub use crate::deprecation::{deprecation_header, refuse_rust_deprecated};
     pub use crate::dispatch::{Collision, DispatchKeys};
@@ -146,8 +147,9 @@ pub mod __private {
     pub use crate::on_event::{ON_EVENT_GRAMMAR, OnEventArgs, parse_on_event_args};
     pub use crate::pair::{DecoratorPair, parse_provider_host, provider_residency};
     pub use crate::posture::{
-        ID_ARG_UNSUPPORTED_BECAUSE, Posture, PostureRules, at_most_one_authorize,
-        posture_contradiction, posture_key_unsupported, posture_required,
+        AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, ID_ARG_UNSUPPORTED_BECAUSE, Posture,
+        PostureRules, at_most_one_authorize, posture_contradiction, posture_key_unsupported,
+        posture_required,
     };
     pub use crate::provider_site::{ProviderSite, host_layers_entry, site_const, site_ref};
     pub use crate::queue_name::{invalid_queue_name, is_valid_queue_name};

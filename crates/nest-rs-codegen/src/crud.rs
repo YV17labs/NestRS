@@ -3,7 +3,7 @@
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use syn::parse::{Parse, ParseStream};
-use syn::{Ident, Path, Token};
+use syn::{Ident, LitStr, Path, Token};
 
 use crate::grammar::Grammar;
 
@@ -38,6 +38,17 @@ pub enum CrudOp {
     Update,
     /// `DELETE /{id}` — needs `Deletable`.
     Delete,
+}
+
+/// What `api(<op>(summary = "…", description = "…"))` documents one generated
+/// operation with, each `None` keeping the default.
+#[derive(Default)]
+#[non_exhaustive]
+pub struct CrudOpApi {
+    /// The operation's OpenAPI `summary`.
+    pub summary: Option<LitStr>,
+    /// The operation's OpenAPI `description`.
+    pub description: Option<LitStr>,
 }
 
 /// Which operations a `#[crud]` block generates.
@@ -87,9 +98,25 @@ pub struct CrudDeclaration {
     pub paginate: Paginate,
     /// Where `paginate` was written, for a refusal when `ops` leaves `list` out.
     paginate_written: Option<Span>,
+    /// `api(…)`: each documented operation, its docs and where it was named.
+    api: Vec<(CrudOp, CrudOpApi, Span)>,
+    /// Where `api` was written, for an edge that documents no operation.
+    api_written: Option<Span>,
 }
 
 impl CrudDeclaration {
+    /// The docs `api(…)` gives `op`, when it names it.
+    pub fn api(&self, op: CrudOp) -> Option<&CrudOpApi> {
+        self.api
+            .iter()
+            .find_map(|(named, api, _)| (*named == op).then_some(api))
+    }
+
+    /// Where `api(…)` was written, if it was.
+    pub fn api_written(&self) -> Option<Span> {
+        self.api_written
+    }
+
     /// Resolve which ops to generate, validating that any explicitly requested
     /// `create`/`update` op has its input type. A `create`/`update` op without
     /// `create = ` / `update = ` is a hard error — never a silently dropped op.
@@ -105,7 +132,16 @@ impl CrudDeclaration {
             OpsSelection::Explicit(ops, span) => {
                 let wants = |op| ops.contains(&op);
                 if let (false, Some(written)) = (wants(CrudOp::List), self.paginate_written) {
-                    return Err(excluded_op_key(written, "paginate", "list"));
+                    return Err(excluded_op_key(written, "paginate", "list", "paginate = …"));
+                }
+                if let Some((op, _, written)) = self.api.iter().find(|(op, ..)| !wants(*op)) {
+                    let name = op_name(*op);
+                    return Err(excluded_op_key(
+                        *written,
+                        "api",
+                        name,
+                        &format!("{name}(…)"),
+                    ));
                 }
                 Ok(GeneratedOps {
                     list: wants(CrudOp::List),
@@ -165,12 +201,12 @@ fn resolve_write_op<'a>(
 
 /// The refusal of a key that configures one op, declared beside an `ops` that
 /// leaves that op out; `create`/`update` go through [`resolve_write_op`].
-fn excluded_op_key(written: Span, key: &str, op: &str) -> syn::Error {
+fn excluded_op_key(written: Span, key: &str, op: &str, drop: &str) -> syn::Error {
     syn::Error::new(
         written,
         format!(
             "{} configures the `{op}` op, which `ops` leaves out — list `{op}` in `ops` to \
-             generate it, or drop `{key} = …`",
+             generate it, or drop `{drop}`",
             crate::args::site("crud", Some(key)),
         ),
     )
@@ -180,9 +216,82 @@ fn excluded_op_key(written: Span, key: &str, op: &str) -> syn::Error {
 const CRUD: Grammar = Grammar::new(
     "crud",
     &[
-        "service", "entity", "output", "create", "update", "ops", "paginate",
+        "service", "entity", "output", "create", "update", "ops", "paginate", "api",
     ],
 );
+
+/// The operations `api(…)` documents, named as `ops` names them.
+const CRUD_API: Grammar =
+    Grammar::new("crud", &["list", "get", "create", "update", "delete"]).under("api");
+
+/// What `api(<op>(…))` sets on one operation.
+const CRUD_OP_API: Grammar = Grammar::new("crud", &["summary", "description"]).under("api");
+
+const API_LIST: &str = "each operation's docs, e.g. `api(get(summary = \"Get a user by id\"))`";
+
+/// An operation by the name `ops` and `api` give it.
+fn op_named(name: &str) -> Option<CrudOp> {
+    match name {
+        "list" => Some(CrudOp::List),
+        "get" => Some(CrudOp::Get),
+        "create" => Some(CrudOp::Create),
+        "update" => Some(CrudOp::Update),
+        "delete" => Some(CrudOp::Delete),
+        _ => None,
+    }
+}
+
+/// The name `ops` and `api` give `op`.
+fn op_name(op: CrudOp) -> &'static str {
+    match op {
+        CrudOp::List => "list",
+        CrudOp::Get => "get",
+        CrudOp::Create => "create",
+        CrudOp::Update => "update",
+        CrudOp::Delete => "delete",
+    }
+}
+
+/// `api(get(summary = "…"), list(description = "…"))`, read at `arg`.
+fn parse_api(arg: &crate::grammar::Arg<'_>) -> syn::Result<Vec<(CrudOp, CrudOpApi, Span)>> {
+    let input = arg.input();
+    if !input.peek(syn::token::Paren) {
+        return Err(syn::Error::new(
+            arg.ident().span(),
+            crate::args::takes_value("crud", Some("api"), API_LIST),
+        ));
+    }
+    let content;
+    syn::parenthesized!(content in input);
+    let mut documented = Vec::new();
+    CRUD_API.parse(&content, |op_arg| {
+        let Some(op) = op_named(op_arg.key()) else {
+            return Ok(());
+        };
+        let input = op_arg.input();
+        if !input.peek(syn::token::Paren) {
+            return Err(syn::Error::new(
+                op_arg.ident().span(),
+                crate::args::takes_value("crud", Some("api"), API_LIST),
+            ));
+        }
+        let docs;
+        syn::parenthesized!(docs in input);
+        let mut api = CrudOpApi::default();
+        CRUD_OP_API.parse(&docs, |doc| {
+            match doc.key() {
+                "summary" => api.summary = Some(doc.str_lit("Get a user by id")?),
+                "description" => api.description = Some(doc.str_lit("…")?),
+                // The grammar hands over only its own keys.
+                _ => {}
+            }
+            Ok(())
+        })?;
+        documented.push((op, api, op_arg.ident().span()));
+        Ok(())
+    })?;
+    Ok(documented)
+}
 
 const PAGINATE: [&str; 2] = ["cursor", "none"];
 
@@ -209,6 +318,8 @@ impl Parse for CrudDeclaration {
         let mut ops = OpsSelection::Default;
         let mut paginate = Paginate::Cursor;
         let mut paginate_written = None;
+        let mut api = Vec::new();
+        let mut api_written = None;
 
         CRUD.parse(input, |arg| {
             match arg.key() {
@@ -264,23 +375,16 @@ impl Parse for CrudDeclaration {
                     )?;
                     let mut selected = Vec::new();
                     for id in idents {
-                        let op = match id.to_string().as_str() {
-                            "list" => CrudOp::List,
-                            "get" => CrudOp::Get,
-                            "create" => CrudOp::Create,
-                            "update" => CrudOp::Update,
-                            "delete" => CrudOp::Delete,
-                            other => {
-                                return Err(syn::Error::new(
-                                    id.span(),
-                                    crate::args::unknown_value(
-                                        "crud",
-                                        "op",
-                                        other,
-                                        &["list", "get", "create", "update", "delete"],
-                                    ),
-                                ));
-                            }
+                        let Some(op) = op_named(&id.to_string()) else {
+                            return Err(syn::Error::new(
+                                id.span(),
+                                crate::args::unknown_value(
+                                    "crud",
+                                    "op",
+                                    &id.to_string(),
+                                    CRUD_API.keys(),
+                                ),
+                            ));
                         };
                         selected.push(op);
                     }
@@ -314,6 +418,10 @@ impl Parse for CrudDeclaration {
                             ));
                         }
                     };
+                }
+                "api" => {
+                    api_written = Some(arg.ident().span());
+                    api = parse_api(&arg)?;
                 }
                 // The grammar hands over only its own keys.
                 _ => {}
@@ -352,6 +460,8 @@ impl Parse for CrudDeclaration {
             ops,
             paginate,
             paginate_written,
+            api,
+            api_written,
         })
     }
 }

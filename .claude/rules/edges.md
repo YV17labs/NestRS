@@ -79,15 +79,19 @@ guard, filter or interceptor loop of its own.
    `#[public]`; no posture is a compile error with a trybuild snapshot. This is
    what keeps *no authn/authz decision outside a guard* true. The grammar is one
    `PostureRules` in `nest-rs-codegen` where it is the same grammar: `#[tools]`
-   and `#[messages]` take it verbatim. `#[operations]` parses its own because only
-   GraphQL can synthesise an id argument and an `Authorized<A, E>` proof
-   (`bind = Service`, `id_arg`); `#[routes]`' posture is optional on a route a
-   guard covers, which the guard decides, and a route no guard covers — the
-   app's pool included — says `#[public]` or refuses the boot, one error naming
-   every such route and both remedies; it refuses `#[authorize]` on `#[sse]` and
-   a posture bound to a handler parameter. An edge whose units
-   have no caller (a job, a tick, an event) declares `Posture::System` and
-   runs no guard stage.
+   and `#[messages]` take it verbatim. `#[operations]` and `#[routes]` parse
+   their own because only they bind a subject by id — `bind = Service`, read
+   from a synthesised id argument (`id_arg` renames it) or from the route's one
+   path parameter — into an `Authorized<A, E>` parameter, which carries the row
+   and never the posture: either without the other is a compile error.
+   `#[routes]`' posture is optional on a route a guard covers, which the guard
+   decides, and a route no guard covers — the app's pool included — says
+   `#[public]` or refuses the boot, one error naming every such route and both
+   remedies; it refuses `#[authorize]` on `#[sse]`, and a hand-written
+   `Authorize<A, E>` anywhere but beside `#[public]` — by spelling at compile
+   time, by its type at boot (`.claude/decisions/route-posture-declared.md`).
+   An edge whose units have no caller (a job, a tick, an event) declares
+   `Posture::System` and runs no guard stage.
 6. **A class gate the posture emits** — `nest_rs_authz::class_gate::<A, E>`,
    one function for every edge and ungated by any edge feature, run on the unit
    right after its guards, so `#[authorize]` cannot mean several things; a
@@ -126,7 +130,7 @@ guard, filter or interceptor loop of its own.
 10. **Request scope** — `Scoped<T>`, a parameter the boot checks (its provider
     is inside the access contract, through `ResolvesProvider` and the impl
     half's probe — HTTP's, GraphQL's, WS's and MCP's today, as is the service
-    HTTP's `Bind<A, S>` and GraphQL's `bind = Service` load through), a miss
+    `bind = Service` loads through on either edge), a miss
     answered opaquely with the type on the operator's line.
 11. **A `#[config]` and its `for_root`** (`container.md`).
 12. **Error opacity** — an error that is neither the edge's own deliberate
@@ -214,7 +218,7 @@ carries the ability its upgrade's guards attached (`data-layer.md`,
 
 **Controllers are thin.** A handler wires layers, each with one home: a guard
 gates access and attaches context, a pipe converts and validates at the edge,
-`Bind` loads and authorizes an entity, the service holds business logic and is
+`#[authorize(A, bind = S)]` loads and authorizes an entity, the service holds business logic and is
 the sole database gateway, an interceptor carries cross-cutting work such as a
 transaction. Inline conversion, permission checks or transaction management in a
 handler is drift.
@@ -439,7 +443,7 @@ router parses. The rewrite is skipped when nothing is versioned.
 - **`#[sse]` is a verb, not an edge.** It collapses to `GET` before the route
   table is built and carries the route's guards, pipes, posture and document; it
   owns only the response. It refuses `#[authorize]`, a shaper parameter
-  (`Authorize<A, E>`, `Bind<A, S>`), the response decorators (`#[http_code]`,
+  (`Authorize<A, E>`), the response decorators (`#[http_code]`,
   `#[redirect]`, `#[response_header]`) and `#[api(response_content_type)]`.
   Correlation is the streaming body's, not the decorator's (`observability.md`).
   Its connection ceiling lives in `HttpConfig`: SSE is not a module, so it owns no

@@ -49,10 +49,8 @@ where
 }
 
 /// The caller's ability plus the entity's mask, captured before the handler and
-/// ready to mask what it answers. Shared by `Authorize<A, S>` and
-/// `nest-rs-seaorm`'s `Bind<A, S>`, which differ only in how they name the
-/// entity.
-pub struct AbilityShaping<S> {
+/// ready to mask what it answers.
+struct AbilityShaping<S> {
     ability: Arc<Ability>,
     action: Action,
     subject: PhantomData<fn() -> S>,
@@ -61,7 +59,7 @@ pub struct AbilityShaping<S> {
 impl<S> AbilityShaping<S> {
     /// The shaping step for `action` on entity `S`, keyed on the ability the
     /// guard attached.
-    pub fn new(ability: Arc<Ability>, action: Action) -> Self {
+    fn new(ability: Arc<Ability>, action: Action) -> Self {
         Self {
             ability,
             action,

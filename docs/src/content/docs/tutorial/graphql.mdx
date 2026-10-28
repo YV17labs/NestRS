@@ -34,9 +34,8 @@ from the framework crate; the schema model itself is async-graphql's.
 use std::sync::Arc;
 
 use async_graphql::{Context, Result};
-use nest_rs::authz::{Create, Read};
+use nest_rs::authz::Create;
 use nest_rs::graphql::{crud, resolver};
-use nest_rs::seaorm::graphql::bind;
 
 use crate::Claims;
 use crate::authz::AuthzGuard;
@@ -64,17 +63,12 @@ impl UsersResolver {
         let user = self.svc.create_in_org(input, actor.org_id).await?;
         Ok(User::from(&user))
     }
-
-    #[query]
-    #[authorize(Read, UserEntity)]
-    async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        Ok(bind::<Read, UsersService>(ctx, &id)
-            .await?
-            .as_ref()
-            .map(User::from))
-    }
 }
 ```
+
+`#[crud]` generates `users`, `user`, `update_user` and `delete_user`; the
+`create_user` you wrote takes over its generated twin because it reads the
+caller's org.
 
 `#[authorize(Action, Entity)]` is each operation's **access posture**:
 the macro emits the class-level gate before your body runs and masks
@@ -96,7 +90,7 @@ posture attribute. The other bindings differ:
 | HTTP | GraphQL | Job |
 |------|---------|-----|
 | `#[authorize(Create, users::Entity)]` attribute | `#[authorize(Create, users::Entity)]` attribute | Refuse the operation if the ability disallows it **and** mask the response fields |
-| `Bind<Read, UsersService>` extractor | `bind::<Read, UsersService>(ctx, &id).await?` call | Load the row through the service, refuse it on a denied ability |
+| `#[authorize(Read, bind = UsersService)]` attribute, an `Authorized<Read, UserEntity>` parameter | the same attribute and parameter, the `id` argument synthesised | Load the row through the service, refuse it on a denied ability |
 | `Ctx<Claims>` extractor | `ctx.data::<Claims>()?` call | Read the principal the endpoint's guards attached |
 
 The same `#[use_guards(...)]` declaration on the resolver struct — the

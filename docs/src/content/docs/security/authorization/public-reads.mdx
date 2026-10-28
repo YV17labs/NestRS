@@ -61,7 +61,8 @@ posture needs: it runs the class gate against the visitor's grant, right
 after the guards, installs the ambient ability the data layer reads and
 arms the response mask. This is the one route shape where you write the
 extractor by hand — `#[authorize(...)]` and `#[public]` declare opposite
-postures, so the decorator form is a compile error here.
+postures, so the decorator form is a compile error here, and the
+hand-written parameter is refused beside anything but `#[public]`.
 
 **Delete that parameter and the route answers `200 []`.** It is prefixed `_`
 and looks unused, so it is what a cleanup pass removes — and the symptom is the
@@ -78,8 +79,11 @@ WARN nest_rs::orm: no ambient Ability outside a worker job — denying all rows
 ```
 
 Grep that target the first time a route returns an empty collection you did not
-expect. On a detail route reach for `Bind<Read, PostsService>` instead; it is a
-shaper too.
+expect. A detail route takes the same parameter and loads its row through the
+service's `access` in the body, mapping `Denied` and `Missing` as
+[by-id binding](/security/authorization/by-id-binding/#the-access-outcome)
+does: `#[authorize(Read, bind = PostsService)]` is the gated posture, the
+opposite of `#[public]`, so the two are never written together.
 
 ## A token still takes the authenticated branch
 

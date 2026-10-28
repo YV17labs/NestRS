@@ -1,0 +1,5 @@
+error: an `Authorized<Action, E>` parameter receives the subject `#[authorize(Action, bind = Service)]` loads, and this operation binds none — declare `bind = Service` in its `#[authorize]`, or drop the parameter: the type carries the row, the attribute the posture
+  --> tests/integration/diagnostics/http/authorized_parameter_without_bind.rs:33:29
+   |
+33 |     async fn archive(&self, user: Authorized<Update, users::Entity>) -> String {
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

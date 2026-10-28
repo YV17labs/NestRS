@@ -34,8 +34,8 @@ const UNREACHED: &str = "attach the ability on /graphql's request — the app's 
                          import AuthzModule";
 
 /// A GraphQL `forbidden` error (code `FORBIDDEN`) — the one denial shape every
-/// GraphQL refusal carries, whether the class gate or a data-layer `bind`
-/// (`nest_rs_seaorm::graphql::bind`) emits it.
+/// GraphQL refusal carries, whether the class gate or the row
+/// `#[authorize(A, bind = S)]` loads emits it.
 pub fn forbidden() -> Error {
     nest_rs_graphql::problem_error(&Problem::new(403, code::FORBIDDEN))
 }

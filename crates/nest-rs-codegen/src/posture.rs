@@ -29,8 +29,10 @@
 //! # }
 //! ```
 //!
-//! GraphQL keeps its own parser for `#[authorize(Update, bind = ArtworksService)]`,
-//! which no other transport can express.
+//! GraphQL and HTTP keep their own parsers for
+//! `#[authorize(Update, bind = ArtworksService)]`: a field synthesises its id
+//! argument, a route reads its path's, and a message or a tool, taking one
+//! payload value, has no id to bind.
 
 use syn::punctuated::Punctuated;
 use syn::{ImplItemFn, Meta, Path, Token};
@@ -44,9 +46,24 @@ pub fn at_most_one_authorize(site: &str) -> String {
 }
 
 /// Why `id_arg` cannot be expressed anywhere but GraphQL: it renames the
-/// argument GraphQL's `bind` synthesises.
+/// argument GraphQL's `bind` synthesises — a route reads its subject's id off
+/// its path instead.
 pub const ID_ARG_UNSUPPORTED_BECAUSE: &str = "it renames the argument GraphQL's `bind = Service` synthesises, and no other \
      transport synthesises one";
+
+/// The sentence an edge prints for `bind = Service` with no parameter to
+/// receive the subject it loads.
+pub const BIND_NEEDS_AUTHORIZED: &str = "`#[authorize(Action, bind = Service)]` needs a parameter of type \
+     `Authorized<Action, E>` to receive the bound subject — the action in the type must match the \
+     one in the attribute (e.g. `#[authorize(Update, bind = FilesService)]` ⇒ \
+     `Authorized<Update, FileEntity>`)";
+
+/// The sentence an edge prints for an `Authorized<A, E>` parameter no
+/// `bind = Service` fills: the type carries a loaded row, never the posture.
+pub const AUTHORIZED_NEEDS_BIND: &str = "an `Authorized<Action, E>` parameter receives the subject \
+     `#[authorize(Action, bind = Service)]` loads, and this operation binds none — declare \
+     `bind = Service` in its `#[authorize]`, or drop the parameter: the type carries the row, \
+     the attribute the posture";
 
 /// The sentence an edge prints when an operation declares both postures.
 pub fn posture_contradiction() -> &'static str {

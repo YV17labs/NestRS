@@ -256,20 +256,27 @@ refused). On the wire:
 - `Result<T>` returning `Err` → `"errors": [...]`, the field's
   value is `null`.
 
-The bind helper follows this rule: `bind::<Read, UsersService>(ctx,
-&id).await?` returns `Result<Option<User>>` — `None` means absent
-(404 equivalent), `Err` means denied or broken.
+`#[crud]`'s generated `user` query follows this rule: an absent row is
+`null` (the 404 equivalent), a denied one or a broken read an error. A
+lookup written by hand reads the same three outcomes off the service's
+`access`:
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 #[query]
 #[authorize(Read, UserEntity)]
-async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-    Ok(bind::<Read, UsersService>(ctx, &id)
-        .await?
-        .as_ref()
-        .map(User::from))
+async fn user(&self, id: String) -> Result<Option<User>> {
+    let id = parse_v7(&id)?;
+    match self.svc.access(Action::Read, id).await.opaque()? {
+        Access::Found(user) => Ok(Some(User::from(&user))),
+        Access::Denied => Err(forbidden()),
+        Access::Missing => Ok(None),
+    }
 }
 ```
+
+A subject bound with `#[authorize(Read, bind = UsersService)]` is the
+operation's precondition instead: a missing row answers `NOT_FOUND`, an
+error.
 
 ## Where a failed field's `null` lands
 

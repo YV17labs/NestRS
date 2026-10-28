@@ -614,3 +614,74 @@ async fn a_document_emit_that_cannot_write_warns_and_still_serves() {
         logs.events(),
     );
 }
+
+// A relative `emit_path` is the app crate's, the one `#[nest_rs_core::main]`
+// expanded in, whatever directory the process runs from.
+
+/// Relative and per-process: no directory is named until the boot resolves it.
+fn relative_document_path() -> std::path::PathBuf {
+    format!("nest_rs_openapi_relative_{}.json", std::process::id()).into()
+}
+
+fn landed_document_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_document_path())
+}
+
+#[module(
+    imports = [
+        OpenApiModule::for_root(OpenApiConfig {
+            enabled: true,
+            emit: true,
+            emit_path: relative_document_path(),
+            ..OpenApiConfig::default()
+        }),
+    ],
+    providers = [WidgetsController],
+)]
+struct RelativeDocumentApp;
+
+/// Removes its file when dropped, so a failed run leaves none in the crate.
+struct Removed(std::path::PathBuf);
+
+impl Drop for Removed {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[nest_rs_core::main]
+async fn boot_emitting_relatively() {
+    let _app = TestApp::for_module::<RelativeDocumentApp>()
+        .await
+        .expect("the documentation boots and emits its document");
+    // The write runs on a blocking thread; its last byte is the newline.
+    nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+        std::fs::read_to_string(landed_document_path()).is_ok_and(|text| text.ends_with('\n'))
+    })
+    .await;
+}
+
+#[test]
+fn a_relative_emit_path_lands_in_the_crate_main_expanded_in() {
+    let elsewhere =
+        std::env::temp_dir().join(format!("nest_rs_openapi_cwd_{}", std::process::id()));
+    std::fs::create_dir_all(&elsewhere).expect("a working directory of its own");
+    std::env::set_current_dir(&elsewhere).expect("the process runs from it");
+    let landed = Removed(landed_document_path());
+
+    boot_emitting_relatively();
+    // `main`'s panic hook outlives it, reporting to a console nothing drains.
+    drop(std::panic::take_hook());
+
+    let document: Value = serde_json::from_str(
+        &std::fs::read_to_string(&landed.0)
+            .expect("the document lands beside the manifest of the crate `main` expanded in"),
+    )
+    .expect("the whole document");
+    assert!(document["paths"]["/widgets"].is_object(), "{document}");
+    assert!(
+        !elsewhere.join(relative_document_path()).exists(),
+        "never under the working directory",
+    );
+    let _ = std::fs::remove_dir_all(&elsewhere);
+}

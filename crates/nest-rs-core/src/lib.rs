@@ -327,6 +327,10 @@ pub use nest_rs_core_macros::hooks;
 /// first signal stops the boot at its next await or drains the serving app,
 /// and one received before any app exists exits at once with 130 / 143.
 ///
+/// It records the directory of the crate it expands in: a development
+/// artifact's relative path — GraphQL's and OpenAPI's `emit_path` — lands
+/// there, whatever directory the process runs from.
+///
 /// ```
 /// # use nest_rs_core::{App, module};
 /// # #[module]

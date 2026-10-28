@@ -2,7 +2,7 @@
 //! compile-time canary in `src/resolver.rs` cannot see (`remove_unused_types`,
 //! sorted SDL export), asserted byte-for-byte against the committed snapshot.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_graphql::SimpleObject;
 use nest_rs_core::module;
@@ -293,3 +293,64 @@ async fn subgraph_sdl_matches_committed_snapshot() {
 
 #[module(providers = [GadgetResolver])]
 struct GadgetModule;
+
+// A relative `emit_path` is the app crate's, the one `#[nest_rs_core::main]`
+// expanded in, whatever directory the process runs from.
+
+/// Relative and per-process: no directory is named until the boot resolves it.
+fn relative_emit_path() -> PathBuf {
+    PathBuf::from(format!(
+        "nest_rs_graphql_relative_{}.graphql",
+        std::process::id()
+    ))
+}
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        emit: true,
+        emit_path: relative_emit_path(),
+        ..GraphqlConfig::default()
+    }),
+    AlphaModule,
+])]
+struct RelativeEmitApp;
+
+/// Removes its file when dropped, so a failed run leaves none in the crate.
+struct Removed(PathBuf);
+
+impl Drop for Removed {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[nest_rs_core::main]
+async fn boot_emitting_relatively() {
+    TestApp::builder()
+        .module::<RelativeEmitApp>()
+        .build()
+        .await
+        .expect("the schema boots and emits its SDL");
+}
+
+#[test]
+fn a_relative_emit_path_lands_in_the_crate_main_expanded_in() {
+    let elsewhere =
+        std::env::temp_dir().join(format!("nest_rs_graphql_cwd_{}", std::process::id()));
+    std::fs::create_dir_all(&elsewhere).expect("a working directory of its own");
+    std::env::set_current_dir(&elsewhere).expect("the process runs from it");
+    let landed = Removed(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_emit_path()));
+
+    boot_emitting_relatively();
+    // `main`'s panic hook outlives it, reporting to a console nothing drains.
+    drop(std::panic::take_hook());
+
+    let sdl = std::fs::read_to_string(&landed.0)
+        .expect("the SDL lands beside the manifest of the crate `main` expanded in");
+    assert!(sdl.contains("widget(id: Int!): Widget!"), "{sdl}");
+    assert!(
+        !elsewhere.join(relative_emit_path()).exists(),
+        "never under the working directory",
+    );
+    let _ = std::fs::remove_dir_all(&elsewhere);
+}

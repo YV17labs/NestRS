@@ -36,6 +36,7 @@ pub struct ClientPayload {
 #[derive(Clone)]
 pub struct OAuthConfig {
     pub clients: Vec<RegisteredClient<ClientPayload>>,
+    pub sign_in_resources: Vec<String>,
     pub default_org_id: Uuid,
 }
 
@@ -43,6 +44,7 @@ impl Default for OAuthConfig {
     fn default() -> Self {
         Self {
             clients: Vec::new(),
+            sign_in_resources: Vec::new(),
             default_org_id: DEFAULT_ORG,
         }
     }
@@ -54,7 +56,21 @@ impl Validate for OAuthConfig {
         if self.clients.is_empty() {
             errors.add("clients", ValidationError::new("at_least_one_client"));
         }
+        if self.sign_in_resources.is_empty() {
+            errors.add(
+                "sign_in_resources",
+                ValidationError::new("at_least_one_resource"),
+            );
+        }
         for client in &self.clients {
+            if client.resources.is_empty() {
+                errors.errors_mut().insert(
+                    format!("clients[{}].resources", client.client_id).into(),
+                    ValidationErrorsKind::Field(vec![ValidationError::new(
+                        "at_least_one_resource",
+                    )]),
+                );
+            }
             if client
                 .scopes
                 .iter()
@@ -77,9 +93,11 @@ impl Validate for OAuthConfig {
 impl Config for OAuthConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
         let clients = env.json("CLIENTS")?.unwrap_or(base.clients);
+        let sign_in_resources = env.list("SIGN_IN_RESOURCES", base.sign_in_resources)?;
         let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(base.default_org_id);
         Ok(Self {
             clients,
+            sign_in_resources,
             default_org_id,
         })
     }
@@ -102,7 +120,11 @@ impl Config for OAuthConfig {
   roles — so the framework owns the credential shape and the app owns only
   what it authorizes on. A client's `scopes` are not roles: they are the
   most it may be delegated, and the token endpoint grants the scopes a
-  request names within them, or all of them when it names none.
+  request names within them, or all of them when it names none. Its
+  `resources` are the [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707)
+  resources its tokens may be minted for — each token for one of them, the
+  one its request names or its only one. `sign_in_resources` is the same list
+  for a user's sign-in, the first being the one a sign-in naming none gets.
 - **"At least one client" and "every registered scope is one the app
   gates on" are struct-level rules**, so `impl Validate` is written by hand,
   building the same `ValidationErrors` the derive would. They run after the
@@ -166,7 +188,7 @@ impl OAuthService {
 ### Run it
 
 ```bash frame="terminal"
-$ NESTRS_OAUTH__CLIENTS='[{"client_id":"web","client_secret":"...","payload":{"org_id":"00000000-0000-0000-0000-000000000000","roles":["user"]},"scopes":["posts:read"]}]' \
+$ NESTRS_OAUTH__CLIENTS='[{"client_id":"web","client_secret":"...","payload":{"org_id":"00000000-0000-0000-0000-000000000000","roles":["user"]},"scopes":["posts:read"],"resources":["http://localhost:3003"]}]' \
   nestrs run dev auth
 2026-06-03T10:42:11Z INFO nest_rs::routes: mounted route controller="OAuthController" method="POST" path="/token" handler="token"
 ```

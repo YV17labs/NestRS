@@ -397,6 +397,26 @@ the edge's answer: a body past the cap its `413`, a `GET` the router's
 `405`, and the throttler's `429`, the protection §2.3.1 asks of a token
 endpoint without fixing its shape.
 
+`resource` is the one parameter that may repeat: [RFC 8707
+§2](https://datatracker.ietf.org/doc/html/rfc8707#section-2) lets a client name
+every resource its token is for, and `AccessTokenRequest::resource` holds each
+in the order sent. Which one the token is minted for is the issuer's to say.
+A `RegisteredClient` lists the resources it may have tokens for, and the
+authenticated client chooses among them:
+
+```rust title="crates/features/src/oauth/service.rs (from the demo, abridged)"
+let audience = client.audience_for(&request.resource)?;
+let token = jwt.sign_for(audience, &claims)?;
+```
+
+`audience_for` answers the resource requested when the client is registered for
+it, exactly, and the client's only resource when the request names none.
+Anything else is `invalid_target`: a resource it is not registered for, none
+among several, and two at once — a token naming two audiences is accepted by
+each, and so a deputy of each at the other. `sign_for` writes the resource
+into the token's `aud`, so only the server serving it accepts the token
+([JWT](/security/authentication/jwt/#signing-a-token)).
+
 ### The handler
 
 What the handler refuses is a `TokenError`, the same envelope with §5.1's
@@ -409,6 +429,7 @@ What the handler refuses is a `TokenError`, the same envelope with §5.1's
 | `InvalidGrant` | `invalid_grant` | 400 |
 | `UnauthorizedClient` | `unauthorized_client` | 400 |
 | `InvalidScope` | `invalid_scope` | 400 |
+| `InvalidTarget` | `invalid_target` — RFC 8707 §2's | 400 |
 | `InvalidClient(ClientSecretBasic)` | `invalid_client` | 401, with `WWW-Authenticate: Basic realm="authorization server"` |
 | `InvalidClient(ClientSecretPost)`, `InvalidClient(None)` | `invalid_client` | 400 |
 | `Sign(inner)` | `server_error` | 500 |

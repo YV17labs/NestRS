@@ -676,7 +676,11 @@ lists what the boot, a log or the wire shows when one is missed.
     | a token route reading `Form<AccessTokenRequest>`, or code decoding it with serde | `request: AccessTokenRequest`, the handler parameter: the type derives no `Deserialize`, and its refusals are `invalid_request` |
     | `TokenError::InvalidClient` built or matched | `TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretBasic)` for a client refused over the `Authorization` header, `ClientSecretPost` for credentials in the body, `None` for none; matched as `InvalidClient(_)` |
     | `TokenError::InvalidClient` answered for a rejected resource-owner password | `TokenError::InvalidGrant` (`400 invalid_grant`) |
-    | `RegisteredClient { client_id, client_secret, scopes, payload }` / `AuthenticatedClient { payload, scopes }` | `RegisteredClient::new(client_id, client_secret, scopes, payload)` / `AuthenticatedClient::new(client_id, scopes, payload)` |
+    | `RegisteredClient { client_id, client_secret, scopes, payload }` / `AuthenticatedClient { payload, scopes }` | `RegisteredClient::new(client_id, client_secret, scopes, resources, payload)` / `AuthenticatedClient::new(client_id, scopes, resources, payload)`: the RFC 8707 resources the client's tokens may be minted for |
+    | a client registry in configuration, `[{"client_id": …, "scopes": […], "payload": …}]` | each client lists `"resources": [...]`, the URIs of the resource servers it calls; a registry without it fails the boot |
+    | `jwt.sign(&claims)` minting an access token another app verifies | `jwt.sign_for(audience, &claims)`, `audience` the resource it is for — at a token endpoint `client.audience_for(&request.resource)?`, which answers RFC 8707's `invalid_target` for a resource the client is not registered for; `sign` stamps this app's own audience, for what it mints for itself |
+    | `<PREFIX>_AUTHN__AUDIENCE` set to `<PREFIX>_OAUTH__RESOURCE__RESOURCE` beside `OAuthResourceModule` | delete it: the resource is the audience. Keep it only for an audience your authorization server mints by policy |
+    | `<PREFIX>_AUTHN__ISSUER` beside `OAuthResourceModule` naming anything but an entry of `<PREFIX>_OAUTH__RESOURCE__AUTHORIZATION_SERVERS` | that entry, exactly, or no `ISSUER`: a token's `iss` must then be one of them |
     | `AuthenticatedClient::actor_id()` read as `None` | it is the client's `client_id` — not a compile error; code keying "a machine caller" on `None` reads the principal's type |
     | `PrincipalIdentity::actor_id` returning `None` for a machine principal | its subject — the client id when it acts for itself (RFC 9068 §2.2) |
     | a hand-written `Set-Cookie` for `authorization.transaction` on the OAuth redirect | `.header(header::SET_COOKIE, authorization.set_cookie())`, before `Location` takes `authorization.url` |
@@ -1188,6 +1192,18 @@ lists what the boot, a log or the wire shows when one is missed.
   `no JWT key configured`, naming the variable. **An unparseable
   `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO` or `METRIC_INTERVAL_SECS`** fails
   `OpenTelemetry::init` where 6.x kept the default.
+- **An app serving a resource under `OAuthResourceModule`** refuses, `401`
+  `invalid_token`, a token whose `iss` is not one of
+  `<PREFIX>_OAUTH__RESOURCE__AUTHORIZATION_SERVERS`, compared exactly — trailing
+  slash included — or that names none, where 6.x checked no issuer unless
+  `ISSUER` was set; and a token whose `aud` is not its resource. An `ISSUER`
+  none of them names fails the boot naming both variables, and so does
+  `ALLOW_ANY_AUDIENCE` beside the module. An issuer of your own that minted
+  every token with one shared audience has every client's token refused by the
+  resource servers that require their own: mint each with `sign_for`.
+- **A token request for a resource the client is not registered for** — or
+  naming none from a client registered for several, or two at once — answers
+  `400 invalid_target`.
 - **A social provider whose module the app does not import** is closed: its
   `/social/<provider>/…` routes answer `404`, said at `debug` only, since a
   provider left out on purpose is not a fault.

@@ -175,6 +175,21 @@ token shares; and the `aud` and `iss` you configured. Your claims name the
 rest — `sub`, `exp`, and the `client_id` of the OAuth client the token is
 issued to — and a claim they already carry is kept as written.
 
+`sign` mints a token for this app itself: its `aud` is this app's own
+audience, the one its verifier requires. An issuer minting a token another app
+will verify names that app instead, with `sign_for`:
+
+```rust title="crates/features/src/oauth/service.rs"
+let token = self.jwt.sign_for("https://api.example.com", &claims)?;
+```
+
+The resource becomes the token's `aud` and nothing else does, so only the app
+serving it accepts the token — the one a client asked for in the
+[RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) `resource` parameter
+of its token request ([OAuth2](/security/authentication/oauth2/#the-request)).
+A token for one resource replayed at another is refused there. `sign_for`
+refuses a blank resource, and claims carrying an `aud` of their own.
+
 ## Verifying outside the guard
 
 Most code reaches the claims through `Ctx<C>`. A path that needs to
@@ -213,11 +228,11 @@ passed to `AuthnModule::for_root(config)`.
 | `algorithms` | `<PREFIX>_AUTHN__ALGORITHMS` | Comma-separated JOSE names (`EdDSA,RS256`), each a `nest_rs::authn::Algorithm` — `HS256`, `HS384`, `HS512`, `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384` or `EdDSA`, case and all. Unset: HS256 for a secret, EdDSA for a PEM key, every asymmetric algorithm for a JWK Set. A secret or a PEM key takes exactly one, which must fit it |
 | `tls` | `<PREFIX>_AUTHN__TLS_CA_CERT`, `<PREFIX>_AUTHN__TLS_CERT` and `<PREFIX>_AUTHN__TLS_KEY`, each or a path in its `_FILE` spelling | A `nest_rs::config::ClientTls`: the PEM authorities the JWK Set endpoint's certificate chains to, replacing the system's, and the client certificate presented to an endpoint that requires one. Without `jwks_uri`, fails the boot |
 | `leeway_secs` | `<PREFIX>_AUTHN__LEEWAY_SECS` | Clock skew, default 30, at most 300 — RFC 7519 §4.1.4's "a few minutes" |
-| `audience` | `<PREFIX>_AUTHN__AUDIENCE` | `aud` claim — set makes it mandatory; unset still refuses a foreign `aud` |
-| `issuer` | `<PREFIX>_AUTHN__ISSUER` | `iss` claim — set makes it mandatory; unset means no issuer check (§4.1.1 states no rejection clause) |
+| `audience` | `<PREFIX>_AUTHN__AUDIENCE` | The `aud` this app requires — set makes it mandatory; unset still refuses a foreign `aud`. Stamped by `sign`, never by `sign_for`. Under `OAuthResourceModule`, unset is the resource |
+| `issuer` | `<PREFIX>_AUTHN__ISSUER` | `iss` claim, stamped on every token this app mints — set makes it mandatory; unset means no issuer check (§4.1.1 states no rejection clause), but under `OAuthResourceModule` a token's `iss` must be one of its authorization servers |
 | `expires_in_secs` | `<PREFIX>_AUTHN__EXPIRES_IN_SECS` | Minted-token lifetime, default 3600, from 1 to 2592000 (thirty days). Outside it — from the environment, a pinned `AuthnConfig` or a `JwtOptions` built in code — the boot fails naming the variable |
 | `explicit_typing` | `<PREFIX>_AUTHN__EXPLICIT_TYPING` | RFC 9068 §2.1/§4 — stamp and require `typ: at+jwt`, default `true`. Turn off only for an issuer minting a plain `typ: JWT`, or no `typ` |
-| `allow_any_audience` | `<PREFIX>_AUTHN__ALLOW_ANY_AUDIENCE` | Opt out of §4.1.3, default `false`. Refused beside `audience`; `warn`s once per boot |
+| `allow_any_audience` | `<PREFIX>_AUTHN__ALLOW_ANY_AUDIENCE` | Opt out of §4.1.3, default `false`. Refused beside `audience` and beside `OAuthResourceModule`; `warn`s once per boot |
 
 `AuthnConfig::into_options` walks the four key fields and chooses a
 mode:

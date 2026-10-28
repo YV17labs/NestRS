@@ -184,6 +184,14 @@ attacker's origin can point its own hostname at `127.0.0.1` and POST to a
 locally running MCP server — which would otherwise answer with the user's
 tools and data. Name your hostnames; do not empty the list.
 
+A server that is an OAuth protected resource names itself once: under
+[`OAuthResourceModule`](/mcp/authorization/#telling-a-client-how-to-authenticate),
+the host its `<PREFIX>_OAUTH__RESOURCE__RESOURCE` names is admitted beside the
+list — `mcp.example.com` for `https://mcp.example.com/mcp`, on any port — so the
+canonical URI clients ask a token for is also the one host they reach it by. An
+emptied list stays empty: the resource never turns the check back on behind a
+deliberate opening.
+
 The default looks strict for a public deployment, and that is the point:
 DNS rebinding only reaches a host the victim's browser can resolve to but the
 attacker cannot call directly — loopback and the local network. The vulnerable

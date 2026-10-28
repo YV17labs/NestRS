@@ -230,9 +230,9 @@ it and kept fresh ([JWT](/security/authentication/jwt/#verifying-another-issuers
 | `ALGORITHMS` | comma-separated JOSE algorithms a token may be signed with, case-sensitive (`EdDSA,RS256`). Unset: `HS256` with `SECRET`, `EdDSA` with a PEM key, every asymmetric one (`RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `EdDSA`) with `JWKS_URI`. A secret or a PEM key takes exactly one that fits it, a JWK Set never an `HS*` one; an unknown name, `none` included, fails the boot |
 | `TLS_CA_CERT` | PEM certificates of the authorities the `JWKS_URI` endpoint's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate, or set without `JWKS_URI`, fails the boot |
 | `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a `JWKS_URI` endpoint that requires one; `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither; without `JWKS_URI`, they fail the boot |
-| `ISSUER` | expected `iss` claim (unset ⇒ no issuer check) |
-| `AUDIENCE` | expected `aud` claim. Set ⇒ the claim is **mandatory** and must name this app. Unset does *not* disable the check: a token carrying an `aud` this app is not named in is refused either way (RFC 7519 §4.1.3) |
-| `ALLOW_ANY_AUDIENCE` | opt out of that clause and accept a token minted for another service (default `false`). Refused beside `AUDIENCE`, and reported at `warn` once per boot |
+| `ISSUER` | the `iss` every token this app mints carries and every token it verifies must name (unset ⇒ no issuer check — but under `OAuthResourceModule` a token's `iss` must be one of its `AUTHORIZATION_SERVERS`, and a set `ISSUER` must be one of them, or the boot fails naming both) |
+| `AUDIENCE` | the `aud` this app requires, and the one a token it mints for itself carries — a token it mints for another resource names that resource. Set ⇒ the claim is **mandatory** and must name this app. Unset does *not* disable the check: a token carrying an `aud` this app is not named in is refused either way (RFC 7519 §4.1.3). Under `OAuthResourceModule`, unset is its `RESOURCE` |
+| `ALLOW_ANY_AUDIENCE` | opt out of that clause and accept a token minted for another service (default `false`). Refused beside `AUDIENCE` and beside `OAuthResourceModule`, and reported at `warn` once per boot |
 | `LEEWAY_SECS` | clock-skew leeway in seconds, `0` to `300` (default `30`) — RFC 7519 §4.1.4's "no more than a few minutes"; past it an expired token still verifies |
 | `EXPIRES_IN_SECS` | minted-token lifetime in seconds, `1` to `2592000` — thirty days (default `3600`) |
 | `EXPLICIT_TYPING` | require the JWT `typ` header to name the token's type (default `true`); `false` for an issuer stamping a plain `typ: JWT`, or none |
@@ -257,17 +257,18 @@ boot naming the field:
 ## `oauth__resource` — `<PREFIX>_OAUTH__RESOURCE__*`
 
 `OAuthResourceModule` is what turns the app into a conformant OAuth 2.1
-resource server (RFC 9728) and what an MCP server needs. Importing it makes
-`<PREFIX>_AUTHN__AUDIENCE` **mandatory**: the boot fails without it rather than
-leaving the app unable to say which tokens are its own. (A token minted for
-*another named* audience is refused with or without the module — that is
-RFC 7519 §4.1.3. What the module adds is that a token carrying no `aud` at all
-is refused too.)
+resource server (RFC 9728) and what an MCP server needs. Importing it binds the
+token verifier to the resource: a token is accepted only when its `aud` is
+`RESOURCE` — or `<PREFIX>_AUTHN__AUDIENCE` when set, warned when it differs —
+and its `iss` is one of `AUTHORIZATION_SERVERS` (RFC 9068 §4), or
+`<PREFIX>_AUTHN__ISSUER` when set, which must be one of them. A token carrying
+no `aud` or no `iss` is refused. The MCP endpoint's `Host` allowlist admits
+`RESOURCE`'s host.
 
 | Key | Meaning |
 |---|---|
 | `RESOURCE` | this deployment's canonical resource URI — the value tokens must carry as `aud`: `https`, a host, no userinfo, no fragment, plain `http` on loopback in a development or test profile alone. **Required** under the module |
-| `AUTHORIZATION_SERVERS` | comma-separated issuer identifiers allowed to mint tokens for it, each held to `RESOURCE`'s rules. **At least one required** |
+| `AUTHORIZATION_SERVERS` | comma-separated issuer identifiers allowed to mint tokens for it, each held to `RESOURCE`'s rules — a token's `iss` must equal one exactly. **At least one required** |
 | `SCOPES_SUPPORTED` | comma-separated minimal scope set, advertised in the metadata document and the `WWW-Authenticate` challenge |
 | `BEARER_METHODS_SUPPORTED` | how a token may be presented — defaults to `header`, the only form accepted |
 | `RESOURCE_NAME` | human-readable name for a consent screen |
@@ -279,7 +280,7 @@ is refused too.)
 
 | Key | Meaning |
 |---|---|
-| `ALLOWED_HOSTS` | comma-separated `Host` authorities accepted (anti-DNS-rebinding). Defaults to loopback, so a public deployment **must** name itself; an empty list disables the check and is reported at `warn` |
+| `ALLOWED_HOSTS` | comma-separated `Host` authorities accepted (anti-DNS-rebinding). Defaults to loopback, so a public deployment **must** name itself — unless it imports `OAuthResourceModule`, whose `RESOURCE` host is admitted beside the list; an empty list disables the check and is reported at `warn` |
 | `LEGACY_SESSION_MODE` | keep sessions alive for protocol revisions older than `2026-07-28` — default `true` |
 | `JSON_RESPONSE` | answer simple operations with `application/json` instead of an SSE stream — default `false` |
 | `SSE_KEEP_ALIVE_SECS` | SSE keep-alive ping interval, from `1` to `3600` (`0` ⇒ none) — default `15` |

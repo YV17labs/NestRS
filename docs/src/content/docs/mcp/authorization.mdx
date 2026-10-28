@@ -139,7 +139,6 @@ imports = [/* … */, OAuthResourceModule::for_root(None)]
 ```bash
 NESTRS_OAUTH__RESOURCE__RESOURCE=https://mcp.example.com
 NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
-NESTRS_AUTHN__AUDIENCE=https://mcp.example.com
 ```
 
 Every `401` from `/mcp` then carries the RFC 9728 pointer, and
@@ -151,9 +150,14 @@ www-authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/
 
 That is the first hop of the client's flow — rmcp implements the rest of it, so
 an MCP client reaches your authorization server without being configured with
-its address. `<PREFIX>_AUTHN__AUDIENCE` becomes mandatory under this module: see
-[split deployment](/security/authentication/split-deployment/)
-for why a resource server that skips it can be handed someone else's token.
+its address, and asks it for a token for `https://mcp.example.com`, the RFC 8707
+`resource`. The two lines are also all the server checks a token against: its
+`aud` must be the resource and its `iss` one of the authorization servers, so a
+token minted for another service, or by an issuer this document does not name,
+opens no session — see
+[split deployment](/security/authentication/split-deployment/#binding-a-token-to-its-resource).
+And the endpoint answers the resource's host: `<PREFIX>_MCP__ALLOWED_HOSTS`
+keeps its loopback default, and `mcp.example.com` is admitted beside it.
 
 ## Going further
 

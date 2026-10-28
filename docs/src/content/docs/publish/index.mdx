@@ -73,9 +73,12 @@ apps:
 ```
 
 Set the hostnames rather than the URLs. The apps address each other by URL —
-the issuer a token is signed by, the audience it is minted for, the resource
-identifier discovery serves, the MCP `Host` allowlist — and each of those is
-some app's public origin, so the chart derives them from `apps.<name>.host`.
+the issuer a token is signed by, the audience each app requires, the resource
+identifier discovery serves, the resources a sign-in may be minted a token for
+— and each of those is some app's public origin, so the chart derives them from
+`apps.<name>.host`. Each app requires its own origin as a token's audience, so
+a token minted for one is refused by the others, and the signing key reaches
+`auth` alone.
 
 Each app's pod sleeps five seconds in a `preStop` hook before its `SIGTERM`, so
 it leaves its Service while it still listens, and the 35-second grace holds that

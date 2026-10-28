@@ -107,16 +107,18 @@ You need a better-auth server reachable over `https`, and the API's
    document `OAuthResourceModule` serves; see
    [Telling clients where the issuer is](/security/authentication/split-deployment/#telling-clients-where-the-issuer-is).
    The provider signs with the same `/jwks` keys and puts the `resource` a
-   client asked for in the token's `aud`, so the API's `RESOURCE` and
-   `AUDIENCE` are one URL. Its tokens carry an issuer of its own, under
-   better-auth's base path: `ISSUER` changes from step 2's to the `issuer` its
-   discovery document names, and `AUTHORIZATION_SERVERS` names the same.
+   client asked for in the token's `aud`, which the module requires:
+   `RESOURCE` is the audience, so step 2's `AUDIENCE` goes. Its tokens carry an
+   issuer of its own, under better-auth's base path, which
+   `AUTHORIZATION_SERVERS` names — the issuer the module requires of a token —
+   so step 2's `ISSUER` goes too, or changes to that same `issuer` its
+   discovery document names: one the document does not advertise fails the
+   boot.
 
    ```bash frame="terminal"
    export NESTRS_OAUTH__RESOURCE__RESOURCE='https://api.example.com'
    export NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS='https://auth.example.com/api/auth'
-   export NESTRS_AUTHN__ISSUER='https://auth.example.com/api/auth'
-   export NESTRS_AUTHN__AUDIENCE='https://api.example.com'
+   unset NESTRS_AUTHN__ISSUER NESTRS_AUTHN__AUDIENCE
    ```
 
    Checkpoint: `curl https://api.example.com/.well-known/oauth-protected-resource`
@@ -147,6 +149,11 @@ with `WWW-Authenticate: Bearer error="invalid_token"`:
 - **`AUDIENCE` that is not the token's `aud`** — `reason="invalid_token"` too.
   better-auth's default audience is its own base URL: set `jwt.audience` as in
   step 1, or `AUDIENCE` to that base URL.
+- **Under `OAuthResourceModule`, a token whose `iss` is not one of
+  `AUTHORIZATION_SERVERS`** — `reason="invalid_token"`: the module accepts only
+  the issuers its document advertises, compared exactly, trailing slash
+  included. An `ISSUER` it does not advertise fails the boot, naming both
+  variables.
 - **`JWKS_URI` naming another tenant or another provider's set** — every token
   is `reason="unknown_key"`: the key its `kid` names is not in the set, even
   after the refetch it earned.

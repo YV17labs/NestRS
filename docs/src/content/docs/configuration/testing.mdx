@@ -41,11 +41,13 @@ async fn issues_a_token_for_a_registered_client() {
                 "test-client",
                 "secret",
                 ["posts:read"],
+                ["http://localhost:3002"],
                 ClientPayload {
                     org_id: Uuid::nil(),
                     roles: vec![Role::User],
                 },
             )],
+            sign_in_resources: vec!["http://localhost:3002".into()],
             default_org_id: Uuid::nil(),
         })
         .build()
@@ -161,12 +163,15 @@ by key, from the pairs you give it, and reads neither `std::env` nor the
 mod tests {
     use super::*;
 
+    const RESOURCE: &str = "https://api.example.com";
+
     // …
 
     #[test]
     fn empty_clients_fails_validation() {
         let cfg = OAuthConfig {
             clients: vec![],
+            sign_in_resources: vec![RESOURCE.into()],
             default_org_id: Uuid::nil(),
         };
         let err = cfg.validate().unwrap_err();
@@ -176,19 +181,27 @@ mod tests {
     // …
 
     #[test]
-    fn clients_are_read_from_their_variable() {
+    fn clients_and_sign_in_resources_are_read_from_their_variables() {
         let env = ConfigService::with_vars(
             "oauth",
-            [(
-                "CLIENTS",
-                r#"[{"client_id":"web","client_secret":"s3cr3t","scopes":["posts:read"],"payload":{"org_id":"00000000-0000-0000-0000-000000000000","roles":["user"]}}]"#,
-            )],
+            [
+                (
+                    "CLIENTS",
+                    r#"[{"client_id":"web","client_secret":"s3cr3t","scopes":["posts:read"],"resources":["https://api.example.com"],"payload":{"org_id":"00000000-0000-0000-0000-000000000000","roles":["user"]}}]"#,
+                ),
+                (
+                    "SIGN_IN_RESOURCES",
+                    "https://api.example.com,https://mcp.example.com",
+                ),
+            ],
         );
         let cfg = OAuthConfig::from_env(&env, OAuthConfig::defaults()).expect("the clients parse");
         assert_eq!(cfg.clients.len(), 1);
         assert_eq!(cfg.clients[0].client_id, "web");
         assert_eq!(cfg.clients[0].scopes, [constants::POSTS_READ]);
+        assert_eq!(cfg.clients[0].resources, [RESOURCE]);
         assert_eq!(cfg.clients[0].payload.roles, [Role::User]);
+        assert_eq!(cfg.sign_in_resources, [RESOURCE, "https://mcp.example.com"]);
         cfg.validate().expect("valid");
     }
 }

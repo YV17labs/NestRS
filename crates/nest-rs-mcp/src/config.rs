@@ -107,9 +107,10 @@ const SSE_RETRY: DurationBounds = DurationBounds::secs(
 pub struct McpConfig {
     /// Hostnames or `host:port` authorities accepted in the inbound `Host`
     /// header (anti-DNS-rebinding). Defaults to loopback only, so a public
-    /// deployment **must** name itself — `<PREFIX>_MCP__ALLOWED_HOSTS=mcp.example.com,mcp.example.com:8443`.
-    /// An empty list disables the check entirely and is reported at `warn` at
-    /// mount time.
+    /// deployment **must** name itself — `<PREFIX>_MCP__ALLOWED_HOSTS=mcp.example.com,mcp.example.com:8443`
+    /// — unless it imports `OAuthResourceModule`, whose resource's host the
+    /// mount admits beside these. An empty list disables the check entirely
+    /// and is reported at `warn` at mount time.
     pub allowed_hosts: Vec<String>,
     /// Keep sessions alive for protocol versions older than `2026-07-28`. Per
     /// SEP-2567 the `2026-07-28` revision is always served statelessly, so this

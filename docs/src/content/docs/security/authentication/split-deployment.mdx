@@ -225,6 +225,47 @@ The bearer is signed by the issuer's private key; the API verifies
 with the public key. The API has no way to mint that token even if it
 wanted to.
 
+## Binding a token to its resource
+
+Every resource server trusting one issuer verifies with the same public key,
+so a signature alone says nothing about *which* server a token was minted for:
+a token stolen from, or sent by mistake to, one API would be accepted by every
+other. [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) closes it by
+naming the resource in the token request, and the issuer writes it into the
+token's `aud` — the one audience the resource server requires.
+
+Each half holds its own word of that contract. A resource server requires its
+own audience — `<PREFIX>_AUTHN__AUDIENCE`, its canonical URI:
+
+```bash
+# apps/api, deployed
+NESTRS_AUTHN__AUDIENCE=https://api.example.com
+```
+
+The issuer mints each access token for the resource it was asked for, with
+`JwtService::sign_for(resource, &claims)` — never with its own audience, which
+is for the tokens it mints for itself, its OAuth transaction cookie among them.
+A machine client names the resource in the `resource` parameter of its token
+request, and gets a token only for a resource it is registered for
+(`AuthenticatedClient::audience_for`, which refuses anything else as RFC 8707's
+`invalid_target`); the demo's sign-in takes `resource` the same way, and a
+sign-in naming none is minted for the first resource the issuer serves:
+
+```bash
+TOKEN=$(curl -sX POST http://localhost:3001/login \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"ada@example.com","password":"hunter2","resource":"http://localhost:3003"}' \
+    | jq -r .access_token)
+```
+
+Deployed, that token opens the assistant and every other resource server
+refuses it, because each app requires an audience of its own — which takes a
+configuration of each app's own: a deployment's per-process environment is one,
+and the demo's chart sets `AUTHN__AUDIENCE` to each app's origin and hands the
+signing key to `auth` alone. Run locally, the demo's apps still read one `.env`,
+so there they share one audience, and one key, until each app has a file of its
+own.
+
 ## Telling clients where the issuer is
 
 An OAuth client that has never met your API does not know which
@@ -246,7 +287,6 @@ pub struct ApiModule;
 ```bash
 NESTRS_OAUTH__RESOURCE__RESOURCE=https://api.example.com
 NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
-NESTRS_AUTHN__AUDIENCE=https://api.example.com
 NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED=users:read,users:write
 ```
 
@@ -321,16 +361,22 @@ see [OAuth scopes](/security/authorization/scopes/). Make sure every
 scope your rules gate on appears in `SCOPES_SUPPORTED`, or you are
 telling clients to request something discovery never names.
 
-**`<PREFIX>_AUTHN__AUDIENCE` stops being optional.** On its own,
-`AuthnConfig` treats it as a nice-to-have; under this module boot fails
-without it, naming the variable. The confused-deputy defence itself is
-not what the module adds — `JwtService` applies RFC 7519 §4.1.3 on every
-path, so a token minted *for another named service* is refused even by an
-app that pins no audience. What pinning adds is the token that carries no
-`aud` at all: without a pinned audience such a token is accepted, and a
-resource server cannot afford that. RFC 8707 makes the resource
-identifier *be* the audience — keep the two strings identical, and the
-framework warns at boot when they drift, naming both variables.
+**The document is what a token is checked against.** Under this module the
+verifier binds itself to the resource it advertises, as RFC 9068 §4 asks of a
+resource server: a token is accepted only when its `aud` is `RESOURCE` and its
+`iss` exactly matches one of `AUTHORIZATION_SERVERS`, so a token minted for
+another service, or signed by an issuer the document does not name, is
+refused — one carrying no `aud` or no `iss` too. Nothing is copied by hand:
+`<PREFIX>_AUTHN__AUDIENCE` may stay unset, and when set to something else —
+some authorization servers mint an opaque audience by policy — it is the one
+required, and the boot warns naming both variables. `<PREFIX>_AUTHN__ISSUER`
+narrows the accepted issuers to itself, and must be one of them: an issuer the
+document does not advertise would refuse every token, so the boot fails naming
+both variables. An app that also mints access tokens for itself sets it, or
+those tokens carry no `iss` its own verifier accepts; its OAuth transaction
+cookie is checked against what it stamps, and needs nothing.
+`ALLOW_ANY_AUDIENCE` beside the module fails the boot, since an
+audience-agnostic verifier protects no resource.
 
 ## Going further
 

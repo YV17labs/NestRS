@@ -335,8 +335,8 @@ impl JwtService {
     ///
     /// A JWK Set is not fetched here: the first token that needs it fetches it.
     pub fn new(options: JwtOptions) -> Result<Self, AuthError> {
-        let issuers = options.issuer.iter().cloned().collect();
-        Self::build(options, issuers)
+        let issuer = options.issuer.clone();
+        Self::build(options, issuer.as_slice())
     }
 
     /// [`new`](Self::new) for the resource `binding` describes: its audience
@@ -354,11 +354,11 @@ impl JwtService {
             ));
         }
         options.audience = Some(binding.audience.clone());
-        Self::build(options, binding.issuers.clone())
+        Self::build(options, &binding.issuers)
     }
 
     /// The service over `options`, a token's `iss` one of `issuers` when any.
-    fn build(options: JwtOptions, issuers: Vec<String>) -> Result<Self, AuthError> {
+    fn build(options: JwtOptions, issuers: &[String]) -> Result<Self, AuthError> {
         // The ranges the variables are held to, held again here: a `JwtOptions`
         // built in code reaches this constructor without a config read, and an
         // unbounded lifetime or leeway overflows the arithmetic below it.
@@ -433,8 +433,8 @@ impl JwtService {
                     }),
                     Verifier::Static {
                         key: DecodingKey::from_secret(bytes),
-                        validation: validation(&options, signing, &issuers),
-                        handshake: own_validation(&options, signing),
+                        validation: validation(&options, signing, issuers),
+                        handshake: validation(&options, signing, options.issuer.as_slice()),
                     },
                 )
             }
@@ -474,8 +474,8 @@ impl JwtService {
                     signer,
                     Verifier::Static {
                         key: decoding,
-                        validation: validation(&options, signing, &issuers),
-                        handshake: own_validation(&options, signing),
+                        validation: validation(&options, signing, issuers),
+                        handshake: validation(&options, signing, options.issuer.as_slice()),
                     },
                 )
             }
@@ -485,7 +485,7 @@ impl JwtService {
                     set: Jwks::new(uri, tls, &algorithms)?,
                     validations: algorithms
                         .iter()
-                        .map(|algorithm| (*algorithm, validation(&options, *algorithm, &issuers)))
+                        .map(|algorithm| (*algorithm, validation(&options, *algorithm, issuers)))
                         .collect(),
                 },
             ),
@@ -713,13 +713,6 @@ impl JwtService {
     pub fn ttl_secs(&self) -> u64 {
         self.expires_in.as_secs()
     }
-}
-
-/// What a token this service minted for itself meets, for one `algorithm`:
-/// the audience and the issuer it stamps.
-fn own_validation(options: &JwtOptions, algorithm: Algorithm) -> Validation {
-    let own: Vec<String> = options.issuer.iter().cloned().collect();
-    validation(options, algorithm, &own)
 }
 
 /// The validation every token meets, for one `algorithm`, its `iss` one of

@@ -45,6 +45,16 @@ pub fn challenge(resp: &nest_rs_http::Response) -> String {
         .to_owned()
 }
 
+/// The whole chain of the error `M`'s boot fails with, panicking with `msg`
+/// when it boots: `TestApp` is not `Debug`, so `expect_err` cannot take a boot
+/// result.
+pub async fn boot_error<M: nest_rs_core::Module + 'static>(msg: &str) -> String {
+    match nest_rs_testing::TestApp::for_module::<M>().await {
+        Ok(_) => panic!("{msg}"),
+        Err(err) => format!("{err:#}"),
+    }
+}
+
 /// A tool host with no tools, enough to mount `/mcp`. rmcp's host macros expand
 /// against the call site's scope, which the imported `rmcp` re-export supplies.
 #[mcp]

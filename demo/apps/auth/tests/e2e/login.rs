@@ -37,13 +37,7 @@ async fn login_issues_a_token_the_public_key_verifies() {
     resp.assert_header("cache-control", "no-store");
     resp.assert_header("pragma", "no-cache");
 
-    let json = resp.json().await;
-    let token = json
-        .value()
-        .object()
-        .get("access_token")
-        .string()
-        .to_owned();
+    let token = access_token(resp).await;
     let claims: Claims = resource_server_verifier(API)
         .verify(&token)
         .await
@@ -139,13 +133,7 @@ async fn login_names_the_resource_its_token_is_for() {
         .send()
         .await;
     resp.assert_status_is_ok();
-    let json = resp.json().await;
-    let token = json
-        .value()
-        .object()
-        .get("access_token")
-        .string()
-        .to_owned();
+    let token = access_token(resp).await;
 
     resource_server_verifier(ASSISTANT)
         .verify::<Claims>(&token)

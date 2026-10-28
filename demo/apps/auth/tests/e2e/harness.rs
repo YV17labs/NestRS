@@ -4,7 +4,7 @@ use features::Role;
 use features::authz::constants;
 use nest_rs::authn::{AuthnConfig, JwtOptions, JwtService, hash_password};
 use nest_rs::social::{GithubSocialConfig, GoogleSocialConfig};
-use nest_rs::testing::{EphemeralDatabase, TestApp};
+use nest_rs::testing::{EphemeralDatabase, TestApp, TestResponse};
 use sea_orm::sea_query::{OnConflict, Query};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
 use uuid::Uuid;
@@ -87,6 +87,16 @@ fn payload(role: Role) -> ClientPayload {
         org_id: ORG_ID.parse().expect("a valid org uuid"),
         roles: vec![role],
     }
+}
+
+pub(crate) async fn access_token(resp: TestResponse) -> String {
+    resp.json()
+        .await
+        .value()
+        .object()
+        .get("access_token")
+        .string()
+        .to_owned()
 }
 
 pub(crate) fn resource_server_verifier(resource: &str) -> JwtService {

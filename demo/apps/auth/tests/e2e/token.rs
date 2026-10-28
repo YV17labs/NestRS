@@ -9,13 +9,12 @@ use super::harness::*;
 async fn request_token(
     app: &TestApp,
     (client_id, client_secret): (&str, &str),
-    body: &str,
+    form: &[(&str, &str)],
 ) -> TestResponse {
     app.http()
         .post("/token")
         .header("authorization", basic_auth(client_id, client_secret))
-        .content_type("application/x-www-form-urlencoded")
-        .body(body.to_owned())
+        .form(&form)
         .send()
         .await
 }
@@ -27,10 +26,11 @@ async fn token_endpoint_issues_a_token_the_public_key_verifies() {
     let resp = request_token(
         &app,
         (CLIENT_ID, CLIENT_SECRET),
-        &format!(
-            "grant_type=client_credentials&scope={POSTS_READ}+{POSTS_WRITE}&resource={}",
-            encoded(API)
-        ),
+        &[
+            ("grant_type", "client_credentials"),
+            ("scope", &format!("{POSTS_READ} {POSTS_WRITE}")),
+            ("resource", API),
+        ],
     )
     .await;
     resp.assert_status_is_ok();
@@ -58,7 +58,7 @@ async fn a_client_asking_for_no_scope_is_granted_exactly_its_registration() {
     let resp = request_token(
         &app,
         (READER_ID, READER_SECRET),
-        "grant_type=client_credentials",
+        &[("grant_type", "client_credentials")],
     )
     .await;
     resp.assert_status_is_ok();
@@ -81,13 +81,13 @@ async fn a_client_asking_for_no_scope_is_granted_exactly_its_registration() {
 #[tokio::test]
 async fn token_endpoint_rejects_an_unsupported_grant() {
     let (_db, app) = boot().await;
-    request_token(&app, (CLIENT_ID, CLIENT_SECRET), "grant_type=password")
-        .await
-        .assert_status(StatusCode::BAD_REQUEST);
-}
-
-fn encoded(value: &str) -> String {
-    value.replace(':', "%3A").replace('/', "%2F")
+    request_token(
+        &app,
+        (CLIENT_ID, CLIENT_SECRET),
+        &[("grant_type", "password")],
+    )
+    .await
+    .assert_status(StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -97,20 +97,14 @@ async fn a_token_names_the_resource_requested_and_no_other() {
     let resp = request_token(
         &app,
         (CLIENT_ID, CLIENT_SECRET),
-        &format!(
-            "grant_type=client_credentials&resource={}",
-            encoded(ASSISTANT)
-        ),
+        &[
+            ("grant_type", "client_credentials"),
+            ("resource", ASSISTANT),
+        ],
     )
     .await;
     resp.assert_status_is_ok();
-    let json = resp.json().await;
-    let token = json
-        .value()
-        .object()
-        .get("access_token")
-        .string()
-        .to_owned();
+    let token = access_token(resp).await;
 
     resource_server_verifier(ASSISTANT)
         .verify::<Claims>(&token)
@@ -130,29 +124,29 @@ async fn a_resource_outside_the_registration_or_none_among_several_is_an_invalid
     let logs = LogCapture::install();
     let (_db, app) = boot().await;
 
-    for (client, body) in [
+    for (client, form) in [
         (
             (READER_ID, READER_SECRET),
-            format!(
-                "grant_type=client_credentials&resource={}",
-                encoded(ASSISTANT)
-            ),
+            &[
+                ("grant_type", "client_credentials"),
+                ("resource", ASSISTANT),
+            ][..],
         ),
         (
             (CLIENT_ID, CLIENT_SECRET),
-            "grant_type=client_credentials".to_owned(),
+            &[("grant_type", "client_credentials")],
         ),
         (
             (CLIENT_ID, CLIENT_SECRET),
-            format!(
-                "grant_type=client_credentials&resource={}&resource={}",
-                encoded(API),
-                encoded(ASSISTANT)
-            ),
+            &[
+                ("grant_type", "client_credentials"),
+                ("resource", API),
+                ("resource", ASSISTANT),
+            ],
         ),
     ] {
         assert_token_error(
-            request_token(&app, client, &body).await,
+            request_token(&app, client, form).await,
             StatusCode::BAD_REQUEST,
             serde_json::json!({ "error": "invalid_target" }),
         )
@@ -214,7 +208,7 @@ async fn token_endpoint_rejects_a_bad_client_secret() {
     let resp = request_token(
         &app,
         (CLIENT_ID, "wrong-secret"),
-        "grant_type=client_credentials",
+        &[("grant_type", "client_credentials")],
     )
     .await;
 
@@ -231,8 +225,11 @@ async fn token_endpoint_rejects_a_bad_client_secret() {
 async fn token_endpoint_refuses_a_request_without_a_grant_type() {
     let (_db, app) = boot().await;
 
-    for body in ["scope=posts%3Aread", "grant_type=&scope=posts%3Aread"] {
-        let resp = request_token(&app, (CLIENT_ID, CLIENT_SECRET), body).await;
+    for form in [
+        &[("scope", POSTS_READ)][..],
+        &[("grant_type", ""), ("scope", POSTS_READ)],
+    ] {
+        let resp = request_token(&app, (CLIENT_ID, CLIENT_SECRET), form).await;
         assert_token_error(
             resp,
             StatusCode::BAD_REQUEST,
@@ -253,7 +250,7 @@ async fn token_endpoint_refuses_a_scope_beyond_the_registration_naming_the_clien
     let resp = request_token(
         &app,
         (READER_ID, READER_SECRET),
-        &format!("grant_type=client_credentials&scope={POSTS_WRITE}"),
+        &[("grant_type", "client_credentials"), ("scope", POSTS_WRITE)],
     )
     .await;
     resp.assert_status(StatusCode::BAD_REQUEST);

@@ -31,7 +31,6 @@ fn expected() -> String {
 fn authn() -> nest_rs_authn::AuthnSetup {
     AuthnModule::for_root(AuthnConfig {
         secret: Some(SECRET.into()),
-        audience: Some(RESOURCE.into()),
         ..AuthnConfig::default()
     })
 }

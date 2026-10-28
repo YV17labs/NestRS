@@ -12,6 +12,8 @@ use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule};
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 
+use crate::boot_error;
+
 const RESOURCE: &str = "https://api.example.com";
 const TRUSTED: [&str; 2] = ["https://auth.example.com", "https://login.example.com"];
 /// 32 bytes: HS256's floor.
@@ -54,14 +56,6 @@ fn minted(iss: Option<&str>, aud: &str) -> String {
             },
         )
         .expect("sign")
-}
-
-/// `TestApp` is not `Debug`, so `expect_err` cannot take a boot result.
-async fn boot_error<M: nest_rs_core::Module + 'static>(msg: &str) -> String {
-    match TestApp::for_module::<M>().await {
-        Ok(_) => panic!("{msg}"),
-        Err(err) => format!("{err:#}"),
-    }
 }
 
 fn authn_var(key: &str) -> String {

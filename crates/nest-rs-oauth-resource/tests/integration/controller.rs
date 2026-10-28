@@ -9,7 +9,7 @@
 //!                       → the AS metadata, whose `issuer` the client validates
 //! ```
 
-use crate::AlwaysUnauthorized;
+use crate::{AlwaysUnauthorized, boot_error};
 use nest_rs_authn::{AuthnConfig, AuthnModule};
 use nest_rs_core::module;
 use nest_rs_http::StatusCode;
@@ -62,8 +62,6 @@ impl StubAuthorizationServer {
 fn authn() -> AuthnConfig {
     AuthnConfig {
         secret: Some(SECRET.into()),
-        // The audience `OAuthResourceModule` requires: the resource identifier.
-        audience: Some(RESOURCE.into()),
         ..AuthnConfig::default()
     }
 }
@@ -196,14 +194,6 @@ async fn the_metadata_endpoint_is_reachable_without_a_token() {
         .assert_status_is_ok();
 }
 
-/// `TestApp` is not `Debug`, so `expect_err` cannot take a boot result.
-async fn boot_error<M: nest_rs_core::Module + 'static>(msg: &str) -> anyhow::Error {
-    match TestApp::for_module::<M>().await {
-        Ok(_) => panic!("{msg}"),
-        Err(err) => err,
-    }
-}
-
 #[tokio::test]
 async fn a_deployment_that_cannot_name_itself_fails_boot() {
     #[module(imports = [
@@ -214,11 +204,11 @@ async fn a_deployment_that_cannot_name_itself_fails_boot() {
 
     let err = boot_error::<Incomplete>("an unnamed resource must not boot").await;
     assert!(
-        format!("{err:#}").contains(&nest_rs_config::var_name(
+        err.contains(&nest_rs_config::var_name(
             <OAuthResourceConfig as nest_rs_config::Namespaced>::NAMESPACE,
             "RESOURCE",
         )),
-        "the boot failure must name the variable: {err:#}",
+        "the boot failure must name the variable: {err}",
     );
 }
 
@@ -237,8 +227,8 @@ async fn a_non_https_resource_identifier_is_refused() {
 
     let err = boot_error::<PlainHttp>("http is not a canonical resource URI").await;
     assert!(
-        format!("{err:#}").contains("RFC 9728 §1.2"),
-        "the refusal names the clause: {err:#}",
+        err.contains("RFC 9728 §1.2"),
+        "the refusal names the clause: {err}",
     );
 }
 
@@ -246,11 +236,7 @@ async fn a_non_https_resource_identifier_is_refused() {
 #[tokio::test]
 async fn http_on_loopback_is_accepted_for_local_development() {
     #[module(imports = [
-        AuthnModule::for_root(AuthnConfig {
-            secret: Some(SECRET.into()),
-            audience: Some("http://localhost:3003".into()),
-            ..AuthnConfig::default()
-        }),
+        AuthnModule::for_root(authn()),
         OAuthResourceModule::for_root(OAuthResourceConfig {
             resource: Some("http://localhost:3003".into()),
             authorization_servers: vec!["https://auth.example.com".into()],
@@ -280,8 +266,7 @@ async fn a_bearer_method_the_framework_does_not_honour_is_refused() {
     struct AdvertisesBody;
 
     let err = boot_error::<AdvertisesBody>("body is not honoured").await;
-    let text = format!("{err:#}");
-    assert!(text.contains("Authorization"), "got: {text}");
+    assert!(err.contains("Authorization"), "got: {err}");
 
     #[module(imports = [
         AuthnModule::for_root(authn()),
@@ -295,7 +280,7 @@ async fn a_bearer_method_the_framework_does_not_honour_is_refused() {
     struct AdvertisesNonsense;
 
     let err = boot_error::<AdvertisesNonsense>("telepathy is not a defined method").await;
-    assert!(format!("{err:#}").contains("RFC 9728 §2"), "got: {err:#}",);
+    assert!(err.contains("RFC 9728 §2"), "got: {err}");
 }
 
 /// The route matches the URL path, which never carries the query a `metadata_url`
@@ -303,11 +288,7 @@ async fn a_bearer_method_the_framework_does_not_honour_is_refused() {
 #[tokio::test]
 async fn a_resource_with_a_query_serves_the_url_its_challenge_advertises() {
     #[module(imports = [
-        AuthnModule::for_root(AuthnConfig {
-            secret: Some(SECRET.into()),
-            audience: Some("https://api.example.com/mcp?tenant=a".into()),
-            ..AuthnConfig::default()
-        }),
+        AuthnModule::for_root(authn()),
         OAuthResourceModule::for_root(OAuthResourceConfig {
             resource: Some("https://api.example.com/mcp?tenant=a".into()),
             authorization_servers: vec!["https://auth.example.com".into()],

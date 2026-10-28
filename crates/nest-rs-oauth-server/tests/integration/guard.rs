@@ -107,7 +107,6 @@ const RESOURCE: &str = "http://localhost";
         HttpModule::for_root(None),
         AuthnModule::for_root(AuthnConfig {
             secret: Some("resource-server-secret-0123456789".into()),
-            audience: Some(RESOURCE.into()),
             ..AuthnConfig::default()
         }),
         OAuthResourceModule::for_root(OAuthResourceConfig {

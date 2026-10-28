@@ -31,13 +31,18 @@ use crate::{{snake}}::{{module}};
 pub struct {{tmodule}};
 "#;
 
+/// The HTTP adapter for a port with no entity: guarded like its `#[crud]`
+/// twin, so the route answers only a caller the two guards admit.
 pub(crate) const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::http::{controller, routes};
 
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
 use crate::{{snake}}::{{service}};
 
 #[controller(path = "/{{kebab}}")]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct {{controller}} {
     #[inject]
     svc: Arc<{{service}}>,
@@ -45,14 +50,10 @@ pub struct {{controller}} {
 
 #[routes]
 impl {{controller}} {
-    // SECURITY: scaffolded as #[public] because this port holds no entity.
-    // Before serving real rows, declare #[authorize(Action, Entity)] instead
-    // (class gate + automatic response masking), bind
-    // #[use_guards(AuthnGuard, AuthzGuard)] on the struct, and import
-    // AuthzModule in this adapter's module.rs — `nestrs g auth` writes all
-    // three, and `nestrs g http` on a `g resource` port emits them.
+    // Guarded by the two guards on the struct, so it needs no posture of its
+    // own; the boot refuses a route no guard covers. A route open on purpose
+    // says #[public]; one serving rows declares #[authorize(Action, Entity)].
     #[get("/")]
-    #[public]
     #[api(summary = "Count {{kebab}} items")]
     async fn list(&self) -> String {
         format!("{} items", self.svc.count())
@@ -149,13 +150,17 @@ pub(crate) const WS_GATEWAY: &str = r#"use std::sync::Arc;
 use nest_rs::core::error_message;
 use nest_rs::ws::{WsClient, gateway, messages};
 
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
 use crate::{{snake}}::{{service}};
 
 // The path carries the feature name: a self-mount path is its exclusive
 // namespace, so a bare `/ws` made the *second* generated gateway fail boot on a
 // duplicate path. `/ws/<feature>` also stays clear of the HTTP controller
-// adapter, which claims `/<feature>`.
+// adapter, which claims `/<feature>`. The guards run at the upgrade, so the
+// socket opens only for a caller they admit.
 #[gateway(path = "/ws/{{kebab}}")]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct {{gateway}} {
     #[inject]
     svc: Arc<{{service}}>,
@@ -164,9 +169,9 @@ pub struct {{gateway}} {
 #[messages]
 impl {{gateway}} {
     // Every message declares its access posture, and this scaffold's reply is a
-    // broadcast rather than entity rows — so `#[public]`: no gate, no mask, and
-    // the guards a gateway binds on its struct still run at the upgrade. A
-    // message that answers with entity rows takes
+    // broadcast rather than entity rows — so `#[public]`: no gate and no mask on
+    // the message, the caller already admitted by the guards the upgrade ran.
+    // A message that answers with entity rows takes
     // `#[authorize(Read, Entity)]` instead, and the mask comes with it.
     #[subscribe_message("{{kebab}}.{{op}}")]
     #[public]

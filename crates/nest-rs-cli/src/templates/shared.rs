@@ -392,11 +392,12 @@ picks between them — not the caller:
 
 **Rows are ability-scoped, and the guards are what install the scope.** `Repo`
 filters every read by the caller's ambient `Ability`; with none installed a read
-denies every row rather than returning them unscoped. So a scaffolded adapter is
-not "open" — it answers nothing until it is wired, which is the fail-secure half
-of the design. Before an operation serves real rows, swap `#[public]` for
-`#[authorize]` and wire its edge — the guards on the struct, and the edge's authz
-module imported in that adapter's `module.rs`:
+denies every row rather than returning them unscoped. A scaffolded HTTP route or
+WebSocket gateway is guarded already — `nestrs g http` and `g ws` bind the two
+guards and write the auth adapter they come from — and an operation that
+declares `#[public]` answers no entity data. Before an operation serves real
+rows, it declares `#[authorize]` and its edge is wired — the guards on the
+struct, and the edge's authz module imported in that adapter's `module.rs`:
 
 | Edge | `#[use_guards(…)]` on the struct | Imported in `module.rs` |
 |---|---|---|
@@ -408,8 +409,8 @@ module imported in that adapter's `module.rs`:
 A guard bound where its check never runs is a compile error naming the edge it
 does check: `AuthnGuard` checks HTTP requests only, so a resolver refuses it.
 `nestrs g auth` writes the guards and `AuthzModule`, `nestrs g graphql|ws|mcp`
-writes that edge's module once auth exists, and `g http` / `g graphql` on a
-`g resource` port emit the wiring already done.
+writes that edge's module once auth exists, and `g http` / `g ws` — and
+`g graphql` on a `g resource` port — emit the wiring already done.
 
 Two edges answer differently, by design. A **scheduled** tick is system work:
 its unit of work runs on `SeaOrmDatabaseModule`'s executor with no ability, so `Repo`

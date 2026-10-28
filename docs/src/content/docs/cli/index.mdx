@@ -358,6 +358,16 @@ authenticates the caller and attaches the ability the resolvers read. Over a
 plain `g feature` port there are no rows to guard, so the resolver stays the
 `#[public]` stand-in and nothing else is generated.
 
+### A generated route or socket is never open
+
+`g http` and `g ws` bind `#[use_guards(AuthnGuard, AuthzGuard)]` on the
+controller or gateway over a plain `g feature` port too, import the transport's
+authz module, and scaffold the `g auth` adapter when the workspace has none, as
+`g resource` does. A route those guards cover needs no posture of its own, and
+the boot refuses one no guard covers, so an opening is always a line you write:
+`#[public]` on the route that is open on purpose. A gateway's guards run at the
+upgrade, and each message still declares its posture.
+
 ## Doctor
 
 ```bash

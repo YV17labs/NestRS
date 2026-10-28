@@ -7,7 +7,9 @@
 //! `count()` stand-in, and its rows are reachable only behind the app's guards:
 //! GraphQL and HTTP over one take the `#[crud]` template, and each transport
 //! gets its `authz/` adapter ([`auth::authz_for`]) whenever the workspace has a
-//! policy to enforce.
+//! policy to enforce. An HTTP controller and a WebSocket gateway bind the guards
+//! over either port shape, so a generated route or socket is never open by
+//! default: the workspace gets its auth adapter first when it has none.
 
 use std::path::PathBuf;
 
@@ -69,10 +71,11 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let mut s = Scaffold::new();
     s.create(dir.join(transport.handler_file()), r.render(handler_tmpl));
 
-    // A guarded `#[crud]` handler imports its transport's authz adapter, or the
-    // access graph fails the boot on the guards it names.
+    // A guarded handler imports its transport's authz adapter, or the access
+    // graph fails the boot on the guards it names.
     let mut module_rs = r.render(module_tmpl);
-    let guarded_handler = crud_port && matches!(transport, Transport::Graphql | Transport::Http);
+    let guarded_handler = matches!(transport, Transport::Http | Transport::Ws)
+        || (crud_port && transport == Transport::Graphql);
     if guarded_handler
         && let Some(b) = auth::authz_for(transport)
         && let Some(wired) = ensure_module_imports(&[(b.feature_path, b.module)])(&module_rs)
@@ -84,7 +87,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
 
     // The transport's authz adapter, whenever the workspace has a policy to enforce:
     // without it `/graphql` installs no ability and `/mcp` is deny-all.
-    let scaffolded_auth = is_graphql && crud_port && !auth::exists(&ws);
+    let scaffolded_auth = guarded_handler && !auth::exists(&ws);
     let authz = auth::authz_for(transport).filter(|b| {
         !b.written_by_g_auth && (scaffolded_auth || auth::exists(&ws)) && !b.exists(&ws)
     });

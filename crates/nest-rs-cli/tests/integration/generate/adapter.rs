@@ -29,28 +29,37 @@ fn generate_http_adapter_wires_feature_mod() {
     assert!(!mod_rs.contains("PostsController"), "{mod_rs}");
 }
 
-/// Every route declares a posture.
+/// A generated route is guarded: no posture of its own, the two guards on its
+/// controller, and the auth adapter they come from bootstrapped when the
+/// workspace has none.
 #[test]
-fn generate_http_adapter_declares_a_route_posture() {
+fn generate_http_adapter_binds_the_guards_and_bootstraps_their_auth() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let path = dir.path().to_str().unwrap();
 
     run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
-    run_ok(dir.path(), &["g", "http", "posts", "-p", path]);
+    let printed = run_ok(dir.path(), &["g", "http", "posts", "-p", path]);
 
-    let controller = fs::read_to_string(
-        dir.path()
-            .join("crates/features/src/posts/http/controller.rs"),
-    )
-    .unwrap();
+    let src = dir.path().join("crates/features/src");
+    let controller = fs::read_to_string(src.join("posts/http/controller.rs")).unwrap();
     assert!(
-        controller.contains("#[public]"),
-        "the scaffolded route must declare its posture: {controller}"
+        controller.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
+        "the scaffolded route is guarded: {controller}"
     );
     assert!(
-        controller.contains("SECURITY:"),
-        "and say why it is open, the way the graphql adapter does: {controller}"
+        !controller.lines().any(|line| line.trim() == "#[public]"),
+        "an opening is the developer's line, never the generator's: {controller}"
+    );
+    let module = fs::read_to_string(src.join("posts/http/module.rs")).unwrap();
+    assert!(module.contains("AuthzModule"), "{module}");
+    assert!(
+        src.join("authz/ability.rs").is_file(),
+        "the guards' adapter lands"
+    );
+    assert!(
+        printed.contains("Also created the auth adapter"),
+        "{printed}"
     );
 }
 
@@ -131,7 +140,7 @@ fn generate_ws_adapter_imports_the_connection_registry() {
         fs::read_to_string(dir.path().join("crates/features/src/posts/ws/module.rs")).unwrap();
     assert!(
         module_rs.contains("use nest_rs::ws::WsModule;")
-            && module_rs.contains("imports = [PostsModule, WsModule]"),
+            && module_rs.contains("imports = [PostsModule, WsModule"),
         "the generated ws module must import WsModule: {module_rs}"
     );
 }
@@ -165,8 +174,9 @@ fn generate_ws_adapter_enables_the_guards_ws_feature_and_tracing() {
     assert!(features_cargo.contains("tracing"), "{features_cargo}");
 }
 
-/// A typed WS payload reaches its derives through `#[input]`, so the manifest
-/// gains a feature and not a `serde` entry.
+/// A typed WS payload reaches its derives through `#[input]`, so the adapter
+/// adds a feature and not a `serde` entry; the auth adapter, written first,
+/// brings its own.
 #[test]
 fn generate_ws_adapter_leaves_serde_to_the_decorator() {
     let dir = tempfile::tempdir().unwrap();
@@ -185,10 +195,13 @@ nest-rs.workspace = true
     .unwrap();
 
     run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "auth", "-p", path]);
+    let serde_lines = |manifest: &str| manifest.lines().filter(|l| l.contains("serde")).count();
+    let before = serde_lines(&fs::read_to_string(&features_cargo_path).unwrap());
     run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
 
     let features_cargo = fs::read_to_string(&features_cargo_path).unwrap();
-    assert!(!features_cargo.contains("serde"), "{features_cargo}");
+    assert_eq!(serde_lines(&features_cargo), before, "{features_cargo}");
     assert!(features_cargo.contains("\"ws\""), "{features_cargo}");
 }
 
@@ -700,10 +713,11 @@ fn generate_ws_and_mcp_write_the_authz_adapters_their_own_output_names() {
     }
 }
 
-/// The authz adapter is scaffolded only where there is a policy to enforce: over a
-/// `g feature` port with no auth adapter, `g ws` writes the adapter and stops.
+/// A generated gateway is guarded at its upgrade: over a `g feature` port with
+/// no auth adapter, `g ws` bootstraps it and writes the WebSocket authz adapter
+/// the guards are imported through.
 #[test]
-fn generate_ws_without_an_auth_adapter_writes_no_authz_adapter() {
+fn generate_ws_over_a_feature_port_guards_the_upgrade_and_bootstraps_its_auth() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let path = dir.path().to_str().unwrap();
@@ -712,13 +726,16 @@ fn generate_ws_without_an_auth_adapter_writes_no_authz_adapter() {
     run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
 
     let src = dir.path().join("crates/features/src");
+    let gateway = fs::read_to_string(src.join("posts/ws/gateway.rs")).unwrap();
     assert!(
-        src.join("posts/ws/gateway.rs").is_file(),
-        "the adapter lands"
+        gateway.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
+        "{gateway}"
     );
+    let module = fs::read_to_string(src.join("posts/ws/module.rs")).unwrap();
+    assert!(module.contains("AuthzWsModule"), "{module}");
     assert!(
-        !src.join("authz/ws").exists(),
-        "no policy to enforce, so no authz adapter",
+        src.join("authz/ws/module.rs").is_file(),
+        "its authz adapter lands"
     );
 }
 

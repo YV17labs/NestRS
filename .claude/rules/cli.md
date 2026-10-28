@@ -42,8 +42,9 @@ under `## Reserved vocabulary`, and the scaffold test asserts its headings; the
 review. Change a table, a heading or the fence with them.
 
 **A template is the developer's own repository, so it may teach in a comment**
-— the `// SECURITY:` note above a generated `#[public]` route is the case that
-decided it. Prose the framework compiles into behaviour is still an argument
+— the `// SECURITY:` note above the GraphQL adapter's generated `#[public]`
+query is the case that decided it. A generated route or gateway is guarded, so
+an opening is always the developer's line, never the generator's. Prose the framework compiles into behaviour is still an argument
 there, as in `demo/` (`demo.md`).
 
 ## Scaffolds emit exactly what the rules mandate

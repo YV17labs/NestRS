@@ -35,7 +35,13 @@ impl Strategy for Registry {
     async fn authenticate(&self, req: &mut Request) -> Result<Client, AuthError> {
         let (client_id, client_secret) =
             basic_credentials(req.headers()).ok_or(AuthError::MissingCredentials)?;
-        let registry = [RegisteredClient::new(CLIENT_ID, SECRET, ["posts:read"], 7)];
+        let registry = [RegisteredClient::new(
+            CLIENT_ID,
+            SECRET,
+            ["posts:read"],
+            ["https://api.example.com"],
+            7,
+        )];
         authenticate_against_registry(&registry, &client_id, &client_secret)
     }
 }

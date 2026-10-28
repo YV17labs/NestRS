@@ -133,7 +133,10 @@ impl RequestController {
     #[post("/token")]
     #[public]
     async fn token(&self, request: AccessTokenRequest) -> nest_rs_http::Result<String> {
-        Ok(format!("{} {:?}", request.grant_type, request.scope))
+        Ok(format!(
+            "{} {:?} {:?}",
+            request.grant_type, request.scope, request.resource
+        ))
     }
 }
 
@@ -166,7 +169,7 @@ async fn a_request_omitting_scope_is_read_because_3_3_makes_it_optional() {
     let response = token_request(&app, FORM, "grant_type=client_credentials").await;
 
     response.assert_status_is_ok();
-    response.assert_text("client_credentials None").await;
+    response.assert_text("client_credentials None []").await;
 }
 
 /// §5.2 answers an unknown grant with `unsupported_grant_type`, which only the
@@ -184,7 +187,30 @@ async fn an_unknown_grant_reaches_the_issuer_rather_than_failing_to_decode() {
 
     response.assert_status_is_ok();
     response
-        .assert_text("urn:ietf:params:oauth:grant-type:device_code None")
+        .assert_text("urn:ietf:params:oauth:grant-type:device_code None []")
+        .await;
+}
+
+/// RFC 8707 §2: "Multiple `resource` parameters MAY be used", so the one
+/// parameter §3.2 lets repeat is read each time, in order — which of them a
+/// token is minted for is the issuer's to decide.
+#[tokio::test]
+async fn the_resource_parameter_is_read_every_time_it_is_sent() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    let response = token_request(
+        &app,
+        FORM,
+        "grant_type=client_credentials&resource=https%3A%2F%2Fapi.example.com\
+         &scope=posts%3Aread&resource=https%3A%2F%2Fmcp.example.com%2Fmcp",
+    )
+    .await;
+
+    response.assert_status_is_ok();
+    response
+        .assert_text(
+            r#"client_credentials Some("posts:read") ["https://api.example.com", "https://mcp.example.com/mcp"]"#,
+        )
         .await;
 }
 
@@ -294,12 +320,12 @@ async fn an_empty_parameter_is_read_as_omitted() {
         .post("/token")
         .header("authorization", "Basic Y2k6czNjcmV0")
         .content_type(FORM)
-        .body("grant_type=client_credentials&scope=&client_secret=")
+        .body("grant_type=client_credentials&scope=&client_secret=&resource=")
         .send()
         .await;
 
     response.assert_status_is_ok();
-    response.assert_text("client_credentials None").await;
+    response.assert_text("client_credentials None []").await;
 }
 
 /// What the transport refuses before any parameter is read keeps its answer.

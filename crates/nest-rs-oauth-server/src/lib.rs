@@ -5,16 +5,19 @@
 //!   endpoint, over an authn [`Strategy`](nest_rs_authn::Strategy), refusing as
 //!   §5.2 answers: `invalid_client`, by the [`TokenEndpointAuthMethod`] the
 //!   client attempted.
-//! - [`AccessTokenRequest`] — §4.4.2's request, read off its form as a handler
-//!   parameter; one that does not parse is §5.2's `invalid_request`, saying
-//!   where.
-//! - [`TokenError`] — §5.2's closed set of six wire codes, with the JSON envelope
-//!   and the §5.1 cache directives the token endpoint owes.
+//! - [`AccessTokenRequest`] — §4.4.2's request, RFC 8707's `resource` with it,
+//!   read off its form as a handler parameter; one that does not parse is
+//!   §5.2's `invalid_request`, saying where.
+//! - [`TokenError`] — §5.2's closed set of six wire codes and RFC 8707 §2's
+//!   `invalid_target`, with the JSON envelope and the §5.1 cache directives the
+//!   token endpoint owes.
 //! - [`AccessTokenResponse`] — §5.1's success body, stating the scope granted
 //!   when it differs from the request, returned bare from a handler, which
 //!   renders with the same directives.
 //! - [`authenticate_against_registry`] — §2.3.1 client authentication against a
-//!   static registry, in constant time, for a strategy to call.
+//!   static registry, in constant time, for a strategy to call; the client it
+//!   answers chooses its token's audience among the resources it is registered
+//!   for ([`AuthenticatedClient::audience_for`]).
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

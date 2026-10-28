@@ -55,7 +55,13 @@ use crate::error::{TokenEndpointAuthMethod, TokenError};
 ///
 ///     async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError> {
 ///         let (id, secret) = basic_credentials(req.headers()).ok_or(AuthError::MissingCredentials)?;
-///         let clients = [RegisteredClient::new("billing", "s3cret", ["invoices:read"], ())];
+///         let clients = [RegisteredClient::new(
+///             "billing",
+///             "s3cret",
+///             ["invoices:read"],
+///             ["https://invoices.example.com"],
+///             (),
+///         )];
 ///         authenticate_against_registry(&clients, &id, &secret)
 ///     }
 /// }

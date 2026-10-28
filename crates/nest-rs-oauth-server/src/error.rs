@@ -37,7 +37,8 @@ impl TokenEndpointAuthMethod {
     }
 }
 
-/// Token-endpoint failure — RFC 6749 §5.2's closed set, all six of it.
+/// Token-endpoint failure — RFC 6749 §5.2's closed set, all six of it, and
+/// RFC 8707 §2's `invalid_target`.
 ///
 /// `Display` yields the wire code of the JSON response's `error` member. The
 /// response is marked [`NoBearerChallenge`]: it is no resource refusal, and
@@ -64,6 +65,11 @@ pub enum TokenError {
     /// The requested scope is unknown or not permitted for this client (400).
     #[error("invalid_scope")]
     InvalidScope,
+    /// The requested resource is invalid, missing, unknown or not permitted
+    /// for this client, or the combination requested is (400) — RFC 8707 §2,
+    /// registered in the OAuth Extensions Error Registry.
+    #[error("invalid_target")]
+    InvalidTarget,
     /// Client authentication failed — unknown client, none included, or an
     /// unsupported authentication method. A client that authenticated through
     /// the `Authorization` header is answered `401` with the `Basic` challenge
@@ -188,6 +194,7 @@ mod tests {
             TokenError::InvalidGrant,
             TokenError::UnauthorizedClient,
             TokenError::InvalidScope,
+            TokenError::InvalidTarget,
             TokenError::InvalidClient(TokenEndpointAuthMethod::None),
             TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretPost),
             TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretBasic),
@@ -230,6 +237,17 @@ mod tests {
             .map(char::from)
             .collect::<String>();
         assert_eq!(error_description(&allowed), allowed);
+    }
+
+    /// RFC 8707 §2 registers `invalid_target` for a resource the server will
+    /// not mint a token for, a client error like §5.2's own.
+    #[tokio::test]
+    async fn an_invalid_target_is_a_400_named_as_8707_registers_it() {
+        let response = TokenError::InvalidTarget.as_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let body = response.into_body().into_string().await.expect("a body");
+        assert_eq!(body, r#"{"error":"invalid_target"}"#);
     }
 
     #[tokio::test]

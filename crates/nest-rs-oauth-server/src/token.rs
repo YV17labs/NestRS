@@ -9,6 +9,7 @@ use nest_rs_http::{
     RequestBodyMeta, Response, StatusCode, header,
 };
 use schemars::JsonSchema;
+use serde::de::{self, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::MalformedRequest;
@@ -26,9 +27,9 @@ use crate::error::MalformedRequest;
 /// (§3.2: "treated as if they were omitted"), repeated or of the wrong kind, a
 /// body that is no form, a client credential in the body beside the
 /// `Authorization` header (more than one mechanism) — never what it held. An
-/// empty `scope` is no scope, and a parameter the request does not define is
-/// ignored (§3.2). A body past the transport's cap keeps the transport's
-/// `413`.
+/// empty `scope` or `resource` is none, and a parameter the request does not
+/// define is ignored (§3.2). `resource` alone may repeat (RFC 8707 §2). A body
+/// past the transport's cap keeps the transport's `413`.
 ///
 /// That parameter is its one reader: the type derives no `Deserialize`, so no
 /// other spelling — a `Form<Self>`, a `Json<Self>` — skips the refusals above.
@@ -51,21 +52,103 @@ pub struct AccessTokenRequest {
     /// §3.3 space-delimited scope list. Absent ⇒ the issuer's own default.
     #[schemars(default)]
     pub scope: Option<String>,
+    /// RFC 8707 §2's `resource` parameters, in the order sent: the resources
+    /// the token is requested for, which become its audience. Empty ⇒ the
+    /// issuer's own default;
+    /// [`AuthenticatedClient::audience_for`](crate::AuthenticatedClient::audience_for)
+    /// chooses among them.
+    #[schemars(default)]
+    pub resource: Vec<String>,
 }
 
 /// §4.4.2's parameters as the body spells them, with the client credentials
 /// §2.3.1 and RFC 7521 §4.2 place there, read for their presence alone.
-#[derive(Deserialize)]
+///
+/// Read by hand: `resource` may repeat (RFC 8707 §2), which a derived reader
+/// refuses as a duplicate, and every other parameter may not (§3.2).
 struct Parameters {
     grant_type: String,
-    #[serde(default)]
     scope: Option<String>,
-    #[serde(default)]
+    resource: Vec<String>,
     client_secret: Credential,
-    #[serde(default)]
     client_assertion: Credential,
-    #[serde(default)]
     client_assertion_type: Credential,
+}
+
+impl<'de> Deserialize<'de> for Parameters {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // As a struct, so the edge places a missing or repeated one at its name.
+        const FIELDS: &[&str] = &[
+            "grant_type",
+            "scope",
+            "resource",
+            "client_secret",
+            "client_assertion",
+            "client_assertion_type",
+        ];
+        deserializer.deserialize_struct("Parameters", FIELDS, ParametersVisitor)
+    }
+}
+
+/// Reads [`Parameters`] off the form's pairs, refusing a repeat as serde's
+/// derive words it, so the edge says where the request failed alike.
+struct ParametersVisitor;
+
+impl<'de> Visitor<'de> for ParametersVisitor {
+    type Value = Parameters;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the token request's form parameters")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Parameters, A::Error> {
+        /// The value of a parameter §3.2 sends at most once.
+        fn once<'de, A: MapAccess<'de>, T: Deserialize<'de>>(
+            map: &mut A,
+            slot: &mut Option<T>,
+            name: &'static str,
+        ) -> Result<(), A::Error> {
+            if slot.is_some() {
+                return Err(de::Error::duplicate_field(name));
+            }
+            *slot = Some(map.next_value()?);
+            Ok(())
+        }
+
+        let mut grant_type = None;
+        let mut scope = None;
+        let mut resource = Vec::new();
+        let mut client_secret = None;
+        let mut client_assertion = None;
+        let mut client_assertion_type = None;
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "grant_type" => once(&mut map, &mut grant_type, "grant_type")?,
+                "scope" => once(&mut map, &mut scope, "scope")?,
+                "resource" => resource.push(map.next_value::<String>()?),
+                "client_secret" => once(&mut map, &mut client_secret, "client_secret")?,
+                "client_assertion" => once(&mut map, &mut client_assertion, "client_assertion")?,
+                "client_assertion_type" => {
+                    once(
+                        &mut map,
+                        &mut client_assertion_type,
+                        "client_assertion_type",
+                    )?;
+                }
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(Parameters {
+            grant_type: grant_type.ok_or_else(|| de::Error::missing_field("grant_type"))?,
+            scope,
+            resource,
+            client_secret: client_secret.unwrap_or_default(),
+            client_assertion: client_assertion.unwrap_or_default(),
+            client_assertion_type: client_assertion_type.unwrap_or_default(),
+        })
+    }
 }
 
 /// Whether a body parameter carrying a client credential has a value (§3.2);
@@ -104,6 +187,11 @@ impl<'a> FromRequest<'a> for AccessTokenRequest {
         Ok(Self {
             grant_type: sent.grant_type,
             scope: sent.scope.filter(|scope| !scope.is_empty()),
+            resource: sent
+                .resource
+                .into_iter()
+                .filter(|resource| !resource.is_empty())
+                .collect(),
         })
     }
 }

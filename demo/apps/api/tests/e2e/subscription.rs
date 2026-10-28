@@ -12,9 +12,7 @@ use uuid::Uuid;
 
 use api::ApiModule;
 
-use crate::{
-    AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, arm_outbox, global_guards, token_for, token_with_sub,
-};
+use crate::{API, DEV_PUBLIC_KEY, ORG_ID, arm_outbox, global_guards, token_for, token_with_sub};
 
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -138,7 +136,7 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(AUDIENCE.into()),
+            audience: Some(API.into()),
             ..Default::default()
         })
         .build_headless()

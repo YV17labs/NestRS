@@ -160,7 +160,8 @@ own `config` over them, every key wearing the deployment's prefix.
 The env of one app: the prefix itself (the one name no prefix renames), the
 environment, the port this chart owns, the audience a token must carry to be
 accepted here — this app's own origin, so a token minted for one app is refused
-by every other (RFC 8707) — then the ConfigMap and Secret wholesale.
+by every other (RFC 8707) — and the app's own `config`, each outranking the
+ConfigMap and Secret that follow wholesale.
 */}}
 {{- define "demo.env" -}}
 {{- $cfg := fromYaml (include "demo.appConfig" (dict "ctx" .ctx "app" .app)) -}}
@@ -176,6 +177,10 @@ by every other (RFC 8707) — then the ConfigMap and Secret wholesale.
 {{- if and $origin (not (hasKey .ctx.Values.config "AUTHN__AUDIENCE")) }}
 - name: {{ printf "%s_AUTHN__AUDIENCE" .ctx.Values.envPrefix }}
   value: {{ $origin | quote }}
+{{- end }}
+{{- range $key, $value := $cfg.config }}
+- name: {{ printf "%s_%s" $.ctx.Values.envPrefix $key }}
+  value: {{ $value | quote }}
 {{- end }}
 {{- with $cfg.extraEnv }}
 {{ toYaml . }}

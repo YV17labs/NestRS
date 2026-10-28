@@ -175,6 +175,8 @@ defaults:
 #        (issuer, each app's own audience, the assistant's resource, the
 #        resources a sign-in may name, social redirect URLs) — set them rather
 #        than copying those URLs into `config` by hand.
+# `config` this app's own settings, spelled like the top-level `config` and laid
+#        over it for this app alone — what `apps/<app>/.env` holds locally
 apps:
   # Schema migrations. An app like any other — the same image, another binary —
   # that runs to completion before any deployment is updated.
@@ -189,6 +191,9 @@ apps:
     port: 3002
     host: ""
     ingress: true
+    config:
+      # The api compresses its own responses, as it does in a local run.
+      HTTP__COMPRESSION: "true"
 
   auth:
     bin: auth

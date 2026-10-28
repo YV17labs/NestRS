@@ -8,18 +8,18 @@ use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
 use serde_json::Value;
 use uuid::Uuid;
 
-pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID};
+pub(crate) use features::testing::{DEV_PUBLIC_KEY, LIVE, ORG_ID};
 
 pub(crate) fn user_token(user: Uuid) -> String {
-    features::testing::token_for(ORG_ID, "user", Subject::User(user))
+    features::testing::token_for(LIVE, ORG_ID, "user", Subject::User(user))
 }
 
 pub(crate) fn machine_token() -> String {
-    features::testing::token_for(ORG_ID, "user", features::testing::client())
+    features::testing::token_for(LIVE, ORG_ID, "user", features::testing::client())
 }
 
 pub(crate) async fn token_for_org(org_id: Uuid, role: Role) -> String {
-    features::testing::token(org_id, vec![role], features::testing::client())
+    features::testing::token(LIVE, org_id, vec![role], features::testing::client())
 }
 
 pub(crate) async fn boot_builder() -> (EphemeralDatabase, TestAppBuilder) {
@@ -32,7 +32,7 @@ pub(crate) async fn boot_builder() -> (EphemeralDatabase, TestAppBuilder) {
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(AUDIENCE.into()),
+            audience: Some(LIVE.into()),
             ..Default::default()
         });
     (db, builder)

@@ -12,6 +12,7 @@ fn narrow_bearer(org_id: &str, sub: Subject, scopes: &[&str]) -> String {
     format!(
         "Bearer {}",
         token_with_scopes(
+            API,
             Uuid::parse_str(org_id).expect("valid org uuid"),
             vec![features::Role::Admin],
             sub,

@@ -125,6 +125,10 @@
         "affinity": { "type": "object" },
         "topologySpreadConstraints": { "type": "array" },
         "extraEnv": { "type": "array" },
+        "config": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] }
+        },
         "pdb": {
           "type": "object",
           "properties": {

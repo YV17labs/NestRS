@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use features::Role;
 use features::authz::constants;
 use features::testing::{
-    AUDIENCE as RESOURCE, ORG_ID, claims, client, signed, signed_by, signed_for, token_for, user,
+    API, ASSISTANT, ISSUER, ORG_ID, claims, client, signed_by, signed_for, token_for, user,
 };
 
 use crate::{SHARED_ENDPOINT, boot};
@@ -28,7 +28,7 @@ async fn an_unauthenticated_tool_call_points_at_the_metadata_document() {
         .to_owned();
     assert!(
         challenge.contains(&format!(
-            "resource_metadata=\"{RESOURCE}/.well-known/oauth-protected-resource\""
+            "resource_metadata=\"{ASSISTANT}/.well-known/oauth-protected-resource\""
         )),
         "the challenge must point at this deployment's document: {challenge}",
     );
@@ -55,7 +55,7 @@ async fn the_metadata_document_names_the_resource_and_its_authorization_server()
         serde_json::from_slice(&resp.0.into_body().into_bytes().await.expect("a body"))
             .expect("the document is JSON");
 
-    assert_eq!(body["resource"], RESOURCE);
+    assert_eq!(body["resource"], ASSISTANT);
     assert_eq!(
         body["authorization_servers"][0], "http://localhost:3001",
         "the demo's own auth app is the issuer, read from the environment",
@@ -90,12 +90,12 @@ async fn a_token_naming_no_subject_opens_no_session() {
         constants::all(),
     ))
     .expect("the claims serialize");
-    let named = format!("Bearer {}", signed(&claim_set));
+    let named = format!("Bearer {}", signed_for(ASSISTANT, &claim_set));
     claim_set
         .as_object_mut()
         .expect("a claim set is an object")
         .remove("sub");
-    let subjectless = format!("Bearer {}", signed(&claim_set));
+    let subjectless = format!("Bearer {}", signed_for(ASSISTANT, &claim_set));
 
     open_session(app.http(), SHARED_ENDPOINT, Some(&named)).await;
     let refused = post_message(
@@ -121,8 +121,8 @@ async fn a_token_naming_no_subject_opens_no_session() {
 #[tokio::test]
 async fn another_users_bearer_reaches_no_session_it_did_not_open() {
     let (_db, app) = boot().await;
-    let owner = format!("Bearer {}", token_for(ORG_ID, "admin", user()));
-    let colleague = format!("Bearer {}", token_for(ORG_ID, "user", user()));
+    let owner = format!("Bearer {}", token_for(ASSISTANT, ORG_ID, "admin", user()));
+    let colleague = format!("Bearer {}", token_for(ASSISTANT, ORG_ID, "user", user()));
     let session = open_session(app.http(), SHARED_ENDPOINT, Some(&owner)).await;
 
     post_message(
@@ -158,8 +158,6 @@ async fn another_users_bearer_reaches_no_session_it_did_not_open() {
     );
 }
 
-const ANOTHER_RESOURCE: &str = "http://localhost:3002";
-
 const ANOTHER_ISSUER: &str = "https://auth.elsewhere.example";
 
 fn admin_claims() -> features::Claims {
@@ -174,7 +172,7 @@ fn admin_claims() -> features::Claims {
 #[tokio::test]
 async fn a_token_minted_for_another_resource_opens_no_session() {
     let (_db, app) = boot().await;
-    let for_another = format!("Bearer {}", signed_for(ANOTHER_RESOURCE, &admin_claims()));
+    let for_another = format!("Bearer {}", signed_for(API, &admin_claims()));
 
     let refused = post_message(
         app.http(),
@@ -192,8 +190,11 @@ async fn a_token_minted_for_another_resource_opens_no_session() {
 #[tokio::test]
 async fn a_token_from_an_issuer_the_document_does_not_name_opens_no_session() {
     let (_db, app) = boot().await;
-    let foreign = format!("Bearer {}", signed_by(ANOTHER_ISSUER, &admin_claims()));
-    let own = format!("Bearer {}", signed(&admin_claims()));
+    let foreign = format!(
+        "Bearer {}",
+        signed_by(ANOTHER_ISSUER, ASSISTANT, &admin_claims())
+    );
+    let own = format!("Bearer {}", signed_by(ISSUER, ASSISTANT, &admin_claims()));
 
     open_session(app.http(), SHARED_ENDPOINT, Some(&own)).await;
     let refused = post_message(

@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 pub(crate) use features::testing::{
-    AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, RedisDatabase, arm_outbox, delete_transcode,
+    API, DEV_PUBLIC_KEY, ORG_ID, RedisDatabase, arm_outbox, delete_transcode,
 };
 
 pub(crate) fn global_guards() -> [GuardSpec; 2] {
@@ -55,7 +55,7 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(AUDIENCE.into()),
+            audience: Some(API.into()),
             ..Default::default()
         })
         .build()
@@ -70,11 +70,11 @@ pub(crate) async fn login() -> String {
 }
 
 pub(crate) async fn token_for(org_id: &str, role: &str) -> String {
-    features::testing::token_for(org_id, role, features::testing::client())
+    features::testing::token_for(API, org_id, role, features::testing::client())
 }
 
 pub(crate) async fn token_with_sub(org_id: &str, role: &str, sub: Uuid) -> String {
-    features::testing::token_for(org_id, role, features::Subject::User(sub))
+    features::testing::token_for(API, org_id, role, features::Subject::User(sub))
 }
 
 pub(crate) async fn create_user(app: &TestApp, bearer: &str, name: &str, email: &str) -> String {

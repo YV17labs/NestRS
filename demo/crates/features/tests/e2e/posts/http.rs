@@ -13,9 +13,7 @@ use features::authn::{Role, Subject};
 use features::authz::{AuthzModule, constants};
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::{PostsHttpModule, publication};
-use features::testing::{
-    AUDIENCE, DEV_PUBLIC_KEY, arm_outbox, client, token, token_with_scopes, user,
-};
+use features::testing::{API, DEV_PUBLIC_KEY, arm_outbox, client, token, token_with_scopes, user};
 use features::users::{ActiveModel as UserActive, UserRole};
 use nest_rs::authn::AuthnConfig;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
@@ -61,14 +59,14 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
     .await
     .expect("seed author");
 
-    let bearer = token(org_id, vec![Role::User], Subject::User(author_id));
+    let bearer = token(API, org_id, vec![Role::User], Subject::User(author_id));
 
     let app = TestApp::builder()
         .module::<PostsHttpTestModule>()
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(AUDIENCE.into()),
+            audience: Some(API.into()),
             ..Default::default()
         })
         .build()
@@ -79,7 +77,7 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
 }
 
 fn admin_bearer(org_id: Uuid) -> String {
-    token(org_id, vec![Role::Admin], user())
+    token(API, org_id, vec![Role::Admin], user())
 }
 
 #[tokio::test]
@@ -153,7 +151,7 @@ async fn a_client_authors_no_post_whatever_its_scope() {
     for scopes in [constants::all(), vec![constants::POSTS_READ.to_owned()]] {
         let machine = format!(
             "Bearer {}",
-            token_with_scopes(org_id, vec![Role::Admin], client(), scopes)
+            token_with_scopes(API, org_id, vec![Role::Admin], client(), scopes)
         );
 
         assert_refused_to_a_client(

@@ -9,11 +9,7 @@ use sea_orm::sea_query::{OnConflict, Query};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
 use uuid::Uuid;
 
-pub(crate) use features::testing::{
-    AUDIENCE as ASSISTANT, DEV_PRIVATE_KEY, DEV_PUBLIC_KEY, ORG_ID,
-};
-
-pub(crate) const API: &str = "http://localhost:3002";
+pub(crate) use features::testing::{API, ASSISTANT, DEV_PRIVATE_KEY, DEV_PUBLIC_KEY, ORG_ID};
 
 pub(crate) const LOGIN_EMAIL: &str = "alice@example.com";
 pub(crate) const LOGIN_PASSWORD: &str = "correct-horse";

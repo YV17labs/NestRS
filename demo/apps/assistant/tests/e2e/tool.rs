@@ -1,6 +1,6 @@
 use features::Role;
 use features::authz::constants;
-use features::testing::{client, token_with_scopes};
+use features::testing::{ASSISTANT, client, token_with_scopes};
 use nest_rs::core::Discovery;
 use nest_rs::http::HttpEndpointMeta;
 use nest_rs::http::StatusCode;
@@ -136,6 +136,7 @@ async fn a_service_token_narrowed_to_reading_posts_is_refused_the_transcode_tool
     let reader = format!(
         "Bearer {}",
         token_with_scopes(
+            ASSISTANT,
             ORG_ID.parse().expect("a valid org uuid"),
             vec![Role::Admin],
             client(),

@@ -30,7 +30,7 @@ list every recipe.
 | Command | What it does |
 |---------|--------------|
 | `nestrs run dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `nestrs run dev api` |
-| `nestrs run start <app>` | Run an app in release mode, under the production profile, e.g. `nestrs run start api`: it reads no development file, so it names its database, Redis and store on the process, as a deployment does. Against the dev container's, declare development: `NESTRS_ENV=development nestrs run start api` |
+| `nestrs run start <app>` | Run an app in release mode, under the production profile, e.g. `nestrs run start api`: it reads no development file and no app's own `apps/<app>/.env`, so it names its database, Redis, store and port on the process, as a deployment does. Against the dev container's, declare development: `NESTRS_ENV=development nestrs run start api` |
 | `nestrs run build <app>` | Build one app in release (default `api`), e.g. `nestrs run build live` |
 | `nestrs run build --all` | Build release binaries for every app in the workspace |
 | `nestrs run test unit` | Run unit + integration + doctests (no DB) |
@@ -52,6 +52,10 @@ shared Postgres schema and seed data.
 **Publish** is a fictional multi-tenant publishing platform told through five
 apps that share [`crates/features/`](crates/features/) and never RPC each
 other. Full map: [nestrs.dev/publish](https://nestrs.dev/publish/).
+
+Each app's port, like the audience it requires, is its own setting, in
+`apps/<app>/.env`: read over the shared `.env*` files under the development and
+test profiles, and set by the deployment otherwise.
 
 | App | Kind | Port |
 |-----|------|------|
@@ -119,10 +123,13 @@ one level up with `-f`:
 ```bash
 cd ..                                                            # build from nestrs/
 docker build -f demo/Dockerfile -t nestrs .
-docker run --rm -p 3002:3002 nestrs                              # default `api`
-docker run --rm -p 3001:3001 nestrs /usr/local/bin/auth         # any other binary
-docker run --rm nestrs /usr/local/bin/migrate up                # apply migrations
+docker run --rm -p 3002:3002 -e NESTRS_HTTP__PORT=3002 nestrs                       # default `api`
+docker run --rm -p 3001:3001 -e NESTRS_HTTP__PORT=3001 nestrs /usr/local/bin/auth  # any other binary
+docker run --rm nestrs /usr/local/bin/migrate up                                   # apply migrations
 ```
+
+The image runs under the production profile, which reads no app's own
+`apps/<app>/.env`: each container names its port, as the chart does.
 
 Runtime image is `gcr.io/distroless/cc-debian13:nonroot` — no shell, no package
 manager, runs as UID 65532. `cargo-chef` cooks dependencies in a cacheable

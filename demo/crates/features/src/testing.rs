@@ -16,9 +16,13 @@ pub const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHf
 
 pub const ORG_ID: &str = "018f0000-0000-7000-8000-000000000000";
 
-pub const AUDIENCE: &str = "http://localhost:3003";
-
 pub const ISSUER: &str = "http://localhost:3001";
+
+pub const API: &str = "http://localhost:3002";
+
+pub const ASSISTANT: &str = "http://localhost:3003";
+
+pub const LIVE: &str = "http://localhost:3004";
 
 pub const SUITES_BUCKET: &str = "nestrs-test";
 
@@ -42,24 +46,18 @@ fn issuer() -> JwtService {
     issuer_named(ISSUER)
 }
 
-pub fn signed(claims: &impl Serialize) -> String {
-    signed_for(AUDIENCE, claims)
+pub fn signed_for(resource: &str, claims: &impl Serialize) -> String {
+    signed_by(ISSUER, resource, claims)
 }
 
-pub fn signed_for(resource: &str, claims: &impl Serialize) -> String {
-    issuer()
+pub fn signed_by(issuer: &str, resource: &str, claims: &impl Serialize) -> String {
+    issuer_named(issuer)
         .sign_for(resource, claims)
         .expect("sign the test token")
 }
 
-pub fn signed_by(issuer: &str, claims: &impl Serialize) -> String {
-    issuer_named(issuer)
-        .sign_for(AUDIENCE, claims)
-        .expect("sign the test token")
-}
-
-pub fn token(org_id: Uuid, roles: Vec<Role>, sub: Subject) -> String {
-    token_with_scopes(org_id, roles, sub, crate::authz::constants::all())
+pub fn token(resource: &str, org_id: Uuid, roles: Vec<Role>, sub: Subject) -> String {
+    token_with_scopes(resource, org_id, roles, sub, crate::authz::constants::all())
 }
 
 pub fn claims(org_id: Uuid, roles: Vec<Role>, sub: Subject, scopes: Vec<String>) -> Claims {
@@ -75,20 +73,26 @@ pub fn claims(org_id: Uuid, roles: Vec<Role>, sub: Subject, scopes: Vec<String>)
 }
 
 pub fn token_with_scopes(
+    resource: &str,
     org_id: Uuid,
     roles: Vec<Role>,
     sub: Subject,
     scopes: Vec<String>,
 ) -> String {
-    signed(&claims(org_id, roles, sub, scopes))
+    signed_for(resource, &claims(org_id, roles, sub, scopes))
 }
 
-pub fn token_for(org_id: &str, role: &str, sub: Subject) -> String {
+pub fn token_for(resource: &str, org_id: &str, role: &str, sub: Subject) -> String {
     let roles = match role {
         "admin" => vec![Role::Admin],
         _ => vec![Role::User],
     };
-    token(Uuid::parse_str(org_id).expect("valid org uuid"), roles, sub)
+    token(
+        resource,
+        Uuid::parse_str(org_id).expect("valid org uuid"),
+        roles,
+        sub,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

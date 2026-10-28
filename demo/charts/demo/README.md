@@ -44,6 +44,9 @@ sets variables — `.env` is a local convenience the image does not carry.
   `auth` reads: a resource server holding it could mint a token for any app.
   With `existingSecret`, every app reads yours, so keep the key out of it and
   hand it to `auth` alone through its `extraEnv`.
+- `apps.<name>.config` — that app's own keys, same spelling, laid over `config`
+  for it alone: what `apps/<name>/.env` holds in a local run, which a
+  deployment never reads. The api's `HTTP__COMPRESSION` is one.
 - `envPrefix` — renames every framework variable at once. It is set on the
   process, which is why it is a pod env var and never a file.
 

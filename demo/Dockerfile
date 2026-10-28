@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1.7
 # Build from the repository root: the demo reaches the framework through ../crates.
 #   docker build -f demo/Dockerfile -t nestrs .
-#   docker run --rm -p 3001:3001 nestrs /usr/local/bin/auth   # default: api
+#   docker run --rm -p 3002:3002 -e NESTRS_HTTP__PORT=3002 nestrs                       # default: api
+#   docker run --rm -p 3001:3001 -e NESTRS_HTTP__PORT=3001 nestrs /usr/local/bin/auth
+# A container names its port: the production profile reads no apps/<app>/.env.
 
 ARG RUST_VERSION=1.97
 ARG CARGO_CHEF_VERSION=0.1.77
@@ -40,6 +42,5 @@ LABEL org.opencontainers.image.licenses="MIT"
 
 COPY --from=builder --chown=nonroot:nonroot /out/ /usr/local/bin/
 
-EXPOSE 3002
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/api"]

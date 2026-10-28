@@ -4,7 +4,7 @@ use features::users::UsersMcpModule;
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
 use nest_rs::oauth::resource::OAuthResourceModule;
 use nest_rs::redis::{RedisModule, RedisQueueModule};
@@ -23,7 +23,7 @@ const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped
         ConfigModule::for_root(),
         ServerTimingModule,
         HealthModule,
-        HttpModule::for_root(HttpConfig { port: 3003, ..Default::default() }),
+        HttpModule::for_root(None),
         McpModule::for_root(McpOptions {
             server: Some(
                 McpIdentity::new(SERVER_NAME, env!("CARGO_PKG_VERSION"))

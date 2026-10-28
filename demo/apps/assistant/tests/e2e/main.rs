@@ -124,7 +124,12 @@ pub(crate) async fn seed_org_with_post(
 pub(crate) fn bearer_for(org_id: &str) -> String {
     format!(
         "Bearer {}",
-        features::testing::token_for(org_id, "admin", features::testing::user())
+        features::testing::token_for(
+            features::testing::ASSISTANT,
+            org_id,
+            "admin",
+            features::testing::user(),
+        )
     )
 }
 

@@ -1,7 +1,7 @@
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::http::{HttpConfig, HttpModule};
+use nest_rs::http::HttpModule;
 use nest_rs::queue::QueueModule;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::schedule::ScheduleModule;
@@ -20,7 +20,7 @@ use features::notifications::{NotificationsQueueModule, NotificationsScheduleMod
         QueueModule::for_root(None),
         ScheduleModule,
         RedisScheduleModule,
-        HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
+        HttpModule::for_root(None),
         HealthModule,
         AudioQueueModule,
         NotificationsQueueModule,

@@ -26,13 +26,15 @@
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — principal resolution: strategies, credential
-/// verification, and the guard's authentication outcome.
+/// verification, the guard's authentication outcome, and the refusals of a
+/// development-only route.
 pub const TARGET: &str = "nest_rs::authn";
 
 mod algorithm;
 mod binding;
 mod config;
 mod credentials;
+mod development;
 mod error;
 mod guard;
 mod jwk_set;
@@ -48,6 +50,7 @@ mod strategy;
 pub use algorithm::Algorithm;
 pub use config::AuthnConfig;
 pub use credentials::{basic_credentials, bearer_token};
+pub use development::DevelopmentOnlyGuard;
 pub use error::{AuthError, CredentialError, PasswordError, UnknownAlgorithmError};
 pub use guard::AuthnGuard;
 pub use jwks::{

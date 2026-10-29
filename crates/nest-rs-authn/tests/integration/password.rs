@@ -8,8 +8,18 @@ use nest_rs_authn::{PasswordError, burn_verify, hash_password, verify_password};
 #[test]
 fn hash_and_verify_round_trip() {
     let encoded = hash_password("correct-horse-battery-staple").expect("hash");
-    assert!(verify_password(&encoded, "correct-horse-battery-staple").expect("verify"));
-    assert!(!verify_password(&encoded, "wrong").expect("verify"));
+    let encoded = encoded.expose_secret();
+    assert!(verify_password(encoded, "correct-horse-battery-staple").expect("verify"));
+    assert!(!verify_password(encoded, "wrong").expect("verify"));
+}
+
+/// A stored hash verifies a password: what `hash_password` hands back prints
+/// whether it is there, never what.
+#[test]
+fn the_hash_handed_back_never_prints() {
+    let encoded = hash_password("correct-horse-battery-staple").expect("hash");
+    let printed = format!("{encoded:?}");
+    assert!(!printed.contains("argon2id"), "{printed}");
 }
 
 #[test]
@@ -80,6 +90,7 @@ fn hash_pins_argon2id() {
     // A PHC string leads with its algorithm id: a switch away from Argon2id
     // surfaces here.
     let encoded = hash_password("pin-the-algorithm").expect("hash");
+    let encoded = encoded.expose_secret();
     assert!(
         encoded.starts_with("$argon2id$"),
         "stored password hashes must be Argon2id, got: {encoded}",

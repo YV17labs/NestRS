@@ -4,10 +4,11 @@
 use std::sync::OnceLock;
 
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
+use nest_rs_core::Secret;
 
 use crate::error::PasswordError;
 
-static TIMING_DUMMY_HASH: OnceLock<String> = OnceLock::new();
+static TIMING_DUMMY_HASH: OnceLock<Option<Secret<String>>> = OnceLock::new();
 
 // Pinned to OWASP's Argon2id recommendation (m = 19 MiB, t = 2, p = 1) rather
 // than `Argon2::default()`, which an upstream release can lower silently.
@@ -27,14 +28,17 @@ fn argon2() -> Result<Argon2<'static>, PasswordError> {
 }
 
 /// Hash `password` for storage (Argon2id, random salt, the pinned OWASP work
-/// factor).
+/// factor), as the PHC string a `Secret<String>` column keeps: it prints
+/// whether it is there, never what, and
+/// [`expose_secret`](Secret::expose_secret) reads it back for
+/// [`verify_password`].
 ///
 /// The salt is the hasher's own: `password-hash` draws the PHC specification's
 /// recommended 16 bytes from the system CSPRNG, once per call.
-pub fn hash_password(password: &str) -> Result<String, PasswordError> {
+pub fn hash_password(password: &str) -> Result<Secret<String>, PasswordError> {
     argon2()?
         .hash_password(password.as_bytes())
-        .map(|hash| hash.to_string())
+        .map(|hash| Secret::new(hash.to_string()))
         .map_err(PasswordError::hash_failed)
 }
 
@@ -65,22 +69,22 @@ pub fn verify_password(encoded_hash: &str, password: &str) -> Result<bool, Passw
 /// than a panic.
 pub fn burn_verify(password: &str) {
     let dummy = TIMING_DUMMY_HASH.get_or_init(|| match hash_password("nestrs-timing-dummy") {
-        Ok(hash) => hash,
+        Ok(hash) => Some(hash),
         Err(error) => {
             tracing::error!(
                 target: crate::TARGET,
                 error = %nest_rs_core::error_message(&error),
                 "timing dummy hash failed to initialize — absent-account burn degrades to no-op",
             );
-            String::new()
+            None
         }
     });
-    if !dummy.is_empty() {
+    if let Some(dummy) = dummy {
         #[expect(
             clippy::let_underscore_must_use,
             reason = "the burn is the work, not the verdict"
         )]
-        let _ = verify_password(dummy, password);
+        let _ = verify_password(dummy.expose_secret(), password);
     }
 }
 
@@ -100,6 +104,7 @@ mod tests {
     #[test]
     fn a_stored_hash_records_the_pinned_parameters() {
         let encoded = hash_password("correct horse battery staple").expect("hash");
+        let encoded = encoded.expose_secret();
         assert!(
             encoded.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"),
             "the stored hash names Argon2id and the pinned work factor: {encoded}",

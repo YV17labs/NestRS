@@ -11,6 +11,7 @@
 mod algorithm;
 mod config;
 mod credentials;
+mod development;
 mod error;
 mod guard;
 mod jwks;

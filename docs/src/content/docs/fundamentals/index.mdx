@@ -34,8 +34,8 @@ every binary leans on:
   bound by HTTP through the `Valid<E>` / `Piped<P, E>` extractors.
 - **Interceptors** — wrap handler execution, after the guards: time it,
   decorate the reply, or answer in its place.
-- **Error handling** — map errors to responses. `ResponseError` on the
-  error type for the default; `#[use_exception_filters(...)]` for a typed
+- **Error handling** — map errors to responses. `ToProblem` on the
+  error type for the default, on every edge; `#[use_exception_filters(...)]` for a typed
   catch or one envelope for every error. See
   [Error handling](/fundamentals/exception-filters/).
 - **Middleware** — NestRS doesn't have a middleware primitive. See [the

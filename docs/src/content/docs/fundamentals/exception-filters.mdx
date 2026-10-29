@@ -1,6 +1,6 @@
 ---
 title: Error handling
-description: "Map errors to responses — defaults on the error type via ResponseError, and typed or catch-all exception filters at the route, the controller or the whole app."
+description: "Map errors to responses — defaults on the error type via ToProblem, and typed or catch-all exception filters at the route, the controller or the whole app."
 sidebar:
   order: 9
 ---
@@ -12,9 +12,9 @@ framework tries them:
 
 1. **An exception filter** — a layer that catches one error type, or every
    error, at the route, the controller or the whole app, closest first.
-2. **`ResponseError`** on a feature's error type — the default mapping the
-   framework answers with when no filter answered. Lives next to the error in
-   the crate that owns it.
+2. **`ToProblem`** on a feature's error type — the default mapping every
+   edge answers with when no filter answered. Lives next to the error in the
+   crate that owns it.
 
 `ExceptionFilter` is a [`Layer`](/fundamentals/request-lifecycle/) sub-trait in
 `nest_rs::core`, edge-neutral like [interceptors](/fundamentals/interceptors/):
@@ -74,10 +74,10 @@ boundary; the impl decides status and body. What a `5xx` among them keeps
 from the client — the database's error, the store that did not answer — is
 filed by the edge, never by the type as it renders: once the answer is
 final, at `error`, at `warn` behind a `503`, on `nest_rs::http`. Every row
-above implements `nest_rs::http::ResponseError`, which is what makes the `?`
-legal — a
-handler returning `Result<Json<T>>` propagates any of them with no
-`map_err`. No per-feature `error.rs` for these — the framework owns them
+above converts into `nest_rs::http::HttpError` — `ServiceError` through its
+`ToProblem`, the authentication and OAuth errors through their own
+`ResponseError` — which is what makes the `?` legal: a handler returning
+`Result<Json<T>>` propagates any of them with no `map_err`. No per-feature `error.rs` for these — the framework owns them
 once, every feature reuses them.
 
 ```rust title="crates/features/src/users/service.rs"
@@ -110,23 +110,23 @@ with `queue,seaorm` and no `http` links no HTTP stack.
 Write a per-feature error **only** when the failure is genuinely
 domain-specific — a wire contract a consumer reads, a security-critical
 opaque variant. In that case the type lives in `<feature>/error.rs`
-and its `nest_rs::http::ResponseError` impl sits next to it, with nothing
-beyond the `http` feature its controllers already need. Most features never
-need this — they compose the framework's types.
+and its `nest_rs::core::ToProblem` impl sits next to it, with no edge's
+feature to turn on. Most features never need this — they compose the
+framework's types.
 
-`ResponseError` is HTTP's seam. An error that also crosses GraphQL,
-WebSockets or MCP implements `nest_rs::core::ToProblem` once: the `Problem`
-it says — a status, a `Code`, a detail — is what those edges answer, each in
-its own form (see [GraphQL errors](/graphql/errors/)). A resolver, a
-gateway handler or an MCP tool returning the error is read by its type; an MCP
-tool answering `McpError` converts it with `nest_rs::mcp::problem_error`. HTTP
-reads `ResponseError`,
-not `ToProblem`: a route answers a `Problem` only when the error is one or
-carries one in its chain. What no seam answers — no `ResponseError`, no
-`ToProblem` where the edge reads it, no framework type in its chain — is
-answered opaquely on every edge, and its whole chain is filed once at
-`error`, as is the chain behind a `5xx` problem or a `5xx` a `ResponseError`
-answers: a failed handler is never logged nowhere.
+`ToProblem` is every edge's seam, written once: the `Problem` it says — a
+status, a `Code`, a problem type and its title, a detail, a field map — is
+what HTTP, GraphQL, WebSockets and MCP answer, each in its own form (see
+[HTTP errors](/http/errors/) and [GraphQL errors](/graphql/errors/)). A route,
+a resolver, a gateway handler or an MCP tool returning the error is read by
+its type; a body answering the edge's own error converts it with that edge's
+`problem_error` (`nest_rs::http::problem_error`,
+`nest_rs::mcp::problem_error`). `nest_rs::http::ResponseError` is for an
+answer that is no problem document — another protocol's body, a challenge.
+What no seam answers — no `ToProblem`, no `ResponseError`, no framework type
+in its chain — is answered opaquely on every edge, and its whole chain is
+filed once at `error`, as is the chain behind a `5xx` problem or a `5xx` a
+`ResponseError` answers: a failed handler is never logged nowhere.
 
 ## Exception filters
 
@@ -137,16 +137,18 @@ not carry that type never reaches it, and one that does gets the filter's
 `catch`:
 
 ```rust title="apps/api/src/exception_filter.rs"
-use nest_rs::core::{Caught, ExceptionFilter, Layer, UnitContext, async_trait, injectable};
-use nest_rs::http::{HttpView, IntoResponse, ProblemDetails, ResponseError, StatusCode};
+use nest_rs::core::{
+    Caught, ExceptionFilter, Layer, Problem, ToProblem, UnitContext, async_trait, injectable,
+};
+use nest_rs::http::{HttpView, IntoResponse, ProblemDetails};
 
 #[derive(Debug, thiserror::Error)]
 #[error("domain failure: {0}")]
 pub struct DomainError(pub String);
 
-impl ResponseError for DomainError {
-    fn status(&self) -> StatusCode {
-        StatusCode::INTERNAL_SERVER_ERROR
+impl ToProblem for DomainError {
+    fn to_problem(&self) -> Option<Problem> {
+        None
     }
 }
 
@@ -176,10 +178,9 @@ impl ExceptionFilter for DomainErrorFilter {
 | `Problem(problem)` | a `nest_rs::core::Problem`, which every edge renders in its own form — the problem document on HTTP |
 | `Declined` | whatever the next filter answers, else the default |
 
-The `ResponseError` impl is what lets a handler's `?` carry `DomainError`; its
-status is the **default** the filter replaces. Drop the filter and the same
-handler answers the opaque `500` from that status — `code: INTERNAL`, no
-`detail`.
+The `ToProblem` impl is what lets a route return `DomainError`; the problem
+it says is the **default** the filter replaces, here none. Drop the filter and
+the same handler answers the opaque `500` — `code: INTERNAL`, no `detail`.
 
 A filter reads the request it answers through the same view, `view.request()`
 in the match above — its method, its headers, its extensions — so it can
@@ -281,11 +282,11 @@ interceptor reaches them. The full order is on
 
 | Seam | Where it lives | When to reach for it |
 |-------|----------------|-----------------|
-| `ResponseError` on an error type | Framework crate that owns the error (`nest-rs-seaorm`, `nest-rs-authn`), or `<feature>/error.rs` for a domain-specific variant | Default. Every handler returning that error gets the same mapping |
+| `ToProblem` on an error type | Framework crate that owns the error (`nest-rs-seaorm`), or `<feature>/error.rs` for a domain-specific variant | Default. Every handler returning that error gets the same mapping, on every edge |
 | A typed `ExceptionFilter` | A provider | The mapping depends on the **error type** across many routes |
 | A catch-all `ExceptionFilter` | A provider | One envelope for every failure, bound on a route, a controller or the app |
 
-Reach for `ResponseError` first.
+Reach for `ToProblem` first.
 
 ## Validation envelopes
 
@@ -302,11 +303,11 @@ stays pure.
 
 ## Going further
 
-- [HTTP / errors — map a feature error with `ResponseError`](/http/errors/#map-a-feature-error-with-responseerror) —
-  the `ResponseError` walkthrough.
+- [HTTP / errors — map a feature error with `ToProblem`](/http/errors/#map-a-feature-error-with-toproblem) —
+  the `ToProblem` walkthrough.
 - [Interceptors](/fundamentals/interceptors/) — the success-path sibling.
 - [Guards](/fundamentals/guards/) — a refusal is answered before any
   filter runs.
-- [`posts/http/exception_filter.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/posts/http/exception_filter.rs)
-  in the demo — answers `PostError::AlreadyPublished` with an RFC 9457
-  `application/problem+json` and declines every other variant.
+- [`posts/error.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/posts/error.rs)
+  in the demo — `PostError`'s one `ToProblem`, `AlreadyPublished` a problem
+  type of its own on every edge.

@@ -11,7 +11,9 @@ error's **type**, so a client reads only what someone meant it to read:
 
 - an `async_graphql::Error` you built is answered as built;
 - an error implementing `ToProblem` answers the problem it says — its sentence
-  and a stable `extensions.code`;
+  and a stable `extensions.code`, with its problem type's `extensions.type`
+  and `extensions.title` and its field map's `extensions.errors` when it has
+  them;
 - the framework's own vocabulary found in the chain — a `Problem`, a pipe
   rejection, a decode failure said without its value — answers in its own form;
 - **anything else answers `"internal error"` under the `INTERNAL` code**, and its
@@ -102,9 +104,8 @@ the framework writes reads them: a guard's denial, the by-id binding (a `bind`
 argument that is not a UUID v7 answers `"id must be a UUID v7"` under
 `INVALID_ARGUMENT`, the twin of the HTTP path's `400`), an opaque failure.
 
-A feature's own error says its class through `ToProblem`, once for GraphQL,
-WebSockets and MCP (HTTP reads its `ResponseError`, see
-[Exception filters](/fundamentals/exception-filters/)):
+A feature's own error says its class through `ToProblem`, once for every
+edge — GraphQL, HTTP ([HTTP errors](/http/errors/)), WebSockets and MCP:
 
 ```rust title="crates/features/src/posts/error.rs"
 use nest_rs::core::problem::code;
@@ -153,8 +154,10 @@ async fn publish(&self, id: String) -> Result<Post, PublishError> {
 }
 ```
 
-A problem without a detail says its code in words (`NOT_A_DRAFT` would read
-`not a draft`); a `5xx` never carries one — a `503` answers
+A problem with a type of its own, `Problem::with_type(uri, title)`, adds
+`"type"` and `"title"` to the extensions, the URI a client keys on, and a field
+map, `with_errors`, `"errors"`. A problem without a detail says its code in
+words (`NOT_A_DRAFT` would read `not a draft`); a `5xx` never carries one — a `503` answers
 `"service unavailable"`, any other `"internal error"`, and the chain behind
 it is filed at `error` on `nest_rs::graphql`. `None` is the opaque answer:
 `Index`'s chain is filed at `error`, the client reads the constant. A
@@ -166,7 +169,7 @@ is refused, and so is a `Problem` whose status is not a `4xx` or a `5xx`.
 A `CrudService` method returns `Result<T, ServiceError>`, and `ServiceError`
 implements `ToProblem`: `NotFound` answers `NOT_FOUND`, `Conflict` `CONFLICT`,
 `Forbidden` `FORBIDDEN`, `Invalid` and `Validation` `INVALID_ARGUMENT`, each with
-its own sentence; `Db`, `Masking` and `Internal` answer opaquely, their cause
+its own sentence, a validation failure's fields under `extensions.errors`; `Db`, `Masking` and `Internal` answer opaquely, their cause
 filed at `error`. A resolver returns the service's result as it is:
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"

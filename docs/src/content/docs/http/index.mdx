@@ -41,7 +41,7 @@ you name.
   `#[routes]`, path/query/JSON extractors, typed returns.
 - [Responses](/http/responses/) — `Json<T>`, status + body tuples,
   `#[http_code]`, `#[response_header]`, `#[redirect]`.
-- [Errors](/http/errors/) — `ResponseError` on a feature error enum,
+- [Errors](/http/errors/) — `ToProblem` on a feature error enum,
   RFC 9457 `ProblemDetails` for one-off problem responses.
 - [Extractors](/http/extractors/) — the full extractor surface:
   `RawBody`, `ClientIp`, `Scoped<T>`, `Ctx<T>` and

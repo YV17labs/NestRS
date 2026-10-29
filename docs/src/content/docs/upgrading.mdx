@@ -291,7 +291,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | a handler reading an empty parameter: `/a//b` matched `/a/{x}/b` with `x` empty | nothing reaches it — `/a//b` answers the fallback's `404`; a value that may be absent travels in the query string |
    | `use poem::web::{Json, Path, Query}` in a controller | `use nest_rs::http::{Json, Path, Query}` — and `Form`, `Multipart`, `Header<T>`, `ClientIp`, `RawBody` |
    | `-> poem::Result<T>`, `poem::Error::from_status(s)` | `-> nest_rs::http::Result<T>`, `HttpError::from_status(s)` |
-   | `impl poem::error::ResponseError for MyError` | `impl nest_rs::http::ResponseError for MyError` — `status()`, and `as_response()` for a body of its own; render only, since the edge files a `5xx`'s chain |
+   | `impl poem::error::ResponseError for MyError` | a domain error: `impl nest_rs::core::ToProblem for MyError` (step 11); an answer that is no problem document: `impl nest_rs::http::ResponseError for MyError` — `status()`, and `as_response()` for a body of its own; render only, since the edge files a `5xx`'s chain |
    | `req: &poem::Request` as a handler parameter | `req: &nest_rs::http::Request`, or the extractor for what it reads |
    | `poem::web::Data<&T>` | an `#[inject]` field on the controller, or `Scoped<T>` for a request-scoped provider |
    | `use nest_rs::http::poem::…` | `nest_rs::http::{Request, Response, Json, IntoResponse}`; `ProblemDetails` answers through `nest_rs::http::ResponseError` / `IntoResponse` |
@@ -680,6 +680,10 @@ lists what the boot, a log or the wire shows when one is missed.
     | a `Result` alias over a foreign error as a resolver's return | spell `Result<T, MyError>` |
     | a WebSocket client reading a handler error's text | the handler returns `WsError::new(..)` or an error implementing `ToProblem`; anything else answers `"internal error"` |
     | `McpError::internal_error(e.to_string(), None)` over an error you did not build | `nest_rs::mcp::problem_error(&e)` (a `ToProblem` error), `.opaque()?`, or the `ToProblem` error returned from an operation spelled `Result<T, E>` |
+    | `impl nest_rs::http::ResponseError for MyError` beside its `impl ToProblem`, two `match`es over one enum | the `ToProblem` impl alone: a route spelled `Result<T, MyError>` answers the problem it says, its type and title included; a body answering `nest_rs::http::Result<T>` converts with `.map_err(nest_rs::http::problem_error)?` |
+    | `impl nest_rs::http::ResponseError for MyError` alone, its `status()` a `match` | `impl nest_rs::core::ToProblem for MyError`: `Some(Problem::new(status, code))` per variant, `None` for one the client is owed no word of — or no impl and `.opaque()?` where every variant is one |
+    | an `ExceptionFilter` answering a domain error with `ProblemDetails::…().with_type(uri).with_title(t)` through `HttpView` | `Problem::new(status, code).with_type(uri, title)` in the error's `ToProblem`, best in a `const`: every edge answers the type — `extensions.type` and `extensions.title` on GraphQL, `data.type` and `data.title` on WebSocket and MCP — and the filter goes |
+    | `service_error.status()`, `service_error.as_response()` on a `ServiceError` | `HttpError::from(service_error).status()`, `.into_response()`, or `service_error.to_problem()`: `ServiceError` is a `ToProblem` error, no longer a `ResponseError`, and `?` on it into an `HttpError` is unchanged |
     | `.opaque()` over a borrowed error, or one that is only `Display` | an owned `std::error::Error` that converts into `Box<dyn Error + Send + Sync>`: it logs the whole chain; `JobError::retry` / `abort`, `WsReply::from_handler_error` and `OccurrenceLockError::new` take the same |
     | `ServiceError::internal(format!("password hashing failed: {e}"))` | `ServiceError::internal_because("password hashing failed", e)` |
     | `ServiceError::internal(&reason)`, `reason` a local `String` or a borrowed `&str` | `ServiceError::internal(reason.clone())` or `.to_owned()`: the detail is `'static`; a `String` or a `&'static str` passes unchanged |
@@ -1113,6 +1117,15 @@ lists what the boot, a log or the wire shows when one is missed.
   request does not have), filed once on the guard's target. Admit the request in
   its `check_http` (`Ok(())`) where its decision is the unit's alone, or write
   its decision so it holds for a request too.
+- **A domain error that dropped its `ResponseError` for its `ToProblem`**, `?`
+  in a body answering `nest_rs::http::Result<T>`, fails to compile:
+
+  ```text frame="terminal"
+  error[E0277]: `?` couldn't convert the error: `PostError: ResponseError` is not satisfied
+  ```
+
+  Spell the route's return `Result<T, PostError>`, or convert at the call:
+  `.map_err(nest_rs::http::problem_error)?`.
 - **A route 6.x served unguarded** stops the boot:
 
   ```text frame="terminal"

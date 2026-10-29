@@ -275,7 +275,7 @@ None of them can drift from the others — they share one source.
 Need a different status, a redirect, a custom header? See
 [responses](/http/responses/) for the response-shaping attributes that
 sit beside the verb. Need the handler's `Err(...)` to render a structured
-JSON body? See [errors](/http/errors/) for `ResponseError` and
+JSON body? See [errors](/http/errors/) for `ToProblem` and
 `ProblemDetails`.
 
 ## Going further
@@ -284,7 +284,7 @@ JSON body? See [errors](/http/errors/) for `ResponseError` and
   how several shapers compose.
 - [Extractors](/http/extractors/) — the full extractor surface a handler
   parameter can take.
-- [Errors](/http/errors/) — `ResponseError` on a feature error enum, and
+- [Errors](/http/errors/) — `ToProblem` on a feature error enum, and
   RFC 9457 problem responses.
 - [Security](/security/) — binding a guard so the handler runs with a
   principal and an ambient ability.

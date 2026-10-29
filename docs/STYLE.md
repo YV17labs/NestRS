@@ -204,10 +204,12 @@ wrong, each filed by a reader following a page verbatim — check them on sight:
 
 - **A snippet that would not compile.** Every decorator it applies is imported, unless the block
   uses `prelude::*`; a type implementing a Layer sub-trait carries `#[derive(Layer)]` or an
-  `impl Layer for T`; a
-  `type Exception = E` implements `ResponseError`; a trait is abridged, never given a method it
-  lacks; `#[authorize(Action, bind = Service)]` takes the action first; a queue is named by its `Queue` type
-  on both sides; a handler never `?`s a `CrudService` read, whose `DbErr` is no `ResponseError`.
+  `impl Layer for T`; a `type Exception = E` a route returns implements `ToProblem` (or
+  `ResponseError`, for an answer that is no problem document); a trait is abridged, never given a
+  method it lacks; `#[authorize(Action, bind = Service)]` takes the action first; a queue is named
+  by its `Queue` type on both sides; a handler never `?`s a `CrudService` read, whose `DbErr`
+  converts into no edge's error; a `?` on a `ToProblem`-only error sits in a route returning it,
+  never in a body answering `HttpError`.
 - **An excerpt that drifted.** A `(from the demo)` title names a file that exists, and every line
   not elided with `// …` is in it, in order.
 - **An install line that installs the wrong thing.** A pin is the workspace's `major.minor`; a

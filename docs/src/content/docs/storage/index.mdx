@@ -248,11 +248,12 @@ and never `posts/cover-2.png`. `put_stream` aborts its multipart upload on any
 failure — the store's or your stream's — so an interrupted upload leaves no
 billable parts behind.
 
-`StorageError` is **not** a `ResponseError`: an infrastructure error does not
-get to pick its own HTTP status, so wrap it in the feature's own error, which is
-where the status belongs — see
-[`audio/error.rs`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio)
-for the shape with a `ProblemDetails` body and the `error` log. Its sentences
+`StorageError` says no problem of its own: an infrastructure error does not
+get to pick what a client reads, so wrap it in the feature's own error, which is
+where that is decided — see
+[`audio/error.rs`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio),
+an error the client is owed no word of, answered with `.opaque()?` and its
+chain filed at `error`. Its sentences
 name the store and the operation, never a key: a key often carries user input,
 so the chain object_store's own errors add is said by their kind, without the
 key or the URL they quote. The library's error stays the source, read with

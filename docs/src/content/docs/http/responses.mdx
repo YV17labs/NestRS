@@ -81,8 +81,8 @@ async fn moved(&self) {}
 
 Overrides the response status on the **success path**. `N` must be in
 `100..=999` and is validated at compile time. When the handler returns a
-`Result` and yields `Err`, the shaper short-circuits: the error's own
-`ResponseError` status stands and `#[http_code]` never touches it — so a
+`Result` and yields `Err`, the shaper short-circuits: the status the error
+answers stands and `#[http_code]` never touches it — so a
 `201` handler that errors still returns the error's `4xx`/`5xx`, not
 `201`. A `Result` is known by its type, not its spelling: `nest_rs::http::Result<T>`
 renamed on import, or a `type Outcome<T> = Result<T, MyError>`, short-circuits
@@ -147,7 +147,7 @@ same facet (the response status) two different ways.
 
 A handler that returns a `Result` keeps its error contract intact: on
 `Err`, the shaper short-circuits before `#[http_code]` runs, so the
-error's `ResponseError` status and body survive unchanged. `#[http_code]`
+error's status and body survive unchanged. `#[http_code]`
 only ever rewrites the success status.
 
 ## When not to reach for a shaper
@@ -181,7 +181,7 @@ why they live on the attribute line, not in the handler body.
 ## Going further
 
 - [Errors](/http/errors/) — when the handler returns `Err(...)`:
-  `ResponseError`, `ProblemDetails`, RFC 9457.
+  `ToProblem`, `ProblemDetails`, RFC 9457.
 - [Controllers & routes](/http/controllers/) — back to the route table.
 - [OpenAPI](/openapi/) — `Json<T>` and the response shape feed the
   generated spec automatically.

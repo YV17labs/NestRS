@@ -239,8 +239,9 @@ someone meant it to read:
 - a `WsError` is sent whole — `WsError::new("text must not be empty")`, or a
   `String` through `?` into a `Result<T, WsError>`;
 - an error implementing `ToProblem` answers the problem it says: its sentence,
-  and its code beside it (`"code": "CONFLICT"`, plus `retryAfterSeconds` when
-  it names a wait); `ServiceError` is one;
+  and its code beside it (`"code": "CONFLICT"`, plus `type` and `title` when it
+  names a problem type of its own, `retryAfterSeconds` when it names a wait
+  and `errors` when it carries a field map); `ServiceError` is one;
 - the framework's own vocabulary found in the chain — a `Problem`, a pipe
   rejection, a decode failure said without its value
   (`invalid type: a string, expected u64 at line 1 column 24`) — answers in its

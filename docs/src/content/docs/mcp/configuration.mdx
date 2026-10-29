@@ -232,7 +232,9 @@ Six constructors cover the common cases:
 A domain error implementing `ToProblem` is returned as it is, from an
 operation answering a `Result<T, E>`: it answers the problem's sentence,
 `invalid_request` for a `4xx` and `internal_error` for a `5xx`, its code under
-`data.code` — or, when the error says none, the opaque answer `Opaque` gives,
+`data.code` — with `data.type` and `data.title` when it names a problem type
+of its own, and `data.errors` for a field map — or, when the error says none,
+the opaque answer `Opaque` gives,
 its chain filed at `error` — and an exception filter reads it as its type
 first:
 

@@ -153,9 +153,11 @@ re-exports it, so import it from the one the file already uses
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[mcp]` | struct | Mounts an MCP endpoint over HTTP, at `/mcp` or a declared path | [MCP](/mcp/) |
-| `#[tools]` | impl block | Serves the block's `#[tool]` and `#[prompt]` methods, deriving the advertised capabilities | [MCP](/mcp/) |
+| `#[tools]` | impl block | Serves the block's `#[tool]`, `#[prompt]`, `#[resource]` and `#[resources]` methods, deriving the advertised capabilities | [MCP](/mcp/) |
 | `#[tool]` | method | Exposes the method as an MCP tool; `description = "…"`, or the doc comment as a fallback | [MCP](/mcp/) |
 | `#[prompt]` | method | Exposes the method as an MCP prompt; `description = "…"`, or the doc comment as a fallback | [Resources and prompts](/mcp/resources-and-prompts/) |
+| `#[resource]` | method | Reads the URIs an RFC 6570 `template = "…"` writes, each variable a typed argument; `description = "…"`, or the doc comment as a fallback | [Resources and prompts](/mcp/resources-and-prompts/) |
+| `#[resources]` | method | Answers `resources/list`, one per host | [Resources and prompts](/mcp/resources-and-prompts/) |
 
 ## Health
 

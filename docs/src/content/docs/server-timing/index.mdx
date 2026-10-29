@@ -51,7 +51,7 @@ A refusal never carries it. A `401`, `403`, `407` or `429` goes out without
 timings in every profile, so the caller an authentication or rate check turned
 away cannot read how long that check worked — and so does a refusal answered
 inside a `200`: a `/graphql` operation refused `UNAUTHENTICATED`, `FORBIDDEN`
-or `RATE_LIMITED`, a `/mcp` tool or prompt call its guards refused. Such a
+or `RATE_LIMITED`, a `/mcp` operation its guards refused. Such a
 refusal marks the request it rode on, and a marked request goes untimed.
 
 An event stream (`text/event-stream`) goes untimed too: its head leaves before

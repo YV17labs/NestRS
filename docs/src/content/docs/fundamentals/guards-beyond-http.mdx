@@ -49,7 +49,7 @@ its own seam:
 | `check_http` | post-routing on the request, before the handler; on a WS upgrade; on the `/graphql` and `/mcp` requests | `#[controller]` / `#[routes]`, and the `#[gateway]` struct |
 | `check` | per GraphQL field, and in front of the federation root fields | `#[resolver]` / `#[operations]` |
 | `check` | once per inbound envelope, after the upgrade | beside a `#[subscribe_message]` |
-| `check` | once per `#[tool]` / `#[prompt]` operation, inside rmcp's dispatch | `#[mcp]` host / `#[tools]` operation |
+| `check` | once per `#[tool]`, `#[prompt]`, `#[resource]` or `#[resources]` operation, inside rmcp's dispatch | `#[mcp]` host / `#[tools]` operation |
 
 `use_guards_global([...])` reaches every edge at every entry it
 implements. `/graphql` and `/mcp` run the pool at their request and in each

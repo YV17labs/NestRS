@@ -436,7 +436,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `LayerKind::Filter` | `LayerKind::ExceptionFilter` |
    | `use nest_rs::interceptors::AppBuilderInterceptorsExt;`, `AppBuilderExceptionFiltersExt`, `AppBuilderFiltersExt` | nothing: `use_interceptors_global` and `use_exception_filters_global` are `AppBuilder`'s own methods, taking `nest_rs::core::{interceptor, exception_filter}` specs |
    | `#[nest_rs::http::interceptor(priority = n)]` | `#[nest_rs::core::interceptor]`, at the handler stage, or `#[interceptor(stage = unit)]` around the guards; the order within a stage is `Layer::priority` on the struct's `Layer` impl |
-   | `#[use_interceptors]` / `#[use_exception_filters]` on a `#[controller]` only | also on a `#[resolver]` and beside its fields, a `#[gateway]` and beside a `#[subscribe_message]`, an `#[mcp]` host and beside its `#[tool]` and `#[prompt]` methods, a `#[processor]`, `#[scheduled]` or `#[listeners]` block |
+   | `#[use_interceptors]` / `#[use_exception_filters]` on a `#[controller]` only | also on a `#[resolver]` and beside its fields, a `#[gateway]` and beside a `#[subscribe_message]`, an `#[mcp]` host and beside its `#[tool]`, `#[prompt]`, `#[resource]` and `#[resources]` methods, a `#[processor]`, `#[scheduled]` or `#[listeners]` block |
    | an interceptor or exception filter written around a gateway's handler bodies by hand | `#[use_interceptors(...)]` / `#[use_exception_filters(...)]` on the `#[gateway]` or beside a `#[subscribe_message]` |
    | a global interceptor or filter written for HTTP requests alone | the same with `fn serves(&self, unit: Unit) -> bool { unit == nest_rs::http::unit::REQUEST }` on its `Layer` impl — not a compile error: without it, it now runs around every unit on every edge |
 
@@ -761,6 +761,9 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::mcp::McpMount`, `endpoint`, `resolve_operation_guard` | the `#[mcp]` host; a request's guards are the transport's |
     | a suite calling `nest_rs::testing::mcp::call_tool` on a gated endpoint whose guard names no subject | `call_tool_statelessly`, or have the guard name its caller: the handshake is otherwise refused `403` |
     | two `#[mcp]` hosts on one path declaring one prompt name | rename one, or give each host its own `path`: the boot refuses the pair |
+    | a host serving resources by hand — `#[tool_router]` tools, a `get_info`, `list_resources` / `read_resource` parsing its URIs | its tools, prompts and resources under `#[tools]`: `#[resources]` lists, `#[resource(template = "post://{id}")]` reads, `id` a typed parameter, each beside `#[authorize(…)]` or `#[public]` |
+    | a `McpError::resource_not_found(…)` built for a row the caller may not read | `Ok(None)` from the `#[resource]` method, answered *Resource not found* under the `NOT_FOUND` class |
+    | a `#[prompt]`, or a `#[tool]` answering `ContentBlock` or `InputRequiredResult`, beside `#[authorize(Action, Entity)]` | `#[authorize(Action, Entity, unmasked)]`: the mask failed every call closed on what is no row, and now does not compile |
 
 13. **Follow the remaining renamed types and signatures.** Each row is a compile
     error, so the compiler finds every site:

@@ -91,7 +91,7 @@ a **list** of the column names it refused:
   "extensions":{"code":"FORBIDDEN","fields":["email","name"]}}]}
 ```
 
-MCP takes the same declaration beside a `#[tool]` / `#[prompt]`, and pushes the
+MCP takes the same declaration beside a `#[tool]` or a `#[resource]`, and pushes the
 schema constraint one step further: an operation returns one fixed Rust type to
 a model, with no selection set to excuse a stripped **required** field, so such
 a mask fails the operation closed. Leave a maskable column `Option` on the

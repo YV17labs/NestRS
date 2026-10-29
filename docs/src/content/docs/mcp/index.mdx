@@ -132,9 +132,9 @@ Two decorators, one per item shape:
   a streamable-HTTP endpoint on the HTTP transport, at `/mcp`. An optional
   `path` serves a different URL instead — write it whole, the way a client
   config carries it.
-- **`#[tools]` on the impl** declares the operations. Every `#[tool]` and
-  `#[prompt]` method is mounted, and the endpoint's advertised capabilities are
-  derived from the roles present — you cannot serve a tool you forgot to
+- **`#[tools]` on the impl** declares the operations. Every `#[tool]`,
+  `#[prompt]`, `#[resource]` and `#[resources]` method is mounted, and the
+  endpoint's advertised capabilities are derived from the roles present — you cannot serve a tool you forgot to
   declare. An operation declares the same request layers a route does:
   `#[use_guards(...)]`, `#[authorize(...)]` / `#[public]`,
   `#[use_exception_filters(...)]`, `#[use_interceptors(...)]`, a pipe on its
@@ -145,7 +145,7 @@ Two decorators, one per item shape:
   such as `type Publishing<T> = Result<T, PublishError>` serves as well as the
   spelled one, and a `String` is refused at the return type. Two readings go
   by the spelling: a *masked* operation spells its `Result<…>`, since the mask
-  reads `Json<T>` off it, and rmcp derives a tool's output schema only from a
+  reads `Json<T>` — a resource's `Option<Json<T>>` — off it, and rmcp derives a tool's output schema only from a
   return spelled `Result<Json<T>, …>`.
 - **The description is `#[tool(description = "…")]`** — the sentence the model
   reads to pick this tool, so it is a value the decorator compiles in rather
@@ -304,8 +304,9 @@ argument needs transforming rather than validating.
 ## Layers around an operation
 
 Every request a client sends is an operation of its own — its span, its line,
-its unit of work — run on the same pipeline as a route. A tool call and a
-prompt fetch run the layers their host and their method bind, then the app's,
+its unit of work — run on the same pipeline as a route. A tool call, a prompt
+fetch, a resource read and a listing run the layers their host and their
+method bind, then the app's,
 each family once: the guards' `check`, the posture's gate, the exception
 filters, the interceptors, then the pipes, the `Scoped<T>` parameters, the body
 and the mask. A layer reads the operation through `McpView`:
@@ -331,8 +332,9 @@ impl PostsTool {
 ```
 
 `cx.switch_to::<McpView>()` answers the JSON-RPC method (`method()`), the
-router serving it (`kind()`), the tool or prompt it names (`name()`) and the
-host declaring it (`host()`). `publish_draft` fails with the domain's own
+router serving it (`kind()`), the tool, prompt or listing it names, or the
+template a resource is read through (`name()`), and the host declaring it
+(`host()`). `publish_draft` fails with the domain's own
 `PublishError`: `SlugTakenFilter` reads it as that type and may answer a
 problem — a `409` is `invalid_request` with `data.code: "CONFLICT"` — and an
 error no filter answers is rendered by its type: a `ToProblem` error says its
@@ -347,7 +349,7 @@ offers fails the boot rather than the first call. A host writing rmcp's handler
 by hand reads `nest_rs::core::current_request_scope()` instead.
 
 The app's own interceptors (`use_interceptors_global`, a module's
-`#[interceptor]`) run around every tool call and prompt fetch too, outermost,
+`#[interceptor]`) run around every operation `#[tools]` declares too, outermost,
 after the guards. An `#[interceptor(stage = unit)]` serving MCP runs once
 around every request — a listing, a handshake, a tool call alike, one naming
 no declared tool included — before rmcp decodes it; `Layer::serves` reads the unit, `nest_rs::mcp::unit::OPERATION`.

@@ -167,7 +167,7 @@ GraphQL `POST` carries shares it — one per message for WebSockets, one per
 operation on a graphql-ws socket, a subscription's for as long as it streams).
 Within a scope, request-scoped providers are cached and shared; across scopes,
 fresh instances are built. A WebSocket message, a GraphQL resolver and an MCP
-tool or prompt take them as a parameter, `nest_rs::ws::Scoped<T>`,
+operation take them as a parameter, `nest_rs::ws::Scoped<T>`,
 `nest_rs::graphql::Scoped<T>` and `nest_rs::mcp::Scoped<T>` — no schema
 argument on GraphQL, and all three inside the access contract as HTTP's is. A
 request-scoped provider may itself inject another request-scoped provider (both

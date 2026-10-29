@@ -53,9 +53,10 @@ from one that does not.
 one.
 
 The one rule the merge adds: **two hosts on one path may not serve the same
-tool or prompt name**. MCP addresses a tool and a prompt by bare name inside an
-endpoint, so the loser would be unreachable — it is a boot error naming the
-name and both hosts:
+tool or prompt name, nor read one resource template**. MCP addresses a tool and
+a prompt by bare name inside an endpoint, and the first host to find a row
+would answer for every URI a shared template writes, so the loser would be
+unreachable — it is a boot error naming the name and both hosts:
 
 ```text frame="terminal"
 duplicate MCP tool name on "/mcp": search (AudioTool and UsersTool) — a tool is

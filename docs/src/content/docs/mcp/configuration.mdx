@@ -226,7 +226,7 @@ Six constructors cover the common cases:
 | `McpError::invalid_request(msg, data)` | The whole request shape was off |
 | `McpError::parse_error(msg, data)` | The JSON itself couldn't be parsed |
 | `McpError::method_not_found::<MethodName>()` | The client called a protocol method this host doesn't serve — never an unknown tool, which is `-32602` above |
-| `McpError::resource_not_found(msg, data)` | An identified resource isn't there (when you ship resources) |
+| `McpError::resource_not_found(msg, data)` | An identified resource isn't there — written only by a hand-written `ServerHandler`: a `#[resource]` method answers `Ok(None)`, and the endpoint answers *Resource not found* for it |
 | `McpError::internal_error(msg, data)` | Anything else — wrap an upstream failure |
 
 A domain error implementing `ToProblem` is returned as it is, from an

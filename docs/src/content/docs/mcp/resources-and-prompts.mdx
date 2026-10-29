@@ -1,6 +1,6 @@
 ---
 title: MCP resources and prompts
-description: "The two capabilities beside tools — what #[prompt] generates, and when a host writes rmcp directly instead."
+description: "The two capabilities beside tools — #[prompt] and #[resource], declared in the same #[tools] block and gated like a tool."
 sidebar:
   label: Resources and prompts
   order: 4
@@ -9,46 +9,112 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 MCP defines two primitives beyond tools: **prompts** (parameterized templates
-the user picks) and **resources** (documents the model can list and fetch).
+the user picks) and **resources** (documents the model can list and read).
+Both are methods in the same `#[tools]` block as your tools, and each takes
+the same mandatory posture, guards, filters and mask a tool does.
 
-A prompt is a `#[prompt]` method in the same decorated block as your tools —
-one `impl`, both routers:
+## Prompts
+
+A prompt is a `#[prompt]` method beside your tools — one `impl`, both routers:
 
 ```rust title="crates/features/src/posts/mcp/tool.rs"
 #[tools]
 impl PostsTool {
     #[tool(description = "List the post titles the caller may read, most recent first.")]
-    #[public]
+    #[authorize(Read, PostEntity)]
     async fn list_posts(&self) -> Result<String, McpError> { /* … */ }
 
     #[prompt(description = "Draft a follow-up post, primed with the titles the caller can read.")]
-    #[public]
+    #[authorize(Read, PostEntity, unmasked)]
     async fn draft_follow_up(&self) -> Result<GetPromptResult, McpError> { /* … */ }
 }
 ```
 
-## Resources have no decorator
+A prompt's messages are prose the entity round-trip cannot read, so a gated
+prompt keeps its gate and declares `unmasked`, as a tool answering a
+`CallToolResult` does; a masked `#[prompt]` does not compile.
 
-They are the one surface without one, because they are a mapping from
-URIs to rows rather than a set of methods. A host that serves them writes its own
-`impl ServerHandler` — `list_resources` / `read_resource` /
-`list_resource_templates` — and that is the documented way out of the sugar: it
-uses rmcp's `#[tool_router]` / `#[tool_handler]` directly, since `#[tools]`
-cannot generate a second `ServerHandler` beside a hand-written one. `demo`'s
-`posts/mcp/tool.rs` is that host.
+## Resources
 
-Such a host declares no operation for a layer to run on, so
-`#[use_guards]`, `#[use_interceptors]`, `#[use_exception_filters]` and
-`#[meta]` beside its `#[mcp]` do not compile: a guard there would gate
-nothing. Its endpoint is guarded where every MCP request is — the app's
-global guards, or [`EndpointGuards<McpView, G>`](/security/authorization/endpoint-guards/)
-from a module, as `AuthzMcpModule` declares them.
+A resource is read at a URI. `#[resource(template = "…")]` declares the
+[RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) template it is read at, and
+each of the template's variables is an argument of the method, typed;
+`#[resources]` declares the method that lists what can be read:
 
-Either way the guarantee is the same one the tool gets. `CrudService::list`
-above writes no organization filter — the ambient ability applies it, so a
-caller from another org gets an empty prompt, and `read_resource` answers
-`resource_not_found` for a row that exists but is not theirs. The demo asserts
-exactly that in `apps/assistant/tests/e2e/posts_tool.rs`.
+```rust title="crates/features/src/posts/mcp/tool.rs (from the demo, abridged)"
+#[tools]
+impl PostsTool {
+    // …
+    #[resources]
+    #[authorize(Read, PostEntity, unmasked)]
+    async fn posts(&self) -> Result<Vec<Resource>, McpError> {
+        let rows = CrudService::list(&*self.svc).await.opaque()?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| Resource::new(format!("post://{}", row.id), row.title))
+            .collect())
+    }
+
+    #[resource(
+        template = "post://{id}",
+        description = "One post the caller is allowed to read, as JSON."
+    )]
+    #[authorize(Read, PostEntity)]
+    async fn post(&self, id: Uuid) -> Result<Option<Json<Post>>, McpError> {
+        let access = CrudService::access(&*self.svc, Action::Read, id)
+            .await
+            .opaque()?;
+        Ok(match access {
+            Access::Found(post) => Some(Json(Post::from(&post))),
+            Access::Denied | Access::Missing => None,
+        })
+    }
+}
+```
+
+A client reads `post://0192…` and the framework does the rest: it finds the
+template the URI was written from, parses `id` as a `Uuid`, runs the
+operation's guards and its class gate, calls `post`, masks the post and
+answers it as the contents of the URI it read. `resources/templates/list`
+advertises every template with its `name` (the method's, unless you state
+one), its `title` and `description`, and the media type its answer is read as;
+`resources/list` is the `#[resources]` method's answer. The `resources`
+capability is derived from the methods present, never written.
+
+- **A template is read back, so it stays level 1.** A variable is `{name}`,
+  named like the parameter that takes it, and two never sit side by side. A
+  value is what RFC 6570's simple expansion writes — unreserved characters and
+  percent-encoded octets — so `post://{id}` never reads `post://a/b`; it is
+  percent-decoded, then parsed with `FromStr`, and it ends at the first
+  occurrence of the literal after it. An operator or a modifier (`{+path}`,
+  `{id:3}`), a variable no parameter takes or a parameter no variable names
+  does not compile.
+- **What it answers is read by its type.** `Json<T>` is read as
+  `application/json`, a `String` as `text/plain`, and a `ReadResourceResult`
+  goes out as you built it, a blob included. Wrap any of them in `Option`:
+  `None` is a resource the caller may not read.
+- **A resource it cannot read is one answer.** A URI no template writes, a
+  variable that does not parse and a `None` are all MCP's *Resource not
+  found* — `-32002`, or `-32602` from protocol `2026-07-28` on — under the
+  `NOT_FOUND` class, and none quotes the URI. A reader cannot tell a row it was
+  refused from a row that does not exist.
+- **The posture is the tool's.** `#[authorize(Read, PostEntity)]` runs the
+  class gate before the body, so a token without `posts:read` is refused with
+  the scope it lacks rather than handed an empty listing, and masks the read
+  inside its `Option`. A listing's entries are URIs and names the round-trip
+  cannot read: a gated `#[resources]` declares `unmasked` and lists only what
+  the caller may read — the ambient ability already scopes
+  `CrudService::list`. A `ReadResourceResult` is opaque to the mask too,
+  bare or inside its `Option`: a gated resource answering one declares
+  `unmasked`, and the masked form does not compile.
+
+The templates are offered a URI in the order the block declares them, so two
+templates with the same shape — `post://{id}` with a `Uuid`, then
+`post://{slug}` with a `String` — read a URI by the first one whose variables
+parse. One template written twice in a host does not compile, and two hosts on
+one path reading one template fail the boot, as a tool name claimed twice
+does.
 
 <Aside type="caution">
   Lean on tools first. The MCP spec is tool-centric: anything you can phrase as
@@ -58,18 +124,31 @@ exactly that in `apps/assistant/tests/e2e/posts_tool.rs`.
   picks a template the client substitutes.
 </Aside>
 
-Everything else the protocol defines — completion, logging levels,
-subscriptions, the `tasks/*` extension, custom methods — is a
-`ServerHandler` method on the same struct, and gets the same treatment. The
-protocol types live under `nest_rs::mcp::model`, the per-operation handles
-under `nest_rs::mcp::service`, and anything newer than this page under
-`nest_rs::mcp::rmcp`. A request the server sends the client — elicitation,
-sampling — goes out through the operation's peer on a session below protocol
-`2026-07-28`; that revision forbids one, so rmcp refuses it there, and the
-operation answers an `InputRequiredResult` instead.
+## What stays hand-written
+
+Completion, logging levels, subscriptions, the `tasks/*` extension and custom
+methods have no decorator. A host serving one writes rmcp's `ServerHandler`
+itself and has no `#[tools]` block: `#[tools]` writes the whole handler, so it
+cannot share one with yours. The protocol types live under
+`nest_rs::mcp::model`, the per-operation handles under `nest_rs::mcp::service`,
+and anything newer than this page under `nest_rs::mcp::rmcp`. A request the
+server sends the client — elicitation, sampling — goes out through the
+operation's peer on a session below protocol `2026-07-28`; that revision
+forbids one, so rmcp refuses it there, and the operation answers an
+`InputRequiredResult` instead.
+
+Such a host declares no operation for a layer to run on, so
+`#[use_guards]`, `#[use_interceptors]`, `#[use_exception_filters]` and
+`#[meta]` beside its `#[mcp]` do not compile: a guard there would gate
+nothing. Its endpoint is guarded where every MCP request is — the app's
+global guards, or [`EndpointGuards<McpView, G>`](/security/authorization/endpoint-guards/)
+from a module, as `AuthzMcpModule` declares them — and every row it reads
+still comes through the ambient ability. Give it a path of its own, or share
+one with the hosts that declare their operations: the endpoint offers a
+completion to each.
 
 ## Going further
 
-- [MCP](/mcp/) — the `#[tools]` block a `#[prompt]` method lives in.
+- [MCP](/mcp/) — the `#[tools]` block a `#[prompt]` and a `#[resource]` live in.
 - [Authorization](/mcp/authorization/) — every capability is gated, not just
   `tools/call`.

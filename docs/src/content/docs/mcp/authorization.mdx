@@ -120,7 +120,9 @@ a stripped **required** field, so such a mask fails the operation closed. A
 column a field grant may mask should be `Option` on the entity. When a tool
 deliberately answers with a narrower projection, say
 `#[authorize(Action, Entity, unmasked)]`: the gate and the row filter stay, and
-the projection *is* the field restriction.
+the projection *is* the field restriction. What is no row at all — a
+`CallToolResult`, a `ReadResourceResult`, a prompt's messages, a
+`#[resources]` listing — says `unmasked` too; masked, it does not compile.
 
 ## Telling a client how to authenticate
 

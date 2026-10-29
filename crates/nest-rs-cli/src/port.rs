@@ -51,15 +51,9 @@ fn app_port(app: &Path) -> CliResult<Option<u16>> {
 
 /// `<PREFIX>_HTTP__PORT` as a `.env` file assigns it, whatever the prefix.
 fn env_port(contents: &str) -> Option<u16> {
-    contents.lines().find_map(|line| {
-        let line = line.trim();
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        let (key, value) = line.split_once('=')?;
-        if line.starts_with('#') || !key.trim().ends_with("_HTTP__PORT") {
-            return None;
-        }
-        value.trim().trim_matches(['"', '\'']).parse().ok()
-    })
+    crate::dotenv::assignments(contents)
+        .filter(|(key, _)| key.ends_with("_HTTP__PORT"))
+        .find_map(|(_, value)| value.trim_matches(['"', '\'']).parse().ok())
 }
 
 /// A port pinned in code: `HttpConfig { port: … }`.

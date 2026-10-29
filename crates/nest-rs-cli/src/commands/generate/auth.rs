@@ -253,14 +253,7 @@ fn sets_namespace(path: &Path, marker: &str) -> CliResult<bool> {
 /// Whether `contents` assigns a variable starting with `marker`, read line by
 /// line as `nest_rs_config`'s loader reads it: a comment sets nothing.
 fn assigns_namespace(contents: &str, marker: &str) -> bool {
-    contents.lines().any(|line| {
-        let line = line.trim();
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        !line.starts_with('#')
-            && line
-                .split_once('=')
-                .is_some_and(|(key, _)| key.trim().starts_with(marker))
-    })
+    crate::dotenv::assignments(contents).any(|(key, _)| key.starts_with(marker))
 }
 
 /// 256 bits from the OS's CSPRNG as 64 lowercase hex characters: RFC 7518 §3.2

@@ -165,7 +165,7 @@ struct Ledger {
     /// Namespaces whose unread keys were looked for.
     keys_checked: BTreeSet<String>,
     /// Variables the cascade sets that a pin shadowed, with their namespace
-    /// and the import that pinned it ([`shadowed`]).
+    /// and the import that pinned it ([`shadowed`]), until a check takes them.
     shadowed: BTreeMap<String, (String, Option<String>)>,
     /// Variables already reported — the once-per-variable guarantee.
     reported: BTreeSet<String>,
@@ -221,15 +221,13 @@ impl Ledger {
             out.extend(unread_keys(namespace, names, &self.known, &owners));
         }
         out.extend(run_together(names, &self.known, &owners));
-        out.extend(
-            self.shadowed
-                .iter()
-                .map(|(variable, (namespace, pinned_by))| Unclaimed::Shadowed {
-                    variable: variable.clone(),
-                    namespace: namespace.clone(),
-                    pinned_by: pinned_by.clone(),
-                }),
-        );
+        out.extend(std::mem::take(&mut self.shadowed).into_iter().map(
+            |(variable, (namespace, pinned_by))| Unclaimed::Shadowed {
+                variable,
+                namespace,
+                pinned_by,
+            },
+        ));
 
         let keys: Vec<String> = keys.iter().map(|ns| (*ns).to_owned()).collect();
         self.keys_checked.extend(keys);

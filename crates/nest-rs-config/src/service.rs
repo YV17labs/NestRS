@@ -23,9 +23,7 @@ thread_local! {
     /// Every variable name read while a `Config::resolve` is in flight; kept on
     /// the reader because a `from_env` hands it to sub-readers that are no `Config`.
     static READING: RefCell<Option<BTreeSet<String>>> = const { RefCell::new(None) };
-}
 
-thread_local! {
     /// The import whose `for_root` pinned the config resolving on this thread,
     /// so the variables the pin shadows are reported naming it. Set across the
     /// one synchronous call that resolves it.

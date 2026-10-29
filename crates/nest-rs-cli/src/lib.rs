@@ -44,6 +44,7 @@ pub mod error;
 
 mod commands;
 mod context;
+mod dotenv;
 mod naming;
 mod port;
 mod scaffold;

@@ -95,14 +95,13 @@ pub(crate) fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
     let (root, app) = match crate::context::NestrsWorkspace::discover(&start) {
         Ok(Some(ws)) => {
             report.in_nestrs_workspace = true;
-            let own = start.canonicalize().is_ok_and(|start| start != ws.root);
-            let app = own.then(|| start.clone());
-            (ws.root, app)
+            let own = start.canonicalize().is_ok_and(|dir| dir != ws.root);
+            (ws.root, own.then_some(start))
         }
-        Ok(None) => (start.clone(), None),
+        Ok(None) => (start, None),
         Err(e) => {
             report.workspace_error = Some(e.to_string());
-            (start.clone(), None)
+            (start, None)
         }
     };
 
@@ -397,19 +396,9 @@ fn cascade_environment(declared: Option<&str>) -> &'static str {
 /// The cascade's value for `name`: the first assignment wins, as the loader's
 /// set-if-absent merge does, and a quoted value is unquoted as the loader does.
 fn cascade_value(contents: &str, name: &str) -> Option<String> {
-    contents
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.starts_with('#') {
-                return None;
-            }
-            let line = line.strip_prefix("export ").unwrap_or(line);
-            line.split_once('=')
-                .filter(|(key, _)| key.trim() == name)
-                .map(|(_, value)| unquote(value.trim()))
-        })
-        .next()
+    crate::dotenv::assignments(contents)
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| unquote(value))
 }
 
 /// A `.env` value as the loader's `parse_value` reads it: single quotes taken

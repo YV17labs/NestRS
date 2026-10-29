@@ -1,0 +1,5 @@
+error: `#[authorize(...)]` cannot mask a #[prompt] — its messages are prose, opaque to the entity round-trip. Keep the gate and write into them only what the caller may read: `#[authorize(Action, Entity, unmasked)]`
+  --> tests/integration/diagnostics/mcp/masked_prompt.rs:22:14
+   |
+22 |     async fn draft(&self) -> Result<GetPromptResult, McpError> {
+   |              ^^^^^

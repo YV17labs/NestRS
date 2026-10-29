@@ -6,10 +6,12 @@
 //! [`Ability`](crate::Ability) they attach is ambient for each operation the
 //! request carries. [`masked_value_for`] masks an operation's return value.
 //!
-//! A host does not call it directly: `#[authorize(Action, Entity)]` beside a
-//! `#[tool]` / `#[prompt]` makes `#[tools]` emit the class gate
-//! ([`class_gate`](crate::class_gate), every edge's) and the mask, exactly as
-//! `#[operations]` does on GraphQL and `#[routes]` on HTTP.
+//! A host does not call it directly: `#[authorize(Action, Entity)]` beside an
+//! operation of `#[tools]` makes it emit the class gate
+//! ([`class_gate`](crate::class_gate), every edge's) and, beside a `#[tool]`
+//! or a `#[resource]`, the mask, exactly as `#[operations]` does on GraphQL
+//! and `#[routes]` on HTTP; a prompt's messages and a listing's entries are
+//! no row, so a gated `#[prompt]` or `#[resources]` declares `unmasked`.
 //!
 //! ```
 //! # use nest_rs_authz::{AbilityBuilder, Action, Read};

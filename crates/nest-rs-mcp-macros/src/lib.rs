@@ -84,9 +84,11 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   piped when it is `Parameters<Valid<T>>` or `Parameters<Piped<P, T>>`,
 ///   and on a `#[resource]` the template variable its name spells;
 /// - a masked operation spells its return `Result<…>`, the mask reading
-///   `Json<T>` or `Option<Json<T>>` to unwrap and `CallToolResult` or
-///   `ReadResourceResult` to refuse off that spelling; a `#[resources]`
-///   listing is never masked, so a gated one declares `unmasked`;
+///   `Json<T>` or `Option<Json<T>>` to unwrap and a tool's opaque answers
+///   (`CallToolResult`, `ContentBlock`, …) or a `ReadResourceResult`, bare or
+///   in its `Option`, to refuse off that spelling; a `#[prompt]`'s messages
+///   and a `#[resources]` listing's entries are never masked, so a gated one
+///   declares `unmasked`;
 /// - rmcp derives a tool's output schema from a return spelled
 ///   `Result<Json<T>, …>`, and from none behind an alias.
 ///

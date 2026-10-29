@@ -1,4 +1,4 @@
-error: `#[authorize(...)]` cannot mask a `ReadResourceResult` — its contents are opaque to the entity round-trip. Return the wire type (`Json<T>` or `T`) and let the mask run, or keep the gate and mask by hand with `#[authorize(Action, Entity, unmasked)]` + `nest_rs_authz::masked_reply`
+error: `#[authorize(...)]` cannot mask a `ReadResourceResult` — its contents are opaque to the entity round-trip. Return the wire type (`Json<T>` or `Option<Json<T>>`) and let the mask run, or keep the gate and mask by hand with `#[authorize(Action, Entity, unmasked)]` + `nest_rs_authz::masked_reply`
   --> tests/integration/diagnostics/mcp/masked_resource_read_result.rs:22:37
    |
 22 |     async fn avatar(&self, id: u32) -> Result<ReadResourceResult, McpError> {

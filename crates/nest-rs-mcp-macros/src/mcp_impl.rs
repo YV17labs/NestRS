@@ -142,6 +142,47 @@ impl Role {
     fn routed_by_rmcp(self) -> bool {
         matches!(self, Self::Tool | Self::Prompt)
     }
+
+    /// Why `#[authorize(...)]` cannot mask this role's answer, whatever its
+    /// type; `None` for a role whose answer may be a row.
+    fn unmaskable(self) -> Option<&'static str> {
+        match self {
+            Self::Tool | Self::Resource => None,
+            Self::Prompt => Some(
+                "#[prompt] — its messages are prose, opaque to the entity round-trip. Keep the \
+                 gate and write into them only what the caller may read",
+            ),
+            Self::Resources => Some(
+                "#[resources] listing — its entries are URIs and names, opaque to the entity \
+                 round-trip. Keep the gate and list only what the caller may read",
+            ),
+        }
+    }
+
+    /// What the mask unwraps off a maskable role's return, as a diagnostic
+    /// offers it.
+    fn mask_unwraps(self) -> &'static str {
+        match self {
+            Self::Resource => "`Json<T>` or `Option<Json<T>>`",
+            Self::Tool | Self::Prompt | Self::Resources => "`Json<T>`",
+        }
+    }
+
+    /// The content types this role answers that the entity round-trip cannot
+    /// read, by their last segment: a masked return naming one is refused.
+    /// The first is the one a diagnostic names.
+    fn opaque_answers(self) -> &'static [&'static str] {
+        match self {
+            Self::Tool => &[
+                "CallToolResult",
+                "CallToolResponse",
+                "ContentBlock",
+                "InputRequiredResult",
+            ],
+            Self::Resource => &["ReadResourceResult"],
+            Self::Prompt | Self::Resources => &[],
+        }
+    }
 }
 
 /// One decorated operation: what the developer wrote, and everything the wrapper
@@ -650,7 +691,7 @@ fn resource_wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2>
     // At the return type, so a value that is no resource's answer is refused there.
     let into = role.wire_answer();
     let (params, output, answered) = if *role == Role::Resource {
-        let masked = masked(posture, sig)?;
+        let masked = masked(*role, posture, sig)?;
         let read = quote_spanned! {answer_span(sig)=>
             #into::into_read(__nestrs_value, __nestrs_uri)
         };
@@ -743,7 +784,7 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         self_ty,
         op,
         quote!(#(#pipe_prelude)*),
-        masked(posture, sig)?,
+        masked(*role, posture, sig)?,
     )?;
     Ok(quote! {
         #role_attr
@@ -869,8 +910,9 @@ fn pipe_statement(arg: &PipedArg) -> TokenStream2 {
 ///
 /// `Json<T>` is unwrapped before masking and rewrapped after: rmcp's wrapper is
 /// neither `Serialize` nor `DeserializeOwned`. A resource's `Option<Json<T>>`
-/// is masked inside the `Option`, `None` passing through.
-fn masked(posture: &Posture, sig: &Signature) -> syn::Result<TokenStream2> {
+/// is masked inside the `Option`, `None` passing through. `take_operation`
+/// already refused a masked role whose every answer is opaque.
+fn masked(role: Role, posture: &Posture, sig: &Signature) -> syn::Result<TokenStream2> {
     let unmasked = quote!(::core::result::Result::Ok(__nestrs_value));
     let Posture::Authorize {
         action,
@@ -888,23 +930,20 @@ fn masked(posture: &Posture, sig: &Signature) -> syn::Result<TokenStream2> {
     let Some(ok_ty) = result_ok_type(sig) else {
         return Ok(unmasked);
     };
-    // Opaque content blocks: refused here, or an unmet `DeserializeOwned` bound
-    // surfaces deep inside the expansion.
-    if let Type::Path(path) = ok_ty
-        && let Some(last) = path.path.segments.last()
-        && matches!(
-            last.ident.to_string().as_str(),
-            "CallToolResult" | "CallToolResponse" | "ReadResourceResult"
-        )
-    {
+    // Opaque content: refused here, or it fails deep inside the expansion or,
+    // compiled, every call closed.
+    if let Some(opaque) = opaque_answer(role, ok_ty) {
+        let remedy = match role {
+            Role::Resource => role.mask_unwraps(),
+            Role::Tool | Role::Prompt | Role::Resources => "`Json<T>` or `T`",
+        };
         return Err(syn::Error::new_spanned(
             &sig.output,
             format!(
                 "`#[authorize(...)]` cannot mask a `{opaque}` — its contents are opaque to \
-                 the entity round-trip. Return the wire type (`Json<T>` or `T`) and let the \
+                 the entity round-trip. Return the wire type ({remedy}) and let the \
                  mask run, or keep the gate and mask by hand with \
                  `#[authorize(Action, Entity, unmasked)]` + `nest_rs_authz::masked_reply`",
-                opaque = last.ident,
             ),
         ));
     }
@@ -936,6 +975,23 @@ fn masked(posture: &Posture, sig: &Signature) -> syn::Result<TokenStream2> {
         ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, _>(__nestrs_value)
             .map_err(::nest_rs_mcp::__private::OperationFailure::from)
     })
+}
+
+/// The opaque content type `role` answers in `ok_ty`, a resource's inside its
+/// `Option` too, which `None` passing through leaves to the mask.
+fn opaque_answer(role: Role, ok_ty: &Type) -> Option<&syn::Ident> {
+    let answered = match role {
+        Role::Resource => nth_generic_type(ok_ty, "Option", 0).unwrap_or(ok_ty),
+        Role::Tool | Role::Prompt | Role::Resources => ok_ty,
+    };
+    let Type::Path(path) = answered else {
+        return None;
+    };
+    let last = &path.path.segments.last()?.ident;
+    role.opaque_answers()
+        .iter()
+        .any(|opaque| last == opaque)
+        .then_some(last)
 }
 
 /// The `T` of a `-> Result<T, E>` return, or `None` for anything else.
@@ -1096,25 +1152,30 @@ fn take_operation(
         ..
     } = take_layers(&pair::MCP, LayerScope::Method, &mut method.attrs)?;
     let posture = posture_rules(role).take(method)?;
+    if posture.masks()
+        && let Some(why) = role.unmaskable()
+    {
+        return Err(syn::Error::new_spanned(
+            &method.sig.ident,
+            format!(
+                "`#[authorize(...)]` cannot mask a {why}: \
+                 `#[authorize(Action, Entity, unmasked)]`"
+            ),
+        ));
+    }
     if posture.masks() && result_ok_type(&method.sig).is_none() {
         return Err(syn::Error::new_spanned(
             &method.sig.output,
             format!(
                 "a masked {} spells its return `Result<…>`: the mask reads the \
-                 value's shape — `Json<T>` to unwrap, `CallToolResult` to refuse — off \
+                 value's shape — {} to unwrap, `{}` to refuse — off \
                  that spelling, and a `Result` renamed on import or behind an alias hides \
                  it. Write `Result<…>`, or declare `#[authorize(Action, Entity, unmasked)]` \
                  and mask in the body",
                 role.attr(),
+                role.mask_unwraps(),
+                role.opaque_answers().first().copied().unwrap_or_default(),
             ),
-        ));
-    }
-    if role == Role::Resources && posture.masks() {
-        return Err(syn::Error::new_spanned(
-            &method.sig.ident,
-            "`#[authorize(...)]` cannot mask a #[resources] listing — its entries are URIs \
-             and names, opaque to the entity round-trip. Keep the gate and list only what \
-             the caller may read: `#[authorize(Action, Entity, unmasked)]`",
         ));
     }
 
@@ -1598,4 +1659,59 @@ fn unsupported(entry: &ImplItem) -> syn::Error {
         "#[tools] serves only #[tool], #[prompt], #[resource] and #[resources] methods — \
          move anything else to a plain `impl` block beside it",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opaque(role: Role, ok: &str) -> Option<String> {
+        let ty: Type = syn::parse_str(ok).expect("a type");
+        opaque_answer(role, &ty).map(ToString::to_string)
+    }
+
+    #[test]
+    fn every_opaque_content_type_a_tool_answers_is_found_by_its_last_segment() {
+        for ok in [
+            "CallToolResult",
+            "rmcp::model::CallToolResponse",
+            "ContentBlock",
+            "nest_rs::mcp::model::InputRequiredResult",
+        ] {
+            assert!(opaque(Role::Tool, ok).is_some(), "{ok}");
+        }
+        for ok in ["Json<Post>", "String", "Vec<Post>", "ReadResourceResult"] {
+            assert_eq!(opaque(Role::Tool, ok), None, "{ok}");
+        }
+    }
+
+    #[test]
+    fn a_resource_s_read_result_is_opaque_inside_its_option_too() {
+        for ok in ["ReadResourceResult", "Option<model::ReadResourceResult>"] {
+            assert_eq!(
+                opaque(Role::Resource, ok).as_deref(),
+                Some("ReadResourceResult"),
+                "{ok}",
+            );
+        }
+        for ok in [
+            "Json<Post>",
+            "Option<Json<Post>>",
+            "String",
+            "CallToolResult",
+        ] {
+            assert_eq!(opaque(Role::Resource, ok), None, "{ok}");
+        }
+    }
+
+    #[test]
+    fn a_role_whose_every_answer_is_opaque_is_refused_whole_rather_than_by_type() {
+        for role in [Role::Prompt, Role::Resources] {
+            assert!(role.unmaskable().is_some(), "{}", role.attr());
+            assert!(role.opaque_answers().is_empty(), "{}", role.attr());
+        }
+        for role in [Role::Tool, Role::Resource] {
+            assert_eq!(role.unmaskable(), None, "{}", role.attr());
+        }
+    }
 }

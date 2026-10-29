@@ -42,9 +42,13 @@ derives. The demo's posts host was that shape, its `list_posts` and
   advertises the media type through a probe, so a value that is no body is
   refused once, at the read.
 - **The mask is the tool's, where it can read.** It unwraps `Json<T>` and a
-  resource's `Option<Json<T>>`, and refuses a masked `ReadResourceResult` as it
-  refuses a `CallToolResult`. A listing's entries are URIs and names the
-  round-trip cannot read, so a gated `#[resources]` writes `unmasked`.
+  resource's `Option<Json<T>>`, and refuses a masked `ReadResourceResult`,
+  bare or inside its `Option`, as it refuses a tool's opaque answers
+  (`CallToolResult`, `CallToolResponse`, `ContentBlock`,
+  `InputRequiredResult`): each would compile and fail every call closed. A
+  role whose every answer is opaque is refused whole, whatever its type: a
+  listing's entries are URIs and names, a prompt's messages prose, so a gated
+  `#[resources]` or `#[prompt]` writes `unmasked`.
 - **A site names its template, never its values.** The view a guard reads and
   the address a denial files are the template; the URI the client sent is the
   request's, on its span as the conventions ask.

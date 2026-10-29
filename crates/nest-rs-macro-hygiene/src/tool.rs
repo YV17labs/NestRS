@@ -22,9 +22,8 @@ pub struct HygieneArgs {
 
 /// A guard bound per operation, so the expansion's chain call resolves.
 #[nest_rs::core::injectable]
+#[derive(Layer)]
 pub struct HygieneGuard;
-
-impl Layer for HygieneGuard {}
 
 #[async_trait]
 impl Guard for HygieneGuard {

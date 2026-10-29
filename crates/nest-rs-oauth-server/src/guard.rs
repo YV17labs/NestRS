@@ -89,6 +89,7 @@ use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
 ///     }
 /// }
 /// ```
+#[derive(Layer)]
 pub struct ClientAuthenticationGuard<S: Strategy> {
     strategy: Arc<S>,
 }
@@ -154,8 +155,6 @@ impl<S: Strategy> ClientAuthenticationGuard<S> {
         Self::new(strategy)
     }
 }
-
-impl<S: Strategy> Layer for ClientAuthenticationGuard<S> {}
 
 #[async_trait]
 impl<S: Strategy> Guard for ClientAuthenticationGuard<S> {

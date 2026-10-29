@@ -15,9 +15,8 @@ use nest_rs::ws::{Scoped, WsView, gateway, messages};
 /// It overrides `check_http`: an empty `impl Guard` beside the declaration is
 /// the lying one this crate's trybuild snapshots refuse.
 #[injectable]
+#[derive(Layer)]
 pub struct HygieneWsGuard;
-
-impl Layer for HygieneWsGuard {}
 
 #[async_trait]
 impl Guard for HygieneWsGuard {
@@ -30,9 +29,8 @@ impl GuardFor<HttpView> for HygieneWsGuard {}
 
 /// Bound on one message, and forced on another past the app-wide pool.
 #[injectable]
+#[derive(Layer)]
 pub struct HygieneMessageGuard;
-
-impl Layer for HygieneMessageGuard {}
 
 #[async_trait]
 impl Guard for HygieneMessageGuard {
@@ -49,10 +47,8 @@ pub struct HygieneLimit(pub u32);
 /// Reads a message's `data` and changes nothing: the pipe a gateway and its
 /// messages bind.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 pub struct HygieneDataPipe;
-
-impl Layer for HygieneDataPipe {}
 
 impl GlobalPipe for HygieneDataPipe {}
 

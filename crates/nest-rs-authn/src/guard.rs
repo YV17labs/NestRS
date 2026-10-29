@@ -40,6 +40,7 @@ mod reason {
 /// strategy silent past it, or one that panics, is denied on every route,
 /// `#[public]` included. So the boot refuses every budget the strategy's code
 /// can reach at or past it (`nest_rs_core::BudgetPastNetError`).
+#[derive(Layer)]
 pub struct AuthnGuard<S: Strategy> {
     strategy: Arc<S>,
 }
@@ -105,8 +106,6 @@ impl<S: Strategy> AuthnGuard<S> {
         Self::new(strategy)
     }
 }
-
-impl<S: Strategy> Layer for AuthnGuard<S> {}
 
 /// Layer-System impl — registers globally via `use_guards_global`.
 ///

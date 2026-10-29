@@ -28,12 +28,11 @@ const RULES_MISCONFIGURED: &str = "rules_misconfigured";
 /// `AuthzGuard` is not a framework type: an app aliases it once at its authz
 /// module root, `pub type AuthzGuard = AbilityGuard<AuthzAbility>;`.
 #[injectable]
+#[derive(Layer)]
 pub struct AbilityGuard<F: AbilityFactory> {
     #[inject]
     factory: Arc<F>,
 }
-
-impl<F: AbilityFactory> Layer for AbilityGuard<F> {}
 
 /// Layer-System impl — global registration via
 /// `use_guards_global([..., guard::<AuthzGuard>()])` is the canonical path.

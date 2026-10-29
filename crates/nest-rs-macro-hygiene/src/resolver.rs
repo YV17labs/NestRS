@@ -181,9 +181,8 @@ impl ShelfResolver {
 
 /// Checks each field it is bound on, through `check`.
 #[nest_rs::core::injectable]
+#[derive(Layer)]
 pub struct HygieneFieldGuard;
-
-impl Layer for HygieneFieldGuard {}
 
 #[async_trait]
 impl Guard for HygieneFieldGuard {

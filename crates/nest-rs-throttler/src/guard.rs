@@ -82,6 +82,7 @@ mod reason {
 /// [`InMemoryThrottler`](crate::InMemoryThrottler) by default, or a shared
 /// store when its module is imported instead.
 #[injectable]
+#[derive(Layer)]
 pub struct ThrottlerGuard {
     /// The limit a site that pins no `#[meta(Throttle)]` runs under.
     /// **Injected, never defaulted**: a guard built without `for_root` fails the
@@ -166,8 +167,6 @@ impl ThrottlerGuard {
         Err(rate_limited(limit.window(), reason).with_source(uncounted))
     }
 }
-
-impl Layer for ThrottlerGuard {}
 
 #[async_trait]
 impl Guard for ThrottlerGuard {

@@ -91,6 +91,34 @@ impl<P> AuthenticatedClient<P> {
         }
     }
 
+    /// The scope of the token this client's request is answered with, read
+    /// off its §3.3 `scope` ([`AccessTokenRequest::scope`](crate::AccessTokenRequest::scope)),
+    /// under one strict rule: none requested is the client's whole registered
+    /// scope; a request naming a scope the client is not registered for is
+    /// refused whole with §5.2's [`TokenError::InvalidScope`], never narrowed in
+    /// silence; a scope named twice is granted once. The token response states
+    /// what this returns ([`with_scope`](crate::AccessTokenResponse::with_scope)),
+    /// as §3.3 asks whenever it differs from the request.
+    ///
+    /// Each refusal files one `warn` on [`TARGET`](crate::TARGET) naming its
+    /// reason, never the scope asked for; the client is the line's
+    /// `actor_id`, the request's.
+    pub fn scope_for(&self, requested: &[String]) -> Result<Vec<String>, TokenError> {
+        if requested.is_empty() {
+            return Ok(self.scopes.clone());
+        }
+        let mut granted: Vec<String> = Vec::with_capacity(requested.len());
+        for scope in requested {
+            if !self.scopes.contains(scope) {
+                return Err(self.refused(TokenError::InvalidScope));
+            }
+            if !granted.contains(scope) {
+                granted.push(scope.clone());
+            }
+        }
+        Ok(granted)
+    }
+
     /// The audience of the token this client's request is answered with, read
     /// off its RFC 8707 §2 `resource` parameters
     /// ([`AccessTokenRequest::resource`](crate::AccessTokenRequest::resource)):
@@ -99,17 +127,34 @@ impl<P> AuthenticatedClient<P> {
     /// [`TokenError::InvalidTarget`] — an unregistered resource, none among
     /// several, and two at once, since a token naming two audiences is a
     /// deputy of each at the other.
+    ///
+    /// Each refusal files one `warn` on [`TARGET`](crate::TARGET) naming its
+    /// reason, never the resource asked for; the client is the line's
+    /// `actor_id`, the request's.
     pub fn audience_for(&self, requested: &[String]) -> Result<&str, TokenError> {
         let wanted = match (requested, self.resources.as_slice()) {
-            ([], [only]) => only,
-            ([one], _) => one,
-            _ => return Err(TokenError::InvalidTarget),
+            ([], [only]) => Some(only),
+            ([one], _) => Some(one),
+            _ => None,
         };
-        self.resources
-            .iter()
-            .find(|registered| *registered == wanted)
+        wanted
+            .and_then(|wanted| {
+                self.resources
+                    .iter()
+                    .find(|registered| *registered == wanted)
+            })
             .map(String::as_str)
-            .ok_or(TokenError::InvalidTarget)
+            .ok_or_else(|| self.refused(TokenError::InvalidTarget))
+    }
+
+    /// `refusal`, filed as the token endpoint's refusal of this client.
+    fn refused(&self, refusal: TokenError) -> TokenError {
+        tracing::warn!(
+            target: crate::TARGET,
+            reason = %refusal,
+            "token request refused",
+        );
+        refusal
     }
 }
 
@@ -229,6 +274,60 @@ mod tests {
             registered_for(&[]).audience_for(&[]),
             Err(TokenError::InvalidTarget)
         ));
+    }
+
+    fn registered_scopes(scopes: &[&str]) -> AuthenticatedClient<u32> {
+        AuthenticatedClient::new("ci", scopes.iter().copied(), [API], 7)
+    }
+
+    /// §3.3: a request naming no scope is granted the registered default,
+    /// here the client's whole registration.
+    #[test]
+    fn no_scope_requested_is_the_whole_registered_scope() {
+        let client = registered_scopes(&["posts:read", "posts:write"]);
+        assert_eq!(
+            client.scope_for(&[]).unwrap(),
+            ["posts:read", "posts:write"]
+        );
+        assert_eq!(
+            registered_scopes(&[]).scope_for(&[]).unwrap(),
+            Vec::<String>::new(),
+            "a client registered for none is delegated none",
+        );
+    }
+
+    #[test]
+    fn a_registered_subset_is_granted_in_the_order_asked_and_each_scope_once() {
+        let client = registered_scopes(&["posts:read", "posts:write"]);
+        assert_eq!(
+            client
+                .scope_for(&requested(&["posts:write", "posts:read"]))
+                .unwrap(),
+            ["posts:write", "posts:read"]
+        );
+        assert_eq!(
+            client
+                .scope_for(&requested(&["posts:read", "posts:read"]))
+                .unwrap(),
+            ["posts:read"]
+        );
+    }
+
+    /// §5.2's `invalid_scope`: the request is refused whole, never narrowed to
+    /// what the client is registered for.
+    #[test]
+    fn a_scope_outside_the_registration_refuses_the_whole_request() {
+        let client = registered_scopes(&["posts:read"]);
+        for asked in [
+            requested(&["posts:read", "admin"]),
+            requested(&["Posts:read"]),
+            requested(&["posts:read\tadmin"]),
+        ] {
+            assert!(
+                matches!(client.scope_for(&asked), Err(TokenError::InvalidScope)),
+                "{asked:?}"
+            );
+        }
     }
 
     #[test]

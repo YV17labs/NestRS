@@ -37,13 +37,17 @@ use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
 /// reason the strategy's and its cause naming the method attempted, never the
 /// client.
 ///
+/// [`ClientSecretBasicStrategy`](crate::ClientSecretBasicStrategy) is the
+/// strategy for the clients [`OAuthServerConfig`](crate::OAuthServerConfig)
+/// registers; a registry held elsewhere is a strategy of the app's own:
+///
 /// ```
 /// use nest_rs_authn::{AuthError, Strategy, basic_credentials};
 /// use nest_rs_core::injectable;
 /// use nest_rs_http::{Ctx, Request, async_trait, controller, routes};
 /// use nest_rs_oauth_server::{
 ///     AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientAuthenticationGuard,
-///     RegisteredClient, TokenError, authenticate_against_registry,
+///     RegisteredClient, authenticate_against_registry,
 /// };
 ///
 /// #[injectable]
@@ -82,10 +86,8 @@ use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
 ///         client: Ctx<AuthenticatedClient<()>>,
 ///         request: AccessTokenRequest,
 ///     ) -> nest_rs_http::Result<AccessTokenResponse> {
-///         if request.grant_type != "client_credentials" {
-///             return Err(TokenError::UnsupportedGrant.into());
-///         }
-///         Ok(AccessTokenResponse::bearer("t", 3600).with_scope(client.scopes.clone()))
+///         let scope = client.scope_for(&request.scope)?;
+///         Ok(AccessTokenResponse::bearer("t", 3600).with_scope(scope))
 ///     }
 /// }
 /// ```

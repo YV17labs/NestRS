@@ -169,26 +169,32 @@ async fn a_request_omitting_scope_is_read_because_3_3_makes_it_optional() {
     let response = token_request(&app, FORM, "grant_type=client_credentials").await;
 
     response.assert_status_is_ok();
-    response.assert_text("client_credentials None []").await;
+    response.assert_text("client_credentials [] []").await;
 }
 
-/// §5.2 answers an unknown grant with `unsupported_grant_type`, which only the
-/// issuer can say: the request reads any grant.
+/// §5.2's `unsupported_grant_type`, with §5.1's directives, answered by the
+/// request itself: a grant the endpoint does not serve never reaches the issuer.
 #[tokio::test]
-async fn an_unknown_grant_reaches_the_issuer_rather_than_failing_to_decode() {
+async fn a_grant_the_endpoint_does_not_serve_is_unsupported_grant_type() {
     let app = TestApp::for_module::<RequestApp>().await.expect("boots");
 
-    let response = token_request(
-        &app,
-        FORM,
-        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
-    )
-    .await;
+    for grant_type in [
+        "urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
+        "password",
+        "authorization_code",
+        "Client_Credentials",
+        "client_credentials%20",
+    ] {
+        let response = token_request(&app, FORM, &format!("grant_type={grant_type}")).await;
 
-    response.assert_status_is_ok();
-    response
-        .assert_text("urn:ietf:params:oauth:grant-type:device_code None []")
-        .await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        response.assert_header("cache-control", "no-store");
+        response.assert_header("pragma", "no-cache");
+        response.assert_header_is_not_exist("www-authenticate");
+        response
+            .assert_json(serde_json::json!({ "error": "unsupported_grant_type" }))
+            .await;
+    }
 }
 
 /// RFC 8707 §2: "Multiple `resource` parameters MAY be used", so the one
@@ -209,8 +215,27 @@ async fn the_resource_parameter_is_read_every_time_it_is_sent() {
     response.assert_status_is_ok();
     response
         .assert_text(
-            r#"client_credentials Some("posts:read") ["https://api.example.com", "https://mcp.example.com/mcp"]"#,
+            r#"client_credentials ["posts:read"] ["https://api.example.com", "https://mcp.example.com/mcp"]"#,
         )
+        .await;
+}
+
+/// §3.3: the scope is one space-delimited list, read into its tokens in the
+/// order sent.
+#[tokio::test]
+async fn the_scope_is_read_into_its_space_delimited_tokens() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    let response = token_request(
+        &app,
+        FORM,
+        "grant_type=client_credentials&scope=posts%3Awrite+posts%3Aread++posts%3Awrite",
+    )
+    .await;
+
+    response.assert_status_is_ok();
+    response
+        .assert_text(r#"client_credentials ["posts:write", "posts:read", "posts:write"] []"#)
         .await;
 }
 
@@ -325,7 +350,7 @@ async fn an_empty_parameter_is_read_as_omitted() {
         .await;
 
     response.assert_status_is_ok();
-    response.assert_text("client_credentials None []").await;
+    response.assert_text("client_credentials [] []").await;
 }
 
 /// What the transport refuses before any parameter is read keeps its answer.

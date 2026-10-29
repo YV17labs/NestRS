@@ -13,13 +13,9 @@ use schemars::JsonSchema;
 use serde::de::{self, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::error::MalformedRequest;
+use crate::error::{MalformedRequest, TokenError};
 
 /// RFC 6749 §4.4.2 — the `client_credentials` access token request.
-///
-/// `grant_type` is a `String`: §5.2 answers an unknown grant with
-/// [`TokenError::UnsupportedGrant`](crate::TokenError::UnsupportedGrant), which an
-/// enum would turn into a deserialization error the issuer never sees.
 ///
 /// A handler takes it as a parameter, which reads the request's
 /// `application/x-www-form-urlencoded` body (§4.4.2) and documents it so; a
@@ -27,10 +23,17 @@ use crate::error::MalformedRequest;
 /// `error_description` saying where — a parameter missing, sent with no value
 /// (§3.2: "treated as if they were omitted"), repeated or of the wrong kind, a
 /// body that is no form, a client credential in the body beside the
-/// `Authorization` header (more than one mechanism) — never what it held. An
-/// empty `scope` or `resource` is none, and a parameter the request does not
-/// define is ignored (§3.2). `resource` alone may repeat (RFC 8707 §2). A body
-/// past the transport's cap keeps the transport's `413`.
+/// `Authorization` header (more than one mechanism) — never what it held. A
+/// `grant_type` naming a grant the endpoint does not serve is §5.2's
+/// `unsupported_grant_type`, answered before the handler runs, so the handler
+/// reads a [`GrantType`]. An empty `scope` or `resource` is none, and a
+/// parameter the request does not define is ignored (§3.2). `resource` alone
+/// may repeat (RFC 8707 §2). A body past the transport's cap keeps the
+/// transport's `413`.
+///
+/// What the client is granted is read off it by the client the guard
+/// authenticated: [`AuthenticatedClient::scope_for`](crate::AuthenticatedClient::scope_for)
+/// and [`AuthenticatedClient::audience_for`](crate::AuthenticatedClient::audience_for).
 ///
 /// That parameter is its one reader: the type derives no `Deserialize`, so no
 /// other spelling — a `Form<Self>`, a `Json<Self>` — skips the refusals above.
@@ -48,11 +51,14 @@ use crate::error::MalformedRequest;
 #[schemars(description = "RFC 6749 §4.4.2 — the `client_credentials` access token request.")]
 #[non_exhaustive]
 pub struct AccessTokenRequest {
-    /// The grant being exercised — `client_credentials` at this endpoint.
-    pub grant_type: String,
-    /// §3.3 space-delimited scope list. Absent ⇒ the issuer's own default.
-    #[schemars(default)]
-    pub scope: Option<String>,
+    /// The grant being exercised — one this endpoint serves.
+    pub grant_type: GrantType,
+    /// §3.3's scope list, sent space-delimited, in the order sent. Empty ⇒
+    /// none requested: the client's registered scope
+    /// ([`AuthenticatedClient::scope_for`](crate::AuthenticatedClient::scope_for)).
+    // The wire is one space-delimited string, and the member is optional.
+    #[schemars(with = "String", default)]
+    pub scope: Vec<String>,
     /// RFC 8707 §2's `resource` parameters, in the order sent: the resources
     /// the token is requested for, which become its audience. Empty ⇒ the
     /// issuer's own default;
@@ -60,6 +66,47 @@ pub struct AccessTokenRequest {
     /// chooses among them.
     #[schemars(default)]
     pub resource: Vec<String>,
+}
+
+/// RFC 6749's `grant_type` — the grants this token endpoint serves, each
+/// spelled as §4 defines it. A request naming any other is refused before the
+/// handler runs, so a handler never compares a string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, JsonSchema)]
+#[schemars(
+    rename_all = "snake_case",
+    description = "RFC 6749's `grant_type`: the grants this token endpoint serves."
+)]
+#[non_exhaustive]
+pub enum GrantType {
+    /// `client_credentials` (§4.4): a client requesting a token on its own
+    /// behalf, authenticated by its own credentials.
+    ClientCredentials,
+}
+
+impl GrantType {
+    /// Every grant this endpoint serves.
+    const SERVED: [Self; 1] = [Self::ClientCredentials];
+
+    /// The value the request's `grant_type` parameter carries for this grant.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientCredentials => "client_credentials",
+        }
+    }
+
+    /// The grant `sent` names, matched exactly (§3.2: values are
+    /// case-sensitive), or `None` for one this endpoint does not serve.
+    fn served(sent: &str) -> Option<Self> {
+        Self::SERVED
+            .into_iter()
+            .find(|grant| grant.as_str() == sent)
+    }
+}
+
+impl fmt::Display for GrantType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// §4.4.2's parameters as the body spells them, with the client credentials
@@ -185,9 +232,17 @@ impl<'a> FromRequest<'a> for AccessTokenRequest {
         if in_body && req.headers().contains_key(header::AUTHORIZATION) {
             return Err(MalformedRequest::at(TWO_MECHANISMS).into());
         }
+        let grant_type = GrantType::served(&sent.grant_type).ok_or(TokenError::UnsupportedGrant)?;
         Ok(Self {
-            grant_type: sent.grant_type,
-            scope: sent.scope.filter(|scope| !scope.is_empty()),
+            grant_type,
+            scope: sent
+                .scope
+                .as_deref()
+                .map(str::split_whitespace)
+                .into_iter()
+                .flatten()
+                .map(str::to_owned)
+                .collect(),
             resource: sent
                 .resource
                 .into_iter()
@@ -396,6 +451,41 @@ mod tests {
         assert_eq!(
             schema.get("required"),
             Some(&serde_json::json!(["grant_type"]))
+        );
+    }
+
+    /// The published form lists the grants the endpoint serves, so a client
+    /// reads which `grant_type` it may send.
+    #[test]
+    fn the_request_schema_lists_the_grants_served_and_a_string_scope() {
+        let schema = schemars::schema_for!(AccessTokenRequest).to_value();
+        let grant_type = &schema["properties"]["grant_type"];
+        let grant_type = grant_type
+            .get("$ref")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|path| path.strip_prefix("#/$defs/"))
+            .map_or(grant_type, |name| &schema["$defs"][name]);
+
+        let served: Vec<&serde_json::Value> = grant_type["oneOf"]
+            .as_array()
+            .map(|variants| variants.iter().map(|variant| &variant["const"]).collect())
+            .unwrap_or_default();
+        assert_eq!(served, ["client_credentials"], "{schema:#}");
+        assert_eq!(schema["properties"]["scope"]["type"], "string");
+    }
+
+    #[test]
+    fn a_grant_type_is_matched_exactly_as_section_4_spells_it() {
+        assert_eq!(
+            GrantType::served("client_credentials"),
+            Some(GrantType::ClientCredentials)
+        );
+        for sent in ["Client_Credentials", " client_credentials", "password", ""] {
+            assert_eq!(GrantType::served(sent), None, "{sent:?}");
+        }
+        assert_eq!(
+            GrantType::ClientCredentials.to_string(),
+            "client_credentials"
         );
     }
 

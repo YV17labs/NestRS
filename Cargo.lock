@@ -3054,6 +3054,7 @@ dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
  "nest-rs-authn",
+ "nest-rs-config",
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
@@ -3065,6 +3066,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "validator",
 ]
 
 [[package]]

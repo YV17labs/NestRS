@@ -21,6 +21,11 @@ nest-rs-authn.workspace = true
 nest-rs-core.workspace = true
 # `ClientAuthenticationGuard` is a guard, bound with `#[use_guards]`.
 nest-rs-guards.workspace = true
+# `OAuthServerConfig` is a `#[config]`, the registry read from
+# `<PREFIX>_OAUTH__SERVER__*`, which `OAuthServerModule::for_root` registers.
+nest-rs-config.workspace = true
+# The registry's boot checks name each refused client, as `ValidationErrors`.
+validator.workspace = true
 # `TokenError` renders itself as the §5.2 JSON envelope, and marks the response
 # `NoBearerChallenge` so a token refusal is never dressed up as a
 # oauth-resource challenge.

@@ -39,11 +39,11 @@ pub(crate) struct DomainError(pub String);
 #[error("infrastructure failure: {0}")]
 pub(crate) struct InfraError(pub String);
 
-/// Without it, a `Result<_, DomainError>` return fails with an `E0277` on
-/// `IntoResult`. The status is the **default** a filter replaces.
-impl nest_rs_http::ResponseError for DomainError {
-    fn status(&self) -> StatusCode {
-        StatusCode::INTERNAL_SERVER_ERROR
+/// What lets a route return `Result<_, DomainError>`: it says no problem, so
+/// its **default**, the opaque `500`, is what a filter replaces.
+impl nest_rs_core::ToProblem for DomainError {
+    fn to_problem(&self) -> Option<Problem> {
+        None
     }
 }
 

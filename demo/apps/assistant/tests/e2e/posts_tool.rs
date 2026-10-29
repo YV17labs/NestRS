@@ -1,4 +1,7 @@
-use nest_rs::testing::mcp::{call_method, call_tool, open_session};
+use features::Role;
+use features::authz::constants;
+use features::testing::{ASSISTANT, ORG_ID, client, token_with_scopes};
+use nest_rs::testing::mcp::{call_method, call_tool, open_session, result};
 use serde_json::json;
 
 use crate::*;
@@ -110,6 +113,25 @@ async fn a_resource_read_of_another_orgs_row_or_a_malformed_uri_is_not_found_quo
         .expect("the listing carries a post:// uri")
         .to_owned();
 
+    let own = call_method(
+        app.http(),
+        POSTS_ENDPOINT,
+        &session,
+        Some(&acme_bearer),
+        "resources/read",
+        json!({ "uri": uri }),
+    )
+    .await;
+    let contents = &result(&own)["result"]["contents"][0];
+    assert_eq!(contents["uri"], uri.as_str(), "{own}");
+    assert_eq!(contents["mimeType"], "application/json", "{own}");
+    assert!(
+        contents["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("acme-only-post") && text.contains("seeded")),
+        "the caller reads its own org's post through the template: {own}",
+    );
+
     let globex_bearer = bearer_for(&globex.to_string());
     let session = open_session(app.http(), POSTS_ENDPOINT, Some(&globex_bearer)).await;
     for asked in [uri.as_str(), "post://not-a-uuid"] {
@@ -126,10 +148,57 @@ async fn a_resource_read_of_another_orgs_row_or_a_malformed_uri_is_not_found_quo
         assert!(
             !denied.contains("seeded")
                 && denied.contains("-32002")
-                && denied.contains(r#""message":"unknown resource""#),
+                && denied.contains(r#""message":"Resource not found""#),
             "`resources/read` must fail closed on another org's row and on a malformed \
              uri alike. Body: {denied}",
         );
         assert!(!denied.contains(asked), "{denied}");
+    }
+}
+
+#[tokio::test]
+async fn a_token_without_the_read_scope_is_refused_every_posts_operation_by_name() {
+    let (_db, app) = boot().await;
+    let narrowed = format!(
+        "Bearer {}",
+        token_with_scopes(
+            ASSISTANT,
+            ORG_ID.parse().expect("a valid org uuid"),
+            vec![Role::Admin],
+            client(),
+            vec![constants::AUDIO_TRANSCODE.to_owned()],
+        )
+    );
+
+    let listed = call_tool(app.http(), POSTS_ENDPOINT, "list_posts", Some(&narrowed)).await;
+    let session = open_session(app.http(), POSTS_ENDPOINT, Some(&narrowed)).await;
+    let mut bodies = vec![listed];
+    for (method, params) in [
+        ("prompts/get", json!({ "name": "draft_follow_up" })),
+        ("resources/list", json!({})),
+        (
+            "resources/read",
+            json!({ "uri": format!("post://{ORG_ID}") }),
+        ),
+    ] {
+        bodies.push(
+            call_method(
+                app.http(),
+                POSTS_ENDPOINT,
+                &session,
+                Some(&narrowed),
+                method,
+                params,
+            )
+            .await,
+        );
+    }
+
+    for body in bodies {
+        assert!(
+            body.contains("insufficient_scope") && body.contains(constants::POSTS_READ),
+            "the posture gates every operation of the host, and the refusal names the \
+             scope it requires rather than answering an empty list: {body}",
+        );
     }
 }

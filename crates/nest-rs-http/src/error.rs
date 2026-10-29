@@ -189,9 +189,8 @@ impl ResponseError for Problem {
 pub fn problem_error<E: ToProblem>(error: E) -> HttpError {
     let status = error
         .to_problem()
-        .map_or(StatusCode::INTERNAL_SERVER_ERROR, |problem| {
-            status_of(&problem)
-        });
+        .as_ref()
+        .map_or(StatusCode::INTERNAL_SERVER_ERROR, status_of);
     HttpError::with(
         status,
         Cause::Typed {

@@ -215,7 +215,7 @@ pub struct Problem {
     status: u16,
     code: Code,
     /// The type's URI and its title, which RFC 9457 pairs.
-    kind: Option<(&'static str, &'static str)>,
+    problem_type: Option<(&'static str, &'static str)>,
     detail: Option<Cow<'static, str>>,
     retry_after: Option<u32>,
     // Boxed so a `Result<_, Problem>` stays the size of the members most
@@ -241,7 +241,7 @@ impl Problem {
         Self {
             status,
             code,
-            kind: None,
+            problem_type: None,
             detail: None,
             retry_after: None,
             errors: None,
@@ -290,7 +290,7 @@ impl Problem {
         if title.is_empty() {
             panic!("a problem `title` summarizes its type, not empty");
         }
-        self.kind = Some((uri, title));
+        self.problem_type = Some((uri, title));
         self
     }
 
@@ -341,7 +341,7 @@ impl Problem {
     /// The URI naming the problem's type, when [`with_type`](Self::with_type)
     /// set one; `None` is `about:blank`.
     pub const fn type_uri(&self) -> Option<&'static str> {
-        match self.kind {
+        match self.problem_type {
             Some((uri, _)) => Some(uri),
             None => None,
         }
@@ -350,7 +350,7 @@ impl Problem {
     /// The title of the problem's type, when [`with_type`](Self::with_type)
     /// set one.
     pub const fn title(&self) -> Option<&'static str> {
-        match self.kind {
+        match self.problem_type {
             Some((_, title)) => Some(title),
             None => None,
         }

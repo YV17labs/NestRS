@@ -77,8 +77,9 @@ final, at `error`, at `warn` behind a `503`, on `nest_rs::http`. Every row
 above converts into `nest_rs::http::HttpError` — `ServiceError` through its
 `ToProblem`, the authentication and OAuth errors through their own
 `ResponseError` — which is what makes the `?` legal: a handler returning
-`Result<Json<T>>` propagates any of them with no `map_err`. No per-feature `error.rs` for these — the framework owns them
-once, every feature reuses them.
+`Result<Json<T>>` propagates any of them with no `map_err`. No per-feature
+`error.rs` for these — the framework owns them once, every feature reuses
+them.
 
 ```rust title="crates/features/src/users/service.rs"
 use nest_rs::seaorm::{Creatable, ServiceError};

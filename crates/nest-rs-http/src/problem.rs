@@ -116,11 +116,10 @@ impl ProblemDetails {
     pub fn from_problem(problem: &Problem) -> Self {
         let mut document = Self::about_blank(status_of(problem)).with_code(problem.code());
         if let Some((type_uri, title)) = problem.type_uri().zip(problem.title()) {
-            document.type_uri = type_uri.to_owned();
-            document.title = title.to_owned();
+            document = document.with_type(type_uri).with_title(title);
         }
         if let Some(detail) = problem.detail() {
-            document.detail = Some(detail.to_owned());
+            document = document.with_detail(detail);
         }
         if let Some(errors) = problem.errors() {
             document = document.with_extension(FIELD_ERRORS, errors.clone());

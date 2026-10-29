@@ -34,10 +34,8 @@ use crate::operation::McpOperationKind;
 /// # use serde_json::{Value, json};
 ///
 /// #[injectable]
-/// #[derive(Default)]
+/// #[derive(Default, Layer)]
 /// struct ApiKeyGuard;
-///
-/// impl Layer for ApiKeyGuard {}
 ///
 /// #[async_trait]
 /// impl Guard for ApiKeyGuard {

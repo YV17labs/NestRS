@@ -30,8 +30,9 @@ A guard listed at gateway scope **rejects the upgrade** — the response
 goes back as HTTP, no socket is opened, no `on_connect` fires. A guard
 listed at message scope **rejects the dispatch** — the connection
 stays open, the envelope is replaced with an error frame on the same
-event name, and a `warn!` lands in `nest_rs::layers` naming the guard,
-the event and the status — never the guard's text, as on every edge.
+event name, and one `guard denied the message` lands on the guard's target
+(`nest_rs::layers` when it declares none) naming the guard, the event and the
+status — never the guard's text, as on every edge.
 
 ## Connection-level: the upgrade gate
 
@@ -82,7 +83,7 @@ would see `None` once the upgrade request had unwound.
 A per-message guard runs every time the envelope's `event` matches a
 handler the guard is attached to:
 
-```rust title="crates/features/src/chat/ws/guard.rs"
+```rust title="crates/features/src/chat/ws/guard.rs (from the demo, abridged)"
 use nest_rs::core::{Layer, UnitContext, injectable};
 use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::ws::{WsView, async_trait};
@@ -90,35 +91,47 @@ use nest_rs::ws::{WsView, async_trait};
 use crate::Claims;
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct ModerationGuard;
-
-impl Layer for ModerationGuard {}
 
 #[async_trait]
 impl Guard for ModerationGuard {
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let caller = cx
-            .ambient::<Claims>()
-            .ok_or_else(|| Denial::internal("ModerationGuard requires AuthnGuard at the upgrade"))?;
-        match caller.sub.user_id() {
-            Some(_) => Ok(()),
-            None => Err(Denial::forbidden("posting takes a token naming a user")),
-        }
+        Self::decide(&*cx.require::<Claims>()?)
+    }
+
+    fn target(&self) -> &'static str {
+        crate::chat::TARGET
     }
 }
 
 impl GuardFor<WsView> for ModerationGuard {}
+
+impl ModerationGuard {
+    fn decide(caller: &Claims) -> Result<(), Denial> {
+        match caller.sub.user_id() {
+            Some(_) => Ok(()),
+            None => {
+                Err(Denial::forbidden("posting takes a token naming a user")
+                    .with_reason("not_a_user"))
+            }
+        }
+    }
+}
 ```
 
 The guard decides on the caller the upgrade authenticated, which every
 message on the connection carries — never on a name the payload states, which
-the client writes. A guard that needs the message itself switches to
+the client writes. The claims are a precondition, so `cx.require` reads them:
+a gateway bound without `AuthnGuard` at its upgrade refuses every message with
+a `500`, filed once at `error`. The guard writes no log line: the edge files
+its refusal, `guard denied the message` on `features::chat`, with
+`reason = "not_a_user"`. A guard that needs the message itself switches to
 `WsView`: `event()`, `data()` and the `client()` that sent it, whose
 connection `cx.peer()` names too.
 
 <Aside type="caution" title="A per-message guard must declare `GuardFor<WsView>`">
-Both entries admit by default, which is right — "this guard does not apply to
+`check` admits by default, which is right — "this guard does not apply to
 that transport" — and is also why binding a guard that only checks HTTP
 requests beside a `#[subscribe_message]` would compile, read as a protection,
 and pass every message.
@@ -135,8 +148,8 @@ error[E0277]: `nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>` does not
  21 |     #[use_guards(AuthnGuard)]
     |                  ^^^^^^^^^^ bound at a site whose units are `WsView`
     |
-    = note: `check_http` and `check` admit by default, so a guard bound here without its check would pass every unit silently
-    = note: override `Guard::check_http` (an HTTP request) or `Guard::check` (every other edge's unit), then declare `impl GuardFor<WsView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
+    = note: `check` admits by default and `check_http` runs it, so a guard bound here without its decision would pass every unit silently
+    = note: write the guard's decision in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<WsView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
 ```
 
 **A guard on the `#[gateway]` struct declares `GuardFor<HttpView>`, not
@@ -215,11 +228,12 @@ sent. A unit-stage interceptor still reads that frame, as it reads a route's
 `403`.
 
 <Aside type="note">
-The same `Guard` trait runs across every transport, so a guard that
-overrides `check_http` and `check` — and declares `GuardFor` for each view it
-serves — can be wired anywhere without rewriting. A guard that only makes
-sense for messages overrides `check`, declares `GuardFor<WsView>` alone, and
-leaves `check_http` admitting. There is no separate message-guard *trait*:
+The same `Guard` trait runs across every transport, so a guard that writes
+its decision in `check` — and declares `GuardFor` for each view it serves —
+can be wired anywhere without rewriting: `check_http` runs it on a request. A
+guard that only makes sense for messages declares `GuardFor<WsView>` alone;
+pooled globally, it would run at every request too, so one whose decision is
+the message's alone admits the request in `check_http`. There is no separate message-guard *trait*:
 `GuardFor` declares what the one `Guard` checks, not four guard types.
 </Aside>
 

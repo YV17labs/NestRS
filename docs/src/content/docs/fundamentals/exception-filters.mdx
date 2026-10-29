@@ -151,10 +151,8 @@ impl ResponseError for DomainError {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct DomainErrorFilter;
-
-impl Layer for DomainErrorFilter {}
 
 #[async_trait]
 impl ExceptionFilter for DomainErrorFilter {

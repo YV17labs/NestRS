@@ -53,10 +53,8 @@ That's an interceptor.
 
 ```rust title="apps/api/src/interceptor.rs"
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct NoIndex;
-
-impl Layer for NoIndex {}
 
 #[async_trait]
 impl Interceptor for NoIndex {
@@ -92,10 +90,8 @@ use nest_rs::guards::prelude::*;
 use nest_rs::http::HttpView;
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct RequireApiKey;
-
-impl Layer for RequireApiKey {}
 
 #[async_trait]
 impl Guard for RequireApiKey {

@@ -46,7 +46,6 @@ The smallest possible gateway: one event, one reply.
 use nest_rs::ws::{gateway, messages};
 
 #[gateway(path = "/ws")]
-#[derive(Default)]
 pub struct PingGateway;
 
 #[messages]

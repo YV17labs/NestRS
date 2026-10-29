@@ -75,7 +75,7 @@ run:
 
 | Unit | Stages | What differs |
 |---|---|---|
-| HTTP route | 1 to 7 | its guards run `check_http`, the global pipes read the body |
+| HTTP route | 1 to 7 | its guards run `check_http` — their `check` unless they override it — the global pipes read the body |
 | A self-mount's request: `/graphql`, `/mcp`, a gateway's upgrade, the OpenAPI document | 1 to 5 | its guard stage is the request stage the transport composes; no handler of yours runs, so no handler stage — `/graphql`'s variables meet the global pipes at its endpoint |
 | What the router answers itself: a `404`, a `405`, a module's fallback | 1, 3, 5 | no unit of work, no guard |
 | [GraphQL root field](/fundamentals/interceptors/#around-a-graphql-field) | 1, 4 to 7, inside its request | its guards run `check`; the request ran the unit stage |

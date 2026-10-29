@@ -28,7 +28,6 @@ current connection's handle:
 use nest_rs::ws::{gateway, messages, WsClient};
 
 #[gateway(path = "/ws")]
-#[derive(Default)]
 pub struct ChatGateway;
 
 #[messages]

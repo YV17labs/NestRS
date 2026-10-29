@@ -20,9 +20,8 @@ use crate::response::Response;
 /// use nest_rs_guards::prelude::*;
 /// use nest_rs_http::HttpView;
 ///
+/// #[derive(Layer)]
 /// struct SignedBody;
-///
-/// impl Layer for SignedBody {}
 ///
 /// #[async_trait]
 /// impl Guard for SignedBody {
@@ -49,9 +48,8 @@ use crate::response::Response;
 /// use nest_rs_core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait};
 /// use nest_rs_http::{HeaderValue, HttpView, Response, StatusCode};
 ///
+/// #[derive(Layer)]
 /// struct Maintenance;
-///
-/// impl Layer for Maintenance {}
 ///
 /// #[async_trait]
 /// impl Interceptor for Maintenance {

@@ -203,7 +203,8 @@ checks what a page states against the code before it ships. These are the classe
 wrong, each filed by a reader following a page verbatim — check them on sight:
 
 - **A snippet that would not compile.** Every decorator it applies is imported, unless the block
-  uses `prelude::*`; a type implementing a Layer sub-trait carries `impl Layer for T {}`; a
+  uses `prelude::*`; a type implementing a Layer sub-trait carries `#[derive(Layer)]` or an
+  `impl Layer for T`; a
   `type Exception = E` implements `ResponseError`; a trait is abridged, never given a method it
   lacks; `#[authorize(Action, bind = Service)]` takes the action first; a queue is named by its `Queue` type
   on both sides; a handler never `?`s a `CrudService` read, whose `DbErr` is no `ResponseError`.

@@ -39,8 +39,8 @@ use crate::unit_context::{UnitContext, take_pending};
 ///     Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
 /// };
 ///
+/// #[derive(Layer)]
 /// struct Audit;
-/// impl Layer for Audit {}
 ///
 /// #[async_trait]
 /// impl Interceptor for Audit {
@@ -56,8 +56,8 @@ use crate::unit_context::{UnitContext, take_pending};
 ///     }
 /// }
 ///
+/// #[derive(Layer)]
 /// struct Opaque;
-/// impl Layer for Opaque {}
 ///
 /// #[async_trait]
 /// impl ExceptionFilter for Opaque {
@@ -162,8 +162,8 @@ impl<T: Interceptor + ?Sized> Interceptor for Arc<T> {
 /// ```compile_fail,E0382
 /// use nest_rs_core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait};
 ///
+/// #[derive(Layer)]
 /// struct Retry;
-/// impl Layer for Retry {}
 ///
 /// #[async_trait]
 /// impl Interceptor for Retry {

@@ -21,10 +21,8 @@ pub type PipeSpec = LayerSpec<dyn GlobalPipe>;
 /// use nest_rs_pipes::{AppBuilderPipesExt, GlobalPipe, pipe};
 ///
 /// #[injectable]
-/// #[derive(Default)]
+/// #[derive(Default, Layer)]
 /// struct StripUnknownFields;
-///
-/// impl Layer for StripUnknownFields {}
 ///
 /// impl GlobalPipe for StripUnknownFields {}
 ///

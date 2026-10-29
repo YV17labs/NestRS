@@ -823,10 +823,8 @@ impl AppBuilder {
     /// };
     ///
     /// #[injectable]
-    /// #[derive(Default)]
+    /// #[derive(Default, Layer)]
     /// struct Audit;
-    ///
-    /// impl Layer for Audit {}
     ///
     /// #[async_trait]
     /// impl Interceptor for Audit {
@@ -876,10 +874,8 @@ impl AppBuilder {
     /// };
     ///
     /// #[injectable]
-    /// #[derive(Default)]
+    /// #[derive(Default, Layer)]
     /// struct Logged;
-    ///
-    /// impl Layer for Logged {}
     ///
     /// #[async_trait]
     /// impl ExceptionFilter for Logged {

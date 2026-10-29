@@ -46,7 +46,6 @@ pub struct NotificationsNs;
 
 #[gateway(path = "/notify", namespace = NotificationsNs)]
 #[use_guards(AuthnGuard)]
-#[derive(Default)]
 pub struct NotificationsGateway;
 
 #[messages]

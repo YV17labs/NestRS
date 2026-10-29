@@ -65,10 +65,8 @@ use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
 use nest_rs::http::{HeaderValue, HttpView};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct Tracer;
-
-impl Layer for Tracer {}
 
 #[async_trait]
 impl Interceptor for Tracer {
@@ -84,7 +82,9 @@ impl Interceptor for Tracer {
 
 A plain `#[injectable]` provider that implements `Interceptor`, listed in a
 module's `providers = [...]` and then bound for the whole app, per controller
-or per handler.
+or per handler. `#[derive(Layer)]` writes the `Layer` impl every interceptor
+extends; `#[layer(priority = -10)]` beside it orders the interceptor ahead of
+its stage's others within one scope.
 
 `async_trait` comes from `nest_rs::core`, as it does for guards: the trait is
 declared under `#[async_trait]`, and an `async fn` written without the same
@@ -137,7 +137,6 @@ anywhere. The demo's API audits every write it admits that way: its
 
 ```rust title="crates/features/src/audit/http/interceptor.rs (from the demo, abridged)"
 #[interceptor]
-#[derive(Default)]
 pub struct AuditInterceptor;
 
 impl Layer for AuditInterceptor {
@@ -197,10 +196,8 @@ use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
 use nest_rs::graphql::{GraphqlView, unit};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct FieldTiming;
-
-impl Layer for FieldTiming {}
 
 #[async_trait]
 impl Interceptor for FieldTiming {

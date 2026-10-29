@@ -14,9 +14,8 @@ use nest_rs_core::{Settled, UnitView};
 /// use nest_rs_events::EventsView;
 ///
 /// /// Keeps the audit listeners quiet while a backfill replays history.
+/// #[derive(Layer)]
 /// struct Backfilling;
-///
-/// impl Layer for Backfilling {}
 ///
 /// #[async_trait]
 /// impl Interceptor for Backfilling {

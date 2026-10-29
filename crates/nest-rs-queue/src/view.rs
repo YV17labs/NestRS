@@ -22,11 +22,10 @@ use crate::Attempt;
 ///
 /// # struct Inbox;
 /// # impl Inbox { async fn first_time(&self, _: &JobId) -> bool { true } }
+/// #[derive(Layer)]
 /// struct Deduplicating {
 ///     inbox: Inbox,
 /// }
-///
-/// impl Layer for Deduplicating {}
 ///
 /// #[async_trait]
 /// impl Interceptor for Deduplicating {

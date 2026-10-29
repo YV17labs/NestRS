@@ -1,11 +1,14 @@
 //! # nest-rs-guards
 //!
-//! One guard contract for every edge. A [`Guard`] checks an HTTP request
-//! through [`check_http`](Guard::check_http) — a route, a WebSocket upgrade, the
-//! request of an in-band endpoint — and a unit an in-band edge carries through
-//! [`check`](Guard::check): a GraphQL field, a WebSocket message, an MCP
-//! operation. Declared once with `App::builder().use_guards_global(...)`, the
-//! pool runs at every site of every edge.
+//! One guard contract for every edge. A [`Guard`] writes its decision once, in
+//! [`check`](Guard::check): it runs on a unit an in-band edge carries — a
+//! GraphQL field, a WebSocket message, an MCP operation — and on an HTTP
+//! request too — a route, a WebSocket upgrade, the request of an in-band
+//! endpoint — through [`check_http`](Guard::check_http), which a guard
+//! overrides only where the request differs from the unit. Declared once with
+//! `App::builder().use_guards_global(...)`, the pool runs at every site of
+//! every edge, and the edge files every denial once, on the guard's
+//! [`target`](Guard::target), with the [`reason`](Denial::reason) it names.
 //!
 //! The contract names a unit's context, never an edge's types: this crate
 //! depends on `nest-rs-core` alone, and every edge depends on it and runs the
@@ -26,11 +29,13 @@
 //!
 //! ## Defining a guard
 //!
-//! Override the entry where the guard has work — both admit by default — then
+//! Write the decision in `check` — a guard writing neither entry admits —
+//! override `check_http` where the guard reads the HTTP request itself, then
 //! **declare each edge it checks** with [`GuardFor`]. The decorators bind a
 //! guard on the edges it declares, so a guard declared where its check is the
 //! default is a compile error at the `#[use_guards]` line instead of a chain
-//! entry that passes everything.
+//! entry that passes everything. `#[derive(Layer)]` writes the
+//! [`Layer`](nest_rs_core::Layer) impl every guard extends.
 //!
 //! ```
 //! use nest_rs_guards::prelude::*;
@@ -38,10 +43,8 @@
 //! # mod audit { pub const TARGET: &str = "features::audit"; }
 //!
 //! #[injectable]
-//! #[derive(Default)]
+//! #[derive(Layer)]
 //! pub struct AuditGuard;
-//!
-//! impl Layer for AuditGuard {}
 //!
 //! #[async_trait]
 //! impl Guard for AuditGuard {
@@ -71,7 +74,8 @@
 //! and the boot fails naming both, instead of every request answering `500`.
 //!
 //! The pool holds `Arc<dyn Guard>` and runs whichever entry a site calls,
-//! declared or not; the decorators bind on [`GuardFor`], so declare the edges
+//! declared or not — a guard writing only `check` runs it at every route and
+//! request stage too; the decorators bind on [`GuardFor`], so declare the edges
 //! anyway.
 //!
 //! ## Where guards run

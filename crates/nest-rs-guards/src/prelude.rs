@@ -6,10 +6,8 @@
 //! use nest_rs_http::HttpView;
 //!
 //! #[injectable]
-//! #[derive(Default)]
+//! #[derive(Layer)]
 //! pub struct MyGuard;
-//!
-//! impl Layer for MyGuard {}
 //!
 //! #[async_trait]
 //! impl Guard for MyGuard {
@@ -19,7 +17,7 @@
 //!         }
 //!         match HttpView::of(cx)?.request().header("x-api-key") {
 //!             Some(_) => Ok(()),
-//!             None => Err(Denial::unauthorized("an API key is required")),
+//!             None => Err(Denial::unauthorized("an API key is required").with_reason("no_api_key")),
 //!         }
 //!     }
 //! }

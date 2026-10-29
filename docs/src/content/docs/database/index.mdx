@@ -125,7 +125,6 @@ use sea_orm::{ColumnTrait, QueryFilter};
 use super::entity::{self, CreatePost, Entity as Posts, Post, UpdatePost};
 
 #[injectable]
-#[derive(Default)]
 pub struct PostsService;
 
 impl CrudService for PostsService {

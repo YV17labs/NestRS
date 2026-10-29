@@ -48,10 +48,8 @@ fn sign(key: &[u8], id: &str, timestamp: u64, body: &[u8]) -> String {
 /// Admits a request whose body carries a valid signature from [`SECRET`], sent
 /// within [`TOLERANCE_SECS`], and hands the handler the bytes it verified.
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 struct WebhookSignature;
-
-impl Layer for WebhookSignature {}
 
 #[async_trait]
 impl Guard for WebhookSignature {

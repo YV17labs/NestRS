@@ -18,10 +18,8 @@ use nest_rs::pipes::{ArgumentKind, GlobalPipe, PipeError};
 use serde_json::Value;
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct TrimStrings;
-
-impl Layer for TrimStrings {}
 
 impl GlobalPipe for TrimStrings {
     fn transform(

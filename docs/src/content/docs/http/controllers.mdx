@@ -55,14 +55,13 @@ impl HelloController {
   `IntoResponse` is a valid return. `String`, `&'static str`, `Json<T>`,
   `StatusCode`, `(StatusCode, Body)`, a built `Response` … all work, and so does
   a `Result` of any of them.
-- **A controller with no `#[inject]` field needs `#[derive(Default)]`.**
-  Injected fields give the container everything it needs to build the struct;
-  with none, it falls back to `Default`. rustc names the fix, but the case only
-  shows up on a controller that reaches for nothing:
+- **A controller is built as an `#[injectable]` provider is.** Its `#[inject]`
+  fields resolve from the container; a struct with no field at all is built
+  as written, and one whose fields are all plain falls back to its own
+  `Default`, which rustc names when it is missing:
 
   ```rust title="crates/features/src/greetings/http/controller.rs"
   #[controller(path = "/greetings")]
-  #[derive(Default)]
   pub struct GreetingsController;
   ```
 

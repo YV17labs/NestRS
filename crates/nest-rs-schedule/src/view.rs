@@ -23,11 +23,10 @@ use crate::scheduler::JobId;
 /// use nest_rs_core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait};
 /// use nest_rs_schedule::ScheduleView;
 ///
+/// #[derive(Layer)]
 /// struct Maintenance {
 ///     on: AtomicBool,
 /// }
-///
-/// impl Layer for Maintenance {}
 ///
 /// #[async_trait]
 /// impl Interceptor for Maintenance {

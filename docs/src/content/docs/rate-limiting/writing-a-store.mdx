@@ -122,15 +122,16 @@ closed.** Return your client's error as `ThrottlerStoreError::new(e)` rather
 than choosing an answer, and log nothing yourself: a store answering
 `allowed` on its own outage would open the limiter exactly when its backend is
 in trouble. An `Err`, a `hit` still silent at `HIT_TIMEOUT` and a `hit` that
-panics each refuse the caller for the whole window, on every edge, and the
-guard files one line on `nest_rs::throttler` naming the `transport` and your
-`store`, never the key:
+panics each refuse the caller for the whole window, on every edge, and the edge
+files the refusal once on `nest_rs::throttler` — `guard denied the …`, at
+`warn` — its `unit` the edge's, its `error` chain naming your `store`, never
+the key:
 
-| The store | The guard's line |
+| The store | The refusal's `reason` and `error` |
 |---|---|
-| answered `Err` | `throttler store failed; denying (fail-closed)`, `warn`, with the `error` chain |
-| was silent past `HIT_TIMEOUT` | `throttler store did not answer within the guard's timeout; denying (fail-closed)`, `warn`, with `waited_ms` |
-| panicked | `throttler store panicked; denying (fail-closed)`, `error`, with the `panic` |
+| answered `Err` | `store_failed`, the chain of your store's error |
+| was silent past `HIT_TIMEOUT` | `store_timeout`, how long it was waited on |
+| panicked | `store_panicked`, beside the panic's own line, `throttler store panicked; denying (fail-closed)` at `error` with the `panic` |
 
 ## TLS
 

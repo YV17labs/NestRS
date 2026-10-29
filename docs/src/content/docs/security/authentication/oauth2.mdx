@@ -373,8 +373,9 @@ and the body's `client_secret_post` the one it calls "NOT RECOMMENDED", so a
 client using it is told its method is not supported, §5.2's
 `400 invalid_client`. `#[public]` opens nothing here — every client
 authenticates at a token endpoint (§3.2.1). Each refusal files one `warn`,
-`client authentication failed` on `nest_rs::oauth::server`, naming the
-`method` attempted and the `reason`, never the client.
+the edge's `guard denied the request` on `nest_rs::oauth::server`, its
+`reason` the strategy's and its `error` chain naming the method attempted,
+never the client.
 
 ### The request
 

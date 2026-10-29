@@ -7,46 +7,49 @@ sidebar:
 
 A guard is written once and bound wherever a caller reaches a unit: an HTTP
 route, a GraphQL field, a WebSocket message, an MCP tool call or prompt fetch.
-It overrides the entry that applies — `check_http` for an HTTP request,
-`check` for every other edge's unit — and declares, with one `GuardFor` line
-per edge, that it checks those units. A job, a tick and a listener call have
-no caller, so no guard runs there: guard where the work is produced.
+It writes its decision once, in `check`, which runs on every unit and, through
+`check_http`, on an HTTP request too; it overrides `check_http` only where the
+request differs from the unit. It declares, with one `GuardFor` line per edge,
+that it checks those units. A job, a tick and a listener call have no caller,
+so no guard runs there: guard where the work is produced.
 
 ```rust title="crates/features/src/posts/guard.rs (from the demo, abridged)"
 #[async_trait]
 impl Guard for PostAuthorGuard {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        // …
-        cx.attach(PostAuthor(author));
-        Ok(())
+        let claims = cx.require::<Claims>()?;
+        Self::attach_author(cx, &claims)
     }
 
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let Some(claims) = cx.ambient::<Claims>() else {
-            // …
-            return Err(Self::user_required());
-        };
-        Self::author(&claims).map(|_| ())
+        let claims = cx
+            .ambient::<Claims>()
+            .ok_or_else(|| Self::user_required("no_claims"))?;
+        Self::attach_author(cx, &claims)
     }
     // …
 }
 
 impl GuardFor<HttpView> for PostAuthorGuard {}
+
 impl GuardFor<GraphqlView> for PostAuthorGuard {}
 ```
 
-On a route it reads the caller and attaches the author the handler writes
-with; on a GraphQL field it refuses a caller whose token names no user, reading
-what the `/graphql` request's guards made ambient.
+Both entries attach the author the handler writes with. They differ where the
+request differs from the unit: on a gated route `AuthnGuard` already refused
+an anonymous caller, so missing claims there are a wiring defect — `require`
+answers a `500` filed once at `error` — while a GraphQL field reads what the
+`/graphql` request's guards made ambient, where an anonymous caller is
+legitimate and refused with a `403`.
 
 ## Two entries, four edges
 
-A guard overrides the entries that apply to it, and the framework runs each at
-its own seam:
+A guard writes `check`, overrides `check_http` where the request differs, and
+the framework runs each at its own seam:
 
 | Entry | Runs | Bound by |
 |---|---|---|
-| `check_http` | post-routing on the request, before the handler; on a WS upgrade; on the `/graphql` and `/mcp` requests | `#[controller]` / `#[routes]`, and the `#[gateway]` struct |
+| `check_http` (`check` unless overridden) | post-routing on the request, before the handler; on a WS upgrade; on the `/graphql` and `/mcp` requests | `#[controller]` / `#[routes]`, and the `#[gateway]` struct |
 | `check` | per GraphQL field, and in front of the federation root fields | `#[resolver]` / `#[operations]` |
 | `check` | once per inbound envelope, after the upgrade | beside a `#[subscribe_message]` |
 | `check` | once per `#[tool]`, `#[prompt]`, `#[resource]` or `#[resources]` operation, inside rmcp's dispatch | `#[mcp]` host / `#[tools]` operation |
@@ -55,7 +58,9 @@ its own seam:
 implements. `/graphql` and `/mcp` run the pool at their request and in each
 operation: `check_http` once on the request, `check` once per operation it
 carries — so a global `ThrottlerGuard` rate-limits the `/mcp` request and each
-tool call, and a global guard overriding only `check` still refuses one.
+tool call. A global guard writing only `check` runs it on every request too,
+the route, the WS upgrade and the `/graphql` and `/mcp` requests included; one
+whose decision is the unit's alone admits the request in `check_http`.
 
 The three multiplexed edges need one thing on top: the guards that build
 the caller's `Ability` at the request, because a unit below the request does
@@ -72,14 +77,14 @@ with the connection-vs-message split on
 
 ## A guard declares the edges it checks
 
-Both entries admit by default — right as "this guard does not apply to that
-edge", and the reason a guard bound where it has no check would compile
+A guard writing neither entry admits — right as "this guard does not apply to
+that edge", and the reason a guard bound where it has no check would compile
 and pass everything. `GuardFor<V>`, `V` the view of the units a site
 dispatches, closes that:
 
 | Bound at | Requires | Because it runs |
 |---|---|---|
-| `#[controller]` / `#[routes]`, `#[gateway]` struct | `GuardFor<HttpView>` | `check_http` |
+| `#[controller]` / `#[routes]`, `#[gateway]` struct | `GuardFor<HttpView>` | `check_http`, `check` unless overridden |
 | `#[resolver]` / `#[operations]` | `GuardFor<GraphqlView>` | `check` |
 | beside a `#[subscribe_message]` | `GuardFor<WsView>` | `check` |
 | `#[mcp]` host / `#[tools]` operation | `GuardFor<McpView>` | `check` |
@@ -99,13 +104,16 @@ error[E0277]: `nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>` does not
  14 | #[use_guards(AuthnGuard, AuthzGuard)]
     |              ^^^^^^^^^^ bound at a site whose units are `GraphqlView`
     |
-    = note: `check_http` and `check` admit by default, so a guard bound here without its check would pass every unit silently
-    = note: override `Guard::check_http` (an HTTP request) or `Guard::check` (every other edge's unit), then declare `impl GuardFor<GraphqlView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
+    = note: `check` admits by default and `check_http` runs it, so a guard bound here without its decision would pass every unit silently
+    = note: write the guard's decision in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<GraphqlView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
 ```
 
-The declaration never proves the *entry* is overridden — the default gives
+The declaration never proves the *entry* is overridden — the defaults give
 every guard both. It proves you **declared** that this guard checks this
-edge's units. An empty `impl Guard for X {}` satisfies the compiler and
+edge's units. On HTTP the gap is closed: a guard declaring `GuardFor<HttpView>`
+and writing only `check` refuses requests with it. On an in-band edge it is
+the line a reader sees: a guard declaring `GuardFor<GraphqlView>` and writing
+only `check_http` still admits every field. An empty `impl Guard for X {}` satisfies the compiler and
 passes every request; `GuardFor` is what turns that into an error at the
 `#[use_guards]` line rather than a chain entry that guards nothing. A guard
 whose one `check` is the same on every edge declares it once for all of them,

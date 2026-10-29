@@ -28,13 +28,13 @@ A guard runs *before* the handler. It sees the request first and either
 lets it through (`Ok(())`) or short-circuits with a typed `Denial` the
 framework maps to 401 / 403 / 429 — or 503, `Denial::unavailable`, when
 something the guard depends on did not answer and the caller did nothing
-wrong. `Denial::unavailable_because` keeps what failed as well: every edge
-files the denial at `warn`, `guard denied …` on `nest_rs::layers`, and that
-line carries the whole chain as its `error` field, while the caller reads the
-condition alone. A guard that files a line of its own for every denial — the
-framework's authentication, ability and throttler guards do, on their crates'
-targets — says so with `files_its_denials()`, and the edge then files none:
-one denial is one line, the decider's. On HTTP the denial is answered as a
+wrong. A guard writes no log line for its refusals: the edge that ran it files
+each denial once, `guard denied …` on the target the guard declares
+(`fn target`, `nest_rs::layers` when it declares none) — at `warn`, at `error`
+for a `500` — carrying the `reason` the denial names
+(`Denial::forbidden("…").with_reason("banned_author")`) and, when the denial
+keeps what failed (`.with_source(err)`), the whole chain as its `error` field,
+while the caller reads the condition alone. On HTTP the denial is answered as a
 problem document, unless the guard's protocol fixes a refusal of its own: a
 token endpoint's client is refused in RFC 6749 §5.2's words, which
 `ClientAuthenticationGuard` writes through `HttpView::respond` before it
@@ -47,7 +47,9 @@ GraphQL field, a WebSocket message and an MCP operation
 `Guard` ships in
 [`nest-rs-guards`](https://crates.io/crates/nest-rs-guards). It extends
 [`Layer`](https://docs.rs/nest-rs-core/latest/nest_rs_core/trait.Layer.html)
-so guards plug into dedup-by-`TypeId` and declaration-order chaining.
+so guards plug into dedup-by-`TypeId` and declaration-order chaining;
+`#[derive(Layer)]` writes that impl, with `#[layer(priority = …)]` when the
+guard orders itself within its site.
 
 ### A minimal custom guard
 
@@ -56,16 +58,14 @@ use nest_rs::guards::prelude::*;
 use nest_rs::http::HttpView;
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct RateLimitGuard;
-
-impl Layer for RateLimitGuard {}
 
 #[async_trait]
 impl Guard for RateLimitGuard {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         if over_quota(HttpView::of(cx)?.request()) {
-            return Err(Denial::rate_limited(60, "rate limited"));
+            return Err(Denial::rate_limited(60, "rate limited").with_reason("over_quota"));
         }
         Ok(())
     }
@@ -84,20 +84,26 @@ A guard is an `#[injectable]` provider listed in some module's
 ensures every controller / resolver / gateway that references it imports
 a module that builds it.
 
-The trait carries two entries, both over the unit being dispatched. One you
-do not override admits — that means "doesn't apply here", not "skip
+The trait carries two entries, both over the unit being dispatched, and a
+guard writes its decision once: `check` runs on every unit, and `check_http`
+runs `check` unless the guard overrides it. Override `check_http` only where
+the HTTP request differs from the unit — the guard reads the request itself,
+as `RateLimitGuard` does, answers in its protocol's own words, or what is
+missing at the request means something else than at the unit. A guard that
+writes neither admits — that means "doesn't apply here", not "skip
 security". Other guards on the same route still run.
 
 | Entry | Runs on | Reads it through |
 |-------|---------|------------------|
-| `check_http` | an HTTP request: a route, a WS upgrade, the `/graphql` and `/mcp` requests | `HttpView::of(cx)` — the request, head and body, and the route it matched |
-| `check` | every other edge's unit: a GraphQL field, a WS message, an MCP operation | `cx.switch_to::<GraphqlView>()`, `WsView`, `McpView` |
+| `check_http` | an HTTP request: a route, a WS upgrade, the `/graphql` and `/mcp` requests; `check` unless overridden | `HttpView::of(cx)` — the request, head and body, and the route it matched |
+| `check` | every unit: a GraphQL field, a WS message, an MCP operation — and the request, through `check_http` | `cx.switch_to::<GraphqlView>()`, `WsView`, `McpView` |
 
 ```rust title="nest_rs::guards::Guard"
 #[async_trait]
 pub trait Guard: Layer {
-    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> { Ok(()) }
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> { self.check(cx).await }
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> { Ok(()) }
+    fn target(&self) -> &'static str { "nest_rs::layers" }
 }
 ```
 
@@ -105,8 +111,51 @@ Whatever the edge, the [execution context](/fundamentals/execution-context/)
 answers the same questions: `cx.reflector()` reads what the site declared
 (`#[meta]`, its posture), `cx.ambient::<T>()` what an earlier guard attached,
 `cx.attach(value)` hands a value to everything after the guard, and
-`cx.edge()` and `cx.handler()` say which unit this is. An entry you do not
-override costs nothing: it is answered without an allocation.
+`cx.edge()` and `cx.handler()` say which unit this is. A guard overriding
+neither entry costs nothing: it is answered without an allocation.
+
+### A guard that needs an earlier one's work
+
+A value an earlier guard attaches — the principal `AuthnGuard` verified — is a
+precondition, not a decision. `cx.require::<Claims>()?` reads it, and its
+absence fails the unit with a `500` the edge files once at `error`, naming the
+guard and the missing type: a guard bound without the one it builds on is a
+wiring defect, never the caller's doing. A value whose absence is legitimate —
+an anonymous caller in-band GraphQL lets through to each field's own gate — is
+read with `cx.ambient::<T>()` and decided:
+
+```rust title="crates/features/src/posts/guard.rs (from the demo)"
+#[injectable]
+#[derive(Layer)]
+pub struct PostAuthorGuard;
+
+#[async_trait]
+impl Guard for PostAuthorGuard {
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let claims = cx.require::<Claims>()?;
+        Self::attach_author(cx, &claims)
+    }
+
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let claims = cx
+            .ambient::<Claims>()
+            .ok_or_else(|| Self::user_required("no_claims"))?;
+        Self::attach_author(cx, &claims)
+    }
+
+    fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+        &[403]
+    }
+
+    fn target(&self) -> &'static str {
+        crate::posts::TARGET
+    }
+}
+```
+
+The request differs from the unit here: a posts route is gated, so
+`AuthnGuard` refused an anonymous caller before this guard ran, while
+`/graphql` admits one and leaves each field to decide.
 
 ### What a route's document lists
 
@@ -399,12 +448,11 @@ use nest_rs::http::{HttpView, current_body_limit};
 use crate::upstream::UpstreamConfig;
 
 #[injectable]
+#[derive(Layer)]
 pub struct WebhookSignature {
     #[inject]
     config: Arc<UpstreamConfig>,
 }
-
-impl Layer for WebhookSignature {}
 
 #[async_trait]
 impl Guard for WebhookSignature {

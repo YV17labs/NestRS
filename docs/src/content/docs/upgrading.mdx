@@ -372,12 +372,19 @@ lists what the boot, a log or the wire shows when one is missed.
    |---|---|
    | a guard's `async fn check_http(&self, req: &mut Request)` | `async fn check_http(&self, cx: &mut UnitContext<'_>)`: the request through `HttpView::of(cx)?.request()` — `request_mut()` to read the body and set it back — and the route's `#[meta]` and posture through `cx.reflector()` |
    | a guard's `check_graphql`, `check_ws_message` or `check_mcp` | one `async fn check(&self, cx: &mut UnitContext<'_>)`: the field, message or operation through `cx.switch_to::<GraphqlView>()`, `WsView` or `McpView`, its name through `cx.handler().address()` |
+   | one decision written twice, in `check_http` and in an in-band entry | the decision once, in `check`: `check_http` runs it unless the guard overrides it, which it does only where the request differs from the unit (it reads the request, or a value missing at the request means something else) |
+   | a guard whose decision is a field's, a message's or an operation's alone, registered with `use_guards_global` | the same `check`, and `async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> { Ok(()) }` beside it: a pooled guard's `check` now runs on every request too |
+   | `impl Layer for X {}`, empty | `#[derive(Layer)]` on the struct — `#[layer(priority = …)]` for an override of `Layer::priority`; a layer overriding `serves` keeps its `impl` |
+   | `#[derive(Default)]` beside `#[injectable]` on a struct with no field | nothing: a fieldless struct, unit or braced, is built as written |
+   | a `tracing::warn!` or `error!` a guard files before returning its `Err` | the denial names why — `Denial::forbidden("…").with_reason("banned_author")` — and the guard its target, `fn target(&self) -> &'static str { crate::TARGET }`: the edge files each denial once, `guard denied …` on that target, with the reason and the chain of what the denial keeps (`.with_source(err)`) |
+   | `cx.ambient::<Claims>()` with an `else` returning `Denial::internal("… must run first")`, a value an earlier guard must have attached | `cx.require::<Claims>()?`: its absence is a `500` the edge files once at `error`, naming the guard and the type |
+   | a `Denial::Unauthorized(…)`, `Forbidden(…)`, `RateLimited { … }` or other variant built or matched | its constructor — `Denial::forbidden(…)`, `Denial::rate_limited(…)` — and, to tell denials apart, `denial.http_status()` and `denial.bearer_error()`: `Denial`'s fields are private |
    | `impl HttpGuard for X {}`, `GraphqlGuard`, `WsGuard`, `McpGuard` | `impl GuardFor<HttpView> for X {}`, `GuardFor<GraphqlView>`, `GuardFor<WsView>`, `GuardFor<McpView>` |
    | `req.extensions_mut().insert(value)` in a guard, read back with `Ctx<T>` | `cx.attach(value)`, with `impl AmbientValue for T {}` beside the type; a guard after it reads `cx.ambient::<T>()` |
    | a `Strategy::Principal` or an `AbilityFactory::Actor` that is not your own type (`()`, `&'static str`) | a type of your own implementing `AmbientValue` and `Clone` — the guard attaches it; a `Claims` gains `impl AmbientValue for Claims {}` |
    | `if Reflector::new(req).is_public() { return Ok(()) }` in an authentication guard | `if matches!(cx.reflector().posture(), Posture::Public \| Posture::InBand) { return Ok(()) }` — `/graphql` is `InBand`, each operation declaring its own posture |
    | `nest_rs::guards::prelude::HttpRequest` | `HttpView`, and `nest_rs::http::Request` for the type it holds |
-   | a `Denial::Unavailable { retry_after_secs, reason }` built or matched in full | `Denial::unavailable(retry_after_secs, reason)` — or `Denial::unavailable_because(…, source)` to keep what failed — and a pattern ending in `..` |
+   | a `Denial::Unavailable { retry_after_secs, reason }` built in full | `Denial::unavailable(retry_after_secs, reason)` — and `.with_source(err)` to keep what failed |
    | the `graphql`, `mcp` or `ws` feature of `nest-rs-throttler` or `nest-rs-guards` | nothing: a guard's edges are its `GuardFor` declarations, and `ThrottlerGuard` declares every view |
    | `nest_rs::guards::{GuardEndpoint, GuardExt}`, a guard wrapped around an endpoint by hand | `#[use_guards]` on the controller or gateway, or the app's global pool: each edge runs its own guard stage |
    | `#[use_guards(X)] #[force_guards(X)]` on a method | `#[force_guards(X)]` |
@@ -1099,6 +1106,13 @@ lists what the boot, a log or the wire shows when one is missed.
 
 ## What fails if you get it wrong
 
+- **A global guard whose decision is a unit's alone** — a field's, a message's,
+  an operation's, written only in `check` — now runs it on every request too:
+  every route, the WebSocket upgrade and the `/graphql` and `/mcp` requests
+  answer its refusal (a `403`, or the `500` of a guard reading a view the
+  request does not have), filed once on the guard's target. Admit the request in
+  its `check_http` (`Ok(())`) where its decision is the unit's alone, or write
+  its decision so it holds for a request too.
 - **A route 6.x served unguarded** stops the boot:
 
   ```text frame="terminal"

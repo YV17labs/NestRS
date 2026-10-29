@@ -301,8 +301,8 @@ deserialize, a pipe rejection, an unknown event — is reported at `debug` on
 none is a denial. A handler's `Err` answered as a refusal — its `WsError`, a
 `4xx` problem, a pipe rejection, a decode failure — is the client's error too.
 The message's line files it, with nothing beside it, as HTTP files a `4xx` on
-its access line alone. A guard's denial is filed at `warn` on
-`nest_rs::layers`. An opaque failure is filed at `error` on `nest_rs::ws`
+its access line alone. A guard's denial is filed at `warn` on the guard's
+target, `nest_rs::layers` when it declares none. An opaque failure is filed at `error` on `nest_rs::ws`
 (`websocket message failed`), as is the chain behind a `5xx` problem. The
 chain behind a `503`, the server unable to answer in time, is filed at `warn`
 (`websocket message unavailable`). A handler's `Err` is filed once its answer

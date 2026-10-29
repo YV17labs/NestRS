@@ -43,3 +43,35 @@ no feature per edge.
 
 **2026-10-23** — poem left the dependency tree; `cargo tree -i nest-rs-http`
 on a headless feature set names the crates a worker pays the HTTP stack for.
+
+## 2026-10-29 — `check_http` runs `check`, and the edge files every denial
+
+Agreed by the owner with the identity audit's breaking changes ("Tout faire",
+2026-10-28). `check_http`'s default now runs `check`, so a guard writes its
+decision once, and overrides `check_http` only where the request differs from
+the unit — it reads the request, answers in its protocol's own words, or a
+value missing at the request means something else than at the unit. The first
+residual gap is closed for HTTP: a guard declaring `GuardFor<HttpView>` and
+writing only `check` refuses with it. The reason `check_http` stays on `Guard`
+stands — one registration, the pool and every site holding `Arc<dyn Guard>` —
+since the change is a default body, not an extension trait.
+
+The gap stays on the in-band views: a guard declaring `GuardFor<GraphqlView>`
+and writing only `check_http` admits every field. Closing it would make
+`check` default to `check_http`, which a unit carried inside a request cannot
+run: its view is not the request's. The second gap is unchanged, and now
+reaches further: `use_guards_global` takes no bound, so a pooled guard writing
+only `check` runs it on every request as well — the route, the WS upgrade,
+the `/graphql` and `/mcp` requests — failing closed where it reads a view the
+request lacks; one whose decision is the unit's alone admits the request in
+`check_http`.
+
+`files_its_denials` is gone with it: a guard declares the target its denials
+are filed on (`fn target`, a method because an associated `const` would make
+`Guard` no longer dyn-compatible) and names why on the `Denial`
+(`with_reason`, `with_source`), and every edge files each guard denial once.
+
+Refused: a `#[guard]` attribute emitting the injectable, the `Layer` and the
+`GuardFor` impls. It reads as `#[interceptor]`, which a module brings to every
+unit it serves, and a module-brought guard would decide posture outside
+`#[use_guards]`; `#[derive(Layer)]` drops the empty impl instead.

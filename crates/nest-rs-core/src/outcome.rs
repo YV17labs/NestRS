@@ -22,8 +22,8 @@ pub type Outcome = Result<Settled, Failure>;
 /// ```compile_fail,E0308
 /// use nest_rs_core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait};
 ///
+/// #[derive(Layer)]
 /// struct Forgetful;
-/// impl Layer for Forgetful {}
 ///
 /// #[async_trait]
 /// impl Interceptor for Forgetful {

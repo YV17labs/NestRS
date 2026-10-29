@@ -1,7 +1,8 @@
 //! Covers `src/interceptor.rs` through `#[interceptor]`: what a module brings
 //! is the container's own provider, runs only where its module is imported,
-//! after what the app lists and in import order, once whatever else lists it,
-//! and the app's own list fails the boot on a type no module provides.
+//! after what the app lists and in import order — a `#[derive(Layer)]`
+//! priority ahead of both — once whatever else lists it, and the app's own list
+//! fails the boot on a type no module provides.
 
 use std::any::TypeId;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -153,6 +154,42 @@ async fn a_module_interceptor_runs_after_the_apps_own_in_import_order() {
     assert_eq!(
         one_unit(&boot(tracing_first).await).await,
         ["app", "tracing", "metrics"]
+    );
+}
+
+/// Brought by its module, ordered ahead of the stage's others by the priority
+/// its derive declares.
+#[interceptor]
+#[derive(Layer)]
+#[layer(priority = -1)]
+struct Prioritized {
+    #[inject]
+    trail: Arc<Trail>,
+}
+
+#[async_trait]
+impl Interceptor for Prioritized {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        self.trail.push("prioritized");
+        next.run(cx).await
+    }
+}
+
+#[module(imports = [TrailModule], providers = [Prioritized])]
+struct PrioritizedModule;
+
+#[module(imports = [AppListedModule, TracingModule, PrioritizedModule])]
+struct ImportsPrioritizedLast;
+
+#[tokio::test]
+async fn a_derived_priority_orders_an_interceptor_ahead_of_its_stage() {
+    let builder = App::builder()
+        .module::<ImportsPrioritizedLast>()
+        .use_interceptors_global([nest_rs_core::interceptor::<AppListed>()]);
+    assert_eq!(
+        one_unit(&boot(builder).await).await,
+        ["prioritized", "app", "tracing"],
+        "`#[layer(priority = -1)]` runs first, import order notwithstanding",
     );
 }
 

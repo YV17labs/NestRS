@@ -32,7 +32,6 @@ use nest_rs::seaorm::{Creatable, CrudService, Deletable, Updatable};
 use super::entity::{CreatePost, Entity as Posts, UpdatePost};
 
 #[injectable]
-#[derive(Default)]
 pub struct PostsService;
 
 impl CrudService for PostsService {

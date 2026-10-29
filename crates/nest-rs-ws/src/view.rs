@@ -19,9 +19,8 @@ use crate::server::WsClient;
 /// use nest_rs_core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait};
 /// use nest_rs_ws::{WsReply, WsView};
 ///
+/// #[derive(Layer)]
 /// struct Maintenance;
-///
-/// impl Layer for Maintenance {}
 ///
 /// #[async_trait]
 /// impl Interceptor for Maintenance {

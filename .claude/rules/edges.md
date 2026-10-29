@@ -119,15 +119,19 @@ guard, filter or interceptor loop of its own.
    and a gate's look the same — on HTTP unless the refusing guard wrote an
    error of its protocol's own into the view (`HttpView::respond`, a token
    endpoint's RFC 6749 §5.2 answer), which the guard stage serves instead,
-   held by its tests. **One denial files one line**, its decider's:
-   a guard that files its own says so (`Guard::files_its_denials`), as the
-   framework's authentication, ability and throttler guards do, and the edge
-   files the structural `guard denied …` on `nest_rs::layers` only for one
-   that does not; a class gate files its own. A guard has two entries,
-   `check_http` for an HTTP request and `check` for every other edge's unit,
-   both reading the `UnitContext` and both admitting by default, so without
-   the bound an empty `impl Guard for X {}` passes everything: each emitter
-   asserts `GuardFor<<Edge>View>` (`guard_capability_bounds`; HTTP has three:
+   held by its tests. **One denial files one line, the edge's**: every edge
+   files a guard's denial through `nest_rs_guards`' one function, `guard
+   denied …` on the target the guard declares (`Guard::target`,
+   `nest_rs::layers` by default), at `error` for a `500` and `warn` otherwise,
+   with one field set — the reason the denial names and the chain of the
+   source it keeps, never its own text — and no guard files a line for its
+   refusal (a panic keeps its own); a class gate files its own. A guard writes
+   one decision, `check`, which `check_http` runs unless the guard overrides
+   it, which it does only where the request differs from the unit; a
+   precondition an earlier guard attached is `cx.require::<T>()?`, a `500`
+   naming both. `check` admits by default, so without the bound an empty
+   `impl Guard for X {}` passes everything: each emitter asserts
+   `GuardFor<<Edge>View>` (`guard_capability_bounds`; HTTP has three:
    `#[controller]`, `#[routes]`, and `#[gateway]` for the upgrade), with a
    trybuild snapshot each. Held by a test per edge.
 9. **A named compile error for every layer family the edge does not run** —
@@ -298,9 +302,11 @@ the visible opening.
   own — one `compose`, no per-transport switch over where the pool runs: a
   GraphQL field's or a declared MCP operation's `Site` guard stage. **An in-band
   endpoint's guards check the request; the site checks the operation**:
-  `check_http` once per request, `check` once per operation,
-  and neither stands in for the other. What a request's guards attach
-  (`cx.attach`) is ambient for every unit the request carries.
+  `check_http` once per request, `check` once per operation — a pooled guard
+  writing only `check` runs it at both, since `check_http` defaults to it, and
+  one whose decision is the operation's alone admits the request in
+  `check_http`. What a request's guards attach (`cx.attach`) is ambient for
+  every unit the request carries.
 - **`/graphql` and `/mcp` stay fail-secure**: the global pool always runs at
   the request, and the `EndpointGuards` a module declares add to it, never
   replace it — each guard once, the declared guards where the pool lists the
@@ -323,12 +329,12 @@ the visible opening.
 - **The global site takes no capability bound**, by decision: a global guard
   legitimately serves whichever edges it implements, and the pool reaches each
   operation where the operation exists, at all four edges. The pool dispatches
-  on `dyn Guard`, so a pooled guard runs the entries it overrides whatever
-  `GuardFor` it declares — a missing declaration never opens an edge (held by a
-  test per edge); the declaration matters only where a decorator binds the
-  guard. A guard declaring `GuardFor<V>` without overriding the entry `V`'s
-  units run is a visible line, not a gap to close
-  (`.claude/decisions/check-http-stays-on-guard.md`).
+  on `dyn Guard`, so a pooled guard runs its entries whatever `GuardFor` it
+  declares — a missing declaration never opens an edge (held by a test per
+  edge); the declaration matters only where a decorator binds the guard. A
+  guard declaring `GuardFor<HttpView>` and writing only `check` refuses with
+  it; one declaring an in-band view without writing `check` is a visible line,
+  not a gap to close (`.claude/decisions/check-http-stays-on-guard.md`).
 - **Only route mounts (global, controller and method scope composed), the global
   bucket and a self-mount's request stage are phase-validated**
   (`.claude/decisions/in-band-phase-validation.md`); **MCP discovery is gated at

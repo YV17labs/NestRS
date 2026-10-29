@@ -33,8 +33,8 @@ use crate::unit_context::UnitContext;
 /// #[error("the order is already paid")]
 /// struct AlreadyPaid;
 ///
+/// #[derive(Layer)]
 /// struct PaymentFilter;
-/// impl Layer for PaymentFilter {}
 ///
 /// #[async_trait]
 /// impl ExceptionFilter for PaymentFilter {

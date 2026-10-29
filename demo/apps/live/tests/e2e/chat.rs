@@ -170,8 +170,11 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_refuses_a_token_
         );
     }
     alice.expect_silence(QUIET).await;
-    let refused = logs.find(features::chat::TARGET, "message denied");
+    let refused = logs.find(features::chat::TARGET, "guard denied the message");
     assert_eq!(refused.len(), 2, "one line per denial: {refused:#?}");
+    for line in &refused {
+        assert_eq!(line.field("reason").as_deref(), Some("not_a_user"));
+    }
     logs.expect_none("nest_rs::layers", "guard denied the message");
 
     bot.close(CloseCode::Normal, "done").await;

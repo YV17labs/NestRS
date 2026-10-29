@@ -15,10 +15,8 @@ carries, and it opens the edge's own view of the unit when you need one.
 use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct Timed;
-
-impl Layer for Timed {}
 
 #[async_trait]
 impl Interceptor for Timed {
@@ -112,13 +110,11 @@ through the reflector:
 ```rust title="crates/features/src/posts/guard.rs"
 #[async_trait]
 impl Guard for RolesGuard {
-    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let Some(Roles(required)) = cx.reflector().get::<Roles>() else {
             return Ok(());
         };
-        let claims = cx
-            .ambient::<Claims>()
-            .ok_or_else(|| Denial::unauthorized("sign in first"))?;
+        let claims = cx.require::<Claims>()?;
         if required.iter().any(|role| claims.roles.iter().any(|held| held == role)) {
             Ok(())
         } else {

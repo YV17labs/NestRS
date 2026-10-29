@@ -323,8 +323,11 @@ async fn a_post_author_denial_files_one_line_on_every_edge() {
         .await
         .assert_status_is_ok();
 
-    let denied = logs.find(features::posts::TARGET, "post write denied");
-    assert_eq!(denied.len(), 2, "one line per denial: {denied:#?}");
+    let route = logs.expect_one(features::posts::TARGET, "guard denied the request");
+    let field = logs.expect_one(features::posts::TARGET, "guard denied the operation");
+    for denied in [route, field] {
+        assert_eq!(denied.field("reason").as_deref(), Some("not_a_user"));
+    }
     for structural in ["guard denied the request", "guard denied the operation"] {
         logs.expect_none("nest_rs::layers", structural);
     }

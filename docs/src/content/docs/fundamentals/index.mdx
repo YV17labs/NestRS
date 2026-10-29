@@ -25,10 +25,10 @@ every binary leans on:
 - **Lifecycle** — the moments an app comes alive and winds down.
   `#[hooks]` tags async methods for the init and shutdown phases the
   framework drains in order. See [Lifecycle](/fundamentals/lifecycle/).
-- **Guards** — decide *who* gets through. `Guard::check_http` on an HTTP
-  request and `Guard::check` on every other edge's unit return `Err(Denial)`
-  to short-circuit the chain, or attach context the handler reads back via
-  `Ctx<T>`.
+- **Guards** — decide *who* gets through. A guard writes its decision once,
+  `Guard::check`, which runs on every unit and on an HTTP request through
+  `Guard::check_http`; it returns `Err(Denial)` to short-circuit the chain, or
+  attaches context the handler reads back via `Ctx<T>`.
 - **Pipes** — convert and validate input at the request boundary.
   Stateless transforms (`Parse<T>`, `ParseUuid`, `ValidationPipe<T>`, …)
   bound by HTTP through the `Valid<E>` / `Piped<P, E>` extractors.
@@ -52,7 +52,6 @@ together, which is why no `service.rs` or `controller.rs` appears there.
 use nest_rs::core::injectable;
 
 #[injectable]
-#[derive(Default)]
 pub struct BlogService;
 
 impl BlogService {

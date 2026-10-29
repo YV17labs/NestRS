@@ -85,7 +85,8 @@ impl Future for Admit {
 /// endpoint — is read through [`UnitContext::reflector`], and what a guard
 /// makes known for the rest of the unit is attached with
 /// [`UnitContext::attach`]: ambient once the whole stage passed, never on a
-/// refused unit.
+/// refused unit. What an earlier guard must have attached is read with
+/// [`UnitContext::require`], whose `?` refuses an unwired unit with a `500`.
 ///
 /// The entries are written out as `#[async_trait]` writes an override, so an
 /// implementation is an ordinary `async fn` under `#[async_trait]`.

@@ -436,13 +436,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             quote! { <#self_ty>::#method_name(&**#ctrl_var, #(#arg_idents),*) },
         );
         let (wrapper_return_type, wrapper_body) = if is_sse {
-            // A fallible open is told by type through `nest_rs_core::__private::Answer`. The return
-            // type is inferred: no macro can name the handler's `impl Stream`.
+            // A fallible open is told by type through `nest_rs_core::__private::Answer`, its
+            // error kept for `RouteReturn` to read by type. The return type is inferred: no
+            // macro can name the handler's `impl Stream`.
             let wrapped = quote! {{
                 use ::nest_rs_core::__private::AnswerFallback as _;
                 let __nestrs_answer = #call_expr;
-                ::nest_rs_core::__private::Answer(&__nestrs_answer)
-                    .map::<::nest_rs_http::HttpError, _, _>()(
+                ::nest_rs_core::__private::Answer(&__nestrs_answer).map()(
                     __nestrs_answer,
                     |__nestrs_stream| {
                         ::nest_rs_http::SseSettings::respond(&__nestrs_sse, __nestrs_stream)
@@ -533,7 +533,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     let #ctrl_var = &self.__ctrl;
                     #sse_binding
                     let #res_var: #wrapper_return_type = async move { #wrapper_body }.await;
-                    let #res_var = ::nest_rs_http::__private::IntoResult::into_result(#res_var);
+                    let #res_var = {
+                        #[allow(unused_imports)]
+                        use ::nest_rs_http::__private::RouteReturnFallback as _;
+                        ::nest_rs_http::__private::RouteReturn(#res_var).into_result()
+                    };
                     ::std::result::Result::map(
                         #res_var,
                         ::nest_rs_http::IntoResponse::into_response,

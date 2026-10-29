@@ -45,11 +45,8 @@ pub const CODE_EXTENSION: &str = "code";
 /// `INVALID_ARGUMENT` code HTTP's `400` names under `extensions.code`, and any
 /// structured field errors under `extensions.errors`.
 pub fn pipe_error(err: &PipeError) -> Error {
-    // Plain JSON always converts; a failure would drop the field map, not the
-    // error. Absent, not null: a client branches on presence.
-    let details = err
-        .details()
-        .and_then(|details| async_graphql::Value::from_json(details.clone()).ok());
+    // Absent, not null: a client branches on presence.
+    let details = err.details().and_then(field_map);
     Error::new(err.message()).extend_with(move |_, e| {
         e.set(CODE_EXTENSION, code::INVALID_ARGUMENT.as_str());
         if let Some(details) = details {
@@ -85,7 +82,9 @@ pub fn denial_to_graphql_error(denial: Denial) -> Error {
 /// Render what a [`ToProblem`] error says — a [`Problem`] among them — as an
 /// `async_graphql::Error`: the problem's
 /// [`client_message`](Problem::client_message), its code under
-/// `extensions.code` and its wait under `extensions.retryAfterSeconds`; or,
+/// `extensions.code`, its RFC 9457 type and title under `extensions.type` and
+/// `extensions.title`, its wait under `extensions.retryAfterSeconds` and its
+/// field map under `extensions.errors`, each when it has one; or,
 /// when the error says none, the opaque answer. Either way the chain an answer
 /// withholds — the opaque one's, a `5xx` problem's — is filed at `error`.
 ///
@@ -108,14 +107,30 @@ fn answered(problem: &Problem, error: &(dyn StdError + 'static)) -> Error {
     Reply::problem(problem, error).filed()
 }
 
-/// A problem in GraphQL's form.
+/// A field map as an extension's value. Plain JSON always converts; a failure
+/// would drop the field map, not the error.
+fn field_map(errors: &serde_json::Value) -> Option<async_graphql::Value> {
+    async_graphql::Value::from_json(errors.clone()).ok()
+}
+
+/// A problem in GraphQL's form: its code, its RFC 9457 `type` and `title`
+/// when it names them, its wait and its field map, each an extension.
 pub(crate) fn rendered(problem: &Problem) -> Error {
     let code = problem.code().as_str();
+    let problem_type = problem.type_uri().zip(problem.title());
     let retry_after = problem.retry_after();
+    let errors = problem.errors().and_then(field_map);
     Error::new(problem.client_message()).extend_with(move |_, e| {
         e.set(CODE_EXTENSION, code);
+        if let Some((type_uri, title)) = problem_type {
+            e.set("type", type_uri);
+            e.set("title", title);
+        }
         if let Some(seconds) = retry_after {
             e.set("retryAfterSeconds", seconds);
+        }
+        if let Some(errors) = errors {
+            e.set(FIELD_ERRORS_EXTENSION, errors);
         }
     })
 }
@@ -528,6 +543,34 @@ mod tests {
         assert!(
             event.field("error").is_some_and(|e| e.contains("10.0.0.1")),
             "{event:#?}"
+        );
+    }
+
+    /// A problem's RFC 9457 type and title, and its field map, ride beside its
+    /// code in the error's extensions; a problem naming none carries none.
+    #[test]
+    fn a_typed_problem_carries_its_type_title_and_field_map_as_extensions() {
+        let taken = problem_error(
+            &Problem::new(409, code::CONFLICT)
+                .with_type("https://example.com/problems/handle-taken", "Handle taken")
+                .with_detail("@ada is taken")
+                .with_errors(serde_json::json!({ "handle": [{ "code": "taken" }] })),
+        );
+        assert_eq!(taken.message, "@ada is taken");
+        assert_eq!(
+            extensions(&taken),
+            serde_json::json!({
+                "code": "CONFLICT",
+                "type": "https://example.com/problems/handle-taken",
+                "title": "Handle taken",
+                FIELD_ERRORS_EXTENSION: { "handle": [{ "code": "taken" }] },
+            }),
+        );
+
+        let blank = problem_error(&Problem::new(404, code::NOT_FOUND));
+        assert_eq!(
+            extensions(&blank),
+            serde_json::json!({ "code": "NOT_FOUND" })
         );
     }
 

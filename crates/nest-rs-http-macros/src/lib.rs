@@ -36,8 +36,12 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Each method tagged with `#[get("/path")]`, `#[post]`, `#[put]`,
 /// `#[delete]`, or `#[patch]` is wired as a route of the HTTP vocabulary:
 /// every parameter a `nest_rs_http::FromRequest`, the return an
-/// `IntoResponse` or a `Result` of one whose error converts into an
-/// `HttpError`.
+/// `IntoResponse` or a `Result` of one whose error is either a
+/// `nest_rs_core::ToProblem` error — answered with the problem it describes,
+/// or the opaque `500` when it describes none — or an error converting into
+/// an `HttpError`. The error is read by its type, whatever the route's other
+/// decorators: a response decorator shapes a success alone, and an `#[sse]`
+/// route's `Result<SseStream, E>` opens the stream or answers the same way.
 ///
 /// Per-method attributes (all consumed; no imports needed):
 ///

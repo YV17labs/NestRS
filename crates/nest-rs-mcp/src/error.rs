@@ -100,11 +100,12 @@ pub fn pipe_error(err: &PipeError) -> McpError {
 }
 
 /// What an error's `data` carries, one shape whoever writes it: the class a
-/// client branches on, the evidence a refusal names beside it — its class in
-/// words, the scopes it requires, the wait before a retry — and a pipe's
-/// field-level `errors`, which nothing else is.
+/// client branches on, a problem's RFC 9457 `type` and `title`, the evidence a
+/// refusal names beside them — its class in words, the scopes it requires,
+/// the wait before a retry — and a field map, `errors`, which nothing else is.
 pub(crate) struct ClassData<'a> {
     pub(crate) code: Code,
+    pub(crate) problem_type: Option<(&'static str, &'static str)>,
     pub(crate) reason: Option<&'static str>,
     pub(crate) required_scopes: &'a [String],
     pub(crate) retry_after_secs: Option<u32>,
@@ -116,6 +117,7 @@ impl ClassData<'_> {
     pub(crate) const fn of(code: Code) -> Self {
         Self {
             code,
+            problem_type: None,
             reason: None,
             required_scopes: &[],
             retry_after_secs: None,
@@ -127,6 +129,10 @@ impl ClassData<'_> {
     fn into_members(self) -> serde_json::Map<String, serde_json::Value> {
         let mut members = serde_json::Map::new();
         members.insert("code".to_owned(), self.code.as_str().into());
+        if let Some((type_uri, title)) = self.problem_type {
+            members.insert("type".to_owned(), type_uri.into());
+            members.insert("title".to_owned(), title.into());
+        }
         if let Some(reason) = self.reason {
             members.insert("reason".to_owned(), reason.into());
         }
@@ -153,8 +159,9 @@ impl ClassData<'_> {
 /// operation answers with: a `4xx` as `invalid_request`, a `5xx` as
 /// `internal_error`, the problem's
 /// [`client_message`](nest_rs_core::Problem::client_message) as the message,
-/// and its code —
-/// with its wait as `retryAfterSeconds` — under `data`. An error that says none
+/// and its code under `data` — with its RFC 9457 `type` and `title`, its wait
+/// as `retryAfterSeconds` and its field map as `errors` when it has them. An
+/// error that says none
 /// answers as [`Opaque`] does, its chain filed at `error`, as is the chain
 /// behind a `5xx` problem.
 ///
@@ -173,7 +180,9 @@ pub fn problem_error<E: ToProblem>(error: &E) -> McpError {
 /// A problem as the JSON-RPC error an MCP operation answers with.
 fn rendered(problem: &Problem) -> McpError {
     let data = ClassData {
+        problem_type: problem.type_uri().zip(problem.title()),
         retry_after_secs: problem.retry_after(),
+        errors: problem.errors(),
         ..ClassData::of(problem.code())
     }
     .into_data();
@@ -1188,6 +1197,35 @@ mod tests {
             said.data,
             Some(serde_json::json!({ "code": "INVALID_ARGUMENT" })),
             "the class HTTP's 400 names for a body that does not decode",
+        );
+    }
+
+    /// A problem's RFC 9457 type and title, and its field map, ride in the
+    /// error's `data` beside its code; a problem naming none carries none.
+    #[test]
+    fn a_typed_problem_carries_its_type_title_and_field_map() {
+        use nest_rs_core::problem::code;
+
+        let taken = problem_error(
+            &Problem::new(409, code::CONFLICT)
+                .with_type("https://example.com/problems/handle-taken", "Handle taken")
+                .with_detail("@ada is taken")
+                .with_errors(serde_json::json!({ "handle": [{ "code": "taken" }] })),
+        );
+        assert_eq!(taken.code, ErrorCode::INVALID_REQUEST);
+        assert_eq!(taken.message, "@ada is taken");
+        assert_eq!(
+            taken.data,
+            Some(serde_json::json!({
+                "code": "CONFLICT",
+                "type": "https://example.com/problems/handle-taken",
+                "title": "Handle taken",
+                "errors": { "handle": [{ "code": "taken" }] },
+            })),
+        );
+        assert_eq!(
+            problem_error(&Problem::new(404, code::NOT_FOUND)).data,
+            Some(serde_json::json!({ "code": "NOT_FOUND" })),
         );
     }
 

@@ -7,13 +7,13 @@ use nest_rs::http::{
 };
 use nest_rs::seaorm::Authorized;
 
-use super::exception_filter::PostProblemFilter;
 use super::interceptor::PostAuditInterceptor;
 use crate::Claims;
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::posts::{
-    CreatePost, Entity as PostEntity, Post, PostAuthor, PostAuthorGuard, PostsService, UpdatePost,
+    CreatePost, Entity as PostEntity, Post, PostAuthor, PostAuthorGuard, PostError, PostsService,
+    UpdatePost,
 };
 
 #[controller(path = "/posts")]
@@ -62,7 +62,6 @@ impl PostsController {
     #[post("/{id}/publish")]
     #[authorize(Update, bind = PostsService)]
     #[use_guards(PostAuthorGuard)]
-    #[use_exception_filters(PostProblemFilter)]
     #[api(
         summary = "Publish a draft post",
         description = "Transitions a draft to published and writes a publication audit row in the \
@@ -74,7 +73,7 @@ impl PostsController {
         &self,
         post: Authorized<Update, PostEntity>,
         actor: Ctx<PostAuthor>,
-    ) -> Result<Json<Post>> {
+    ) -> Result<Json<Post>, PostError> {
         let PostAuthor(actor_id) = *actor;
         Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
     }

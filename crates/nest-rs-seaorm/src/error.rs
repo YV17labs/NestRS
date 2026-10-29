@@ -397,9 +397,11 @@ fn said_server(server: &(dyn DatabaseError + 'static)) -> String {
     said
 }
 
-/// What every edge without its own rendering of a `ServiceError` answers: a
-/// business variant's problem, its sentence as the detail; `None` for `Db`,
-/// `Masking` and `Internal`, which the edge answers opaquely, logging the cause.
+/// What every edge answers for a `ServiceError`, HTTP included: a business
+/// variant's problem, its sentence as the detail and a validation failure's
+/// field map as `errors`; a cancelled statement's `503` and its wait; `None`
+/// for any other `Db`, `Masking` and `Internal`, which the edge answers
+/// opaquely, logging the cause.
 impl nest_rs_core::ToProblem for ServiceError {
     fn to_problem(&self) -> Option<nest_rs_core::Problem> {
         use nest_rs_core::Problem;
@@ -413,7 +415,11 @@ impl nest_rs_core::ToProblem for ServiceError {
             Self::Db(_) if self.is_unavailable() => unavailable(),
             Self::Db(_) | Self::Masking { .. } | Self::Internal { .. } => return None,
         };
-        Some(problem.with_detail(self.to_string()))
+        let problem = problem.with_detail(self.to_string());
+        Some(match self.field_errors() {
+            Some(fields) => problem.with_errors(fields),
+            None => problem,
+        })
     }
 }
 
@@ -624,47 +630,9 @@ mod graphql {
 
 #[cfg(feature = "http")]
 mod http {
-    use nest_rs_core::problem::code;
-    use nest_rs_core::{Problem, ToProblem};
-    use nest_rs_http::{
-        HttpError, IntoResponse, ProblemDetails, Response, ResponseError, StatusCode,
-    };
+    use nest_rs_http::HttpError;
 
     use super::ServiceError;
-
-    impl ResponseError for ServiceError {
-        fn status(&self) -> StatusCode {
-            match self {
-                ServiceError::Validation(_) | ServiceError::Invalid(_) => {
-                    StatusCode::UNPROCESSABLE_ENTITY
-                }
-                ServiceError::Conflict(_) => StatusCode::CONFLICT,
-                ServiceError::Forbidden(_) => StatusCode::FORBIDDEN,
-                ServiceError::NotFound(_) => StatusCode::NOT_FOUND,
-                ServiceError::Db(_) if self.is_unavailable() => StatusCode::SERVICE_UNAVAILABLE,
-                ServiceError::Db(_)
-                | ServiceError::Masking { .. }
-                | ServiceError::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-            }
-        }
-
-        /// Render the failure as an RFC 9457 `application/problem+json`: the
-        /// problem it says, with its code, its wait and a validation failure's
-        /// `errors` member, or an opaque one's `500` under `INTERNAL`, as a
-        /// `#[crud]` operation answers it. The cause an opaque variant
-        /// withholds is the edge's to file.
-        fn as_response(&self) -> Response {
-            let Some(problem) = self.to_problem() else {
-                return ResponseError::as_response(&Problem::new(500, code::INTERNAL));
-            };
-            match self.field_errors() {
-                Some(fields) => ProblemDetails::from_problem(&problem)
-                    .with_extension("errors", fields)
-                    .into_response(),
-                None => ResponseError::as_response(&problem),
-            }
-        }
-    }
 
     /// A `#[crud]` operation's failure as the problem document of its class:
     /// `409` for a unique violation, `403` for a create its scope re-check
@@ -676,20 +644,38 @@ mod http {
         HttpError::from(super::crud_problem(&err))
     }
 
+    /// `?` on a `ServiceError` in a body answering an `HttpError` answers as a
+    /// route returning it would: through
+    /// [`ToProblem`](nest_rs_core::ToProblem).
+    impl From<ServiceError> for HttpError {
+        fn from(error: ServiceError) -> Self {
+            nest_rs_http::problem_error(error)
+        }
+    }
+
     #[cfg(test)]
     mod tests {
+        use nest_rs_core::problem::code;
+        use nest_rs_http::{Response, StatusCode};
+
         use super::*;
 
         #[test]
         fn validation_is_422() {
             let err = ServiceError::Validation(validator::ValidationErrors::new());
-            assert_eq!(err.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(
+                HttpError::from(err).status(),
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
         }
 
         #[test]
         fn db_is_500() {
             let err = ServiceError::Db(sea_orm::DbErr::Custom("boom".into()));
-            assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(
+                HttpError::from(err).status(),
+                StatusCode::INTERNAL_SERVER_ERROR
+            );
         }
 
         /// Rendered for the HTTP edge, which files what a `5xx` withholds
@@ -706,7 +692,7 @@ mod http {
                 ServiceError::internal("could not sign the export"),
                 ServiceError::not_found("no such widget"),
             ] {
-                let _ = error.as_response();
+                let _ = HttpError::from(error).into_response();
             }
             assert!(logs.events().is_empty(), "{:#?}", logs.events());
         }
@@ -770,21 +756,22 @@ mod http {
 
         #[test]
         fn business_variants_map_to_their_4xx() {
-            assert_eq!(
-                ServiceError::invalid("x").status(),
-                StatusCode::UNPROCESSABLE_ENTITY
-            );
-            assert_eq!(ServiceError::conflict("x").status(), StatusCode::CONFLICT);
-            assert_eq!(ServiceError::forbidden("x").status(), StatusCode::FORBIDDEN);
-            assert_eq!(ServiceError::not_found("x").status(), StatusCode::NOT_FOUND);
-            assert_eq!(
-                ServiceError::internal("x").status(),
-                StatusCode::INTERNAL_SERVER_ERROR
-            );
+            for (error, status) in [
+                (ServiceError::invalid("x"), StatusCode::UNPROCESSABLE_ENTITY),
+                (ServiceError::conflict("x"), StatusCode::CONFLICT),
+                (ServiceError::forbidden("x"), StatusCode::FORBIDDEN),
+                (ServiceError::not_found("x"), StatusCode::NOT_FOUND),
+                (
+                    ServiceError::internal("x"),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                ),
+            ] {
+                assert_eq!(HttpError::from(error).status(), status);
+            }
         }
 
         async fn body_json(err: ServiceError) -> (StatusCode, Option<String>, serde_json::Value) {
-            body_of(err.as_response()).await
+            body_of(HttpError::from(err).into_response()).await
         }
 
         async fn body_json_of(err: HttpError) -> (StatusCode, Option<String>, serde_json::Value) {
@@ -873,7 +860,7 @@ mod http {
             let logs = nest_rs_testing::LogCapture::install();
             let (service, crud) = on_a_pool_bounding_statements(STATEMENT_BOUND, || {
                 (
-                    ServiceError::from(cancelled_statement()).as_response(),
+                    HttpError::from(ServiceError::from(cancelled_statement())).into_response(),
                     crud_error(cancelled_statement()).into_response(),
                 )
             })
@@ -1513,6 +1500,32 @@ pub(crate) mod tests {
         ] {
             assert_eq!(opaque.to_problem(), None, "{opaque:?}");
         }
+    }
+
+    /// A validation failure's field map is its problem's, so every edge
+    /// answers it under `errors`, not HTTP alone.
+    #[test]
+    fn a_validation_failure_s_problem_carries_its_field_map() {
+        use nest_rs_core::ToProblem;
+
+        let mut errors = ValidationErrors::new();
+        errors.add("email", validator::ValidationError::new("email"));
+        let failure = ServiceError::Validation(errors);
+        let problem = failure.to_problem().expect("a client error");
+        assert_eq!(problem.errors(), failure.field_errors().as_ref());
+        assert!(
+            problem
+                .errors()
+                .is_some_and(|fields| fields.get("email").is_some()),
+            "{problem:?}"
+        );
+        assert_eq!(
+            ServiceError::invalid("empty")
+                .to_problem()
+                .and_then(|problem| problem.errors().cloned()),
+            None,
+            "only a validation failure carries a field map",
+        );
     }
 }
 

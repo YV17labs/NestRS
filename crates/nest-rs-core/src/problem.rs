@@ -5,13 +5,14 @@
 //! Each edge answers a problem in its own standard form: an RFC 9457 problem
 //! document with a `code` member on HTTP (`ProblemDetails` is its document),
 //! `extensions.code` on GraphQL, `data.code` in a WebSocket error frame and in
-//! an MCP JSON-RPC error — beside a pipe's field-level `errors` on every edge
-//! (`.claude/decisions/every-refusal-carries-its-class.md`). Where a
-//! [`ToProblem`] error is read differs: GraphQL's and WebSocket's handler
-//! wrappers probe a handler's error for it by type, an MCP operation converts
-//! one with `nest_rs_mcp::problem_error`, and HTTP reads a [`Problem`] only —
-//! the error itself or one its chain carries — beside an error's own
-//! `ResponseError`. An error the edge finds no answer in is answered opaquely
+//! an MCP JSON-RPC error — beside a field map's `errors` on every edge
+//! (`.claude/decisions/every-refusal-carries-its-class.md`), and the problem's
+//! RFC 9457 `type` and `title` where it names them: the document's own members
+//! on HTTP, `extensions.type` and `extensions.title` on GraphQL, `data.type`
+//! and `data.title` on WebSocket and MCP. Every edge reads a [`ToProblem`]
+//! error by its type, a route's included, so a domain error maps to the wire
+//! once, with no HTTP impl beside it. An error the edge finds no answer in is
+//! answered opaquely
 //! ([`OPAQUE_CLIENT_MESSAGE`]; on HTTP the `500` document under the `INTERNAL`
 //! code, with no `detail`) and its chain is logged once at `error`.
 //!
@@ -20,6 +21,10 @@
 //! use nest_rs_core::{Code, Problem, ToProblem};
 //!
 //! const IDEMPOTENCY_KEY_REQUIRED: Code = Code::new("IDEMPOTENCY_KEY_REQUIRED");
+//! const ALREADY_PAID: Problem = Problem::new(409, code::CONFLICT).with_type(
+//!     "https://example.com/problems/order-already-paid",
+//!     "Order already paid",
+//! );
 //!
 //! #[derive(Debug, thiserror::Error)]
 //! enum OrderError {
@@ -34,7 +39,7 @@
 //! impl ToProblem for OrderError {
 //!     fn to_problem(&self) -> Option<Problem> {
 //!         match self {
-//!             Self::AlreadyPaid => Some(Problem::new(409, code::CONFLICT).with_detail("already paid")),
+//!             Self::AlreadyPaid => Some(ALREADY_PAID.with_detail(self.to_string())),
 //!             Self::NoKey => Some(Problem::new(400, IDEMPOTENCY_KEY_REQUIRED)),
 //!             Self::Ledger(_) => None,
 //!         }
@@ -43,6 +48,7 @@
 //!
 //! let problem = OrderError::AlreadyPaid.to_problem().expect("a client error");
 //! assert_eq!((problem.status(), problem.code()), (409, code::CONFLICT));
+//! assert_eq!(problem.title(), Some("Order already paid"));
 //! assert!(OrderError::Ledger(std::io::Error::other("disk full")).to_problem().is_none());
 //! ```
 //!
@@ -208,8 +214,13 @@ pub mod code {
 pub struct Problem {
     status: u16,
     code: Code,
+    /// The type's URI and its title, which RFC 9457 pairs.
+    kind: Option<(&'static str, &'static str)>,
     detail: Option<Cow<'static, str>>,
     retry_after: Option<u32>,
+    // Boxed so a `Result<_, Problem>` stays the size of the members most
+    // problems carry.
+    errors: Option<Box<serde_json::Value>>,
 }
 
 impl Problem {
@@ -230,9 +241,57 @@ impl Problem {
         Self {
             status,
             code,
+            kind: None,
             detail: None,
             retry_after: None,
+            errors: None,
         }
+    }
+
+    /// This problem's type (RFC 9457 §3.1.1): the URI naming an app's own
+    /// class, which a client may key on and dereference for its
+    /// documentation — an absolute URI, as the RFC recommends — and its
+    /// title, a short summary the same for every occurrence (§3.1.3). Unset,
+    /// the type is `about:blank`, a problem meaning nothing beyond its status
+    /// and [`code`](Self::code), whose title is the status's reason phrase.
+    ///
+    /// # Panics
+    ///
+    /// When `uri` is empty or holds a character no URI reference does (RFC
+    /// 3986 §2), or `title` is empty. Declared in a `const`, the panic is a
+    /// compile error:
+    ///
+    /// ```compile_fail,E0080
+    /// use nest_rs_core::Problem;
+    /// use nest_rs_core::problem::code;
+    ///
+    /// const TAKEN: Problem =
+    ///     Problem::new(409, code::CONFLICT).with_type("handle taken", "Handle taken");
+    /// ```
+    #[expect(
+        clippy::panic,
+        reason = "evaluated in a const, where a panic is the compile error naming the refused type"
+    )]
+    pub const fn with_type(mut self, uri: &'static str, title: &'static str) -> Self {
+        let bytes = uri.as_bytes();
+        if bytes.is_empty() {
+            panic!("a problem `type` is a URI reference, not empty");
+        }
+        let mut i = 0;
+        while i < bytes.len() {
+            if !is_uri_byte(bytes[i]) {
+                panic!(
+                    "a problem `type` is a URI reference (RFC 3986 §2): letters, digits, \
+                     `-._~:/?#[]@!$&'()*+,;=` and percent-encoded bytes"
+                );
+            }
+            i += 1;
+        }
+        if title.is_empty() {
+            panic!("a problem `title` summarizes its type, not empty");
+        }
+        self.kind = Some((uri, title));
+        self
     }
 
     /// A sentence the client may read. A server error never carries one to
@@ -251,6 +310,24 @@ impl Problem {
         self
     }
 
+    /// The field map a client acts on field by field, as a pipe's refusal
+    /// carries it — every edge's `errors` member, and nothing else is. Never
+    /// one of the values the request sent. A server error never carries it to
+    /// the wire, [`errors`](Self::errors) answering `None` on a `5xx`.
+    ///
+    /// ```
+    /// use nest_rs_core::Problem;
+    /// use nest_rs_core::problem::code;
+    ///
+    /// let fields = serde_json::json!({ "email": [{ "code": "email" }] });
+    /// let problem = Problem::new(422, code::INVALID_ARGUMENT).with_errors(fields.clone());
+    /// assert_eq!(problem.errors(), Some(&fields));
+    /// ```
+    pub fn with_errors(mut self, errors: serde_json::Value) -> Self {
+        self.errors = Some(Box::new(errors));
+        self
+    }
+
     /// The status the problem answers, `400..=599`.
     pub const fn status(&self) -> u16 {
         self.status
@@ -259,6 +336,33 @@ impl Problem {
     /// The machine-readable class a client branches on.
     pub const fn code(&self) -> Code {
         self.code
+    }
+
+    /// The URI naming the problem's type, when [`with_type`](Self::with_type)
+    /// set one; `None` is `about:blank`.
+    pub const fn type_uri(&self) -> Option<&'static str> {
+        match self.kind {
+            Some((uri, _)) => Some(uri),
+            None => None,
+        }
+    }
+
+    /// The title of the problem's type, when [`with_type`](Self::with_type)
+    /// set one.
+    pub const fn title(&self) -> Option<&'static str> {
+        match self.kind {
+            Some((_, title)) => Some(title),
+            None => None,
+        }
+    }
+
+    /// The field map [`with_errors`](Self::with_errors) set on a `4xx`, and
+    /// `None` on a `5xx`, whatever was set.
+    pub fn errors(&self) -> Option<&serde_json::Value> {
+        if self.is_server_error() {
+            return None;
+        }
+        self.errors.as_deref()
     }
 
     /// The sentence the client reads: what [`with_detail`](Self::with_detail)
@@ -316,16 +420,51 @@ impl fmt::Display for Problem {
 
 impl Error for Problem {}
 
+/// Whether `byte` may appear in a URI reference (RFC 3986 §2): unreserved,
+/// reserved, or the `%` of a percent-encoded octet.
+const fn is_uri_byte(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'.'
+            | b'_'
+            | b'~'
+            | b':'
+            | b'/'
+            | b'?'
+            | b'#'
+            | b'['
+            | b']'
+            | b'@'
+            | b'!'
+            | b'$'
+            | b'&'
+            | b'\''
+            | b'('
+            | b')'
+            | b'*'
+            | b'+'
+            | b','
+            | b';'
+            | b'='
+            | b'%'
+    )
+}
+
 /// An error that says what its client may read, implemented once by a domain
-/// error type.
+/// error type: the one mapping of its variants to the wire, on every edge.
 ///
-/// GraphQL's `#[operations]` and WebSocket's `#[messages]` wrappers probe a
-/// handler's error for it by type; an MCP operation converts one with
-/// `nest_rs_mcp::problem_error`. HTTP does not read it: a route answers a
-/// [`Problem`] its error is or carries, or the error's own `ResponseError`, so
-/// a domain error a route returns implements that too. `Some(problem)` answers
-/// that problem in the edge's standard form; `None` answers opaquely. Either
-/// way, what the answer withholds of the error's chain is logged at `error`.
+/// The handler wrappers of every edge probe a handler's error for it by type —
+/// HTTP's `#[routes]`, GraphQL's `#[operations]`, WebSocket's `#[messages]`,
+/// MCP's `#[tools]` — and where a body answers the edge's own error, its
+/// `problem_error` converts one (`nest_rs_http::problem_error`,
+/// `nest_rs_graphql::problem_error`, `nest_rs_mcp::problem_error`).
+/// `Some(problem)` answers that problem in the edge's standard form; `None`
+/// answers opaquely. Either way, what the answer withholds of the error's
+/// chain is logged at `error`, at `warn` behind a `503`.
 pub trait ToProblem: Error + Send + Sync + 'static {
     /// The problem to answer, or `None` to answer opaquely.
     fn to_problem(&self) -> Option<Problem>;
@@ -443,6 +582,73 @@ mod tests {
             Problem::new(409, code::CONFLICT).client_message(),
             "conflict"
         );
+    }
+
+    #[test]
+    fn a_problem_carries_its_type_title_and_field_map() {
+        const TAKEN: Problem = Problem::new(409, code::CONFLICT)
+            .with_type("https://example.com/problems/handle-taken", "Handle taken");
+        let fields = serde_json::json!({ "handle": [{ "code": "taken" }] });
+        let problem = TAKEN
+            .with_detail("@ada is taken")
+            .with_errors(fields.clone());
+        assert_eq!(
+            problem.type_uri(),
+            Some("https://example.com/problems/handle-taken")
+        );
+        assert_eq!(problem.title(), Some("Handle taken"));
+        assert_eq!(problem.errors(), Some(&fields));
+        assert_eq!(
+            problem.to_string(),
+            "409 CONFLICT",
+            "a log line says the class"
+        );
+
+        let blank = Problem::new(404, code::NOT_FOUND);
+        assert_eq!(
+            (blank.type_uri(), blank.title(), blank.errors()),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn a_server_error_never_hands_its_field_map_to_an_edge() {
+        let problem = Problem::new(500, code::INTERNAL)
+            .with_type("https://example.com/problems/ledger-down", "Ledger down")
+            .with_errors(serde_json::json!({ "amount": ["10.0.0.1 refused"] }));
+        assert_eq!(problem.errors(), None);
+        assert_eq!(
+            problem.title(),
+            Some("Ledger down"),
+            "a type is no occurrence"
+        );
+    }
+
+    #[test]
+    fn a_type_is_a_uri_reference_with_a_title() {
+        for accepted in [
+            "https://example.com/problems/out-of-credit",
+            "urn:problem:out-of-credit",
+            "/problems/out-of-credit#v2",
+            "tag:example.com,2026:caf%C3%A9",
+        ] {
+            assert_eq!(
+                Problem::new(400, code::INVALID_ARGUMENT)
+                    .with_type(accepted, "Out of credit")
+                    .type_uri(),
+                Some(accepted),
+            );
+        }
+        for refused in ["", "out of credit", "https://example.com/é", "a\"b", "a<b>"] {
+            let outcome = std::panic::catch_unwind(|| {
+                Problem::new(400, code::INVALID_ARGUMENT).with_type(refused, "Out of credit")
+            });
+            assert!(outcome.is_err(), "{refused:?} is not a URI reference");
+        }
+        let untitled = std::panic::catch_unwind(|| {
+            Problem::new(400, code::INVALID_ARGUMENT).with_type("urn:problem:out-of-credit", "")
+        });
+        assert!(untitled.is_err(), "a type has a title");
     }
 
     #[test]

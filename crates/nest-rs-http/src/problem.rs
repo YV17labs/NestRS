@@ -20,6 +20,15 @@ pub const BEARER: &str = "Bearer";
 /// The extension member a problem document carries its [`Code`] in.
 const CODE: &str = "code";
 
+/// The extension member a problem document carries a field map in.
+pub(crate) const FIELD_ERRORS: &str = "errors";
+
+/// The status a [`Problem`] answers.
+pub(crate) fn status_of(problem: &Problem) -> StatusCode {
+    // `Problem::new` holds its status to 400..=599, every one of them valid.
+    StatusCode::from_u16(problem.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 /// The response a [`Problem`] answers: its document, and `Retry-After` when it
 /// names a wait (RFC 9110 §10.2.3).
 pub(crate) fn problem_response(problem: &Problem) -> crate::Response {
@@ -86,9 +95,11 @@ impl ProblemDetails {
             .with_detail(DecodeError::redact(&err.to_string(), Some(err)).into_owned())
     }
 
-    /// The HTTP document of a [`Problem`]: its status's own problem, its
-    /// [`detail`](Problem::detail) on a `4xx`, and its code as the `code`
-    /// extension member.
+    /// The HTTP document of a [`Problem`]: its status's own problem, under
+    /// the problem's [`type_uri`](Problem::type_uri) and
+    /// [`title`](Problem::title) when it names them, its
+    /// [`detail`](Problem::detail) and its field map, the `errors` extension
+    /// member, on a `4xx`, and its code as the `code` extension member.
     ///
     /// ```
     /// use nest_rs_core::Problem;
@@ -103,14 +114,18 @@ impl ProblemDetails {
     /// assert_eq!(document.extensions["code"], "CONFLICT");
     /// ```
     pub fn from_problem(problem: &Problem) -> Self {
-        // `Problem::new` holds its status to 400..=599, every one of them valid.
-        let status =
-            StatusCode::from_u16(problem.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        let document = Self::about_blank(status).with_code(problem.code());
-        match problem.detail() {
-            Some(detail) => document.with_detail(detail),
-            None => document,
+        let mut document = Self::about_blank(status_of(problem)).with_code(problem.code());
+        if let Some((type_uri, title)) = problem.type_uri().zip(problem.title()) {
+            document.type_uri = type_uri.to_owned();
+            document.title = title.to_owned();
         }
+        if let Some(detail) = problem.detail() {
+            document.detail = Some(detail.to_owned());
+        }
+        if let Some(errors) = problem.errors() {
+            document = document.with_extension(FIELD_ERRORS, errors.clone());
+        }
+        document
     }
 
     /// The problem an error answers with `status`: the status's own problem,
@@ -905,6 +920,27 @@ mod tests {
         assert!(
             resp.headers().get(header::TRANSFER_ENCODING).is_none(),
             "a stale Transfer-Encoding must not survive onto the rewritten body",
+        );
+    }
+
+    /// A problem's type and title are the document's own RFC 9457 members, its
+    /// field map the `errors` one, beside its class's `code`.
+    #[test]
+    fn a_typed_problem_answers_its_type_title_and_field_map() {
+        let problem = Problem::new(409, code::CONFLICT)
+            .with_type("https://example.com/problems/handle-taken", "Handle taken")
+            .with_detail("@ada is taken")
+            .with_errors(serde_json::json!({ "handle": [{ "code": "taken" }] }));
+        assert_eq!(
+            serde_json::to_value(ProblemDetails::from_problem(&problem)).unwrap(),
+            serde_json::json!({
+                "type": "https://example.com/problems/handle-taken",
+                "title": "Handle taken",
+                "status": 409,
+                "detail": "@ada is taken",
+                "code": "CONFLICT",
+                "errors": { "handle": [{ "code": "taken" }] },
+            }),
         );
     }
 

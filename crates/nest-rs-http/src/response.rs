@@ -5,6 +5,7 @@ use std::fmt;
 use bytes::Bytes;
 use http::response::Parts as ResponseParts;
 use http::{Extensions, HeaderMap, HeaderName, HeaderValue, StatusCode, Version, header};
+use nest_rs_core::ToProblem;
 
 use crate::body::Body;
 use crate::error::{BoxError, HttpError, Result};
@@ -422,6 +423,32 @@ impl<T: IntoResponse> IntoResult<T> for T {
 impl<T: IntoResponse, E: Into<HttpError>> IntoResult<T> for std::result::Result<T, E> {
     fn into_result(self) -> Result<T> {
         self.map_err(Into::into)
+    }
+}
+
+/// A handler's return, read by its type, as every edge reads one: the
+/// inherent method takes a `Result` whose error is a [`ToProblem`] error,
+/// answered by the problem it says ([`problem_error`](crate::problem_error));
+/// [`RouteReturnFallback`] any other return, through [`IntoResult`].
+pub struct RouteReturn<R>(pub R);
+
+impl<T: IntoResponse, E: ToProblem> RouteReturn<std::result::Result<T, E>> {
+    /// The value, or the problem its error says.
+    pub fn into_result(self) -> Result<T> {
+        self.0.map_err(crate::problem_error)
+    }
+}
+
+/// The [`RouteReturn`] of a return whose error is no [`ToProblem`] error: a
+/// value, or an error converting into an [`HttpError`].
+pub trait RouteReturnFallback<T: IntoResponse> {
+    /// The value as a result.
+    fn into_result(self) -> Result<T>;
+}
+
+impl<T: IntoResponse, R: IntoResult<T>> RouteReturnFallback<T> for RouteReturn<R> {
+    fn into_result(self) -> Result<T> {
+        self.0.into_result()
     }
 }
 

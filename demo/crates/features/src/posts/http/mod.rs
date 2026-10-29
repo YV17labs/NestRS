@@ -1,5 +1,4 @@
 mod controller;
-mod exception_filter;
 mod interceptor;
 mod module;
 

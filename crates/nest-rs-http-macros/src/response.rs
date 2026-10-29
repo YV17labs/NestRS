@@ -374,7 +374,8 @@ fn redirect_status(written: &Expr) -> syn::Result<LitInt> {
 /// skips the call.
 ///
 /// A failure keeps its own status: the overrides touch the success path only,
-/// and which answers are failures is read by type through `nest_rs_core::__private::Answer`,
+/// and which answers are failures, and what their error answers, is read by
+/// type through `nest_rs_http::__private::RouteReturn`, as on every route,
 /// since a spelling-based check misses an aliased `Result`.
 pub(crate) fn apply_response_shapers(
     shapers: &ResponseShapers,
@@ -424,14 +425,13 @@ pub(crate) fn apply_response_shapers(
 
     quote! {
         {
-            let #out = #call_expr;
-            let mut #response: ::nest_rs_http::Response = {
-                use ::nest_rs_core::__private::AnswerFallback as _;
-                ::nest_rs_core::__private::Answer(&#out).map::<::nest_rs_http::HttpError, _, _>()(
-                    #out,
-                    ::nest_rs_http::IntoResponse::into_response,
-                )?
+            let #out = {
+                #[allow(unused_imports)]
+                use ::nest_rs_http::__private::RouteReturnFallback as _;
+                ::nest_rs_http::__private::RouteReturn(#call_expr).into_result()?
             };
+            let mut #response: ::nest_rs_http::Response =
+                ::nest_rs_http::IntoResponse::into_response(#out);
             #status_apply
             #header_writes
             ::nest_rs_http::Result::<::nest_rs_http::Response>::Ok(#response)

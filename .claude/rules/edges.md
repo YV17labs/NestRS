@@ -160,7 +160,8 @@ guard, filter or interceptor loop of its own.
     failure an exception filter answers `4xx` files nothing. `Problem`, `Code` and `ToProblem` are the
     one client-error contract: a `Problem` answers in the edge's standard
     form (a `code` member, `extensions.code`, `data.code` on WebSocket and
-    MCP), never with its detail on a `5xx`, a denial carries the same `code`
+    MCP, its RFC 9457 `type` and `title` beside it), never with its detail
+    or its field map on a `5xx`, a denial carries the same `code`
     on every edge (`denial_code`), an opaque answer the `INTERNAL` one through
     one constructor per edge, a problem HTTP builds from a status alone the
     class core names for that status, a decode failure and a pipe's refusal
@@ -169,11 +170,14 @@ guard, filter or interceptor loop of its own.
     framework emits is a `nest_rs_core::problem::code` constant, read off the
     standard that names its class (its module doc;
     `.claude/decisions/every-refusal-carries-its-class.md`). The edge decides **by type**
-    where it names the handler's error — GraphQL's, WS's and MCP's wrappers
-    probe `ToProblem` before the chain — and a `Problem`, `PipeError` or decode failure its
-    chain carries answers itself; HTTP reads no `ToProblem`: it renders an
-    error's own `ResponseError` as built and reads the chain of what it
-    would otherwise render as text. GraphQL holds the rule at
+    where it names the handler's error — every edge's wrapper, HTTP's
+    `#[routes]` included, probes `ToProblem` before the chain, and a body
+    answering the edge's own error converts one with the edge's
+    `problem_error` — so a domain error maps to the wire once, and a
+    hand-written HTTP `ResponseError` is an answer that is no problem
+    (another protocol's body, a challenge); a `Problem`, `PipeError` or
+    decode failure its chain carries answers itself, HTTP reading the chain
+    of what it would otherwise render as text. GraphQL holds the rule at
     compile time: async-graphql's `custom-error-conversion` is on, so a `?`
     cannot turn a foreign error's `Display` into a client message. An
     `Opaque` trait beside the edge's error type says the same at a call

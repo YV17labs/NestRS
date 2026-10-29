@@ -34,16 +34,14 @@ impl<T, E> Answer<'_, Result<T, E>> {
     }
 
     /// Turn the value inside a `Result` answer into what the edge sends, the
-    /// error lifted out into the edge's own — a response built from the value
-    /// alone, so nothing a decorator applies to a success reaches a failure.
-    pub fn map<X: From<E>, U, F>(&self) -> fn(Result<T, E>, F) -> Result<U, X>
+    /// error kept as it is, for the edge to read by its type — a response
+    /// built from the value alone, so nothing a decorator applies to a success
+    /// reaches a failure.
+    pub fn map<U, F>(&self) -> fn(Result<T, E>, F) -> Result<U, E>
     where
         F: FnOnce(T) -> U,
     {
-        |answer, f| match answer {
-            Ok(value) => Ok(f(value)),
-            Err(error) => Err(X::from(error)),
-        }
+        |answer, f| answer.map(f)
     }
 
     /// Apply `f` to the value inside a `Result` answer — what a mask reads, so
@@ -73,7 +71,7 @@ pub trait AnswerFallback {
     fn split<X>(&self) -> fn(Self::Value) -> Result<Self::Value, X>;
 
     /// Turn the answer itself into what the edge sends.
-    fn map<X, U, F>(&self) -> fn(Self::Value, F) -> Result<U, X>
+    fn map<U, F>(&self) -> fn(Self::Value, F) -> U
     where
         F: FnOnce(Self::Value) -> U;
 
@@ -93,11 +91,11 @@ impl<R> AnswerFallback for Answer<'_, R> {
         Ok
     }
 
-    fn map<X, U, F>(&self) -> fn(R, F) -> Result<U, X>
+    fn map<U, F>(&self) -> fn(R, F) -> U
     where
         F: FnOnce(R) -> U,
     {
-        |answer, f| Ok(f(answer))
+        |answer, f| f(answer)
     }
 
     fn mapper<X, F>(&self) -> fn(R, F) -> Result<R, X>
@@ -120,6 +118,10 @@ mod tests {
 
     #[derive(Debug, PartialEq)]
     struct SearchResult(i32);
+
+    /// An error that converts into nothing, so only the answer's own can hold it.
+    #[derive(Debug, PartialEq)]
+    struct Refused;
 
     #[test]
     fn a_result_is_known_by_its_type_never_by_its_name() {
@@ -146,21 +148,20 @@ mod tests {
     }
 
     #[test]
-    fn map_builds_from_the_value_and_lifts_the_error() {
-        let failed: Renamed<i32> = Err("refused".into());
-        let mapped: Result<String, String> =
+    fn map_builds_from_the_value_and_keeps_the_error() {
+        let failed: Result<i32, Refused> = Err(Refused);
+        let mapped: Result<String, Refused> =
             Answer(&failed).map()(failed, |value: i32| format!("sent {value}"));
-        assert_eq!(mapped, Err("refused".to_owned()));
+        assert_eq!(mapped, Err(Refused));
 
         let answered: Renamed<i32> = Ok(1);
-        let mapped: Result<String, String> =
+        let mapped: Renamed<String> =
             Answer(&answered).map()(answered, |value: i32| format!("sent {value}"));
         assert_eq!(mapped, Ok("sent 1".to_owned()));
 
         let value = SearchResult(2);
-        let mapped: Result<i32, String> =
-            Answer(&value).map()(value, |value: SearchResult| value.0);
-        assert_eq!(mapped, Ok(2));
+        let mapped: i32 = Answer(&value).map()(value, |value: SearchResult| value.0);
+        assert_eq!(mapped, 2);
     }
 
     #[test]

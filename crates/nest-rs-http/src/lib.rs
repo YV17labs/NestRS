@@ -209,7 +209,7 @@ pub use deprecation::DeprecationMeta;
 pub use detached::DetachedWork;
 pub use endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, declare_endpoint, endpoint_fn};
 pub use endpoint_guards::{CarriedView, EndpointGuards, GuardList};
-pub use error::{BodyError, HttpError, ResponseError, Result, RouteTemplateError};
+pub use error::{BodyError, HttpError, ResponseError, Result, RouteTemplateError, problem_error};
 pub use fallback::HttpFallbackMeta;
 pub use form::Form;
 pub use headers::Header;
@@ -266,7 +266,7 @@ pub mod __private {
     };
     pub use crate::origin::OriginScheme;
     pub use crate::problem::{framework_sentence, method_not_allowed};
-    pub use crate::response::IntoResult;
+    pub use crate::response::{IntoResult, RouteReturn, RouteReturnFallback};
     pub use crate::route_site::{
         RouteGuards, RoutePipes, RouteWrapper, mount_controller, mount_route, route_guard_stage,
     };

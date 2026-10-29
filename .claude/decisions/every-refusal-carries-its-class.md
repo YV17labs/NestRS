@@ -148,3 +148,67 @@ MCP's own words, *Resource not found*, under the `NOT_FOUND` class and quoting
 no URI — the one constructor, `nest_rs_mcp`'s `resource_not_found`, as
 `tool_not_found` is for a tool. A `-32002` a hand-written host builds keeps its
 `data`, as before.
+
+## 2026-10-29 — a domain error maps to the wire once, its type and title on every edge
+
+A domain error wrote its wire mapping twice: `ToProblem` for GraphQL,
+WebSocket and MCP, and `nest_rs_http::ResponseError` for HTTP, which read no
+`ToProblem` — two parallel `match`es over one enum, free to drift (the demo's
+`PostError` and the framework's own `ServiceError` both carried them). And
+`Problem` held a status, a code, a detail and a wait, not RFC 9457 §3.1's
+`type` and `title`: a typed problem took an HTTP-only exception filter
+building a `ProblemDetails`, and no GraphQL, WebSocket or MCP client ever saw
+its `type`. The edges rule stated HTTP's choice without a security or a
+correctness reason for it. The owner agreed this break on 2026-10-28 ("Tout
+faire", the identity audit's public-API series).
+
+- **Decided**: HTTP reads a route's error by its type, as every other
+  edge reads a handler's: `#[routes]`' wrapper probes `ToProblem` first and
+  answers the problem it says — its status, the problem document the other
+  edges render the same problem as, the opaque `500` when it says none —
+  keeping the error as the failure's cause for an exception filter and the
+  operator's line. A body answering an `HttpError` converts one with
+  `nest_rs_http::problem_error`, as GraphQL's and MCP's `problem_error`
+  convert for theirs, and the framework's own `ServiceError` converts into
+  `HttpError` through it, as it converts into `async_graphql::Error`, so `?`
+  on it is unchanged. A hand-written `ResponseError` stays for an answer that
+  is no problem — another protocol's (a token endpoint's RFC 6749 §5.2 body),
+  a challenge, a response of its own — and for the edge's own refusals.
+- **`Problem` carries RFC 9457's `type` and `title`, together**: one
+  `const fn with_type(uri, title)`, `&'static str` both, since both are the
+  problem type's and never the occurrence's (§3.1.1, §3.1.3) — a typed
+  problem is a `const` — the URI checked for a URI reference's characters
+  and the title for being one when it compiles. Each edge renders them where
+  its standard puts a problem's members: the document's own on HTTP (unset,
+  `about:blank` and the reason phrase, as before), `extensions.type` and
+  `extensions.title` on GraphQL, `data.type` and `data.title` on WebSocket
+  (`WsProblemType`, boxed, so a handler's `Result<_, WsError>` keeps its
+  size) and MCP, absent when unset. Unlike `detail`, they go out on a `5xx`
+  too: they are constants the developer declared, never what failed.
+- **`Problem` carries the field map too** (`with_errors`), the `errors`
+  member a pipe's refusal fills on every edge, withheld on a `5xx` as `detail`
+  is. `ServiceError`'s HTTP mapping added a validation failure's fields to its
+  problem by hand; mapped once, its problem holds them, and GraphQL, WebSocket
+  and MCP answer them where they had answered the class alone. `errors` still
+  names the field map and nothing else.
+- **Refused: a blanket `impl<E: ToProblem> ResponseError for E`**, the
+  audit's sketch. `ToProblem` is `nest-rs-core`'s, so the blanket makes the
+  generic `From<E: ResponseError>` overlap `From<anyhow::Error>` and
+  `From<StatusCode>` for the compiler (an upstream crate may implement
+  `ToProblem` for either): it would cost `?` on an `anyhow` error, which
+  answers the opaque `500` with its chain filed, and `HttpError::from` a
+  status — a break nobody agreed, for a probe the route wrapper does at no
+  cost. What it would have held by types — no error mapped by both traits —
+  is held by review and the rule.
+- **Refused: keeping `ResponseError` as the domain error's seam** beside a
+  `ToProblem` probe of the chain. The edge could read a `Problem` the chain
+  carries, never a `ToProblem` it implements — `dyn Error` names no trait —
+  so every domain error would still write the HTTP half by hand.
+- **Refused: `type` and `title` as owned strings.** A title localized per
+  request is the one thing it costs, and nothing in the framework localizes;
+  a type built at run time is a type a client cannot key on.
+- **Refused: `with_type` and `with_title` apart**, the audit's sketch. A
+  title summarizes its type, and `about:blank`'s SHOULD be the status's
+  reason phrase (§4.2.1), so a title alone is a problem the standard
+  advises against, and a type alone has no summary a registry would list
+  (§4.2). `ProblemDetails`, the raw document, keeps a setter per member.

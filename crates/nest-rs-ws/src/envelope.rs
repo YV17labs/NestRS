@@ -110,12 +110,13 @@ impl WsEnvelope {
 }
 
 /// What an error frame carries: the human-readable message, the class a client
-/// branches on and the evidence a refusal names beside it, and a pipe's
-/// field-level errors under HTTP's RFC 9457 `errors` name.
+/// branches on, a problem's RFC 9457 type and title, the evidence a refusal
+/// names beside them, and a field map under HTTP's RFC 9457 `errors` name.
 ///
 /// Each member is the frame's `data.<member>`, omitted when there is none, as
-/// HTTP omits it: `{ "error": …, "code"?: …, "reason"?: …, "requiredScopes"?:
-/// […], "retryAfterSeconds"?: …, "errors"?: { … } }`.
+/// HTTP omits it: `{ "error": …, "code"?: …, "type"?: …, "title"?: …,
+/// "reason"?: …, "requiredScopes"?: […], "retryAfterSeconds"?: …, "errors"?:
+/// { … } }`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -127,6 +128,10 @@ pub struct WsError {
     /// [`new`](Self::new), which names none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<Cow<'static, str>>,
+    /// The problem's RFC 9457 type, when it named one: the frame's
+    /// `data.type` and `data.title`. Boxed, as `errors` is.
+    #[serde(flatten)]
+    pub problem_type: Option<Box<WsProblemType>>,
     /// A refusal's class in lowercase words, the member these frames carried
     /// first (`forbidden`, `timeout`) — the frame's `data.reason`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -143,8 +148,8 @@ pub struct WsError {
         skip_serializing_if = "Option::is_none"
     )]
     pub retry_after_secs: Option<u32>,
-    /// A pipe's field-level errors, field by field, as every edge carries them
-    /// — the frame's `data.errors`, and nothing else is. Boxed, so the `Err`
+    /// A field map, field by field, as every edge carries a pipe's or a
+    /// problem's — the frame's `data.errors`, and nothing else is. Boxed, so the `Err`
     /// of every handler's `Result` stays the size of the members most frames
     /// carry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -157,6 +162,7 @@ impl WsError {
         Self {
             error: message.into(),
             code: None,
+            problem_type: None,
             reason: None,
             required_scopes: Vec::new(),
             retry_after_secs: None,
@@ -180,8 +186,9 @@ impl WsError {
     }
 
     /// The frame a [`Problem`] answers: its
-    /// [`client_message`](Problem::client_message), its code, and its wait as
-    /// `retryAfterSeconds` when it has one.
+    /// [`client_message`](Problem::client_message), its code, and its type,
+    /// its title, its wait as `retryAfterSeconds` and its field map as
+    /// `errors` when it has them.
     ///
     /// ```
     /// use nest_rs_core::Problem;
@@ -196,7 +203,14 @@ impl WsError {
     /// ```
     pub fn from_problem(problem: &Problem) -> Self {
         Self {
+            problem_type: problem.type_uri().zip(problem.title()).map(|(uri, title)| {
+                Box::new(WsProblemType {
+                    uri: Cow::Borrowed(uri),
+                    title: Cow::Borrowed(title),
+                })
+            }),
             retry_after_secs: problem.retry_after(),
+            errors: problem.errors().cloned().map(Box::new),
             ..Self::classed(problem.client_message(), problem.code())
         }
     }
@@ -237,6 +251,18 @@ impl WsError {
             ..Self::invalid_argument(message)
         }
     }
+}
+
+/// A problem's RFC 9457 type as an error frame carries it, beside its code:
+/// both members or neither, as `Problem::with_type` sets them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct WsProblemType {
+    /// The URI naming the type (RFC 9457 §3.1.1) — the frame's `data.type`.
+    #[serde(rename = "type")]
+    pub uri: Cow<'static, str>,
+    /// The type's summary (RFC 9457 §3.1.3) — the frame's `data.title`.
+    pub title: Cow<'static, str>,
 }
 
 impl std::fmt::Display for WsError {
@@ -817,6 +843,33 @@ mod tests {
         );
     }
 
+    /// A problem's RFC 9457 type and title, and its field map, ride in the
+    /// frame's `data` beside its code; a problem naming none carries none.
+    #[test]
+    fn a_typed_problem_carries_its_type_title_and_field_map() {
+        use nest_rs_core::problem::code;
+
+        let taken = Problem::new(409, code::CONFLICT)
+            .with_type("https://example.com/problems/handle-taken", "Handle taken")
+            .with_detail("@ada is taken")
+            .with_errors(serde_json::json!({ "handle": [{ "code": "taken" }] }));
+        assert_eq!(
+            serde_json::to_value(WsError::from_problem(&taken)).expect("a frame"),
+            serde_json::json!({
+                "error": "@ada is taken",
+                "code": "CONFLICT",
+                "type": "https://example.com/problems/handle-taken",
+                "title": "Handle taken",
+                "errors": { "handle": [{ "code": "taken" }] },
+            }),
+        );
+        assert_eq!(
+            serde_json::to_value(WsError::from_problem(&Problem::new(404, code::NOT_FOUND)))
+                .expect("a frame"),
+            serde_json::json!({ "error": "not found", "code": "NOT_FOUND" }),
+        );
+    }
+
     /// Every member reads and writes under the name every edge gives it, so a
     /// client decoding a frame with `WsError` reads what the server wrote.
     #[test]
@@ -824,6 +877,8 @@ mod tests {
         let wire = serde_json::json!({
             "error": "slow down",
             "code": "RATE_LIMITED",
+            "type": "https://example.com/problems/slow-down",
+            "title": "Slow down",
             "reason": "rate_limited",
             "requiredScopes": ["posts:write"],
             "retryAfterSeconds": 7,
@@ -831,6 +886,9 @@ mod tests {
         });
         let frame: WsError = serde_json::from_value(wire.clone()).expect("a frame");
         assert_eq!(frame.code.as_deref(), Some("RATE_LIMITED"));
+        let problem_type = frame.problem_type.as_deref().expect("a typed frame");
+        assert_eq!(problem_type.uri, "https://example.com/problems/slow-down");
+        assert_eq!(problem_type.title, "Slow down");
         assert_eq!(frame.reason.as_deref(), Some("rate_limited"));
         assert_eq!(frame.required_scopes, ["posts:write"]);
         assert_eq!(frame.retry_after_secs, Some(7));

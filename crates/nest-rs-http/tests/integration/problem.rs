@@ -3,14 +3,16 @@
 //! fails without saying why — one document, its class's `code` and no `detail` —
 //! on every path an `Err` is rendered by.
 
+use nest_rs_core::problem::code;
 use nest_rs_core::{
-    App, Interceptor, Layer, Module, Next, Outcome, Transport, UnitContext, injectable,
-    interceptor, module,
+    App, Interceptor, Layer, Module, Next, Outcome, Problem, ToProblem, Transport, UnitContext,
+    injectable, interceptor, module,
 };
 use nest_rs_http::StatusCode;
 use nest_rs_http::{
     Form, HttpConfig, HttpError, Json, Opaque, ProblemDetails, Query, RawBody, ResponseError,
-    Result, Valid, async_trait, controller, input, routes,
+    Result, SseEvent, SseStream, Valid, async_trait, controller, futures_util::stream, input,
+    problem_error, routes,
 };
 use nest_rs_testing::TestClient;
 use serde::{Deserialize, Serialize};
@@ -355,6 +357,116 @@ fn server_problem() -> nest_rs_core::Problem {
 
 #[module(providers = [FailureController, Forwarding])]
 struct FailureModule;
+
+const OVERDRAWN: Problem = Problem::new(409, code::CONFLICT).with_type(
+    "https://example.com/problems/overdrawn",
+    "Account overdrawn",
+);
+
+/// A domain error mapped to the wire once, through `ToProblem` alone.
+#[derive(Debug, thiserror::Error)]
+enum LedgerError {
+    #[error("account 7 is overdrawn")]
+    Overdrawn,
+    #[error("the transfer is refused")]
+    Refused,
+    #[error("the ledger is busy")]
+    Busy(#[source] std::io::Error),
+    #[error("the ledger at 10.0.0.1 holds secret 42")]
+    Down,
+}
+
+impl ToProblem for LedgerError {
+    fn to_problem(&self) -> Option<Problem> {
+        match self {
+            Self::Overdrawn => Some(OVERDRAWN.with_detail(self.to_string())),
+            Self::Refused => Some(
+                Problem::new(422, code::INVALID_ARGUMENT)
+                    .with_detail(self.to_string())
+                    .with_errors(serde_json::json!({ "amount": [{ "code": "range" }] })),
+            ),
+            Self::Busy(_) => Some(Problem::new(503, code::UNAVAILABLE).with_retry_after(30)),
+            Self::Down => None,
+        }
+    }
+}
+
+#[controller(path = "/domain")]
+struct DomainController;
+
+#[routes]
+impl DomainController {
+    #[get("/overdrawn")]
+    #[public]
+    async fn overdrawn(&self) -> std::result::Result<String, LedgerError> {
+        Err(LedgerError::Overdrawn)
+    }
+
+    /// The same error, converted where the body answers the edge's own error.
+    #[get("/converted")]
+    #[public]
+    async fn converted(&self) -> Result<String> {
+        Err(problem_error(LedgerError::Overdrawn))
+    }
+
+    #[get("/refused")]
+    #[public]
+    async fn refused(&self) -> std::result::Result<String, LedgerError> {
+        Err(LedgerError::Refused)
+    }
+
+    #[get("/busy")]
+    #[public]
+    async fn busy(&self) -> std::result::Result<String, LedgerError> {
+        Err(LedgerError::Busy(std::io::Error::other(
+            "the ledger at 10.0.0.1 timed out",
+        )))
+    }
+
+    #[get("/down")]
+    #[public]
+    async fn down(&self) -> std::result::Result<String, LedgerError> {
+        Err(LedgerError::Down)
+    }
+
+    #[post("/transfer")]
+    #[public]
+    #[http_code(201)]
+    async fn transfer(&self, draw: Query<Draw>) -> std::result::Result<String, LedgerError> {
+        draw.0.settle()
+    }
+
+    #[get("/statement")]
+    #[public]
+    #[response_header("x-ledger", "7")]
+    async fn statement(&self, draw: Query<Draw>) -> std::result::Result<String, LedgerError> {
+        draw.0.settle()
+    }
+
+    #[sse("/movements")]
+    #[public]
+    async fn movements(&self, draw: Query<Draw>) -> std::result::Result<SseStream, LedgerError> {
+        let settled = draw.0.settle()?;
+        Ok(SseStream::new(stream::iter([SseEvent::message(settled)])))
+    }
+}
+
+#[input]
+struct Draw {
+    amount: u64,
+}
+
+impl Draw {
+    fn settle(&self) -> std::result::Result<String, LedgerError> {
+        if self.amount > 100 {
+            return Err(LedgerError::Overdrawn);
+        }
+        Ok(format!("moved {}", self.amount))
+    }
+}
+
+#[module(providers = [DomainController, Forwarding])]
+struct DomainModule;
 
 type Client = TestClient;
 
@@ -733,6 +845,127 @@ async fn a_typed_server_error_files_its_chain_once_by_the_status_sent() {
             .await
             .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(filed(&logs), [], "nothing withheld, nothing filed");
+    }
+}
+
+/// A domain error writing `ToProblem` alone answers a route its problem — its
+/// RFC 9457 `type` and `title`, its `code`, its `detail` and its field map —
+/// whether the handler returns it or converts it into the edge's own error,
+/// on every path an `Err` is rendered by; a client answer files nothing.
+#[tokio::test]
+async fn a_to_problem_error_answers_its_problem_from_a_route() {
+    for client in clients::<DomainModule>().await {
+        let logs = nest_rs_testing::LogCapture::install();
+        for path in ["/domain/overdrawn", "/domain/converted"] {
+            let resp = client.get(path).send().await;
+            resp.assert_status(StatusCode::CONFLICT);
+            resp.assert_content_type("application/problem+json");
+            assert_eq!(
+                problem_json(resp).await,
+                serde_json::json!({
+                    "type": "https://example.com/problems/overdrawn",
+                    "title": "Account overdrawn",
+                    "status": 409,
+                    "detail": "account 7 is overdrawn",
+                    "code": "CONFLICT",
+                }),
+                "{path}",
+            );
+        }
+        let refused = client.get("/domain/refused").send().await;
+        refused.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            problem_json(refused).await,
+            serde_json::json!({
+                "type": "about:blank",
+                "title": "Unprocessable Content",
+                "status": 422,
+                "detail": "the transfer is refused",
+                "code": "INVALID_ARGUMENT",
+                "errors": { "amount": [{ "code": "range" }] },
+            }),
+        );
+        assert_eq!(filed(&logs), [], "a client answer withholds nothing");
+    }
+}
+
+/// A route a response decorator shapes, and an `#[sse]` open, read a
+/// `ToProblem` error as every route does: a failure answers its problem,
+/// none of the success's status or headers on it, and a success is shaped.
+#[tokio::test]
+async fn a_to_problem_error_answers_its_problem_from_a_shaped_route_and_an_sse_open() {
+    for client in clients::<DomainModule>().await {
+        for failed in [
+            client.post("/domain/transfer?amount=500").send().await,
+            client.get("/domain/statement?amount=500").send().await,
+            client.get("/domain/movements?amount=500").send().await,
+        ] {
+            failed.assert_status(StatusCode::CONFLICT);
+            failed.assert_content_type("application/problem+json");
+            failed.assert_header_is_not_exist("x-ledger");
+            assert_eq!(
+                problem_json(failed).await,
+                serde_json::json!({
+                    "type": "https://example.com/problems/overdrawn",
+                    "title": "Account overdrawn",
+                    "status": 409,
+                    "detail": "account 7 is overdrawn",
+                    "code": "CONFLICT",
+                }),
+            );
+        }
+
+        let created = client.post("/domain/transfer?amount=5").send().await;
+        created.assert_status(StatusCode::CREATED);
+        created.assert_text("moved 5").await;
+        let statement = client.get("/domain/statement?amount=5").send().await;
+        statement.assert_status_is_ok();
+        statement.assert_header("x-ledger", "7");
+        statement.assert_text("moved 5").await;
+        let movements = client.get("/domain/movements?amount=5").send().await;
+        movements.assert_status_is_ok();
+        let body = movements
+            .0
+            .into_body()
+            .into_string()
+            .await
+            .unwrap_or_default();
+        assert!(body.contains("data: moved 5"), "the stream opens: {body:?}");
+    }
+}
+
+/// A `ToProblem` error answering a `5xx` keeps its chain from the client and
+/// files it once — a `503`'s at `warn` with its wait, one saying no problem
+/// at `error` behind the one opaque document.
+#[tokio::test]
+async fn a_to_problem_server_error_files_the_chain_it_withholds() {
+    for client in clients::<DomainModule>().await {
+        let logs = nest_rs_testing::LogCapture::install();
+        let busy = client.get("/domain/busy").send().await;
+        busy.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        busy.assert_header(nest_rs_http::header::RETRY_AFTER, "30");
+        assert_eq!(problem_json(busy).await["code"], "UNAVAILABLE");
+        assert_eq!(
+            filed(&logs),
+            [(
+                "warn".to_owned(),
+                "request unavailable".to_owned(),
+                Some("the ledger is busy: the ledger at 10.0.0.1 timed out".to_owned()),
+            )],
+        );
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let down = client.get("/domain/down").send().await;
+        down.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(problem_json(down).await, internal_document());
+        assert_eq!(
+            filed(&logs),
+            [(
+                "error".to_owned(),
+                "request failed".to_owned(),
+                Some("the ledger at 10.0.0.1 holds secret 42".to_owned()),
+            )],
+        );
     }
 }
 

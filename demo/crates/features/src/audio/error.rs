@@ -1,4 +1,3 @@
-use nest_rs::http::{ResponseError, StatusCode};
 use nest_rs::queue::QueueError;
 use nest_rs::storage::StorageError;
 
@@ -10,12 +9,6 @@ pub enum AudioError {
     Queue(#[from] QueueError),
     #[error("audio transcode record operation failed")]
     Transcodes(#[from] redis::RedisError),
-}
-
-impl ResponseError for AudioError {
-    fn status(&self) -> StatusCode {
-        StatusCode::INTERNAL_SERVER_ERROR
-    }
 }
 
 #[cfg(test)]

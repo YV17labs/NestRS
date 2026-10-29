@@ -6,8 +6,8 @@ use futures_util::StreamExt;
 use nest_rs::authz::Manage;
 use nest_rs::core::error_message;
 use nest_rs::http::{
-    Body, Header, HeaderValue, HttpError, Json, Query, Response, Result, SseEvent, SseStream,
-    StatusCode, Valid, controller, routes,
+    Body, Header, HeaderValue, HttpError, Json, Opaque, Query, Response, Result, SseEvent,
+    SseStream, StatusCode, Valid, controller, routes,
 };
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
@@ -43,7 +43,7 @@ impl AudioController {
                        `Transcoding`)."
     )]
     async fn create_upload(&self) -> Result<Json<PresignedUrlDto>> {
-        Ok(Json(self.svc.presign_upload().await?))
+        Ok(Json(self.svc.presign_upload().await.opaque()?))
     }
 
     #[get("/results")]
@@ -58,7 +58,7 @@ impl AudioController {
     )]
     async fn result(&self, query: Valid<Query<TranscodeDto>>) -> Result<Json<PresignedUrlDto>> {
         let file = query.into_inner().file;
-        match self.svc.presign_result(file).await? {
+        match self.svc.presign_result(file).await.opaque()? {
             Some(ticket) => Ok(Json(ticket)),
             None => Err(HttpError::from_status(StatusCode::NOT_FOUND)),
         }
@@ -82,7 +82,8 @@ impl AudioController {
         Ok(Json(
             self.svc
                 .store_upload(upload.part.into_byte_stream())
-                .await?,
+                .await
+                .opaque()?,
         ))
     }
 
@@ -101,7 +102,7 @@ impl AudioController {
     )]
     async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
         let file = query.into_inner().file;
-        match self.svc.open_result(file).await? {
+        match self.svc.open_result(file).await.opaque()? {
             Some(stream) => Ok(Response::builder()
                 .content_type(HeaderValue::from_static("audio/mpeg"))
                 .body(Body::from_stream(stream))),
@@ -170,7 +171,10 @@ impl AudioController {
     )]
     #[http_code(202)]
     async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<()> {
-        self.svc.enqueue_transcode(body.into_inner().file).await?;
+        self.svc
+            .enqueue_transcode(body.into_inner().file)
+            .await
+            .opaque()?;
         Ok(())
     }
 }

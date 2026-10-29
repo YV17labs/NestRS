@@ -141,16 +141,22 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
         .send()
         .await;
     republished.assert_status_is_ok();
-    assert!(
-        republished
-            .json()
-            .await
-            .value()
-            .object()
-            .get_opt("errors")
-            .is_some(),
-        "republishing an already-published post must conflict",
+    let republished = republished.json().await;
+    let extensions = republished
+        .value()
+        .object()
+        .get("errors")
+        .array()
+        .get(0)
+        .object()
+        .get("extensions")
+        .object();
+    assert_eq!(extensions.get("code").string(), "CONFLICT");
+    assert_eq!(
+        extensions.get("type").string(),
+        "https://nestrs.dev/problems/post-already-published",
     );
+    assert_eq!(extensions.get("title").string(), "Post already published");
 
     let by_id = json!({ "query": format!("{{ post(id: \"{post_a}\") {{ status }} }}") });
     let again = app

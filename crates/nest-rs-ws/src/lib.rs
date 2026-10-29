@@ -182,7 +182,7 @@ mod view;
 pub use config::WsConfig;
 pub use envelope::{
     ErrorReport, ErrorReportChain, ErrorReportFallback, ErrorReportLocal, HandlerFailed,
-    ReplyOutcome, ReplyValue, ReplyValueFallback, WsEnvelope, WsError, WsReply,
+    ReplyOutcome, ReplyValue, ReplyValueFallback, WsEnvelope, WsError, WsProblemType, WsReply,
 };
 pub use gateway::Gateway;
 pub use guard::denial_to_ws_error;

@@ -13,11 +13,11 @@ use http::{Extensions, StatusCode};
 
 use nest_rs_core::__private::Withheld;
 use nest_rs_core::problem::code;
-use nest_rs_core::{DecodeError, Problem};
+use nest_rs_core::{DecodeError, Problem, ToProblem};
 
 use crate::headers::one_of;
 use crate::origin::OriginScheme;
-use crate::problem::{ProblemDetails, problem_response};
+use crate::problem::{ProblemDetails, problem_response, status_of};
 use crate::response::{IntoResponse, Response};
 
 /// Any error, boxed: a body's, or the cause an [`HttpError`] carries.
@@ -84,28 +84,40 @@ impl ResponseError for BodyError {
     }
 }
 
-/// An error that knows its HTTP answer, so `?` on it answers its status.
+/// An error that builds its own HTTP answer, so `?` on it answers its status.
+///
+/// A domain error implements [`ToProblem`] instead, its one mapping on every
+/// edge: a route returning it answers the problem it says, and
+/// [`problem_error`] converts one where a body answers an [`HttpError`]. This
+/// trait is for an answer that is no problem — another protocol's (RFC 6749
+/// §5.2's token error), a challenge, a response of its own — and for the
+/// edge's own refusals ([`BodyError`]).
 ///
 /// Rendering it files nothing: what a `5xx` answer keeps from the client of
 /// its chain is filed by the edge, once the answer is final, by the status it
 /// went out with.
 ///
 /// ```
-/// use nest_rs_http::{HttpError, ResponseError, StatusCode};
+/// use nest_rs_http::{HttpError, IntoResponse, Json, Response, ResponseError, StatusCode};
 ///
 /// #[derive(Debug, thiserror::Error)]
-/// #[error("the order is already paid")]
-/// struct AlreadyPaid;
+/// #[error("the grant is invalid")]
+/// struct InvalidGrant;
 ///
-/// impl ResponseError for AlreadyPaid {
+/// impl ResponseError for InvalidGrant {
 ///     fn status(&self) -> StatusCode {
-///         StatusCode::CONFLICT
+///         StatusCode::BAD_REQUEST
+///     }
+///
+///     fn as_response(&self) -> Response {
+///         let body = serde_json::json!({ "error": "invalid_grant" });
+///         (self.status(), Json(body)).into_response()
 ///     }
 /// }
 ///
-/// let error = HttpError::from(AlreadyPaid);
-/// assert_eq!(error.status(), StatusCode::CONFLICT);
-/// assert!(error.is::<AlreadyPaid>());
+/// let error = HttpError::from(InvalidGrant);
+/// assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+/// assert!(error.is::<InvalidGrant>());
 /// ```
 pub trait ResponseError {
     /// The status this error answers.
@@ -122,8 +134,9 @@ pub trait ResponseError {
     }
 }
 
-/// A [`Problem`] answers its status, its document with the `code` member and
-/// its `Retry-After`, so `?` on one answers it.
+/// A [`Problem`] answers its status, its document — its `type`, `title` and
+/// `code` member, its `detail` and field map on a `4xx` — and its
+/// `Retry-After`, so `?` on one answers it.
 ///
 /// ```
 /// use nest_rs_core::Problem;
@@ -135,13 +148,57 @@ pub trait ResponseError {
 /// ```
 impl ResponseError for Problem {
     fn status(&self) -> StatusCode {
-        // `Problem::new` holds its status to 400..=599, every one of them valid.
-        StatusCode::from_u16(Problem::status(self)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+        status_of(self)
     }
 
     fn as_response(&self) -> Response {
         problem_response(self)
     }
+}
+
+/// The [`HttpError`] a [`ToProblem`] error answers: the problem it says — its
+/// status, and its document with its `type`, `title` and `code` member, its
+/// `detail` and field map on a `4xx`, and its `Retry-After` — or, when it says
+/// none, the opaque `500`. The error stays its cause, for an exception filter
+/// and for the operator: the chain a `5xx` answer withholds is filed once the
+/// answer is final, as on every edge.
+///
+/// A route returning the error answers through it already; a body answering
+/// an [`HttpError`] converts with it, as GraphQL's and MCP's `problem_error`
+/// convert for theirs.
+///
+/// ```
+/// use nest_rs_core::problem::code;
+/// use nest_rs_core::{Problem, ToProblem};
+/// use nest_rs_http::StatusCode;
+///
+/// #[derive(Debug, thiserror::Error)]
+/// #[error("the order is already paid")]
+/// struct AlreadyPaid;
+///
+/// impl ToProblem for AlreadyPaid {
+///     fn to_problem(&self) -> Option<Problem> {
+///         Some(Problem::new(409, code::CONFLICT).with_detail(self.to_string()))
+///     }
+/// }
+///
+/// let error = nest_rs_http::problem_error(AlreadyPaid);
+/// assert_eq!(error.status(), StatusCode::CONFLICT);
+/// assert!(error.is::<AlreadyPaid>());
+/// ```
+pub fn problem_error<E: ToProblem>(error: E) -> HttpError {
+    let status = error
+        .to_problem()
+        .map_or(StatusCode::INTERNAL_SERVER_ERROR, |problem| {
+            status_of(&problem)
+        });
+    HttpError::with(
+        status,
+        Cause::Typed {
+            error: Box::new(error),
+            render: render_problem::<E>,
+        },
+    )
 }
 
 /// An HTTP failure: a status, the error that caused it, and typed extensions
@@ -167,7 +224,7 @@ struct Repr {
     extensions: Extensions,
 }
 
-/// How a [`ResponseError`] answers on the wire, from a borrow.
+/// How an error rendering itself answers on the wire, from a borrow.
 type RenderTyped = fn(&BoxError, StatusCode) -> Response;
 
 enum Cause {
@@ -177,7 +234,8 @@ enum Cause {
     Response(Response),
     /// An error rendered as a problem document of the status.
     Error(BoxError),
-    /// A [`ResponseError`], rendered by its own `as_response`.
+    /// An error rendering itself: a [`ResponseError`] by its own
+    /// `as_response`, a [`ToProblem`] error by the problem it says.
     Typed {
         error: BoxError,
         render: RenderTyped,
@@ -416,7 +474,7 @@ impl HttpError {
     }
 
     /// What a `status` answer keeps from the client of this error: the chain
-    /// it carries behind a `5xx` — a [`ResponseError`]'s too, whatever it
+    /// it carries behind a `5xx` — an error rendering itself too, whatever it
     /// rendered — unless that is a bare [`Problem`], or a [`ProblemDetails`]
     /// rendering itself, which answers all it holds. A status alone and a
     /// ready response carry none.
@@ -433,8 +491,8 @@ impl HttpError {
     }
 
     /// The error chain this error renders from, when it is one the edge reads:
-    /// a [`ResponseError`] renders itself, so its chain is never read for a
-    /// [`Problem`].
+    /// an error rendering itself says its own answer, so its chain is never
+    /// read for a [`Problem`].
     fn chain(&self) -> Option<&(dyn Error + 'static)> {
         match &self.0.cause {
             Cause::Anyhow(error) => Some(error.as_ref()),
@@ -463,6 +521,15 @@ pub(crate) fn file(withheld: Withheld) {
             error = %said,
             "request unavailable",
         ),
+    }
+}
+
+/// A [`ToProblem`] error's problem, behind the box that erased its type; the
+/// status's own document, the opaque `500`, when it says none.
+fn render_problem<E: ToProblem>(error: &BoxError, status: StatusCode) -> Response {
+    match error.downcast_ref::<E>().and_then(ToProblem::to_problem) {
+        Some(problem) => problem_response(&problem),
+        None => ProblemDetails::from_status(status).into_response(),
     }
 }
 

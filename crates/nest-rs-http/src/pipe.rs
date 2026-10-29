@@ -61,7 +61,7 @@ into_inner!(Json<T>, Path<T>, Query<T>, Form<T>, Header<T>);
 pub fn pipe_error(err: &PipeError) -> HttpError {
     let mut problem = ProblemDetails::bad_request().with_detail(err.message().to_owned());
     if let Some(details) = err.details() {
-        problem = problem.with_extension("errors", details.clone());
+        problem = problem.with_extension(crate::problem::FIELD_ERRORS, details.clone());
     }
     problem.into()
 }

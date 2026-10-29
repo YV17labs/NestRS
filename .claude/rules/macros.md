@@ -115,14 +115,20 @@ shapes.
 generated code. The impls rmcp needs are emitted inside a private child module
 that carries the `rmcp` import itself, so the developer's file names no `rmcp`;
 the router is generated `pub(crate)` so the parent reads the real tool list, not
-an empty fallback. A host's advertised capabilities are derived from the roles
-present (`#[tool]` ⇒ `tools`, `#[prompt]` ⇒ `prompts`), never restated. A host
-that owns its `ServerHandler` (resources, completion) writes rmcp directly and
-has no `#[tools]` block; `#[tools]` on a trait impl is a compile error saying so.
-Such a host declares no operation for its layers to reach, so a layer or a
-`#[meta]` beside its `#[mcp]` is a compile error at the attribute: the struct
-half asks the host for `ToolsHost`, which only `#[tools]` implements.
-`demo`'s `posts` host stays on that raw shape as its witness.
+an empty fallback. rmcp has no resource router, so `#[tools]` writes
+`list_resources`, `list_resource_templates` and `read_resource` itself: a
+`#[resource(template = "…")]` reads the URIs its RFC 6570 level-1 template
+writes, each variable a typed parameter, and `#[resources]` is the one listing
+(`.claude/decisions/mcp-resources-declared.md`). A host's advertised
+capabilities are derived from the roles present (`#[tool]` ⇒ `tools`,
+`#[prompt]` ⇒ `prompts`, `#[resource]` or `#[resources]` ⇒ `resources`), never
+restated. A host that owns its `ServerHandler` — completion, logging levels,
+subscriptions, the `tasks/*` trio — writes rmcp directly and has no `#[tools]`
+block; `#[tools]` on a trait impl is a compile error saying so. Such a host
+declares no operation for its layers to reach, so a layer or a `#[meta]` beside
+its `#[mcp]` is a compile error at the attribute: the struct half asks the host
+for `ToolsHost`, which only `#[tools]` implements. Completion is that shape's
+witness, in `nest-rs-mcp`'s registry suite; no `demo` feature serves one.
 
 ## The impl half — one method grammar at every member
 
@@ -159,8 +165,9 @@ answers to `Discoverable::injected_per_request`, so the access graph checks it.
 Spelling decides only what no value can tell a macro, and each such reading is
 stated in the decorator's rustdoc: the wrapper async-graphql's derive itself
 reads by name, the `Json<T>` rmcp derives a tool's output schema from, the
-shape a masked MCP or WS operation unwraps, which `#[subscribe_message]`
-parameter is the payload (`&WsClient` by its reference, `Scoped<T>` by its
+shape a masked MCP or WS operation unwraps (`Json<T>`, a resource's
+`Option<Json<T>>`), the template variable a `#[resource]` parameter's name
+spells, which `#[subscribe_message]` parameter is the payload (`&WsClient` by its reference, `Scoped<T>` by its
 name — resolved through `nest_rs_ws::__private::scoped_parameter`, which
 returns that crate's own `Scoped`, so a namesake does not compile), and what an
 OpenAPI document infers (`#[api(response = T)]` states what spelling hides).
@@ -229,9 +236,9 @@ own decorator, then the impl half's expansion, then the boot (*Discovery* in
 `container.md`) — with a trybuild snapshot per refused shape and one that tries
 the escape.
 
-**`#[tool]` and `#[prompt]` fall back to the doc comment** when no
-`description` is given, so a consumer who writes comments never states the
-sentence twice. The attribute wins; an operation with neither, or a blank one,
+**`#[tool]`, `#[prompt]` and `#[resource]` fall back to the doc comment**
+when no `description` is given, so a consumer who writes comments never states
+the sentence twice. The attribute wins; an operation with neither, or a blank one,
 is a compile error; no other decorator falls back — `#[api]` takes its argument
 or nothing. `demo/` and the templates always write the argument (`demo.md`).
 

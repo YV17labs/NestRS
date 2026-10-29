@@ -1,0 +1,5 @@
+error: `#[authorize(...)]` cannot mask a #[resources] listing — its entries are URIs and names, opaque to the entity round-trip. Keep the gate and list only what the caller may read: `#[authorize(Action, Entity, unmasked)]`
+  --> tests/integration/diagnostics/mcp/resource_listing_masked.rs:21:14
+   |
+21 |     async fn users(&self) -> Result<Vec<Resource>, McpError> {
+   |              ^^^^^

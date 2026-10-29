@@ -10,7 +10,8 @@
 //! # An operation runs the layers every other edge runs
 //!
 //! Each request is one `mcp.operation` unit on core's pipeline, and a
-//! `#[tool]` / `#[prompt]` is a site of its own inside it, taking
+//! `#[tool]`, `#[prompt]`, `#[resource]` or `#[resources]` is a site of its
+//! own inside it, taking
 //! `#[use_guards(...)]` / `#[force_guards(...)]`, a **mandatory** access
 //! posture (`#[authorize(Action, Entity)]` or `#[public]`),
 //! `#[use_exception_filters(...)]`, `#[use_interceptors(...)]`, `Scoped<T>`
@@ -26,8 +27,12 @@
 //!
 //! # Every capability, not just tools
 //!
-//! A host serves `#[tool_router]`/`#[tool]` tools, `#[prompt_router]`/`#[prompt]`
-//! prompts, and whatever else it implements by hand on `ServerHandler`. The
+//! Under `#[tools]` a host serves tools, prompts and resources — a
+//! `#[resource(template = "post://{id}")]` read takes the RFC 6570 template's
+//! variables as typed arguments, a `#[resources]` method lists what can be
+//! read — and the capabilities it advertises are derived from them. What no
+//! decorator declares — completion, logging levels, subscriptions — a host
+//! writes by hand on rmcp's `ServerHandler`, with no `#[tools]` block. The
 //! protocol types live under [`model`], the per-operation handles under
 //! [`service`], and anything not re-exported here under [`rmcp`].
 //!
@@ -73,11 +78,13 @@ mod operation;
 mod parameters;
 mod propagate;
 mod registry;
+mod resource;
 mod scope;
 mod sessions;
 #[cfg(test)]
 mod testing;
 pub mod unit;
+mod uri_template;
 mod view;
 
 pub use composite::CompositeHandler;
@@ -90,7 +97,7 @@ pub use module::{McpModule, McpOptions, McpSetup};
 pub use operation::{McpOperationKind, current_container};
 pub use propagate::PropagatingHandler;
 pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity, hosts_on};
-/// The `#[injectable(scope = request)]` provider a tool or a prompt takes as a
+/// The `#[injectable(scope = request)]` provider an operation takes as a
 /// parameter — the MCP mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::Scoped;
 pub use view::McpView;
@@ -103,6 +110,7 @@ pub mod __private {
     pub use crate::endpoint::{McpMount, endpoint};
     pub use crate::error::{
         ErrorReport, ErrorReportChain, OperationAnswer, OperationFailure, answer_of,
+        resource_not_found,
     };
     pub use crate::identity::declared_identity;
     pub use crate::operation::{
@@ -113,7 +121,11 @@ pub mod __private {
         DeclaredRoutes, DefaultDeclaredRoutes, DefaultOperationLayers, DefaultPromptRouter,
         DefaultToolRouter, ENDPOINT, ToolsHost, declare_endpoint, register_host,
     };
+    pub use crate::resource::{
+        MimeProbe, MimeProbeFallback, MimeProbeReads, ResourceBody, ResourceListing,
+    };
     pub use crate::scope::scoped;
+    pub use crate::uri_template::{TemplateMatch, TemplatePart, UriTemplate};
     pub use rmcp::handler::server::prompt::IntoGetPromptResult;
     pub use rmcp::handler::server::tool::IntoCallToolResult;
 }
@@ -309,6 +321,52 @@ pub use nest_rs_mcp_macros::mcp;
 /// let arguments = serde_json::json!({ "name": "ada" });
 /// let body = call_tool_with(app.http(), DEFAULT_PATH, "find", None, arguments).await;
 /// assert_eq!(result(&body)["result"]["content"][0]["text"], "ada");
+/// # Ok(())
+/// # }
+/// ```
+///
+/// A resource is read at a URI its template writes, each `{variable}` an
+/// argument parsed with `FromStr`; `None` is a resource the caller may not
+/// read, answered as one no template reads:
+///
+/// ```
+/// use nest_rs_mcp::{McpError, mcp, tools};
+/// # use nest_rs_core::{Posture, module};
+/// # use nest_rs_mcp::{DEFAULT_PATH, McpModule, McpOptions};
+/// # use nest_rs_testing::mcp::{call_method, open_session, result};
+///
+/// #[mcp]
+/// #[derive(Default)]
+/// struct NotesHost;
+///
+/// #[tools]
+/// impl NotesHost {
+///     #[resource(template = "note://{id}", description = "One note's text.")]
+///     #[public]
+///     async fn note(&self, id: u32) -> Result<Option<String>, McpError> {
+///         Ok((id == 1).then(|| "the first note".to_owned()))
+///     }
+/// }
+/// # #[module(imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })], providers = [NotesHost])]
+/// # struct AppModule;
+/// #
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+/// # let session = open_session(app.http(), DEFAULT_PATH, None).await;
+/// # let read = |uri: &'static str| {
+/// #     let (http, session) = (app.http(), session.clone());
+/// #     async move {
+/// #         let params = serde_json::json!({ "uri": uri });
+/// #         result(&call_method(http, DEFAULT_PATH, &session, None, "resources/read", params).await)
+/// #     }
+/// # };
+///
+/// let found = read("note://1").await;
+/// assert_eq!(found["result"]["contents"][0]["text"], "the first note");
+///
+/// let missing = read("note://2").await;
+/// assert_eq!(missing["error"]["message"], "Resource not found");
 /// # Ok(())
 /// # }
 /// ```

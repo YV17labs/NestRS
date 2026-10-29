@@ -15,6 +15,8 @@ use nest_rs_codegen::__private::{
     layer_deps, reject_path, scoped_specs,
 };
 
+use crate::mcp_impl::Role;
+
 pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
     match pair::MCP.parse_host(input.into()) {
         Ok(item) => mcp_struct(args, item),
@@ -32,7 +34,7 @@ pub(crate) fn tools(args: TokenStream, input: TokenStream) -> TokenStream {
     // binds a layer, so a refused block still emits a default `ServerHandler`
     // and the marker, or the refusal gains an unsatisfied-bound error.
     pair::MCP
-        .keep_item_on_refusal(written, expansion.into(), &["tool", "prompt"], |item| {
+        .keep_item_on_refusal(written, expansion.into(), &Role::names(), |item| {
             let self_ty = &item.self_ty;
             let (impl_generics, _, where_clause) = item.generics.split_for_impl();
             quote! {
@@ -202,8 +204,9 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
                     },
                     || {
                         // An inherent router (the impl half's `pub(crate)` one, or
-                        // rmcp's) shadows each empty fallback; the mount routes a
-                        // name, and the boot checks it is claimed once, on these.
+                        // rmcp's) and the impl half's templates shadow each empty
+                        // fallback; the mount routes a name, and the boot checks
+                        // it is claimed once, on these.
                         use ::nest_rs_mcp::__private::{
                             DefaultDeclaredRoutes as _, DefaultPromptRouter as _,
                             DefaultToolRouter as _,
@@ -211,6 +214,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
                         ::nest_rs_mcp::__private::DeclaredRoutes::new(
                             <Self>::tool_router().list_all(),
                             <Self>::prompt_router().list_all(),
+                            <Self>::__nestrs_mcp_resource_templates(),
                             <Self>::__nestrs_mcp_declares_every_route(),
                         )
                     },

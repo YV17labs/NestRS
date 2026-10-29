@@ -510,7 +510,7 @@ pub(crate) fn said_by_code(code: ErrorCode) -> Option<&'static str> {
         ErrorCode::METHOD_NOT_FOUND => METHOD_NOT_FOUND,
         ErrorCode::INVALID_PARAMS => "Invalid params",
         ErrorCode::INTERNAL_ERROR => "Internal error",
-        ErrorCode::RESOURCE_NOT_FOUND => "Resource not found",
+        ErrorCode::RESOURCE_NOT_FOUND => RESOURCE_NOT_FOUND,
         ErrorCode::HEADER_MISMATCH => "Header mismatch",
         ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY => "Missing required client capability",
         ErrorCode::UNSUPPORTED_PROTOCOL_VERSION => "Unsupported protocol version",
@@ -533,6 +533,19 @@ pub(crate) fn refuses_tool(error: &McpError) -> bool {
 pub(crate) fn tool_not_found() -> McpError {
     McpError::invalid_params(TOOL_NOT_FOUND, ClassData::of(code::NOT_FOUND).into_data())
 }
+
+/// The refusal of a resource no `#[resource]` reads — no template writes its
+/// URI, a variable does not parse, or the method found nothing the caller may
+/// read — in MCP's words under the `NOT_FOUND` class, the URI never quoted.
+pub fn resource_not_found() -> McpError {
+    McpError::resource_not_found(
+        RESOURCE_NOT_FOUND,
+        ClassData::of(code::NOT_FOUND).into_data(),
+    )
+}
+
+/// MCP's words for a resource the server cannot read.
+const RESOURCE_NOT_FOUND: &str = "Resource not found";
 
 /// rmcp 3.8's answer to a session it does not hold, word for word.
 pub(crate) const SESSION_NOT_FOUND: &str = "Not Found: Session not found";

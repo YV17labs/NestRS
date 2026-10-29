@@ -19,7 +19,9 @@ use nest_rs_core::{
 };
 use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
 use nest_rs_http::{DetachedWork, HttpEndpointMeta, HttpRoutes, normalize_mount_path};
-use rmcp::model::{Prompt, ProtocolVersion, ServerCapabilities, ServerConfig, Tool};
+use rmcp::model::{
+    Prompt, ProtocolVersion, ResourceTemplate, ServerCapabilities, ServerConfig, Tool,
+};
 
 use crate::composite::{CompositeHandler, common_protocol_versions};
 use crate::endpoint::{McpMount, endpoint};
@@ -74,21 +76,30 @@ type OperationSites = fn() -> Vec<&'static Site>;
 /// every operation's site for.
 const ENDPOINTS: &str = "nest_rs::mcp::endpoints";
 
-/// The tools and prompts a host's routers declare, read without an instance.
+/// The tools, prompts and resource templates a host declares, read without an
+/// instance.
 pub struct DeclaredRoutes {
     tools: Vec<Tool>,
     prompts: Vec<Prompt>,
+    templates: Vec<ResourceTemplate>,
     complete: bool,
 }
 
 impl DeclaredRoutes {
-    /// `tools` and `prompts` as the host's routers list them; `complete` when
+    /// `tools` and `prompts` as the host's routers list them, and the
+    /// `templates` its `#[resource]` methods read through; `complete` when
     /// they are every tool and prompt the host serves, as `#[tools]` writes
     /// its whole handler.
-    pub fn new(tools: Vec<Tool>, prompts: Vec<Prompt>, complete: bool) -> Self {
+    pub fn new(
+        tools: Vec<Tool>,
+        prompts: Vec<Prompt>,
+        templates: Vec<ResourceTemplate>,
+        complete: bool,
+    ) -> Self {
         Self {
             tools,
             prompts,
+            templates,
             complete,
         }
     }
@@ -99,6 +110,12 @@ impl DeclaredRoutes {
 
     fn prompt_names(&self) -> impl Iterator<Item = String> + '_ {
         self.prompts.iter().map(|prompt| prompt.name.clone())
+    }
+
+    fn template_uris(&self) -> impl Iterator<Item = String> + '_ {
+        self.templates
+            .iter()
+            .map(|template| template.uri_template.clone())
     }
 }
 
@@ -140,8 +157,8 @@ impl McpHostMeta {
         (self.routes)()
     }
 
-    /// The sites its operations run, one per tool and prompt `#[tools]`
-    /// declares.
+    /// The sites its operations run, one per tool, prompt, resource and
+    /// listing `#[tools]` declares.
     pub(crate) fn operation_sites(&self) -> Vec<&'static Site> {
         (self.sites)()
     }
@@ -174,11 +191,17 @@ pub trait DefaultPromptRouter: Sized + Send + Sync + 'static {
 impl<T: Send + Sync + 'static> DefaultPromptRouter for T {}
 
 /// Fallback so `#[mcp]` can ask **any** host whether its routers are all it
-/// serves: only the `#[tools]` impl's inherent function answers yes.
+/// serves, and which resource templates it reads through: only the `#[tools]`
+/// impl's inherent functions answer otherwise.
 pub trait DefaultDeclaredRoutes: Sized + 'static {
     /// A host writing rmcp's handler by hand may serve more than its routers.
     fn __nestrs_mcp_declares_every_route() -> bool {
         false
+    }
+
+    /// No `#[resource]` method, so no template a boot check can read.
+    fn __nestrs_mcp_resource_templates() -> Vec<ResourceTemplate> {
+        Vec::new()
     }
 }
 
@@ -195,7 +218,7 @@ impl<T: 'static> DefaultDeclaredRoutes for T {}
     note = "a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host \
             writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate \
             nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the \
-            app's global guards, or move its tools and prompts under `#[tools]`"
+            app's global guards, or move its tools, prompts and resources under `#[tools]`"
 )]
 pub trait ToolsHost {}
 
@@ -321,6 +344,7 @@ fn check_endpoint(container: &Container, path: &str) -> Result<(), String> {
     }
     check_duplicate_tools(path, &hosts)?;
     check_duplicate_prompts(path, &hosts)?;
+    check_duplicate_templates(path, &hosts)?;
     warn_undeclared_tools(path, &hosts);
     check_protocol_versions(path, &hosts)
 }
@@ -385,6 +409,7 @@ struct ResolvedHost {
     name: &'static str,
     tools: BTreeSet<String>,
     prompts: BTreeSet<String>,
+    templates: BTreeSet<String>,
     /// Whether its routers are every tool and prompt it serves.
     complete: bool,
     instance: Arc<dyn McpHost>,
@@ -406,6 +431,7 @@ fn resolve(container: &Container, path: &str) -> Vec<ResolvedHost> {
                 name: meta.host(),
                 tools: routes.tool_names().collect(),
                 prompts: routes.prompt_names().collect(),
+                templates: routes.template_uris().collect(),
                 complete: routes.complete,
                 instance: meta.build(container),
                 meta,
@@ -480,11 +506,13 @@ pub(crate) struct MountIndex {
 
 impl MountIndex {
     /// The type path of the host declaring the tool or the prompt `name`, as
-    /// `kind` says which.
+    /// `kind` says which; `None` for a resource, which a URI addresses
+    /// through a template only its host reads.
     pub(crate) fn host(&self, kind: McpOperationKind, name: &str) -> Option<&'static str> {
         let routes = match kind {
             McpOperationKind::Tool => &self.tools,
             McpOperationKind::Prompt => &self.prompts,
+            McpOperationKind::Resource | McpOperationKind::Resources => return None,
         };
         routes
             .owner(name)
@@ -564,7 +592,12 @@ fn check_duplicate_tools(path: &str, hosts: &[ResolvedHost]) -> Result<(), Strin
             }
         }
     }
-    refuse_clashes(path, "tool", owners)
+    refuse_clashes(
+        path,
+        "tool",
+        "a tool is addressed by bare name within an endpoint, so rename one of them",
+        owners,
+    )
 }
 
 /// Fail boot when two hosts on one path declare the same prompt name: the
@@ -576,13 +609,38 @@ fn check_duplicate_prompts(path: &str, hosts: &[ResolvedHost]) -> Result<(), Str
             owners.entry(name).or_default().push(host.name);
         }
     }
-    refuse_clashes(path, "prompt", owners)
+    refuse_clashes(
+        path,
+        "prompt",
+        "a prompt is addressed by bare name within an endpoint, so rename one of them",
+        owners,
+    )
 }
 
-/// The boot failure naming every `kind` name more than one host claims.
+/// Fail boot when two hosts on one path read one resource template: the first
+/// to find a row would answer for the URI, the second's never read.
+fn check_duplicate_templates(path: &str, hosts: &[ResolvedHost]) -> Result<(), String> {
+    let mut owners: BTreeMap<&String, Vec<&'static str>> = BTreeMap::new();
+    for host in hosts {
+        for template in &host.templates {
+            owners.entry(template).or_default().push(host.name);
+        }
+    }
+    refuse_clashes(
+        path,
+        "resource template",
+        "a URI one template writes is read by one method within an endpoint, so change one \
+         of the templates",
+        owners,
+    )
+}
+
+/// The boot failure naming every `kind` name more than one host claims, and
+/// `why` a name is one host's.
 fn refuse_clashes(
     path: &str,
     kind: &str,
+    why: &str,
     owners: BTreeMap<&String, Vec<&'static str>>,
 ) -> Result<(), String> {
     let clashes: Vec<String> = owners
@@ -595,9 +653,7 @@ fn refuse_clashes(
         return Ok(());
     }
     Err(format!(
-        "duplicate MCP {kind} name on {path:?}: {} — a {kind} is addressed by bare \
-         name within an endpoint, so rename one of them or give each host its \
-         own path",
+        "duplicate MCP {kind} name on {path:?}: {} — {why}, or give each host its own path",
         clashes.join(", "),
     ))
 }

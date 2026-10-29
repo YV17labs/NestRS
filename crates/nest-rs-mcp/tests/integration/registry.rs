@@ -1510,6 +1510,51 @@ async fn a_duplicate_prompt_name_on_one_path_fails_boot() {
     );
 }
 
+/// A host reading notes through one template on a shared path.
+macro_rules! note_host {
+    ($host:ident, $text:literal) => {
+        #[mcp(path = "/template-clash")]
+        #[derive(Clone, Default)]
+        struct $host;
+
+        #[tools]
+        impl $host {
+            /// A note.
+            #[resource(template = "note://{id}")]
+            #[public]
+            async fn note(&self, id: u32) -> Result<String, McpError> {
+                Ok(format!("{} {id}", $text))
+            }
+        }
+    };
+}
+
+note_host!(FirstNotes, "first");
+note_host!(SecondNotes, "second");
+
+#[module(providers = [FirstNotes, SecondNotes])]
+struct ClashingTemplateModule;
+
+/// The first host to find a row would answer for every URI the template
+/// writes, the second's never read: the boot refuses it, as it refuses a
+/// tool's name.
+#[tokio::test]
+async fn a_duplicate_resource_template_on_one_path_fails_boot() {
+    let err = match TestApp::for_module::<ClashingTemplateModule>().await {
+        Ok(_) => panic!("two hosts reading one template must not boot"),
+        Err(err) => format!("{err:#}"),
+    };
+
+    assert!(
+        err.contains("duplicate MCP resource template name") && err.contains("note://{id}"),
+        "the failure names the contested template: {err}",
+    );
+    assert!(
+        err.contains("FirstNotes") && err.contains("SecondNotes"),
+        "…and both owning providers: {err}",
+    );
+}
+
 #[tokio::test]
 async fn a_bare_host_serves_the_default_endpoint() {
     let app = TestApp::for_module::<AlphaOnlyApp>()

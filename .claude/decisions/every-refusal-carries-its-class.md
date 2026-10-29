@@ -137,3 +137,14 @@ facts the entries above read off 3.5 moved with it.
   a JSON-RPC response or error sent statelessly is `400` with `-32600`,
   `stateless server does not accept JSON-RPC responses`, kept as a sentence
   that quotes nothing, where 3.5 answered `202`.
+
+## 2026-10-28 — a resource no `#[resource]` reads, written by the framework
+
+The entry of 2026-10-26 left a `-32002` as a host's own answer, since neither
+rmcp nor the framework wrote one. `#[tools]` now reads resources
+(`mcp-resources-declared.md`), and the `read_resource` it writes answers a URI
+no template reads, a variable that does not parse and a method's `None` with
+MCP's own words, *Resource not found*, under the `NOT_FOUND` class and quoting
+no URI — the one constructor, `nest_rs_mcp`'s `resource_not_found`, as
+`tool_not_found` is for a tool. A `-32002` a hand-written host builds keeps its
+`data`, as before.

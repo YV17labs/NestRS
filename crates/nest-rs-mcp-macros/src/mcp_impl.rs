@@ -2,9 +2,12 @@
 //!
 //! The authored methods are re-emitted untouched; each operation declares its
 //! `static` site — its guards, its posture's class gate, its exception filters
-//! and interceptors — and gets a generated wrapper carrying
-//! `#[tool(name = "…")]` that dispatches it through that site, its tail running
-//! pipes → `Scoped<T>` parameters → call → mask. rmcp's routers and
+//! and interceptors — and gets a generated wrapper that dispatches it through
+//! that site, its tail running pipes → `Scoped<T>` parameters → call → mask.
+//! A tool's or a prompt's wrapper carries `#[tool(name = "…")]` /
+//! `#[prompt(name = "…")]` for rmcp's routers; a resource's is called by the
+//! `read_resource` and `list_resources` the expansion writes itself, rmcp
+//! having no router for them (`resource.rs`). rmcp's routers and
 //! `ServerHandler` are emitted in a private child module that carries the
 //! `rmcp` import rmcp's macros resolve against. An inherent impl may sit in any
 //! module of the defining crate and still reach the parent's private fields
@@ -30,41 +33,60 @@ use nest_rs_codegen::__private::{
 };
 use nest_rs_codegen::snake_case;
 
+use crate::resource::{self, ResourceDecl};
+
 /// The decorated methods of one authored `impl`, partitioned by router.
 #[derive(Default)]
 struct Operations {
     tools: Vec<Operation>,
     prompts: Vec<Operation>,
+    /// The `#[resource]` reads, in declaration order: the order a URI is
+    /// offered to their templates.
+    resources: Vec<Operation>,
+    /// The `#[resources]` listing — one, unless `#[cfg]` keeps one of several.
+    listings: Vec<Operation>,
 }
 
 impl Operations {
     fn is_empty(&self) -> bool {
-        self.tools.is_empty() && self.prompts.is_empty()
+        self.tools.is_empty()
+            && self.prompts.is_empty()
+            && self.resources.is_empty()
+            && self.listings.is_empty()
     }
 
     fn all(&self) -> impl Iterator<Item = &Operation> {
-        self.tools.iter().chain(self.prompts.iter())
+        self.tools
+            .iter()
+            .chain(self.prompts.iter())
+            .chain(self.resources.iter())
+            .chain(self.listings.iter())
     }
 }
 
 /// Which router a decorated method belongs to.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Role {
+pub(crate) enum Role {
     Tool,
     Prompt,
+    Resource,
+    Resources,
 }
 
 impl Role {
     /// Every role with its bare attribute name and the bracketed form a
     /// diagnostic quotes.
-    const ALL: [(Self, &'static str, &'static str); 2] = [
+    const ALL: [(Self, &'static str, &'static str); 4] = [
         (Self::Tool, "tool", "#[tool]"),
         (Self::Prompt, "prompt", "#[prompt]"),
+        (Self::Resource, "resource", "#[resource]"),
+        (Self::Resources, "resources", "#[resources]"),
     ];
 
-    /// The bare attribute names, for the refusal that lists what is accepted.
-    fn names() -> [&'static str; 2] {
-        [Self::ALL[0].1, Self::ALL[1].1]
+    /// The bare attribute names, for the refusal that lists what is accepted
+    /// and the markers a refused block still strips.
+    pub(crate) fn names() -> [&'static str; 4] {
+        Self::ALL.map(|(_, name, _)| name)
     }
 
     /// The role an attribute gives a method, if it gives one.
@@ -89,15 +111,20 @@ impl Role {
         match self {
             Self::Tool => quote!(::nest_rs_mcp::McpOperationKind::Tool),
             Self::Prompt => quote!(::nest_rs_mcp::McpOperationKind::Prompt),
+            Self::Resource => quote!(::nest_rs_mcp::McpOperationKind::Resource),
+            Self::Resources => quote!(::nest_rs_mcp::McpOperationKind::Resources),
         }
     }
 
-    /// What rmcp's router takes this role's answer as, named where the
-    /// expansion cannot spell the answer's type.
+    /// What the wrapper turns this role's answer into, named where the
+    /// expansion cannot spell the answer's type: rmcp's router's trait for a
+    /// tool and a prompt, the framework's for a resource read and listing.
     fn wire_answer(self) -> TokenStream2 {
         match self {
             Self::Tool => quote!(::nest_rs_mcp::__private::IntoCallToolResult),
             Self::Prompt => quote!(::nest_rs_mcp::__private::IntoGetPromptResult),
+            Self::Resource => quote!(::nest_rs_mcp::__private::ResourceBody),
+            Self::Resources => quote!(::nest_rs_mcp::__private::ResourceListing),
         }
     }
 
@@ -106,7 +133,14 @@ impl Role {
         match self {
             Self::Tool => "tool",
             Self::Prompt => "prompt",
+            Self::Resource => "resource",
+            Self::Resources => "resources",
         }
+    }
+
+    /// Whether rmcp routes this role, through the wrapper's own attribute.
+    fn routed_by_rmcp(self) -> bool {
+        matches!(self, Self::Tool | Self::Prompt)
     }
 }
 
@@ -115,7 +149,8 @@ impl Role {
 struct Operation {
     role: Role,
     /// The role attribute as it will sit on the wrapper — description filled in
-    /// from the doc comment, `name` pinned to the authored method's own.
+    /// from the doc comment, `name` pinned to the authored method's own; empty
+    /// for a resource role, which rmcp does not route.
     role_attr: TokenStream2,
     /// A `const` refusing a blank description the expansion could only read as
     /// an expression — `None` when it was a literal, already checked here.
@@ -136,10 +171,13 @@ struct Operation {
     /// The authored method's `#[cfg]` conditions, which its router group, and so
     /// its wrapper and its route, are compiled under.
     cfgs: Vec<TokenStream2>,
-    /// The name a client calls it by.
+    /// The name a client calls it by — for a `#[resource]`, the template it
+    /// is read through; for the `#[resources]` listing, its method's name.
     wire_name: String,
     /// The method's `#[meta]` values.
     metas: Vec<syn::Expr>,
+    /// A `#[resource]`'s template and the parameters its variables fill.
+    resource: Option<ResourceDecl>,
 }
 
 impl Operation {
@@ -150,7 +188,7 @@ impl Operation {
     }
 }
 
-/// A `#[tool]` / `#[prompt]` parameter a request-scoped provider fills.
+/// An operation's parameter a request-scoped provider fills, whatever its role.
 struct ScopedArg {
     ident: syn::Ident,
     /// `Scoped<T>`, as written.
@@ -195,12 +233,24 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         ));
     }
     let (operations, declared) = take_operations(&mut item, &base)?;
-    let markers = declared.markers(&self_ty, &item.generics);
+    let markers = declared
+        .iter()
+        .map(|keys| keys.markers(&self_ty, &item.generics));
+    let markers = quote!(#(#markers)*);
     if operations.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.self_ty,
-            "#[tools] on an impl with no #[tool] or #[prompt] method has nothing to \
-             mount — drop the decorator, or mark the methods it should serve",
+            "#[tools] on an impl with no #[tool], #[prompt], #[resource] or #[resources] \
+             method has nothing to mount — drop the decorator, or mark the methods it \
+             should serve",
+        ));
+    }
+    if let (Some(listing), true) = (operations.listings.first(), operations.resources.is_empty()) {
+        return Err(syn::Error::new_spanned(
+            listing.name(),
+            "a #[resources] listing lists the URIs a #[resource] reads, and this #[tools] \
+             block declares none — declare the `#[resource(template = \"…\")]` that reads \
+             what it lists",
         ));
     }
 
@@ -237,6 +287,8 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         let prompts = (!operations.prompts.is_empty()).then(|| quote!(#[prompt_handler]));
         quote!(#tools #prompts)
     };
+    let resources = resources_impl(&self_ty, &generics, &operations)?;
+    let resource_methods = resource_handler_methods(&operations);
 
     // Each operation switches its surface on under its own `#[cfg]`, so a host
     // whose every tool is compiled out advertises no tools capability.
@@ -257,11 +309,15 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         };
         let tools = surface(&operations.tools, quote!(tools));
         let prompts = surface(&operations.prompts, quote!(prompts));
+        let resources = surface(&operations.resources, quote!(resources));
+        let listings = surface(&operations.listings, quote!(resources));
         quote! {{
             #[allow(unused_mut)]
             let mut __capabilities = ServerCapabilities::builder().build();
             #(#tools)*
             #(#prompts)*
+            #(#resources)*
+            #(#listings)*
             __capabilities
         }}
     };
@@ -297,6 +353,7 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let layer_keys = &layers.keys;
     let layer_labels = &layers.labels;
     let sites = site_items(&self_ty, &base, &operations);
+    let templates = template_items(&operations);
 
     let (impl_generics, ty_generics, where_clause) = &generics;
     Ok(quote! {
@@ -324,6 +381,8 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             pub fn __nestrs_mcp_declares_every_route() -> bool {
                 true
             }
+
+            #templates
         }
 
         impl #impl_generics ::nest_rs_mcp::__private::ToolsHost for #self_ty #ty_generics
@@ -345,12 +404,15 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
             #tool_impl
             #prompt_impl
+            #resources
 
             #handler_attrs
             impl #impl_generics ServerHandler for #self_ty #ty_generics #where_clause {
                 fn get_info(&self) -> ServerConfig {
                     ServerConfig::new(#capabilities)
                 }
+
+                #resource_methods
             }
         }
     })
@@ -433,6 +495,189 @@ fn router_impl(
     }))
 }
 
+/// The wrappers the generated `read_resource` and `list_resources` call, one
+/// per `#[resource]` and `#[resources]` method, in a plain impl: rmcp routes
+/// neither.
+fn resources_impl(
+    self_ty: &Type,
+    (impl_generics, ty_generics, where_clause): &Generics<'_>,
+    operations: &Operations,
+) -> syn::Result<Option<TokenStream2>> {
+    let wrappers = operations
+        .resources
+        .iter()
+        .chain(&operations.listings)
+        .map(|op| resource_wrapper(self_ty, op))
+        .collect::<syn::Result<Vec<_>>>()?;
+    if wrappers.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(quote! {
+        impl #impl_generics #self_ty #ty_generics #where_clause {
+            #(#wrappers)*
+        }
+    }))
+}
+
+/// The `ServerHandler` methods serving the resource roles: the listing, the
+/// templates and the read, which offers a URI to each template in
+/// declaration order — none reading it is `resource_not_found`.
+fn resource_handler_methods(operations: &Operations) -> TokenStream2 {
+    let listings = operations.listings.iter().map(|op| {
+        let cfgs = &op.cfgs;
+        let wrapper = &op.wrapper;
+        quote! {
+            #(#cfgs)*
+            async fn list_resources(
+                &self,
+                _request: ::core::option::Option<::nest_rs_mcp::model::PaginatedRequestParams>,
+                _context: ::nest_rs_mcp::service::RequestContext<
+                    ::nest_rs_mcp::service::RoleServer,
+                >,
+            ) -> ::core::result::Result<
+                ::nest_rs_mcp::model::ListResourcesResult,
+                ::nest_rs_mcp::McpError,
+            > {
+                self.#wrapper().await
+            }
+        }
+    });
+    if operations.resources.is_empty() {
+        return quote!(#(#listings)*);
+    }
+    let arms = operations.resources.iter().filter_map(|op| {
+        let decl = op.resource.as_ref()?;
+        let template = site_const_ident("template", op.name());
+        Some(resource::read_arm(decl, &template, &op.wrapper, &op.cfgs))
+    });
+    quote! {
+        #(#listings)*
+
+        async fn list_resource_templates(
+            &self,
+            _request: ::core::option::Option<::nest_rs_mcp::model::PaginatedRequestParams>,
+            _context: ::nest_rs_mcp::service::RequestContext<::nest_rs_mcp::service::RoleServer>,
+        ) -> ::core::result::Result<
+            ::nest_rs_mcp::model::ListResourceTemplatesResult,
+            ::nest_rs_mcp::McpError,
+        > {
+            ::core::result::Result::Ok(
+                ::nest_rs_mcp::model::ListResourceTemplatesResult::with_all_items(
+                    <Self>::__nestrs_mcp_resource_templates(),
+                ),
+            )
+        }
+
+        async fn read_resource(
+            &self,
+            request: ::nest_rs_mcp::model::ReadResourceRequestParams,
+            _context: ::nest_rs_mcp::service::RequestContext<::nest_rs_mcp::service::RoleServer>,
+        ) -> ::core::result::Result<
+            ::nest_rs_mcp::model::ReadResourceResponse,
+            ::nest_rs_mcp::McpError,
+        > {
+            let __nestrs_uri = request.uri;
+            #(#arms)*
+            ::core::result::Result::Err(::nest_rs_mcp::__private::resource_not_found())
+        }
+    }
+}
+
+/// Each `#[resource]`'s template, as a const of the host, and the templates
+/// `resources/templates/list` advertises and the boot checks.
+fn template_items(operations: &Operations) -> TokenStream2 {
+    if operations.resources.is_empty() {
+        return quote!();
+    }
+    let consts = operations.resources.iter().filter_map(|op| {
+        let decl = op.resource.as_ref()?;
+        let cfgs = &op.cfgs;
+        let name = site_const_ident("template", op.name());
+        let template = resource::template_const(decl);
+        Some(quote! {
+            #(#cfgs)*
+            #[doc(hidden)]
+            const #name: ::nest_rs_mcp::__private::UriTemplate = #template;
+        })
+    });
+    let advertised = operations.resources.iter().filter_map(|op| {
+        let decl = op.resource.as_ref()?;
+        let cfgs = &op.cfgs;
+        let template = resource::advertised(decl, &op.sig.output);
+        Some(quote! {
+            #(#cfgs)*
+            __nestrs_templates.push(#template);
+        })
+    });
+    quote! {
+        #(#consts)*
+
+        /// The templates the host's `#[resource]` methods read through, in
+        /// declaration order.
+        #[doc(hidden)]
+        pub fn __nestrs_mcp_resource_templates()
+            -> ::std::vec::Vec<::nest_rs_mcp::model::ResourceTemplate>
+        {
+            #[allow(unused_mut, reason = "every resource may be compiled out")]
+            let mut __nestrs_templates = ::std::vec::Vec::new();
+            #(#advertised)*
+            __nestrs_templates
+        }
+    }
+}
+
+/// The generated method a resource role is served through: the operation
+/// dispatched through its site, the authored method its tail, its answer read
+/// by its type — a `#[resource]`'s into the contents of the URI it was read
+/// at, the `#[resources]` listing's into the listing.
+fn resource_wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
+    let Operation {
+        role,
+        wrapper,
+        sig,
+        posture,
+        cfgs,
+        ..
+    } = op;
+    let variables = op
+        .resource
+        .iter()
+        .flat_map(|decl| &decl.variables)
+        .map(|arg| {
+            let (ident, ty) = (&arg.ident, &arg.ty);
+            quote!(#ident: #ty)
+        });
+    // At the return type, so a value that is no resource's answer is refused there.
+    let into = role.wire_answer();
+    let (params, output, answered) = if *role == Role::Resource {
+        let masked = masked(posture, sig)?;
+        let read = quote_spanned! {answer_span(sig)=>
+            #into::into_read(__nestrs_value, __nestrs_uri)
+        };
+        (
+            quote!(__nestrs_uri: ::std::string::String, #(#variables),*),
+            quote!(::nest_rs_mcp::model::ReadResourceResult),
+            quote!((#masked).and_then(|__nestrs_value| #read)),
+        )
+    } else {
+        let listed = quote_spanned! {answer_span(sig)=> #into::into_listing(__nestrs_value)};
+        (
+            quote!(),
+            quote!(::nest_rs_mcp::model::ListResourcesResult),
+            quote!(::core::result::Result::Ok(#listed)),
+        )
+    };
+    let body = dispatch(self_ty, op, quote!(), answered)?;
+    Ok(quote! {
+        #(#cfgs)*
+        async fn #wrapper(&self, #params)
+            -> ::core::result::Result<#output, ::nest_rs_mcp::McpError>
+        {
+            #body
+        }
+    })
+}
+
 /// The three halves of `Generics::split_for_impl`.
 type Generics<'a> = (
     syn::ImplGenerics<'a>,
@@ -451,7 +696,6 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         posture,
         pipes,
         scoped,
-        wire_name,
         ..
     } = op;
     let name = op.name();
@@ -495,6 +739,37 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
     };
 
     let pipe_prelude = pipes.iter().map(pipe_statement);
+    let body = dispatch(
+        self_ty,
+        op,
+        quote!(#(#pipe_prelude)*),
+        masked(posture, sig)?,
+    )?;
+    Ok(quote! {
+        #role_attr
+        #wire_sig {
+            #body
+        }
+    })
+}
+
+/// Every wrapper's body: the operation dispatched through its site, its tail
+/// running `prelude`, the `Scoped<T>` parameters and the authored method,
+/// whose value `answered` turns into what the wrapper returns.
+fn dispatch(
+    self_ty: &Type,
+    op: &Operation,
+    prelude: TokenStream2,
+    answered: TokenStream2,
+) -> syn::Result<TokenStream2> {
+    let Operation {
+        role,
+        sig,
+        scoped,
+        wire_name,
+        ..
+    } = op;
+    let name = op.name();
     let scoped_prelude = scoped.iter().map(|ScopedArg { ident, ty }| {
         quote! { let #ident: #ty = ::nest_rs_mcp::__private::scoped()?; }
     });
@@ -505,39 +780,35 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
     let answer = quote_spanned! {answer_span(sig)=>
         ::nest_rs_mcp::__private::answer_of(#returned_by)
     };
-    let answered = masked(posture, sig)?;
     let site = site_ref(self_ty, name);
     let kind = role.kind();
     let wire_name = LitStr::new(wire_name, name.span());
     Ok(quote! {
-        #role_attr
-        #wire_sig {
-            ::nest_rs_mcp::__private::run_operation(
-                #site,
-                ::nest_rs_mcp::__private::operation_view(
-                    #kind,
-                    #wire_name,
-                    ::core::any::type_name::<#self_ty>(),
-                ),
-                move || async move {
-                    #(#pipe_prelude)*
-                    #(#scoped_prelude)*
-                    let #returned_by = #call;
-                    match #answer {
-                        ::core::result::Result::Ok(__nestrs_value) => #answered,
-                        ::core::result::Result::Err(__nestrs_error) => {
-                            #[allow(unused_imports)]
-                            use ::nest_rs_mcp::__private::ErrorReportChain as _;
-                            ::core::result::Result::Err(
-                                ::nest_rs_mcp::__private::ErrorReport(__nestrs_error)
-                                    .into_failure(),
-                            )
-                        }
+        ::nest_rs_mcp::__private::run_operation(
+            #site,
+            ::nest_rs_mcp::__private::operation_view(
+                #kind,
+                #wire_name,
+                ::core::any::type_name::<#self_ty>(),
+            ),
+            move || async move {
+                #prelude
+                #(#scoped_prelude)*
+                let #returned_by = #call;
+                match #answer {
+                    ::core::result::Result::Ok(__nestrs_value) => #answered,
+                    ::core::result::Result::Err(__nestrs_error) => {
+                        #[allow(unused_imports)]
+                        use ::nest_rs_mcp::__private::ErrorReportChain as _;
+                        ::core::result::Result::Err(
+                            ::nest_rs_mcp::__private::ErrorReport(__nestrs_error)
+                                .into_failure(),
+                        )
                     }
-                },
-            )
-            .await
-        }
+                }
+            },
+        )
+        .await
     })
 }
 
@@ -597,7 +868,8 @@ fn pipe_statement(arg: &PipedArg) -> TokenStream2 {
 /// the posture arms it.
 ///
 /// `Json<T>` is unwrapped before masking and rewrapped after: rmcp's wrapper is
-/// neither `Serialize` nor `DeserializeOwned`.
+/// neither `Serialize` nor `DeserializeOwned`. A resource's `Option<Json<T>>`
+/// is masked inside the `Option`, `None` passing through.
 fn masked(posture: &Posture, sig: &Signature) -> syn::Result<TokenStream2> {
     let unmasked = quote!(::core::result::Result::Ok(__nestrs_value));
     let Posture::Authorize {
@@ -622,16 +894,33 @@ fn masked(posture: &Posture, sig: &Signature) -> syn::Result<TokenStream2> {
         && let Some(last) = path.path.segments.last()
         && matches!(
             last.ident.to_string().as_str(),
-            "CallToolResult" | "CallToolResponse"
+            "CallToolResult" | "CallToolResponse" | "ReadResourceResult"
         )
     {
         return Err(syn::Error::new_spanned(
             &sig.output,
-            "`#[authorize(...)]` cannot mask a `CallToolResult` — its content blocks are \
-             opaque to the entity round-trip. Return the wire type (`Json<T>` or `T`) and \
-             let the mask run, or keep the gate and mask by hand with \
-             `#[authorize(Action, Entity, unmasked)]` + `nest_rs_authz::masked_reply`",
+            format!(
+                "`#[authorize(...)]` cannot mask a `{opaque}` — its contents are opaque to \
+                 the entity round-trip. Return the wire type (`Json<T>` or `T`) and let the \
+                 mask run, or keep the gate and mask by hand with \
+                 `#[authorize(Action, Entity, unmasked)]` + `nest_rs_authz::masked_reply`",
+                opaque = last.ident,
+            ),
         ));
+    }
+
+    if let Some(inner) = nth_generic_type(ok_ty, "Option", 0)
+        .and_then(|optional| nth_generic_type(optional, "Json", 0))
+    {
+        return Ok(quote! {
+            __nestrs_value
+                .map(|::nest_rs_mcp::Json(__nestrs_out)| {
+                    ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, #inner>(__nestrs_out)
+                        .map(::nest_rs_mcp::Json)
+                })
+                .transpose()
+                .map_err(::nest_rs_mcp::__private::OperationFailure::from)
+        });
     }
 
     if let Some(inner) = nth_generic_type(ok_ty, "Json", 0) {
@@ -662,13 +951,24 @@ fn result_ok_type(sig: &Signature) -> Option<&Type> {
 fn take_operations(
     item: &mut ItemImpl,
     base: &syn::Ident,
-) -> syn::Result<(Operations, DispatchKeys)> {
+) -> syn::Result<(Operations, [DispatchKeys; 3])> {
     let mut operations = Operations::default();
     // rmcp's router keeps the last route added under a name, silently.
     let mut declared = DispatchKeys::new(
         "#[tools]",
         "a host routes each tool name, and each prompt name, to one method, so one of the \
          two would never run — give one a distinct `name`",
+    );
+    // `read_resource` offers a URI to the templates in order: the second of
+    // two equal ones would never read one.
+    let mut templates = DispatchKeys::new(
+        "#[tools]",
+        "a host reads the URIs one template writes through one method, so one of the two \
+         would never run — give one a distinct `template`",
+    );
+    let mut listings = DispatchKeys::new(
+        "#[tools]",
+        "`resources/list` is answered by one method per host — list every resource there",
     );
 
     for entry in item.items.iter_mut() {
@@ -685,31 +985,66 @@ fn take_operations(
         concrete_signature(method, "#[tools]")?;
 
         let role_attr = &method.attrs[index];
-        let wire_name = match stated_name(role_attr)? {
-            Some(name) => name,
-            None => method.sig.ident.to_string(),
+        let cfgs = cfg_attrs(&method.attrs);
+        let (wire_name, resource) = match role {
+            Role::Tool | Role::Prompt => {
+                let wire_name = match stated_name(role_attr)? {
+                    Some(name) => name,
+                    None => method.sig.ident.to_string(),
+                };
+                declared.declare(
+                    Collision::Marker,
+                    role.label(),
+                    &wire_name,
+                    &format!(
+                        "{}(name = {wire_name:?})]",
+                        role.attr().trim_end_matches(']')
+                    ),
+                    &method.sig.ident,
+                    &cfgs,
+                    role_attr,
+                )?;
+                (wire_name, None)
+            }
+            Role::Resource => {
+                let decl = resource::declaration(method, index)?;
+                let wire_name = decl.template.value();
+                templates.declare(
+                    Collision::Marker,
+                    role.label(),
+                    &wire_name,
+                    &format!("#[resource(template = {wire_name:?})]"),
+                    &method.sig.ident,
+                    &cfgs,
+                    role_attr,
+                )?;
+                (wire_name, Some(decl))
+            }
+            Role::Resources => {
+                resource::listing_declaration(role_attr)?;
+                listings.declare(
+                    Collision::Marker,
+                    role.label(),
+                    "resources/list",
+                    "#[resources]",
+                    &method.sig.ident,
+                    &cfgs,
+                    role_attr,
+                )?;
+                (method.sig.ident.to_string(), None)
+            }
         };
-        declared.declare(
-            Collision::Marker,
-            role.label(),
-            &wire_name,
-            &format!(
-                "{}(name = {wire_name:?})]",
-                role.attr().trim_end_matches(']')
-            ),
-            &method.sig.ident,
-            &cfg_attrs(&method.attrs),
-            role_attr,
-        )?;
 
-        let operation = take_operation(method, index, role, base, wire_name)?;
+        let operation = take_operation(method, index, role, base, wire_name, resource)?;
         match role {
             Role::Tool => operations.tools.push(operation),
             Role::Prompt => operations.prompts.push(operation),
+            Role::Resource => operations.resources.push(operation),
+            Role::Resources => operations.listings.push(operation),
         }
     }
 
-    Ok((operations, declared))
+    Ok((operations, [declared, templates, listings]))
 }
 
 /// The `name = "…"` stated inside `#[tool(...)]` / `#[prompt(...)]`, when one is.
@@ -737,10 +1072,19 @@ fn take_operation(
     role: Role,
     base: &syn::Ident,
     wire_name: String,
+    mut resource: Option<ResourceDecl>,
 ) -> syn::Result<Operation> {
     let name = method.sig.ident.clone();
-    let (role_attr, description_check) = wrapper_role_attr(method, index, role)?;
-    // Left on the authored method, rmcp would route it as a second tool of the same name.
+    let (role_attr, description_check) = if role.routed_by_rmcp() {
+        wrapper_role_attr(method, index, role)?
+    } else {
+        let check = resource
+            .as_mut()
+            .and_then(|decl| decl.description_check.take());
+        (quote!(), check)
+    };
+    // Left on the authored method, rmcp would route it as a second tool of the
+    // same name, and rustc would refuse a resource role as an unknown attribute.
     method.attrs.remove(index);
 
     let Layers {
@@ -765,10 +1109,26 @@ fn take_operation(
             ),
         ));
     }
+    if role == Role::Resources && posture.masks() {
+        return Err(syn::Error::new_spanned(
+            &method.sig.ident,
+            "`#[authorize(...)]` cannot mask a #[resources] listing — its entries are URIs \
+             and names, opaque to the entity round-trip. Keep the gate and list only what \
+             the caller may read: `#[authorize(Action, Entity, unmasked)]`",
+        ));
+    }
 
     let mut sig = method.sig.clone();
     normalize_forwarded_args(sig.inputs.iter_mut())?;
-    let pipes = piped_args(&sig)?;
+    let pipes = match role {
+        Role::Tool | Role::Prompt => piped_args(&sig)?,
+        Role::Resource | Role::Resources => Vec::new(),
+    };
+    match (role, resource.as_mut()) {
+        (Role::Resource, Some(decl)) => resource::bind_variables(decl, &sig)?,
+        (Role::Resources, _) => resource::refuse_listing_arguments(&sig)?,
+        _ => {}
+    }
     let scoped = scoped_args(&sig);
 
     let cfgs = cfg_attrs(&method.attrs);
@@ -789,6 +1149,7 @@ fn take_operation(
         cfgs,
         wire_name,
         metas,
+        resource,
     })
 }
 
@@ -805,14 +1166,17 @@ fn scoped_args(sig: &Signature) -> Vec<ScopedArg> {
             let syn::Pat::Ident(pat_ident) = &*pat_type.pat else {
                 return None;
             };
-            generic_args(&pat_type.ty)
-                .is_some_and(|(ident, _)| ident == "Scoped")
-                .then(|| ScopedArg {
-                    ident: pat_ident.ident.clone(),
-                    ty: (*pat_type.ty).clone(),
-                })
+            is_scoped(&pat_type.ty).then(|| ScopedArg {
+                ident: pat_ident.ident.clone(),
+                ty: (*pat_type.ty).clone(),
+            })
         })
         .collect()
+}
+
+/// Whether `ty` is a `Scoped<T>`, read by its last segment.
+pub(crate) fn is_scoped(ty: &Type) -> bool {
+    generic_args(ty).is_some_and(|(ident, _)| ident == "Scoped")
 }
 
 /// What each operation declares on its host: its `Handler`, `mcp.operation`
@@ -996,24 +1360,7 @@ fn wrapper_role_attr(
             doc.map(Description::read)
         }
     };
-    let description_check = match description {
-        None => {
-            return Err(syn::Error::new_spanned(
-                &method.sig.ident,
-                NEEDS_A_DESCRIPTION,
-            ));
-        }
-        Some(Description::Read | Description::Runtime) => None,
-        Some(Description::Evaluated(expr)) => {
-            let span = method.sig.ident.span();
-            Some(quote_spanned! {span=>
-                const _: () = ::core::assert!(
-                    !::nest_rs_mcp::__private::description_is_blank(#expr),
-                    #NEEDS_A_DESCRIPTION,
-                );
-            })
-        }
-    };
+    let description_check = description_check(description, method)?;
     if !stated.iter().any(|key| key == "name") {
         // The wrapper's ident is generated; the wire keeps the authored name.
         let name = method.sig.ident.to_string();
@@ -1038,7 +1385,7 @@ fn wrapper_role_attr(
 }
 
 /// A description, as far as the expansion can read it.
-enum Description {
+pub(crate) enum Description {
     /// A literal, read here, holding prose.
     Read,
     /// A macro of literals or a constant: a value only the compiler evaluates.
@@ -1050,10 +1397,52 @@ enum Description {
 impl Description {
     /// A doc comment as [`doc_comment`] emits it: one literal — never blank,
     /// [`doc_comment`] answers `None` for that — or a `concat!`.
-    fn read(doc: TokenStream2) -> Self {
+    pub(crate) fn read(doc: TokenStream2) -> Self {
         match syn::parse2::<LitStr>(doc.clone()) {
             Ok(_) => Self::Read,
             Err(_) => Self::Evaluated(doc),
+        }
+    }
+
+    /// A stated `description = …` value, read as far as the compiler can read
+    /// it. A blank literal is refused at the literal.
+    pub(crate) fn stated(value: &syn::Expr) -> syn::Result<Self> {
+        Ok(match ungrouped_expr(value) {
+            syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(text),
+                ..
+            }) => {
+                if text.value().trim().is_empty() {
+                    return Err(syn::Error::new_spanned(text, NEEDS_A_DESCRIPTION));
+                }
+                Self::Read
+            }
+            expr @ (syn::Expr::Macro(_) | syn::Expr::Path(_)) => Self::Evaluated(quote!(#expr)),
+            _ => Self::Runtime,
+        })
+    }
+}
+
+/// The `const` refusing a description only the compiler can read blank, at
+/// `method`; no description at all is refused there.
+pub(crate) fn description_check(
+    description: Option<Description>,
+    method: &ImplItemFn,
+) -> syn::Result<Option<TokenStream2>> {
+    match description {
+        None => Err(syn::Error::new_spanned(
+            &method.sig.ident,
+            NEEDS_A_DESCRIPTION,
+        )),
+        Some(Description::Read | Description::Runtime) => Ok(None),
+        Some(Description::Evaluated(expr)) => {
+            let span = method.sig.ident.span();
+            Ok(Some(quote_spanned! {span=>
+                const _: () = ::core::assert!(
+                    !::nest_rs_mcp::__private::description_is_blank(#expr),
+                    #NEEDS_A_DESCRIPTION,
+                );
+            }))
         }
     }
 }
@@ -1071,19 +1460,7 @@ fn stated_description(attr: &Attribute) -> syn::Result<Option<Description>> {
     }) else {
         return Ok(None);
     };
-    Ok(Some(match ungrouped_expr(value) {
-        syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(text),
-            ..
-        }) => {
-            if text.value().trim().is_empty() {
-                return Err(syn::Error::new_spanned(text, NEEDS_A_DESCRIPTION));
-            }
-            Description::Read
-        }
-        expr @ (syn::Expr::Macro(_) | syn::Expr::Path(_)) => Description::Evaluated(quote!(#expr)),
-        _ => Description::Runtime,
-    }))
+    Description::stated(value).map(Some)
 }
 
 /// The top-level keys the author already stated inside `#[tool(...)]`; a nested
@@ -1101,7 +1478,7 @@ fn stated_keys(attr: &Attribute) -> syn::Result<Vec<String>> {
 
 /// The method's doc comment, joined into the one sentence rmcp sends: a literal
 /// when every line is one, else a `concat!` keeping `#[doc = include_str!(…)]` lines.
-fn doc_comment(attrs: &[Attribute]) -> Option<TokenStream2> {
+pub(crate) fn doc_comment(attrs: &[Attribute]) -> Option<TokenStream2> {
     let lines: Vec<&syn::Expr> = attrs
         .iter()
         .filter(|attr| attr.path().is_ident("doc"))
@@ -1151,10 +1528,19 @@ fn posture_rules(role: Role) -> PostureRules {
         public_means: "no gate and no mask — `#[use_guards]` guards still run, and the \
                        guards at the endpoint's request already authenticated it",
         transport: "MCP",
-        bind_unsupported_because: "an operation takes one `Parameters<T>` struct, not the named \
-                                   id argument the binding reads. Keep \
-                                   `#[authorize(Action, Entity)]` and bind in the body with the \
-                                   service's `access`",
+        bind_unsupported_because: match role {
+            Role::Tool | Role::Prompt => {
+                "an operation takes one `Parameters<T>` struct, not the named id argument the \
+                 binding reads. Keep `#[authorize(Action, Entity)]` and bind in the body with \
+                 the service's `access`"
+            }
+            Role::Resource => {
+                "a resource reads its row in the body, off its template's variables, and \
+                 answers `None` for one the caller may not read. Keep \
+                 `#[authorize(Action, Entity)]` and load it with the service's `access`"
+            }
+            Role::Resources => "a listing loads no one row to bind",
+        },
     }
 }
 
@@ -1209,7 +1595,7 @@ fn piped_args(sig: &Signature) -> syn::Result<Vec<PipedArg>> {
 fn unsupported(entry: &ImplItem) -> syn::Error {
     syn::Error::new_spanned(
         entry,
-        "#[tools] serves only #[tool] and #[prompt] methods — move anything else to \
-         a plain `impl` block beside it",
+        "#[tools] serves only #[tool], #[prompt], #[resource] and #[resources] methods — \
+         move anything else to a plain `impl` block beside it",
     )
 }

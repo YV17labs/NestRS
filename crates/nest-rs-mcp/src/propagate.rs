@@ -368,6 +368,9 @@ impl OperationUnits {
             Addressed::Prompt(_) if method.sent() == GetPromptRequestMethod::VALUE => {
                 Some(McpOperationKind::Prompt)
             }
+            Addressed::Resource(_) if method.sent() == ReadResourceRequestMethod::VALUE => {
+                Some(McpOperationKind::Resource)
+            }
             _ => None,
         };
         let name = addressed.spanned();

@@ -11,8 +11,9 @@ use crate::operation::McpOperationKind;
 /// serves it, the tool, prompt or resource it addresses, and the `#[mcp]` host
 /// that declares it.
 ///
-/// Every request is an operation a unit-stage interceptor reads through it; a
-/// tool call and a prompt fetch are also the units their guards check, through
+/// Every request is an operation a unit-stage interceptor reads through it; an
+/// operation `#[tools]` declares — a tool call, a prompt fetch, a resource
+/// read or listing — is also the unit its guards check, through
 /// `UnitContext::switch_to` in `Guard::check`, and the units their exception
 /// filters and handler-stage interceptors run around. It carries no
 /// arguments: deciding access from a payload is a pipe's job, never a guard's.
@@ -93,7 +94,7 @@ impl CarriedView for McpView {}
 
 impl McpView {
     /// The view of the operation `name` on `host`, served by `kind`'s router:
-    /// a tool call or a prompt fetch `#[tools]` declares.
+    /// an operation `#[tools]` declares.
     pub(crate) fn declared(kind: McpOperationKind, name: &'static str, host: &'static str) -> Self {
         Self {
             method: Cow::Borrowed(kind.method()),
@@ -124,21 +125,24 @@ impl McpView {
         &self.method
     }
 
-    /// The router serving the operation: a tool call or a prompt fetch;
-    /// `None` for every other request.
+    /// The router serving the operation: a tool call, a prompt fetch, a
+    /// resource read, or — inside its site — a resource listing; `None` for
+    /// every other request.
     pub fn kind(&self) -> Option<McpOperationKind> {
         self.kind
     }
 
-    /// What the operation addresses: the tool or prompt it names, or a
-    /// resource's URI; `None` when the method names nothing.
+    /// What the operation addresses: the tool or prompt it names, a
+    /// resource's URI as the request named it — inside a `#[resource]`'s site,
+    /// the template it reads through, never the values the URI carries — or a
+    /// `#[resources]` listing's method; `None` when the method names nothing.
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
 
-    /// The `#[mcp]` host type declaring the tool or prompt the operation
-    /// names; `None` when no host on the endpoint declares it, or the method
-    /// names neither.
+    /// The `#[mcp]` host type declaring the operation; `None` when no host on
+    /// the endpoint declares it, or — for a request, before a host matched a
+    /// resource's URI to a template — when only the host can say.
     pub fn host(&self) -> Option<&'static str> {
         self.host
     }

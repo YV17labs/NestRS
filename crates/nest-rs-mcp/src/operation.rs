@@ -1,6 +1,7 @@
 //! What one MCP operation *is*, and the sites it runs through on core's
 //! pipeline: every request's own [`REQUEST`] site, and the site `#[tools]`
-//! declares for each tool and prompt, run inside it.
+//! declares for each tool, prompt, resource and resource listing, run inside
+//! it.
 
 use std::any::TypeId;
 use std::fmt;
@@ -20,7 +21,10 @@ use nest_rs_core::{
 };
 use nest_rs_guards::__private::{RefusalMark, check_guards, failure_chain, resolve_global_guards};
 use nest_rs_guards::{Denial, Guard, GuardSpec};
-use rmcp::model::{CallToolRequestMethod, ConstString, GetPromptRequestMethod};
+use rmcp::model::{
+    CallToolRequestMethod, ConstString, GetPromptRequestMethod, ListResourcesRequestMethod,
+    ReadResourceRequestMethod,
+};
 
 use crate::McpError;
 use crate::error::{OperationFailure, Reply, answer, opaque_answer};
@@ -33,7 +37,8 @@ pub fn current_container() -> Option<Container> {
     crate::scope::current_scope().map(|scope| scope.root().clone())
 }
 
-/// Which router an operation belongs to — the two roles `#[tools]` serves.
+/// Which router an operation belongs to — the roles `#[tools]` serves, each
+/// named for its attribute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum McpOperationKind {
@@ -41,6 +46,11 @@ pub enum McpOperationKind {
     Tool,
     /// A `#[prompt]` method, reached by `prompts/get`.
     Prompt,
+    /// A `#[resource]` method, reached by `resources/read` at a URI its
+    /// template writes.
+    Resource,
+    /// The `#[resources]` method, reached by `resources/list`.
+    Resources,
 }
 
 impl McpOperationKind {
@@ -49,6 +59,8 @@ impl McpOperationKind {
         match self {
             Self::Tool => "tool",
             Self::Prompt => "prompt",
+            Self::Resource => "resource",
+            Self::Resources => "resources",
         }
     }
 
@@ -57,6 +69,8 @@ impl McpOperationKind {
         match self {
             Self::Tool => CallToolRequestMethod::VALUE,
             Self::Prompt => GetPromptRequestMethod::VALUE,
+            Self::Resource => ReadResourceRequestMethod::VALUE,
+            Self::Resources => ListResourcesRequestMethod::VALUE,
         }
     }
 }
@@ -75,7 +89,7 @@ const REQUEST_LAYERS: GlobalLayers = GlobalLayers {
     handler_stage: false,
 };
 
-/// What a tool's or a prompt's site folds of the app-wide layers: its
+/// What a declared operation's site folds of the app-wide layers: its
 /// exception filters and handler-stage interceptors, never the unit stage the
 /// operation's own request site ran around it.
 pub const OPERATION_LAYERS: GlobalLayers = GlobalLayers {
@@ -96,8 +110,8 @@ static REQUEST_HANDLER: Handler = declare_handler(HandlerDeclaration {
     meta: MetaLevels::default,
 });
 
-/// The site every MCP request runs as — the unit stage alone; a tool call or
-/// a prompt fetch then reaches its own site inside it.
+/// The site every MCP request runs as — the unit stage alone; a declared
+/// operation then reaches its own site inside it.
 pub(crate) static REQUEST: Site = declare_site(
     &REQUEST_HANDLER,
     SiteDeclaration {
@@ -108,7 +122,7 @@ pub(crate) static REQUEST: Site = declare_site(
     },
 );
 
-/// The guards one tool's or prompt's site declares, as `#[tools]` collects
+/// The guards one declared operation's site declares, as `#[tools]` collects
 /// them.
 pub struct OperationGuards {
     /// `#[use_guards]` on the host.
@@ -202,8 +216,9 @@ impl OperationGuardStage {
     }
 }
 
-/// Run one tool call or prompt fetch through the site `#[tools]` declared for
-/// it — `#[tools]` wraps every operation in this — the rest of it being
+/// Run one declared operation — a tool call, a prompt fetch, a resource read
+/// or listing — through the site `#[tools]` declared for it — `#[tools]`
+/// wraps every operation in this — the rest of it being
 /// `tail`: its `Scoped<T>` parameters, its pipes, the call and the posture's
 /// mask, answering the operation's value.
 ///
@@ -463,5 +478,7 @@ mod tests {
     fn an_operation_kind_names_the_method_reaching_its_router() {
         assert_eq!(McpOperationKind::Tool.method(), "tools/call");
         assert_eq!(McpOperationKind::Prompt.method(), "prompts/get");
+        assert_eq!(McpOperationKind::Resource.method(), "resources/read");
+        assert_eq!(McpOperationKind::Resources.method(), "resources/list");
     }
 }

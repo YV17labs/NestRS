@@ -1,5 +1,5 @@
-//! [`Scoped<T>`], the request-scoped provider a `#[tool]` or `#[prompt]` takes
-//! as a parameter — the MCP mirror of `nest_rs_http::Scoped<T>`.
+//! [`Scoped<T>`], the request-scoped provider an operation `#[tools]` declares
+//! takes as a parameter — the MCP mirror of `nest_rs_http::Scoped<T>`.
 //!
 //! An operation receives no HTTP request: the endpoint carries the request's
 //! scope onto rmcp's task, and `#[tools]` resolves each `Scoped<T>` from it
@@ -61,7 +61,7 @@ pub(crate) fn current_scope() -> Option<Arc<RequestScope>> {
 }
 
 /// A provider of type `T`, resolved from the operation's request scope: a
-/// `#[tool]` or `#[prompt]` parameter.
+/// `#[tool]`, `#[prompt]`, `#[resource]` or `#[resources]` parameter.
 ///
 /// The provider is checked at boot like an `#[inject]` field — offered by the
 /// host's module, one it imports, or global infrastructure — so a

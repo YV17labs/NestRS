@@ -6,13 +6,15 @@ use proc_macro::TokenStream;
 
 mod mcp;
 mod mcp_impl;
+mod resource;
+mod uri_template;
 
 /// Behaves like `#[injectable]` for construction and emits a `Discoverable`
 /// that attaches an `HttpEndpointMeta`. Its operations go under
-/// [`macro@tools`] on the host's inherent impl; a host serving a hand-written
-/// `ServerHandler` carries rmcp's own `#[tool_router]` / `#[tool_handler]`
-/// impls instead. The factory runs per session, so per-session state stays
-/// fresh.
+/// [`macro@tools`] on the host's inherent impl; a host serving what no
+/// decorator declares — completion, logging levels, subscriptions — writes
+/// rmcp's `ServerHandler` by hand instead. The factory runs per session, so
+/// per-session state stays fresh.
 ///
 /// Every argument is optional. `path` is the **whole URL path** — omit it to
 /// serve `nest_rs_mcp::DEFAULT_PATH` (`/mcp`). Nothing nests under it: it names
@@ -42,13 +44,15 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(mcp::mcp(args, input).into()).into()
 }
 
-/// The operations half of an MCP host: its `#[tool]` and `#[prompt]` methods.
+/// The operations half of an MCP host: its `#[tool]`, `#[prompt]`,
+/// `#[resource]` and `#[resources]` methods.
 ///
 /// Takes no arguments — path and identity are `#[mcp]`'s, on the struct.
 ///
 /// It absorbs rmcp's three-block shape (`#[tool_router]`, `#[prompt_router]`,
-/// `#[tool_handler]`/`#[prompt_handler]` + `get_info`) into generated code, and
-/// gives each operation the request layers every other edge has:
+/// `#[tool_handler]`/`#[prompt_handler]` + `get_info`) into generated code,
+/// writes the resource methods rmcp has no router for, and gives each
+/// operation the request layers every other edge has:
 /// `#[use_guards]` / `#[force_guards]`, a **mandatory** posture
 /// (`#[authorize(Action, Entity)]` or `#[public]`), `#[use_exception_filters]`,
 /// `#[use_interceptors]`, `Scoped<T>` parameters, per-argument pipes inside
@@ -59,33 +63,50 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 /// operation's site is a `static`, which no parameter of a generic impl
 /// reaches.
 ///
+/// `#[resource(template = "post://{id}")]` reads one resource: the template is
+/// RFC 6570 level 1, each `{variable}` a parameter of the method parsed with
+/// `FromStr`, and `resources/templates/list` advertises it with its `name`
+/// (the method's unless stated), `title`, `description` and the media type its
+/// answer is read as — `Json<T>` as `application/json`, a `String` as
+/// `text/plain`, a `ReadResourceResult` as built, any of them inside `Option`,
+/// `None` answering as a URI no template reads. `#[resources]` lists what can
+/// be read, `Vec<Resource>`, one method per host. A URI is offered to the
+/// templates in declaration order; one no template reads, whose variables do
+/// not parse, or whose method answers `None` is MCP's *Resource not found*,
+/// quoting nothing.
+///
 /// An operation answers a `Result`, read by its type: a renamed `Result` or an
 /// alias answers as the spelled one, over any error, and any other return is
 /// refused at its type. A few readings go by the spelling, since no type tells
 /// a macro them:
 ///
 /// - a parameter is request-scoped when its type's last segment is `Scoped`,
-///   and piped when it is `Parameters<Valid<T>>` or `Parameters<Piped<P, T>>`;
+///   piped when it is `Parameters<Valid<T>>` or `Parameters<Piped<P, T>>`,
+///   and on a `#[resource]` the template variable its name spells;
 /// - a masked operation spells its return `Result<…>`, the mask reading
-///   `Json<T>` to unwrap and `CallToolResult` to refuse off that spelling;
+///   `Json<T>` or `Option<Json<T>>` to unwrap and `CallToolResult` or
+///   `ReadResourceResult` to refuse off that spelling; a `#[resources]`
+///   listing is never masked, so a gated one declares `unmasked`;
 /// - rmcp derives a tool's output schema from a return spelled
 ///   `Result<Json<T>, …>`, and from none behind an alias.
 ///
-/// A host that hand-writes `ServerHandler` (resources, completion) writes rmcp
-/// directly and has no `#[tools]` block at all — `#[tools]` on a trait impl is
-/// a compile error saying so.
+/// A host that hand-writes `ServerHandler` (completion, logging levels,
+/// subscriptions) writes rmcp directly and has no `#[tools]` block at all —
+/// `#[tools]` on a trait impl is a compile error saying so.
 ///
 /// # Expands to
 ///
 /// The authored impl re-emitted **untouched**, each operation's `Handler` and
-/// `static` site, plus — inside a private child module that carries rmcp's
-/// imports, so the host file needs none — a delegating wrapper per operation
-/// carrying `#[tool(name = "…")]` (the authored name stays the wire name),
-/// rmcp's routers with `pub(crate)` visibility, and the `ServerHandler` impl
-/// with its `get_info`. Each wrapper dispatches its site — the guards, the
-/// posture's gate, the exception filters, the interceptors — its tail running
-/// the pipes, the `Scoped<T>` parameters, the authored method and the response
-/// mask, in that order.
+/// `static` site, each template's split parts, plus — inside a private child
+/// module that carries rmcp's imports, so the host file needs none — a
+/// delegating wrapper per operation, a tool's or a prompt's carrying
+/// `#[tool(name = "…")]` (the authored name stays the wire name), rmcp's
+/// routers with `pub(crate)` visibility, and the `ServerHandler` impl with its
+/// `get_info` and, for the resource roles, `list_resources`,
+/// `list_resource_templates` and `read_resource`. Each wrapper dispatches its
+/// site — the guards, the posture's gate, the exception filters, the
+/// interceptors — its tail running the pipes, the `Scoped<T>` parameters, the
+/// authored method and the response mask, in that order.
 #[proc_macro_attribute]
 pub fn tools(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(mcp::tools(args, input).into()).into()

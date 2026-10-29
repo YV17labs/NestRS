@@ -6,6 +6,7 @@
 //! `Json<T>` (SEP-2106) and a bare value — plus the fail-closed path MCP cannot
 //! escape the way GraphQL does: with no selection set to acquit it, a mask that
 //! strips a *required* field fails the operation rather than serving the row.
+//! A `#[resource]` read takes the same gate and mask, inside its `Option`.
 
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, input, module};
@@ -14,6 +15,7 @@ use nest_rs_http::EndpointGuards;
 use nest_rs_http::async_trait;
 use nest_rs_mcp::McpView;
 use nest_rs_mcp::{Json, McpError, mcp, tools};
+use nest_rs_testing::mcp::{call_method_with, open_session_with};
 
 use super::{PassGuard, widget};
 use crate::post;
@@ -162,6 +164,18 @@ impl MaskTool {
         Ok(Json(PostDto::new(1, 7)))
     }
 
+    /// One widget, read through its template; widget 1 alone exists.
+    #[resource(template = "widget://{id}")]
+    #[authorize(Read, widget::Entity)]
+    async fn widget(&self, id: i32) -> Result<Option<Json<WidgetDto>>, McpError> {
+        Ok((id == 1).then(|| {
+            Json(WidgetDto {
+                id,
+                name: Some("first".to_owned()),
+            })
+        }))
+    }
+
     /// The opt-out: no gate, no mask.
     #[tool]
     #[public]
@@ -183,6 +197,62 @@ struct MaskModule;
 
 async fn call(role: &str, tool: &str) -> String {
     super::call_as::<MaskModule>("/mcp/mask", role, tool).await
+}
+
+/// Read `uri` as `role`, on a session of its own.
+async fn read(role: &str, uri: &str) -> String {
+    let app = nest_rs_testing::TestApp::for_module::<MaskModule>()
+        .await
+        .expect("the host under test boots");
+    let headers = [("x-role", role)];
+    let session = open_session_with(
+        app.http(),
+        "/mcp/mask",
+        None,
+        &headers,
+        serde_json::json!({}),
+    )
+    .await;
+    call_method_with(
+        app.http(),
+        "/mcp/mask",
+        &session,
+        None,
+        &headers,
+        "resources/read",
+        serde_json::json!({ "uri": uri }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_resource_read_is_masked_like_a_tool_s_answer() {
+    let unrestricted = read("admin", "widget://1").await;
+    assert!(unrestricted.contains("first"), "{unrestricted}");
+
+    let restricted = read("viewer", "widget://1").await;
+    assert!(
+        !restricted.contains("first") && restricted.contains("widget://1"),
+        "a grant limited to `id` masks `name` out of the resource's contents, with no \
+         masking call in its body: {restricted}",
+    );
+}
+
+#[tokio::test]
+async fn a_resource_read_is_gated_by_its_posture() {
+    let refused = read("stranger", "widget://1").await;
+    assert!(
+        refused.contains("forbidden") && !refused.contains("first"),
+        "a caller the ability grants nothing on the class is refused before the body \
+         runs: {refused}",
+    );
+
+    let missing = read("admin", "widget://2").await;
+    assert!(
+        missing.contains("-32002") && !missing.contains("widget://2"),
+        "…and a row the body did not find is a resource not found, quoting nothing: \
+         {missing}",
+    );
 }
 
 #[tokio::test]

@@ -103,7 +103,7 @@ pub const MCP: DecoratorPair = DecoratorPair::edge(
     "#[mcp]",
     "host struct",
     "#[tools]",
-    "#[tool] / #[prompt]",
+    "#[tool] / #[prompt] / #[resource] / #[resources]",
 );
 
 /// Lifecycle hooks on a provider.

@@ -61,7 +61,8 @@ fn rate_limited(retry_after: Duration) -> Denial {
 /// edge feature. The bucket is the unit the edge *addresses*, joined with the
 /// caller that edge can see: the matched route pattern and the client's network
 /// on HTTP — its address in IPv4, its `/64` in IPv6 — the field name on
-/// GraphQL, the tool or prompt on MCP, the event and the connection on WS.
+/// GraphQL, the operation on MCP (a resource by its template), the event and
+/// the connection on WS.
 ///
 /// A site's `#[meta(Throttle::...)]` overrides the module default on every
 /// edge; a site that pins none counts against
@@ -190,7 +191,7 @@ impl Guard for ThrottlerGuard {
 
     /// An in-band edge's unit — a GraphQL field, a WS message, an MCP operation —
     /// counted once per unit, keyed on the address its site declares (the
-    /// field, the event, the tool or prompt) and the caller: the connection on
+    /// field, the event, the MCP operation) and the caller: the connection on
     /// an edge that holds one (WS), else the actor
     /// ([`current_actor_id`](nest_rs_core::current_actor_id)), else one shared
     /// anonymous bucket, reported once per process. The same guard in

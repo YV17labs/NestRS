@@ -29,8 +29,8 @@ schedule, events), or container metadata (MCP: each host attaches `McpHostMeta`,
 the first on a path the one `HttpEndpointMeta` that mounts them all).
 
 - **Merging adds one failure: two contributions claiming one addressable name**,
-  a boot error naming both owners (a duplicate tool or prompt name within an
-  MCP path).
+  a boot error naming both owners (a duplicate tool or prompt name, or one
+  resource template read by two hosts, within an MCP path).
 - **The mount's identity belongs to the app**, never to whichever contribution
   registered first. The app declares it once; at most one contribution refines
   it for its own mount; a declaration replaces only what it states, so
@@ -249,7 +249,7 @@ every unit, global and scoped together, outermost first:
 | WS message | runs | pool, gateway, message (`check`) | message, gateway, app | app, modules, gateway, message | the pool over `data`, `#[use_pipes]`, per argument |
 | WS connection hook | — | — (the upgrade's) | pending | pending | — |
 | MCP request (`mcp.operation`) | runs | — (the `/mcp` request's) | — | — | — |
-| its `#[tool]` or `#[prompt]` | — | pool, host, operation (`check`) | operation, host, app | app, modules, host, operation | per argument, inside `Parameters` |
+| its `#[tool]`, `#[prompt]`, `#[resource]` or `#[resources]` | — | pool, host, operation (`check`) | operation, host, app | app, modules, host, operation | per argument, inside `Parameters` (none on a resource role) |
 | Job attempt, tick, listener call | runs | — (no caller) | method, host, app | app, modules, host, method | per argument |
 
 Every unit is one `Site` dispatched through core's pipeline inside `run_unit`
@@ -277,7 +277,7 @@ the visible opening.
   type, at the kernel's wiring step (`provide_wiring`), in every app whatever it
   serves; so does a global guard pool listed out of phase order.
   **No site runs without a layer it declares**: one composed at boot (a route, a
-  gateway's upgrade and messages, a GraphQL field or an MCP tool or prompt at
+  gateway's upgrade and messages, a GraphQL field or an MCP operation `#[tools]` declares at
   the wiring step) fails the boot naming the layer and the site, one composed
   on its first dispatch (a GraphQL field or an MCP operation of a container
   built by hand) refuses that unit opaquely and files one `error` naming both.
@@ -296,7 +296,7 @@ the visible opening.
 - **The in-band edges also run a per-operation chain**, composed once per site
   from the app-wide pool, the provider's `#[use_guards]` and the operation's
   own — one `compose`, no per-transport switch over where the pool runs: a
-  GraphQL field's or an MCP tool's or prompt's `Site` guard stage. **An in-band
+  GraphQL field's or a declared MCP operation's `Site` guard stage. **An in-band
   endpoint's guards check the request; the site checks the operation**:
   `check_http` once per request, `check` once per operation,
   and neither stands in for the other. What a request's guards attach
@@ -364,8 +364,10 @@ resolve, or two `#[meta]` values of one type, refuse the boot. A field's
 the `/mcp` request's context — its scope, its trace, what its guards and layers
 made ambient — and a unit of work of its own: its own site runs the unit stage
 alone, once around whatever the request reaches, rmcp's decode and routing
-included, a `tools/call` naming no declared tool among it. A `#[tool]` or a
-`#[prompt]` `#[tools]` declares is a site inside it:
+included, a `tools/call` naming no declared tool among it. A `#[tool]`, a
+`#[prompt]`, a `#[resource]` or the `#[resources]` listing `#[tools]` declares
+is a site inside it — a resource's named by its template, never by the values
+its URI carries:
 its guards' `check`, its class gate, the exception filters and the handler
 stage, never a second unit stage; `subscriptions/listen` and the
 notifications run none. Every operation's site is composed at the wiring step,

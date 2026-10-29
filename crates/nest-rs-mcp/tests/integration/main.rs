@@ -120,6 +120,7 @@ mod operation;
 mod parameters;
 mod propagate;
 mod registry;
+mod resource;
 mod scope;
 mod sessions;
 mod unit;

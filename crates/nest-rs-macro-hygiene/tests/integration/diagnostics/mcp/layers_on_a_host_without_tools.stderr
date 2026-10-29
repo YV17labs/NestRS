@@ -9,7 +9,7 @@ help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented 
    |
 63 | struct RawHost;
    | ^^^^^^^^^^^^^^
-   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools and prompts under `#[tools]`
+   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools, prompts and resources under `#[tools]`
 note: required by a bound in `_::__nestrs_assert_tools_host`
   --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:58:3
    |
@@ -27,7 +27,7 @@ help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented 
    |
 63 | struct RawHost;
    | ^^^^^^^^^^^^^^
-   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools and prompts under `#[tools]`
+   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools, prompts and resources under `#[tools]`
 note: required by a bound in `_::__nestrs_assert_tools_host`
   --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:59:3
    |
@@ -45,7 +45,7 @@ help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented 
    |
 63 | struct RawHost;
    | ^^^^^^^^^^^^^^
-   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools and prompts under `#[tools]`
+   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools, prompts and resources under `#[tools]`
 note: required by a bound in `_::__nestrs_assert_tools_host`
   --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:60:3
    |
@@ -63,7 +63,7 @@ help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented 
    |
 63 | struct RawHost;
    | ^^^^^^^^^^^^^^
-   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools and prompts under `#[tools]`
+   = note: a host's layers and `#[meta]` values reach the operations `#[tools]` declares; a host writing rmcp's `ServerHandler` by hand declares none, so a guard here would gate nothing: guard its endpoint with `EndpointGuards<McpView, G>` from a module or the app's global guards, or move its tools, prompts and resources under `#[tools]`
 note: required by a bound in `_::__nestrs_assert_tools_host`
   --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:61:3
    |

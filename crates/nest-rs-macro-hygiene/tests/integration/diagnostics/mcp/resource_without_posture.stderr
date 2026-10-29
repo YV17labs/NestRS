@@ -1,0 +1,5 @@
+error: every #[resource] declares its access posture: `#[authorize(Action, Entity)]` (class-level gate + automatic response masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` (no gate and no mask — `#[use_guards]` guards still run, and the guards at the endpoint's request already authenticated it)
+  --> tests/integration/diagnostics/mcp/resource_without_posture.rs:13:14
+   |
+13 |     async fn note(&self, id: u32) -> Result<String, McpError> {
+   |              ^^^^

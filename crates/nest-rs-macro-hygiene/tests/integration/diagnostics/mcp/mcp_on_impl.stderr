@@ -1,4 +1,4 @@
-error: #[mcp] decorates the host struct — its #[tool] / #[prompt] methods go under #[tools] on the impl block
+error: #[mcp] decorates the host struct — its #[tool] / #[prompt] / #[resource] / #[resources] methods go under #[tools] on the impl block
   --> tests/integration/diagnostics/mcp/mcp_on_impl.rs:13:1
    |
 13 | / impl DemoTool {

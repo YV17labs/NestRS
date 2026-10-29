@@ -1,6 +1,6 @@
 //! `#[mcp]` + `#[tools]`, through the umbrella alone: the layers a host and
-//! an operation bind, a `Scoped<T>` parameter, and an error of the domain's
-//! own type.
+//! an operation bind, a `Scoped<T>` parameter, an error of the domain's own
+//! type, and a resource read through its template beside the listing.
 //!
 //! rmcp's `#[tool_router]`/`#[tool_handler]`/`#[prompt]` expand to bare `rmcp::`
 //! paths resolved at the call site; this file names no `rmcp`, so it stops
@@ -8,8 +8,8 @@
 
 use nest_rs::core::{Layer, UnitContext};
 use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
-use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Role};
-use nest_rs::mcp::{McpError, McpView, Parameters, Scoped, Valid, input, mcp, tools};
+use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Resource, Role};
+use nest_rs::mcp::{Json, McpError, McpView, Parameters, Scoped, Valid, input, mcp, tools};
 
 use crate::pipeline::{HygieneUnitAudit, HygieneUnitRefusal};
 
@@ -57,8 +57,8 @@ impl std::fmt::Display for HygieneRefused {
 
 impl std::error::Error for HygieneRefused {}
 
-/// Tools and prompts, under a host-scope guard, interceptor and exception
-/// filter.
+/// Tools, prompts and resources, under a host-scope guard, interceptor and
+/// exception filter.
 #[mcp(path = "/hygiene")]
 #[meta(HygieneLimit(100))]
 #[use_guards(HygieneGuard)]
@@ -133,6 +133,42 @@ impl HygieneTool {
     #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
     fn export(&self) -> Result<String, McpError> {
         Ok("queued".into())
+    }
+
+    #[cfg(feature = "authz")]
+    #[resource(template = "hygiene-export://{id}", description = "Read one export.")]
+    #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
+    fn exported(&self, id: u32) -> Result<Option<Json<HygieneArgs>>, McpError> {
+        Ok(Some(Json(HygieneArgs {
+            value: id.to_string(),
+        })))
+    }
+
+    #[resources]
+    #[public]
+    async fn values(&self) -> Result<Vec<Resource>, McpError> {
+        Ok(vec![Resource::new("hygiene://one", "one")])
+    }
+
+    /// A value read back through its template, beside this request's basket.
+    #[resource(template = "hygiene://{value}", title = "A value")]
+    #[public]
+    #[use_guards(HygieneGuard)]
+    #[use_interceptors(HygieneUnitAudit)]
+    async fn value(
+        &self,
+        value: String,
+        basket: Scoped<HygieneBasket>,
+    ) -> Result<Option<Json<HygieneArgs>>, McpError> {
+        let _ = &*basket;
+        Ok(Some(Json(HygieneArgs { value })))
+    }
+
+    #[cfg(feature = "seaorm")]
+    #[resource(template = "hygiene-count://{id}", description = "Count one row.")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn counted(&self, id: u32) -> Result<String, McpError> {
+        Ok(id.to_string())
     }
 
     /// An operation compiled out takes its wrapper, route and guard with it.

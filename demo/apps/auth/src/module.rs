@@ -8,7 +8,7 @@ use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::social::{GithubSocialModule, GoogleSocialModule, SocialModule};
 use nest_rs::throttler::ThrottlerModule;
 
-use features::oauth::OAuthHttpModule;
+use features::sign_in::SignInHttpModule;
 
 #[module(
     imports = [
@@ -23,7 +23,7 @@ use features::oauth::OAuthHttpModule;
         SocialModule,
         GithubSocialModule,
         GoogleSocialModule,
-        OAuthHttpModule,
+        SignInHttpModule,
     ],
 )]
 pub struct AuthModule;

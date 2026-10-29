@@ -320,13 +320,13 @@ pub(crate) fn verify_credentials(
 pub(crate) fn active_for_new_user(
     input: CreateUser,
     org_id: Uuid,
-    password_hash: Option<String>,
+    password_hash: Option<Secret<String>>,
 ) -> entity::ActiveModel {
     let mut active = input.into_active_model();
     active.org_id = Set(org_id);
     active.role = Set(DEFAULT_ROLE);
     if password_hash.is_some() {
-        active.password_hash = Set(password_hash.map(Secret::new));
+        active.password_hash = Set(password_hash);
     }
     active
 }
@@ -473,7 +473,7 @@ mod tests {
         let active = active_for_new_user(
             input("bob", "bob@example.com"),
             Uuid::now_v7(),
-            Some("argon2id$mock".into()),
+            Some(Secret::new("argon2id$mock".into())),
         );
         let pw = active.get(entity::Column::PasswordHash);
         assert!(
@@ -540,7 +540,7 @@ mod tests {
         );
     }
 
-    fn user_row(password_hash: Option<String>) -> entity::Model {
+    fn user_row(password_hash: Option<Secret<String>>) -> entity::Model {
         let now = chrono::Utc::now().fixed_offset();
         entity::Model {
             id: Uuid::now_v7(),
@@ -548,7 +548,7 @@ mod tests {
             name: "ada".into(),
             email: "ada@example.com".into(),
             role: UserRole::User,
-            password_hash: password_hash.map(Secret::new),
+            password_hash,
             created_at: now,
             updated_at: now,
             deleted_at: None,

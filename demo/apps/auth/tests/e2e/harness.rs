@@ -1,8 +1,9 @@
-use auth::{AuthModule, ClientPayload, OAuthConfig, RegisteredClient};
+use auth::{AuthModule, ClientPayload, SignInConfig};
 use base64::Engine as _;
 use features::Role;
 use features::authz::constants;
 use nest_rs::authn::{AuthnConfig, JwtOptions, JwtService, hash_password};
+use nest_rs::oauth::server::{OAuthServerConfig, RegisteredClient};
 use nest_rs::social::{GithubSocialConfig, GoogleSocialConfig};
 use nest_rs::testing::{EphemeralDatabase, TestApp, TestResponse};
 use sea_orm::sea_query::{OnConflict, Query};
@@ -52,7 +53,7 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
             redirect_url: "http://localhost:3001/social/google/callback".into(),
             scopes: vec![],
         })
-        .provide(OAuthConfig {
+        .provide(OAuthServerConfig {
             clients: vec![
                 RegisteredClient::new(
                     CLIENT_ID,
@@ -69,7 +70,9 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
                     payload(Role::User),
                 ),
             ],
-            sign_in_resources: vec![API.into(), ASSISTANT.into()],
+        })
+        .provide(SignInConfig {
+            resources: vec![API.into(), ASSISTANT.into()],
             default_org_id: ORG_ID.parse().expect("a valid org uuid"),
         })
         .build()
@@ -145,7 +148,7 @@ pub(crate) async fn seed_org_and_user(db: &DatabaseConnection) {
             "Alice".into(),
             LOGIN_EMAIL.into(),
             "admin".into(),
-            hash.into(),
+            hash.expose_secret().clone().into(),
         ])
         .to_owned();
     db.execute(&user_stmt).await.expect("seed login user");

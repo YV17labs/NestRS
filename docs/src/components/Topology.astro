@@ -17,14 +17,14 @@ interface Tier {
   bins: Binary[];
 }
 
-const modules = ['users', 'orgs', 'posts', 'audio', 'chat', 'notifications', 'audit', 'authn', 'authz', 'oauth'];
+const modules = ['users', 'orgs', 'posts', 'audio', 'chat', 'notifications', 'audit', 'authn', 'authz', 'sign_in'];
 
 const split: Tier[] = [
   {
     hint: 'exposed to clients',
     private: false,
     bins: [
-      { app: 'auth', edges: 'HTTP', modules: ['oauth'] },
+      { app: 'auth', edges: 'HTTP', modules: ['sign_in'] },
       {
         app: 'api',
         edges: 'HTTP · GraphQL · events · schedule',

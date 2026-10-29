@@ -4,9 +4,9 @@ pub mod authn;
 pub mod authz;
 pub mod chat;
 pub mod notifications;
-pub mod oauth;
 pub mod orgs;
 pub mod posts;
+pub mod sign_in;
 #[cfg(feature = "test-support")]
 #[expect(
     clippy::expect_used,

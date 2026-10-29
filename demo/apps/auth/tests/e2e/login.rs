@@ -16,7 +16,7 @@ fn the_one_refusal_says_neither(logs: &LogCapture, reason: &str, email: &str, pa
             .all(|value| !value.contains(email) && !value.contains(password)),
         "{refusal:?}"
     );
-    logs.expect_none(features::oauth::TARGET, "token request refused");
+    logs.expect_none(features::sign_in::TARGET, "sign-in refused");
 }
 
 #[tokio::test]
@@ -166,6 +166,6 @@ async fn login_for_a_resource_the_issuer_does_not_serve_is_an_invalid_target() {
 
     resp.assert_status(StatusCode::BAD_REQUEST);
     resp.assert_json(json!({ "error": "invalid_target" })).await;
-    let refusal = logs.expect_one(features::oauth::TARGET, "token request refused");
+    let refusal = logs.expect_one(features::sign_in::TARGET, "sign-in refused");
     assert_eq!(refusal.field("reason").as_deref(), Some("invalid_target"));
 }

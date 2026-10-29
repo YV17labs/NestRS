@@ -140,7 +140,7 @@ its resource's host by itself.
 {{- end -}}
 {{- end -}}
 {{- if $resources -}}
-{{- $_ := set $derived "OAUTH__SIGN_IN_RESOURCES" (join "," $resources) -}}
+{{- $_ := set $derived "SIGN_IN__RESOURCES" (join "," $resources) -}}
 {{- end -}}
 {{- $derived | toYaml -}}
 {{- end }}

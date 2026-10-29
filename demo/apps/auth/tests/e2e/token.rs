@@ -1,7 +1,7 @@
 use features::authz::constants::{POSTS_READ, POSTS_WRITE};
-use features::oauth::TARGET;
 use features::{Claims, Role, Subject};
 use nest_rs::http::StatusCode;
+use nest_rs::oauth::server::TARGET;
 use nest_rs::testing::{LogCapture, TestApp, TestResponse};
 
 use super::harness::*;

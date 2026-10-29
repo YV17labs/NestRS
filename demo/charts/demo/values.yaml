@@ -68,7 +68,7 @@ config:
 #   AUTHN__PUBLIC_KEY        PEM, its matching half
 #   STORAGE__ACCESS_KEY      the object store's access key id
 #   STORAGE__SECRET_KEY      and its secret
-# Optional: OAUTH__CLIENTS,
+# Optional: OAUTH__SERVER__CLIENTS,
 #   SOCIAL__GITHUB__CLIENT_ID / __CLIENT_SECRET, SOCIAL__GOOGLE__*
 secrets: {}
 

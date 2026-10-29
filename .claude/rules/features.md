@@ -65,7 +65,7 @@ for MCP: `audio` and `users` share `/mcp` through bare `#[mcp]` hosts, and
 
 **A feature with a `config.rs` imports `ConfigModule::for_feature::<C>()` and
 writes no `for_root`**: the in-code path for a config you own is its
-`impl Default` (`architecture.md`, *Configuration*). `oauth/module.rs` and
+`impl Default` (`architecture.md`, *Configuration*). `sign_in/module.rs` and
 `audio/schedule/module.rs` are the exemplars.
 
 ## One `service.rs` per feature

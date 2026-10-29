@@ -92,3 +92,49 @@ async fn the_social_callback_reads_the_transaction_cookie_the_redirect_set() {
         "the transaction was read and verified; only the forged state stopped it"
     );
 }
+
+#[tokio::test]
+async fn the_social_authorize_endpoint_refuses_a_resource_the_issuer_does_not_serve() {
+    let (_db, app) = boot().await;
+    let resp = app
+        .http()
+        .get("/social/github/authorize")
+        .query("resource", &"https://billing.example.com")
+        .send()
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    resp.assert_json(serde_json::json!({ "error": "invalid_target" }))
+        .await;
+}
+
+#[tokio::test]
+async fn a_provider_refusal_at_the_callback_signs_no_one_in() {
+    let (_db, app) = boot().await;
+    let authorize = app
+        .http()
+        .get("/social/github/authorize")
+        .query("resource", &ASSISTANT)
+        .send()
+        .await;
+    authorize.assert_status(StatusCode::FOUND);
+    let cookie = authorize
+        .0
+        .headers()
+        .get("set-cookie")
+        .expect("the redirect sets the transaction cookie")
+        .to_str()
+        .expect("an ascii cookie")
+        .split(';')
+        .next()
+        .expect("the cookie's name and value")
+        .to_owned();
+
+    app.http()
+        .get("/social/github/callback")
+        .query("error", &"access_denied")
+        .query("state", &"any-state")
+        .header("cookie", cookie)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}

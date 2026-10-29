@@ -1,26 +1,26 @@
 use std::sync::Arc;
 
-use crate::oauth::{
-    AuthenticatedClient, Caller, ClientAuthnGuard, LoginDto, OAuthGuard, OAuthService,
-};
 use nest_rs::http::{
-    Ctx, HeaderValue, HttpError, Json, Opaque, Path, Piped, Response, Result, StatusCode, Valid,
-    controller, header, routes,
+    Ctx, HeaderValue, HttpError, Json, Opaque, Path, Piped, Query, Response, Result, StatusCode,
+    Valid, controller, header, routes,
 };
 use nest_rs::oauth::server::{AccessTokenRequest, AccessTokenResponse};
 use nest_rs::pipes::Lowercase;
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
+use super::guard::{ClientGuard, SocialGuard};
+use crate::sign_in::{AuthenticatedClient, AuthorizeDto, Caller, LoginDto, SignInService};
+
 #[controller(path = "/")]
-pub struct OAuthController {
+pub struct SignInController {
     #[inject]
-    svc: Arc<OAuthService>,
+    svc: Arc<SignInService>,
 }
 
 #[routes]
-impl OAuthController {
+impl SignInController {
     #[post("/token")]
-    #[use_guards(ThrottlerGuard, ClientAuthnGuard)]
+    #[use_guards(ThrottlerGuard, ClientGuard)]
     #[meta(Throttle::per_minute(10))]
     #[api(
         summary = "OAuth2 token endpoint (client_credentials)",
@@ -32,12 +32,7 @@ impl OAuthController {
         client: Ctx<AuthenticatedClient>,
         request: AccessTokenRequest,
     ) -> Result<AccessTokenResponse> {
-        Ok(self.svc.grant_client_credentials(
-            &request.grant_type,
-            request.scope.as_deref(),
-            &request.resource,
-            &client,
-        )?)
+        Ok(self.svc.grant_client_credentials(&request, &client)?)
     }
 
     #[get("/social/{provider}/authorize")]
@@ -48,12 +43,15 @@ impl OAuthController {
         summary = "Social login — redirects to the named provider",
         tags("OAuth2")
     )]
-    async fn social_authorize(&self, provider: Piped<Lowercase, Path<String>>) -> Result<Response> {
+    async fn social_authorize(
+        &self,
+        provider: Piped<Lowercase, Path<String>>,
+        query: Query<AuthorizeDto>,
+    ) -> Result<Response> {
         let authorization = self
             .svc
-            .authorize(&provider.into_inner())
-            .ok_or_else(|| HttpError::from_status(StatusCode::NOT_FOUND))?
-            .opaque()?;
+            .authorize(&provider.into_inner(), query.0.resource.as_deref())?
+            .ok_or_else(|| HttpError::from_status(StatusCode::NOT_FOUND))?;
         let set_cookie = HeaderValue::try_from(authorization.set_cookie()).opaque()?;
         let location = HeaderValue::try_from(authorization.url).opaque()?;
         Ok(Response::builder()
@@ -64,7 +62,7 @@ impl OAuthController {
     }
 
     #[get("/social/{provider}/callback")]
-    #[use_guards(ThrottlerGuard, OAuthGuard)]
+    #[use_guards(ThrottlerGuard, SocialGuard)]
     #[meta(Throttle::per_minute(10))]
     #[api(
         summary = "Social login redirect URI — issues this app's token",
@@ -72,9 +70,12 @@ impl OAuthController {
         response = AccessTokenResponse
     )]
     async fn social_callback(&self, caller: Ctx<Caller>) -> Result<AccessTokenResponse> {
-        Ok(self
-            .svc
-            .issue(None, caller.user_id, caller.org_id, caller.roles.clone())?)
+        Ok(self.svc.issue(
+            caller.resource.as_deref(),
+            caller.user_id,
+            caller.org_id,
+            caller.roles.clone(),
+        )?)
     }
 
     #[post("/login")]

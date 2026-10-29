@@ -1,4 +1,5 @@
 use nest_rs_authn::AuthError;
+use nest_rs_core::Secret;
 use nest_rs_oauth_client::{OAuthClient, TokenSet};
 use serde::Deserialize;
 
@@ -26,9 +27,9 @@ impl GithubSocialProvider {
     async fn resolve_email(
         &self,
         emails_url: &str,
-        profile_email: Option<String>,
+        profile_email: Option<Secret<String>>,
         access_token: &str,
-    ) -> (Option<String>, bool) {
+    ) -> (Option<Secret<String>>, bool) {
         match self
             .client
             .fetch::<Vec<GithubEmail>>(emails_url, access_token)
@@ -63,16 +64,16 @@ impl GithubSocialProvider {
 struct GithubUser {
     id: i64,
     #[serde(default)]
-    login: Option<String>,
+    login: Option<Secret<String>>,
     #[serde(default)]
-    name: Option<String>,
+    name: Option<Secret<String>>,
     #[serde(default)]
-    email: Option<String>,
+    email: Option<Secret<String>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GithubEmail {
-    email: String,
+    email: Secret<String>,
     primary: bool,
     verified: bool,
 }
@@ -102,8 +103,8 @@ impl SocialProvider for GithubSocialProvider {
                 .await;
             Ok::<_, AuthError>(
                 SocialProfile::new(Self::KEY, user.id.to_string())
-                    .with_email(email, verified)
-                    .with_name(display_name),
+                    .with_email(email.map(|email| email.expose_secret().clone()), verified)
+                    .with_name(display_name.map(|name| name.expose_secret().clone())),
             )
         })
     }
@@ -128,16 +129,36 @@ mod tests {
     use super::*;
 
     fn user(email: Option<&str>, login: Option<&str>, name: Option<&str>) -> GithubUser {
+        let personal = |value: Option<&str>| value.map(|value| Secret::new(value.to_owned()));
         GithubUser {
             id: 42,
-            login: login.map(str::to_owned),
-            name: name.map(str::to_owned),
-            email: email.map(str::to_owned),
+            login: personal(login),
+            name: personal(name),
+            email: personal(email),
         }
     }
 
     fn parse_emails(json: &str) -> Vec<GithubEmail> {
         serde_json::from_str(json).expect("valid emails json")
+    }
+
+    /// The account's email, name and login are personal data: the DTOs read
+    /// off GitHub's answers print whether each is there, never what.
+    #[test]
+    fn debug_never_prints_the_personal_data_github_answers() {
+        let user: GithubUser = serde_json::from_str(
+            r#"{"id":42,"login":"ada-l","name":"Ada Lovelace","email":"ada@example.com"}"#,
+        )
+        .expect("valid user json");
+        let emails =
+            parse_emails(r#"[{"email":"ada@example.com","primary":true,"verified":true}]"#);
+
+        let printed = format!("{user:?} {emails:?}");
+
+        for personal in ["ada@example.com", "Lovelace", "ada-l"] {
+            assert!(!printed.contains(personal), "{printed}");
+        }
+        assert!(printed.contains("42"), "the subject stays: {printed}");
     }
 
     #[test]
@@ -152,7 +173,7 @@ mod tests {
             .iter()
             .find(|e| e.primary && e.verified)
             .or_else(|| emails.iter().find(|e| e.verified))
-            .map(|e| e.email.clone());
+            .map(|e| e.email.expose_secret().clone());
         assert_eq!(chosen.as_deref(), Some("primary@example.com"));
     }
 
@@ -238,12 +259,15 @@ mod tests {
         let (email, verified) = provider
             .resolve_email(
                 &format!("https://{addr}/user/emails"),
-                Some("ada@example.com".into()),
+                Some(Secret::new("ada@example.com".into())),
                 "gho_access-token",
             )
             .await;
 
-        assert_eq!(email.as_deref(), Some("ada@example.com"));
+        assert_eq!(
+            email.as_ref().map(|email| email.expose_secret().as_str()),
+            Some("ada@example.com")
+        );
         assert!(!verified, "the profile email is never taken as verified");
         let event = logs.expect_one(
             crate::TARGET,

@@ -30,7 +30,7 @@ pub struct AuthorizationRedirect {
     /// Signed, short-lived token binding the CSRF state to the PKCE verifier.
     /// Set as a cookie on the redirect through [`set_cookie`](Self::set_cookie);
     /// read back with [`OAuthClient::transaction_from`] and passed to
-    /// [`exchange`](OAuthClient::exchange).
+    /// [`callback`](OAuthClient::callback).
     pub transaction: String,
 }
 
@@ -55,6 +55,17 @@ impl AuthorizationRedirect {
 
 /// Outcome of the Authorization-Code exchange: three bearer credentials, so
 /// each is a [`Secret`].
+///
+/// [`OAuthClient::exchange`] builds it; a provider whose exchange deviates
+/// builds its own:
+///
+/// ```
+/// use nest_rs_oauth_client::TokenSet;
+///
+/// let tokens = TokenSet::new("access").with_id_token("eyJhbGciOi").with_refresh_token("refresh");
+/// assert_eq!(tokens.access_token.expose_secret(), "access");
+/// assert!(!format!("{tokens:?}").contains("eyJhbGciOi"));
+/// ```
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct TokenSet {
@@ -65,6 +76,63 @@ pub struct TokenSet {
     pub id_token: Option<Secret<String>>,
     /// The refresh token, when the provider issued one; `None` otherwise.
     pub refresh_token: Option<Secret<String>>,
+}
+
+impl TokenSet {
+    /// The provider's access token alone, with no id_token and no refresh
+    /// token; chain the `with_*` setters to add them.
+    pub fn new(access_token: impl Into<String>) -> Self {
+        Self {
+            access_token: Secret::new(access_token.into()),
+            id_token: None,
+            refresh_token: None,
+        }
+    }
+
+    /// The OIDC id_token the provider issued beside the access token.
+    pub fn with_id_token(mut self, id_token: impl Into<String>) -> Self {
+        self.id_token = Some(Secret::new(id_token.into()));
+        self
+    }
+
+    /// The refresh token the provider issued beside the access token.
+    pub fn with_refresh_token(mut self, refresh_token: impl Into<String>) -> Self {
+        self.refresh_token = Some(Secret::new(refresh_token.into()));
+        self
+    }
+}
+
+/// RFC 6749 §4.1.2's authorization response — the `code` and `state` a
+/// provider sends the redirect URI — matched to the transaction cookie that
+/// began the flow, by [`OAuthClient::callback`]: bound to its provider, its
+/// `state` the one the transaction signed. What [`OAuthClient::exchange`]
+/// trades for a [`TokenSet`], so no exchange runs on a response nobody
+/// matched.
+#[derive(Debug)]
+pub struct AuthorizationResponse {
+    code: Secret<String>,
+    pkce_verifier: Secret<String>,
+    resource: Option<String>,
+}
+
+impl AuthorizationResponse {
+    /// The authorization code the provider issued (§4.1.2), single-use.
+    pub fn code(&self) -> &Secret<String> {
+        &self.code
+    }
+
+    /// The PKCE verifier (RFC 7636 §4.1) the transaction kept, which the
+    /// token request presents beside the code.
+    pub fn pkce_verifier(&self) -> &Secret<String> {
+        &self.pkce_verifier
+    }
+
+    /// The resource (RFC 8707) the flow's own access token was asked for
+    /// when it began ([`OAuthClient::authorize`]), carried across the
+    /// provider in the signed transaction; `None` when it named none.
+    pub fn resource(&self) -> Option<&str> {
+        self.resource.as_deref()
+    }
 }
 
 /// The transaction cookie's handshake purpose (RFC 8725 §3.11): a resource server
@@ -80,12 +148,16 @@ enum TransactionKind {
 /// Carried as a [`JwtService`]-signed cookie so the client cannot forge it.
 /// `provider` binds it to the flow that minted it: one cookie name serves
 /// every provider, and PKCE alone would not stop a cross-provider replay.
+/// `resource` is the one the flow's own access token is asked for, signed so
+/// the callback mints for what the authorize leg asked.
 #[derive(Serialize, Deserialize)]
 struct Transaction {
     typ: TransactionKind,
     provider: String,
     csrf: String,
     pkce: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource: Option<String>,
     exp: u64,
 }
 
@@ -549,11 +621,14 @@ impl OAuthClient {
     }
 
     /// Begin the flow: the provider redirect URL and the signed transaction token to
-    /// set as a cookie, bound to `provider`.
+    /// set as a cookie, bound to `provider` and carrying `resource`, the one
+    /// (RFC 8707) the flow's own access token is asked for —
+    /// [`AuthorizationResponse::resource`] reads it back at the callback.
     pub fn authorize(
         &self,
         jwt: &JwtService,
         provider: &str,
+        resource: Option<&str>,
     ) -> Result<AuthorizationRedirect, AuthError> {
         let client = Self::basic_client(&self.config)?;
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
@@ -569,6 +644,7 @@ impl OAuthClient {
                 provider: provider.to_owned(),
                 csrf: csrf.secret().clone(),
                 pkce: verifier.secret().clone(),
+                resource: resource.map(str::to_owned),
                 exp: jwt.expiry_in(Self::TRANSACTION_TTL_SECS),
             },
         )?;
@@ -578,16 +654,17 @@ impl OAuthClient {
         })
     }
 
-    /// Complete the flow: check `transaction` belongs to `provider` and matches
-    /// `state`, both before trading `code` for a [`TokenSet`].
-    pub async fn exchange(
-        &self,
+    /// Read the callback's authorization response (§4.1.2) against the
+    /// transaction that began the flow: `transaction` must verify, belong to
+    /// `provider` and carry `state`, compared in constant time. Each refusal
+    /// files one `warn` naming its reason, never a value.
+    pub fn callback(
         jwt: &JwtService,
         provider: &str,
         transaction: &str,
         state: &str,
         code: &str,
-    ) -> Result<TokenSet, AuthError> {
+    ) -> Result<AuthorizationResponse, AuthError> {
         // The only `warn` for a forged cookie: no guard sits above this path, and
         // `JwtService` logs its decode reason at `debug`.
         let tx: Transaction = jwt
@@ -623,6 +700,16 @@ impl OAuthClient {
             );
             return Err(AuthError::failed("OAuth state mismatch"));
         }
+        Ok(AuthorizationResponse {
+            code: Secret::new(code.to_owned()),
+            pkce_verifier: Secret::new(tx.pkce),
+            resource: tx.resource,
+        })
+    }
+
+    /// Complete the flow: trade the matched `response`'s code, with its PKCE
+    /// verifier, for a [`TokenSet`] at the provider's token endpoint.
+    pub async fn exchange(&self, response: AuthorizationResponse) -> Result<TokenSet, AuthError> {
         let endpoint = Endpoint {
             role: TOKEN_ENDPOINT,
             url: &self.config.token_url,
@@ -634,9 +721,14 @@ impl OAuthClient {
             http: &self.http,
             answered: std::sync::Mutex::new(None),
         };
+        let AuthorizationResponse {
+            code,
+            pkce_verifier,
+            ..
+        } = response;
         let exchanged = Self::basic_client(&self.config)?
-            .exchange_code(AuthorizationCode::new(code.to_string()))
-            .set_pkce_verifier(PkceCodeVerifier::new(tx.pkce))
+            .exchange_code(AuthorizationCode::new(code.expose_secret().clone()))
+            .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier.expose_secret().clone()))
             .request_async(&observed)
             .await;
         let token = exchanged.map_err(|error| {
@@ -647,12 +739,10 @@ impl OAuthClient {
                 .take();
             exchange_failed(&endpoint, answered, error)
         })?;
-        Ok(TokenSet {
-            access_token: Secret::new(token.access_token().secret().clone()),
-            id_token: None,
-            refresh_token: token
-                .refresh_token()
-                .map(|t| Secret::new(t.secret().clone())),
+        let tokens = TokenSet::new(token.access_token().secret().clone());
+        Ok(match token.refresh_token() {
+            Some(refresh) => tokens.with_refresh_token(refresh.secret().clone()),
+            None => tokens,
         })
     }
 
@@ -776,6 +866,7 @@ mod tests {
                 provider: provider.into(),
                 csrf: csrf.into(),
                 pkce: "verifier".into(),
+                resource: None,
                 exp: jwt.expiry(),
             },
         )
@@ -971,20 +1062,18 @@ mod tests {
             "new refuses it first"
         );
         assert!(matches!(
-            unchecked(config).authorize(&jwt(), "acme"),
+            unchecked(config).authorize(&jwt(), "acme", None),
             Err(AuthError::Failed { .. })
         ));
     }
 
-    #[tokio::test]
-    async fn exchange_rejects_a_transaction_minted_for_another_provider() {
+    #[test]
+    fn a_callback_refuses_a_transaction_minted_for_another_provider() {
         let jwt = jwt();
-        let client = OAuthClient::new(valid_config()).expect("new accepts a valid config");
         let transaction = signed_transaction(&jwt, "provider-a", "agreed-state");
 
-        let Err(err) = client
-            .exchange(&jwt, "provider-b", &transaction, "agreed-state", "code")
-            .await
+        let Err(err) =
+            OAuthClient::callback(&jwt, "provider-b", &transaction, "agreed-state", "code")
         else {
             panic!("a transaction from another provider is rejected");
         };
@@ -992,13 +1081,9 @@ mod tests {
         assert!(said.contains("provider mismatch"), "{said}");
     }
 
-    /// The token endpoint does not parse, so a state that passes fails there instead.
-    #[tokio::test]
-    async fn the_state_matches_only_byte_for_byte_whatever_its_length() {
+    #[test]
+    fn the_state_matches_only_byte_for_byte_whatever_its_length() {
         let jwt = jwt();
-        let mut config = valid_config();
-        config.token_url = "::::".into();
-        let client = unchecked(config);
         let transaction = signed_transaction(&jwt, "acme", "the-signed-state");
 
         for (presented, matches) in [
@@ -1008,22 +1093,38 @@ mod tests {
             ("the-signed-states", false),
             ("", false),
         ] {
-            let Err(err) = client
-                .exchange(&jwt, "acme", &transaction, presented, "the-code")
-                .await
-            else {
-                panic!("nothing reaches a token endpoint that does not parse");
-            };
-            assert!(
-                matches!(err, AuthError::Failed { .. }),
-                "{presented:?}: {err}"
-            );
-            let said = nest_rs_core::error_message(&err);
-            assert_eq!(
-                !said.contains("state mismatch"),
-                matches,
-                "{presented:?}: {said}"
-            );
+            let answered = OAuthClient::callback(&jwt, "acme", &transaction, presented, "the-code");
+            assert_eq!(answered.is_ok(), matches, "{presented:?}");
+            if let Err(err) = answered {
+                assert!(
+                    matches!(err, AuthError::Failed { .. }),
+                    "{presented:?}: {err}"
+                );
+                let said = nest_rs_core::error_message(&err);
+                assert!(said.contains("state mismatch"), "{presented:?}: {said}");
+            }
+        }
+    }
+
+    /// RFC 8707: the resource the authorize leg asked for is the one the
+    /// callback reads back, signed with the transaction.
+    #[test]
+    fn the_resource_asked_at_authorize_is_read_back_at_the_callback() {
+        let jwt = jwt();
+        let client = OAuthClient::new(valid_config()).expect("new accepts a valid config");
+        for resource in [Some("https://mcp.example.com/mcp"), None] {
+            let redirect = client.authorize(&jwt, "acme", resource).expect("authorize");
+            let tx: Transaction = jwt
+                .verify_handshake(TRANSACTION_PURPOSE, &redirect.transaction)
+                .expect("the transaction verifies");
+
+            let response =
+                OAuthClient::callback(&jwt, "acme", &redirect.transaction, &tx.csrf, "the-code")
+                    .expect("the callback matches");
+
+            assert_eq!(response.resource(), resource);
+            assert_eq!(response.code().expose_secret(), "the-code");
+            assert!(!format!("{response:?}").contains("the-code"));
         }
     }
 

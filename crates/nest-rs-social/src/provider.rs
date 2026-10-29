@@ -5,7 +5,7 @@ use std::pin::Pin;
 
 use nest_rs_authn::{AuthError, JwtService};
 use nest_rs_core::Secret;
-use nest_rs_oauth_client::{AuthorizationRedirect, OAuthClient, TokenSet};
+use nest_rs_oauth_client::{AuthorizationRedirect, AuthorizationResponse, OAuthClient, TokenSet};
 
 /// The normalized profile a provider reports for the authenticated caller.
 ///
@@ -75,28 +75,28 @@ pub trait SocialProvider: Send + Sync + 'static {
     /// drive the shared PKCE/CSRF flow through it.
     fn client(&self) -> &OAuthClient;
 
-    /// Begin the redirect leg (default: the shared flow); the transaction is bound
-    /// to [`key`](Self::key), so it cannot complete on another provider's callback.
-    fn authorize(&self, jwt: &JwtService) -> Result<AuthorizationRedirect, AuthError> {
-        self.client().authorize(jwt, self.key())
+    /// Begin the redirect leg (default: the shared flow); the transaction is
+    /// bound to [`key`](Self::key), so it cannot complete on another provider's
+    /// callback, and carries `resource` (RFC 8707), the one this app's own
+    /// token is asked for, which the callback reads back
+    /// ([`AuthorizationResponse::resource`]).
+    fn authorize(
+        &self,
+        jwt: &JwtService,
+        resource: Option<&str>,
+    ) -> Result<AuthorizationRedirect, AuthError> {
+        self.client().authorize(jwt, self.key(), resource)
     }
 
-    /// Complete the code exchange. Default: the shared flow (CSRF check, PKCE,
-    /// SSRF-safe client). Override **only** for a provider whose exchange
-    /// deviates (e.g. Apple's per-request ES256-signed client secret, or an
-    /// OIDC provider populating [`TokenSet::id_token`]).
-    fn exchange<'a>(
-        &'a self,
-        jwt: &'a JwtService,
-        transaction: &'a str,
-        state: &'a str,
-        code: &'a str,
-    ) -> TokenFuture<'a> {
-        Box::pin(async move {
-            self.client()
-                .exchange(jwt, self.key(), transaction, state, code)
-                .await
-        })
+    /// Trade the callback's authorization response — already matched to the
+    /// transaction that began the flow ([`OAuthClient::callback`]) — for the
+    /// provider's tokens. Default: the shared flow (PKCE, SSRF-safe client).
+    /// Override **only** for a provider whose exchange deviates (e.g. Apple's
+    /// per-request ES256-signed client secret, or an OIDC provider populating
+    /// [`TokenSet::id_token`]), building its [`TokenSet`] with
+    /// [`TokenSet::new`].
+    fn exchange(&self, response: AuthorizationResponse) -> TokenFuture<'_> {
+        Box::pin(async move { self.client().exchange(response).await })
     }
 
     /// Fetch and normalize the provider's profile. Takes the full [`TokenSet`]

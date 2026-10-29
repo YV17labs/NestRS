@@ -44,7 +44,7 @@ fn default_authorize_delegates_to_the_configured_client() {
         JwtService::new(JwtOptions::new("social-int-tests-padded-to-32-bytes")).expect("hmac jwt");
 
     let authorization = provider
-        .authorize(&jwt)
+        .authorize(&jwt, None)
         .expect("the trait default drives the shared flow through client()");
 
     assert!(

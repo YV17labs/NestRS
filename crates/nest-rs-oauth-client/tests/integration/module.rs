@@ -39,7 +39,7 @@ async fn for_root_pins_the_config_and_provides_a_client_built_from_it() {
         .get()
         .expect("for_root queues the OAuthClient factory");
     let jwt = crate::jwt();
-    let authorization = client.authorize(&jwt, "acme").expect("authorize");
+    let authorization = client.authorize(&jwt, "acme", None).expect("authorize");
     assert!(
         authorization
             .url

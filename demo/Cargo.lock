@@ -2944,6 +2944,7 @@ dependencies = [
  "anyhow",
  "aws-lc-rs",
  "nest-rs-authn",
+ "nest-rs-config",
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
@@ -2952,6 +2953,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tracing",
+ "validator",
 ]
 
 [[package]]
@@ -3150,6 +3152,7 @@ dependencies = [
  "nest-rs-authn",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-http",
  "nest-rs-oauth-client",
  "serde",
  "serde_json",

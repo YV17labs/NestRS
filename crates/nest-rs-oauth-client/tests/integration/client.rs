@@ -37,7 +37,7 @@ fn client() -> OAuthClient {
 #[test]
 fn authorize_url_carries_client_scope_and_pkce_and_a_verifiable_transaction() {
     let jwt = crate::jwt();
-    let auth = client().authorize(&jwt, "acme").expect("authorize");
+    let auth = client().authorize(&jwt, "acme", None).expect("authorize");
 
     assert!(auth.url.starts_with("https://provider.example/authorize?"));
     assert!(auth.url.contains("client_id=demo-client"));
@@ -59,7 +59,7 @@ fn authorize_url_carries_client_scope_and_pkce_and_a_verifiable_transaction() {
 #[tokio::test]
 async fn the_transaction_cookie_is_not_accepted_as_an_access_token() {
     let jwt = crate::jwt();
-    let auth = client().authorize(&jwt, "acme").expect("authorize");
+    let auth = client().authorize(&jwt, "acme", None).expect("authorize");
 
     assert!(
         matches!(
@@ -93,15 +93,13 @@ fn an_access_token_is_not_accepted_as_a_transaction() {
 }
 
 #[tokio::test]
-async fn exchange_rejects_a_state_that_does_not_match_the_transaction() {
+async fn a_callback_refuses_a_state_that_does_not_match_the_transaction() {
     let logs = LogCapture::install();
     let jwt = crate::jwt();
-    let auth = client().authorize(&jwt, "acme").expect("authorize");
+    let auth = client().authorize(&jwt, "acme", None).expect("authorize");
 
-    // `TokenSet` is not `Debug` (it carries tokens).
-    let Err(err) = client()
-        .exchange(&jwt, "acme", &auth.transaction, "not-the-csrf", "some-code")
-        .await
+    let Err(err) =
+        OAuthClient::callback(&jwt, "acme", &auth.transaction, "not-the-csrf", "some-code")
     else {
         panic!("state mismatch is rejected");
     };
@@ -116,7 +114,7 @@ async fn exchange_rejects_a_state_that_does_not_match_the_transaction() {
 }
 
 #[tokio::test]
-async fn exchange_reports_a_transaction_cookie_that_does_not_verify() {
+async fn a_callback_reports_a_transaction_cookie_that_does_not_verify() {
     // On this path no guard emits the `warn`, and `JwtService` logs its reason at `debug`.
     let logs = LogCapture::install();
     let attacker = JwtService::new(JwtOptions::new("attacker-secret-padded-to-32-byt"))
@@ -131,9 +129,8 @@ async fn exchange_reports_a_transaction_cookie_that_does_not_verify() {
         }))
         .expect("sign with the wrong key");
 
-    let Err(err) = client()
-        .exchange(&crate::jwt(), "acme", &forged, "agreed-state", "some-code")
-        .await
+    let Err(err) =
+        OAuthClient::callback(&crate::jwt(), "acme", &forged, "agreed-state", "some-code")
     else {
         panic!("a transaction signed by another key is rejected");
     };
@@ -170,10 +167,7 @@ async fn an_expired_transaction_cookie_is_reported_the_same_way() {
         }))
         .expect("sign");
 
-    let Err(err) = client()
-        .exchange(&jwt, "acme", &stale, "agreed-state", "some-code")
-        .await
-    else {
+    let Err(err) = OAuthClient::callback(&jwt, "acme", &stale, "agreed-state", "some-code") else {
         panic!("an expired transaction is rejected");
     };
     assert!(matches!(err, AuthError::Expired), "{err}");
@@ -415,7 +409,7 @@ async fn an_exchange_the_provider_never_answers_fails_at_the_call_timeout() {
     let addr = provider.addr;
     let client = client_for(addr);
     let jwt = crate::jwt();
-    let auth = client.authorize(&jwt, "acme").expect("authorize");
+    let auth = client.authorize(&jwt, "acme", None).expect("authorize");
     let tx: Transaction = jwt
         .verify_handshake("oauth-tx", &auth.transaction)
         .expect("the transaction verifies");
@@ -423,7 +417,10 @@ async fn an_exchange_the_provider_never_answers_fails_at_the_call_timeout() {
     let sent = tokio::time::Instant::now();
     let Err(error) = within_twice(
         OAuthClient::CALL_TIMEOUT,
-        client.exchange(&jwt, "acme", &auth.transaction, &tx.csrf, CODE),
+        client.exchange(
+            OAuthClient::callback(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+                .expect("the callback matches its transaction"),
+        ),
     )
     .await
     else {
@@ -582,12 +579,15 @@ async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
     let addr = provider.addr;
     let client = client_for(addr);
     let jwt = crate::jwt();
-    let auth = client.authorize(&jwt, "acme").expect("authorize");
+    let auth = client.authorize(&jwt, "acme", None).expect("authorize");
     let tx: Transaction = jwt
         .verify_handshake("oauth-tx", &auth.transaction)
         .expect("the transaction verifies");
     let Err(error) = client
-        .exchange(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+        .exchange(
+            OAuthClient::callback(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+                .expect("the callback matches its transaction"),
+        )
         .await
     else {
         panic!("an outage completes no exchange");
@@ -699,12 +699,15 @@ async fn module_built(config: OAuthClientConfig) -> Arc<OAuthClient> {
 /// A full exchange through `client`, its transaction minted by `client` itself.
 async fn exchange(client: &OAuthClient) -> Result<TokenSet, AuthError> {
     let jwt = crate::jwt();
-    let auth = client.authorize(&jwt, "acme").expect("authorize");
+    let auth = client.authorize(&jwt, "acme", None).expect("authorize");
     let tx: Transaction = jwt
         .verify_handshake("oauth-tx", &auth.transaction)
         .expect("the transaction verifies");
     client
-        .exchange(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+        .exchange(
+            OAuthClient::callback(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+                .expect("the callback matches its transaction"),
+        )
         .await
 }
 
@@ -1013,13 +1016,16 @@ async fn a_token_answer_past_the_cap_fails_the_exchange_the_same_way() {
     let addr = provider.addr;
     let client = client_for(addr);
     let jwt = crate::jwt();
-    let auth = client.authorize(&jwt, "acme").expect("authorize");
+    let auth = client.authorize(&jwt, "acme", None).expect("authorize");
     let tx: Transaction = jwt
         .verify_handshake("oauth-tx", &auth.transaction)
         .expect("the transaction verifies");
 
     let Err(error) = client
-        .exchange(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+        .exchange(
+            OAuthClient::callback(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+                .expect("the callback matches its transaction"),
+        )
         .await
     else {
         panic!("a token answer past the cap completes no exchange");

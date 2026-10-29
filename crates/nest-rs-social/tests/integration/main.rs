@@ -1,6 +1,6 @@
 //! Integration coverage for the social provider seam: link-time entry
-//! submission, the module that opens each provider, and the flow-owning
-//! trait's default delegation.
+//! submission, the module that opens each provider, the flow-owning
+//! trait's default delegation, and the redirect URI's strategy.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -13,6 +13,7 @@ mod module;
 mod provider;
 mod providers;
 mod registry;
+mod strategy;
 
 use nest_rs_core::AppBuilder;
 use nest_rs_social::{GithubSocialConfig, GoogleSocialConfig, SocialProviderEntry, SocialRegistry};

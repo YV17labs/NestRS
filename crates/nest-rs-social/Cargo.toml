@@ -18,6 +18,8 @@ nest-rs-authn.workspace = true
 # their own; `SocialProvider::authorize`/`exchange` default to it.
 nest-rs-oauth-client.workspace = true
 nest-rs-config = { workspace = true, features = ["tls"] }
+# `SocialStrategy` is an authn `Strategy`, reading the callback's request.
+nest-rs-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
@@ -28,8 +30,10 @@ anyhow.workspace = true
 # `LogCapture`: an unconfigured provider is inert, and inert is indistinguishable
 # from absent at every call site — the boot warn is the only trace.
 # `TestAuthority`: the GitHub double serves over TLS, as every provider is
-# dialled.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+# dialled. `TestApp`: the redirect URI's strategy is proved on a guarded route.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls"] }
+# The guarded route `#[routes]` expands into.
+nest-rs-guards = { path = "../nest-rs-guards" }
 tokio = { workspace = true }
 # A third-party provider package: `tests/unreferenced_provider/` never names it,
 # `tests/integration/` does.

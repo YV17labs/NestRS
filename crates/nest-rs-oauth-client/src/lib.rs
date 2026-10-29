@@ -22,6 +22,6 @@ mod client;
 mod config;
 mod module;
 
-pub use client::{AuthorizationRedirect, OAuthClient, TokenSet};
+pub use client::{AuthorizationRedirect, AuthorizationResponse, OAuthClient, TokenSet};
 pub use config::{OAuthClientConfig, refuse_plaintext_redirect};
 pub use module::{OAuthClientModule, OAuthClientSetup};

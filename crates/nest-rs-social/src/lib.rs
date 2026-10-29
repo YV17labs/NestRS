@@ -21,6 +21,12 @@
 //! [`SocialProvider::exchange`] default to the shared PKCE/CSRF flow, so a
 //! standard provider implements only [`SocialProvider::profile`].
 //!
+//! The redirect URI is [`SocialStrategy`]'s: it reads RFC 6749 §4.1.2's
+//! authorization response — or §4.1.2.1's refusal — against the transaction
+//! cookie, exchanges the code and fetches the profile, and the product's
+//! [`SocialSignIn`] says who that profile is in this app, which is all the
+//! product writes.
+//!
 //! **No provider is proved at boot** (`nest_rs_core::prove`): each is a third
 //! party, reached once per login, and one briefly down must cost its logins,
 //! never the app's start.
@@ -34,6 +40,7 @@ pub const TARGET: &str = "nest_rs::social";
 mod module;
 mod provider;
 mod registry;
+mod strategy;
 
 pub mod providers;
 
@@ -42,6 +49,7 @@ pub use provider::{ProfileFuture, SocialProfile, SocialProvider, TokenFuture};
 pub use registry::{
     BuiltProvider, SocialProviderConfig, SocialProviderEntry, SocialRegistry, resolve_provider,
 };
+pub use strategy::{SocialSignIn, SocialStrategy};
 
 pub use providers::github::{GithubSocialConfig, GithubSocialModule, GithubSocialProvider};
 pub use providers::google::{GoogleSocialConfig, GoogleSocialModule, GoogleSocialProvider};

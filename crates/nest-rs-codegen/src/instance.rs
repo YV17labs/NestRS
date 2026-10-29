@@ -60,6 +60,7 @@ pub const RESERVED_VOCABULARY: &[&str] = &[
     "schedule",
     "mcp",
     "events",
+    "oauth",
 ];
 
 fn named_by_its_ident(key: &str) -> Option<String> {

@@ -134,8 +134,11 @@ providers that carry their own).
 **A `#[config]`'s namespace is its stem, read and never chosen**, minus plural
 role folders and a product's container: `redis/src/queue/config.rs` →
 `<PREFIX>_REDIS__QUEUE__*`, `social/src/providers/github/config.rs` →
-`<PREFIX>_SOCIAL__GITHUB__*`, `features/src/oauth/config.rs` →
-`<PREFIX>_OAUTH__*`; `<PREFIX>_DATABASE__URL` names neither crate nor type. One
+`<PREFIX>_SOCIAL__GITHUB__*`, `features/src/sign_in/config.rs` →
+`<PREFIX>_SIGN_IN__*`; `<PREFIX>_DATABASE__URL` names neither crate nor type. A
+product's stem never takes a family's word (`oauth`): that first level is its
+members' alone, so a product module there reads as one of them in every path,
+target and variable — the product names its own domain. One
 namespace, one type; `Config` names a `#[config]` only (a nested struct is
 vocabulary, `HttpTls`); seeding (`App::builder().provide`) is for hermetic
 tests, and pins the value, never the checks a read one passes. A pinned base
@@ -247,8 +250,9 @@ plural folder (`events/` is an edge): several sit at the port as
 
 ## Reserved vocabulary
 
-A module may not take a name from the structural vocabulary — pick the domain
-word (`programs`, not `apps`); `nestrs new` and `nestrs generate` refuse them.
+A module may not take a name from the structural vocabulary, nor a family's
+word — pick the domain word (`programs`, not `apps`; `sign_in`, not `oauth`);
+`nestrs new` and `nestrs generate` refuse them.
 
 ```
 structure   apps  crates  features  src  tests
@@ -259,6 +263,7 @@ roles       mod  module  service  controller  resolver  gateway  tool
 singulars   dto  command  event  subject
 plurals     services  entities  dtos  commands  strategies  pipes
 edges       http  graphql  ws  queue  schedule  mcp  events
+families    oauth
 ```
 
 ## Transfer objects — named for the boundary they cross

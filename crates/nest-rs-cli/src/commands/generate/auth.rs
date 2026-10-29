@@ -74,14 +74,12 @@ pub(super) fn queue(
 ) -> CliResult<Secrets> {
     let src = ws.features_root();
 
-    const FILES: [(&str, &str); 12] = [
+    const FILES: [(&str, &str); 10] = [
         ("authn/claims.rs", auth::AUTHN_CLAIMS),
         ("authn/mod.rs", auth::AUTHN_MOD),
         ("authn/module.rs", auth::AUTHN_MODULE),
         ("authn/strategy.rs", auth::AUTHN_STRATEGY),
         ("authn/http/mod.rs", auth::AUTHN_HTTP_MOD),
-        ("authn/http/audit.rs", auth::AUTHN_HTTP_AUDIT),
-        ("authn/http/guard.rs", auth::AUTHN_HTTP_GUARD),
         ("authn/http/controller.rs", auth::AUTHN_HTTP_CONTROLLER),
         ("authn/http/module.rs", auth::AUTHN_HTTP_MODULE),
         ("authz/ability.rs", auth::AUTHZ_ABILITY),

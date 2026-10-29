@@ -137,6 +137,10 @@ fn reserved_role(category: &str, word: &str) -> String {
         "roles" => format!("the name of a role file (`{word}.rs`)"),
         "plurals" => format!("the name of a pluralized role folder (`{word}/`)"),
         "edges" => format!("the name of a transport adapter folder (`{word}/`)"),
+        "families" => format!(
+            "the first level of a crate family's paths, targets and variables \
+             (`nest_rs::{word}::…`)"
+        ),
         _ => "part of the structural vocabulary".to_string(),
     }
 }
@@ -474,6 +478,7 @@ mod tests {
             ("dtos", "plurals"),
             ("http", "edges"),
             ("graphql", "edges"),
+            ("oauth", "families"),
         ] {
             assert_eq!(
                 reserved_category(word),
@@ -486,6 +491,15 @@ mod tests {
         assert_eq!(reserved_category("programs"), None);
         assert!(validate_not_reserved("apps").is_err());
         assert!(validate_not_reserved("programs").is_ok());
+    }
+
+    /// A family's first level is its members': a product module there would
+    /// read as one of them in every path, target and variable.
+    #[test]
+    fn a_family_word_is_refused_naming_the_family_it_belongs_to() {
+        let refused = validate_feature_name("oauth").expect_err("a family's word");
+        assert!(refused.contains("nest_rs::oauth::"), "{refused}");
+        assert!(validate_feature_name("sign_in").is_ok());
     }
 
     /// A port of the same name would hold a module of its own name, which the

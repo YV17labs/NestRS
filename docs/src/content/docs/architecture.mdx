@@ -255,7 +255,9 @@ other crate composes on it, and it composes on none of them*. A `core` that
 fails that test is a `shared` wearing a better word.
 
 Module names themselves avoid the structural vocabulary, because reusing one
-makes every path ambiguous:
+makes every path ambiguous — and a family's word, whose first level belongs to
+its members, so a module there would read as one of them in every path, span
+target and variable:
 
 ```
 structure   apps  crates  features  src  tests
@@ -266,9 +268,11 @@ roles       mod  module  service  controller  resolver  gateway  tool
 singulars   dto  command  event  subject
 plurals     services  entities  dtos  commands  strategies  pipes
 edges       http  graphql  ws  queue  schedule  mcp  events
+families    oauth
 ```
 
-A module about desktop applications is `programs/`, not `apps/`.
+A module about desktop applications is `programs/`, not `apps/`; the module
+that signs your users in is `sign_in/`, not `oauth/`.
 
 ## The rules travel with your code
 

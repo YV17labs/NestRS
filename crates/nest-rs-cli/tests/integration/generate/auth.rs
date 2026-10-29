@@ -42,37 +42,27 @@ fn generate_auth_scaffolds_the_adapter_once() {
         "the development token route is what a scaffolded app calls its guarded routes with: \
          {controller}"
     );
-    // On its own provider: a `#[controller]` registers no instance to run hooks on.
-    let audit = fs::read_to_string(src.join("authn/http/audit.rs")).unwrap();
+    // The development-only gate is the framework's: one guard that refuses
+    // the request and, at its module-init hook, the boot outside development
+    // and test — nothing of it is written into the app.
     assert!(
-        audit.contains("#[on_module_init]") && audit.contains("if is_development()"),
-        "the module refuses the boot when this is not a development run: {audit}"
+        controller.contains("use nest_rs::authn::{DevelopmentOnlyGuard, JwtService};")
+            && controller.contains("#[use_guards(DevelopmentOnlyGuard)]"),
+        "the controller binds the framework's gate, so the refusal travels with the route: \
+         {controller}"
     );
+    let module = fs::read_to_string(src.join("authn/http/module.rs")).unwrap();
     assert!(
-        !controller.contains("#[hooks]"),
-        "the refusal must not sit on the controller, where the hook is skipped: {controller}"
+        module.contains("providers = [DevelopmentOnlyGuard, DevTokenController]"),
+        "the module lists the gate, so the boot refusal runs wherever the route is served: \
+         {module}"
     );
-
-    // **Absence must answer `false`**: `<PREFIX>_ENV` is unset in most scaffolds
-    // and CI, so the scaffold asks `Environment::declared`, which answers `None`
-    // for unset and misspelled alike.
-    assert!(
-        audit.contains("Environment::declared()")
-            && !audit.contains("Environment::from_env()")
-            && !audit.contains(r#"Ok("development")"#),
-        "the predicate asks the framework's classifier positively, so an unset or hand-parsed \
-         variable is not a development run: {audit}"
-    );
-    // A guard asking the same question covers registration from another module.
-    let guard = fs::read_to_string(src.join("authn/http/guard.rs")).unwrap();
-    assert!(
-        guard.contains("impl Guard for DevOnlyGuard") && guard.contains("if is_development()"),
-        "the route's own refusal is a guard: {guard}"
-    );
-    assert!(
-        controller.contains("#[use_guards(DevOnlyGuard)]"),
-        "the controller binds it, so the refusal travels with the route: {controller}"
-    );
+    for written_by_hand in ["authn/http/audit.rs", "authn/http/guard.rs"] {
+        assert!(
+            !src.join(written_by_hand).exists(),
+            "{written_by_hand} is the framework's now"
+        );
+    }
 
     let second = Command::new(env!("CARGO_BIN_EXE_nestrs"))
         .args(["g", "auth", "-p", dir.path().to_str().unwrap()])

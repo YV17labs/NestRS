@@ -138,26 +138,25 @@ use super::strategy::{AuthnGuard, AuthnStrategy};
 pub struct AuthnModule;
 "#;
 
-// authn/http/ — the development token route, refusing the boot outside
+// authn/http/ — the development token route, behind the framework's
+// `DevelopmentOnlyGuard`, which refuses the request and the boot outside
 // `development` / `test`. Deleted the day the real login lands.
 
-pub(crate) const AUTHN_HTTP_MOD: &str = r#"mod audit;
-mod controller;
-mod guard;
+pub(crate) const AUTHN_HTTP_MOD: &str = r#"mod controller;
 mod module;
 
 pub use module::AuthnHttpModule;
 "#;
 
 /// The route the tutorial `curl`s. `#[public]`: the environment check stands in
-/// for the credential this route deliberately does not have.
+/// for the credential this route deliberately does not have. Only the handler
+/// is the app's: it builds the app's own `Claims`.
 pub(crate) const AUTHN_HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
-use nest_rs::authn::JwtService;
+use nest_rs::authn::{DevelopmentOnlyGuard, JwtService};
 use nest_rs::http::{Json, Opaque, Result, controller, input, routes};
 use uuid::Uuid;
 
-use super::guard::DevOnlyGuard;
 use crate::authn::{Claims, Role, Subject};
 
 #[input]
@@ -176,7 +175,7 @@ pub struct DevTokenResponseDto {
 }
 
 #[controller(path = "/auth")]
-#[use_guards(DevOnlyGuard)]
+#[use_guards(DevelopmentOnlyGuard)]
 pub struct DevTokenController {
     #[inject]
     jwt: Arc<JwtService>,
@@ -206,86 +205,15 @@ impl DevTokenController {
 }
 "#;
 
-/// The boot refusal, on a provider of its own.
-///
-/// Not on `DevTokenController`: a `#[controller]` registers metadata, never an
-/// instance, so its `#[hooks]` could not run (`nest_rs::core::ProviderResidency`).
-pub(crate) const AUTHN_HTTP_GUARD: &str = r#"use nest_rs::core::{Layer, UnitContext, injectable};
-use nest_rs::guards::{Denial, Guard, GuardFor};
-use nest_rs::http::{HttpView, async_trait};
+pub(crate) const AUTHN_HTTP_MODULE: &str = r#"use nest_rs::authn::DevelopmentOnlyGuard;
+use nest_rs::core::module;
 
-use super::audit::is_development;
-
-/// Refuses every request unless this is a development or test process. The
-/// boot refusal covers the app that imports `AuthnHttpModule`; this covers the
-/// route wherever it is mounted from.
-#[injectable]
-#[derive(Layer)]
-pub struct DevOnlyGuard;
-
-#[async_trait]
-impl Guard for DevOnlyGuard {
-    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        if is_development() {
-            return Ok(());
-        }
-        Err(Denial::forbidden("development-only route").with_reason("outside_development"))
-    }
-
-    fn denial_statuses(&self, _public: bool) -> &'static [u16] {
-        &[403]
-    }
-}
-
-impl GuardFor<HttpView> for DevOnlyGuard {}
-"#;
-
-pub(crate) const AUTHN_HTTP_AUDIT: &str = r#"use nest_rs::config::Environment;
-use nest_rs::core::anyhow::{anyhow, Result};
-use nest_rs::core::{hooks, injectable};
-
-/// Development and test only. Absence answers `false`: `Environment::declared()`
-/// is `None` until somebody sets the variable, so a process nobody told is not
-/// a development one.
-pub fn is_development() -> bool {
-    matches!(
-        Environment::declared(),
-        Some(Environment::Development | Environment::Test)
-    )
-}
-
-#[injectable]
-pub struct DevTokenAudit;
-
-#[hooks]
-impl DevTokenAudit {
-    #[on_module_init]
-    async fn refuse_outside_development(&self) -> Result<()> {
-        if is_development() {
-            return Ok(());
-        }
-        Err(anyhow!(
-            "DevTokenController mints unauthenticated bearer tokens, and {} is not set to \
-             `development` or `test` (it reads {:?}). Set it for a development run, or delete \
-             crates/features/src/authn/http/ and its AuthnHttpModule import and write the real \
-             login route in its place.",
-            Environment::var_name(),
-            std::env::var(Environment::var_name()).ok(),
-        ))
-    }
-}
-"#;
-
-pub(crate) const AUTHN_HTTP_MODULE: &str = r#"use nest_rs::core::module;
-
-use super::audit::DevTokenAudit;
 use super::controller::DevTokenController;
-use super::guard::DevOnlyGuard;
 use crate::authn::AuthnModule;
 
 #[module(
     imports = [AuthnModule],
-    providers = [DevTokenAudit, DevOnlyGuard, DevTokenController],
+    providers = [DevelopmentOnlyGuard, DevTokenController],
 )]
 pub struct AuthnHttpModule;
 "#;

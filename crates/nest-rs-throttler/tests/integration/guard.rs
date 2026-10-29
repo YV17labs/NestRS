@@ -13,11 +13,34 @@ use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, module};
 use nest_rs_guards::guard;
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
-use nest_rs_testing::{LogCapture, TestApp};
+use nest_rs_testing::{CapturedEvent, LogCapture, TestApp};
 use nest_rs_throttler::{
     BACKEND_REMEDY, Decision, HIT_TIMEOUT, Throttle, ThrottlerConfig, ThrottlerGuard,
     ThrottlerModule, ThrottlerStore, ThrottlerStoreError,
 };
+
+/// The one line a refusal of `reason` filed: the edge's, on the throttler's
+/// target.
+fn the_denial(logs: &LogCapture, reason: &str) -> CapturedEvent {
+    let mut lines = denials(logs, reason);
+    assert_eq!(
+        lines.len(),
+        1,
+        "expected one `{reason}` denial on the throttler's target, captured: {:#?}",
+        logs.events(),
+    );
+    lines.remove(0)
+}
+
+/// Every line a refusal of `reason` filed.
+fn denials(logs: &LogCapture, reason: &str) -> Vec<CapturedEvent> {
+    logs.events()
+        .into_iter()
+        .filter(|line| line.target == nest_rs_throttler::TARGET)
+        .filter(|line| line.message.starts_with("guard denied the "))
+        .filter(|line| line.field("reason").as_deref() == Some(reason))
+        .collect()
+}
 
 #[controller(path = "/rated")]
 struct RatedController;
@@ -95,12 +118,12 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
     denied.assert_header_exist("retry-after");
 
     // The route, never the composite store key, which holds the client's address.
-    let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
+    let event = the_denial(&logs, "limit_exceeded");
     assert_eq!(event.level, "warn");
     assert!(
         event
-            .field("route")
-            .is_some_and(|r| r.contains("/rated/strict")),
+            .field("address")
+            .is_some_and(|r| r.contains("/strict")),
         "the event names the route on its own field, got {:?}",
         event.fields,
     );
@@ -132,10 +155,11 @@ async fn the_bucket_key_is_the_declared_template() {
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
 
-    let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
-    assert_eq!(
-        event.field("route").as_deref(),
-        Some("/rated/items/{id}"),
+    let event = the_denial(&logs, "limit_exceeded");
+    assert!(
+        event
+            .field("address")
+            .is_some_and(|route| route.ends_with("/items/{id}")),
         "the bucket is named as the route declares it, got {:?}",
         event.fields,
     );
@@ -234,22 +258,19 @@ type PanickingStoreModule = StoreModule<PanickingStore>;
 
 /// The line says what the refusal cannot: that the store never answered, and
 /// which store it was.
-fn assert_the_store_was_waited_out(logs: &LogCapture, transport: &str) {
-    let cause = logs.expect_one(
-        nest_rs_throttler::TARGET,
-        "throttler store did not answer within the guard's timeout; denying (fail-closed)",
-    );
+fn assert_the_store_was_waited_out(logs: &LogCapture, unit: &str) {
+    let cause = the_denial(logs, "store_timeout");
     assert_eq!(cause.level, "warn");
-    assert_eq!(cause.field("transport").as_deref(), Some(transport));
-    assert_eq!(
-        cause.field("store").as_deref(),
-        Some(std::any::type_name::<StalledStore>()),
+    assert_eq!(cause.field("unit").as_deref(), Some(unit));
+    let chain = cause.field("error").unwrap_or_default();
+    assert!(
+        chain.contains(std::any::type_name::<StalledStore>()),
         "the line names the store behind the trait object, got {:?}",
         cause.fields,
     );
-    assert_eq!(
-        cause.field("waited_ms").as_deref(),
-        Some(HIT_TIMEOUT.as_millis().to_string().as_str()),
+    assert!(
+        chain.contains(&format!("{} ms", HIT_TIMEOUT.as_millis())),
+        "…and how long it was waited on, got {chain}",
     );
     assert_no_limit_was_exceeded(logs);
 }
@@ -257,7 +278,8 @@ fn assert_the_store_was_waited_out(logs: &LogCapture, transport: &str) {
 /// A store that could not count exceeded no limit: the cause line is the one
 /// line, never followed by the over-limit one.
 fn assert_no_limit_was_exceeded(logs: &LogCapture) {
-    logs.expect_none(nest_rs_throttler::TARGET, "rate limit exceeded");
+    let exceeded = denials(logs, "limit_exceeded");
+    assert!(exceeded.is_empty(), "{exceeded:#?}");
 }
 
 /// The window the stalled-store apps pin, and so the `Retry-After` a refusal for
@@ -349,19 +371,16 @@ struct PanickingHttpModule;
 )]
 struct FailingHttpModule;
 
-/// The line a store that could not count is filed under: the guard's, at
-/// `warn` — the store itself says nothing.
-const FAILED: &str = "throttler store failed; denying (fail-closed)";
-
 /// The line says which store failed, on which edge, and why, and holds no
-/// part of the bucket's key — the caller's address is in it.
-fn assert_the_store_failure_was_said(logs: &LogCapture, transport: &str) {
-    let said = logs.expect_one(nest_rs_throttler::TARGET, FAILED);
+/// part of the bucket's key — the caller's address is in it. The store itself
+/// says nothing: the denial's line, at `warn`, is the one line.
+fn assert_the_store_failure_was_said(logs: &LogCapture, unit: &str) {
+    let said = the_denial(logs, "store_failed");
     assert_eq!(said.level, "warn");
-    assert_eq!(said.field("transport").as_deref(), Some(transport));
-    assert_eq!(
-        said.field("store").as_deref(),
-        Some(std::any::type_name::<FailingStore>()),
+    assert_eq!(said.field("unit").as_deref(), Some(unit));
+    assert!(
+        said.field("error")
+            .is_some_and(|error| error.contains(std::any::type_name::<FailingStore>())),
         "the line names the store behind the trait object, got {:?}",
         said.fields,
     );
@@ -393,7 +412,7 @@ async fn a_store_that_fails_is_refused_for_the_window_and_said_once() {
 
     refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     refused.assert_header("retry-after", WINDOW_SECS.to_string());
-    assert_the_store_failure_was_said(&logs, "http");
+    assert_the_store_failure_was_said(&logs, "http.request");
 }
 
 /// The line a store that unwound is filed under: the guard's, at `error`.
@@ -454,7 +473,7 @@ async fn a_store_that_never_answers_is_refused_at_the_bound_over_http() {
         waited < timeout,
         "…and before the edge's own request timeout: {waited:?}"
     );
-    assert_the_store_was_waited_out(&logs, "http");
+    assert_the_store_was_waited_out(&logs, "http.request");
 }
 
 #[tokio::test(start_paused = true)]
@@ -594,17 +613,17 @@ mod graphql {
             );
         }
 
-        let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
+        let event = super::the_denial(&logs, "limit_exceeded");
         assert_eq!(event.level, "warn");
         assert_eq!(
-            event.field("transport").as_deref(),
-            Some("graphql"),
-            "the family shares one message, so the edge is a field an operator \
+            event.field("unit").as_deref(),
+            Some("graphql.field"),
+            "two edges share the message, so the unit is a field an operator \
              filters on, got {:?}",
             event.fields,
         );
         assert_eq!(
-            event.field("operation").as_deref(),
+            event.field("address").as_deref(),
             Some("tick"),
             "the bucket is the field's, so the field is what the line names, \
              got {:?}",
@@ -647,7 +666,7 @@ mod graphql {
             !refused.contains("\"tick\":\"ok\""),
             "…and the resolver body never ran: {refused}",
         );
-        assert_the_store_was_waited_out(&logs, "graphql");
+        assert_the_store_was_waited_out(&logs, "graphql.field");
     }
 }
 
@@ -747,11 +766,11 @@ mod mcp {
             );
         }
 
-        let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
+        let event = super::the_denial(&logs, "limit_exceeded");
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("transport").as_deref(), Some("mcp"));
+        assert_eq!(event.field("unit").as_deref(), Some("mcp.operation"));
         assert_eq!(
-            event.field("operation").as_deref(),
+            event.field("address").as_deref(),
             Some("tick"),
             "the bucket is the operation's, got {:?}",
             event.fields,
@@ -784,7 +803,7 @@ mod mcp {
             refused.contains("Too Many Requests"),
             "a store that cannot answer refuses the call: {refused}",
         );
-        assert_the_store_was_waited_out(&logs, "mcp");
+        assert_the_store_was_waited_out(&logs, "mcp.operation");
     }
 }
 
@@ -795,6 +814,7 @@ mod ws {
         HandlerDeclaration, MetaLevels, declare_handler, new_unit_context,
     };
     use nest_rs_core::{Handler, Peer, Posture, UnitView, module};
+    use nest_rs_guards::__private::Refused;
     use nest_rs_guards::{Denial, Guard};
     use nest_rs_testing::TestApp;
     use nest_rs_throttler::{Throttle, ThrottlerGuard, ThrottlerModule};
@@ -884,18 +904,18 @@ mod ws {
             );
         }
 
-        let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
+        let event = super::the_denial(&logs, "limit_exceeded");
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("transport").as_deref(), Some("ws"));
+        assert_eq!(event.field("unit").as_deref(), Some("ws.message"));
         assert_eq!(
-            event.field("event").as_deref(),
+            event.field("address").as_deref(),
             Some("tick"),
             "the event names the unit, got {:?}",
             event.fields,
         );
         assert!(
             event
-                .field("connection")
+                .field("conn_id")
                 .is_some_and(|connection| connection.parse::<u64>().is_ok()),
             "…and the connection the bucket is keyed on, a number this process \
              minted for the socket — never the peer's address, got {:?}",
@@ -924,12 +944,17 @@ mod ws {
 
     impl UnitView for Message {}
 
-    /// The guard's entry on one message of connection `7`, as the gateway's
-    /// per-message table runs it: no socket, so time can be paused.
+    /// The guard's entry on one message of connection `7`, its refusal filed,
+    /// as the gateway's per-message table runs it: no socket, so time can be
+    /// paused.
     async fn check_a_message(guard: &ThrottlerGuard) -> Result<(), Denial> {
         let mut view = Message;
         let mut cx = new_unit_context(&TICK, &mut view, Some(Peer::new(None, Some(7))), None);
-        guard.check(&mut cx).await
+        match guard.check(&mut cx).await {
+            Ok(()) => Ok(()),
+            Err(denial) => Err(Refused::by("ThrottlerGuard", guard, denial)
+                .into_denial("guard denied the message", &cx)),
+        }
     }
 
     /// No request timeout reaches a socket's messages at all.
@@ -955,7 +980,7 @@ mod ws {
             429,
             "refused as a rate limit, the one refusal a store that cannot answer gives",
         );
-        assert_the_store_was_waited_out(&logs, "ws");
+        assert_the_store_was_waited_out(&logs, "ws.message");
     }
 
     /// A store that says it could not count refuses the message as a rate
@@ -976,7 +1001,7 @@ mod ws {
             .expect_err("a store that cannot count refuses the message");
 
         assert_eq!(refused.http_status(), 429);
-        assert_the_store_failure_was_said(&logs, "ws");
+        assert_the_store_failure_was_said(&logs, "ws.message");
     }
 }
 
@@ -1049,7 +1074,13 @@ mod self_mount {
             .await
             .assert_status(StatusCode::TOO_MANY_REQUESTS);
 
-        let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
-        assert_eq!(event.field("route").as_deref(), Some("/files/{*name}"));
+        let event = super::the_denial(&logs, "limit_exceeded");
+        assert!(
+            event
+                .field("address")
+                .is_some_and(|mount| mount.starts_with("/files")),
+            "{:?}",
+            event.fields,
+        );
     }
 }

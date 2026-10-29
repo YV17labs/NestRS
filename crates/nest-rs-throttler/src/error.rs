@@ -4,7 +4,7 @@
 /// store's own failure, kept opaque so this port names no backend.
 ///
 /// Never `#[error(transparent)]`, whose `source()` skips the store's error
-/// itself and drops it from the chain the guard's `warn` renders.
+/// itself and drops it from the chain the denial's line renders.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct ThrottlerStoreError(#[source] Box<dyn std::error::Error + Send + Sync>);
@@ -15,6 +15,37 @@ impl ThrottlerStoreError {
     pub fn new(source: impl Into<Box<dyn std::error::Error + Send + Sync>> + 'static) -> Self {
         Self(nest_rs_core::boxed_error(source))
     }
+}
+
+/// Why a hit was refused without being counted: the store named could not
+/// count it — what a throttler denial keeps as its cause, naming the store and
+/// never the key, which holds the caller's address.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub(crate) enum UncountedError {
+    /// The store answered an error.
+    #[error("the throttler store `{store}` failed")]
+    Failed {
+        /// The store, as it names itself.
+        store: &'static str,
+        /// Its failure.
+        #[source]
+        error: ThrottlerStoreError,
+    },
+    /// The store did not answer within the guard's bound.
+    #[error("the throttler store `{store}` did not answer within {waited_ms} ms")]
+    Silent {
+        /// The store, as it names itself.
+        store: &'static str,
+        /// The bound waited out.
+        waited_ms: u64,
+    },
+    /// The store panicked; the panic is filed on its own line.
+    #[error("the throttler store `{store}` panicked")]
+    Panicked {
+        /// The store, as it names itself.
+        store: &'static str,
+    },
 }
 
 #[cfg(test)]

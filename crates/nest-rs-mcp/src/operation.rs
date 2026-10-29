@@ -19,7 +19,7 @@ use nest_rs_core::{
     Container, Deadline, Failure, Handler, Outcome, Posture, UnitContext, UnresolvedLayerError,
     anyhow,
 };
-use nest_rs_guards::__private::{RefusalMark, check_guards, failure_chain, resolve_global_guards};
+use nest_rs_guards::__private::{RefusalMark, check_guards, resolve_global_guards};
 use nest_rs_guards::{Denial, Guard, GuardSpec};
 use rmcp::model::{
     CallToolRequestMethod, ConstString, GetPromptRequestMethod, ListResourcesRequestMethod,
@@ -133,8 +133,6 @@ pub struct OperationGuards {
     pub force: Vec<TypeId>,
     /// Which router serves the operation.
     pub kind: McpOperationKind,
-    /// The host's type, as a denial's line names it.
-    pub host_type: &'static str,
 }
 
 /// The guard stage of the operation `handler` declares: the app-wide pool, the
@@ -168,19 +166,13 @@ pub fn operation_guard_stage(
     if chain.is_empty() {
         return Ok(None);
     }
-    Ok(Some(Arc::new(OperationGuardStage {
-        guards: chain,
-        kind: declared.kind,
-        host: declared.host_type,
-    })))
+    Ok(Some(Arc::new(OperationGuardStage { guards: chain })))
 }
 
 /// One operation's guards, as the pipeline runs a site's guard stage: each
 /// one's [`check`](Guard::check) on the operation, read through [`McpView`].
 struct OperationGuardStage {
     guards: Vec<ResolvedLayer<dyn Guard>>,
-    kind: McpOperationKind,
-    host: &'static str,
 }
 
 impl GuardStage for OperationGuardStage {
@@ -188,33 +180,13 @@ impl GuardStage for OperationGuardStage {
         Box::pin(async move {
             check_guards(&self.guards, None, cx)
                 .await
-                .map_err(|refused| {
-                    let operation = cx.handler().address();
-                    Failure::from(
-                        refused.into_denial(|guard, denial| self.file(guard, operation, denial)),
-                    )
-                })
+                .map_err(|refused| Failure::from(refused.into_denial(DENIED, cx)))
         })
     }
 }
 
-impl OperationGuardStage {
-    /// The edge's structural floor under a denial `guard` raised on
-    /// `operation`; host and operation stay separate fields for an incident
-    /// query.
-    fn file(&self, guard: &'static str, operation: &str, denial: &Denial) {
-        tracing::warn!(
-            target: nest_rs_core::target::LAYERS,
-            guard,
-            host = self.host,
-            kind = self.kind.as_str(),
-            operation,
-            status = denial.http_status(),
-            error = failure_chain(denial),
-            "guard denied the operation",
-        );
-    }
-}
+/// The line a guard's denial of a tool call or a prompt fetch is filed as.
+const DENIED: &str = "guard denied the operation";
 
 /// Run one declared operation — a tool call, a prompt fetch, a resource read
 /// or listing — through the site `#[tools]` declared for it — `#[tools]`

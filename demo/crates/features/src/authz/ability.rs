@@ -10,7 +10,6 @@ use crate::posts as post;
 use crate::users as user;
 
 #[injectable]
-#[derive(Default)]
 pub struct AuthzAbility;
 
 impl AbilityFactory for AuthzAbility {

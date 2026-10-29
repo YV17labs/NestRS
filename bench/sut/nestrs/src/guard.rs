@@ -3,10 +3,8 @@ use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::{HttpView, header};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct BearerGuard;
-
-impl Layer for BearerGuard {}
 
 #[async_trait]
 impl Guard for BearerGuard {

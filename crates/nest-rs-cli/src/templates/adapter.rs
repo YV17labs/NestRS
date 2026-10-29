@@ -218,7 +218,6 @@ use nest_rs::queue::processor;
 use crate::{{snake}}::{{{command}}, {{queue}}};
 
 #[injectable]
-#[derive(Default)]
 pub struct {{processor}};
 
 #[processor]
@@ -301,7 +300,6 @@ use nest_rs::events::listeners;
 use crate::{{snake}}::{{event}};
 
 #[injectable]
-#[derive(Default)]
 pub struct {{listener}};
 
 #[listeners]

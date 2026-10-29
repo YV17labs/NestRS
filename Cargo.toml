@@ -20,6 +20,10 @@ tokio = { version = "1.54", features = ["full"] }  # public
 tokio-util = { version = "0.7", features = ["rt", "io"] }  # public
 
 tracing = "0.1"  # public
+# A guard's denial line is filed on the target the guard names at run time,
+# through a callsite made once per target: tracing's macros declare theirs as
+# constants, and tracing-core is the stable API a callsite is made with.
+tracing-core = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 log = "0.4"
 

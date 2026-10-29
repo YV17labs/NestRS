@@ -1,6 +1,6 @@
 //! Surface-agnostic nestrs decorators (`#[injectable]`, `#[interceptor]`,
-//! `#[module]`, `#[hooks]`, `#[input]`, `#[instance]`, `#[main]`), re-exported
-//! by `nest-rs-core`.
+//! `#[module]`, `#[hooks]`, `#[input]`, `#[instance]`, `#[main]`) and
+//! `#[derive(Layer)]`, re-exported by `nest-rs-core`.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -12,12 +12,14 @@ mod injectable;
 mod input;
 mod instance;
 mod interceptor;
+mod layer;
 mod module;
 
 /// Declares a struct as a provider: `#[inject]` fields resolve via
 /// `container.get()` (or `get_dyn` for `Arc<dyn Trait>`), other fields fall
 /// back to `Default::default()`; with no `#[inject]` field, the struct's own
-/// `Default` impl builds it.
+/// `Default` impl builds it, and a struct with no field at all is built as
+/// written, with no `Default`.
 ///
 /// Emits `impl Discoverable` (so the struct can sit in
 /// `#[module(providers = [...])]`) and `impl ProviderResidency` (`true` for a
@@ -53,6 +55,19 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(interceptor::interceptor(args, input).into()).into()
+}
+
+/// Implements `Layer` for a guard, an interceptor, an exception filter or a
+/// global pipe — the trait every layer family extends — so the type writes
+/// only its family's trait.
+///
+/// One optional helper attribute, `#[layer(priority = …)]`, an `i8` ordering
+/// the layer within one site of its stage (lower first, never ahead of a
+/// broader site's); without it, declaration order decides. A layer reading
+/// which units it serves (`Layer::serves`) writes its `impl Layer` by hand.
+#[proc_macro_derive(Layer, attributes(layer))]
+pub fn derive_layer(input: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(layer::derive_layer(input).into()).into()
 }
 
 /// Registers a provider's lifecycle hooks; `App` invokes each method tagged

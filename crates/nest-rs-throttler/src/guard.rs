@@ -12,14 +12,15 @@ use nest_rs_core::{Edge, Layer, Unanswered, UnitContext, UnitView, injectable, w
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{ClientOrigin, HttpView, async_trait};
 
+use crate::error::UncountedError;
 use crate::pseudonym::PseudonymStore;
 use crate::store::{Decision, HIT_TIMEOUT, ThrottlerStore};
 use crate::throttle::Throttle;
 
-/// The edge a bucket belongs to — the leading segment of every key, and the
-/// `transport` field on every denial: a `#[query]`, a `#[tool]` and a
-/// `#[subscribe_message]` may share a name, and must not share a budget. An
-/// in-band edge's word is its own (`Edge::as_str`).
+/// The edge a bucket belongs to — the leading segment of every key: a
+/// `#[query]`, a `#[tool]` and a `#[subscribe_message]` may share a name, and
+/// must not share a budget. An in-band edge's word is its own
+/// (`Edge::as_str`).
 mod transport {
     pub(super) const HTTP: &str = "http";
     /// A unit off the framework's edges, which names no edge of its own.
@@ -49,9 +50,18 @@ fn bucket_key(parts: &[&dyn fmt::Display]) -> String {
     key
 }
 
-/// The refusal every edge returns.
-fn rate_limited(retry_after: Duration) -> Denial {
-    Denial::rate_limited(retry_after_secs(retry_after), RATE_LIMITED_MESSAGE)
+/// The refusal every edge returns, for `reason`.
+fn rate_limited(retry_after: Duration, reason: &'static str) -> Denial {
+    Denial::rate_limited(retry_after_secs(retry_after), RATE_LIMITED_MESSAGE).with_reason(reason)
+}
+
+/// Why a hit was refused, the `reason` of its denial's line: over the limit,
+/// or a hit the store could not count.
+mod reason {
+    pub(super) const LIMIT_EXCEEDED: &str = "limit_exceeded";
+    pub(super) const STORE_FAILED: &str = "store_failed";
+    pub(super) const STORE_PANICKED: &str = "store_panicked";
+    pub(super) const STORE_TIMEOUT: &str = "store_timeout";
 }
 
 /// Counts one unit of work against a limit and refuses the caller over it —
@@ -113,9 +123,10 @@ impl ThrottlerGuard {
     ///
     /// The one place a store's failure is decided, fail closed: an `Err`, a
     /// store silent past the bound and one that panics are each refused for
-    /// the whole window, and said here once — never with the key, which holds
-    /// the caller's address. The in-process store answers at the first poll,
-    /// so it pays no timer.
+    /// the whole window, the store named in the denial's cause — never the
+    /// key, which holds the caller's address; a panic is filed on its own line
+    /// besides. The in-process store answers at the first poll, so it pays no
+    /// timer.
     async fn count(
         &self,
         transport: &'static str,
@@ -123,32 +134,36 @@ impl ThrottlerGuard {
         limit: Throttle,
     ) -> Result<Decision, Denial> {
         let store = &*self.throttler.0;
-        match within(HIT_TIMEOUT, async { store.hit(key, limit).await }).await {
-            Ok(Ok(decision)) => return Ok(decision),
-            Ok(Err(error)) => tracing::warn!(
-                target: crate::TARGET,
-                transport,
-                store = ThrottlerStore::name(store),
-                error = %nest_rs_core::error_message(&error),
-                "throttler store failed; denying (fail-closed)",
-            ),
-            Err(Unanswered::Panicked(payload)) => nest_rs_core::contained_panic!(
-                target: crate::TARGET,
-                payload.as_ref(),
-                "throttler store panicked; denying (fail-closed)",
-                transport,
-                store = ThrottlerStore::name(store),
-            ),
-            Err(_) => tracing::warn!(
-                target: crate::TARGET,
-                transport,
-                store = ThrottlerStore::name(store),
-                waited_ms = u64::try_from(HIT_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
-                "throttler store did not answer within the guard's timeout; denying \
-                 (fail-closed)",
-            ),
-        }
-        Err(rate_limited(limit.window()))
+        let name = ThrottlerStore::name(store);
+        let (reason, uncounted) =
+            match within(HIT_TIMEOUT, async { store.hit(key, limit).await }).await {
+                Ok(Ok(decision)) => return Ok(decision),
+                Ok(Err(error)) => (
+                    reason::STORE_FAILED,
+                    UncountedError::Failed { store: name, error },
+                ),
+                Err(Unanswered::Panicked(payload)) => {
+                    nest_rs_core::contained_panic!(
+                        target: crate::TARGET,
+                        payload.as_ref(),
+                        "throttler store panicked; denying (fail-closed)",
+                        transport,
+                        store = name,
+                    );
+                    (
+                        reason::STORE_PANICKED,
+                        UncountedError::Panicked { store: name },
+                    )
+                }
+                Err(_) => (
+                    reason::STORE_TIMEOUT,
+                    UncountedError::Silent {
+                        store: name,
+                        waited_ms: u64::try_from(HIT_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+                    },
+                ),
+            };
+        Err(rate_limited(limit.window(), reason).with_source(uncounted))
     }
 }
 
@@ -176,17 +191,7 @@ impl Guard for ThrottlerGuard {
         if decision.allowed {
             return Ok(());
         }
-        // The route alone, never the store key: the key holds the client's
-        // address, personal data no line carries; and only the template the
-        // router matched, never the path a client sent.
-        tracing::warn!(
-            target: crate::TARGET,
-            transport = transport::HTTP,
-            route = view.route(),
-            retry_after = retry_after_secs(decision.retry_after),
-            "rate limit exceeded",
-        );
-        Err(rate_limited(decision.retry_after))
+        Err(rate_limited(decision.retry_after, reason::LIMIT_EXCEEDED))
     }
 
     /// An in-band edge's unit — a GraphQL field, a WS message, an MCP operation —
@@ -215,27 +220,7 @@ impl Guard for ThrottlerGuard {
         if decision.allowed {
             return Ok(());
         }
-        let retry_after = retry_after_secs(decision.retry_after);
-        match connection {
-            // The connection is a number this process minted for the socket,
-            // never the peer's address.
-            Some(connection) => tracing::warn!(
-                target: crate::TARGET,
-                transport = edge,
-                event = address,
-                connection,
-                retry_after,
-                "rate limit exceeded",
-            ),
-            None => tracing::warn!(
-                target: crate::TARGET,
-                transport = edge,
-                operation = address,
-                retry_after,
-                "rate limit exceeded",
-            ),
-        }
-        Err(rate_limited(decision.retry_after))
+        Err(rate_limited(decision.retry_after, reason::LIMIT_EXCEEDED))
     }
 
     /// `429` on every route, `#[public]` included: over the limit, and for a
@@ -244,10 +229,10 @@ impl Guard for ThrottlerGuard {
         &[429]
     }
 
-    /// Every refusal is filed here, on `nest_rs::throttler`: the limit, or the
-    /// store that could not count the hit.
-    fn files_its_denials(&self) -> bool {
-        true
+    /// Every refusal is filed on `nest_rs::throttler`, the limit exceeded or
+    /// the store that could not count the hit as its reason.
+    fn target(&self) -> &'static str {
+        crate::TARGET
     }
 }
 
@@ -588,11 +573,19 @@ mod tests {
         .await
         .expect_err("past its limit");
 
-        let line = logs.expect_one(crate::TARGET, "rate limit exceeded");
+        let line = logs.expect_one(crate::TARGET, "guard denied the request");
         for (field, value) in &line.fields {
             assert!(!value.contains("marked"), "{field} = {value}");
         }
-        assert_eq!(line.field("route"), None, "{:?}", line.fields);
+        assert_eq!(
+            line.field("reason").as_deref(),
+            Some(reason::LIMIT_EXCEEDED)
+        );
+        assert_eq!(
+            line.field("address").as_deref(),
+            Some(LOGIN.address()),
+            "the template the site declares, never the path a client sent",
+        );
     }
 
     #[test]

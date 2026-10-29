@@ -1308,7 +1308,6 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
                         method: #method_guards,
                         force: #force,
                         kind: #kind,
-                        host_type: ::core::any::type_name::<#self_ty>(),
                     },
                 )
             }

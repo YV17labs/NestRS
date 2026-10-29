@@ -5,7 +5,6 @@ use nest_rs::core::{
 use nest_rs::http::HttpView;
 
 #[interceptor]
-#[derive(Default)]
 pub struct AuditInterceptor;
 
 impl Layer for AuditInterceptor {

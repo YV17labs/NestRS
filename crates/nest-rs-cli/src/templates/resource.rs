@@ -63,7 +63,6 @@ use nest_rs::seaorm::{Creatable, CrudService, Deletable, Updatable};
 use super::entity::{{{create_op}}, Entity as {{pascal}}, {{update_op}}};
 
 #[injectable]
-#[derive(Default)]
 pub struct {{service}};
 
 // Read API + the audited ORM choke point.

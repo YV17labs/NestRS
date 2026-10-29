@@ -102,8 +102,8 @@ static RATED: Handler = declare_handler(HandlerDeclaration {
     meta: MetaLevels::default,
 });
 
-/// The line the guard files for a store that could not count.
-const FAILED: &str = "throttler store failed; denying (fail-closed)";
+/// The line the edge files for the guard's refusal, on the throttler's target.
+const DENIED: &str = "guard denied the request";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_redis_that_stops_denies_with_one_line_from_the_guard_and_none_from_the_store() {
@@ -138,19 +138,21 @@ async fn a_redis_that_stops_denies_with_one_line_from_the_guard_and_none_from_th
     .expect_err("a store that cannot count refuses the request");
 
     assert_eq!(refused.http_status(), 429);
-    let said = logs.expect_one(nest_rs_throttler::TARGET, FAILED);
+    let said = logs.expect_one(nest_rs_throttler::TARGET, DENIED);
     assert_eq!(said.level, "warn");
-    assert_eq!(
-        said.field("store").as_deref(),
-        Some("nest_rs_redis::throttler::store::RedisThrottler"),
+    assert_eq!(said.field("reason").as_deref(), Some("store_failed"));
+    assert!(
+        said.field("error")
+            .is_some_and(|chain| chain.contains("nest_rs_redis::throttler::store::RedisThrottler")),
+        "{:?}",
+        said.fields,
     );
-    assert!(said.field("error").is_some(), "{:?}", said.fields);
     let others: Vec<_> = logs
         .events()
         .into_iter()
         .filter(|event| {
             event.target == nest_rs_throttler::TARGET
-                && event.message != FAILED
+                && event.message != DENIED
                 && event.message != "rate-limit keying degraded to a shared bucket"
         })
         .collect();

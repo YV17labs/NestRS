@@ -2795,6 +2795,7 @@ dependencies = [
  "async-trait",
  "nest-rs-core",
  "tracing",
+ "tracing-core",
 ]
 
 [[package]]

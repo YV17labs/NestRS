@@ -14,7 +14,7 @@ use nest_rs_core::__private::{
 use nest_rs_core::{Container, Failure, Handler, Peer, UnitContext};
 use nest_rs_guards::__private::{
     GlobalBucket, Refused, SiteChainSources, boot_validate_guards, check_guards, client_message,
-    compose_site_chain, denial_code, denial_of, denial_reason, failure_chain,
+    compose_site_chain, denial_code, denial_of, denial_reason,
 };
 use nest_rs_guards::{Denial, Guard, GuardSpec};
 use nest_rs_http::__private::OriginRefused;
@@ -88,30 +88,19 @@ impl GuardStage for MessageGuardStage {
     }
 }
 
-/// The refused message's answer: the denial filed by the stage when its guard
-/// filed none, rendered into the view, the unit failed with it, answered.
+/// The refused message's answer: a guard's denial filed, rendered into the
+/// view, the unit failed with it, answered.
 fn refuse(cx: &mut UnitContext<'_>, refused: Refused) -> Failure {
-    let connection = cx.peer().and_then(|peer| peer.connection);
-    let event = cx.handler().address();
-    let denial = refused.into_denial(|guard, denial| {
-        // Structural floor mirroring the HTTP edge's, filed where the denial
-        // is still held; its text never reaches the line.
-        tracing::warn!(
-            target: nest_rs_core::target::LAYERS,
-            guard,
-            conn_id = connection,
-            event,
-            status = denial.http_status(),
-            error = failure_chain(denial),
-            "guard denied the message",
-        );
-    });
+    let denial = refused.into_denial(DENIED, cx);
     let frame = denial_to_ws_error(denial.clone());
     match WsView::of(cx) {
         Ok(view) => Failure::from(denial).answered(view.respond(WsReply::Error(frame))),
         Err(viewless) => viewless,
     }
 }
+
+/// The line a guard's denial of a message is filed as.
+const DENIED: &str = "guard denied the message";
 
 /// Render a guard's [`Denial`] as the error frame one message answers with.
 ///
@@ -121,7 +110,7 @@ fn refuse(cx: &mut UnitContext<'_>, refused: Refused) -> Failure {
 /// code its only member, and an unavailable dependency answers its condition,
 /// never what the guard said of it.
 pub fn denial_to_ws_error(denial: Denial) -> WsError {
-    if matches!(denial, Denial::Internal(_)) {
+    if denial.http_status() == 500 {
         return WsError::internal();
     }
     WsError {
@@ -283,7 +272,8 @@ mod tests {
         assert!(line.is_none(), "the stage filed the denial itself");
         let event = logs.expect_one("nest_rs::layers", "guard denied the message");
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("event").as_deref(), Some("send"));
+        assert_eq!(event.field("address").as_deref(), Some("send"));
+        assert_eq!(event.field("unit").as_deref(), Some("ws.message"));
         assert_eq!(event.field("error"), None, "a refused caller is no failure");
     }
 
@@ -307,11 +297,10 @@ mod tests {
     #[async_trait]
     impl Guard for StoreDown {
         async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-            Err(Denial::unavailable_because(
-                None,
-                "the identity store did not answer",
-                ConnectionRefused,
-            ))
+            Err(
+                Denial::unavailable(None, "the identity store did not answer")
+                    .with_source(ConnectionRefused),
+            )
         }
     }
 

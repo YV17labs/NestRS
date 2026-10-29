@@ -170,10 +170,11 @@ pub use error::{
     AccessGraphError, BootInterruptedError, BudgetPastNetError, ContainerError,
     ContestedDeclarationError, DecodeError, DuplicateMetaError, DuplicateProviderError,
     FactoryCycleError, FactoryFailedError, InitFailedError, LateFactoryError,
-    LateOptionalDependencyError, MissingDependencyError, OverriddenDependencyError,
-    ProviderCycleError, ScopeViolationError, ScopedLayerError, UnboundedTransportError,
-    UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError, UngatedDiscoveryError,
-    UnregisteredModuleError, UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
+    LateOptionalDependencyError, MissingAmbientError, MissingDependencyError,
+    OverriddenDependencyError, ProviderCycleError, ScopeViolationError, ScopedLayerError,
+    UnboundedTransportError, UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError,
+    UngatedDiscoveryError, UnregisteredModuleError, UnresolvedFactoryError, UnresolvedLayerError,
+    WiringFailedError,
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
 pub use exception_filter::{Catch, Caught, ExceptionFilter, ExceptionFilterSpec, exception_filter};
@@ -400,7 +401,6 @@ pub use nest_rs_core_macros::module;
 /// use nest_rs_core::{App, Discoverable, ProviderResidency, injectable, module};
 ///
 /// #[injectable]
-/// #[derive(Default)]
 /// struct Clock;
 ///
 /// #[injectable]
@@ -410,7 +410,6 @@ pub use nest_rs_core_macros::module;
 /// }
 ///
 /// #[injectable(scope = transient)]
-/// #[derive(Default)]
 /// struct Draft;
 ///
 /// #[module(providers = [Clock, Greeter, Draft])]
@@ -493,12 +492,11 @@ pub use nest_rs_core_macros::input;
 /// }
 ///
 /// #[interceptor]
+/// #[derive(Layer)]
 /// struct CountUnits {
 ///     #[inject]
 ///     metrics: Arc<Metrics>,
 /// }
-///
-/// impl Layer for CountUnits {}
 ///
 /// #[async_trait]
 /// impl Interceptor for CountUnits {
@@ -553,3 +551,41 @@ pub use nest_rs_core_macros::input;
 /// # }
 /// ```
 pub use nest_rs_core_macros::interceptor;
+
+/// Implement [`Layer`](trait@Layer) — the trait every layer family extends —
+/// so a guard, an interceptor, an exception filter or a global pipe writes
+/// only its family's trait. `#[layer(priority = …)]` orders it within one
+/// site of its stage, lower first; a layer choosing the units it serves
+/// ([`Layer::serves`]) writes the impl by hand.
+///
+/// ```
+/// use nest_rs_core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable};
+///
+/// #[injectable]
+/// #[derive(Layer)]
+/// struct Timed;
+///
+/// #[injectable]
+/// #[derive(Layer)]
+/// #[layer(priority = -10)]
+/// struct TimedFirst;
+///
+/// #[async_trait]
+/// impl Interceptor for Timed {
+///     async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+///         next.run(cx).await
+///     }
+/// }
+///
+/// assert_eq!(Layer::priority(&Timed), 0);
+/// assert_eq!(Layer::priority(&TimedFirst), -10);
+/// ```
+///
+/// It takes one key:
+///
+/// ```compile_fail
+/// #[derive(nest_rs_core::Layer)]
+/// #[layer(order = 1)]
+/// struct Misnamed;
+/// ```
+pub use nest_rs_core_macros::Layer;

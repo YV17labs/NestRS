@@ -32,6 +32,13 @@ impl Layer for Closed {}
 
 #[async_trait]
 impl Guard for Closed {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
     async fn check(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,
@@ -270,14 +277,11 @@ async fn a_pooled_guard_refuses_a_reference_before_any_member_answers() {
     );
 
     // A federation field belongs to no provider, so this site carries its own
-    // event with a `route` label.
+    // message, naming the field it addresses.
     let event = logs.expect_one("nest_rs::layers", "guard denied the federation field");
     assert_eq!(event.level, "warn");
-    assert_eq!(
-        event.field("route").as_deref(),
-        Some("POST /graphql (federation)"),
-    );
-    assert_eq!(event.field("field").as_deref(), Some("_entities"));
+    assert_eq!(event.field("unit").as_deref(), Some("graphql.field"));
+    assert_eq!(event.field("address").as_deref(), Some("_entities"));
     assert!(
         event.field("guard").is_some_and(|g| g.contains("Closed")),
         "the event names the guard that refused, got {:?}",
@@ -410,7 +414,7 @@ async fn a_federation_denial_keeping_its_cause_files_the_chain() {
     );
     assert!(!body.to_string().contains("refused"), "{body}");
     let event = logs.expect_one("nest_rs::layers", "guard denied the federation field");
-    assert_eq!(event.field("field").as_deref(), Some("_service"));
+    assert_eq!(event.field("address").as_deref(), Some("_service"));
     assert_eq!(
         event.field("error").as_deref(),
         Some(crate::STORE_DOWN_CHAIN)
@@ -429,6 +433,13 @@ impl Layer for Counting {}
 
 #[async_trait]
 impl Guard for Counting {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
     async fn check(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,

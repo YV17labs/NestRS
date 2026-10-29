@@ -51,7 +51,7 @@ impl PrincipalClaim {
 /// The future a guard's check returns, as `#[async_trait]` writes an override.
 type Check<'fut> = Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>;
 
-/// What an entry a guard does not override answers: admitted, with nothing
+/// What a guard overriding neither entry answers: admitted, with nothing
 /// allocated — a box of a zero-sized future holds no memory.
 struct Admit;
 
@@ -66,14 +66,20 @@ impl Future for Admit {
 /// A guard: decides whether a unit of work may run, before anything an app or
 /// a package adds around it.
 ///
-/// Two entries, each admitting by default: [`check_http`](Self::check_http)
-/// for an HTTP request — a route, a WebSocket upgrade, the request of an
-/// in-band endpoint (`/graphql`, `/mcp`) — and [`check`](Self::check) for a
-/// unit an in-band edge carries: a GraphQL field, a WebSocket message, an MCP
-/// operation, or a later edge's unit. Override the one(s) where the guard has
-/// work, then declare each edge it checks with [`GuardFor`]: a decorator binds
-/// a guard only on the edges it declares, so a guard bound where its check is
-/// the default is a compile error rather than an entry that admits everything.
+/// One decision, written once: [`check`](Self::check) runs on every unit the
+/// guard is bound at — a GraphQL field, a WebSocket message, an MCP operation,
+/// a later edge's unit — and on an HTTP request too, since
+/// [`check_http`](Self::check_http) runs it unless the guard overrides it. A
+/// guard overrides `check_http` only where the request differs from the unit:
+/// it reads the request itself, answers in its protocol's own words, or what is
+/// missing at the request means something else than at the unit. Then declare
+/// each edge it checks with [`GuardFor`]: a decorator binds a guard only on the
+/// edges it declares.
+///
+/// A refusal is a [`Denial`], filed by the edge that ran the guard — one line,
+/// on the guard's [`target`](Self::target), carrying the denial's
+/// [`reason`](Denial::reason) — so a guard writes no log line of its own for
+/// it.
 ///
 /// The posture a site declares — `#[public]`, `#[authorize]`, an in-band
 /// endpoint — is read through [`UnitContext::reflector`], and what a guard
@@ -84,9 +90,11 @@ impl Future for Admit {
 /// The entries are written out as `#[async_trait]` writes an override, so an
 /// implementation is an ordinary `async fn` under `#[async_trait]`.
 pub trait Guard: Layer {
-    /// An HTTP request. Read it — head and body — through the HTTP edge's view
-    /// of `cx` (`HttpView::of(cx)`); a guard that reads the body sets it back.
-    /// The default admits.
+    /// An HTTP request — a route, a WebSocket upgrade, the request of an
+    /// in-band endpoint (`/graphql`, `/mcp`). Read it — head and body — through
+    /// the HTTP edge's view of `cx` (`HttpView::of(cx)`); a guard that reads the
+    /// body sets it back. The default runs [`check`](Self::check), the guard's
+    /// one decision.
     fn check_http<'s, 'c, 'u, 'fut>(&'s self, cx: &'c mut UnitContext<'u>) -> Check<'fut>
     where
         's: 'fut,
@@ -94,11 +102,10 @@ pub trait Guard: Layer {
         'u: 'fut,
         Self: 'fut,
     {
-        let _ = cx;
-        Box::pin(Admit)
+        self.check(cx)
     }
 
-    /// A unit an in-band edge carries; [`UnitContext::edge`] and
+    /// The guard's decision on a unit; [`UnitContext::edge`] and
     /// [`UnitContext::switch_to`] say which. The default admits.
     fn check<'s, 'c, 'u, 'fut>(&'s self, cx: &'c mut UnitContext<'u>) -> Check<'fut>
     where
@@ -137,7 +144,7 @@ pub trait Guard: Layer {
     /// [`Denial::http_status`] or the status of the error a refusing guard
     /// answers in its protocol's own words, which the HTTP edge serves in place
     /// of the denial's rendering: what a route's document lists for this guard.
-    /// A `500` is not declared — [`Denial::Internal`] is a wiring defect, and
+    /// A `500` is not declared — [`Denial::internal`] is a wiring defect, and
     /// every route documents it.
     ///
     /// The default is `401` and `403` on a route that is not `#[public]`, and
@@ -161,12 +168,11 @@ pub trait Guard: Layer {
         if public { &[] } else { &[401, 403] }
     }
 
-    /// Whether this guard files one line of its own, on its crate's target, for
-    /// every denial it returns. The edge then files none, so one denial is one
-    /// line, the decider's; by default the edge files `guard denied …` on
-    /// `nest_rs::layers`, so a guard that says nothing is still seen.
-    fn files_its_denials(&self) -> bool {
-        false
+    /// The target the edge files this guard's denials on: the target constant
+    /// of the crate owning the concern the guard decides. The default is
+    /// `nest_rs::layers`.
+    fn target(&self) -> &'static str {
+        nest_rs_core::target::LAYERS
     }
 }
 
@@ -181,10 +187,10 @@ pub trait Guard: Layer {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not declare that it checks `{V}` units",
     label = "bound at a site whose units are `{V}`",
-    note = "`check_http` and `check` admit by default, so a guard bound here without its check \
-            would pass every unit silently",
-    note = "override `Guard::check_http` (an HTTP request) or `Guard::check` (every other edge's \
-            unit), then declare `impl GuardFor<{V}> for {Self} {{}}`"
+    note = "`check` admits by default and `check_http` runs it, so a guard bound here without its \
+            decision would pass every unit silently",
+    note = "write the guard's decision in `Guard::check` (overriding `Guard::check_http` only where \
+            the HTTP request differs from the unit), then declare `impl GuardFor<{V}> for {Self} {{}}`"
 )]
 pub trait GuardFor<V: UnitView>: Guard {}
 
@@ -227,8 +233,8 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
         (**self).denial_statuses(public)
     }
 
-    fn files_its_denials(&self) -> bool {
-        (**self).files_its_denials()
+    fn target(&self) -> &'static str {
+        (**self).target()
     }
 }
 
@@ -327,6 +333,68 @@ mod tests {
         let guard = Arc::new(OfficeOnly);
         assert_eq!(Guard::denial_statuses(&guard, false), [403]);
         assert_eq!(Guard::denial_statuses(&guard, true), [403]);
+    }
+
+    /// Writes its decision once, in the unit entry.
+    struct OneDecision;
+
+    impl Layer for OneDecision {}
+
+    #[async_trait]
+    impl Guard for OneDecision {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Err(Denial::forbidden("refused wherever it is bound"))
+        }
+    }
+
+    #[test]
+    fn a_guard_writing_one_decision_refuses_an_http_request_with_it() {
+        let mut view = Socket;
+        let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
+        let guard: Arc<dyn Guard> = Arc::new(OneDecision);
+
+        let (http, _) = run_counting(|| guard.as_ref().check_http(&mut cx));
+        assert_eq!(
+            http.map_err(|denial| denial.http_status()),
+            Err(403),
+            "an HTTP request runs the one decision a guard writes, never an admit-all default",
+        );
+    }
+
+    /// What an earlier guard attaches.
+    struct Author;
+
+    impl nest_rs_core::AmbientValue for Author {}
+
+    /// Requires what no guard before it attached.
+    struct RequiresAuthor;
+
+    impl Layer for RequiresAuthor {}
+
+    #[async_trait]
+    impl Guard for RequiresAuthor {
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            cx.require::<Author>()?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_missing_precondition_refuses_with_a_500_naming_the_value() {
+        let mut view = Socket;
+        let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
+        let guard: Arc<dyn Guard> = Arc::new(RequiresAuthor);
+
+        let (unit, _) = run_counting(|| guard.as_ref().check(&mut cx));
+        let denial = unit.expect_err("an unwired guard fails closed");
+        assert_eq!(denial.http_status(), 500);
+        assert_eq!(denial.reason(), Some(crate::denial::MISSING_AMBIENT));
+        let chain = crate::denial::failure_chain(&denial).unwrap_or_default();
+        assert!(chain.contains(std::any::type_name::<Author>()), "{chain}");
+
+        cx.attach(Author);
+        let (unit, _) = run_counting(|| guard.as_ref().check(&mut cx));
+        assert!(unit.is_ok(), "attached earlier in the stage, it is there");
     }
 
     #[test]

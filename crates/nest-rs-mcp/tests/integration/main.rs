@@ -190,7 +190,8 @@ struct StoreDown;
 
 impl StoreDown {
     fn denial() -> Denial {
-        Denial::unavailable_because(None, "the identity store did not answer", ConnectionRefused)
+        Denial::unavailable(None, "the identity store did not answer")
+            .with_source(ConnectionRefused)
     }
 }
 

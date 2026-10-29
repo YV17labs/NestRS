@@ -13,6 +13,7 @@ categories = ["web-programming", "authentication"]
 [dependencies]
 async-trait.workspace = true
 tracing.workspace = true
+tracing-core.workspace = true
 # The only framework crate below this one: the contract names a unit's context,
 # never an edge's types, so every edge depends on guards and guards on none.
 nest-rs-core.workspace = true

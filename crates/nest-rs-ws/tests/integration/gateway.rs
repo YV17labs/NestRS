@@ -2435,6 +2435,10 @@ impl Layer for UnmarkedWsGuard {}
 
 #[async_trait]
 impl Guard for UnmarkedWsGuard {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
     async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("refused by an unmarked WS check"))
     }
@@ -2552,7 +2556,7 @@ async fn a_per_message_internal_denial_answers_opaquely_and_is_filed_once_on_the
     app.shutdown().await.expect("the transport stops cleanly");
 
     let denied = logs.expect_one(nest_rs_core::target::LAYERS, "guard denied the message");
-    assert_eq!(denied.level, "warn");
+    assert_eq!(denied.level, "error", "a 500 is a defect");
     assert!(
         denied
             .field("guard")
@@ -2560,7 +2564,7 @@ async fn a_per_message_internal_denial_answers_opaquely_and_is_filed_once_on_the
         "{denied:#?}",
     );
     assert_eq!(
-        denied.field("event").as_deref(),
+        denied.field("address").as_deref(),
         Some("internal"),
         "{denied:#?}"
     );

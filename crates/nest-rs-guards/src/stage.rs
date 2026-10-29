@@ -8,36 +8,48 @@ use nest_rs_core::__private::{ClassGate, ResolvedLayer};
 use nest_rs_core::{AmbientValue, Continuation, UnitContext};
 
 use crate::denial::denial_of;
+use crate::line::file_denial;
 use crate::{Denial, Guard};
 
 /// Why a guard stage refused its unit.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Refused {
-    /// A guard's denial nobody filed, beside the name of the guard that raised
-    /// it, as raised: the edge files it and renders it.
-    Guard(&'static str, Denial),
-    /// A denial its decider filed — the posture's class gate, or a guard that
-    /// [files its own](Guard::files_its_denials): the edge renders it alone,
-    /// so one denial is one line.
+    /// A guard's denial, beside the guard that raised it: the edge files it, on
+    /// the target the guard declares, and renders it.
+    Guard {
+        /// The guard's name, the line's `guard` field.
+        guard: &'static str,
+        /// The target the guard declares ([`Guard::target`]).
+        target: &'static str,
+        /// The denial, as raised.
+        denial: Denial,
+    },
+    /// A denial its decider filed — the posture's class gate: the edge renders
+    /// it alone, so one denial is one line.
     Filed(Denial),
 }
 
 impl Refused {
     /// `denial`, raised by `guard` under the name `name`.
     pub fn by(name: &'static str, guard: &dyn Guard, denial: Denial) -> Self {
-        match guard.files_its_denials() {
-            true => Self::Filed(denial),
-            false => Self::Guard(name, denial),
+        Self::Guard {
+            guard: name,
+            target: guard.target(),
+            denial,
         }
     }
 
-    /// The denial to render, a guard's nobody filed passed first to `file`, the
-    /// edge's structural floor.
-    pub fn into_denial(self, file: impl FnOnce(&'static str, &Denial)) -> Denial {
+    /// The denial to render, a guard's filed first as `message` on the unit
+    /// `cx` ([`file_denial`]).
+    pub fn into_denial(self, message: &'static str, cx: &UnitContext<'_>) -> Denial {
         match self {
-            Self::Guard(guard, denial) => {
-                file(guard, &denial);
+            Self::Guard {
+                guard,
+                target,
+                denial,
+            } => {
+                file_denial(message, guard, target, cx, &denial);
                 denial
             }
             Self::Filed(denial) => denial,

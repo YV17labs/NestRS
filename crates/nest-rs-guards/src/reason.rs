@@ -7,13 +7,14 @@ use nest_rs_core::Code;
 use nest_rs_core::problem::code;
 
 use crate::Denial;
+use crate::denial::Class;
 
 /// The one sentence an in-band edge answers a denial with: a `4xx`'s own
 /// reason, and a `5xx`'s condition — never what the refusal said of the server.
 pub fn client_message(denial: &Denial) -> &str {
-    match denial {
-        Denial::Internal(_) => nest_rs_core::OPAQUE_CLIENT_MESSAGE,
-        Denial::Unavailable { .. } => nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE,
+    match denial.class() {
+        Class::Internal => nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        Class::Unavailable { .. } => nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE,
         _ => denial.message(),
     }
 }
@@ -22,13 +23,13 @@ pub fn client_message(denial: &Denial) -> &str {
 /// HTTP's problem document, and on the edges with no status line the member a
 /// `Problem`'s class rides under there too.
 pub fn denial_code(denial: &Denial) -> Code {
-    match denial {
-        Denial::Unauthorized(_) | Denial::InvalidCredential { .. } => code::UNAUTHENTICATED,
-        Denial::Forbidden(_) => code::FORBIDDEN,
-        Denial::InsufficientScope { .. } => code::INSUFFICIENT_SCOPE,
-        Denial::RateLimited { .. } => code::RATE_LIMITED,
-        Denial::Unavailable { .. } => code::UNAVAILABLE,
-        Denial::Internal(_) => code::INTERNAL,
+    match denial.class() {
+        Class::Unauthorized | Class::InvalidCredential { .. } => code::UNAUTHENTICATED,
+        Class::Forbidden => code::FORBIDDEN,
+        Class::InsufficientScope { .. } => code::INSUFFICIENT_SCOPE,
+        Class::RateLimited { .. } => code::RATE_LIMITED,
+        Class::Unavailable { .. } => code::UNAVAILABLE,
+        Class::Internal => code::INTERNAL,
     }
 }
 
@@ -36,13 +37,13 @@ pub fn denial_code(denial: &Denial) -> Code {
 /// MCP's error `data` carried first, and still carry beside its
 /// [`denial_code`].
 pub fn denial_reason(denial: &Denial) -> &'static str {
-    match denial {
-        Denial::Unauthorized(_) | Denial::InvalidCredential { .. } => "unauthenticated",
-        Denial::Forbidden(_) => "forbidden",
-        Denial::InsufficientScope { .. } => "insufficient_scope",
-        Denial::RateLimited { .. } => "rate_limited",
-        Denial::Unavailable { .. } => "unavailable",
-        Denial::Internal(_) => "internal",
+    match denial.class() {
+        Class::Unauthorized | Class::InvalidCredential { .. } => "unauthenticated",
+        Class::Forbidden => "forbidden",
+        Class::InsufficientScope { .. } => "insufficient_scope",
+        Class::RateLimited { .. } => "rate_limited",
+        Class::Unavailable { .. } => "unavailable",
+        Class::Internal => "internal",
     }
 }
 

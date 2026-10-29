@@ -4,8 +4,8 @@ error[E0277]: `HttpOnlyGuard` does not declare that it checks `McpView` units
 39 |     #[use_guards(HttpOnlyGuard)]
    |                  ^^^^^^^^^^^^^ bound at a site whose units are `McpView`
    |
-   = note: `check_http` and `check` admit by default, so a guard bound here without its check would pass every unit silently
-   = note: override `Guard::check_http` (an HTTP request) or `Guard::check` (every other edge's unit), then declare `impl GuardFor<McpView> for HttpOnlyGuard {}`
+   = note: `check` admits by default and `check_http` runs it, so a guard bound here without its decision would pass every unit silently
+   = note: write the guard's decision in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<McpView> for HttpOnlyGuard {}`
 help: the trait `GuardFor<McpView>` is not implemented for `HttpOnlyGuard`
       but trait `GuardFor<HttpView>` is implemented for it
   --> tests/integration/diagnostics/mcp/http_only_guard_on_a_tool_operation.rs:30:1

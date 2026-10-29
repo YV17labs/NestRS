@@ -13,7 +13,6 @@ const RETENTION: TimeDelta = TimeDelta::days(30);
 const PURGE_BATCH: u64 = 1_000;
 
 #[injectable]
-#[derive(Default)]
 pub struct NotificationsService;
 
 impl CrudService for NotificationsService {

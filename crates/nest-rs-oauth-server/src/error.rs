@@ -181,6 +181,18 @@ fn error_description(said: &str) -> String {
         .collect()
 }
 
+/// A client the token endpoint refused, the method it attempted named: the
+/// cause its denial keeps, never the client's id nor its secret.
+#[derive(Debug, thiserror::Error)]
+#[error("client authentication by `{}` refused", .method.as_str())]
+pub(crate) struct ClientRefusedError {
+    /// The method the request attempted (RFC 6749 §2.3).
+    pub(crate) method: TokenEndpointAuthMethod,
+    /// What the strategy answered.
+    #[source]
+    pub(crate) error: nest_rs_authn::AuthError,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

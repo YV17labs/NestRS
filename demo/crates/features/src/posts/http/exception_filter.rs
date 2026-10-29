@@ -4,10 +4,8 @@ use nest_rs::http::{HttpView, IntoResponse, ProblemDetails};
 use crate::posts::PostError;
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct PostProblemFilter;
-
-impl Layer for PostProblemFilter {}
 
 #[async_trait]
 impl ExceptionFilter for PostProblemFilter {

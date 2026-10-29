@@ -220,18 +220,16 @@ use super::audit::is_development;
 /// boot refusal covers the app that imports `AuthnHttpModule`; this covers the
 /// route wherever it is mounted from.
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct DevOnlyGuard;
-
-impl Layer for DevOnlyGuard {}
 
 #[async_trait]
 impl Guard for DevOnlyGuard {
-    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         if is_development() {
             return Ok(());
         }
-        Err(Denial::forbidden("development-only route"))
+        Err(Denial::forbidden("development-only route").with_reason("outside_development"))
     }
 
     fn denial_statuses(&self, _public: bool) -> &'static [u16] {
@@ -257,7 +255,6 @@ pub fn is_development() -> bool {
 }
 
 #[injectable]
-#[derive(Default)]
 pub struct DevTokenAudit;
 
 #[hooks]
@@ -310,7 +307,6 @@ use nest_rs::core::injectable;
 use crate::authn::Claims;
 
 #[injectable]
-#[derive(Default)]
 pub struct AuthzAbility;
 
 impl AbilityFactory for AuthzAbility {

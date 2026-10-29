@@ -116,16 +116,16 @@ async fn an_operation_with_no_ambient_ability_is_refused() {
     );
 
     // The refusal is an opaque JSON-RPC error; only the log says the ability is missing.
-    let event = logs.expect_one("nest_rs::authz", "authorization denied");
+    let event = logs.expect_one("nest_rs::authz", "guard denied the operation");
     assert_eq!(
         event.level, "warn",
         "a denial is a security event: `warn` or above, never `debug`",
     );
     assert_eq!(
-        event.field("transport").as_deref(),
-        Some("mcp"),
-        "the line names the edge that refused, or an operator filtering denials \
-         by transport sees every edge except this one: {:?}",
+        event.field("unit").as_deref(),
+        Some("mcp.operation"),
+        "the line names the unit that was refused, or an operator filtering denials \
+         by edge sees every edge except this one: {:?}",
         event.fields,
     );
     assert_eq!(

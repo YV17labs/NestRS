@@ -2867,6 +2867,7 @@ dependencies = [
  "nest-rs-testing",
  "tokio",
  "tracing",
+ "tracing-core",
 ]
 
 [[package]]

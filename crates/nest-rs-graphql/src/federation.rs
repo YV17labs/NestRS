@@ -34,7 +34,9 @@ use nest_rs_guards::GuardSpecs;
 
 use crate::config::GraphqlConfig;
 use crate::error::{FieldFailure, Unserved, opaque_error};
-use crate::operation::{FieldGuardStage, FieldUnit, Floor, ROOT_FIELD, in_field_unit};
+use crate::operation::{
+    DENIED_FEDERATION_FIELD, FieldGuardStage, FieldUnit, ROOT_FIELD, in_field_unit,
+};
 use crate::view::FieldRole;
 
 /// The `Query`-root field a router calls to read a subgraph's SDL.
@@ -93,7 +95,7 @@ fn federation_guard_stage(
         return Ok(None);
     }
     let chain = resolve_global_chain(container, "POST /graphql (federation)");
-    Ok(FieldGuardStage::of(chain, Floor::Federation))
+    Ok(FieldGuardStage::of(chain, DENIED_FEDERATION_FIELD))
 }
 
 /// Compose both federation sites against `container`, so a layer they fold

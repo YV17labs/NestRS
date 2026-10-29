@@ -9,8 +9,8 @@ help: the trait `GuardFor<HttpView>` is not implemented for `UnattestedGuard`
    |
 13 | struct UnattestedGuard;
    | ^^^^^^^^^^^^^^^^^^^^^^
-   = note: `check_http` and `check` admit by default, so a guard bound here without its check would pass every unit silently
-   = note: override `Guard::check_http` (an HTTP request) or `Guard::check` (every other edge's unit), then declare `impl GuardFor<HttpView> for UnattestedGuard {}`
+   = note: `check` admits by default and `check_http` runs it, so a guard bound here without its decision would pass every unit silently
+   = note: write the guard's decision in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<HttpView> for UnattestedGuard {}`
 help: the trait `GuardFor<HttpView>` is implemented for `AbilityGuard<F>`
   --> $WORKSPACE/crates/nest-rs-authz/src/guard.rs
    |

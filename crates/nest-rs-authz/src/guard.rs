@@ -4,12 +4,16 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{Edge, Layer, Posture, UnitContext, injectable};
+use nest_rs_core::{Edge, Layer, MissingAmbientError, Posture, UnitContext, injectable};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 use nest_rs_http::async_trait;
 
-use crate::gate::{Refusal, reason};
+use crate::gate::reason;
 use crate::{Ability, AbilityBuilder, AbilityFactory};
+
+/// Why the ability guard refused a request whose rules would not build, the
+/// `reason` of its denial's line.
+const RULES_MISCONFIGURED: &str = "rules_misconfigured";
 
 /// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AuthzAbility>)]`.
 /// `F::Actor` is the principal the authentication guard attached; its absence
@@ -66,24 +70,12 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
                 cx.attach(ability);
                 Ok(())
             }
-            Some(Err(err)) => {
-                tracing::error!(
-                    target: crate::TARGET,
-                    error = %nest_rs_core::error_message(&err),
-                    "ability construction failed — denying the request",
-                );
-                Err(Denial::internal("authorization rules are misconfigured"))
-            }
-            None => {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    actor_type = std::any::type_name::<F::Actor>(),
-                    "ability guard denied: no authenticated actor and route is not public",
-                );
-                Err(Denial::internal(
-                    "AbilityGuard requires an authentication guard to run first",
-                ))
-            }
+            Some(Err(err)) => Err(Denial::internal("authorization rules are misconfigured")
+                .with_reason(RULES_MISCONFIGURED)
+                .with_source(err)),
+            // Off a `#[public]` or in-band site, an actor is an earlier guard's
+            // work: its absence is a wiring defect.
+            None => Err(MissingAmbientError::of::<F::Actor>().into()),
         }
     }
 
@@ -93,20 +85,15 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         if cx.ambient::<Ability>().is_some() {
             return Ok(());
         }
-        let edge = cx.edge();
-        crate::gate::warn_denied(Refusal {
-            reason: Some(reason::NO_AMBIENT_ABILITY),
-            event: (edge == Some(Edge::Ws)).then(|| cx.handler().address()),
-            ..Refusal::on(edge.map_or("unit", Edge::as_str))
-        });
-        Err(Denial::unauthorized(match edge {
+        let refused = Denial::unauthorized(match cx.edge() {
             Some(Edge::Graphql) => {
                 "no ambient ability — authentication did not run on the GraphQL operation"
             }
             Some(Edge::Ws) => "no ambient ability — WS connection did not authenticate",
             Some(Edge::Mcp) => "no ambient ability — the MCP operation did not authenticate",
             _ => "no ambient ability — the unit's request did not authenticate",
-        }))
+        });
+        Err(refused.with_reason(reason::NO_AMBIENT_ABILITY))
     }
 
     fn phase(&self) -> GuardPhase {
@@ -124,9 +111,9 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         &[]
     }
 
-    /// Every refusal is filed here, on `nest_rs::authz`.
-    fn files_its_denials(&self) -> bool {
-        true
+    /// Every refusal is filed on `nest_rs::authz`.
+    fn target(&self) -> &'static str {
+        crate::TARGET
     }
 }
 
@@ -387,24 +374,19 @@ mod tests {
     // ability around messages: the per-message guard must deny.
     #[tokio::test]
     async fn ws_message_without_ambient_ability_is_denied() {
-        let logs = nest_rs_testing::LogCapture::install();
         let mut view = Message;
         let mut cx = new_unit_context(&PING, &mut view, None, None);
-        let denial = guard()
+        let guard = guard();
+        let denial = guard
             .check(&mut cx)
             .await
             .expect_err("missing ambient ability must deny");
         assert_eq!(denial.http_status(), 401);
-
-        let event = logs.expect_one("nest_rs::authz", "authorization denied");
-        assert_eq!(event.level, "warn");
-        assert_eq!(event.field("transport").as_deref(), Some("ws"));
-        assert_eq!(event.field("event").as_deref(), Some("ping"));
+        assert_eq!(denial.reason(), Some("no_ambient_ability"));
         assert_eq!(
-            event.field("reason").as_deref(),
-            Some("no_ambient_ability"),
-            "{:?}",
-            event.fields,
+            guard.target(),
+            crate::TARGET,
+            "the edge files it on the authorization target"
         );
     }
 

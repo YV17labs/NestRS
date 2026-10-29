@@ -26,6 +26,10 @@ impl Layer for Witness {}
 
 #[async_trait]
 impl Guard for Witness {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
     async fn check(&self, cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
         let view = cx
             .switch_to::<GraphqlView>()

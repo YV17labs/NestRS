@@ -134,7 +134,7 @@ async fn strategy_error_denies_as_unauthorized() {
     let denial = check(&guard, &GATED, &mut req)
         .await
         .expect_err("auth failed");
-    assert!(matches!(denial, Denial::Unauthorized { .. }));
+    assert_eq!(denial.http_status(), 401);
     assert!(attached::<Nobody>(&req).is_none());
 }
 
@@ -242,24 +242,16 @@ async fn unreachable_store_fails_closed_even_on_a_public_route() {
     let denial = check(&guard, &PUBLIC, &mut bare())
         .await
         .expect_err("an unevaluated credential must not pass as anonymous");
-    assert!(
-        matches!(
-            denial,
-            Denial::Unavailable {
-                retry_after_secs: None,
-                ..
-            }
-        ),
-        "{denial:?}"
-    );
+    assert_eq!(denial.retry_after_secs(), None, "{denial:?}");
     assert_eq!(denial.http_status(), 503, "the caller did nothing wrong");
 
     // The client message is opaque, so the outage is only readable here.
-    let event = logs.expect_one(
-        nest_rs_authn::TARGET,
-        "authentication unavailable — what the strategy asks did not answer",
+    let event = logs.expect_one(nest_rs_authn::TARGET, DENIED);
+    assert_eq!(
+        event.level, "warn",
+        "a 503 is filed at warn, as every edge files one"
     );
-    assert_eq!(event.level, "error");
+    assert_eq!(event.field("reason").as_deref(), Some("unavailable"));
     assert!(
         event
             .field("error")
@@ -267,7 +259,6 @@ async fn unreachable_store_fails_closed_even_on_a_public_route() {
         "the event carries the underlying failure, got {:?}",
         event.fields,
     );
-    assert!(event.field("strategy").is_some(), "{:?}", event.fields);
 }
 
 /// Authentication sets the ambient identity everything downstream reads back
@@ -448,10 +439,13 @@ impl Strategy for PanickingStrategy {
 /// The guard over the strategy that never answers, as an app aliases its own.
 type StalledAuthn = AuthnGuard<StalledStrategy>;
 
-/// The line a strategy that did not answer is filed under — the one thing that
-/// tells this denial from an unreachable store's, which answers the caller the
-/// same way.
-const STALLED: &str = "strategy did not answer within the guard's timeout; denying (fail-closed)";
+/// The line every denial of a request is filed as, on the guard's target.
+const DENIED: &str = "guard denied the request";
+
+/// The reason a strategy that did not answer is filed under — the one thing
+/// that tells this denial from an unreachable store's, which answers the
+/// caller the same way.
+const STALLED: &str = "strategy_timeout";
 
 /// What every handler below answers, so a response carrying it is a request the
 /// guard let through.
@@ -460,18 +454,19 @@ const REACHED: &str = "reached";
 /// The refusal alone reads like an outage; this line says the strategy never
 /// answered, which strategy, on which edge, and how long it was waited on.
 fn assert_the_strategy_was_waited_out(logs: &LogCapture) {
-    let cause = logs.expect_one(nest_rs_authn::TARGET, STALLED);
+    let cause = logs.expect_one(nest_rs_authn::TARGET, DENIED);
     assert_eq!(cause.level, "warn");
-    assert_eq!(
-        cause.field("strategy").as_deref(),
-        Some(std::any::type_name::<StalledStrategy>()),
+    assert_eq!(cause.field("reason").as_deref(), Some(STALLED));
+    assert_eq!(cause.field("unit").as_deref(), Some("http.request"));
+    let chain = cause.field("error").unwrap_or_default();
+    assert!(
+        chain.contains(std::any::type_name::<StalledStrategy>()),
         "the line names the strategy, got {:?}",
         cause.fields,
     );
-    assert_eq!(cause.field("transport").as_deref(), Some("http"));
-    assert_eq!(
-        cause.field("waited_ms").as_deref(),
-        Some(AUTHENTICATE_TIMEOUT.as_millis().to_string().as_str()),
+    assert!(
+        chain.contains(&format!("{} ms", AUTHENTICATE_TIMEOUT.as_millis())),
+        "…and how long it was waited on, got {chain}",
     );
 }
 
@@ -505,7 +500,7 @@ async fn a_strategy_that_never_answers_is_denied_at_the_bound() {
     // The answer an unreachable identity store gets, word for word: the caller
     // cannot tell a hang from an outage, and has the same remedy for both.
     let unavailable = AuthError::unavailable("", None);
-    assert!(matches!(denial, Denial::Unavailable { .. }), "{denial:?}");
+    assert_eq!(denial.http_status(), 503, "{denial:?}");
     assert_eq!(denial.message(), unavailable.client_message());
     assert!(attached::<Who>(&req).is_none(), "no principal is attached");
     assert_the_strategy_was_waited_out(&logs);
@@ -523,7 +518,7 @@ async fn a_strategy_that_panics_is_denied_and_said_once() {
         let denial = check(&guard, site, &mut req)
             .await
             .expect_err("a strategy that unwound decided nothing, so nothing passes");
-        assert!(matches!(denial, Denial::Unavailable { .. }), "{denial:?}");
+        assert_eq!(denial.http_status(), 503, "{denial:?}");
         assert!(attached::<Who>(&req).is_none());
     }
 
@@ -556,7 +551,7 @@ async fn a_strategy_that_never_answers_is_denied_on_a_public_route_too() {
         .await
         .expect_err("an unevaluated credential must not pass as anonymous");
 
-    assert!(matches!(denial, Denial::Unavailable { .. }), "{denial:?}");
+    assert_eq!(denial.http_status(), 503, "{denial:?}");
     assert_the_strategy_was_waited_out(&logs);
     logs.expect_none(nest_rs_authn::TARGET, "anonymous request on a public route");
 }
@@ -574,7 +569,7 @@ async fn a_strategy_answering_inside_the_bound_is_waited_for() {
         .expect("a strategy that answers in time is heard");
 
     assert_eq!(attached::<Who>(&req).as_deref(), Some(&Who("ada")));
-    logs.expect_none(nest_rs_authn::TARGET, STALLED);
+    logs.expect_none(nest_rs_authn::TARGET, DENIED);
 }
 
 /// The budget above the bound, read from the constant that sets it rather than
@@ -666,11 +661,12 @@ async fn a_route_is_refused_at_the_bound() {
             "{path}: the handler never ran: {body}"
         );
     }
-    assert_eq!(
-        logs.find(nest_rs_authn::TARGET, STALLED).len(),
-        2,
-        "one line per request the strategy held",
-    );
+    let held = logs
+        .find(nest_rs_authn::TARGET, DENIED)
+        .into_iter()
+        .filter(|line| line.field("reason").as_deref() == Some(STALLED))
+        .count();
+    assert_eq!(held, 2, "one line per request the strategy held");
 }
 
 /// The sender a signed webhook authenticates as.
@@ -1020,8 +1016,8 @@ mod ws {
         refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
         assert_the_strategy_was_waited_out(&logs);
 
-        // The guard filed the refusal, so the chain files none: one denial, one line.
-        logs.expect_none(nest_rs_core::target::LAYERS, "guard denied the request");
+        // Filed once, on the guard's target: one denial, one line.
+        logs.expect_none(nest_rs_core::target::LAYERS, super::DENIED);
     }
 }
 

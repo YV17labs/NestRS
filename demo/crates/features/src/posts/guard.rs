@@ -12,47 +12,29 @@ pub struct PostAuthor(pub Uuid);
 impl AmbientValue for PostAuthor {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct PostAuthorGuard;
-
-impl Layer for PostAuthorGuard {}
 
 #[async_trait]
 impl Guard for PostAuthorGuard {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let Some(claims) = cx.ambient::<Claims>() else {
-            tracing::error!(
-                target: crate::posts::TARGET,
-                reason = "no_claims",
-                "post write denied: AuthnGuard did not run first",
-            );
-            return Err(Denial::internal(
-                "PostAuthorGuard requires AuthnGuard to run first",
-            ));
-        };
-        let author = Self::author(&claims)?;
-        cx.attach(PostAuthor(author));
-        Ok(())
+        let claims = cx.require::<Claims>()?;
+        Self::attach_author(cx, &claims)
     }
 
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let Some(claims) = cx.ambient::<Claims>() else {
-            tracing::warn!(
-                target: crate::posts::TARGET,
-                reason = "no_claims",
-                "post write denied",
-            );
-            return Err(Self::user_required());
-        };
-        Self::author(&claims).map(|_| ())
+        let claims = cx
+            .ambient::<Claims>()
+            .ok_or_else(|| Self::user_required("no_claims"))?;
+        Self::attach_author(cx, &claims)
     }
 
     fn denial_statuses(&self, _public: bool) -> &'static [u16] {
         &[403]
     }
 
-    fn files_its_denials(&self) -> bool {
-        true
+    fn target(&self) -> &'static str {
+        crate::posts::TARGET
     }
 }
 
@@ -61,19 +43,16 @@ impl GuardFor<HttpView> for PostAuthorGuard {}
 impl GuardFor<GraphqlView> for PostAuthorGuard {}
 
 impl PostAuthorGuard {
-    fn author(claims: &Claims) -> Result<Uuid, Denial> {
-        claims.sub.user_id().ok_or_else(|| {
-            tracing::warn!(
-                target: crate::posts::TARGET,
-                org_id = %claims.org_id,
-                reason = "not_a_user",
-                "post write denied",
-            );
-            Self::user_required()
-        })
+    fn attach_author(cx: &mut UnitContext<'_>, claims: &Claims) -> Result<(), Denial> {
+        let author = claims
+            .sub
+            .user_id()
+            .ok_or_else(|| Self::user_required("not_a_user"))?;
+        cx.attach(PostAuthor(author));
+        Ok(())
     }
 
-    fn user_required() -> Denial {
-        Denial::forbidden("writing a post takes a token naming a user")
+    fn user_required(reason: &'static str) -> Denial {
+        Denial::forbidden("writing a post takes a token naming a user").with_reason(reason)
     }
 }

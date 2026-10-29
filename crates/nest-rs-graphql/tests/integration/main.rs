@@ -51,7 +51,7 @@ const STORE_DOWN_CHAIN: &str =
 
 /// The denial a guard whose identity store is down answers, keeping why.
 fn store_down() -> Denial {
-    Denial::unavailable_because(None, "the identity store did not answer", ConnectionRefused)
+    Denial::unavailable(None, "the identity store did not answer").with_source(ConnectionRefused)
 }
 
 /// Cannot evaluate the `/graphql` request: its identity store is down.
@@ -79,6 +79,10 @@ impl Layer for FieldStoreDown {}
 
 #[async_trait]
 impl Guard for FieldStoreDown {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
     async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(store_down())
     }

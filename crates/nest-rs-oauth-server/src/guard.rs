@@ -14,7 +14,7 @@ use nest_rs_http::{
     HeaderMap, HeaderValue, HttpView, Response, ResponseError, async_trait, header,
 };
 
-use crate::error::{TokenEndpointAuthMethod, TokenError};
+use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
 
 /// The client-authentication guard of a token endpoint (RFC 6749 §2.3): runs
 /// a [`Strategy`] on the request, as [`AuthnGuard`](nest_rs_authn::AuthnGuard)
@@ -33,8 +33,9 @@ use crate::error::{TokenEndpointAuthMethod, TokenError};
 ///
 /// It reads the request's head alone, never its body, and refuses on every
 /// route, `#[public]` included: every client authenticates at a token endpoint
-/// (§3.2.1). Each refusal files one `warn` on [`TARGET`](crate::TARGET)
-/// naming the method attempted and the reason, never the client.
+/// (§3.2.1). Each refusal files one line on [`TARGET`](crate::TARGET), its
+/// reason the strategy's and its cause naming the method attempted, never the
+/// client.
 ///
 /// ```
 /// use nest_rs_authn::{AuthError, Strategy, basic_credentials};
@@ -162,7 +163,6 @@ impl<S: Strategy> Guard for ClientAuthenticationGuard<S> {
         let method = attempted(HttpView::of(cx)?.request().headers());
         match authenticate(&*self.strategy, cx).await? {
             Verdict::Admitted => Ok(()),
-            // Already filed, by the run that met it.
             Verdict::Unavailable(denial) => {
                 let mut answer =
                     TokenError::Server(anyhow::Error::new(denial.clone())).as_response();
@@ -174,16 +174,11 @@ impl<S: Strategy> Guard for ClientAuthenticationGuard<S> {
                 refuse(cx, answer, denial)
             }
             Verdict::Refused(error) => {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    strategy = std::any::type_name::<S>(),
-                    method = method.as_str(),
-                    reason = error.reason(),
-                    error = %nest_rs_core::error_message(&error),
-                    "client authentication failed",
-                );
                 let answer = TokenError::InvalidClient(method).as_response();
-                refuse(cx, answer, Denial::unauthorized(error.client_message()))
+                let denial = Denial::unauthorized(error.client_message())
+                    .with_reason(error.reason())
+                    .with_source(ClientRefusedError { method, error });
+                refuse(cx, answer, denial)
             }
         }
     }
@@ -202,11 +197,10 @@ impl<S: Strategy> Guard for ClientAuthenticationGuard<S> {
         &[400, 401, 503]
     }
 
-    /// Every refusal is filed here, on `nest_rs::oauth::server`, with the
-    /// method attempted and its reason; an unevaluated client by the run, on
-    /// `nest_rs::authn`.
-    fn files_its_denials(&self) -> bool {
-        true
+    /// Every refusal is filed on `nest_rs::oauth::server`, its reason the
+    /// strategy's and its cause naming the method attempted.
+    fn target(&self) -> &'static str {
+        crate::TARGET
     }
 }
 

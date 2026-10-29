@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::time::Instant;
 
 use crate::ambient::{AmbientValue, Pending};
+use crate::error::MissingAmbientError;
 use crate::handler::{Handler, Reflector};
 use crate::operation_log::{Edge, Unit};
 use crate::outcome::Failure;
@@ -124,6 +125,17 @@ impl<'a> UnitContext<'a> {
         self.pending
             .get::<T>()
             .or_else(crate::ambient::ambient::<T>)
+    }
+
+    /// The `T` this unit carries, for a layer that cannot run without it — a
+    /// guard whose precondition is an earlier guard's work. Absent, the unit
+    /// fails, never passes: a guard's `?` answers the error as a `500` denial
+    /// that its edge files once at `error`, naming the guard and the value.
+    ///
+    /// A value whose absence is legitimate — a caller in-band GraphQL admits
+    /// anonymously — is read with [`ambient`](Self::ambient) and decided.
+    pub fn require<T: AmbientValue>(&self) -> Result<Arc<T>, MissingAmbientError> {
+        self.ambient::<T>().ok_or_else(MissingAmbientError::of::<T>)
     }
 
     /// Record what the rest of the unit came to, for the interceptor whose
@@ -308,6 +320,29 @@ mod tests {
             crate::ambient::install_pending(pending, async { crate::ambient::<Author>() }).await;
         assert_eq!(installed.as_deref(), Some(&Author("alice")));
         assert!(cx.ambient::<Author>().is_none(), "taken, so installed once");
+    }
+
+    #[test]
+    fn a_required_value_no_layer_attached_names_its_type() {
+        let mut view = SocketView { event: "send" };
+        let mut cx = new_unit_context(&SEND, &mut view, None, None);
+
+        let missing = cx
+            .require::<Author>()
+            .expect_err("nothing attached an author");
+        assert_eq!(missing.value, std::any::type_name::<Author>());
+        assert!(
+            missing
+                .to_string()
+                .contains(std::any::type_name::<Author>()),
+            "{missing}",
+        );
+
+        cx.attach(Author("carol"));
+        assert_eq!(
+            cx.require::<Author>().ok().as_deref(),
+            Some(&Author("carol"))
+        );
     }
 
     #[tokio::test]

@@ -203,6 +203,13 @@ impl Layer for DenyAll {}
 
 #[async_trait]
 impl Guard for DenyAll {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
     async fn check(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,
@@ -225,6 +232,13 @@ impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
     async fn check(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,

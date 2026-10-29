@@ -1,5 +1,5 @@
-//! Every error the boot can fail with, and [`DecodeError`] — the one error the
-//! kernel lends every edge rather than raises.
+//! Every error the boot can fail with, and the two the kernel lends every edge
+//! and layer rather than raises: [`DecodeError`] and [`MissingAmbientError`].
 
 use std::borrow::Cow;
 
@@ -38,6 +38,33 @@ pub struct AccessGraphError {
     pub dependency: &'static str,
     /// Module that actually provides `dependency` — the one to import to fix it.
     pub owner: &'static str,
+}
+
+/// A layer required a value no earlier layer attached to its unit
+/// ([`UnitContext::require`](crate::UnitContext::require)): a wiring defect —
+/// the guard that attaches it is not bound, or runs after the one requiring
+/// it — never the caller's doing. A guard's `?` answers it as a `500` denial,
+/// filed once at `error` by the edge, naming the guard and the value.
+#[derive(Debug, Error)]
+#[error(
+    "no `{value}` is ambient on this unit: the layer that attaches it is not bound before the \
+     one requiring it"
+)]
+#[non_exhaustive]
+pub struct MissingAmbientError {
+    /// The type of the value required, as `std::any::type_name` spells it.
+    pub value: &'static str,
+}
+
+impl MissingAmbientError {
+    /// A `T` was required and is not ambient — what
+    /// [`UnitContext::require`](crate::UnitContext::require) answers, for a
+    /// layer that reads `T` another way first.
+    pub fn of<T: 'static>() -> Self {
+        Self {
+            value: std::any::type_name::<T>(),
+        }
+    }
 }
 
 /// A provider depends on something **no module provides** — not global

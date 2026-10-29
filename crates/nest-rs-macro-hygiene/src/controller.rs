@@ -169,13 +169,12 @@ impl HygieneVersionedController {
 
 /// Checks each request it is bound on.
 #[injectable]
+#[derive(Layer)]
 pub struct HygieneRouteGuard;
-
-impl Layer for HygieneRouteGuard {}
 
 #[async_trait]
 impl Guard for HygieneRouteGuard {
-    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }

@@ -1,0 +1,11 @@
+error: unknown #[layer] argument `order`; expected `priority`
+ --> tests/integration/diagnostics/core/layer_derive_unknown_argument.rs:8:9
+  |
+8 | #[layer(order = 1)]
+  |         ^^^^^
+
+error: #[layer] is written once — put every key in one `#[layer(…)]`
+  --> tests/integration/diagnostics/core/layer_derive_unknown_argument.rs:13:1
+   |
+13 | #[layer(priority = 2)]
+   | ^^^^^^^^^^^^^^^^^^^^^^

@@ -210,7 +210,7 @@ async fn an_operation_denial_keeping_its_cause_files_the_chain() {
         "…never the cause, and the body never ran: {refused}",
     );
     let event = logs.expect_one("nest_rs::layers", "guard denied the operation");
-    assert_eq!(event.field("operation").as_deref(), Some("down"));
+    assert_eq!(event.field("address").as_deref(), Some("down"));
     assert_eq!(
         event.field("error").as_deref(),
         Some(crate::STORE_DOWN_CHAIN)
@@ -409,6 +409,10 @@ impl Layer for DeclaredEverywhere {}
 
 #[async_trait]
 impl Guard for DeclaredEverywhere {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
     async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         DECLARED_CALLS.fetch_add(1, Ordering::SeqCst);
         Ok(())

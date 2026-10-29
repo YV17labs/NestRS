@@ -4,7 +4,6 @@ use nest_rs::seaorm::{Creatable, CrudService, Deletable, Updatable};
 use super::entity::{CreateOrg, Entity as Orgs, UpdateOrg};
 
 #[injectable]
-#[derive(Default)]
 pub struct OrgsService;
 
 impl CrudService for OrgsService {

@@ -2,10 +2,8 @@ use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
 use nest_rs::http::HttpView;
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct PostAuditInterceptor;
-
-impl Layer for PostAuditInterceptor {}
 
 #[async_trait]
 impl Interceptor for PostAuditInterceptor {

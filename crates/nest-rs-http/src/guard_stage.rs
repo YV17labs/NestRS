@@ -17,7 +17,7 @@ use nest_rs_core::__private::{
     new_unit_context, pending_of, take_pending,
 };
 use nest_rs_core::{AmbientValue, Failure, Handler, UnitContext};
-use nest_rs_guards::__private::{RefusalMark, Refused, denial_code, denial_of, failure_chain};
+use nest_rs_guards::__private::{RefusalMark, Refused, denial_code, denial_of};
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
 
 use crate::error::HttpError;
@@ -136,7 +136,10 @@ impl GuardStage for HttpGuardStage {
                     self.passed(cx);
                     Ok(())
                 }
-                Err(refused) => Err(answer(cx, refused.into_denial(file_denial))),
+                Err(refused) => {
+                    let denial = refused.into_denial(DENIED, cx);
+                    Err(answer(cx, denial))
+                }
             }
         })
     }
@@ -267,16 +270,15 @@ pub async fn check_request<'g>(
     let checked = install_pending(earlier, async {
         let mut cx = new_unit_context(handler, &mut view, None, None);
         for (name, guard) in guards {
-            guard
-                .check_http(&mut cx)
-                .await
-                .map_err(|denial| Refused::by(name, guard, denial))?;
+            if let Err(denial) = guard.check_http(&mut cx).await {
+                return Err(Refused::by(name, guard, denial).into_denial(DENIED, &cx));
+            }
         }
         Ok(take_pending(&mut cx))
     })
     .await;
     *req = view.into_request();
-    let pending = checked.map_err(|refused: Refused| refused.into_denial(file_denial))?;
+    let pending = checked?;
     let attached = req.extensions_mut();
     match attached.get_mut::<Attached>() {
         Some(Attached(earlier)) => earlier.merge(pending),
@@ -307,18 +309,9 @@ pub fn attached<T: AmbientValue>(req: &Request) -> Option<Arc<T>> {
     req.extensions().get::<Attached>()?.0.get::<T>()
 }
 
-/// The one `warn` that keeps every denial of an HTTP request visible whatever
-/// the guard logged, carrying the chain of what failed when the denial keeps
-/// one.
-fn file_denial(guard: &'static str, denial: &Denial) {
-    tracing::warn!(
-        target: nest_rs_core::target::LAYERS,
-        guard,
-        status = denial.http_status(),
-        error = failure_chain(denial),
-        "guard denied the request",
-    );
-}
+/// The line a guard's denial of an HTTP request is filed as, on the guard's
+/// target.
+const DENIED: &str = "guard denied the request";
 
 /// A [`Denial`] as the HTTP response the edge answers: the RFC 9457
 /// `application/problem+json` envelope under the `code` the denial's class
@@ -813,11 +806,10 @@ mod tests {
     #[async_trait]
     impl Guard for StoreDown {
         async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-            Err(Denial::unavailable_because(
-                None,
-                "the identity store did not answer",
-                ConnectionRefused,
-            ))
+            Err(
+                Denial::unavailable(None, "the identity store did not answer")
+                    .with_source(ConnectionRefused),
+            )
         }
     }
 

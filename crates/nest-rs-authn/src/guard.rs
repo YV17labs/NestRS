@@ -13,12 +13,19 @@ use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardFor, GuardPhase, Princip
 use nest_rs_http::{HttpView, RejectedCredential, async_trait};
 
 use crate::PrincipalIdentity;
-use crate::error::{AuthError, UNAVAILABLE};
+use crate::error::{AuthError, UNAVAILABLE, UnansweredError};
 use crate::strategy::{AUTHENTICATE_TIMEOUT, Strategy};
 
 /// The edge this guard authenticates on: `http` whichever edge the request is
 /// for, since a route, GraphQL, MCP and the WS upgrade all arrive as HTTP.
 const TRANSPORT: &str = "http";
+
+/// Why a credential went unevaluated, the `reason` of its denial's line beside
+/// what the strategy itself answers ([`AuthError::reason`]).
+mod reason {
+    pub(super) const STRATEGY_PANICKED: &str = "strategy_panicked";
+    pub(super) const STRATEGY_TIMEOUT: &str = "strategy_timeout";
+}
 
 /// The authentication guard: runs a [`Strategy`] on the request, attaches the
 /// resulting principal — its granted scopes and the tenant it acts within
@@ -151,17 +158,11 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                 Ok(())
             }
             Verdict::Refused(error) => {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    strategy,
-                    reason = error.reason(),
-                    error = %nest_rs_core::error_message(&error),
-                    "authentication failed",
-                );
-                Err(match error.error_code() {
+                let denial = match error.error_code() {
                     Some(code) => Denial::invalid_credential(error.client_message(), code),
                     None => Denial::unauthorized(error.client_message()),
-                })
+                };
+                Err(denial.with_reason(error.reason()).with_source(error))
             }
         }
     }
@@ -181,10 +182,10 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         if public { &[503] } else { &[401, 503] }
     }
 
-    /// Every refusal is filed here, on `nest_rs::authn`, with the strategy and
-    /// its reason.
-    fn files_its_denials(&self) -> bool {
-        true
+    /// Every refusal is filed on `nest_rs::authn`, the strategy named by the
+    /// guard's type and the credential's fault by the reason.
+    fn target(&self) -> &'static str {
+        crate::TARGET
     }
 }
 
@@ -204,7 +205,8 @@ pub enum Verdict {
     Refused(AuthError),
     /// Nothing was decided about the credential — what the strategy asks did
     /// not answer, it was silent past [`AUTHENTICATE_TIMEOUT`], or it panicked —
-    /// already filed: the `503` the request is refused with.
+    /// the `503` the request is refused with, its reason and cause on it for
+    /// the edge to file (a panic is filed on its own line besides).
     Unavailable(Denial),
 }
 
@@ -227,23 +229,33 @@ pub async fn authenticate<S: Strategy>(
     let outcome = match within(AUTHENTICATE_TIMEOUT, strategy.authenticate(request)).await {
         Ok(outcome) => outcome,
         Err(unanswered) => {
-            match unanswered {
-                Unanswered::Panicked(payload) => nest_rs_core::contained_panic!(
-                    target: crate::TARGET,
-                    payload.as_ref(),
-                    "strategy panicked; denying (fail-closed)",
-                    strategy = name,
-                    transport = TRANSPORT,
+            let (reason, cause) = match unanswered {
+                Unanswered::Panicked(payload) => {
+                    nest_rs_core::contained_panic!(
+                        target: crate::TARGET,
+                        payload.as_ref(),
+                        "strategy panicked; denying (fail-closed)",
+                        strategy = name,
+                        transport = TRANSPORT,
+                    );
+                    (
+                        reason::STRATEGY_PANICKED,
+                        UnansweredError::Panicked { strategy: name },
+                    )
+                }
+                _ => (
+                    reason::STRATEGY_TIMEOUT,
+                    UnansweredError::Silent {
+                        strategy: name,
+                        waited_ms: u64::try_from(AUTHENTICATE_TIMEOUT.as_millis())
+                            .unwrap_or(u64::MAX),
+                    },
                 ),
-                _ => tracing::warn!(
-                    target: crate::TARGET,
-                    strategy = name,
-                    transport = TRANSPORT,
-                    waited_ms = u64::try_from(AUTHENTICATE_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
-                    "strategy did not answer within the guard's timeout; denying (fail-closed)",
-                ),
-            }
-            return Ok(Verdict::Unavailable(Denial::unavailable(None, UNAVAILABLE)));
+            };
+            let denial = Denial::unavailable(None, UNAVAILABLE)
+                .with_reason(reason)
+                .with_source(cause);
+            return Ok(Verdict::Unavailable(denial));
         }
     };
     match outcome {
@@ -252,17 +264,10 @@ pub async fn authenticate<S: Strategy>(
             Ok(Verdict::Admitted)
         }
         Err(error @ AuthError::Unavailable { .. }) => {
-            tracing::error!(
-                target: crate::TARGET,
-                strategy = name,
-                reason = error.reason(),
-                error = %nest_rs_core::error_message(&error),
-                "authentication unavailable — what the strategy asks did not answer",
-            );
-            Ok(Verdict::Unavailable(Denial::unavailable(
-                error.retry_after_secs(),
-                error.client_message(),
-            )))
+            let denial = Denial::unavailable(error.retry_after_secs(), error.client_message())
+                .with_reason(error.reason())
+                .with_source(error);
+            Ok(Verdict::Unavailable(denial))
         }
         Err(error) => Ok(Verdict::Refused(error)),
     }

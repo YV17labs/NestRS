@@ -20,7 +20,6 @@ use super::entities::user_identity::{self, Entity as UserIdentities};
 const DEFAULT_ROLE: UserRole = UserRole::User;
 
 #[injectable]
-#[derive(Default)]
 pub struct UsersService;
 
 impl CrudService for UsersService {

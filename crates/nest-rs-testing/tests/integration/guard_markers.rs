@@ -1,9 +1,10 @@
-//! A pooled guard runs the entries it overrides at every edge, whatever
-//! `GuardFor` it declares, which only the decorators bound: one overriding
-//! only `check` gates every GraphQL, WS and MCP unit and no route; one
-//! overriding only `check_http` gates every route, the WS upgrade and the
-//! `/graphql` and `/mcp` requests, and no unit they carry. A missing
-//! declaration never opens an edge.
+//! A pooled guard runs its decision at every edge, whatever `GuardFor` it
+//! declares, which only the decorators bound: one writing its decision once,
+//! in `check`, gates every route, the WS upgrade and the `/graphql` and `/mcp`
+//! requests with it, since `check_http` runs `check`; one admitting the request
+//! in `check_http` gates every GraphQL, WS and MCP unit and no route; one
+//! overriding only `check_http` gates every request and no unit it carries. A
+//! missing declaration never opens an edge.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -80,15 +81,30 @@ impl PingGateway {
     }
 }
 
-/// Refuses every unit, and declares no edge.
+/// Refuses everything in one decision, and declares no edge.
 #[injectable]
-#[derive(Default)]
-struct ChecksUnitsOnly;
+#[derive(Layer)]
+struct DecidesOnce;
 
-impl Layer for ChecksUnitsOnly {}
+#[async_trait]
+impl Guard for DecidesOnce {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::forbidden("refused by the one decision"))
+    }
+}
+
+/// Admits every request and refuses every unit it carries, and declares no
+/// edge.
+#[injectable]
+#[derive(Layer)]
+struct ChecksUnitsOnly;
 
 #[async_trait]
 impl Guard for ChecksUnitsOnly {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
     async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("refused by a unit check"))
     }
@@ -99,10 +115,8 @@ static REQUESTS_CHECKED: AtomicUsize = AtomicUsize::new(0);
 /// Admits a request carrying [`PASS`], naming its caller as `AuthnGuard` does,
 /// counting each request it checks, and declares no edge.
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 struct ChecksRequestsOnly;
-
-impl Layer for ChecksRequestsOnly {}
 
 #[async_trait]
 impl Guard for ChecksRequestsOnly {
@@ -119,6 +133,7 @@ impl Guard for ChecksRequestsOnly {
 #[module(
     imports = [GraphqlModule::for_root(None), WsModule],
     providers = [
+        DecidesOnce,
         ChecksUnitsOnly,
         ChecksRequestsOnly,
         PlainController,
@@ -151,6 +166,41 @@ async fn ping_and_pong(
     let status = response.0.status();
     let body = response.0.into_body().into_string().await.expect("a body");
     (status, body)
+}
+
+#[tokio::test]
+async fn a_pooled_guard_writing_one_decision_gates_every_request() {
+    let app = pooling::<DecidesOnce>()
+        .build()
+        .await
+        .expect("a pooled guard declaring no edge boots");
+
+    app.http()
+        .get("/plain")
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    let (status, body) = ping_and_pong(&app, &[]).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    app.http()
+        .post("/mcp/markers")
+        .body_json(&initialize_request())
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_pooled_guard_writing_one_decision_gates_the_ws_upgrade() {
+    let app = pooling::<DecidesOnce>()
+        .build_ws()
+        .await
+        .expect("a pooled guard declaring no edge boots on a real port");
+
+    let refused = app.socket("/ws/markers").expect_refused().await;
+    assert_eq!(refused, StatusCode::FORBIDDEN);
+
+    app.shutdown().await.expect("the transport stops cleanly");
 }
 
 #[tokio::test]

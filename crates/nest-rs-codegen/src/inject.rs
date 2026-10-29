@@ -35,7 +35,8 @@ pub struct InjectableBody {
 /// `Arc<Concrete>` via `get`. `Option<Arc<…>>` is an optional dependency,
 /// reported apart from `dependencies`/`injected`. An `#[inject]` field
 /// that is neither errors; a non-`#[inject]` field falls back to
-/// `Default::default()`.
+/// `Default::default()`. A struct with no field — unit or braced — is built as
+/// written, with no `Default`.
 pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBody> {
     match &mut item.fields {
         Fields::Unit => Ok(InjectableBody {
@@ -142,7 +143,9 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 }
             }
 
-            let ctor = if has_inject {
+            // A struct with no field is built as written, never asked for a
+            // `Default` it has nothing to default.
+            let ctor = if has_inject || fields.named.is_empty() {
                 quote! { Self { #(#field_inits),* } }
             } else {
                 quote! { <Self as ::core::default::Default>::default() }
@@ -703,6 +706,23 @@ mod tests {
             refused,
             "unknown #[inject] argument `name`; expected no arguments"
         );
+    }
+
+    #[test]
+    fn a_struct_with_no_field_is_built_as_written() {
+        for mut item in [
+            parse_quote!(
+                struct Door;
+            ),
+            parse_quote!(
+                struct Door {}
+            ),
+        ] {
+            let body = build_injectable_body(&mut item).expect("a fieldless struct is read");
+            let ctor = body.ctor.to_string();
+            assert!(!ctor.contains("Default"), "{ctor}");
+            assert!(body.dep_keys.is_empty() && body.opt_keys.is_empty());
+        }
     }
 
     #[test]

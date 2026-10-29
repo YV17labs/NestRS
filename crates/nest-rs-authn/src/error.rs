@@ -410,6 +410,26 @@ impl ResponseError for CredentialError {
     }
 }
 
+/// Why a strategy's answer never came: the cause an unavailable denial keeps,
+/// naming the strategy and never the credential.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum UnansweredError {
+    /// It did not answer within the guard's bound.
+    #[error("the strategy `{strategy}` did not answer within {waited_ms} ms")]
+    Silent {
+        /// The strategy's type.
+        strategy: &'static str,
+        /// The bound waited out.
+        waited_ms: u64,
+    },
+    /// It panicked; the panic is filed on its own line.
+    #[error("the strategy `{strategy}` panicked")]
+    Panicked {
+        /// The strategy's type.
+        strategy: &'static str,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

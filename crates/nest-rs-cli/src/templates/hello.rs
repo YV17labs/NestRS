@@ -9,7 +9,6 @@
 pub(crate) const SERVICE: &str = r#"use nest_rs::core::injectable;
 
 #[injectable]
-#[derive(Default)]
 pub struct {{service}};
 
 impl {{service}} {

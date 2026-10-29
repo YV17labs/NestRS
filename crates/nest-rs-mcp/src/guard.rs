@@ -22,7 +22,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub fn denial_to_mcp_error(denial: Denial) -> McpError {
     use nest_rs_guards::__private::{client_message, denial_code, denial_reason};
 
-    if matches!(denial, Denial::Internal(_)) {
+    if denial.http_status() == 500 {
         return crate::error::opaque_answer();
     }
     let data = crate::error::ClassData {
@@ -35,7 +35,7 @@ pub fn denial_to_mcp_error(denial: Denial) -> McpError {
     // Not the caller's request: something the server depends on did not
     // answer, which JSON-RPC files under its internal error, with the reason
     // and the wait a client acts on.
-    if matches!(denial, Denial::Unavailable { .. }) {
+    if denial.http_status() == 503 {
         return McpError::internal_error(client_message(&denial).to_owned(), data);
     }
     McpError::invalid_request(client_message(&denial).to_owned(), data)

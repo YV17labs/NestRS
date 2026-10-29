@@ -1,7 +1,7 @@
-//! `#[interceptor]` at both stages, and an exception filter: a consumer with no
-//! direct `async-trait` or `tracing` dependency compiles the provider and the
-//! registration it emits — and the layers a route, a gateway, an MCP host and
-//! the worker witnesses bind.
+//! `#[interceptor]` at both stages, and an exception filter, each deriving
+//! `Layer`: a consumer with no direct `async-trait` or `tracing` dependency
+//! compiles the provider and the registration it emits — and the layers a
+//! route, a gateway, an MCP host and the worker witnesses bind.
 
 use std::sync::Arc;
 
@@ -11,16 +11,15 @@ use nest_rs::core::{
 };
 
 #[nest_rs::core::injectable]
-#[derive(Default)]
 pub struct HygieneClock;
 
 #[interceptor]
+#[derive(Layer)]
+#[layer(priority = -1)]
 pub struct HygieneAudit {
     #[inject]
     clock: Arc<HygieneClock>,
 }
-
-impl Layer for HygieneAudit {}
 
 #[async_trait]
 impl Interceptor for HygieneAudit {
@@ -31,10 +30,8 @@ impl Interceptor for HygieneAudit {
 }
 
 #[interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct HygieneTiming;
-
-impl Layer for HygieneTiming {}
 
 #[async_trait]
 impl Interceptor for HygieneTiming {
@@ -44,10 +41,8 @@ impl Interceptor for HygieneTiming {
 }
 
 #[interceptor(stage = handler)]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct HygieneCache;
-
-impl Layer for HygieneCache {}
 
 #[async_trait]
 impl Interceptor for HygieneCache {
@@ -59,10 +54,8 @@ impl Interceptor for HygieneCache {
 /// An interceptor a job, a tick and a listener bind on their block and their
 /// method.
 #[nest_rs::core::injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct HygieneUnitAudit;
-
-impl Layer for HygieneUnitAudit {}
 
 #[async_trait]
 impl Interceptor for HygieneUnitAudit {
@@ -74,10 +67,8 @@ impl Interceptor for HygieneUnitAudit {
 /// Declines every failure: the exception filter a route, a job, a tick and a
 /// listener bind.
 #[nest_rs::core::injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct HygieneUnitRefusal;
-
-impl Layer for HygieneUnitRefusal {}
 
 #[async_trait]
 impl ExceptionFilter for HygieneUnitRefusal {

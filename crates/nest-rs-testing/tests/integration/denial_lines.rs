@@ -1,9 +1,10 @@
-//! One denial files one line, on every edge: the line of the guard that decided
-//! it when the guard files its own (`Guard::files_its_denials`), else the edge's
-//! `guard denied …` on `nest_rs::layers`, so a guard that says nothing is still
-//! seen.
+//! One denial files one line, on every edge: the edge's `guard denied …`, on
+//! the target the refusing guard declares (`Guard::target`, `nest_rs::layers`
+//! when it declares none), carrying the reason its denial names — a guard
+//! writes no line of its own. A guard writing its decision once in `check`
+//! refuses an HTTP request with it too.
 
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, UnitContext, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
@@ -14,84 +15,87 @@ use nest_rs_testing::mcp::{call_tool_statelessly, initialize_request, post_messa
 use nest_rs_testing::{CapturedEvent, LogCapture, TestApp};
 use nest_rs_ws::{WsModule, WsView, gateway, messages};
 
-/// What a guard filing its own line files for each denial.
-const FILED: &str = "the guard refused and said so";
+/// The target the declaring guards file on.
+const ACME: &str = "acme::door";
 
-/// A guard refusing every request, filing [`FILED`] first.
+/// Why the declaring guards refuse.
+const CLOSED: &str = "door_closed";
+
+/// A guard refusing every unit and every request, in one decision, on its own
+/// target and naming why.
 #[injectable]
-#[derive(Default)]
-struct FilingDoor;
-
-impl Layer for FilingDoor {}
+#[derive(Layer)]
+struct DeclaredDoor;
 
 #[async_trait]
-impl Guard for FilingDoor {
-    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        tracing::warn!(target: "acme::door", door = "front", "the guard refused and said so");
-        Err(Denial::forbidden("closed"))
+impl Guard for DeclaredDoor {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::forbidden("closed").with_reason(CLOSED))
     }
 
-    fn files_its_denials(&self) -> bool {
-        true
+    fn target(&self) -> &'static str {
+        ACME
     }
 }
 
-impl GuardFor<HttpView> for FilingDoor {}
+impl GuardFor<HttpView> for DeclaredDoor {}
 
-/// A guard refusing every request, saying nothing.
+/// A guard refusing every unit and every request, declaring nothing.
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 struct SilentDoor;
-
-impl Layer for SilentDoor {}
 
 #[async_trait]
 impl Guard for SilentDoor {
-    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("closed"))
     }
 }
 
 impl GuardFor<HttpView> for SilentDoor {}
 
-/// A guard admitting every request and refusing every unit it carries, filing
-/// [`FILED`] first.
+/// A guard admitting every request and refusing every unit it carries, on its
+/// own target and naming why: the request differs from the unit, so it writes
+/// both entries.
 #[injectable]
-#[derive(Default)]
-struct FilingField;
-
-impl Layer for FilingField {}
+#[derive(Layer)]
+struct DeclaredField;
 
 #[async_trait]
-impl Guard for FilingField {
-    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        tracing::warn!(target: "acme::field", field = "any", "the guard refused and said so");
-        Err(Denial::forbidden("closed"))
+impl Guard for DeclaredField {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 
-    fn files_its_denials(&self) -> bool {
-        true
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::forbidden("closed").with_reason(CLOSED))
+    }
+
+    fn target(&self) -> &'static str {
+        ACME
     }
 }
 
-/// A guard admitting every request and refusing every unit it carries, saying
-/// nothing.
+/// A guard admitting every request and refusing every unit it carries,
+/// declaring nothing.
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 struct SilentField;
-
-impl Layer for SilentField {}
 
 #[async_trait]
 impl Guard for SilentField {
-    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("closed"))
     }
 }
 
-impl GuardFor<GraphqlView> for FilingField {}
-impl GuardFor<McpView> for FilingField {}
-impl GuardFor<WsView> for FilingField {}
+impl GuardFor<GraphqlView> for DeclaredField {}
+impl GuardFor<McpView> for DeclaredField {}
+impl GuardFor<WsView> for DeclaredField {}
 impl GuardFor<GraphqlView> for SilentField {}
 impl GuardFor<McpView> for SilentField {}
 impl GuardFor<WsView> for SilentField {}
@@ -150,9 +154,9 @@ impl DoorGateway {
 #[module(
     imports = [GraphqlModule::for_root(None), WsModule],
     providers = [
-        FilingDoor,
+        DeclaredDoor,
         SilentDoor,
-        FilingField,
+        DeclaredField,
         SilentField,
         DoorController,
         DoorResolver,
@@ -179,33 +183,35 @@ fn filed(logs: &LogCapture) -> usize {
     filed_since(logs, 0).len()
 }
 
-/// The one line `edge`'s denial filed: its decider's when the guard files its
-/// own, else the edge's floor, naming the guard `silent` by its type path as
-/// every edge's floor does.
-fn assert_one_line(logs: &LogCapture, seen: usize, edge: &str, guard_files: bool, silent: &str) {
+/// The one line `edge`'s denial filed: the edge's, on the target the guard
+/// `named` declares, carrying the reason its denial names when it names one.
+fn assert_one_line(logs: &LogCapture, seen: usize, edge: &str, declared: bool, named: &str) {
     let lines = filed_since(logs, seen);
     let said: Vec<(&str, &str)> = lines
         .iter()
         .map(|line| (line.target.as_str(), line.message.as_str()))
         .collect();
     assert_eq!(lines.len(), 1, "{edge}: one denial, one line — {said:?}");
-    match guard_files {
-        true => assert_eq!(
-            lines[0].message, FILED,
-            "{edge}: the guard's own — {said:?}"
-        ),
+    let line = &lines[0];
+    assert!(
+        line.message.starts_with("guard denied the "),
+        "{edge}: the edge's line — {said:?}",
+    );
+    assert_eq!(line.level, "warn", "{edge}: a 403 is no defect");
+    assert_eq!(
+        line.field("guard").as_deref(),
+        Some(named),
+        "{edge}: one guard field, one vocabulary — {:?}",
+        line.fields,
+    );
+    match declared {
+        true => {
+            assert_eq!(line.target, ACME, "{edge}: the guard's target — {said:?}");
+            assert_eq!(line.field("reason").as_deref(), Some(CLOSED), "{edge}");
+        }
         false => {
-            assert_eq!(lines[0].target, "nest_rs::layers", "{edge}: {said:?}");
-            assert!(
-                lines[0].message.starts_with("guard denied the "),
-                "{edge}: the edge's floor — {said:?}",
-            );
-            assert_eq!(
-                lines[0].field("guard"),
-                Some(silent.to_owned()),
-                "{edge}: one guard field, one vocabulary — {:?}",
-                lines[0].fields,
-            );
+            assert_eq!(line.target, "nest_rs::layers", "{edge}: {said:?}");
+            assert_eq!(line.field("reason"), None, "{edge}: {:?}", line.fields);
         }
     }
 }
@@ -219,9 +225,9 @@ async fn booted(pool: nest_rs_guards::GuardSpec) -> TestApp {
         .expect("every edge boots")
 }
 
-/// Every edge's request, refused by the pool's guard.
-async fn requests_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
-    let silent = std::any::type_name::<SilentDoor>();
+/// Every edge's request, refused by the pool's guard, `named`, writing its
+/// one decision in `check`.
+async fn requests_refused(pool: nest_rs_guards::GuardSpec, declared: bool, named: &str) {
     let logs = LogCapture::install();
     let app = booted(pool).await;
 
@@ -231,7 +237,7 @@ async fn requests_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "a route", guard_files, silent);
+    assert_one_line(&logs, seen, "a route", declared, named);
 
     let seen = filed(&logs);
     app.http()
@@ -240,13 +246,13 @@ async fn requests_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "/graphql", guard_files, silent);
+    assert_one_line(&logs, seen, "/graphql", declared, named);
 
     let seen = filed(&logs);
     post_message(app.http(), "/mcp", None, None, &initialize_request())
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "/mcp", guard_files, silent);
+    assert_one_line(&logs, seen, "/mcp", declared, named);
 
     let seen = filed(&logs);
     app.http()
@@ -258,22 +264,31 @@ async fn requests_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "a gateway's upgrade", guard_files, silent);
+    assert_one_line(&logs, seen, "a gateway's upgrade", declared, named);
 }
 
 #[tokio::test]
-async fn a_request_a_filing_guard_refuses_files_the_guards_line_alone() {
-    requests_refused(guard::<FilingDoor>(), true).await;
+async fn a_request_a_declaring_guard_refuses_files_one_line_on_its_target() {
+    requests_refused(
+        guard::<DeclaredDoor>(),
+        true,
+        std::any::type_name::<DeclaredDoor>(),
+    )
+    .await;
 }
 
 #[tokio::test]
-async fn a_request_a_silent_guard_refuses_files_the_edges_line() {
-    requests_refused(guard::<SilentDoor>(), false).await;
+async fn a_request_a_silent_guard_refuses_files_one_line_on_the_layers_target() {
+    requests_refused(
+        guard::<SilentDoor>(),
+        false,
+        std::any::type_name::<SilentDoor>(),
+    )
+    .await;
 }
 
-/// Every in-band edge's unit, refused by the pool's guard.
-async fn units_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
-    let silent = std::any::type_name::<SilentField>();
+/// Every in-band edge's unit, refused by the pool's guard, `named`.
+async fn units_refused(pool: nest_rs_guards::GuardSpec, declared: bool, named: &str) {
     let logs = LogCapture::install();
     let app = TestApp::builder()
         .module::<EveryEdgeModule>()
@@ -290,12 +305,12 @@ async fn units_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
         refused["data"]["error"].is_string(),
         "the message is refused: {refused}"
     );
-    assert_one_line(&logs, seen, "a WS message", guard_files, silent);
+    assert_one_line(&logs, seen, "a WS message", declared, named);
     drop(socket);
     app.close().await;
 
-    let app = booted(match guard_files {
-        true => guard::<FilingField>(),
+    let app = booted(match declared {
+        true => guard::<DeclaredField>(),
         false => guard::<SilentField>(),
     })
     .await;
@@ -308,7 +323,7 @@ async fn units_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
         .send()
         .await;
     graphql.assert_status(StatusCode::OK);
-    assert_one_line(&logs, seen, "a GraphQL operation", guard_files, silent);
+    assert_one_line(&logs, seen, "a GraphQL operation", declared, named);
 
     // No guard names a caller at the request, so no session opens for one: a
     // stateless call reaches the operation.
@@ -316,15 +331,25 @@ async fn units_refused(pool: nest_rs_guards::GuardSpec, guard_files: bool) {
     let mcp =
         call_tool_statelessly(app.http(), "/mcp", "ping", None, &[], serde_json::json!({})).await;
     assert!(mcp.contains("closed"), "the tool call is refused: {mcp}");
-    assert_one_line(&logs, seen, "an MCP operation", guard_files, silent);
+    assert_one_line(&logs, seen, "an MCP operation", declared, named);
 }
 
 #[tokio::test]
-async fn a_unit_a_filing_guard_refuses_files_the_guards_line_alone() {
-    units_refused(guard::<FilingField>(), true).await;
+async fn a_unit_a_declaring_guard_refuses_files_one_line_on_its_target() {
+    units_refused(
+        guard::<DeclaredField>(),
+        true,
+        std::any::type_name::<DeclaredField>(),
+    )
+    .await;
 }
 
 #[tokio::test]
-async fn a_unit_a_silent_guard_refuses_files_the_edges_line() {
-    units_refused(guard::<SilentField>(), false).await;
+async fn a_unit_a_silent_guard_refuses_files_one_line_on_the_layers_target() {
+    units_refused(
+        guard::<SilentField>(),
+        false,
+        std::any::type_name::<SilentField>(),
+    )
+    .await;
 }

@@ -307,8 +307,8 @@ async fn an_admitted_client_is_read_back_as_the_actor() {
         .await;
 }
 
-/// One refusal, one `warn`, the guard's: the method attempted and the
-/// reason, never the client's id nor its secret.
+/// One refusal, one `warn`, the edge's on the guard's target: the method
+/// attempted and the reason, never the client's id nor its secret.
 #[tokio::test]
 async fn each_refusal_files_one_warn_naming_neither_the_client_nor_its_secret() {
     let app = TestApp::for_module::<TokenApp>().await.expect("boots");
@@ -334,8 +334,13 @@ async fn each_refusal_files_one_warn_naming_neither_the_client_nor_its_secret() 
             panic!("one line per refusal: {said:#?}");
         };
         assert_eq!(refusal.target, nest_rs_oauth_server::TARGET);
-        assert_eq!(refusal.message, "client authentication failed");
-        assert_eq!(refusal.field("method").as_deref(), Some(method));
+        assert_eq!(refusal.message, "guard denied the request");
+        assert!(
+            refusal
+                .field("error")
+                .is_some_and(|chain| chain.contains(&format!("`{method}`"))),
+            "{refusal:#?}",
+        );
         assert_eq!(refusal.field("reason").as_deref(), Some(reason));
         let printed = format!("{refusal:?}");
         for secret in [UNKNOWN_ID, WRONG_SECRET] {

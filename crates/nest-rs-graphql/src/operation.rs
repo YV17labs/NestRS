@@ -22,7 +22,7 @@ use nest_rs_core::{
     Container, Failure, Handler, Outcome, Problem, UnitContext, UnresolvedLayerError,
 };
 use nest_rs_guards::__private::{
-    GlobalBucket, RefusalMark, SiteChainSources, check_guards, compose_site_chain, failure_chain,
+    GlobalBucket, RefusalMark, SiteChainSources, check_guards, compose_site_chain,
 };
 use nest_rs_guards::{Denial, Guard, GuardSpec};
 use tracing::Instrument;
@@ -122,58 +122,30 @@ pub fn field_guard_stage(
         force,
     };
     let chain = compose_site_chain(container, label, sources, site.bucket(container))?;
-    Ok(FieldGuardStage::of(chain, Floor::Operation(label)))
+    Ok(FieldGuardStage::of(chain, DENIED_OPERATION))
 }
 
 /// One field's guards, as the pipeline runs a site's guard stage: each one's
 /// [`check`](Guard::check) on the field, read through [`GraphqlView`].
 pub(crate) struct FieldGuardStage {
     guards: Vec<ResolvedLayer<dyn Guard>>,
-    floor: Floor,
+    denied: &'static str,
 }
 
-/// The structural line a denial no guard filed itself is said with.
-#[derive(Clone, Copy)]
-pub(crate) enum Floor {
-    /// A resolver's field, named by its label.
-    Operation(&'static str),
-    /// A federation root field, named by the field.
-    Federation,
-}
+/// The line a guard's denial of a resolver's field is filed as.
+pub(crate) const DENIED_OPERATION: &str = "guard denied the operation";
+
+/// The line a guard's denial of a federation root field is filed as.
+pub(crate) const DENIED_FEDERATION_FIELD: &str = "guard denied the federation field";
 
 impl FieldGuardStage {
-    /// The stage running `guards`, or `None` when there are none.
+    /// The stage running `guards`, filing a denial as `denied`, or `None` when
+    /// there are none.
     pub(crate) fn of(
         guards: Vec<ResolvedLayer<dyn Guard>>,
-        floor: Floor,
+        denied: &'static str,
     ) -> Option<Arc<dyn GuardStage>> {
-        (!guards.is_empty()).then(|| Arc::new(Self { guards, floor }) as Arc<dyn GuardStage>)
-    }
-}
-
-impl Floor {
-    /// The edge's structural floor under a denial `guard` raised on `field`:
-    /// every denial visible at `warn` whatever the guard logged.
-    fn file(self, guard: &'static str, field: &str, denial: &Denial) {
-        match self {
-            Self::Operation(route) => tracing::warn!(
-                target: nest_rs_core::target::LAYERS,
-                guard,
-                route,
-                status = denial.http_status(),
-                error = failure_chain(denial),
-                "guard denied the operation",
-            ),
-            Self::Federation => tracing::warn!(
-                target: nest_rs_core::target::LAYERS,
-                guard,
-                route = "POST /graphql (federation)",
-                field,
-                status = denial.http_status(),
-                error = failure_chain(denial),
-                "guard denied the federation field",
-            ),
-        }
+        (!guards.is_empty()).then(|| Arc::new(Self { guards, denied }) as Arc<dyn GuardStage>)
     }
 }
 
@@ -182,12 +154,7 @@ impl GuardStage for FieldGuardStage {
         Box::pin(async move {
             check_guards(&self.guards, None, cx)
                 .await
-                .map_err(|refused| {
-                    let field = cx.handler().address();
-                    Failure::from(
-                        refused.into_denial(|guard, denial| self.floor.file(guard, field, denial)),
-                    )
-                })
+                .map_err(|refused| Failure::from(refused.into_denial(self.denied, cx)))
         })
     }
 }

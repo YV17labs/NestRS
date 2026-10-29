@@ -86,7 +86,7 @@ fn guard_over<F: AbilityFactory>(factory: F) -> Arc<AbilityGuard<F>> {
 }
 
 #[tokio::test]
-async fn a_route_reached_with_no_actor_warns_that_no_authn_guard_ran() {
+async fn a_route_reached_with_no_actor_files_that_no_authn_guard_ran() {
     let logs = LogCapture::install();
     let guard = guard_over(WellFormed);
     // No ambient `Actor`, on a route that is not public: the branch that means
@@ -96,19 +96,17 @@ async fn a_route_reached_with_no_actor_warns_that_no_authn_guard_ran() {
     let denial = check(&*guard, &GATED, &mut req)
         .await
         .expect_err("no actor on a non-public route is refused");
-    assert!(matches!(denial, Denial::Internal(_)), "{denial:?}");
+    assert_eq!(denial.http_status(), 500, "{denial:?}");
 
-    let event = logs.expect_one(
-        "nest_rs::authz",
-        "ability guard denied: no authenticated actor and route is not public",
+    let event = logs.expect_one("nest_rs::authz", "guard denied the request");
+    assert_eq!(
+        event.level, "error",
+        "a guard bound without its authn guard is a defect"
     );
-    assert_eq!(event.level, "warn");
-    // The field names the actor type the missing authn guard would have inserted.
+    assert_eq!(event.field("reason").as_deref(), Some("missing_ambient"));
     assert!(
-        event
-            .field("actor_type")
-            .is_some_and(|t| t.contains("Actor")),
-        "the event names the expected actor type, got {:?}",
+        event.field("error").is_some_and(|t| t.contains("Actor")),
+        "the line names the actor type the missing authn guard would have attached, got {:?}",
         event.fields,
     );
 }
@@ -136,13 +134,14 @@ async fn a_malformed_rule_is_reported_at_error_before_the_request_is_denied() {
     let denial = with_ambient(Arc::new(Actor), check(&*guard, &GATED, &mut req))
         .await
         .expect_err("a malformed rule denies rather than installing a partial ability");
-    assert!(matches!(denial, Denial::Internal(_)), "{denial:?}");
+    assert_eq!(denial.http_status(), 500, "{denial:?}");
 
-    let event = logs.expect_one(
-        "nest_rs::authz",
-        "ability construction failed — denying the request",
-    );
+    let event = logs.expect_one("nest_rs::authz", "guard denied the request");
     assert_eq!(event.level, "error");
+    assert_eq!(
+        event.field("reason").as_deref(),
+        Some("rules_misconfigured")
+    );
     // The client body is deliberately opaque, so the rule that broke is only
     // ever readable here.
     assert!(

@@ -914,11 +914,9 @@ async fn an_unreachable_set_answers_503_on_a_guarded_and_a_public_route() {
             "{path}: no challenge blames the token"
         );
     }
-    let outages = logs.find(
-        nest_rs_authn::TARGET,
-        "authentication unavailable — what the strategy asks did not answer",
-    );
+    let outages = logs.find(nest_rs_authn::TARGET, "guard denied the request");
     assert_eq!(outages.len(), 2);
+    assert_eq!(outages[0].field("reason").as_deref(), Some("unavailable"));
     assert!(
         outages[0]
             .field("error")

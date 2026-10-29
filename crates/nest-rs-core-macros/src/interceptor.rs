@@ -31,11 +31,11 @@ const INTERCEPTOR: nest_rs_codegen::Grammar =
 const STAGES: [&str; 2] = ["unit", "handler"];
 
 /// `priority` is the old HTTP attribute's key: here an interceptor orders
-/// itself through its `Layer` impl.
+/// itself through `#[derive(Layer)]`'s `#[layer(priority = …)]`.
 fn known_elsewhere(key: &str) -> Option<String> {
     (key == "priority").then(|| {
         "#[interceptor] takes no `priority`: an interceptor orders itself within its stage \
-         through `Layer::priority` — override it on the struct's `Layer` impl"
+         through `Layer::priority` — derive `Layer` with `#[layer(priority = …)]`"
             .to_owned()
     })
 }

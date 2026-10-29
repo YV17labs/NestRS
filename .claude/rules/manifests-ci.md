@@ -119,8 +119,7 @@ owning crate's suite is undocumented.
 ## CI
 
 **CI runs on a change, never on a clock, and only what keeps the product from
-regressing** (`decisions/ci-on-change.md`), but for the advisory audit's daily
-run: an advisory is the one red a clock brings. `framework.yml` runs `just ci`,
+regressing** (`decisions/ci-on-change.md`). `framework.yml` runs `just ci`,
 recipe for recipe: fmt, clippy, each capability alone, the dependency policy,
 rustdoc, then every test against real Postgres, Valkey and S3 — never a mock —
 each on one server, the dev container's: a backend's other shapes run by hand
@@ -147,18 +146,21 @@ crate it bans; an exception names its advisory or crate and its reason. **A
 check belongs where only a change can turn it red**: the bans, licences and
 sources are `just lint`'s, while the advisories, which the database moves
 overnight, are `just audit`'s, over the framework's and the demo's lockfiles,
-with three reaches. A change blocks only on what it introduces: a pull request
+with two reaches. A change blocks only on what it introduces: a pull request
 runs `just audit <base>`, refused for an advisory absent at its base and warned
-of one already there. A clock alerts and blocks nobody: `audit.yml` checks the
-default branch and every `release/**` head whole each day, and Dependabot
-opens the security update. A release ships nothing undecided: `publish.yml`
-runs the whole check. Every advisory's exit is the project's — the bump, or an
-`ignore` in `deny.toml` with its reason when no fix exists or the code cannot
-reach it — never a wait on a third party. The npm trees are third-party
-tooling taking their vendor's fixes as they ship: `docs/` kept to what it uses,
-a bench SUT whole as its framework's CLI scaffolds it
-(`decisions/npm-lockfile-advisories.md`). The workflows stay
-hardened — actions pinned by SHA, a local action referenced `$/`
+of one already there. A release ships nothing undecided: `publish.yml` runs the
+whole check. Between the two no workflow runs: GitHub's Dependabot — its alerts
+and security updates, a repository setting — watches the default branch for the
+vulnerabilities GitHub's advisory database holds, and the rest `deny.toml`
+refuses (an unmaintained crate, a yanked version, an unsound one GitHub has not
+imported), like any advisory on a release branch, surfaces at the next pull
+request touching a Cargo tree or at the publish. Every advisory's exit is the
+project's — the bump, or an `ignore` in `deny.toml` with its reason when no fix
+exists or the code cannot reach it — never a wait on a third party. The npm
+trees are third-party tooling taking their vendor's fixes as they ship: `docs/`
+kept to what it uses, a bench SUT whole as its framework's CLI scaffolds it
+(`decisions/npm-lockfile-advisories.md`). The workflows stay hardened — actions
+pinned by SHA, a local action referenced `$/`
 (`decisions/self-repository-actions.md`), `persist-credentials: false`, least
 permissions — held by zizmor's offline audits and actionlint in `just lint`
 (`decisions/workflow-lint.md`); an exception is a `# zizmor: ignore[…]` beside

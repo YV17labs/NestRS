@@ -1,8 +1,9 @@
-# Security updates alone, for the trees `just audit` reads: no version-update
-# pull request may be open, so Dependabot opens one only for an advisory a
-# release fixes, against the default branch. Alerts and security updates are
-# turned on in the repository's settings. The benchmarks' trees stay out
-# (.claude/decisions/ci-on-change.md).
+# The trees `just audit` reads, watched on the default branch by Dependabot for
+# the vulnerabilities GitHub's advisory database holds, its alerts and security
+# updates turned on in the repository's settings: no workflow audits a branch
+# on a clock. Security updates alone: no version-update pull request may be
+# open, so Dependabot opens one only for an advisory a release fixes. The
+# benchmarks' trees stay out (.claude/decisions/ci-on-change.md).
 
 version: 2
 updates:

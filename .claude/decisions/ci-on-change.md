@@ -72,3 +72,43 @@ comes from a clock, not a change.
 - **The pull request's check left non-blocking**: it would let through the one
   advisory a change can settle, its own.
 - **A second recipe**: `just audit` takes the base as an optional argument.
+
+## 2026-10-28 — the audit leaves the clock again: Dependabot watches the default branch
+
+Asked what CI the 7.0 run had added and what it cost, the owner removed the
+daily audit: GitHub's Dependabot already alerts on the lockfiles'
+vulnerabilities, keeping a clock over them is GitHub's job, not the project's,
+and dropping it saves two minutes of CI a day. The run had never started
+either: a schedule reads the default branch's workflows, and `main` did not
+carry `audit.yml` yet.
+
+- `audit.yml` runs on a pull request touching a Cargo tree, and on nothing
+  else: `just audit <base>` refuses an advisory the change brings, as the
+  2026-10-22 entry decided.
+- The schedule and `workflow_dispatch` are gone, with the two jobs only they
+  ran: the listing of the default branch and every `release/**` head, and the
+  whole check on each.
+- `publish.yml` keeps the whole check before a release.
+- Dependabot's alerts and security updates, a repository setting, watch the
+  default branch's lockfiles for the vulnerabilities GitHub's advisory database
+  holds; `dependabot.yml` still opens security updates alone, version updates
+  off.
+
+**No longer watched**, between a tree's changes and its publish:
+
+- a `release/**` branch's lockfiles: Dependabot reads the default branch alone;
+- on every branch, the default one included, what `deny.toml` refuses beyond
+  that database: an unmaintained crate, a yanked version, and an unsound crate
+  GitHub has not imported. Dependabot, like the dependency review the
+  2026-10-22 entry refused, reads GitHub's advisory database alone: in the
+  RustSec database of 2026-10-27, 6 of its 283 unmaintained advisories and 160
+  of its 228 unsound ones carry a GitHub alias, and a yanked version is no
+  advisory at all.
+
+Either surfaces at the next pull request touching that tree, as a warning since
+the base holds it, and at `publish.yml`'s whole check, which refuses the release
+until a bump or an `ignore` with its reason settles it.
+
+**Refused:** `workflow_dispatch` kept for a whole check by hand. `just audit`
+runs it on any checkout, and the pull request's job reads a merge commit's
+first parent, which a dispatched run does not have.

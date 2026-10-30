@@ -100,9 +100,12 @@ async fn a_callback_refuses_a_state_that_does_not_match_the_transaction() {
     let jwt = crate::jwt();
     let auth = client().authorize(&jwt, "acme", None).expect("authorize");
 
-    let Err(err) =
-        OAuthClient::callback(&jwt, "acme", &auth.transaction, "not-the-csrf", "some-code")
-    else {
+    let Err(err) = OAuthClient::callback(
+        &jwt,
+        "acme",
+        &auth.transaction,
+        "code=some-code&state=not-the-csrf",
+    ) else {
         panic!("state mismatch is rejected");
     };
     assert!(matches!(err, AuthError::Failed { .. }));
@@ -131,9 +134,12 @@ async fn a_callback_reports_a_transaction_cookie_that_does_not_verify() {
         }))
         .expect("sign with the wrong key");
 
-    let Err(err) =
-        OAuthClient::callback(&crate::jwt(), "acme", &forged, "agreed-state", "some-code")
-    else {
+    let Err(err) = OAuthClient::callback(
+        &crate::jwt(),
+        "acme",
+        &forged,
+        "code=some-code&state=agreed-state",
+    ) else {
         panic!("a transaction signed by another key is rejected");
     };
     assert!(matches!(err, AuthError::InvalidSignature), "{err}");
@@ -169,7 +175,8 @@ async fn an_expired_transaction_cookie_is_reported_the_same_way() {
         }))
         .expect("sign");
 
-    let Err(err) = OAuthClient::callback(&jwt, "acme", &stale, "agreed-state", "some-code") else {
+    let Err(err) = OAuthClient::callback(&jwt, "acme", &stale, "code=some-code&state=agreed-state")
+    else {
         panic!("an expired transaction is rejected");
     };
     assert!(matches!(err, AuthError::Expired), "{err}");
@@ -685,8 +692,13 @@ fn matched(client: &OAuthClient) -> (AuthorizationResponse, Transaction) {
     let tx: Transaction = jwt
         .verify_handshake("oauth-tx", &auth.transaction)
         .expect("the transaction verifies");
-    let response = OAuthClient::callback(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
-        .expect("the callback matches its transaction");
+    let response = OAuthClient::callback(
+        &jwt,
+        "acme",
+        &auth.transaction,
+        &format!("code={CODE}&state={}", tx.csrf),
+    )
+    .expect("the callback matches its transaction");
     (response, tx)
 }
 

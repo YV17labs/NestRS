@@ -193,12 +193,15 @@ The framework generates a fresh PKCE pair per flow
 ## The callback leg
 
 The provider redirects to `redirect_url` with `state` and `code`
-query parameters. `OAuthClient::transaction_from` reads the transaction
-back from the request's `Cookie` fields — every one of them, since HTTP/2
-may split the cookies over several — by its exact name. `callback` then
-verifies the cookie's signature, checks it belongs to the provider, compares
-its CSRF state to the query string in constant time, and answers the matched
-`AuthorizationResponse` — the only value `exchange` trades for a `TokenSet`:
+query parameters — or, when it refuses, `state` and §4.1.2.1's `error`.
+`OAuthClient::transaction_from` reads the transaction back from the
+request's `Cookie` fields — every one of them, since HTTP/2 may split the
+cookies over several — by its exact name. `callback` takes the query as the
+request carries it: it verifies the cookie's signature, checks it belongs to
+the provider and compares its CSRF state to the query's in constant time
+before it reads anything else there, then answers the provider's refusal or
+the matched `AuthorizationResponse` — the only value `exchange` trades for a
+`TokenSet`:
 
 ```rust title="crates/features/src/authn/http/controller.rs"
 let transaction_cookie = OAuthClient::transaction_from(
@@ -213,8 +216,7 @@ let response = OAuthClient::callback(
     &self.jwt,
     "github",              // the same provider the transaction was minted for
     transaction_cookie,
-    state_from_query,
-    code_from_query,
+    req.uri().query().unwrap_or_default(),
 )?;
 let resource = response.resource().map(str::to_owned);
 let tokens = self.client.exchange(response).await?;

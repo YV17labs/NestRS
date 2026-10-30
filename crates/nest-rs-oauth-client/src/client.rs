@@ -161,7 +161,65 @@ struct Transaction {
     exp: u64,
 }
 
-/// Low-cardinality `reason` codes for the three ways a callback is refused.
+/// The redirect URI's query as §4.1.2 and §4.1.2.1 name its parameters; any
+/// other is ignored.
+#[derive(Default)]
+struct AuthorizationParameters {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+impl AuthorizationParameters {
+    /// `query` read once per parameter, since §3.1 forbids sending one twice:
+    /// a repeat is refused naming the parameter, never a value.
+    fn parse(query: &str) -> Result<Self, AuthError> {
+        let mut parameters = Self::default();
+        for (name, value) in oauth2::url::form_urlencoded::parse(query.as_bytes()) {
+            let slot = match name.as_ref() {
+                "code" => &mut parameters.code,
+                "state" => &mut parameters.state,
+                "error" => &mut parameters.error,
+                _ => continue,
+            };
+            if slot.replace(value.into_owned()).is_some() {
+                return Err(AuthError::failed(format!(
+                    "OAuth callback query repeats `{name}`"
+                )));
+            }
+        }
+        Ok(parameters)
+    }
+}
+
+/// The refusal a matched §4.1.2.1 `error` code is answered with, its detail
+/// naming the code when the registry holds it.
+fn refused_by_provider(code: &str) -> AuthError {
+    match code {
+        "server_error" => {
+            AuthError::unavailable("OAuth provider could not authorize: server_error", None)
+        }
+        "temporarily_unavailable" => AuthError::unavailable(
+            "OAuth provider could not authorize: temporarily_unavailable",
+            None,
+        ),
+        _ => AuthError::failed(match code {
+            "access_denied" => "OAuth provider refused the authorization: access_denied",
+            "invalid_request" => "OAuth provider refused the authorization: invalid_request",
+            "unauthorized_client" => {
+                "OAuth provider refused the authorization: unauthorized_client"
+            }
+            "unsupported_response_type" => {
+                "OAuth provider refused the authorization: unsupported_response_type"
+            }
+            "invalid_scope" => "OAuth provider refused the authorization: invalid_scope",
+            _ => "OAuth provider refused the authorization with an unregistered error code",
+        }),
+    }
+}
+
+/// Low-cardinality `reason` codes for the three ways a transaction does not
+/// match its callback.
 const REASON_INVALID_TRANSACTION: &str = "invalid_transaction";
 const REASON_PROVIDER_MISMATCH: &str = "provider_mismatch";
 const REASON_CSRF_STATE_MISMATCH: &str = "csrf_state_mismatch";
@@ -654,17 +712,30 @@ impl OAuthClient {
         })
     }
 
-    /// Read the callback's authorization response (§4.1.2) against the
-    /// transaction that began the flow: `transaction` must verify, belong to
-    /// `provider` and carry `state`, compared in constant time. Each refusal
-    /// files one `warn` naming its reason, never a value.
+    /// Read the redirect URI's `query` — RFC 6749 §4.1.2's response, or
+    /// §4.1.2.1's error response — against the transaction that began the
+    /// flow, before anything else in it is read: `transaction` must verify,
+    /// belong to `provider` and carry the response's `state`, compared in
+    /// constant time. A response no transaction matches is refused as the
+    /// transaction's failure whatever it says — never as the outage it may
+    /// claim — and files one `warn` naming its reason, never a value.
+    ///
+    /// A matched error response is the provider's refusal: `server_error` and
+    /// `temporarily_unavailable` are [`AuthError::Unavailable`], every other
+    /// code [`AuthError::Failed`], its detail naming the code when §4.1.2.1
+    /// registers it and never what the provider sent otherwise. A parameter
+    /// sent twice (§3.1), no `state` or no `code` is refused naming the
+    /// parameter, never its value.
     pub fn callback(
         jwt: &JwtService,
         provider: &str,
         transaction: &str,
-        state: &str,
-        code: &str,
+        query: &str,
     ) -> Result<AuthorizationResponse, AuthError> {
+        let parameters = AuthorizationParameters::parse(query)?;
+        let state = parameters
+            .state
+            .ok_or_else(|| AuthError::failed("OAuth callback missing state"))?;
         // The only `warn` for a forged cookie: no guard sits above this path, and
         // `JwtService` logs its decode reason at `debug`.
         let tx: Transaction = jwt
@@ -700,8 +771,15 @@ impl OAuthClient {
             );
             return Err(AuthError::failed("OAuth state mismatch"));
         }
+        if let Some(error) = parameters.error {
+            return Err(refused_by_provider(&error));
+        }
+        let code = parameters
+            .code
+            .filter(|code| !code.is_empty())
+            .ok_or_else(|| AuthError::failed("OAuth callback missing code"))?;
         Ok(AuthorizationResponse {
-            code: Secret::new(code.to_owned()),
+            code: Secret::new(code),
             pkce_verifier: Secret::new(tx.pkce),
             resource: tx.resource,
         })
@@ -1073,9 +1151,12 @@ mod tests {
         let jwt = jwt();
         let transaction = signed_transaction(&jwt, "provider-a", "agreed-state");
 
-        let Err(err) =
-            OAuthClient::callback(&jwt, "provider-b", &transaction, "agreed-state", "code")
-        else {
+        let Err(err) = OAuthClient::callback(
+            &jwt,
+            "provider-b",
+            &transaction,
+            "code=the-code&state=agreed-state",
+        ) else {
             panic!("a transaction from another provider is rejected");
         };
         let said = nest_rs_core::error_message(&err);
@@ -1094,7 +1175,12 @@ mod tests {
             ("the-signed-states", false),
             ("", false),
         ] {
-            let answered = OAuthClient::callback(&jwt, "acme", &transaction, presented, "the-code");
+            let answered = OAuthClient::callback(
+                &jwt,
+                "acme",
+                &transaction,
+                &format!("code=the-code&state={presented}"),
+            );
             assert_eq!(answered.is_ok(), matches, "{presented:?}");
             if let Err(err) = answered {
                 assert!(
@@ -1119,13 +1205,156 @@ mod tests {
                 .verify_handshake(TRANSACTION_PURPOSE, &redirect.transaction)
                 .expect("the transaction verifies");
 
-            let response =
-                OAuthClient::callback(&jwt, "acme", &redirect.transaction, &tx.csrf, "the-code")
-                    .expect("the callback matches");
+            let response = OAuthClient::callback(
+                &jwt,
+                "acme",
+                &redirect.transaction,
+                &format!("state={}&code=the-code", tx.csrf),
+            )
+            .expect("the callback matches");
 
             assert_eq!(response.resource(), resource);
             assert_eq!(response.code().expose_secret(), "the-code");
             assert!(!format!("{response:?}").contains("the-code"));
+        }
+    }
+
+    /// §4.1.2.1's `error` is read only once the response matches its
+    /// transaction: an outage nobody's flow met is no outage.
+    #[test]
+    fn an_error_response_no_transaction_matches_is_refused_as_unmatched() {
+        let jwt = jwt();
+        let transaction = signed_transaction(&jwt, "acme", "agreed-state");
+
+        for (provider, query, said) in [
+            (
+                "acme",
+                "error=temporarily_unavailable&state=another-state",
+                "state mismatch",
+            ),
+            ("acme", "error=temporarily_unavailable", "missing state"),
+            (
+                "other",
+                "error=server_error&state=agreed-state",
+                "provider mismatch",
+            ),
+        ] {
+            let Err(refused) = OAuthClient::callback(&jwt, provider, &transaction, query) else {
+                panic!("{query}: an unmatched response is refused");
+            };
+            assert!(matches!(refused, AuthError::Failed { .. }), "{query}");
+            let message = nest_rs_core::error_message(&refused);
+            assert!(message.contains(said), "{query}: {message}");
+        }
+    }
+
+    #[test]
+    fn a_matched_error_response_is_the_providers_refusal_as_it_says() {
+        let jwt = jwt();
+        let transaction = signed_transaction(&jwt, "acme", "agreed-state");
+
+        for (code, unavailable) in [
+            ("server_error", true),
+            ("temporarily_unavailable", true),
+            ("access_denied", false),
+        ] {
+            let refused = OAuthClient::callback(
+                &jwt,
+                "acme",
+                &transaction,
+                &format!("error={code}&state=agreed-state&code=ignored"),
+            )
+            .expect_err("a matched error response is refused");
+            assert_eq!(
+                matches!(refused, AuthError::Unavailable { .. }),
+                unavailable,
+                "{code}"
+            );
+            assert!(
+                nest_rs_core::error_message(&refused).ends_with(code),
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_provider_that_cannot_answer_now_is_unavailable_and_any_other_refusal_failed() {
+        for code in ["server_error", "temporarily_unavailable"] {
+            assert!(
+                matches!(refused_by_provider(code), AuthError::Unavailable { .. }),
+                "{code}"
+            );
+        }
+        for code in [
+            "access_denied",
+            "invalid_request",
+            "unauthorized_client",
+            "unsupported_response_type",
+            "invalid_scope",
+        ] {
+            let refusal = refused_by_provider(code);
+            assert!(matches!(refusal, AuthError::Failed { .. }), "{code}");
+            let said = nest_rs_core::error_message(&refusal);
+            assert!(said.ends_with(code), "{said}");
+        }
+    }
+
+    #[test]
+    fn an_unregistered_code_is_refused_without_quoting_it() {
+        let refusal = refused_by_provider("<script>hunter2</script>");
+        assert!(matches!(refusal, AuthError::Failed { .. }));
+        let said = nest_rs_core::error_message(&refusal);
+        assert!(!said.contains("hunter2"), "{said}");
+        assert!(said.contains("unregistered error code"), "{said}");
+    }
+
+    /// §3.1: a parameter is sent once; a repeat is refused before any
+    /// transaction is read, naming the parameter and never a value.
+    #[test]
+    fn a_parameter_sent_twice_is_refused_naming_it_never_its_value() {
+        for (query, name) in [
+            (
+                "code=first-never-quoted&code=second-never-quoted&state=s",
+                "code",
+            ),
+            ("state=s&code=c&state=second-never-quoted", "state"),
+            (
+                "error=access_denied&error=second-never-quoted&state=s",
+                "error",
+            ),
+        ] {
+            let Err(refused) = AuthorizationParameters::parse(query) else {
+                panic!("{query}: a repeat is refused");
+            };
+            let said = nest_rs_core::error_message(&refused);
+            assert!(said.ends_with(&format!("repeats `{name}`")), "{said}");
+            assert!(!said.contains("never-quoted"), "{said}");
+        }
+    }
+
+    #[test]
+    fn the_query_is_read_decoded_and_any_other_parameter_ignored() {
+        let parameters = AuthorizationParameters::parse(
+            "iss=https%3A%2F%2Fprovider.example&code=a%2Fb+c&state=s%3D&error_description=x",
+        )
+        .expect("parses");
+        assert_eq!(parameters.code.as_deref(), Some("a/b c"));
+        assert_eq!(parameters.state.as_deref(), Some("s="));
+        assert_eq!(parameters.error, None);
+    }
+
+    #[test]
+    fn a_matched_response_with_no_code_is_refused() {
+        let jwt = jwt();
+        let transaction = signed_transaction(&jwt, "acme", "agreed-state");
+
+        for query in ["state=agreed-state", "code=&state=agreed-state"] {
+            let refused = OAuthClient::callback(&jwt, "acme", &transaction, query)
+                .expect_err("no code to exchange");
+            assert!(
+                nest_rs_core::error_message(&refused).contains("missing code"),
+                "{query}"
+            );
         }
     }
 

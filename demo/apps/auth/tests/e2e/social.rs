@@ -109,6 +109,7 @@ async fn the_social_authorize_endpoint_refuses_a_resource_the_issuer_does_not_se
 
 #[tokio::test]
 async fn a_provider_refusal_at_the_callback_signs_no_one_in() {
+    let logs = LogCapture::install();
     let (_db, app) = boot().await;
     let authorize = app
         .http()
@@ -117,24 +118,34 @@ async fn a_provider_refusal_at_the_callback_signs_no_one_in() {
         .send()
         .await;
     authorize.assert_status(StatusCode::FOUND);
-    let cookie = authorize
-        .0
-        .headers()
-        .get("set-cookie")
-        .expect("the redirect sets the transaction cookie")
-        .to_str()
-        .expect("an ascii cookie")
+    let header = |name: &str| {
+        authorize
+            .0
+            .headers()
+            .get(name)
+            .expect("the redirect carries it")
+            .to_str()
+            .expect("an ascii header")
+            .to_owned()
+    };
+    let cookie = header("set-cookie")
         .split(';')
         .next()
         .expect("the cookie's name and value")
         .to_owned();
+    let location = header("location");
+    let state = location
+        .split(['?', '&'])
+        .find_map(|pair| pair.strip_prefix("state="))
+        .expect("the redirect carries its state");
 
     app.http()
         .get("/social/github/callback")
         .query("error", &"access_denied")
-        .query("state", &"any-state")
+        .query("state", &state)
         .header("cookie", cookie)
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+    logs.expect_none(TARGET, "OAuth callback rejected");
 }

@@ -110,15 +110,17 @@ Two legs, both dispatched by a `{provider}` path segment:
   Unknown provider ⇒ `404`.
 - `GET /social/{provider}/callback` — the redirect URI, guarded by
   `AuthnGuard<SocialStrategy<S>>`. The strategy reads RFC 6749 §4.1.2's
-  `code` and `state` against the transaction cookie, exchanges the code,
-  fetches the profile, and hands it to your `SocialSignIn`, which says who
-  that profile is here; the handler reads the principal as `Ctx<…>` and
-  issues this app's token. A provider's own refusal (§4.1.2.1's `error`:
-  `access_denied` when the user cancelled) is a `401` naming its code —
-  `server_error` and `temporarily_unavailable` a `503` — and a forged,
-  expired or foreign transaction a `401` before any exchange. Do **not** mark
-  this route `#[public]`, or the guard's denial is absorbed and the failure
-  surfaces as a missing principal instead.
+  response against the transaction cookie, exchanges the code, fetches the
+  profile, and hands it to your `SocialSignIn`, which says who that profile
+  is here; the handler reads the principal as `Ctx<…>` and issues this app's
+  token. A forged, expired or foreign transaction, or another `state`, is a
+  `401` before anything else in the response is read. A provider's own
+  refusal (§4.1.2.1's `error`: `access_denied` when the user cancelled),
+  once matched, is a `401` — `server_error` and `temporarily_unavailable` a
+  `503` — and the edge's `guard denied the request` on `nest_rs::authn` names
+  the registered code in its `error` chain; the response never does. Do
+  **not** mark this route `#[public]`, or the guard's denial is absorbed and
+  the failure surfaces as a missing principal instead.
 
 Your part of the callback is one trait:
 

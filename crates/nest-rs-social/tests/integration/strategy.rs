@@ -254,6 +254,34 @@ async fn a_response_no_transaction_matches_is_refused_before_any_exchange() {
     assert_eq!(signed_in(&app), 0);
 }
 
+/// §4.1.2.1's refusal carries the flow's `state`: one nobody's flow matches
+/// is refused as forged, never filed as the provider outage it claims.
+#[tokio::test]
+async fn an_error_response_no_transaction_matches_is_refused_and_files_no_outage() {
+    let app = TestApp::for_module::<SignInApp>().await.expect("boots");
+    let (redirect, _) = begun(&app, None);
+    let cookie = redirect.set_cookie();
+
+    for (query, cookie) in [
+        ("error=temporarily_unavailable&state=any-state", None),
+        (
+            "error=temporarily_unavailable&state=another-state",
+            Some(cookie.as_str()),
+        ),
+        ("error=server_error", Some(cookie.as_str())),
+    ] {
+        let logs = nest_rs_testing::LogCapture::install();
+
+        callback(&app, query, cookie)
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+
+        let line = logs.expect_one(nest_rs_authn::TARGET, "guard denied the request");
+        assert_eq!(line.field("reason").as_deref(), Some("failed"), "{query}");
+    }
+    assert_eq!(signed_in(&app), 0);
+}
+
 #[tokio::test]
 async fn a_provider_no_imported_module_registers_is_refused() {
     let app = TestApp::for_module::<SignInApp>().await.expect("boots");

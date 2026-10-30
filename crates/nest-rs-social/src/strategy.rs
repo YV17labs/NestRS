@@ -6,9 +6,8 @@ use std::sync::Arc;
 
 use nest_rs_authn::{AuthError, JwtService, PrincipalIdentity, Strategy};
 use nest_rs_core::{AmbientValue, injectable};
-use nest_rs_http::{Body, FromRequest, Query, Request, RequestBody, async_trait, header};
+use nest_rs_http::{Request, async_trait, header};
 use nest_rs_oauth_client::OAuthClient;
-use serde::Deserialize;
 
 use crate::provider::SocialProfile;
 use crate::registry::SocialRegistry;
@@ -78,18 +77,18 @@ pub trait SocialSignIn: Send + Sync + 'static {
 
 /// The [`Strategy`] of a social provider's redirect URI: a route whose path
 /// names the provider `{provider}` (`/social/{provider}/callback`), bound with
-/// `AuthnGuard<SocialStrategy<S>>`. It reads RFC 6749 §4.1.2's `code` and
-/// `state` against the transaction cookie that began the flow
+/// `AuthnGuard<SocialStrategy<S>>`. It reads RFC 6749 §4.1.2's response
+/// against the transaction cookie that began the flow
 /// ([`OAuthClient::callback`]), trades the code for the provider's tokens and
 /// profile, and hands the profile to the product's [`SocialSignIn`].
 ///
-/// A provider's own refusal (§4.1.2.1's `error`) is refused as what it says:
+/// A provider's own refusal (§4.1.2.1's `error`) is read only once the
+/// response matches its transaction, and is refused as what it says:
 /// `server_error` and `temporarily_unavailable` as
-/// [`AuthError::Unavailable`], every other code as [`AuthError::Failed`],
-/// naming the code when §4.1.2.1 registers it and never what the request
-/// sent otherwise. A provider no imported module registers, a response with
-/// no `code` or `state`, a missing, forged or expired transaction, or one
-/// minted for another provider, is refused before any exchange.
+/// [`AuthError::Unavailable`], every other code as [`AuthError::Failed`]. A
+/// provider no imported module registers, a missing, forged or expired
+/// transaction, one minted for another provider or carrying another `state`,
+/// and a response with no `code`, are refused before any exchange.
 #[injectable]
 pub struct SocialStrategy<S: SocialSignIn> {
     #[inject]
@@ -111,40 +110,6 @@ impl<S: SocialSignIn> SocialStrategy<S> {
     }
 }
 
-/// RFC 6749 §4.1.2's response parameters, and §4.1.2.1's `error`.
-#[derive(Deserialize)]
-struct AuthorizationParameters {
-    code: Option<String>,
-    state: Option<String>,
-    error: Option<String>,
-}
-
-/// The refusal a §4.1.2.1 `error` code is answered with, its detail naming
-/// the code when the registry holds it.
-fn refused_by_provider(code: &str) -> AuthError {
-    match code {
-        "server_error" => {
-            AuthError::unavailable("social provider could not authorize: server_error", None)
-        }
-        "temporarily_unavailable" => AuthError::unavailable(
-            "social provider could not authorize: temporarily_unavailable",
-            None,
-        ),
-        _ => AuthError::failed(match code {
-            "access_denied" => "social provider refused the authorization: access_denied",
-            "invalid_request" => "social provider refused the authorization: invalid_request",
-            "unauthorized_client" => {
-                "social provider refused the authorization: unauthorized_client"
-            }
-            "unsupported_response_type" => {
-                "social provider refused the authorization: unsupported_response_type"
-            }
-            "invalid_scope" => "social provider refused the authorization: invalid_scope",
-            _ => "social provider refused the authorization with an unregistered error code",
-        }),
-    }
-}
-
 #[async_trait]
 impl<S: SocialSignIn> Strategy for SocialStrategy<S> {
     type Principal = S::Principal;
@@ -157,24 +122,6 @@ impl<S: SocialSignIn> Strategy for SocialStrategy<S> {
             .providers
             .get(key)
             .ok_or_else(|| AuthError::failed("social callback names no registered provider"))?;
-        let Ok(Query(parameters)) = Query::<AuthorizationParameters>::from_request(
-            req,
-            &mut RequestBody::new(Body::empty()),
-        )
-        .await
-        else {
-            return Err(AuthError::failed("social callback query does not decode"));
-        };
-        if let Some(code) = parameters.error {
-            return Err(refused_by_provider(&code));
-        }
-        let code = parameters
-            .code
-            .filter(|code| !code.is_empty())
-            .ok_or_else(|| AuthError::failed("social callback missing code"))?;
-        let state = parameters
-            .state
-            .ok_or_else(|| AuthError::failed("social callback missing state"))?;
         let transaction = OAuthClient::transaction_from(
             req.headers()
                 .get_all(header::COOKIE)
@@ -183,47 +130,15 @@ impl<S: SocialSignIn> Strategy for SocialStrategy<S> {
         )
         .ok_or_else(|| AuthError::failed("social transaction cookie missing"))?;
 
-        let response =
-            OAuthClient::callback(&self.jwt, provider.key(), transaction, &state, &code)?;
+        let response = OAuthClient::callback(
+            &self.jwt,
+            provider.key(),
+            transaction,
+            req.uri().query().unwrap_or_default(),
+        )?;
         let resource = response.resource().map(str::to_owned);
         let tokens = provider.exchange(response).await?;
         let profile = provider.profile(&tokens).await?;
         self.sign_in.sign_in(profile, resource.as_deref()).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_provider_that_cannot_answer_now_is_unavailable_and_any_other_refusal_failed() {
-        for code in ["server_error", "temporarily_unavailable"] {
-            assert!(
-                matches!(refused_by_provider(code), AuthError::Unavailable { .. }),
-                "{code}"
-            );
-        }
-        for code in [
-            "access_denied",
-            "invalid_request",
-            "unauthorized_client",
-            "unsupported_response_type",
-            "invalid_scope",
-        ] {
-            let refusal = refused_by_provider(code);
-            assert!(matches!(refusal, AuthError::Failed { .. }), "{code}");
-            let said = nest_rs_core::error_message(&refusal);
-            assert!(said.ends_with(code), "{said}");
-        }
-    }
-
-    #[test]
-    fn an_unregistered_code_is_refused_without_quoting_it() {
-        let refusal = refused_by_provider("<script>hunter2</script>");
-        assert!(matches!(refusal, AuthError::Failed { .. }));
-        let said = nest_rs_core::error_message(&refusal);
-        assert!(!said.contains("hunter2"), "{said}");
-        assert!(said.contains("unregistered error code"), "{said}");
     }
 }

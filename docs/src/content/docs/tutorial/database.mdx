@@ -7,18 +7,20 @@ sidebar:
 
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
-You add one module to the app root and one migration to the workspace,
-and the data layer comes alive. By the end of this page, `POST /posts`
-persists into Postgres inside a transaction, a failing handler rolls
-back automatically, and the e2e baseline you add in
-[Test it end to end](/tutorial/testing/) has a real database to point at.
+You add the binding the last page's boot named and one migration to the
+workspace, and the data layer comes alive. By the end of this page, the
+five CRUD routes mount, `POST /posts` persists into Postgres inside a
+transaction, a failing handler rolls back automatically, and the e2e
+baseline you add in [Test it end to end](/tutorial/testing/) has a real
+database to point at.
 
 ## The data layer in one import
 
 Two imports activate the SeaORM data layer, one per shape:
 `SeaOrmModule::for_root(None)` opens the pool from `<PREFIX>_SEAORM__URL`, and
-`SeaOrmDatabaseModule` — a bare import beside it — binds over that pool the
-unit of work each request and each job runs in. The configuration
+`SeaOrmDatabaseModule` — the line the last page's boot named, a bare import
+beside it — binds over that pool the unit of work each request and each job
+runs in. The configuration
 uses the framework's dual-path rule — pin a value here or leave it
 `None` and let env vars supply it.
 
@@ -28,7 +30,7 @@ The data layer crates are
 [**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm)
 (the SeaORM implementation, on top of [SeaORM](https://www.sea-ql.org/SeaORM/)).
 
-```rust title="apps/blog/src/module.rs" {2, 9}
+```rust title="apps/blog/src/module.rs" {2, 9-10}
 use nest_rs::core::module;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
@@ -179,10 +181,40 @@ which carries the credentials. The boot dials one connection before the pool
 opens: credentials Postgres refuses stop it at once, and a server still
 starting is retried within the connect budget, one `warn` per attempt.
 
-Every route is behind the guards you bound on the previous page, so it needs a
-bearer token. `nestrs g auth` wrote one route that mints them — signed with the
-`<PREFIX>_AUTHN__SECRET` it drew into `.env.local`, and refusing to boot anywhere
-but development and test:
+The route table — the `nest_rs::routes` target prints every mount — shows
+the full CRUD surface of one `#[crud]` block, before you wrote a single
+handler body:
+
+```text frame="terminal"
+INFO nest_rs::routes: mounted route controller="PostsController" method="GET" path="/posts" handler="list"
+INFO nest_rs::routes: mounted route controller="PostsController" method="POST" path="/posts" handler="create"
+INFO nest_rs::routes: mounted route controller="PostsController" method="GET" path="/posts/{id}" handler="get"
+INFO nest_rs::routes: mounted route controller="PostsController" method="PUT" path="/posts/{id}" handler="update"
+INFO nest_rs::routes: mounted route controller="PostsController" method="DELETE" path="/posts/{id}" handler="delete"
+```
+
+Every route is behind the guards you bound on the previous page, so an
+anonymous call stops at the door:
+
+```bash frame="terminal"
+$ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3005/posts
+401
+```
+
+```text frame="terminal"
+WARN nest_rs::authn: guard denied the request guard="…AuthnGuard<…JwtStrategy<…Claims>>" unit="http.request" host="PostsController" address="/" status=401 reason="missing_credentials" error="missing credentials" trace_id=01a0156ebd7d77e0b78201a531dd9536 span_id=e0312d68a4872409
+```
+
+One denial, one line, filed by the edge on the target of the guard that
+decided it. It carries the request's `trace_id`, and no `actor_id` — nobody
+was authenticated, which is the whole story of a `401`. Drop
+`#[use_guards(...)]` from the controller and the boot refuses instead,
+naming every route no guard covers: a route runs a guard, or says
+`#[public]`.
+
+A call needs a bearer token. `nestrs g auth` wrote one route that mints them —
+signed with the `<PREFIX>_AUTHN__SECRET` it drew into `.env.local`, and
+refusing to boot anywhere but development and test:
 
 ```bash frame="terminal"
 $ TOKEN=$(curl -s -X POST http://localhost:3005/auth/dev-token \
@@ -225,7 +257,7 @@ tags the request's span and the SQL spans.
 ## What you have now
 
 - `SeaOrmModule::for_root(None)` + `SeaOrmDatabaseModule` in the app — the
-  data layer is on.
+  data layer is on, and the five CRUD routes mount.
 - A migration adding the `post` table, applied through
   `nestrs run db up`.
 - `POST /posts` persisting into Postgres inside an automatic

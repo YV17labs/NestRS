@@ -83,7 +83,10 @@ imports beside the port's module — the snippet above. Consumers inject
 root alone. The port's own default is an ordinary factory, so a vendor
 binding supersedes it wherever it sits in `imports`; two vendor bindings
 contest, and the boot fails naming both and the port's `BACKEND_REMEDY`, the
-sentence each port words once.
+sentence each port words once. The port submits the same sentence as the
+`DependencyRemedy` of its trait object, so a consumer injecting `dyn Port` in
+an app that imports no binding is refused with it too, rather than with the
+kernel's generic "add a provider".
 
 **By type parameter.** You name the implementation in an alias, and the
 generic host is instantiated with it. Two instantiations are two distinct

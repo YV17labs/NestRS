@@ -646,7 +646,12 @@ lists what the boot, a log or the wire shows when one is missed.
     the data contexts from your authz modules first: `WsDataContext as dyn
     SocketContext` leaves `authz/ws/module.rs` (`#[module(imports =
     [AuthzModule, WsModule])]`) and `McpDataContext as dyn McpToolContext`
-    leaves `authz/mcp/module.rs`; the edges open their units themselves.
+    leaves `authz/mcp/module.rs`; the edges open their units themselves. An
+    app reaching a `#[crud]` host, a route or field under `#[authorize(A, bind
+    = S)]`, or the service a GraphQL-exposed entity names (`#[expose(service =
+    S, graphql)]`) imports `SeaOrmDatabaseModule` beside
+    `SeaOrmModule::for_root(None)`: 6.x booted without it and failed every call
+    such a host made; 7.0 refuses the boot naming it.
 
     | 6.x | 7.0 |
     |---|---|
@@ -1376,6 +1381,24 @@ lists what the boot, a log or the wire shows when one is missed.
   for a transient layer on a job, a tick or a listener, `UngatedDiscoveryError`
   for a container built by hand that a transport discovers from, and a
   `Scoped<T>` or a `bind = S` service whose module the app does not import.
+- **A wiring gap a declaration knows** fails the boot naming the line to add,
+  where 6.x booted and failed each request that reached it. A `#[crud]`
+  controller or resolver, a route or a field under `#[authorize(A, bind = S)]`,
+  or the service a GraphQL-exposed entity names (`#[expose(service = S, graphql)]`)
+  with no unit-of-work binding names `SeaOrmDatabaseModule`:
+
+  ```text frame="terminal"
+  unmet dependency: `UsersController` (in module `UsersHttpModule`) depends on `dyn UnitOfWork`, which no module this app imports provides. Import exactly one unit-of-work binding: `nest_rs::seaorm::SeaOrmDatabaseModule` runs every edge's units of work over SeaORM's executor.
+  ```
+
+  A provider injecting `Arc<dyn JobProducer>` with no queue backend names
+  `RedisQueueModule`, one injecting the pool or the default instance's
+  `RedisConnection` with no module opening it names `SeaOrmModule::for_root(None)`
+  or `RedisModule::for_root(None)` — where 6.x told it to add a provider or
+  seed one. A GraphQL schema serving an exposed relation whose target's module
+  the app does not import names the field, the entity declaring it and the
+  module, where 6.x counted the loader at `warn` and erred on every query
+  selecting the field.
 - **Layers.** The compile refuses every name step 7's left column lists, a
   guard listed by both `#[use_guards]` and `#[force_guards]`, a layer attribute
   an edge does not run — each with a sentence saying why — and a `#[meta]`

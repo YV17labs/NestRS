@@ -82,7 +82,9 @@ framework half.
   submits, since the host's struct is `#[injectable]`'s; a site resolves its
   layers once, at boot, where a request-scoped one is never built and a
   transient one would be shared by every run, so either fails the boot naming
-  its scope, `ScopedLayerError`), and
+  its scope, `ScopedLayerError`), what a decorator's generated code resolves
+  on its host's behalf (the `HostRequires` entry, never checked for scope:
+  `#[crud]`'s unit of work), and
   every provider a handler resolves through a parameter whose type implements
   `ResolvesProvider`, checked for reach but never for scope, since a request is
   its consumer; `Container::get` at runtime is an unchecked escape hatch. **A provider a module lists is built, or the boot
@@ -357,7 +359,11 @@ questions shape a port:
 - **What selects the active implementation.** *By import*: one, chosen by the
   imported module; two is a boot error worded once per port as a
   `BACKEND_REMEDY` declared in the file holding what a backend supplies, never in
-  a `module.rs`, and it may name the first-party binding as the remedy. *By type
+  a `module.rs`, and it may name the first-party binding as the remedy. None,
+  where a provider injects the port, is the same sentence: the file submits it
+  as the `DependencyRemedy` of the port's trait object, which the unmet
+  dependency names in place of the kernel's — as the module opening a resource
+  does for the resource's type. *By type
   parameter* (`AuthnGuard<S: Strategy>`): two instantiations are two types, so
   no arbitration is owed. *By configuration*: the import opens the gate and
   configuration decides which members are active, zero to all — or, for a

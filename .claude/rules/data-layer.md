@@ -114,7 +114,11 @@ operation's own transaction, joined before the field's savepoint settles.
 the one port, `nest_rs_database::run_unit`, over the `dyn UnitOfWork` the
 driver's binding provides — resolved once at mount or boot, never per unit,
 or read by the bus off the unit its emitter ran under;
-with none bound a unit runs bare and `Repo` fails closed. A driver implements
+with none bound a unit runs bare, a host whose generated code runs `Repo`
+(`#[crud]`, a bound subject, a GraphQL-exposed entity's service —
+`#[expose(service = S, graphql)]`) is refused at boot naming the binding, and
+any other `Repo` call fails closed
+(`.claude/decisions/declared-need-refused-at-boot.md`). A driver implements
 that one trait and binds it through `nest_rs_database::provide_unit_of_work`,
 which serves every edge and the kernel's lifecycle hooks; an app lists no data
 context. Each edge commits on its own unit's outcome: an HTTP request on
@@ -384,8 +388,10 @@ A database error is never an empty batch.
 dataloader that `#[expose(name = "…", service = <Path>)]` emits on the owning
 service, reached from the inverse side without naming the other service. Every
 batch goes through `Repo::scoped(Action::Read)`, so row filtering applies.
-Leaving a relation unexposed opts it out; write a `#[field_resolver]` for a
-custom shape.
+The serving adapter imports the target's module, and a schema serving a
+relation whose loader's owner the app does not reach is refused at boot naming
+that module. Leaving a relation unexposed opts it out; write a
+`#[field_resolver]` for a custom shape.
 
 **A service touching another entity injects that entity's service; the FK
 loader belongs to its owner's service**, never the consumer's.

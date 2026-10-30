@@ -301,9 +301,14 @@ any adapter compiles immediately — the handler is the seam you fill in. Its
 `module.rs` imports what serves its edge (`HttpModule`, `GraphqlModule`,
 `WsModule`, `QueueModule`, `ScheduleModule`), so an app importing the adapter
 serves it and imports nothing more; `g events` imports `EventsModule` into the
-port that emits. The queue's backend is the one line the app's root keeps,
-since the root chooses it: `g queue` names `RedisModule::for_root(None)` and
-`RedisQueueModule` when the app binds none.
+port that emits. The app's root keeps only the bindings it chooses. The queue's
+backend is one: `g queue` names `RedisModule::for_root(None)` and
+`RedisQueueModule` when the app binds none. The unit of work is the other: a
+`#[crud]` handler — `g resource`'s controller, `g http` or `g graphql` over a
+resource port — runs each call in the unit of work `SeaOrmDatabaseModule`
+binds, and an app without that binding is refused at boot, so the generator
+wires it only into an app that imports the binding, and elsewhere names the
+binding beside the import.
 
 When the cursor isn't inside an app, wire the edge module by hand:
 

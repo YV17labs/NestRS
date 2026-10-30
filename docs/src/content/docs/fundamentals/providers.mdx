@@ -160,7 +160,19 @@ or a module it imports. One reached through no import fails the boot with an
 request-scoped provider is the point of the parameter, so the boot checks where
 it comes from, never its scope. A route or an operation declaring
 `#[authorize(A, bind = S)]` is held the same way for the service `S` it loads
-through.
+through, and for the unit of work that load runs in, which
+`SeaOrmDatabaseModule` binds.
+
+When the crate owning a missing dependency's type knows the line to add, the
+refusal says it in place of the generic one. A service injecting
+`Arc<dyn JobProducer>` in an app that binds no queue backend reads:
+
+```text frame="terminal"
+unmet dependency: `PostsService` (in module `PostsModule`) depends on `dyn JobProducer`, which no module this app imports provides. Import exactly one queue backend's binding — `nest_rs::redis::RedisQueueModule` binds the queue port over Redis.
+```
+
+A crate of your own names one for a type it owns with
+`nest_rs::core::DependencyRemedy`, keyed by the type the container holds.
 
 HTTP, WebSockets, GraphQL, and MCP each install a fresh request scope per call
 (one per request for HTTP and MCP — every operation one `/mcp` request or one

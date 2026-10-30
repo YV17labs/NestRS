@@ -1,15 +1,16 @@
 ---
 title: Expose over HTTP
-description: A PostsService that goes through Repo, a PostsController that mounts GET /posts/{id} and POST /posts, the first curl that returns a post.
+description: A PostsService that goes through Repo, a PostsController whose one #[crud] block declares the CRUD routes, and a boot that names the line the data layer still needs.
 sidebar:
   order: 5
 ---
 
-You write the service that owns the entity, the controller that mounts
+You write the service that owns the entity, the controller that declares
 the CRUD routes, and the HTTP module that ties them together. By the end
-of this page, the boot log shows five CRUD routes mounted from one empty
-`#[crud]` impl. The first successful `curl` lands on the next page,
-[Persist through Postgres](/tutorial/database/), once Postgres is wired.
+of this page, the boot refuses, naming the one line the data layer still
+needs. The next page, [Persist through Postgres](/tutorial/database/),
+adds it: the five routes of one empty `#[crud]` impl mount, and the first
+`curl` returns a post.
 
 ## The service
 
@@ -240,58 +241,16 @@ if other apps already occupy it when you ran `nestrs new blog`.
 
 ## Run it
 
-Boot the binary and read the route table from the boot log — the
-`nest_rs::routes` target prints every mount on startup.
-
 ```bash frame="terminal"
 $ nestrs run dev blog
-INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3005"
+Error: unmet dependency: `PostsController` (in module `PostsHttpModule`) depends on `dyn UnitOfWork`, which no module this app imports provides. Import exactly one unit-of-work binding: `nest_rs::seaorm::SeaOrmDatabaseModule` runs every edge's units of work over SeaORM's executor.
 ```
 
-```text frame="terminal"
-INFO nest_rs::routes: mounted route controller="PostsController" method="GET" path="/posts" handler="list"
-INFO nest_rs::routes: mounted route controller="PostsController" method="POST" path="/posts" handler="create"
-INFO nest_rs::routes: mounted route controller="PostsController" method="GET" path="/posts/{id}" handler="get"
-INFO nest_rs::routes: mounted route controller="PostsController" method="PUT" path="/posts/{id}" handler="update"
-INFO nest_rs::routes: mounted route controller="PostsController" method="DELETE" path="/posts/{id}" handler="delete"
-```
-
-Five routes mounted from one `#[crud]` block — the full CRUD surface,
-before you wrote a single handler body. The shape is right; the live
-call lands on the next page.
-
-## What fails if you get it wrong
-
-The guards run first, so an anonymous call stops at the door — the route table
-is mounted, the data layer is not, and neither matters yet:
-
-```bash frame="terminal"
-$ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3005/posts
-401
-```
-
-```text frame="terminal"
-WARN nest_rs::authn: guard denied the request guard="…AuthnGuard<…JwtStrategy<…Claims>>" unit="http.request" host="PostsController" address="/" status=401 reason="missing_credentials" error="missing credentials" trace_id=01a0156ebd7d77e0b78201a531dd9536 span_id=e0312d68a4872409
-```
-
-One denial, one line, filed by the edge on the target of the guard that
-decided it. It carries the request's `trace_id`, and no `actor_id` — nobody
-was authenticated, which is the whole story of a `401`.
-
-Drop `#[use_guards(...)]` from the controller and the answer becomes a **500**
-instead, because `#[crud]` still emits the class gate and nothing installed an
-ability for it to read:
-
-```text frame="terminal"
-ERROR nest_rs::authz: authorization denied transport="http" host="PostsController" method="list"
-                      action=Read subject="features::posts::entity::Entity" reason="no_ambient_ability"
-                      remedy="bind the ability guard on this site's request — #[use_guards(AuthnGuard, AuthzGuard)], …"
-```
-
-That log line is the difference between a five-minute fix and an afternoon:
-grep `nest_rs::authz` whenever a guarded route answers `500`.
-[Persist through Postgres](/tutorial/database/) plugs `SeaOrmDatabaseModule` in, and
-the same curl — with a token — returns a post.
+The boot stops before a route mounts, and that is the framework doing its
+job. Every route `#[crud]` generates runs its `Repo` call inside a unit of
+work — the transaction a `POST` commits in — and nothing in this app binds
+one yet. The declaration alone says so, so the boot names the line to add
+rather than answering `500` to the first request that reaches the table.
 
 ## What you have now
 
@@ -299,8 +258,8 @@ the same curl — with a token — returns a post.
 - A `PostsController` with the full CRUD surface `#[crud]` generated,
   behind `AuthnGuard` + `AuthzGuard`.
 - An `AuthzAbility` granting `Manage` on `Post`.
-- A `PostsHttpModule` mounted in the app — the boot log shows the
-  routes.
+- A `PostsHttpModule` imported by the app, and a boot naming the one
+  binding still missing.
 
 ## Going further
 

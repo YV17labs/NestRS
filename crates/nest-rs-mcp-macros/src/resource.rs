@@ -3,14 +3,14 @@
 //! listing. rmcp routes neither, so the expansion writes the three
 //! `ServerHandler` methods that serve them itself.
 
-use nest_rs_codegen::__private::{PipeWrapper, generic_args, pipe_wrapper};
+use nest_rs_codegen::__private::{PipeWrapper, generic_args, pipe_wrapper, tail_param};
 use nest_rs_codegen::Grammar;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{Attribute, Expr, FnArg, ImplItemFn, LitStr, Meta, Signature, Type};
 
-use crate::mcp_impl::{Description, description_check, doc_comment, tail_param};
+use crate::mcp_impl::{Description, description_check, doc_comment};
 use crate::uri_template::{self, Part};
 
 /// What `#[resource(…)]` takes.

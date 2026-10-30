@@ -30,7 +30,7 @@ use nest_rs_codegen::__private::{
     force_guard_typeids, forwarded_arg_idents, generic_args, guard_capability_bounds,
     handler_const, handler_ref, impl_self_ident, layer_deps, normalize_forwarded_args,
     nth_generic_type, one_role_per_method, pipe_wrapper, reject_meta_on_operations, scoped_specs,
-    shared_receiver, site_const_ident, site_fn_ident, ungrouped_expr,
+    shared_receiver, site_const_ident, site_fn_ident, tail_param, ungrouped_expr,
 };
 use nest_rs_codegen::snake_case;
 
@@ -1238,12 +1238,6 @@ fn tail_args(sig: &Signature) -> Vec<TailArg> {
             })
         })
         .collect()
-}
-
-/// What the tail fills `ty` from, when it is a `Scoped<T>` or a `Ctx<T>`
-/// written with its argument.
-pub(crate) fn tail_param(ty: &Type) -> Option<TailParam> {
-    TailParam::named(generic_args(ty)?.0)
 }
 
 /// What each operation declares on its host: its `Handler`, `mcp.operation`

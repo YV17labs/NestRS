@@ -15,9 +15,10 @@ use crate::setting::FromSetting;
 /// A scalar ([`FromSetting`]) reads one variable, an `Option` of one keeps
 /// `base` when it is unset, and a `Vec` of one reads a comma-separated list,
 /// trimmed, empties dropped, each entry refused by its place. A vocabulary of
-/// several variables ([`ClientTls`](crate::ClientTls)) implements it whole,
-/// its keys extending the field's with `_` (`TLS_CA_CERT` under a field
-/// `tls`): `__` is the namespace's separator, so a key never holds one.
+/// several variables implements it whole, its keys extending the field's with
+/// `_` (`TLS_CA_CERT` under the field `tls` a [`ClientTls`](crate::ClientTls)
+/// is read under): `__` is the namespace's separator, so a key never holds
+/// one.
 ///
 /// ```
 /// use nest_rs_config::{ConfigField, ConfigService};

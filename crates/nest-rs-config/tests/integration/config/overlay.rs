@@ -259,3 +259,25 @@ fn a_manual_overlay_is_the_structs_own() {
         "HUSH"
     );
 }
+
+#[config(namespace = "overlay_upstream")]
+#[derive(Clone, Debug, Default)]
+struct UpstreamConfig {
+    upstream_tls: nest_rs_config::ClientTls,
+}
+
+/// A TLS client's checks name `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY`, so a
+/// field of another name, whose variables they would misname, is refused at
+/// the read.
+#[test]
+fn a_tls_client_under_a_field_not_named_tls_is_refused() {
+    let refused = UpstreamConfig::from_env(
+        &ConfigService::with_vars("overlay_upstream", []),
+        UpstreamConfig::default(),
+    )
+    .expect_err("a TLS client is read under `tls`");
+    assert!(
+        matches!(&refused, ConfigError::MisnamedField { var, .. } if *var == var_name("overlay_upstream", "UPSTREAM_TLS")),
+        "{refused:?}"
+    );
+}

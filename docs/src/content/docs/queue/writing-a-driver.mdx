@@ -241,9 +241,11 @@ so each failure is said once:
 
 A client your driver opens verifies its server, with nothing that turns
 verification off. Read what it trusts and presents as
-`nest_rs::config::ClientTls`, a field of your config named `tls` and read
-under your own namespace — `<PREFIX>_<STORAGE>__TLS_CA_CERT`, `__TLS_CERT` and
-`__TLS_KEY`, each with its `_FILE` spelling; `#[config]` reads it by its type:
+`nest_rs::config::ClientTls`, a field of your config named `tls` — the name
+every refusal of its material gives its variables, so the boot refuses any
+other — read under your own namespace: `<PREFIX>_<STORAGE>__TLS_CA_CERT`,
+`__TLS_CERT` and `__TLS_KEY`, each with its `_FILE` spelling. `#[config]` reads
+it by its type:
 
 ```rust title="from nest-rs-redis's config, abridged"
 #[config(namespace = "redis")]

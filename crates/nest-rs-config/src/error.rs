@@ -46,6 +46,25 @@ pub enum ConfigError {
         /// The variable the reader was asked for.
         var: String,
     },
+    /// A vocabulary read under a field it does not name its variables by — a
+    /// [`ClientTls`](crate::ClientTls) under a field not named `tls`, whose
+    /// checks would refuse `TLS_CA_CERT` for a variable spelled otherwise — a
+    /// defect in the config's declaration.
+    #[error(
+        "{var}_* would hold a `{vocabulary}`, whose refusals name its variables {named}_*, the \
+         field `{field}`'s, never the ones this field reads: name the field `{field}`"
+    )]
+    MisnamedField {
+        /// The stem of the variables the field would read,
+        /// `<PREFIX>_<DOMAIN>__<KEY>`.
+        var: String,
+        /// The vocabulary the field holds.
+        vocabulary: &'static str,
+        /// The one field name it is read under.
+        field: &'static str,
+        /// The stem its refusals name, the field's key under the namespace.
+        named: String,
+    },
     /// A loaded config failed `validator::Validate`.
     ///
     /// Renders the **namespace** and one line per offending field, never

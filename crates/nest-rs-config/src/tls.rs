@@ -27,6 +27,8 @@ use crate::{
 /// client certificate when `TLS_CERT` and `TLS_KEY` are set. Verification is not
 /// optional: no field or method turns it off.
 ///
+/// A config holds it in a field named `tls`, the name every refusal of its
+/// material gives its variables; another name is refused at the read.
 /// Read once, when the configuration resolves: a renewed file takes effect at
 /// the next boot. Every client the framework opens trusts through
 /// [`authorities_pem`](Self::authorities_pem), so the system's store is read
@@ -541,21 +543,42 @@ impl TlsNames for ConfigService {
     }
 }
 
-/// The deployment's `<KEY>_CA_CERT`, `<KEY>_CERT` and `<KEY>_KEY` (each with
-/// its `_FILE` spelling) over `base`, per field — `TLS_CA_CERT`, `TLS_CERT` and
-/// `TLS_KEY` under the field `tls` every framework config names it, which the
-/// checks' sentences name. The certificate and its key move as one: half a
-/// pair is refused naming what was set and both spellings of what is missing.
+/// The field a [`ClientTls`] is read under, and the key its checks name.
+const FIELD: &str = "tls";
+const KEY: &str = "TLS";
+
+/// The deployment's `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY` (each with its
+/// `_FILE` spelling) over `base`, per field. The certificate and its key move
+/// as one: half a pair is refused naming what was set and both spellings of
+/// what is missing.
+///
+/// Read under a field named `tls` alone, since every check names those
+/// variables: under another, the read is refused naming the field
+/// ([`ConfigError::MisnamedField`]) rather than refusing material later under
+/// a name the deployment never set. A config holding two TLS clients holds two
+/// resources, each its own namespace.
 impl ConfigField for ClientTls {
     fn overlay(env: &ConfigService, key: &str, base: Self) -> Result<Self> {
-        let [authorities, cert, private] =
-            ["CA_CERT", "CERT", "KEY"].map(|part| format!("{key}_{part}"));
-        let authorities = env.material(&authorities)?.map(|pem| pem.value);
-        let identity = match (env.material(&cert)?, env.material(&private)?) {
+        if key != KEY {
+            return Err(ConfigError::MisnamedField {
+                var: env.var_name(key),
+                vocabulary: "ClientTls",
+                field: FIELD,
+                named: env.var_name(KEY),
+            });
+        }
+        let [authorities, cert, private] = [
+            TlsSetting::Authorities,
+            TlsSetting::Certificate,
+            TlsSetting::Key,
+        ]
+        .map(TlsSetting::key);
+        let authorities = env.material(authorities)?.map(|pem| pem.value);
+        let identity = match (env.material(cert)?, env.material(private)?) {
             (Some(cert), Some(key)) => Some(TlsIdentity::new(cert.value, key.value)),
             (None, None) => None,
-            (Some(given), None) => return Err(half_an_identity(env, &given, &private)),
-            (None, Some(given)) => return Err(half_an_identity(env, &given, &cert)),
+            (Some(given), None) => return Err(half_an_identity(env, &given, private)),
+            (None, Some(given)) => return Err(half_an_identity(env, &given, cert)),
         };
         Ok(base.overlaid(authorities, identity))
     }
@@ -831,6 +854,25 @@ mod tests {
         let refused = tls.check(&cache).expect_err("no certificate").to_string();
         assert!(
             refused.contains(&crate::var_name("redis__cache", "TLS_CA_CERT")),
+            "{refused}"
+        );
+    }
+
+    /// A field named otherwise would read `UPSTREAM_TLS_CA_CERT` and refuse
+    /// it as `TLS_CA_CERT`, the name every check gives it.
+    #[test]
+    fn a_tls_client_is_read_under_the_field_tls_alone() {
+        let env = ConfigService::with_vars("redis", [("UPSTREAM_TLS_CA_CERT", "no certificate")]);
+        let refused = ClientTls::overlay(&env, "UPSTREAM_TLS", ClientTls::default())
+            .expect_err("a TLS client under another field");
+        assert!(
+            matches!(&refused, ConfigError::MisnamedField { field: "tls", .. }),
+            "{refused:?}"
+        );
+        let refused = refused.to_string();
+        assert!(
+            refused.contains(&format!("{}_*", var("UPSTREAM_TLS")))
+                && refused.contains(&format!("{}_*", var("TLS"))),
             "{refused}"
         );
     }

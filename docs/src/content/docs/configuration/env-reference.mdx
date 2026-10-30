@@ -28,14 +28,18 @@ The tables below name the `_FILE` spelling only where a key is usually given
 that way.
 
 **Every TLS client reads the same three keys.** In each namespace whose module
-opens a TLS connection — `redis`, `storage`, `authn`, `oauth__client`,
-`opentelemetry` — `TLS_CA_CERT` names the
+opens a TLS connection — `redis`, `storage`, `authn`, `oauth__client` —
+`TLS_CA_CERT` names the
 authorities the peer's certificate must chain to, replacing the system's, and
 `TLS_CERT` / `TLS_KEY` the certificate and key presented to a peer that
-requires one, both or neither. The certificate is verified whatever is set, and
+requires one, both or neither. They are the keys of the config's `tls` field,
+and a config of your own holds its `ClientTls` under that name too: under any
+other, the boot refuses the field rather than read variables its refusals
+would never name. The certificate is verified whatever is set, and
 a client that cannot present a certificate fails the boot rather than ignoring
 one. Each is read at the start, so a renewed file takes effect at the next one
-([rotating a file](/configuration/#configservice-api)).
+([rotating a file](/configuration/#configservice-api)). OpenTelemetry's
+exporter reads the specification's own instead, below.
 
 **The namespace is the path of the crate that parses it — never chosen.** It is
 the same stem the config type is named from: the crate's word, then the

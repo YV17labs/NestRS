@@ -264,7 +264,9 @@ arbitrates between variables or tiers.
   `ConfigService::json`, never by a config's own `serde_json`, and redacted at
   the `ConfigError` sink (`CLAUDE.md`, no payload value in an error).
 - **A TLS client's material is `ClientTls`**, read under its namespace's
-  `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY` — or the variables a specification
+  `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY` through a field named `tls`, the
+  name every refusal gives them, so another name is refused at the read
+  (`ConfigError::MisnamedField`) — or the variables a specification
   names for them (OTLP's `OTEL_EXPORTER_OTLP_CERTIFICATE`, `CLIENT_CERTIFICATE`
   and `CLIENT_KEY`), refused under those names: the one client vocabulary lives
   beside the loader, its checks run in the consumer's one constructor, and a

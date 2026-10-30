@@ -69,10 +69,10 @@ fn insert_module_import(lines: &mut Vec<String>, use_line: &str, ident: &str) ->
 
     // 1. The `use` import at the top of the file, with the imports of its crate.
     if !lines.iter().any(|l| l.trim() == use_line) {
-        let root = use_line.split("::").next().unwrap_or(use_line);
+        let same_crate = format!("{}::", use_line.split("::").next().unwrap_or(use_line));
         let insert_at = lines
             .iter()
-            .rposition(|l| l.trim_start().starts_with(&format!("{root}::")))
+            .rposition(|l| l.trim_start().starts_with(&same_crate))
             .or_else(|| {
                 lines
                     .iter()

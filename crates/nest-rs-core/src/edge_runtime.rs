@@ -1,7 +1,7 @@
 //! [`EdgeRuntime`] — what an edge's hosts run on, so [`App::run`](crate::App::run)
 //! names each host the app reaches whose runtime it does not attach.
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::borrow::Cow;
 
 use crate::access::__private::ModuleDescriptor;
@@ -38,6 +38,19 @@ pub fn attaches_transport<T: Transport>(container: &Container) -> bool {
         .any(|contribution| contribution.meta.is::<T>())
 }
 
+/// Each host the app's modules attached an `M` to, named by `name`; an `M`
+/// it answers `None` for is no host of the edge.
+pub fn registered_hosts<M: Any + Send + Sync>(
+    container: &Container,
+    name: impl Fn(&M) -> Option<Cow<'static, str>>,
+) -> EdgeHosts {
+    Discovery::new(container)
+        .meta::<M>()
+        .into_iter()
+        .filter_map(|found| Some((found.provider_type_id?, name(&found.meta)?)))
+        .collect()
+}
+
 /// What an ungated container is refused naming.
 const HOSTS: &str = "edge host";
 
@@ -56,7 +69,9 @@ pub(crate) fn report_unserved(container: &Container) -> anyhow::Result<()> {
         }
         let mut hosts = (runtime.hosts)(container);
         hosts.retain(|(host, _)| reachable.reaches(*host));
-        hosts.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+        // By name, then type, so a host's entries sit together for the dedup
+        // even where two hosts share a name.
+        hosts.sort_unstable_by(|(a, a_name), (b, b_name)| a_name.cmp(b_name).then(a.cmp(b)));
         hosts.dedup_by_key(|(host, _)| *host);
         for (host, name) in hosts {
             let module = listing_module(&descriptors, composition.as_deref(), host);

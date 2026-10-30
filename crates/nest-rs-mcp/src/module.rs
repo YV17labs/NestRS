@@ -11,10 +11,9 @@ use std::any::TypeId;
 use std::borrow::Cow;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::__private::{EdgeHosts, EdgeRuntime, attaches_transport};
+use nest_rs_core::__private::{EdgeHosts, EdgeRuntime, attaches_transport, registered_hosts};
 use nest_rs_core::{
-    Collecting, Container, ContainerBuilder, Discovery, DynamicModule, Edge, Posture, Registering,
-    module,
+    Collecting, Container, ContainerBuilder, DynamicModule, Edge, Posture, Registering, module,
 };
 use nest_rs_http::__private::EndpointPosture;
 use nest_rs_http::{HttpModule, HttpTransport};
@@ -240,14 +239,7 @@ nest_rs_core::inventory::submit! {
 
 /// Every `#[mcp]` host the app's modules registered.
 fn mcp_hosts(container: &Container) -> EdgeHosts {
-    Discovery::new(container)
-        .meta::<registry::McpHostMeta>()
-        .iter()
-        .filter_map(|found| {
-            let host = found.provider_type_id?;
-            Some((host, Cow::Borrowed(found.meta.host())))
-        })
-        .collect()
+    registered_hosts::<registry::McpHostMeta>(container, |meta| Some(Cow::Borrowed(meta.host())))
 }
 
 #[cfg(test)]

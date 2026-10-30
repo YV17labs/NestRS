@@ -4,8 +4,8 @@
 use std::borrow::Cow;
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::__private::{EdgeHosts, EdgeRuntime, attaches_transport};
-use nest_rs_core::{Container, Discovery, Edge, module};
+use nest_rs_core::__private::{EdgeHosts, EdgeRuntime, attaches_transport, registered_hosts};
+use nest_rs_core::{Container, Edge, module};
 use nest_rs_http::{HttpEndpointMeta, HttpTransport};
 
 use crate::config::WsConfig;
@@ -47,15 +47,9 @@ nest_rs_core::inventory::submit! {
 
 /// Every gateway the app's modules registered: each self-mounts its upgrade.
 fn gateway_hosts(container: &Container) -> EdgeHosts {
-    Discovery::new(container)
-        .meta::<HttpEndpointMeta>()
-        .iter()
-        .filter(|found| found.meta.label() == crate::gateway::GATEWAY_LABEL)
-        .filter_map(|found| {
-            let host = found.provider_type_id?;
-            Some((host, Cow::Owned(found.meta.owner().to_owned())))
-        })
-        .collect()
+    registered_hosts::<HttpEndpointMeta>(container, |meta| {
+        (meta.label() == crate::gateway::GATEWAY_LABEL).then(|| Cow::Owned(meta.owner().to_owned()))
+    })
 }
 
 #[cfg(test)]

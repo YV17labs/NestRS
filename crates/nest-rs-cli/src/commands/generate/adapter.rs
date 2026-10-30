@@ -221,10 +221,9 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let wired_app = wire_into_app(&ctx, &mut s, &imports, None);
     // Read before the edit lands: the app's own binding of a queue backend.
     let backend_bound = transport == Transport::Queue
-        && wired_app
-            .as_deref()
-            .and_then(|module_rs| std::fs::read_to_string(module_rs).ok())
-            .is_some_and(|module_rs| module_rs.contains("RedisQueueModule"));
+        && wired_app.as_deref().is_some_and(|module_rs| {
+            std::fs::read_to_string(module_rs).is_ok_and(|src| src.contains("RedisQueueModule"))
+        });
     // The app crate needs the crate owning the binding its next step names, or
     // that step fails with `E0433`.
     let host_deps = app_host_deps(transport);
@@ -252,7 +251,6 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         &ctx,
         transport,
         &names,
-        &tmodule,
         wired_app.is_some(),
         backend_bound,
         authz,
@@ -329,20 +327,16 @@ enum Grant {
     EveryAction(String),
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one step per fact the run settled; a struct would only rename the list"
-)]
 fn print_next_steps(
     ctx: &Context,
     transport: Transport,
     names: &Names,
-    tmodule: &str,
     wired: bool,
     backend_bound: bool,
     authz: Option<&'static auth::AuthzAdapter>,
     grant: Option<Grant>,
 ) {
+    let tmodule = names.module_for(transport);
     println!();
     println!("Next steps:");
     if wired {
@@ -358,15 +352,15 @@ fn print_next_steps(
             names.snake, tmodule,
         );
     }
-    if transport == Transport::Queue && wired && !backend_bound {
-        println!(
-            "  The app binds no queue backend yet: import {QUEUE_BACKEND} at its root, \
-             where the backend is chosen, so its worker has one to consume."
-        );
-    } else if transport == Transport::Queue && !wired {
-        println!("  The app importing it binds a queue backend at its root: {QUEUE_BACKEND}.");
-    }
-    if matches!(transport, Transport::Queue) {
+    if transport == Transport::Queue {
+        if !wired {
+            println!("  The app importing it binds a queue backend at its root: {QUEUE_BACKEND}.");
+        } else if !backend_bound {
+            println!(
+                "  The app binds no queue backend yet: import {QUEUE_BACKEND} at its root, \
+                 where the backend is chosen, so its worker has one to consume."
+            );
+        }
         println!(
             "  Push from a provider injecting Arc<dyn JobProducer>, with \
              JobProducerExt in scope: `queue.push({}, job, None)`. The app that \

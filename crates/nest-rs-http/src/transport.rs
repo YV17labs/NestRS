@@ -11,7 +11,7 @@ use http::Method;
 use http::header::{HeaderName, HeaderValue, SERVER};
 use nest_rs_core::__private::{
     EdgeHosts, EdgeRuntime, GlobalLayers, GuardStage, SiteDeclaration, SiteLayers, UnitChains,
-    attaches_transport, compose_site,
+    attaches_transport, compose_site, registered_hosts,
 };
 use nest_rs_core::{Container, Discovery, Edge, Listening, Posture, Transport};
 use nest_rs_database::UnitOfWork;
@@ -904,14 +904,7 @@ nest_rs_core::inventory::submit! {
 
 /// Every controller the app's modules registered.
 fn controller_hosts(container: &Container) -> EdgeHosts {
-    Discovery::new(container)
-        .meta::<HttpControllerMeta>()
-        .iter()
-        .filter_map(|found| {
-            let host = found.provider_type_id?;
-            Some((host, Cow::Borrowed(found.meta.controller())))
-        })
-        .collect()
+    registered_hosts::<HttpControllerMeta>(container, |meta| Some(Cow::Borrowed(meta.controller())))
 }
 
 #[cfg(test)]

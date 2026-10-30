@@ -296,8 +296,9 @@ pub struct HttpConfig {
     /// Default security response headers (`nosniff`, `X-Frame-Options`,
     /// `Referrer-Policy`, the `Cross-Origin-*` pair, HSTS under TLS), each on a
     /// response that sets none. On by default; tune via
-    /// `<PREFIX>_HTTP__SECURITY_HEADERS` (the master switch) and one key per
-    /// header — see [`HttpSecurityHeaders`].
+    /// `<PREFIX>_HTTP__SECURITY_HEADERS_ENABLED` (the switch) and one key per
+    /// header, each its field's name after `SECURITY_HEADERS_` — see
+    /// [`HttpSecurityHeaders`].
     #[config(with = security_headers)]
     pub security_headers: HttpSecurityHeaders,
     /// Negotiate response compression (gzip / deflate / brotli / zstd) from the
@@ -549,25 +550,30 @@ impl HttpConfig {
 
 /// The server's own certificate, its vocabulary's `TLS_*` keys; a reading
 /// failure that names no variable is named under them, its I/O source kept.
-fn tls(env: &ConfigService, _key: &str, base: Option<HttpTls>) -> Result<Option<HttpTls>> {
+fn tls(env: &ConfigService, key: &str, base: Option<HttpTls>) -> Result<Option<HttpTls>> {
+    debug_assert_eq!(key, "TLS", "HttpTls reads its fields' names under `tls`");
     HttpTls::from_env(env, base).map_err(|e| match e.downcast::<nest_rs_config::ConfigError>() {
         Ok(worded) => worded,
         Err(e) => nest_rs_config::ConfigError::parse(env.var_name("TLS_*"), format!("{e:#}")),
     })
 }
 
-/// The CORS policy, its vocabulary's `CORS_*` keys.
-fn cors(env: &ConfigService, _key: &str, base: Option<HttpCors>) -> Result<Option<HttpCors>> {
+/// The CORS policy, each key its field's name after `CORS_`.
+fn cors(env: &ConfigService, key: &str, base: Option<HttpCors>) -> Result<Option<HttpCors>> {
+    debug_assert_eq!(key, "CORS", "HttpCors reads its fields' names under `cors`");
     HttpCors::from_env(env, base)
 }
 
-/// The security headers: the switch under the field's key, each header under
-/// its own.
+/// The security headers, each key its field's name after `SECURITY_HEADERS_`.
 fn security_headers(
     env: &ConfigService,
-    _key: &str,
+    key: &str,
     base: HttpSecurityHeaders,
 ) -> Result<HttpSecurityHeaders> {
+    debug_assert_eq!(
+        key, "SECURITY_HEADERS",
+        "HttpSecurityHeaders reads its fields' names under `security_headers`"
+    );
     HttpSecurityHeaders::from_env(env, base)
 }
 
@@ -715,7 +721,7 @@ mod tests {
             ("VERSION_HEADER", format!("{SECRET} bad")),
             ("TLS_RELOAD_SECS", SECRET.to_owned()),
             ("CORS_MAX_AGE_SECS", SECRET.to_owned()),
-            ("HSTS", format!("{SECRET}\u{7}")),
+            ("SECURITY_HEADERS_HSTS", format!("{SECRET}\u{7}")),
             ("SHUTDOWN_TIMEOUT_SECS", SECRET.to_owned()),
             ("MAX_CONCURRENT_CONNECTIONS", SECRET.to_owned()),
             ("HEADER_READ_TIMEOUT_SECS", SECRET.to_owned()),
@@ -755,7 +761,7 @@ mod tests {
             ("VERSION_HEADER", format!("{SECRET} bad")),
             ("TLS_RELOAD_SECS", SECRET.to_owned()),
             ("CORS_MAX_AGE_SECS", SECRET.to_owned()),
-            ("HSTS", format!("{SECRET}\u{7}")),
+            ("SECURITY_HEADERS_HSTS", format!("{SECRET}\u{7}")),
             ("PORT", SECRET.to_owned()),
             ("SHUTDOWN_TIMEOUT_SECS", SECRET.to_owned()),
             ("MAX_CONCURRENT_CONNECTIONS", SECRET.to_owned()),
@@ -777,6 +783,50 @@ mod tests {
             );
             assert!(!err.contains(SECRET), "{key}: never shows the value: {err}");
         }
+    }
+
+    /// A vocabulary's keys are its fields' names under the field holding it —
+    /// `CORS_EXPOSED_HEADERS` for `cors.exposed_headers`, the security
+    /// headers' switch `SECURITY_HEADERS_ENABLED` — and the 6.x spellings,
+    /// `CORS_EXPOSED`, the bare `SECURITY_HEADERS` and the flat `HSTS`, are
+    /// read by nothing.
+    #[test]
+    fn a_vocabularys_keys_are_its_fields_names_under_the_field_holding_it() {
+        let read = |vars: &[(&str, &str)]| {
+            let mut vars = vars.to_vec();
+            vars.push(("CORS_ORIGINS", "https://a.example"));
+            HttpConfig::from_env(
+                &ConfigService::with_vars("http", vars),
+                HttpConfig::default(),
+            )
+            .expect("the config reads")
+        };
+        let read_off_fields = read(&[
+            ("CORS_EXPOSED_HEADERS", "x-cost"),
+            ("SECURITY_HEADERS_ENABLED", "false"),
+            ("SECURITY_HEADERS_FRAME_OPTIONS", "SAMEORIGIN"),
+            ("SECURITY_HEADERS_HSTS", "off"),
+        ]);
+        let cors = read_off_fields.cors.expect("origins are set");
+        assert_eq!(cors.exposed_headers, ["x-cost"]);
+        let headers = read_off_fields.security_headers;
+        assert!(!headers.enabled);
+        assert_eq!(headers.frame_options.as_deref(), Some("SAMEORIGIN"));
+        assert_eq!(headers.hsts, None);
+
+        let retired = read(&[
+            ("CORS_EXPOSED", "x-cost"),
+            ("SECURITY_HEADERS", "false"),
+            ("HSTS", "off"),
+        ]);
+        assert!(
+            retired
+                .cors
+                .expect("origins are set")
+                .exposed_headers
+                .is_empty()
+        );
+        assert_eq!(retired.security_headers, HttpSecurityHeaders::default());
     }
 
     #[test]
@@ -934,6 +984,39 @@ mod tests {
                 nest_rs_config::unclaimed::UNREAD_CONFIG_VARIABLE,
             );
             assert_eq!(line.field("variable").as_deref(), Some(var.as_str()));
+            Ok(())
+        });
+    }
+
+    /// The 6.x spellings of the vocabularies' keys are read by nothing, and
+    /// the boot names each once, suggesting only what it surely meant: the
+    /// bare `SECURITY_HEADERS` leads every security header's key, so it gets
+    /// none of them.
+    #[test]
+    fn a_retired_vocabulary_key_is_named_at_boot() {
+        let var = |key| nest_rs_config::var_name("http", key);
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(var("CORS_ORIGINS"), "https://a.example");
+            for retired in ["CORS_EXPOSED", "CORS_MAX_AGE", "SECURITY_HEADERS", "HSTS"] {
+                jail.set_env(var(retired), "off");
+            }
+            let logs = nest_rs_testing::LogCapture::install();
+            HttpConfig::resolve(None).expect("an unread variable is no refusal");
+            let lines = logs.find(
+                nest_rs_config::TARGET,
+                nest_rs_config::unclaimed::UNREAD_CONFIG_VARIABLE,
+            );
+            let named = |retired| {
+                lines
+                    .iter()
+                    .find(|line| line.field("variable") == Some(var(retired)))
+                    .unwrap_or_else(|| panic!("{retired} is named: {lines:#?}"))
+                    .field("suggestion")
+            };
+            assert_eq!(named("CORS_MAX_AGE"), Some(var("CORS_MAX_AGE_SECS")));
+            assert_eq!(named("SECURITY_HEADERS"), None);
+            named("CORS_EXPOSED");
+            named("HSTS");
             Ok(())
         });
     }

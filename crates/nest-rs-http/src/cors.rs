@@ -155,13 +155,14 @@ impl CorsList {
         }
     }
 
-    /// The key `<PREFIX>_HTTP__<KEY>` reads it from.
+    /// The key `<PREFIX>_HTTP__<KEY>` reads it from: its field's name under
+    /// `CORS`, the key of the `HttpConfig` field holding the policy.
     fn key(self) -> &'static str {
         match self {
             Self::Origins => "CORS_ORIGINS",
             Self::Methods => "CORS_METHODS",
             Self::Headers => "CORS_HEADERS",
-            Self::ExposedHeaders => "CORS_EXPOSED",
+            Self::ExposedHeaders => "CORS_EXPOSED_HEADERS",
         }
     }
 
@@ -966,6 +967,23 @@ mod tests {
         assert!(err.contains("`*`"), "says what to write instead: {err}");
     }
 
+    /// A list's key is its field's name under `CORS`, the field holding the
+    /// policy, so a deployment derives every variable from the struct.
+    #[test]
+    fn a_lists_key_is_its_fields_name_under_cors() {
+        for list in [
+            CorsList::Origins,
+            CorsList::Methods,
+            CorsList::Headers,
+            CorsList::ExposedHeaders,
+        ] {
+            assert_eq!(
+                list.key(),
+                format!("CORS_{}", list.field().to_ascii_uppercase())
+            );
+        }
+    }
+
     /// A method, a header name or an exposed header name that is no token is
     /// refused by place, the same shape as an origin.
     #[test]
@@ -978,7 +996,7 @@ mod tests {
             ("headers", "CORS_HEADERS", |c| {
                 c.headers = vec!["x-tenant".into(), "bad marker!".into()]
             }),
-            ("exposed_headers", "CORS_EXPOSED", |c| {
+            ("exposed_headers", "CORS_EXPOSED_HEADERS", |c| {
                 c.exposed_headers = vec!["x-cost".into(), "bad marker!".into()]
             }),
         ];

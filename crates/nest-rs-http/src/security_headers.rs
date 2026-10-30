@@ -1,5 +1,5 @@
 //! Default security response headers, on by default, each overridable via
-//! `<PREFIX>_HTTP__*` or the pinned struct. The family is
+//! `<PREFIX>_HTTP__SECURITY_HEADERS_*` or the pinned struct. The family is
 //! [OWASP's list](https://owasp.org/www-project-secure-headers/).
 //!
 //! Each is a default: the edge writes it only on a response that sets none, so
@@ -32,14 +32,18 @@ const DEFAULT_REFERRER_POLICY: &str = "strict-origin-when-cross-origin";
 const DEFAULT_COOP: &str = "same-origin";
 const DEFAULT_CORP: &str = "same-origin";
 
-const KEY_FRAME_OPTIONS: &str = "FRAME_OPTIONS";
-const KEY_HSTS: &str = "HSTS";
-const KEY_REFERRER_POLICY: &str = "REFERRER_POLICY";
-const KEY_COOP: &str = "CROSS_ORIGIN_OPENER_POLICY";
-const KEY_CORP: &str = "CROSS_ORIGIN_RESOURCE_POLICY";
-const KEY_COEP: &str = "CROSS_ORIGIN_EMBEDDER_POLICY";
-const KEY_PERMISSIONS_POLICY: &str = "PERMISSIONS_POLICY";
-const KEY_CSP: &str = "CONTENT_SECURITY_POLICY";
+// Each key is its field's name under `SECURITY_HEADERS`, the key of the
+// `HttpConfig` field holding the set.
+const KEY_ENABLED: &str = "SECURITY_HEADERS_ENABLED";
+const KEY_CONTENT_TYPE_OPTIONS: &str = "SECURITY_HEADERS_CONTENT_TYPE_OPTIONS";
+const KEY_FRAME_OPTIONS: &str = "SECURITY_HEADERS_FRAME_OPTIONS";
+const KEY_HSTS: &str = "SECURITY_HEADERS_HSTS";
+const KEY_REFERRER_POLICY: &str = "SECURITY_HEADERS_REFERRER_POLICY";
+const KEY_COOP: &str = "SECURITY_HEADERS_CROSS_ORIGIN_OPENER_POLICY";
+const KEY_CORP: &str = "SECURITY_HEADERS_CROSS_ORIGIN_RESOURCE_POLICY";
+const KEY_COEP: &str = "SECURITY_HEADERS_CROSS_ORIGIN_EMBEDDER_POLICY";
+const KEY_PERMISSIONS_POLICY: &str = "SECURITY_HEADERS_PERMISSIONS_POLICY";
+const KEY_CSP: &str = "SECURITY_HEADERS_CONTENT_SECURITY_POLICY";
 
 /// Default-on security headers, each written only on a response that sets none.
 /// Disable the whole set with `enabled = false`; drop an individual header with
@@ -100,14 +104,15 @@ struct ValueHeader<'a> {
 }
 
 impl HttpSecurityHeaders {
-    /// Read `<PREFIX>_HTTP__SECURITY_HEADERS` (master) plus one key per header,
-    /// overlaid onto `base`. Absent vars keep `base`'s value (the safe defaults
-    /// unless the call site pinned something else); `off` drops that one
-    /// header, and a blank value is refused.
+    /// Read `<PREFIX>_HTTP__SECURITY_HEADERS_ENABLED` (the switch) plus one key
+    /// per header, each its field's name after `SECURITY_HEADERS_`, overlaid
+    /// onto `base`. Absent vars keep `base`'s value (the safe defaults unless
+    /// the call site pinned something else); `off` drops that one header, and
+    /// a blank value is refused.
     pub fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let resolved = Self {
-            enabled: env.flag("SECURITY_HEADERS", base.enabled)?,
-            content_type_options: env.flag("CONTENT_TYPE_OPTIONS", base.content_type_options)?,
+            enabled: env.flag(KEY_ENABLED, base.enabled)?,
+            content_type_options: env.flag(KEY_CONTENT_TYPE_OPTIONS, base.content_type_options)?,
             frame_options: override_header(env, KEY_FRAME_OPTIONS, base.frame_options)?,
             hsts: override_header(env, KEY_HSTS, base.hsts)?,
             referrer_policy: override_header(env, KEY_REFERRER_POLICY, base.referrer_policy)?,
@@ -134,7 +139,7 @@ impl HttpSecurityHeaders {
             content_security_policy: override_header(env, KEY_CSP, base.content_security_policy)?,
         };
         // The response layer would silently drop an invalid value: a stray char
-        // in `<PREFIX>_HTTP__HSTS` would remove HSTS in production.
+        // in `<PREFIX>_HTTP__SECURITY_HEADERS_HSTS` would remove HSTS in production.
         for entry in resolved.value_headers() {
             validate_header_value(env, entry.key, entry.value)?;
         }
@@ -446,9 +451,9 @@ mod tests {
         let env = ConfigService::with_vars(
             "http",
             [
-                ("FRAME_OPTIONS", "off"),
-                ("HSTS", " OFF "),
-                ("REFERRER_POLICY", "no-referrer"),
+                (KEY_FRAME_OPTIONS, "off"),
+                (KEY_HSTS, " OFF "),
+                (KEY_REFERRER_POLICY, "no-referrer"),
             ],
         );
         let cfg = HttpSecurityHeaders::from_env(&env, HttpSecurityHeaders::default())
@@ -475,12 +480,12 @@ mod tests {
 
     #[test]
     fn a_blank_header_value_is_refused_naming_off() {
-        let env = ConfigService::with_vars("http", [("HSTS", "   ")]);
+        let env = ConfigService::with_vars("http", [(KEY_HSTS, "   ")]);
         let err = HttpSecurityHeaders::from_env(&env, HttpSecurityHeaders::default())
             .expect_err("a blank header value is refused")
             .to_string();
         assert!(
-            err.contains(&nest_rs_config::var_name("http", "HSTS")),
+            err.contains(&nest_rs_config::var_name("http", "SECURITY_HEADERS_HSTS")),
             "names the variable: {err}"
         );
         assert!(err.contains("`off`"), "and how to drop the header: {err}");

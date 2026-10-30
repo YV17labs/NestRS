@@ -142,6 +142,10 @@ lists what the boot, a log or the wire shows when one is missed.
    | `<PREFIX>_STORAGE__ENDPOINT=` (empty for AWS) | unset |
    | `<PREFIX>_STORAGE__TLS_CERT` / `TLS_KEY`, set and ignored | removed: the boot now fails naming them |
    | `<PREFIX>_HTTP__FAIL_SECURE_STRICT` | removed: no mount is left for it to guard, and the boot reports it as read by no config |
+   | `<PREFIX>_HTTP__CORS_MAX_AGE` | `<PREFIX>_HTTP__CORS_MAX_AGE_SECS`, whole seconds from `1` to `86400`, or `0` for no `Access-Control-Max-Age` |
+   | `<PREFIX>_HTTP__CORS_EXPOSED` | `<PREFIX>_HTTP__CORS_EXPOSED_HEADERS`, the field it sets |
+   | `<PREFIX>_HTTP__SECURITY_HEADERS` | `<PREFIX>_HTTP__SECURITY_HEADERS_ENABLED` |
+   | `<PREFIX>_HTTP__HSTS`, `FRAME_OPTIONS`, `CONTENT_TYPE_OPTIONS`, `REFERRER_POLICY`, `CROSS_ORIGIN_OPENER_POLICY`, `CROSS_ORIGIN_RESOURCE_POLICY`, `CROSS_ORIGIN_EMBEDDER_POLICY`, `PERMISSIONS_POLICY`, `CONTENT_SECURITY_POLICY` | the same name after `SECURITY_HEADERS_`: `<PREFIX>_HTTP__SECURITY_HEADERS_HSTS`, … |
    | `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` (step 16) |
    | `<PREFIX>_GRAPHQL__EMIT_SDL` | `<PREFIX>_GRAPHQL__EMIT` — on by default under a declared development profile, so a `.env.development` setting it drops the line |
    | `<PREFIX>_GRAPHQL__SCHEMA_PATH` | `<PREFIX>_GRAPHQL__EMIT_PATH`, a relative path now the app crate's: `apps/api/schema.graphql` becomes `schema.graphql`, the default |
@@ -154,7 +158,6 @@ lists what the boot, a log or the wire shows when one is missed.
    | `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO=0.1` | `OTEL_TRACES_SAMPLER=parentbased_traceidratio` and `OTEL_TRACES_SAMPLER_ARG=0.1` |
    | `<PREFIX>_OPENTELEMETRY__METRIC_INTERVAL_SECS=5` | `OTEL_METRIC_EXPORT_INTERVAL=5000`, in milliseconds |
    | `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT`, `TLS_CERT`, `TLS_KEY` (or their `_FILE`) | `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, each a path to the PEM file |
-   | `<PREFIX>_HTTP__CORS_MAX_AGE` | `<PREFIX>_HTTP__CORS_MAX_AGE_SECS`, whole seconds from `1` to `86400`, or `0` for no `Access-Control-Max-Age` |
 
    OpenTelemetry's are the specification's own, so they take no prefix: no
    `ACME_` renames `OTEL_*`. Under a prefix of your own, the rest holds with
@@ -1190,6 +1193,14 @@ lists what the boot, a log or the wire shows when one is missed.
   `Access-Control-Max-Age`: the boot reports it at `warn` as read by no config
   (`config variable read by no config`), with `CORS_MAX_AGE_SECS` as the
   suggestion.
+- **A deployment still setting `CORS_EXPOSED`, the bare `SECURITY_HEADERS` or a
+  security header's flat key** (`<PREFIX>_HTTP__HSTS`) has the default in its
+  place: the exposed list empty, every default-on header sent, and a
+  `Content-Security-Policy`, `Permissions-Policy` or
+  `Cross-Origin-Embedder-Policy` it set no longer sent at all. The boot names
+  each variable at `warn` as read by no config; `SECURITY_HEADERS` gets no
+  suggestion, since it leads every header's key. Move each to its row in step
+  3.
 - **`ConfigModule::for_feature` left in an import list** fails to compile; a
   config no provider of an imported module injects is no longer loaded — read
   it through a provider, or queue it from the module's `collect`.

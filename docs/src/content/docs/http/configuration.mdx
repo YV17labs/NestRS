@@ -75,7 +75,7 @@ Real env always wins over the `.env` cascade, and a pinned struct over every
 | `cors.origins` | `<PREFIX>_HTTP__CORS_ORIGINS` (comma list of `scheme://host[:port]`, or `*`; see [CORS](#cors)) | unset or empty ⇒ CORS off | `HttpCors { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
 | `cors.methods` | `<PREFIX>_HTTP__CORS_METHODS` | empty | `methods: vec!["GET".into(), "POST".into()]` |
 | `cors.headers` | `<PREFIX>_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
-| `cors.exposed_headers` | `<PREFIX>_HTTP__CORS_EXPOSED` | empty — `Link`, `Location` and `Retry-After`, which the framework sends, are always exposed | `exposed_headers: vec!["X-Total-Count".into()]` |
+| `cors.exposed_headers` | `<PREFIX>_HTTP__CORS_EXPOSED_HEADERS` | empty — `Link`, `Location` and `Retry-After`, which the framework sends, are always exposed | `exposed_headers: vec!["X-Total-Count".into()]` |
 | `cors.credentials` | `<PREFIX>_HTTP__CORS_CREDENTIALS` (`true`/`false`) | `false` | `credentials: true` |
 | `cors.max_age` | `<PREFIX>_HTTP__CORS_MAX_AGE_SECS` (seconds, `1`–`86400`, `0` ⇒ none) | unset ⇒ no `Access-Control-Max-Age`, the browser's own few seconds | `max_age: Some(Duration::from_secs(3600))` |
 | `versioning` | `<PREFIX>_HTTP__VERSIONING` (`uri`, `header`, `media_type`) | `uri` | `HttpConfig { versioning: ApiVersioning::Header, ..Default::default() }` — see [Versioning](/http/versioning/) |
@@ -95,7 +95,7 @@ Real env always wins over the `.env` cascade, and a pinned struct over every
 | `shutdown_timeout` | `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` (seconds, `1`–`3600`) | `20 s` | `HttpConfig { shutdown_timeout: Duration::from_secs(55), ..Default::default() }` |
 | `sse_max_connection` | `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS` (seconds, `0` ⇒ unlimited) | `4 h` | `HttpConfig { sse_max_connection: Some(Duration::from_secs(3600)), ..Default::default() }` — see [Streaming](/http/streaming/#configuration) |
 | `sse_keep_alive` | `<PREFIX>_HTTP__SSE_KEEP_ALIVE_SECS` (seconds, `1`–`3600`, `0` ⇒ none) | `15 s` | `HttpConfig { sse_keep_alive: Some(Duration::from_secs(30)), ..Default::default() }` |
-| `security_headers` | `<PREFIX>_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: HttpSecurityHeaders { enabled: false, ..Default::default() }, ..Default::default() }` |
+| `security_headers` | `<PREFIX>_HTTP__SECURITY_HEADERS_ENABLED` (the switch), then each field's name after `SECURITY_HEADERS_`: `_CONTENT_TYPE_OPTIONS`, `_FRAME_OPTIONS`, `_HSTS`, `_REFERRER_POLICY`, `_CROSS_ORIGIN_OPENER_POLICY`, `_CROSS_ORIGIN_RESOURCE_POLICY`, `_CROSS_ORIGIN_EMBEDDER_POLICY`, `_PERMISSIONS_POLICY`, `_CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: HttpSecurityHeaders { enabled: false, ..Default::default() }, ..Default::default() }` |
 | `compression` | `<PREFIX>_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
 
 See [Compression](/http/compression/) for what the flag negotiates and when to leave it off.
@@ -614,22 +614,23 @@ be the framework guessing about a document it does not serve:
 
 | Header | Field / env | Why it ships off |
 |---|---|---|
-| `Content-Security-Policy` | `content_security_policy` / `__CONTENT_SECURITY_POLICY` | A policy strict enough to be worth having (`default-src 'none'`) breaks every page an app serves, a single-page app included; one loose enough to ship safely states nothing. The sources are the app's. The Swagger UI keeps its own, stricter one under any you set. |
-| `Cross-Origin-Embedder-Policy` | `cross_origin_embedder_policy` / `__CROSS_ORIGIN_EMBEDDER_POLICY` | `require-corp` is how a *page* opts into cross-origin isolation, and it breaks every cross-origin subresource that does not carry CORP. |
-| `Permissions-Policy` | `permissions_policy` / `__PERMISSIONS_POLICY` | It governs camera / geolocation / payment in a document; a restrictive guess silently disables a feature the app's own front end asked for. |
+| `Content-Security-Policy` | `content_security_policy` / `__SECURITY_HEADERS_CONTENT_SECURITY_POLICY` | A policy strict enough to be worth having (`default-src 'none'`) breaks every page an app serves, a single-page app included; one loose enough to ship safely states nothing. The sources are the app's. The Swagger UI keeps its own, stricter one under any you set. |
+| `Cross-Origin-Embedder-Policy` | `cross_origin_embedder_policy` / `__SECURITY_HEADERS_CROSS_ORIGIN_EMBEDDER_POLICY` | `require-corp` is how a *page* opts into cross-origin isolation, and it breaks every cross-origin subresource that does not carry CORP. |
+| `Permissions-Policy` | `permissions_policy` / `__SECURITY_HEADERS_PERMISSIONS_POLICY` | It governs camera / geolocation / payment in a document; a restrictive guess silently disables a feature the app's own front end asked for. |
 
-Every value is tunable through the dual path. Disable the whole set with
-the master switch, or drop one header by setting its variable to `off` — in
+Every value is tunable through the dual path, each variable its field's name
+under `SECURITY_HEADERS_`. Disable the whole set with the switch,
+`SECURITY_HEADERS_ENABLED`, or drop one header by setting its variable to `off` — in
 code, by setting its field to `None`, or `content_type_options` to `false`. A
 blank value is refused at boot, and an empty one counts as unset, as it does for
 every variable, so that header keeps its default. In a file, as here, they reach
 an app that pins no `HttpConfig`:
 
 ```bash title=".env" frame="terminal"
-NESTRS_HTTP__SECURITY_HEADERS=false                    # all off
-NESTRS_HTTP__FRAME_OPTIONS=SAMEORIGIN                  # override one value
-NESTRS_HTTP__HSTS=off                                  # off ⇒ drop just HSTS
-NESTRS_HTTP__CONTENT_SECURITY_POLICY="default-src 'self'"
+NESTRS_HTTP__SECURITY_HEADERS_ENABLED=false
+NESTRS_HTTP__SECURITY_HEADERS_FRAME_OPTIONS=SAMEORIGIN
+NESTRS_HTTP__SECURITY_HEADERS_HSTS=off
+NESTRS_HTTP__SECURITY_HEADERS_CONTENT_SECURITY_POLICY="default-src 'self'"
 ```
 
 ```rust title="apps/api/src/module.rs"

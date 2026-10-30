@@ -14,6 +14,7 @@ mod instance;
 mod interceptor;
 mod layer;
 mod module;
+mod output;
 
 /// Declares a struct as a provider: `#[inject]` fields resolve via
 /// `container.get()` (or `get_dyn` for `Arc<dyn Trait>`), other fields fall
@@ -124,6 +125,18 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(input::input(args, item).into()).into()
+}
+
+/// The reply-DTO shorthand: derives `Serialize` and `JsonSchema` through the
+/// framework (the DTO's crate needs no `serde` or `schemars` line), for a value
+/// an edge sends and never decodes — no `Deserialize`, no `Validate`, which
+/// `#[input]` carries for what an edge reads.
+///
+/// Takes no argument, and a struct or an enum. Other derives (`Debug`,
+/// `Clone`) and `#[serde(…)]` attributes may be added beside it.
+#[proc_macro_attribute]
+pub fn output(args: TokenStream, item: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(output::output(args, item).into()).into()
 }
 
 /// Declares a unit struct as an `Instance` marker: one instance of a resource

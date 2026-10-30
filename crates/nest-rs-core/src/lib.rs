@@ -468,8 +468,25 @@ pub use nest_rs_core_macros::instance;
 
 /// The wire-DTO shorthand: carries `Serialize`/`Deserialize`/`Validate`/
 /// `JsonSchema` and routes each back here, so a DTO crossing any transport
-/// declares none of them.
+/// declares none of them. Every edge decoding one holds it to its rules.
 pub use nest_rs_core_macros::input;
+
+/// The reply-DTO shorthand: carries `Serialize`/`JsonSchema` and routes each
+/// back here, for a value an edge sends and never decodes.
+///
+/// ```
+/// use nest_rs_core::output;
+///
+/// #[output]
+/// pub struct PersonDto {
+///     pub name: String,
+/// }
+///
+/// let sent = serde_json::to_value(PersonDto { name: "ada".into() })?;
+/// assert_eq!(sent["name"], "ada");
+/// # Ok::<(), serde_json::Error>(())
+/// ```
+pub use nest_rs_core_macros::output;
 
 /// Declare a struct as an interceptor its module brings for every unit it
 /// serves — `#[interceptor]` after the guards and the class gate, or

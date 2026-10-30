@@ -21,7 +21,7 @@ use crate::view::McpView;
 
 /// DI module that resolves [`McpConfig`] and carries the app's own
 /// [`McpIdentity`].
-#[module(imports = [ConfigModule::for_feature::<McpConfig>()])]
+#[module(imports = [nest_rs_config::__private::feature::<McpConfig>()])]
 pub struct McpModule;
 
 impl McpModule {

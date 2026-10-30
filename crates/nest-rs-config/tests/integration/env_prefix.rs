@@ -4,8 +4,10 @@
 //! `NESTRS_ENV_PREFIX` before anything reads a name; no `NESTRS_*` name may
 //! resolve anything.
 
+use std::sync::Arc;
+
 use nest_rs_config::{ConfigModule, ConfigService, Environment, Namespaced, config, var_name};
-use nest_rs_core::{App, EnvPrefix, module};
+use nest_rs_core::{App, EnvPrefix, injectable, module};
 
 #[config(namespace = "widget")]
 #[derive(Clone)]
@@ -23,7 +25,14 @@ impl Default for WidgetConfig {
     }
 }
 
-#[module(imports = [ConfigModule::for_root(), ConfigModule::for_feature::<WidgetConfig>()])]
+/// What reads the widget's config, and so loads it.
+#[injectable]
+struct Widget {
+    #[inject]
+    _config: Arc<WidgetConfig>,
+}
+
+#[module(imports = [ConfigModule::for_root()], providers = [Widget])]
 struct WidgetModule;
 
 #[test]
@@ -69,7 +78,7 @@ fn a_booted_app_resolves_its_config_from_the_declared_prefix() {
         let config = app
             .container()
             .get::<WidgetConfig>()
-            .expect("ConfigModule::for_feature registers the config for injection");
+            .expect("a provider injecting the config loads it");
 
         assert_eq!(config.port, 8443, "ACME_WIDGET__PORT must reach the field");
         assert_eq!(

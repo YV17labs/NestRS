@@ -1,4 +1,5 @@
-//! [`ConfigModule`] — the `ConfigModule.for_root` / `for_feature` DI wiring.
+//! [`ConfigModule`] — the `ConfigModule.for_root` DI wiring, and the seam
+//! every config's loading routes through.
 
 use std::any::TypeId;
 use std::marker::PhantomData;
@@ -13,10 +14,11 @@ use crate::environment::Environment;
 use crate::error::ConfigNotResolvedError;
 use crate::for_instance::ForInstance;
 
-/// Sole owner of config loading: [`for_feature`](Self::for_feature) declares a
-/// config, [`setup`](Self::setup) backs a module's `for_root`, and
-/// [`provide_feature`](Self::provide_feature) is the primitive both route
-/// through.
+/// Sole owner of config loading: [`setup`](Self::setup) backs a module's
+/// `for_root`, and [`provide_feature`](Self::provide_feature) is the primitive
+/// it routes through, as does the boot's own load of a config a reachable
+/// provider injects — `#[inject] config: Arc<C>` is the whole declaration of
+/// a config an app owns.
 ///
 /// Config reads see the `.env` cascade without any import; `#[nest_rs::main]`
 /// also publishes it into `std::env`, before the runtime exists, for readers
@@ -30,14 +32,6 @@ impl ConfigModule {
     /// `<PREFIX>_ENV` runs as production, and the boot says so once at `info`.
     pub fn for_root() -> ConfigRootSetup {
         ConfigRootSetup
-    }
-
-    /// **Declare** that `C` exists and must be loaded — it does not configure
-    /// it. Loads in the factory phase from the environment over `C::defaults()`,
-    /// becoming global infrastructure; a test that seeds `C` wins over it. A
-    /// base is pinned on the owning module's own `for_root(cfg)`.
-    pub fn for_feature<C: Config>() -> ConfigFeatureSetup<C> {
-        ConfigFeatureSetup(PhantomData)
     }
 
     /// Queue the factory that resolves `C` for the boot, for one instance. `None`
@@ -203,7 +197,7 @@ impl ConfigModule {
     /// # pub struct WsConfig {
     /// #     pub max_message_bytes: usize,
     /// # }
-    /// # #[module(imports = [ConfigModule::for_feature::<WsConfig>()])]
+    /// # #[module(imports = [nest_rs_config::__private::feature::<WsConfig>()])]
     /// # pub struct WsModule;
     /// pub type WsSetup = ConfigSetup<WsModule, WsConfig>;
     ///
@@ -258,9 +252,31 @@ impl<M: Module + 'static, C: Config, I: Instance> DynamicModule for ConfigSetup<
     }
 }
 
-/// The import produced by [`ConfigModule::for_feature`]. Queues a factory that
-/// loads and validates `C` in the factory phase, as global infrastructure.
+/// The import that queues `C`'s environment-over-defaults factory, for a
+/// framework module that reads its config in `register` without injecting it.
+/// Not API: an app's config loads once a provider injects it.
+#[doc(hidden)]
 pub struct ConfigFeatureSetup<C>(PhantomData<fn() -> C>);
+
+/// [`ConfigFeatureSetup`] for `C`. Not API.
+#[doc(hidden)]
+pub fn feature<C: Config>() -> ConfigFeatureSetup<C> {
+    ConfigFeatureSetup(PhantomData)
+}
+
+/// Queue `C`'s environment-over-defaults factory: what `#[config]` files for
+/// the boot to call once a reachable provider injects `C`. Not API.
+#[doc(hidden)]
+pub fn queue_feature<C: Config>(builder: ContainerBuilder) -> ContainerBuilder {
+    ConfigModule::provide_feature(None::<C>, builder)
+}
+
+/// The checks a seeded `C` passes before anything reads it: what `#[config]`
+/// files beside [`queue_feature`]. Not API.
+#[doc(hidden)]
+pub fn check_feature<C: Config>(container: &Container) -> anyhow::Result<()> {
+    check_seed::<C, Unnamed>(container)
+}
 
 impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
     fn module() -> TypeId {
@@ -321,7 +337,7 @@ impl Module for ConfigRoot {
     reason = "figment::Jail fixes the closure's error type"
 )]
 mod tests {
-    /// The `for_root` / `for_feature` seam, exercised through a real boot.
+    /// The `for_root` seam, exercised through a real boot.
     mod seam {
         use nest_rs_core::{App, Collecting, ContainerBuilder, Module, Registering, module};
         use validator::Validate;
@@ -464,7 +480,7 @@ mod tests {
             }
         }
 
-        #[module(imports = [ConfigModule::for_feature::<SeamConfig>(), OpensModule])]
+        #[module(imports = [feature::<SeamConfig>(), OpensModule])]
         struct OpeningOwner;
 
         #[module(imports = [ConfigModule::setup::<OpeningOwner, SeamConfig, Unnamed>(SeamConfig {

@@ -1,6 +1,6 @@
-//! Namespaced config end-to-end: `ConfigModule::for_feature`, a seed winning
-//! over the factory and held to the checks a read passes, and a config pinned
-//! in code overridden per field.
+//! Namespaced config end-to-end: a config a provider injects loads with no
+//! import, a seed winning over the factory and held to the checks a read
+//! passes, and a config pinned in code overridden per field.
 
 use nest_rs_config::var_name;
 use std::any::TypeId;
@@ -47,10 +47,7 @@ impl DemoService {
     }
 }
 
-#[module(
-    imports = [ConfigModule::for_feature::<DemoConfig>()],
-    providers = [DemoService],
-)]
+#[module(providers = [DemoService])]
 struct DemoModule;
 
 #[test]
@@ -67,8 +64,10 @@ fn from_env_maps_each_namespaced_var_from_its_source() {
     assert_eq!(cfg.max_connections, 7);
 }
 
+/// The provider's `#[inject] Arc<DemoConfig>` is the whole declaration: the
+/// boot queues the config's factory, and a seed still wins over it.
 #[tokio::test]
-async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
+async fn an_injected_config_loads_with_no_import_and_a_seed_overrides_the_factory() {
     let app = HeadlessApp::builder()
         .module::<DemoModule>()
         .build_headless()
@@ -101,6 +100,49 @@ async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
         "the seed wins over the factory"
     );
     assert_eq!(svc.max_connections(), 99);
+}
+
+/// A config only an unimported module's provider injects: linked, never read.
+#[config(namespace = "unreached_probe")]
+#[derive(Clone, Debug, Default)]
+struct UnreachedConfig {
+    token: Option<String>,
+}
+
+#[injectable]
+struct Unreached {
+    #[inject]
+    _cfg: Arc<UnreachedConfig>,
+}
+
+#[module(providers = [Unreached])]
+struct UnreachedModule;
+
+/// The load is gated by the provider that asks for it: a config whose only
+/// reader sits in a module the app does not import is never read.
+#[tokio::test]
+async fn a_config_no_reached_provider_injects_is_never_loaded() {
+    let _ = UnreachedModule;
+    let app = HeadlessApp::builder()
+        .module::<DemoModule>()
+        .build_headless()
+        .await
+        .expect("the app boots");
+    assert!(app.container().get::<UnreachedConfig>().is_none());
+}
+
+/// The synchronous boot runs no factory, so the config a provider injects is
+/// refused for the factory it needs, naming the remedy, rather than as a
+/// provider nothing registers.
+#[test]
+fn the_synchronous_boot_refuses_an_injected_config_for_its_factory() {
+    let refused = nest_rs_core::App::new::<DemoModule>()
+        .err()
+        .expect("App::new runs no factory");
+    let unresolved = refused
+        .downcast_ref::<nest_rs_core::UnresolvedFactoryError>()
+        .unwrap_or_else(|| panic!("not the factory refusal: {refused:#}"));
+    assert_eq!(unresolved.type_name, std::any::type_name::<DemoConfig>());
 }
 
 /// What every configurable module's `for_root(cfg)` does: hand the pinned struct

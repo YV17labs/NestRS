@@ -19,7 +19,7 @@ use crate::interceptor::ServerTiming;
 /// struct EverywhereModule;
 /// ```
 #[module(
-    imports = [ConfigModule::for_feature::<ServerTimingConfig>()],
+    imports = [nest_rs_config::__private::feature::<ServerTimingConfig>()],
     providers = [ServerTiming],
 )]
 pub struct ServerTimingModule;

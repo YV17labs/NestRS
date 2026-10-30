@@ -56,7 +56,7 @@ pub use error::{ConfigError, ConfigNotResolvedError, Result};
 pub use field::ConfigField;
 pub use for_instance::ForInstance;
 pub use material::{Material, read_material};
-pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup, ConfigSetup};
+pub use module::{ConfigModule, ConfigRootSetup, ConfigSetup};
 pub use namespace::instance_namespace;
 pub use service::{ConfigService, spellings, spellings_or_field, var_name, var_name_or_field};
 pub use setting::{FromSetting, Setting};
@@ -132,12 +132,14 @@ pub mod __private {
     pub use crate::bounds::{BoundedField, reads_field};
     pub use crate::dotenv::load_app_cascade;
     pub use crate::field::overlay_json;
+    pub use crate::module::{ConfigFeatureSetup, check_feature, feature, queue_feature};
     pub use crate::namespace::ConfigNamespace;
     #[cfg(feature = "tls")]
     pub use crate::tls::{PairRefusal, certified_key, crypto_provider};
     #[cfg(feature = "reqwest")]
     pub use crate::tls::{ReqwestTls, reqwest_tls};
 
+    pub use nest_rs_core::__private::InjectedFactory;
     pub use nest_rs_core::inventory;
     pub use validator;
 }

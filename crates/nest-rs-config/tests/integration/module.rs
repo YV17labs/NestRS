@@ -2,8 +2,10 @@
 //! when the process declared none; the default instance's config resolves
 //! through its `Config::resolve`.
 
+use std::sync::Arc;
+
 use nest_rs_config::{Config, ConfigModule, ConfigService, Environment, Result, config};
-use nest_rs_core::{App, Module, Unnamed, module};
+use nest_rs_core::{App, Module, Unnamed, injectable, module};
 use nest_rs_testing::LogCapture;
 
 const UNDECLARED: &str = "no environment declared; running as production";
@@ -80,7 +82,14 @@ impl Config for KilnConfig {
 #[module]
 struct Kilns;
 
-#[module(imports = [ConfigModule::for_feature::<KilnConfig>()])]
+/// What reads the kiln's config, and so loads it.
+#[injectable]
+struct Kiln {
+    #[inject]
+    _config: Arc<KilnConfig>,
+}
+
+#[module(providers = [Kiln])]
 struct KilnRead;
 
 #[module(imports = [ConfigModule::setup::<Kilns, KilnConfig, Unnamed>(KilnConfig { heat: Some(7) })])]

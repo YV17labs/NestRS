@@ -341,7 +341,7 @@ pub struct ContestedDeclarationError {
 #[derive(Debug, Error)]
 #[error(
     "`{type_name}` is provided by an async factory, which the synchronous `App::new` never runs. \
-     A module's `for_root(..)` and `ConfigModule::for_feature` both queue one. Boot with \
+     A module's `for_root(..)` and a config a provider injects both queue one. Boot with \
      `App::builder().module::<M>().build().await` instead."
 )]
 #[non_exhaustive]

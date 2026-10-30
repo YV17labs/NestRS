@@ -67,10 +67,10 @@ and keep the shape. `demo/apps/assistant` is the witness
 for MCP: `audio` and `users` share `/mcp` through bare `#[mcp]` hosts, and
 `posts` mounts its own path.
 
-**A feature with a `config.rs` imports `ConfigModule::for_feature::<C>()` and
-writes no `for_root`**: the in-code path for a config you own is its
-`impl Default` (`architecture.md`, *Configuration*). `sign_in/module.rs` and
-`audio/schedule/module.rs` are the exemplars.
+**A feature's `config.rs` is loaded by the provider that injects it, and the
+feature writes no `for_root`**: the in-code path for a config you own is its
+`impl Default` (`architecture.md`, *Configuration*). `sign_in/service.rs` and
+`audio/schedule/tasks.rs` are the exemplars.
 
 ## One `service.rs` per feature
 

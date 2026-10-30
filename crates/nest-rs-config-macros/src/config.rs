@@ -33,6 +33,21 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let from_env = (!args.manual_from_env).then(|| overlay(&item, &fields, args.defaults.as_ref()));
 
+    // A provider's injection is the whole declaration of a config: the boot
+    // queues its factory then. A generic config has no one type to file, and
+    // is queued by the module reading it.
+    let injected = item.generics.params.is_empty().then(|| {
+        quote! {
+            ::nest_rs_config::__private::inventory::submit! {
+                ::nest_rs_config::__private::InjectedFactory::new(
+                    || ::core::any::TypeId::of::<#name>(),
+                    ::nest_rs_config::__private::queue_feature::<#name>,
+                    ::nest_rs_config::__private::check_feature::<#name>,
+                )
+            }
+        }
+    });
+
     // The literal and the declaration, not the type: a generic config files one entry.
     let declaration = quote! {
         ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#name))
@@ -51,6 +66,8 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         #from_env
+
+        #injected
     }
     .into()
 }

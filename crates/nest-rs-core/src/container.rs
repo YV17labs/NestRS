@@ -1381,6 +1381,13 @@ impl ContainerBuilder {
         self
     }
 
+    /// Whether a factory queued so far provides `key`.
+    pub(crate) fn queues(&self, key: TypeId) -> bool {
+        self.factories
+            .iter()
+            .any(|queued| queued.provides.contains(&key))
+    }
+
     pub(crate) fn take_factories(&mut self) -> Vec<QueuedFactory> {
         std::mem::take(&mut self.factories)
     }
@@ -1509,19 +1516,30 @@ impl ContainerBuilder {
     /// The first seed a queued factory's check refuses, as the boot's factory
     /// phase runs it where the seed makes the factory skip: a builder made by
     /// hand drains no factory, so its seeds pass their checks here.
+    /// A seed of a type that loads itself once injected
+    /// ([`InjectedFactory`](crate::__private::InjectedFactory)) is held to its
+    /// checks whether or not anything queued its factory.
     fn seed_refusal(&self) -> Result<(), crate::ContainerError> {
-        let mut seeded = self
+        let mut checked = HashSet::new();
+        let queued = self
             .factories
             .iter()
             .map(QueuedFactory::id)
-            .filter(|id| self.contains(*id))
-            .filter_map(|id| self.seed_check(id))
-            .peekable();
-        if seeded.peek().is_none() {
+            .filter_map(|id| self.seed_check(id).map(|check| (id, check)));
+        let injected = inventory::iter::<crate::injected_factory::InjectedFactory>()
+            .map(|entry| (entry.key(), entry.check()));
+        let seeded: Vec<SeedCheck> = queued
+            .chain(injected)
+            .filter(|(id, _)| self.contains(*id) && checked.insert(*id))
+            .map(|(_, check)| check)
+            .collect();
+        if seeded.is_empty() {
             return Ok(());
         }
         let built = self.snapshot();
-        seeded.try_for_each(|check| check(&built).map_err(crate::ContainerError::SeedRefused))
+        seeded
+            .into_iter()
+            .try_for_each(|check| check(&built).map_err(crate::ContainerError::SeedRefused))
     }
 
     /// What the register phase leaves to refuse, on every path, in the boot's

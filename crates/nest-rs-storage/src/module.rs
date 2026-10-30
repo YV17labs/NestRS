@@ -14,7 +14,7 @@ use crate::store::Store;
 /// [`StorageConfig::url`] names, opened and proved at boot. Import it to inject
 /// `Storage` for presigned URLs, uploads and metadata reads.
 #[module(
-    imports = [ConfigModule::for_feature::<StorageConfig>(), StorageOpening::import()],
+    imports = [nest_rs_config::__private::feature::<StorageConfig>(), StorageOpening::import()],
     providers = [Storage],
 )]
 pub struct StorageModule;

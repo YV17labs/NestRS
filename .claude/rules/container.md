@@ -111,11 +111,11 @@ The `*Setup` it returns is opaque — no public method, no second constructor on
 the module type. A declaration that does not fit makes `x` grow a **field**,
 never the seam a **method**. Held by review: no inherent `impl` on a `*Setup`,
 and no inherent `pub fn` on a module type besides `for_root`.
-`ConfigModule` is the one carve-out — its `for_root` / `for_feature` /
-`provide_feature` / `setup` / `resolved` (`resolved_for` per instance) are the
-primitives every other seam is built from, and `provide_feature` and
-`resolved`, the read a `register` or a factory makes of the config, are public
-for third-party drivers. A seam one framework
+`ConfigModule` is the one carve-out — its `for_root` / `provide_feature` /
+`setup` / `resolved` (`resolved_for` per instance) are the primitives every
+other seam is built from, and `provide_feature` and `resolved`, the read a
+`register` or a factory makes of the config, are public for third-party
+drivers. A seam one framework
 crate needs from another lives in its crate's `__private` (`macros.md`); one
 only its own crate needs stays private.
 
@@ -152,9 +152,17 @@ setups table, which imports every first-party `for_root` twice.
   that must not be imported bare hides its `#[module]` behind a private host
   struct and exposes only the façade (`OAuthResourceHost` /
   `OAuthResourceModule`).
-- **Who gets a `for_root`, and `for_feature`'s role, are `architecture.md`'s**
-  (*Configuration*): every `nest-rs-*` module owning a `#[config]`, never one
-  owning none (`.claude/decisions/config-one-seam.md`).
+- **Who gets a `for_root` is `architecture.md`'s** (*Configuration*): every
+  `nest-rs-*` module owning a `#[config]`, never one owning none
+  (`.claude/decisions/config-one-seam.md`). **A config a reached provider
+  injects loads itself**: `#[config]` files the type
+  (`InjectedFactory`), and once every module has collected the boot queues
+  the factory of each one a reached module's provider requires that no
+  import queued — module-gated by that provider; a framework module reading
+  its config in `register` queues it from its imports through the config
+  crate's private seam, and a seed of a filed config is held to its checks
+  in a container built by hand too. Held by `nest-rs-testing`'s config
+  suite.
 - **A value an import site chose is a declaration**
   (`ContainerBuilder::provide_declared_factory`, carrying its remedy sentence),
   and so is the trait object a `provide_factory_dyn` binds.
@@ -221,6 +229,14 @@ arbitrates between variables or tiers.
   the seed makes its factory skip), on every boot that drains factories, and
   at `ContainerBuilder::build` for a container built by hand, which drains
   none (`ContainerError::SeedRefused`).
+- **A `#[config]`'s overlay is derived from its struct**, each key its
+  field's name, each reader its type's (`ConfigField`), so no field is
+  reachable from code alone (`.claude/decisions/config-overlay-derived.md`);
+  `from_env = "manual"` is for fields that depend on each other. **`None` is
+  off and nothing else**: a duration is a `Duration`, or an `Option<Duration>`
+  only where an off exists; a count the same, `0` from the environment its
+  `None`; a default sits in `Default`, never behind a `None`, and no field
+  names a unit. Held by the derive's refusals and each config's unit tests.
 - **A duration a deployment sets has a floor and a ceiling**, refused naming the
   variable whether pinned or read, never clamped. The floor is where the thing
   stops working; the ceiling is where a value becomes a slip, **and never above

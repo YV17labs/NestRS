@@ -117,21 +117,26 @@ everything cancels the encapsulation. **No `*_module.rs`, ever**: one
 | Whose config | Seam | In-code path |
 |---|---|---|
 | a **library** module's, in its own namespace | `Module::for_root(cfg)` | `for_root` — the base the env overlays, per field |
-| **yours**, declared by your own module | `ConfigModule::for_feature::<C>()` | `impl Default` — you own the struct, so you edit it |
+| **yours**, declared by your own module | none — a provider injecting it loads it | `impl Default` — you own the struct, so you edit it |
 | nobody's (a discovered plugin) | its registry entry reads its own namespace | none — credentials are deployment data |
 
 Who can edit the struct decides: `HttpModule::for_root(cfg)` sets a config you
 cannot touch, your own config's `impl Default` is its in-code path, and it gets
 a `for_root` only once an app must pin it from outside. The one homonym,
 `ConfigModule::for_root()`, is the `.env` cascade, first in the root's imports.
-**`for_root` configures; `for_feature` registers**, taking no value, so a
-library module writes both: `for_feature` in `imports`, and `for_root(c: impl
+**`for_root` configures; nothing registers**: a reached provider's
+`#[inject] Arc<C>` loads `C`, so a library module writes `for_root(c: impl
 Into<Option<C>>)` returning `ConfigModule::setup(c.into())` as a
-`ConfigSetup<M, C>` alias (a hand-rolled `*Setup` only to queue more). **A
-module owning no config gets no `for_root`** (`SocialModule` discovers
-providers that carry their own).
+`ConfigSetup<M, C>` alias (a hand-rolled `*Setup` only to queue more), and
+queues its config from its own imports only when it reads it in `register`
+rather than injecting it. **A module owning no config gets no `for_root`**
+(`SocialModule` discovers providers that carry their own).
 
-**A `#[config]`'s namespace is its stem, read and never chosen**, minus plural
+**A `#[config]`'s keys are its fields' names**, the overlay derived from the
+struct (`from_env = "manual"` only where fields depend on each other); a
+vocabulary of several variables extends its field's key with `_`
+(`TLS_CA_CERT` under `tls`), never `__`, the namespace's separator.
+**Its namespace is its stem, read and never chosen**, minus plural
 role folders and a product's container: `redis/src/queue/config.rs` →
 `<PREFIX>_REDIS__QUEUE__*`, `social/src/providers/github/config.rs` →
 `<PREFIX>_SOCIAL__GITHUB__*`, `features/src/sign_in/config.rs` →

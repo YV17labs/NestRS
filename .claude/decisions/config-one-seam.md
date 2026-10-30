@@ -18,3 +18,22 @@ put a judgement in the crate that only loads:
   one of them skipped the pinned value and booted a zero Redis budget. Every
   duration is now a `DurationBounds`, refused in the same words from the
   environment and from code.
+
+Revisited (2026-10-30): `for_feature` left the public surface. A config a
+provider of a reached module requires (`#[inject] Arc<C>`) is loaded by the
+boot itself: `#[config]` files the type, and once every module has collected,
+the container queues the environment-over-defaults factory of each filed config
+such a provider injects, unless an import already queued one — a `for_root`
+pin still supersedes it as a declaration. A framework module reading its config
+in `register` without injecting it queues it from its own imports through the
+config crate's private seam; a third-party module calls `provide_feature`. The
+import line repeated what `#[config]` on the type and the provider's injection
+already declare (the identity audit's comp-10, the owner's "Tout faire" of
+2026-10-28 agreeing the break), and keeping the public `for_feature` beside
+the inference would have been two ways to register one config. Nothing pins
+through the inference, so the order-dependence this entry retired does not
+return, and module-gating holds: the load is keyed on a reached module's
+provider, and loading a config mounts and exposes nothing. Decided by elegance
+— nothing to wire — under the security and correctness lines, which it leaves
+where they were. The split stands: `for_root` configures, and a config the app
+owns needs no registering seam at all.

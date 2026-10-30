@@ -11,7 +11,7 @@ use crate::server::WsServer;
 /// DI module that provides the [`WsServer`] connection registries and resolves
 /// [`WsConfig`]. Import it wherever a gateway broadcasts or a service pushes to
 /// clients.
-#[module(imports = [ConfigModule::for_feature::<WsConfig>()], providers = [WsServer, WsNamespaces])]
+#[module(imports = [nest_rs_config::__private::feature::<WsConfig>()], providers = [WsServer, WsNamespaces])]
 pub struct WsModule;
 
 impl WsModule {

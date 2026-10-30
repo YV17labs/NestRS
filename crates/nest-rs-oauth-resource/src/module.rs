@@ -33,7 +33,7 @@ use crate::metadata::ProtectedResourceMetadata;
 /// The discovery surface, private: inert without the [`ProtectedResourceMetadata`]
 /// factory only [`OAuthResourceSetup`] queues, so `for_root` is the single seam.
 #[module(
-    imports = [ConfigModule::for_feature::<OAuthResourceConfig>()],
+    imports = [nest_rs_config::__private::feature::<OAuthResourceConfig>()],
     providers = [OAuthResourceController, ResourceChallenge],
 )]
 struct OAuthResourceHost;

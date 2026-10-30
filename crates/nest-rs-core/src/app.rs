@@ -238,6 +238,13 @@ impl App {
             .enter_root(root)
             .import::<M>()
             .leave_import();
+        let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
+        // So a config a provider injects is refused for the factory it needs,
+        // the remedy below, rather than as a provider nothing registers.
+        let builder = crate::injected_factory::queue_injected(
+            builder,
+            &reachable_descriptors(&descriptors, &[TypeId::of::<M>()]),
+        );
         // Before the queue check: a contested declaration survives the remedy
         // `UnresolvedFactoryError` prescribes (`.claude/decisions/boot-refusal-order.md`).
         check_contested_declarations(&builder)?;
@@ -256,7 +263,6 @@ impl App {
             TypeId::of::<ProviderOrder>(),
             TypeId::of::<Composition>(),
         ]);
-        let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
         let sealed = seal(
             &builder,
             &descriptors,
@@ -1115,12 +1121,12 @@ async fn assemble(
     for hooks in modules {
         builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
     }
-    *slot = builder;
-    check_contested_declarations(slot)?;
     let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
     let roots: Vec<(TypeId, &'static str)> = modules.iter().map(|h| (h.type_id, h.name)).collect();
     let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
     let reached = reachable_descriptors(&descriptors, &ids);
+    *slot = crate::injected_factory::queue_injected(builder, &reached);
+    check_contested_declarations(slot)?;
     // Refused as soon as the resource exists, before a later factory's I/O
     // fails on something else first.
     check_budgets(slot, &reached, None)?;

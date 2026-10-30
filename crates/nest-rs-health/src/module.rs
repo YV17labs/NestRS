@@ -10,7 +10,7 @@ use crate::controller::HealthController;
 use crate::service::HealthService;
 
 #[module(
-    imports = [ConfigModule::for_feature::<HealthConfig>(), HealthWiring],
+    imports = [nest_rs_config::__private::feature::<HealthConfig>(), HealthWiring],
     providers = [
         HealthService,
         HealthController,

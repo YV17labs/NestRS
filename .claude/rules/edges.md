@@ -486,7 +486,9 @@ router parses. The rewrite is skipped when nothing is versioned.
   `nest_rs::pipes::Piped<P, S>`, over the `Source` its input is read from: an
   HTTP extractor (`Piped<P, Json<T>>`), or the value the edge decodes itself,
   the default (`Piped<P>`, inside `Parameters<…>` on MCP); `Piped(x)` binds the
-  output on every edge. Validation is no pipe and takes no wrapper: the edge
+  output on every edge. `Piped` is no HTTP extractor: `#[routes]` reads it by
+  its spelling, so one behind an alias fails to compile rather than skip its
+  source's rules. Validation is no pipe and takes no wrapper: the edge
   runs it (item 4), and a hand-written check converts `validator`'s errors
   with `PipeError::from`, so it answers as the edge does. Global
   pipes register in `nest-rs-pipes`, beside their contract, and run over an

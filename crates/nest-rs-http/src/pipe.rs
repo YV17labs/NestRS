@@ -3,7 +3,9 @@
 //!
 //! - `Piped<P, E>` (e.g. `Piped<ParseUuid, Path<String>>`) applies pipe `P` to
 //!   what `E` extracted, and binds its output: `Piped(id)`. `#[routes]`
-//!   extracts `E` itself, holds it to its rules, then runs [`piped`].
+//!   extracts `E` itself, holds it to its rules, then runs [`piped`]. `Piped`
+//!   is no extractor, so a carrier `#[routes]` cannot read by its spelling (one
+//!   behind an alias) is a compile error rather than a route skipping its rules.
 //! - `Json<T>`, `Query<T>`, `Form<T>`, `Path<T>` and `Header<T>` implement
 //!   `validator::Validate` when `T` does, so `#[routes]` validates the value
 //!   they carry with no wrapper.
@@ -12,15 +14,10 @@
 //! `400` ([`ProblemDetails`]) carrying the [`PipeError`]'s message as `detail`
 //! and any field-level errors as an `errors` extension member.
 
-use std::future::Future;
-use std::pin::Pin;
-
 use nest_rs_pipes::{Pipe, PipeError, Piped, Source};
 use validator::{Validate, ValidationErrors};
 
-use crate::{
-    Form, FromRequest, Header, HttpError, Json, Path, ProblemDetails, Query, Request, RequestBody,
-};
+use crate::{Form, Header, HttpError, Json, Path, ProblemDetails, Query};
 
 /// Each single-value extractor is a source a pipe reads, and validates as the
 /// value it carries does.
@@ -75,25 +72,9 @@ where
     Piped::apply(extracted.into_value()).map_err(|refused| pipe_error(&refused))
 }
 
-/// Each extractor of the vocabulary that reads the body reads it under the cap
-/// itself. The future is boxed: a generic `async fn` delegating to another's
-/// trips rustc#100013.
-impl<'a, P, E> FromRequest<'a> for Piped<P, E>
-where
-    P: Pipe + Send + Sync,
-    P::Out: Send,
-    E: FromRequest<'a> + Source<Value = P::In>,
-{
-    async fn from_request(req: &'a Request, body: &mut RequestBody) -> crate::Result<Self> {
-        let extract: Pin<Box<dyn Future<Output = crate::Result<E>> + Send + '_>> =
-            Box::pin(E::from_request(req, body));
-        piped(extract.await?)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use http::{HeaderValue, StatusCode, header};
+    use http::{StatusCode, header};
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -185,61 +166,20 @@ mod tests {
         );
     }
 
-    fn json_request<T: Serialize>(payload: &T) -> (Request, RequestBody) {
-        Request::builder()
-            .header(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            )
-            .body(serde_json::to_vec(payload).expect("body serializes"))
-            .split()
-    }
-
-    #[tokio::test]
-    async fn piped_pipes_the_extracted_value_and_binds_the_output() {
-        let (req, mut body) = json_request(&"hello".to_owned());
-        let Piped(shouted) = Piped::<ToUpper, Json<String>>::from_request(&req, &mut body)
-            .await
-            .expect("happy path");
+    #[test]
+    fn piped_pipes_the_extracted_value_and_binds_the_output() {
+        let Piped(shouted) = piped::<ToUpper, _>(Json("hello".to_owned())).expect("happy path");
         assert_eq!(shouted, "HELLO");
     }
 
     #[tokio::test]
-    async fn piped_rejects_when_the_pipe_returns_an_error() {
-        let (req, mut body) = json_request(&"hello".to_owned());
-        let Err(err) = Piped::<AlwaysReject, Json<String>>::from_request(&req, &mut body).await
-        else {
+    async fn piped_answers_the_pipes_refusal_as_its_400() {
+        let Err(err) = piped::<AlwaysReject, _>(Path("hello".to_owned())) else {
             panic!("the pipe should have rejected");
         };
         let (status, json, _) = problem_of(err).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(json["detail"], "nope");
-    }
-
-    #[tokio::test]
-    async fn piped_rejects_a_body_past_the_configured_limit_with_413() {
-        let (req, mut body) = json_request(&"well over four bytes".to_owned());
-        let Err(err) = crate::raw_body::with_body_limit(
-            4,
-            Piped::<ToUpper, Json<String>>::from_request(&req, &mut body),
-        )
-        .await
-        else {
-            panic!("body exceeds the cap");
-        };
-        assert_eq!(err.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    }
-
-    #[tokio::test]
-    async fn piped_accepts_a_body_within_the_configured_limit() {
-        let (req, mut body) = json_request(&"hi".to_owned());
-        let Piped(shouted) = crate::raw_body::with_body_limit(
-            4096,
-            Piped::<ToUpper, Json<String>>::from_request(&req, &mut body),
-        )
-        .await
-        .expect("body fits under the cap");
-        assert_eq!(shouted, "HI");
     }
 
     #[derive(Debug, Serialize, Deserialize, Validate)]

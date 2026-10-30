@@ -165,6 +165,11 @@ it as a v7 UUID. A non-UUID string is `400` with `"must be a UUID v7"` —
 not a stringly-typed handler doing its own `parse::<Uuid>()`. `Piped(id)`
 binds the pipe's output, a `Uuid`; the carrier also derefs to it.
 
+The carrier is read where it is written: `#[routes]` takes `Piped<P, E>`
+spelled out in the handler's signature, holds what `E` extracted to its rules,
+then runs the pipe. `Piped` is no extractor, so the same carrier behind a type
+alias does not compile rather than skip those rules.
+
 ## Global pipes
 
 A pipe bound per argument runs where its argument is decoded. One that shapes

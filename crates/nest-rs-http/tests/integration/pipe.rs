@@ -1,14 +1,14 @@
 //! A `Piped<P, E>` refusal is the edge's `400` problem, and its `detail` says
 //! what the value had to be, never the value. Every extracted argument whose
-//! type declares rules is validated there, whatever extractor carries it, once
-//! the guards admitted the caller.
+//! type declares rules is validated there, whatever extractor carries it, a
+//! pipe's source before the pipe runs, once the guards admitted the caller.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use nest_rs_core::module;
 use nest_rs_http::StatusCode;
 use nest_rs_http::{Form, Json, Path, Query, controller, input, routes};
-use nest_rs_pipes::{ParseArray, Piped};
+use nest_rs_pipes::{ParseArray, Pipe, PipeError, Piped};
 
 use crate::Refuse;
 
@@ -20,6 +20,21 @@ struct Charge {
 
 /// Counts the bodies a handler reached, so a refusal is seen to run before it.
 static CHARGED: AtomicU32 = AtomicU32::new(0);
+
+/// Counts the charges the pipe read, so a refusal is seen to run before it.
+static DOUBLED: AtomicU32 = AtomicU32::new(0);
+
+/// A pipe over a body whose type declares rules.
+struct Doubled;
+
+impl Pipe for Doubled {
+    type In = Charge;
+    type Out = u64;
+    fn transform(charge: Charge) -> Result<u64, PipeError> {
+        DOUBLED.fetch_add(1, Ordering::SeqCst);
+        Ok(charge.amount * 2)
+    }
+}
 
 #[controller(path = "/pipe")]
 struct PipeController;
@@ -49,6 +64,13 @@ impl PipeController {
     #[public]
     async fn charge_by_form(&self, charge: Form<Charge>) -> String {
         charge.amount.to_string()
+    }
+
+    #[post("/charge/doubled")]
+    #[public]
+    async fn charge_doubled(&self, Piped(doubled): Piped<Doubled, Json<Charge>>) -> String {
+        CHARGED.fetch_add(1, Ordering::SeqCst);
+        doubled.to_string()
     }
 }
 
@@ -149,6 +171,36 @@ async fn every_extractor_carrying_a_type_with_rules_is_validated() {
         .await;
 }
 
+#[tokio::test]
+async fn a_piped_source_breaking_its_rules_is_refused_before_the_pipe_and_the_handler() {
+    let client = crate::boot::<PipeModule>().await;
+    let (piped, charged) = (
+        DOUBLED.load(Ordering::SeqCst),
+        CHARGED.load(Ordering::SeqCst),
+    );
+
+    refused_for_its_rules(
+        client
+            .post("/pipe/charge/doubled")
+            .content_type("application/json")
+            .body(br#"{"amount":0}"#.to_vec())
+            .send()
+            .await,
+    )
+    .await;
+
+    assert_eq!(DOUBLED.load(Ordering::SeqCst), piped, "the pipe ran");
+    assert_eq!(CHARGED.load(Ordering::SeqCst), charged, "the handler ran");
+    client
+        .post("/pipe/charge/doubled")
+        .content_type("application/json")
+        .body(br#"{"amount":4}"#.to_vec())
+        .send()
+        .await
+        .assert_text("8")
+        .await;
+}
+
 #[controller(path = "/gated")]
 #[use_guards(Refuse)]
 struct GatedController;
@@ -178,16 +230,17 @@ async fn a_refused_caller_is_answered_before_its_input_is_validated() {
 }
 
 /// The same route written by hand on the vocabulary's extractors: what
-/// `#[routes]` answers, case for case.
+/// `#[routes]` answers, case for case. `Piped` is no extractor, so the route
+/// extracts the source, then runs the pipe over its value.
 async fn on_the_vocabulary() -> crate::Client {
     crate::vocabulary_route(
         nest_rs_http::Method::GET,
         "/pipe/ids/{ids}",
         |req, mut body| async move {
-            let ids = <Piped<ParseArray<u64>, nest_rs_http::Path<String>> as nest_rs_http::FromRequest>::from_request(
-                &req, &mut body,
-            )
-            .await?;
+            let raw =
+                <Path<String> as nest_rs_http::FromRequest>::from_request(&req, &mut body).await?;
+            let ids = Piped::<ParseArray<u64>, Path<String>>::apply(raw.into_inner())
+                .map_err(|refused| nest_rs_http::pipe_error(&refused))?;
             Ok(nest_rs_http::IntoResponse::into_response(format!(
                 "{:?}",
                 ids.into_inner()

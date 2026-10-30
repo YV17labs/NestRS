@@ -107,6 +107,10 @@ async fn show(&self, Piped(id): Piped<ParseUuid, Path<String>>) -> Json<Post> {
 }
 ```
 
+`Piped` is no extractor of its own: `#[routes]` reads it where the signature
+spells it out, so a type alias of it is a compile error naming `FromRequest`
+rather than a parameter that skips its source's rules.
+
 ## `Header<T>` — typed request headers
 
 The header-map twin of `Query<T>`: one struct field per header,

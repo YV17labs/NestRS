@@ -14,10 +14,10 @@ help: the trait `FromRequest<'_>` is not implemented for `Settings`
              Authorize<A, S>
              ClientIp
              Ctx<T>
-             Piped<P, E>
              RawBody
              Result<T, HttpError>
              nest_rs::nest_rs_authz::http::Scope<E, A>
+             nest_rs::nest_rs_http::Body
            and $N others
 
 error[E0277]: the trait bound `Settings: FromRequest<'_>` is not satisfied
@@ -36,9 +36,9 @@ help: the trait `FromRequest<'_>` is not implemented for `Settings`
              Authorize<A, S>
              ClientIp
              Ctx<T>
-             Piped<P, E>
              RawBody
              Result<T, HttpError>
              nest_rs::nest_rs_authz::http::Scope<E, A>
+             nest_rs::nest_rs_http::Body
            and $N others
    = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

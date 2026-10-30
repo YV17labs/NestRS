@@ -299,7 +299,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | `field.into_byte_stream()` through `nest_rs::http::PartExt` | `Field::into_byte_stream()` on `nest_rs::http::Multipart`'s field |
    | `RawBody::extract_with_limit(&mut poem_body, n)` in an extractor of your own | the extractor implements `nest_rs::http::FromRequest`, whose `RequestBody` `extract_with_limit` takes; a handler reads `body.into_bytes_limit(n)` |
    | `body: Valid<Json<T>>`, `Valid(input): Valid<Json<T>>` — and over `Query`, `Form`, `Path`, `Header` | `Json(input): Json<T>`: every extracted value is held to the rules its type declares, with nothing to wrap |
-   | `nest_rs::http::Piped<P, E>`, read through `into_inner()` or `Deref` | `nest_rs::pipes::Piped<P, E>`, bound `Piped(value)` — `into_inner()` and `Deref` still read it |
+   | `nest_rs::http::Piped<P, E>`, read through `into_inner()` or `Deref` | `nest_rs::pipes::Piped<P, E>` spelled out in the handler's signature, bound `Piped(value)` — `into_inner()` and `Deref` still read it |
+   | `Piped<P, E>` behind a type alias, or read with `FromRequest` on a route registered on `HttpRoutes` | the carrier spelled out where `#[routes]` reads it; by hand, extract `E`, then `Piped::<P, E>::apply(extracted.into_inner())` — `Piped` is no extractor |
    | `impl nest_rs::http::IntoInner for MyExtractor<T>` | `impl nest_rs::pipes::Source for MyExtractor<T>` (`type Value`, `into_value`), and `validator::Validate` when `T` declares rules |
    | `SseEvent::retry(ms)` | `SseEvent::message("").retry(Duration::from_millis(ms))` |
    | `match event { SseEvent::Message { .. } => … }` | none: an event is written, never read back |

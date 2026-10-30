@@ -1,0 +1,34 @@
+error[E0277]: the trait bound `Piped<Trim, nest_rs::prelude::Json<std::string::String>>: FromRequest<'_>` is not satisfied
+  --> tests/integration/diagnostics/http/a_pipe_carrier_behind_an_alias_is_no_extractor.rs:18:41
+   |
+18 |     async fn create(&self, Piped(name): Trimmed) -> String {
+   |                                         ^^^^^^^ the trait `FromRequest<'_>` is not implemented for `Piped<Trim, nest_rs::prelude::Json<std::string::String>>`
+   |
+   = help: the following other types implement trait `FromRequest<'a>`:
+             &'a nest_rs::nest_rs_http::Request
+             Authorize<A, S>
+             ClientIp
+             Ctx<T>
+             RawBody
+             Result<T, HttpError>
+             nest_rs::nest_rs_authz::http::Scope<E, A>
+             nest_rs::nest_rs_http::Body
+           and $N others
+
+error[E0277]: the trait bound `Piped<Trim, nest_rs::prelude::Json<std::string::String>>: FromRequest<'_>` is not satisfied
+  --> tests/integration/diagnostics/http/a_pipe_carrier_behind_an_alias_is_no_extractor.rs:14:1
+   |
+14 | #[routes]
+   | ^^^^^^^^^ the trait `FromRequest<'_>` is not implemented for `Piped<Trim, nest_rs::prelude::Json<std::string::String>>`
+   |
+   = help: the following other types implement trait `FromRequest<'a>`:
+             &'a nest_rs::nest_rs_http::Request
+             Authorize<A, S>
+             ClientIp
+             Ctx<T>
+             RawBody
+             Result<T, HttpError>
+             nest_rs::nest_rs_authz::http::Scope<E, A>
+             nest_rs::nest_rs_http::Body
+           and $N others
+   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

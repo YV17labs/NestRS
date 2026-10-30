@@ -143,6 +143,24 @@ impl OpenTelemetryConfig {
     }
 }
 
+/// What the boot says of each variable under `<PREFIX>_OPENTELEMETRY__`, a
+/// namespace nothing reads since the specification's `OTEL_*` replaced it.
+pub(crate) const RETIRED_VARIABLE: &str = "variable read by nothing: OpenTelemetry reads the \
+                                           OpenTelemetry specification's OTEL_* variables";
+
+/// The variables the process sets under `<PREFIX>_OPENTELEMETRY__`, by name:
+/// a deployment carried over from before the specification's variables, which
+/// would otherwise export nothing in silence.
+pub(crate) fn retired_variables() -> Vec<String> {
+    let retired = nest_rs_config::var_name("opentelemetry", "");
+    let mut names: Vec<String> = std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .filter(|name| name.starts_with(&retired))
+        .collect();
+    names.sort();
+    names
+}
+
 #[cfg(test)]
 #[expect(
     clippy::result_large_err,
@@ -166,6 +184,22 @@ mod tests {
         assert!(!cfg.log_source_location, "it leaks source paths");
         assert_eq!(cfg.metric_interval, DEFAULT_METRIC_INTERVAL);
         assert_eq!(DEFAULT_METRIC_INTERVAL, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn a_variable_under_the_retired_namespace_is_named_and_no_other() {
+        figment::Jail::expect_with(|jail| {
+            let retired = nest_rs_config::var_name("opentelemetry", "OTLP_ENDPOINT");
+            jail.set_env(&retired, "http://collector:4318");
+            jail.set_env("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318");
+            let named = retired_variables();
+            assert!(named.contains(&retired), "{named:?}");
+            assert!(
+                named.iter().all(|name| !name.starts_with("OTEL_")),
+                "{named:?}"
+            );
+            Ok(())
+        });
     }
 
     #[test]

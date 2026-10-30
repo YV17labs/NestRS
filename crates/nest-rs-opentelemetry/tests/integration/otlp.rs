@@ -335,3 +335,27 @@ fn an_export_timeout_that_is_not_milliseconds_is_ignored_and_said() {
     );
     drop(otel);
 }
+
+/// A deployment carried over from `<PREFIX>_OPENTELEMETRY__*` exports nothing
+/// through it, and is told so once per variable.
+#[test]
+fn a_variable_of_the_retired_namespace_is_said_at_warn() {
+    let logs = LogCapture::install();
+    let retired = nest_rs_config::var_name("opentelemetry", "OTLP_ENDPOINT");
+
+    let otel = init_under(
+        &[(retired.as_str(), "http://collector:4318")],
+        OpenTelemetryConfig::default(),
+    )
+    .expect("a retired variable fails no boot");
+
+    let event = logs.expect_one(
+        TARGET,
+        "variable read by nothing: OpenTelemetry reads the OpenTelemetry specification's OTEL_* \
+         variables",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("variable").as_deref(), Some(retired.as_str()));
+    assert!(!event.quotes("collector:4318"), "{event:?}");
+    drop(otel);
+}

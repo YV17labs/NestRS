@@ -46,9 +46,8 @@
 //! what it read and reports nothing; the first read with a listener files what
 //! the earlier ones found. Only a reader backed by the environment
 //! ([`ConfigService::for_namespace`](crate::ConfigService::for_namespace))
-//! triggers either half. A namespace read without a `Config` behind it
-//! (`nest-rs-opentelemetry`'s) is known as far as it was read, and gets no
-//! report of its own.
+//! triggers either half. A namespace read without a `Config` behind it is
+//! known as far as it was read, and gets no report of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, PoisonError};

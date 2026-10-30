@@ -90,6 +90,7 @@ impl OpenTelemetry {
             }
             mark_initialized();
 
+            say_retired_variables();
             let summary = exporters.summary;
             for variable in summary.ignored {
                 tracing::warn!(
@@ -126,6 +127,7 @@ impl OpenTelemetry {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }
             mark_initialized();
+            say_retired_variables();
             tracing::info!(
                 target: crate::TARGET,
                 service = config
@@ -139,6 +141,19 @@ impl OpenTelemetry {
             );
             Ok(OpenTelemetry {})
         }
+    }
+}
+
+/// One `warn` per variable under the retired `<PREFIX>_OPENTELEMETRY__`, said
+/// once the subscriber can hear it.
+fn say_retired_variables() {
+    use crate::config::RETIRED_VARIABLE;
+    for variable in crate::config::retired_variables() {
+        tracing::warn!(
+            target: crate::TARGET,
+            variable = variable.as_str(),
+            "{RETIRED_VARIABLE}",
+        );
     }
 }
 

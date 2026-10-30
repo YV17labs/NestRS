@@ -58,8 +58,7 @@ struct Owner {
 ///
 /// Records the resolved name, never the key: `("social__google", "CLIENT_ID")`
 /// and `("social", "GOOGLE__CLIENT_ID")` are one variable. A namespace read with
-/// no `Config` behind it (`nest-rs-opentelemetry`'s, before the container) is
-/// not covered.
+/// no `Config` behind it is not covered.
 pub(crate) fn claiming<C: 'static, T>(load: impl FnOnce() -> T) -> (T, Result<(), ConfigError>) {
     /// Restores the outer window even if `from_env` unwinds.
     struct Window(Option<BTreeSet<String>>);

@@ -36,6 +36,10 @@ from two namespaces at once (its timeouts under `OTEL_*`, the rest under ours).
   `OTEL_EXPORTER_OTLP_CERTIFICATE`, `_CLIENT_CERTIFICATE`, `_CLIENT_KEY`, per
   signal or for all three — read through the one bounded reader into a
   `ClientTls`, whose refusals name them through `nest_rs_config::TlsNames`.
+- **A variable under the retired namespace is said, never read**: `init`
+  names each `<PREFIX>_OPENTELEMETRY__*` it finds once at `warn`, since no
+  config reads that namespace and the unclaimed-variable report would stay
+  silent, while the deployment exported nothing.
 - **`OpenTelemetry::init()` takes no argument**, and `OpenTelemetryConfig` is
   set one way: its public fields, over `Default` or `from_env`; the `with_*`
   setters and `new(name)` are gone.

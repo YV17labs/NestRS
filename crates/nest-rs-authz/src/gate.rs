@@ -38,6 +38,7 @@ pub(crate) mod reason {
     pub(crate) const NO_AMBIENT_ABILITY: &str = crate::ability::mask_reason::NO_AMBIENT_ABILITY;
     /// The ability guard's rules would not build — the request is refused
     /// rather than given an ability whose denial evaporates.
+    #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
     pub(crate) const RULES_MISCONFIGURED: &str = "rules_misconfigured";
     /// A field grant stripped a key the answer cannot be delivered without.
     /// Only the edges handing a typed value back reach it; HTTP and WS drop the key.

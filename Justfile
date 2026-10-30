@@ -1,6 +1,10 @@
 # The framework workspace. `demo/` and `bench/` are separate projects with their
 # own Justfiles.
 
+# Warnings fail the each-capability checks in every crate they build. A `cfg` every
+# target matches joins `.cargo/config.toml`'s rustflags; `RUSTFLAGS` would replace them.
+deny_warnings := "--config=target.'cfg(all())'.rustflags=['-D','warnings']"
+
 _default:
     @just --list
 
@@ -15,8 +19,8 @@ lint:
     actionlint
     zizmor --offline --quiet .github
     cargo clippy --workspace --all-targets --all-features --keep-going -- -D warnings
-    cargo hack check -p nest-rs -p nest-rs-macro-hygiene --each-feature --exclude-all-features --keep-going
-    cargo check -p nest-rs-macro-hygiene --no-default-features --features queue,testing
+    cargo hack check -p nest-rs -p nest-rs-macro-hygiene --each-feature --exclude-all-features --keep-going "{{deny_warnings}}"
+    cargo check -p nest-rs-macro-hygiene --no-default-features --features queue,testing "{{deny_warnings}}"
 
 # Each lockfile is read as committed: one its manifests outgrew fails rather than
 # being resolved again. An ignore is judged in the framework's tree, where it is

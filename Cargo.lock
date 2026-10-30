@@ -3383,6 +3383,7 @@ dependencies = [
  "nest-rs-mcp",
  "nest-rs-oauth-client",
  "nest-rs-oauth-resource",
+ "nest-rs-oauth-server",
  "nest-rs-openapi",
  "nest-rs-opentelemetry",
  "nest-rs-pipes",

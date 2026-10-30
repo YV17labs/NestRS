@@ -19,6 +19,7 @@ use nest_rs_http::{
 use nest_rs_mcp::{McpConfig, McpModule};
 use nest_rs_oauth_client::{OAuthClientConfig, OAuthClientModule};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule};
+use nest_rs_oauth_server::{OAuthServerConfig, OAuthServerModule, RegisteredClient};
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 use nest_rs_queue::{OutboxConfig, OutboxModule, QueueConfig, QueueModule};
 use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueConfig, RedisQueueModule};
@@ -235,6 +236,18 @@ fn pinned_authn() -> AuthnConfig {
     }
 }
 
+fn pinned_oauth_server() -> OAuthServerConfig<()> {
+    OAuthServerConfig {
+        clients: vec![RegisteredClient::new(
+            "setups-client",
+            "setups-secret",
+            ["setups:read"],
+            ["https://api.example.com"],
+            (),
+        )],
+    }
+}
+
 fn pinned_oauth_client() -> OAuthClientConfig {
     OAuthClientConfig {
         client_id: "setups-client".into(),
@@ -376,6 +389,13 @@ imported_twice!(
     seeds = |app| app.provide(pinned_oauth_client()),
     unpinned = [OAuthClientModule::for_root(None)],
     pinned = [OAuthClientModule::for_root(pinned_oauth_client())],
+);
+
+imported_twice!(
+    oauth_server,
+    seeds = |app| app.provide(pinned_oauth_server()),
+    unpinned = [OAuthServerModule::for_root::<()>(None)],
+    pinned = [OAuthServerModule::for_root(pinned_oauth_server())],
 );
 
 /// The token verifier `OAuthResourceModule` binds to its resource, which an app

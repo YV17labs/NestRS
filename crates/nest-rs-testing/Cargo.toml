@@ -177,6 +177,7 @@ nest-rs-authn = { path = "../nest-rs-authn" }
 nest-rs-health = { path = "../nest-rs-health" }
 nest-rs-oauth-client = { path = "../nest-rs-oauth-client" }
 nest-rs-oauth-resource = { path = "../nest-rs-oauth-resource" }
+nest-rs-oauth-server = { path = "../nest-rs-oauth-server" }
 nest-rs-openapi = { path = "../nest-rs-openapi" }
 nest-rs-redis = { path = "../nest-rs-redis", features = ["queue"] }
 nest-rs-server-timing = { path = "../nest-rs-server-timing" }

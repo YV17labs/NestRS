@@ -202,12 +202,13 @@ impl DevTokenController {
 
 pub(crate) const AUTHN_HTTP_MODULE: &str = r#"use nest_rs::authn::DevelopmentOnlyGuard;
 use nest_rs::core::module;
+use nest_rs::http::HttpModule;
 
 use super::controller::DevTokenController;
 use crate::authn::AuthnModule;
 
 #[module(
-    imports = [AuthnModule],
+    imports = [AuthnModule, HttpModule],
     providers = [DevelopmentOnlyGuard, DevTokenController],
 )]
 pub struct AuthnHttpModule;

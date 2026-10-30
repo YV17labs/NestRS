@@ -3,8 +3,20 @@ use std::path::Path;
 
 use crate::context::NestrsWorkspace;
 use crate::error::{CliError, CliResult};
+use crate::naming::Transport;
 
 const DEFAULT_HTTP_PORT: u16 = 3000;
+
+/// The framework modules that listen on HTTP, each importing `HttpModule`.
+const MOUNTS_ON_HTTP: [&str; 7] = [
+    "GraphqlModule",
+    "HealthModule",
+    "HttpModule",
+    "McpModule",
+    "OAuthResourceModule",
+    "OpenApiModule",
+    "StaticFilesModule",
+];
 
 /// Next HTTP listen port for a workspace app — one past the highest any app
 /// under `apps/` takes. The base is the workspace's
@@ -33,7 +45,8 @@ fn collect_used_ports(apps_root: &Path) -> CliResult<Vec<u16>> {
 
 /// The port the app in `app` listens on: its own `.env`'s
 /// `<PREFIX>_HTTP__PORT`, else a port its `src/module.rs` pins in code, else
-/// the framework's default when that module mounts `HttpModule` at all.
+/// the framework's default when that module imports anything listening on
+/// HTTP.
 fn app_port(app: &Path) -> CliResult<Option<u16>> {
     let read = |path: &Path| -> CliResult<Option<String>> {
         if !path.is_file() {
@@ -45,8 +58,28 @@ fn app_port(app: &Path) -> CliResult<Option<u16>> {
         return Ok(Some(port));
     }
     Ok(read(&app.join("src/module.rs"))?.and_then(|module| {
-        pinned_port(&module).or_else(|| module.contains("HttpModule").then_some(DEFAULT_HTTP_PORT))
+        pinned_port(&module).or_else(|| listens_on_http(&module).then_some(DEFAULT_HTTP_PORT))
     }))
+}
+
+/// Whether an app's root `module` imports anything listening on HTTP: a
+/// framework module mounting there, or a feature's adapter of an edge served
+/// over it (`BlogHttpModule`, `ChatWsModule`), which imports the transport.
+fn listens_on_http(module: &str) -> bool {
+    module
+        .lines()
+        .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
+        .flat_map(|code| code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')))
+        .any(|word| {
+            MOUNTS_ON_HTTP.contains(&word)
+                || word.strip_suffix("Module").is_some_and(|stem| {
+                    Transport::ALL
+                        .into_iter()
+                        .filter(|transport| transport.serves_on_http())
+                        .filter_map(|transport| stem.strip_suffix(transport.module_infix()))
+                        .any(|feature| feature.starts_with(|c: char| c.is_ascii_uppercase()))
+                })
+        })
 }
 
 /// `<PREFIX>_HTTP__PORT` as a `.env` file assigns it, whatever the prefix.
@@ -78,32 +111,43 @@ mod tests {
     fn an_app_s_port_is_its_own_env_s_then_its_pin_then_the_default() {
         let dir = tempfile::tempdir().unwrap();
         let apps = dir.path().join("apps");
-        for app in ["auth", "api", "hello", "legacy", "cli"] {
+        let roots = [
+            ("auth", "HttpModule::for_root(None)"),
+            ("api", "BlogHttpModule"),
+            (
+                "legacy",
+                "HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })",
+            ),
+            ("hello", "HttpModule::for_root(None)"),
+            ("blog", "[BlogHttpModule]"),
+            ("live", "[ChatWsModule, NotificationsWsModule]"),
+            ("assistant", "[McpModule::for_root(opts), UsersMcpModule]"),
+            ("graph", "[UsersGraphqlModule]"),
+            (
+                "probes",
+                "[HealthModule, AudioQueueModule, RedisQueueModule]",
+            ),
+            (
+                "jobs",
+                "[AudioQueueModule, RedisQueueModule, AudioScheduleModule]",
+            ),
+            ("pushes", "// HttpModule\n[ChatModule, WsModule]"),
+            ("cli", "ConfigModule::for_root()"),
+        ];
+        for (app, module) in roots {
             fs::create_dir_all(apps.join(app).join("src")).unwrap();
+            fs::write(apps.join(app).join("src/module.rs"), module).unwrap();
         }
         fs::write(apps.join("auth/.env"), "# its own\nACME_HTTP__PORT=3001\n").unwrap();
-        fs::write(
-            apps.join("auth/src/module.rs"),
-            "HttpModule::for_root(None)",
-        )
-        .unwrap();
         fs::write(apps.join("api/.env"), "export NESTRS_HTTP__PORT=\"3004\"\n").unwrap();
-        fs::write(
-            apps.join("hello/src/module.rs"),
-            "HttpModule::for_root(None)",
-        )
-        .unwrap();
-        fs::write(
-            apps.join("legacy/src/module.rs"),
-            "HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })",
-        )
-        .unwrap();
-        fs::write(apps.join("cli/src/module.rs"), "ConfigModule::for_root()").unwrap();
 
         let mut used = collect_used_ports(&apps).unwrap();
         // `read_dir` order is not guaranteed.
         used.sort_unstable();
-        assert_eq!(used, vec![3000, 3001, 3002, 3004]);
+        assert_eq!(
+            used,
+            vec![3000, 3000, 3000, 3000, 3000, 3000, 3001, 3002, 3004]
+        );
     }
 
     #[test]

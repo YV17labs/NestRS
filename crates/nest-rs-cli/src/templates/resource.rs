@@ -98,15 +98,17 @@ pub use module::{{http_module}};
 "#;
 
 /// Imports `AuthzModule` alongside the port so the ability guard is
-/// reachable — the access graph fails boot otherwise.
+/// reachable — the access graph fails boot otherwise — and `HttpModule`, which
+/// serves the controller.
 pub(crate) const HTTP_MODULE: &str = r#"use nest_rs::core::module;
+use nest_rs::http::HttpModule;
 
 use super::controller::{{controller}};
 use crate::authz::AuthzModule;
 use crate::{{snake}}::{{module}};
 
 #[module(
-    imports = [{{module}}, AuthzModule],
+    imports = [{{module}}, AuthzModule, HttpModule],
     providers = [{{controller}}],
 )]
 pub struct {{http_module}};

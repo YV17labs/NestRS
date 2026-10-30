@@ -240,12 +240,13 @@ impl PostController {}
 /// The resource's HTTP module without the `AuthzModule` import the guards
 /// brought.
 const UNGUARDED_CRUD_MODULE: &str = r#"use nest_rs::core::module;
+use nest_rs::http::HttpModule;
 
 use super::controller::PostController;
 use crate::post::PostModule;
 
 #[module(
-    imports = [PostModule],
+    imports = [PostModule, HttpModule],
     providers = [PostController],
 )]
 pub struct PostHttpModule;

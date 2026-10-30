@@ -15,17 +15,21 @@ mod module;
 pub use module::{{tmodule}};
 "#;
 
-/// Adapter `module.rs` — imports the port, provides the handler.
+/// Adapter `module.rs` — imports the port and the framework modules serving
+/// its edge, provides the handler. `{{runtime_uses}}` / `{{runtime_imports}}`
+/// are [`Transport::runtime`](crate::naming::Transport::runtime), rendered.
 ///
 /// **Every adapter imports the port**, the queue's included: a processor
 /// handing the job to the port service would otherwise fail the access graph.
+/// **And what serves its edge**, bare, so the app importing the adapter serves
+/// it with no import of its own; only the app pins one.
 pub(crate) const MODULE: &str = r#"use nest_rs::core::module;
-
+{{runtime_uses}}
 use super::{{handler_mod}}::{{handler}};
 use crate::{{snake}}::{{module}};
 
 #[module(
-    imports = [{{module}}],
+    imports = [{{module}}{{runtime_imports}}],
     providers = [{{handler}}],
 )]
 pub struct {{tmodule}};
@@ -148,21 +152,6 @@ pub struct {{resolver}} {
 impl {{resolver}} {}
 "#;
 
-/// The WS adapter's `module.rs`. `WsModule` is **not optional**: it owns the
-/// connection registry every `WsClient` reads.
-pub(crate) const WS_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::ws::WsModule;
-
-use super::{{handler_mod}}::{{handler}};
-use crate::{{snake}}::{{module}};
-
-#[module(
-    imports = [{{module}}, WsModule],
-    providers = [{{handler}}],
-)]
-pub struct {{tmodule}};
-"#;
-
 pub(crate) const WS_GATEWAY: &str = r#"use std::sync::Arc;
 
 use nest_rs::core::error_message;
@@ -277,8 +266,8 @@ pub struct {{tasks}} {
 impl {{tasks}} {
     // Fires on every replica (`replicas = "each"`, the default), which suits
     // per-process work. Work that is the deployment's declares
-    // `replicas = "one"`, and the app imports `RedisScheduleModule` beside
-    // `ScheduleModule` (feature `redis-schedule`) so one replica claims each tick.
+    // `replicas = "one"`, and the app imports `RedisScheduleModule` (feature
+    // `redis-schedule`) so one replica claims each tick.
     #[every("60s")]
     async fn tick(&self) -> Result<()> {
 {{op_body}}

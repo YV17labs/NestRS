@@ -140,7 +140,7 @@ fn generate_ws_adapter_imports_the_connection_registry() {
         fs::read_to_string(dir.path().join("crates/features/src/posts/ws/module.rs")).unwrap();
     assert!(
         module_rs.contains("use nest_rs::ws::WsModule;")
-            && module_rs.contains("imports = [PostsModule, WsModule"),
+            && module_rs.contains("imports = [PostsModule, HttpModule, WsModule"),
         "the generated ws module must import WsModule: {module_rs}"
     );
 }
@@ -375,7 +375,7 @@ fn generate_queue_adapter_module_imports_the_port() {
     let module_rs =
         fs::read_to_string(dir.path().join("crates/features/src/posts/queue/module.rs")).unwrap();
     assert!(
-        module_rs.contains("imports = [PostsModule]"),
+        module_rs.contains("imports = [PostsModule, QueueModule]"),
         "the queue adapter module must import its port: {module_rs}"
     );
 
@@ -780,23 +780,99 @@ fn generate_graphql_reuses_an_existing_authz_adapter() {
     );
 }
 
-/// `g graphql` also edits the app's `Cargo.toml`, so its printed next step
-/// compiles.
+/// Every adapter imports the modules that serve its edge, bare, so the app
+/// importing the adapter serves it and is told nothing more to import; an
+/// event's bus is imported by the port that emits it.
 #[test]
-fn generate_graphql_gives_the_app_crate_the_dependency_its_next_step_needs() {
-    let dir = tempfile::tempdir().unwrap();
-    write_fake_workspace(dir.path());
-    let app = write_fake_app(dir.path(), "hello");
-    let root = dir.path().to_str().unwrap();
+fn every_adapter_imports_the_modules_that_serve_its_edge() {
+    // (transport, the file importing them, below the feature, each `use` path)
+    const CASES: [(&str, &str, &[&str]); 7] = [
+        ("http", "http/module.rs", &["nest_rs::http::HttpModule"]),
+        (
+            "graphql",
+            "graphql/module.rs",
+            &["nest_rs::graphql::GraphqlModule"],
+        ),
+        (
+            "ws",
+            "ws/module.rs",
+            &["nest_rs::http::HttpModule", "nest_rs::ws::WsModule"],
+        ),
+        ("queue", "queue/module.rs", &["nest_rs::queue::QueueModule"]),
+        (
+            "schedule",
+            "schedule/module.rs",
+            &["nest_rs::schedule::ScheduleModule"],
+        ),
+        ("mcp", "mcp/module.rs", &["nest_rs::http::HttpModule"]),
+        ("events", "module.rs", &["nest_rs::events::EventsModule"]),
+    ];
 
-    run_ok(dir.path(), &["g", "feature", "notes", "-p", root]);
-    run_ok(&app, &["g", "graphql", "notes"]);
+    for (transport, file, modules) in CASES {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let app = write_fake_app(dir.path(), "api");
+        let root = dir.path().to_str().unwrap();
 
-    let app_cargo = fs::read_to_string(app.join("Cargo.toml")).unwrap();
-    assert!(
-        app_cargo.contains("graphql"),
-        "the app that has to import GraphqlModule needs the crate: {app_cargo}",
-    );
+        run_ok(dir.path(), &["g", "feature", "posts", "-p", root]);
+        let printed = run_ok(&app, &["g", transport, "posts"]);
+
+        let module_rs =
+            fs::read_to_string(dir.path().join("crates/features/src/posts").join(file)).unwrap();
+        for module in modules {
+            let ident = module.rsplit("::").next().unwrap();
+            let imports = module_rs
+                .split("imports = [")
+                .nth(1)
+                .and_then(|rest| rest.split(']').next())
+                .unwrap_or_default();
+            let listed = imports.split([',', ' ', '\n']).any(|token| token == ident);
+            assert!(
+                module_rs.contains(&format!("use {module};")) && listed,
+                "`g {transport}` imports {ident} in posts/{file}: {module_rs}",
+            );
+        }
+        assert!(
+            !printed.contains("Make sure the app imports"),
+            "`g {transport}` wired what serves its edge itself: {printed}",
+        );
+    }
+}
+
+/// The queue backend is the app's choice, so `g queue` names its binding when
+/// the app binds none, and only then.
+#[test]
+fn generate_queue_names_the_backend_binding_only_when_the_app_binds_none() {
+    const UNBOUND: &str = "binds no queue backend";
+
+    for bound in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let app = write_fake_app(dir.path(), "worker");
+        if bound {
+            let module_rs = app.join("src/module.rs");
+            let source = fs::read_to_string(&module_rs).unwrap().replace(
+                "HttpModule::for_root(None),",
+                "HttpModule::for_root(None),\n        RedisQueueModule,",
+            );
+            fs::write(&module_rs, source).unwrap();
+        }
+        let root = dir.path().to_str().unwrap();
+
+        run_ok(dir.path(), &["g", "feature", "audio", "-p", root]);
+        let printed = run_ok(&app, &["g", "queue", "audio"]);
+
+        assert_eq!(
+            printed.contains(UNBOUND),
+            !bound,
+            "the binding is named only where the app has none: {printed}",
+        );
+        let app_cargo = fs::read_to_string(app.join("Cargo.toml")).unwrap();
+        assert!(
+            app_cargo.contains("redis-queue"),
+            "the app that binds the backend needs the binding's feature: {app_cargo}",
+        );
+    }
 }
 
 #[test]

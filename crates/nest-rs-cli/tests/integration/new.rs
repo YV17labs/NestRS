@@ -356,11 +356,12 @@ fn new_workspace_app_scaffold() {
 }
 
 /// The port sits in the app's own `.env`, never pinned in code: a pin would cut
-/// the app's whole HTTP namespace off the cascade.
+/// the app's whole HTTP namespace off the cascade. The root names no transport,
+/// which its HTTP adapter imports.
 #[track_caller]
 fn assert_the_port_is_the_app_s_own_setting(app: &Path, port: u16) {
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
-    assert!(module.contains("HttpModule::for_root(None)"), "{module}");
+    assert!(!module.contains("HttpModule::for_root"), "{module}");
     assert!(!module.contains("HttpConfig"), "{module}");
     let own = fs::read_to_string(app.join(".env")).unwrap();
     assert!(

@@ -128,7 +128,8 @@ pub(super) fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
         // `AUTHZ`: the operation's posture names its action and, over a port
         // with no entity, the `#[subject]` written beside the service.
         Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL, &AUTHZ],
-        Transport::Ws => vec![&WS, &TRACING],
+        // `HTTP`: the adapter imports `HttpModule`, which its gateway self-mounts on.
+        Transport::Ws => vec![&WS, &HTTP, &TRACING],
         // `SERDE`: the payload carries plain derives, not `#[input]`, whose
         // `deny_unknown_fields` would dead-letter a newer producer's jobs.
         Transport::Queue => vec![&REDIS_QUEUE, &ANYHOW, &SERDE],
@@ -138,15 +139,18 @@ pub(super) fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
     }
 }
 
-/// What an **app crate** needs to depend on to name the transport's root
-/// module; empty where every scaffolded app crate already carries it.
+/// What an **app crate** needs to depend on to name what its root binds for
+/// the transport: the queue's backend, which no adapter imports. Every other
+/// adapter imports what serves it, so the app names nothing more.
 pub(super) fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
     match transport {
-        Transport::Http | Transport::Ws | Transport::Mcp => vec![],
-        Transport::Graphql => vec![&GRAPHQL],
         Transport::Queue => vec![&REDIS_QUEUE],
-        Transport::Schedule => vec![&SCHEDULE],
-        Transport::Events => vec![&EVENTS],
+        Transport::Http
+        | Transport::Graphql
+        | Transport::Ws
+        | Transport::Schedule
+        | Transport::Mcp
+        | Transport::Events => vec![],
     }
 }
 
@@ -323,13 +327,14 @@ mod tests {
             for crud_port in [false, true] {
                 let (handler, module) =
                     crate::commands::generate::adapter::templates_for(transport, crud_port);
+                let (runtime, _) = crate::commands::generate::adapter::runtime_vars(transport);
                 // The queue payload rides at the port, but `g queue` writes it.
                 let extra = if transport == Transport::Queue {
                     crate::templates::adapter::QUEUE_COMMAND
                 } else {
                     ""
                 };
-                let src = format!("{handler}{module}{extra}");
+                let src = format!("{handler}{module}{runtime}{extra}");
                 for (token, krate) in NAMED {
                     if !src.contains(token) {
                         continue;
@@ -363,12 +368,13 @@ mod tests {
                 .collect();
             let (handler, module) =
                 crate::commands::generate::adapter::templates_for(transport, false);
+            let (runtime, _) = crate::commands::generate::adapter::runtime_vars(transport);
             let extra = if transport == Transport::Queue {
                 crate::templates::adapter::QUEUE_COMMAND
             } else {
                 ""
             };
-            let src = format!("{handler}{module}{extra}");
+            let src = format!("{handler}{module}{runtime}{extra}");
             for rest in src.split("nest_rs::").skip(1) {
                 let named = rest
                     .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))

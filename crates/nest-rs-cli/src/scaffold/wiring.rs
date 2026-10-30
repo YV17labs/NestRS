@@ -44,7 +44,8 @@ pub(crate) fn ensure_lines(new_lines: Vec<String>) -> Transform {
 
 /// Ensure every `(use_path, ident)` is imported into a
 /// `#[module(imports = [ … ])]` block: `use <use_path>;` among the top-of-file
-/// `use` lines, and the bare `<ident>,` entry before the closing `]`.
+/// `use` lines, and the bare `<ident>,` entry before the closing `]` — a
+/// `#[module(…)]` listing no imports yet gains its `imports = [<ident>]`.
 ///
 /// A slice, so a caller wiring two modules lands them in **one** transform.
 pub(crate) fn ensure_module_imports(imports: &[(&str, &str)]) -> Transform {
@@ -66,21 +67,27 @@ pub(crate) fn ensure_module_imports(imports: &[(&str, &str)]) -> Transform {
 fn insert_module_import(lines: &mut Vec<String>, use_line: &str, ident: &str) -> bool {
     let mut changed = false;
 
-    // 1. The `use` import at the top of the file.
+    // 1. The `use` import at the top of the file, with the imports of its crate.
     if !lines.iter().any(|l| l.trim() == use_line) {
+        let root = use_line.split("::").next().unwrap_or(use_line);
         let insert_at = lines
             .iter()
-            .rposition(|l| l.trim_start().starts_with("use "))
+            .rposition(|l| l.trim_start().starts_with(&format!("{root}::")))
+            .or_else(|| {
+                lines
+                    .iter()
+                    .rposition(|l| l.trim_start().starts_with("use "))
+            })
             .map(|i| i + 1)
             .unwrap_or(0);
         lines.insert(insert_at, use_line.to_owned());
         changed = true;
     }
 
-    // 2. The entry inside `imports = [ … ]`.
-    if let Some((start, end)) = imports_span(lines) {
-        let already = lines[start..=end].iter().any(|l| entry_matches(l, ident));
-        if !already {
+    // 2. The entry inside `imports = [ … ]`, opening the list where there is none.
+    match imports_span(lines) {
+        None => changed |= open_imports(lines, ident),
+        Some((start, end)) if !lines[start..=end].iter().any(|l| entry_matches(l, ident)) => {
             if start == end {
                 // Single-line `imports = [A, B]` — splice into the brackets.
                 if let Some(spliced) = splice_inline(&lines[start], ident) {
@@ -93,6 +100,7 @@ fn insert_module_import(lines: &mut Vec<String>, use_line: &str, ident: &str) ->
                 changed = true;
             }
         }
+        Some(_) => {}
     }
 
     changed
@@ -149,6 +157,21 @@ fn imports_span(lines: &[String]) -> Option<(usize, usize)> {
         .position(|l| l.trim_start().starts_with(']'))
         .map(|i| start + 1 + i)?;
     Some((start, end))
+}
+
+/// Open `imports = [<ident>]` in the first `#[module(` of `lines`, which lists
+/// none: inline after the parenthesis, or on a line of its own when the
+/// attribute's arguments start on the next one. `false` when there is none.
+fn open_imports(lines: &mut Vec<String>, ident: &str) -> bool {
+    let Some(at) = lines.iter().position(|l| l.contains("#[module(")) else {
+        return false;
+    };
+    if lines[at].trim_end().ends_with("#[module(") {
+        lines.insert(at + 1, format!("    imports = [{ident}],"));
+    } else {
+        lines[at] = lines[at].replacen("#[module(", &format!("#[module(imports = [{ident}], "), 1);
+    }
+    true
 }
 
 /// Splice `ident` before the `]` of a single-line `imports = [ … ]`.
@@ -233,6 +256,29 @@ mod tests {
         let out = t(src).expect("inserts");
         assert!(out.contains("PostsHttpModule"));
         assert!(out.contains("use crate::posts::PostsHttpModule;"));
+    }
+
+    #[test]
+    fn ensure_module_import_opens_the_list_a_module_lacks() {
+        for (src, opened) in [
+            (
+                "use nest_rs::core::module;\n\n#[module(providers = [PostsService])]\npub struct PostsModule;\n",
+                "#[module(imports = [EventsModule], providers = [PostsService])]",
+            ),
+            (
+                "use nest_rs::core::module;\n\n#[module(\n    providers = [PostsService],\n)]\npub struct PostsModule;\n",
+                "#[module(\n    imports = [EventsModule],\n    providers = [PostsService],",
+            ),
+        ] {
+            let t = || ensure_module_imports(&[("nest_rs::events::EventsModule", "EventsModule")]);
+            let out = t()(src).expect("inserts");
+            assert!(
+                out.contains("use nest_rs::core::module;\nuse nest_rs::events::EventsModule;\n"),
+                "beside the imports of its crate: {out}",
+            );
+            assert!(out.contains(opened), "{out}");
+            assert!(t()(&out).is_none(), "idempotent: {out}");
+        }
     }
 
     #[test]

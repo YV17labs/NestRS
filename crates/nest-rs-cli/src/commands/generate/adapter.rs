@@ -1,6 +1,7 @@
 //! `nestrs g http|graphql|ws|queue|schedule|mcp|events <feature>` — bolt one
 //! transport adapter onto an existing port. One uniform generator parameterised
-//! by [`Transport`]: it picks the right templates, ensures the transport's
+//! by [`Transport`]: it picks the right templates, imports what serves the edge
+//! into the adapter (an event's bus into the port), ensures the transport's
 //! crates, wires the feature `mod.rs`, and (inside an app) the app's imports.
 //!
 //! A `g resource` port exposes a `CrudService` rather than `g feature`'s
@@ -62,10 +63,13 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let tmodule = names.module_for(transport);
     let is_graphql = transport == Transport::Graphql;
     let crud_port = is_crud_port(&ws, &names.snake);
+    let (runtime_uses, runtime_imports) = runtime_vars(transport);
     let mut r = Renderer::new(&names)
         .with("handler", names.handler_for(transport))
         .with("handler_mod", transport.handler_mod())
-        .with("tmodule", tmodule.clone());
+        .with("tmodule", tmodule.clone())
+        .with("runtime_uses", runtime_uses)
+        .with("runtime_imports", runtime_imports);
     for (key, value) in crate::templates::crud::crud_vars(crud_port, transport) {
         r = r.with(key, value);
     }
@@ -151,7 +155,8 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         ));
     }
     // An event is a published fact, so it too is port vocabulary, with no plural
-    // folder: `events/` is the edge.
+    // folder: `events/` is the edge. Its bus is the port's import, since the
+    // service emitting the event injects it.
     if transport == Transport::Events {
         s.create(
             feature_root.join("event.rs"),
@@ -159,6 +164,10 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         );
         port_lines.push("mod event;".to_string());
         port_lines.push(format!("pub use event::{};", names.event()));
+        s.edit(
+            feature_root.join("module.rs"),
+            ensure_module_imports(&[("nest_rs::events::EventsModule", "EventsModule")]),
+        );
     }
 
     let mut deps = adapter_deps(transport);
@@ -210,15 +219,20 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         imports.extend(auth::app_imports());
     }
     let wired_app = wire_into_app(&ctx, &mut s, &imports, None);
-    // The app crate needs the crate owning the transport's root module, or the
-    // printed next step fails with `E0433`.
+    // Read before the edit lands: the app's own binding of a queue backend.
+    let backend_bound = transport == Transport::Queue
+        && wired_app
+            .as_deref()
+            .and_then(|module_rs| std::fs::read_to_string(module_rs).ok())
+            .is_some_and(|module_rs| module_rs.contains("RedisQueueModule"));
+    // The app crate needs the crate owning the binding its next step names, or
+    // that step fails with `E0433`.
+    let host_deps = app_host_deps(transport);
     if wired_app.is_some()
+        && !host_deps.is_empty()
         && let Some(app) = ctx.current_app.as_ref()
     {
-        s.edit(
-            app.join("Cargo.toml"),
-            ensure_features_deps(app_host_deps(transport)),
-        );
+        s.edit(app.join("Cargo.toml"), ensure_features_deps(host_deps));
     }
 
     finish(
@@ -240,6 +254,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         &names,
         &tmodule,
         wired_app.is_some(),
+        backend_bound,
         authz,
         grant,
     );
@@ -278,26 +293,32 @@ pub(crate) fn templates_for(transport: Transport, crud_port: bool) -> (&'static 
         (Transport::Queue, _) => (adapter::QUEUE_PROCESSOR, adapter::MODULE),
         (Transport::Http, false) => (adapter::HTTP_CONTROLLER, adapter::MODULE),
         (Transport::Graphql, false) => (adapter::GRAPHQL_RESOLVER, adapter::MODULE),
-        (Transport::Ws, _) => (adapter::WS_GATEWAY, adapter::WS_MODULE),
+        (Transport::Ws, _) => (adapter::WS_GATEWAY, adapter::MODULE),
         (Transport::Schedule, _) => (adapter::SCHEDULE_TASKS, adapter::MODULE),
         (Transport::Mcp, _) => (adapter::MCP_TOOL, adapter::MODULE),
         (Transport::Events, _) => (adapter::EVENTS_LISTENER, adapter::MODULE),
     }
 }
 
-/// The app-level root module each transport needs to actually serve the adapter.
-fn host_module(transport: Transport) -> &'static str {
-    match transport {
-        Transport::Http | Transport::Ws => "nest_rs::http::HttpModule",
-        Transport::Graphql => "nest_rs::graphql::GraphqlModule",
-        Transport::Queue => {
-            "nest_rs::redis::RedisModule::for_root(None) + nest_rs::redis::RedisQueueModule + nest_rs::queue::QueueModule::for_root(None)"
-        }
-        Transport::Schedule => "nest_rs::schedule::ScheduleModule",
-        Transport::Mcp => "nest_rs::http::HttpModule",
-        Transport::Events => "nest_rs::events::EventsModule",
-    }
+/// [`Transport::runtime`] as the `MODULE` template writes it: its `use` lines,
+/// and its entries after the port's in `imports`.
+pub(crate) fn runtime_vars(transport: Transport) -> (String, String) {
+    let runtime = transport.runtime();
+    let uses = runtime
+        .iter()
+        .map(|path| format!("use {path};\n"))
+        .collect();
+    let imports = runtime
+        .iter()
+        .map(|path| format!(", {}", path.rsplit("::").next().unwrap_or(path)))
+        .collect();
+    (uses, imports)
 }
+
+/// What an app binds at its root to run a queue adapter's jobs: the backend
+/// is the composition's choice, so no adapter imports it.
+const QUEUE_BACKEND: &str =
+    "nest_rs::redis::RedisModule::for_root(None) and nest_rs::redis::RedisQueueModule";
 
 /// What a generated GraphQL or MCP adapter waits for in `authz/ability.rs`,
 /// its subject named by the path that resolves there.
@@ -308,37 +329,42 @@ enum Grant {
     EveryAction(String),
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one step per fact the run settled; a struct would only rename the list"
+)]
 fn print_next_steps(
     ctx: &Context,
     transport: Transport,
     names: &Names,
     tmodule: &str,
     wired: bool,
+    backend_bound: bool,
     authz: Option<&'static auth::AuthzAdapter>,
     grant: Option<Grant>,
 ) {
     println!();
     println!("Next steps:");
     if wired {
-        println!("  {tmodule} is wired into the current app.");
-        println!(
-            "  Make sure the app imports {} so the adapter is served.",
-            host_module(transport)
-        );
+        println!("  {tmodule} is wired into the current app, and imports what serves it.");
     } else if ctx.current_app.is_some() {
         println!(
-            "  Import `features::{}::{}` in this app (needs {}).",
-            names.snake,
-            tmodule,
-            host_module(transport)
+            "  Import `features::{}::{}` in this app: it imports what serves it.",
+            names.snake, tmodule,
         );
     } else {
         println!(
-            "  Import `features::{}::{}` in an app that has {}.",
-            names.snake,
-            tmodule,
-            host_module(transport)
+            "  Import `features::{}::{}` in the app that serves it: it imports what serves it.",
+            names.snake, tmodule,
         );
+    }
+    if transport == Transport::Queue && wired && !backend_bound {
+        println!(
+            "  The app binds no queue backend yet: import {QUEUE_BACKEND} at its root, \
+             where the backend is chosen, so its worker has one to consume."
+        );
+    } else if transport == Transport::Queue && !wired {
+        println!("  The app importing it binds a queue backend at its root: {QUEUE_BACKEND}.");
     }
     if matches!(transport, Transport::Queue) {
         println!(

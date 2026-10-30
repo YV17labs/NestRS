@@ -21,8 +21,7 @@ pub(crate) enum Transport {
 }
 
 impl Transport {
-    /// Every transport, for a check over the whole adapter surface. Test-only.
-    #[cfg(test)]
+    /// Every transport, for a check over the whole adapter surface.
     pub(crate) const ALL: [Transport; 7] = [
         Self::Http,
         Self::Graphql,
@@ -47,7 +46,7 @@ impl Transport {
     }
 
     /// PascalCase infix used in the module name (`Users<Http>Module`).
-    fn module_infix(self) -> &'static str {
+    pub(crate) fn module_infix(self) -> &'static str {
         match self {
             Self::Http => "Http",
             Self::Graphql => "Graphql",
@@ -75,6 +74,29 @@ impl Transport {
     /// Module name of the handler file (`controller`, `resolver`, …).
     pub(crate) fn handler_mod(self) -> &'static str {
         self.handler_file().trim_end_matches(".rs")
+    }
+
+    /// The framework modules this transport's adapter imports bare, so the app
+    /// importing the adapter serves it: its transport, and the registry a
+    /// gateway needs. None for events, whose bus the emitting port imports.
+    pub(crate) fn runtime(self) -> &'static [&'static str] {
+        match self {
+            Self::Http | Self::Mcp => &["nest_rs::http::HttpModule"],
+            Self::Graphql => &["nest_rs::graphql::GraphqlModule"],
+            Self::Ws => &["nest_rs::http::HttpModule", "nest_rs::ws::WsModule"],
+            Self::Queue => &["nest_rs::queue::QueueModule"],
+            Self::Schedule => &["nest_rs::schedule::ScheduleModule"],
+            Self::Events => &[],
+        }
+    }
+
+    /// Whether this transport's adapter serves on the HTTP listener, so an app
+    /// importing it listens.
+    pub(crate) fn serves_on_http(self) -> bool {
+        match self {
+            Self::Http | Self::Graphql | Self::Ws | Self::Mcp => true,
+            Self::Queue | Self::Schedule | Self::Events => false,
+        }
     }
 }
 

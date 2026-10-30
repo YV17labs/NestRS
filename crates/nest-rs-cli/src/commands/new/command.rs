@@ -203,10 +203,13 @@ mod tests {
     }
 
     /// The app must actually reach it: the app module imports the feature's
-    /// HTTP module, and that module lists the controller as a provider.
+    /// HTTP module, which lists the controller as a provider and imports the
+    /// transport serving it, so the root names no transport.
     #[test]
     fn the_app_wires_the_hello_controller_in() {
         assert!(workspace::APP_MODULE.contains("{{http_module}},"));
+        assert!(!workspace::APP_MODULE.contains("HttpModule::"));
         assert!(hello::FEATURE_HTTP_MODULE.contains("providers = [{{controller}}]"));
+        assert!(hello::FEATURE_HTTP_MODULE.contains("imports = [{{module}}, HttpModule]"));
     }
 }

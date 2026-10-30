@@ -62,17 +62,14 @@ impl Setting {
     ///
     /// The refusal names `T` and drops the parser's own reason, inline or from
     /// a file alike: `T::Err`'s `Display` is free to quote its input.
-    #[expect(
-        clippy::map_err_ignore,
-        reason = "the parser's error may quote the value; the refusal names the type instead"
-    )]
     pub fn parse<T: FromStr>(&self) -> Result<T, ConfigError> {
-        self.value.parse::<T>().map_err(|_| {
-            self.refuse(format_args!(
-                "does not parse as {}",
-                std::any::type_name::<T>()
-            ))
-        })
+        parsed(&self.value).map_err(|expected| self.refuse(expected))
+    }
+
+    /// The value read as `T`, refused under this setting's variable with what
+    /// `T` expected.
+    pub(crate) fn read<T: FromSetting>(&self) -> Result<T, ConfigError> {
+        T::from_setting(&self.value).map_err(|expected| self.refuse(expected))
     }
 
     /// The value decoded from JSON as `T`, refused under this setting's variable
@@ -225,13 +222,5 @@ impl FromSetting for uuid::Uuid {
 impl<T: FromSetting> FromSetting for nest_rs_core::Secret<T> {
     fn from_setting(text: &str) -> Result<Self, Cow<'static, str>> {
         T::from_setting(text).map(Self::new)
-    }
-}
-
-impl Setting {
-    /// The value read as `T`, refused under this setting's variable with what
-    /// `T` expected.
-    pub(crate) fn read<T: FromSetting>(&self) -> Result<T, ConfigError> {
-        T::from_setting(&self.value).map_err(|expected| self.refuse(expected))
     }
 }

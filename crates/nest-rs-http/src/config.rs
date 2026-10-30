@@ -677,8 +677,6 @@ mod tests {
 
     use super::*;
 
-    /// A TLS file the transport cannot read fails the boot with its I/O reason
-    /// as the source.
     /// The transport's own long-lived streams take the defaults it exports
     /// for every edge riding on it.
     #[test]
@@ -689,6 +687,8 @@ mod tests {
         assert_eq!(d.request_timeout, Some(DEFAULT_UNIT_TIMEOUT));
     }
 
+    /// A TLS file the transport cannot read fails the boot with its I/O reason
+    /// as the source.
     #[test]
     fn an_unreadable_tls_file_fails_the_boot_with_its_reason() {
         let env = ConfigService::with_vars(

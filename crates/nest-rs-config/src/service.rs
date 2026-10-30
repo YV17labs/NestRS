@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use nest_rs_core::EnvPrefix;
 
 use crate::error::ConfigError;
+use crate::field::ConfigField;
 use crate::material::{Material, read_material};
 use crate::setting::Setting;
 use crate::source::{ConfigSource, EnvSource, MapSource};
@@ -473,12 +474,7 @@ impl ConfigService {
     /// The vocabulary is [`nest_rs_core::parse_bool`], shared with the kernel; an
     /// unrecognised value is a boot error naming the variable.
     pub fn flag(&self, key: &str, default: bool) -> Result<bool, ConfigError> {
-        match self.setting(key)? {
-            None => Ok(default),
-            Some(setting) => nest_rs_core::parse_bool(&setting.value).ok_or_else(|| {
-                setting.refuse("expected a boolean (1/0, true/false, yes/no, on/off)")
-            }),
-        }
+        bool::overlay(self, key, default)
     }
 
     /// A whole count, where **`0` means unlimited**: unset keeps `base`, and
@@ -493,16 +489,7 @@ impl ConfigService {
 
     /// Comma-separated, trimmed, empties dropped; `default` is kept when unset.
     pub fn list(&self, key: &str, default: Vec<String>) -> Result<Vec<String>, ConfigError> {
-        Ok(self
-            .get(key)?
-            .map(|raw| {
-                raw.split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect()
-            })
-            .unwrap_or(default))
+        Vec::overlay(self, key, default)
     }
 }
 

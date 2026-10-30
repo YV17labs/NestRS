@@ -144,8 +144,8 @@ pub struct McpConfig {
     /// `None` ⇒ no deadline. Read from `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS`,
     /// whole seconds from 1 to 3600 or `0` for none — refused outside, from the
     /// environment and from the pinned struct alike; defaults to 20 seconds,
-    /// [`nest_rs_http::DEFAULT_UNIT_TIMEOUT`]. A deadline past the HTTP shutdown window, or
-    /// none, is said at boot with a `warn`.
+    /// [`nest_rs_http::DEFAULT_UNIT_TIMEOUT`]. A deadline past the HTTP
+    /// shutdown window, or none, is said at boot with a `warn`.
     #[config(bounds = OPERATION_TIMEOUT)]
     pub operation_timeout: Option<Duration>,
     /// Live sessions one mount holds at most. Past it, an `initialize` from a

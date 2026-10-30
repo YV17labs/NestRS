@@ -284,7 +284,7 @@ impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(None::<C>, builder)
+        queue_feature::<C>(builder)
     }
 }
 

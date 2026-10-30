@@ -14,7 +14,8 @@ pub struct ServerTimingConfig {
     ///
     /// The header reaches every client, so `Default` keeps it off — a config
     /// pinned over `..Default::default()` stamps nothing in any profile — and
-    /// only a development or test profile's [`Config::defaults`](nest_rs_config::Config::defaults) turns it on.
+    /// only a development or test profile's
+    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns it on.
     /// Enabling it outside such a profile is honoured and logged at `warn`.
     pub enabled: bool,
 }

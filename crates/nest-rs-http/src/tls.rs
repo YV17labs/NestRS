@@ -64,10 +64,11 @@ enum TlsSource {
 /// Material read from files (`<PREFIX>_HTTP__TLS_CERT_FILE` +
 /// `<PREFIX>_HTTP__TLS_KEY_FILE`, or [`from_files`](Self::from_files)) is
 /// **watched**: every [`reload`](Self::with_reload) interval — a minute by
-/// default, `None` to disable — the pair is re-read, and a pair that has changed, *settled*
-/// and can serve is swapped into the running listener without dropping a
-/// connection. Anything short of that keeps the previous certificate serving,
-/// with a `warn` on `nest_rs::http`. Inline PEM is loaded once.
+/// default, `None` to disable — the pair is re-read, and a pair that has
+/// changed, *settled* and can serve is swapped into the running listener
+/// without dropping a connection. Anything short of that keeps the previous
+/// certificate serving, with a `warn` on `nest_rs::http`. Inline PEM is loaded
+/// once.
 #[derive(Clone)]
 pub struct HttpTls {
     cert: Vec<u8>,

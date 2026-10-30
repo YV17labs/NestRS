@@ -57,7 +57,8 @@ pub struct WsConfig {
     /// Maximum lifetime of a single WebSocket connection; the peer must then
     /// re-upgrade, re-running authn/authz. `None` ⇒ unlimited. Read from
     /// `<PREFIX>_WS__MAX_CONNECTION_SECS`, whole seconds from 1 to 86400 or `0`
-    /// for unlimited; defaults to 4 hours, [`nest_rs_http::DEFAULT_MAX_CONNECTION`].
+    /// for unlimited; defaults to 4 hours,
+    /// [`nest_rs_http::DEFAULT_MAX_CONNECTION`].
     #[config(bounds = MAX_CONNECTION)]
     pub max_connection: Option<Duration>,
     /// Maximum bytes accepted for a single inbound message, enforced at the
@@ -71,9 +72,9 @@ pub struct WsConfig {
     /// socket goes on serving. `None` ⇒ no deadline. Read from
     /// `<PREFIX>_WS__MESSAGE_TIMEOUT_SECS`, whole seconds from 1 to 3600 or `0`
     /// for none — refused outside, from the environment and from the pinned
-    /// struct alike; defaults to 20 seconds, [`nest_rs_http::DEFAULT_UNIT_TIMEOUT`]. A
-    /// deadline past the HTTP shutdown window, or none, is said at boot with a
-    /// `warn`.
+    /// struct alike; defaults to 20 seconds,
+    /// [`nest_rs_http::DEFAULT_UNIT_TIMEOUT`]. A deadline past the HTTP
+    /// shutdown window, or none, is said at boot with a `warn`.
     #[config(bounds = MESSAGE_TIMEOUT)]
     pub message_timeout: Option<Duration>,
     /// Wall-clock deadline for the `#[on_connect]` hook; past it the hook's

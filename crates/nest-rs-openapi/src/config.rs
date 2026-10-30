@@ -20,8 +20,8 @@ pub struct OpenApiConfig {
     /// Both endpoints are **public**, unauthenticated, so `Default` keeps them
     /// off — a config pinned over `..Default::default()` serves them in no
     /// profile — and only a development or test profile's
-    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns them on. Enabling them outside such a
-    /// profile is honoured and logged at `warn`.
+    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns them on.
+    /// Enabling them outside such a profile is honoured and logged at `warn`.
     pub enabled: bool,
     /// The API title shown in the document `info` block and Swagger UI;
     /// defaults to the binary's package name ([`AppIdentity`]).
@@ -44,11 +44,12 @@ pub struct OpenApiConfig {
     pub license: Option<OpenApiLicense>,
     /// (Re)write [`emit_path`](Self::emit_path) with the document `/api-json`
     /// serves once at boot — the committed copy a pull request diffs. `Default`
-    /// keeps it off, and only a development profile's [`Config::defaults`](nest_rs_config::Config::defaults)
-    /// turns it on: under test, parallel suites would rewrite a committed
-    /// file. With [`enabled`](Self::enabled) off no document is built, so
-    /// nothing is written and the boot says so at `warn`; a write failure is
-    /// logged, never fatal.
+    /// keeps it off, and only a development profile's
+    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns it on:
+    /// under test, parallel suites would rewrite a committed file. With
+    /// [`enabled`](Self::enabled) off no document is built, so nothing is
+    /// written and the boot says so at `warn`; a write failure is logged,
+    /// never fatal.
     pub emit: bool,
     /// Where [`emit`](Self::emit) writes the JSON document. Default
     /// `openapi.json`; a relative path is the app crate's — the one
@@ -132,10 +133,9 @@ fn contact(
     Ok((contact != OpenApiContact::default()).then_some(contact))
 }
 
-/// `LICENSE_NAME` makes the license, which OpenAPI requires a name of; the
-/// other keys overlay a license, never stand without one.
-/// The license, its vocabulary's `LICENSE_*` keys: named, then by its SPDX
-/// identifier or its URL, never both.
+/// The license, its vocabulary's `LICENSE_*` keys: `LICENSE_NAME` makes it,
+/// since OpenAPI requires a name, and the other keys overlay a license, never
+/// stand without one; it is known by its SPDX identifier or its URL, never both.
 fn license(
     env: &ConfigService,
     _key: &str,

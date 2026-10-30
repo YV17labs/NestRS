@@ -56,9 +56,10 @@ const INTROSPECTION_OPEN: &str =
 ///
 /// `Default` is the production-safe value: no playground, no introspection, no
 /// schema written. A declared development or test profile's
-/// [`Config::defaults`](nest_rs_config::Config::defaults) serves the playground and answers introspection, and a
-/// development profile's writes the schema; a config pinned over
-/// `..Default::default()` gets none of it in any profile.
+/// [`Config::defaults`](nest_rs_config::Config::defaults) serves the
+/// playground and answers introspection, and a development profile's writes
+/// the schema; a config pinned over `..Default::default()` gets none of it in
+/// any profile.
 #[config(namespace = "graphql", defaults = Self::profile_defaults)]
 #[derive(Clone, Debug)]
 pub struct GraphqlConfig {
@@ -69,14 +70,16 @@ pub struct GraphqlConfig {
     /// Serve the GraphQL Playground on `GET` for a browser's request.
     ///
     /// The page is public, so `Default` keeps it off and only a development or
-    /// test profile's [`Config::defaults`](nest_rs_config::Config::defaults) turns it on. Serving it outside such
-    /// a profile is honoured and logged at `warn`.
+    /// test profile's [`Config::defaults`](nest_rs_config::Config::defaults)
+    /// turns it on. Serving it outside such a profile is honoured and logged at
+    /// `warn`.
     pub playground: bool,
     /// (Re)write [`emit_path`](Self::emit_path) with the schema's SDL once at
     /// boot — the committed copy a pull request diffs. `Default` keeps it off,
-    /// and only a development profile's [`Config::defaults`](nest_rs_config::Config::defaults) turns it on: under
-    /// test, parallel suites would rewrite a committed file. A write failure is
-    /// logged, never fatal.
+    /// and only a development profile's
+    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns it on:
+    /// under test, parallel suites would rewrite a committed file. A write
+    /// failure is logged, never fatal.
     pub emit: bool,
     /// Where [`emit`](Self::emit) writes the SDL. Default `schema.graphql`; a
     /// relative path is the app crate's — the one `#[nest_rs::main]` expanded
@@ -102,8 +105,8 @@ pub struct GraphqlConfig {
     pub max_complexity: Option<usize>,
     /// Answer introspection queries. The schema is the API's documentation,
     /// so `Default` keeps this off and only a development or test profile's
-    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns it on. Answering them outside such a profile
-    /// is honoured and logged at `warn`.
+    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns it on.
+    /// Answering them outside such a profile is honoured and logged at `warn`.
     pub introspection: bool,
     /// Maximum number of operations in a single HTTP batch request.
     /// Default `10`.

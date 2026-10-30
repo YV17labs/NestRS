@@ -609,7 +609,7 @@ const DEVELOPMENT_CLIENT: &str = "/certs/dev";
 fn presenting_the_development_certificate() -> nest_rs_config::ClientTls {
     let cert = format!("{DEVELOPMENT_CLIENT}/client.pem");
     let key = format!("{DEVELOPMENT_CLIENT}/client.key");
-    nest_rs_config::ClientTls::from_env(
+    <nest_rs_config::ClientTls as nest_rs_config::ConfigField>::overlay(
         &nest_rs_config::ConfigService::with_vars(
             "redis",
             [
@@ -617,6 +617,7 @@ fn presenting_the_development_certificate() -> nest_rs_config::ClientTls {
                 ("TLS_KEY_FILE", key.as_str()),
             ],
         ),
+        "TLS",
         nest_rs_config::ClientTls::default(),
     )
     .expect("the dev container's copy of the client certificate")

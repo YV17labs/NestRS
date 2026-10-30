@@ -1033,10 +1033,9 @@ async fn a_reference_list_over_the_ceiling_is_refused_naming_it() {
     );
 }
 
-/// `0` is the unlimited sentinel pinned in code too, which never passes
-/// through `ConfigService::count`.
+/// `None` pinned in code is unlimited, as `0` is from the environment.
 #[tokio::test]
-async fn a_ceiling_of_zero_is_unlimited() {
+async fn a_ceiling_of_none_is_unlimited() {
     let app = TestApp::for_module::<UncappedModule>()
         .await
         .expect("a subgraph with the ceiling disabled boots");
@@ -1119,7 +1118,7 @@ impl UncappedResolver {
     }
 }
 
-#[module(imports = [capped(Some(0))], providers = [UncappedResolver])]
+#[module(imports = [capped(None)], providers = [UncappedResolver])]
 struct UncappedModule;
 
 /// **Upstream behaviour, frozen.** async-graphql resolves the batch with

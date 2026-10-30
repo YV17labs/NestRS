@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use nest_rs_config::{Config, ConfigError, ConfigService, Environment, Result, config};
+use nest_rs_config::{ConfigError, ConfigService, Environment, Result, config};
 use nest_rs_core::AppIdentity;
 
 use crate::contact::OpenApiContact;
@@ -12,7 +12,7 @@ use crate::license::OpenApiLicense;
 /// The OpenAPI document's `info` block plus the master enable switch, settable
 /// via `<PREFIX>_OPENAPI__*` or pinned through
 /// [`OpenApiModule::for_root`](crate::OpenApiModule::for_root).
-#[config(namespace = "openapi")]
+#[config(namespace = "openapi", defaults = Self::profile_defaults)]
 #[derive(Clone, Debug)]
 pub struct OpenApiConfig {
     /// Master switch for the documentation endpoints.
@@ -20,7 +20,7 @@ pub struct OpenApiConfig {
     /// Both endpoints are **public**, unauthenticated, so `Default` keeps them
     /// off — a config pinned over `..Default::default()` serves them in no
     /// profile — and only a development or test profile's
-    /// [`Config::defaults`] turns them on. Enabling them outside such a
+    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns them on. Enabling them outside such a
     /// profile is honoured and logged at `warn`.
     pub enabled: bool,
     /// The API title shown in the document `info` block and Swagger UI;
@@ -37,12 +37,14 @@ pub struct OpenApiConfig {
     /// A URL to the API's terms of service.
     pub terms_of_service: Option<String>,
     /// Who answers for the API.
+    #[config(with = contact)]
     pub contact: Option<OpenApiContact>,
     /// The license the API is offered under.
+    #[config(with = license)]
     pub license: Option<OpenApiLicense>,
     /// (Re)write [`emit_path`](Self::emit_path) with the document `/api-json`
     /// serves once at boot — the committed copy a pull request diffs. `Default`
-    /// keeps it off, and only a development profile's [`Config::defaults`]
+    /// keeps it off, and only a development profile's [`Config::defaults`](nest_rs_config::Config::defaults)
     /// turns it on: under test, parallel suites would rewrite a committed
     /// file. With [`enabled`](Self::enabled) off no document is built, so
     /// nothing is written and the boot says so at `warn`; a write failure is
@@ -88,9 +90,11 @@ impl OpenApiConfig {
     }
 }
 
-impl Config for OpenApiConfig {
-    // Not in `from_env`: overlaying it would rewrite a pinned value.
-    fn defaults() -> Self {
+impl OpenApiConfig {
+    /// The documentation served under a development or test profile, and the
+    /// document written under development — the base `Config::defaults`
+    /// returns; in the overlay it would rewrite a pinned value.
+    fn profile_defaults() -> Self {
         let environment = Environment::from_env();
         Self {
             enabled: !environment.is_deployed(),
@@ -99,38 +103,24 @@ impl Config for OpenApiConfig {
         }
     }
 
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let d = base;
+    /// One `warn` when the documentation is served outside a development or
+    /// test profile: honoured, since the deployment chose it, and said.
+    pub(crate) fn warn_when_open(&self) {
         let environment = Environment::from_env();
-        let enabled = env.flag("ENABLED", d.enabled)?;
-        if enabled && environment.is_deployed() {
+        if self.enabled && environment.is_deployed() {
             tracing::warn!(
                 target: crate::TARGET,
                 environment = environment.as_str(),
                 "OpenAPI documentation endpoints are enabled and public outside a dev profile",
             );
         }
-        Ok(Self {
-            enabled,
-            title: env.get("TITLE")?.unwrap_or(d.title),
-            version: env.get("VERSION")?.unwrap_or(d.version),
-            summary: env.get("SUMMARY")?.or(d.summary),
-            description: env.get("DESCRIPTION")?.or(d.description),
-            terms_of_service: env.get("TERMS_OF_SERVICE")?.or(d.terms_of_service),
-            contact: contact_from_env(env, d.contact)?,
-            license: license_from_env(env, d.license)?,
-            emit: env.flag("EMIT", d.emit)?,
-            emit_path: env
-                .get("EMIT_PATH")?
-                .map(PathBuf::from)
-                .unwrap_or(d.emit_path),
-        })
     }
 }
 
-/// Each `CONTACT_*` key overlays its field; no field set is no contact.
-fn contact_from_env(
+/// The contact, its vocabulary's `CONTACT_*` keys; none when every part is unset.
+fn contact(
     env: &ConfigService,
+    _key: &str,
     base: Option<OpenApiContact>,
 ) -> Result<Option<OpenApiContact>> {
     let base = base.unwrap_or_default();
@@ -144,8 +134,11 @@ fn contact_from_env(
 
 /// `LICENSE_NAME` makes the license, which OpenAPI requires a name of; the
 /// other keys overlay a license, never stand without one.
-fn license_from_env(
+/// The license, its vocabulary's `LICENSE_*` keys: named, then by its SPDX
+/// identifier or its URL, never both.
+fn license(
     env: &ConfigService,
+    _key: &str,
     base: Option<OpenApiLicense>,
 ) -> Result<Option<OpenApiLicense>> {
     let identifier = env.get("LICENSE_IDENTIFIER")?;
@@ -185,6 +178,7 @@ fn license_from_env(
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::Config;
     use nest_rs_core::__private::package_identity;
 
     use super::*;
@@ -416,6 +410,7 @@ mod tests {
             )
             .expect("an explicit `true` is honoured, not overridden");
             assert!(cfg.enabled, "the deployment's choice stands");
+            cfg.warn_when_open();
 
             let event = logs.expect_one(
                 "nest_rs::openapi",
@@ -437,11 +432,12 @@ mod tests {
             let logs = nest_rs_testing::LogCapture::install();
             jail.set_env(nest_rs_config::Environment::var_name(), "development");
 
-            let _ = OpenApiConfig::from_env(
+            OpenApiConfig::from_env(
                 &ConfigService::with_vars("openapi", [("ENABLED", "true")]),
                 Default::default(),
             )
-            .expect("ok");
+            .expect("ok")
+            .warn_when_open();
 
             assert!(
                 logs.find(

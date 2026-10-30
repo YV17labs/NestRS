@@ -90,6 +90,7 @@ impl Discoverable for ServerTiming {
             Ok(config) => config,
             Err(refusal) => return builder.refuse(refusal),
         };
+        config.warn_when_open();
         if !config.enabled {
             return builder;
         }

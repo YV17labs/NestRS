@@ -68,7 +68,8 @@ pub enum ConfigError {
         "`{var}` is read by two configuration types — `{owner}` and `{claimant}`. \
          A `<PREFIX>_<DOMAIN>__<KEY>` variable belongs to one type: setting it would \
          configure whichever read it, with nothing to say which. Give one of the two \
-         its own key, or its own `#[config(namespace = \"…\")]`."
+         its own key — a field's name is its key — or its own namespace, read off \
+         its own path."
     )]
     ContestedVariable {
         /// The fully-qualified variable both types read.

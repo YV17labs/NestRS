@@ -43,6 +43,9 @@ nest-rs-config-macros.workspace = true
 # the framework opens trusts them by default — read once, PEM.
 rustls-native-certs.workspace = true
 base64.workspace = true
+# `FromSetting` reads a UUID, the identifier the framework's entities and
+# tenants carry, so a `#[config]` field may hold one; the kernel links it already.
+uuid.workspace = true
 # `endpoint_shown`: a URL a sentence names is parsed by the WHATWG parser every
 # HTTP client of the framework dials through (reqwest's), so what is shown is
 # the address dialled, its userinfo, query and fragment left out.

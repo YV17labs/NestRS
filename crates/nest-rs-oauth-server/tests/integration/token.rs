@@ -145,7 +145,7 @@ struct RequestApp;
 
 #[module(
     imports = [HttpModule::for_root(HttpConfig {
-        max_body_bytes: Some(32),
+        max_body_bytes: 32,
         ..HttpConfig::default()
     })],
     providers = [RequestController],

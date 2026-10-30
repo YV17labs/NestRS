@@ -2,42 +2,45 @@
 //! `<PREFIX>_SERVER_TIMING__*` or pinned through
 //! [`ServerTimingModule::for_root`](crate::ServerTimingModule::for_root).
 
-use nest_rs_config::{Config, ConfigService, Environment, Result, config};
+use nest_rs_config::{Environment, config};
 
 /// Whether responses carry `Server-Timing`, settable via
 /// `<PREFIX>_SERVER_TIMING__ENABLED` or pinned through
 /// [`ServerTimingModule::for_root`](crate::ServerTimingModule::for_root).
-#[config(namespace = "server_timing")]
+#[config(namespace = "server_timing", defaults = Self::profile_defaults)]
 #[derive(Clone, Debug, Default)]
 pub struct ServerTimingConfig {
     /// Stamp each response with the time its backends took.
     ///
     /// The header reaches every client, so `Default` keeps it off — a config
     /// pinned over `..Default::default()` stamps nothing in any profile — and
-    /// only a development or test profile's [`Config::defaults`] turns it on.
+    /// only a development or test profile's [`Config::defaults`](nest_rs_config::Config::defaults) turns it on.
     /// Enabling it outside such a profile is honoured and logged at `warn`.
     pub enabled: bool,
 }
 
-impl Config for ServerTimingConfig {
-    // Not in `from_env`: overlaying it would rewrite a pinned `enabled: true`.
-    fn defaults() -> Self {
+impl ServerTimingConfig {
+    /// Off unless a development or test profile is declared — the base
+    /// `Config::defaults` returns; in the overlay it would rewrite a pinned
+    /// `enabled: true`.
+    fn profile_defaults() -> Self {
         Self {
             enabled: !Environment::from_env().is_deployed(),
         }
     }
 
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+    /// One `warn` when the header is on outside a development or test profile:
+    /// honoured, since the deployment chose it, and said, since every client
+    /// then reads the backends' timings.
+    pub(crate) fn warn_when_open(&self) {
         let environment = Environment::from_env();
-        let enabled = env.flag("ENABLED", base.enabled)?;
-        if enabled && environment.is_deployed() {
+        if self.enabled && environment.is_deployed() {
             tracing::warn!(
                 target: crate::TARGET,
                 environment = environment.as_str(),
                 "Server-Timing is enabled outside a dev profile",
             );
         }
-        Ok(Self { enabled })
     }
 }
 
@@ -47,6 +50,8 @@ impl Config for ServerTimingConfig {
     reason = "figment::Jail fixes the closure's error type"
 )]
 mod tests {
+    use nest_rs_config::{Config, ConfigService};
+
     use super::*;
 
     const ENABLED_OUTSIDE_DEV: &str = "Server-Timing is enabled outside a dev profile";
@@ -128,6 +133,7 @@ mod tests {
             )
             .expect("an explicit `true` is honoured, not overridden");
             assert!(cfg.enabled, "the deployment's choice stands");
+            cfg.warn_when_open();
 
             let event = logs.expect_one(crate::TARGET, ENABLED_OUTSIDE_DEV);
             assert_eq!(event.level, "warn");
@@ -145,6 +151,7 @@ mod tests {
             )
             .expect("ok");
             assert!(cfg.enabled);
+            cfg.warn_when_open();
             logs.expect_none(crate::TARGET, ENABLED_OUTSIDE_DEV);
         });
     }
@@ -153,11 +160,12 @@ mod tests {
     fn off_outside_a_dev_profile_is_silent() {
         in_profile("production", || {
             let logs = nest_rs_testing::LogCapture::install();
-            let _ = ServerTimingConfig::from_env(
+            ServerTimingConfig::from_env(
                 &ConfigService::with_vars("server_timing", []),
                 ServerTimingConfig::defaults(),
             )
-            .expect("ok");
+            .expect("ok")
+            .warn_when_open();
             logs.expect_none(crate::TARGET, ENABLED_OUTSIDE_DEV);
         });
     }

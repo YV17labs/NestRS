@@ -1,4 +1,4 @@
-use nest_rs::config::{ClientTls, Config, ConfigService, config};
+use nest_rs::config::{ClientTls, config};
 use nest_rs::core::Secret;
 use nest_rs::oauth::client::OAuthClientConfig;
 use nest_rs::social::SocialProviderConfig;
@@ -36,18 +36,6 @@ impl ProbeSocialConfig {
             scopes: Vec::new(),
             tls: ClientTls::default(),
         }
-    }
-}
-
-impl Config for ProbeSocialConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
-        Ok(Self {
-            client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
-            client_secret: env
-                .get("CLIENT_SECRET")?
-                .map(Secret::new)
-                .unwrap_or(base.client_secret),
-        })
     }
 }
 

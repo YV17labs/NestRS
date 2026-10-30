@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
+use nest_rs_config::{Bound, DurationBounds, Floor, config};
 
 /// Default lease: thirty seconds, renewed every ten while the attempt runs.
 const DEFAULT_LEASE_SECS: u64 = 30;
@@ -37,6 +37,7 @@ pub struct RedisQueueConfig {
     /// at least 1 and at most 3600; defaults to 30s. More than one and a half
     /// times the connection's budget, or the boot is refused: a renewal sent a
     /// third into the lease may wait out the whole budget.
+    #[config(bounds = LEASE)]
     pub lease: Duration,
 }
 
@@ -48,18 +49,10 @@ impl Default for RedisQueueConfig {
     }
 }
 
-impl Config for RedisQueueConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            lease: LEASE.read(env, base.lease)?.value,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_config::Namespaced;
+    use nest_rs_config::{Config, ConfigService, Namespaced, Result};
 
     fn read(vars: &[(&str, &str)], base: RedisQueueConfig) -> Result<RedisQueueConfig> {
         RedisQueueConfig::from_env(

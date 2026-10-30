@@ -37,7 +37,7 @@ use crate::registry::RegisteredClient;
 /// # use validator::Validate as _;
 /// # config.validate().expect("a registry that serves");
 /// ```
-#[config(namespace = "oauth__server", validate = "manual")]
+#[config(namespace = "oauth__server", validate = "manual", from_env = "manual")]
 #[derive(Clone, Debug)]
 pub struct OAuthServerConfig<P> {
     /// The registered clients, each with its scope, its resources and its

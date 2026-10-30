@@ -238,7 +238,7 @@ impl SocketBounds {
             max_connection: config.max_connection,
             max_message_bytes: config.max_message_bytes,
             connection_init_timeout: config.connection_init_timeout,
-            max_operations: config.max_socket_operations.filter(|&max| max > 0),
+            max_operations: config.max_socket_operations,
         }
     }
 }

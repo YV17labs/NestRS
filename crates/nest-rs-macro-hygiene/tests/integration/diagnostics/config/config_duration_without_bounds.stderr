@@ -1,0 +1,19 @@
+error[E0277]: `Duration` is no type a `#[config]` field reads from the environment
+  --> tests/integration/diagnostics/config/config_duration_without_bounds.rs:12:13
+   |
+12 |     window: Duration,
+   |             ^^^^^^^^ no `ConfigField` reads this field's type
+   |
+   = help: the trait `FromSetting` is not implemented for `Duration`
+   = note: a scalar implements `FromSetting`; a `Duration` is read through its bounds, `#[config(bounds = …)]`; a structured value as JSON, `#[config(json)]`; any other field names its reader, `#[config(with = …)]`, or the struct writes its own overlay, `#[config(from_env = "manual")]`
+   = help: the following other types implement trait `FromSetting`:
+             ApiVersioning
+             IpAddr
+             Ipv4Addr
+             Ipv6Addr
+             PathBuf
+             Secret<T>
+             bool
+             f32
+           and $N others
+   = note: required for `Duration` to implement `ConfigField`

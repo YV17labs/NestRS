@@ -6,10 +6,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, BoundedDuration, Config, ConfigError, ConfigService, DurationBounds, Floor, Result,
-    config,
-};
+use nest_rs_config::{Bound, ConfigError, ConfigService, DurationBounds, Floor, Result, config};
 
 /// How long a client may reuse a file before it asks again, the variable that
 /// sets it, and why its range ends where it does.
@@ -40,6 +37,7 @@ pub struct StaticFilesConfig {
     pub root: Option<PathBuf>,
     /// The URL path the files answer under (key `PATH`, default `/`). Literal
     /// and outside the global prefix; every route and self-mount answers first.
+    #[config(with = mount_path)]
     pub path: String,
     /// Answer a browser's navigation to a path no file matches with the root's
     /// `index.html` (key `SPA_FALLBACK`, default `false`), so a single-page
@@ -50,6 +48,7 @@ pub struct StaticFilesConfig {
     /// `MAX_AGE_SECS`, `0` for unset): `public, max-age` on every file but an
     /// HTML document. Unset, the default, every file is revalidated
     /// (`no-cache`), which suits a build whose file names do not change.
+    #[config(bounds = MAX_AGE)]
     pub max_age: Option<Duration>,
 }
 
@@ -64,32 +63,23 @@ impl Default for StaticFilesConfig {
     }
 }
 
-impl Config for StaticFilesConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let path = env.get("PATH")?.unwrap_or(base.path);
-        let path = nest_rs_http::literal_mount_path(&path).ok_or_else(|| {
-            ConfigError::parse(
-                env.var_name("PATH"),
-                "must be a literal URL path such as `/` or `/assets`, which the router matches as \
-                 written: no empty, `.` or `..` segment, no template syntax (`{` `}`) nor what the \
-                 router reads as a parameter (`:` `*` `<`), and none of `%` `?` `#` `\\` — set \
-                 here, or as `StaticFilesConfig::path` in code",
-            )
-        })?;
-        Ok(Self {
-            root: env.get("ROOT")?.map(PathBuf::from).or(base.root),
-            path,
-            spa_fallback: env.flag("SPA_FALLBACK", base.spa_fallback)?,
-            max_age: MAX_AGE
-                .read_optional(env, base.max_age)?
-                .map(|read: BoundedDuration| read.value),
-        })
-    }
+/// The mount path, held to a literal the router matches as written.
+fn mount_path(env: &ConfigService, key: &str, base: String) -> Result<String> {
+    let path = env.get(key)?.unwrap_or(base);
+    nest_rs_http::literal_mount_path(&path).ok_or_else(|| {
+        ConfigError::parse(
+            env.var_name(key),
+            "must be a literal URL path such as `/` or `/assets`, which the router matches as \
+             written: no empty, `.` or `..` segment, no template syntax (`{` `}`) nor what the \
+             router reads as a parameter (`:` `*` `<`), and none of `%` `?` `#` `\\` — set \
+             here, or as `StaticFilesConfig::path` in code",
+        )
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_config::{Namespaced, var_name};
+    use nest_rs_config::{Config, Namespaced, var_name};
 
     use super::*;
 

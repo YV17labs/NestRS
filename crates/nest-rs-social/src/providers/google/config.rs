@@ -1,7 +1,5 @@
 use nest_rs_authn::AuthError;
-use nest_rs_config::{
-    ClientTls, Config, ConfigService, Namespaced, config, endpoint_shown, spellings_or_field,
-};
+use nest_rs_config::{ClientTls, Namespaced, config, endpoint_shown, spellings_or_field};
 use nest_rs_core::Secret;
 use nest_rs_oauth_client::{OAuthClientConfig, refuse_plaintext_redirect};
 
@@ -86,20 +84,6 @@ impl std::fmt::Debug for GoogleSocialConfig {
             .field("redirect_url", &endpoint_shown(redirect_url))
             .field("scopes", scopes)
             .finish()
-    }
-}
-
-impl Config for GoogleSocialConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
-            client_secret: env
-                .get("CLIENT_SECRET")?
-                .map(Secret::new)
-                .unwrap_or(base.client_secret),
-            redirect_url: env.get("REDIRECT_URL")?.unwrap_or(base.redirect_url),
-            scopes: env.list("SCOPES", base.scopes)?,
-        })
     }
 }
 

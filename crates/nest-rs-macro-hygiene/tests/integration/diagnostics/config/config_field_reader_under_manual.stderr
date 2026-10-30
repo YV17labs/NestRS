@@ -1,0 +1,5 @@
+error: #[config] on a field says how the derived overlay reads it, and under `from_env = "manual"` the struct's own `from_env` reads every field
+ --> tests/integration/diagnostics/config/config_field_reader_under_manual.rs:9:5
+  |
+9 |     #[config(json)]
+  |     ^^^^^^^^^^^^^^^

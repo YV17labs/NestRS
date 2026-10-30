@@ -339,7 +339,7 @@ async fn a_rollback_after_a_statement_postgres_cancelled_is_said_at_warn() {
     let app = nest_rs_core::App::builder()
         .provide(SeaOrmConfig {
             url: crate::harness::url().into(),
-            statement_timeout_secs: Some(1),
+            statement_timeout: std::time::Duration::from_secs(1),
             ..SeaOrmConfig::default()
         })
         .module::<BoundedPoolModule>()

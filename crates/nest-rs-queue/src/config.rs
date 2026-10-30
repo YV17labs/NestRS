@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
+use nest_rs_config::{Bound, DurationBounds, Floor, config};
 
 /// Default drain window on shutdown: 20s, which with the hooks' 5s, the
 /// telemetry flush's 3s and the console's 1s fits Kubernetes' default 30s grace;
@@ -41,6 +41,7 @@ pub struct QueueConfig {
     /// another replica inside the reserve. Read from
     /// `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, at least 1 and at most 3600;
     /// defaults to 20s.
+    #[config(bounds = SHUTDOWN_TIMEOUT)]
     pub shutdown_timeout: Duration,
 }
 
@@ -52,18 +53,10 @@ impl Default for QueueConfig {
     }
 }
 
-impl Config for QueueConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            shutdown_timeout: SHUTDOWN_TIMEOUT.read(env, base.shutdown_timeout)?.value,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_config::Namespaced;
+    use nest_rs_config::{Config, ConfigService, Namespaced, Result};
 
     fn read(vars: &[(&str, &str)]) -> Result<QueueConfig> {
         QueueConfig::from_env(

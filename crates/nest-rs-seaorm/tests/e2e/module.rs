@@ -64,10 +64,11 @@ struct UnboundPoolModule;
 
 /// Seeded rather than pinned, so the suite's own variables cannot move it.
 pub(crate) fn config(budget: Option<Duration>) -> SeaOrmConfig {
+    let defaults = SeaOrmConfig::default();
     SeaOrmConfig {
         url: crate::harness::url().into(),
-        connect_timeout_secs: budget.map(|budget| budget.as_secs()),
-        ..Default::default()
+        connect_timeout: budget.unwrap_or(defaults.connect_timeout),
+        ..defaults
     }
 }
 
@@ -124,7 +125,7 @@ async fn a_pool_no_executor_installs_is_not_held_under_a_strategy_injecting_noth
 /// A pool whose statements Postgres cancels past `statement_timeout`.
 pub(crate) fn bounding_statements(bound: Duration) -> SeaOrmConfig {
     SeaOrmConfig {
-        statement_timeout_secs: Some(bound.as_secs()),
+        statement_timeout: bound,
         ..config(None)
     }
 }
@@ -216,7 +217,7 @@ async fn refused_at(url: String) -> (anyhow::Error, Duration) {
     let Err(refused) = App::builder()
         .provide(SeaOrmConfig {
             url: url.into(),
-            connect_timeout_secs: Some(60),
+            connect_timeout: Duration::from_secs(60),
             ..Default::default()
         })
         .module::<PoolModule>()

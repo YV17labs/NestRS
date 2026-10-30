@@ -96,17 +96,12 @@ impl ConfigModule {
     ///
     /// ```
     /// # use std::any::TypeId;
-    /// # use nest_rs_config::{Config, ConfigModule, ConfigService, config};
+    /// # use nest_rs_config::{ConfigModule, config};
     /// # use nest_rs_core::{App, Collecting, ContainerBuilder, DynamicModule, module};
     /// # #[config(namespace = "bucket_guard")]
     /// # #[derive(Clone, Debug, Default)]
     /// # pub struct BucketConfig {
     /// #     pub name: String,
-    /// # }
-    /// # impl Config for BucketConfig {
-    /// #     fn from_env(_: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-    /// #         Ok(base)
-    /// #     }
     /// # }
     /// pub struct Bucket(String);
     ///
@@ -149,17 +144,12 @@ impl ConfigModule {
     /// ```
     /// # use std::borrow::Borrow;
     /// # use std::marker::PhantomData;
-    /// # use nest_rs_config::{Config, ConfigModule, ConfigService, ForInstance, config};
+    /// # use nest_rs_config::{ConfigModule, ForInstance, config};
     /// # use nest_rs_core::{App, Collecting, ContainerBuilder, Instance, Module, Registering, instance, module};
     /// # #[config(namespace = "bucket_for")]
     /// # #[derive(Clone, Debug, Default)]
     /// # pub struct BucketConfig {
     /// #     pub name: String,
-    /// # }
-    /// # impl Config for BucketConfig {
-    /// #     fn from_env(_: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-    /// #         Ok(base)
-    /// #     }
     /// # }
     /// pub struct Bucket<I>(String, PhantomData<fn() -> I>);
     ///
@@ -206,17 +196,12 @@ impl ConfigModule {
     /// nothing else:
     ///
     /// ```
-    /// # use nest_rs_config::{Config, ConfigModule, ConfigService, ConfigSetup, config};
+    /// # use nest_rs_config::{ConfigModule, ConfigSetup, config};
     /// # use nest_rs_core::{App, module};
     /// # #[config(namespace = "ws")]
     /// # #[derive(Clone, Debug, Default)]
     /// # pub struct WsConfig {
     /// #     pub max_message_bytes: usize,
-    /// # }
-    /// # impl Config for WsConfig {
-    /// #     fn from_env(_: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-    /// #         Ok(base)
-    /// #     }
     /// # }
     /// # #[module(imports = [ConfigModule::for_feature::<WsConfig>()])]
     /// # pub struct WsModule;

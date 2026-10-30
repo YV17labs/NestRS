@@ -76,6 +76,18 @@ impl ApiVersioning {
     }
 }
 
+/// `<PREFIX>_HTTP__VERSIONING`, read as [`FromStr`] reads it.
+impl nest_rs_config::FromSetting for ApiVersioning {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "the parser's sentence quotes the value; the refusal names the strategies"
+    )]
+    fn from_setting(text: &str) -> std::result::Result<Self, std::borrow::Cow<'static, str>> {
+        text.parse()
+            .map_err(|_| "is none of `uri`, `header` and `media_type`".into())
+    }
+}
+
 impl FromStr for ApiVersioning {
     type Err = String;
 

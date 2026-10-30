@@ -568,7 +568,7 @@ mod the_answer_on_the_wire {
 
     #[module(
         imports = [
-            HttpModule::for_root(HttpConfig { max_body_bytes: Some(CAP), ..HttpConfig::default() }),
+            HttpModule::for_root(HttpConfig { max_body_bytes: CAP, ..HttpConfig::default() }),
             GraphqlModule::for_root(GraphqlConfig { max_batch_size: 2, ..GraphqlConfig::default() }),
         ],
         providers = [WireResolver],

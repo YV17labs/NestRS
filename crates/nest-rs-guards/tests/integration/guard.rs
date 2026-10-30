@@ -121,7 +121,7 @@ impl WebhooksController {
 }
 
 #[module(
-    imports = [HttpModule::for_root(HttpConfig { max_body_bytes: Some(CAP), ..Default::default() })],
+    imports = [HttpModule::for_root(HttpConfig { max_body_bytes: CAP, ..Default::default() })],
     providers = [WebhookSignature, WebhooksController],
 )]
 struct WebhooksModule;

@@ -80,8 +80,8 @@ const WINDOW_SECS: u64 = 30;
 
 fn policy() -> ThrottlerSetup {
     ThrottlerModule::for_root(ThrottlerConfig {
-        limit: Some(60),
-        window_secs: Some(WINDOW_SECS),
+        limit: 60,
+        window: std::time::Duration::from_secs(WINDOW_SECS),
         pseudonym_key: Some("nest-rs-redis integration pseudonym key".into()),
     })
 }

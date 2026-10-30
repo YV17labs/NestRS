@@ -12,6 +12,7 @@
 
 use std::process::Command;
 
+mod config;
 mod dotenv;
 mod env_prefix;
 mod environment;

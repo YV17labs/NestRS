@@ -119,10 +119,8 @@ impl FederationExtensionFactory {
     /// boot refuses a keyed schema, the one async-graphql would serve the
     /// federation fields from.
     pub(crate) fn for_schema(container: &Container, config: &GraphqlConfig) -> Option<Self> {
-        // A pinned `Some(0)` never passes through `ConfigService::count`, which
-        // maps the environment's `0` to unlimited.
-        (config.federation || gate_runs(container)).then(|| Self {
-            max_representations: config.max_representations.filter(|max| *max > 0),
+        (config.federation || gate_runs(container)).then_some(Self {
+            max_representations: config.max_representations,
         })
     }
 }

@@ -88,7 +88,7 @@ fn into_options_without_any_key_fails() {
 fn leeway_and_audience_are_applied_from_config() {
     let options = AuthnConfig {
         secret: Some(STRONG_SECRET.into()),
-        leeway_secs: Some(45),
+        leeway: Duration::from_secs(45),
         audience: Some("api".into()),
         ..Default::default()
     }
@@ -477,14 +477,14 @@ fn a_lifetime_or_a_leeway_outside_its_range_is_refused_naming_the_variable() {
     for (pinned, key) in [
         (
             AuthnConfig {
-                expires_in_secs: Some(u64::MAX),
+                expires_in: Duration::MAX,
                 ..Default::default()
             },
             "EXPIRES_IN_SECS",
         ),
         (
             AuthnConfig {
-                leeway_secs: Some(u64::MAX),
+                leeway: Duration::MAX,
                 ..Default::default()
             },
             "LEEWAY_SECS",
@@ -504,10 +504,13 @@ fn a_lifetime_or_a_leeway_outside_its_range_is_refused_naming_the_variable() {
         AuthnConfig::default(),
     )
     .expect("each end of the range is inside it");
-    assert_eq!(edges.expires_in_secs, Some(30 * 24 * 60 * 60));
-    assert_eq!(edges.leeway_secs, Some(0));
+    assert_eq!(edges.expires_in, Duration::from_secs(30 * 24 * 60 * 60));
+    assert_eq!(edges.leeway, Duration::ZERO);
     let unset = read(&[], AuthnConfig::default()).expect("unset keeps the defaults");
-    assert_eq!((unset.expires_in_secs, unset.leeway_secs), (None, None));
+    assert_eq!(
+        (unset.expires_in, unset.leeway),
+        (Duration::from_secs(3600), Duration::from_secs(30))
+    );
 }
 
 // An external issuer's JWK Set, and the algorithms a token may be signed with.

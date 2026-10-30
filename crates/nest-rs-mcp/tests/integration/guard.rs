@@ -32,8 +32,8 @@ struct PoolModule;
 
 fn one_per_minute() -> ThrottlerConfig {
     ThrottlerConfig {
-        limit: Some(1),
-        window_secs: Some(60),
+        limit: 1,
+        window: std::time::Duration::from_secs(60),
         pseudonym_key: None,
     }
 }

@@ -1,7 +1,7 @@
 //! [`OAuthResourceConfig`] — who this resource server is, and which
 //! authorization servers issue tokens for it (RFC 9728 §2).
 
-use nest_rs_config::{Config, ConfigService, Environment, Namespaced, config};
+use nest_rs_config::{Environment, Namespaced, config};
 
 use crate::metadata::ProtectedResourceMetadata;
 use nest_rs_authn::AuthError;
@@ -49,24 +49,6 @@ pub struct OAuthResourceConfig {
     /// RFC 9728 §2 `resource_tos_uri`: the terms of service; one carrying
     /// userinfo fails the boot, since the document publishes it.
     pub resource_tos_uri: Option<String>,
-}
-
-impl Config for OAuthResourceConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            resource: env.get("RESOURCE")?.or(base.resource),
-            authorization_servers: env.list("AUTHORIZATION_SERVERS", base.authorization_servers)?,
-            scopes_supported: env.list("SCOPES_SUPPORTED", base.scopes_supported)?,
-            bearer_methods_supported: env
-                .list("BEARER_METHODS_SUPPORTED", base.bearer_methods_supported)?,
-            resource_name: env.get("RESOURCE_NAME")?.or(base.resource_name),
-            resource_policy_uri: env.get("RESOURCE_POLICY_URI")?.or(base.resource_policy_uri),
-            resource_tos_uri: env.get("RESOURCE_TOS_URI")?.or(base.resource_tos_uri),
-            resource_documentation: env
-                .get("RESOURCE_DOCUMENTATION")?
-                .or(base.resource_documentation),
-        })
-    }
 }
 
 impl OAuthResourceConfig {
@@ -284,6 +266,8 @@ fn validate_canonical_uri(
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::{Config, ConfigService};
+
     use super::*;
 
     fn valid() -> OAuthResourceConfig {

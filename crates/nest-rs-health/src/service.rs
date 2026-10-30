@@ -186,7 +186,7 @@ async fn run_indicators(
     kind: ProbeKind,
     config: &HealthConfig,
 ) -> ProbeReport {
-    let indicator_timeout = config.indicator_timeout();
+    let indicator_timeout = config.indicator_timeout;
     // Not `spawn`ed: the operation span and trace context are task-locals, and
     // a spawned check would file its `warn` under no unit of work.
     let mut running: FuturesUnordered<_> = entries
@@ -201,7 +201,7 @@ async fn run_indicators(
         })
         .collect();
 
-    let deadline = tokio::time::Instant::now() + config.probe_deadline();
+    let deadline = tokio::time::Instant::now() + config.probe_deadline;
     let mut outcomes: Vec<Option<(IndicatorStatus, Option<String>)>> = vec![None; entries.len()];
     loop {
         match tokio::time::timeout_at(deadline, running.next()).await {
@@ -212,7 +212,7 @@ async fn run_indicators(
                 tracing::warn!(
                     target: crate::TARGET,
                     ?kind,
-                    deadline_ms = config.probe_deadline_ms,
+                    deadline_ms = u64::try_from(config.probe_deadline.as_millis()).unwrap_or(u64::MAX),
                     answered = outcomes.len() - unanswered,
                     unanswered,
                     "health probe deadline exceeded",
@@ -622,8 +622,8 @@ mod tests {
     async fn indicators_run_concurrently_so_the_probe_costs_the_slowest_one() {
         let container = Container::builder().build().expect("the container builds");
         let config = HealthConfig {
-            indicator_timeout_ms: 30_000,
-            probe_deadline_ms: 60_000,
+            indicator_timeout: Duration::from_millis(30_000),
+            probe_deadline: Duration::from_millis(60_000),
         };
         let slow: IndicatorRun = |_| {
             Box::pin(async {
@@ -656,8 +656,8 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let container = Container::builder().build().expect("the container builds");
         let config = HealthConfig {
-            indicator_timeout_ms: 300_000,
-            probe_deadline_ms: 900,
+            indicator_timeout: Duration::from_millis(300_000),
+            probe_deadline: Duration::from_millis(900),
         };
         let entries = [
             entry("fast", |_| Box::pin(async { Ok(()) })),
@@ -700,7 +700,7 @@ mod tests {
     async fn the_report_is_ordered_by_name_not_by_completion() {
         let container = Container::builder().build().expect("the container builds");
         let config = HealthConfig {
-            probe_deadline_ms: 60_000,
+            probe_deadline: Duration::from_millis(60_000),
             ..HealthConfig::default()
         };
         let entries = [

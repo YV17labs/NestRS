@@ -385,6 +385,77 @@ impl BoundedDuration {
     }
 }
 
+/// A `#[config]` field read through its [`DurationBounds`]: a `Duration` the
+/// range holds, or an `Option<Duration>` whose `None` is off — the only two
+/// shapes a duration takes. Not API: what `#[config(bounds = …)]` expands to.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`#[config(bounds = …)]` reads a `Duration` or an `Option<Duration>`, not `{Self}`",
+    label = "a field its bounds read",
+    note = "a duration is a `Duration`, or an `Option<Duration>` only where `None` turns it off"
+)]
+pub trait BoundedField: Sized {
+    /// The variable `bounds` names over `base`, held to its range.
+    fn overlay_within(
+        bounds: &DurationBounds,
+        env: &ConfigService,
+        base: Self,
+    ) -> Result<Self, ConfigError>;
+}
+
+impl BoundedField for Duration {
+    fn overlay_within(
+        bounds: &DurationBounds,
+        env: &ConfigService,
+        base: Self,
+    ) -> Result<Self, ConfigError> {
+        bounds.read(env, base).map(|read| read.value)
+    }
+}
+
+impl BoundedField for Option<Duration> {
+    fn overlay_within(
+        bounds: &DurationBounds,
+        env: &ConfigService,
+        base: Self,
+    ) -> Result<Self, ConfigError> {
+        Ok(bounds.read_optional(env, base)?.map(|read| read.value))
+    }
+}
+
+/// Whether `bounds` reads the field `field` of `config` under `key`, the
+/// field's name in SCREAMING_SNAKE: its key is that name with its unit's
+/// suffix after it, and it pins `Config::field`. What `#[config(bounds = …)]`
+/// asserts at compile time, so a bound cannot drift from the field it reads.
+#[doc(hidden)]
+pub const fn reads_field(bounds: &DurationBounds, key: &str, config: &str, field: &str) -> bool {
+    let suffix = match bounds.unit {
+        DurationUnit::Seconds => "_SECS",
+        DurationUnit::Millis => "_MS",
+    };
+    joined(bounds.key, &[key, suffix]) && joined(bounds.field, &[config, "::", field])
+}
+
+/// Whether `whole` is `parts` end to end — a `const` concatenation compare.
+const fn joined(whole: &str, parts: &[&str]) -> bool {
+    let whole = whole.as_bytes();
+    let mut at = 0;
+    let mut part = 0;
+    while part < parts.len() {
+        let bytes = parts[part].as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if at >= whole.len() || whole[at] != bytes[i] {
+                return false;
+            }
+            at += 1;
+            i += 1;
+        }
+        part += 1;
+    }
+    at == whole.len()
+}
+
 /// `count` followed by its unit, singular or plural.
 struct Count(DurationUnit, u64);
 

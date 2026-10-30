@@ -40,7 +40,7 @@ async fn booted(url: String) -> anyhow::Result<nest_rs_core::App> {
     App::builder()
         .provide(SeaOrmConfig {
             url: url.into(),
-            connect_timeout_secs: Some(60),
+            connect_timeout: Duration::from_secs(60),
             ..Default::default()
         })
         .module::<PoolModule>()

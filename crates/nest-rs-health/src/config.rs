@@ -8,15 +8,15 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
+use nest_rs_config::{Bound, DurationBounds, Floor, config};
 
 /// Per-indicator ceiling: under the probe deadline, so a slow indicator is
 /// reported by name before the probe-wide deadline sweeps it up.
-const DEFAULT_INDICATOR_TIMEOUT_MS: u64 = 750;
+const DEFAULT_INDICATOR_TIMEOUT: Duration = Duration::from_millis(750);
 
 /// Probe-wide ceiling: inside Kubernetes' 1 s `timeoutSeconds` default, the
 /// remainder left to the connection and the response.
-const DEFAULT_PROBE_DEADLINE_MS: u64 = 900;
+const DEFAULT_PROBE_DEADLINE: Duration = Duration::from_millis(900);
 
 const NOT_ZERO: &str = "an unbounded probe outlives the kubelet's deadline and a zero one fails \
                         every probe on the first poll, so neither is a ceiling";
@@ -30,14 +30,14 @@ const PAST_A_MINUTE: Bound = Bound::new(
 
 const INDICATOR_TIMEOUT: DurationBounds = DurationBounds::millis(
     "INDICATOR_TIMEOUT_MS",
-    "HealthConfig::indicator_timeout_ms",
+    "HealthConfig::indicator_timeout",
     Floor::Units(Bound::new(1, NOT_ZERO)),
     PAST_A_MINUTE,
 );
 
 const PROBE_DEADLINE: DurationBounds = DurationBounds::millis(
     "PROBE_DEADLINE_MS",
-    "HealthConfig::probe_deadline_ms",
+    "HealthConfig::probe_deadline",
     Floor::Units(Bound::new(1, NOT_ZERO)),
     PAST_A_MINUTE,
 );
@@ -48,62 +48,38 @@ const PROBE_DEADLINE: DurationBounds = DurationBounds::millis(
 pub struct HealthConfig {
     /// Wall-clock ceiling on **one** indicator, past which it reports `down`.
     /// Read from `<PREFIX>_HEALTH__INDICATOR_TIMEOUT_MS`, from 1 to 60000; defaults
-    /// to 750 ms. At or above [`probe_deadline_ms`](Self::probe_deadline_ms) it
+    /// to 750 ms. At or above [`probe_deadline`](Self::probe_deadline) it
     /// never fires, and the per-indicator diagnostic is lost.
-    pub indicator_timeout_ms: u64,
+    #[config(bounds = INDICATOR_TIMEOUT)]
+    pub indicator_timeout: Duration,
     /// Wall-clock ceiling on the **whole** probe response; indicators that have
     /// not answered by then are `down`. Read from
     /// `<PREFIX>_HEALTH__PROBE_DEADLINE_MS`, from 1 to 60000; defaults to 900 ms.
-    pub probe_deadline_ms: u64,
+    #[config(bounds = PROBE_DEADLINE)]
+    pub probe_deadline: Duration,
 }
 
 impl Default for HealthConfig {
     fn default() -> Self {
         Self {
-            indicator_timeout_ms: DEFAULT_INDICATOR_TIMEOUT_MS,
-            probe_deadline_ms: DEFAULT_PROBE_DEADLINE_MS,
+            indicator_timeout: DEFAULT_INDICATOR_TIMEOUT,
+            probe_deadline: DEFAULT_PROBE_DEADLINE,
         }
-    }
-}
-
-impl HealthConfig {
-    /// [`indicator_timeout_ms`](Self::indicator_timeout_ms) as a [`Duration`].
-    pub fn indicator_timeout(&self) -> Duration {
-        Duration::from_millis(self.indicator_timeout_ms)
-    }
-
-    /// [`probe_deadline_ms`](Self::probe_deadline_ms) as a [`Duration`].
-    pub fn probe_deadline(&self) -> Duration {
-        Duration::from_millis(self.probe_deadline_ms)
-    }
-}
-
-/// Whole milliseconds, saturating.
-fn as_millis(d: Duration) -> u64 {
-    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
-}
-
-impl Config for HealthConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            indicator_timeout_ms: as_millis(
-                INDICATOR_TIMEOUT.read(env, base.indicator_timeout())?.value,
-            ),
-            probe_deadline_ms: as_millis(PROBE_DEADLINE.read(env, base.probe_deadline())?.value),
-        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::{Config, ConfigService};
+
     use super::*;
 
     #[test]
     fn defaults_fit_inside_the_kubelet_default_deadline() {
         let cfg = HealthConfig::default();
-        assert!(cfg.probe_deadline() < Duration::from_secs(1));
+        assert!(cfg.probe_deadline < Duration::from_secs(1));
         assert!(
-            cfg.indicator_timeout() < cfg.probe_deadline(),
+            cfg.indicator_timeout < cfg.probe_deadline,
             "the per-indicator ceiling fires first, so the warn names which one hung",
         );
     }
@@ -111,17 +87,17 @@ mod tests {
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {
         let pinned = HealthConfig {
-            indicator_timeout_ms: 120,
-            probe_deadline_ms: 300,
+            indicator_timeout: Duration::from_millis(120),
+            probe_deadline: Duration::from_millis(300),
         };
         let cfg = HealthConfig::from_env(
             &ConfigService::with_vars("health", [("PROBE_DEADLINE_MS", "450")]),
             pinned,
         )
         .expect("the overlay resolves");
-        assert_eq!(cfg.probe_deadline(), Duration::from_millis(450));
+        assert_eq!(cfg.probe_deadline, Duration::from_millis(450));
         assert_eq!(
-            cfg.indicator_timeout(),
+            cfg.indicator_timeout,
             Duration::from_millis(120),
             "the field the env is silent about keeps the pin",
         );
@@ -133,8 +109,8 @@ mod tests {
             HealthConfig::from_env(&ConfigService::with_vars("health", []), Default::default())
                 .expect("ok");
         let defaults = HealthConfig::default();
-        assert_eq!(cfg.indicator_timeout_ms, defaults.indicator_timeout_ms);
-        assert_eq!(cfg.probe_deadline_ms, defaults.probe_deadline_ms);
+        assert_eq!(cfg.indicator_timeout, defaults.indicator_timeout);
+        assert_eq!(cfg.probe_deadline, defaults.probe_deadline);
     }
 
     #[test]
@@ -154,14 +130,14 @@ mod tests {
         for (zeroed, key) in [
             (
                 HealthConfig {
-                    indicator_timeout_ms: 0,
+                    indicator_timeout: Duration::ZERO,
                     ..Default::default()
                 },
                 "INDICATOR_TIMEOUT_MS",
             ),
             (
                 HealthConfig {
-                    probe_deadline_ms: 0,
+                    probe_deadline: Duration::ZERO,
                     ..Default::default()
                 },
                 "PROBE_DEADLINE_MS",
@@ -206,7 +182,7 @@ mod tests {
         let pinned = HealthConfig::from_env(
             &ConfigService::with_vars("health", []),
             HealthConfig {
-                probe_deadline_ms: u64::MAX,
+                probe_deadline: Duration::MAX,
                 ..HealthConfig::default()
             },
         )

@@ -5,14 +5,21 @@
 use proc_macro::TokenStream;
 
 mod config;
+mod overlay;
 
-/// The `#[config(namespace = "…")]` decorator: implements `Namespaced` and files
-/// the namespace with the link-time registry (`nest_rs_config::unclaimed`); a
-/// second struct declaring the same namespace is refused at the read of either.
+/// The `#[config(namespace = "…")]` decorator: implements `Namespaced`, files
+/// the namespace with the link-time registry (`nest_rs_config::unclaimed`) —
+/// a second struct declaring it is refused at the read of either — and writes
+/// `impl Config`, whose `from_env` reads each field under its name in
+/// SCREAMING_SNAKE through the reader its type chooses.
 ///
 /// Must sit **above** the derives so it sees them intact. `namespace` must be
 /// a non-empty lowercase string. It carries the `Validate` derive itself;
-/// `validate = "manual"` suppresses it for a config writing `impl Validate` by hand.
+/// `validate = "manual"` suppresses it for a config writing `impl Validate` by
+/// hand, `from_env = "manual"` the `impl Config` for one writing its overlay by
+/// hand, and `defaults = path` names the profile-aware `fn() -> Self` the
+/// derived `Config::defaults` returns. A field's own `#[config(…)]` names its
+/// reader: `bounds = CONST` for a duration, `json`, `count` or `with = path`.
 #[proc_macro_attribute]
 pub fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(config::config(args, input).into()).into()

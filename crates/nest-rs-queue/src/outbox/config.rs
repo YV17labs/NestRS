@@ -5,9 +5,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, Config, ConfigError, ConfigService, DurationBounds, Floor, Result, config,
-};
+use nest_rs_config::{Bound, ConfigError, ConfigService, DurationBounds, Floor, Result, config};
 
 use crate::ENQUEUE_BATCH;
 
@@ -44,9 +42,6 @@ const STALL_WARNING: DurationBounds = DurationBounds::secs(
     ),
 );
 
-/// The batch's variable.
-const BATCH_SIZE: &str = "BATCH_SIZE";
-
 /// The relay's settings, set through `<PREFIX>_QUEUE__OUTBOX__*` or pinned
 /// through [`OutboxModule::for_root`](crate::OutboxModule::for_root).
 #[config(namespace = "queue__outbox")]
@@ -57,15 +52,18 @@ pub struct OutboxConfig {
     /// replica's unit wrote. Read from
     /// `<PREFIX>_QUEUE__OUTBOX__SWEEP_INTERVAL_MS`, at least 100 and at most
     /// 60000; defaults to 1s.
+    #[config(bounds = SWEEP_INTERVAL)]
     pub sweep_interval: Duration,
     /// How many records one pass claims, holding them locked while it files
     /// them. Read from `<PREFIX>_QUEUE__OUTBOX__BATCH_SIZE`, at least 1 and at
     /// most [`ENQUEUE_BATCH`]; defaults to 100.
+    #[config(with = batch_size)]
     pub batch_size: usize,
     /// How long records may wait unfiled before the relay says so at `error`,
     /// once per outage. Read from
     /// `<PREFIX>_QUEUE__OUTBOX__STALL_WARNING_SECS`, at least 1 and at most
     /// 86400; defaults to 5 minutes.
+    #[config(bounds = STALL_WARNING)]
     pub stall_warning: Duration,
 }
 
@@ -79,30 +77,20 @@ impl Default for OutboxConfig {
     }
 }
 
-impl Config for OutboxConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            sweep_interval: SWEEP_INTERVAL.read(env, base.sweep_interval)?.value,
-            batch_size: batch_size(env, base.batch_size)?,
-            stall_warning: STALL_WARNING.read(env, base.stall_warning)?.value,
-        })
-    }
-}
-
 /// `<PREFIX>_QUEUE__OUTBOX__BATCH_SIZE` over `base`, refused outside 1 to
 /// [`ENQUEUE_BATCH`] from either side: a claim the port could not hand the
 /// backend in one call holds its locks for several.
-fn batch_size(env: &ConfigService, base: usize) -> Result<usize> {
+fn batch_size(env: &ConfigService, key: &str, base: usize) -> Result<usize> {
     let range = format!(
         "must be 1 to {ENQUEUE_BATCH} — a pass claims what one call to the backend files, \
          holding it locked until it is filed"
     );
-    let Some(setting) = env.setting(BATCH_SIZE)? else {
+    let Some(setting) = env.setting(key)? else {
         if (1..=ENQUEUE_BATCH).contains(&base) {
             return Ok(base);
         }
         return Err(ConfigError::parse(
-            env.var_name(BATCH_SIZE),
+            env.var_name(key),
             format!("is not set, and `OutboxConfig::batch_size` set in code {range}"),
         ));
     };
@@ -116,7 +104,7 @@ fn batch_size(env: &ConfigService, base: usize) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_config::Namespaced;
+    use nest_rs_config::{Config, Namespaced};
 
     fn read(vars: &[(&str, &str)]) -> Result<OutboxConfig> {
         read_over(vars, OutboxConfig::default())
@@ -194,7 +182,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains(&nest_rs_config::var_name("queue__outbox", BATCH_SIZE)),
+                .contains(&nest_rs_config::var_name("queue__outbox", "BATCH_SIZE")),
             "{error}"
         );
     }

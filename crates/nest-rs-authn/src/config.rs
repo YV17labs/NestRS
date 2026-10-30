@@ -3,8 +3,7 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Bound, ClientTls, Config, ConfigService, DurationBounds, Floor, Namespaced, config,
-    endpoint_shown,
+    Bound, ClientTls, ConfigService, DurationBounds, Floor, Namespaced, config, endpoint_shown,
 };
 use nest_rs_core::Secret;
 
@@ -16,7 +15,7 @@ use crate::{Algorithm, JwtKey, JwtOptions};
 /// The token lifetime's range, the variable that sets it, and why.
 pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds::secs(
     "EXPIRES_IN_SECS",
-    "AuthnConfig::expires_in_secs",
+    "AuthnConfig::expires_in",
     Floor::Units(Bound::new(
         1,
         "a token that expires as it is minted is refused by every verifier, so every \
@@ -33,7 +32,7 @@ pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds::secs(
 /// The clock-skew leeway's range, the variable that sets it, and why.
 pub(crate) const LEEWAY: DurationBounds = DurationBounds::secs(
     "LEEWAY_SECS",
-    "AuthnConfig::leeway_secs",
+    "AuthnConfig::leeway",
     Floor::Units(Bound::new(0, "no leeway is a leeway")),
     Bound::new(
         5 * 60,
@@ -48,7 +47,7 @@ pub(crate) const LEEWAY: DurationBounds = DurationBounds::secs(
 /// `Debug` shows `jwks_uri` through [`endpoint_shown`]: its userinfo or query
 /// may carry the issuer's credential.
 #[config(namespace = "authn")]
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AuthnConfig {
     /// HS256 shared secret (key `SECRET`); must be ≥ 32 bytes. A verifier
     /// holding it can also mint tokens. Refused beside either EdDSA key.
@@ -56,10 +55,12 @@ pub struct AuthnConfig {
     /// EdDSA signing key, PEM (key `PRIVATE_KEY`, or a path in
     /// `PRIVATE_KEY_FILE`). Set only on the app that issues tokens, beside the
     /// `public_key` of its own pair.
+    #[config(with = pem_text)]
     pub private_key: Option<Secret<String>>,
     /// EdDSA verification key, PEM (key `PUBLIC_KEY`, or a path in
     /// `PUBLIC_KEY_FILE`). A resource server holds only this — it can verify
     /// but not sign.
+    #[config(with = pem_text)]
     pub public_key: Option<String>,
     /// The URI of the JWK Set (RFC 7517 §5) an external issuer publishes its
     /// keys at (key `JWKS_URI`), `https` only — the `jwks_uri` of its RFC 8414
@@ -70,6 +71,7 @@ pub struct AuthnConfig {
     /// comma-separated, `RS256,EdDSA`). Unset, a secret is HS256, a PEM key
     /// EdDSA, and a JWK Set every asymmetric algorithm; a secret or a PEM key
     /// takes exactly one.
+    #[config(with = algorithms)]
     pub algorithms: Option<Vec<Algorithm>>,
     /// What the JWK Set endpoint's certificate must chain to — the system's
     /// authorities unless `<PREFIX>_AUTHN__TLS_CA_CERT` names others — and the
@@ -77,9 +79,10 @@ pub struct AuthnConfig {
     /// (`<PREFIX>_AUTHN__TLS_CERT` and `TLS_KEY`). Refused without `jwks_uri`,
     /// which is the only connection it could serve.
     pub tls: ClientTls,
-    /// Clock skew leeway in seconds (key `LEEWAY_SECS`, default 30), at most
-    /// 300 — RFC 7519 §4.1.4's "a few minutes".
-    pub leeway_secs: Option<u64>,
+    /// Clock skew leeway (key `LEEWAY_SECS`, whole seconds; default 30), at
+    /// most 300 — RFC 7519 §4.1.4's "a few minutes".
+    #[config(bounds = LEEWAY)]
+    pub leeway: Duration,
     /// The `aud` this app requires of every token it verifies (key
     /// `AUDIENCE`), and the one a token it mints for itself carries — a token
     /// it mints for another resource names that resource instead
@@ -95,9 +98,10 @@ pub struct AuthnConfig {
     /// under `OAuthResourceModule` a token's `iss` must be one of its
     /// authorization servers (RFC 9068 §4), and a set one must be among them.
     pub issuer: Option<String>,
-    /// Token lifetime in seconds (key `EXPIRES_IN_SECS`, default 3600), at
-    /// least 1 and at most thirty days.
-    pub expires_in_secs: Option<u64>,
+    /// Token lifetime (key `EXPIRES_IN_SECS`, whole seconds; default an hour),
+    /// at least 1 second and at most thirty days.
+    #[config(bounds = EXPIRES_IN)]
+    pub expires_in: Duration,
     /// Opt out of RFC 7519 §4.1.3 (key `ALLOW_ANY_AUDIENCE`, default `false`):
     /// accept a token whose `aud` names a service this one is not.
     ///
@@ -111,8 +115,27 @@ pub struct AuthnConfig {
     /// OpenID Connect ID Token being spent as an access token.
     ///
     /// Turn it off only to verify tokens from an issuer that predates the
-    /// profile and mints a plain `typ: JWT`.
-    pub explicit_typing: Option<bool>,
+    /// profile and mints a plain `typ: JWT`. Key `EXPLICIT_TYPING`.
+    pub explicit_typing: bool,
+}
+
+impl Default for AuthnConfig {
+    fn default() -> Self {
+        Self {
+            secret: None,
+            private_key: None,
+            public_key: None,
+            jwks_uri: None,
+            algorithms: None,
+            tls: ClientTls::default(),
+            leeway: JwtOptions::DEFAULT_LEEWAY,
+            audience: None,
+            issuer: None,
+            expires_in: JwtOptions::DEFAULT_EXPIRES_IN,
+            allow_any_audience: false,
+            explicit_typing: true,
+        }
+    }
 }
 
 impl std::fmt::Debug for AuthnConfig {
@@ -124,10 +147,10 @@ impl std::fmt::Debug for AuthnConfig {
             jwks_uri,
             algorithms,
             tls,
-            leeway_secs,
+            leeway,
             audience,
             issuer,
-            expires_in_secs,
+            expires_in,
             allow_any_audience,
             explicit_typing,
         } = self;
@@ -138,63 +161,28 @@ impl std::fmt::Debug for AuthnConfig {
             .field("jwks_uri", &jwks_uri.as_deref().map(endpoint_shown))
             .field("algorithms", algorithms)
             .field("tls", tls)
-            .field("leeway_secs", leeway_secs)
+            .field("leeway", leeway)
             .field("audience", audience)
             .field("issuer", issuer)
-            .field("expires_in_secs", expires_in_secs)
+            .field("expires_in", expires_in)
             .field("allow_any_audience", allow_any_audience)
             .field("explicit_typing", explicit_typing)
             .finish()
     }
 }
 
-impl Config for AuthnConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            secret: env.get("SECRET")?.map(Secret::new).or(base.secret),
-            private_key: pem_text(env, "PRIVATE_KEY")?
-                .map(Secret::new)
-                .or(base.private_key),
-            public_key: pem_text(env, "PUBLIC_KEY")?.or(base.public_key),
-            jwks_uri: env.get("JWKS_URI")?.or(base.jwks_uri),
-            algorithms: algorithms(env)?.or(base.algorithms),
-            tls: ClientTls::from_env(env, base.tls)?,
-            leeway_secs: seconds(LEEWAY.read_optional(env, base.leeway_secs.map(secs))?),
-            audience: env.get("AUDIENCE")?.or(base.audience),
-            issuer: env.get("ISSUER")?.or(base.issuer),
-            expires_in_secs: seconds(
-                EXPIRES_IN.read_optional(env, base.expires_in_secs.map(secs))?,
-            ),
-            allow_any_audience: env.flag("ALLOW_ANY_AUDIENCE", base.allow_any_audience)?,
-            explicit_typing: match env
-                .flag("EXPLICIT_TYPING", base.explicit_typing.unwrap_or(true))?
-            {
-                // Round-trip through the base so an unset variable stays
-                // "unstated" rather than becoming a pinned `true`.
-                v if base.explicit_typing.is_none() && v => None,
-                v => Some(v),
-            },
-        })
-    }
-}
-
-fn secs(count: u64) -> Duration {
-    Duration::from_secs(count)
-}
-
-/// A bounded read back in the whole seconds the field holds.
-fn seconds(read: Option<nest_rs_config::BoundedDuration>) -> Option<u64> {
-    read.map(|read| read.value.as_secs())
-}
-
 /// EdDSA key material for `key` — inline, or read from the file `<KEY>_FILE`
-/// names — as the text the JWT library parses.
-fn pem_text(env: &ConfigService, key: &str) -> nest_rs_config::Result<Option<String>> {
+/// names — as the text the JWT library parses, over `base`.
+fn pem_text<T: From<String>>(
+    env: &ConfigService,
+    key: &str,
+    base: Option<T>,
+) -> nest_rs_config::Result<Option<T>> {
     let Some(pem) = env.material(key)? else {
-        return Ok(None);
+        return Ok(base);
     };
     match std::str::from_utf8(&pem.value.bytes) {
-        Ok(text) => Ok(Some(text.to_owned())),
+        Ok(text) => Ok(Some(T::from(text.to_owned()))),
         Err(_) => Err(pem.refuse("is not PEM text: it holds bytes that are not UTF-8")),
     }
 }
@@ -203,9 +191,13 @@ fn pem_text(env: &ConfigService, key: &str) -> nest_rs_config::Result<Option<Str
 /// since a JOSE `alg` is case-sensitive. A name it does not know, `none`
 /// included, fails the boot; whether the list fits the key is
 /// [`JwtService::new`](crate::JwtService::new)'s to judge.
-fn algorithms(env: &ConfigService) -> nest_rs_config::Result<Option<Vec<Algorithm>>> {
-    let Some(setting) = env.setting("ALGORITHMS")? else {
-        return Ok(None);
+fn algorithms(
+    env: &ConfigService,
+    key: &str,
+    base: Option<Vec<Algorithm>>,
+) -> nest_rs_config::Result<Option<Vec<Algorithm>>> {
+    let Some(setting) = env.setting(key)? else {
+        return Ok(base);
     };
     let known = || one_of(algorithms_of(Family::ALL));
     setting
@@ -364,14 +356,12 @@ impl AuthnConfig {
         if let Some(algorithms) = self.algorithms {
             options.algorithms = algorithms;
         }
-        options.leeway = Duration::from_secs(self.leeway_secs.unwrap_or(30));
+        options.leeway = self.leeway;
         options.audience = self.audience;
         options.issuer = self.issuer;
         options.allow_any_audience = self.allow_any_audience;
-        options.explicit_typing = self.explicit_typing.unwrap_or(true);
-        if let Some(secs) = self.expires_in_secs {
-            options.expires_in = Duration::from_secs(secs);
-        }
+        options.explicit_typing = self.explicit_typing;
+        options.expires_in = self.expires_in;
         Ok(options)
     }
 }

@@ -72,8 +72,8 @@ impl RatedController {
 #[module(
     imports = [
         ThrottlerModule::for_root(ThrottlerConfig {
-            limit: Some(60),
-            window_secs: Some(60),
+            limit: 60,
+            window: Duration::from_secs(60),
             pseudonym_key: None,
         }),
     ],
@@ -319,8 +319,8 @@ impl StalledController {
     imports = [
         HttpModule::for_root(edge()),
         ThrottlerModule::for_root(ThrottlerConfig {
-            limit: Some(60),
-            window_secs: Some(WINDOW_SECS),
+            limit: 60,
+            window: Duration::from_secs(WINDOW_SECS),
             pseudonym_key: Some(PSEUDONYM_KEY.into()),
         }),
         StalledStoreModule,
@@ -333,8 +333,8 @@ struct StalledHttpModule;
     imports = [
         HttpModule::for_root(edge()),
         ThrottlerModule::for_root(ThrottlerConfig {
-            limit: Some(60),
-            window_secs: Some(WINDOW_SECS),
+            limit: 60,
+            window: Duration::from_secs(WINDOW_SECS),
             pseudonym_key: Some(PSEUDONYM_KEY.into()),
         }),
         SlowStoreModule,
@@ -347,8 +347,8 @@ struct SlowHttpModule;
     imports = [
         HttpModule::for_root(edge()),
         ThrottlerModule::for_root(ThrottlerConfig {
-            limit: Some(60),
-            window_secs: Some(WINDOW_SECS),
+            limit: 60,
+            window: Duration::from_secs(WINDOW_SECS),
             pseudonym_key: Some(PSEUDONYM_KEY.into()),
         }),
         PanickingStoreModule,
@@ -361,8 +361,8 @@ struct PanickingHttpModule;
     imports = [
         HttpModule::for_root(edge()),
         ThrottlerModule::for_root(ThrottlerConfig {
-            limit: Some(60),
-            window_secs: Some(WINDOW_SECS),
+            limit: 60,
+            window: Duration::from_secs(WINDOW_SECS),
             pseudonym_key: Some(PSEUDONYM_KEY.into()),
         }),
         FailingStoreModule,
@@ -509,8 +509,8 @@ fn the_bound_answers_before_the_http_edge_times_a_request_out() {
 /// A default no test reaches, so a refusal is the site's own budget.
 fn generous() -> ThrottlerConfig {
     ThrottlerConfig {
-        limit: Some(1_000),
-        window_secs: Some(60),
+        limit: 1_000,
+        window: Duration::from_secs(60),
         pseudonym_key: Some(PSEUDONYM_KEY.into()),
     }
 }
@@ -1046,8 +1046,8 @@ mod self_mount {
     #[module(
         imports = [
             ThrottlerModule::for_root(ThrottlerConfig {
-                limit: Some(2),
-                window_secs: Some(60),
+                limit: 2,
+                window: std::time::Duration::from_secs(60),
                 pseudonym_key: None,
             }),
         ],

@@ -2,17 +2,16 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, Config, ConfigError, ConfigService, DurationBounds, Floor, Result, config, var_name,
-};
+use nest_rs_config::{Bound, ConfigError, ConfigService, DurationBounds, Floor, Result, config};
 use nest_rs_core::Secret;
 
 use crate::pseudonym::MIN_KEY_BYTES;
+use crate::throttle::DEFAULT_THROTTLE;
 
 /// The window's range, the variable that sets it, and why.
 const WINDOW: DurationBounds = DurationBounds::secs(
     "WINDOW_SECS",
-    "ThrottlerConfig::window_secs",
+    "ThrottlerConfig::window",
     Floor::Units(Bound::new(
         1,
         "a zero window resets every bucket on every hit, so the count never passes one and \
@@ -25,25 +24,36 @@ const WINDOW: DurationBounds = DurationBounds::secs(
     ),
 );
 
-/// The key the pseudonym key is read from, beside its `_FILE` spelling.
-const PSEUDONYM_KEY: &str = "PSEUDONYM_KEY";
-
 /// Rate-limit settings, settable via `<PREFIX>_THROTTLER__*` or pinned through
 /// [`ThrottlerModule::for_root`](crate::ThrottlerModule::for_root).
 #[config(namespace = "throttler")]
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ThrottlerConfig {
-    /// Requests allowed per window. Unset ⇒ module default (60).
-    pub limit: Option<u32>,
-    /// Window size in whole seconds, from 1 to 86400 (a day). Unset ⇒ module
-    /// default (60).
-    pub window_secs: Option<u64>,
+    /// Requests allowed per window, `<PREFIX>_THROTTLER__LIMIT`; defaults to 60,
+    /// [`DEFAULT_THROTTLE`]'s.
+    pub limit: u32,
+    /// The window a bucket counts over, `<PREFIX>_THROTTLER__WINDOW_SECS` in
+    /// whole seconds, from 1 to 86400 (a day); defaults to a minute,
+    /// [`DEFAULT_THROTTLE`]'s.
+    #[config(bounds = WINDOW)]
+    pub window: Duration,
     /// The key a store outside this process counts each bucket under: an
     /// HMAC-SHA256 of the bucket's subject, so the client's address or identity
     /// never reaches it. At least 32 bytes, the same on every replica sharing
     /// the store; required beside one (`RedisThrottlerModule`), unused by the
     /// in-process default. `<PREFIX>_THROTTLER__PSEUDONYM_KEY`, or its `_FILE`.
+    #[config(with = pseudonym_key)]
     pub pseudonym_key: Option<Secret<String>>,
+}
+
+impl Default for ThrottlerConfig {
+    fn default() -> Self {
+        Self {
+            limit: DEFAULT_THROTTLE.limit(),
+            window: DEFAULT_THROTTLE.window(),
+            pseudonym_key: None,
+        }
+    }
 }
 
 /// Why a pseudonym key shorter than [`MIN_KEY_BYTES`] is refused, without its
@@ -55,35 +65,32 @@ const SHORT_KEY: &str = "must be at least 32 bytes: HMAC-SHA256's key is as stro
 // Trusted proxies live on `HttpConfig` (`<PREFIX>_HTTP__TRUSTED_PROXIES`): they
 // decide who every request is attributed to, not only the bucket.
 
-impl Config for ThrottlerConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let pseudonym_key = match env.setting(PSEUDONYM_KEY)? {
-            Some(setting) if setting.value.len() < MIN_KEY_BYTES => {
-                return Err(setting.refuse(SHORT_KEY));
+/// The pseudonym key over `base`, refused shorter than [`MIN_KEY_BYTES`] from
+/// either side, never shown.
+fn pseudonym_key(
+    env: &ConfigService,
+    key: &str,
+    base: Option<Secret<String>>,
+) -> Result<Option<Secret<String>>> {
+    match env.setting(key)? {
+        Some(setting) if setting.value.len() < MIN_KEY_BYTES => Err(setting.refuse(SHORT_KEY)),
+        Some(setting) => Ok(Some(Secret::new(setting.value))),
+        None => match base {
+            Some(pinned) if pinned.expose_secret().len() < MIN_KEY_BYTES => {
+                Err(ConfigError::parse(
+                    env.var_name(key),
+                    format!("`ThrottlerConfig::pseudonym_key` set in code {SHORT_KEY}"),
+                ))
             }
-            Some(setting) => Some(Secret::new(setting.value)),
-            None => match base.pseudonym_key {
-                Some(pinned) if pinned.expose_secret().len() < MIN_KEY_BYTES => {
-                    return Err(ConfigError::parse(
-                        var_name("throttler", PSEUDONYM_KEY),
-                        format!("`ThrottlerConfig::pseudonym_key` set in code {SHORT_KEY}"),
-                    ));
-                }
-                pinned => pinned,
-            },
-        };
-        Ok(Self {
-            limit: env.parse("LIMIT")?.or(base.limit),
-            window_secs: WINDOW
-                .read_optional(env, base.window_secs.map(Duration::from_secs))?
-                .map(|read| read.value.as_secs()),
-            pseudonym_key,
-        })
+            pinned => Ok(pinned),
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::Config;
+
     use super::*;
 
     #[test]
@@ -93,15 +100,15 @@ mod tests {
             Default::default(),
         )
         .expect("no error");
-        assert!(cfg.limit.is_none(), "unset ⇒ module default applies later");
-        assert!(cfg.window_secs.is_none());
+        assert_eq!(cfg.limit, 60, "unset ⇒ the port's default");
+        assert_eq!(cfg.window, Duration::from_secs(60));
     }
 
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {
         let pinned = ThrottlerConfig {
-            limit: Some(10),
-            window_secs: Some(5),
+            limit: 10,
+            window: Duration::from_secs(5),
             pseudonym_key: None,
         };
         let cfg = ThrottlerConfig::from_env(
@@ -109,8 +116,12 @@ mod tests {
             pinned,
         )
         .expect("the overlay resolves");
-        assert_eq!(cfg.limit, Some(120), "the env outranks the pin");
-        assert_eq!(cfg.window_secs, Some(5), "the untouched pin survives");
+        assert_eq!(cfg.limit, 120, "the env outranks the pin");
+        assert_eq!(
+            cfg.window,
+            Duration::from_secs(5),
+            "the untouched pin survives"
+        );
     }
 
     /// A zero window would turn the limiter off on both stores.
@@ -130,8 +141,8 @@ mod tests {
         let pinned = ThrottlerConfig::from_env(
             &ConfigService::with_vars("throttler", []),
             ThrottlerConfig {
-                limit: Some(1),
-                window_secs: Some(0),
+                limit: 1,
+                window: Duration::ZERO,
                 pseudonym_key: None,
             },
         )
@@ -139,7 +150,7 @@ mod tests {
         .to_string();
         assert!(
             pinned.contains(&var)
-                && pinned.contains("`ThrottlerConfig::window_secs` set in code is 0ns"),
+                && pinned.contains("`ThrottlerConfig::window` set in code is 0ns"),
             "{pinned}"
         );
     }
@@ -160,9 +171,8 @@ mod tests {
         let pinned = ThrottlerConfig::from_env(
             &ConfigService::with_vars("throttler", []),
             ThrottlerConfig {
-                limit: None,
-                window_secs: Some(u64::MAX),
-                pseudonym_key: None,
+                window: Duration::MAX,
+                ..ThrottlerConfig::default()
             },
         )
         .expect_err("a pinned window past a day")
@@ -237,7 +247,7 @@ mod tests {
             Default::default(),
         )
         .expect("no error");
-        assert_eq!(cfg.limit, Some(120));
-        assert_eq!(cfg.window_secs, Some(90));
+        assert_eq!(cfg.limit, 120);
+        assert_eq!(cfg.window, Duration::from_secs(90));
     }
 }

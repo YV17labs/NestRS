@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Bound, ClientTls, Config, ConfigError, ConfigService, DurationBounds, Floor, Result, config,
+    Bound, ClientTls, ConfigError, ConfigService, DurationBounds, Floor, Result, config,
 };
 use nest_rs_core::Secret;
 
@@ -45,6 +45,7 @@ pub struct RedisConfig {
     /// `sentinelPassword` for sentinels holding users); and
     /// `redis-cluster://n1:6379/2?node=n2:6379` a Cluster. Each `rediss…://`
     /// form connects over TLS. A [`Secret`], since it may carry a password.
+    #[config(with = url)]
     pub url: Secret<String>,
     /// How long boot may spend reaching Redis before failing with a named
     /// error, and afterwards the most any command a caller waits on may take
@@ -56,6 +57,7 @@ pub struct RedisConfig {
     /// authentication guard when its strategy injects the connection — and the
     /// queue binding (feature `queue`) a lease the port's renewal cannot fit
     /// in, by the queue port's `lease_fits_renewal`.
+    #[config(bounds = CONNECT_TIMEOUT)]
     pub connect_timeout: Duration,
     /// What a `rediss://` URL trusts and presents: nothing set trusts the
     /// system's authorities and presents no certificate. Read from
@@ -76,29 +78,18 @@ impl Default for RedisConfig {
     }
 }
 
-impl Config for RedisConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let connect_timeout = CONNECT_TIMEOUT.read(env, base.connect_timeout)?.value;
-        Ok(Self {
-            url: resolve_url(env, base.url)?,
-            connect_timeout,
-            tls: ClientTls::from_env(env, base.tls)?,
-        })
-    }
-}
-
 /// The deployment's URL, else the base's — a pin — refusing a blank one under
 /// the spelling that set it, or the variable of the instance `env` reads when
 /// neither holds one.
-fn resolve_url(env: &ConfigService, base: Secret<String>) -> Result<Secret<String>> {
-    match env.setting("URL")? {
+fn url(env: &ConfigService, key: &str, base: Secret<String>) -> Result<Secret<String>> {
+    match env.setting(key)? {
         Some(setting) if setting.value.trim().is_empty() => {
             Err(setting.refuse("is blank — it must hold the Redis URL"))
         }
         Some(setting) => Ok(Secret::new(setting.value)),
         None if base.expose_secret().trim().is_empty() => Err(ConfigError::unset(
             env.namespace(),
-            "URL",
+            key,
             "the URL is deployment data, which no default holds in any profile, and a config \
              pinned in code reads it from the deployment, not `.env`",
         )),
@@ -108,7 +99,7 @@ fn resolve_url(env: &ConfigService, base: Secret<String>) -> Result<Secret<Strin
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_config::{Environment, Namespaced};
+    use nest_rs_config::{Config, Environment, Namespaced};
 
     use super::*;
 
@@ -256,7 +247,10 @@ mod tests {
                     path.to_str().expect("a UTF-8 path"),
                 )],
             ),
-            RedisConfig::default(),
+            RedisConfig {
+                url: "rediss://valkey.local".into(),
+                ..RedisConfig::default()
+            },
         );
         let _ = std::fs::remove_file(&path);
         let err = refused.expect_err("a zero budget is refused").to_string();
@@ -274,6 +268,7 @@ mod tests {
         let err = RedisConfig::from_env(
             &ConfigService::with_vars("redis", []),
             RedisConfig {
+                url: "rediss://valkey.local".into(),
                 connect_timeout: Duration::ZERO,
                 ..RedisConfig::default()
             },

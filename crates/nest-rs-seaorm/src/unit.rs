@@ -108,7 +108,7 @@ impl SeaOrmUnitOfWork {
 /// The settle net: what Postgres holds a statement to, `COMMIT` included,
 /// plus a second, so it fires only on a database that stopped bounding itself.
 fn settle_net(config: &SeaOrmConfig) -> Duration {
-    config.statement_timeout() + Duration::from_secs(1)
+    config.statement_timeout + Duration::from_secs(1)
 }
 
 impl UnitOfWork for SeaOrmUnitOfWork {
@@ -561,7 +561,7 @@ mod tests {
     fn the_settle_net_is_the_statement_budget_and_a_second() {
         assert_eq!(unit_of_work().settle_net(), Duration::from_secs(16));
         let pinned = SeaOrmConfig {
-            statement_timeout_secs: Some(30),
+            statement_timeout: Duration::from_secs(30),
             ..SeaOrmConfig::default()
         };
         assert_eq!(settle_net(&pinned), Duration::from_secs(31));

@@ -10,26 +10,10 @@ struct Ports {
     port: Option<u16>,
 }
 
-impl Config for Ports {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            port: env.parse("PORT")?.or(base.port),
-        })
-    }
-}
-
 #[config(namespace = "shared_namespace")]
 #[derive(Clone, Debug, Default)]
 struct Hosts {
     host: Option<String>,
-}
-
-impl Config for Hosts {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            host: env.get("HOST")?.or(base.host),
-        })
-    }
 }
 
 fn assert_refused_naming_both(err: ConfigError) {
@@ -87,7 +71,7 @@ fn a_hand_written_namespace_is_refused_beside_a_declared_one() {
         }
     }
 
-    #[config(namespace = "declared_once")]
+    #[config(namespace = "declared_once", from_env = "manual")]
     #[derive(Clone, Debug, Default)]
     struct Declared {
         _token: Option<String>,
@@ -117,14 +101,6 @@ fn a_namespace_one_struct_declares_is_read() {
         token: Option<String>,
     }
 
-    impl Config for Alone {
-        fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-            Ok(Self {
-                token: env.get("TOKEN")?.or(base.token),
-            })
-        }
-    }
-
     let read = nest_rs_config::read(
         &ConfigService::with_vars("declared_alone", [("TOKEN", "t")]),
         Alone::default(),
@@ -139,27 +115,11 @@ struct DrawerConfig {
     label: Option<String>,
 }
 
-impl Config for DrawerConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            label: env.get("LABEL")?.or(base.label),
-        })
-    }
-}
-
 /// What a package's binding of `drawer` to its own lock port would declare.
 #[config(namespace = "drawer__lock")]
 #[derive(Clone, Debug, Default)]
 struct DrawerLockConfig {
     lease: Option<u16>,
-}
-
-impl Config for DrawerLockConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            lease: env.parse("LEASE")?.or(base.lease),
-        })
-    }
 }
 
 #[nest_rs_core::instance]

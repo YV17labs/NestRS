@@ -199,7 +199,11 @@ pub struct JwtOptions {
 }
 
 impl JwtOptions {
-    const DEFAULT_LEEWAY: Duration = Duration::from_secs(30);
+    /// The clock-skew leeway a verifier allows unless told otherwise.
+    pub(crate) const DEFAULT_LEEWAY: Duration = Duration::from_secs(30);
+
+    /// The lifetime of a token minted unless told otherwise: an hour.
+    pub(crate) const DEFAULT_EXPIRES_IN: Duration = Duration::from_secs(3600);
 
     /// Options over `key`, accepting its default algorithms — HS256 for a
     /// secret, EdDSA for a PEM key, every asymmetric one for a JWK Set — every
@@ -213,7 +217,7 @@ impl JwtOptions {
         Self {
             key,
             algorithms,
-            expires_in: Duration::from_secs(3600),
+            expires_in: Self::DEFAULT_EXPIRES_IN,
             leeway: Self::DEFAULT_LEEWAY,
             audience: None,
             issuer: None,

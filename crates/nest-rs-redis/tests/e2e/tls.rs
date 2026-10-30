@@ -233,7 +233,7 @@ mod standalone {
         let clients = TestAuthority::new();
         let proxy = TlsProxy::start(Some(crate::redis_url()), Some(&clients)).await;
         let issued = clients.client("nestrs-test-client");
-        let presenting = ClientTls::from_env(
+        let presenting = <ClientTls as nest_rs_config::ConfigField>::overlay(
             &ConfigService::with_vars(
                 "redis",
                 [
@@ -241,6 +241,7 @@ mod standalone {
                     ("TLS_KEY", issued.key.as_str()),
                 ],
             ),
+            "TLS",
             trusting_the_test_authority(),
         )
         .expect("the deployment's certificate over the trusted authority");

@@ -38,7 +38,7 @@ async fn each_part_arrives_with_its_name_and_bytes() {
 #[tokio::test]
 async fn a_multipart_field_past_the_cap_is_413() {
     let client = uploads_on(HttpConfig {
-        max_body_bytes: Some(4096),
+        max_body_bytes: 4096,
         ..HttpConfig::default()
     })
     .await;

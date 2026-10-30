@@ -18,7 +18,9 @@ use rustls::sign::CertifiedKey;
 
 use nest_rs_core::Secret;
 
-use crate::{ConfigError, ConfigService, Material, Result, Setting, system_authorities};
+use crate::{
+    ConfigError, ConfigField, ConfigService, Material, Result, Setting, system_authorities,
+};
 
 /// What a TLS client the framework opens trusts and presents: the system's
 /// authorities ([`system_authorities`]) unless `TLS_CA_CERT` names others, and a
@@ -31,10 +33,10 @@ use crate::{ConfigError, ConfigService, Material, Result, Setting, system_author
 /// one way, once, whatever library dials.
 ///
 /// ```
-/// use nest_rs_config::{ClientTls, ConfigService};
+/// use nest_rs_config::{ClientTls, ConfigField, ConfigService};
 ///
 /// let env = ConfigService::with_vars("redis", []);
-/// let tls = ClientTls::from_env(&env, ClientTls::default())?;
+/// let tls = ClientTls::overlay(&env, "TLS", ClientTls::default())?;
 /// tls.check(&env)?;
 /// assert!(tls.is_empty() && tls.identity_pem().is_none());
 /// # Ok::<(), nest_rs_config::ConfigError>(())
@@ -71,21 +73,6 @@ impl ClientTls {
             authorities,
             identity,
         }
-    }
-
-    /// The deployment's `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY` (each with its
-    /// `_FILE` spelling) in `env`'s namespace over `base`, per field. The
-    /// certificate and its key move as one: half a pair is refused naming what
-    /// was set and both spellings of what is missing.
-    pub fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let authorities = env.material("TLS_CA_CERT")?.map(|pem| pem.value);
-        let identity = match (env.material("TLS_CERT")?, env.material("TLS_KEY")?) {
-            (Some(cert), Some(key)) => Some(TlsIdentity::new(cert.value, key.value)),
-            (None, None) => None,
-            (Some(cert), None) => return Err(half_an_identity(env, &cert, "TLS_KEY")),
-            (None, Some(key)) => return Err(half_an_identity(env, &key, "TLS_CERT")),
-        };
-        Ok(base.overlaid(authorities, identity))
     }
 
     /// `authorities` and `identity`, read elsewhere than a namespace — the
@@ -554,6 +541,26 @@ impl TlsNames for ConfigService {
     }
 }
 
+/// The deployment's `<KEY>_CA_CERT`, `<KEY>_CERT` and `<KEY>_KEY` (each with
+/// its `_FILE` spelling) over `base`, per field — `TLS_CA_CERT`, `TLS_CERT` and
+/// `TLS_KEY` under the field `tls` every framework config names it, which the
+/// checks' sentences name. The certificate and its key move as one: half a
+/// pair is refused naming what was set and both spellings of what is missing.
+impl ConfigField for ClientTls {
+    fn overlay(env: &ConfigService, key: &str, base: Self) -> Result<Self> {
+        let [authorities, cert, private] =
+            ["CA_CERT", "CERT", "KEY"].map(|part| format!("{key}_{part}"));
+        let authorities = env.material(&authorities)?.map(|pem| pem.value);
+        let identity = match (env.material(&cert)?, env.material(&private)?) {
+            (Some(cert), Some(key)) => Some(TlsIdentity::new(cert.value, key.value)),
+            (None, None) => None,
+            (Some(given), None) => return Err(half_an_identity(env, &given, &private)),
+            (None, Some(given)) => return Err(half_an_identity(env, &given, &cert)),
+        };
+        Ok(base.overlaid(authorities, identity))
+    }
+}
+
 fn half_an_identity(env: &ConfigService, given: &Setting<Material>, missing: &str) -> ConfigError {
     given.refuse(format_args!(
         "is set without {} — a client certificate is presented with its key",
@@ -749,8 +756,9 @@ mod tests {
                 Material::inline(b"pinned-key"),
             )),
         );
-        let tls = ClientTls::from_env(
+        let tls = ClientTls::overlay(
             &ConfigService::with_vars("redis", [("TLS_CA_CERT", "deployed-authority")]),
+            "TLS",
             pinned,
         )
         .expect("the overlay resolves");
@@ -765,11 +773,12 @@ mod tests {
             "and the untouched pair survives"
         );
 
-        let replaced = ClientTls::from_env(
+        let replaced = ClientTls::overlay(
             &ConfigService::with_vars(
                 "redis",
                 [("TLS_CERT", "deployed-cert"), ("TLS_KEY", "deployed-key")],
             ),
+            "TLS",
             ClientTls::default(),
         )
         .expect("a whole pair resolves");
@@ -791,8 +800,9 @@ mod tests {
             ("TLS_CERT_FILE", file, "TLS_CERT_FILE", "TLS_KEY"),
         ]
         .map(|(key, value, named, missing)| {
-            let outcome = ClientTls::from_env(
+            let outcome = ClientTls::overlay(
                 &ConfigService::with_vars("redis", [(key, value)]),
+                "TLS",
                 ClientTls::default(),
             );
             (outcome, named, missing)
@@ -816,7 +826,8 @@ mod tests {
     #[test]
     fn a_named_instance_reads_and_names_its_own_namespace() {
         let cache = ConfigService::with_vars("redis__cache", [("TLS_CA_CERT", "no certificate")]);
-        let tls = ClientTls::from_env(&cache, ClientTls::default()).expect("the overlay resolves");
+        let tls =
+            ClientTls::overlay(&cache, "TLS", ClientTls::default()).expect("the overlay resolves");
         let refused = tls.check(&cache).expect_err("no certificate").to_string();
         assert!(
             refused.contains(&crate::var_name("redis__cache", "TLS_CA_CERT")),
@@ -826,8 +837,8 @@ mod tests {
 
     #[test]
     fn nothing_set_trusts_the_system_and_presents_nothing() {
-        let tls =
-            ClientTls::from_env(&redis(), ClientTls::default()).expect("nothing set resolves");
+        let tls = ClientTls::overlay(&redis(), "TLS", ClientTls::default())
+            .expect("nothing set resolves");
         assert!(tls.is_empty());
         assert_eq!(tls.authorities_pem(), system_authorities());
         assert!(tls.identity_pem().is_none());

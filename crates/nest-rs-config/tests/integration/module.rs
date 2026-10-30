@@ -56,7 +56,7 @@ fn a_declared_environment_boots_silently() {
     }
 }
 
-#[config(namespace = "kiln")]
+#[config(namespace = "kiln", from_env = "manual")]
 #[derive(Clone, Debug, Default)]
 struct KilnConfig {
     heat: Option<u16>,

@@ -7,7 +7,7 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigError, ConfigService, config};
+use nest_rs_config::{Config, ConfigError, config};
 use nest_rs_core::{App, Instanced, instance, module};
 use nest_rs_redis::{
     RedisConfig, RedisConnection, RedisError, RedisModule, RedisQueueConfig, RedisQueueModule,
@@ -211,14 +211,6 @@ struct Lock;
 #[derive(Clone, Default)]
 struct RedisLockConfig {
     holders: u64,
-}
-
-impl Config for RedisLockConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            holders: env.parse("HOLDERS")?.unwrap_or(base.holders),
-        })
-    }
 }
 
 #[module(imports = [RedisModule::for_root((Lock, None))])]

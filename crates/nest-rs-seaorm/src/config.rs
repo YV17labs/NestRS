@@ -2,9 +2,7 @@ use std::time::Duration;
 
 use std::str::FromStr;
 
-use nest_rs_config::{
-    Bound, Config, ConfigError, ConfigService, DurationBounds, Floor, Namespaced, Result, config,
-};
+use nest_rs_config::{Bound, ConfigError, DurationBounds, Floor, Namespaced, Result, config};
 use nest_rs_core::Secret;
 use sea_orm::ConnectOptions;
 use sea_orm::sqlx::postgres::{PgConnectOptions, PgSslMode};
@@ -13,7 +11,7 @@ use sea_orm::sqlx::postgres::{PgConnectOptions, PgSslMode};
 /// ceiling keeps it short of a panic inside sqlx.
 pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     "CONNECT_TIMEOUT_SECS",
-    "SeaOrmConfig::connect_timeout_secs",
+    "SeaOrmConfig::connect_timeout",
     Floor::Units(Bound::new(
         1,
         "the pool gives up on a zero budget before any connection opens, so the boot fails \
@@ -31,7 +29,7 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
 /// (`statement_timeout`).
 pub(crate) const STATEMENT_TIMEOUT: DurationBounds = DurationBounds::secs(
     "STATEMENT_TIMEOUT_SECS",
-    "SeaOrmConfig::statement_timeout_secs",
+    "SeaOrmConfig::statement_timeout",
     Floor::Units(Bound::new(
         1,
         "Postgres cancels every statement that takes longer, and under a second it cancels \
@@ -62,32 +60,37 @@ nest_rs_core::inventory::submit! {
 /// own error.
 pub(crate) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// sqlx's own pool ceiling, which SeaORM keeps when it is handed none.
+const DEFAULT_MAX_CONNECTIONS: u32 = 10;
+
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
-/// settable via a `<PREFIX>_SEAORM__*` env var (see `from_env`) or pinned through
-/// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
+/// settable via a `<PREFIX>_SEAORM__*` env var, its name in SCREAMING_SNAKE, or
+/// pinned through [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
 #[config(namespace = "seaorm")]
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SeaOrmConfig {
     /// e.g. `postgres://user:pass@host/db`, a [`Secret`] since it may carry the
     /// password. Empty aborts the build.
     pub url: Secret<String>,
-    /// Upper bound on pooled connections; `None` uses SeaORM's default.
-    pub max_connections: Option<u32>,
-    /// Lower bound on idle pooled connections; `None` uses SeaORM's default.
-    pub min_connections: Option<u32>,
+    /// Upper bound on pooled connections; defaults to 10, sqlx's.
+    pub max_connections: u32,
+    /// Lower bound on idle pooled connections; defaults to 0, sqlx's.
+    pub min_connections: u32,
     /// How long to wait for a connection before failing, in whole seconds, from
-    /// 1 to 3600; `None` waits 10 s. The boot refuses a budget at or past the
+    /// 1 to 3600; defaults to 10 s. The boot refuses a budget at or past the
     /// net of a guard whose code reaches the pool — the authentication guard's
     /// 18 s — which is every guard's once
     /// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule) binds `Repo`.
-    pub connect_timeout_secs: Option<u64>,
+    #[config(bounds = CONNECT_TIMEOUT)]
+    pub connect_timeout: Duration,
     /// How long one statement runs before Postgres cancels it
-    /// (`statement_timeout`), in whole seconds, from 1 to 3600; `None` waits
+    /// (`statement_timeout`), in whole seconds, from 1 to 3600; defaults to
     /// 15 s. It bounds every statement of the app's pool, a job's `BEGIN` /
     /// `COMMIT` / `ROLLBACK` included, and the boot refuses it at or past the net
     /// of a guard whose code reaches the pool. The tools
     /// ([`connect_from_env`](crate::connect_from_env)) open without it.
-    pub statement_timeout_secs: Option<u64>,
+    #[config(bounds = STATEMENT_TIMEOUT)]
+    pub statement_timeout: Duration,
     /// Log every statement SeaORM issues. Off in production — chatty and leaks
     /// query shapes into logs.
     pub sqlx_logging: bool,
@@ -102,47 +105,30 @@ pub struct SeaOrmConfig {
     pub observe_serialization_conflicts: bool,
 }
 
-impl Config for SeaOrmConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            url: env.get("URL")?.map(Secret::new).unwrap_or(base.url),
-            max_connections: env.parse("MAX_CONNECTIONS")?.or(base.max_connections),
-            min_connections: env.parse("MIN_CONNECTIONS")?.or(base.min_connections),
-            connect_timeout_secs: CONNECT_TIMEOUT
-                .read_optional(env, base.connect_timeout_secs.map(Duration::from_secs))?
-                .map(|read| read.value.as_secs()),
-            statement_timeout_secs: STATEMENT_TIMEOUT
-                .read_optional(env, base.statement_timeout_secs.map(Duration::from_secs))?
-                .map(|read| read.value.as_secs()),
-            sqlx_logging: env.flag("SQLX_LOGGING", base.sqlx_logging)?,
-            observe_serialization_conflicts: env.flag(
-                "OBSERVE_SERIALIZATION_CONFLICTS",
-                base.observe_serialization_conflicts,
-            )?,
-        })
+impl Default for SeaOrmConfig {
+    fn default() -> Self {
+        Self {
+            url: Secret::default(),
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            min_connections: 0,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            statement_timeout: DEFAULT_STATEMENT_TIMEOUT,
+            sqlx_logging: false,
+            observe_serialization_conflicts: false,
+        }
     }
 }
 
 impl SeaOrmConfig {
-    /// How long one statement of the app's pool runs before Postgres cancels
-    /// it: the configured bound, or the default when none is set.
-    pub(crate) fn statement_timeout(&self) -> Duration {
-        self.statement_timeout_secs
-            .map_or(DEFAULT_STATEMENT_TIMEOUT, Duration::from_secs)
-    }
-
     /// The app's pool: [`connect_options`](Self::connect_options) with every
     /// statement bounded, the bound refused outside its range.
     pub(crate) fn app_connect_options(&self) -> Result<ConnectOptions> {
         let mut opts = self.connect_options()?;
-        let bound = match self.statement_timeout_secs {
-            Some(secs) => STATEMENT_TIMEOUT.check(
-                Self::NAMESPACE,
-                STATEMENT_TIMEOUT.field(),
-                Duration::from_secs(secs),
-            )?,
-            None => DEFAULT_STATEMENT_TIMEOUT,
-        };
+        let bound = STATEMENT_TIMEOUT.check(
+            Self::NAMESPACE,
+            STATEMENT_TIMEOUT.field(),
+            self.statement_timeout,
+        )?;
         opts.statement_timeout(bound);
         Ok(opts)
     }
@@ -257,22 +243,15 @@ impl SeaOrmConfig {
             ));
         }
         let tls = self.tls()?;
-        let budget = match self.connect_timeout_secs {
-            Some(secs) => CONNECT_TIMEOUT.check(
-                Self::NAMESPACE,
-                CONNECT_TIMEOUT.field(),
-                Duration::from_secs(secs),
-            )?,
-            None => DEFAULT_CONNECT_TIMEOUT,
-        };
+        let budget = CONNECT_TIMEOUT.check(
+            Self::NAMESPACE,
+            CONNECT_TIMEOUT.field(),
+            self.connect_timeout,
+        )?;
         let mut opts = ConnectOptions::new(self.url.expose_secret().clone());
         opts.map_sqlx_postgres_opts(tls);
-        if let Some(n) = self.max_connections {
-            opts.max_connections(n);
-        }
-        if let Some(n) = self.min_connections {
-            opts.min_connections(n);
-        }
+        opts.max_connections(self.max_connections);
+        opts.min_connections(self.min_connections);
         opts.connect_timeout(budget);
         opts.sqlx_logging(self.sqlx_logging);
         Ok(opts)
@@ -281,6 +260,8 @@ impl SeaOrmConfig {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::{Config, ConfigService};
+
     use super::*;
 
     fn pinned(url: &str) -> SeaOrmConfig {
@@ -298,7 +279,7 @@ mod tests {
             pinned("postgres://pinned/app"),
         )
         .expect("the overlay resolves");
-        assert_eq!(cfg.max_connections, Some(25), "the env outranks the pin");
+        assert_eq!(cfg.max_connections, 25, "the env outranks the pin");
         assert_eq!(
             cfg.url.expose_secret(),
             "postgres://pinned/app",
@@ -408,12 +389,12 @@ mod tests {
     }
 
     #[test]
-    fn connect_options_omits_pool_bounds_by_default() {
+    fn connect_options_hands_sqlx_its_own_pool_bounds_by_default() {
         let opts = pinned("postgres://localhost/app")
             .connect_options()
             .expect("a verified URL");
-        assert_eq!(opts.get_max_connections(), None);
-        assert_eq!(opts.get_min_connections(), None);
+        assert_eq!(opts.get_max_connections(), Some(10));
+        assert_eq!(opts.get_min_connections(), Some(0));
     }
 
     #[test]
@@ -434,7 +415,7 @@ mod tests {
             None
         );
         let pinned = SeaOrmConfig {
-            statement_timeout_secs: Some(3),
+            statement_timeout: Duration::from_secs(3),
             ..config
         };
         assert_eq!(
@@ -475,12 +456,11 @@ mod tests {
     fn connect_options_propagates_pool_bounds_when_set() {
         let opts = SeaOrmConfig {
             url: "postgres://localhost/app".into(),
-            max_connections: Some(50),
-            min_connections: Some(5),
-            connect_timeout_secs: Some(8),
-            statement_timeout_secs: None,
+            max_connections: 50,
+            min_connections: 5,
+            connect_timeout: Duration::from_secs(8),
             sqlx_logging: true,
-            observe_serialization_conflicts: false,
+            ..SeaOrmConfig::default()
         }
         .connect_options()
         .expect("bounds in range");
@@ -525,9 +505,9 @@ mod tests {
         );
         let cfg = SeaOrmConfig::from_env(&service, Default::default()).expect("ok");
         assert_eq!(cfg.url.expose_secret(), "postgres://u@h/d");
-        assert_eq!(cfg.max_connections, Some(25));
-        assert_eq!(cfg.min_connections, Some(2));
-        assert_eq!(cfg.connect_timeout_secs, Some(12));
+        assert_eq!(cfg.max_connections, 25);
+        assert_eq!(cfg.min_connections, 2);
+        assert_eq!(cfg.connect_timeout, Duration::from_secs(12));
         assert!(cfg.sqlx_logging);
         assert!(cfg.observe_serialization_conflicts);
     }
@@ -548,7 +528,7 @@ mod tests {
         let pinned = SeaOrmConfig::from_env(
             &ConfigService::with_vars("seaorm", []),
             SeaOrmConfig {
-                connect_timeout_secs: Some(0),
+                connect_timeout: Duration::ZERO,
                 ..pinned("postgres://localhost/app")
             },
         )
@@ -556,13 +536,13 @@ mod tests {
         .to_string();
         assert!(
             pinned.contains(&var)
-                && pinned.contains("`SeaOrmConfig::connect_timeout_secs` set in code is 0ns"),
+                && pinned.contains("`SeaOrmConfig::connect_timeout` set in code is 0ns"),
             "{pinned}"
         );
         let unset =
             SeaOrmConfig::from_env(&ConfigService::with_vars("seaorm", []), Default::default())
-                .expect("unset is the library's default");
-        assert_eq!(unset.connect_timeout_secs, None);
+                .expect("unset keeps the default");
+        assert_eq!(unset.connect_timeout, DEFAULT_CONNECT_TIMEOUT);
     }
 
     #[test]
@@ -583,7 +563,7 @@ mod tests {
         let pinned = SeaOrmConfig::from_env(
             &ConfigService::with_vars("seaorm", []),
             SeaOrmConfig {
-                connect_timeout_secs: Some(u64::MAX),
+                connect_timeout: Duration::MAX,
                 ..pinned("postgres://localhost/app")
             },
         )
@@ -598,7 +578,7 @@ mod tests {
     #[test]
     fn a_budget_built_in_code_past_the_ceiling_is_refused_before_sqlx_sees_it() {
         let refused = SeaOrmConfig {
-            connect_timeout_secs: Some(u64::MAX),
+            connect_timeout: Duration::MAX,
             ..pinned("postgres://nobody@127.0.0.1:1/none")
         }
         .connect_options()
@@ -614,7 +594,7 @@ mod tests {
     #[test]
     fn a_statement_bound_built_in_code_past_the_ceiling_is_refused_before_the_pool_opens() {
         let config = SeaOrmConfig {
-            statement_timeout_secs: Some(60 * 60 + 1),
+            statement_timeout: Duration::from_secs(60 * 60 + 1),
             ..pinned("postgres://nobody@127.0.0.1:1/none")
         };
         let refused = config
@@ -635,12 +615,12 @@ mod tests {
     }
 
     #[test]
-    fn from_env_defaults_to_empty_url_and_no_bounds() {
+    fn from_env_defaults_to_empty_url_and_sqlx_pool_bounds() {
         let cfg =
             SeaOrmConfig::from_env(&ConfigService::with_vars("seaorm", []), Default::default())
                 .expect("ok");
         assert!(cfg.url.expose_secret().is_empty());
-        assert!(cfg.max_connections.is_none());
+        assert_eq!((cfg.max_connections, cfg.min_connections), (10, 0));
         assert!(!cfg.sqlx_logging, "off by default — never noisy in prod");
         assert!(
             !cfg.observe_serialization_conflicts,

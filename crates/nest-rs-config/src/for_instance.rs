@@ -15,7 +15,7 @@ use crate::config::Config;
 ///
 /// ```
 /// # use std::marker::PhantomData;
-/// use nest_rs_config::{Config, ConfigModule, ConfigService, ConfigSetup, ForInstance, config};
+/// use nest_rs_config::{Config, ConfigModule, ConfigSetup, ForInstance, config};
 /// use nest_rs_core::{
 ///     App, Collecting, Container, ContainerBuilder, Instance, Instanced, Module, Registering,
 ///     Unnamed, instance, module,
@@ -26,11 +26,6 @@ use crate::config::Config;
 /// pub struct BucketConfig {
 ///     pub name: String,
 /// }
-/// # impl Config for BucketConfig {
-/// #     fn from_env(_: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-/// #         Ok(base)
-/// #     }
-/// # }
 ///
 /// /// A module that can be opened once per instance, written by hand.
 /// pub struct BucketModule<I = Unnamed>(PhantomData<fn() -> I>);

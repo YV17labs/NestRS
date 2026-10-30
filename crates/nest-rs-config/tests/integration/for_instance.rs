@@ -4,9 +4,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use nest_rs_config::{
-    Config, ConfigModule, ConfigService, ConfigSetup, ForInstance, Result, config, var_name,
-};
+use nest_rs_config::{ConfigModule, ConfigSetup, ForInstance, config, var_name};
 use nest_rs_core::{
     App, Collecting, ContainerBuilder, Instance, Instanced, Module, Registering, Unnamed, instance,
     module,
@@ -17,14 +15,6 @@ use nest_rs_core::{
 struct ShelfConfig {
     #[validate(range(min = 1))]
     slots: Option<u16>,
-}
-
-impl Config for ShelfConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            slots: env.parse("SLOTS")?.or(base.slots),
-        })
-    }
 }
 
 /// A module opened once per instance, written by hand as a binding is.

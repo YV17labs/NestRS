@@ -43,7 +43,7 @@ async fn a_posted_form_decodes_and_another_body_is_415_never_quoting_its_type() 
 #[tokio::test]
 async fn a_form_past_the_transport_cap_is_413() {
     let client = login_on(HttpConfig {
-        max_body_bytes: Some(16),
+        max_body_bytes: 16,
         ..HttpConfig::default()
     })
     .await;

@@ -385,7 +385,7 @@ impl HttpTransport {
                 .global_prefix
                 .as_deref()
                 .and_then(normalize_global_prefix),
-            max_body_bytes: cfg.max_body_bytes.unwrap_or(crate::RawBody::DEFAULT_LIMIT),
+            max_body_bytes: cfg.max_body_bytes,
             request_timeout: cfg.request_budget()?,
             shutdown_timeout: cfg.shutdown_window()?,
             max_concurrent_connections: cfg.connection_cap()?,

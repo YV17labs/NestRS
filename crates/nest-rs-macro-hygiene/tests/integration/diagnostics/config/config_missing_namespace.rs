@@ -1,6 +1,6 @@
 //! `#[config]` requires a `namespace` — omitting it is a spanned compile error
-//! naming the fix, never a silent default that would break `NESTRS_<DOMAIN>__`
-//! resolution.
+//! saying how the stem is read off the file's path, with the rule's examples,
+//! never one crate's namespace to copy nor a silent default.
 
 use nest_rs::config::config;
 

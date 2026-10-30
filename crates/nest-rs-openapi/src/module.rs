@@ -59,6 +59,7 @@ impl Module for OpenApiModule {
 }
 
 fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuilder {
+    options.warn_when_open();
     if !options.enabled {
         tracing::info!(
             target: nest_rs_http::target::ROUTES,

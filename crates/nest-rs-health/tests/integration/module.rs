@@ -23,8 +23,8 @@ mod for_root {
 
     fn pinned_health() -> nest_rs_health::HealthSetup {
         HealthModule::for_root(HealthConfig {
-            indicator_timeout_ms: 120,
-            probe_deadline_ms: 250,
+            indicator_timeout: Duration::from_millis(120),
+            probe_deadline: Duration::from_millis(250),
         })
     }
 
@@ -41,8 +41,8 @@ mod for_root {
             .container()
             .get::<HealthConfig>()
             .expect("for_root resolves the config into the container");
-        assert_eq!(config.indicator_timeout(), Duration::from_millis(120));
-        assert_eq!(config.probe_deadline(), Duration::from_millis(250));
+        assert_eq!(config.indicator_timeout, Duration::from_millis(120));
+        assert_eq!(config.probe_deadline, Duration::from_millis(250));
 
         app.http()
             .get("/health/ready")

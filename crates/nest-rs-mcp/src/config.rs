@@ -20,9 +20,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, Config, ConfigError, ConfigService, DurationBounds, Floor, Result, config,
-};
+use nest_rs_config::{Bound, ConfigError, ConfigService, DurationBounds, Floor, Result, config};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use rmcp::transport::streamable_http_server::session::local::SessionConfig;
 
@@ -43,9 +41,6 @@ const OPERATION_TIMEOUT: DurationBounds = DurationBounds::secs(
 
 /// Live sessions one mount holds by default.
 const DEFAULT_MAX_CONCURRENT_SESSIONS: usize = 1024;
-
-/// The key of [`McpConfig::max_concurrent_sessions`].
-const MAX_CONCURRENT_SESSIONS: &str = "MAX_CONCURRENT_SESSIONS";
 
 const SESSIONS_FLOOR: Bound = Bound::new(
     1,
@@ -125,11 +120,13 @@ pub struct McpConfig {
     /// SSE keep-alive ping interval. `None` ⇒ no pings. Read from
     /// `<PREFIX>_MCP__SSE_KEEP_ALIVE_SECS`, whole seconds from 1 to 3600 or `0`
     /// for none; defaults to 15s.
+    #[config(bounds = SSE_KEEP_ALIVE)]
     pub sse_keep_alive: Option<Duration>,
     /// `retry:` interval advertised on SSE priming events — a stateless
     /// answer's and every stream of a session alike. `None` ⇒ none. Read from
     /// `<PREFIX>_MCP__SSE_RETRY_SECS`, whole seconds from 1 to 3600 or `0` for
     /// none; defaults to 3s.
+    #[config(bounds = SSE_RETRY)]
     pub sse_retry: Option<Duration>,
     /// Cap on a single POST body, enforced while streaming (independent of
     /// `Content-Length`); over it the client gets `413`. Read from
@@ -153,6 +150,7 @@ pub struct McpConfig {
     /// environment and from the pinned struct alike; defaults to 20 seconds,
     /// the HTTP request timeout's. A deadline past the HTTP shutdown window, or
     /// none, is said at boot with a `warn`.
+    #[config(bounds = OPERATION_TIMEOUT)]
     pub operation_timeout: Option<Duration>,
     /// Live sessions one mount holds at most. Past it, an `initialize` from a
     /// client older than `2026-07-28` is answered `503` with `Retry-After`
@@ -169,6 +167,7 @@ pub struct McpConfig {
     /// holds about 110 MiB at most. Two `initialize`s racing for the last place
     /// both pass the check that answers `503`; the second is then refused by
     /// the session manager, and answered the same `503`.
+    #[config(with = max_concurrent_sessions)]
     pub max_concurrent_sessions: usize,
     /// How long a session may go without a message before it is closed, its
     /// place under [`max_concurrent_sessions`](Self::max_concurrent_sessions)
@@ -176,6 +175,7 @@ pub struct McpConfig {
     /// `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS`, whole seconds from 1 to 3600,
     /// never off — refused outside, from the environment and from the pinned
     /// struct alike; defaults to 300 seconds.
+    #[config(bounds = SESSION_IDLE_TIMEOUT)]
     pub session_idle_timeout: Duration,
 }
 
@@ -247,44 +247,14 @@ impl McpConfig {
     }
 }
 
-impl Config for McpConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            allowed_hosts: env.list("ALLOWED_HOSTS", base.allowed_hosts)?,
-            legacy_session_mode: env.flag("LEGACY_SESSION_MODE", base.legacy_session_mode)?,
-            json_response: env.flag("JSON_RESPONSE", base.json_response)?,
-            sse_keep_alive: SSE_KEEP_ALIVE
-                .read_optional(env, base.sse_keep_alive)?
-                .map(|read| read.value),
-            sse_retry: SSE_RETRY
-                .read_optional(env, base.sse_retry)?
-                .map(|read| read.value),
-            max_request_body_bytes: env
-                .parse::<usize>("MAX_REQUEST_BODY_BYTES")?
-                .unwrap_or(base.max_request_body_bytes),
-            stateless_protocol_metadata_required: env.flag(
-                "STATELESS_PROTOCOL_METADATA_REQUIRED",
-                base.stateless_protocol_metadata_required,
-            )?,
-            operation_timeout: OPERATION_TIMEOUT
-                .read_optional(env, base.operation_timeout)?
-                .map(|read| read.value),
-            max_concurrent_sessions: max_concurrent_sessions(env, base.max_concurrent_sessions)?,
-            session_idle_timeout: SESSION_IDLE_TIMEOUT
-                .read(env, base.session_idle_timeout)?
-                .value,
-        })
-    }
-}
-
 /// `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS` over `base`, refused below its
 /// floor from either side, never raised to it.
-fn max_concurrent_sessions(env: &ConfigService, base: usize) -> Result<usize> {
+fn max_concurrent_sessions(env: &ConfigService, key: &str, base: usize) -> Result<usize> {
     let floor = usize::try_from(SESSIONS_FLOOR.count).unwrap_or(usize::MAX);
-    let Some(setting) = env.setting(MAX_CONCURRENT_SESSIONS)? else {
+    let Some(setting) = env.setting(key)? else {
         if base < floor {
             return Err(ConfigError::parse(
-                env.var_name(MAX_CONCURRENT_SESSIONS),
+                env.var_name(key),
                 format!(
                     "is not set, and `McpConfig::max_concurrent_sessions` set in code is {base}, \
                      below the {floor} it must be at least — {}",
@@ -306,6 +276,8 @@ fn max_concurrent_sessions(env: &ConfigService, base: usize) -> Result<usize> {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::Config;
+
     use super::*;
 
     #[test]

@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, DurationBounds, Result, config};
+use nest_rs_config::{DurationBounds, config};
 
 /// Default socket-lifetime ceiling: 4 hours.
 const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
@@ -65,6 +65,7 @@ pub struct WsConfig {
     /// re-upgrade, re-running authn/authz. `None` ⇒ unlimited. Read from
     /// `<PREFIX>_WS__MAX_CONNECTION_SECS`, whole seconds from 1 to 86400 or `0`
     /// for unlimited; defaults to 4 hours.
+    #[config(bounds = MAX_CONNECTION)]
     pub max_connection: Option<Duration>,
     /// Maximum bytes accepted for a single inbound message, enforced at the
     /// protocol layer so a giant frame is refused before it is buffered. Read
@@ -80,17 +81,20 @@ pub struct WsConfig {
     /// struct alike; defaults to 20 seconds, the HTTP request timeout's. A
     /// deadline past the HTTP shutdown window, or none, is said at boot with a
     /// `warn`.
+    #[config(bounds = MESSAGE_TIMEOUT)]
     pub message_timeout: Option<Duration>,
     /// Wall-clock deadline for the `#[on_connect]` hook; past it the hook's
     /// work is dropped and rolled back, and the socket is closed unserved with
     /// 1011, as when the hook panics. `None` ⇒ no deadline. Read from
     /// `<PREFIX>_WS__CONNECT_TIMEOUT_SECS`, on `message_timeout`'s range and
     /// with its default, 20 seconds.
+    #[config(bounds = CONNECT_TIMEOUT)]
     pub connect_timeout: Option<Duration>,
     /// Wall-clock deadline for the `#[on_disconnect]` hook; past it the hook's
     /// work is dropped and rolled back, and the close goes on. `None` ⇒ no
     /// deadline. Read from `<PREFIX>_WS__DISCONNECT_TIMEOUT_SECS`, on
     /// `message_timeout`'s range and with its default, 20 seconds.
+    #[config(bounds = DISCONNECT_TIMEOUT)]
     pub disconnect_timeout: Option<Duration>,
 }
 
@@ -133,35 +137,10 @@ impl WsConfig {
     }
 }
 
-impl Config for WsConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let max_connection = MAX_CONNECTION
-            .read_optional(env, base.max_connection)?
-            .map(|read| read.value);
-        let max_message_bytes = env
-            .parse::<usize>("MAX_MESSAGE_BYTES")?
-            .unwrap_or(base.max_message_bytes);
-        let message_timeout = MESSAGE_TIMEOUT
-            .read_optional(env, base.message_timeout)?
-            .map(|read| read.value);
-        let connect_timeout = CONNECT_TIMEOUT
-            .read_optional(env, base.connect_timeout)?
-            .map(|read| read.value);
-        let disconnect_timeout = DISCONNECT_TIMEOUT
-            .read_optional(env, base.disconnect_timeout)?
-            .map(|read| read.value);
-        Ok(Self {
-            max_connection,
-            max_message_bytes,
-            message_timeout,
-            connect_timeout,
-            disconnect_timeout,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::{Config, ConfigService};
+
     use super::*;
 
     #[test]

@@ -79,6 +79,7 @@ impl Module for GraphqlModule {
 }
 
 fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuilder {
+    options.warn_when_open();
     let log_path = options.path.clone();
     let builder = builder.provide_wiring("nest_rs::graphql::schema", wire_schema);
     // Every graphql-ws socket (outliving the HTTP connection that upgraded it) and

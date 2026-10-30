@@ -1,4 +1,4 @@
-use nest_rs::config::{Config, ConfigService, config};
+use nest_rs::config::config;
 use nest_rs::oauth::server::OAuthServerConfig;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -45,15 +45,6 @@ impl Validate for SignInConfig {
     }
 }
 
-impl Config for SignInConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
-        Ok(Self {
-            resources: env.list("RESOURCES", base.resources)?,
-            default_org_id: env.parse("DEFAULT_ORG_ID")?.unwrap_or(base.default_org_id),
-        })
-    }
-}
-
 pub(crate) fn registered_within_policy(
     registry: &OAuthServerConfig<ClientPayload>,
 ) -> Result<(), ValidationErrors> {
@@ -85,7 +76,7 @@ pub(crate) fn registered_within_policy(
 
 #[cfg(test)]
 mod tests {
-    use nest_rs::config::{ConfigError, Namespaced};
+    use nest_rs::config::{Config, ConfigError, ConfigService, Namespaced};
     use nest_rs::oauth::server::RegisteredClient;
 
     use super::*;

@@ -167,8 +167,8 @@ mod module {
     /// way of this call.
     fn pinned_policy() -> ThrottlerSetup {
         ThrottlerModule::for_root(ThrottlerConfig {
-            limit: Some(2),
-            window_secs: Some(30),
+            limit: 2,
+            window: std::time::Duration::from_secs(30),
             pseudonym_key: Some(PSEUDONYM_KEY.into()),
         })
     }

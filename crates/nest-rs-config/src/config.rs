@@ -1,9 +1,9 @@
 //! Namespaced, injectable configuration: the **type is the token**.
 //!
-//! A `#[config(namespace = "…")]` struct supplies its namespace; the crate
-//! writes `from_env` mapping each `<PREFIX>_<NAMESPACE>__*` variable to a field.
-//! `ConfigModule::for_feature::<T>()` loads once at boot and registers
-//! `Arc<T>`, injected directly by any provider.
+//! A `#[config(namespace = "…")]` struct supplies its namespace, and the
+//! decorator writes `from_env`, each field reading the
+//! `<PREFIX>_<NAMESPACE>__*` variable its name spells. The config loads once at
+//! boot and registers `Arc<T>`, injected directly by any provider.
 
 use std::borrow::{Borrow, Cow};
 use std::sync::Arc;
@@ -106,9 +106,12 @@ fn resolve_under<C: Config>(namespace: Cow<'static, str>, pinned: Option<C>) -> 
 
 /// A namespaced configuration type.
 ///
-/// [`from_env`](Self::from_env) is the **explicit** field-by-field overlay of
-/// `<PREFIX>_<NAMESPACE>__<KEY>` variables over a base value — the single place
-/// to look for the env contract of a feature.
+/// [`from_env`](Self::from_env) is the field-by-field overlay of
+/// `<PREFIX>_<NAMESPACE>__<KEY>` variables over a base value, which `#[config]`
+/// writes from the struct, each key its field's name: the struct is the env
+/// contract of a feature, and no field is reachable from code alone. A config
+/// whose fields depend on each other writes it by hand, under
+/// `#[config(from_env = "manual")]`.
 ///
 /// # The deployment can always override, per field
 ///
@@ -133,7 +136,8 @@ fn resolve_under<C: Config>(namespace: Cow<'static, str>, pinned: Option<C>) -> 
 pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized + 'static {
     /// Field-by-field overlay of this namespace's environment over `base`: every
     /// field takes its `<PREFIX>_<NAMESPACE>__<KEY>` value when the variable is
-    /// set, and the matching field of `base` when it is not.
+    /// set, and the matching field of `base` when it is not. `#[config]` writes
+    /// it, unless the struct says `from_env = "manual"`.
     ///
     /// A set-but-unparseable variable returns `Err` (naming it) and aborts
     /// boot — never a silent fallback.
@@ -141,9 +145,9 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
 
     /// The base the environment overlays when the call site pinned nothing.
     ///
-    /// Defaults to [`Default::default`]. Override it when a field's safe
-    /// baseline depends on the active profile: inside `from_env` it would also
-    /// rewrite a pinned value.
+    /// Defaults to [`Default::default`]. Name another with `#[config(defaults =
+    /// path)]` when a field's safe baseline depends on the active profile:
+    /// inside `from_env` it would also rewrite a pinned value.
     fn defaults() -> Self {
         Self::default()
     }
@@ -171,7 +175,7 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
     /// What a seeded value goes through, before anything reads it.
     ///
     /// ```
-    /// # use nest_rs_config::{Config, ConfigService, config};
+    /// # use nest_rs_config::{Config, config};
     /// #[config(namespace = "kiln")]
     /// #[derive(Clone, Debug)]
     /// pub struct KilnConfig {
@@ -180,11 +184,6 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
     /// }
     /// # impl Default for KilnConfig {
     /// #     fn default() -> Self { Self { workers: 4 } }
-    /// # }
-    /// # impl Config for KilnConfig {
-    /// #     fn from_env(_: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-    /// #         Ok(base)
-    /// #     }
     /// # }
     /// assert!(KilnConfig { workers: 4 }.check().is_ok());
     /// assert!(KilnConfig { workers: 0 }.check().is_err());

@@ -21,28 +21,11 @@ struct KeysConfig {
     label: String,
 }
 
-impl Config for KeysConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            port: env.parse("PORT")?.unwrap_or(base.port),
-            label: env.get("LABEL")?.unwrap_or(base.label),
-        })
-    }
-}
-
 /// A family member: its namespace carries the family as a level.
 #[config(namespace = "unclaimed__member")]
 #[derive(Clone, Default)]
 struct MemberConfig {
     url: String,
-}
-
-impl Config for MemberConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            url: env.get("URL")?.unwrap_or(base.url),
-        })
-    }
 }
 
 /// Makes `<PREFIX>_LOG_FORMAT` equal a name read here once separators are set
@@ -55,28 +38,10 @@ struct LogShapedConfig {
     source_location: String,
 }
 
-impl Config for LogShapedConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            level: env.get("LEVEL")?.unwrap_or(base.level),
-            format: env.get("FORMAT")?.unwrap_or(base.format),
-            source_location: env.get("SOURCE_LOCATION")?.unwrap_or(base.source_location),
-        })
-    }
-}
-
 #[config(namespace = "env")]
 #[derive(Clone, Default)]
 struct EnvShapedConfig {
     prefix: String,
-}
-
-impl Config for EnvShapedConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            prefix: env.get("PREFIX")?.unwrap_or(base.prefix),
-        })
-    }
 }
 
 /// A vendor's config, read once per instance an app opens.
@@ -84,16 +49,6 @@ impl Config for EnvShapedConfig {
 #[derive(Clone, Default)]
 struct VendorConfig {
     max_connections: u64,
-}
-
-impl Config for VendorConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            max_connections: env
-                .parse("MAX_CONNECTIONS")?
-                .unwrap_or(base.max_connections),
-        })
-    }
 }
 
 /// A named instance of [`VendorConfig`], whose namespace is
@@ -106,16 +61,6 @@ struct Spare;
 #[derive(Clone, Default)]
 struct SingleConfig {
     max_connections: u64,
-}
-
-impl Config for SingleConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            max_connections: env
-                .parse("MAX_CONNECTIONS")?
-                .unwrap_or(base.max_connections),
-        })
-    }
 }
 
 /// The module owning [`KeysConfig`], whose `for_root` pins it.
@@ -419,40 +364,16 @@ struct OpenapiShapedConfig {
     title: String,
 }
 
-impl Config for OpenapiShapedConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            title: env.get("TITLE")?.unwrap_or(base.title),
-        })
-    }
-}
-
 #[config(namespace = "authq")]
 #[derive(Clone, Default)]
 struct AuthnShapedConfig {
     issuer: String,
 }
 
-impl Config for AuthnShapedConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            issuer: env.get("ISSUER")?.unwrap_or(base.issuer),
-        })
-    }
-}
-
 #[config(namespace = "wx")]
 #[derive(Clone, Default)]
 struct WsShapedConfig {
     url: String,
-}
-
-impl Config for WsShapedConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            url: env.get("URL")?.unwrap_or(base.url),
-        })
-    }
 }
 
 /// Another binary's namespace one edit from a linked one (`OPENAI`, `AUTH`,

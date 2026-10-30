@@ -1157,7 +1157,10 @@ mod tests {
         }
         let from_env = <RedisConfig as nest_rs_config::Config>::from_env(
             &nest_rs_config::ConfigService::with_vars("redis", [("CONNECT_TIMEOUT_SECS", "32768")]),
-            RedisConfig::default(),
+            RedisConfig {
+                url: "rediss://valkey.local".into(),
+                ..RedisConfig::default()
+            },
         )
         .expect_err("past the ceiling");
         assert!(

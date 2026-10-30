@@ -1,7 +1,7 @@
 //! [`OAuthClientConfig`] — env-driven OAuth2 provider endpoints.
 
 use nest_rs_authn::AuthError;
-use nest_rs_config::{ClientTls, Config, ConfigService, Environment, config, endpoint_shown};
+use nest_rs_config::{ClientTls, ConfigService, Environment, config, endpoint_shown};
 use nest_rs_core::Secret;
 use oauth2::url::{Host, Url};
 
@@ -81,24 +81,6 @@ fn not_blank(value: &str) -> Result<(), validator::ValidationError> {
 /// [`not_blank`] for a credential held as a [`Secret`].
 fn not_blank_secret(value: &Secret<String>) -> Result<(), validator::ValidationError> {
     not_blank(value.expose_secret())
-}
-
-impl Config for OAuthClientConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
-            client_secret: env
-                .get("CLIENT_SECRET")?
-                .map(Secret::new)
-                .unwrap_or(base.client_secret),
-            auth_url: env.get("AUTH_URL")?.unwrap_or(base.auth_url),
-            token_url: env.get("TOKEN_URL")?.unwrap_or(base.token_url),
-            redirect_url: env.get("REDIRECT_URL")?.unwrap_or(base.redirect_url),
-            userinfo_url: env.get("USERINFO_URL")?.unwrap_or(base.userinfo_url),
-            scopes: env.list("SCOPES", base.scopes)?,
-            tls: ClientTls::from_env(env, base.tls)?,
-        })
-    }
 }
 
 impl OAuthClientConfig {

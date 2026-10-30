@@ -9,17 +9,9 @@ struct First {
     token: Option<String>,
 }
 
-impl Config for First {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            token: env.get("TOKEN")?.or(base.token),
-        })
-    }
-}
-
 /// A second type reading the **same** variable, through a reader it opened on
 /// `First`'s domain.
-#[config(namespace = "claims_contender")]
+#[config(namespace = "claims_contender", from_env = "manual")]
 #[derive(Clone, Debug, Default)]
 struct Contender {
     token: Option<String>,
@@ -82,7 +74,7 @@ fn a_type_may_read_its_own_variable_again() {
 fn a_key_read_through_a_const_is_claimed_like_any_other() {
     const KEY: &str = "TOKEN";
 
-    #[config(namespace = "claims_const")]
+    #[config(namespace = "claims_const", from_env = "manual")]
     #[derive(Clone, Debug, Default)]
     struct ViaConst {
         token: Option<String>,
@@ -96,7 +88,7 @@ fn a_key_read_through_a_const_is_claimed_like_any_other() {
         }
     }
 
-    #[config(namespace = "claims_const_borrower")]
+    #[config(namespace = "claims_const_borrower", from_env = "manual")]
     #[derive(Clone, Debug, Default)]
     struct AlsoViaConst {
         token: Option<String>,
@@ -123,7 +115,7 @@ fn a_key_read_through_a_const_is_claimed_like_any_other() {
 /// Citing a variable through `var_name` is not reading it.
 #[test]
 fn citing_a_variable_is_not_claiming_it() {
-    #[config(namespace = "claims_cite")]
+    #[config(namespace = "claims_cite", from_env = "manual")]
     #[derive(Clone, Debug, Default)]
     struct Citer {
         token: Option<String>,
@@ -136,7 +128,7 @@ fn citing_a_variable_is_not_claiming_it() {
         }
     }
 
-    #[config(namespace = "claims_cite_reader")]
+    #[config(namespace = "claims_cite_reader", from_env = "manual")]
     #[derive(Clone, Debug, Default)]
     struct Reader {
         token: Option<String>,
@@ -165,15 +157,7 @@ fn the_free_reader_is_outside_the_registry() {
         token: Option<String>,
     }
 
-    impl Config for Owner {
-        fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-            Ok(Self {
-                token: env.get("TOKEN")?.or(base.token),
-            })
-        }
-    }
-
-    #[config(namespace = "claims_free_borrower")]
+    #[config(namespace = "claims_free_borrower", from_env = "manual")]
     #[derive(Clone, Debug, Default)]
     struct Borrower {
         token: Option<String>,

@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Bound, ClientTls, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor,
-    Namespaced, Setting, config, endpoint_shown,
+    Bound, ClientTls, Config, ConfigError, ConfigField, ConfigService, DurationBounds, Environment,
+    Floor, Namespaced, Setting, config, endpoint_shown,
 };
 use nest_rs_core::Secret;
 
@@ -52,7 +52,7 @@ pub(crate) const READ_TIMEOUT: DurationBounds = DurationBounds::secs(
 /// `..StorageConfig::defaults()` allows it in development and test. The S3
 /// settings are read for an `s3://` store alone: set beside `memory:///`, the
 /// boot refuses them.
-#[config(namespace = "storage")]
+#[config(namespace = "storage", from_env = "manual")]
 #[derive(Clone)]
 pub struct StorageConfig {
     /// The store, whose scheme picks the backend: `s3://<bucket>[/<prefix>]`
@@ -169,7 +169,7 @@ impl Config for StorageConfig {
         let secret_key = env.setting("SECRET_KEY")?;
         refuse_half_a_credential(env, &d, access_key.as_ref(), secret_key.as_ref())?;
         let endpoint = resolve_endpoint(env, env.setting("ENDPOINT")?, d.endpoint, allow_http)?;
-        let tls = ClientTls::from_env(env, d.tls)?;
+        let tls = ClientTls::overlay(env, "TLS", d.tls)?;
         refuse_tls(env, endpoint.as_deref(), &tls)?;
         Ok(Self {
             url,

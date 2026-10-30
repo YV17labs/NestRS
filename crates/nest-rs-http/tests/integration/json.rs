@@ -41,7 +41,7 @@ async fn a_json_body_reads_and_answers_as_json() {
 #[tokio::test]
 async fn each_refusal_answers_a_problem_that_never_quotes_the_request() {
     let client = orders_on(HttpConfig {
-        max_body_bytes: Some(32),
+        max_body_bytes: 32,
         ..HttpConfig::default()
     })
     .await;

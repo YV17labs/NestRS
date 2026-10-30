@@ -5,9 +5,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, Config, ConfigService, DurationBounds, Environment, Floor, Result, config,
-};
+use nest_rs_config::{Bound, DurationBounds, Environment, Floor, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
@@ -61,10 +59,10 @@ const INTROSPECTION_OPEN: &str =
 ///
 /// `Default` is the production-safe value: no playground, no introspection, no
 /// schema written. A declared development or test profile's
-/// [`Config::defaults`] serves the playground and answers introspection, and a
+/// [`Config::defaults`](nest_rs_config::Config::defaults) serves the playground and answers introspection, and a
 /// development profile's writes the schema; a config pinned over
 /// `..Default::default()` gets none of it in any profile.
-#[config(namespace = "graphql")]
+#[config(namespace = "graphql", defaults = Self::profile_defaults)]
 #[derive(Clone, Debug)]
 pub struct GraphqlConfig {
     /// Endpoint path. Default `/graphql`. One literal path: a template's `{`
@@ -74,12 +72,12 @@ pub struct GraphqlConfig {
     /// Serve the GraphQL Playground on `GET` for a browser's request.
     ///
     /// The page is public, so `Default` keeps it off and only a development or
-    /// test profile's [`Config::defaults`] turns it on. Serving it outside such
+    /// test profile's [`Config::defaults`](nest_rs_config::Config::defaults) turns it on. Serving it outside such
     /// a profile is honoured and logged at `warn`.
     pub playground: bool,
     /// (Re)write [`emit_path`](Self::emit_path) with the schema's SDL once at
     /// boot — the committed copy a pull request diffs. `Default` keeps it off,
-    /// and only a development profile's [`Config::defaults`] turns it on: under
+    /// and only a development profile's [`Config::defaults`](nest_rs_config::Config::defaults) turns it on: under
     /// test, parallel suites would rewrite a committed file. A write failure is
     /// logged, never fatal.
     pub emit: bool,
@@ -88,21 +86,26 @@ pub struct GraphqlConfig {
     /// in — so each app of a workspace writes its own.
     pub emit_path: PathBuf,
     /// Maximum nesting depth of an incoming query AST. Defaults to `Some(15)`;
-    /// `None` disables the check.
+    /// `None` disables the check, as `0` does from
+    /// `<PREFIX>_GRAPHQL__MAX_DEPTH`.
     ///
-    /// `Some(0)` is rejected at boot: async-graphql checks `depth > limit`
-    /// strictly and every field has depth ≥ 1, so `0` would refuse every query.
+    /// A pinned `Some(0)` is rejected at boot: async-graphql checks
+    /// `depth > limit` strictly and every field has depth ≥ 1, so `0` would
+    /// refuse every query.
     #[validate(range(min = 1))]
+    #[config(count)]
     pub max_depth: Option<usize>,
     /// Maximum complexity score of an incoming query AST: 1 per field, plus
     /// the multiplier `#[expose]` sets on list relations. Defaults to
-    /// `Some(2000)`; `None` disables the check. `Some(0)` is rejected at boot,
-    /// as for `max_depth`.
+    /// `Some(2000)`; `None` disables the check, as `0` does from the
+    /// environment, and a pinned `Some(0)` is rejected at boot, as for
+    /// `max_depth`.
     #[validate(range(min = 1))]
+    #[config(count)]
     pub max_complexity: Option<usize>,
     /// Answer introspection queries. The schema is the API's documentation,
     /// so `Default` keeps this off and only a development or test profile's
-    /// [`Config::defaults`] turns it on. Answering them outside such a profile
+    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns it on. Answering them outside such a profile
     /// is honoured and logged at `warn`.
     pub introspection: bool,
     /// Maximum number of operations in a single HTTP batch request.
@@ -115,6 +118,7 @@ pub struct GraphqlConfig {
     ///
     /// Read from `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`, whole seconds from 1 to
     /// 86400 or `0` for unlimited; defaults to 4 hours.
+    #[config(bounds = MAX_CONNECTION)]
     pub max_connection: Option<Duration>,
     /// The graphql-ws socket's per-message and per-frame byte cap, held at the
     /// protocol layer so a larger frame is refused before it is buffered, and
@@ -129,13 +133,16 @@ pub struct GraphqlConfig {
     ///
     /// Read from `<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS`, whole seconds
     /// from 1 to 60, never off; defaults to 3 seconds.
+    #[config(bounds = CONNECTION_INIT_TIMEOUT)]
     pub connection_init_timeout: Duration,
     /// Operations one graphql-ws socket may run at once; a `subscribe` past it
     /// is answered with an `error` message for its id, and the socket stays.
     ///
     /// Read from `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS`; defaults to 100.
-    /// **`None` and `Some(0)` both mean unlimited**, as for
-    /// `max_representations`.
+    /// `None` is unlimited, as `0` is from the environment; a pinned `Some(0)`
+    /// fails the boot, as for every count here.
+    #[validate(range(min = 1))]
+    #[config(count)]
     pub max_socket_operations: Option<usize>,
     /// Serve this schema as an Apollo **subgraph**: the federation directives
     /// are declared, and the emitted SDL is the subgraph form.
@@ -156,8 +163,10 @@ pub struct GraphqlConfig {
     /// ceiling is a GraphQL error naming it, never a truncation.
     ///
     /// Read from `<PREFIX>_GRAPHQL__MAX_REPRESENTATIONS`; defaults to 100.
-    /// **`None` and `Some(0)` both mean unlimited here**, where `max_depth` and
-    /// `max_complexity` refuse `0`.
+    /// `None` is unlimited, as `0` is from the environment; a pinned `Some(0)`
+    /// fails the boot, as for every count here.
+    #[validate(range(min = 1))]
+    #[config(count)]
     pub max_representations: Option<usize>,
     /// Promote the default `warn` on a linked `#[resolver]` no module lists in
     /// `providers` — filtered out of the schema — into a boot failure.
@@ -191,9 +200,12 @@ impl Default for GraphqlConfig {
     }
 }
 
-impl Config for GraphqlConfig {
-    // Not in `from_env`: overlaying it would rewrite a pinned value.
-    fn defaults() -> Self {
+impl GraphqlConfig {
+    /// The playground and introspection open under a development or test
+    /// profile, and the schema written under development — the base
+    /// `Config::defaults` returns; in the overlay it would rewrite a pinned
+    /// value.
+    fn profile_defaults() -> Self {
         let environment = Environment::from_env();
         let open = !environment.is_deployed();
         Self {
@@ -204,59 +216,32 @@ impl Config for GraphqlConfig {
         }
     }
 
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let d = base;
-        let playground = env.flag("PLAYGROUND", d.playground)?;
-        let introspection = env.flag("INTROSPECTION", d.introspection)?;
+    /// One `warn` per public surface open outside a development or test
+    /// profile: honoured, since the deployment chose it, and said.
+    pub(crate) fn warn_when_open(&self) {
         let environment = Environment::from_env();
-        if environment.is_deployed() {
-            if playground {
+        if !environment.is_deployed() {
+            return;
+        }
+        for (open, surface) in [
+            (self.playground, PLAYGROUND_OPEN),
+            (self.introspection, INTROSPECTION_OPEN),
+        ] {
+            if open {
                 tracing::warn!(
                     target: crate::TARGET,
                     environment = environment.as_str(),
-                    "{PLAYGROUND_OPEN}",
-                );
-            }
-            if introspection {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    environment = environment.as_str(),
-                    "{INTROSPECTION_OPEN}",
+                    "{surface}",
                 );
             }
         }
-        Ok(Self {
-            path: env.get("PATH")?.unwrap_or(d.path),
-            playground,
-            emit: env.flag("EMIT", d.emit)?,
-            emit_path: env
-                .get("EMIT_PATH")?
-                .map(PathBuf::from)
-                .unwrap_or(d.emit_path),
-            max_depth: env.parse("MAX_DEPTH")?.or(d.max_depth),
-            max_complexity: env.parse("MAX_COMPLEXITY")?.or(d.max_complexity),
-            introspection,
-            max_batch_size: env.parse("MAX_BATCH_SIZE")?.unwrap_or(d.max_batch_size),
-            max_connection: MAX_CONNECTION
-                .read_optional(env, d.max_connection)?
-                .map(|read| read.value),
-            max_message_bytes: env
-                .parse("MAX_MESSAGE_BYTES")?
-                .unwrap_or(d.max_message_bytes),
-            connection_init_timeout: CONNECTION_INIT_TIMEOUT
-                .read(env, d.connection_init_timeout)?
-                .value,
-            max_socket_operations: env.count("MAX_SOCKET_OPERATIONS", d.max_socket_operations)?,
-            federation: env.flag("FEDERATION", d.federation)?,
-            max_representations: env.count("MAX_REPRESENTATIONS", d.max_representations)?,
-            strict_resolver_membership: env
-                .flag("STRICT_RESOLVER_MEMBERSHIP", d.strict_resolver_membership)?,
-        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::{Config, ConfigService};
+
     use super::*;
     use validator::Validate;
 
@@ -342,14 +327,16 @@ mod tests {
     fn a_surface_opened_outside_a_dev_profile_is_reported_by_name() {
         let logs = nest_rs_testing::LogCapture::install();
         let cfg = in_profile("production", || {
-            GraphqlConfig::from_env(
+            let cfg = GraphqlConfig::from_env(
                 &ConfigService::with_vars(
                     "graphql",
                     [("PLAYGROUND", "true"), ("INTROSPECTION", "true")],
                 ),
                 GraphqlConfig::default(),
             )
-            .expect("an explicit opening is honoured")
+            .expect("an explicit opening is honoured");
+            cfg.warn_when_open();
+            cfg
         });
         assert!(cfg.playground && cfg.introspection);
         for surface in [PLAYGROUND_OPEN, INTROSPECTION_OPEN] {
@@ -367,8 +354,9 @@ mod tests {
                 &ConfigService::with_vars("graphql", []),
                 <GraphqlConfig as Config>::defaults(),
             )
-        })
-        .expect("the profile's defaults resolve");
+            .expect("the profile's defaults resolve")
+            .warn_when_open();
+        });
         for surface in [PLAYGROUND_OPEN, INTROSPECTION_OPEN] {
             assert!(
                 logs.find("nest_rs::graphql", surface).is_empty(),
@@ -440,6 +428,44 @@ mod tests {
         };
         assert!(tight.validate().is_ok());
         assert!(GraphqlConfig::default().validate().is_ok());
+    }
+
+    /// One rule for every count: `None` is unlimited and nothing else, `0`
+    /// from the environment is that `None`, and a pinned `Some(0)` is refused.
+    #[test]
+    fn every_count_reads_zero_as_unlimited_and_refuses_a_pinned_zero() {
+        let keys = [
+            "MAX_DEPTH",
+            "MAX_COMPLEXITY",
+            "MAX_SOCKET_OPERATIONS",
+            "MAX_REPRESENTATIONS",
+        ];
+        let unlimited = GraphqlConfig::from_env(
+            &ConfigService::with_vars("graphql", keys.map(|key| (key, "0"))),
+            GraphqlConfig::default(),
+        )
+        .expect("`0` is unlimited");
+        assert_eq!(
+            [
+                unlimited.max_depth,
+                unlimited.max_complexity,
+                unlimited.max_socket_operations,
+                unlimited.max_representations,
+            ],
+            [None; 4]
+        );
+        for pinned in [
+            GraphqlConfig {
+                max_socket_operations: Some(0),
+                ..GraphqlConfig::default()
+            },
+            GraphqlConfig {
+                max_representations: Some(0),
+                ..GraphqlConfig::default()
+            },
+        ] {
+            assert!(pinned.validate().is_err(), "off in code is `None`");
+        }
     }
 
     #[test]

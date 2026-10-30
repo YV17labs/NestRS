@@ -1,4 +1,4 @@
-error: unknown #[config] argument `domain`; expected `namespace` or `validate`
+error: unknown #[config] argument `domain`; expected `namespace`, `validate`, `from_env` or `defaults`
  --> tests/integration/diagnostics/config/config_unknown_argument.rs:8:10
   |
 8 | #[config(domain = "app")]

@@ -4,9 +4,7 @@
 //! `NESTRS_ENV_PREFIX` before anything reads a name; no `NESTRS_*` name may
 //! resolve anything.
 
-use nest_rs_config::{
-    Config, ConfigModule, ConfigService, Environment, Namespaced, config, var_name,
-};
+use nest_rs_config::{ConfigModule, ConfigService, Environment, Namespaced, config, var_name};
 use nest_rs_core::{App, EnvPrefix, module};
 
 #[config(namespace = "widget")]
@@ -22,15 +20,6 @@ impl Default for WidgetConfig {
             port: 3000,
             label: "default".to_owned(),
         }
-    }
-}
-
-impl Config for WidgetConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            port: env.parse("PORT")?.unwrap_or(base.port),
-            label: env.get("LABEL")?.unwrap_or(base.label),
-        })
     }
 }
 

@@ -2,7 +2,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use http::HeaderName;
-use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
+use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Result, config};
 
 use crate::cors::HttpCors;
 use crate::raw_body::RawBody;
@@ -217,7 +217,7 @@ const SSE_KEEP_ALIVE: DurationBounds = DurationBounds::secs(
 ///
 /// `<PREFIX>_HTTP__*` overlays the struct pinned in
 /// [`HttpModule::for_root`](crate::HttpModule::for_root) per field; see
-/// [`Config`] for the precedence chain.
+/// [`Config`](nest_rs_config::Config) for the precedence chain.
 #[config(namespace = "http")]
 #[derive(Clone, Debug)]
 pub struct HttpConfig {
@@ -227,11 +227,13 @@ pub struct HttpConfig {
     pub port: u16,
     /// PEM cert + key for HTTPS. `None` ⇒ plain HTTP. Picked up from
     /// `<PREFIX>_HTTP__TLS_CERT[_FILE]` + `<PREFIX>_HTTP__TLS_KEY[_FILE]`.
+    #[config(with = tls)]
     pub tls: Option<HttpTls>,
     /// CORS policy. `None` ⇒ no CORS layer. Populated when
     /// `<PREFIX>_HTTP__CORS_ORIGINS` is set (see [`HttpCors`]). Its origins are
     /// also the browser origins a WebSocket gateway, the graphql-ws upgrade and
     /// `/mcp` admit; with `None`, those admit the request's own origin alone.
+    #[config(with = cors)]
     pub cors: Option<HttpCors>,
     /// How a caller selects an API version: `uri` (the default), `header` or
     /// `media_type`. Read from `<PREFIX>_HTTP__VERSIONING`.
@@ -240,6 +242,7 @@ pub struct HttpConfig {
     /// `X-API-Version`; read from `<PREFIX>_HTTP__VERSION_HEADER`. Ignored by the
     /// other two strategies, but a value that is no HTTP header name fails the
     /// boot under any, from the environment and from the pinned struct alike.
+    #[config(with = version_header)]
     pub version_header: String,
     /// The version served to a caller that states none. `None` (the default)
     /// leaves such a request on the unversioned routes. Read from
@@ -253,16 +256,17 @@ pub struct HttpConfig {
     /// `/` is added and a trailing one stripped, and empty or `"/"` is no
     /// prefix. One literal path: a template's `{` `}`, or a `:`, `*` or `<` the
     /// router reads as a parameter, fails the boot.
+    #[config(with = global_prefix)]
     pub global_prefix: Option<String>,
     /// Transport-wide cap on the request body size, for every reader — an
     /// extractor, a guard, a global pipe — counted as the body is read, after
     /// routing and the guards: the edge reads nothing, and refuses only a
     /// declared `Content-Length` past it. A per-route
     /// [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit) can
-    /// pin a tighter one. `None` ⇒ the default (2 MiB); there is no off. Read
-    /// from `<PREFIX>_HTTP__MAX_BODY_BYTES`; `0` fails the boot.
+    /// pin a tighter one. Defaults to 2 MiB ([`RawBody::DEFAULT_LIMIT`]); there
+    /// is no off. Read from `<PREFIX>_HTTP__MAX_BODY_BYTES`; `0` fails the boot.
     #[validate(range(min = 1, message = "must be at least 1 byte"))]
-    pub max_body_bytes: Option<usize>,
+    pub max_body_bytes: usize,
     /// Wall-clock budget for a single request, counted from its arrival, so the
     /// reading of its body counts against it; a request still running past it
     /// is aborted with `503 Service Unavailable` and a `Retry-After`. `None` ⇒
@@ -273,12 +277,14 @@ pub struct HttpConfig {
     /// admitted just before a stop is answered inside the window. A budget past
     /// the window, or none, is said once at boot with a `warn`. Off in code is
     /// `None`; a pinned zero is refused.
+    #[config(bounds = REQUEST_TIMEOUT)]
     pub request_timeout: Option<Duration>,
     /// Default security response headers (`nosniff`, `X-Frame-Options`,
     /// `Referrer-Policy`, the `Cross-Origin-*` pair, HSTS under TLS), each on a
     /// response that sets none. On by default; tune via
     /// `<PREFIX>_HTTP__SECURITY_HEADERS` (the master switch) and one key per
     /// header — see [`HttpSecurityHeaders`].
+    #[config(with = security_headers)]
     pub security_headers: HttpSecurityHeaders,
     /// Negotiate response compression (gzip / deflate / brotli / zstd) from the
     /// request's `Accept-Encoding`. Off by default; read from
@@ -310,11 +316,13 @@ pub struct HttpConfig {
     /// A security control: 4 hours by default, one second to a day
     /// ([`MAX_CONNECTION_CEILING`]), `0` ⇒ unlimited. Read from
     /// `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`.
+    #[config(bounds = SSE_MAX_CONNECTION)]
     pub sse_max_connection: Option<Duration>,
     /// How often a `#[sse]` stream emits a keep-alive comment, so an idle
     /// stream is not dropped by an intermediary that sees no bytes. `None` ⇒
     /// none sent. Read from `<PREFIX>_HTTP__SSE_KEEP_ALIVE_SECS`, whole seconds
     /// from 1 to 3600 or `0` for none; defaults to 15 seconds.
+    #[config(bounds = SSE_KEEP_ALIVE)]
     pub sse_keep_alive: Option<Duration>,
     /// How long the transport lets open connections finish after a shutdown
     /// signal; what is still open then is closed, and one `warn` on
@@ -329,6 +337,7 @@ pub struct HttpConfig {
     /// alike; defaults to 20 seconds. Keep the pod's grace period above it plus
     /// 9.5 seconds (`serve`'s unwind, the shutdown hooks, the telemetry flush and
     /// the console's).
+    #[config(bounds = SHUTDOWN_TIMEOUT)]
     pub shutdown_timeout: Duration,
     /// How many connections the transport holds open at once, an upgraded
     /// socket counted until it closes. Past it a new connection waits in the
@@ -339,6 +348,7 @@ pub struct HttpConfig {
     /// Read from `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`, from 1 to
     /// 1 048 576 — refused outside, from the environment and from the pinned
     /// struct alike; defaults to 10 000.
+    #[config(with = max_concurrent_connections)]
     pub max_concurrent_connections: usize,
     /// How long a connection has to deliver its first request head, counted
     /// from accept with the TLS handshake and HTTP/2's preface inside it, and on
@@ -349,6 +359,7 @@ pub struct HttpConfig {
     /// Read from `<PREFIX>_HTTP__HEADER_READ_TIMEOUT_SECS`, whole seconds from 1
     /// to 300 — refused outside, from the environment and from the pinned struct
     /// alike; defaults to 30 seconds.
+    #[config(bounds = HEADER_READ_TIMEOUT)]
     pub header_read_timeout: Duration,
     /// How long a kept-alive connection waits for its next request once its last
     /// answer has ended: then an HTTP/1 connection is closed and an HTTP/2 one
@@ -359,6 +370,7 @@ pub struct HttpConfig {
     /// Read from `<PREFIX>_HTTP__IDLE_TIMEOUT_SECS`, whole seconds from 1 to 3600
     /// — refused outside, from the environment and from the pinned struct alike;
     /// defaults to 75 seconds.
+    #[config(bounds = IDLE_TIMEOUT)]
     pub idle_timeout: Duration,
     /// How long a write waits on a peer that takes nothing: past it the
     /// connection is dropped — a response body, an event stream or a WebSocket
@@ -368,6 +380,7 @@ pub struct HttpConfig {
     /// Read from `<PREFIX>_HTTP__SEND_TIMEOUT_SECS`, whole seconds from 1 to 3600
     /// — refused outside, from the environment and from the pinned struct alike;
     /// defaults to 60 seconds.
+    #[config(bounds = SEND_TIMEOUT)]
     pub send_timeout: Duration,
     /// How long a request body may go without a byte once something reads it.
     /// Past it the read fails and the request is answered `408 Request
@@ -383,6 +396,7 @@ pub struct HttpConfig {
     /// Read from `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS`, whole seconds from 1
     /// to 3600 — refused outside, from the environment and from the pinned
     /// struct alike; defaults to 10 seconds.
+    #[config(bounds = BODY_READ_TIMEOUT)]
     pub body_read_timeout: Duration,
 }
 
@@ -398,7 +412,7 @@ impl Default for HttpConfig {
             default_version: None,
             server_header: false,
             global_prefix: None,
-            max_body_bytes: Some(RawBody::DEFAULT_LIMIT),
+            max_body_bytes: RawBody::DEFAULT_LIMIT,
             request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
             security_headers: HttpSecurityHeaders::default(),
             compression: false,
@@ -519,71 +533,43 @@ impl HttpConfig {
     }
 }
 
-impl Config for HttpConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let global_prefix = env
-            .get("GLOBAL_PREFIX")?
-            .map(|raw| {
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_owned())
-                }
-            })
-            .unwrap_or(base.global_prefix);
-        Ok(Self {
-            host: env.get("HOST")?.unwrap_or(base.host),
-            port: env.parse("PORT")?.unwrap_or(base.port),
-            tls: HttpTls::from_env(env, base.tls).map_err(|e| {
-                // Kept whole: it names its variable and carries the I/O source.
-                match e.downcast::<nest_rs_config::ConfigError>() {
-                    Ok(worded) => worded,
-                    Err(e) => {
-                        nest_rs_config::ConfigError::parse(env.var_name("TLS_*"), format!("{e:#}"))
-                    }
-                }
-            })?,
-            cors: HttpCors::from_env(env, base.cors)?,
-            versioning: env.parse("VERSIONING")?.unwrap_or(base.versioning),
-            version_header: version_header(env, base.version_header)?,
-            default_version: env.get("DEFAULT_VERSION")?.or(base.default_version),
-            server_header: env.flag("SERVER_HEADER", base.server_header)?,
-            global_prefix,
-            max_body_bytes: env.parse("MAX_BODY_BYTES")?.or(base.max_body_bytes),
-            request_timeout: optional(REQUEST_TIMEOUT.read_optional(env, base.request_timeout)?),
-            security_headers: HttpSecurityHeaders::from_env(env, base.security_headers)?,
-            compression: env.flag("COMPRESSION", base.compression)?,
-            access_log: env.flag("ACCESS_LOG", base.access_log)?,
-            trusted_proxies: parse_trusted_proxies(env, base.trusted_proxies)?,
-            sse_max_connection: optional(
-                SSE_MAX_CONNECTION.read_optional(env, base.sse_max_connection)?,
-            ),
-            sse_keep_alive: optional(SSE_KEEP_ALIVE.read_optional(env, base.sse_keep_alive)?),
-            shutdown_timeout: SHUTDOWN_TIMEOUT.read(env, base.shutdown_timeout)?.value,
-            max_concurrent_connections: max_concurrent_connections(
-                env,
-                base.max_concurrent_connections,
-            )?,
-            header_read_timeout: HEADER_READ_TIMEOUT
-                .read(env, base.header_read_timeout)?
-                .value,
-            idle_timeout: IDLE_TIMEOUT.read(env, base.idle_timeout)?.value,
-            send_timeout: SEND_TIMEOUT.read(env, base.send_timeout)?.value,
-            body_read_timeout: BODY_READ_TIMEOUT.read(env, base.body_read_timeout)?.value,
-        })
-    }
+/// The server's own certificate, its vocabulary's `TLS_*` keys; a reading
+/// failure that names no variable is named under them, its I/O source kept.
+fn tls(env: &ConfigService, _key: &str, base: Option<HttpTls>) -> Result<Option<HttpTls>> {
+    HttpTls::from_env(env, base).map_err(|e| match e.downcast::<nest_rs_config::ConfigError>() {
+        Ok(worded) => worded,
+        Err(e) => nest_rs_config::ConfigError::parse(env.var_name("TLS_*"), format!("{e:#}")),
+    })
+}
+
+/// The CORS policy, its vocabulary's `CORS_*` keys.
+fn cors(env: &ConfigService, _key: &str, base: Option<HttpCors>) -> Result<Option<HttpCors>> {
+    HttpCors::from_env(env, base)
+}
+
+/// The security headers: the switch under the field's key, each header under
+/// its own.
+fn security_headers(
+    env: &ConfigService,
+    _key: &str,
+    base: HttpSecurityHeaders,
+) -> Result<HttpSecurityHeaders> {
+    HttpSecurityHeaders::from_env(env, base)
+}
+
+/// The global prefix, trimmed; blank is none.
+fn global_prefix(env: &ConfigService, key: &str, base: Option<String>) -> Result<Option<String>> {
+    Ok(match env.get(key)? {
+        Some(raw) => Some(raw.trim().to_owned()).filter(|trimmed| !trimmed.is_empty()),
+        None => base,
+    })
 }
 
 /// `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS` over `base`, refused outside its
 /// range from either side, never clamped.
-fn max_concurrent_connections(env: &ConfigService, base: usize) -> Result<usize> {
-    let Some(setting) = env.setting(MAX_CONCURRENT_CONNECTIONS)? else {
-        return check_connection_cap(
-            env.var_name(MAX_CONCURRENT_CONNECTIONS),
-            base,
-            "is not set, and ",
-        );
+fn max_concurrent_connections(env: &ConfigService, key: &str, base: usize) -> Result<usize> {
+    let Some(setting) = env.setting(key)? else {
+        return check_connection_cap(env.var_name(key), base, "is not set, and ");
     };
     let count: usize = setting.parse()?;
     match outside_connection_range(count) {
@@ -633,15 +619,11 @@ fn in_range(bounds: DurationBounds, value: Duration) -> Result<Duration> {
     )
 }
 
-fn optional(read: Option<nest_rs_config::BoundedDuration>) -> Option<Duration> {
-    read.map(|read| read.value)
-}
-
 /// The header the [`ApiVersioning::Header`] strategy reads, refused from either
 /// side when it is no HTTP header name.
-fn version_header(env: &ConfigService, base: String) -> Result<String> {
-    let Some(raw) = env.setting(VERSION_HEADER)? else {
-        header_name(env.var_name(VERSION_HEADER), &base, "is not set, and ")?;
+fn version_header(env: &ConfigService, key: &str, base: String) -> Result<String> {
+    let Some(raw) = env.setting(key)? else {
+        header_name(env.var_name(key), &base, "is not set, and ")?;
         return Ok(base);
     };
     match HeaderName::from_bytes(raw.value.as_bytes()) {
@@ -665,35 +647,14 @@ fn header_name(var: String, name: &str, lead: &str) -> Result<HeaderName> {
     }
 }
 
-/// Parse `<PREFIX>_HTTP__TRUSTED_PROXIES`; a bad entry fails the boot, since a
-/// skipped one collapses every caller onto the balancer's address.
-fn parse_trusted_proxies(env: &ConfigService, base: Vec<IpAddr>) -> Result<Vec<IpAddr>> {
-    const KEY: &str = "TRUSTED_PROXIES";
-    let Some(raw) = env.setting(KEY)? else {
-        return Ok(base);
-    };
-    raw.value
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .enumerate()
-        .map(|(index, s)| {
-            s.parse::<IpAddr>().map_err(|e| {
-                raw.refuse(format_args!(
-                    "entry {} of the list is not an IP address: {e}",
-                    index + 1
-                ))
-            })
-        })
-        .collect()
-}
-
 #[cfg(test)]
 #[expect(
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
 )]
 mod tests {
+    use nest_rs_config::Config;
+
     use super::*;
 
     /// A TLS file the transport cannot read fails the boot with its I/O reason
@@ -806,7 +767,7 @@ mod tests {
             "Server header opt-out by default — no framework fingerprint in prod",
         );
         assert!(d.global_prefix.is_none(), "no global prefix by default");
-        assert_eq!(d.max_body_bytes, Some(RawBody::DEFAULT_LIMIT));
+        assert_eq!(d.max_body_bytes, RawBody::DEFAULT_LIMIT);
         assert!(
             !d.compression,
             "compression opt-in — proxy-terminated by default"
@@ -910,7 +871,7 @@ mod tests {
         .expect("the overlay resolves");
         assert_eq!(cfg.port, 3555, "the env outranks the pinned port");
         assert_eq!(cfg.global_prefix.as_deref(), Some("/api"));
-        assert_eq!(cfg.max_body_bytes, Some(4096));
+        assert_eq!(cfg.max_body_bytes, 4096);
         assert!(cfg.compression);
         assert_eq!(cfg.host, "0.0.0.0", "and an untouched field keeps the base");
     }
@@ -987,7 +948,7 @@ mod tests {
             jail.set_env(nest_rs_config::var_name("http", "MAX_BODY_BYTES"), "1024");
             let env = ConfigService::for_namespace("http");
             let cfg = HttpConfig::from_env(&env, Default::default()).expect("env parses");
-            assert_eq!(cfg.max_body_bytes, Some(1024));
+            assert_eq!(cfg.max_body_bytes, 1024);
             Ok(())
         });
     }

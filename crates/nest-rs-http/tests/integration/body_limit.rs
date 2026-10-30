@@ -76,7 +76,7 @@ async fn boot() -> TestClient {
 
 async fn boot_with(compression: bool) -> TestClient {
     crate::boot_on::<BodyModule>(HttpConfig {
-        max_body_bytes: Some(CAP),
+        max_body_bytes: CAP,
         compression,
         ..HttpConfig::default()
     })
@@ -218,7 +218,7 @@ struct ReadModule;
 /// `request_timeout` names one.
 async fn serve_read(request_timeout: Option<Duration>) -> Serving {
     serve_module::<ReadModule>(HttpConfig {
-        max_body_bytes: Some(CAP),
+        max_body_bytes: CAP,
         request_timeout,
         ..HttpConfig::default()
     })

@@ -6,7 +6,6 @@
 use std::any::TypeId;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, MissingDependencyError};
@@ -14,7 +13,7 @@ use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, MissingDependenc
 use crate::config::ThrottlerConfig;
 use crate::guard::ThrottlerGuard;
 use crate::store::{InMemoryThrottler, ThrottlerStore};
-use crate::throttle::{DEFAULT_THROTTLE, Throttle};
+use crate::throttle::Throttle;
 
 /// The throttler port: policy, guard, and the in-process default store. Wire
 /// with `ThrottlerModule::for_root(None)` (env-driven, default
@@ -88,27 +87,26 @@ impl DynamicModule for ThrottlerSetup {
 /// Resolve a [`ThrottlerConfig`] into the default [`Throttle`] the guard applies
 /// to routes that pin none.
 fn resolve(config: &ThrottlerConfig) -> Throttle {
-    let limit = config.limit.unwrap_or(DEFAULT_THROTTLE.limit());
-    let window = config
-        .window_secs
-        .map(Duration::from_secs)
-        .unwrap_or(DEFAULT_THROTTLE.window());
-    Throttle::new(limit, window)
+    Throttle::new(config.limit, config.window)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::throttle::DEFAULT_THROTTLE;
 
     #[test]
-    fn resolve_falls_back_to_the_port_default_per_field() {
-        let cfg = ThrottlerConfig {
-            limit: Some(5),
-            window_secs: None,
-            pseudonym_key: None,
-        };
-        let t = resolve(&cfg);
+    fn the_default_config_is_the_ports_default_throttle() {
+        let t = resolve(&ThrottlerConfig {
+            limit: 5,
+            ..ThrottlerConfig::default()
+        });
         assert_eq!(t.limit(), 5);
         assert_eq!(t.window(), DEFAULT_THROTTLE.window());
+        let default = resolve(&ThrottlerConfig::default());
+        assert_eq!(
+            (default.limit(), default.window()),
+            (DEFAULT_THROTTLE.limit(), DEFAULT_THROTTLE.window())
+        );
     }
 }

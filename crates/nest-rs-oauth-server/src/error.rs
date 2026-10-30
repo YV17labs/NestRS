@@ -88,6 +88,18 @@ pub enum TokenError {
     Server(#[source] anyhow::Error),
 }
 
+/// `refusal`, filed as the token endpoint's refusal of the request: one
+/// `warn` naming its wire code, the client the request's `actor_id` names,
+/// never what it asked for.
+pub(crate) fn refused(refusal: TokenError) -> TokenError {
+    tracing::warn!(
+        target: crate::TARGET,
+        reason = %refusal,
+        "token request refused",
+    );
+    refusal
+}
+
 impl TokenError {
     /// The HTTP status RFC 6749 §5.2 assigns this condition — and, for the two
     /// failures §5.2 leaves to HTTP, the one RFC 9110 does: `500` for this

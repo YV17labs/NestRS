@@ -13,7 +13,7 @@ use schemars::JsonSchema;
 use serde::de::{self, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::error::{MalformedRequest, TokenError};
+use crate::error::{MalformedRequest, TokenError, refused};
 
 /// RFC 6749 §4.4.2 — the `client_credentials` access token request.
 ///
@@ -25,8 +25,9 @@ use crate::error::{MalformedRequest, TokenError};
 /// body that is no form, a client credential in the body beside the
 /// `Authorization` header (more than one mechanism) — never what it held. A
 /// `grant_type` naming a grant the endpoint does not serve is §5.2's
-/// `unsupported_grant_type`, answered before the handler runs, so the handler
-/// reads a [`GrantType`]. An empty `scope` or `resource` is none, and a
+/// `unsupported_grant_type`, answered before the handler runs and filed once
+/// at `warn` by its reason, never the grant sent, so the handler reads a
+/// [`GrantType`]. An empty `scope` or `resource` is none, and a
 /// parameter the request does not define is ignored (§3.2). `resource` alone
 /// may repeat (RFC 8707 §2). A body past the transport's cap keeps the
 /// transport's `413`.
@@ -232,7 +233,8 @@ impl<'a> FromRequest<'a> for AccessTokenRequest {
         if in_body && req.headers().contains_key(header::AUTHORIZATION) {
             return Err(MalformedRequest::at(TWO_MECHANISMS).into());
         }
-        let grant_type = GrantType::served(&sent.grant_type).ok_or(TokenError::UnsupportedGrant)?;
+        let grant_type = GrantType::served(&sent.grant_type)
+            .ok_or_else(|| refused(TokenError::UnsupportedGrant))?;
         Ok(Self {
             grant_type,
             scope: sent

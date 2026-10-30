@@ -5,7 +5,7 @@ use nest_rs_http::{
     HttpConfig, HttpControllerMeta, HttpModule, IntoResponse, StatusCode, controller, routes,
 };
 use nest_rs_oauth_server::{AccessTokenRequest, AccessTokenResponse};
-use nest_rs_testing::{TestApp, TestResponse};
+use nest_rs_testing::{LogCapture, TestApp, TestResponse};
 
 /// The one encoding RFC 6749 §4.4.2 gives a token request.
 const FORM: &str = "application/x-www-form-urlencoded";
@@ -173,7 +173,8 @@ async fn a_request_omitting_scope_is_read_because_3_3_makes_it_optional() {
 }
 
 /// §5.2's `unsupported_grant_type`, with §5.1's directives, answered by the
-/// request itself: a grant the endpoint does not serve never reaches the issuer.
+/// request itself and filed by its reason: a grant the endpoint does not serve
+/// never reaches the issuer, and is never quoted.
 #[tokio::test]
 async fn a_grant_the_endpoint_does_not_serve_is_unsupported_grant_type() {
     let app = TestApp::for_module::<RequestApp>().await.expect("boots");
@@ -184,9 +185,19 @@ async fn a_grant_the_endpoint_does_not_serve_is_unsupported_grant_type() {
         "authorization_code",
         "Client_Credentials",
         "client_credentials%20",
+        "never-logged-grant",
     ] {
+        let logs = LogCapture::install();
         let response = token_request(&app, FORM, &format!("grant_type={grant_type}")).await;
 
+        let event = logs.expect_one("nest_rs::oauth::server", "token request refused");
+        assert_eq!(event.level, "warn");
+        assert!(event.fields.keys().eq(["reason"]), "{event:?}");
+        assert_eq!(
+            event.field("reason").as_deref(),
+            Some("unsupported_grant_type")
+        );
+        assert!(!format!("{event:?}").contains("never-logged"), "{event:?}");
         response.assert_status(StatusCode::BAD_REQUEST);
         response.assert_header("cache-control", "no-store");
         response.assert_header("pragma", "no-cache");

@@ -130,10 +130,11 @@ grant's refusals too.
   empty secret (an empty Basic password would match it).
   `ClientSecretBasicStrategy<P>` is §2.3.1's Basic pair checked against it, the
   guard's ordinary strategy.
-- **Each refusal of `scope_for` and `audience_for` files one `warn`**,
-  `token request refused` on `nest_rs::oauth::server`, its `reason` the wire
-  code; the client is the line's `actor_id`, never a field, and what it asked
-  for is never quoted.
+- **Each refusal of the grant files one `warn`** — the request's
+  `unsupported_grant_type`, `scope_for`'s and `audience_for`'s — `token
+  request refused` on `nest_rs::oauth::server`, its `reason` the wire code;
+  the client is the line's `actor_id`, never a field, and what it asked for —
+  the grant, the scope, the resource — is never quoted.
 - **Refused: a policy hook in the registry** (a closure deciding partial
   grants, a product payload validator). The product's own checks over the
   registry — a scope outside the set its rules gate on — run in its own

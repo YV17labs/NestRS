@@ -106,13 +106,18 @@ async fn a_wrong_secret_is_refused_by_the_registry_the_module_reads() {
         .await;
 }
 
-/// §5.2's `invalid_scope` and RFC 8707's `invalid_target`, each filed once at
-/// `warn` by its reason, the client its actor, never what it asked for.
+/// §5.2's `unsupported_grant_type` and `invalid_scope`, and RFC 8707's
+/// `invalid_target`, each filed once at `warn` by its reason, the client its
+/// actor, never what it asked for.
 #[tokio::test]
-async fn a_scope_or_a_resource_outside_the_registration_is_refused_and_filed() {
+async fn an_authenticated_clients_refused_request_is_filed_by_its_reason() {
     let app = TestApp::for_module::<IssuerApp>().await.expect("boots");
 
     for (body, error) in [
+        (
+            "grant_type=urn%3Anever-logged%3Agrant-type",
+            "unsupported_grant_type",
+        ),
         (
             "grant_type=client_credentials&scope=posts%3Aread+admin-never-logged",
             "invalid_scope",

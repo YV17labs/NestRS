@@ -8,6 +8,7 @@ use nest_rs_authn::PrincipalIdentity;
 use nest_rs_core::{AmbientValue, Secret};
 
 use crate::TokenError;
+use crate::error::refused;
 
 /// A machine client permitted to use the `client_credentials` grant, as loaded
 /// from configuration. Generic over the principal payload `P` the app attaches
@@ -143,17 +144,6 @@ impl<P> AuthenticatedClient<P> {
             .map(String::as_str)
             .ok_or_else(|| refused(TokenError::InvalidTarget))
     }
-}
-
-/// `refusal`, filed as the token endpoint's refusal of the authenticated
-/// client the request's `actor_id` names.
-fn refused(refusal: TokenError) -> TokenError {
-    tracing::warn!(
-        target: crate::TARGET,
-        reason = %refusal,
-        "token request refused",
-    );
-    refusal
 }
 
 impl<P: Send + Sync + 'static> AmbientValue for AuthenticatedClient<P> {}

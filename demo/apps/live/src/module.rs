@@ -1,7 +1,6 @@
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::http::HttpModule;
 use nest_rs::opentelemetry::OpenTelemetryModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
@@ -18,7 +17,6 @@ use features::users::UsersWsModule;
         SeaOrmDatabaseModule,
         AuthnModule,
         HealthModule,
-        HttpModule::for_root(None),
         ChatWsModule,
         NotificationsWsModule,
         UsersWsModule,

@@ -4,7 +4,6 @@ use features::users::UsersMcpModule;
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::http::HttpModule;
 use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
 use nest_rs::oauth::resource::OAuthResourceModule;
 use nest_rs::opentelemetry::OpenTelemetryModule;
@@ -24,7 +23,6 @@ const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped
         OpenTelemetryModule,
         ServerTimingModule,
         HealthModule,
-        HttpModule::for_root(None),
         McpModule::for_root(McpOptions {
             server: Some(
                 McpIdentity::default()

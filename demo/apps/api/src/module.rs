@@ -1,12 +1,9 @@
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
-use nest_rs::graphql::GraphqlModule;
 use nest_rs::health::HealthModule;
-use nest_rs::http::HttpModule;
 use nest_rs::openapi::OpenApiModule;
 use nest_rs::opentelemetry::OpenTelemetryModule;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
-use nest_rs::schedule::ScheduleModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::server_timing::ServerTimingModule;
 use nest_rs::throttler::ThrottlerModule;
@@ -30,11 +27,8 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         RedisQueueModule,
         HealthModule,
         ServerTimingModule,
-        ScheduleModule,
         RedisScheduleModule,
-        HttpModule::for_root(None),
         ThrottlerModule::for_root(None),
-        GraphqlModule::for_root(None),
         OpenApiModule::for_root(None),
         AuthnModule,
         AuthzModule,

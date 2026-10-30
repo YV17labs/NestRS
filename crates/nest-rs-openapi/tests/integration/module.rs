@@ -6,8 +6,8 @@ use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::Multipart;
 use nest_rs_http::StatusCode;
 use nest_rs_http::{
-    ApiVersioning, Header, HttpConfig, HttpModule, HttpSecurityHeaders, async_trait, controller,
-    input, routes,
+    ApiVersioning, Created, Header, HttpConfig, HttpModule, HttpSecurityHeaders, Json, Paginated,
+    async_trait, controller, input, routes,
 };
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule, OpenApiSetup};
 use nest_rs_testing::TestApp;
@@ -61,6 +61,28 @@ impl WidgetsController {
         let _ = form;
         trace.into_inner().request_id
     }
+
+    #[post("/")]
+    #[public]
+    async fn create(&self) -> nest_rs_http::Result<Created<Json<Widget>>> {
+        Ok(Created::at(
+            7,
+            Json(Widget {
+                name: "gear".into(),
+            }),
+        ))
+    }
+
+    #[get("/pages")]
+    #[public]
+    async fn pages(&self) -> nest_rs_http::Result<Paginated<Json<Vec<Widget>>>> {
+        Ok(Paginated::new(Json(Vec::new()), 20, None::<u32>))
+    }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct Widget {
+    name: String,
 }
 
 #[input]
@@ -207,6 +229,34 @@ async fn the_documented_import_serves_a_document_describing_the_app() {
             .get("headers")
             .is_none(),
         "a route that sends no Location declares none: {doc}",
+    );
+}
+
+/// A typed answer says its status and its headers through the return type,
+/// with no `#[http_code]` and no `#[api(response = …)]` beside it.
+#[tokio::test]
+async fn a_created_and_a_paginated_answer_document_their_status_their_header_and_their_body() {
+    let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
+    let resp = app.http().get("/api-json").send().await;
+    resp.assert_status_is_ok();
+    let doc: Value = resp.json().await.value().deserialize();
+
+    let created = &doc["paths"]["/widgets"]["post"]["responses"];
+    assert!(created.get("200").is_none(), "{created}");
+    assert_eq!(
+        created["201"]["headers"]["Location"]["schema"]["format"], "uri-reference",
+        "{created}",
+    );
+    assert!(
+        created["201"]["content"]["application/json"]["schema"].is_object(),
+        "the body inside `Created` is documented: {created}",
+    );
+
+    let page = &doc["paths"]["/widgets/pages"]["get"]["responses"]["200"];
+    assert!(page["headers"]["Link"].is_object(), "{page}");
+    assert!(
+        page["content"]["application/json"]["schema"].is_object(),
+        "the body inside `Paginated` is documented: {page}",
     );
 }
 

@@ -62,6 +62,12 @@ impl ResponseShapers {
         self.http_code.is_none() && self.headers.is_empty() && self.redirect.is_none()
     }
 
+    /// Whether a `#[redirect]` or an `#[http_code]` sets the status, over
+    /// whatever the handler's answer said.
+    pub(crate) fn sets_status(&self) -> bool {
+        self.redirect.is_some() || self.http_code.is_some()
+    }
+
     /// The success status this handler emits, for the OpenAPI document: a
     /// `#[redirect]`'s code (default `307`), else `#[http_code(N)]`'s, else `200`.
     pub(crate) fn success_status(&self) -> u16 {

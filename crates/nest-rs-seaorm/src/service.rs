@@ -563,10 +563,24 @@ fn model_pk<E: EntityTrait>(model: &E::Model) -> Option<sea_orm::Value> {
     Some(model.get(pk_col))
 }
 
-/// The model's first primary key as a `Uuid`, for `#[crud]`'s `201`
-/// `Location`; `None` when the entity has none, or one of another type.
+/// The model's first primary key as a `Uuid`; `None` when the entity has
+/// none, or one of another type.
 pub fn model_uuid<E: EntityTrait>(model: &E::Model) -> Option<Uuid> {
     <Uuid as sea_orm::sea_query::ValueType>::try_from(model_pk::<E>(model)?).ok()
+}
+
+/// The key of a row `#[crud]`'s create inserted, which its `201` names: a
+/// `CrudService` entity is keyed by a `Uuid`, as its by-id reads are.
+pub fn created_key<E>(model: &E::Model) -> Uuid
+where
+    E: EntityTrait,
+    E::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
+{
+    #[expect(
+        clippy::expect_used,
+        reason = "the bound makes the one key a `Uuid`, which its column value reads back as"
+    )]
+    model_uuid::<E>(model).expect("a `Uuid`-keyed row reads its key back as a `Uuid`")
 }
 
 #[cfg(test)]

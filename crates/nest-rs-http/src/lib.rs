@@ -24,10 +24,12 @@ mod compression;
 mod config;
 mod controller;
 mod cors;
+mod created;
 mod ctx;
 mod deadline;
 mod deprecation;
 mod detached;
+mod documented_answer;
 mod documented_body;
 mod drain;
 mod edge;
@@ -47,6 +49,7 @@ mod module;
 mod multipart;
 mod opaque;
 mod origin;
+mod paginated;
 mod path;
 mod phase;
 mod pipe;
@@ -203,6 +206,7 @@ pub use config::{
 };
 pub use controller::{HttpControllerMeta, HttpRouteMeta, RequestBodyMeta, SchemaFn};
 pub use cors::HttpCors;
+pub use created::Created;
 pub use ctx::RejectedCredential;
 pub use deadline::RequestDeadline;
 pub use deprecation::DeprecationMeta;
@@ -214,13 +218,12 @@ pub use fallback::HttpFallbackMeta;
 pub use form::Form;
 pub use headers::Header;
 pub use json::Json;
-pub use link::set_next_link;
-pub use location::{caller_path, set_created_location};
 pub use module::{HttpModule, HttpSetup};
 pub use multipart::{Field, Multipart, PartStream};
 pub use nest_rs_core::input;
 pub use nest_rs_core::{current_request_scope, with_request_scope};
 pub use opaque::Opaque;
+pub use paginated::Paginated;
 pub use path::Path;
 pub use pipe::pipe_error;
 pub use problem::{ProblemDetails, normalize_error_response};
@@ -256,6 +259,9 @@ pub mod __private {
         HttpRouteParts, http_controller_meta, http_route_meta, route_denial_statuses, schema_of,
     };
     pub use crate::deprecation::{deprecated_route, deprecation_meta};
+    pub use crate::documented_answer::{
+        AnswerDoc, AnswerProbe, DocumentedAnswer, PlainAnswerProbe,
+    };
     pub use crate::documented_body::{BodyProbe, DocumentedBody, UndocumentedProbe};
     pub use crate::endpoint::{OriginCheck, checks_origin, guarded_by};
     pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};

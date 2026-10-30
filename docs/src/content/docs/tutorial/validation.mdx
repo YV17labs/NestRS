@@ -25,13 +25,8 @@ not a shortcut — for a bare CRUD feature, the macro is the handler.
 
 ```rust title="from the #[crud] expansion, abridged — you don't write this"
 #[post("/")]
-#[http_code(201)]
-async fn create(
-    &self,
-    __req: &Request,
-    __body: Json<CreatePost>,
-) -> Result<Response> {
-    // Creatable::create, then the `Location` of the row it made
+async fn create(&self, __body: Json<CreatePost>) -> Result<Created<Json<Post>>> {
+    // Creatable::create, then a `201` naming the row it made
 }
 ```
 

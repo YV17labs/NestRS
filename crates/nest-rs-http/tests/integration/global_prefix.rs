@@ -1,10 +1,10 @@
-//! `HttpConfig.global_prefix` is applied exactly once at the root, and
-//! `caller_path` keeps it in a `Location`.
+//! `HttpConfig.global_prefix` is applied exactly once at the root, and a
+//! `Created` answer keeps it in its `Location`.
 
 use nest_rs_config::{Config, ConfigService};
 use nest_rs_core::module;
 use nest_rs_http::StatusCode;
-use nest_rs_http::{HttpConfig, caller_path, controller, routes, set_created_location};
+use nest_rs_http::{Created, HttpConfig, controller, routes};
 use nest_rs_testing::TestClient;
 
 /// The id the create route below hands back.
@@ -33,15 +33,11 @@ impl OrgsController {
         "orgs"
     }
 
-    /// What `#[crud]`'s generated create does, by hand.
+    /// What `#[crud]`'s generated create answers.
     #[post("/")]
     #[public]
-    async fn create_org(&self, req: &nest_rs_http::Request) -> nest_rs_http::Response {
-        let mut resp = nest_rs_http::Response::builder()
-            .status(StatusCode::CREATED)
-            .finish();
-        set_created_location(&mut resp, caller_path(req), NEW_ORG_ID);
-        resp
+    async fn create_org(&self) -> Created<()> {
+        Created::at(NEW_ORG_ID, ())
     }
 }
 

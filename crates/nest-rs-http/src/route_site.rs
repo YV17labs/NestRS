@@ -54,7 +54,10 @@ impl<W: RouteWrapper> SiteTail for RouteTail<W> {
             // weigh on every route's future, which the table boxes per request.
             Box::pin(self.pipes.apply(self.handler, req)).await?;
         }
-        self.wrapper.call(req).await
+        let mut response = self.wrapper.call(req).await?;
+        crate::created::stamp_location(req, &mut response);
+        crate::paginated::stamp_next_link(req, &mut response);
+        Ok(response)
     }
 }
 

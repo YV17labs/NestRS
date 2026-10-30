@@ -55,10 +55,7 @@ to wrap. `Json<T>` is the usual carrier, and `Query<T>`, `Form<T>`, `Path<T>`
 and `Header<T>` answer the same way:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::{
-    IntoResponse, Json, Request, Response, Result, caller_path, input,
-    set_created_location,
-};
+use nest_rs::http::{Created, Json, Result, input};
 
 #[input]
 struct CreateUser {
@@ -78,12 +75,9 @@ conflicting impl (`E0119`). A reply the route only sends takes `#[output]`,
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[post("/users")]
-#[http_code(201)]
-async fn create(&self, req: &Request, Json(body): Json<CreateUser>) -> Result<Response> {
+async fn create(&self, Json(body): Json<CreateUser>) -> Result<Created<Json<User>>> {
     let user = self.svc.create(body).await?;
-    let mut res = Json(&user).into_response();
-    set_created_location(&mut res, caller_path(req), user.id);
-    Ok(res)
+    Ok(Created::at(user.id, Json(User::from(&user))))
 }
 ```
 

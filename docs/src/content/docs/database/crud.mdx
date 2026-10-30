@@ -218,8 +218,8 @@ hand-written `delete` cancels the generated one, and a key configuring only a
 cancelled op (`api(delete(…))`, or `paginate` for a hand-written `list`) fails
 the build, since nothing generated reads it. An override answers what the
 generated method does: a hand-written `create` keeps the `201` and its
-`Location` with `#[http_code(201)]` and `set_created_location`, built on the
-path `caller_path` reads.
+`Location` by returning `Created<Json<T>>`
+([Responses](/http/responses/#a-create-names-what-it-created)).
 
 ## The GraphQL twin
 

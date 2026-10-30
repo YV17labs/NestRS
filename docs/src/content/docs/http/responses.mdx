@@ -51,6 +51,31 @@ async fn enqueue(&self) -> (StatusCode, &'static str) {
 For anything richer than a static body, prefer `Json<T>` so the OpenAPI
 document picks up the shape.
 
+## A create names what it created
+
+A `201` names what it created (RFC 9110 §15.3.2), and `Created<T>` says both in
+the return type:
+
+```rust title="crates/features/src/posts/http/controller.rs"
+use nest_rs::http::{Created, Json, Result};
+
+#[post("/posts")]
+async fn create(&self, Json(input): Json<CreatePost>) -> Result<Created<Json<Post>>> {
+    let post = self.svc.create(input).await?;
+    Ok(Created::at(post.id, Json(post)))
+}
+```
+
+`Created::at(id, body)` answers `201` with `Location: <collection>/<id>`, the
+collection being the path the caller addressed — global prefix and version
+included, the client-controlled `Host` never named. The route writes the
+header, and the [OpenAPI document](/openapi/) reads the status, the `Location`
+and the body off the return type, alias included: no `#[http_code(201)]`, no
+`#[api(response = …)]`, no `&Request` taken for its path. The
+[`#[crud]` create](/database/crud/) answers the same type. A list that pages
+answers `Paginated<T>` alike, its `Link` to the next page
+([Pagination](/database/pagination/)).
+
 ## Shape a response declaratively
 
 When the handler body would otherwise return `Ok(value)` and the only
@@ -58,19 +83,13 @@ thing changing is the status, a header, or a redirect, three attribute
 macros sit beside the verb attribute:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::{
-    IntoResponse, Json, Request, Response, Result, caller_path, http_code, redirect,
-    response_header, set_created_location,
-};
+use nest_rs::http::{Json, Result, http_code, redirect, response_header};
 
-#[post("/posts")]
-#[http_code(201)]
+#[post("/posts/import")]
+#[http_code(202)]
 #[response_header("x-cache-status", "miss")]
-async fn create(&self, req: &Request, Json(input): Json<CreatePost>) -> Result<Response> {
-    let post = self.svc.create(input).await?;
-    let mut res = Json(&post).into_response();
-    set_created_location(&mut res, caller_path(req), &post.id);
-    Ok(res)
+async fn import(&self, Json(input): Json<ImportPosts>) -> Result<Json<ImportTicket>> {
+    Ok(Json(self.svc.import(input).await?))
 }
 
 #[get("/old-path")]
@@ -84,17 +103,11 @@ Overrides the response status on the **success path**. `N` must be in
 `100..=999` and is validated at compile time. When the handler returns a
 `Result` and yields `Err`, the shaper short-circuits: the status the error
 answers stands and `#[http_code]` never touches it — so a
-`201` handler that errors still returns the error's `4xx`/`5xx`, not
-`201`. A `Result` is known by its type, not its spelling: `nest_rs::http::Result<T>`
+`202` handler that errors still returns the error's `4xx`/`5xx`, not
+`202`. A `Result` is known by its type, not its spelling: `nest_rs::http::Result<T>`
 renamed on import, or a `type Outcome<T> = Result<T, MyError>`, short-circuits
 the same way. Mutually exclusive with `#[redirect]` — the two macros cannot both
 decorate the same handler.
-
-A `201` names what it created (RFC 9110 §15.3.2), so the `create` above
-returns a `Response` stamped by `set_created_location`, as the
-[`#[crud]` create](/database/crud/#override-one-handler-keep-the-rest) does.
-`caller_path(req)` is the collection the caller addressed, global prefix and
-version included.
 
 ### `#[response_header("name", "value")]`
 
@@ -130,21 +143,18 @@ practice:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 #[post("/posts")]
-#[http_code(201)]
 #[response_header("x-cache-status", "miss")]
 #[response_header("link", "</posts>; rel=collection")]
-async fn create(&self, req: &Request, Json(input): Json<CreatePost>) -> Result<Response> {
+async fn create(&self, Json(input): Json<CreatePost>) -> Result<Created<Json<Post>>> {
     let post = self.svc.create(input).await?;
-    let mut res = Json(&post).into_response();
-    set_created_location(&mut res, caller_path(req), &post.id);
-    Ok(res)
+    Ok(Created::at(post.id, Json(post)))
 }
 ```
 
-The handler returns the post with its `Location`; `#[http_code(201)]`
-rewrites the status from `200` to `201`; the two `#[response_header]`
-attributes append their headers. `#[redirect]` cannot stack with `#[http_code]` — they decide the
-same facet (the response status) two different ways.
+The handler answers `201` with the post and its `Location`; the two
+`#[response_header]` attributes append their headers. `#[redirect]` cannot
+stack with `#[http_code]` — they decide the same facet (the response status)
+two different ways.
 
 A handler that returns a `Result` keeps its error contract intact: on
 `Err`, the shaper short-circuits before `#[http_code]` runs, so the
@@ -159,21 +169,21 @@ whether an entity already existed, the headers depend on the resolved
 user — go back to a plain tuple return and let the handler decide:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::{
-    IntoResponse, Json, Request, Response, Result, StatusCode, caller_path, set_created_location,
-};
+use nest_rs::http::{Created, IntoResponse, Json, Response, Result};
 
 #[post("/posts")]
-async fn upsert(&self, req: &Request, Json(input): Json<CreatePost>) -> Result<Response> {
+async fn upsert(&self, Json(input): Json<CreatePost>) -> Result<Response> {
     let (post, created) = self.svc.upsert(input).await?;
-    if !created {
-        return Ok(Json(post).into_response());
-    }
-    let mut res = (StatusCode::CREATED, Json(&post)).into_response();
-    set_created_location(&mut res, caller_path(req), &post.id);
-    Ok(res)
+    Ok(match created {
+        true => Created::at(post.id, Json(post)).into_response(),
+        false => Json(post).into_response(),
+    })
 }
 ```
+
+A `Created` turned into a `Response` keeps its `Location`: the route still
+writes it. What the document cannot read off a `Response` is the status, so
+such a route documents `200`.
 
 The shapers are best when the value is the same on every call — that's
 why they live on the attribute line, not in the handler body.

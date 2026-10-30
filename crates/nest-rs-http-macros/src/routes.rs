@@ -115,7 +115,7 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// What `#[routes]` consumes off a method beside the layers and the posture.
-const HELPERS: [&str; 13] = [
+const HELPERS: [&str; 11] = [
     "get",
     "post",
     "put",
@@ -127,8 +127,6 @@ const HELPERS: [&str; 13] = [
     "response_header",
     "redirect",
     "crud_write",
-    "crud_location",
-    "crud_next_link",
 ];
 
 fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -383,16 +381,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(flag) => flag,
             Err(err) => return err.to_compile_error().into(),
         };
-        // `#[crud]`'s create marker: the document declares the `Location` it sends.
-        let mut sets_location = match take_flag_attr(&mut method.attrs, "crud_location") {
-            Ok(flag) => flag,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        // `#[crud]`'s paginated-list marker: the document declares the `Link` it sends.
-        let sets_next_link = match take_flag_attr(&mut method.attrs, "crud_next_link") {
-            Ok(flag) => flag,
-            Err(err) => return err.to_compile_error().into(),
-        };
 
         let response_shapers =
             match crate::response::take_response_shapers(&mut method.attrs, &method.block) {
@@ -410,13 +398,15 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
+        // A shaper's status is the one the route sends: it is set after the answer.
         let success_status = response_shapers.success_status();
+        let shaped_status = response_shapers.sets_status();
         let response_headers = response_shapers.headers.iter().map(|(name, value)| {
             quote! { (#name, #value) }
         });
         let response_headers = quote! { &[#(#response_headers),*] };
-        if response_shapers.redirect.is_some() {
-            sets_location = true;
+        let redirects = response_shapers.redirect.is_some();
+        if redirects {
             method.attrs.push(parse_quote! {
                 #[allow(dead_code, reason = "#[redirect] answers without calling the handler")]
             });
@@ -843,8 +833,30 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             });
         }
 
+        // What the return type answers beside its body, read by its type so an
+        // alias documents it too; a type no expression can name answers nothing.
+        let answer = match answer_type(&method.sig.output) {
+            Some(ty) if !is_sse => quote! { ::nest_rs_http::__answer_of!(#ty) },
+            _ => quote! { ::core::option::Option::None },
+        };
+        let success_status = match shaped_status {
+            true => quote! { #success_status },
+            false => quote! {
+                ::core::option::Option::map_or(__nestrs_answer, #success_status, |__a| __a.status)
+            },
+        };
+        let sets_location = quote! {
+            #redirects
+                || ::core::option::Option::is_some_and(__nestrs_answer, |__a| __a.location)
+        };
+        let sets_next_link = quote! {
+            ::core::option::Option::is_some_and(__nestrs_answer, |__a| __a.next_link)
+        };
         route_metas.push(quote! {
             #(#cfgs)*
+            {
+            let __nestrs_answer: ::core::option::Option<::nest_rs_http::__private::AnswerDoc> =
+                #answer;
             ::nest_rs_http::__private::http_route_meta(::nest_rs_http::__private::HttpRouteParts {
                 method: ::nest_rs_http::Method::#method_const,
                 path: #route_path,
@@ -872,6 +884,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 versions: #route_versions,
                 site: &#site_name,
             })
+            }
         });
     }
 
@@ -1842,13 +1855,35 @@ pub(crate) fn result_inner(ty: &Type) -> Option<&Type> {
     nth_generic_type(ty, "Result", 0)
 }
 
-/// The JSON payload type of a handler's return, under one optional `Result`.
+/// The JSON payload type of a handler's return, under one optional `Result`
+/// and one optional `Created` or `Paginated` answer.
 fn response_payload(output: &ReturnType) -> Option<Type> {
     let ReturnType::Type(_, ty) = output else {
         return None;
     };
     let inner = result_inner(ty).unwrap_or(ty);
+    let inner = nth_generic_type(inner, "Created", 0)
+        .or_else(|| nth_generic_type(inner, "Paginated", 0))
+        .unwrap_or(inner);
     nth_generic_type(inner, "Json", 0).cloned()
+}
+
+/// The return type an expression in the controller's `register` can name, for
+/// the answer probe: none borrowing a lifetime, hiding behind `impl`, or
+/// leaving a part to inference.
+fn answer_type(output: &ReturnType) -> Option<&Type> {
+    let ReturnType::Type(_, ty) = output else {
+        return None;
+    };
+    fn nameable(tokens: TokenStream2) -> bool {
+        tokens.into_iter().all(|token| match token {
+            proc_macro2::TokenTree::Group(group) => nameable(group.stream()),
+            proc_macro2::TokenTree::Ident(ident) => ident != "impl" && ident != "_",
+            proc_macro2::TokenTree::Punct(punct) => punct.as_char() != '\'',
+            proc_macro2::TokenTree::Literal(_) => true,
+        })
+    }
+    nameable(quote!(#ty)).then_some(&**ty)
 }
 
 #[cfg(test)]

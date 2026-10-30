@@ -247,14 +247,14 @@ impl HttpRouteMeta {
     }
 
     /// The route's success response carries a `Location` header that the
-    /// framework emits (`#[crud]`'s create, `#[redirect]`); a hand-written
-    /// handler setting it itself reads `false`.
+    /// framework emits (a [`Created`](crate::Created) answer, `#[redirect]`);
+    /// a handler setting it itself reads `false`.
     pub fn sets_location(&self) -> bool {
         self.parts.sets_location
     }
 
-    /// `#[crud]`'s paginated list: the success response carries a `Link` with
-    /// `rel="next"` whenever another page follows ([`set_next_link`](crate::set_next_link)).
+    /// A [`Paginated`](crate::Paginated) answer: the success response carries
+    /// a `Link` with `rel="next"` whenever another page follows.
     pub fn sets_next_link(&self) -> bool {
         self.parts.sets_next_link
     }
@@ -266,7 +266,8 @@ impl HttpRouteMeta {
     }
 
     /// The effective **success** HTTP status this route emits — `200` unless a
-    /// `#[http_code(N)]` or `#[redirect(_, code)]` overrides it.
+    /// `#[http_code(N)]` or `#[redirect(_, code)]` overrides it, or the return
+    /// type answers its own (a [`Created`](crate::Created) answer's `201`).
     pub fn success_status(&self) -> u16 {
         self.parts.success_status
     }

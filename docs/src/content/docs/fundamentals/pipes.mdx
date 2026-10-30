@@ -92,9 +92,7 @@ wherever it is decoded. `#[input]` carries the `Validate` derive, so the rules
 on the DTO are the whole declaration:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::{
-    IntoResponse, Json, Request, Response, Result, caller_path, input, set_created_location,
-};
+use nest_rs::http::{Created, Json, Result, input};
 
 #[input]
 pub struct CreateUser {
@@ -105,12 +103,9 @@ pub struct CreateUser {
 }
 
 #[post("/")]
-#[http_code(201)]
-async fn create(&self, req: &Request, Json(input): Json<CreateUser>) -> Result<Response> {
+async fn create(&self, Json(input): Json<CreateUser>) -> Result<Created<Json<User>>> {
     let user = self.svc.create(input).await?;
-    let mut res = Json(User::from(&user)).into_response();
-    set_created_location(&mut res, caller_path(req), user.id);
-    Ok(res)
+    Ok(Created::at(user.id, Json(User::from(&user))))
 }
 ```
 

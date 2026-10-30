@@ -147,27 +147,23 @@ impl PostsService {
 }
 ```
 
-The route reads the query as `PageParams`, and answers a cursor no page
-issued with the `400` every list answers, through `pipe_error`:
+The route reads the query as `PageParams`, answers a cursor no page issued
+with the `400` every list answers, through `pipe_error`, and returns a
+`Paginated` answer, which writes the `Link` on the path the caller addressed
+and documents it, as the generated list does:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 #[get("/by-author/{author_id}")]
 #[authorize(Read, PostEntity)]
-#[api(response = Vec<Post>)]
 async fn by_author(
     &self,
-    req: &Request,
     author_id: Path<Uuid>,
     params: Query<PageParams>,
-) -> Result<Response> {
+) -> Result<Paginated<Json<Vec<Post>>>> {
     let after = params.cursor().map_err(|refused| pipe_error(&refused))?;
     let page = self.svc.page_by_author(author_id.0, params.limit(), after).await?;
     let posts: Vec<Post> = page.items.iter().map(Post::from).collect();
-    let mut res = Json(posts).into_response();
-    if let Some(cursor) = page.next_cursor {
-        set_next_link(&mut res, caller_path(req), params.limit(), cursor);
-    }
-    Ok(res)
+    Ok(Paginated::new(Json(posts), params.limit(), page.next_cursor))
 }
 ```
 

@@ -92,17 +92,14 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             },
             Paginate::Cursor => parse_quote! {
                 #[get("/")]
-                // A built `Response` hides the payload from the signature: declared here.
-                #[api(#api, response = ::std::vec::Vec<#output>)]
-                // Read by `#[routes]` to declare the `Link` in the document.
-                #[crud_next_link]
+                #[api(#api)]
                 #[authorize(::nest_rs_authz::Read, #entity)]
                 async fn list(
                     &self,
-                    // Read through `caller_path`: a version selector rewrites `uri()`.
-                    __req: &::nest_rs_http::Request,
                     __page: ::nest_rs_http::Query<::nest_rs_seaorm::PageParams>,
-                ) -> ::nest_rs_http::Result<::nest_rs_http::Response> {
+                ) -> ::nest_rs_http::Result<
+                    ::nest_rs_http::Paginated<::nest_rs_http::Json<::std::vec::Vec<#output>>>,
+                > {
                     let __first = __page.0.limit();
                     let __after = __page
                         .0
@@ -117,17 +114,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                     let __items: ::std::vec::Vec<#output> =
                         __p.items.iter().map(#output::from).collect();
-                    let mut __resp =
-                        ::nest_rs_http::IntoResponse::into_response(::nest_rs_http::Json(__items));
-                    if let ::core::option::Option::Some(__cursor) = __p.next_cursor {
-                        ::nest_rs_http::set_next_link(
-                            &mut __resp,
-                            ::nest_rs_http::caller_path(__req),
-                            __first,
-                            __cursor,
-                        );
-                    }
-                    ::core::result::Result::Ok(__resp)
+                    ::core::result::Result::Ok(::nest_rs_http::Paginated::new(
+                        ::nest_rs_http::Json(__items),
+                        __first,
+                        __p.next_cursor,
+                    ))
                 }
             },
         };
@@ -166,40 +157,23 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         let api = api_args(&cfg, CrudOp::Create, format!("Create {noun}"));
         generated.push(parse_quote! {
             #[post("/")]
-            // A built `Response` hides the payload from the signature: declared here.
-            #[api(#api, response = #output)]
+            #[api(#api)]
             #[crud_write]
-            // Read by `#[routes]` to declare the `Location` header in the document.
-            #[crud_location]
-            // Via `#[http_code]`, not a returned status, so the document advertises it.
-            #[http_code(201)]
             #[authorize(::nest_rs_authz::Create, #entity)]
             async fn create(
                 &self,
-                // Read through `caller_path`: a version selector rewrites `uri()`.
-                __req: &::nest_rs_http::Request,
                 __body: ::nest_rs_http::Json<#create>,
-            ) -> ::nest_rs_http::Result<::nest_rs_http::Response> {
+            ) -> ::nest_rs_http::Result<::nest_rs_http::Created<::nest_rs_http::Json<#output>>> {
                 let __row = ::nest_rs_seaorm::Creatable::create(
                     &*self.#service,
                     __body.into_inner(),
                 )
                 .await
                 .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
-                let mut __resp = ::nest_rs_http::IntoResponse::into_response(
+                ::core::result::Result::Ok(::nest_rs_http::Created::at(
+                    ::nest_rs_seaorm::__private::created_key::<#entity>(&__row),
                     ::nest_rs_http::Json(#output::from(&__row)),
-                );
-                // RFC 9110 §15.3.2: a `201` names what it created.
-                if let ::core::option::Option::Some(__id) =
-                    ::nest_rs_seaorm::model_uuid::<#entity>(&__row)
-                {
-                    ::nest_rs_http::set_created_location(
-                        &mut __resp,
-                        ::nest_rs_http::caller_path(__req),
-                        __id,
-                    );
-                }
-                ::core::result::Result::Ok(__resp)
+                ))
             }
         });
     }
@@ -356,39 +330,22 @@ mod tests {
         assert!(!out.contains("fn update"), "update must be absent: {out}");
     }
 
-    // A missing marker is no compile error anywhere, only a poorer document.
     #[test]
-    fn the_create_op_marks_the_location_it_sends() {
+    fn the_create_answers_a_created_and_the_cursor_list_a_paginated_answer() {
         let out = generated_methods(quote! {
             service = svc, entity = E, output = Thing, create = CreateThing
         });
+        assert!(out.contains(":: nest_rs_http :: Created <"), "{out}");
+        assert!(out.contains(":: nest_rs_http :: Paginated <"), "{out}");
         assert!(
-            out.contains("crud_location"),
-            "create stamps the marker `#[routes]` reads: {out}",
-        );
-        let read_only = generated_methods(quote! {
-            service = svc, entity = E, output = Thing, ops = [list, get]
-        });
-        assert!(
-            !read_only.contains("crud_location"),
-            "only the create op declares a Location: {read_only}",
-        );
-    }
-
-    #[test]
-    fn only_the_paginated_list_marks_the_link_it_sends() {
-        let paged = generated_methods(quote! {
-            service = svc, entity = E, output = Thing, ops = [list]
-        });
-        assert!(
-            paged.contains("crud_next_link"),
-            "the cursor list stamps the marker `#[routes]` reads: {paged}",
+            !out.contains("http_code (201)"),
+            "the answer says its status: {out}"
         );
         let whole = generated_methods(quote! {
             service = svc, entity = E, output = Thing, ops = [list], paginate = none
         });
         assert!(
-            !whole.contains("crud_next_link"),
+            !whole.contains("Paginated"),
             "a full collection sends no cursor: {whole}",
         );
     }

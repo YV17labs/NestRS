@@ -1,7 +1,8 @@
 //! The `Location` response header, for a route that mints a resource.
 //!
 //! RFC 9110 §15.3.2 asks a `201` to name what it created. The value is composed
-//! with [`join_path`](crate::join_path), as the transport mounts the route.
+//! with [`join_path`](crate::join_path), as the transport mounts the route, on
+//! the path a [`Created`](crate::Created) answer's route read off the edge.
 
 use std::fmt::Display;
 
@@ -15,11 +16,11 @@ use crate::response::Response;
 #[derive(Clone)]
 pub(crate) struct CallerUri(pub(crate) Uri);
 
-/// The path the caller addressed — the collection a `#[crud]` create posted to.
+/// The path the caller addressed — the collection a create posted to.
 ///
 /// Read from the edge's capture: a header or media-type version selector
 /// rewrites `uri()` before the handler runs.
-pub fn caller_path(req: &Request) -> &str {
+pub(crate) fn caller_path(req: &Request) -> &str {
     match req.extensions().get::<CallerUri>() {
         Some(CallerUri(uri)) => uri.path(),
         // No edge: a unit test calling the endpoint bare, with no selector in front.
@@ -30,10 +31,10 @@ pub fn caller_path(req: &Request) -> &str {
 /// Stamp `Location: <collection_path>/<id>` onto a create response.
 ///
 /// An absolute-path reference (RFC 9110 §10.2.2): an absolute URI would name
-/// the client-controlled `Host`. Pass [`caller_path`] as the collection path.
+/// the client-controlled `Host`. The collection path is [`caller_path`].
 ///
 /// A header value that will not build is dropped, never raised.
-pub fn set_created_location(resp: &mut Response, collection_path: &str, id: impl Display) {
+pub(crate) fn set_created_location(resp: &mut Response, collection_path: &str, id: impl Display) {
     let location = crate::join_path(collection_path, &id.to_string());
     if let Ok(value) = HeaderValue::from_str(&location) {
         resp.headers_mut().insert(LOCATION, value);

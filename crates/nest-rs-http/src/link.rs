@@ -10,10 +10,15 @@ use crate::response::Response;
 /// another follows.
 ///
 /// A relative reference (RFC 8288 §3.1), resolved against the request: an
-/// absolute URI would name the client-controlled `Host`. Pass
-/// [`caller_path`](crate::caller_path) as the collection path. A header value
-/// that will not build is dropped, never raised.
-pub fn set_next_link(resp: &mut Response, collection_path: &str, first: u64, after: impl Display) {
+/// absolute URI would name the client-controlled `Host`. The collection path
+/// is the one the caller addressed. A header value that will not build is
+/// dropped, never raised.
+pub(crate) fn set_next_link(
+    resp: &mut Response,
+    collection_path: &str,
+    first: u64,
+    after: impl Display,
+) {
     let target = format!(
         "{collection_path}?first={first}&after={}",
         encode_query_value(&after.to_string()),

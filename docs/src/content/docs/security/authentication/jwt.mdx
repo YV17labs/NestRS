@@ -139,14 +139,13 @@ the struct and both impls.
 The handler reads them back through `Ctx<Claims>`:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUser>>)
-    -> Result<Json<User>>
-{
-    Ok(Json(
-        self.svc.create_in_org(body.into_inner(), auth.org_id).await?,
-    ))
+async fn caller_org(&self, auth: Ctx<Claims>) -> Json<Uuid> {
+    Json(auth.org_id)
 }
 ```
+
+A create needs no `Ctx<Claims>` to land in the caller's org: the `Create` grant
+that pins `org_id` also fills it ([CRUD](/database/crud/#the-tenant-comes-from-the-grant)).
 
 ## Signing a token
 

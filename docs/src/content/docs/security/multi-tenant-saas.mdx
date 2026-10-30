@@ -26,12 +26,16 @@ pub struct UsersController {
 ## The guarantee
 
 Once the authz modules are imported, the caller's ambient `Ability` is
-non-optional. It does three things on every request, without a
+non-optional. It does four things on every request, without a
 per-handler opt-in:
 
 - **Pre-filters every read.** `Repo` joins the ability's predicate into
   the SQL `WHERE`, so a member querying posts gets `org_id =
   $caller_org_id` appended.
+- **Stamps and checks every create.** A column the caller's `Create` grant
+  pins — `org_id = $caller_org_id` — is filled when the input left it unset,
+  and the fresh row is re-checked against the grant in SQL: a row outside the
+  caller's org is rolled back and answers `403`.
 - **Gates every by-id write.** A denied-but-existing row updates zero
   rows and returns `403`, not the row.
 - **Masks every response field.** Fields the caller cannot read are
@@ -141,15 +145,15 @@ impl NotificationsProcessor {
 }
 ```
 
-The service writes the row under the payload's org, through `Repo`:
+The service writes the row under the payload's org, through `Repo`; the key
+and the creation time are the entity's `#[expose(…, timestamps)]` to seed:
 
 ```rust title="crates/features/src/notifications/service.rs (from the demo, abridged)"
 pub async fn persist(&self, command: NotifyCommand) -> Result<(), ServiceError> {
     let active = entity::ActiveModel {
-        id: Set(Uuid::now_v7()),
         org_id: Set(command.org_id),
         message: Set(command.message),
-        created_at: Set(chrono::Utc::now().fixed_offset()),
+        ..Default::default()
     };
     let model = Repo::<Notifications>::insert_unscoped(active).await?;
     // …

@@ -63,7 +63,8 @@ From this one declaration, `#[expose]` generates the wire DTO returned by
 handlers (`Post`), the `CreatePost` and `UpdatePost` inputs filtered by
 `input(create)` / `input(update)`, the GraphQL `SimpleObject`, the OpenAPI
 schema, the PK dataloader (`PostsServiceById`) for relations, and the
-`From<&Model>` / `IntoActiveModel` plumbing every handler needs. The
+`From<&Model>` / `IntoActiveModel` plumbing every handler needs, and the
+column defaults every insert through `Repo` fills, a v7 key first. The
 entity-derived inputs are **bare** (`CreatePost`, not `CreatePostDto`) — one
 struct is at once the service's create type, the REST body, and the GraphQL
 input, so no boundary suffix fits.
@@ -159,7 +160,9 @@ offers, and each names its bare entity-derived input (`type Create =
 CreatePost`). A read-only resource implements just `CrudService` and declares
 none of them; a write op wired without its trait is a build break, never a
 silent no-op. Every method routes through `Repo` and is filtered by the
-caller's [`Ability`](/security/). Custom queries (here: `find_by_title`) sit
+caller's [`Ability`](/security/); a create fills what the caller's `Create`
+grant pins, the tenant first, then checks the fresh row against it
+([CRUD](/database/crud/#the-tenant-comes-from-the-grant)). Custom queries (here: `find_by_title`) sit
 beside the inherited ones and stay ability-scoped by going through
 `Repo::<Posts>::scoped(Action::Read)` — an unscoped raw query is the
 documented exception, covered on [Repo and executor](/database/repo-and-executor/).

@@ -291,12 +291,12 @@ this is the same shape every adapter uses:
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 use std::sync::Arc;
-use async_graphql::{Context, Result};
+use async_graphql::Result;
 use nest_rs::authz::{Create, Read};
 use nest_rs::graphql::{operations, resolver};
-use nest_rs::seaorm::Authorized;
+use nest_rs::pipes::Valid;
+use nest_rs::seaorm::{Authorized, Creatable, ServiceError};
 
-use crate::Claims;
 use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, User, UsersService};
 
@@ -317,15 +317,22 @@ impl UsersResolver {
 
     #[mutation]
     #[authorize(Create, UserEntity)]
-    async fn create_user(&self, ctx: &Context<'_>, input: CreateUser) -> Result<User> {
-        let actor = ctx.data::<Claims>()?;
-        let user = self.svc.create_in_org(input, actor.org_id).await?;
+    async fn create_user(&self, input: Valid<CreateUser>) -> Result<User> {
+        let user = self
+            .svc
+            .create(input.into_inner())
+            .await
+            .map_err(ServiceError::from)?;
         Ok(User::from(&user))
     }
 }
 ```
 
-The service stays the single audited choke point to the database. The
+`Valid<CreateUser>` runs the input's rules before the body, as the generated
+`create_user` does; `Creatable::create` validates nothing itself. It takes the
+caller's org from the `Create` grant that pins it, so the mutation reads no
+principal. The service stays the single audited choke point to the database.
+The
 resolver only translates between the wire shape and the service —
 `#[authorize(Action, Entity)]` is each operation's access posture,
 gating the call against the ambient ability and masking the returned

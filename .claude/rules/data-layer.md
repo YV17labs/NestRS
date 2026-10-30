@@ -204,6 +204,23 @@ deadline**: opened through the binding its emitter ran under
   handles, with an `OutboxStore` its binding binds beside the relay's module,
   or its pushes are filed at once.
 
+## What a create fills — the grants first, then the entity
+
+**An authorized create's server-side columns are never a service's to
+stamp.** The tenant and the author are `Create` grants in the
+`AbilityFactory`: `Creatable` fills what they
+pin and the input left unset, then re-checks the row against them, and a
+column they leave undecided is refused, never guessed. An author is a grant of
+its own, declared only for a subject that can author, so it never narrows an
+update or delete. What no grant decides — the v7 key, a constant
+(`#[expose(default = …)]`) — every insert through `Repo` fills from the column
+defaults `#[expose]` registers, the shape `soft_delete` registers in, so the
+entity's `ActiveModelBehavior` stays its own and `timestamps` stamps
+`created_at`; a table no transport exposes carries no `#[expose]` and its
+migration defaults the key to `uuidv7()`
+(`.claude/decisions/create-fills-what-the-grants-pin.md`). Held by
+`nest-rs-authz`'s and `nest-rs-seaorm`'s tests.
+
 ## Write capability is segregated, never a placeholder
 
 `CrudService` carries the **read** half only. The write half is three opt-in

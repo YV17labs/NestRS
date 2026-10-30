@@ -95,7 +95,7 @@ a set of bare flags.
 | `name = "Post"` | **required** | The wire DTO / GraphQL object / OpenAPI schema name. |
 | `service = …` | path | The service that owns the entity. Required as soon as the entity exposes a relation or another feature needs its PK loader — it's where the macro emits the loaders. |
 | `graphql` | flag | Emit the GraphQL object + input objects, and auto-resolve exposed relations through dataloaders. An exposed relation **without** `graphql` is a compile error. |
-| `timestamps` | flag | Emit an `ActiveModelBehavior` that stamps `created_at` on insert and `updated_at` on every save. Requires both columns. |
+| `timestamps` | flag | Emit an `ActiveModelBehavior` that stamps `created_at` on insert and, when the entity has one, `updated_at` on every save. Requires `created_at`: an append-only entity has no `updated_at`. |
 | `soft_delete` | flag | Deletes set `deleted_at`, and every `Repo` read hides a tombstoned row. Requires a `deleted_at: Option<…>` column. |
 | `complex` | flag | Force `#[graphql(complex)]` on the wire DTO. Auto-enabled when `graphql` is set and the entity has auto-resolved relations — you rarely set it by hand. |
 
@@ -107,7 +107,7 @@ to:
 
 | Column | Type | Role |
 |---|---|---|
-| `id` | `Uuid` | Primary key, `auto_increment = false`. The create path seeds it with `Uuid::now_v7()` when the input omits it — time-ordered, index-friendly. |
+| `id` | `Uuid` | Primary key, `auto_increment = false`. Every insert through `Repo` that leaves it unset gets `Uuid::now_v7()` — time-ordered, index-friendly. |
 | `created_at` | `DateTimeWithTimeZone` | Stamped once on insert by `timestamps`. Read-only on the wire. |
 | `updated_at` | `DateTimeWithTimeZone` | Stamped on every save by `timestamps`. Read-only on the wire. |
 | `deleted_at` | `Option<DateTimeWithTimeZone>` | The soft-delete tombstone. **Left unexposed** — it's server-side state, never a wire field. |
@@ -252,6 +252,20 @@ A **relation** field cannot carry `input(...)` — only scalar columns
 are writable. Set the foreign-key column (`org_id`) as the input, not
 the relation (`org`).
 
+A column the server decides is no input. The tenant and the author come from
+the caller's grants, which a create fills ([CRUD](/database/crud/#the-tenant-comes-from-the-grant));
+a constant takes `default`, which every insert through `Repo` leaving the
+column unset stores:
+
+```rust title="crates/features/src/posts/entities/post.rs (from the demo, abridged)"
+#[expose(default = PostStatus::Draft)]
+pub status: PostStatus,
+```
+
+`default` belongs to a column the create input does not carry, never to the
+primary key, and never to a column `timestamps` stamps; each is a compile
+error.
+
 ## Relations
 
 A SeaORM `belongs_to` / `has_many` field, typed `HasOne<E>` /
@@ -319,12 +333,16 @@ the same entity — pick one source of `ComplexObject` fields per entity.
 
 ## Lifecycle behaviour
 
-`timestamps` and `soft_delete` are independent flags that emit
-SeaORM-level behaviour:
+Every exposed entity registers its column defaults — the `Uuid` key's v7
+UUID and each column's `default` — and every insert through `Repo` fills the
+ones the row left unset, `Creatable::create` and `Repo::insert_unscoped`
+alike, after what the caller's grants pin. `timestamps` and `soft_delete` are
+independent flags that emit SeaORM-level behaviour:
 
 - **`timestamps`** emits `ActiveModelBehavior::before_save`, stamping
-  `created_at` on insert and `updated_at` on every save with
-  `chrono::Utc::now().fixed_offset()`.
+  `created_at` on insert and `updated_at`, when the entity has one, on every
+  save, with `chrono::Utc::now().fixed_offset()` — one instant, so a fresh
+  row's two columns are equal.
 - **`soft_delete`** emits `impl SoftDeletable for Entity` and registers
   the entity, with or without a `service`. `SoftDeletable` is sealed: only
   the decorator implements it, so the trait never goes without the
@@ -338,8 +356,11 @@ SeaORM-level behaviour:
 <Aside type="caution">
 SeaORM requires exactly **one** `ActiveModelBehavior` per entity. The
 macro emits it for you when `timestamps` is set — do not also write
-your own, or the impls collide. With **no** `timestamps`, supply the
-empty `impl ActiveModelBehavior for ActiveModel {}` yourself.
+your own, or the impls collide. With **no** `timestamps`, supply it
+yourself: the empty `impl ActiveModelBehavior for ActiveModel {}`, or one
+carrying your own hooks, which the column defaults never touch. A table no
+transport exposes writes its own too, and its migration gives the key
+`DEFAULT uuidv7()`.
 </Aside>
 
 ## The migration

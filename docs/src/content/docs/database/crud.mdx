@@ -141,62 +141,85 @@ impl OrgsController {}
   on every request: mount the resource under a path naming none, or write
   those operations by hand.
 
-## Override one handler, keep the rest
+## The tenant comes from the grant
 
-`#[crud]` only generates the operations you did **not** write. Hand-write
-the ones that need custom logic — the rest are filled in:
+`users` is tenant-scoped, and its controller is still one `#[crud]` line: the
+create lands in the caller's org without a handler.
 
 ```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)"
-#[controller(path = "/users")]
-#[use_guards(AuthnGuard, AuthzGuard)]
-pub struct UsersController {
-    #[inject]
-    svc: Arc<UsersService>,
-}
-
 #[crud(
     service = svc,
     entity = UserEntity,
     output = User,
     create = CreateUser,
     update = UpdateUser,
-    api(get(
-        summary = "Get a user in the caller's org by id",
-        description = "A user outside the caller's org answers 403, an absent one 404."
-    )),
+    api(
+        get(
+            summary = "Get a user in the caller's org by id",
+            description = "A user outside the caller's org answers 403, an absent one 404."
+        ),
+        // … create(…)
+    ),
 )]
-impl UsersController {
-    #[post("/")]
-    #[http_code(201)]
-    #[authorize(Create, UserEntity)]
-    // … #[api(…)]
-    async fn create(
-        &self,
-        req: &Request,
-        auth: Ctx<Claims>,
-        body: Valid<Json<CreateUser>>,
-    ) -> Result<Response> {
-        let user = self
-            .svc
-            .create_in_org(body.into_inner(), auth.org_id)
-            .await?;
-        let mut res = Json(User::from(&user)).into_response();
-        set_created_location(&mut res, caller_path(req), user.id);
-        Ok(res)
+impl UsersController {}
+```
+
+`CreateUser` carries no `org_id`. The ability's `Create` grant pins it —
+`p.eq(user::Column::OrgId, actor.org_id)` — and `Creatable::create` fills every
+column the caller's `Create` grants pin by equality that the input left unset
+(CASL's `rulesToFields`), then inserts and re-checks the fresh row against the
+same grants in SQL. A grant naming the author too pins both:
+
+```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
+if let Some(author) = actor.sub.user_id() {
+    ab.can(Action::Create, post::Entity)
+        .when(|p| {
+            p.all([
+                p.eq(post::Column::OrgId, actor.org_id),
+                p.eq(post::Column::AuthorId, author),
+            ])
+        })
+        .requires_scope(constants::POSTS_WRITE);
+}
+```
+
+The fill never guesses. A column is filled only when every grant constraining
+it pins it to one value; two grants pinning it apart, or one constraining it
+with `is_in`, a comparison or `any`, leave it unset, and the re-check refuses
+the row. A value the input carries is never overwritten: the re-check judges
+it. Constants the server owns, such as a new post's status, are the entity's
+`#[expose(default = …)]` ([Entities](/database/entities/#write-side--inputs-and-validation)).
+
+## Override one handler, keep the rest
+
+`#[crud]` only generates the operations you did **not** write. Hand-write
+the ones that need custom logic — the rest are filled in:
+
+```rust title="crates/features/src/posts/http/controller.rs"
+#[crud(
+    service = svc,
+    entity = PostEntity,
+    output = Post,
+    create = CreatePost,
+    update = UpdatePost,
+)]
+impl PostsController {
+    #[get("/")]
+    #[authorize(Read, PostEntity)]
+    async fn list(&self) -> Result<Json<Vec<Post>>> {
+        Ok(Json(self.svc.published().await?))
     }
 }
 ```
 
-The `create` method takes over its generated counterpart, because it reads
-the caller's org; the default `list`, `get`, `update` and `delete` are still
-emitted, and `api(get(…))` gives the generated `get` its document text rather
-than an override that would change nothing else. Names match by ident — a
+The `list` method takes over its generated counterpart; the default `get`,
+`create`, `update` and `delete` are still emitted. Names match by ident — a
 hand-written `delete` cancels the generated one, and a key configuring only a
 cancelled op (`api(delete(…))`, or `paginate` for a hand-written `list`) fails
-the build, since nothing generated reads it. An override
-answers what the generated method does: this `create` keeps the `201` and
-its `Location` with `#[http_code(201)]` and `set_created_location`, built on
-the path `caller_path` reads.
+the build, since nothing generated reads it. An override answers what the
+generated method does: a hand-written `create` keeps the `201` and its
+`Location` with `#[http_code(201)]` and `set_created_location`, built on the
+path `caller_path` reads.
 
 ## The GraphQL twin
 
@@ -219,15 +242,7 @@ pub struct UsersResolver {
     create = CreateUser,
     update = UpdateUser,
 )]
-impl UsersResolver {
-    #[mutation]
-    #[authorize(Create, UserEntity)]
-    async fn create_user(&self, ctx: &Context<'_>, input: CreateUser) -> Result<User> {
-        let actor = ctx.data::<Claims>()?;
-        let user = self.svc.create_in_org(input, actor.org_id).await?;
-        Ok(User::from(&user))
-    }
-}
+impl UsersResolver {}
 ```
 
 Every operation — generated or hand-written — declares its posture with
@@ -235,8 +250,8 @@ Every operation — generated or hand-written — declares its posture with
 `#[public]`; an operation with none does not compile. Posture is **always**
 a visible attribute — a parameter type never stands in for it.
 
-Same override rule — the GraphQL `create_user` you wrote takes over;
-`users`, `user`, `update_user`, `delete_user` are generated.
+Same override rule — a `create_user` you write takes over its generated twin,
+and the generated `create_user` fills the caller's org exactly as REST's does.
 
 ## When the database refuses
 
@@ -452,7 +467,7 @@ impl Deletable for PostsService {}
 | Reading a deleted row | `Repo::<E>::with_tombstones(action)` — the one way (admin, retention) |
 | Restoring a deleted row | Not offered in 7.0: `Repo::update` hides a tombstone too; `Repo::restore` is planned for 7.x |
 | Hard purge | `Repo::delete` directly, which reaches a tombstone |
-| `timestamps` flag | Emits `ActiveModelBehavior::before_save` — **remove** any manual empty `impl ActiveModelBehavior` on the entity |
+| `timestamps` flag | Emits `ActiveModelBehavior::before_save`, which stamps `created_at` on insert and `updated_at`, when the entity has one, on every save — **remove** any manual empty `impl ActiveModelBehavior` on the entity |
 
 Migration snippet (Postgres):
 

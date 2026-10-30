@@ -281,29 +281,22 @@ can attach a typed value for the rest of the request. `Ctx<T>` is how the
 handler reads that value back:
 
 ```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
-#[post("/")]
-#[http_code(201)]
-#[authorize(Create, PostEntity)]
+#[post("/{id}/publish")]
+#[authorize(Update, bind = PostsService)]
 #[use_guards(PostAuthorGuard)]
 // … #[api(…)]
-async fn create(
+async fn publish(
     &self,
-    req: &Request,
-    auth: Ctx<Claims>,
-    author: Ctx<PostAuthor>,
-    body: Valid<Json<CreatePost>>,
-) -> Result<Response> {
-    let PostAuthor(author_id) = *author;
-    let post = self
-        .svc
-        .create_in_org(body.into_inner(), auth.org_id, author_id)
-        .await?;
-    // … the `201` and its `Location`
+    post: Authorized<Update, PostEntity>,
+    actor: Ctx<PostAuthor>,
+) -> Result<Json<Post>, PostError> {
+    let PostAuthor(actor_id) = *actor;
+    Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
 }
 ```
 
-`auth` is the principal the controller's `AuthnGuard` attached, `author` the
-value the route's own `PostAuthorGuard` attached after it.
+`actor` is the value the route's own `PostAuthorGuard` attached, after the
+controller's `AuthnGuard` attached the principal it reads.
 
 `Ctx<T>` rejects with `500` if `T` is absent — a missing context means
 the guard that should have set it never ran on this route (a wiring bug,

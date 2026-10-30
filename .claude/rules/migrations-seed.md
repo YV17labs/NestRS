@@ -23,7 +23,9 @@ from `demo/` with `nestrs run db <recipe>`.
   `nestrs_` prefix is the framework's alone. `nestrs g migration
   nestrs_outbox` writes the entry, and regenerating `migrator.rs` keeps it.
 - **House columns:** `created_at` / `updated_at` defaulting to
-  `current_timestamp`; a nullable `deleted_at` for soft delete.
+  `current_timestamp`; a nullable `deleted_at` for soft delete. A table no
+  entity `#[expose]`s defaults its `Uuid` key to `uuidv7()`, since nothing
+  else seeds it (`data-layer.md`, *What a create fills*).
 - **A value unique among a soft-deleted table's rows is unique among its live
   ones**: a partial unique index (`… WHERE deleted_at IS NULL`), never
   `unique_key()`. `Repo` hides a tombstone, so a full index would refuse, with

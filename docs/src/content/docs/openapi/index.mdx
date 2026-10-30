@@ -99,31 +99,30 @@ Swagger UI — try a request straight from the browser.
 The document is complete without annotations. `#[api(...)]` adds what the
 signature cannot say — a summary, a description, the group it sits in:
 
-```rust title="crates/features/src/users/http/controller.rs (from the demo)"
-#[post("/")]
-#[http_code(201)]
-#[authorize(Create, UserEntity)]
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
+#[post("/{id}/publish")]
+#[authorize(Update, bind = PostsService)]
+#[use_guards(PostAuthorGuard)]
 #[api(
-    summary = "Create a user in the caller's org",
-    description = "Requires a bearer JWT (obtain one from `POST /login` on the auth app). The \
-                   user's org is taken from the caller's token, never the body.",
-    response = User
+    summary = "Publish a draft post",
+    description = "Transitions a draft to published and writes a publication audit row in the \
+                   same transaction. The id loads the `Update`-authorized post through the \
+                   service. Re-publishing an already published post returns RFC 9457 \
+                   `application/problem+json` (409)."
 )]
-async fn create(
+async fn publish(
     &self,
-    req: &Request,
-    auth: Ctx<Claims>,
-    body: Valid<Json<CreateUser>>,
-) -> Result<Response> {
-    let user = self
-        .svc
-        .create_in_org(body.into_inner(), auth.org_id)
-        .await?;
-    let mut res = Json(User::from(&user)).into_response();
-    set_created_location(&mut res, caller_path(req), user.id);
-    Ok(res)
+    post: Authorized<Update, PostEntity>,
+    actor: Ctx<PostAuthor>,
+) -> Result<Json<Post>, PostError> {
+    let PostAuthor(actor_id) = *actor;
+    Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
 }
 ```
+
+An operation `#[crud]` generates takes its `summary` and `description` the
+same way, through `api(create(…))` on the `#[crud]` line: `users`' generated
+create is documented so.
 
 `#[api]` takes eight keys — `summary`, `description`, `tags(...)`,
 `response = Type`, `multipart = Type`, `response_content_type = "type/subtype"`,

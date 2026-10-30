@@ -12,8 +12,10 @@ slice: the port at the feature root, one adapter folder per edge.
 ## The bar
 
 - **A new CRUD feature is at most 60 lines of hand-written glue** beyond the
-  entity's column declarations; `orgs/` is the measurement. When that breaks,
-  open an issue — never rewrite the boilerplate.
+  entity's column declarations and its OpenAPI text; `users/` is the
+  measurement — a tenant-scoped entity on HTTP and GraphQL, whose create takes
+  its org from the grant. When that breaks, open an issue — never rewrite the
+  boilerplate.
 - **Adding a feature is copying `users/`**, plus the two edits a copy cannot
   carry: `pub mod <feature>;` in `lib.rs` and the `<Feature><Edge>Module`
   entry in the serving app's `module.rs`. `nestrs g feature/resource/<edge>`
@@ -119,8 +121,9 @@ access contract. Batch field fetches with `#[dataloader]`.
 
 ## Exemplars
 
-- **`src/users/`** — the reference feature.
-- **`src/orgs/`** — the full HTTP CRUD slice the bar is measured on.
+- **`src/users/`** — the reference feature, and the CRUD slice the bar is
+  measured on.
+- **`src/orgs/`** — the same CRUD for an entity with no tenant.
 - **`src/posts/`** — the tutorial feature.
 - **`src/notifications/schedule/`** — work that belongs to the deployment, not
   the process: `replicas = "one"`, hosted by the worker beside the Redis

@@ -106,20 +106,14 @@ Two patterns to read here:
 
 ## Bind the guards on the controller
 
-The controller gains two attributes — the guard chain on the struct, the
-posture on the route. The by-id read is `#[crud]`'s generated `get`, which
-declares its own.
+The controller gains one attribute: the guard chain on the struct. Every
+operation `#[crud]` generates declares its own posture, the create included.
 
-```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)" {3, 9-11, 15, 27, 29-38}
+```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)" {5-6, 10}
 use std::sync::Arc;
 
-use nest_rs::authz::Create;
-use nest_rs::http::{
-    Ctx, IntoResponse, Json, Request, Response, Result, Valid, caller_path, controller, crud,
-    set_created_location,
-};
+use nest_rs::http::{controller, crud};
 
-use crate::Claims;
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
@@ -132,41 +126,28 @@ pub struct UsersController {
 }
 
 #[crud(
-    // … same as before
+    service = svc,
+    entity = UserEntity,
+    output = User,
+    create = CreateUser,
+    update = UpdateUser,
+    // … api(get(…), create(…))
 )]
-impl UsersController {
-    #[post("/")]
-    #[http_code(201)]
-    #[authorize(Create, UserEntity)]
-    // … #[api(…)]
-    async fn create(
-        &self,
-        req: &Request,
-        auth: Ctx<Claims>,
-        body: Valid<Json<CreateUser>>,
-    ) -> Result<Response> {
-        let user = self
-            .svc
-            .create_in_org(body.into_inner(), auth.org_id)
-            .await?;
-        let mut res = Json(User::from(&user)).into_response();
-        set_created_location(&mut res, caller_path(req), user.id);
-        Ok(res)
-    }
-}
+impl UsersController {}
 ```
 
-Four things changed:
-
-| Change | Job |
-|--------|-----|
+| Piece | Job |
+|-------|-----|
 | `#[use_guards(AuthnGuard, AuthzGuard)]` | Run authn then authz on every route in the controller |
-| `auth: Ctx<Claims>` | Read the principal that `AuthnGuard` attached to the request |
-| `#[authorize(Create, UserEntity)]` | Check the ability allows `Create` on `UserEntity` before the body runs |
 | `#[crud]`'s generated `get` | Declares `#[authorize(Read, UserEntity)]`: parse the `{id}`, load the row through the service, `404` if absent, `403` if the ability refuses it |
+| `#[crud]`'s generated `create` | Declares `#[authorize(Create, UserEntity)]`, fills the columns the caller's `Create` grant pins, re-checks the fresh row against it, and answers `201` with its `Location` |
 
-The org id comes from the caller's claims, never from the body — there
-is no placeholder to fill in and no way to spoof the tenant.
+The org id comes from the caller's grant, never from the body. `CreateUser`
+has no `org_id`, and the rule `p.eq(Column::OrgId, actor.org_id)` that
+filters reads also decides the column on a create: `Creatable::create` fills
+what the grant pins and the input left unset, then checks the row in SQL. There
+is no placeholder to fill in, no hand-written create, and no way to spoof the
+tenant.
 
 ## Import the authz module
 

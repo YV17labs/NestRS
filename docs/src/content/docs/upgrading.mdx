@@ -642,6 +642,10 @@ lists what the boot, a log or the wire shows when one is missed.
     | a `Repo` read meant to see deleted rows (admin, retention) | `Repo::<E>::with_tombstones(action)` |
     | a restore through `Repo::update` (clearing `deleted_at`) | not offered in 7.0: `update` hides the row |
     | `impl SoftDeletable for Entity` by hand | `#[expose(..., soft_delete)]` on the entity |
+    | a create handler or service method stamping the tenant or the author (`active.org_id = Set(auth.org_id)`, `create_in_org`), and the `#[crud]` op it overrode | a `Create` grant pinning the column — `.when(\|p\| p.eq(Column::OrgId, actor.org_id))` — and `#[crud]`'s generated create, or `Creatable::create`; the author is a `Create` grant of its own, for a subject that can author |
+    | `active.status = Set(Draft)` before a create | `#[expose(default = Status::Draft)]` on the column, which the create input does not carry |
+    | `id: Set(Uuid::now_v7())`, `created_at: Set(now)` on a row built for `Repo::insert_unscoped` | `..Default::default()`: the insert fills the key on an exposed entity, and `created_at` under `timestamps`; a table no transport exposes takes `DEFAULT uuidv7()` on its key in its migration |
+    | `#[expose(..., timestamps)]` on an entity with `created_at` and no `updated_at`, refused | accepted: `updated_at` is stamped when the entity has one |
     | a unique column on a `soft_delete` table, `unique_key()` | a partial unique index, `… WHERE deleted_at IS NULL` |
     | `params.after_uuid()` | `params.cursor().map_err(\|refused\| nest_rs::http::pipe_error(&refused))?` |
     | `Page::next_cursor: Option<Uuid>`; `Repo::page`, `Repo::relation_pages`, `CrudService::page`, `RelationKey::after` taking `Option<Uuid>` | `Option<PageCursor>`: `PageCursor::from(uuid)` builds one, `cursor.to_string()` is its text |
@@ -1120,6 +1124,11 @@ lists what the boot, a log or the wire shows when one is missed.
 
 ## What fails if you get it wrong
 
+- **A `Create` grant the create cannot complete** — an org-wide `Manage` that
+  lets a caller who authors nothing reach an insert whose author no grant pins
+  — answers the insert's NOT NULL violation as a `500`, filed at `error` on
+  `nest_rs::orm`. Grant `Create` only where the grants pin every column the
+  server owns, and `Update` and `Delete` beside it where `Manage` stood.
 - **A global guard whose decision is a unit's alone** — a field's, a message's,
   an operation's, written only in `check` — now runs it on every request too:
   every route, the WebSocket upgrade and the `/graphql` and `/mcp` requests

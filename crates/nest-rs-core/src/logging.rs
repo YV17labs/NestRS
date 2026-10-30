@@ -1,6 +1,9 @@
 //! Baseline console logging, installed at boot when no global `tracing`
 //! subscriber is set; an observability stack installed in `main` first is left
-//! in place. Configuration is env-only, read by [`LogSettings`]:
+//! in place. [`LogSettings`] holds its configuration: settings set in code,
+//! under the variables that override them field by field
+//! ([`LogSettings::overlaid_by_env`]), or the variables alone
+//! ([`LogSettings::from_env`]):
 //!
 //! - `<PREFIX>_LOG` (falling back to `RUST_LOG`) — `EnvFilter` directives,
 //!   default `info`, narrowed by the clamp of each library the framework wires
@@ -11,10 +14,10 @@
 //! - `<PREFIX>_LOG_SOURCE_LOCATION` — append the emitting `file:line` to each
 //!   event; off by default (it leaks source paths).
 //!
-//! Unset or blank is the default; a value that does not parse aborts the boot,
-//! naming the variable and never quoting the value. The same variables drive
-//! the console layer of `nest-rs-opentelemetry`. Behind the default `logging`
-//! cargo feature.
+//! Unset or blank keeps the setting set in code, or the default; a value that
+//! does not parse aborts the boot, naming the variable and never quoting the
+//! value. The same variables drive the console layer of
+//! `nest-rs-opentelemetry`. Behind the default `logging` cargo feature.
 
 use std::borrow::Cow;
 use std::ffi::OsString;
@@ -115,7 +118,9 @@ const RUST_LOG: &str = "RUST_LOG";
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LogSettings {
-    /// An `EnvFilter` directive, already checked to parse.
+    /// An `EnvFilter` directive, checked to parse by
+    /// [`overlaid_by_env`](Self::overlaid_by_env) and
+    /// [`from_env`](Self::from_env).
     pub filter: String,
     /// The console format.
     pub format: LogFormat,
@@ -123,19 +128,55 @@ pub struct LogSettings {
     pub source_location: bool,
 }
 
+impl Default for LogSettings {
+    /// What every setting unset or blank reads as: `info`,
+    /// [`LogFormat::by_profile`], and no source location.
+    fn default() -> Self {
+        Self {
+            filter: DEFAULT_FILTER.to_owned(),
+            format: LogFormat::by_profile(),
+            source_location: false,
+        }
+    }
+}
+
 impl LogSettings {
     /// Read and check all three; unset or blank is the default (`info`,
     /// [`LogFormat::by_profile`], `false`), a value that does not parse is
     /// refused naming its variable.
+    pub fn from_env() -> Result<Self, LogSettingsError> {
+        Self::default().overlaid_by_env()
+    }
+
+    /// These settings — set in code — under the variables, field by field:
+    /// each one set replaces its field, read and checked as
+    /// [`from_env`](Self::from_env) reads it, and a field no variable sets
+    /// keeps its value. The filter set in code is checked whatever the
+    /// variables set, refused naming `LogSettings::filter`: a caller carrying
+    /// it in a field of its own checks it first with
+    /// [`check_filter`](Self::check_filter), naming that field.
+    ///
+    /// ```
+    /// use nest_rs_core::logging::{LogFormat, LogSettings};
+    ///
+    /// let mut pinned = LogSettings::default();
+    /// pinned.format = LogFormat::Json;
+    /// let console = pinned.overlaid_by_env()?;
+    /// # Ok::<(), nest_rs_core::logging::LogSettingsError>(())
+    /// ```
     #[expect(
         clippy::disallowed_methods,
         reason = "the logging bootstrap runs before any config exists"
     )]
-    pub fn from_env() -> Result<Self, LogSettingsError> {
-        Self::from_lookup(|name| std::env::var_os(name))
+    pub fn overlaid_by_env(self) -> Result<Self, LogSettingsError> {
+        self.overlaid_from(|name| std::env::var_os(name))
     }
 
-    fn from_lookup(get: impl Fn(&str) -> Option<OsString>) -> Result<Self, LogSettingsError> {
+    fn overlaid_from(
+        self,
+        get: impl Fn(&str) -> Option<OsString>,
+    ) -> Result<Self, LogSettingsError> {
+        Self::check_filter(&self.filter, "LogSettings::filter")?;
         // `None` when unset or blank; `Some(None)` when set to a value that is
         // not UTF-8, which no setting parses.
         let set = |name: &str| match get(name)?.into_string() {
@@ -158,7 +199,7 @@ impl LogSettings {
                     reason: "the value is not UTF-8",
                 });
             }
-            None => DEFAULT_FILTER.to_owned(),
+            None => self.filter,
         };
 
         let format_var = EnvPrefix::var(var::FORMAT);
@@ -167,7 +208,7 @@ impl LogSettings {
                 .as_deref()
                 .and_then(LogFormat::parse)
                 .ok_or(LogSettingsError::Format { var: format_var })?,
-            None => LogFormat::by_profile(),
+            None => self.format,
         };
 
         let location_var = EnvPrefix::var(var::SOURCE_LOCATION);
@@ -176,7 +217,7 @@ impl LogSettings {
                 .as_deref()
                 .and_then(crate::parse_bool)
                 .ok_or(LogSettingsError::SourceLocation { var: location_var })?,
-            None => false,
+            None => self.source_location,
         };
 
         Ok(Self {
@@ -2035,7 +2076,7 @@ mod tests {
 
     /// The settings `set` describes, every other variable unset.
     fn settings_under(set: &[(String, &str)]) -> Result<LogSettings, LogSettingsError> {
-        LogSettings::from_lookup(|name| {
+        LogSettings::default().overlaid_from(|name| {
             set.iter()
                 .find(|(variable, _)| variable == name)
                 .map(|(_, value)| OsString::from(value))
@@ -2053,10 +2094,11 @@ mod tests {
             EnvPrefix::var(var::FORMAT),
             EnvPrefix::var(var::SOURCE_LOCATION),
         ] {
-            let refused = LogSettings::from_lookup(|name| {
-                (name == variable).then(|| OsString::from_vec(b"info\xff".to_vec()))
-            })
-            .expect_err("a value that is not UTF-8 is set, and parses as nothing");
+            let refused = LogSettings::default()
+                .overlaid_from(|name| {
+                    (name == variable).then(|| OsString::from_vec(b"info\xff".to_vec()))
+                })
+                .expect_err("a value that is not UTF-8 is set, and parses as nothing");
             let said = refused.to_string();
             assert!(said.starts_with(&format!("{variable} ")), "{said}");
             assert!(!said.contains("info"), "the value is never quoted: {said}");
@@ -2078,6 +2120,94 @@ mod tests {
             (EnvPrefix::var(var::SOURCE_LOCATION), "  "),
         ];
         assert_eq!(settings_under(&blank).expect("the defaults"), defaults);
+    }
+
+    #[test]
+    fn the_default_is_every_setting_unset() {
+        assert_eq!(
+            LogSettings::default(),
+            settings_under(&[]).expect("the defaults")
+        );
+    }
+
+    /// Settings set in code are the base the variables overlay: each variable
+    /// set replaces its field alone, read and checked as `from_env` reads it,
+    /// and a field no variable sets — or a blank one — keeps its value.
+    #[test]
+    fn a_base_keeps_each_field_no_variable_sets_and_takes_each_one_set() {
+        let base = LogSettings {
+            filter: "warn".to_owned(),
+            format: LogFormat::Json,
+            source_location: true,
+        };
+        let under = |set: &[(String, &str)]| {
+            base.clone().overlaid_from(|name| {
+                set.iter()
+                    .find(|(variable, _)| variable == name)
+                    .map(|(_, value)| OsString::from(value))
+            })
+        };
+
+        assert_eq!(under(&[]).expect("the base"), base);
+        assert_eq!(
+            under(&[
+                (EnvPrefix::var(var::FILTER), " "),
+                (EnvPrefix::var(var::FORMAT), ""),
+            ])
+            .expect("the base"),
+            base,
+            "blank is unset"
+        );
+
+        let read = under(&[(EnvPrefix::var(var::FORMAT), "text")]).expect("a format");
+        assert_eq!(
+            (read.filter.as_str(), read.format, read.source_location),
+            ("warn", LogFormat::Text, true)
+        );
+        let read = under(&[(RUST_LOG.to_owned(), "debug")]).expect("a filter");
+        assert_eq!(
+            (read.filter.as_str(), read.format, read.source_location),
+            ("debug", LogFormat::Json, true)
+        );
+        let read = under(&[(EnvPrefix::var(var::SOURCE_LOCATION), "off")]).expect("a boolean");
+        assert!(!read.source_location);
+
+        let refused =
+            under(&[(EnvPrefix::var(var::FILTER), "billing=notalevel")]).expect_err("a level");
+        assert!(
+            matches!(&refused, LogSettingsError::Filter { setting, .. } if *setting == EnvPrefix::var(var::FILTER)),
+            "{refused:?}"
+        );
+    }
+
+    /// A filter set in code is checked whatever the variables set, so every
+    /// settings value the overlay returns holds a directive that parses: a
+    /// lossy parse later would drop it with a line quoting it.
+    #[test]
+    fn a_filter_set_in_code_that_does_not_parse_is_refused_naming_the_field() {
+        let base = LogSettings {
+            filter: "billing=notalevel".to_owned(),
+            ..LogSettings::default()
+        };
+        for set in [vec![], vec![(EnvPrefix::var(var::FILTER), "debug")]] {
+            let refused = base
+                .clone()
+                .overlaid_from(|name| {
+                    set.iter()
+                        .find(|(variable, _)| variable == name)
+                        .map(|(_, value)| OsString::from(value))
+                })
+                .expect_err("a filter set in code that does not parse");
+            assert!(
+                matches!(&refused, LogSettingsError::Filter { setting, .. } if setting == "LogSettings::filter"),
+                "{refused:?}"
+            );
+            let said = refused.to_string();
+            assert!(
+                !said.contains("billing") && !said.contains("notalevel"),
+                "{said}"
+            );
+        }
     }
 
     #[test]

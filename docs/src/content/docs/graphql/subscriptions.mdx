@@ -182,7 +182,8 @@ connect and shared by every operation for four hours would not be
 request-scoped, so the upgrade's scope stays behind. Each operation the socket
 carries opens a scope of its own instead, as a WebSocket message does: a query
 or a mutation for its unit, a subscription at its opening. A `Scoped<T>`
-parameter resolves there as it does on `POST`.
+parameter resolves there as it does on `POST`, and a `Ctx<Claims>` parameter
+reads the principal the upgrade carried, at the opening.
 
 A subscription's guards, class gate, exception filters and interceptors run at
 its **opening** — the call answering the stream — never per item: each item

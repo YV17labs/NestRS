@@ -709,18 +709,36 @@ fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenS
     }}
 }
 
-/// Whether `ty` is a `Scoped<T>` parameter, which the tail resolves from the
-/// request rather than reading off the document.
-fn is_scoped(ty: &Type) -> bool {
-    matches!(ty, Type::Path(tp) if tp
-        .path
-        .segments
-        .last()
-        .is_some_and(|segment| segment.ident == "Scoped"))
+/// A parameter the tail resolves rather than the schema reading it, known by
+/// its type's last segment, since no value tells a macro what to leave out of
+/// async-graphql's argument list.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TailParam {
+    /// `Scoped<T>`: a provider from the request's scope, which the access
+    /// graph checks.
+    Scoped,
+    /// `Ctx<T>`: what a guard attached, resolved through a function returning
+    /// core's own `Ctx`, so a namesake does not compile.
+    Ctx,
 }
 
-/// The `Scoped<T>` parameters of `sig`, each with its type.
-fn scoped_args(sig: &Signature) -> Vec<(Ident, Type)> {
+/// What the tail resolves `ty` as, when it is one of its parameters.
+fn tail_param(ty: &Type) -> Option<TailParam> {
+    let Type::Path(tp) = ty else {
+        return None;
+    };
+    let segment = tp.path.segments.last()?;
+    if segment.ident == "Scoped" {
+        Some(TailParam::Scoped)
+    } else if segment.ident == "Ctx" {
+        Some(TailParam::Ctx)
+    } else {
+        None
+    }
+}
+
+/// The parameters of `sig` the tail resolves, each with its type.
+fn tail_args(sig: &Signature) -> Vec<(Ident, Type, TailParam)> {
     sig.inputs
         .iter()
         .filter_map(|arg| {
@@ -728,19 +746,28 @@ fn scoped_args(sig: &Signature) -> Vec<(Ident, Type)> {
             let syn::Pat::Ident(pi) = &*pt.pat else {
                 return None;
             };
-            is_scoped(&pt.ty).then(|| (pi.ident.clone(), (*pt.ty).clone()))
+            tail_param(&pt.ty).map(|kind| (pi.ident.clone(), (*pt.ty).clone(), kind))
         })
         .collect()
 }
 
-/// The tail statements resolving each `Scoped<T>` parameter.
-fn scoped_bindings(scoped: &[(Ident, Type)]) -> Vec<TokenStream2> {
-    scoped
-        .iter()
-        .map(|(ident, ty)| {
-            quote! {
+/// The `Scoped<T>` types among `tail`, whose providers the access graph checks.
+fn scoped_types(tail: &[(Ident, Type, TailParam)]) -> impl Iterator<Item = Type> + '_ {
+    tail.iter()
+        .filter(|(_, _, kind)| *kind == TailParam::Scoped)
+        .map(|(_, ty, _)| ty.clone())
+}
+
+/// The tail statements resolving each of `tail`'s parameters.
+fn tail_bindings(tail: &[(Ident, Type, TailParam)]) -> Vec<TokenStream2> {
+    tail.iter()
+        .map(|(ident, ty, kind)| match kind {
+            TailParam::Scoped => quote! {
                 let #ident = <#ty as ::nest_rs_graphql::__private::FromScope>::from_scope()?;
-            }
+            },
+            TailParam::Ctx => quote! {
+                let #ident: #ty = ::nest_rs_graphql::__private::ctx_parameter()?;
+            },
         })
         .collect()
 }
@@ -782,6 +809,7 @@ fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> sy
     let ctx = ctx_param_ident(sig);
     let keys = sig.inputs.iter().filter(|arg| match arg {
         FnArg::Receiver(_) => false,
+        FnArg::Typed(pt) if tail_param(&pt.ty).is_some() => false,
         FnArg::Typed(pt) => match &*pt.pat {
             syn::Pat::Ident(pi) => Some(&pi.ident) != ctx.as_ref(),
             _ => true,
@@ -989,11 +1017,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         let method_name = method.sig.ident.clone();
         // Off the normalized signature, the one the wrapper resolves them from:
         // `Scoped(x): Scoped<T>` is a `Scoped<T>` whatever its pattern.
-        scoped_params.extend(
-            scoped_args(&sig)
-                .into_iter()
-                .map(|(_, ty)| (cfgs.clone(), ty)),
-        );
+        let tail = tail_args(&sig);
+        scoped_params.extend(scoped_types(&tail).map(|ty| (cfgs.clone(), ty)));
 
         if is_field {
             if authorize_spec.is_some() || is_public {
@@ -1173,15 +1198,16 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 });
             }
             let piped = piped_args(&sig);
-            let scoped = scoped_args(&sig);
             // On the wire, the bound subject becomes its `id` string and each pipe its
-            // `T`; a `Scoped<T>` is no argument at all.
+            // `T`; a `Scoped<T>` or a `Ctx<T>` is no argument at all.
             let wrapper_sig = {
                 let mut s = sig.clone();
                 s.inputs = s
                     .inputs
                     .into_iter()
-                    .filter(|input| !matches!(input, FnArg::Typed(pt) if is_scoped(&pt.ty)))
+                    .filter(
+                        |input| !matches!(input, FnArg::Typed(pt) if tail_param(&pt.ty).is_some()),
+                    )
                     .collect();
                 for input in s.inputs.iter_mut() {
                     let FnArg::Typed(pt) = input else { continue };
@@ -1354,7 +1380,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     let #ident = #apply.map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
                 }
             });
-            let scoped_prelude = scoped_bindings(&scoped);
+            let tail_prelude = tail_bindings(&tail);
             // Bare on purpose: `graphql` is an inert helper the `#[Object]` derive
             // strips, not a path to resolve.
             let entity_attr = is_entity.then(|| quote!(#[graphql(entity)]));
@@ -1389,7 +1415,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 #entity_attr
                 #gsig {
                     #run(#site, #gctx, #site_kind, move || async move {
-                        #(#scoped_prelude)*
+                        #(#tail_prelude)*
                         #bind_prelude
                         #(#pipe_prelude)*
                         #body
@@ -1539,7 +1565,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
 /// Build a field resolver's `#[ComplexObject]` method, the parent as `&self`,
 /// run through its site. Owned args become GraphQL field arguments,
-/// `&`-reference args are injected, a `Scoped<T>` resolves per request.
+/// `&`-reference args are injected, a `Scoped<T>` resolves per request and a
+/// `Ctx<T>` from what a guard attached.
 fn field_method(
     self_ty: &Type,
     deleg_attrs: &[Attribute],
@@ -1583,7 +1610,7 @@ fn field_method(
     let mut gql_args: Vec<&FnArg> = Vec::new();
     let mut call_args: Vec<TokenStream2> = Vec::new();
     let mut dep_bindings: Vec<TokenStream2> = Vec::new();
-    let mut scoped: Vec<(Ident, Type)> = Vec::new();
+    let mut tail: Vec<(Ident, Type, TailParam)> = Vec::new();
     let mut injected_deps: Vec<Type> = Vec::new();
     for (arg, ident) in rest.iter().copied().zip(&rest_idents) {
         let FnArg::Typed(pt) = arg else { continue };
@@ -1592,8 +1619,8 @@ fn field_method(
             call_args.push(quote! { __ctx });
             continue;
         }
-        if is_scoped(&pt.ty) {
-            scoped.push((ident.clone(), (*pt.ty).clone()));
+        if let Some(kind) = tail_param(&pt.ty) {
+            tail.push((ident.clone(), (*pt.ty).clone(), kind));
             call_args.push(quote! { #ident });
             continue;
         }
@@ -1626,7 +1653,7 @@ fn field_method(
     let output = wrapper_output(sig);
     let site = site_ref(self_ty, method_name);
     let site_kind = ChainSite::Field.path();
-    let scoped_prelude = scoped_bindings(&scoped);
+    let tail_prelude = tail_bindings(&tail);
     // By path: method lookup on a value tries a trait method taking `self` first.
     let call = call_as_result(
         sig,
@@ -1647,7 +1674,7 @@ fn field_method(
         ) #output #where_clause {
             ::nest_rs_graphql::__private::run_nested(#site, __ctx, #site_kind, move || async move {
                 let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
-                #(#scoped_prelude)*
+                #(#tail_prelude)*
                 #(#dep_bindings)*
                 let __resolver = <#self_ty>::__nestrs_from_container(__container);
                 #call

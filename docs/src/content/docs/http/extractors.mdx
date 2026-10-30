@@ -304,6 +304,11 @@ not a client error). `T` implements `AmbientValue` and `Clone`; the value is
 cloned out of the ambient context, so a large one goes in a newtype holding an
 `Arc` (`struct Catalog(Arc<Entries>)`), which implements `AmbientValue` itself.
 
+`Ctx<T>` is core's, `nest_rs::core::Ctx`, and the same parameter on every
+edge: a GraphQL operation, a WebSocket message and an MCP tool read what their
+guards attached the same way, and none of them lists it among the arguments
+its protocol describes.
+
 The canonical use is the authenticated principal: `AuthnGuard` runs the
 strategy, then attaches a `Claims` (or whatever the resource server's
 principal is). Every authenticated handler reads it as `auth: Ctx<Claims>`.

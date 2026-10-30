@@ -151,8 +151,8 @@ A layer adds one with `cx.attach(Tenant(..))`. From a guard, it becomes
 ambient once the whole guard stage passed, so a refused unit carries nothing
 its guards attached; from an interceptor, it is ambient inside
 `next.run(cx)`. Everything the unit reaches reads it back: a later guard with
-`cx.ambient::<Tenant>()`, an HTTP handler with a `Ctx<Tenant>` parameter, a
-service anywhere with `nest_rs::core::ambient::<Tenant>()`. Outside a layer,
+`cx.ambient::<Tenant>()`, a handler on any edge with a `Ctx<Tenant>`
+parameter, a service anywhere with `nest_rs::core::ambient::<Tenant>()`. Outside a layer,
 `with_ambient(value, future)` runs a future with one more value.
 
 ### How far a value travels

@@ -3,7 +3,8 @@
 //! The authored methods are re-emitted untouched; each operation declares its
 //! `static` site — its guards, its posture's class gate, its exception filters
 //! and interceptors — and gets a generated wrapper that dispatches it through
-//! that site, its tail running pipes → `Scoped<T>` parameters → call → mask.
+//! that site, its tail running pipes → `Scoped<T>` and `Ctx<T>` parameters →
+//! call → mask.
 //! A tool's or a prompt's wrapper carries `#[tool(name = "…")]` /
 //! `#[prompt(name = "…")]` for rmcp's routers; a resource's is called by the
 //! `read_resource` and `list_resources` the expansion writes itself, rmcp
@@ -207,8 +208,9 @@ struct Operation {
     exception_filters: Vec<Path>,
     posture: Posture,
     pipes: Vec<PipedArg>,
-    /// Its `Scoped<T>` parameters, resolved in its tail rather than by rmcp.
-    scoped: Vec<ScopedArg>,
+    /// Its `Scoped<T>` and `Ctx<T>` parameters, resolved in its tail rather
+    /// than by rmcp.
+    tail: Vec<TailArg>,
     /// The authored method's `#[cfg]` conditions, which its router group, and so
     /// its wrapper and its route, are compiled under.
     cfgs: Vec<TokenStream2>,
@@ -229,11 +231,24 @@ impl Operation {
     }
 }
 
-/// An operation's parameter a request-scoped provider fills, whatever its role.
-struct ScopedArg {
+/// An operation's parameter its tail fills, whatever its role.
+struct TailArg {
     ident: syn::Ident,
-    /// `Scoped<T>`, as written.
+    /// `Scoped<T>` or `Ctx<T>`, as written.
     ty: Type,
+    kind: TailParam,
+}
+
+/// What an operation's tail fills a parameter from, read by its type's last
+/// segment.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TailParam {
+    /// `Scoped<T>`: a provider from the request's scope, which the access
+    /// graph checks.
+    Scoped,
+    /// `Ctx<T>`: what a guard attached, resolved through a function returning
+    /// core's own `Ctx`, so a namesake does not compile.
+    Ctx,
 }
 
 /// A `#[tool]` / `#[prompt]` parameter whose wire value goes through a pipe:
@@ -736,13 +751,14 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         sig,
         posture,
         pipes,
-        scoped,
+        tail,
         ..
     } = op;
     let name = op.name();
 
     // Each pipe carrier is replaced by the value it wraps, so rmcp derives the
-    // tool's JSON Schema from `T`; a `Scoped<T>` is the tail's, never rmcp's.
+    // tool's JSON Schema from `T`; a `Scoped<T>` or a `Ctx<T>` is the tail's,
+    // never rmcp's.
     let mut wire_sig = sig.clone();
     wire_sig.ident = wrapper.clone();
     wire_sig.asyncness = Some(syn::token::Async(name.span()));
@@ -754,7 +770,7 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
             if let FnArg::Typed(pat_type) = &mut input
                 && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
             {
-                if scoped.iter().any(|arg| arg.ident == pat_ident.ident) {
+                if tail.iter().any(|arg| arg.ident == pat_ident.ident) {
                     return None;
                 }
                 if let Some(arg) = pipes.iter().find(|arg| arg.ident == pat_ident.ident) {
@@ -795,7 +811,7 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
 }
 
 /// Every wrapper's body: the operation dispatched through its site, its tail
-/// running `prelude`, the `Scoped<T>` parameters and the authored method,
+/// running `prelude`, the `Scoped<T>` and `Ctx<T>` parameters and the authored method,
 /// whose value `answered` turns into what the wrapper returns.
 fn dispatch(
     self_ty: &Type,
@@ -806,13 +822,14 @@ fn dispatch(
     let Operation {
         role,
         sig,
-        scoped,
+        tail,
         wire_name,
         ..
     } = op;
     let name = op.name();
-    let scoped_prelude = scoped.iter().map(|ScopedArg { ident, ty }| {
-        quote! { let #ident: #ty = ::nest_rs_mcp::__private::scoped()?; }
+    let tail_prelude = tail.iter().map(|TailArg { ident, ty, kind }| match kind {
+        TailParam::Scoped => quote! { let #ident: #ty = ::nest_rs_mcp::__private::scoped()?; },
+        TailParam::Ctx => quote! { let #ident: #ty = ::nest_rs_mcp::__private::ctx_parameter()?; },
     });
     let call_args = forwarded_arg_idents(sig)?;
     let call = await_if_async(sig, quote!(<#self_ty>::#name(self, #(#call_args),*)));
@@ -834,7 +851,7 @@ fn dispatch(
             ),
             move || async move {
                 #prelude
-                #(#scoped_prelude)*
+                #(#tail_prelude)*
                 let #returned_by = #call;
                 match #answer {
                     ::core::result::Result::Ok(__nestrs_value) => #answered,
@@ -1190,7 +1207,7 @@ fn take_operation(
         (Role::Resources, _) => resource::refuse_listing_arguments(&sig)?,
         _ => {}
     }
-    let scoped = scoped_args(&sig);
+    let tail = tail_args(&sig);
 
     let cfgs = cfg_attrs(&method.attrs);
 
@@ -1206,7 +1223,7 @@ fn take_operation(
         exception_filters,
         posture,
         pipes,
-        scoped,
+        tail,
         cfgs,
         wire_name,
         metas,
@@ -1214,10 +1231,10 @@ fn take_operation(
     })
 }
 
-/// Every `Scoped<T>` parameter, read by its last segment as `#[routes]` reads
-/// HTTP's: the tail resolves it once the guards and the gate admitted the
-/// caller, so the wire signature rmcp extracts from leaves it out.
-fn scoped_args(sig: &Signature) -> Vec<ScopedArg> {
+/// Every `Scoped<T>` and `Ctx<T>` parameter, read by its last segment: the
+/// tail resolves it once the guards and the gate admitted the caller, so the
+/// wire signature rmcp extracts from leaves it out.
+fn tail_args(sig: &Signature) -> Vec<TailArg> {
     sig.inputs
         .iter()
         .filter_map(|input| {
@@ -1227,17 +1244,22 @@ fn scoped_args(sig: &Signature) -> Vec<ScopedArg> {
             let syn::Pat::Ident(pat_ident) = &*pat_type.pat else {
                 return None;
             };
-            is_scoped(&pat_type.ty).then(|| ScopedArg {
+            tail_param(&pat_type.ty).map(|kind| TailArg {
                 ident: pat_ident.ident.clone(),
                 ty: (*pat_type.ty).clone(),
+                kind,
             })
         })
         .collect()
 }
 
-/// Whether `ty` is a `Scoped<T>`, read by its last segment.
-pub(crate) fn is_scoped(ty: &Type) -> bool {
-    generic_args(ty).is_some_and(|(ident, _)| ident == "Scoped")
+/// What the tail fills `ty` from, when it is a `Scoped<T>` or a `Ctx<T>`.
+pub(crate) fn tail_param(ty: &Type) -> Option<TailParam> {
+    match generic_args(ty)?.0.to_string().as_str() {
+        "Scoped" => Some(TailParam::Scoped),
+        "Ctx" => Some(TailParam::Ctx),
+        _ => None,
+    }
 }
 
 /// What each operation declares on its host: its `Handler`, `mcp.operation`
@@ -1341,15 +1363,18 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
         }
     });
     let probes = operations.all().flat_map(|op| {
-        op.scoped.iter().map(move |ScopedArg { ty, .. }| {
-            let cfgs = &op.cfgs;
-            quote! {
-                #(#cfgs)*
-                let () = __nestrs_resolved.extend(
-                    (&&::nest_rs_core::__private::ParamProbe::<#ty>::new()).resolved_provider(),
-                );
-            }
-        })
+        op.tail
+            .iter()
+            .filter(|arg| arg.kind == TailParam::Scoped)
+            .map(move |TailArg { ty, .. }| {
+                let cfgs = &op.cfgs;
+                quote! {
+                    #(#cfgs)*
+                    let () = __nestrs_resolved.extend(
+                        (&&::nest_rs_core::__private::ParamProbe::<#ty>::new()).resolved_provider(),
+                    );
+                }
+            })
     });
     quote! {
         impl #self_ty {

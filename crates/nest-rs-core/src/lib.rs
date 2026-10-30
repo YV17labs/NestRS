@@ -103,6 +103,7 @@ mod backoff;
 mod budget;
 mod close;
 pub mod container;
+mod ctx;
 pub(crate) mod cycle_guard;
 mod decode_path;
 pub mod discoverable;
@@ -160,6 +161,7 @@ pub use backoff::{Backoff, Retries, process_seed};
 pub use budget::Budget;
 pub use close::CloseContribution;
 pub use container::{Container, ContainerBuilder, ContainerId, ProviderScope};
+pub use ctx::Ctx;
 pub use discoverable::{
     Discoverable, INERT_HOST_HINT, InertHost, ProviderResidency, inert_host, unresolved_host,
 };
@@ -228,6 +230,7 @@ pub mod __private {
         declaring_site, enter_import, leave_import, overrides_any, record_absent_optional,
         record_stall, refuse_site, register_dynamic_import, site_chains, take_site_refusal,
     };
+    pub use crate::ctx::attached;
     pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};
     pub use crate::error_message::__private::find_in_chain;
     pub use crate::exception_filter::__private::ErasedExceptionFilter;

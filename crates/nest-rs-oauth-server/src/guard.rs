@@ -43,8 +43,8 @@ use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
 ///
 /// ```
 /// use nest_rs_authn::{AuthError, Strategy, basic_credentials};
-/// use nest_rs_core::injectable;
-/// use nest_rs_http::{Ctx, Request, async_trait, controller, routes};
+/// use nest_rs_core::{Ctx, injectable};
+/// use nest_rs_http::{Request, async_trait, controller, routes};
 /// use nest_rs_oauth_server::{
 ///     AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientAuthenticationGuard,
 ///     RegisteredClient, authenticate_against_registry,

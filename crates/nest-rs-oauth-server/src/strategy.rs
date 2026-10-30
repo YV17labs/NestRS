@@ -19,8 +19,8 @@ use crate::registry::{AuthenticatedClient, authenticate_against_registry};
 /// matches is refused without saying which half failed.
 ///
 /// ```
-/// use nest_rs_core::module;
-/// use nest_rs_http::{Ctx, controller, routes};
+/// use nest_rs_core::{Ctx, module};
+/// use nest_rs_http::{controller, routes};
 /// use nest_rs_oauth_server::{
 ///     AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientAuthenticationGuard,
 ///     ClientSecretBasicStrategy, OAuthServerModule,

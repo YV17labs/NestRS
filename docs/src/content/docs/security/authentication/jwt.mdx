@@ -118,8 +118,8 @@ impl PrincipalIdentity for Claims {
 ```
 
 `AmbientValue` is what lets `AuthnGuard` attach the claims for the rest of the
-request — every guard after it, `Ctx<Claims>` in a handler and a resolver below
-`/graphql` read them there. `PrincipalIdentity` names the audit identity: on a
+request — every guard after it, and `Ctx<Claims>` in a handler on any edge, a
+resolver below `/graphql` included, read them there. `PrincipalIdentity` names the audit identity: on a
 successful authentication `AuthnGuard` records `actor_id` onto the request
 span, so every downstream event — denials included — is attributable without
 threading the identity through each call site.

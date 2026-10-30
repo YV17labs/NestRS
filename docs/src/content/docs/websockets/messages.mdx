@@ -58,19 +58,22 @@ impl ChatGateway {
 }
 ```
 
-The macro reads four things from the signature:
+The macro reads five things from the signature:
 
 - **The event name** — the literal in `#[subscribe_message(...)]`.
-- **The payload type** — the one argument that is neither `&WsClient` nor a
-  `Scoped<T>`. Deserialized from `envelope.data` with `serde`.
+- **The payload type** — the one argument that is neither `&WsClient`, a
+  `Scoped<T>` nor a `Ctx<T>`. Deserialized from `envelope.data` with `serde`.
 - **The request-scoped providers** — each `Scoped<T>` argument, resolved from
   the message's own scope (below).
+- **What a guard attached** — each `Ctx<T>` argument, read from what the
+  upgrade's guards and the message's own attached, as a route reads it.
 - **The return type** — drives the reply, per the contract below.
 
 A `&WsClient` parameter is the [per-connection handle](/websockets/rooms/);
-it can appear in any position alongside the payload. The macro tells the three
-apart by their shape — a reference, a type named `Scoped`, anything else — since
-it reads tokens, not types; a `Scoped` of another crate does not compile.
+it can appear in any position alongside the payload. The macro tells the four
+apart by their shape — a reference, a type named `Scoped`, a type named
+`Ctx`, anything else — since it reads tokens, not types; a `Scoped` or a `Ctx`
+of another crate does not compile.
 
 ### Request-scoped providers
 
@@ -179,8 +182,8 @@ async fn on_message(&self, msg: SendMessageDto) { /* ... */ }
 
 The payload carries what the client decides, and nothing the server
 already knows: who sent the message is the caller the upgrade authenticated,
-read from `nest_rs::core::ambient::<Claims>()`, never an `author` field the
-client could fill with someone else's name. `#[input]` refuses a field the
+read as a `Ctx<Claims>` parameter, never an `author` field the client could
+fill with someone else's name. `#[input]` refuses a field the
 type does not declare, so such a payload is an error frame.
 
 A malformed payload (wrong shape, missing fields) is treated as a

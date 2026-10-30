@@ -1,9 +1,10 @@
 //! `#[gateway]` + `#[use_guards]` + `#[messages]`: the guard-layer emission,
 //! a guard a message binds or `#[force_guards]` re-runs, the interceptors,
 //! exception filters and data pipes a gateway and its messages bind, a
-//! `Scoped<T>` parameter, the message sites and the versioned mount.
+//! `Scoped<T>` and a `Ctx<T>` parameter, the message sites and the versioned
+//! mount.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::core::{Ctx, Layer, UnitContext, injectable};
 use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs::http::HttpView;
 use nest_rs::pipes::GlobalPipe;
@@ -91,6 +92,12 @@ impl HygieneGateway {
     async fn layered(&self, session: Scoped<HygieneMessageSession>, text: String) -> String {
         let _ = session;
         text
+    }
+
+    #[subscribe_message("hygiene.operator")]
+    #[public]
+    async fn operator(&self, operator: Ctx<crate::operator::HygieneOperator>) -> String {
+        operator.into_inner().0
     }
 
     #[subscribe_message("hygiene.sync")]

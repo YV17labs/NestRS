@@ -166,18 +166,17 @@ impl ChatGateway {
     #[subscribe_message("message")]
     #[public]
     #[use_guards(ModerationGuard)]
-    async fn on_message(&self, msg: SendMessageDto) -> Result<(), WsError> {
-        let caller = ambient::<Claims>().ok_or("no principal reached the message").opaque()?;
-        self.svc.record(caller.sub.clone(), msg).opaque()?;
+    async fn on_message(&self, caller: Ctx<Claims>, msg: SendMessageDto) -> Result<(), WsError> {
+        self.svc.record(caller.into_inner().sub, msg).opaque()?;
         Ok(())
     }
 }
 ```
 
-The handler names the author from the same principal,
-`nest_rs::core::ambient::<Claims>()`, so `SendMessageDto` carries the text
-alone: it is an `#[input]`, and a payload naming an author is refused as an
-unknown field before the handler runs.
+The handler names the author from the same principal, the `Ctx<Claims>`
+parameter the upgrade's `AuthnGuard` attached, so `SendMessageDto` carries the
+text alone: it is an `#[input]`, and a payload naming an author is refused as
+an unknown field before the handler runs.
 
 A denial surfaces as a wire-shaped error frame on the rejected event,
 the class a client branches on beside its sentence — `code`, the member a

@@ -42,6 +42,7 @@ pub mod lifecycle;
 pub mod listener;
 pub mod module;
 pub mod never;
+pub mod operator;
 pub mod pipeline;
 pub mod prelude;
 #[cfg(feature = "queue")]

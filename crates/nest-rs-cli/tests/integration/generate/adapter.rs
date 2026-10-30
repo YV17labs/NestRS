@@ -709,9 +709,12 @@ fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_endpoint_guards(
     assert!(module.contains("AuthzGraphqlModule"), "{module}");
     let authz_graphql = fs::read_to_string(src.join("authz/graphql/module.rs")).unwrap();
     assert!(
-        authz_graphql.contains("EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>")
-            && authz_graphql.contains("forward_principal!(Claims)"),
-        "the endpoint's guards, and the principal forward: {authz_graphql}"
+        authz_graphql.contains("EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>"),
+        "the endpoint's guards: {authz_graphql}"
+    );
+    assert!(
+        !authz_graphql.contains("forward_principal"),
+        "a resolver reads the claims as a `Ctx<Claims>` parameter, with no forwarder: {authz_graphql}"
     );
     assert!(
         !authz_graphql.contains("LoaderScope"),

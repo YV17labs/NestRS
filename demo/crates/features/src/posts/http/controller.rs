@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use nest_rs::authz::Update;
-use nest_rs::http::{Ctx, Json, Result, controller, crud};
+use nest_rs::core::Ctx;
+use nest_rs::http::{Json, Result, controller, crud};
 use nest_rs::seaorm::Authorized;
 
 use super::interceptor::PostAuditInterceptor;

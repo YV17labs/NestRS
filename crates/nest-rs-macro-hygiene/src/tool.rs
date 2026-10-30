@@ -1,12 +1,13 @@
 //! `#[mcp]` + `#[tools]`, through the umbrella alone: the layers a host and
-//! an operation bind, a `Scoped<T>` parameter, an error of the domain's own
-//! type, and a resource read through its template beside the listing.
+//! an operation bind, a `Scoped<T>` and a `Ctx<T>` parameter, an error of the
+//! domain's own type, and a resource read through its template beside the
+//! listing.
 //!
 //! rmcp's `#[tool_router]`/`#[tool_handler]`/`#[prompt]` expand to bare `rmcp::`
 //! paths resolved at the call site; this file names no `rmcp`, so it stops
 //! compiling if `#[tools]` ever stops carrying that import itself.
 
-use nest_rs::core::{Layer, UnitContext};
+use nest_rs::core::{Ctx, Layer, UnitContext};
 use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Resource, Role};
 use nest_rs::mcp::{Json, McpError, McpView, Parameters, Scoped, Valid, input, mcp, tools};
@@ -109,6 +110,15 @@ impl HygieneTool {
     #[force_guards(HygieneGuard)]
     fn again(&self) -> Result<String, McpError> {
         Ok("again".into())
+    }
+
+    #[tool(description = "Say who is calling.")]
+    #[public]
+    async fn operator(
+        &self,
+        operator: Ctx<crate::operator::HygieneOperator>,
+    ) -> Result<String, McpError> {
+        Ok(operator.into_inner().0)
     }
 
     #[tool(description = "Read this request's basket.")]

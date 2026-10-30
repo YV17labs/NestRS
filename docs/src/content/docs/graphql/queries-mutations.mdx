@@ -220,14 +220,20 @@ operation rolls back with it ([GraphQL: one unit per operation](/database/transa
 ## Reading the request context
 
 A resolver method takes an optional `ctx: &Context<'_>` first
-non-receiver argument. The context exposes per-request data the auth
-chain seeded (a principal) and is the entry point to typed batch loaders.
-The caller's `Ability` is not on it: the field's unit carries it, the one its
-class gate checked, and its mask and every read under it see that one.
+non-receiver argument, the entry point to typed batch loaders. What the
+request needs beyond the document is a parameter, as on a route, and no
+schema argument:
 
-A request-scoped provider is a parameter, as on a route: `Scoped<T>` is no
-schema argument, and the boot checks its provider like an `#[inject]`ed one —
-see [Providers](/fundamentals/providers/).
+- **What a guard attached** is `Ctx<T>` — the principal the endpoint's
+  guards verified, or what a guard bound on the field derived from it. Absent,
+  the field answers the opaque internal error and the type is filed at
+  `error`: the guard that attaches it did not run there.
+- **A request-scoped provider** is `Scoped<T>`, and the boot checks its
+  provider like an `#[inject]`ed one — see
+  [Providers](/fundamentals/providers/).
+
+The caller's `Ability` is neither: the field's unit carries it, the one its
+class gate checked, and its mask and every read under it see that one.
 
 ```rust title="crates/features/src/profile/graphql/resolver.rs"
 use nest_rs::graphql::{Scoped, operations, resolver};
@@ -239,28 +245,50 @@ async fn visits(&self, counter: Scoped<crate::VisitCounter>) -> u32 {
 }
 ```
 
-```rust title="crates/features/src/profile/graphql/resolver.rs"
-use async_graphql::{Context, Result};
-use nest_rs::graphql::{operations, resolver};
+```rust title="crates/features/src/posts/graphql/resolver.rs"
+use nest_rs::authz::Update;
+use nest_rs::core::{Ctx, ambient};
+use nest_rs::graphql::operations;
+use nest_rs::seaorm::Authorized;
 
-#[resolver]
-pub struct ProfileResolver;
+use crate::Claims;
+use crate::posts::{
+    Entity as PostEntity, Post, PostAuthor, PostAuthorGuard, PostError, PostsService,
+};
 
 #[operations]
-impl ProfileResolver {
+impl PostsResolver {
+    #[mutation]
+    #[authorize(Update, bind = PostsService)]
+    #[use_guards(PostAuthorGuard)]
+    async fn publish_post(
+        &self,
+        post: Authorized<Update, PostEntity>,
+        actor: Ctx<PostAuthor>,
+    ) -> Result<Post, PostError> {
+        let PostAuthor(actor_id) = *actor;
+        self.svc.publish(post.into_inner(), actor_id).await
+    }
+
     #[query]
     #[public]
-    async fn me(&self, ctx: &Context<'_>) -> Result<String> {
-        let claims = ctx.data::<crate::Claims>()?;
-        Ok(format!("subject: {:?}", claims.sub))
+    async fn greeting(&self) -> String {
+        match ambient::<Claims>() {
+            Some(claims) => format!("hello, {:?}", claims.sub),
+            None => "hello, visitor".to_owned(),
+        }
     }
 }
 ```
 
-The principal type lands in `ctx` through `forward_principal!` —
-declared once per app, see [Security](/security/). On a public query
-the call returns an error; bind the ability guard to refuse anonymous
-traffic before the method runs.
+`#[authorize]` refuses an anonymous caller before the method runs, and
+`PostAuthorGuard`, bound on the field, attaches the author it derives from the
+claims the endpoint's guards verified (see
+[Endpoint guards](/security/authorization/endpoint-guards/)), so on this gated
+operation the `PostAuthor` is always there. A `#[public]` operation also admits
+anonymous callers, for whom no guard attached any: it reads
+`nest_rs::core::ambient::<Claims>()` and decides, as `greeting` does. A
+`Ctx<Claims>` there would answer every anonymous call with the internal error.
 
 ## Returning a `Result`
 

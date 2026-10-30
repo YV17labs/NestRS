@@ -319,13 +319,20 @@ async fn a_post_author_denial_files_one_line_on_every_edge() {
     let mutation = json!({
         "query": format!("mutation {{ publishPost(id: \"{post}\") {{ id }} }}")
     });
-    app.http()
+    let answered = app
+        .http()
         .post("/graphql")
         .header(header::AUTHORIZATION, &client)
         .body_json(&mutation)
         .send()
-        .await
-        .assert_status_is_ok();
+        .await;
+    answered.assert_status_is_ok();
+    let answered: serde_json::Value = answered.json().await.value().deserialize();
+    assert_eq!(
+        answered["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{answered}"
+    );
+    assert!(!answered.to_string().contains("Guard"), "{answered}");
 
     let route = logs.expect_one(features::posts::TARGET, "guard denied the request");
     let field = logs.expect_one(features::posts::TARGET, "guard denied the operation");

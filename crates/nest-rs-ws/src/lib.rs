@@ -165,6 +165,7 @@ pub mod target {
 }
 
 mod config;
+mod ctx;
 mod envelope;
 mod gateway;
 mod guard;
@@ -198,6 +199,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::ctx::ctx_parameter;
     pub use crate::envelope::decode_payload;
     pub use crate::gateway::{gateway_endpoint, wire_gateway};
     pub use crate::guard::{MessageGuards, message_guard_stage, refused_origin};

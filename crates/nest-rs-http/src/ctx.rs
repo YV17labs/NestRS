@@ -1,12 +1,10 @@
-//! Request-scoped context: the typed value a guard attaches to the request's
-//! unit for the handler to read back (e.g. the authenticated principal an
-//! authentication guard attaches).
+//! HTTP's reading of [`Ctx<T>`]: the value a guard attached to the route's
+//! unit, or the `401` an authentication guard deferred on a `#[public]` route.
 
 use std::any::TypeId;
-use std::ops::Deref;
 
 use http::{Extensions, StatusCode};
-use nest_rs_core::AmbientValue;
+use nest_rs_core::{AmbientValue, Ctx};
 
 use crate::problem::ProblemDetails;
 use crate::response::{IntoResponse, Response};
@@ -28,32 +26,6 @@ pub struct RejectedCredential {
     /// `WWW-Authenticate` challenge, or `None` when §3 says to report none —
     /// which is the case for a request that carried no credentials at all.
     pub bearer_error: Option<&'static str>,
-}
-
-/// Extracts a value of type `T` a guard attached to the request with
-/// `UnitContext::attach` — ambient for the rest of the request once the guards
-/// passed.
-///
-/// Rejects with `500` if absent — the guard that should have attached it never
-/// ran on this route. `T` is cloned out of the ambient context; attach a value
-/// that is cheap to clone.
-///
-/// One exception: when an authentication guard rejected a presented credential
-/// on a `#[public]` route, the deferred `401` ([`RejectedCredential`]) answers.
-pub struct Ctx<T>(pub T);
-
-impl<T> Ctx<T> {
-    /// Take ownership of the extracted value.
-    pub fn into_inner(self) -> T {
-        self.0
-    }
-}
-
-impl<T> Deref for Ctx<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
 }
 
 /// Why no guard's value is there to read.
@@ -91,39 +63,44 @@ impl RejectedCredential {
     }
 }
 
-impl<T: AmbientValue + Clone> Ctx<T> {
-    /// What a guard attached, or why it is absent.
-    fn read(extensions: &Extensions) -> Result<Self, Absent<'_>> {
-        if let Some(value) = nest_rs_core::ambient::<T>() {
-            return Ok(Ctx(T::clone(&value)));
-        }
-        if let Some(rejected) = extensions
-            .get::<RejectedCredential>()
-            .filter(|r| r.principal == TypeId::of::<T>())
-        {
-            tracing::debug!(
-                target: crate::target::HTTP,
-                context_type = std::any::type_name::<T>(),
-                "public route needs the principal a rejected credential never produced — answering the deferred 401",
-            );
-            return Err(Absent::Deferred(rejected));
-        }
-        // The type name belongs in the log, never the response body.
-        tracing::error!(
+/// What a guard attached, or why it is absent.
+fn read<T: AmbientValue + Clone>(extensions: &Extensions) -> Result<Ctx<T>, Absent<'_>> {
+    if let Ok(attached) = nest_rs_core::__private::attached::<T>() {
+        return Ok(attached);
+    }
+    if let Some(rejected) = extensions
+        .get::<RejectedCredential>()
+        .filter(|r| r.principal == TypeId::of::<T>())
+    {
+        tracing::debug!(
             target: crate::target::HTTP,
             context_type = std::any::type_name::<T>(),
-            "missing request context — the guard that attaches it did not run on this route",
+            "public route needs the principal a rejected credential never produced — answering the deferred 401",
         );
-        Err(Absent::Unwired)
+        return Err(Absent::Deferred(rejected));
     }
+    // The type name belongs in the log, never the response body.
+    tracing::error!(
+        target: crate::target::HTTP,
+        context_type = std::any::type_name::<T>(),
+        "missing request context — the guard that attaches it did not run on this route",
+    );
+    Err(Absent::Unwired)
 }
 
+/// Reads the `T` a guard attached with `UnitContext::attach` — ambient for the
+/// rest of the request once the guards passed.
+///
+/// Rejects with `500` if absent — the guard that should have attached it never
+/// ran on this route — but where an authentication guard rejected a presented
+/// credential on a `#[public]` route: the deferred `401`
+/// ([`RejectedCredential`]) answers.
 impl<'a, T: AmbientValue + Clone> crate::FromRequest<'a> for Ctx<T> {
     async fn from_request(
         req: &'a crate::Request,
         _body: &mut crate::RequestBody,
     ) -> crate::Result<Self> {
-        Self::read(req.extensions()).map_err(|absent| match absent {
+        read(req.extensions()).map_err(|absent| match absent {
             Absent::Deferred(rejected) => crate::HttpError::from_response(rejected.deferred()),
             Absent::Unwired => crate::HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR),
         })

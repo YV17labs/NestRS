@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
+use async_graphql::Error;
 use async_graphql::futures_util::stream::Stream;
-use async_graphql::{Context, Error, Result};
 use nest_rs::authz::{Read, Update};
-use nest_rs::graphql::{crud, problem_error, resolver};
+use nest_rs::core::Ctx;
+use nest_rs::graphql::{crud, resolver};
 use nest_rs::seaorm::Authorized;
 
-use crate::Claims;
 use crate::authz::AuthzGuard;
-use crate::posts::{Entity as PostEntity, Post, PostAuthorGuard, PostFeed, PostsService};
+use crate::posts::{
+    Entity as PostEntity, Post, PostAuthor, PostAuthorGuard, PostError, PostFeed, PostsService,
+};
 
 #[resolver]
 #[use_guards(AuthzGuard)]
@@ -31,16 +33,11 @@ impl PostsResolver {
     #[use_guards(PostAuthorGuard)]
     async fn publish_post(
         &self,
-        ctx: &Context<'_>,
         post: Authorized<Update, PostEntity>,
-    ) -> Result<Post> {
-        let actor_id = ctx.data::<Claims>()?.sub.user_id().ok_or_else(|| {
-            async_graphql::Error::new("PostAuthorGuard must run before publish_post")
-        })?;
-        self.svc
-            .publish(post.into_inner(), actor_id)
-            .await
-            .map_err(|error| problem_error(&error))
+        actor: Ctx<PostAuthor>,
+    ) -> Result<Post, PostError> {
+        let PostAuthor(actor_id) = *actor;
+        self.svc.publish(post.into_inner(), actor_id).await
     }
 
     #[subscription]

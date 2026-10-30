@@ -292,7 +292,7 @@ service — on HTTP, from the route's path:
         &self,
         post: Authorized<Update, PostEntity>,
         actor: Ctx<PostAuthor>,
-    ) -> Result<Json<Post>> {
+    ) -> Result<Json<Post>, PostError> {
         let PostAuthor(actor_id) = *actor;
         Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
     }
@@ -306,16 +306,17 @@ and on GraphQL, from an `id: String!` argument the attribute synthesises:
     #[use_guards(PostAuthorGuard)]
     async fn publish_post(
         &self,
-        ctx: &Context<'_>,
         post: Authorized<Update, PostEntity>,
-    ) -> Result<Post> {
-        // …
-        self.svc
-            .publish(post.into_inner(), actor_id)
-            .await
-            .map_err(|error| problem_error(&error))
+        actor: Ctx<PostAuthor>,
+    ) -> Result<Post, PostError> {
+        let PostAuthor(actor_id) = *actor;
+        self.svc.publish(post.into_inner(), actor_id).await
     }
 ```
+
+`PostAuthorGuard` derives the author from the verified claims and attaches it
+on both edges, so each body reads it as `Ctx<PostAuthor>`; the service's
+`PostError` answers its `409` or its `CONFLICT` by its own `ToProblem`.
 
 Two pieces, each with one job:
 

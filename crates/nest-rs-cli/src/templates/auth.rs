@@ -92,7 +92,8 @@ impl Claims {
 }
 
 // The authentication guard attaches the claims for the rest of the request:
-// `Ctx<Claims>` in a handler, and every guard after it, reads them back.
+// `Ctx<Claims>` in a handler on every edge, and every guard after it, reads
+// them back.
 impl AmbientValue for Claims {}
 
 // Puts `actor_id` on the request span, so every downstream event — denials
@@ -293,13 +294,14 @@ pub use module::AuthzGraphqlModule;
 "#;
 
 /// The controllers' own chain (`AuthnGuard`, then `AuthzGuard`) at the GraphQL
-/// request, joining the app's global pool: the ability it attaches is ambient
-/// for every operation — so one policy answers on both transports.
+/// request, joining the app's global pool: the claims and the ability it
+/// attaches are ambient for every operation — so one policy answers on both
+/// transports, and a resolver reads the claims as `Ctx<Claims>`.
 pub(crate) const AUTHZ_GRAPHQL_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::graphql::{GraphqlView, forward_principal};
+use nest_rs::graphql::GraphqlView;
 use nest_rs::http::EndpointGuards;
 
-use crate::authn::{AuthnGuard, Claims};
+use crate::authn::AuthnGuard;
 use crate::authz::{AuthzGuard, AuthzModule};
 
 #[module(
@@ -307,11 +309,6 @@ use crate::authz::{AuthzGuard, AuthzModule};
     providers = [EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>],
 )]
 pub struct AuthzGraphqlModule;
-
-// Forwards the verified principal into every operation's GraphQL context.
-// Anonymous requests pass through untouched, so nothing to gate: the guard that
-// attaches the principal is the gate.
-forward_principal!(Claims);
 "#;
 
 // authz/ws/ — what a gateway imports to serve rows (`nestrs g ws`): the

@@ -21,3 +21,20 @@ its stage passed. `forward_principal!` copies the principal from there into
 the GraphQL context. The gate argument is unchanged: the value is present only
 if a module-gated guard attached it, so the forwarder still activates on a
 condition narrower than a provider registration.
+
+## 2026-10-30 — the forwarder retires: a handler reads `Ctx<T>` on every edge
+
+Agreed by the owner with the identity audit's breaking changes ("Tout faire",
+2026-10-28). `Ctx<T>` moved to core, and every impl half reads it: a route by
+its type, `#[operations]`, `#[messages]` and `#[tools]` by its spelling, from
+the unit's ambient context, leaving it out of the protocol's arguments. A
+resolver therefore takes `claims: Ctx<Claims>`, and `forward_principal!` —
+one line every app with GraphQL repeated, copying the principal alone into
+async-graphql's context — is removed with the CLI's line that wrote it.
+
+The reasons above still hold, and now for the parameter: what reads the value
+mounts and exposes nothing, and its gate is the module-gated guard that
+attaches it, a condition narrower than any registration. Nothing replaces the
+forwarder, so there is no second gate to weigh. `GraphqlContextSeed` stays for
+the framework's own seeds; `ctx.data::<T>()` remains async-graphql's API and is
+no longer taught.

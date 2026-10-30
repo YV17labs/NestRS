@@ -4,10 +4,9 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{AmbientValue, module};
-use nest_rs_graphql::async_graphql::Context;
+use nest_rs_core::{AmbientValue, Ctx, module};
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
-use nest_rs_graphql::{GraphqlModule, forward_principal, operations, resolver};
+use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_testing::TestApp;
 
 /// The caller a guard at the upgrade would attach.
@@ -15,8 +14,6 @@ use nest_rs_testing::TestApp;
 struct Caller(&'static str);
 
 impl AmbientValue for Caller {}
-
-forward_principal!(Caller);
 
 #[resolver]
 struct CallerResolver;
@@ -29,14 +26,12 @@ impl CallerResolver {
         0
     }
 
-    /// The caller each source holds: the ambient one, then the one the seed
-    /// forwarded into the connection's context.
+    /// The caller the operation's ambient context holds, read as its
+    /// parameter.
     #[subscription]
     #[public]
-    fn caller(&self, ctx: &Context<'_>) -> impl Stream<Item = String> {
-        let ambient = nest_rs_core::ambient::<Caller>().map_or("none", |caller| caller.0);
-        let forwarded = ctx.data_opt::<Caller>().map_or("none", |caller| caller.0);
-        stream::iter([format!("{ambient} {forwarded}")])
+    fn caller(&self, caller: Ctx<Caller>) -> impl Stream<Item = String> {
+        stream::iter([caller.into_inner().0.to_owned()])
     }
 }
 
@@ -57,13 +52,27 @@ async fn first_caller(attached: Option<Caller>) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn an_attached_value_is_ambient_for_each_operation_and_forwarded_by_the_seeds() {
+async fn an_attached_value_reaches_each_operation_as_its_parameter() {
     let item = first_caller(Some(Caller("ada"))).await;
-    assert_eq!(item["data"]["caller"], "ada ada", "{item}");
+    assert_eq!(item["data"]["caller"], "ada", "{item}");
 }
 
 #[tokio::test]
-async fn a_socket_attaching_nothing_carries_nothing() {
+async fn a_socket_attaching_nothing_answers_the_operation_opaquely() {
     let item = first_caller(None).await;
-    assert_eq!(item["data"]["caller"], "none none", "{item}");
+    assert_eq!(item["data"], serde_json::Value::Null, "{item}");
+    assert_eq!(
+        item["errors"][0]["message"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "{item}"
+    );
+    assert_eq!(
+        item["errors"][0]["extensions"]["code"], "INTERNAL",
+        "{item}"
+    );
+    let said = item.to_string();
+    assert!(
+        !said.contains("Caller"),
+        "the answer names the type: {said}"
+    );
 }

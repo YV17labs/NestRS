@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use nest_rs::core::{ambient, error_message};
+use nest_rs::core::{Ctx, error_message};
 use nest_rs::ws::{Opaque, Scoped, WsClient, WsError, gateway, messages};
 
 use super::guard::ModerationGuard;
 use super::request_seq::RequestSeq;
+use crate::Claims;
 use crate::authn::AuthnGuard;
 use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 use crate::chat::service::ChatService;
-use crate::{Claims, Subject};
 
 #[gateway(path = "/ws")]
 #[use_guards(AuthnGuard)]
@@ -33,8 +33,12 @@ impl ChatGateway {
     #[subscribe_message("message")]
     #[public]
     #[use_guards(ModerationGuard)]
-    async fn on_message(&self, message: SendMessageDto) -> Result<(), WsError> {
-        self.svc.record(Self::author()?, message).opaque()?;
+    async fn on_message(
+        &self,
+        caller: Ctx<Claims>,
+        message: SendMessageDto,
+    ) -> Result<(), WsError> {
+        self.svc.record(caller.into_inner().sub, message).opaque()?;
         Ok(())
     }
 
@@ -59,24 +63,20 @@ impl ChatGateway {
     #[subscribe_message("typing")]
     #[public]
     #[use_guards(ModerationGuard)]
-    async fn typing(&self, message: SendMessageDto, client: &WsClient) -> Result<(), WsError> {
+    async fn typing(
+        &self,
+        caller: Ctx<Claims>,
+        message: SendMessageDto,
+        client: &WsClient,
+    ) -> Result<(), WsError> {
         let typing = ChatMessageDto {
-            author: Self::author()?,
+            author: caller.into_inner().sub,
             text: message.text,
         };
         if let Err(e) = client.broadcast("typing", &typing) {
             tracing::warn!(target: crate::chat::TARGET, error = %error_message(&e), "broadcast failed");
         }
         Ok(())
-    }
-}
-
-impl ChatGateway {
-    fn author() -> Result<Subject, WsError> {
-        ambient::<Claims>()
-            .map(|caller| caller.sub.clone())
-            .ok_or("no principal reached the message: AuthnGuard did not run at the upgrade")
-            .opaque()
     }
 }
 

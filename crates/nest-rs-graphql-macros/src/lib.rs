@@ -39,6 +39,15 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `#[use_exception_filters]` belong on the struct beside `#[resolver]`, not
 /// here; a method binds its own beside its role.
 ///
+/// Two parameters are no argument of the schema: the field's tail resolves
+/// them once the guards and the gate passed. They are read by their type's
+/// last segment, since no value tells a macro what to leave out of
+/// async-graphql's argument list, and each through a function returning its
+/// own type, so a namesake does not compile: `Scoped<T>`, a provider from the
+/// request's scope, and `Ctx<T>` (`nest_rs_core::Ctx`), what a guard attached
+/// — a miss of either answers the opaque internal error, the type filed at
+/// `error`.
+///
 /// **Every `#[query]`/`#[mutation]`/`#[subscription]` declares its access
 /// posture** — forgetting one is a compile error, never a silently ungated
 /// operation:

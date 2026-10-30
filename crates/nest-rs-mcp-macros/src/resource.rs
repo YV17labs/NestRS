@@ -10,7 +10,7 @@ use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{Attribute, Expr, FnArg, ImplItemFn, LitStr, Meta, Signature, Type};
 
-use crate::mcp_impl::{Description, description_check, doc_comment, is_scoped};
+use crate::mcp_impl::{Description, description_check, doc_comment, tail_param};
 use crate::uri_template::{self, Part};
 
 /// What `#[resource(…)]` takes.
@@ -141,7 +141,7 @@ pub(crate) fn bind_variables(decl: &mut ResourceDecl, sig: &Signature) -> syn::R
         let syn::Pat::Ident(pat_ident) = &*pat_type.pat else {
             continue;
         };
-        if is_scoped(&pat_type.ty) {
+        if tail_param(&pat_type.ty).is_some() {
             continue;
         }
         let ident = &pat_ident.ident;
@@ -165,7 +165,7 @@ pub(crate) fn bind_variables(decl: &mut ResourceDecl, sig: &Signature) -> syn::R
                     "#[resource] reads its arguments off its URI template: `{ident}` names no \
                      variable of `{template}` — name it after one (`{{id}}` is read into \
                      `id: T`, where `T: FromStr`), or take a request-scoped provider as \
-                     `Scoped<T>`",
+                     `Scoped<T>` or what a guard attached as `Ctx<T>`",
                     template = decl.template.value(),
                 ),
             ));
@@ -205,17 +205,19 @@ fn argument_carrier(ty: &Type) -> Option<&'static str> {
     })
 }
 
-/// Refuse a parameter of a `#[resources]` listing other than a `Scoped<T>`.
+/// Refuse a parameter of a `#[resources]` listing other than a `Scoped<T>` or a
+/// `Ctx<T>`.
 pub(crate) fn refuse_listing_arguments(sig: &Signature) -> syn::Result<()> {
     for input in &sig.inputs {
         if let FnArg::Typed(pat_type) = input
-            && !is_scoped(&pat_type.ty)
+            && tail_param(&pat_type.ty).is_none()
         {
             return Err(syn::Error::new_spanned(
                 pat_type,
                 "#[resources] lists every resource a caller may read, so it takes no \
-                 argument but a request-scoped provider (`Scoped<T>`) — a resource read \
-                 by its own arguments is a `#[resource(template = \"…\")]`",
+                 argument but a request-scoped provider (`Scoped<T>`) or what a guard \
+                 attached (`Ctx<T>`) — a resource read by its own arguments is a \
+                 `#[resource(template = \"…\")]`",
             ));
         }
     }

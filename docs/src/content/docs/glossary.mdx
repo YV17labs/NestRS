@@ -43,8 +43,8 @@ deep on each.
   writes, never a unit you declare.
 - **[Guard](/fundamentals/guards/)** — a pre-handler gate; returns
   `Ok(())` to let the request through or a typed `Denial` mapped to
-  401/403/429, and may attach context the handler reads through
-  `Ctx<T>`.
+  401/403/429, and may attach context a handler on any edge reads
+  through `Ctx<T>`.
 - **[Endpoint guards](/security/authorization/endpoint-guards/)** —
   `EndpointGuards<V, (G1, …)>`, the guards a module adds to the request of
   `/graphql` or `/mcp`, beside the global pool; what they attach is ambient

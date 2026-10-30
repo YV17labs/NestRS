@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use nest_rs_authn::{AuthError, AuthnConfig, AuthnModule, Strategy, basic_credentials};
-use nest_rs_core::{injectable, module};
-use nest_rs_http::{Ctx, HttpModule, Request, StatusCode, async_trait, controller, routes};
+use nest_rs_core::{Ctx, injectable, module};
+use nest_rs_http::{HttpModule, Request, StatusCode, async_trait, controller, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule};
 use nest_rs_oauth_server::{
     AuthenticatedClient, ClientAuthenticationGuard, RegisteredClient, authenticate_against_registry,

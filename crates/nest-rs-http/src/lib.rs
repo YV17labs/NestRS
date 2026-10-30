@@ -22,9 +22,9 @@ pub mod challenge;
 mod client_ip;
 mod compression;
 mod config;
-mod context;
 mod controller;
 mod cors;
+mod ctx;
 mod deadline;
 mod deprecation;
 mod detached;
@@ -201,9 +201,9 @@ pub use config::{
     HttpConfig, MAX_CONNECTION_CEILING, MAX_CONNECTION_FLOOR, SSE_KEEP_ALIVE_CEILING,
     SSE_KEEP_ALIVE_FLOOR, UNIT_TIMEOUT_CEILING, UNIT_TIMEOUT_FLOOR,
 };
-pub use context::{Ctx, RejectedCredential};
 pub use controller::{HttpControllerMeta, HttpRouteMeta, RequestBodyMeta, SchemaFn};
 pub use cors::HttpCors;
+pub use ctx::RejectedCredential;
 pub use deadline::RequestDeadline;
 pub use deprecation::DeprecationMeta;
 pub use detached::DetachedWork;

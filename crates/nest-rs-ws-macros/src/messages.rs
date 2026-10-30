@@ -353,13 +353,25 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     };
                 });
                 call_args.push(quote! { #ident });
+            } else if is_ctx(pt.ty.as_ref()) {
+                let ty = pt.ty.as_ref();
+                let ident = format_ident!("__ctx_{}", scoped.len());
+                scoped.push(quote! {
+                    let #ident: #ty = match ::nest_rs_ws::__private::ctx_parameter(#event) {
+                        ::core::result::Result::Ok(__attached) => __attached,
+                        ::core::result::Result::Err(__missing) => {
+                            return ::core::result::Result::Ok(__missing);
+                        }
+                    };
+                });
+                call_args.push(quote! { #ident });
             } else {
                 if payload_ty.is_some() {
                     arity_error = Some(syn::Error::new_spanned(
                         &pt.ty,
                         "a #[subscribe_message] handler takes at most one payload parameter \
-                         (deserialized from the message's `data`) beside its `Scoped<T>` \
-                         parameters",
+                         (deserialized from the message's `data`) beside its `Scoped<T>` and \
+                         `Ctx<T>` parameters",
                     ));
                     break;
                 }
@@ -804,13 +816,25 @@ fn conditional<T>(items: &[(Vec<TokenStream2>, T)]) -> impl Iterator<Item = Cond
 /// that crate's `Scoped`, so a type of another crate under that name does not
 /// compile.
 fn is_scoped(ty: &Type) -> bool {
+    last_segment_is(ty, "Scoped")
+}
+
+/// Whether a `#[subscribe_message]` parameter is a `Ctx<T>`, read by its last
+/// segment as `Scoped<T>` is: the expansion resolves it through `nest_rs_ws`'s
+/// `ctx_parameter`, which returns core's `Ctx`, so a namesake does not compile.
+fn is_ctx(ty: &Type) -> bool {
+    last_segment_is(ty, "Ctx")
+}
+
+/// Whether `ty` is a path whose last segment is `name`.
+fn last_segment_is(ty: &Type, name: &str) -> bool {
     let Type::Path(path) = ty else {
         return false;
     };
     path.path
         .segments
         .last()
-        .is_some_and(|segment| segment.ident == "Scoped")
+        .is_some_and(|segment| segment.ident == name)
 }
 
 enum ReturnKind {

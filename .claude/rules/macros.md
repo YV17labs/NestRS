@@ -167,9 +167,11 @@ stated in the decorator's rustdoc: the wrapper async-graphql's derive itself
 reads by name, the `Json<T>` rmcp derives a tool's output schema from, the
 shape a masked MCP or WS operation unwraps (`Json<T>`, a resource's
 `Option<Json<T>>`), the template variable a `#[resource]` parameter's name
-spells, which `#[subscribe_message]` parameter is the payload (`&WsClient` by its reference, `Scoped<T>` by its
-name — resolved through `nest_rs_ws::__private::scoped_parameter`, which
-returns that crate's own `Scoped`, so a namesake does not compile), and what an
+spells, which `#[subscribe_message]` parameter is the payload (`&WsClient` by its reference, `Scoped<T>` and
+`Ctx<T>` by their names — each resolved through a function of the edge crate's
+`__private` returning its own type, so a namesake does not compile), the
+`Scoped<T>` and `Ctx<T>` parameters `#[operations]` and `#[tools]` leave out of
+the protocol's arguments, read the same way, and what an
 OpenAPI document infers (`#[api(response = T)]` states what spelling hides).
 
 ## Keys — one grammar, one refusal sentence

@@ -25,6 +25,7 @@ pub const TARGET: &str = "nest_rs::graphql";
 
 mod config;
 mod context;
+mod ctx;
 mod endpoint;
 mod error;
 mod federation;
@@ -58,6 +59,7 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::context::{ENDPOINT, connection_data};
+    pub use crate::ctx::ctx_parameter;
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate, FieldFailure};
     pub use crate::loader::{GraphqlLoaderRegistration, batch_spawner};
     pub use crate::operation::{
@@ -72,7 +74,6 @@ pub mod __private {
     pub use crate::subscription::{compose_schema, keep_masked_item};
 
     pub use inventory;
-    pub use nest_rs_core::ambient;
     // For `#[crud]`-generated ops, so the consumer needs no nest-rs-pipes dependency.
     pub use nest_rs_pipes::__private::{MaybeValidateFallback, ValidateProbe};
 }

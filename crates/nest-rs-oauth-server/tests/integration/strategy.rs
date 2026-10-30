@@ -3,8 +3,8 @@
 //! the client it attaches reads what its request is granted.
 
 use base64::Engine as _;
-use nest_rs_core::module;
-use nest_rs_http::{Ctx, HttpModule, StatusCode, controller, routes};
+use nest_rs_core::{Ctx, module};
+use nest_rs_http::{HttpModule, StatusCode, controller, routes};
 use nest_rs_oauth_server::{
     AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientAuthenticationGuard,
     ClientSecretBasicStrategy, OAuthServerConfig, OAuthServerModule, RegisteredClient,

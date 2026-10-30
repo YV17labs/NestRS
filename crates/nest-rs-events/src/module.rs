@@ -47,8 +47,8 @@ nest_rs_core::inventory::submit! {
 }
 
 /// The sentence the boot files for a listener whose app registered no bus.
-pub const NO_BUS_REPORT: &str = "listener declared but no event bus is registered — add `EventsModule` to the root \
-     module's `imports = [...]`";
+pub const NO_BUS_REPORT: &str = "listener declared but no event bus is registered — add `EventsModule` to the \
+     `imports = [...]` of the module whose service emits its event";
 
 /// The only site that sees reachable listeners without a bus: no host depends
 /// on `EventBus`, so the app otherwise boots clean.

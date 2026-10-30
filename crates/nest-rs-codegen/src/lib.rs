@@ -115,7 +115,7 @@ pub mod __private {
     };
     pub use crate::attrs::{Conditional, cfg_attrs, delegated_attrs};
     pub use crate::capability::guard_capability_bounds;
-    pub use crate::casing::singular;
+    pub use crate::casing::{camel_case, singular};
     pub use crate::crud::{
         CrudDeclaration, CrudOp, CrudOpApi, CrudTypes, GeneratedOps, OpsSelection, Paginate,
         parse_crud_args, resolver_singular, resource_noun,

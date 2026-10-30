@@ -18,8 +18,8 @@ use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Collision, Conditional, DispatchKeys,
     HandlerSite, HostBorrow, HostMeta, InjectableBody, SitePosture, TailParam, VersionedEdge,
-    answer_span, at_most_one_authorize, await_if_async, build_injectable_body, cfg_attrs,
-    concrete_signature, delegated_attrs, force_guard_typeids, forwarded_arg_idents,
+    answer_span, at_most_one_authorize, await_if_async, build_injectable_body, camel_case,
+    cfg_attrs, concrete_signature, delegated_attrs, force_guard_typeids, forwarded_arg_idents,
     forwarded_idents, from_container_method, guard_capability_bounds, handler_const, handler_ref,
     host_meta_fn, impl_self_ident, injected_field_types, injected_keys_with_layers,
     injected_methods_with_layers, injected_names_with_layers, injected_optional_fns,
@@ -988,7 +988,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
         // Unfolded: async-graphql reads a plain `#[cfg]`, never one inside `#[cfg_attr]`.
         let mut deleg_attrs = delegated_attrs(&method.attrs);
-        let mut field = lower_camel(&method.sig.ident.unraw().to_string());
+        let mut field = camel_case(&method.sig.ident.unraw().to_string());
         if !is_entity {
             match graphql_name(&method.attrs)? {
                 Some(name) => field = name,
@@ -1728,35 +1728,6 @@ fn graphql_name(attrs: &[Attribute]) -> syn::Result<Option<String>> {
     Ok(None)
 }
 
-/// A method name as the schema serves it — a port of `Inflector`'s
-/// `to_camel_case`, async-graphql's default (a new word after a digit too):
-/// `get_2fa` is `get2Fa`, `userID` stays `userID`. Held against the derive by a test.
-fn lower_camel(name: &str) -> String {
-    let trimmed = name.trim_end_matches(|c: char| !c.is_alphanumeric());
-    let mut camel = String::with_capacity(trimmed.len());
-    let mut new_word = false;
-    let mut last = ' ';
-    let mut started = false;
-    for c in trimmed.chars() {
-        if !c.is_alphanumeric() {
-            new_word |= started;
-        } else if c.is_numeric() {
-            started = true;
-            new_word = true;
-            camel.push(c);
-        } else if new_word || (last.is_lowercase() && c.is_uppercase()) {
-            started = true;
-            new_word = false;
-            camel.push(c.to_ascii_uppercase());
-        } else {
-            started = true;
-            last = c;
-            camel.push(c.to_ascii_lowercase());
-        }
-    }
-    camel
-}
-
 /// State `field` as the name async-graphql serves a method under. It joins the
 /// developer's `#[graphql(...)]`: async-graphql strips only the first.
 fn name_the_field(attrs: &mut Vec<Attribute>, field: &str) -> syn::Result<()> {
@@ -1985,25 +1956,6 @@ mod tests {
         let err = resolver_impl_inner(item)
             .expect_err("#[authorize] and #[public] together must fail to expand");
         assert!(err.to_string().contains("contradict"), "{}", err);
-    }
-
-    #[test]
-    fn a_method_name_is_camel_cased_as_async_graphql_does() {
-        for (method, served) in [
-            ("user_count", "userCount"),
-            ("get_2fa", "get2Fa"),
-            ("a_1b", "a1B"),
-            ("a1_b", "a1B"),
-            ("page_2_items", "page2Items"),
-            ("v2_api", "v2Api"),
-            ("userID", "userID"),
-            ("user_id", "userId"),
-            ("_leading", "leading"),
-            ("trailing_", "trailing"),
-            ("x", "x"),
-        ] {
-            assert_eq!(lower_camel(method), served, "{method}");
-        }
     }
 
     #[test]

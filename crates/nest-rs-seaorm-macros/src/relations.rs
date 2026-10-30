@@ -5,10 +5,11 @@
 //! The FK-side dataloader (`by_<fk_col>`) and its `RelatedTo<Parent, Via>` impl
 //! are emitted by the entity declaring `belongs_to`, never by the parent.
 
-use nest_rs_codegen::__private::{last_segment_ident, site, unit_of_work_required};
+use nest_rs_codegen::__private::{camel_case, last_segment_ident, site, unit_of_work_required};
 use nest_rs_codegen::pascal_case;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
+use syn::ext::IdentExt as _;
 use syn::{Ident, Type};
 
 use crate::attr::{
@@ -457,12 +458,7 @@ fn relation_registration(
 ) -> TokenStream2 {
     let wire = &model.output_ident;
     let root = graphql_root();
-    let pascal = pascal_case(field).to_string();
-    let mut chars = pascal.chars();
-    let name: String = chars
-        .next()
-        .map(|first| first.to_lowercase().chain(chars).collect())
-        .unwrap_or_default();
+    let name = camel_case(&field.unraw().to_string());
     quote! {
         ::nest_rs_seaorm::__private::inventory::submit! {
             ::nest_rs_seaorm::__private::GraphqlRelationRegistration {
@@ -470,7 +466,7 @@ fn relation_registration(
                     &<#wire as #root::OutputType>::type_name(),
                 ),
                 field: #name,
-                entity: || ::core::any::type_name::<Entity>(),
+                entity: ::core::any::type_name::<Entity>,
                 owner: <#loader as ::nest_rs_seaorm::__private::LoaderOwner>::owner,
                 origin: ::core::module_path!(),
             }

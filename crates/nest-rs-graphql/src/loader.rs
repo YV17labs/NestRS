@@ -207,20 +207,19 @@ pub(crate) fn check_served_relations(
 /// What a refusal says of one relation: the field, its entity, the loader's
 /// owner and the import its cause prescribes.
 fn unreached_relation(container: &Container, relation: &GraphqlRelationRegistration) -> String {
+    let parent = (relation.parent)();
     let (owner_type, owner) = (relation.owner)();
     let remedy = match nest_rs_core::inert_host(container, relation.origin, owner_type) {
         InertHost::ModuleNotImported { module }
         | InertHost::Dependency {
             module: Some(module),
         } => Cow::Owned(format!(
-            "import `{module}` into the module serving `{}`",
-            (relation.parent)()
+            "import `{module}` into the module serving `{parent}`"
         )),
         cause => cause.hint(),
     };
     format!(
-        "`{}.{}` (declared on `{}`) reads a loader of `{owner}`: {remedy}",
-        (relation.parent)(),
+        "`{parent}.{}` (declared on `{}`) reads a loader of `{owner}`: {remedy}",
         relation.field,
         (relation.entity)(),
     )

@@ -56,6 +56,35 @@ pub fn pascal_case(ident: &Ident) -> Ident {
     Ident::new(&out, ident.span())
 }
 
+/// A method name as a GraphQL schema serves it — a port of `Inflector`'s
+/// `to_camel_case`, async-graphql's default (a new word after a digit too):
+/// `get_2fa` is `get2Fa`, `userID` stays `userID`. Held against the derive by a test.
+pub fn camel_case(name: &str) -> String {
+    let trimmed = name.trim_end_matches(|c: char| !c.is_alphanumeric());
+    let mut camel = String::with_capacity(trimmed.len());
+    let mut new_word = false;
+    let mut last = ' ';
+    let mut started = false;
+    for c in trimmed.chars() {
+        if !c.is_alphanumeric() {
+            new_word |= started;
+        } else if c.is_numeric() {
+            started = true;
+            new_word = true;
+            camel.push(c);
+        } else if new_word || (last.is_lowercase() && c.is_uppercase()) {
+            started = true;
+            new_word = false;
+            camel.push(c.to_ascii_uppercase());
+        } else {
+            started = true;
+            last = c;
+            camel.push(c.to_ascii_lowercase());
+        }
+    }
+    camel
+}
+
 /// Naive English singularization over the last word of a PascalCase name:
 /// `Users` → `User`, `Categories` → `Category`, `Statuses` → `Status`; a word
 /// already singular passes through. `#[crud]` reads a host's resource by it,
@@ -96,6 +125,25 @@ mod tests {
             ("", ""),
         ] {
             assert_eq!(super::singular(plural), singular, "{plural}");
+        }
+    }
+
+    #[test]
+    fn a_method_name_is_camel_cased_as_async_graphql_does() {
+        for (method, served) in [
+            ("user_count", "userCount"),
+            ("get_2fa", "get2Fa"),
+            ("a_1b", "a1B"),
+            ("a1_b", "a1B"),
+            ("page_2_items", "page2Items"),
+            ("v2_api", "v2Api"),
+            ("userID", "userID"),
+            ("user_id", "userId"),
+            ("_leading", "leading"),
+            ("trailing_", "trailing"),
+            ("x", "x"),
+        ] {
+            assert_eq!(camel_case(method), served, "{method}");
         }
     }
 

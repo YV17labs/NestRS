@@ -393,12 +393,8 @@ pub(crate) fn validate_access_graph(
                 }
                 .into());
             }
-            let bound_layers = linked
-                .layers
-                .get(&(p.provider)())
-                .into_iter()
-                .flatten()
-                .copied();
+            let host = (p.provider)();
+            let bound_layers = linked.layers.get(&host).into_iter().flatten().copied();
             // A site resolves its layers once, when it composes: a request-scoped one
             // would refuse there naming a missing import, a transient one be shared by
             // every run.
@@ -413,18 +409,13 @@ pub(crate) fn validate_access_graph(
                 }
                 .into());
             }
+            let host_requires = linked.required.get(&host).into_iter().flatten().copied();
             // A request-scoped provider is what a handler's parameter is for,
             // so it is out of the scope check above.
-            let required = linked
-                .required
-                .get(&(p.provider)())
-                .into_iter()
-                .flatten()
-                .copied();
             let per_request = (p.injects_per_request)()
                 .into_iter()
                 .chain(bound_layers)
-                .chain(required)
+                .chain(host_requires)
                 .map(|(dep, name)| (dep, name, false));
             for (dep, name, optional) in deps.into_iter().chain(per_request) {
                 if global.contains(&dep) || closure_keys.contains(&dep) {

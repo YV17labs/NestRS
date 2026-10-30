@@ -57,9 +57,11 @@ faire", they now read `CORS_EXPOSED_HEADERS`, `SECURITY_HEADERS_ENABLED` and
 its field's key, so every variable is derived from the structs, and "no
 deployment variable moved" above no longer holds for these two. The retired
 spellings are read by nothing: the unread-variable report names each at boot,
-as it names every retired key of a namespace the binary reads, and a key that
-leads several read keys (the bare `SECURITY_HEADERS`) gets no suggestion,
-where the nearest by distance would have told an operator to write
+as it names every retired key of a namespace the binary reads, with the key it
+became as its suggestion — the one read key it leads (`CORS_EXPOSED`) or ends
+at a segment (`HSTS`), each too far by edit distance for a third of its length
+to reach. A key that leads several read keys (the bare `SECURITY_HEADERS`)
+gets none, where the nearest by distance would have told an operator to write
 `SECURITY_HEADERS_HSTS=false`.
 
 A `ClientTls` is read under a field named `tls` alone, another refused at the

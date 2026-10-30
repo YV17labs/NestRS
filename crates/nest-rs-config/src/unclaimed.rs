@@ -5,8 +5,9 @@
 //!
 //! - **An unread key** — [`UNREAD_CONFIG_VARIABLE`]. The variable sits under a
 //!   namespace a config of this binary read, and names a key that nothing read.
-//!   The closest key that *was* read comes back as `suggestion` when one is
-//!   near enough to be the intended one.
+//!   The key that *was* read comes back as `suggestion` when one is near
+//!   enough to be the intended one, or is the key it names once renamed
+//!   (`HSTS` for `SECURITY_HEADERS_HSTS`).
 //! - **A misspelled namespace** — [`MISSPELLED_CONFIG_NAMESPACE`]. The variable
 //!   spells a namespace this binary read otherwise than the loader reads it —
 //!   other separators (`OAUTH_RESOURCE` for `oauth__resource`, `SEAORM_URL` for
@@ -574,38 +575,58 @@ fn squash(name: &str) -> String {
 
 /// The known name whose key `key` most plausibly meant, if any is near enough.
 ///
-/// Equal once separators and case are set aside is nearest of all; otherwise
-/// the edit distance must stay within a third of the longer key, and at least
-/// one edit — `PROT` reaches `PORT`, `HOST` does not. Ties go to the name that
-/// sorts first, so the suggestion is stable across runs. A key that leads
-/// several read keys segment by segment names their vocabulary, not one of
-/// them (`SECURITY_HEADERS` beside `SECURITY_HEADERS_HSTS` and
-/// `SECURITY_HEADERS_ENABLED`), and gets none; a key's `_FILE` spelling is
-/// that key.
+/// Equal once separators and case are set aside is nearest of all. A key is
+/// then read as a renamed one by its segments: one that leads a single read
+/// key segment by segment is that key (`CORS_EXPOSED` for
+/// `CORS_EXPOSED_HEADERS`), one that leads several names their vocabulary and
+/// gets none (`SECURITY_HEADERS` beside `SECURITY_HEADERS_HSTS` and
+/// `SECURITY_HEADERS_ENABLED`), and one that a single read key ends with, at
+/// a segment, is that key (`HSTS` for `SECURITY_HEADERS_HSTS`); a key's
+/// `_FILE` spelling is that key. Only the namespace's own keys are read so: a
+/// key holding `__` is a sub-namespace's. Otherwise the edit distance must stay within a third of the longer key,
+/// and at least one edit — `PROT` reaches `PORT`, `HOST` does not. Ties go to
+/// the name that sorts first, so the suggestion is stable across runs.
 fn closest<'k>(key: &str, read: &[(&str, &'k str)]) -> Option<&'k str> {
     let typed = key.to_ascii_uppercase();
-    let segment = format!("{typed}_");
-    let led: BTreeSet<&str> = read
+    let squashed = squash(&typed);
+    if let Some((_, name)) = read
         .iter()
-        .filter(|(candidate, _)| candidate.starts_with(&segment))
-        .map(|(candidate, _)| {
+        .filter(|(candidate, _)| squash(candidate) == squashed)
+        .min_by_key(|(_, name)| *name)
+    {
+        return Some(name);
+    }
+    let own = read
+        .iter()
+        .filter(|(candidate, _)| !candidate.contains("__"));
+    let led: BTreeSet<&str> = own
+        .clone()
+        .filter(|(candidate, _)| {
+            candidate.starts_with(&typed) && candidate[typed.len()..].starts_with('_')
+        })
+        .map(|(candidate, name)| {
             candidate
                 .strip_suffix("_FILE")
-                .filter(|inline| read.iter().any(|(other, _)| other == inline))
-                .unwrap_or(candidate)
+                .and_then(|inline| read.iter().find(|(other, _)| *other == inline))
+                .map_or(*name, |(_, inline)| *inline)
         })
         .collect();
     if led.len() > 1 {
         return None;
     }
-    let squashed = squash(&typed);
+    let mut ended = own.filter(|(candidate, _)| {
+        candidate.ends_with(&typed) && candidate[..candidate.len() - typed.len()].ends_with('_')
+    });
+    let ended = ended
+        .next()
+        .filter(|_| ended.next().is_none())
+        .map(|(_, name)| *name);
+    if let Some(name) = led.into_iter().next().or(ended) {
+        return Some(name);
+    }
     read.iter()
         .filter_map(|(candidate, name)| {
-            let distance = if squash(candidate) == squashed {
-                0
-            } else {
-                distance(&typed, candidate)
-            };
+            let distance = distance(&typed, candidate);
             let reach = (typed.chars().count().max(candidate.chars().count()) / 3).max(1);
             (distance <= reach).then_some((distance, *name))
         })
@@ -732,6 +753,101 @@ mod tests {
             Some(secs.as_str()),
             "a key and its `_FILE` spelling are one key"
         );
+    }
+
+    /// Fixture names under `fixture` for `keys`, each with its `_FILE`
+    /// spelling read beside it, as every reader reads a key.
+    fn spelled(keys: &[&str]) -> Vec<(String, String)> {
+        keys.iter()
+            .flat_map(|key| [(*key).to_owned(), format!("{key}_FILE")])
+            .map(|key| {
+                let name = var_name("fixture", &key);
+                (key, name)
+            })
+            .collect()
+    }
+
+    fn pairs(spelled: &[(String, String)]) -> Vec<(&str, &str)> {
+        spelled
+            .iter()
+            .map(|(key, name)| (key.as_str(), name.as_str()))
+            .collect()
+    }
+
+    /// A key renamed by a segment added after it — `CORS_EXPOSED` for the
+    /// field `exposed_headers` — leads the one key it became, too far by
+    /// distance for a third of its length to reach.
+    #[test]
+    fn a_key_leading_one_read_key_is_suggested_that_key() {
+        let read = spelled(&["CORS_EXPOSED_HEADERS", "CORS_ORIGINS", "CORS_MAX_AGE_SECS"]);
+        let read = pairs(&read);
+        assert_eq!(
+            closest("CORS_EXPOSED", &read),
+            Some(var_name("fixture", "CORS_EXPOSED_HEADERS").as_str()),
+        );
+        assert_eq!(
+            closest("CORS_MAX_AGE", &read),
+            Some(var_name("fixture", "CORS_MAX_AGE_SECS").as_str()),
+        );
+        assert_eq!(
+            closest("CORS", &read),
+            None,
+            "a key leading several names their vocabulary"
+        );
+    }
+
+    /// A key renamed by a vocabulary's segment put before it — `HSTS` for
+    /// `SECURITY_HEADERS_HSTS` — is the one read key ending with it at a
+    /// segment; its `_FILE` spelling is that key's.
+    #[test]
+    fn a_key_one_read_key_ends_with_is_suggested_that_key() {
+        let read = spelled(&[
+            "SECURITY_HEADERS_ENABLED",
+            "SECURITY_HEADERS_HSTS",
+            "SECURITY_HEADERS_CONTENT_SECURITY_POLICY",
+            "TLS_CERT",
+            "TLS_CA_CERT",
+        ]);
+        let read = pairs(&read);
+        for (typed, meant) in [
+            ("HSTS", "SECURITY_HEADERS_HSTS"),
+            ("hsts", "SECURITY_HEADERS_HSTS"),
+            ("HSTS_FILE", "SECURITY_HEADERS_HSTS_FILE"),
+            (
+                "CONTENT_SECURITY_POLICY",
+                "SECURITY_HEADERS_CONTENT_SECURITY_POLICY",
+            ),
+            (
+                "SECURITY_POLICY",
+                "SECURITY_HEADERS_CONTENT_SECURITY_POLICY",
+            ),
+        ] {
+            assert_eq!(
+                closest(typed, &read),
+                Some(var_name("fixture", meant).as_str()),
+                "{typed}"
+            );
+        }
+        assert_eq!(
+            closest("CERT", &read),
+            None,
+            "two keys end with it, and neither is near"
+        );
+        assert_eq!(
+            closest("STS", &read),
+            None,
+            "a segment, never a part of one"
+        );
+    }
+
+    /// A sub-namespace's key is another namespace's word: one ending with the
+    /// key typed is no rename of it.
+    #[test]
+    fn a_sub_namespace_key_is_not_read_by_its_segments() {
+        let read = spelled(&["GOOGLE__CLIENT_ID"]);
+        let read = pairs(&read);
+        assert_eq!(closest("CLIENT_ID", &read), None);
+        assert_eq!(closest("GOOGLE", &read), None);
     }
 
     #[test]

@@ -989,15 +989,22 @@ mod tests {
     }
 
     /// The 6.x spellings of the vocabularies' keys are read by nothing, and
-    /// the boot names each once, suggesting only what it surely meant: the
-    /// bare `SECURITY_HEADERS` leads every security header's key, so it gets
+    /// the boot names each once with the key it became — but the bare
+    /// `SECURITY_HEADERS`, which leads every security header's key, and gets
     /// none of them.
     #[test]
     fn a_retired_vocabulary_key_is_named_at_boot() {
         let var = |key| nest_rs_config::var_name("http", key);
         figment::Jail::expect_with(|jail| {
             jail.set_env(var("CORS_ORIGINS"), "https://a.example");
-            for retired in ["CORS_EXPOSED", "CORS_MAX_AGE", "SECURITY_HEADERS", "HSTS"] {
+            for retired in [
+                "CORS_EXPOSED",
+                "CORS_MAX_AGE",
+                "SECURITY_HEADERS",
+                "HSTS",
+                "CONTENT_SECURITY_POLICY",
+                "CROSS_ORIGIN_EMBEDDER_POLICY",
+            ] {
                 jail.set_env(var(retired), "off");
             }
             let logs = nest_rs_testing::LogCapture::install();
@@ -1014,9 +1021,22 @@ mod tests {
                     .field("suggestion")
             };
             assert_eq!(named("CORS_MAX_AGE"), Some(var("CORS_MAX_AGE_SECS")));
+            assert_eq!(named("CORS_EXPOSED"), Some(var("CORS_EXPOSED_HEADERS")));
+            for header in [
+                "HSTS",
+                "CONTENT_SECURITY_POLICY",
+                "CROSS_ORIGIN_EMBEDDER_POLICY",
+            ] {
+                assert_eq!(
+                    named(header),
+                    Some(nest_rs_config::var_name(
+                        "http",
+                        &format!("SECURITY_HEADERS_{header}")
+                    )),
+                    "{header}"
+                );
+            }
             assert_eq!(named("SECURITY_HEADERS"), None);
-            named("CORS_EXPOSED");
-            named("HSTS");
             Ok(())
         });
     }

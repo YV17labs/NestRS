@@ -358,7 +358,7 @@ default in place and nothing said so. The boot now does, once per variable, at
 
 | Message | When | Fields |
 |---|---|---|
-| `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough |
+| `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough, or the one key it names once renamed (`HSTS` for `SECURITY_HEADERS_HSTS`, `CORS_EXPOSED` for `CORS_EXPOSED_HEADERS`) |
 | `config variable from the .env cascade shadowed by a config pinned in code; export it into the real environment, or set it in the pin` | a `.env` file sets a key a config reads, but the app pinned that config in code (`Module::for_root(cfg)`), which cuts its whole namespace off the cascade | `variable`, `namespace`, and `pinned_by` — the import that pinned it, `` `HttpModule::for_root(..)` at `imports[4]` of `ApiModule` `` |
 | `config variable under a misspelled namespace` | the variable's namespace is a near miss of one this binary read — other separators (`<PREFIX>_OAUTH_RESOURCE__RESOURCE` for `oauth__resource`, `<PREFIX>_SEAORM_URL` for `seaorm`), another case, the prefix's included, since the loader folds none (`<PREFIX>_Seaorm__URL`, `nestrs_seaorm__url`), or one misspelled segment of six letters or more, a family member's included (`<PREFIX>_SEAROM__URL`, `<PREFIX>_OAUTH__RESOURSE__RESOURCE`) — **and its key is one that namespace reads**, or one edit from one | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
 

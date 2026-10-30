@@ -129,3 +129,20 @@ async fn the_harness_boots_the_transport_a_seeded_config_describes() {
     resp.assert_status_is_ok();
     resp.assert_header(header::CONTENT_ENCODING, "gzip");
 }
+
+/// A suite boots its app under the name and version its binary would report,
+/// read off the tested package as `#[nest_rs::main]` reads the binary's.
+#[test]
+fn a_test_app_runs_under_the_identity_of_the_package_it_tests() {
+    assert!(nest_rs_core::AppIdentity::current().is_none());
+
+    let _builder = TestApp::builder();
+
+    let identity = nest_rs_core::AppIdentity::current().expect("published by the harness");
+    assert_eq!(identity.name, env!("CARGO_PKG_NAME"));
+    assert_eq!(identity.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        identity.description.as_deref(),
+        Some(env!("CARGO_PKG_DESCRIPTION"))
+    );
+}

@@ -15,8 +15,10 @@ pub use http::TestApp;
 
 /// Builder for a test app, from [`HeadlessApp::builder`] or, with the `http`
 /// feature, `TestApp::builder`: [`AppBuilder`]'s registration surface plus
-/// test-only overrides. Defaults `<PREFIX>_ENV=test` and loads the project `.env`
-/// cascade.
+/// test-only overrides. Defaults `<PREFIX>_ENV=test`, loads the project `.env`
+/// cascade, and publishes the tested package's name, version and description as
+/// the process's [`AppIdentity`](nest_rs_core::AppIdentity), as
+/// `#[nest_rs::main]` publishes the binary's.
 pub struct TestAppBuilder {
     inner: AppBuilder,
 }
@@ -24,6 +26,7 @@ pub struct TestAppBuilder {
 impl TestAppBuilder {
     pub(crate) fn new() -> Self {
         crate::env::load_project_env();
+        crate::package::publish_package_identity();
         Self {
             inner: App::builder(),
         }

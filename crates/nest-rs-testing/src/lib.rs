@@ -42,6 +42,7 @@ mod logs;
 /// Driving the MCP endpoint over the HTTP test client (feature `http`).
 #[cfg(feature = "http")]
 pub mod mcp;
+mod package;
 #[cfg(feature = "http")]
 mod response;
 mod url;

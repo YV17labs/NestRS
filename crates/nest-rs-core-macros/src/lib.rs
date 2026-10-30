@@ -163,6 +163,9 @@ pub fn instance(args: TokenStream, input: TokenStream) -> TokenStream {
 /// first signal stops the boot at its next await or drains the serving app,
 /// and one received before any app exists exits at once with 130 / 143.
 ///
+/// It captures the binary's name, version and description from its package's
+/// manifest as the process's `AppIdentity`, before the body runs.
+///
 /// Takes no argument. The app's manifest needs no `tokio` line for it.
 #[proc_macro_attribute]
 pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {

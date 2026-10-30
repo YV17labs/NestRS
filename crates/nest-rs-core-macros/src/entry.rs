@@ -30,10 +30,15 @@ pub(crate) fn main(args: TokenStream, input: TokenStream) -> TokenStream {
         ReturnType::Type(_, ty) => quote! { #ty },
     };
     let body = &item.block;
-    // Expanded in the app crate, so the manifest directory is the app's own.
+    // Expanded in the app crate, so the manifest read is the binary's own.
     let wrapped: Block = syn::parse_quote! {{
         ::nest_rs_core::__private::main::<#output, _>(
-            ::core::env!("CARGO_MANIFEST_DIR"),
+            ::nest_rs_core::__private::MainCrate {
+                dir: ::core::env!("CARGO_MANIFEST_DIR"),
+                name: ::core::env!("CARGO_PKG_NAME"),
+                version: ::core::env!("CARGO_PKG_VERSION"),
+                description: ::core::env!("CARGO_PKG_DESCRIPTION"),
+            },
             async move #body,
         )
     }};

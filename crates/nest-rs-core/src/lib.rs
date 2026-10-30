@@ -98,6 +98,7 @@ mod ambient;
 mod answer;
 pub mod app;
 mod app_dir;
+mod app_identity;
 mod app_lifecycle;
 mod backoff;
 mod budget;
@@ -156,6 +157,7 @@ mod wiring;
 pub use access::{Composition, ProviderOrder, ReachableProviders};
 pub use ambient::{AmbientValue, Continuation, Deadline, ambient, with_ambient};
 pub use app::{App, AppBuilder, BootStep};
+pub use app_identity::AppIdentity;
 pub use app_lifecycle::{AppLifecycle, AppState, StopCause};
 pub use backoff::{Backoff, Retries, process_seed};
 pub use budget::Budget;
@@ -225,6 +227,7 @@ pub mod __private {
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{check_stop_bound, close_after, init_tearing_down_after};
     pub use crate::app_dir::{app_dir, in_app_dir};
+    pub use crate::app_identity::{capture_app_identity, package_identity};
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,
         declaring_site, enter_import, leave_import, overrides_any, record_absent_optional,
@@ -272,7 +275,7 @@ pub mod __private {
     };
     pub use crate::type_name::short_type_name;
     pub use crate::unit_context::{new_unit_context, pending_of, take_pending};
-    pub use crate::way_down::main;
+    pub use crate::way_down::{MainCrate, main};
 
     pub use schemars;
     pub use serde;
@@ -335,7 +338,10 @@ pub use nest_rs_core_macros::hooks;
 ///
 /// It records the directory of the crate it expands in: a development
 /// artifact's relative path — GraphQL's and OpenAPI's `emit_path` — lands
-/// there, whatever directory the process runs from.
+/// there, whatever directory the process runs from. And it records that
+/// crate's name, version and description as the process's [`AppIdentity`],
+/// which OpenAPI's `info`, MCP's `serverInfo` and OpenTelemetry's
+/// `service.name` and `service.version` default to.
 ///
 /// ```
 /// # use nest_rs_core::{App, module};

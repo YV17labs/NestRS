@@ -41,7 +41,8 @@ pub trait Strategy: Send + Sync + 'static {
     /// lets the framework record `actor_id` on the request span on success
     /// — every principal must say who it is for audit (or `None`) — and its
     /// [`AmbientValue`] one is what lets the guard attach it for the rest of
-    /// the request (`impl AmbientValue for Claims {}`).
+    /// the request — a claims struct derives both
+    /// ([`#[derive(PrincipalIdentity)]`](macro@crate::PrincipalIdentity)).
     type Principal: PrincipalIdentity + AmbientValue + Clone;
 
     /// Map the request to a principal, or return why authentication failed.

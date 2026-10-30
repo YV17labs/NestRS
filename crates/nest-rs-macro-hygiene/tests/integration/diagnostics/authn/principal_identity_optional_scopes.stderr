@@ -1,0 +1,12 @@
+error[E0308]: mismatched types
+  --> tests/integration/diagnostics/authn/principal_identity_optional_scopes.rs:8:17
+   |
+ 8 | #[derive(Clone, PrincipalIdentity)]
+   |                 ^^^^^^^^^^^^^^^^^ expected `&[String]`, found `&Option<Vec<String>>`
+...
+13 |     pub scope: Option<Vec<String>>,
+   |                ------ expected due to this
+   |
+   = note: expected reference `&[std::string::String]`
+              found reference `&std::option::Option<Vec<std::string::String>>`
+   = note: this error originates in the derive macro `PrincipalIdentity` (in Nightly builds, run with -Z macro-backtrace for more info)

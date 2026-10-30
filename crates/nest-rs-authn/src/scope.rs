@@ -4,9 +4,11 @@
 //! ```
 //! # use nest_rs_authn::PrincipalIdentity;
 //! # use serde::{Deserialize, Serialize};
-//! #[derive(Serialize, Deserialize)]
+//! #[derive(Serialize, Deserialize, PrincipalIdentity)]
 //! pub struct Claims {
+//!     #[principal(actor)]
 //!     pub sub: String,
+//!     #[principal(scopes)]
 //!     #[serde(
 //!         default,
 //!         rename = "scope",
@@ -14,11 +16,6 @@
 //!         skip_serializing_if = "Vec::is_empty"
 //!     )]
 //!     pub scopes: Vec<String>,
-//! }
-//!
-//! impl PrincipalIdentity for Claims {
-//!     fn actor_id(&self) -> Option<String> { Some(self.sub.clone()) }
-//!     fn scopes(&self) -> Option<&[String]> { Some(&self.scopes) }
 //! }
 //! # fn main() -> Result<(), serde_json::Error> {
 //!

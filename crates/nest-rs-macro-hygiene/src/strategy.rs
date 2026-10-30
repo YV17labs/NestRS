@@ -3,23 +3,15 @@
 //! `nest_rs::http`'s, and no server library is named.
 
 use nest_rs::authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy, bearer_token};
-use nest_rs::core::{AmbientValue, Ctx, async_trait};
+use nest_rs::core::{Ctx, async_trait};
 use nest_rs::http::{Request, controller, routes};
 
 /// The caller a bearer token admits, named by its subject, never by the token.
-#[derive(Clone)]
-pub struct HygieneCaller(pub String);
+#[derive(Clone, PrincipalIdentity)]
+pub struct HygieneCaller(#[principal(actor)] pub String);
 
 /// The subject the witness's one caller carries.
 const SUBJECT: &str = "hygiene-caller";
-
-impl AmbientValue for HygieneCaller {}
-
-impl PrincipalIdentity for HygieneCaller {
-    fn actor_id(&self) -> Option<String> {
-        Some(self.0.clone())
-    }
-}
 
 /// Admits a request carrying a bearer token, as the witness's one caller.
 pub struct HygieneStrategy;

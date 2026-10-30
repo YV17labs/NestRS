@@ -17,6 +17,7 @@ mod guard;
 mod jwks;
 mod module;
 mod password;
+mod principal_identity;
 mod service;
 mod strategies;
 

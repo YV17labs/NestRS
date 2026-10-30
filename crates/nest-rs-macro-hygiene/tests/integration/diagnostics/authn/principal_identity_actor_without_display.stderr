@@ -1,0 +1,49 @@
+error[E0599]: the method `identifier` exists for reference `&&nest_rs::nest_rs_authn::__private::IdentifierProbe<'_, Vec<u8>>`, but its trait bounds were not satisfied
+  --> tests/integration/diagnostics/authn/principal_identity_actor_without_display.rs:12:14
+   |
+12 |     pub sub: Vec<u8>,
+   |              ^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/crates/nest-rs-authn/src/principal.rs
+   |
+   | pub struct IdentifierProbe<'a, T: ?Sized>(pub &'a T);
+   | ----------------------------------------- doesn't satisfy `_: IdentifierAnswer`
+   |
+  ::: $RUST/alloc/src/vec/mod.rs
+   |
+   | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+   | ------------------------------------------------------------------------------------------------ doesn't satisfy `Vec<u8>: std::fmt::Display`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Vec<u8>: std::fmt::Display`
+           which is required by `nest_rs::nest_rs_authn::__private::IdentifierProbe<'_, Vec<u8>>: nest_rs::nest_rs_authn::__private::IdentifierAnswer`
+
+error[E0599]: the method `identifier` exists for reference `&&nest_rs::nest_rs_authn::__private::IdentifierProbe<'_, std::option::Option<Opaque>>`, but its trait bounds were not satisfied
+  --> tests/integration/diagnostics/authn/principal_identity_actor_without_display.rs:14:14
+   |
+ 7 | pub struct Opaque;
+   | ----------------- doesn't satisfy `Opaque: std::fmt::Display`
+...
+14 |     pub org: Option<Opaque>,
+   |              ^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $RUST/core/src/option.rs
+   |
+   | pub enum Option<T> {
+   | ------------------ doesn't satisfy `std::option::Option<Opaque>: std::fmt::Display`
+   |
+  ::: $WORKSPACE/crates/nest-rs-authn/src/principal.rs
+   |
+   | pub struct IdentifierProbe<'a, T: ?Sized>(pub &'a T);
+   | ----------------------------------------- doesn't satisfy `_: IdentifierAnswer`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Opaque: std::fmt::Display`
+           which is required by `&nest_rs::nest_rs_authn::__private::IdentifierProbe<'_, std::option::Option<Opaque>>: nest_rs::nest_rs_authn::__private::IdentifierAnswer`
+           `std::option::Option<Opaque>: std::fmt::Display`
+           which is required by `nest_rs::nest_rs_authn::__private::IdentifierProbe<'_, std::option::Option<Opaque>>: nest_rs::nest_rs_authn::__private::IdentifierAnswer`
+note: the trait `std::fmt::Display` must be implemented
+  --> $RUST/core/src/fmt/mod.rs
+   |
+   | pub trait Display: PointeeSized {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

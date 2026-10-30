@@ -1,0 +1,5 @@
+error: #[derive(PrincipalIdentity)] requires a field marked `#[principal(actor)]`: the subject the verified credential names, an access token's `sub`; `#[principal(tenant)]` and `#[principal(scopes)]` are optional
+ --> tests/integration/diagnostics/authn/principal_identity_without_an_actor.rs:8:12
+  |
+8 | pub struct Claims {
+  |            ^^^^^^

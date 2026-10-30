@@ -26,6 +26,9 @@ nest-rs-config = { workspace = true, features = ["reqwest"] }
 # `AuthnGuard` lends it.
 nest-rs-http.workspace = true
 nest-rs-guards.workspace = true
+# `#[derive(PrincipalIdentity)]`, re-exported at the root beside the trait it
+# implements.
+nest-rs-authn-macros.workspace = true
 async-trait.workspace = true
 # Token signing/verification — kept internal to this crate (apps never depend on
 # jsonwebtoken directly). Its `jwk` module reads an issuer's JWK Set.

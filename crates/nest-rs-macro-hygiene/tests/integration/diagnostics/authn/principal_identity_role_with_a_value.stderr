@@ -1,0 +1,5 @@
+error: #[principal] `actor` takes no value — the role is the field it is written on: `#[principal(actor)]`
+ --> tests/integration/diagnostics/authn/principal_identity_role_with_a_value.rs:7:17
+  |
+7 |     #[principal(actor = sub)]
+  |                 ^^^^^

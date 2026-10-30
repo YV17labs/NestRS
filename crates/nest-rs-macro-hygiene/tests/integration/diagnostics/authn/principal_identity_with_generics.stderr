@@ -1,0 +1,11 @@
+error: #[derive(PrincipalIdentity)] takes no generics: a strategy authenticates one concrete principal, and an ambient value owns what it holds — write `PrincipalIdentity` and `AmbientValue` by hand for a generic one
+ --> tests/integration/diagnostics/authn/principal_identity_with_generics.rs:8:18
+  |
+8 | pub struct Claims<T> {
+  |                  ^^^
+
+error: #[derive(PrincipalIdentity)] takes no generics: a strategy authenticates one concrete principal, and an ambient value owns what it holds — write `PrincipalIdentity` and `AmbientValue` by hand for a generic one
+  --> tests/integration/diagnostics/authn/principal_identity_with_generics.rs:15:20
+   |
+15 | pub struct Borrowed<'a> {
+   |                    ^^^^

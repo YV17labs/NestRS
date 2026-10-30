@@ -2606,6 +2606,7 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "jsonwebtoken",
+ "nest-rs-authn-macros",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-guards",
@@ -2617,6 +2618,16 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "nest-rs-authn-macros"
+version = "7.0.0"
+dependencies = [
+ "nest-rs-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]

@@ -143,3 +143,10 @@ cannot share while the field awaits it; and a request-scoped DataLoader caches
 what it read, so a row a rolled-back field wrote would be served to the next
 field from the cache. Closing it takes a loader cache scoped to the block and
 a spawner that joins its batches before the block settles.
+
+**2026-10-30 — a principal's visible line is its derive.** A claims type
+derives its `AmbientValue` with its `PrincipalIdentity`
+(`#[derive(PrincipalIdentity)]`, `principal-identity-derived.md`): what a
+strategy answers must be ambient, so declaring the type a principal is the line
+that lets it travel, and the derive writes the empty impl with the default
+carry. Every other ambient value still implements the trait by hand.

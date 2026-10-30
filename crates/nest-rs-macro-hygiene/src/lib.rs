@@ -45,6 +45,8 @@ pub mod never;
 pub mod operator;
 pub mod pipeline;
 pub mod prelude;
+#[cfg(feature = "authn")]
+pub mod principal;
 #[cfg(feature = "queue")]
 pub mod processor;
 #[cfg(all(feature = "queue", feature = "testing"))]

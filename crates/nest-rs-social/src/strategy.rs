@@ -18,22 +18,15 @@ use crate::registry::SocialRegistry;
 ///
 /// ```
 /// use nest_rs_authn::{AuthError, PrincipalIdentity};
-/// use nest_rs_core::{AmbientValue, injectable};
+/// use nest_rs_core::injectable;
 /// use nest_rs_http::async_trait;
 /// use nest_rs_social::{SocialProfile, SocialSignIn};
 ///
-/// #[derive(Clone)]
+/// #[derive(Clone, PrincipalIdentity)]
 /// struct Member {
+///     #[principal(actor)]
 ///     id: String,
 ///     resource: Option<String>,
-/// }
-///
-/// impl AmbientValue for Member {}
-///
-/// impl PrincipalIdentity for Member {
-///     fn actor_id(&self) -> Option<String> {
-///         Some(self.id.clone())
-///     }
 /// }
 ///
 /// #[injectable]

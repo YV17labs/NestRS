@@ -176,6 +176,7 @@ rust-embed = { version = "8.13", features = ["debug-embed"] }  # public
 # not cover.
 nest-rs-core = { version = "=7.0.0", path = "crates/nest-rs-core" }
 nest-rs-authn = { version = "=7.0.0", path = "crates/nest-rs-authn" }
+nest-rs-authn-macros = { version = "=7.0.0", path = "crates/nest-rs-authn-macros" }
 nest-rs-throttler = { version = "=7.0.0", path = "crates/nest-rs-throttler" }
 nest-rs-config = { version = "=7.0.0", path = "crates/nest-rs-config" }
 nest-rs-config-macros = { version = "=7.0.0", path = "crates/nest-rs-config-macros" }

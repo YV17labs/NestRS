@@ -6,6 +6,8 @@
 //! succeeds, so every downstream event inherits it, and makes the tenant
 //! ambient for the request and every job it pushes.
 
+use std::fmt;
+
 /// Stable audit identifier of a principal — the value recorded as the
 /// request span's `actor_id` field, and the subject an MCP session is bound
 /// to. Return the subject the verified credential names: an access token's
@@ -43,5 +45,66 @@ pub trait PrincipalIdentity {
     /// carries and is not an authorization decision.
     fn scopes(&self) -> Option<&[String]> {
         None
+    }
+}
+
+/// An `actor` or `tenant` field the claims derive reads, held so the compiler
+/// can be asked whether its type is optional: called on `&&IdentifierProbe`,
+/// an `Option<T>` answers through the first impl below, autoref's first
+/// step, and any other type through the second.
+pub struct IdentifierProbe<'a, T: ?Sized>(pub &'a T);
+
+/// What [`IdentifierProbe`] answers: the text the field's value prints, or
+/// `None` for an optional field holding none.
+pub trait IdentifierAnswer {
+    /// The field's value as an identifier.
+    fn identifier(&self) -> Option<String>;
+}
+
+impl<T: fmt::Display> IdentifierAnswer for &IdentifierProbe<'_, Option<T>> {
+    fn identifier(&self) -> Option<String> {
+        self.0.as_ref().map(ToString::to_string)
+    }
+}
+
+impl<T: fmt::Display + ?Sized> IdentifierAnswer for IdentifierProbe<'_, T> {
+    fn identifier(&self) -> Option<String> {
+        Some(self.0.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IdentifierAnswer as _, IdentifierProbe};
+
+    /// The expansion's call, written once so every test asks at the depth
+    /// the derive emits.
+    macro_rules! probe {
+        ($field:expr) => {
+            (&&IdentifierProbe(&$field)).identifier()
+        };
+    }
+
+    #[test]
+    fn a_present_field_answers_the_text_it_prints() {
+        assert_eq!(probe!(String::from("ada")), Some("ada".to_owned()));
+        assert_eq!(probe!("acme"), Some("acme".to_owned()));
+        assert_eq!(probe!(42_u64), Some("42".to_owned()));
+    }
+
+    #[test]
+    fn an_optional_field_answers_its_value_or_none() {
+        assert_eq!(probe!(Some(String::from("ada"))), Some("ada".to_owned()));
+        assert_eq!(probe!(Some(7_u32)), Some("7".to_owned()));
+        assert_eq!(probe!(None::<String>), None);
+    }
+
+    /// A type alias is the type it names, so an aliased `Option` answers as
+    /// one: the probe reads the type, never its spelling.
+    #[test]
+    fn an_aliased_option_is_read_as_an_option() {
+        type OrgId = Option<u32>;
+        let absent: OrgId = None;
+        assert_eq!(probe!(absent), None);
     }
 }

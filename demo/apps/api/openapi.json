@@ -411,8 +411,8 @@
       "identifier": "MIT",
       "name": "MIT"
     },
-    "title": "nestrs API",
-    "version": "0.1.0"
+    "title": "api",
+    "version": "7.0.0"
   },
   "openapi": "3.1.2",
   "paths": {

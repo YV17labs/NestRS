@@ -49,14 +49,14 @@ fn serves(declared: Option<Environment>) -> bool {
     declared.is_some_and(|environment| !environment.is_deployed())
 }
 
-/// The boot's refusal in a process that declares `declared`, or `None` where
-/// the route serves.
-fn refusal(declared: Option<Environment>) -> Option<anyhow::Error> {
+/// Whether a process that declares `declared` boots with the guard listed:
+/// where the route serves, or refused naming the variable and what it reads.
+fn boots(declared: Option<Environment>) -> anyhow::Result<()> {
     if serves(declared) {
-        return None;
+        return Ok(());
     }
     let reads = declared.map_or("none, so production", |environment| environment.as_str());
-    Some(anyhow::anyhow!(
+    Err(anyhow::anyhow!(
         "DevelopmentOnlyGuard guards a route only development and test serve, and {} declares \
          {reads}. Declare `development` or `test` for a development run, or remove the module \
          that lists the guard and its routes from this app.",
@@ -68,7 +68,7 @@ fn refusal(declared: Option<Environment>) -> Option<anyhow::Error> {
 impl DevelopmentOnlyGuard {
     #[on_module_init]
     async fn refuse_outside_development(&self) -> anyhow::Result<()> {
-        refusal(Environment::declared()).map_or(Ok(()), Err)
+        boots(Environment::declared())
     }
 }
 
@@ -106,19 +106,19 @@ mod tests {
             (None, false),
         ] {
             assert_eq!(serves(declared), serving, "{declared:?}");
-            assert_eq!(refusal(declared).is_none(), serving, "{declared:?}");
+            assert_eq!(boots(declared).is_ok(), serving, "{declared:?}");
         }
     }
 
     #[test]
     fn the_refusal_names_the_variable_and_the_environment_declared() {
-        let staging = refusal(Some(Environment::Staging))
-            .expect("refused")
+        let staging = boots(Some(Environment::Staging))
+            .expect_err("refused")
             .to_string();
         assert!(staging.contains(&Environment::var_name()), "{staging}");
         assert!(staging.contains("declares staging"), "{staging}");
 
-        let undeclared = refusal(None).expect("refused").to_string();
+        let undeclared = boots(None).expect_err("refused").to_string();
         assert!(
             undeclared.contains("declares none, so production"),
             "{undeclared}"

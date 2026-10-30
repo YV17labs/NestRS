@@ -26,7 +26,7 @@ const CODE: &str = "the-code-never-logged";
 const MCP: &str = "https://mcp.example.com/mcp";
 
 /// A provider whose exchange and profile answer in process: what the strategy
-/// hands it, it records.
+/// hands it, it checks.
 struct StubProvider {
     client: OAuthClient,
 }

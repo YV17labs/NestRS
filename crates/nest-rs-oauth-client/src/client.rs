@@ -721,14 +721,13 @@ impl OAuthClient {
             http: &self.http,
             answered: std::sync::Mutex::new(None),
         };
-        let AuthorizationResponse {
-            code,
-            pkce_verifier,
-            ..
-        } = response;
         let exchanged = Self::basic_client(&self.config)?
-            .exchange_code(AuthorizationCode::new(code.expose_secret().clone()))
-            .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier.expose_secret().clone()))
+            .exchange_code(AuthorizationCode::new(
+                response.code.expose_secret().clone(),
+            ))
+            .set_pkce_verifier(PkceCodeVerifier::new(
+                response.pkce_verifier.expose_secret().clone(),
+            ))
             .request_async(&observed)
             .await;
         let token = exchanged.map_err(|error| {
@@ -739,10 +738,12 @@ impl OAuthClient {
                 .take();
             exchange_failed(&endpoint, answered, error)
         })?;
-        let tokens = TokenSet::new(token.access_token().secret().clone());
-        Ok(match token.refresh_token() {
-            Some(refresh) => tokens.with_refresh_token(refresh.secret().clone()),
-            None => tokens,
+        Ok(TokenSet {
+            access_token: Secret::new(token.access_token().secret().clone()),
+            id_token: None,
+            refresh_token: token
+                .refresh_token()
+                .map(|t| Secret::new(t.secret().clone())),
         })
     }
 

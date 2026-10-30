@@ -122,29 +122,27 @@ struct AuthorizationParameters {
 /// The refusal a §4.1.2.1 `error` code is answered with, its detail naming
 /// the code when the registry holds it.
 fn refused_by_provider(code: &str) -> AuthError {
-    let detail = match code {
+    match code {
         "server_error" => {
-            return AuthError::unavailable(
-                "social provider could not authorize: server_error",
-                None,
-            );
+            AuthError::unavailable("social provider could not authorize: server_error", None)
         }
-        "temporarily_unavailable" => {
-            return AuthError::unavailable(
-                "social provider could not authorize: temporarily_unavailable",
-                None,
-            );
-        }
-        "access_denied" => "social provider refused the authorization: access_denied",
-        "invalid_request" => "social provider refused the authorization: invalid_request",
-        "unauthorized_client" => "social provider refused the authorization: unauthorized_client",
-        "unsupported_response_type" => {
-            "social provider refused the authorization: unsupported_response_type"
-        }
-        "invalid_scope" => "social provider refused the authorization: invalid_scope",
-        _ => "social provider refused the authorization with an unregistered error code",
-    };
-    AuthError::failed(detail)
+        "temporarily_unavailable" => AuthError::unavailable(
+            "social provider could not authorize: temporarily_unavailable",
+            None,
+        ),
+        _ => AuthError::failed(match code {
+            "access_denied" => "social provider refused the authorization: access_denied",
+            "invalid_request" => "social provider refused the authorization: invalid_request",
+            "unauthorized_client" => {
+                "social provider refused the authorization: unauthorized_client"
+            }
+            "unsupported_response_type" => {
+                "social provider refused the authorization: unsupported_response_type"
+            }
+            "invalid_scope" => "social provider refused the authorization: invalid_scope",
+            _ => "social provider refused the authorization with an unregistered error code",
+        }),
+    }
 }
 
 #[async_trait]
@@ -152,10 +150,12 @@ impl<S: SocialSignIn> Strategy for SocialStrategy<S> {
     type Principal = S::Principal;
 
     async fn authenticate(&self, req: &mut Request) -> Result<S::Principal, AuthError> {
-        let provider = req
+        let key = req
             .path_param("provider")
-            .ok_or_else(|| AuthError::failed("social callback route names no {provider}"))
-            .map(|key| self.providers.get(key))?
+            .ok_or_else(|| AuthError::failed("social callback route names no {provider}"))?;
+        let provider = self
+            .providers
+            .get(key)
             .ok_or_else(|| AuthError::failed("social callback names no registered provider"))?;
         let Ok(Query(parameters)) = Query::<AuthorizationParameters>::from_request(
             req,

@@ -107,10 +107,10 @@ impl<P> AuthenticatedClient<P> {
         if requested.is_empty() {
             return Ok(self.scopes.clone());
         }
-        let mut granted: Vec<String> = Vec::with_capacity(requested.len());
+        let mut granted = Vec::with_capacity(requested.len());
         for scope in requested {
             if !self.scopes.contains(scope) {
-                return Err(self.refused(TokenError::InvalidScope));
+                return Err(refused(TokenError::InvalidScope));
             }
             if !granted.contains(scope) {
                 granted.push(scope.clone());
@@ -133,29 +133,27 @@ impl<P> AuthenticatedClient<P> {
     /// `actor_id`, the request's.
     pub fn audience_for(&self, requested: &[String]) -> Result<&str, TokenError> {
         let wanted = match (requested, self.resources.as_slice()) {
-            ([], [only]) => Some(only),
-            ([one], _) => Some(one),
-            _ => None,
+            ([], [only]) => only,
+            ([one], _) => one,
+            _ => return Err(refused(TokenError::InvalidTarget)),
         };
-        wanted
-            .and_then(|wanted| {
-                self.resources
-                    .iter()
-                    .find(|registered| *registered == wanted)
-            })
+        self.resources
+            .iter()
+            .find(|registered| *registered == wanted)
             .map(String::as_str)
-            .ok_or_else(|| self.refused(TokenError::InvalidTarget))
+            .ok_or_else(|| refused(TokenError::InvalidTarget))
     }
+}
 
-    /// `refusal`, filed as the token endpoint's refusal of this client.
-    fn refused(&self, refusal: TokenError) -> TokenError {
-        tracing::warn!(
-            target: crate::TARGET,
-            reason = %refusal,
-            "token request refused",
-        );
-        refusal
-    }
+/// `refusal`, filed as the token endpoint's refusal of the authenticated
+/// client the request's `actor_id` names.
+fn refused(refusal: TokenError) -> TokenError {
+    tracing::warn!(
+        target: crate::TARGET,
+        reason = %refusal,
+        "token request refused",
+    );
+    refusal
 }
 
 impl<P: Send + Sync + 'static> AmbientValue for AuthenticatedClient<P> {}

@@ -238,9 +238,8 @@ impl<'a> FromRequest<'a> for AccessTokenRequest {
             scope: sent
                 .scope
                 .as_deref()
-                .map(str::split_whitespace)
-                .into_iter()
-                .flatten()
+                .unwrap_or_default()
+                .split_whitespace()
                 .map(str::to_owned)
                 .collect(),
             resource: sent

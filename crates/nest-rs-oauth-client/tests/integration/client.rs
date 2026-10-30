@@ -9,7 +9,9 @@ use std::sync::{Arc, LazyLock};
 use nest_rs_authn::{AuthError, JwtOptions, JwtService};
 use nest_rs_config::{ClientTls, Config, ConfigService, Namespaced, var_name};
 use nest_rs_core::{App, module};
-use nest_rs_oauth_client::{OAuthClient, OAuthClientConfig, OAuthClientModule, TARGET, TokenSet};
+use nest_rs_oauth_client::{
+    AuthorizationResponse, OAuthClient, OAuthClientConfig, OAuthClientModule, TARGET, TokenSet,
+};
 use nest_rs_testing::{LogCapture, TestAuthority, TestCertificate};
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -408,21 +410,10 @@ async fn an_exchange_the_provider_never_answers_fails_at_the_call_timeout() {
     let provider = Provider::serving(Behaviour::Silent).await;
     let addr = provider.addr;
     let client = client_for(addr);
-    let jwt = crate::jwt();
-    let auth = client.authorize(&jwt, "acme", None).expect("authorize");
-    let tx: Transaction = jwt
-        .verify_handshake("oauth-tx", &auth.transaction)
-        .expect("the transaction verifies");
+    let (response, tx) = matched(&client);
 
     let sent = tokio::time::Instant::now();
-    let Err(error) = within_twice(
-        OAuthClient::CALL_TIMEOUT,
-        client.exchange(
-            OAuthClient::callback(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
-                .expect("the callback matches its transaction"),
-        ),
-    )
-    .await
+    let Err(error) = within_twice(OAuthClient::CALL_TIMEOUT, client.exchange(response)).await
     else {
         panic!("a provider that never answers cannot complete the exchange");
     };
@@ -578,18 +569,8 @@ async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
         provider_answering("502 Bad Gateway", Some("Wed, 21 Oct 2015 07:28:00 GMT")).await;
     let addr = provider.addr;
     let client = client_for(addr);
-    let jwt = crate::jwt();
-    let auth = client.authorize(&jwt, "acme", None).expect("authorize");
-    let tx: Transaction = jwt
-        .verify_handshake("oauth-tx", &auth.transaction)
-        .expect("the transaction verifies");
-    let Err(error) = client
-        .exchange(
-            OAuthClient::callback(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
-                .expect("the callback matches its transaction"),
-        )
-        .await
-    else {
+    let (response, tx) = matched(&client);
+    let Err(error) = client.exchange(response).await else {
         panic!("an outage completes no exchange");
     };
     assert_eq!(
@@ -696,19 +677,23 @@ async fn module_built(config: OAuthClientConfig) -> Arc<OAuthClient> {
         .expect("the module provides the client")
 }
 
-/// A full exchange through `client`, its transaction minted by `client` itself.
-async fn exchange(client: &OAuthClient) -> Result<TokenSet, AuthError> {
+/// A flow `client` began, its callback matched to the transaction it signed,
+/// which comes back beside it.
+fn matched(client: &OAuthClient) -> (AuthorizationResponse, Transaction) {
     let jwt = crate::jwt();
     let auth = client.authorize(&jwt, "acme", None).expect("authorize");
     let tx: Transaction = jwt
         .verify_handshake("oauth-tx", &auth.transaction)
         .expect("the transaction verifies");
-    client
-        .exchange(
-            OAuthClient::callback(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
-                .expect("the callback matches its transaction"),
-        )
-        .await
+    let response = OAuthClient::callback(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+        .expect("the callback matches its transaction");
+    (response, tx)
+}
+
+/// A full exchange through `client`, its transaction minted by `client` itself.
+async fn exchange(client: &OAuthClient) -> Result<TokenSet, AuthError> {
+    let (response, _) = matched(client);
+    client.exchange(response).await
 }
 
 /// A provider whose certificate a private authority signed is trusted only
@@ -1014,20 +999,7 @@ async fn a_token_answer_past_the_cap_fails_the_exchange_the_same_way() {
     )
     .await;
     let addr = provider.addr;
-    let client = client_for(addr);
-    let jwt = crate::jwt();
-    let auth = client.authorize(&jwt, "acme", None).expect("authorize");
-    let tx: Transaction = jwt
-        .verify_handshake("oauth-tx", &auth.transaction)
-        .expect("the transaction verifies");
-
-    let Err(error) = client
-        .exchange(
-            OAuthClient::callback(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
-                .expect("the callback matches its transaction"),
-        )
-        .await
-    else {
+    let Err(error) = exchange(&client_for(addr)).await else {
         panic!("a token answer past the cap completes no exchange");
     };
     assert_oversized(

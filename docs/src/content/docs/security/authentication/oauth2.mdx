@@ -49,8 +49,10 @@ config in code by passing an `OAuthClientConfig`.
 pub struct AuthModule;
 ```
 
-A controller then exposes the two HTTP legs. The exemplar in
-`crates/features/src/oauth/` ships the full handler:
+A controller then exposes the two HTTP legs. Behind a social provider, the
+callback's strategy is the framework's ([Social login](/security/authentication/social-login/#the-request-flow),
+the exemplar in `crates/features/src/sign_in/`); over a client of your own it
+looks like this:
 
 ```rust title="crates/features/src/authn/http/controller.rs"
 #[controller(path = "/")]
@@ -67,7 +69,7 @@ impl OAuthController {
     #[get("/authorize")]
     #[public]
     async fn authorize(&self) -> Result<Response> {
-        let auth = self.client.authorize(&self.jwt, "github")?;
+        let auth = self.client.authorize(&self.jwt, "github", None)?;
         Ok(Response::builder()
             .status(StatusCode::FOUND)
             .header(header::SET_COOKIE, auth.set_cookie())
@@ -164,16 +166,19 @@ plaintext.
 transaction cookie that ties the round-trip together:
 
 ```rust title="crates/features/src/authn/http/controller.rs"
-let auth = self.client.authorize(&self.jwt, "github")?;
+let auth = self.client.authorize(&self.jwt, "github", Some("https://api.example.com"))?;
 // auth.url        — the provider redirect URL
-// auth.transaction — short-lived JWT cookie: CSRF state + PKCE verifier
+// auth.transaction — short-lived JWT cookie: CSRF state + PKCE verifier + resource
 ```
 
 The `provider` argument is the registry key of the provider this flow is for.
-It is **load-bearing**: it is minted into the transaction, and `exchange`
+It is **load-bearing**: it is minted into the transaction, and `callback`
 refuses a transaction issued for a different provider (`AuthError::Failed`,
 its detail `OAuth provider mismatch`) *before* the CSRF compare — which is what stops a
-transaction being replayed across providers.
+transaction being replayed across providers. The `resource` is the
+[RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) resource your own
+token is asked for once the flow ends, signed into the transaction so the
+callback reads back what the redirect leg asked (`None` when it named none).
 
 The transaction is a JSON Web Token signed by your app's
 `JwtService`, carrying the random CSRF `state`, the PKCE verifier,
@@ -190,9 +195,10 @@ The framework generates a fresh PKCE pair per flow
 The provider redirects to `redirect_url` with `state` and `code`
 query parameters. `OAuthClient::transaction_from` reads the transaction
 back from the request's `Cookie` fields — every one of them, since HTTP/2
-may split the cookies over several — by its exact name. `exchange` then
-verifies the cookie's signature, compares its CSRF state to the query
-string, and only then trades the code for a `TokenSet`:
+may split the cookies over several — by its exact name. `callback` then
+verifies the cookie's signature, checks it belongs to the provider, compares
+its CSRF state to the query string in constant time, and answers the matched
+`AuthorizationResponse` — the only value `exchange` trades for a `TokenSet`:
 
 ```rust title="crates/features/src/authn/http/controller.rs"
 let transaction_cookie = OAuthClient::transaction_from(
@@ -203,13 +209,15 @@ let transaction_cookie = OAuthClient::transaction_from(
 )
 .ok_or_else(|| AuthError::failed("OAuth transaction cookie missing"))?;
 
-let tokens = self.client.exchange(
+let response = OAuthClient::callback(
     &self.jwt,
     "github",              // the same provider the transaction was minted for
     transaction_cookie,
     state_from_query,
     code_from_query,
-).await?;
+)?;
+let resource = response.resource().map(str::to_owned);
+let tokens = self.client.exchange(response).await?;
 ```
 
 `TokenSet` carries the `access_token` (and a `refresh_token` /
@@ -217,7 +225,7 @@ let tokens = self.client.exchange(
 identity from the id_token rather than a userinfo call.
 
 The CSRF check runs **before** the exchange — never the other way
-around. A mismatched state returns `AuthError::Failed`, its detail
+around: no exchange takes a response nobody matched. A mismatched state returns `AuthError::Failed`, its detail
 `OAuth state mismatch`, and the flow stops.
 
 ## User info → principal
@@ -331,16 +339,29 @@ never in the problem documents the rest of the edge speaks: a conforming
 client — `OAuthClient` among them — parses §5.2's JSON and nothing else.
 `nest_rs::oauth::server` carries all three refusals. `ClientAuthenticationGuard`
 authenticates the client, `AccessTokenRequest` reads the request, and
-`TokenError` is what the handler itself refuses. The demo's endpoint binds
-the first two:
+`TokenError` is what the handler itself refuses. The clients it registers are
+`OAuthServerConfig<P>`'s, under `<PREFIX>_OAUTH__SERVER__CLIENTS` — a JSON
+array, or its `_FILE` — generic over the payload `P` each client carries,
+your own type: `OAuthServerModule::for_root::<P>(None)` registers it, and the
+boot refuses a registry that could serve no token or the wrong one (none, a
+client with no resource, a duplicate or empty id, an empty secret), naming
+each client by its id. The demo's endpoint is the whole protocol bound:
 
-```rust title="crates/features/src/oauth/strategies/client_credentials.rs (from the demo, abridged)"
-pub type ClientAuthnGuard = ClientAuthenticationGuard<ClientCredentialsStrategy>;
+```rust title="crates/features/src/sign_in/http/guard.rs (from the demo)"
+use nest_rs::authn::AuthnGuard;
+use nest_rs::oauth::server::{ClientAuthenticationGuard, ClientSecretBasicStrategy};
+use nest_rs::social::SocialStrategy;
+
+use crate::sign_in::{ClientPayload, SignInService};
+
+pub type ClientGuard = ClientAuthenticationGuard<ClientSecretBasicStrategy<ClientPayload>>;
+
+pub type SocialGuard = AuthnGuard<SocialStrategy<SignInService>>;
 ```
 
-```rust title="crates/features/src/oauth/http/controller.rs (from the demo, abridged)"
+```rust title="crates/features/src/sign_in/http/controller.rs (from the demo, abridged)"
 #[post("/token")]
-#[use_guards(ThrottlerGuard, ClientAuthnGuard)]
+#[use_guards(ThrottlerGuard, ClientGuard)]
 #[meta(Throttle::per_minute(10))]
 // …
 async fn token(
@@ -348,14 +369,15 @@ async fn token(
     client: Ctx<AuthenticatedClient>,
     request: AccessTokenRequest,
 ) -> Result<AccessTokenResponse> {
-    // …
+    Ok(self.svc.grant_client_credentials(&request, &client)?)
 }
 ```
 
 ### The client
 
-`ClientAuthenticationGuard<S>` runs your `Strategy` — the demo's reads HTTP
-Basic and checks it with `authenticate_against_registry` — the way
+`ClientAuthenticationGuard<S>` runs a `Strategy` —
+`ClientSecretBasicStrategy<P>` reads HTTP Basic and checks it, in constant
+time, against the registry — the way
 `AuthnGuard` runs one: under the same bound, a panic contained, the client
 attached as the request's principal (`Ctx<AuthenticatedClient<P>>`) and
 named as its `actor_id`. What differs is the refusal, decided by how the
@@ -389,11 +411,18 @@ compile. A request that does not parse is §5.2's `invalid_request`, its
 |-------------|---------------------|
 | no `grant_type`, or `grant_type=` — §3.2 reads an empty parameter as omitted | ``form field `grant_type`: missing`` |
 | `grant_type` twice | ``form field `grant_type`: duplicate`` |
+| a `grant_type` the endpoint does not serve — `password`, a URN, `Client_Credentials` | none: §5.2's `unsupported_grant_type` |
 | a JSON body, or any other that is no form | ``the request's content type is not `application/x-www-form-urlencoded` `` |
 | `client_secret` or `client_assertion` in the body beside the `Authorization` header | ``the client authenticates by more than one mechanism: the `Authorization` header and the body`` |
 
-`scope=` asks for no scope, and a parameter the request does not define is
-ignored (§3.2). What the transport refuses before a parameter is read keeps
+A grant the endpoint serves is read into `GrantType`, named off the IANA
+registry's values (`client_credentials` today), so a handler never compares a
+string; any other is refused before the handler runs. `scope` is §3.3's list,
+read into its tokens; the client the guard attached grants it with
+`AuthenticatedClient::scope_for`, strictly: none asked is its whole
+registration, a scope it is not registered for refuses the request whole as
+`invalid_scope`, a repeat is granted once. `scope=` asks for no scope, and a
+parameter the request does not define is ignored (§3.2). What the transport refuses before a parameter is read keeps
 the edge's answer: a body past the cap its `413`, a `GET` the router's
 `405`, and the throttler's `429`, the protection §2.3.1 asks of a token
 endpoint without fixing its shape.
@@ -405,9 +434,9 @@ in the order sent. Which one the token is minted for is the issuer's to say.
 A `RegisteredClient` lists the resources it may have tokens for, and the
 authenticated client chooses among them:
 
-```rust title="crates/features/src/oauth/service.rs (from the demo, abridged)"
-let audience = client.audience_for(&request.resource)?;
-let token = jwt.sign_for(audience, &claims)?;
+```rust title="crates/features/src/sign_in/service.rs (from the demo, abridged)"
+let scopes = client.scope_for(scope)?;
+let audience = client.audience_for(resource)?;
 ```
 
 `audience_for` answers the resource requested when the client is registered for
@@ -416,7 +445,10 @@ Anything else is `invalid_target`: a resource it is not registered for, none
 among several, and two at once — a token naming two audiences is accepted by
 each, and so a deputy of each at the other. `sign_for` writes the resource
 into the token's `aud`, so only the server serving it accepts the token
-([JWT](/security/authentication/jwt/#signing-a-token)).
+([JWT](/security/authentication/jwt/#signing-a-token)). Each refusal of
+`scope_for` and `audience_for` files one `warn`, `token request refused` on
+`nest_rs::oauth::server`, its `reason` the wire code, the client its
+`actor_id`, never what it asked for.
 
 ### The handler
 

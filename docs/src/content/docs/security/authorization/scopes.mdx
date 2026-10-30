@@ -109,30 +109,25 @@ granted no scopes, not exempted from them.
 ## Grant no more than was registered
 
 Scopes only narrow if the issuer never hands out more than a client may
-hold. The demo's token endpoint (`apps/auth`, the `client_credentials`
-grant) follows RFC 6749 §3.3: a request naming scopes gets exactly those
-when every one is registered for the client, a request naming one that is
-not gets `invalid_scope`, and a request naming none gets the client's whole
-registration:
+hold. `nest_rs::oauth::server` holds that rule for every token endpoint built
+on it: the client `ClientAuthenticationGuard` attached reads its grant with
+`AuthenticatedClient::scope_for`, which follows RFC 6749 §3.3 strictly — a
+request naming scopes gets exactly those when every one is registered for the
+client, a request naming one that is not gets `invalid_scope` whole, never a
+quietly narrowed token, a scope named twice is granted once, and a request
+naming none gets the client's whole registration. The demo's token endpoint
+(`apps/auth`, the `client_credentials` grant) is all it takes:
 
-```rust title="crates/features/src/oauth/scope.rs (from the demo, abridged)"
-pub(crate) fn granted_scopes(
-    requested: Option<&str>,
-    registered: &[String],
-) -> Result<Vec<String>, TokenError> {
-    let Some(requested) = requested.filter(|raw| !raw.trim().is_empty()) else {
-        return Ok(registered.to_vec());
-    };
-    let mut granted: Vec<String> = Vec::new();
-    for scope in requested.split_whitespace() {
-        if !registered.iter().any(|own| own == scope) {
-            return Err(TokenError::InvalidScope);
-        }
-        if !granted.iter().any(|kept| kept == scope) {
-            granted.push(scope.to_owned());
-        }
-    }
-    Ok(granted)
+```rust title="crates/features/src/sign_in/service.rs (from the demo, abridged)"
+pub(crate) fn grant_client_credentials_with_jwt(
+    jwt_svc: &JwtService,
+    scope: &[String],
+    resource: &[String],
+    client: &AuthenticatedClient,
+) -> Result<AccessTokenResponse, TokenError> {
+    let scopes = client.scope_for(scope)?;
+    let audience = client.audience_for(resource)?;
+    // …
 }
 ```
 

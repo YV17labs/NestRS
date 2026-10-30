@@ -329,7 +329,7 @@ decorator declares; the reader picks it up by type.
 Declare metadata on the route, or on its `#[controller]` for every route it
 serves:
 
-```rust title="crates/features/src/oauth/http/controller.rs (from the demo, abridged)"
+```rust title="crates/features/src/sign_in/http/controller.rs (from the demo, abridged)"
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 // …
 
@@ -342,7 +342,7 @@ async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse
     let input = body.into_inner();
     Ok(self
         .svc
-        .grant_password(&input.email, &input.password)
+        .grant_password(&input.email, &input.password, input.resource.as_deref())
         .await?)
 }
 ```

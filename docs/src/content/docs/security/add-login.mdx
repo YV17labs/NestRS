@@ -33,10 +33,15 @@ production.** The route arms only when the variable positively reads `developmen
 `test` — not "unless it reads `production`". The variable is unset in a
 fresh scaffold, in a container, and in most CI, so a default of
 "development" would leave a token minter serving wherever nobody thought to
-set it. `just dev` sets it; nothing else does. The check runs twice:
-`DevTokenAudit` refuses the boot, so a deployment that kept the file finds out
-at start-up, and the handler asks again per request, so registering the
-controller from some other module buys nothing.
+set it. `just dev` sets it; nothing else does. The check is the framework's
+`nest_rs::authn::DevelopmentOnlyGuard`, bound on the controller and listed in
+its module, and it runs twice: in any process that does not declare
+`development` or `test`, wherever it is listed, it refuses the boot, so a
+deployment that kept the file finds out at start-up, and it asks again per
+request, answering `403` — the edge files it once on `nest_rs::authn`,
+`guard denied the request`, at `warn`, `reason = "outside_development"` — so
+mounting the controller from some other module buys nothing. The generated file holds only the handler, which builds your
+`Claims`.
 
 The parts underneath the real login are in the box, so the handler stays thin:
 `hash_password` / `verify_password` / `burn_verify` (argon2, constant-time),
@@ -47,7 +52,7 @@ and `JwtService::sign` — and so is the response, RFC 6749's
 
 The handler validates the body, delegates to the service, returns the token:
 
-```rust title="crates/features/src/oauth/http/controller.rs (from the demo — you write this)"
+```rust title="crates/features/src/sign_in/http/controller.rs (from the demo — you write this)"
 #[post("/login")]
 #[public]
 #[use_guards(ThrottlerGuard)]
@@ -61,7 +66,7 @@ async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse
     let input = body.into_inner();
     Ok(self
         .svc
-        .grant_password(&input.email, &input.password)
+        .grant_password(&input.email, &input.password, input.resource.as_deref())
         .await?)
 }
 ```
@@ -193,10 +198,12 @@ that a half-wired login never serves an unprotected route.
 - **The feature's HTTP module does not import `AuthzModule`.** The guard bound
   on the controller is then unreachable through the access graph, and the boot
   names it. The route is never served unprotected.
-- **`crates/features/src/authn/http/` shipped to production.** `DevTokenAudit`
-  refuses the boot wherever `<PREFIX>_ENV` does not positively read `development`
-  or `test`, so a deployment that kept the dev-token route finds out at
-  start-up rather than from a caller.
+- **`crates/features/src/authn/http/` shipped to production.**
+  `DevelopmentOnlyGuard` refuses the boot wherever `<PREFIX>_ENV` does not
+  positively read `development` or `test` — `DevelopmentOnlyGuard guards a
+  route only development and test serve, and <PREFIX>_ENV declares production`
+  — so a deployment that kept the dev-token route finds out at start-up rather
+  than from a caller.
 
 ## Going further
 

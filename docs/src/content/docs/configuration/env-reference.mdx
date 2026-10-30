@@ -256,6 +256,17 @@ boot naming the field:
 | `TLS_CA_CERT` | PEM certificates of the authorities the provider's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate fails the boot |
 | `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a provider that requires one; `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither |
 
+## `oauth__server` — `<PREFIX>_OAUTH__SERVER__*`
+
+The clients an authorization server registers (RFC 6749 §2), read by
+`OAuthServerConfig<P>` in `nest-rs-oauth-server` once
+`OAuthServerModule::for_root::<P>` is imported, `P` the payload the app's
+own type carries:
+
+| Key | Meaning |
+|---|---|
+| `CLIENTS` | a JSON array of clients, each `client_id`, `client_secret`, `scopes` (the most it may be granted), `resources` (RFC 8707: what its tokens may be minted for) and the app's `payload`; `CLIENTS_FILE` reads it from a path instead. **At least one required**; a duplicate or empty id, an empty secret or a client registered for no resource fails the boot naming the client, never its secret |
+
 ## `oauth__resource` — `<PREFIX>_OAUTH__RESOURCE__*`
 
 `OAuthResourceModule` is what turns the app into a conformant OAuth 2.1
@@ -323,7 +334,7 @@ way their section is, so the page is named rather than left to a search:
 | `health` | [Health](/health/) |
 | `throttler` | [Rate limiting](/rate-limiting/) |
 | `ws` | [WebSockets](/websockets/) |
-| `oauth` | the demo feature library — [the Publish workspace](/publish/) |
+| `sign_in` | the demo feature library — [the Publish workspace](/publish/) |
 
 ## A variable nothing reads
 

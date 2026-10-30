@@ -179,7 +179,7 @@ issued to — and a claim they already carry is kept as written.
 audience, the one its verifier requires. An issuer minting a token another app
 will verify names that app instead, with `sign_for`:
 
-```rust title="crates/features/src/oauth/service.rs"
+```rust title="crates/features/src/sign_in/service.rs"
 let token = self.jwt.sign_for("https://api.example.com", &claims)?;
 ```
 

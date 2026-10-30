@@ -95,9 +95,15 @@ posture attribute. The other bindings differ:
 
 The same `#[use_guards(...)]` declaration on the resolver struct — the
 markers are the same, the access graph checks the same thing. It names
-`AuthzGuard` alone here because `apps/api` already declares `AuthnGuard`
-with `use_guards_global`, and a guard bound at two scopes still runs
-exactly once: scope chooses the site, never the count.
+`AuthzGuard` alone because `/graphql` authenticates at its request, before
+any field runs: `AuthzGraphqlModule`, imported below, declares
+`EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` for it, and what
+those attach is ambient for every field the request carries. `AuthnGuard`
+reads a bearer token off an HTTP request and declares no GraphQL check of its
+own (`GuardFor<HttpView>` alone), so binding it on a resolver is a compile
+error, never a second authentication. `AuthzGuard` declares both: on a
+field it builds nothing, and refuses one no ability reached — a request that
+did not authenticate.
 
 ## The GraphQL module
 

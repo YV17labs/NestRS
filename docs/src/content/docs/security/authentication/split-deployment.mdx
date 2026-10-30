@@ -136,14 +136,16 @@ to EdDSA means removing its secret.
         SocialModule,
         GithubSocialModule,
         GoogleSocialModule,
-        OAuthHttpModule,
+        SignInHttpModule,
     ],
 )]
 pub struct AuthModule;
 ```
 
-The issuer imports the OAuth flow controller (`OAuthHttpModule`) and
-the throttler. It does **not** import `UsersHttpModule` — the issuer
+The issuer imports the sign-in controller (`SignInHttpModule`) — the token
+endpoint, the password login and the social redirects — and the throttler; its
+`SignInModule` registers the authorization server's clients through
+`OAuthServerModule::for_root`. It does **not** import `UsersHttpModule` — the issuer
 mints tokens, not users.
 
 ```rust title="apps/api/src/module.rs (from the demo)"

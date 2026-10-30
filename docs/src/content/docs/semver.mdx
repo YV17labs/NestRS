@@ -76,9 +76,9 @@ one struct you write as a literal, and freezing it would freeze every module's
 settings for the whole line.
 
 `OpenTelemetryConfig` is read before the container exists, so it is no
-`#[config]`, but it grows the same way: start from `OpenTelemetryConfig::new`
-or `from_env`, and set what you change on that value, through its `with_*`
-methods or its fields.
+`#[config]`, but it grows the same way: start from
+`OpenTelemetryConfig::default()` or `from_env()`, and set what you change in a
+literal over that value.
 
 ## Match and build the rest the way it grows
 

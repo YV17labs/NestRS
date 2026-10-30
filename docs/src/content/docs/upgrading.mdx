@@ -148,8 +148,16 @@ lists what the boot, a log or the wire shows when one is missed.
    | `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION` | `<PREFIX>_GRAPHQL__INTROSPECTION`, its opposite: `DISABLE_INTROSPECTION=false` is `INTROSPECTION=true`. On by default under a declared development or test profile, so a `.env.development` setting it drops the line |
    | `<PREFIX>_OPENAPI__EMIT_DOCUMENT` | `<PREFIX>_OPENAPI__EMIT` — on by default under a declared development profile |
    | `<PREFIX>_OPENAPI__DOCUMENT_PATH` | `<PREFIX>_OPENAPI__EMIT_PATH`, relative to the app crate: `apps/api/openapi.json` becomes `openapi.json`, the default |
+   | `<PREFIX>_OPENTELEMETRY__SERVICE_NAME` | `OTEL_SERVICE_NAME`, unprefixed — or nothing: the service is named after the binary |
+   | `<PREFIX>_OPENTELEMETRY__SERVICE_VERSION`, `SERVICE_ENVIRONMENT`, `SERVICE_INSTANCE_ID` | `OTEL_RESOURCE_ATTRIBUTES=service.version=…,deployment.environment.name=…,service.instance.id=…` — the version defaults to the binary's |
+   | `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` | `OTEL_EXPORTER_OTLP_ENDPOINT` |
+   | `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO=0.1` | `OTEL_TRACES_SAMPLER=parentbased_traceidratio` and `OTEL_TRACES_SAMPLER_ARG=0.1` |
+   | `<PREFIX>_OPENTELEMETRY__METRIC_INTERVAL_SECS=5` | `OTEL_METRIC_EXPORT_INTERVAL=5000`, in milliseconds |
+   | `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT`, `TLS_CERT`, `TLS_KEY` (or their `_FILE`) | `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, each a path to the PEM file |
 
-   Under a prefix of your own, the same holds with `ACME_` for `NESTRS_`. Every
+   OpenTelemetry's are the specification's own, so they take no prefix: no
+   `ACME_` renames `OTEL_*`. Under a prefix of your own, the rest holds with
+   `ACME_` for `NESTRS_`. Every
    one of them — every namespaced variable, in fact — can now be given as a file
    instead, through its `_FILE` spelling; see the
    [ConfigService API](/configuration/#configservice-api). A name you miss is not
@@ -796,6 +804,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | rmcp's `Parameters`, named from rmcp in an operation's signature | `nest_rs::mcp::Parameters`, the framework's own type with rmcp's shape |
     | an `impl McpHost` written by hand | the same with `negotiate_initialize` |
     | `McpIdentity::declared(name, title)` | `#[mcp(name = …, title = …)]`, or `McpIdentity::new` for the app's own |
+    | `McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))` in `McpOptions::server` | `McpIdentity::default()`, then its `title`, `instructions`…: the name, version and description are the binary's; `new` stays to report others |
     | `.map_err(\|e\| problem_error(&e))?` in an operation answering `McpError` | return the `ToProblem` error itself from an operation spelled `Result<T, E>` |
     | `#[mcp] struct Host<T>`, `#[tools] impl<T> Host<T>` | a non-generic host type per instantiation |
     | `nest_rs::mcp::McpMount`, `endpoint`, `resolve_operation_guard` | the `#[mcp]` host; a request's guards are the transport's |
@@ -833,6 +842,9 @@ lists what the boot, a log or the wire shows when one is missed.
     | `entry.run`, `entry.wire`, `entry.build`, `entry.declaration_index`, `entry.provider_type_name` or `entry.module` on a registry entry | none: only the boot runs a discovered entry |
     | a `CronJobMeta { … }` registered by hand | `CronJobMeta::new(module_path!(), provider, method, trigger, run)`, then `.with_timeout(…)`, `.with_transaction(TransactionPolicy::Pool)`, `.with_replicas(Replicas::One)`, `.with_key(…)` for each field you set away from its default |
     | `Bound { count, why }` | `Bound::new(count, why)` |
+    | `let _otel = OpenTelemetry::init("api")?;` | `let _otel = OpenTelemetry::init()?;` — the service is the binary's name and version |
+    | `OpenTelemetryConfig::new("api")`, `OpenTelemetryConfig::from_env("api")?` | `OpenTelemetryConfig::default()`, `OpenTelemetryConfig::from_env()?`; `service_name: Some("api".into())` to name the service otherwise |
+    | `.with_log_filter(f)`, `.with_log_format(x)`, `.with_log_source_location(b)`, `.with_otlp_endpoint(e)`, `.with_service_version(v)`, `.with_deployment_environment(d)`, `.with_trace_sample_ratio(r)`, `.with_metric_interval(i)` on an `OpenTelemetryConfig` | the field in a literal over its base: `OpenTelemetryConfig { trace_sample_ratio: 0.1, ..OpenTelemetryConfig::from_env()? }`; a ratio outside `[0, 1]` now fails `init_with` instead of being clamped |
     | `OpenApiLicense { name, identifier: Some(id), url: None }` | `OpenApiLicense::new(name).with_identifier(id)` |
     | the queue's `Processor` trait | nothing: a consumer is a `#[processor]` host and its `#[process]` methods |
     | `envelope::seal(payload)` and `envelope::open(value)` from the queue crate, in a driver | the port seals before `enqueue` and opens in its worker; the type is `Envelope` at the crate's root — see [Writing a driver](/queue/writing-a-driver/) |
@@ -947,7 +959,7 @@ lists what the boot, a log or the wire shows when one is missed.
       `REDIRECT_URL` `https` — loopback `http` in a declared development or test
       profile alone; a provider or an `https://` collector signed by a private
       authority is trusted through `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` or
-      `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT`. A flow begun before the deploy that
+      the file `OTEL_EXPORTER_OTLP_CERTIFICATE` names. A flow begun before the deploy that
       renames the OAuth transaction cookie to `__Host-oauth_tx` fails its
       callback once; the user signs in again.
     - **KEDA** reads the stream's length now: a `redis-streams` trigger on
@@ -1146,6 +1158,18 @@ lists what the boot, a log or the wire shows when one is missed.
 </Steps>
 
 ## What fails if you get it wrong
+
+- **A deployment still setting `<PREFIX>_OPENTELEMETRY__*`** exports nothing
+  through it: `OpenTelemetry::init` names each such variable once at `warn` on
+  `nest_rs::opentelemetry` (`variable read by nothing: OpenTelemetry reads the
+  OpenTelemetry specification's OTEL_* variables`). Set the `OTEL_*` of step 3.
+  An `OTEL_EXPORTER_OTLP_PROTOCOL` other than `http/protobuf` fails the boot
+  naming it.
+- **A client comparing the OpenAPI document's `info`** reads the binary's
+  package name and version in `info.title` and `info.version`, where 6.x
+  published `nestrs API` and `0.1.0`; pin `<PREFIX>_OPENAPI__TITLE` and
+  `VERSION` to keep others. An MCP endpoint nobody named reports the binary's
+  name and version where it reported `rmcp`'s.
 
 - **A value breaking its type's rules that 6.x let through**, because no
   `Valid` wrapped its parameter, is now refused at the edge that decodes it:
@@ -1370,9 +1394,10 @@ lists what the boot, a log or the wire shows when one is missed.
 - **An HMAC secret shorter than its hash** fails `JwtService::new`: a
   `JwtOptions` choosing HS384 needs 48 bytes, HS512 64. A deployment that kept
   the old scaffold's public secret and sets none of its own refuses to boot with
-  `no JWT key configured`, naming the variable. **An unparseable
-  `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO` or `METRIC_INTERVAL_SECS`** fails
-  `OpenTelemetry::init` where 6.x kept the default.
+  `no JWT key configured`, naming the variable. **An
+  `OTEL_METRIC_EXPORT_INTERVAL` outside a second to an hour, or a pinned
+  `trace_sample_ratio` outside `[0, 1]`,** fails `OpenTelemetry::init` where 6.x
+  kept the default.
 - **An app serving a resource under `OAuthResourceModule`** refuses, `401`
   `invalid_token`, a token whose `iss` is not one of
   `<PREFIX>_OAUTH__RESOURCE__AUTHORIZATION_SERVERS`, compared exactly — trailing

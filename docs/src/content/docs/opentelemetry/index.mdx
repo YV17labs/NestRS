@@ -1,6 +1,6 @@
 ---
 title: OpenTelemetry
-description: First-class OpenTelemetry for nestrs — traces, logs and metrics, W3C propagation, OTLP export — wired by importing one module.
+description: First-class OpenTelemetry for nestrs — traces, logs and metrics, W3C propagation, OTLP export — wired by one line in main and one import, and configured by the specification's own OTEL_* variables.
 sidebar:
   order: 1
 ---
@@ -54,7 +54,7 @@ use auth::AuthModule;
 
 #[nest_rs::main]
 async fn main() -> Result<()> {
-    let _otel = OpenTelemetry::init("auth")?;
+    let _otel = OpenTelemetry::init()?;
 
     App::builder()
         .module::<AuthModule>()
@@ -76,9 +76,13 @@ async fn main() -> Result<()> {
 pub struct AuthModule;
 ```
 
-Two pieces, one rule. `OpenTelemetry::init(name)?` installs the global
-subscriber and must run **before** `App::builder()`. The returned guard flushes
-batch exporters on Drop, so it must live until `main` returns. That flush is
+Two pieces, one rule. `OpenTelemetry::init()?` installs the global
+subscriber and must run **before** `App::builder()`. It takes no name: the
+service is the binary `#[nest_rs::main]` started, named and versioned from its
+package's manifest. The returned guard flushes batch exporters on Drop, so it
+must live until `main` returns — bind it to `_otel`, never `_`, which drops it
+on the spot; the guard is `#[must_use]`, and `clippy::let_underscore_must_use`
+refuses the discard. That flush is
 bounded: the three providers export at once, and what is still exporting after
 three seconds (`FLUSH_TIMEOUT`) is abandoned with a line on stderr naming it,
 so a collector that stopped answering delays the exit by three seconds and
@@ -89,45 +93,75 @@ second, which sums to 29.5 seconds under a Kubernetes pod's 30-second grace.
 per-request layer, since what it adds to a span reaches every edge through
 the framework's span constructor.
 
+`init` stays a line of `main` rather than a `#[nest_rs::main]` key: a pinned
+config goes through `init_with`, and one way to start telemetry beats two.
+
 ## Configure the exporter
 
-Every option of `OpenTelemetryConfig` is settable via env or via the pinned
-struct — the [framework-wide config dual path](/configuration/).
-`OpenTelemetry::init(name)` reads env; `OpenTelemetry::init_with(cfg)` takes a
-pinned `OpenTelemetryConfig`.
+The exporter reads the variables the
+[OpenTelemetry specification](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/)
+names — the ones the OpenTelemetry Operator injects and every other SDK reads —
+with no prefix: `OTEL_*` belongs to the ecosystem, as `RUST_LOG` does. They
+override what `OpenTelemetryConfig` pins, field by field;
+`OpenTelemetry::init()` starts from the defaults, and
+`OpenTelemetry::init_with(cfg)` from a pinned config.
 
 | Env var | Field | Default |
 |---|---|---|
-| `<PREFIX>_OPENTELEMETRY__SERVICE_NAME` | `service_name` | argument to `init` |
-| `<PREFIX>_OPENTELEMETRY__SERVICE_VERSION` | `service_version` | `None` |
-| `<PREFIX>_OPENTELEMETRY__SERVICE_ENVIRONMENT` | `deployment_environment` | `None` |
-| `<PREFIX>_OPENTELEMETRY__SERVICE_INSTANCE_ID` | `service_instance_id` | fresh UUIDv7 per process |
+| `OTEL_SERVICE_NAME`, then `service.name` in `OTEL_RESOURCE_ATTRIBUTES` | `service_name` | the binary's package name |
+| `service.version` in `OTEL_RESOURCE_ATTRIBUTES` | `service_version` | the binary's package version |
+| `deployment.environment.name` in `OTEL_RESOURCE_ATTRIBUTES` | `deployment_environment` | none |
+| `service.instance.id` in `OTEL_RESOURCE_ATTRIBUTES` | `service_instance_id` | fresh UUIDv7 per process |
 | `<PREFIX>_LOG` | `log_filter` | `info` (the framework-wide logging family) |
 | `<PREFIX>_LOG_FORMAT` | `log_format` | `text` under a declared development or test profile, `json` otherwise |
 | `<PREFIX>_LOG_SOURCE_LOCATION` | `log_source_location` | `false` |
-| `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` | `otlp_endpoint` | `None` (console-only) |
-| `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO` | `trace_sample_ratio` | `1.0` |
-| `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT`, `TLS_CERT`, `TLS_KEY` | `tls` | the system's authorities, no client certificate |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, then per signal `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (`_METRICS_`, `_LOGS_`) | `otlp_endpoint` | none: console-only |
+| `OTEL_TRACES_SAMPLER`, with `OTEL_TRACES_SAMPLER_ARG` | `trace_sample_ratio` | `1.0`, parent-based |
+| `OTEL_METRIC_EXPORT_INTERVAL` (milliseconds) | `metric_interval` | 60 s |
+| `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` (and per signal) | `tls` | the system's authorities, no client certificate |
+
+Any other variable the SDK reads — `OTEL_EXPORTER_OTLP_HEADERS`, the batch
+processors' `OTEL_BSP_*` and `OTEL_BLRP_*` — it reads as it always does.
+`OTEL_EXPORTER_OTLP_PROTOCOL` (or a signal's own) may only say
+`http/protobuf`, the one protocol this exporter speaks: any other fails the
+boot naming it, rather than send protobuf to a port that expects gRPC.
 
 The three `<PREFIX>_LOG*` variables are read by the kernel's one parser, as
 the baseline logger reads them: a value that does not parse fails `init` with
 `OpenTelemetryError::LogSettings`, naming the variable and never its value, and
-a filter pinned with `with_log_filter` is checked the same way at `init_with`,
-naming `OpenTelemetryConfig::log_filter`.
+a `log_filter` pinned in code is checked the same way at `init_with`, naming
+`OpenTelemetryConfig::log_filter`.
 
-The OTLP exporter wires up **only** when `otlp_endpoint` is set. Without it,
-the subscriber stays console-only; the W3C propagator is still installed so
-an inbound `traceparent` is continued behind a trusted proxy and the response
-carries `traceresponse`.
+Each signal exports **only** when an endpoint is set for it.
+`OTEL_EXPORTER_OTLP_ENDPOINT` is the base every signal appends its path to
+(`/v1/traces`, `/v1/metrics`, `/v1/logs`); a signal's own variable is used as
+given. Without any, the subscriber stays console-only; the W3C propagator is
+still installed so an inbound `traceparent` is continued behind a trusted proxy
+and the response carries `traceresponse`.
 
 ```bash frame="terminal"
-NESTRS_OPENTELEMETRY__OTLP_ENDPOINT=http://otel-collector:4318 \
-NESTRS_OPENTELEMETRY__SERVICE_VERSION=2026.06.0 \
-NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT=production \
-NESTRS_OPENTELEMETRY__SAMPLE_RATIO=0.1 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \
+OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=production \
+OTEL_TRACES_SAMPLER=parentbased_traceidratio \
+OTEL_TRACES_SAMPLER_ARG=0.1 \
 NESTRS_LOG=info \
   nestrs run start api
 ```
+
+A pinned config holds the same settings in code, and the variables still
+override it:
+
+```rust title="main.rs"
+let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
+    trace_sample_ratio: 0.1,
+    ..OpenTelemetryConfig::from_env()?
+})?;
+```
+
+`OpenTelemetryConfig` is set one way — its fields, over
+`OpenTelemetryConfig::default()` or `from_env()` — and a pinned ratio outside
+`[0, 1]` or a metric period outside a second to an hour fails `init_with`
+naming the field.
 
 The exporter uses HTTP/protobuf via `reqwest` (no `tonic`, no `openssl`) — the
 batch processors export from a dedicated non-Tokio thread so the blocking
@@ -139,25 +173,28 @@ The endpoint's scheme decides, as the OTLP specification lets it: an
 `http://` endpoint exports in plaintext — a collector beside the app, as a
 sidecar or a node agent, is the common case — and an `https://` one over
 TLS alone. Any other scheme, and a value that does not parse as a URL, fail
-the boot naming `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT`, never its value,
-which may carry a collector's credential.
+the boot naming the variable that set it, never its value, which may carry a
+collector's credential.
 
 An `https://` collector's certificate is verified against the system's
-authorities, or the ones `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT` names, which
-replace them; a collector requiring a client certificate gets `TLS_CERT`
-and `TLS_KEY`. Each takes its `_FILE` spelling, and none is accepted beside
-an `http://` endpoint, where it would go unused. All three are read at the
+authorities, or the ones in the file `OTEL_EXPORTER_OTLP_CERTIFICATE` names,
+which replace them; a collector requiring a client certificate gets the files
+`OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and `OTEL_EXPORTER_OTLP_CLIENT_KEY`
+name — both or neither. Each has its per-signal spelling
+(`OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`, …), read first, and none is accepted
+beside an `http://` endpoint, where it would go unused. All are read at the
 start, so a renewed file takes effect at the next one: rotate it with a rolling
 restart. The clients are this crate's own: they follow no redirect, give up
 reaching the collector after 3 s, and cut each export where the SDK stops
 waiting for it — `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` (or `_METRICS_`, `_LOGS_`), then
 `OTEL_EXPORTER_OTLP_TIMEOUT`, in milliseconds, then 10 s. A value that is
 not a whole number of milliseconds is ignored, as the SDK ignores it, and
-said once at `warn` with the variable's name.
+said once at `warn` with the variable's name; so is an
+`OTEL_METRIC_EXPORT_INTERVAL` that is not one.
 
 ```bash frame="terminal"
-NESTRS_OPENTELEMETRY__OTLP_ENDPOINT=https://otel-collector.internal:4318 \
-NESTRS_OPENTELEMETRY__TLS_CA_CERT_FILE=/run/secrets/collector-ca.pem \
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otel-collector.internal:4318 \
+OTEL_EXPORTER_OTLP_CERTIFICATE=/run/secrets/collector-ca.pem \
   nestrs run start api
 ```
 
@@ -189,9 +226,8 @@ nest-rs = { workspace = true, features = ["opentelemetry"] }
 ```text frame="terminal"
 Error: OpenTelemetryModule was imported without calling `OpenTelemetry::init`
 first — the global tracer and meter are no-ops, so traces and metrics would be
-silently dropped. Add `let _otel =
-nest_rs::opentelemetry::OpenTelemetry::init("<service>")?;` at the top of
-`main`, before building the app.
+silently dropped. Add `let _otel = nest_rs::opentelemetry::OpenTelemetry::init()?;`
+at the top of `main`, before building the app.
 ```
 
 Forgetting `OpenTelemetry::init` is the failure mode that hurts in production:

@@ -98,8 +98,8 @@ attribute combination becomes a separate time series.
 
 Metrics batch on a
 [`PeriodicReader`](https://docs.rs/opentelemetry_sdk) and export through the
-same OTLP endpoint as the traces (set
-`<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT`). Without an endpoint, instrument
+same OTLP endpoint as the traces (set `OTEL_EXPORTER_OTLP_ENDPOINT`, or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` for the metrics alone). Without an endpoint, instrument
 construction still works — `counter()` and friends return real handles, so
 wiring compiles and runs — but the meter comes from a `NoopMeterProvider` and
 every reading is **dropped**. The SDK says so once, at `Meter was obtained from
@@ -114,32 +114,38 @@ spans and log records with **zero** metrics, for a full minute. Nothing is wrong
 shorten the interval for a local run:
 
 ```bash frame="terminal"
-NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS=5 nestrs run dev api
+OTEL_METRIC_EXPORT_INTERVAL=5000 nestrs run dev api
 ```
 
 or pin it in code, as with any other field:
 
-```rust title="apps/api/src/module.rs"
-OpenTelemetryConfig::from_env("api")?.with_metric_interval(Duration::from_secs(5))
+```rust title="apps/api/src/main.rs"
+let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
+    metric_interval: Duration::from_secs(5),
+    ..OpenTelemetryConfig::from_env()?
+})?;
 ```
 
-A value of `0` is the sentinel for "keep the 60 s default" — a `PeriodicReader`
-on a zero period is a tight export loop, which is worse than a slow one. A
-**non-numeric** value is a typo, not a sentinel: `OpenTelemetry::init` fails
-with `OpenTelemetryError::Config`, naming the variable, as every framework
-variable does when it is set and cannot be read.
+The variable is the specification's, in milliseconds, and wins over the pin.
+Either is held to a second to an hour — a `PeriodicReader` on a zero period
+is a tight export loop, and an hourly one reaches the collector after the
+dashboards that read it — and `OpenTelemetry::init` fails with
+`OpenTelemetryError::Config` outside that range, naming the variable or the
+field. A value that is not a whole number of milliseconds is ignored, as the
+SDK ignores it, and said once at `warn` naming the variable.
 
 ## Resource attributes
 
 Every exported metric carries the service-level resource attributes built from
-`OpenTelemetryConfig`:
+`OpenTelemetryConfig`, under what `OTEL_SERVICE_NAME` and
+`OTEL_RESOURCE_ATTRIBUTES` set:
 
-- `service.name` — argument to `OpenTelemetry::init`
-- `service.version` — `<PREFIX>_OPENTELEMETRY__SERVICE_VERSION`
-- `deployment.environment.name` — `<PREFIX>_OPENTELEMETRY__SERVICE_ENVIRONMENT`
-- `service.instance.id` — `<PREFIX>_OPENTELEMETRY__SERVICE_INSTANCE_ID` (a
-  fresh UUIDv7 per process by default, so restarts get distinct identities in
-  the backend)
+- `service.name` — the binary's package name, which `#[nest_rs::main]` reads
+  off its manifest
+- `service.version` — the binary's package version
+- `deployment.environment.name` — none unless set
+- `service.instance.id` — a fresh UUIDv7 per process by default, so restarts
+  get distinct identities in the backend
 
 These come from the
 [`opentelemetry-semantic-conventions`](https://crates.io/crates/opentelemetry-semantic-conventions)

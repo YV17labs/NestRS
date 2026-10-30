@@ -31,7 +31,7 @@ McpModule::for_root(McpOptions {
         allowed_hosts: vec!["mcp.example.com".into()],
         ..Default::default()
     }),
-    server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
+    server: Some(McpIdentity::default().title("Acme assistant")),
     ..Default::default()
 }),
 ```

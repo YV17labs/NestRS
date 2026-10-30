@@ -200,7 +200,7 @@ McpModule::for_root(McpOptions {
         allowed_hosts: vec!["mcp.example.com".into()],
         ..Default::default()
     }),
-    server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
+    server: Some(McpIdentity::default().title("Acme assistant")),
     ..Default::default()
 }),
 ```
@@ -453,9 +453,10 @@ Three things are worth knowing:
 - **It is a rename, not an alias.** Once set, `<PREFIX>_HTTP__PORT` is just
   another variable in the environment — inert. That is deliberate: a stale
   value silently winning is the failure mode a fallback would create.
-- **`RUST_LOG` keeps its name.** It belongs to the ecosystem, not to us — and
-  so, for the same reason, does `NESTRS_ENV_PREFIX` itself: it is the one name
-  no prefix can rename.
+- **`RUST_LOG` and `OTEL_*` keep their names.** They belong to the ecosystem,
+  not to us — the OpenTelemetry specification names `OTEL_*`, and every SDK and
+  operator reads it — and so, for the same reason, does `NESTRS_ENV_PREFIX`
+  itself: it is the one name no prefix can rename.
 
 The value is checked on the first read (uppercase ASCII, digits and
 underscores, no trailing `_` — the framework supplies the separator), and a

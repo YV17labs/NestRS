@@ -23,7 +23,7 @@ own reads its keys and words its refusals as these do, on the kit
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[module]` | struct | Composes a binary: lists `providers` it owns and `imports` it depends on | [Modules](/fundamentals/modules/) |
-| `#[nest_rs::main]` | `main` function | Installs the panic hook and publishes the `.env` cascade before `main`, builds the runtime, and ends the process within the shutdown budget; written in full, never a bare `#[main]`, which `use tokio::main;` would make tokio's | [Shutdown](/fundamentals/shutdown/) |
+| `#[nest_rs::main]` | `main` function | Installs the panic hook, publishes the `.env` cascade and captures the binary's name, version and description (`AppIdentity`, which OpenAPI's `info`, MCP's `serverInfo` and OpenTelemetry's `service.name` default to) before `main`, builds the runtime, and ends the process within the shutdown budget; written in full, never a bare `#[main]`, which `use tokio::main;` would make tokio's | [Shutdown](/fundamentals/shutdown/) |
 | `#[injectable]` | struct | Marks a provider built from the container, with optional `scope = request \| transient` | [Providers](/fundamentals/providers/) |
 | `#[inject]` | field | Resolves the field from the container by its type, at construction; takes no argument | [Providers](/fundamentals/providers/) |
 | `#[instance]` | unit struct | Declares a marker naming one instance of a resource the app opens more than once; its name is the ident in snake case | [Providers](/fundamentals/providers/#instances--one-resource-opened-twice) |

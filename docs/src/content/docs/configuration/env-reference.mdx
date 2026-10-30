@@ -200,17 +200,25 @@ Read once `StaticFilesModule` is imported, and pinned through its `for_root`
 | `SPA_FALLBACK` | answer a browser's navigation that no file matches with the root's `index.html` — default `false`. A request that does not ask for a page, or whose last segment names a file, still gets the `404` problem document |
 | `MAX_AGE_SECS` | `Cache-Control: public, max-age` on every file but an HTML document, from `1` to a year (`31536000`); `0` or unset revalidates every file (`no-cache`), the default |
 
-## `opentelemetry` — `<PREFIX>_OPENTELEMETRY__*`
+## `opentelemetry` — the specification's `OTEL_*`
 
-| Key | Meaning |
+OpenTelemetry reads the variables its
+[specification](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/)
+names, unprefixed like `RUST_LOG`, over what `OpenTelemetryConfig` pins
+([OpenTelemetry](/opentelemetry/#configure-the-exporter)).
+
+| Variable | Meaning |
 |---|---|
-| `SERVICE_NAME` | service name; overrides the name passed to `OpenTelemetry::init` |
-| `OTLP_ENDPOINT` | collector endpoint (unset ⇒ no export): `http://` exports in plaintext, `https://` over TLS alone; another scheme, or a value that does not parse as a URL, fails the boot |
-| `SAMPLE_RATIO` | trace sampling ratio, `0.0`–`1.0` (default `1.0`) |
-| `METRIC_INTERVAL_SECS` | metric export period, from `1` to `3600` (default `60`; `0` is refused). Traces and logs export immediately — metrics wait for this flush |
-| `SERVICE_VERSION` · `SERVICE_ENVIRONMENT` · `SERVICE_INSTANCE_ID` | resource attributes |
-| `TLS_CA_CERT` | PEM certificates of the authorities an `https://` collector's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate, or beside an `http://` endpoint, fails the boot |
-| `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a collector that requires one; `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither; beside an `http://` endpoint, they fail the boot |
+| `OTEL_SERVICE_NAME` | service name; default the binary's package name |
+| `OTEL_RESOURCE_ATTRIBUTES` | resource attributes, `key=value` comma-separated: `service.version` (default the binary's package version), `deployment.environment.name`, `service.instance.id` (default a fresh UUIDv7) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | collector base endpoint, each signal appending `/v1/traces`, `/v1/metrics`, `/v1/logs` (unset ⇒ no export): `http://` exports in plaintext, `https://` over TLS alone; another scheme, or a value that does not parse as a URL, fails the boot |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` · `_METRICS_ENDPOINT` · `_LOGS_ENDPOINT` | one signal's endpoint, used as given, over the base |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` (and per signal) | `http/protobuf`, the one protocol exported; any other fails the boot |
+| `OTEL_TRACES_SAMPLER` · `OTEL_TRACES_SAMPLER_ARG` | the sampler and its argument, read by the SDK; default parent-based, every trace |
+| `OTEL_METRIC_EXPORT_INTERVAL` | metric export period in milliseconds, from `1000` to `3600000` (default `60000`); outside fails the boot, not a number is ignored and said |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` (and per signal) | one export's bound in milliseconds (default `10000`); not a number is ignored and said |
+| `OTEL_EXPORTER_OTLP_CERTIFICATE` (and per signal) | path to the PEM authorities an `https://` collector's certificate must chain to, replacing the system's. Holding no certificate, or beside an `http://` endpoint, fails the boot |
+| `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` / `OTEL_EXPORTER_OTLP_CLIENT_KEY` (and per signal) | paths to the PEM client certificate chain, leaf first, and its private key, presented to a collector that requires one. Both or neither; beside an `http://` endpoint, they fail the boot |
 
 The console layer reads the [`<PREFIX>_LOG*` family](#logging--prefix_log)
 above — there are no OTel-specific log variables.

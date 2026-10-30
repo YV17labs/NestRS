@@ -78,21 +78,28 @@ preserved across the hop.
 ## Sampling
 
 `ParentBased(TraceIdRatioBased(ratio))` — children inherit the parent's
-sampling decision, so a request either samples end-to-end or not at all.
+sampling decision, so a request either samples end-to-end or not at all. The
+deployment picks the sampler with the specification's own variables, which
+the SDK reads:
 
 ```bash
-NESTRS_OPENTELEMETRY__SAMPLE_RATIO=0.1
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.1
 ```
 
-Or pinned:
+Or pinned, in `main`, under those variables:
 
-```rust title="apps/api/src/module.rs"
-OpenTelemetryConfig::new("api").with_trace_sample_ratio(0.1)
+```rust title="apps/api/src/main.rs"
+let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
+    trace_sample_ratio: 0.1,
+    ..OpenTelemetryConfig::from_env()?
+})?;
 ```
 
 The sampler comes from
 [`opentelemetry_sdk::trace::Sampler`](https://docs.rs/opentelemetry_sdk).
-Ratios are clamped to `[0.0, 1.0]`.
+A pinned ratio outside `[0.0, 1.0]` fails `init_with`, naming
+`OpenTelemetryConfig::trace_sample_ratio`.
 
 ## HTTP interceptor
 

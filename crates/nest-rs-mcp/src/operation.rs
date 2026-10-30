@@ -186,7 +186,7 @@ impl GuardStage for OperationGuardStage {
     }
 }
 
-/// The line a guard's denial of a tool call or a prompt fetch is filed as.
+/// The line a guard's denial of a declared operation is filed as.
 const DENIED: &str = "guard denied the operation";
 
 /// Run one declared operation — a tool call, a prompt fetch, a resource read

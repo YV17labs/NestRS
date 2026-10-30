@@ -14,22 +14,25 @@ tests boot it the same way.
 A module that owns a configuration offers one `for_root`, taking the value an
 app pins, or `None` to read the environment alone:
 
-```rust title="from nest-rs-config's ConfigModule::setup example"
-#[module(imports = [ConfigModule::for_feature::<WsConfig>()])]
-pub struct WsModule;
-pub type WsSetup = ConfigSetup<WsModule, WsConfig>;
+```rust title="src/module.rs"
+#[module(providers = [AcmeClient])]
+pub struct AcmeModule;
+pub type AcmeSetup = ConfigSetup<AcmeModule, AcmeConfig>;
 
-impl WsModule {
-    pub fn for_root(config: impl Into<Option<WsConfig>>) -> WsSetup {
+impl AcmeModule {
+    pub fn for_root(config: impl Into<Option<AcmeConfig>>) -> AcmeSetup {
         ConfigModule::setup(config.into())
     }
 }
 ```
 
-`for_feature` registers the config, so a bare `WsModule` import still reads
-its variables; `for_root` pins the base those variables overlay, field by
-field. A second pin of the same config fails the boot, naming both imports:
-one config has one seam.
+`AcmeClient` injects `Arc<AcmeConfig>`, and that injection loads the config,
+so a bare `AcmeModule` import still reads its variables; `for_root` pins the
+base those variables overlay, field by field. A second pin of the same config
+fails the boot, naming both imports: one config has one seam. A module that
+reads its config only in a `register` of its own, injecting it nowhere, queues
+it from its `collect` with `ConfigModule::provide_feature(None::<AcmeConfig>,
+builder)`.
 
 ## The manifest and the names
 
@@ -45,8 +48,9 @@ and its health indicators ([Naming a package](/semver/#naming-a-package)).
 
 ## Its configuration
 
-A `#[config]` struct names its namespace and reads each field over the base it
-is handed — `Default`, or the value an app pinned:
+A `#[config]` struct names its namespace, and each field reads the variable
+its name spells over the base it is handed — `Default`, or the value an app
+pinned:
 
 ```rust title="from nestrs-social-probe, a package-shaped fixture, abridged"
 #[config(namespace = "social_probe")]
@@ -58,19 +62,6 @@ pub struct ProbeSocialConfig {
     /// The OAuth client secret.
     #[validate(length(min = 1))]
     pub client_secret: Secret<String>,
-}
-// …
-
-impl Config for ProbeSocialConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
-        Ok(Self {
-            client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
-            client_secret: env
-                .get("CLIENT_SECRET")?
-                .map(Secret::new)
-                .unwrap_or(base.client_secret),
-        })
-    }
 }
 ```
 

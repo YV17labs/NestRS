@@ -8,7 +8,7 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 The framework loads a small cascade of `.env` files once at boot, before
-any `Config::from_env` runs. The cascade follows dotenv-flow conventions:
+any config is read. The cascade follows dotenv-flow conventions:
 most specific wins, real process env wins over every file, and tests stay
 hermetic.
 
@@ -196,9 +196,9 @@ follows the same scheme:
   uppercased.
 - `__` — a double underscore separator (single underscores are reserved
   for word boundaries inside keys).
-- `<KEY>` — the field name, uppercased. The macro doesn't enforce a
-  specific casing — `from_env` calls `env.get("…")` with whatever string
-  you write.
+- `<KEY>` — the field name, uppercased: `#[config]` reads each field under
+  its own name, and a duration's key adds its unit (`_SECS`, `_MS`) through
+  its bounds.
 
 Examples, under the default prefix:
 
@@ -209,7 +209,7 @@ NESTRS_OAUTH__SERVER__CLIENTS
 NESTRS_HTTP__PORT
 ```
 
-A feature reads only **its own** namespace from `from_env`. To borrow a
+A feature reads only **its own** namespace. To borrow a
 sibling variable (rare — see *own > borrowed > code default* on the
 [index](/configuration/)), call `env_var(&var_name("<other>", "<KEY>"))`
 directly: `var_name` spells it under the deployment's prefix.

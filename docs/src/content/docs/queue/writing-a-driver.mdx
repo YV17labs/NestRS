@@ -241,26 +241,23 @@ so each failure is said once:
 
 A client your driver opens verifies its server, with nothing that turns
 verification off. Read what it trusts and presents as
-`nest_rs::config::ClientTls`, a field of your config read under your own
-namespace — `<PREFIX>_<STORAGE>__TLS_CA_CERT`, `__TLS_CERT` and `__TLS_KEY`,
-each with its `_FILE` spelling:
+`nest_rs::config::ClientTls`, a field of your config named `tls` and read
+under your own namespace — `<PREFIX>_<STORAGE>__TLS_CA_CERT`, `__TLS_CERT` and
+`__TLS_KEY`, each with its `_FILE` spelling; `#[config]` reads it by its type:
 
 ```rust title="from nest-rs-redis's config, abridged"
 #[config(namespace = "redis")]
 #[derive(Clone, Debug)]
 pub struct RedisConfig {
     // …
+    #[config(with = url)]
+    pub url: Secret<String>,
+    // …
+    #[config(bounds = CONNECT_TIMEOUT)]
+    pub connect_timeout: Duration,
+    // …
     pub tls: ClientTls,
 }
-// …
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let connect_timeout = CONNECT_TIMEOUT.read(env, base.connect_timeout)?.value;
-        Ok(Self {
-            url: resolve_url(env, base.url)?,
-            connect_timeout,
-            tls: ClientTls::from_env(env, base.tls)?,
-        })
-    }
 ```
 
 Before dialling, `ClientTls::check` refuses material no handshake could use,

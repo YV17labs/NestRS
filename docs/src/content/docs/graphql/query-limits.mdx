@@ -84,9 +84,10 @@ automatically — see below.
 Typical production value: **1000 to 5000**, tuned from observed
 legitimate queries. The check is **strict `>`** — `max_complexity =
 1000` admits a query scoring exactly 1000; pin 999 to reject it.
-Setting `max_depth = Some(0)` or `max_complexity = Some(0)` **fails at
+Pinning `max_depth = Some(0)` or `max_complexity = Some(0)` **fails at
 boot** with a config error: `0` would block every query, so `None` is
-the way to disable a check.
+the way to disable a check in code, and `0` its spelling from the
+environment (`<PREFIX>_GRAPHQL__MAX_DEPTH=0`).
 
 <Aside type="caution">
 **Introspection has a cost.** Apollo's full `IntrospectionQuery`

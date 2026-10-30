@@ -144,7 +144,7 @@ A window must count something: `Throttle::new` refuses one under a
 millisecond — the Redis store's resolution — which in a `const` is a compile
 error and in `#[meta]` fails the boot at the route. A zero window reset every
 bucket on every hit, so the limiter let everything through at any limit.
-`<PREFIX>_THROTTLER__WINDOW_SECS=0`, or a pinned `window_secs: Some(0)`, fails the
+`<PREFIX>_THROTTLER__WINDOW_SECS=0`, or a pinned `window: Duration::ZERO`, fails the
 boot naming the variable for the same reason.
 
 ## What "per client" means

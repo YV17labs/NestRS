@@ -112,7 +112,7 @@ config survives adopting or dropping the observability stack.
 | `CORS_HEADERS` | comma-separated allowed request headers |
 | `CORS_EXPOSED` | comma-separated response headers exposed to the browser, beside `Link`, `Location` and `Retry-After`, always exposed |
 | `CORS_CREDENTIALS` | allow credentialed requests — default `false` |
-| `CORS_MAX_AGE` | preflight cache lifetime in seconds |
+| `CORS_MAX_AGE_SECS` | preflight cache lifetime — whole seconds from `1` to `86400` (a day, every browser's cap or more), or `0` ⇒ none; unset ⇒ no `Access-Control-Max-Age` |
 | `COMPRESSION` | negotiate response compression from `Accept-Encoding` — default `false` (leave it to the proxy unless the app terminates responses) |
 | `SSE_MAX_CONNECTION_SECS` | how long an [`#[sse]` stream](/http/streaming/) may stay open before the server ends it and the client reconnects — default `14400` (4 h); from `1` to `86400` (a day), or `0` ⇒ unlimited. A security control: the stream authenticates once, at the request |
 | `SSE_KEEP_ALIVE_SECS` | keep-alive comment interval on an `#[sse]` stream, so an idle feed is not dropped by an intermediary — default `15`; from `1` to `3600`, or `0` ⇒ none sent |
@@ -127,8 +127,8 @@ on Postgres — the one engine the framework builds sea-orm with.
 | Key | Meaning |
 |---|---|
 | `URL` | database connection string. TLS is verified or off: with no `sslmode` the connection asks for `verify-full`, the server's certificate checked against the system's authorities — or the file `sslrootcert` names; libpq's `sslrootcert=system` is the system's too — and its name against the host; `sslmode=disable` is plaintext, written where it is meant. `allow`, `prefer`, `require` and `verify-ca`, which encrypt without that check or may, fail the boot naming this variable. Every connection the framework opens holds to it — the pool, `connect_from_env`, `EphemeralDatabase` — through `SeaOrmConfig::connect_options`. The URL is read at the start; the files its `sslrootcert`, `sslcert` and `sslkey` name are read at each connection the pool opens, so a renewed one reaches every connection opened after it |
-| `MAX_CONNECTIONS` | pool maximum connections (unset ⇒ SeaORM default) |
-| `MIN_CONNECTIONS` | pool minimum connections (unset ⇒ SeaORM default) |
+| `MAX_CONNECTIONS` | pool maximum connections — default `10`, sqlx's |
+| `MIN_CONNECTIONS` | pool minimum idle connections — default `0`, sqlx's |
 | `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds, and the boot's budget to open the pool — what Postgres refuses on every attempt (credentials, the database, TLS) fails the boot at once, the rest (a server not listening yet, starting or full, a name that does not resolve yet) is retried within it, each attempt a `warn` on `nest_rs::orm` — from `1` to `3600` (unset ⇒ `10`, below the authentication guard's 18-second net and the HTTP request timeout, so a pool that runs dry answers with its own error; `Repo` reaches the pool from any strategy, so an app running the authentication guard keeps it under that net: the boot refuses one at or past it) — `0` fails the boot rather than time out every acquire, and past an hour the request that asked for a connection has long been abandoned |
 | `STATEMENT_TIMEOUT_SECS` | how long one statement runs before Postgres cancels it (`statement_timeout`), in seconds, from `1` to `3600` (unset ⇒ `15`, below the authentication guard's 18-second net and the HTTP request timeout) — a unit of work's `BEGIN` / `COMMIT` / `ROLLBACK` included; a statement it cancels answers `503` / `UNAVAILABLE`, and a commit that does not answer within it plus a second is in doubt; the boot refuses one at or past a net reaching the pool, as it refuses `CONNECT_TIMEOUT_SECS`. `migrate` and `seed`, opened by `connect_from_env`, run without it |
 | `SQLX_LOGGING` | log SQL statements |
@@ -374,7 +374,7 @@ namespaces are held apart from each other by the conformance suite. A key holdin
 read here. The framework's process-level names, `<PREFIX>_LOG*`,
 `<PREFIX>_ENV` and `NESTRS_ENV_PREFIX`, are never reported.
 
-The check runs where each config is read, against the keys its `from_env`
+The check runs where each config is read, against the keys its overlay
 actually asked for — the namespace's misspellings included, at that same read,
 ended by an error or not, so a renamed required variable is named before the
 boot error its absence causes. A key read only behind a branch — `HttpCors` reads its other

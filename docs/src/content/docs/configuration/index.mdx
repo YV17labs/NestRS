@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Typed, namespaced configuration loaded from environment variables — written by hand, validated on the way in.
+description: Typed, namespaced configuration loaded from environment variables — each field read under its own name, validated on the way in.
 sidebar:
   label: Overview
   order: 1
@@ -8,14 +8,15 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Configuration in nestrs is a typed struct, one file per concern, mapped
-explicitly to `<PREFIX>_<NAMESPACE>__<KEY>` environment variables. The crate
-is hand-rolled: you write `from_env`, the framework
-loads it once at boot, validates it, and registers `Arc<MyConfig>` into
-the container. Consumers inject it like any other provider.
+Configuration in nestrs is a typed struct, one file per concern, each field
+read from the `<PREFIX>_<NAMESPACE>__<FIELD>` environment variable its name
+spells. `#[config]` writes that mapping from the struct, the framework loads
+it once at boot, validates it, and registers `Arc<MyConfig>` into the
+container the moment a provider asks for it. Consumers inject it like any
+other provider.
 
 The whole pipeline reads from environment variables and a small `.env`
-cascade the framework merges before any `from_env` runs. No TOML loader,
+cascade the framework merges before any config is read. No TOML loader,
 no YAML, no remote source baked in — but a [`ConfigSource`](/configuration/sources/)
 trait lets you ship one when you need Vault, K8s, or AWS Parameter Store.
 
@@ -30,32 +31,37 @@ cargo add nest-rs --features config
 
 ## A typed config — by example
 
-The common case is three short blocks: a `#[config]` struct, a derived
-`Validate`, and a `from_env` that maps one line per variable.
+The common case is two short blocks: a `#[config]` struct and its `Default`.
 
 ```rust title="crates/features/src/posts/config.rs"
-use nest_rs::config::{config, Config, ConfigService};
+use std::time::Duration;
+
+use nest_rs::config::{Bound, DurationBounds, Floor, config};
+
+const CACHE_TTL: DurationBounds = DurationBounds::secs(
+    "CACHE_TTL_SECS",
+    "PostsConfig::cache_ttl",
+    Floor::UnitsOrOff(Bound::new(1, "a shorter lifetime caches nothing")),
+    Bound::new(3600, "past an hour a post edited meanwhile is served stale"),
+);
 
 #[config(namespace = "posts")]
 #[derive(Clone)]
 pub struct PostsConfig {
     #[validate(range(min = 1, max = 500))]
     pub page_size: u32,
-    pub cache_enabled: bool,
+    pub featured_tags: Vec<String>,
+    #[config(bounds = CACHE_TTL)]
+    pub cache_ttl: Option<Duration>,
 }
 
 impl Default for PostsConfig {
     fn default() -> Self {
-        Self { page_size: 50, cache_enabled: false }
-    }
-}
-
-impl Config for PostsConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
-        Ok(Self {
-            page_size: env.parse("PAGE_SIZE")?.unwrap_or(base.page_size),
-            cache_enabled: env.flag("CACHE_ENABLED", base.cache_enabled)?,
-        })
+        Self {
+            page_size: 50,
+            featured_tags: Vec::new(),
+            cache_ttl: Some(Duration::from_secs(60)),
+        }
     }
 }
 ```
@@ -63,29 +69,46 @@ impl Config for PostsConfig {
 Three pieces do the heavy lifting:
 
 - **`#[config(namespace = "posts")]`** binds the struct to the
-  `<PREFIX>_POSTS__*` scheme. The macro wires the `Namespaced` trait — no
-  manual constant to write. A namespace belongs to one struct: a second
-  `#[config]` declaring it fails the boot naming both, so a variable always
-  names the one type that reads it.
-- **`impl Config { fn from_env(env: &ConfigService, base: Self) }`** is the
-  hand-written contract: one line per variable. A reviewer reading this
-  file knows exactly which env vars exist, with which defaults, and what
-  happens when one is malformed. Each line reads *env, else `base`* — `base`
-  is where the fallback comes from, which is what makes [the dual-path
-  rule](#the-dual-path-rule) work per field.
-- **`impl Default`** is that fallback when nothing is pinned at the call
-  site. Defaults live here and nowhere else, so `from_env` has no second
-  copy to drift from.
-- **`#[derive(Validate)]`** plus `#[validate(...)]` attributes run after
-  the load. A failure aborts boot naming the field. A rule the derive
-  cannot express is the one case for a hand-written `impl Validate` —
-  see the [Advanced section](#advanced)
-  at the end of this page.
+  `<PREFIX>_POSTS__*` scheme, and writes the mapping: `page_size` reads
+  `<PREFIX>_POSTS__PAGE_SIZE`, `featured_tags` the comma-separated
+  `<PREFIX>_POSTS__FEATURED_TAGS`, each field its own name in SCREAMING_SNAKE.
+  The struct is the whole contract — a reviewer reading this file knows which
+  variables exist and of which type — and no field can be reachable from code
+  alone. A namespace belongs to one struct: a second `#[config]` declaring it
+  fails the boot naming both, so a variable always names the one type that
+  reads it.
+- **`impl Default`** is what a field keeps when its variable is unset and
+  nothing is pinned at the call site. Defaults live here and nowhere else.
+- **`#[validate(...)]`** attributes run after the load — `#[config]`
+  carries the `Validate` derive itself. A failure aborts boot naming the
+  field. A rule the derive cannot express is the one case for a hand-written
+  `impl Validate` — see the [Advanced section](#advanced) at the end of this
+  page.
 
-`env.parse("PAGE_SIZE")?` reads + parses into the field's type; unset
-returns `None`, set-but-unparseable returns `Err` naming the
-variable — boot-fatal, no silent fallback. `env.flag` accepts the
-usual boolean spellings.
+**The field's type chooses its reader.** A number, a string, a path, an
+address or a UUID parses as itself, a `bool` accepts the usual spellings
+(`1`/`true`/`yes`/`on` and their negatives), an `Option` keeps its base when
+the variable is unset, a `Vec` reads a comma-separated list, and a
+`nest_rs::core::Secret` holds what it reads out of every log. A value that
+does not read fails the boot naming the variable, never quoting it — no
+silent fallback. A type of your own implements `nest_rs::config::FromSetting`,
+three lines saying what a refused value was expected to be.
+
+**A field says what its type cannot**, with its own `#[config(…)]`:
+
+| Key | Reads |
+|---|---|
+| `bounds = CONST` | A `Duration`, or an `Option<Duration>` whose `None` turns it off, held to the `DurationBounds` named — whose key carries the unit (`CACHE_TTL_SECS`) and must be the field's, checked at compile time |
+| `json` | A structured value — a list of records, a map — written as JSON |
+| `count` | An `Option<usize>` where `0` from the environment is `None`, unlimited |
+| `with = path` | Through a function of yours, `fn(&ConfigService, &str, T) -> Result<T>`, handed the field's key and base |
+
+**A duration is a `Duration`; `None` is off and nothing else.** A field never
+names its unit — the key does, through its bounds — and its default sits in
+`Default`, never behind a `None` the code would read as "the default". A
+field named `ttl_secs`, or a `Duration` with no bounds, is a compile error
+saying so. A count follows the same rule: a plain number with its default in
+`Default`, or an `Option` whose `None` is unlimited.
 
 ## The dual-path rule
 
@@ -93,8 +116,8 @@ Every field a module's config exposes must be reachable two ways:
 
 1. The pinned struct, passed to `Module::for_root(MyConfig { ... })` —
    programmatic, type-checked, comes from code.
-2. The `<PREFIX>_<NS>__<KEY>` environment variable, mapped explicitly in
-   `from_env`.
+2. The `<PREFIX>_<NS>__<FIELD>` environment variable its name spells, which
+   `#[config]` reads for every field — so no field can be left out.
 
 That is the framework-wide rule for every `nest-rs-*` module. An env-only
 field can't be set from a config file; a code-only field can't be
@@ -158,17 +181,14 @@ builder chain to continue on the result, and no second constructor on the
 module type — so "how do I configure this?" has one answer per module,
 readable in one expression.
 
-**`for_root` configures; `for_feature` registers.** They are not two ways to do
-one thing. `ConfigModule::for_feature::<C>()` takes no value on purpose: it
-declares that `C` must be loaded, and the module that owns `C` is where a base
-is pinned. A config reachable through two seams is a config whose value depends
-on import order.
+**`for_root` configures, and nothing registers.** A config loads the moment a
+provider of a module your app imports asks for it — `#[inject] config:
+Arc<C>` is the whole declaration. Every `nest-rs-*` module that owns a config
+gives you a `for_root` to pin it from; there is no second seam, so a config's
+value never depends on import order.
 
-Every `nest-rs-*` module that owns a config writes both — `for_feature` in its
-`imports`, and a `for_root` for you to pin from.
-
-**Your own feature modules write only `for_feature`.** You own the struct, so
-its `impl Default` is already your in-code path; that is precisely what a
+**Your own feature modules write neither.** You own the struct, so its
+`impl Default` is already your in-code path; that is precisely what a
 framework module cannot offer, and what its `for_root` exists to replace. Add
 one the day another crate must pin your config — four lines with `ConfigSetup`
 — not before.
@@ -225,9 +245,10 @@ BucketModule::for_root((Cache, None)),   // the `cache` instance
 
 ## `ConfigService` API
 
-The reader handed to `from_env` is a thin wrapper around the namespace
-prefix. Every method is sync, and every one that reads a value returns a
-`Result`, because reading can fail before parsing does.
+The reader a `with = path` function — or a hand-written overlay — is handed
+is a thin wrapper around the namespace prefix; the derived overlay reads
+through it too. Every method is sync, and every one that reads a value returns
+a `Result`, because reading can fail before parsing does.
 
 | Method                                         | Reads                                       |
 |------------------------------------------------|---------------------------------------------|
@@ -243,28 +264,20 @@ prefix. Every method is sync, and every one that reads a value returns a
 | `env.spellings("KEY")` → `String`              | Both spellings, `<PREFIX>_<NS>__KEY (or <PREFIX>_<NS>__KEY_FILE)` — for a message naming a setting that was not read |
 
 **A duration is read through its bounds, never through `parse`.** Declare a
-`nest_rs_config::DurationBounds` beside the config with `DurationBounds::secs`
-or `DurationBounds::millis` — the key, the field that pins it, a floor and a
-ceiling each with the sentence a refusal gives — and read it with
-`BOUNDS.read(env, base)?` (or `read_optional` for an `Option<Duration>`): a
-value outside the range fails the boot naming the variable, from the environment
-or pinned in code alike, in the framework's own words. The constructor holds the
-key to its unit — `secs` takes a key ending in `_SECS`, `millis` one ending in
-`_MS`, and any other fails to compile — and every `env.*` reader above refuses a
-`_SECS` or `_MS` key at boot, naming `DurationBounds`. A ceiling a deployment may
-lift deliberately takes `Floor::UnitsOrOff`, so `0` from the environment and
-`None` in code are off.
-
-```rust title="crates/features/src/reports/config.rs"
-use nest_rs::config::{Bound, DurationBounds, Floor};
-
-const WINDOW: DurationBounds = DurationBounds::secs(
-    "WINDOW_SECS",
-    "ReportsConfig::window",
-    Floor::Units(Bound::new(1, "a shorter window counts nothing")),
-    Bound::new(3600, "past an hour the report is stale before it is read"),
-);
-```
+`nest_rs::config::DurationBounds` beside the config with
+`DurationBounds::secs` or `DurationBounds::millis` — the key, the field that
+pins it, a floor and a ceiling each with the sentence a refusal gives — and
+name it on the field, `#[config(bounds = CACHE_TTL)]`, as the example above
+does: a value outside the range fails the boot naming the variable, from the
+environment or pinned in code alike, in the framework's own words. The
+constructor holds the key to its unit — `secs` takes a key ending in `_SECS`,
+`millis` one ending in `_MS`, and any other fails to compile — `#[config]`
+holds the key to the field (`CACHE_TTL_SECS` reads `cache_ttl`), and every
+`env.*` reader above refuses a `_SECS` or `_MS` key at boot, naming
+`DurationBounds`. A ceiling a deployment may lift deliberately takes
+`Floor::UnitsOrOff`, so `0` from the environment and `None` in code are off. A
+reader of your own reads one with `BOUNDS.read(env, base)?`, or
+`read_optional` for an `Option<Duration>`.
 
 **Every variable can be given as a file.** `<PREFIX>_<NS>__KEY_FILE=/run/secrets/key`
 supplies `KEY` from the file it names — the Docker and Kubernetes secrets
@@ -298,22 +311,23 @@ in.
 **A credential is a `Secret`.** Type a field holding a password, a key or a
 URL that carries one as `nest_rs::core::Secret<String>`: its `Debug` prints
 `<redacted>`, so the config derives `Debug` and a `{:?}` of it in a log line
-holds nothing to steal. A literal still reads `"…".into()`, a value read from
-the environment is `env.get("API_KEY")?.map(Secret::new)`, and the call that
-needs the value reads it with `expose_secret()`. A `#[validate(length(…))]`
+holds nothing to steal. A literal still reads `"…".into()`, the field reads its
+variable like any other, and the call that needs the value reads it with
+`expose_secret()`. A `#[validate(length(…))]`
 rule judges the value, and its refusal names the field with the placeholder
 where `validator` would list the value. The framework's own configs hold their
 credentials this way: `SeaOrmConfig::url`, `RedisConfig::url`, the storage
 pair, the JWT secret and private key, every OAuth client secret.
 
 **A structured value is refused without its content, whichever spelling gave
-it.** `env.json::<T>("KEY")?` decodes a JSON value as any `Deserialize` type, and
+it.** `#[config(json)]` on a field — `env.json::<T>("KEY")?` in a reader of
+your own — decodes a JSON value as any `Deserialize` type, and
 a value that does not decode fails the boot saying where in it it failed, the
 kind of value found and the type expected — ``invalid value for
 <PREFIX>_OAUTH__SERVER__CLIENTS at `[0].scopes`: invalid type: a string, expected a
 sequence`` — never the value itself, inline or not: a list of records is where a deployment writes
-credentials, such as each OAuth client's secret. Decode one through `env.json`
-rather than `serde_json::from_str` in your own `from_env`, whose error quotes
+credentials, such as each OAuth client's secret. Decode one through `json`
+rather than `serde_json::from_str` in a reader of your own, whose error quotes
 what it refused.
 
 Empty strings count as unset, so `FOO=` in a `.env` file does not blank
@@ -325,55 +339,12 @@ and `FOO=11` in `.env`, and the in-code default is what lands. Same for an empty
 value in the real environment. Delete the line to defer to the next layer;
 leave it empty to mean "nothing, whatever the files below say".
 
-## Wire it in
-
-The wiring is two module imports. The feature owns its config; the root
-module imports `ConfigModule::for_root()` once.
-
-```rust title="crates/features/src/posts/module.rs"
-use nest_rs::config::ConfigModule;
-use nest_rs::core::module;
-use super::config::PostsConfig;
-use super::service::PostsService;
-
-#[module(
-    imports = [ConfigModule::for_feature::<PostsConfig>()],
-    providers = [PostsService],
-)]
-pub struct PostsModule;
-```
-
-```rust title="apps/api/src/module.rs"
-use nest_rs::config::ConfigModule;
-use nest_rs::core::module;
-
-#[module(
-    imports = [
-        ConfigModule::for_root(),
-        PostsHttpModule,
-    ],
-)]
-pub struct AppModule;
-```
-
-- **`ConfigModule::for_root()`** registers `Arc<Environment>` — the active
-  profile, read from `<PREFIX>_ENV` — so a provider can inject it and branch. It
-  writes nothing to the process environment, and its position among the imports
-  carries no meaning: every module's `collect` runs before any config factory.
-  What puts the `.env` cascade in the process environment is
-  `#[nest_rs::main]`, before your `main` runs; see
-  [alternative sources](/configuration/sources/#what-fails-if-you-get-it-wrong--hermeticity-and-the-cascade).
-- **`ConfigModule::for_feature::<C>()`** queues a factory in the boot's
-  factory phase. The factory calls `C::load()` (= `from_env` over
-  `C::defaults()`, then `validate`); on failure the boot aborts with the
-  variable named. Pass `Some(cfg)` to make `cfg` the base those variables
-  overlay, exactly as a module's `for_root(cfg)` does — one code path, so a
-  field cannot be reachable one way only.
-
 ## Inject it
 
-A consumer injects `Arc<PostsConfig>` like any provider — the type is
-the token.
+A consumer injects `Arc<PostsConfig>` like any provider — the type is the
+token, and the injection is the whole wiring: the boot sees a provider of an
+imported module asking for a `#[config]` and loads it, environment over
+`Default`, before anything is built.
 
 ```rust title="crates/features/src/posts/service.rs"
 #[injectable]
@@ -390,6 +361,42 @@ impl PostsService {
 }
 ```
 
+```rust title="crates/features/src/posts/module.rs"
+use nest_rs::core::module;
+use super::service::PostsService;
+
+#[module(providers = [PostsService])]
+pub struct PostsModule;
+```
+
+```rust title="apps/api/src/module.rs"
+use nest_rs::config::ConfigModule;
+use nest_rs::core::module;
+
+#[module(
+    imports = [
+        ConfigModule::for_root(),
+        PostsHttpModule,
+    ],
+)]
+pub struct AppModule;
+```
+
+- **The injection loads the config.** Once every module has collected, the
+  boot queues a factory for each `#[config]` a provider of an imported module
+  requires, unless a `for_root` pinned it already. The factory reads every
+  field over `C::defaults()`, then validates; on failure the boot aborts with
+  the variable named. A config only an unimported module asks for is never
+  read, and a test that seeds the config (`App::builder().provide(cfg)`)
+  wins over the factory.
+- **`ConfigModule::for_root()`** registers `Arc<Environment>` — the active
+  profile, read from `<PREFIX>_ENV` — so a provider can inject it and branch. It
+  writes nothing to the process environment, and its position among the imports
+  carries no meaning: every module's `collect` runs before any config factory.
+  What puts the `.env` cascade in the process environment is
+  `#[nest_rs::main]`, before your `main` runs; see
+  [alternative sources](/configuration/sources/#what-fails-if-you-get-it-wrong--hermeticity-and-the-cascade).
+
 ## Run it
 
 A bad value fails the boot before any port opens. The config is built by
@@ -401,24 +408,31 @@ $ NESTRS_POSTS__PAGE_SIZE=lots nestrs run dev api
 Error: the factory for `features::posts::config::PostsConfig` failed
 
 Caused by:
-    invalid value for NESTRS_POSTS__PAGE_SIZE: invalid digit found in string
+    invalid value for NESTRS_POSTS__PAGE_SIZE: does not parse as u32
 ```
 
 A violated `#[validate]` rule aborts the same way after the load,
 naming the field.
 
-## Why hand-written `from_env`
+## Why the struct is the contract
 
-Auto-deserializing from env vars sounds convenient, but the contract
-becomes implicit (which vars exist? what are their types?). With
-`from_env` written explicitly:
+A line per variable written by hand looks explicit, but it is a second copy of
+the struct: a forgotten line leaves a field settable from code alone, and a key
+retyped apart from its field renames the variable without a word. Reading each
+key off its field keeps the contract where the fields are:
 
-- The full env contract of a feature is one impl block, in one file.
+- The full env contract of a feature is one struct, in one file — the field's
+  name is the variable, its type the reader.
 - A missing variable falls back to the base — the pinned value, or the
-  config's own `Default` — one visible expression per field.
-- Unparseable values fail loudly, naming the variable.
-- A reviewer reads the contract by reading ten lines, not by chasing
-  serde attributes.
+  config's own `Default` — for every field alike.
+- An unreadable value fails loudly, naming the variable, never quoting it.
+- What a type cannot say is said on the field, in one of four keys, and a
+  config whose fields depend on each other writes its overlay itself —
+  [Advanced configuration](/configuration/advanced/).
+
+It is no serde deserializer over the environment either: that would read
+neither a `<KEY>_FILE` secret, nor the tiers a pin narrows, and its errors
+quote the value they refuse.
 
 ## Your own prefix
 
@@ -465,7 +479,11 @@ wrong and silent.
 
 ## Advanced
 
-Hand-writing `from_env` (for custom validation, or a field carrying a structured payload, or a rule spanning the whole struct) is covered on [Advanced configuration](/configuration/advanced/) with the real `OAuthServerConfig` as the worked example.
+A reader of your own (`with = path`), a rule spanning the whole struct, a
+profile-dependent baseline (`defaults = path`) and a hand-written overlay
+(`from_env = "manual"`) are covered on
+[Advanced configuration](/configuration/advanced/), with the real
+`OAuthServerConfig` as the worked example.
 
 ## In this section
 
@@ -480,8 +498,8 @@ Hand-writing `from_env` (for custom validation, or a field carrying a structured
   or AWS Parameter Store behind `ConfigSource`.
 - [Overriding in tests](/configuration/testing/) — seed pinned values,
   isolate the environment, keep both suites hermetic.
-- [Advanced: hand-written `from_env`](/configuration/advanced/) — custom
-  validation and nested config, when the derive is not enough.
+- [Advanced configuration](/configuration/advanced/) — a reader of your own,
+  whole-struct validation, a profile's baseline, a hand-written overlay.
 - [Env-var reference](/configuration/env-reference/) — every `<PREFIX>_*`
   variable the framework reads, by namespace.
 

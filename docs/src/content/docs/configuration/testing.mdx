@@ -9,9 +9,8 @@ import { Aside } from '@astrojs/starlight/components';
 
 Tests bypass the environment in two ways depending on the layer. End-to-end
 tests use `TestApp` and seed pinned config values directly — the seed
-wins over `ConfigModule::for_feature::<C>()`. Unit tests for a `Config`
-impl read a map of variables through `ConfigService::with_vars`, and never
-touch `std::env`.
+wins over the factory that would read it. Unit tests for a config read a map
+of variables through `ConfigService::with_vars`, and never touch `std::env`.
 
 Both rely on a single guarantee: under `<PREFIX>_ENV=test`, the
 [`.env.local`](/configuration/env-cascade/#test-mode-is-hermetic) file is
@@ -19,9 +18,9 @@ skipped, so a developer's personal secrets cannot leak in.
 
 ## Seeding a pinned value (e2e)
 
-`TestApp::builder()` exposes `.provide(value)` — when the value's type
-matches a config registered via `ConfigModule::for_feature::<C>()`, the
-seed wins and the factory never runs. The seed still passes what a read
+`TestApp::builder()` exposes `.provide(value)` — when the value's type is a
+config a provider injects, or a module's `for_root` loads, the seed wins and
+the factory never runs. The seed still passes what a read
 value does, before any factory reads it: a duration outside its range or a
 field its `validate()` refuses fails the boot with the same `ConfigError`,
 naming the field or the namespace.
@@ -156,10 +155,11 @@ variable a committed `.env` happens to define will read the file. Use
 `with_source` — or `.provide(cfg)` — when the test must not. See
 [hermeticity and the cascade](/configuration/sources/#what-fails-if-you-get-it-wrong--hermeticity-and-the-cascade).
 
-## Unit-testing a `Config` impl
+## Unit-testing a config
 
-When the unit under test is the `from_env` mapping itself, read it from a
-map of variables. `ConfigService::with_vars` answers for one namespace,
+When the unit under test is the mapping itself — which variable each field
+reads, and what a reader of your own refuses — read it from a map of
+variables. `ConfigService::with_vars` answers for one namespace,
 by key, from the pairs you give it, and reads neither `std::env` nor the
 `.env` cascade. Validation is the struct's own `validate()`, which
 `load()` runs after the mapping.

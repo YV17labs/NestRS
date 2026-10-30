@@ -154,6 +154,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO=0.1` | `OTEL_TRACES_SAMPLER=parentbased_traceidratio` and `OTEL_TRACES_SAMPLER_ARG=0.1` |
    | `<PREFIX>_OPENTELEMETRY__METRIC_INTERVAL_SECS=5` | `OTEL_METRIC_EXPORT_INTERVAL=5000`, in milliseconds |
    | `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT`, `TLS_CERT`, `TLS_KEY` (or their `_FILE`) | `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, each a path to the PEM file |
+   | `<PREFIX>_HTTP__CORS_MAX_AGE` | `<PREFIX>_HTTP__CORS_MAX_AGE_SECS`, whole seconds from `1` to `86400`, or `0` for no `Access-Control-Max-Age` |
 
    OpenTelemetry's are the specification's own, so they take no prefix: no
    `ACME_` renames `OTEL_*`. Under a prefix of your own, the rest holds with
@@ -498,7 +499,15 @@ lists what the boot, a log or the wire shows when one is missed.
    | 6.x | 7.0 |
    |---|---|
    | `HttpConfig::default().with_global_prefix(p)` (and every config `with_*`) | the field in a struct literal over `..Default::default()` |
-   | `HealthConfig::default().with_probe_deadline(Duration::from_millis(400))` | `HealthConfig { probe_deadline_ms: 400, ..Default::default() }` |
+   | `HealthConfig::default().with_probe_deadline(Duration::from_millis(400))` | `HealthConfig { probe_deadline: Duration::from_millis(400), ..Default::default() }` |
+   | `impl Config for MyConfig { fn from_env(…) }` beside `#[config(namespace = "…")]` | delete it: `#[config]` writes it, each field reading `<PREFIX>_<NAMESPACE>__<FIELD>`, its name in SCREAMING_SNAKE, through the reader its type chooses. A field your `from_env` read under another key is renamed, or its key is renamed in the deployment; a field it read with `env.json` takes `#[config(json)]`, one with `env.count` `#[config(count)]`, one it judged itself `#[config(with = your_fn)]` (`fn(&ConfigService, &str, T) -> Result<T>`); a `fn defaults()` moves to `#[config(defaults = Self::your_fn)]`. Fields that depend on each other keep the impl under `#[config(namespace = "…", from_env = "manual")]` |
+   | a duration field `window_secs: u64` or `timeout_ms: Option<u64>` read through `DURATION.read(env, …)` | `window: Duration` with `#[config(bounds = WINDOW)]`, its default in `Default`; `Option<Duration>` only where `None` turns it off. The bounds' key keeps the unit (`WINDOW_SECS`), so no variable moves |
+   | a field of a type of your own read with `env.parse` | `impl FromSetting for YourType`, saying what a refused value was expected to be |
+   | `ConfigModule::for_feature::<C>()` in a module's `imports` | delete it: the provider that injects `Arc<C>` loads `C`. A module reading `C` only in a `register` of its own calls `ConfigModule::provide_feature(None::<C>, builder)` from its `collect` |
+   | `SeaOrmConfig { connect_timeout_secs: Some(5), statement_timeout_secs: Some(10), max_connections: Some(20), min_connections: Some(2), .. }` | `connect_timeout: Duration::from_secs(5)`, `statement_timeout: Duration::from_secs(10)`, `max_connections: 20`, `min_connections: 2` — unset is `Default`'s 10 s, 15 s, 10 and 0, which the pool is now always handed |
+   | `AuthnConfig { leeway_secs: Some(45), expires_in_secs: Some(7200), explicit_typing: Some(false), .. }` | `leeway: Duration::from_secs(45)`, `expires_in: Duration::from_secs(7200)`, `explicit_typing: false` — `Default` holds 30 s, an hour and `true` |
+   | `ThrottlerConfig { limit: Some(120), window_secs: Some(30), .. }` | `limit: 120, window: Duration::from_secs(30)` — `Default` holds 60 a minute |
+   | `HttpConfig { max_body_bytes: Some(n), .. }` | `max_body_bytes: n` — `Default` holds 2 MiB, and there is no off |
    | `HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })` — a pin of what varies by machine or by app — beside `<PREFIX>_HTTP__*` keys in `.env` files | `HttpModule::for_root(None)` and `<PREFIX>_HTTP__PORT=3002` in the app's own `apps/<app>/.env`, read over the root's under `development` and `test`; the deployment sets it on the process. A pin takes its whole namespace off every `.env` file, and the boot names each key it shadows |
    | `RedisModule::for_root(RedisConfig { …, ..Default::default() })` relying on the loopback | `url` written in the pin, or `<PREFIX>_REDIS__URL` in the deployment: no profile holds a URL, and a pinned config reads the process environment, never `.env` |
    | `StorageModule::for_root(StorageConfig { …, ..Default::default() })` relying on the development pair or on plain HTTP | `..StorageConfig::defaults()` for plain HTTP in development and test (with `use nest_rs::config::Config;`); the pair from the deployment's environment in every profile |
@@ -1170,6 +1179,20 @@ lists what the boot, a log or the wire shows when one is missed.
   published `nestrs API` and `0.1.0`; pin `<PREFIX>_OPENAPI__TITLE` and
   `VERSION` to keep others. An MCP endpoint nobody named reports the binary's
   name and version where it reported `rmcp`'s.
+- **A hand-written `impl Config` left beside `#[config]`** fails to compile,
+  `conflicting implementations of trait Config` (E0119): delete it, or say
+  `from_env = "manual"`. A field whose type no reader reads names the one it
+  needs (`Duration` is read through its bounds, `#[config(bounds = …)]`), a
+  field named for a unit (`window_secs`) names the field it should be, and a
+  `DurationBounds` whose key is not its field's fails the `const` it is
+  checked in.
+- **A deployment still setting `<PREFIX>_HTTP__CORS_MAX_AGE`** sends no
+  `Access-Control-Max-Age`: the boot reports it at `warn` as read by no config
+  (`config variable read by no config`), with `CORS_MAX_AGE_SECS` as the
+  suggestion.
+- **`ConfigModule::for_feature` left in an import list** fails to compile; a
+  config no provider of an imported module injects is no longer loaded — read
+  it through a provider, or queue it from the module's `collect`.
 
 - **A value breaking its type's rules that 6.x let through**, because no
   `Valid` wrapped its parameter, is now refused at the edge that decodes it:

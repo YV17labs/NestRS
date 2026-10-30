@@ -30,7 +30,7 @@ One method. `var` is the fully-qualified name (e.g.
 source just answers lookups. Empty strings count as unset, same rule as
 `EnvSource`.
 
-The trait is **sync on purpose**: `Config::from_env` runs synchronously
+The trait is **sync on purpose**: a config's overlay runs synchronously
 at boot. A remote source pre-fetches its keys into an in-memory map
 during a factory phase, then serves `get` from that map.
 
@@ -76,7 +76,7 @@ literal. Override it only if your source also serves values that should *lose*
 to a pin.
 
 Wire it in by building the `ConfigService` directly and calling
-`Config::from_env` yourself — bypassing `ConfigModule::for_feature`:
+`Config::from_env` yourself — bypassing the factory the boot would queue:
 
 ```rust title="apps/api/src/main.rs"
 use nest_rs::config::ConfigService;
@@ -94,8 +94,7 @@ App::builder()
     .await?;
 ```
 
-A seeded config wins over `ConfigModule::for_feature::<SeaOrmConfig>()`,
-so the rest of the app sees the Vault-loaded value without changing any
+A seeded config wins over the factory that would read it, so the rest of the app sees the Vault-loaded value without changing any
 downstream code. The pattern matches [`Repo::scoped`](/database/repo-and-executor/):
 build the seam where the source lives, hand the result to the framework.
 

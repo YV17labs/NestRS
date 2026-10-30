@@ -77,7 +77,7 @@ Real env always wins over the `.env` cascade, and a pinned struct over every
 | `cors.headers` | `<PREFIX>_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
 | `cors.exposed_headers` | `<PREFIX>_HTTP__CORS_EXPOSED` | empty — `Link`, `Location` and `Retry-After`, which the framework sends, are always exposed | `exposed_headers: vec!["X-Total-Count".into()]` |
 | `cors.credentials` | `<PREFIX>_HTTP__CORS_CREDENTIALS` (`true`/`false`) | `false` | `credentials: true` |
-| `cors.max_age` | `<PREFIX>_HTTP__CORS_MAX_AGE` (seconds) | unset ⇒ no `Access-Control-Max-Age`, the browser's own few seconds | `max_age: Some(Duration::from_secs(3600))` |
+| `cors.max_age` | `<PREFIX>_HTTP__CORS_MAX_AGE_SECS` (seconds, `1`–`86400`, `0` ⇒ none) | unset ⇒ no `Access-Control-Max-Age`, the browser's own few seconds | `max_age: Some(Duration::from_secs(3600))` |
 | `versioning` | `<PREFIX>_HTTP__VERSIONING` (`uri`, `header`, `media_type`) | `uri` | `HttpConfig { versioning: ApiVersioning::Header, ..Default::default() }` — see [Versioning](/http/versioning/) |
 | `version_header` | `<PREFIX>_HTTP__VERSION_HEADER` | `X-API-Version` | `HttpConfig { version_header: "X-Version".into(), ..Default::default() }` |
 | `default_version` | `<PREFIX>_HTTP__DEFAULT_VERSION` | unset ⇒ no default | `HttpConfig { default_version: Some("1".into()), ..Default::default() }` |
@@ -85,7 +85,7 @@ Real env always wins over the `.env` cascade, and a pinned struct over every
 | `access_log` | `<PREFIX>_HTTP__ACCESS_LOG` (`true`/`false`) | `true` | `HttpConfig { access_log: false, ..Default::default() }` — see [Logs](/opentelemetry/logs/) |
 | `trusted_proxies` | `<PREFIX>_HTTP__TRUSTED_PROXIES` (comma list of IPs) | empty | `HttpConfig { trusted_proxies: vec![IpAddr::from([10, 0, 0, 1])], ..Default::default() }` — see [`ClientIp`](/http/extractors/#clientip--best-effort-observation-grade) |
 | `global_prefix` | `<PREFIX>_HTTP__GLOBAL_PREFIX` (one literal path: `{` `}` or `:` `*` `<` fail the boot) | unset ⇒ no prefix | `HttpConfig { global_prefix: Some("/api".into()), ..Default::default() }` |
-| `max_body_bytes` | `<PREFIX>_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig { max_body_bytes: Some(4 * 1024 * 1024), ..Default::default() }` |
+| `max_body_bytes` | `<PREFIX>_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig { max_body_bytes: 4 * 1024 * 1024, ..Default::default() }` |
 | `request_timeout` | `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `20 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
 | `max_concurrent_connections` | `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS` (`1`–`1048576`) | `10 000` | `HttpConfig { max_concurrent_connections: 50_000, ..Default::default() }` |
 | `header_read_timeout` | `<PREFIX>_HTTP__HEADER_READ_TIMEOUT_SECS` (seconds, `1`–`300`) | `30 s` | `HttpConfig { header_read_timeout: Duration::from_secs(10), ..Default::default() }` |
@@ -99,6 +99,19 @@ Real env always wins over the `.env` cascade, and a pinned struct over every
 | `compression` | `<PREFIX>_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
 
 See [Compression](/http/compression/) for what the flag negotiates and when to leave it off.
+
+**A long-lived connection's ceiling is set per edge.** An `#[sse]` stream, a
+[WebSocket](/websockets/) and a [GraphQL subscription](/graphql/subscriptions/)
+socket each authenticate once and keep those privileges until they end, and
+each edge runs its own loop, so each reads its own variable —
+`<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`, `<PREFIX>_WS__MAX_CONNECTION_SECS`,
+`<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` — from one default, four hours
+(`nest_rs::http::DEFAULT_MAX_CONNECTION`). A deployment shortening how long a
+revoked credential keeps a live socket sets the three. The same holds for a
+server-sent stream's keep-alive (`SSE_KEEP_ALIVE_SECS`, here and on
+[MCP](/mcp/configuration/), `DEFAULT_SSE_KEEP_ALIVE`) and a unit's deadline
+(`REQUEST_TIMEOUT_SECS` here, a WebSocket message's and an MCP operation's on
+theirs, `DEFAULT_UNIT_TIMEOUT`).
 
 ## Serve HTTPS
 
@@ -172,7 +185,7 @@ NESTRS_HTTP__CORS_ORIGINS=https://app.example.com,https://admin.example.com
 NESTRS_HTTP__CORS_METHODS=GET,POST,PUT,DELETE
 NESTRS_HTTP__CORS_HEADERS=Content-Type,Authorization
 NESTRS_HTTP__CORS_CREDENTIALS=true
-NESTRS_HTTP__CORS_MAX_AGE=3600
+NESTRS_HTTP__CORS_MAX_AGE_SECS=3600
 ```
 
 ```rust title="apps/api/src/module.rs"

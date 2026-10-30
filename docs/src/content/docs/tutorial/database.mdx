@@ -172,7 +172,7 @@ unwind — a `GET` that writes keeps its write, whatever it answers. No
 
 ```bash frame="terminal"
 $ nestrs run dev blog
-INFO nest_rs::orm: connecting to database endpoint=localhost:5432 max_connections=None
+INFO nest_rs::orm: connecting to database endpoint=localhost:5432 max_connections=Some(10)
 INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3005"
 ```
 

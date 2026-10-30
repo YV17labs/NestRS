@@ -147,8 +147,9 @@ module config is reachable both ways:
 
 1. **Pinned in code** — `Module::for_root(MyConfig { .. })`, type-checked by
    the compiler.
-2. **`<PREFIX>_<NAMESPACE>__<KEY>`** — one explicit line per variable in
-   `from_env`, so the file lists exactly which variables exist.
+2. **`<PREFIX>_<NAMESPACE>__<FIELD>`** — each field read under its own name,
+   the overlay `#[config]` writes from the struct, so the struct lists exactly
+   which variables exist.
 
 The two compose **per field, not per struct**: the pinned struct is the *base*
 the environment overlays. Pinning `compression` in `HttpConfig` leaves
@@ -168,7 +169,7 @@ malformed value is boot-fatal and names the variable, so a bad ConfigMap fails
 the readiness probe instead of surfacing as a mystery three requests later.
 
 <Aside type="note">
-  The rule and the `from_env` contract live on
+  The rule and the struct-as-contract live on
   [Configuration](/configuration/#the-dual-path-rule); every variable the
   framework reads is in the [env reference](/configuration/env-reference/).
 </Aside>

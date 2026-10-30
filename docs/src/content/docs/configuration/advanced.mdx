@@ -1,21 +1,73 @@
 ---
-title: "Advanced: hand-written from_env"
-description: "When the #[config] derive is not enough — a hand-written from_env with custom validation and nested/dynamic config."
+title: "Advanced configuration"
+description: "When a field's type cannot say how it reads — a reader of your own, a rule spanning the whole struct, a profile's baseline, a hand-written overlay."
 sidebar:
   order: 5
 ---
 
 
-The derive covers per-field rules and `FromStr` covers scalar parsing.
-Two things push a config past them: a field carrying a **structured
-payload** (a JSON blob in one variable) and a **rule spanning the whole
-struct**. `OAuthServerConfig<P>` — the clients an authorization server
-registers, which the demo's `apps/auth` issues tokens to — needs both. Its
-namespace is read off its path, as every config's is:
-`nest-rs-oauth-server/src/config.rs` reads `<PREFIX>_OAUTH__SERVER__*`.
+`#[config]` reads each field by its type, and a field's own `#[config(…)]`
+covers a duration, a JSON value and a count. Three things push a config past
+them: a field whose reading **only you can judge**, a **rule spanning the whole
+struct**, and an overlay whose **fields depend on each other** — or a config
+generic over a type the app fills, which no derive can bound.
+
+## A reader of your own
+
+A field whose value is refused on a rule its type does not know names the
+function that reads it, `with = path`. The function is handed the reader, the
+field's key and its base — the value pinned in code, or the default — and
+answers the field. The throttler's pseudonym key is one: a key shorter than
+HMAC's own length is refused, from the environment or pinned in code alike,
+and never shown.
+
+```rust title="nest_rs::throttler::ThrottlerConfig (abridged)"
+#[config(namespace = "throttler")]
+#[derive(Clone, Debug)]
+pub struct ThrottlerConfig {
+    pub limit: u32,
+    #[config(bounds = WINDOW)]
+    pub window: Duration,
+    #[config(with = pseudonym_key)]
+    pub pseudonym_key: Option<Secret<String>>,
+}
+
+fn pseudonym_key(
+    env: &ConfigService,
+    key: &str,
+    base: Option<Secret<String>>,
+) -> Result<Option<Secret<String>>> {
+    match env.setting(key)? {
+        Some(setting) if setting.value.len() < MIN_KEY_BYTES => Err(setting.refuse(SHORT_KEY)),
+        Some(setting) => Ok(Some(Secret::new(setting.value))),
+        None => match base {
+            Some(pinned) if pinned.expose_secret().len() < MIN_KEY_BYTES => {
+                Err(ConfigError::parse(
+                    env.var_name(key),
+                    format!("`ThrottlerConfig::pseudonym_key` set in code {SHORT_KEY}"),
+                ))
+            }
+            pinned => Ok(pinned),
+        },
+    }
+}
+```
+
+`env.setting(key)` keeps which spelling the deployment used — the variable or
+its `_FILE` — so `setting.refuse(reason)` names that one, and `reason` says
+what was expected, never the value.
+
+## A rule spanning the whole struct, on a generic config
+
+`OAuthServerConfig<P>` — the clients an authorization server registers, which
+the demo's `apps/auth` issues tokens to — is generic over the payload each
+client carries, so it writes its overlay itself (`from_env = "manual"`), and
+its rules span every client, so it writes its `Validate` too
+(`validate = "manual"`). Its namespace is read off its path, as every config's
+is: `nest-rs-oauth-server/src/config.rs` reads `<PREFIX>_OAUTH__SERVER__*`.
 
 ```rust title="nest_rs::oauth::server::OAuthServerConfig (abridged)"
-#[config(namespace = "oauth__server", validate = "manual")]
+#[config(namespace = "oauth__server", validate = "manual", from_env = "manual")]
 #[derive(Clone, Debug)]
 pub struct OAuthServerConfig<P> {
     pub clients: Vec<RegisteredClient<P>>,
@@ -61,11 +113,12 @@ impl<P> Validate for OAuthServerConfig<P> {
   deployment that sets nothing.
 - **`clients` is a JSON array in a single variable.** `env.json("CLIENTS")`
   decodes it as the field's type, inline or through
-  `<PREFIX>_OAUTH__SERVER__CLIENTS_FILE`, and a value that does not decode
+  `<PREFIX>_OAUTH__SERVER__CLIENTS_FILE` — what `#[config(json)]` reads on a
+  config that is not generic — and a value that does not decode
   fails the boot with `ConfigError::Decode`, naming whichever spelling was
   set, where the value failed, the kind of value found and the type expected —
   never the value, since a mistyped list of clients holds their secrets.
-  Decoding it with `serde_json` in the `from_env` would quote it back. The
+  Decoding it with `serde_json` in the overlay would quote it back. The
   element is `RegisteredClient<P>`; the app fills the generic `payload` — the
   demo's `ClientPayload`, the org each client acts as and its roles — so the
   framework owns the credential shape and the app owns only what it
@@ -75,22 +128,20 @@ impl<P> Validate for OAuthServerConfig<P> {
   the derive would. They run after the load and abort the boot exactly like a
   derived rule, naming each refusal by the client's id, never its secret.
 
-The app registers it with the payload type it owns, and reads it like any
-config:
+The app imports its module with the payload type it owns; `SignInService`
+injects its own `SignInConfig`, which that injection loads:
 
 ```rust title="crates/features/src/sign_in/module.rs (from the demo)"
-use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::oauth::server::OAuthServerModule;
 use nest_rs::social::SocialModule;
 
-use super::config::{ClientPayload, SignInConfig};
+use super::config::ClientPayload;
 use super::service::SignInService;
 use crate::users::UsersModule;
 
 #[module(
     imports = [
-        ConfigModule::for_feature::<SignInConfig>(),
         OAuthServerModule::for_root::<ClientPayload>(None),
         UsersModule,
         SocialModule,
@@ -100,10 +151,20 @@ use crate::users::UsersModule;
 pub struct SignInModule;
 ```
 
-`SignInConfig` beside it is the product's own — the resources a sign-in may
-ask for and the org a first social sign-in joins — read from
-`<PREFIX>_SIGN_IN__*`, the feature's own word: a product stem never takes a
-family's (`oauth`), whose first level is the framework members'.
+`SignInConfig` is the product's own — the resources a sign-in may ask for and
+the org a first social sign-in joins — read from `<PREFIX>_SIGN_IN__*`, the
+feature's own word: a product stem never takes a family's (`oauth`), whose
+first level is the framework members'. Its overlay is derived; only its
+validation is written by hand:
+
+```rust title="crates/features/src/sign_in/config.rs (from the demo, abridged)"
+#[config(namespace = "sign_in", validate = "manual")]
+#[derive(Clone)]
+pub struct SignInConfig {
+    pub resources: Vec<String>,
+    pub default_org_id: Uuid,
+}
+```
 
 ### Run it
 
@@ -121,7 +182,7 @@ $ NESTRS_SIGN_IN__DEFAULT_ORG_ID=not-a-uuid nestrs run dev auth
 Error: the factory for `features::sign_in::config::SignInConfig` failed
 
 Caused by:
-    invalid value for NESTRS_SIGN_IN__DEFAULT_ORG_ID: invalid character: found `n` at 0
+    invalid value for NESTRS_SIGN_IN__DEFAULT_ORG_ID: is not a UUID
 ```
 
 A failed validation runs after the load:
@@ -155,20 +216,24 @@ lists it beside the variable.
 
 ## A profile-dependent baseline
 
-`from_env` overlays the environment onto a **base**, and that base is
+The overlay reads the environment onto a **base**, and that base is
 `Config::defaults()` when nothing was pinned at the import site. `Default` is
 the production-safe value, in every profile; a development convenience — plain
 HTTP, public documentation, a committed artifact's emit, a seed — lives in
 `defaults()`, armed only by a declared development or test profile. A process
 that declares no `<PREFIX>_ENV` runs as production, so it gets `Default`. The
 framework does this for its own storage, OpenAPI, GraphQL and Server-Timing
-configs:
+configs, naming the function on the struct, `defaults = path`:
 
 ```rust title="crates/nest-rs-graphql/src/config.rs (abridged)"
-use nest_rs::config::Environment;
+use nest_rs::config::{Environment, config};
 
-impl Config for GraphqlConfig {
-    fn defaults() -> Self {
+#[config(namespace = "graphql", defaults = Self::profile_defaults)]
+#[derive(Clone, Debug)]
+pub struct GraphqlConfig { /* … */ }
+
+impl GraphqlConfig {
+    fn profile_defaults() -> Self {
         let environment = Environment::from_env();
         let open = !environment.is_deployed();
         Self {
@@ -178,17 +243,18 @@ impl Config for GraphqlConfig {
             ..Self::default()
         }
     }
-
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> { /* … */ }
 }
 ```
+
+A config writing its overlay itself (`from_env = "manual"`) writes
+`fn defaults()` in its own `impl Config` instead.
 
 An address or a credential is never one, in any profile: no `defaults()` names
 a database, a Redis, a store or the pair to reach it. The profile's `.env` file
 does — `nestrs new` writes `compose.yml`'s services into `.env.development` and
 `.env.test` — and a deployment names its own.
 
-It belongs here rather than inside `from_env`: `from_env` also runs over a
+It belongs here rather than inside the overlay: the overlay also runs over a
 value pinned in code, and a profile rule there would silently rewrite a
 deliberate choice. So a pin chooses its base in sight — `..T::defaults()` for
 the profile's, `..Default::default()` for the production-safe value — and
@@ -196,5 +262,5 @@ the profile's, `..Default::default()` for the production-safe value — and
 
 ## Going further
 
-- [Configuration](/configuration/) — the typed `#[config]` derive and the dual-path rule.
+- [Configuration](/configuration/) — the overlay `#[config]` derives and the dual-path rule.
 - [Testing configuration](/configuration/testing/) — `MapSource` / `ConfigService::with_vars`.

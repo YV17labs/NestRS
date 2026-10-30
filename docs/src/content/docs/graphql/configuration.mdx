@@ -50,11 +50,12 @@ pub struct GraphqlConfig {
     pub max_message_bytes: usize,
     /// The wait for `connection_init`. Default 3 seconds.
     pub connection_init_timeout: Duration,
-    /// Operations one socket runs at once. Default `100`.
+    /// Operations one socket runs at once. Default `100`; `None` unlimited.
     pub max_socket_operations: Option<usize>,
     /// Serve as an Apollo subgraph. Default `false`.
     pub federation: bool,
-    /// Bound on a federation `_entities` request. Default `100`.
+    /// Bound on a federation `_entities` request. Default `100`; `None`
+    /// unlimited.
     pub max_representations: Option<usize>,
     /// Fail the boot on an unreachable resolver. Default `false`.
     pub strict_resolver_membership: bool,
@@ -67,15 +68,15 @@ pub struct GraphqlConfig {
 | `playground` | `<PREFIX>_GRAPHQL__PLAYGROUND` | `false`; `true` in development and test | When `true`, `GET <path>` serves the GraphQL Playground page, which loads its scripts, styles and fonts from third-party hosts ([The playground](#the-playground)). |
 | `emit` | `<PREFIX>_GRAPHQL__EMIT` | `false`; `true` in development | When `true`, the running app writes its live SDL to `emit_path` once at boot. |
 | `emit_path` | `<PREFIX>_GRAPHQL__EMIT_PATH` | `schema.graphql` | Where the SDL gets written; a relative path is the app crate's ([SDL emission](#sdl-emission)). |
-| `max_depth` | `<PREFIX>_GRAPHQL__MAX_DEPTH` | `15` | Bound on AST nesting depth; `None` disables. See [Query limits](/graphql/query-limits/). |
-| `max_complexity` | `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` | `2000` | Bound on query complexity score; `None` disables. See [Query limits](/graphql/query-limits/). |
+| `max_depth` | `<PREFIX>_GRAPHQL__MAX_DEPTH` | `15` | Bound on AST nesting depth; `None` disables, as `0` does from the environment. See [Query limits](/graphql/query-limits/). |
+| `max_complexity` | `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` | `2000` | Bound on query complexity score; `None` disables, as `0` does from the environment. See [Query limits](/graphql/query-limits/). |
 | `introspection` | `<PREFIX>_GRAPHQL__INTROSPECTION` | `false`; `true` in development and test | When `true`, the schema answers introspection queries (`__schema`, `__type`). |
 | `max_batch_size` | `<PREFIX>_GRAPHQL__MAX_BATCH_SIZE` | `10` | Maximum operations in a single HTTP batch request. |
 | `max_connection` | `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` | `14400` (4 h) | Ceiling on a subscription's lifetime. A **security** control: a socket authenticates once and replays those privileges for as long as it stays open. `0` disables it. |
 | `max_message_bytes` | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | `65536` (64 KiB) | Byte cap on one graphql-ws message, held at the protocol layer: a larger frame is never buffered, and the socket closes. |
 | `connection_init_timeout` | `<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS` | `3` | How long an upgraded socket may wait for `connection_init` before it closes `4408`. From `1` to `60`, never off. |
-| `max_socket_operations` | `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS` | `100` | Operations one socket runs at once; a `subscribe` past it is answered an `error` message for its id. `0` disables it. |
-| `max_representations` | `<PREFIX>_GRAPHQL__MAX_REPRESENTATIONS` | `100` | Bound on the `representations` a federation `_entities` call may ask for in one request. `0` disables it. |
+| `max_socket_operations` | `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS` | `100` | Operations one socket runs at once; a `subscribe` past it is answered an `error` message for its id. `None` disables it, as `0` does from the environment; a pinned `Some(0)` fails the boot. |
+| `max_representations` | `<PREFIX>_GRAPHQL__MAX_REPRESENTATIONS` | `100` | Bound on the `representations` a federation `_entities` call may ask for in one request. `None` disables it, as `0` does from the environment; a pinned `Some(0)` fails the boot. |
 | `strict_resolver_membership` | `<PREFIX>_GRAPHQL__STRICT_RESOLVER_MEMBERSHIP` | `false` | When `true`, a resolver no imported module owns fails the boot instead of warning. |
 | `federation` | `<PREFIX>_GRAPHQL__FEDERATION` | `false` | Serve as an Apollo subgraph: declares the federation directives and exports the subgraph SDL form. An `#[entity]` declared while this is `false` fails the boot. See [Federation](/graphql/federation/). |
 
@@ -208,7 +209,7 @@ Before shipping:
 ## Reference
 
 - `crates/nest-rs-graphql/src/config.rs` — the `GraphqlConfig`
-  struct and `Config::from_env` impl.
+  struct, whose overlay `#[config]` derives.
 - `crates/nest-rs-graphql/src/module.rs` — the `for_root` /
   `register` glue that turns the config into route mounts.
 

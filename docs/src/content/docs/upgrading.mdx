@@ -388,7 +388,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `impl HttpGuard for X {}`, `GraphqlGuard`, `WsGuard`, `McpGuard` | `impl GuardFor<HttpView> for X {}`, `GuardFor<GraphqlView>`, `GuardFor<WsView>`, `GuardFor<McpView>` |
    | `req.extensions_mut().insert(value)` in a guard, read back with `Ctx<T>` | `cx.attach(value)`, with `impl AmbientValue for T {}` beside the type; a guard after it reads `cx.ambient::<T>()` |
    | `use nest_rs::http::Ctx;` | `use nest_rs::core::Ctx;` — the same parameter on a route, a resolver, a message handler and a tool; `nest_rs::prelude::*` carries it |
-   | a `Strategy::Principal` or an `AbilityFactory::Actor` that is not your own type (`()`, `&'static str`) | a type of your own implementing `AmbientValue` and `Clone` — the guard attaches it; a `Claims` gains `impl AmbientValue for Claims {}` |
+   | a `Strategy::Principal` or an `AbilityFactory::Actor` that is not your own type (`()`, `&'static str`) | a type of your own implementing `AmbientValue` and `Clone` — the guard attaches it; a `Claims` gains `impl AmbientValue for Claims {}`, or derives it with its `PrincipalIdentity` (step 11) |
    | `if Reflector::new(req).is_public() { return Ok(()) }` in an authentication guard | `if matches!(cx.reflector().posture(), Posture::Public \| Posture::InBand) { return Ok(()) }` — `/graphql` is `InBand`, each operation declaring its own posture |
    | `nest_rs::guards::prelude::HttpRequest` | `HttpView`, and `nest_rs::http::Request` for the type it holds |
    | a `Denial::Unavailable { retry_after_secs, reason }` built in full | `Denial::unavailable(retry_after_secs, reason)` — and `.with_source(err)` to keep what failed |
@@ -756,7 +756,12 @@ lists what the boot, a log or the wire shows when one is missed.
     A project scaffolded by an earlier `nestrs g auth` keeps
     `sub: Option<Uuid>` in its claims, which cannot hold a client's own id; the
     [JWT page](/security/authentication/jwt/) shows the claims a 7.0 scaffold
-    writes, whose subject is always present. An `http://localhost` OAuth or
+    writes, whose subject is always present. Optionally, the claims' two
+    hand-written impls may be derived: `#[derive(PrincipalIdentity)]` on the
+    struct, `#[principal(actor)]` on the field `actor_id` returned, and
+    `#[principal(tenant)]` and `#[principal(scopes)]` on those `tenant_id` and
+    `scopes` read, then delete `impl AmbientValue` and `impl PrincipalIdentity`.
+    Kept, they compile as before. An `http://localhost` OAuth or
     social-login redirect, a protected resource's or an issuer's loopback
     `http` URI, serve a declared development or test profile alone.
 

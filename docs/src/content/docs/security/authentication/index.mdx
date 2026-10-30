@@ -98,9 +98,18 @@ itself — a redirect-style flow (OAuth `/authorize`) is a plain handler,
 so authentication stays a pure request → principal mapping.
 
 ```rust title="crates/features/src/authn/strategies/api_key.rs"
+use std::sync::Arc;
+
 use nest_rs::authn::{AuthError, PrincipalIdentity, Strategy};
-use nest_rs::core::{AmbientValue, async_trait, injectable};
+use nest_rs::core::{async_trait, injectable};
 use nest_rs::http::Request;
+use uuid::Uuid;
+
+#[derive(Clone, PrincipalIdentity)]
+pub struct ApiKey {
+    #[principal(actor)]
+    pub owner_id: Uuid,
+}
 
 #[injectable]
 pub struct ApiKeyStrategy {
@@ -119,20 +128,12 @@ impl Strategy for ApiKeyStrategy {
         }
     }
 }
-
-// The guard attaches the principal for the rest of the request.
-impl AmbientValue for ApiKey {}
-
-// Every principal declares its audit identity — the value the framework
-// records as `actor_id` on the request span, so denials are attributable.
-impl PrincipalIdentity for ApiKey {
-    fn actor_id(&self) -> Option<String> {
-        Some(self.owner_id.to_string())
-    }
-}
 ```
 
-A custom strategy binds exactly like the shipped one:
+`#[derive(PrincipalIdentity)]` makes `ApiKey` a principal: the guard attaches
+it for the rest of the request, and records the field marked
+`#[principal(actor)]` as `actor_id` on the request span, so every denial is
+attributable. A custom strategy binds exactly like the shipped one:
 `AuthnGuard<ApiKeyStrategy>` behind a type alias, listed in `providers`,
 bound with `#[use_guards(...)]`.
 
@@ -164,15 +165,15 @@ for an anonymous caller. It is an **audit** identity and never an authorization
 input: what a caller may *do* is the ambient `Ability`, decided in a guard. See
 [Correlation](/fundamentals/correlation/).
 
-Return the credential's subject. RFC 9068 §2.2 requires `sub` in a JWT access
-token — the client's own id when it acts on its own behalf — so a conformant
-credential always names one. A principal whose `actor_id` is `None` can still be
-authorized, but nothing can be bound to it alone: an
+Mark the credential's subject as the actor. RFC 9068 §2.2 requires `sub` in a
+JWT access token — the client's own id when it acts on its own behalf — so a
+conformant credential always names one. A principal whose `actor_id` is `None`
+can still be authorized, but nothing can be bound to it alone: an
 [MCP session](/mcp/configuration/#a-session-belongs-to-the-principal-that-opened-it)
 never opens for one.
 
-A principal bound to a tenant declares it beside, with `fn tenant_id(&self) ->
-Option<String>`, read off the verified credential — a claim its issuer signed,
+A principal bound to a tenant marks it beside, `#[principal(tenant)]` on the
+field read off the verified credential — a claim its issuer signed,
 never a header the caller sends beside it. The tenant is the opposite of the
 actor: an **authorization** input. The guard makes it ambient for the request
 and seals it into every job the request pushes, and

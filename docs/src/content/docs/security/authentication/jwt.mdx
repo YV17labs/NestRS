@@ -84,11 +84,11 @@ with `WWW-Authenticate: Bearer`.
 
 The framework's `JwtStrategy<C>` is generic. `C` is any
 `DeserializeOwned + PrincipalIdentity + AmbientValue + Clone` type — usually a
-struct with the standard `sub`, `exp`, plus whatever your app needs:
+struct with the standard `sub`, `exp`, plus whatever your app needs, which
+derives the two traits:
 
 ```rust title="crates/features/src/authn/claims.rs"
 use nest_rs::authn::PrincipalIdentity;
-use nest_rs::core::AmbientValue;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -100,29 +100,34 @@ pub enum Subject {
 }
 // …
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PrincipalIdentity)]
 pub struct Claims {
+    #[principal(actor)]
     pub sub: Subject,
+    #[principal(tenant)]
     pub org_id: Uuid,
     pub roles: Vec<Role>,
     pub exp: u64,
 }
-
-impl AmbientValue for Claims {}
-
-impl PrincipalIdentity for Claims {
-    fn actor_id(&self) -> Option<String> {
-        Some(self.sub.to_string())
-    }
-}
 ```
 
-`AmbientValue` is what lets `AuthnGuard` attach the claims for the rest of the
-request — every guard after it, and `Ctx<Claims>` in a handler on any edge, a
-resolver below `/graphql` included, read them there. `PrincipalIdentity` names the audit identity: on a
-successful authentication `AuthnGuard` records `actor_id` onto the request
-span, so every downstream event — denials included — is attributable without
-threading the identity through each call site.
+`#[derive(PrincipalIdentity)]` reads each role off the field marked for it.
+`#[principal(actor)]` is the audit identity: on a successful authentication
+`AuthnGuard` records it as `actor_id` onto the request span, so every
+downstream event — denials included — is attributable without threading the
+identity through each call site. `#[principal(tenant)]` is the tenant the
+caller acts within, made ambient for the request and every job it pushes
+([Multi-tenant SaaS](/security/multi-tenant-saas/)), and `#[principal(scopes)]`
+the token's `scope` claim ([Scopes](/security/authorization/scopes/)); both are
+optional. An actor or a tenant is read as the text its value prints, so a
+`Uuid`, a `String` or an enum with its `Display` all serve, and an `Option`
+answers `None` when it holds none. The derive also implements `AmbientValue`,
+which is what lets `AuthnGuard` attach the claims for the rest of the request —
+every guard after it, and `Ctx<Claims>` in a handler on any edge, a resolver
+below `/graphql` included, read them there. Claims marking no actor, or a role
+the derive does not know, are a compile error naming the three roles it takes;
+a role marked twice is refused at its second mark. A generic principal, or one
+narrowing what it carries, writes the two impls by hand.
 
 Every access token names its subject: RFC 9068 §2.2 requires `sub`, the user's
 id, or the client's own when it acts on its own behalf (the
@@ -133,8 +138,8 @@ binds to. `Subject` keeps the two kinds apart: one string on the wire, read
 back by its shape, a UUID being a user. Whatever registers your clients
 therefore refuses a client id a UUID parses, so no client passes for a user
 (RFC 9068 §5). A route writing a user's row reads `claims.sub.user_id()`, which
-a client answers with `None`. `nestrs g auth` writes the enum, its conversions,
-the struct and both impls.
+a client answers with `None`. `nestrs g auth` writes the enum, its conversions
+and the struct with its derive.
 
 The handler reads them back through `Ctx<Claims>`:
 

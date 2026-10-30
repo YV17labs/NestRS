@@ -97,11 +97,11 @@ What a job keeps is the tenant it was pushed for. Your claims name it once,
 off the verified token:
 
 ```rust title="crates/features/src/authn/claims.rs (from the demo, abridged)"
-impl nest_rs::authn::PrincipalIdentity for Claims {
+#[derive(Debug, Clone, Serialize, Deserialize, PrincipalIdentity)]
+pub struct Claims {
     // …
-    fn tenant_id(&self) -> Option<String> {
-        Some(self.org_id.to_string())
-    }
+    #[principal(tenant)]
+    pub org_id: Uuid,
     // …
 }
 ```

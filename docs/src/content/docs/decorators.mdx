@@ -66,6 +66,13 @@ host or a worker's impl block, and a method one of its handlers.
 | `#[authorize]` | method | Access posture: gates the unit by ability (`Action`, `Subject`) and, on an entity, masks the response; `bind = Service` also loads the row an id names into an `Authorized<Action, E>` parameter, on a route or a GraphQL operation | [Authorization](/security/authorization/), [Route model binding](/security/authorization/by-id-binding/) |
 | `#[subject]` | unit struct | Declares a capability no table holds as an authorization subject: a rule grants it whole, `#[authorize]` gates it on every edge and masks nothing | [Policies](/security/authorization/policies/#subjects-no-table-holds) |
 
+## Authentication
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[derive(PrincipalIdentity)]` | struct | Makes a claims type a principal: implements `PrincipalIdentity` and `AmbientValue` off the fields `#[principal]` marks | [JWT](/security/authentication/jwt/#claims--your-shape-your-business-rules) |
+| `#[principal]` | field | Marks the role its field plays — `actor` (required), `tenant` or `scopes` — each played by one field | [JWT](/security/authentication/jwt/#claims--your-shape-your-business-rules) |
+
 ## Layer attributes, pair by pair
 
 One grammar holds every decorator pair: each layer attribute is taken where

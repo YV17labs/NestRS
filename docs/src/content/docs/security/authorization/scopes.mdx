@@ -56,19 +56,22 @@ manage users, no scope makes them able to.
 
 ## Tell the framework what the token carries
 
-Scopes reach the ability layer from the principal. Implement
-`PrincipalIdentity::scopes` on your claims type, and read the standard
-space-delimited `scope` claim with the `serde` helper the framework
-ships:
+Scopes reach the ability layer from the principal. Mark the field that
+holds them `#[principal(scopes)]` on your claims type, and read the
+standard space-delimited `scope` claim with the `serde` helper the
+framework ships:
 
-```rust title="crates/features/src/authn/claims.rs (from the demo, abridged)" {8-14,23-25}
-#[derive(Debug, Clone, Serialize, Deserialize)]
+```rust title="crates/features/src/authn/claims.rs (from the demo)" {10-17}
+#[derive(Debug, Clone, Serialize, Deserialize, PrincipalIdentity)]
 pub struct Claims {
+    #[principal(actor)]
     pub sub: Subject,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    #[principal(tenant)]
     pub org_id: Uuid,
     pub roles: Vec<Role>,
+    #[principal(scopes)]
     #[serde(
         default,
         rename = "scope",
@@ -78,17 +81,11 @@ pub struct Claims {
     pub scopes: Vec<String>,
     pub exp: u64,
 }
-// …
-impl nest_rs::authn::PrincipalIdentity for Claims {
-    fn actor_id(&self) -> Option<String> {
-        Some(self.sub.to_string())
-    }
-    // …
-    fn scopes(&self) -> Option<&[String]> {
-        Some(&self.scopes)
-    }
-}
 ```
+
+The field is a list, never an `Option`: a token sent without its `scope`
+claim reads as one granted nothing, and the derive refuses an optional
+list at compile time.
 
 The authentication guard publishes the result and the ability guard
 reads it. You write nothing else.

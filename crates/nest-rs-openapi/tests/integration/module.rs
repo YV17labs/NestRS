@@ -744,3 +744,49 @@ fn a_relative_emit_path_lands_in_the_crate_main_expanded_in() {
     );
     let _ = std::fs::remove_dir_all(&elsewhere);
 }
+
+/// The documentation pinned open outside a dev profile is honoured, and the
+/// boot mounting it says so.
+#[test]
+fn a_pin_opening_the_documentation_in_production_is_said_at_boot() {
+    let logs = in_production(|| async {
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<DocumentedApp>()
+            .await
+            .unwrap_or_else(|refused| panic!("an explicit opening is honoured: {refused:#}"));
+        app.http()
+            .get("/api-json")
+            .send()
+            .await
+            .assert_status_is_ok();
+        logs
+    });
+    let event = logs.expect_one(
+        nest_rs_openapi::TARGET,
+        "OpenAPI documentation endpoints are enabled and public outside a dev profile",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("environment").as_deref(), Some("production"));
+}
+
+/// Runs `boot` in a process that declares the production profile, which the
+/// boot reads off the process environment `figment::Jail` scopes.
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn in_production<F: std::future::Future>(boot: impl FnOnce() -> F) -> F::Output {
+    let mut out = None;
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(nest_rs_config::Environment::var_name(), "production");
+        out = Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(boot()),
+        );
+        Ok(())
+    });
+    out.expect("the jailed boot ran")
+}

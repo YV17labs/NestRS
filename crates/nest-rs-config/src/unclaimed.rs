@@ -577,9 +577,27 @@ fn squash(name: &str) -> String {
 /// Equal once separators and case are set aside is nearest of all; otherwise
 /// the edit distance must stay within a third of the longer key, and at least
 /// one edit — `PROT` reaches `PORT`, `HOST` does not. Ties go to the name that
-/// sorts first, so the suggestion is stable across runs.
+/// sorts first, so the suggestion is stable across runs. A key that leads
+/// several read keys segment by segment names their vocabulary, not one of
+/// them (`SECURITY_HEADERS` beside `SECURITY_HEADERS_HSTS` and
+/// `SECURITY_HEADERS_ENABLED`), and gets none; a key's `_FILE` spelling is
+/// that key.
 fn closest<'k>(key: &str, read: &[(&str, &'k str)]) -> Option<&'k str> {
     let typed = key.to_ascii_uppercase();
+    let segment = format!("{typed}_");
+    let led: BTreeSet<&str> = read
+        .iter()
+        .filter(|(candidate, _)| candidate.starts_with(&segment))
+        .map(|(candidate, _)| {
+            candidate
+                .strip_suffix("_FILE")
+                .filter(|inline| read.iter().any(|(other, _)| other == inline))
+                .unwrap_or(candidate)
+        })
+        .collect();
+    if led.len() > 1 {
+        return None;
+    }
     let squashed = squash(&typed);
     read.iter()
         .filter_map(|(candidate, name)| {
@@ -679,6 +697,41 @@ mod tests {
         let secs = var_name("fixture", "CONNECT_TIMEOUT_SECS");
         let read = [("CONNECT_TIMEOUT_SECS", secs.as_str())];
         assert_eq!(closest("CONNECT_TIMEOUT", &read), Some(secs.as_str()));
+    }
+
+    /// A key the leading segments of several read keys names their
+    /// vocabulary, not one of them: the bare `SECURITY_HEADERS` is no
+    /// misspelling of `SECURITY_HEADERS_HSTS`, the nearest by distance.
+    #[test]
+    fn a_key_leading_several_read_keys_suggests_none_of_them() {
+        let keys = [
+            "SECURITY_HEADERS_ENABLED",
+            "SECURITY_HEADERS_ENABLED_FILE",
+            "SECURITY_HEADERS_FRAME_OPTIONS",
+            "SECURITY_HEADERS_HSTS",
+        ];
+        let names = keys.map(|key| var_name("fixture", key));
+        let read: Vec<(&str, &str)> = keys
+            .into_iter()
+            .zip(names.iter().map(String::as_str))
+            .collect();
+        assert_eq!(closest("SECURITY_HEADERS", &read), None);
+        assert_eq!(
+            closest("SECURITY_HEADERS_HTSS", &read),
+            Some(names[3].as_str()),
+            "a typo of one of them is still that one"
+        );
+        let secs = var_name("fixture", "CONNECT_TIMEOUT_SECS");
+        let file = var_name("fixture", "CONNECT_TIMEOUT_SECS_FILE");
+        let spelled = [
+            ("CONNECT_TIMEOUT_SECS", secs.as_str()),
+            ("CONNECT_TIMEOUT_SECS_FILE", file.as_str()),
+        ];
+        assert_eq!(
+            closest("CONNECT_TIMEOUT", &spelled),
+            Some(secs.as_str()),
+            "a key and its `_FILE` spelling are one key"
+        );
     }
 
     #[test]

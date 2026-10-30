@@ -1,9 +1,12 @@
 //! Per-argument pipes on GraphQL operations: a `Piped<P>` parameter exposes
 //! the pipe's input on the wire, runs the pipe before the body, and surfaces a
 //! rejection as a GraphQL error. An argument whose type declares rules is
-//! validated there unasked, an optional one when it is given.
+//! validated there unasked, an optional one when it is given, and so is a
+//! `#[field_resolver]`'s.
 
-use async_graphql::InputObject;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use async_graphql::{InputObject, SimpleObject};
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_pipes::{ParseArray, Pipe, PipeError, Piped, Trim};
@@ -76,7 +79,36 @@ impl PipeResolver {
     }
 }
 
-#[module(providers = [PipeResolver])]
+#[derive(SimpleObject)]
+#[graphql(complex)]
+struct Shelf {
+    id: i32,
+}
+
+/// Counts the field resolver bodies that ran, so a refusal is seen to run
+/// before it.
+static LABELLED: AtomicU32 = AtomicU32::new(0);
+
+#[resolver]
+struct ShelfResolver;
+
+#[operations]
+impl ShelfResolver {
+    #[query]
+    #[public]
+    async fn shelf(&self) -> Shelf {
+        Shelf { id: 1 }
+    }
+
+    /// A field resolver's argument whose type declares rules.
+    #[field_resolver]
+    async fn label(&self, parent: &Shelf, input: NameInput) -> String {
+        LABELLED.fetch_add(1, Ordering::SeqCst);
+        format!("{}:{}", parent.id, input.name)
+    }
+}
+
+#[module(providers = [PipeResolver, ShelfResolver])]
 struct PipeFeatureModule;
 
 #[module(imports = [GraphqlModule::for_root(None), PipeFeatureModule])]
@@ -196,6 +228,43 @@ async fn an_input_breaking_its_rules_is_refused_before_the_body() {
         first_error("{ named(input: { name: \"\" }) }").await,
         "validation failed"
     );
+}
+
+#[tokio::test]
+async fn a_field_resolver_argument_breaking_its_rules_is_a_field_error_before_the_body() {
+    let app = boot().await;
+    let ask = |name: &'static str| {
+        let query = format!("{{ shelf {{ id label(input: {{ name: \"{name}\" }}) }} }}");
+        let app = &app;
+        async move {
+            let resp = app
+                .http()
+                .post("/graphql")
+                .body_json(&serde_json::json!({ "query": query }))
+                .send()
+                .await;
+            resp.assert_status_is_ok();
+            resp.json().await.value().deserialize::<serde_json::Value>()
+        }
+    };
+
+    let refused = ask("").await;
+    let error = &refused["errors"][0];
+    assert_eq!(error["message"], "validation failed", "{refused}");
+    assert_eq!(
+        error["extensions"]["code"],
+        nest_rs_core::problem::code::INVALID_ARGUMENT.as_str(),
+        "{refused}",
+    );
+    assert_eq!(
+        error["extensions"]["errors"]["name"][0]["code"], "length",
+        "{refused}"
+    );
+    assert_eq!(error["path"], serde_json::json!(["shelf", "label"]));
+    assert_eq!(LABELLED.load(Ordering::SeqCst), 0, "the body ran");
+
+    let kept = ask("ok").await;
+    assert_eq!(kept["data"]["shelf"]["label"], "1:ok", "{kept}");
 }
 
 #[tokio::test]

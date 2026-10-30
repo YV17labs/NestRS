@@ -1,5 +1,6 @@
 //! `src/resource.rs`: a `#[resource]` read and a `#[resources]` listing,
-//! declared under `#[tools]` beside a tool and run through a site of their own.
+//! declared under `#[tools]` beside a tool and run through a site of their own,
+//! a template variable held to the rules its type declares before the body.
 
 use std::sync::Mutex;
 
@@ -393,4 +394,84 @@ async fn a_resource_whose_guard_no_module_provides_refuses_the_boot() {
         Err(err) => format!("{err:#}"),
     };
     assert!(refused.contains("NeverProvided"), "{refused}");
+}
+
+/// A template variable whose type declares rules.
+#[input]
+struct Slug {
+    #[validate(length(min = 3))]
+    value: String,
+}
+
+impl std::str::FromStr for Slug {
+    type Err = std::convert::Infallible;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(Self {
+            value: value.to_owned(),
+        })
+    }
+}
+
+const TAGS: &str = "/mcp/tags";
+
+#[mcp(path = "/mcp/tags")]
+#[derive(Clone, Default)]
+struct TagsHost;
+
+#[tools]
+impl TagsHost {
+    /// One tag, read off its slug.
+    #[resource(template = "tag://{slug}")]
+    #[public]
+    async fn tag(&self, slug: Slug) -> Result<String, McpError> {
+        Ok(format!("the tag {}", slug.value))
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [TagsHost])]
+struct TagsModule;
+
+#[tokio::test]
+async fn a_template_variable_breaking_its_rules_is_refused_before_the_body() {
+    let app = TestApp::for_module::<TagsModule>()
+        .await
+        .expect("a host reading a variable whose type declares rules boots");
+    let read = |uri: &'static str| {
+        let app = &app;
+        async move {
+            let session = open_session(app.http(), TAGS, None).await;
+            let body = call_method(
+                app.http(),
+                TAGS,
+                &session,
+                None,
+                "resources/read",
+                json!({ "uri": uri }),
+            )
+            .await;
+            let answer = result(&body);
+            (body, answer)
+        }
+    };
+
+    let (body, refused) = read("tag://zq").await;
+    assert_eq!(refused["error"]["code"], json!(-32602), "{body}");
+    assert_eq!(refused["error"]["message"], "validation failed", "{body}");
+    assert_eq!(
+        refused["error"]["data"]["code"],
+        nest_rs_core::problem::code::INVALID_ARGUMENT.as_str(),
+        "{body}",
+    );
+    assert_eq!(
+        refused["error"]["data"]["errors"]["value"][0]["code"], "length",
+        "{body}"
+    );
+    assert!(!body.contains("the tag"), "the body ran: {body}");
+    assert!(!body.contains("zq"), "the refusal quotes the value: {body}");
+
+    let (body, kept) = read("tag://abc").await;
+    assert_eq!(
+        kept["result"]["contents"][0]["text"], "the tag abc",
+        "{body}"
+    );
 }

@@ -9,9 +9,6 @@ use nest_rs_config::{Bound, DurationBounds, Environment, Floor, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
-/// Four hours, as `<PREFIX>_WS__MAX_CONNECTION_SECS` defaults.
-const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
-
 /// The subscription socket ceiling's range and the variable that sets it.
 const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
     "MAX_CONNECTION_SECS",
@@ -117,7 +114,8 @@ pub struct GraphqlConfig {
     /// control: a subscription captures its principal once at the upgrade.
     ///
     /// Read from `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`, whole seconds from 1 to
-    /// 86400 or `0` for unlimited; defaults to 4 hours.
+    /// 86400 or `0` for unlimited; defaults to 4 hours,
+    /// [`nest_rs_http::DEFAULT_MAX_CONNECTION`].
     #[config(bounds = MAX_CONNECTION)]
     pub max_connection: Option<Duration>,
     /// The graphql-ws socket's per-message and per-frame byte cap, held at the
@@ -189,7 +187,7 @@ impl Default for GraphqlConfig {
             max_complexity: Some(2000),
             introspection: false,
             max_batch_size: 10,
-            max_connection: Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
+            max_connection: Some(nest_rs_http::DEFAULT_MAX_CONNECTION),
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             connection_init_timeout: Duration::from_secs(DEFAULT_CONNECTION_INIT_TIMEOUT_SECS),
             max_socket_operations: Some(DEFAULT_MAX_SOCKET_OPERATIONS),
@@ -244,6 +242,16 @@ mod tests {
 
     use super::*;
     use validator::Validate;
+
+    /// A subscription socket's ceiling defaults to the value the HTTP transport
+    /// exports for every long-lived connection, never a copy of it.
+    #[test]
+    fn the_socket_ceiling_is_the_transports_own() {
+        assert_eq!(
+            GraphqlConfig::default().max_connection,
+            Some(nest_rs_http::DEFAULT_MAX_CONNECTION)
+        );
+    }
 
     #[test]
     fn defaults_are_production_safe() {

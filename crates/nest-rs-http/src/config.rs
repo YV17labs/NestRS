@@ -12,18 +12,10 @@ use crate::versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, VersionSelector};
 
 const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 3000;
-/// Default `#[sse]` stream ceiling: 4 hours, the WS and GraphQL connection
-/// ceilings' default too.
-const DEFAULT_SSE_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
-/// 15 seconds: under the 30–60 s idle timeout common to proxies and browsers.
-const DEFAULT_SSE_KEEP_ALIVE_SECS: u64 = 15;
 /// 20 seconds, plus 5 for the shutdown hooks, 3 for the telemetry flush and 1
 /// for the console's (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT`): 29, under
 /// Kubernetes' default 30.
 pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
-/// The shutdown window's own default, so a request admitted just before a stop
-/// is answered inside the window.
-const DEFAULT_REQUEST_TIMEOUT: Duration = DEFAULT_SHUTDOWN_TIMEOUT;
 
 const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds::secs(
     "SHUTDOWN_TIMEOUT_SECS",
@@ -41,6 +33,28 @@ const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds::secs(
          gives a replica, whose kill then cuts what the window held without a word",
     ),
 );
+
+/// The lifetime ceiling every long-lived connection takes by default: four
+/// hours, for an `#[sse]` stream here, a WebSocket and a GraphQL subscription
+/// in their own crates.
+///
+/// Each edge reads its own variable — `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`,
+/// `<PREFIX>_WS__MAX_CONNECTION_SECS`, `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` —
+/// since each runs its own loop and may want its own ceiling: a deployment
+/// tightening how long a revoked credential keeps a live socket sets all three.
+pub const DEFAULT_MAX_CONNECTION: Duration = Duration::from_secs(4 * 60 * 60);
+
+/// The interval a server-sent stream keeps itself alive at by default — HTTP's
+/// `#[sse]` here, MCP's stream in its own crate: 15 seconds, under the 30–60 s
+/// idle timeout common to proxies and browsers. Each reads its own variable.
+pub const DEFAULT_SSE_KEEP_ALIVE: Duration = Duration::from_secs(15);
+
+/// The deadline an edge's unit takes by default — HTTP's request here, a
+/// WebSocket message's and hooks' and an MCP operation's in their own crates:
+/// the shutdown window's own default, so a unit admitted just before a stop is
+/// answered inside the window, and above every net it waits under. Each reads
+/// its own variable.
+pub const DEFAULT_UNIT_TIMEOUT: Duration = DEFAULT_SHUTDOWN_TIMEOUT;
 
 /// The floor every long-lived connection's lifetime ceiling is held to — an
 /// `#[sse]` stream here, a WebSocket and a GraphQL subscription in their own
@@ -413,13 +427,13 @@ impl Default for HttpConfig {
             server_header: false,
             global_prefix: None,
             max_body_bytes: RawBody::DEFAULT_LIMIT,
-            request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
+            request_timeout: Some(DEFAULT_UNIT_TIMEOUT),
             security_headers: HttpSecurityHeaders::default(),
             compression: false,
             access_log: true,
             trusted_proxies: Vec::new(),
-            sse_max_connection: Some(Duration::from_secs(DEFAULT_SSE_MAX_CONNECTION_SECS)),
-            sse_keep_alive: Some(Duration::from_secs(DEFAULT_SSE_KEEP_ALIVE_SECS)),
+            sse_max_connection: Some(DEFAULT_MAX_CONNECTION),
+            sse_keep_alive: Some(DEFAULT_SSE_KEEP_ALIVE),
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             max_concurrent_connections: DEFAULT_MAX_CONCURRENT_CONNECTIONS,
             header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
@@ -659,6 +673,16 @@ mod tests {
 
     /// A TLS file the transport cannot read fails the boot with its I/O reason
     /// as the source.
+    /// The transport's own long-lived streams take the defaults it exports
+    /// for every edge riding on it.
+    #[test]
+    fn the_sse_defaults_are_the_exported_ones() {
+        let d = HttpConfig::default();
+        assert_eq!(d.sse_max_connection, Some(DEFAULT_MAX_CONNECTION));
+        assert_eq!(d.sse_keep_alive, Some(DEFAULT_SSE_KEEP_ALIVE));
+        assert_eq!(d.request_timeout, Some(DEFAULT_UNIT_TIMEOUT));
+    }
+
     #[test]
     fn an_unreadable_tls_file_fails_the_boot_with_its_reason() {
         let env = ConfigService::with_vars(

@@ -15,9 +15,6 @@ use std::time::Duration;
 
 use nest_rs_config::{DurationBounds, config};
 
-/// Default socket-lifetime ceiling: 4 hours.
-const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
-
 /// The socket-lifetime ceiling's range and the variable that sets it.
 const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
     "MAX_CONNECTION_SECS",
@@ -28,10 +25,6 @@ const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
 
 /// Default per-message byte cap: 64 KiB, against tungstenite's own 64 MiB.
 pub(crate) const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
-
-/// The HTTP request timeout's default, ordered the same way: inside the
-/// shutdown window, above every net a message or a hook waits under.
-const DEFAULT_UNIT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The message deadline's range and the variable that sets it.
 const MESSAGE_TIMEOUT: DurationBounds = DurationBounds::secs(
@@ -64,7 +57,7 @@ pub struct WsConfig {
     /// Maximum lifetime of a single WebSocket connection; the peer must then
     /// re-upgrade, re-running authn/authz. `None` ⇒ unlimited. Read from
     /// `<PREFIX>_WS__MAX_CONNECTION_SECS`, whole seconds from 1 to 86400 or `0`
-    /// for unlimited; defaults to 4 hours.
+    /// for unlimited; defaults to 4 hours, [`nest_rs_http::DEFAULT_MAX_CONNECTION`].
     #[config(bounds = MAX_CONNECTION)]
     pub max_connection: Option<Duration>,
     /// Maximum bytes accepted for a single inbound message, enforced at the
@@ -78,7 +71,7 @@ pub struct WsConfig {
     /// socket goes on serving. `None` ⇒ no deadline. Read from
     /// `<PREFIX>_WS__MESSAGE_TIMEOUT_SECS`, whole seconds from 1 to 3600 or `0`
     /// for none — refused outside, from the environment and from the pinned
-    /// struct alike; defaults to 20 seconds, the HTTP request timeout's. A
+    /// struct alike; defaults to 20 seconds, [`nest_rs_http::DEFAULT_UNIT_TIMEOUT`]. A
     /// deadline past the HTTP shutdown window, or none, is said at boot with a
     /// `warn`.
     #[config(bounds = MESSAGE_TIMEOUT)]
@@ -101,11 +94,11 @@ pub struct WsConfig {
 impl Default for WsConfig {
     fn default() -> Self {
         Self {
-            max_connection: Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
+            max_connection: Some(nest_rs_http::DEFAULT_MAX_CONNECTION),
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
-            message_timeout: Some(DEFAULT_UNIT_TIMEOUT),
-            connect_timeout: Some(DEFAULT_UNIT_TIMEOUT),
-            disconnect_timeout: Some(DEFAULT_UNIT_TIMEOUT),
+            message_timeout: Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT),
+            connect_timeout: Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT),
+            disconnect_timeout: Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT),
         }
     }
 }
@@ -142,6 +135,17 @@ mod tests {
     use nest_rs_config::{Config, ConfigService};
 
     use super::*;
+
+    /// A socket's ceiling and a message's deadline default to the values the
+    /// HTTP transport they ride on exports, never a copy of them.
+    #[test]
+    fn the_defaults_are_the_transports_own() {
+        let d = WsConfig::default();
+        assert_eq!(d.max_connection, Some(nest_rs_http::DEFAULT_MAX_CONNECTION));
+        for timeout in [d.message_timeout, d.connect_timeout, d.disconnect_timeout] {
+            assert_eq!(timeout, Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT));
+        }
+    }
 
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {

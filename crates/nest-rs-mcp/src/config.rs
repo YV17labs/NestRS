@@ -27,10 +27,6 @@ use rmcp::transport::streamable_http_server::session::local::SessionConfig;
 /// rmcp's own default POST body ceiling.
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 
-/// The HTTP request timeout's default, ordered the same way: inside the
-/// shutdown window, above every net an operation waits under.
-const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
-
 /// The operation deadline's range and the variable that sets it.
 const OPERATION_TIMEOUT: DurationBounds = DurationBounds::secs(
     "OPERATION_TIMEOUT_SECS",
@@ -119,7 +115,7 @@ pub struct McpConfig {
     pub json_response: bool,
     /// SSE keep-alive ping interval. `None` ⇒ no pings. Read from
     /// `<PREFIX>_MCP__SSE_KEEP_ALIVE_SECS`, whole seconds from 1 to 3600 or `0`
-    /// for none; defaults to 15s.
+    /// for none; defaults to 15s, [`nest_rs_http::DEFAULT_SSE_KEEP_ALIVE`].
     #[config(bounds = SSE_KEEP_ALIVE)]
     pub sse_keep_alive: Option<Duration>,
     /// `retry:` interval advertised on SSE priming events — a stateless
@@ -148,7 +144,7 @@ pub struct McpConfig {
     /// `None` ⇒ no deadline. Read from `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS`,
     /// whole seconds from 1 to 3600 or `0` for none — refused outside, from the
     /// environment and from the pinned struct alike; defaults to 20 seconds,
-    /// the HTTP request timeout's. A deadline past the HTTP shutdown window, or
+    /// [`nest_rs_http::DEFAULT_UNIT_TIMEOUT`]. A deadline past the HTTP shutdown window, or
     /// none, is said at boot with a `warn`.
     #[config(bounds = OPERATION_TIMEOUT)]
     pub operation_timeout: Option<Duration>,
@@ -186,11 +182,11 @@ impl Default for McpConfig {
             allowed_hosts: vec!["localhost".into(), "127.0.0.1".into(), "::1".into()],
             legacy_session_mode: true,
             json_response: false,
-            sse_keep_alive: Some(Duration::from_secs(15)),
+            sse_keep_alive: Some(nest_rs_http::DEFAULT_SSE_KEEP_ALIVE),
             sse_retry: Some(Duration::from_secs(3)),
             max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
             stateless_protocol_metadata_required: false,
-            operation_timeout: Some(DEFAULT_OPERATION_TIMEOUT),
+            operation_timeout: Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT),
             max_concurrent_sessions: DEFAULT_MAX_CONCURRENT_SESSIONS,
             session_idle_timeout: DEFAULT_SESSION_IDLE_TIMEOUT,
         }
@@ -279,6 +275,18 @@ mod tests {
     use nest_rs_config::Config;
 
     use super::*;
+
+    /// A stream's keep-alive and an operation's deadline default to the values
+    /// the HTTP transport exports, never a copy of them.
+    #[test]
+    fn the_defaults_are_the_transports_own() {
+        let d = McpConfig::default();
+        assert_eq!(d.sse_keep_alive, Some(nest_rs_http::DEFAULT_SSE_KEEP_ALIVE));
+        assert_eq!(
+            d.operation_timeout,
+            Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT)
+        );
+    }
 
     #[test]
     fn defaults_keep_the_sdk_loopback_allowlist() {

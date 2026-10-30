@@ -32,20 +32,22 @@ slice: the port at the feature root, one adapter folder per edge.
 
 The port lives at the feature **root**, never in a `core/` folder.
 
-| Path | Contents | Module |
-|---|---|---|
-| `users/` | `mod.rs`, `entity.rs`/`entities/`, `service.rs`/`services/`, `dto.rs`/`dtos/`, `command.rs`/`event.rs`, `config.rs`, `error.rs`, `guard.rs` (only when two adapters bind it), `module.rs` | `UsersModule` (port) |
-| `users/http/` | `controller.rs` | `UsersHttpModule` |
-| `users/graphql/` | `resolver.rs` (field and root operations in one `UsersResolver`) | `UsersGraphqlModule` |
-| `users/ws/` | `gateway.rs` | `UsersWsModule` |
-| `users/queue/` | `processor.rs` (its payload lives at the port) | `UsersQueueModule` |
-| `users/schedule/` | `tasks.rs` | `UsersScheduleModule` |
-| `users/mcp/` | `tool.rs` | `UsersMcpModule` |
-| `users/events/` | `listener.rs` | `UsersEventsModule` |
+| Path | Contents | Module | Imports bare, beside the port |
+|---|---|---|---|
+| `users/` | `mod.rs`, `entity.rs`/`entities/`, `service.rs`/`services/`, `dto.rs`/`dtos/`, `command.rs`/`event.rs`, `config.rs`, `error.rs`, `guard.rs` (only when two adapters bind it), `module.rs` | `UsersModule` (port) | `EventsModule` when it emits |
+| `users/http/` | `controller.rs` | `UsersHttpModule` | `HttpModule` |
+| `users/graphql/` | `resolver.rs` (field and root operations in one `UsersResolver`) | `UsersGraphqlModule` | `GraphqlModule` |
+| `users/ws/` | `gateway.rs` | `UsersWsModule` | `HttpModule`, `WsModule` |
+| `users/queue/` | `processor.rs` (its payload lives at the port) | `UsersQueueModule` | `QueueModule` |
+| `users/schedule/` | `tasks.rs` | `UsersScheduleModule` | `ScheduleModule` |
+| `users/mcp/` | `tool.rs` | `UsersMcpModule` | `HttpModule` |
+| `users/events/` | `listener.rs` | `UsersEventsModule` | — |
 
-**Each adapter imports its port explicitly** — composition, not inheritance.
+**Each adapter imports its port explicitly** — composition, not inheritance —
+**and the transport serving its edge**, so importing the adapter serves it.
 Importing only the port mounts nothing, and no module re-exports every edge:
-the app lists the edges it serves, so its imports are what the binary exposes.
+the app lists the edges it serves, so its imports are what the binary exposes;
+the queue's backend binding is the root's, since the root chooses it.
 
 **A feature that emits events declares its span target at its root** —
 `pub const TARGET: &str = "features::<feature>";` in its `mod.rs` — and every

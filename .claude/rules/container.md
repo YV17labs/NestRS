@@ -316,7 +316,16 @@ imported module lists, one registered outside every imported module — is a
 host the app neither imports nor registers — the framework's, a package's, a
 shared library crate's — is said at `debug` (`cause = "dependency"`). The cause
 is read off the composition, never off a crate's name: a prefix is no evidence
-of who wrote a crate. Three disciplines bind every boot diagnostic:
+of who wrote a crate. **A host the app reaches whose edge's transport no
+module attaches is a cause too**, named at `warn` with its module and the
+import serving it, by `App::run` once its transports are attached, never at
+the seal, which `TestApp` and `HeadlessApp` serve with transports they build;
+each edge's crate declares what its hosts run on (`EdgeRuntime`), held by a
+test per edge. A run with no transport at all says so at `warn` and stops for
+`StopCause::NoTransport`.
+Neither refuses: a shape a harness serves is no defect, and a refusal would be
+a break (`.claude/decisions/adapter-imports-its-transport.md`). Three
+disciplines bind every boot diagnostic:
 
 - **Escalate no further than the fact supports** — a shape correct in another
   composition warns or says less; a boot error there refuses working code.

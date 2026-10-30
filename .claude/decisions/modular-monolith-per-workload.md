@@ -74,3 +74,10 @@ is not its job is not. Keeping a demo illustration exact is not worth a source
 scanner (`conformance-scanner.md`). The figure is hand-kept, and
 `.claude/rules/demo.md` asks the commit changing an app's composition to update
 it, held by review.
+
+Kept (2026-10-30): edge adapters now import their transport
+(`adapter-imports-its-transport.md`, the owner's "Tout faire" of 2026-10-28), so
+an app's root lists the adapters it serves and names a transport only to pin it.
+The opening is still the import: a binary that imports no adapter of an edge
+attaches no transport for it, and `WsModule`, which a port may import to push,
+attaches none.

@@ -472,9 +472,17 @@ router parses. The rewrite is skipped when nothing is versioned.
 
 ## Surface decisions
 
-- **HTTP** is activated only by importing `HttpModule` — configured by the
-  app's one `for_root`, bare in a feature declaring the dependency; no public
-  `.transport(...)`.
+- **A transport is activated by the module that serves on it**: every edge
+  adapter imports its edge's transport module bare — `HttpModule` for HTTP,
+  WebSocket and MCP, plus `GraphqlModule`, `WsModule`, `QueueModule` or
+  `ScheduleModule` — and so does every framework module mounting on HTTP, so an
+  app imports what it serves and nothing more; events' bus is imported by the
+  port that emits. `WsModule`, the registry a port may import to push, attaches
+  no transport. The root names a transport only to pin it (`for_root(cfg)`),
+  and a backend binding (`RedisQueueModule`) where it chooses the backend; no
+  public `.transport(...)`. A host the app reaches whose edge's transport no
+  module attaches is named at run (`container.md`, *Discovery and its gate*;
+  `.claude/decisions/adapter-imports-its-transport.md`).
 - **`#[sse]` is a verb, not an edge.** It collapses to `GET` before the route
   table is built and carries the route's guards, pipes, posture and document; it
   owns only the response. It refuses `#[authorize]` on an entity (a

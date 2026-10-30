@@ -136,7 +136,9 @@ rather than injecting it. **A module owning no config gets no `for_root`**
 struct (`from_env = "manual"` only where fields depend on each other); a
 vocabulary of several variables extends its field's key with `_` and each
 member's name (`CORS_EXPOSED_HEADERS` for `cors.exposed_headers`,
-`TLS_CA_CERT` under `tls`), never `__`, the namespace's separator.
+`TLS_RELOAD_SECS` for `HttpTls`'s `reload` under `tls`), never `__`, the
+namespace's separator; `ClientTls` alone keeps the material's names every TLS
+client shares, `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY`.
 **Its namespace is its stem, read and never chosen**, minus plural
 role folders and a product's container: `redis/src/queue/config.rs` →
 `<PREFIX>_REDIS__QUEUE__*`, `social/src/providers/github/config.rs` →

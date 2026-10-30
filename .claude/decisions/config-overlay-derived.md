@@ -54,8 +54,9 @@ names: `HttpCors::exposed_headers` read `CORS_EXPOSED`, and
 each header under a flat key (`HSTS`) beside it. Under the owner's "Tout
 faire", they now read `CORS_EXPOSED_HEADERS`, `SECURITY_HEADERS_ENABLED` and
 `SECURITY_HEADERS_<FIELD>`: a vocabulary's keys are its members' names after
-its field's key, so every variable is derived from the structs, and "no
-deployment variable moved" above no longer holds for these two. The retired
+its field's key, so every variable is derived from the structs but the
+client-TLS one's (below), and "no deployment variable moved" above no longer
+holds for these two. The retired
 spellings are read by nothing: the unread-variable report names each at boot,
 as it names every retired key of a namespace the binary reads, with the key it
 became as its suggestion — the one read key it leads (`CORS_EXPOSED`) or ends
@@ -67,8 +68,13 @@ gets none, where the nearest by distance would have told an operator to write
 A `ClientTls` is read under a field named `tls` alone, another refused at the
 read (`ConfigError::MisnamedField`): every check of its material, the
 handshake's remedy and the drivers' own refusals name `TLS_CA_CERT`,
-`TLS_CERT` and `TLS_KEY`. `HttpTls::with_reload_secs(u64)`, whose `0` stopped
-the watch, is `with_reload(Option<Duration>)`, the duration shape above.
+`TLS_CERT` and `TLS_KEY`. It is the one vocabulary whose keys are not its
+members' names: they name the material every TLS client presents, the client
+vocabulary the container rule fixes, where its members are `authorities` and
+an `identity` holding `cert` and `key`; every other vocabulary is read off its
+members, `HttpTls`'s `reload` as `TLS_RELOAD_SECS` among them.
+`HttpTls::with_reload_secs(u64)`, whose `0` stopped the watch, is
+`with_reload(Option<Duration>)`, the duration shape above.
 
 The shape is held where the field is read: the derived read refuses an
 `Option<Duration>` whose bounds admit no off — its `None` would mean "unset"

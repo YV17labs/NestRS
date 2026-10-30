@@ -16,9 +16,10 @@ use crate::setting::FromSetting;
 /// `base` when it is unset, and a `Vec` of one reads a comma-separated list,
 /// trimmed, empties dropped, each entry refused by its place. A vocabulary of
 /// several variables implements it whole, its keys extending the field's with
-/// `_` (`TLS_CA_CERT` under the field `tls` a [`ClientTls`](crate::ClientTls)
-/// is read under): `__` is the namespace's separator, so a key never holds
-/// one.
+/// `_` and each member's name (`TLS_RELOAD_SECS` for the `reload` of a field
+/// `tls`): `__` is the namespace's separator, so a key never holds one. A
+/// [`ClientTls`](crate::ClientTls) alone names its material instead,
+/// `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY`, the same in every namespace.
 ///
 /// ```
 /// use nest_rs_config::{ConfigField, ConfigService};

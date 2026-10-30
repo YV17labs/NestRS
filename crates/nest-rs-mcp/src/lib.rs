@@ -14,9 +14,10 @@
 //! own inside it, taking
 //! `#[use_guards(...)]` / `#[force_guards(...)]`, a **mandatory** access
 //! posture (`#[authorize(Action, Entity)]` or `#[public]`),
-//! `#[use_exception_filters(...)]`, `#[use_interceptors(...)]`, `Scoped<T>`
-//! parameters and a pipe on its arguments (`Parameters<Piped<P>>`), then the
-//! rules its arguments' types declare, run in that order. The host's layers and the
+//! `#[use_exception_filters(...)]` and `#[use_interceptors(...)]`. Its tail then
+//! holds each argument it decoded to the rules its type declares, runs a pipe
+//! on its arguments (`Parameters<Piped<P>>`), and reads its `Scoped<T>` and
+//! `Ctx<T>` parameters, in that order. The host's layers and the
 //! app-wide ones join each family once per site, deduplicated by `TypeId`; the
 //! guard stage runs each guard's `check`, the guards at the endpoint's request
 //! running `check_http` apart from it.

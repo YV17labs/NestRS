@@ -25,8 +25,9 @@ nest-rs-database.workspace = true
 # The edge runs its guards itself: the pool at the request, each operation's
 # chain; it renders a denial as a JSON-RPC error.
 nest-rs-guards.workspace = true
-# `Valid<T>` / `Piped<P, T>` on a tool argument: the `#[mcp]` expansion runs the
-# pipe over the wire value and renders a rejection as `invalid_params`.
+# The `#[tools]` expansion checks each decoded argument against the rules its
+# type declares through the re-exported probe, runs a `Parameters<Piped<P>>`
+# pipe over the wire value, and renders a refusal as `invalid_params`.
 nest-rs-pipes.workspace = true
 # `Stream`, which the session manager wrapping rmcp's names in its signatures.
 futures-util.workspace = true

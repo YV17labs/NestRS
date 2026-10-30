@@ -19,7 +19,8 @@ all-features = true
 [dependencies]
 thiserror.workspace = true
 # `Config::load` runs declarative `#[validate(...)]` checks after the explicit
-# `from_env` mapping — the same `validator` the HTTP `ValidationPipe` uses.
+# `from_env` mapping — the same `validator` every edge checks a decoded
+# argument with.
 validator.workspace = true
 # `ConfigModule::for_feature` queues a config-loading factory on the container,
 # so this crate reaches into the kernel. The reverse never holds — `nest-rs-core`

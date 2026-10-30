@@ -31,9 +31,9 @@ validator.workspace = true
 # `websocket` is the graphql-ws socket's handshake and frames.
 nest-rs-http = { workspace = true, features = ["websocket"] }
 async-graphql.workspace = true
-# `#[crud]`-generated create/update ops validate their input through the
-# re-exported `ValidateProbe` (global validation, the NestJS `ValidationPipe`
-# analog); re-exported so a crud consumer needs no direct nest-rs-pipes dep.
+# Every operation's argument is checked against the rules its type declares
+# through the re-exported `ValidateProbe`, so a resolver's crate needs no
+# nest-rs-pipes dep of its own; a refusal renders from its `PipeError`.
 nest-rs-pipes.workspace = true
 # Re-exported as `nest_rs_graphql::async_trait` for implementors of its async
 # seams.

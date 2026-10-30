@@ -14,7 +14,8 @@ categories = ["web-programming", "rust-patterns"]
 [dependencies]
 # Pipes are pure data transforms — no transport.
 thiserror.workspace = true
-# `ValidationPipe` surfaces field-level errors as structured `details`.
+# A `PipeError`'s structured `details` — what `PipeError::from` makes of
+# `validator`'s errors — and a global pipe's input are JSON.
 serde_json.workspace = true
 validator.workspace = true
 # `ParseUuid` / `ParseUuidVersion`.

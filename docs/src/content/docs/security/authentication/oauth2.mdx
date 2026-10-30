@@ -257,8 +257,8 @@ carries three bounds, constants on the client:
 An identity provider answers each of these in well under a second, so a
 call past its bound is a provider that is not answering. That is the
 provider's outage, not the caller's failed sign-in, so it fails as
-`AuthError::Unavailable` — a `503` (RFC 9110 §15.6.4), logged at `error`
-— and its sentence names the endpoint and the bound that ended it:
+`AuthError::Unavailable` — a `503` (RFC 9110 §15.6.4), filed at `warn` as
+every `503` — and its sentence names the endpoint and the bound that ended it:
 
 ```text
 authentication unavailable: the OAuth provider's token endpoint

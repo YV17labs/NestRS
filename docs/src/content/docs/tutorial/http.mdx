@@ -273,12 +273,12 @@ $ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3005/posts
 ```
 
 ```text frame="terminal"
-WARN nest_rs::authn: authentication failed strategy="…JwtStrategy<…Claims>" reason="missing_credentials" trace_id=01a0156ebd7d77e0b78201a531dd9536 span_id=e0312d68a4872409
+WARN nest_rs::authn: guard denied the request guard="…AuthnGuard<…JwtStrategy<…Claims>>" unit="http.request" host="PostsController" address="/" status=401 reason="missing_credentials" error="missing credentials" trace_id=01a0156ebd7d77e0b78201a531dd9536 span_id=e0312d68a4872409
 ```
 
-One denial, one line, on the target of the guard that decided it. It carries
-the request's `trace_id`, and no `actor_id` — nobody was authenticated, which
-is the whole story of a `401`.
+One denial, one line, filed by the edge on the target of the guard that
+decided it. It carries the request's `trace_id`, and no `actor_id` — nobody
+was authenticated, which is the whole story of a `401`.
 
 Drop `#[use_guards(...)]` from the controller and the answer becomes a **500**
 instead, because `#[crud]` still emits the class gate and nothing installed an

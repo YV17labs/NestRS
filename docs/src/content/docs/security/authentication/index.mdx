@@ -275,9 +275,10 @@ fn store_unavailable(email: &str, err: DbErr) -> AuthError {
 
 The error displays the constant the caller reads — `"authentication
 failed"` or `"authentication unavailable"` — and keeps the detail, then the
-cause's chain, as its `source()`. The line the guard files is that whole
-chain through `nest_rs::core::error_message`, a decode failure in it said
-without its value, so you never `format!` an error into the detail:
+cause's chain, as its `source()`. The line the edge files for the guard's
+refusal carries that whole chain as its `error`, through
+`nest_rs::core::error_message`, a decode failure in it said without its
+value, so you never `format!` an error into the detail:
 
 ```text
 authentication unavailable: the credential store is unreachable: <the driver's error>
@@ -295,15 +296,15 @@ the identity provider could not be reached, or answered that it cannot
 answer now, so the credential was never evaluated. The caller did nothing
 wrong (RFC 9110 §15.6.4) — reporting it as a 401 would tell a caller with
 a perfectly good token to go get another one, and would let an outage
-read as a wave of authentication failures. The guard meeting it logs it at
-`error`, a handler answering it with `?` has the HTTP edge file it at `warn`
-as every `503`, and either way it is rendered as a `503` with a
-`Retry-After` when `retry_after` is known — an
+read as a wave of authentication failures. The edge files it at `warn`, as
+every `503`, whether the guard refused with it (`reason = "unavailable"`) or
+a handler answered it with `?`, and either way it is rendered as a `503`
+with a `Retry-After` when `retry_after` is known — an
 identity provider's own, given in seconds and rounded up to one at least,
 since `0` would tell the caller to retry at once — and none invented when it
 is not. The guard answers a strategy that outlived `AUTHENTICATE_TIMEOUT`
-with the same 503, and files its own `warn` saying the strategy never
-answered. What the refusal says of the identity store stays on the
+with the same 503, which the edge files at `warn` under `reason =
+"strategy_timeout"`. What the refusal says of the identity store stays on the
 server: HTTP's 503 carries no `detail`, and the GraphQL, MCP and
 WebSocket edges, which have no status line, answer `"service
 unavailable"` with the class a client branches on — `extensions.code:

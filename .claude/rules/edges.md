@@ -123,9 +123,10 @@ guard, filter or interceptor loop of its own.
    files a guard's denial through `nest_rs_guards`' one function, `guard
    denied …` on the target the guard declares (`Guard::target`,
    `nest_rs::layers` by default), at `error` for a `500` and `warn` otherwise,
-   with one field set — the reason the denial names and the chain of the
-   source it keeps, never its own text — and no guard files a line for its
-   refusal (a panic keeps its own); a class gate files its own. A guard writes
+   with one field set — the reason the denial names and, when it keeps a
+   source, the whole chain from its own text down, never that text alone —
+   and no guard files a line for its refusal (a panic keeps its own); a class
+   gate files its own. A guard writes
    one decision, `check`, which `check_http` runs unless the guard overrides
    it, which it does only where the request differs from the unit; a
    precondition an earlier guard attached is `cx.require::<T>()?`, a `500`

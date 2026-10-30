@@ -1,0 +1,11 @@
+error: #[config] `defaults` is the derived `impl Config`'s: under `from_env = "manual"` the struct's own `impl Config` writes `fn defaults()`
+ --> tests/integration/diagnostics/config/config_defaults_beside_manual.rs:7:62
+  |
+7 | #[config(namespace = "kiln", from_env = "manual", defaults = Self::for_profile)]
+  |                                                              ^^^^^^^^^^^^^^^^^
+
+error: the overlay is written by hand here
+ --> tests/integration/diagnostics/config/config_defaults_beside_manual.rs:7:41
+  |
+7 | #[config(namespace = "kiln", from_env = "manual", defaults = Self::for_profile)]
+  |                                         ^^^^^^^^

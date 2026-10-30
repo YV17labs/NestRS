@@ -162,7 +162,7 @@ fn take_reader(attrs: &mut Vec<syn::Attribute>) -> syn::Result<Reader> {
                             other,
                             "#[config] `with` takes the path of a \
                              `fn(&ConfigService, &str, T) -> Result<T>`, e.g. \
-                             `with = HttpTls::overlay`",
+                             `with = pseudonym_key`",
                         ));
                     }
                 },

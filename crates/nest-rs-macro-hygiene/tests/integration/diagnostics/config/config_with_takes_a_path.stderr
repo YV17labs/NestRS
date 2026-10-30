@@ -1,0 +1,5 @@
+error: #[config] `with` takes the path of a `fn(&ConfigService, &str, T) -> Result<T>`, e.g. `with = pseudonym_key`
+ --> tests/integration/diagnostics/config/config_with_takes_a_path.rs:9:21
+  |
+9 |     #[config(with = "doubled")]
+  |                     ^^^^^^^^^

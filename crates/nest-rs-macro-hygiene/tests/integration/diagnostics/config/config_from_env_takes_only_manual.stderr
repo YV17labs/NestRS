@@ -1,0 +1,5 @@
+error: #[config] `from_env` takes only `"manual"`, which leaves the struct to write `impl Config` itself, its overlay included
+ --> tests/integration/diagnostics/config/config_from_env_takes_only_manual.rs:6:41
+  |
+6 | #[config(namespace = "kiln", from_env = "derived")]
+  |                                         ^^^^^^^^^

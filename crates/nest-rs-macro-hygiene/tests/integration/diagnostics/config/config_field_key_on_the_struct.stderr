@@ -1,0 +1,5 @@
+error: #[config] `json` is a field's: write `#[config(json …)]` on the field it reads
+ --> tests/integration/diagnostics/config/config_field_key_on_the_struct.rs:6:30
+  |
+6 | #[config(namespace = "kiln", json)]
+  |                              ^^^^

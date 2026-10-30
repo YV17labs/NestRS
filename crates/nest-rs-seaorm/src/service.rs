@@ -4,13 +4,14 @@ use async_trait::async_trait;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, DbErr, EntityName, EntityTrait, IntoActiveModel,
-    PrimaryKeyTrait, QueryFilter,
+    ActiveModelBehavior, ActiveModelTrait, DbErr, EntityName, EntityTrait, IdenStatic,
+    IntoActiveModel, PrimaryKeyTrait, QueryFilter,
 };
 
-use nest_rs_authz::{Action, ActionMarker};
+use nest_rs_authz::{Ability, Action, ActionMarker, current_ability};
 use nest_rs_database::atomic;
 
+use crate::column_default::fill_column_defaults;
 use crate::error::AtomicDbError;
 use crate::page::{Page, PageCursor};
 use crate::repo::{Repo, ability_scope, pk_condition};
@@ -364,10 +365,16 @@ pub trait Creatable: CrudService {
     /// via [`CreateModel`].
     type Create: CreateModel<Self::Entity> + Send;
 
-    /// Insert a row from a create-input DTO, atomically with its scope check:
-    /// the fresh row is re-checked in SQL against `condition_for(Create)`, and
+    /// Insert a row from a create-input DTO, atomically with its scope check.
+    ///
+    /// A column the input leaves unset takes the value the ambient ability's
+    /// `Create` grants pin it to ([`Ability::pinned_values`](nest_rs_authz::Ability::pinned_values)):
+    /// the tenant a grant scopes the caller to, the author it names; one no
+    /// grant pins takes the default its `#[expose]` entity declares. The
+    /// fresh row is then re-checked in SQL against `condition_for(Create)`, and
     /// one outside the caller's scope is [`DbErr::RecordNotInserted`] and never
-    /// persists.
+    /// persists — so a value the grants leave undecided is refused, never
+    /// guessed.
     async fn create(
         &self,
         input: Self::Create,
@@ -376,14 +383,18 @@ pub trait Creatable: CrudService {
     }
 
     /// Insert a **prepared** `ActiveModel` through the same audited path as
-    /// [`create`](Creatable::create), for a service stamping server-side
-    /// columns first.
+    /// [`create`](Creatable::create), its pinned columns filled alike, for a
+    /// service setting a column neither the input nor the grants decide.
     async fn create_from_active(
         &self,
         active: <Self::Entity as EntityTrait>::ActiveModel,
     ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
         let entity = Self::entity_name();
         Repo::<Self::Entity>::conn()?;
+        let active = match current_ability() {
+            Some(ability) => fill_pinned::<Self::Entity>(active, &ability, entity),
+            None => active,
+        };
         // A swallowed `RecordNotInserted` must not leave the row to commit with
         // the request.
         atomic(async move {
@@ -394,14 +405,47 @@ pub trait Creatable: CrudService {
     }
 }
 
-/// Insert, then re-check the fresh row against `condition_for(Create)` in SQL
-/// on the same executor.
-async fn insert_in_scope<E>(active: E::ActiveModel, entity: &'static str) -> Result<E::Model, DbErr>
+/// Set each column `ability`'s `Create` grants pin that `active` leaves unset.
+fn fill_pinned<E: EntityTrait>(
+    mut active: E::ActiveModel,
+    ability: &Ability,
+    entity: &'static str,
+) -> E::ActiveModel {
+    let mut filled = Vec::new();
+    for (column, value) in ability.pinned_values::<E>(Action::Create) {
+        if !active.is_not_set(column) {
+            continue;
+        }
+        match active.try_set(column, value) {
+            Ok(()) => filled.push(column.as_str()),
+            Err(err) => tracing::warn!(
+                target: crate::target::ORM,
+                entity,
+                column = column.as_str(),
+                error = %nest_rs_core::error_message(&err),
+                "a value the ability pins does not fit its column — left unset",
+            ),
+        }
+    }
+    if !filled.is_empty() {
+        tracing::debug!(target: crate::target::ORM, entity, columns = ?filled, "create filled from the ability's grants");
+    }
+    active
+}
+
+/// Fill the entity's column defaults the row leaves unset, after the grants'
+/// pins so a pin wins over a default, then insert and re-check the fresh row
+/// against `condition_for(Create)` in SQL on the same executor.
+async fn insert_in_scope<E>(
+    mut active: E::ActiveModel,
+    entity: &'static str,
+) -> Result<E::Model, DbErr>
 where
     E: EntityTrait,
     E::ActiveModel: ActiveModelBehavior + Send,
     E::Model: IntoActiveModel<E::ActiveModel>,
 {
+    fill_column_defaults::<E>(&mut active);
     let model = active.insert(&Repo::<E>::conn()?).await?;
     let in_scope = Repo::<E>::scoped(Action::Create)
         .filter(pk_condition::<E>(&model))
@@ -523,4 +567,86 @@ fn model_pk<E: EntityTrait>(model: &E::Model) -> Option<sea_orm::Value> {
 /// `Location`; `None` when the entity has none, or one of another type.
 pub fn model_uuid<E: EntityTrait>(model: &E::Model) -> Option<Uuid> {
     <Uuid as sea_orm::sea_query::ValueType>::try_from(model_pk::<E>(model)?).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use nest_rs_authz::{Ability, AbilityBuilder};
+    use sea_orm::{ActiveValue, Set};
+
+    use super::*;
+
+    mod note {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "notes")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key, auto_increment = false)]
+            pub id: Uuid,
+            pub org_id: Uuid,
+            pub author_id: Uuid,
+            pub body: String,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    fn pinning(org: Uuid, author: Uuid) -> Ability {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Create, note::Entity).when(|p| {
+            p.all([
+                p.eq(note::Column::OrgId, org),
+                p.eq(note::Column::AuthorId, author),
+            ])
+        });
+        b.build().expect("a valid ability")
+    }
+
+    #[test]
+    fn a_create_fills_what_the_ability_pins_and_the_input_left_unset() {
+        let (org, author, written) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        let active = note::ActiveModel {
+            author_id: Set(written),
+            body: Set("hello".into()),
+            ..Default::default()
+        };
+
+        let filled = fill_pinned::<note::Entity>(active, &pinning(org, author), "notes");
+
+        assert_eq!(filled.org_id, Set(org));
+        assert_eq!(
+            filled.author_id,
+            Set(written),
+            "a value the input carries is the scope check's to judge, never overwritten",
+        );
+        assert_eq!(filled.id, ActiveValue::NotSet);
+    }
+
+    #[test]
+    fn a_pinned_value_its_column_cannot_hold_is_left_unset_and_said() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Create, note::Entity)
+            .when(|p| p.eq(note::Column::OrgId, "not-a-uuid"));
+        let ability = b.build().expect("a valid ability");
+
+        let filled = fill_pinned::<note::Entity>(
+            <note::ActiveModel as Default>::default(),
+            &ability,
+            "notes",
+        );
+
+        assert_eq!(filled.org_id, ActiveValue::NotSet);
+        let event = logs.expect_one(
+            crate::target::ORM,
+            "a value the ability pins does not fit its column — left unset",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("column").as_deref(), Some("org_id"));
+        assert!(!event.quotes("not-a-uuid"), "{event:?}");
+    }
 }

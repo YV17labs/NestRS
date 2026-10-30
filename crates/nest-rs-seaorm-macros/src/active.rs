@@ -1,7 +1,8 @@
 //! Emit `CreateModel` / `UpdateModel` impls — the conversions `CrudService`'s
 //! default `create`/`update` call. Only `input(create)` / `input(update)`
-//! columns are set; server-side columns (`org_id`, etc.) stay `NotSet`, so an
-//! entity needing them overrides the service method.
+//! columns are set, and a `Uuid` key is seeded; every other column stays
+//! `NotSet`, for the create to fill from what the caller's grants pin and the
+//! insert from the entity's column defaults (`lifecycle.rs`).
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;

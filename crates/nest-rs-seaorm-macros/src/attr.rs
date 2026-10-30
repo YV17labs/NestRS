@@ -54,8 +54,8 @@ pub(crate) struct ResourceField {
     pub read: bool,
     pub in_create: bool,
     pub in_update: bool,
-    /// The `#[sea_orm(primary_key)]` column — seeded with UUID v7 by the
-    /// generated `create` when its type is `Uuid`.
+    /// The `#[sea_orm(primary_key)]` column — seeded with UUID v7 on insert,
+    /// when unset and its type is `Uuid`.
     pub is_pk: bool,
     /// Re-emitted verbatim as `#[validate(...)]` on the input field.
     pub validate: Vec<TokenStream2>,
@@ -67,6 +67,9 @@ pub(crate) struct ResourceField {
     /// `#[wire_default]` (`Some(None)`, the type's `Default`) or
     /// `#[wire_default(expr)]`: the placeholder a masked reply is rebuilt with.
     pub wire_default: Option<Option<Expr>>,
+    /// `#[expose(default = expr)]`: the value an insert leaving the column
+    /// unset stores.
+    pub default: Option<Expr>,
     /// The `Column` variant `DeriveEntityModel` generates for this field; `None`
     /// for a relation or an `ignore`d field, which have none.
     pub column: Option<Ident>,
@@ -129,8 +132,12 @@ pub(crate) struct ResourceModel {
     /// `soft_delete`'s tombstone: the `Column` variant of `deleted_at`, which a
     /// delete stamps and every `Repo` read filters on.
     pub deleted_at: Option<Ident>,
-    /// Maintain `created_at` / `updated_at` via `ActiveModelBehavior::before_save`.
+    /// Emit the entity's `ActiveModelBehavior`, whose `before_save` stamps
+    /// `created_at` on insert.
     pub timestamps: bool,
+    /// Under `timestamps`, whether the entity has an `updated_at` to stamp on
+    /// every save; an append-only entity has none.
+    pub updated_at: bool,
 }
 
 impl ResourceModel {
@@ -204,6 +211,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         let mut validate = Vec::new();
         let mut complexity: Option<Expr> = None;
         let mut via: Option<LitStr> = None;
+        let mut default: Option<Expr> = None;
         let mut is_pk = false;
         let mut is_belongs_to = false;
         let mut is_has_many = false;
@@ -316,6 +324,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     }
                     via = Some(lit);
                 }
+                "default" => default = Some(arg.expr()?),
                 // The grammar hands over only its own keys.
                 _ => {}
             }
@@ -406,6 +415,35 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             ));
         }
 
+        if let Some(default) = &default {
+            let refused = if is_pk {
+                Some(
+                    "the primary key is seeded on insert — a `Uuid` key with a v7 UUID, any \
+                     other by the database",
+                )
+            } else if relation.is_some() {
+                Some("a relation is no column — set its foreign key column's `default` instead")
+            } else if in_create {
+                Some(
+                    "the create input carries this column, so the insert always holds its \
+                     value — drop `default`, or drop `create` from `input(...)`",
+                )
+            } else if timestamps && (ident == "created_at" || ident == "updated_at") {
+                Some(
+                    "`timestamps` stamps this column with the save's instant — drop \
+                     `default`, or drop `timestamps`",
+                )
+            } else {
+                None
+            };
+            if let Some(refused) = refused {
+                return Err(syn::Error::new_spanned(
+                    default,
+                    format!("{}: {refused}", site("expose", Some("default"))),
+                ));
+            }
+        }
+
         if wire_default.is_some() {
             if read {
                 return Err(syn::Error::new_spanned(
@@ -438,6 +476,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             relation,
             complexity,
             wire_default,
+            default,
             column,
         });
     }
@@ -464,21 +503,14 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         };
         deleted_at = Some(column.clone());
     }
-    if timestamps {
-        for name in ["created_at", "updated_at"] {
-            fields
-                .iter()
-                .find(|f| f.ident == name)
-                .ok_or_else(|| {
-                    syn::Error::new_spanned(
-                        &source_ident,
-                        format!(
-                            "`#[expose(..., timestamps)]` requires `{name}` on the entity — remove any manual `impl ActiveModelBehavior` when using this flag",
-                        ),
-                    )
-                })?;
-        }
+    if timestamps && !fields.iter().any(|f| f.ident == "created_at") {
+        return Err(syn::Error::new_spanned(
+            &source_ident,
+            "`#[expose(..., timestamps)]` stamps `created_at` on insert, and `updated_at` on \
+             every save when the entity has one: add a `created_at` column, or drop `timestamps`",
+        ));
     }
+    let updated_at = timestamps && fields.iter().any(|f| f.ident == "updated_at");
 
     Ok(ResourceModel {
         source_ident,
@@ -491,6 +523,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         graphql,
         deleted_at,
         timestamps,
+        updated_at,
     })
 }
 
@@ -548,7 +581,10 @@ const MODEL: Grammar = Grammar::new(
 
 /// The field half's key set — the `#[expose]` written on a column, as opposed
 /// to the one on the `Model`.
-const FIELD: Grammar = Grammar::new("expose", &["input", "validate", "complexity", "via"]);
+const FIELD: Grammar = Grammar::new(
+    "expose",
+    &["input", "validate", "complexity", "via", "default"],
+);
 
 /// A field key's list value — `input(create, update)` — each element read as
 /// written, or the key refused naming what its list takes when no list follows.

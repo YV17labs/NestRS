@@ -5,8 +5,8 @@ use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex, PoisonError};
 
-use sea_orm::EntityTrait;
 use sea_orm::sea_query::{Condition, Expr};
+use sea_orm::{EntityTrait, IdenStatic, Value};
 
 use crate::action::Action;
 use crate::predicate::{Predicate, Truth, nothing_invented};
@@ -258,6 +258,45 @@ impl Ability {
         out
     }
 
+    /// The column values the grants of `action` on `E` pin by equality — CASL's
+    /// `rulesToFields`: what a fresh row must hold to fall in scope, which
+    /// `nest_rs::seaorm::Creatable` fills on a create where the input left a
+    /// column unset.
+    ///
+    /// A column is kept only when every grant constraining it pins it with
+    /// `eq` to one value; a grant leaving it free admits any. Two grants
+    /// pinning it apart, or one constraining it any other way (`is_in`, a
+    /// comparison, a null test, inside `any` or `not`), leave it out, and the
+    /// scope check decides. A grant with no `when` and a denial pin nothing.
+    pub fn pinned_values<E: EntityTrait>(&self, action: Action) -> Vec<(E::Column, Value)> {
+        let mut agreed: Vec<(E::Column, Value)> = Vec::new();
+        let mut contested: Vec<E::Column> = Vec::new();
+        let mut pinned = Vec::new();
+        for rule in self.rules_for(action, TypeId::of::<E>()) {
+            if rule.inverted {
+                continue;
+            }
+            let Some(predicate) = rule.predicate.as_deref() else {
+                continue;
+            };
+            // Unreachable (see `predicate_of`): a rule this read cannot see
+            // pins nothing at all.
+            let Some(predicate) = predicate_of::<E>(predicate) else {
+                return Vec::new();
+            };
+            predicate.pins(&mut pinned, &mut contested);
+            for (column, value) in pinned.drain(..) {
+                match agreed.iter().find(|(held, _)| same_column(held, &column)) {
+                    Some((_, held)) if *held == value => {}
+                    Some(_) => contested.push(column),
+                    None => agreed.push((column, value)),
+                }
+            }
+        }
+        agreed.retain(|(column, _)| !contested.iter().any(|c| same_column(c, column)));
+        agreed
+    }
+
     /// Layer ③ — instance check: at least one grant matches this model and no
     /// denial does (a denial overrides), decided on the model alone, with no
     /// query.
@@ -451,6 +490,11 @@ impl Ability {
 fn keys_for(action: Action, subject: TypeId) -> impl Iterator<Item = (Action, TypeId)> {
     let wildcard = (action != Action::Manage).then_some((Action::Manage, subject));
     std::iter::once((action, subject)).chain(wildcard)
+}
+
+/// Whether two columns are one: sea-orm's `Column` enums derive no `PartialEq`.
+fn same_column<C: IdenStatic>(a: &C, b: &C) -> bool {
+    a.as_str() == b.as_str()
 }
 
 /// What one rule scan concluded about a model: whether it is visible, and which
@@ -858,5 +902,136 @@ mod tests {
             event.field("error").as_deref(),
             Some("invalid type: a string, expected u64")
         );
+    }
+
+    /// What a create would be filled with, by column name.
+    fn pins(ability: &Ability) -> Vec<(&'static str, sea_orm::Value)> {
+        ability
+            .pinned_values::<post::Entity>(Action::Create)
+            .into_iter()
+            .map(|(column, value)| (column.as_str(), value))
+            .collect()
+    }
+
+    fn org(id: i32) -> (&'static str, sea_orm::Value) {
+        ("org_id", id.into())
+    }
+
+    #[test]
+    fn a_create_grant_pins_every_column_it_equates() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Create, post::Entity).when(|p| {
+            p.all([
+                p.eq(post::Column::OrgId, 7),
+                p.eq(post::Column::Title, "draft"),
+            ])
+        });
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), [org(7), ("title", "draft".into())]);
+    }
+
+    #[test]
+    fn the_manage_wildcard_pins_a_create_and_another_action_does_not() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "read"));
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), [org(7)]);
+    }
+
+    #[test]
+    fn a_grant_leaving_a_column_free_never_unpins_what_another_pins() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.can(Action::Create, post::Entity).when(|p| {
+            p.all([
+                p.eq(post::Column::OrgId, 7),
+                p.eq(post::Column::Title, "authored"),
+            ])
+        });
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), [org(7), ("title", "authored".into())]);
+    }
+
+    #[test]
+    fn grants_pinning_a_column_apart_leave_it_to_the_recheck() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Create, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.can(Action::Create, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 8));
+        b.can(Action::Create, post::Entity).when(|p| {
+            p.all([
+                p.eq(post::Column::Title, "one"),
+                p.eq(post::Column::Title, "two"),
+            ])
+        });
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), []);
+    }
+
+    #[test]
+    fn a_column_constrained_but_by_equality_is_never_pinned() {
+        type Constraint = fn(PredicateBuilder<post::Entity>) -> Predicate<post::Entity>;
+        let constraints: [Constraint; 5] = [
+            |p| p.is_in(post::Column::OrgId, [7, 8]),
+            |p| p.gte(post::Column::OrgId, 7),
+            |p| p.is_not_null(post::Column::OrgId),
+            |p| p.any([p.eq(post::Column::OrgId, 7)]),
+            |p| p.not(p.eq(post::Column::OrgId, 8)),
+        ];
+        for constraint in constraints {
+            let mut b = crate::AbilityBuilder::new();
+            b.can(Action::Create, post::Entity)
+                .when(|p| p.eq(post::Column::OrgId, 7));
+            b.can(Action::Create, post::Entity).when(constraint);
+            let ability = b.build().unwrap();
+
+            assert_eq!(pins(&ability), []);
+        }
+    }
+
+    #[test]
+    fn a_denial_and_an_unconditional_grant_pin_nothing() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Create, post::Entity);
+        b.cannot(Action::Create, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 9));
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), []);
+    }
+
+    #[test]
+    fn a_relation_pins_nothing_and_leaves_an_equated_column_pinned() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Create, post::Entity).when(|p| {
+            p.all([
+                in_org(7)(PredicateBuilder::new()),
+                p.eq(post::Column::Title, "related"),
+            ])
+        });
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), [("title", "related".into())]);
+    }
+
+    #[test]
+    fn a_grant_withheld_for_its_scope_pins_nothing() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        b.can(Action::Create, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7))
+            .requires_scope("posts:write");
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), []);
     }
 }

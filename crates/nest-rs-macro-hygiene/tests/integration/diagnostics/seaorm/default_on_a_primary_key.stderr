@@ -1,0 +1,5 @@
+error: #[expose] `default`: the primary key is seeded on insert — a `Uuid` key with a v7 UUID, any other by the database
+  --> tests/integration/diagnostics/seaorm/default_on_a_primary_key.rs:12:24
+   |
+12 |     #[expose(default = Uuid::nil())]
+   |                        ^^^^^^^^^^^

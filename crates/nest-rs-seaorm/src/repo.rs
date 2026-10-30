@@ -9,6 +9,7 @@ use sea_orm::{
     Select, Update, Value,
 };
 
+use crate::column_default::fill_column_defaults;
 use crate::executor::{SeaOrmExecutor, current_executor};
 use crate::select::RepoSelect;
 use crate::soft_delete::live_condition_of;
@@ -207,12 +208,17 @@ impl<E: EntityTrait> Repo<E> {
     /// Bar: **pre-principal provisioning** (a social-login user) and
     /// principal-less system work. Every authorized create goes through
     /// [`Creatable::create_from_active`](crate::Creatable).
-    pub async fn insert_unscoped(active: E::ActiveModel) -> Result<E::Model, DbErr>
+    ///
+    /// A column the row leaves unset takes the default its `#[expose]` entity
+    /// declares: a v7 UUID for a `Uuid` key, its `#[expose(default = …)]` for
+    /// any other.
+    pub async fn insert_unscoped(mut active: E::ActiveModel) -> Result<E::Model, DbErr>
     where
         E::ActiveModel: ActiveModelBehavior + Send,
         E::Model: IntoActiveModel<E::ActiveModel>,
     {
         let conn = Self::conn()?;
+        fill_column_defaults::<E>(&mut active);
         tracing::trace!(
             target: crate::target::ORM,
             entity = E::default().table_name(),

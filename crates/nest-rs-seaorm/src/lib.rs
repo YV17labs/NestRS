@@ -54,6 +54,7 @@
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod atomic;
+mod column_default;
 mod config;
 mod database;
 mod error;
@@ -121,6 +122,7 @@ pub mod __private {
     pub use crate::page::graphql_page_cursor;
     pub use crate::service::{SameEntity, bound_entity};
 
+    pub use crate::column_default::ColumnDefaultRegistration;
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
     pub use inventory;
 
@@ -250,6 +252,15 @@ pub mod __private {
 /// with_graphql::<graph::Item>();
 /// # }
 /// ```
+///
+/// **An insert through [`Repo`] fills the entity's column defaults** the row
+/// left unset, [`Repo::insert_unscoped`] and [`Creatable::create`] alike: a
+/// `Uuid` key with a v7 UUID, and a column's `#[expose(default = expr)]` — a
+/// server-side constant on a column the create input does not carry. What the
+/// caller's grants pin (the tenant, the author) [`Creatable::create`] fills
+/// first, so a pin wins over a default. The entity's `ActiveModelBehavior` is
+/// its own, but under `timestamps`, which writes it to stamp `created_at` on
+/// insert and `updated_at`, when the entity has one, on every save.
 pub use nest_rs_seaorm_macros::expose;
 
 /// The enum mode of [`macro@expose`]: make a column's enum type a wire type.

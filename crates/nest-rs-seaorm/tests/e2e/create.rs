@@ -190,6 +190,129 @@ async fn in_scope_create_over_the_pool_executor_commits() {
         .expect("cleanup");
 }
 
+mod tenanted {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "create_fill_gadgets")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+        pub org_id: i32,
+        pub label: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+struct CreateTenanted {
+    id: Uuid,
+    label: &'static str,
+}
+
+impl CreateModel<tenanted::Entity> for CreateTenanted {
+    fn into_active_model(self) -> tenanted::ActiveModel {
+        tenanted::ActiveModel {
+            id: Set(self.id),
+            label: Set(self.label.to_owned()),
+            ..Default::default()
+        }
+    }
+}
+
+struct TenantedService;
+
+impl CrudService for TenantedService {
+    type Entity = tenanted::Entity;
+}
+
+impl Creatable for TenantedService {
+    type Create = CreateTenanted;
+}
+
+/// The tenant column defaults to `0`, an org no grant names, so a create the
+/// grants leave undecided lands where the scope check can refuse it.
+async fn tenanted_db() -> DatabaseConnection {
+    let conn = crate::harness::connect().await;
+    crate::harness::setup_shared_table(
+        &conn,
+        "create_fill_gadgets",
+        "CREATE TABLE IF NOT EXISTS create_fill_gadgets (
+            id UUID PRIMARY KEY,
+            org_id INT NOT NULL DEFAULT 0,
+            label TEXT NOT NULL
+        );",
+    )
+    .await;
+    conn
+}
+
+async fn create_tenanted(
+    conn: &DatabaseConnection,
+    ability: nest_rs_authz::Ability,
+    id: Uuid,
+) -> Result<tenanted::Model, DbErr> {
+    with_request_executor(
+        SeaOrmExecutor::Pool(conn.clone()).into(),
+        with_ability(Arc::new(ability), async {
+            TenantedService
+                .create(CreateTenanted {
+                    id,
+                    label: "filled",
+                })
+                .await
+        }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_create_takes_the_tenant_its_grant_pins_when_the_input_carries_none() {
+    let conn = tenanted_db().await;
+    let id = Uuid::now_v7();
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Create, tenanted::Entity)
+        .when(|p| p.eq(tenanted::Column::OrgId, 7));
+
+    let created = create_tenanted(&conn, b.build().expect("a valid ability"), id)
+        .await
+        .expect("the grant decides the tenant, so the row is in scope");
+
+    assert_eq!(created.org_id, 7);
+    let persisted = tenanted::Entity::find_by_id(id)
+        .one(&conn)
+        .await
+        .expect("read-back query runs")
+        .expect("the filled row committed");
+    assert_eq!(persisted.org_id, 7);
+}
+
+#[tokio::test]
+async fn grants_pinning_the_tenant_apart_leave_it_unset_and_the_recheck_refuses() {
+    let conn = tenanted_db().await;
+    let id = Uuid::now_v7();
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Create, tenanted::Entity)
+        .when(|p| p.eq(tenanted::Column::OrgId, 7));
+    b.can(Action::Create, tenanted::Entity)
+        .when(|p| p.eq(tenanted::Column::OrgId, 8));
+
+    let refused = create_tenanted(&conn, b.build().expect("a valid ability"), id).await;
+
+    assert!(
+        matches!(refused, Err(DbErr::RecordNotInserted)),
+        "two grants naming two tenants decide neither, got {refused:?}",
+    );
+    let persisted = tenanted::Entity::find_by_id(id)
+        .one(&conn)
+        .await
+        .expect("read-back query runs");
+    assert!(persisted.is_none(), "an undecided tenant persists nothing");
+}
+
 // A trigger terminates its own backend: the insert fails and the session its
 // SAVEPOINT would roll back on is gone, as a `pg_terminate_backend` leaves it.
 mod fragile {

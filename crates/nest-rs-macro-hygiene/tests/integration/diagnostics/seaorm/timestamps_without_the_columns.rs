@@ -1,6 +1,6 @@
-//! `timestamps` maintains two columns from `before_save`, and the refusal
-//! carries the remedy for the other way this goes wrong: a hand-written
-//! `ActiveModelBehavior` the generated one would collide with.
+//! `timestamps` stamps `created_at` from `before_save`, and `updated_at` when
+//! the entity has one: an entity with neither is refused, naming the column it
+//! needs and the flag to drop.
 
 use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;

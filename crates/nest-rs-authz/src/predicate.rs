@@ -189,6 +189,33 @@ impl<E: EntityTrait> Predicate<E> {
         self.decide(model, &nothing_invented) == Truth::True
     }
 
+    /// Split this predicate, read as one rule's condition, into the columns its
+    /// top-level conjunction pins by equality and the columns it constrains any
+    /// other way.
+    pub(crate) fn pins(&self, pinned: &mut Vec<(E::Column, Value)>, other: &mut Vec<E::Column>) {
+        match self {
+            Predicate::Eq(col, value) => pinned.push((*col, value.clone())),
+            Predicate::And(parts) => parts.iter().for_each(|part| part.pins(pinned, other)),
+            constrained => constrained.columns(other),
+        }
+    }
+
+    /// Every column of `E` this predicate reads; a relation reads the related
+    /// entity's.
+    fn columns(&self, out: &mut Vec<E::Column>) {
+        match self {
+            Predicate::Always | Predicate::Deny | Predicate::Related(_) => {}
+            Predicate::Eq(col, _)
+            | Predicate::In(col, _)
+            | Predicate::Cmp(col, _, _)
+            | Predicate::IsNull(col, _) => out.push(*col),
+            Predicate::And(parts) | Predicate::Or(parts) => {
+                parts.iter().for_each(|part| part.columns(out));
+            }
+            Predicate::Not(inner) => inner.columns(out),
+        }
+    }
+
     /// What this predicate is on `model`, as SQL would compute it from the row's
     /// columns. `invented` names the columns whose value the row was given
     /// rather than read, so a rule on one is undecided.

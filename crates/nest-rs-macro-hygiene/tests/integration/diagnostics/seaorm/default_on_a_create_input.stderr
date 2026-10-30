@@ -1,0 +1,5 @@
+error: #[expose] `default`: the create input carries this column, so the insert always holds its value — drop `default`, or drop `create` from `input(...)`
+  --> tests/integration/diagnostics/seaorm/default_on_a_create_input.rs:14:39
+   |
+14 |     #[expose(input(create), default = String::from("untitled"))]
+   |                                       ^^^^^^^^^^^^^^^^^^^^^^^^

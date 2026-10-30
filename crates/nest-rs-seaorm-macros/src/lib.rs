@@ -22,7 +22,17 @@ mod wire_enum;
 /// `nest-rs-seaorm`) for GraphQL types and auto-resolved relations. Add
 /// `soft_delete` and/or `timestamps` for lifecycle columns: `soft_delete`
 /// registers the entity, so a delete stamps `deleted_at` and every `Repo` read
-/// hides a stamped row (see `nest-rs-seaorm`'s `SoftDeletable`).
+/// hides a stamped row (see `nest-rs-seaorm`'s `SoftDeletable`); `timestamps`
+/// emits the entity's `ActiveModelBehavior`, which stamps `created_at` on
+/// insert and, when the entity has one, `updated_at` on every save. Without
+/// `timestamps` the entity writes its own, empty when it needs no hook.
+///
+/// **An insert through `Repo` fills the entity's column defaults** the row
+/// left unset: a `Uuid` primary key with a v7 UUID, and a column's
+/// `#[expose(default = expr)]` — a server-side constant such as a draft
+/// status, on a column the create input does not carry. The decorator
+/// registers them, as `soft_delete` registers its tombstone, so the entity's
+/// own hooks stay its own.
 ///
 /// **Exposure is opt-in.** A column crosses the wire only when it carries
 /// `#[expose]`; a field with no `#[expose]` is hidden from every transport
@@ -36,9 +46,10 @@ mod wire_enum;
 /// The original entity unchanged, plus: the wire DTO (`Serialize` +
 /// `JsonSchema`, GraphQL `SimpleObject` under `graphql`), the `Create`/`Update`
 /// input types, active-model write glue, `impl WireModelDefaults` (for response
-/// masking to rebuild unexposed columns), lifecycle column glue
-/// (`soft_delete`'s `SoftDeletable` and registration, `timestamps`'
-/// `ActiveModelBehavior`), and — under `graphql` — the relation loaders +
+/// masking to rebuild unexposed columns), lifecycle glue (the column defaults'
+/// registration, `soft_delete`'s `SoftDeletable` and registration,
+/// `timestamps`' `ActiveModelBehavior`), and — under `graphql` — the relation
+/// loaders +
 /// `#[ComplexObject]` field resolvers for `#[expose]`d relations.
 #[proc_macro_attribute]
 pub fn expose(args: TokenStream, item: TokenStream) -> TokenStream {

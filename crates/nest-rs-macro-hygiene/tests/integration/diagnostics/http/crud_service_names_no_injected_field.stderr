@@ -1,47 +1,17 @@
-error[E0277]: `NotesController` injects no field by the name `#[crud(service = …)]` gives
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:45:6
-   |
-45 | impl NotesController {}
-   |      ^^^^^^^^^^^^^^^ no `#[inject]` field of that name
-   |
-   = note: `service = <field>` names the host's `#[inject]` field holding the service, e.g. `#[inject] svc: Arc<UsersService>` beside `#[crud(service = svc)]`
-help: the trait `InjectedField<9396668372466763757>` is not implemented for `NotesController`
-      but trait `InjectedField<4652337650770631594>` is implemented for it
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:38:1
+error[E0576]: cannot find associated type `svc` in trait `__NestrsInjectedNotesController`
+  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:44:18
    |
 38 | #[controller(path = "/notes")]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: this error originates in the attribute macro `controller` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: `NotesController` injects no field by the name `#[crud(service = …)]` gives
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:44:1
-   |
+   | ------------------------------ associated type `notes` defined here
+...
 44 | #[crud(service = svc, ops = [get])]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `#[inject]` field of that name
+   |                  ^^^ not found in `__NestrsInjectedNotesController`
    |
-   = note: `service = <field>` names the host's `#[inject]` field holding the service, e.g. `#[inject] svc: Arc<UsersService>` beside `#[crud(service = svc)]`
-help: the trait `InjectedField<9396668372466763757>` is not implemented for `NotesController`
-      but trait `InjectedField<4652337650770631594>` is implemented for it
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:38:1
+help: maybe you meant this associated type
    |
-38 | #[controller(path = "/notes")]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: this error originates in the attribute macro `controller` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: `NotesController` injects no field by the name `#[crud(service = …)]` gives
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:44:1
+44 - #[crud(service = svc, ops = [get])]
+44 + #[crud(service = notes, ops = [get])]
    |
-44 | #[crud(service = svc, ops = [get])]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `#[inject]` field of that name
-   |
-   = note: `service = <field>` names the host's `#[inject]` field holding the service, e.g. `#[inject] svc: Arc<UsersService>` beside `#[crud(service = svc)]`
-help: the trait `InjectedField<9396668372466763757>` is not implemented for `NotesController`
-      but trait `InjectedField<4652337650770631594>` is implemented for it
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:38:1
-   |
-38 | #[controller(path = "/notes")]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: this error originates in the attribute macro `controller` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0609]: no field `svc` on type `&NotesController`
   --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:44:18
@@ -50,48 +20,3 @@ error[E0609]: no field `svc` on type `&NotesController`
    |                  ^^^ unknown field
    |
    = note: available field is: `notes`
-
-error[E0277]: `NotesController` injects no field by the name `#[crud(service = …)]` gives
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:44:1
-   |
-44 | #[crud(service = svc, ops = [get])]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `#[inject]` field of that name
-   |
-   = note: `service = <field>` names the host's `#[inject]` field holding the service, e.g. `#[inject] svc: Arc<UsersService>` beside `#[crud(service = svc)]`
-help: the trait `InjectedField<9396668372466763757>` is not implemented for `NotesController`
-      but trait `InjectedField<4652337650770631594>` is implemented for it
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:38:1
-   |
-38 | #[controller(path = "/notes")]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: this error originates in the macro `::nest_rs::http::__gate_of` which comes from the expansion of the attribute macro `controller` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: `NotesController` injects no field by the name `#[crud(service = …)]` gives
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:44:1
-   |
-44 | #[crud(service = svc, ops = [get])]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `#[inject]` field of that name
-   |
-   = note: `service = <field>` names the host's `#[inject]` field holding the service, e.g. `#[inject] svc: Arc<UsersService>` beside `#[crud(service = svc)]`
-help: the trait `InjectedField<9396668372466763757>` is not implemented for `NotesController`
-      but trait `InjectedField<4652337650770631594>` is implemented for it
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:38:1
-   |
-38 | #[controller(path = "/notes")]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: this error originates in the macro `::nest_rs::http::__shaper_of` which comes from the expansion of the attribute macro `controller` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: `NotesController` injects no field by the name `#[crud(service = …)]` gives
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:44:1
-   |
-44 | #[crud(service = svc, ops = [get])]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `#[inject]` field of that name
-   |
-   = note: `service = <field>` names the host's `#[inject]` field holding the service, e.g. `#[inject] svc: Arc<UsersService>` beside `#[crud(service = svc)]`
-help: the trait `InjectedField<9396668372466763757>` is not implemented for `NotesController`
-      but trait `InjectedField<4652337650770631594>` is implemented for it
-  --> tests/integration/diagnostics/http/crud_service_names_no_injected_field.rs:38:1
-   |
-38 | #[controller(path = "/notes")]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: this error originates in the macro `::nest_rs::http::__answer_of` which comes from the expansion of the attribute macro `controller` (in Nightly builds, run with -Z macro-backtrace for more info)

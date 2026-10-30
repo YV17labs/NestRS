@@ -259,9 +259,10 @@ impl CrudDeclaration {
 
     /// The types `ops` name on the block `#[crud]` decorates, `self_ty` its
     /// host named `host`: aliases of the projections off the type of the
-    /// field `service` names, which the host's struct half hands over through
-    /// `InjectedField` under [`injected_field_key`](crate::__private::injected_field_key).
-    /// Only what a generated op reads is declared, so none is left unused.
+    /// field `service` names, which the host's struct half declares beside it
+    /// ([`injected_field_types`](crate::__private::injected_field_types)) and
+    /// this block reaches through `self_ty`'s path. Only what a generated op
+    /// reads is declared, so none is left unused.
     pub fn types(&self, host: &Ident, self_ty: &Type, ops: GeneratedOps) -> CrudTypes {
         let alias = |what: &str| format_ident!("__NestrsCrud{}{}", host, what);
         let service = alias("Service");
@@ -270,13 +271,12 @@ impl CrudDeclaration {
         let create = alias("Create");
         let update = alias("Update");
         let entity_alias = ops.any().then(|| {
-            let key = crate::inject::injected_field_key(&self.service);
-            // Spanned on the key's value: a field the host does not inject is
-            // refused there.
+            let field = injected_field_type(self_ty, host, &self.service);
+            // The one alias naming the field, spanned on the key's value: a
+            // name the host does not inject is refused there, once.
             let service_alias = quote_spanned! {self.service.span()=>
                 #[doc(hidden)]
-                type #service = <<#self_ty as ::nest_rs_core::__private::InjectedField<#key>>::Type
-                    as ::core::ops::Deref>::Target;
+                type #service = <#field as ::core::ops::Deref>::Target;
             };
             quote! {
                 #service_alias
@@ -310,6 +310,22 @@ impl CrudDeclaration {
             aliases: quote! { #entity_alias #output_alias #create_alias #update_alias },
         }
     }
+}
+
+/// The type `field` holds, read off the trait the struct half declares beside
+/// the host, reached through `self_ty`'s own path with its last segment
+/// swapped: a block written `impl super::UsersController` reads
+/// `<super::UsersController as super::__NestrsInjectedUsersController>::svc`.
+fn injected_field_type(self_ty: &Type, host: &Ident, field: &Ident) -> TokenStream2 {
+    let types = crate::inject::injected_field_types_trait(host);
+    let mut path = match self_ty {
+        Type::Path(written) if written.qself.is_none() => written.path.clone(),
+        _ => syn::Path::from(types.clone()),
+    };
+    if let Some(last) = path.segments.last_mut() {
+        *last = syn::PathSegment::from(types);
+    }
+    quote! { <#self_ty as #path>::#field }
 }
 
 /// The refusal of a key that configures one op, declared beside an `ops` that
@@ -558,7 +574,9 @@ pub fn resource_noun(host: &Ident, role: &str) -> String {
 /// operation names it generates (`UsersResolver` → `user`, so `users`, `user`,
 /// `create_user`, …), which async-graphql camelCases.
 ///
-/// Pluralization is naive (`Category` → `categorys`); hand-write the operation
+/// Pluralization is naive (`Category` → `categorys`), and so is the singular a
+/// host named in the singular over a noun ending in `s` reads (`StatusResolver`
+/// → `statu`, where `StatusesResolver` → `status`); hand-write the operation
 /// when that matters — `#[crud]` skips any op a method of that name defines
 /// ([`CrudOp::resolver_method`]).
 pub fn resolver_singular(host: &Ident) -> String {
@@ -627,12 +645,11 @@ mod tests {
         let self_ty: Type = parse_quote!(UsersController);
         let types = cfg.types(&host, &self_ty, ALL);
         let aliases = types.aliases.to_string();
-        let key = crate::inject::injected_field_key(&parse_quote!(svc));
         assert!(
-            aliases.contains("type __NestrsCrudUsersControllerService =")
-                && aliases.contains(&format!(
-                    "UsersController as :: nest_rs_core :: __private :: InjectedField < {key}u64 >"
-                )),
+            aliases.contains(
+                "type __NestrsCrudUsersControllerService = < < UsersController as \
+                 __NestrsInjectedUsersController > :: svc as :: core :: ops :: Deref > :: Target"
+            ),
             "{aliases}",
         );
         for read in [
@@ -646,6 +663,21 @@ mod tests {
         assert_eq!(
             types.entity.to_string(),
             "__NestrsCrudUsersControllerEntity"
+        );
+    }
+
+    #[test]
+    fn a_block_naming_its_host_by_path_reaches_the_field_alias_by_that_path() {
+        let cfg = parse(quote! { service = svc_users }).expect("parses");
+        let host: Ident = parse_quote!(UsersController);
+        let self_ty: Type = parse_quote!(super::http::UsersController);
+        let aliases = cfg.types(&host, &self_ty, ALL).aliases.to_string();
+        assert!(
+            aliases.contains(
+                "< < super :: http :: UsersController as super :: http :: \
+                 __NestrsInjectedUsersController > :: svc_users as"
+            ),
+            "{aliases}",
         );
     }
 
@@ -679,6 +711,25 @@ mod tests {
             ..delete_only
         };
         assert!(cfg.types(&host, &self_ty, none).aliases.is_empty());
+    }
+
+    /// The names a GraphQL client asks for, pinned: a host named in the
+    /// singular over a noun ending in `s` loses the `s`, and its plural reads
+    /// the noun whole.
+    #[test]
+    fn a_singular_host_over_a_noun_ending_in_s_reads_it_without_the_s() {
+        let names = |host: &str| {
+            let singular = resolver_singular(&Ident::new(host, Span::call_site()));
+            [CrudOp::Get, CrudOp::List, CrudOp::Create].map(|op| op.resolver_method(&singular))
+        };
+        assert_eq!(names("StatusResolver"), ["statu", "status", "create_statu"]);
+        assert_eq!(
+            names("StatusesResolver"),
+            ["status", "statuss", "create_status"]
+        );
+        assert_eq!(names("AliasResolver"), ["alia", "alias", "create_alia"]);
+        let controller = Ident::new("StatusController", Span::call_site());
+        assert_eq!(resource_noun(&controller, "Controller"), "Statu");
     }
 
     #[test]

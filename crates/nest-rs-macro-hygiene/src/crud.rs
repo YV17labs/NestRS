@@ -1,6 +1,7 @@
 //! `#[crud]` on a controller, and under `graphql` on a resolver, whose source
 //! names `std`, the umbrella and `crate::`, and nothing else; every generated
-//! operation's emission compiles here, its types read off the service.
+//! operation's emission compiles here, its types read off the service — a
+//! crate-private one, which each public host injects.
 
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ use crate::entity::{CreateHygieneNote, Entity as HygieneNoteEntity, UpdateHygien
 
 #[injectable]
 #[derive(Default)]
-pub struct HygieneCrudService;
+pub(crate) struct HygieneCrudService;
 
 impl CrudService for HygieneCrudService {
     type Entity = HygieneNoteEntity;

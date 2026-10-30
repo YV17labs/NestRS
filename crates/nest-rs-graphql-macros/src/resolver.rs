@@ -21,7 +21,7 @@ use nest_rs_codegen::__private::{
     answer_span, at_most_one_authorize, await_if_async, build_injectable_body, cfg_attrs,
     concrete_signature, delegated_attrs, force_guard_typeids, forwarded_arg_idents,
     forwarded_idents, from_container_method, guard_capability_bounds, handler_const, handler_ref,
-    host_meta_fn, impl_self_ident, injected_field_impls, injected_keys_with_layers,
+    host_meta_fn, impl_self_ident, injected_field_types, injected_keys_with_layers,
     injected_methods_with_layers, injected_names_with_layers, injected_optional_fns,
     injected_per_request_method, key_as_written, layer_deps, normalize_forwarded_args,
     one_role_per_method, piped_input, posture_contradiction, posture_required,
@@ -118,7 +118,7 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
 
     // Read before the body strips `#[inject]`: `#[crud]` reads its service's
     // type off the field its key names.
-    let injected_fields = injected_field_impls(&item);
+    let injected_fields = injected_field_types(&item);
     let InjectableBody {
         ctor,
         dep_keys,

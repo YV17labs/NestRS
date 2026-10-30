@@ -16,20 +16,33 @@ no `Location`.
 Decided, by elegance with correctness held:
 
 - **`#[crud(service = svc)]` alone.** The field's type crosses the decorator
-  pair through `InjectedField<KEY>`, which `#[controller]` and `#[resolver]`
-  implement per `#[inject]` field, keyed by a hash of the field's name both
-  halves compute alike; the expansion reads the entity, the inputs and the
-  wire type through hidden aliases of the projections. `ops` is the one
-  selector, all five by default, so an op whose trait the service lacks fails
-  to resolve. The four other keys are gone, none kept as a second way.
+  pair through a private trait the struct half declares beside the host,
+  `__NestrsInjected<Host>`, whose associated types are named for the
+  `#[inject]` fields and implemented as their types: a private trait's impl
+  is no more visible than the host's module, so a host may inject a type less
+  visible than itself, and a host declared in a function body has the trait
+  in its block. The impl half reaches it through the path its self type is
+  written with (`impl super::UsersController` →
+  `<super::UsersController as super::__NestrsInjectedUsersController>::svc`),
+  so a name the host does not inject fails at the key: the trait has no such
+  associated type, rustc proposes the injected field's name, and the host has
+  no such field. The expansion reads the entity, the inputs and the wire type
+  through hidden aliases of the projections. `ops` is the one selector, all
+  five by default, so an op whose trait the service lacks fails to resolve,
+  and a block that left `create` or `update` out over a service implementing
+  the trait serves it once migrated: the upgrading guide says so, and `ops`
+  keeps it closed. The four other keys are gone, none kept as a second way.
 - **`Exposed { type Wire }`, sealed, on every `#[expose]`**: the one
-  association from an entity to its wire type, which `PkLoadable` reads too.
-  A hand-written impl would put on the wire a type no `#[expose]` built.
+  association from an entity to its wire type, which `PkLoadable` and
+  `RelatedTo` read too. A hand-written impl would put on the wire a type no
+  `#[expose]` built.
 - **The GraphQL field names and the default summaries are read off the
   host's name**, the module's noun singularized (`UsersResolver` → `users`,
   `user`, `create_user`): the same names as the output type gave for every
   resource named by the convention, and still no collision for a host named
-  in the singular.
+  in the singular. The singular is the generator's naive rule, so a host
+  named in the singular over a noun ending in `s` loses it (`StatusResolver`
+  → `statu`); the convention names it in the plural (`StatusesResolver`).
 - **`Created<T>` and `Paginated<T>` answer through `IntoResponse` and mark the
   response; the route's tail writes the `Location` or the `Link`** on the path
   the caller addressed, as `set_created_location` and `set_next_link` built
@@ -44,9 +57,18 @@ Decided, by elegance with correctness held:
   the same block.
 - **A `name = "…"` key for the GraphQL fields.** It would restate the noun the
   host's name already carries.
-- **An alias the struct half declares at module level, named after the
-  host.** It resolves only where the struct is in scope; the trait on the
-  host resolves wherever the impl is.
+- **A public trait the struct half implements on the host, naming the
+  field's type as an associated type** (`InjectedField<KEY>`, keyed by a hash
+  of the field's name), first built. An associated type of an impl as visible
+  as the host cannot name a less visible type (E0446), so a `pub` controller
+  injecting a `pub(crate)` service — what a module that does not export its
+  service writes — stopped compiling, `#[crud]` or not; no chain of public
+  impls reaches a less visible type from a public host. Its refusal also
+  quoted two 64-bit keys per error, six times over.
+- **An alias per field beside the host, or a hidden module re-exporting
+  them under the fields' names.** The alias's refusal of a misnamed key had
+  rustc propose another alias's mangled name as the key; the module's
+  `super::` cannot reach an item declared in a function body.
 - **Writing the `Location` at the edge, after every layer.** The edge would
   copy the request's URI on every request, self-mounts included; the route's
   tail holds the request already, and runs only on routes.
@@ -54,6 +76,10 @@ Decided, by elegance with correctness held:
   with the request.** A shaper (`#[http_code]`, `#[response_header]`) or a
   `Created` turned into a `Response` by the handler would bypass it; the
   marker travels with the response whatever converts it.
+
+The limit of the path: a block naming its host through a `use … as` rename
+or a type alias, or from outside the struct's module and its descendants,
+does not reach the trait and fails to resolve the field's type.
 
 Not done: `#[expose(service = …, writes = [create, update, delete])]` emitting
 the service's trait impls, the audit's optional second step. It would move the

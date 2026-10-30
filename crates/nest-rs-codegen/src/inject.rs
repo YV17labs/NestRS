@@ -5,7 +5,8 @@
 use std::collections::HashSet;
 
 use proc_macro2::{Group, Spacing, TokenStream as TokenStream2, TokenTree};
-use quote::{ToTokens, quote};
+use quote::{ToTokens, format_ident, quote};
+use syn::ext::IdentExt;
 use syn::{Fields, FnArg, Ident, ItemStruct, Pat, Signature, Type};
 
 use crate::attrs::Conditional;
@@ -178,49 +179,63 @@ fn removed_key(key: &str) -> Option<String> {
     })
 }
 
-/// The key a host's `#[inject]` field is read by across its decorator pair:
-/// 64-bit FNV-1a over the field's name, which the struct half declaring the
-/// field and the impl half naming it compute alike.
-pub fn injected_field_key(field: &Ident) -> u64 {
-    field
-        .to_string()
-        .bytes()
-        .fold(0xcbf2_9ce4_8422_2325, |hash: u64, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-        })
+/// The hidden trait beside a host naming each of its `#[inject]` fields'
+/// types by the field's own name, `__NestrsInjected<Host>`, which the struct
+/// half declaring the fields and the impl half reading one spell alike.
+pub(crate) fn injected_field_types_trait(host: &Ident) -> Ident {
+    format_ident!("__NestrsInjected{}", host.unraw())
 }
 
-/// Per `#[inject]` field of `item`, the `InjectedField` impl naming its type
-/// under [`injected_field_key`], compiled out with the field. Read before
+/// The types of `item`'s `#[inject]` fields, each an associated type named by
+/// its field on a private trait beside the host, `__NestrsInjected<Host>`,
+/// compiled out with the field. Private, so its impl is no more visible than
+/// the host's module and may name any type the host injects, as an impl of a
+/// public trait would not (E0446); declared in the host's scope, so a host
+/// written in a function body has it too. Read before
 /// [`build_injectable_body`] strips the attribute.
-pub fn injected_field_impls(item: &ItemStruct) -> TokenStream2 {
-    let Fields::Named(fields) = &item.fields else {
-        return TokenStream2::new();
-    };
-    let name = &item.ident;
-    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
-    let impls = fields.named.iter().filter_map(|field| {
-        let ident = field.ident.as_ref()?;
-        if !field
-            .attrs
+pub fn injected_field_types(item: &ItemStruct) -> TokenStream2 {
+    let injected: Vec<_> = match &item.fields {
+        Fields::Named(fields) => fields
+            .named
             .iter()
-            .any(|attr| attr.path().is_ident("inject"))
-        {
-            return None;
-        }
-        let key = injected_field_key(ident);
-        let ty = &field.ty;
-        let cfgs = crate::attrs::cfg_attrs(&field.attrs);
-        Some(quote! {
-            #(#cfgs)*
-            impl #impl_generics ::nest_rs_core::__private::InjectedField<#key>
-                for #name #ty_generics #where_clause
-            {
-                type Type = #ty;
-            }
-        })
+            .filter(|field| {
+                field
+                    .attrs
+                    .iter()
+                    .any(|attr| attr.path().is_ident("inject"))
+            })
+            .filter_map(|field| {
+                Some((
+                    field.ident.as_ref()?,
+                    &field.ty,
+                    crate::attrs::cfg_attrs(&field.attrs),
+                ))
+            })
+            .collect(),
+        Fields::Unit => Vec::new(),
+        Fields::Unnamed(_) => return TokenStream2::new(),
+    };
+    let declared = injected.iter().map(|(field, _, cfgs)| {
+        quote! { #(#cfgs)* type #field; }
     });
-    quote! { #(#impls)* }
+    let defined = injected.iter().map(|(field, ty, cfgs)| {
+        quote! { #(#cfgs)* type #field = #ty; }
+    });
+    let name = &item.ident;
+    let types = injected_field_types_trait(name);
+    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    quote! {
+        #[doc(hidden)]
+        // Named for the fields, and read by `#[crud]` alone.
+        #[allow(dead_code, non_camel_case_types)]
+        trait #types {
+            #(#declared)*
+        }
+
+        impl #impl_generics #types for #name #ty_generics #where_clause {
+            #(#defined)*
+        }
+    }
 }
 
 /// The hidden `__nestrs_from_container` constructor emitted by every decorator
@@ -674,6 +689,51 @@ mod tests {
     use syn::parse_quote;
 
     use super::*;
+
+    #[test]
+    fn each_injected_field_s_type_is_named_by_the_field_beside_its_host() {
+        let host: ItemStruct = parse_quote! {
+            pub struct UsersController {
+                #[inject]
+                svc: Arc<UsersService>,
+                #[cfg(feature = "audit")]
+                #[inject]
+                r#audit: Arc<AuditService>,
+                plain: u8,
+            }
+        };
+        let emitted = injected_field_types(&host).to_string();
+        for declared in [
+            "trait __NestrsInjectedUsersController { type svc ; # [cfg (feature = \"audit\")] \
+             type r#audit ; }",
+            "impl __NestrsInjectedUsersController for UsersController { type svc = Arc < \
+             UsersService > ; # [cfg (feature = \"audit\")] type r#audit = Arc < AuditService \
+             > ; }",
+        ] {
+            assert!(emitted.contains(declared), "{declared}: {emitted}");
+        }
+        assert!(
+            !emitted.contains("plain") && !emitted.contains("pub"),
+            "{emitted}"
+        );
+        let generic: ItemStruct = parse_quote! {
+            pub struct Host<T: Send> {
+                #[inject]
+                svc: Arc<T>,
+            }
+        };
+        assert!(injected_field_types(&generic).to_string().contains(
+            "impl < T : Send > __NestrsInjectedHost for Host < T > { type svc = Arc < T > ; }"
+        ),);
+        let injects_nothing: ItemStruct = parse_quote!(
+            pub struct Host;
+        );
+        assert!(
+            injected_field_types(&injects_nothing)
+                .to_string()
+                .contains("trait __NestrsInjectedHost { }")
+        );
+    }
 
     #[test]
     fn a_probe_names_no_lifetime_of_the_signature_it_was_read_off() {

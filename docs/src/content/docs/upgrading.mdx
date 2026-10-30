@@ -856,7 +856,8 @@ lists what the boot, a log or the wire shows when one is missed.
     | a `#[crud]` block generating `get`, `update` or `delete` under a controller path naming a parameter (`/orgs/{org}/users`) | those operations written by hand, reading every parameter, or the resource mounted under a path naming none: the generated ones answered `500` on every request |
     | `#[crud(service = svc, entity = E, output = Dto, create = CreateDto, update = UpdateDto)]` | `#[crud(service = svc)]`: every type is read off the service's `CrudService`, `Creatable` and `Updatable` impls and the entity's `#[expose]` |
     | a bare `#[crud(service = svc, entity = …, output = …)]` over a read-only service (`list`, `get` and `delete` by default) | `#[crud(service = svc, ops = [list, get])]`, or `ops = [list, get, delete]` beside a `Deletable` impl: the default is all five |
-    | `<E as PkLoadable>::Wire` | `<E as Exposed>::Wire`, `nest_rs::seaorm::Exposed` |
+    | a `#[crud(service = svc, entity = …, output = …)]` that left `create` or `update` out, over a service implementing `Creatable` or `Updatable` | `#[crud(service = svc, ops = [list, get, delete])]`, the operations it served: without `ops`, the block serves every write its service implements |
+    | `<E as PkLoadable>::Wire`, `<E as RelatedTo<P, V>>::Wire` | `<E as Exposed>::Wire`, `nest_rs::seaorm::Exposed` |
 
     Name your own log target by the constant the feature declares, as a 7.0
     scaffold does (`pub const TARGET: &str = "features::chat";` in
@@ -1155,12 +1156,24 @@ lists what the boot, a log or the wire shows when one is missed.
   way to the edge's `400`. Keep `validate()` only where the service builds the
   input — from a provider's profile, a seed.
 
+- **A `#[crud]` block that left `create` or `update` out, over a service that
+  implements `Creatable` or `Updatable`,** serves that write once its keys are
+  dropped, with no compile error: `POST` and `PUT` on a controller,
+  `createX` and `updateX` on a resolver, each behind the block's guards and the
+  caller's grants. List `ops` with the operations it served to keep the write
+  closed.
 - **A GraphQL `#[crud]` resolver named apart from its wire type** answers new
   field names with no compile error: the names come off the resolver's name
   (`AlbumsResolver` → `albums`), where they came off `output =` (`PagedAlbum`
   → `pagedAlbums`), and a client asking the old field gets `Unknown field`.
   Name the resolver after its resource, or write the operation by hand under
   the name the client asks.
+- **A `#[crud]` host named in the singular over a noun ending in `s`** reads
+  its resource as that noun without the `s`: `StatusResolver` serves `statu`
+  and `status`, where `output = Status` gave `status` and `statuss`, and
+  `StatusController` documents `List Statu`. Name the host in the plural, as a
+  module is (`StatusesResolver` → `status`, `statuss`), or write the operation
+  by hand under the name the client asks.
 - **A `Create` grant the create cannot complete** — an org-wide `Manage` that
   lets a caller who authors nothing reach an insert whose author no grant pins
   — answers the insert's NOT NULL violation as a `500`, filed at `error` on

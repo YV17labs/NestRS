@@ -111,8 +111,9 @@ The suffixes are `architecture.md`'s (*Transfer objects*). Placement:
 
 **The entity's derived forms are the exception.** `Create<E>` / `Update<E>`
 are at once the service's input, the GraphQL `input` and the REST body, so no
-single boundary suffix fits; they live inside the entity's `#[expose]` block
-(`create = CreateUser`), and the SDL reads `input CreateUser` on purpose.
+single boundary suffix fits; the entity's `#[expose]` generates them from the
+columns it marks `input(create)` / `input(update)`, and the SDL reads
+`input CreateUser` on purpose.
 Hand-written transfer objects keep their suffix. Do not split per transport
 without a genuine need.
 

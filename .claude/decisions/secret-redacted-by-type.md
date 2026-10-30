@@ -78,3 +78,12 @@ function boundary (`hash_password`'s return, `verify_password`'s and
 `authenticate_against_registry`'s parameters) is a borrowed `&str` or a
 `String` the caller stores into a `Secret` field; the type holds what is kept
 in a struct, not every value in flight.
+
+## 2026-10-29 — a stored password hash is a `Secret` on its way out
+
+`hash_password` returns `Secret<String>`: what it hands back is exactly what a
+struct keeps (the user's password column), and its caller had to remember to
+wrap it. The limit above holds for the rest — `verify_password`'s and
+`authenticate_against_registry`'s parameters, `ThrottlerGuard::new`'s — which
+borrow a value in flight, read once where it arrives; a `&Secret` there would
+add an `expose_secret()` at every caller and keep nothing.

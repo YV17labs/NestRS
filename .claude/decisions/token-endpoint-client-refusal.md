@@ -98,3 +98,48 @@ words, through `TokenError`'s one rendering.
   edge's problem documents; and the OpenAPI document, which still lists a
   guard's declared statuses as problem documents, a `401` with a `Bearer`
   challenge and a `bearerAuth` requirement.
+
+## 2026-10-29 — the grant's own refusals, and the registry, are the server's
+
+The owner agreed on 2026-10-28 that the identity audit's breaking changes land
+in 7.0: an authorization server built on `nest-rs-oauth-server` wrote by hand
+what RFC 6749 fixes — a `grant_type` compared to a literal, §3.3's scope
+narrowing, the registered clients under its own config, their Basic
+authentication — so the guard and the request taken above now carry the
+grant's refusals too.
+
+- **Taken: `GrantType`, read off the IANA OAuth grant-type registry**
+  (`client_credentials` today). `grant_type` had stayed a `String` so the
+  issuer could answer an unknown grant itself, since an enum under serde would
+  have made it a deserialization error the issuer never sees. That argument
+  fell with the extractor above: the request refuses a grant the endpoint does
+  not serve as §5.2's `unsupported_grant_type` before the handler runs. The
+  registry's values are exact strings, so `Client_Credentials` is unsupported,
+  not a spelling.
+- **Taken: `AuthenticatedClient::scope_for`, one strict §3.3 rule** — none
+  asked is the whole registration, a scope outside it refuses the request
+  whole as `invalid_scope`, a repeat is granted once. §3.3 lets a server grant
+  part of what was asked; a quiet partial grant is a policy, and the framework
+  carries no policy, so the one rule it ships refuses rather than narrows. A
+  product wanting another rule reads `request.scope` itself.
+- **Taken: the registry is `OAuthServerConfig<P>`** under
+  `<PREFIX>_OAUTH__SERVER__CLIENTS`, the family member's own namespace; the
+  demo's `<PREFIX>_OAUTH__CLIENTS` sat one letter from `OAUTH__CLIENT__*`, the
+  opposite role. The boot refuses a registry that serves no token or the
+  wrong one: none, a client with no resource, a duplicate or empty id, an
+  empty secret (an empty Basic password would match it).
+  `ClientSecretBasicStrategy<P>` is §2.3.1's Basic pair checked against it, the
+  guard's ordinary strategy.
+- **Each refusal of `scope_for` and `audience_for` files one `warn`**,
+  `token request refused` on `nest_rs::oauth::server`, its `reason` the wire
+  code; the client is the line's `actor_id`, never a field, and what it asked
+  for is never quoted.
+- **Refused: a policy hook in the registry** (a closure deciding partial
+  grants, a product payload validator). The product's own checks over the
+  registry — a scope outside the set its rules gate on — run in its own
+  module-init hook, in the config's words; a hook for a hypothetical user is
+  not built.
+- **Not covered:** the grants the endpoint does not serve (`authorization_code`
+  at this server, `refresh_token`, the device and JWT-bearer URNs), which
+  `GrantType` gains as each is built, with `unauthorized_client` and
+  `invalid_grant` raised by whichever reads them.

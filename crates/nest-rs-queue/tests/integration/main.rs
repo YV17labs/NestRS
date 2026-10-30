@@ -13,6 +13,7 @@ mod consume;
 mod inventory;
 #[path = "../harness/memory.rs"]
 mod memory;
+mod module;
 mod outbox;
 #[path = "../harness/outbox.rs"]
 mod outbox_store;

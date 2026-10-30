@@ -4,19 +4,21 @@
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
 use nest_rs_core::{Container, ContainerBuilder, Module, ReachableProviders, Registering, module};
+use nest_rs_http::HttpModule;
 
 use crate::config::HealthConfig;
 use crate::controller::HealthController;
 use crate::service::HealthService;
 
 #[module(
-    imports = [nest_rs_config::__private::feature::<HealthConfig>(), HealthWiring],
+    imports = [nest_rs_config::__private::feature::<HealthConfig>(), HttpModule, HealthWiring],
     providers = [
         HealthService,
         HealthController,
     ],
 )]
-/// Provides the health probe endpoints. Import it to mount `/health` and let
+/// Provides the health probe endpoints, over the [`HttpModule`] it imports
+/// bare. Import it to mount `/health` and let
 /// any reachable provider contribute `#[liveness]`/`#[readiness]`/`#[startup]`
 /// indicators, and any imported module attach an
 /// [`IndicatorEntry`](crate::IndicatorEntry).

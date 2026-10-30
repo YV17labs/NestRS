@@ -84,6 +84,10 @@ pub trait Gateway: Send + Sync + 'static {
     }
 }
 
+/// The label of the endpoint a gateway self-mounts its upgrade on, read back
+/// where a gateway is told from the other self-mounts.
+pub const GATEWAY_LABEL: &str = "ws";
+
 /// The endpoint a gateway's upgrade mounts at, assembled from the gateway, its
 /// messages, the container it mounts from, and the [`DetachedWork`] its
 /// `HttpEndpointMeta` declares; what each connection needs from the container

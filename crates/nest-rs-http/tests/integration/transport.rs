@@ -1,5 +1,7 @@
 //! `HttpTransport::serve` once shutdown is asked for, over real sockets since
-//! `TestClient` has none; the clock is paused once the connections are up.
+//! `TestClient` has none; the clock is paused once the connections are up. And
+//! a controller the app reaches without the transport, named at run, and one it
+//! serves, left unnamed.
 
 use std::net::TcpListener as StdTcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,14 +10,14 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{
-    App, ContainerBuilder, Interceptor, Layer, Next, Outcome, Transport, UnitContext, interceptor,
-    module,
+    App, AppLifecycle, ContainerBuilder, Interceptor, Layer, Next, Outcome, Transport, UnitContext,
+    interceptor, module, target,
 };
 use nest_rs_http::__private::websocket::{WebSocketLimits, WebSocketUpgrade};
 use nest_rs_http::Body;
 use nest_rs_http::{
-    DetachedWork, HttpConfig, HttpEndpointMeta, HttpTransport, Method, SseStream, async_trait,
-    controller, routes,
+    DetachedWork, HttpConfig, HttpEndpointMeta, HttpModule, HttpTransport, Method, SseStream,
+    async_trait, controller, routes,
 };
 use nest_rs_testing::LogCapture;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -1353,4 +1355,85 @@ async fn the_route_log_prints_the_method_token() {
         ]
         .map(|(handler, method)| (handler.to_owned(), method.to_owned())),
     );
+}
+
+/// What `App::run` files for a host whose edge's transport the app does not attach.
+const UNSERVED: &str = "host not served: its edge's transport is not attached";
+
+#[controller(path = "/reports")]
+#[derive(Default)]
+struct ReportsController;
+
+#[routes]
+impl ReportsController {
+    #[get("/")]
+    #[public]
+    async fn list(&self) -> &'static str {
+        "[]"
+    }
+}
+
+/// A hand-written adapter that forgets the transport.
+#[module(providers = [ReportsController])]
+struct ReportsHttpModule;
+
+#[tokio::test]
+async fn a_controller_the_app_reaches_without_the_transport_is_named_at_run() {
+    let logs = LogCapture::install();
+
+    App::new::<ReportsHttpModule>()
+        .expect("the module boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let unserved = logs.expect_one(target::APP, UNSERVED);
+    assert_eq!(unserved.level, "warn");
+    assert_eq!(unserved.field("edge").as_deref(), Some("http"));
+    assert_eq!(unserved.field("host").as_deref(), Some("ReportsController"));
+    assert_eq!(
+        unserved.field("module").as_deref(),
+        Some("ReportsHttpModule")
+    );
+    assert_eq!(
+        unserved.field("import").as_deref(),
+        Some("nest_rs::http::HttpModule")
+    );
+}
+
+/// The adapter importing its transport, on a free loopback port.
+#[module(
+    imports = [HttpModule::for_root(loopback()), ReportsHttpModule],
+)]
+struct ServedReportsModule;
+
+fn loopback() -> HttpConfig {
+    HttpConfig {
+        host: "127.0.0.1".into(),
+        port: 0,
+        ..HttpConfig::default()
+    }
+}
+
+#[tokio::test]
+async fn a_controller_the_transport_serves_is_not_named_at_run() {
+    let logs = LogCapture::install();
+    let app = App::builder()
+        .module::<ServedReportsModule>()
+        .build()
+        .await
+        .expect("the module boots");
+    let lifecycle = app
+        .container()
+        .get::<AppLifecycle>()
+        .expect("every app is seeded its lifecycle");
+
+    // `App::run` names an unserved host before it turns ready, so the run is
+    // dropped there.
+    let running = tokio::spawn(app.run());
+    assert!(lifecycle.ready().await, "the app serves");
+    running.abort();
+
+    logs.expect_one(target::APP, "app ready");
+    logs.expect_none(target::APP, UNSERVED);
 }

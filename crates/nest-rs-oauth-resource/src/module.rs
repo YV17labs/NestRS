@@ -9,6 +9,8 @@
 //!    declared `#[public]`.
 //! 3. Attaches [`ResourceChallenge`], so every `401` carries `resource_metadata`.
 //!
+//! The endpoint and the challenge ride the HTTP transport it imports bare.
+//!
 //! It also binds the token verifier [`AuthnModule`](nest_rs_authn::AuthnModule)
 //! builds to this resource — the MCP authorization spec's confused-deputy
 //! defence: a token is accepted only when its `aud` is the resource (RFC 8707;
@@ -24,6 +26,7 @@ use nest_rs_authn::AuthnConfig;
 use nest_rs_config::{ConfigModule, endpoint_shown};
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering, module};
 use nest_rs_http::__private::CanonicalHost;
+use nest_rs_http::HttpModule;
 
 use crate::config::OAuthResourceConfig;
 use crate::controller::OAuthResourceController;
@@ -33,7 +36,7 @@ use crate::metadata::ProtectedResourceMetadata;
 /// The discovery surface, private: inert without the [`ProtectedResourceMetadata`]
 /// factory only [`OAuthResourceSetup`] queues, so `for_root` is the single seam.
 #[module(
-    imports = [nest_rs_config::__private::feature::<OAuthResourceConfig>()],
+    imports = [nest_rs_config::__private::feature::<OAuthResourceConfig>(), HttpModule],
     providers = [OAuthResourceController, ResourceChallenge],
 )]
 struct OAuthResourceHost;

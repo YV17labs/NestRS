@@ -208,7 +208,7 @@ pub mod __private {
 
     pub use crate::ctx::ctx_parameter;
     pub use crate::envelope::decode_payload;
-    pub use crate::gateway::{gateway_endpoint, wire_gateway};
+    pub use crate::gateway::{GATEWAY_LABEL, gateway_endpoint, wire_gateway};
     pub use crate::guard::{MessageGuards, message_guard_stage, refused_origin};
     pub use crate::message::{DeclaredMessage, MessageTable};
     pub use crate::namespace::WsNamespaceEntry;

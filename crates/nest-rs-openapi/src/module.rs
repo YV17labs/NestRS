@@ -5,7 +5,9 @@ use nest_rs_config::{ConfigModule, ConfigSetup};
 use nest_rs_core::{
     Collecting, Container, ContainerBuilder, Handler, Module, Posture, Registering,
 };
-use nest_rs_http::{HttpEndpointMeta, Method, declare_endpoint, join_path, version_path};
+use nest_rs_http::{
+    HttpEndpointMeta, HttpModule, Method, declare_endpoint, join_path, version_path,
+};
 
 use crate::config::OpenApiConfig;
 use crate::document::{Reported, build_document, versioned_documents};
@@ -28,7 +30,8 @@ const VERSIONED_SPEC_PATTERN: &str = "/api-json/{*version}";
 /// profile alone until `<PREFIX>_OPENAPI__ENABLED=true` (or a pinned
 /// `OpenApiConfig { enabled: true, .. }`) opens them — see [`OpenApiConfig`].
 /// A bare `OpenApiModule` import beside the app's `for_root` mounts nothing
-/// twice.
+/// twice. It imports [`HttpModule`] bare, so the documentation is served
+/// wherever it is imported.
 pub struct OpenApiModule;
 
 impl OpenApiModule {
@@ -46,11 +49,12 @@ impl Module for OpenApiModule {
     // A bare import still reads `<PREFIX>_OPENAPI__*`; a `for_root(Some(cfg))`'s
     // declared value supersedes this env-only one.
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(None::<OpenApiConfig>, builder)
+        ConfigModule::provide_feature(None::<OpenApiConfig>, builder).import::<HttpModule>()
     }
 
     // Registered once however many modules import it, so the document mounts once.
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        let builder = builder.import::<HttpModule>();
         match ConfigModule::resolved::<OpenApiConfig>(&builder.snapshot()) {
             Ok(config) => register(builder, (*config).clone()),
             Err(refusal) => builder.refuse(refusal),

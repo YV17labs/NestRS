@@ -5,7 +5,7 @@ use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Module, Registering};
-use nest_rs_http::{BoxEndpoint, HttpFallbackMeta};
+use nest_rs_http::{BoxEndpoint, HttpFallbackMeta, HttpModule};
 
 use crate::config::StaticFilesConfig;
 use crate::disk::DiskRoot;
@@ -17,8 +17,9 @@ use crate::files::Files;
 /// names, or an [`Embedded`] one the binary carries.
 ///
 /// The files answer only what no route and no self-mount claims, outside the
-/// global prefix, and publicly: importing the module is the opening. A bare
-/// import reads `<PREFIX>_STATIC_FILES__*` alone.
+/// global prefix, and publicly: importing the module is the opening, and it
+/// imports [`HttpModule`] bare, so the files are served wherever it is
+/// imported. A bare import reads `<PREFIX>_STATIC_FILES__*` alone.
 ///
 /// ```
 /// use nest_rs_core::module;
@@ -119,10 +120,11 @@ impl DynamicModule for StaticFilesSetup {
 
 impl Module for StaticFilesModule {
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(None::<StaticFilesConfig>, builder)
+        ConfigModule::provide_feature(None::<StaticFilesConfig>, builder).import::<HttpModule>()
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        let builder = builder.import::<HttpModule>();
         let snapshot = builder.snapshot();
         let config = match ConfigModule::resolved::<StaticFilesConfig>(&snapshot) {
             Ok(config) => config,

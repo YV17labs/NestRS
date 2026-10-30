@@ -117,6 +117,7 @@ mod endpoint;
 mod error;
 mod guard;
 mod mcp_impl;
+mod module;
 mod operation;
 mod parameters;
 mod propagate;

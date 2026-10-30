@@ -211,6 +211,43 @@ async fn a_transport_that_fails_stops_the_app_for_that_cause_and_says_so_once() 
     assert_eq!(draining.field("signal"), None);
 }
 
+#[module(providers = [Observer])]
+struct ServesNothingModule;
+
+#[tokio::test]
+async fn a_run_with_no_transport_says_so_once_and_stops_for_that_cause_after_its_init_hooks() {
+    let logs = LogCapture::install();
+    let app = App::new::<ServesNothingModule>().expect("the module boots");
+    let lifecycle = Arc::clone(app.lifecycle());
+
+    app.run()
+        .await
+        .expect("an app with nothing to serve stops cleanly");
+
+    assert_eq!(
+        reads(),
+        [("init hook", AppState::Starting)],
+        "the init hooks ran"
+    );
+    let nothing = logs.expect_one(target::APP, "app serves nothing: no transport is attached");
+    assert_eq!(nothing.level, "warn");
+    assert!(
+        nothing
+            .field("hint")
+            .is_some_and(|hint| hint.contains("imports its transport")),
+        "{:?}",
+        nothing.fields,
+    );
+    logs.expect_none(target::APP, "app ready");
+    let draining = logs.expect_one(target::APP, "app draining");
+    assert_eq!(draining.field("cause").as_deref(), Some("NoTransport"));
+    assert_eq!(lifecycle.state(), AppState::Draining);
+    assert!(
+        !lifecycle.ready().await,
+        "an app that served nothing is never ready"
+    );
+}
+
 /// What a shutdown hook or a close read of the stop cause once the app's
 /// `stopping()` fired, where it read it.
 static JOINED: Mutex<Vec<(&'static str, Option<StopCause>)>> = Mutex::new(Vec::new());

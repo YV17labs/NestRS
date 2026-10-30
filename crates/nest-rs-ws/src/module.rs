@@ -1,8 +1,12 @@
 //! [`WsModule`] — provides the [`WsServer`] connection registries, namespaced
 //! ones included, and resolves [`WsConfig`].
 
+use std::borrow::Cow;
+
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::module;
+use nest_rs_core::__private::{EdgeHosts, EdgeRuntime, attaches_transport};
+use nest_rs_core::{Container, Discovery, Edge, module};
+use nest_rs_http::{HttpEndpointMeta, HttpTransport};
 
 use crate::config::WsConfig;
 use crate::namespace::WsNamespaces;
@@ -11,6 +15,11 @@ use crate::server::WsServer;
 /// DI module that provides the [`WsServer`] connection registries and resolves
 /// [`WsConfig`]. Import it wherever a gateway broadcasts or a service pushes to
 /// clients.
+///
+/// It attaches no transport: a gateway upgrades from the HTTP transport its
+/// adapter imports beside it (`HttpModule`), and a port pushing to clients
+/// opens no listener in a binary serving no gateway. A gateway the app reaches
+/// without it is named at `warn` when the app runs.
 #[module(imports = [nest_rs_config::__private::feature::<WsConfig>()], providers = [WsServer, WsNamespaces])]
 pub struct WsModule;
 
@@ -26,6 +35,28 @@ impl WsModule {
 /// [`WsModule::for_root`]: resolves [`WsConfig`] (env over the pinned base),
 /// then brings the base [`WsModule`] wiring.
 pub type WsSetup = ConfigSetup<WsModule, WsConfig>;
+
+nest_rs_core::inventory::submit! {
+    EdgeRuntime {
+        edge: Edge::Ws,
+        import: "nest_rs::http::HttpModule",
+        attached: attaches_transport::<HttpTransport>,
+        hosts: gateway_hosts,
+    }
+}
+
+/// Every gateway the app's modules registered: each self-mounts its upgrade.
+fn gateway_hosts(container: &Container) -> EdgeHosts {
+    Discovery::new(container)
+        .meta::<HttpEndpointMeta>()
+        .iter()
+        .filter(|found| found.meta.label() == crate::gateway::GATEWAY_LABEL)
+        .filter_map(|found| {
+            let host = found.provider_type_id?;
+            Some((host, Cow::Owned(found.meta.owner().to_owned())))
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {

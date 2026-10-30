@@ -30,9 +30,11 @@ pub enum StopCause {
     /// `SIGTERM`.
     Terminate,
     /// A transport returned `Err`, panicked, or stopped serving on its own
-    /// before a stop was asked — an app left with no transport serving stops
-    /// for this cause.
+    /// before a stop was asked.
     TransportFailed,
+    /// [`App::run`](crate::App::run) found no transport attached, so nothing
+    /// served: the app stops once its init hooks have run.
+    NoTransport,
     /// The boot failed — a transport's `configure` or `listen`, an init hook —
     /// before the app served.
     BootFailed,
@@ -46,7 +48,7 @@ impl StopCause {
         match self {
             Self::Interrupt => Some("SIGINT"),
             Self::Terminate => Some("SIGTERM"),
-            Self::TransportFailed | Self::BootFailed | Self::Closed => None,
+            Self::TransportFailed | Self::NoTransport | Self::BootFailed | Self::Closed => None,
         }
     }
 }

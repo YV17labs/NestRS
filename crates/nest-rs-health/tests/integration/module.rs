@@ -7,6 +7,7 @@ use nest_rs_health::{HealthConfig, HealthModule, HealthService};
 fn registers_health_service() {
     let container = Container::builder()
         .provide(HealthConfig::default())
+        .provide(nest_rs_http::HttpConfig::default())
         .import::<HealthModule>()
         .build()
         .expect("the container builds");

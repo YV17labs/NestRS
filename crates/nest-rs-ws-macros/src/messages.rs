@@ -649,7 +649,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     ::nest_rs_ws::nest_rs_http::HttpEndpointMeta::new(
                         <#self_ty>::__NESTRS_UPGRADE,
                         <#self_ty>::__nestrs_mount_path(),
-                        "ws",
+                        ::nest_rs_ws::__private::GATEWAY_LABEL,
                         move |__container, __routes| {
                             let __path = <#self_ty>::__nestrs_mount_path();
                             #(#mounted_logs)*

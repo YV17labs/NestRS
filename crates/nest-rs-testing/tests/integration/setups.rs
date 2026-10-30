@@ -425,6 +425,58 @@ imported_twice!(
     pinned = [SeaOrmModule::for_root(SeaOrmConfig::default())],
 );
 
+/// A row of the second table: `$import` alone attaches the HTTP transport its
+/// surface mounts on, so an app importing it serves it with no import of
+/// `HttpModule` of its own.
+macro_rules! mounts_on_http {
+    ($row:ident, seeds = $seeds:expr, import = [$($i:tt)*] $(,)?) => {
+        mod $row {
+            use super::*;
+
+            #[module(imports = [$($i)*])]
+            struct Alone;
+
+            #[tokio::test]
+            async fn attaches_the_http_transport_it_mounts_on() {
+                let seeds: Seeds = $seeds;
+                assert_eq!(wiring::<Alone>(seeds).await.transports, ["HttpTransport"]);
+            }
+        }
+    };
+}
+
+mod mounts_on_http {
+    use super::*;
+
+    mounts_on_http!(graphql, seeds = unseeded, import = [GraphqlModule]);
+
+    mounts_on_http!(
+        openapi,
+        seeds = unseeded,
+        import = [OpenApiModule::for_root(pinned_openapi())],
+    );
+
+    mounts_on_http!(mcp, seeds = unseeded, import = [McpModule]);
+
+    mounts_on_http!(health, seeds = unseeded, import = [HealthModule]);
+
+    mounts_on_http!(
+        static_files,
+        seeds = |app| app.provide(pinned_static_files()),
+        import = [StaticFilesModule],
+    );
+
+    mounts_on_http!(
+        oauth_resource,
+        seeds = |app| {
+            app.provide(pinned_oauth_resource())
+                .provide(pinned_authn())
+                .module::<ProtectedVerifier>()
+        },
+        import = [OAuthResourceModule::for_root(None)],
+    );
+}
+
 /// A Redis connection opens only against a server, so the Redis rows stop
 /// where the boot stops without one: after the declarations, before any
 /// factory runs — the synchronous boot, which drains none.

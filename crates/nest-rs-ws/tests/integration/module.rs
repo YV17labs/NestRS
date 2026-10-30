@@ -1,8 +1,9 @@
-//! Wiring a gateway: what happens when `WsModule` is missing.
+//! Wiring a gateway: what happens when `WsModule` is missing, and when the
+//! HTTP transport it upgrades from is or is not attached.
 
 use std::sync::Arc;
 
-use nest_rs_core::{AccessGraphError, App, module};
+use nest_rs_core::{AccessGraphError, App, AppLifecycle, module, target};
 use nest_rs_ws::{WsClient, WsModule, WsServer, gateway, messages};
 
 #[gateway(path = "/unwired")]
@@ -55,6 +56,71 @@ impl WiredGateway {
 
 #[module(imports = [WsModule], providers = [WiredGateway])]
 struct WiredModule;
+
+#[tokio::test]
+async fn a_gateway_the_app_reaches_without_the_http_transport_is_named_at_run() {
+    let logs = LogCapture::install();
+
+    App::builder()
+        .module::<WiredModule>()
+        .build()
+        .await
+        .expect("the module boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let unserved = logs.expect_one(
+        target::APP,
+        "host not served: its edge's transport is not attached",
+    );
+    assert_eq!(unserved.level, "warn");
+    assert_eq!(unserved.field("edge").as_deref(), Some("ws"));
+    assert_eq!(unserved.field("host").as_deref(), Some("WiredGateway"));
+    assert_eq!(unserved.field("module").as_deref(), Some("WiredModule"));
+    assert_eq!(
+        unserved.field("import").as_deref(),
+        Some("nest_rs::http::HttpModule")
+    );
+}
+
+/// The gateway's adapter beside the transport, on a free loopback port.
+#[module(imports = [HttpModule::for_root(loopback()), WiredModule])]
+struct ServedWiredModule;
+
+fn loopback() -> HttpConfig {
+    HttpConfig {
+        host: "127.0.0.1".into(),
+        port: 0,
+        ..HttpConfig::default()
+    }
+}
+
+#[tokio::test]
+async fn a_gateway_the_transport_serves_is_not_named_at_run() {
+    let logs = LogCapture::install();
+    let app = App::builder()
+        .module::<ServedWiredModule>()
+        .build()
+        .await
+        .expect("the module boots");
+    let lifecycle = app
+        .container()
+        .get::<AppLifecycle>()
+        .expect("every app is seeded its lifecycle");
+
+    // `App::run` names an unserved host before it turns ready, so the run is
+    // dropped there.
+    let running = tokio::spawn(app.run());
+    assert!(lifecycle.ready().await, "the app serves");
+    running.abort();
+
+    logs.expect_one(target::APP, "app ready");
+    logs.expect_none(
+        target::APP,
+        "host not served: its edge's transport is not attached",
+    );
+}
 
 #[tokio::test]
 async fn importing_ws_module_is_the_whole_fix() {
@@ -162,7 +228,7 @@ use nest_rs_core::{Layer, Transport, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_testing::LogCapture;
 use nest_rs_ws::async_trait;
-use nest_rs_ws::nest_rs_http::{HttpConfig, HttpTransport};
+use nest_rs_ws::nest_rs_http::{HttpConfig, HttpModule, HttpTransport};
 
 #[injectable]
 #[derive(Default)]

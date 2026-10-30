@@ -1,18 +1,23 @@
 //! [`McpModule`] — the app's say over its MCP surface: the streamable-HTTP
 //! server ([`McpConfig`]) and who the app is ([`McpIdentity`]).
 //!
-//! It activates nothing: listing an `#[mcp]` provider mounts the endpoint.
-//! Without it every mount runs on [`McpConfig::default`], gated, and reports
-//! what its hosts declare. Identity and posture have no `<PREFIX>_MCP__*` twin,
-//! so they travel in [`McpOptions`].
+//! Listing an `#[mcp]` provider mounts the endpoint, on the HTTP transport its
+//! adapter imports; this module imports `HttpModule` bare too. Without it
+//! every mount runs on [`McpConfig::default`], gated, and reports what its
+//! hosts declare. Identity and posture have no `<PREFIX>_MCP__*` twin, so they
+//! travel in [`McpOptions`].
 
 use std::any::TypeId;
+use std::borrow::Cow;
 
 use nest_rs_config::ConfigModule;
+use nest_rs_core::__private::{EdgeHosts, EdgeRuntime, attaches_transport};
 use nest_rs_core::{
-    Collecting, Container, ContainerBuilder, DynamicModule, Posture, Registering, module,
+    Collecting, Container, ContainerBuilder, Discovery, DynamicModule, Edge, Posture, Registering,
+    module,
 };
 use nest_rs_http::__private::EndpointPosture;
+use nest_rs_http::{HttpModule, HttpTransport};
 
 use crate::config::McpConfig;
 use crate::identity::McpIdentity;
@@ -21,7 +26,7 @@ use crate::view::McpView;
 
 /// DI module that resolves [`McpConfig`] and carries the app's own
 /// [`McpIdentity`].
-#[module(imports = [nest_rs_config::__private::feature::<McpConfig>()])]
+#[module(imports = [nest_rs_config::__private::feature::<McpConfig>(), HttpModule])]
 pub struct McpModule;
 
 impl McpModule {
@@ -222,6 +227,27 @@ impl DynamicModule for McpSetup {
         };
         builder.import::<McpModule>()
     }
+}
+
+nest_rs_core::inventory::submit! {
+    EdgeRuntime {
+        edge: Edge::Mcp,
+        import: "nest_rs::http::HttpModule",
+        attached: attaches_transport::<HttpTransport>,
+        hosts: mcp_hosts,
+    }
+}
+
+/// Every `#[mcp]` host the app's modules registered.
+fn mcp_hosts(container: &Container) -> EdgeHosts {
+    Discovery::new(container)
+        .meta::<registry::McpHostMeta>()
+        .iter()
+        .filter_map(|found| {
+            let host = found.provider_type_id?;
+            Some((host, Cow::Borrowed(found.meta.host())))
+        })
+        .collect()
 }
 
 #[cfg(test)]

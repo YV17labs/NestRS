@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use features::Role;
 use features::authz::constants::{POSTS_READ, POSTS_WRITE};
-use features::sign_in::{ClientPayload, SignInConfig, SignInService};
-use nest_rs::authn::{JwtOptions, JwtService};
-use nest_rs::oauth::server::{OAuthServerConfig, TokenError};
-use nest_rs::social::SocialRegistry;
-use nest_rs::testing::LogCapture;
+use features::sign_in::{ClientPayload, SignInConfig, SignInModule, SignInService};
+use nest_rs::authn::{AuthnConfig, AuthnModule, JwtOptions, JwtService};
+use nest_rs::core::module;
+use nest_rs::http::StatusCode;
+use nest_rs::oauth::server::{OAuthServerConfig, RegisteredClient, TokenError};
+use nest_rs::social::{GithubSocialConfig, GithubSocialModule, SocialRegistry};
+use nest_rs::testing::{HeadlessApp, LogCapture, TestAppBuilder};
 use uuid::Uuid;
 
 const ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_00a1);
@@ -15,12 +17,11 @@ const RESOURCE: &str = "https://api.example.com";
 
 const SENT_RESOURCE: &str = "https://only-the-caller-knows.example";
 
+const SECRET: &str = "sign-in-grant-test-secret-padded-32";
+
 fn sign_in_service() -> SignInService {
     SignInService::new(
-        Arc::new(
-            JwtService::new(JwtOptions::new("sign-in-grant-test-secret-padded-32"))
-                .expect("jwt service"),
-        ),
+        Arc::new(JwtService::new(JwtOptions::new(SECRET)).expect("jwt service")),
         Arc::new(SocialRegistry::default()),
         Arc::new(features::users::UsersService),
         Arc::new(SignInConfig {
@@ -65,4 +66,99 @@ fn a_first_party_sign_in_is_delegated_every_scope_of_the_policy() {
 
     assert!(token.scope.iter().any(|scope| scope == POSTS_READ));
     assert!(token.scope.iter().any(|scope| scope == POSTS_WRITE));
+}
+
+#[module(
+    imports = [
+        AuthnModule::for_root(AuthnConfig {
+            secret: Some(SECRET.into()),
+            ..AuthnConfig::default()
+        }),
+        GithubSocialModule,
+        SignInModule,
+    ],
+)]
+struct SignInApp;
+
+fn registered(client_id: &str, scopes: &[&str]) -> RegisteredClient<ClientPayload> {
+    RegisteredClient::new(
+        client_id,
+        "s3cr3t-never-logged",
+        scopes.iter().copied(),
+        [RESOURCE],
+        ClientPayload {
+            org_id: ORG,
+            roles: vec![Role::User],
+        },
+    )
+}
+
+fn sign_in_app(clients: Vec<RegisteredClient<ClientPayload>>) -> TestAppBuilder {
+    HeadlessApp::builder()
+        .module::<SignInApp>()
+        .provide(SignInConfig {
+            resources: vec![RESOURCE.into()],
+            default_org_id: ORG,
+        })
+        .provide(OAuthServerConfig { clients })
+        .provide(GithubSocialConfig {
+            client_id: "github-client".into(),
+            client_secret: "github-secret".into(),
+            redirect_url: "https://auth.example.com/social/github/callback".into(),
+            scopes: Vec::new(),
+        })
+}
+
+#[tokio::test]
+async fn a_client_registered_outside_the_policy_refuses_the_boot_naming_it() {
+    let user_shaped = Uuid::now_v7().to_string();
+
+    for (client, said) in [
+        (
+            registered("ci-runner", &[POSTS_READ, "admin"]),
+            "clients[ci-runner].scopes: unknown_scope".to_owned(),
+        ),
+        (
+            registered(&user_shaped, &[POSTS_READ]),
+            format!("clients[{user_shaped}].client_id: reads_as_a_user"),
+        ),
+    ] {
+        let app = sign_in_app(vec![client])
+            .build_headless()
+            .await
+            .expect("the framework's checks pass");
+
+        let refused = format!("{:#}", app.init().await.expect_err("the policy refuses"));
+
+        assert!(refused.contains(&said), "{refused}");
+        assert!(!refused.contains("s3cr3t-never-logged"), "{refused}");
+    }
+}
+
+#[tokio::test]
+async fn a_social_redirect_that_cannot_be_signed_is_this_servers_own_failure() {
+    let app = sign_in_app(vec![registered("ci-runner", &[POSTS_READ])])
+        .override_value(
+            JwtService::new(JwtOptions::eddsa_verify(
+                "-----BEGIN PUBLIC KEY-----\n\
+                 MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=\n\
+                 -----END PUBLIC KEY-----\n",
+            ))
+            .expect("a verify-only jwt service"),
+        )
+        .build_headless()
+        .await
+        .expect("boots");
+    app.init().await.expect("within the policy");
+    let svc = app
+        .container()
+        .get::<SignInService>()
+        .expect("SignInModule lists it");
+
+    let Err(refused) = svc.authorize("github", None) else {
+        panic!("a transaction no key signs is refused");
+    };
+
+    assert!(matches!(refused, TokenError::Sign(_)), "{refused:?}");
+    assert_eq!(refused.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

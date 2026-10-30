@@ -135,7 +135,7 @@ impl SignInService {
         provider
             .authorize(&self.jwt_svc, resource)
             .map(Some)
-            .map_err(|error| TokenError::Server(error.into()))
+            .map_err(|error| TokenError::Sign(error.into()))
     }
 
     fn sign_in_audience(&self, resource: Option<&str>) -> Result<&str, TokenError> {

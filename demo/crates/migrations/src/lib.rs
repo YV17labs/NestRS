@@ -7,6 +7,7 @@ mod m20260718_000000_add_post_status;
 mod m20260718_000001_create_notification;
 mod m20260721_000000_create_post_publication;
 mod m20261015_000000_unique_among_live_rows;
+mod m20261030_000000_internal_keys_default_to_uuidv7;
 mod migrator;
 
 pub use migrator::{Migrator, migrate};

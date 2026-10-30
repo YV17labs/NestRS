@@ -27,9 +27,11 @@ impl AbilityFactory for AuthzAbility {
             ab.can(Action::Read, post::Entity)
                 .when(|p| p.eq(post::Column::OrgId, actor.org_id))
                 .requires_scope(constants::POSTS_READ);
-            ab.can(Action::Manage, post::Entity)
-                .when(|p| p.eq(post::Column::OrgId, actor.org_id))
-                .requires_scope(constants::POSTS_WRITE);
+            for action in [Action::Update, Action::Delete] {
+                ab.can(action, post::Entity)
+                    .when(|p| p.eq(post::Column::OrgId, actor.org_id))
+                    .requires_scope(constants::POSTS_WRITE);
+            }
             ab.can(Action::Read, notification::Entity)
                 .when(|p| p.eq(notification::Column::OrgId, actor.org_id));
         } else {
@@ -43,11 +45,18 @@ impl AbilityFactory for AuthzAbility {
             ab.can(Action::Read, post::Entity)
                 .when(|p| p.eq(post::Column::OrgId, actor.org_id))
                 .requires_scope(constants::POSTS_READ);
-            ab.can(Action::Create, post::Entity)
-                .when(|p| p.eq(post::Column::OrgId, actor.org_id))
-                .requires_scope(constants::POSTS_WRITE);
             ab.can(Action::Read, notification::Entity)
                 .when(|p| p.eq(notification::Column::OrgId, actor.org_id));
+        }
+        if let Some(author) = actor.sub.user_id() {
+            ab.can(Action::Create, post::Entity)
+                .when(|p| {
+                    p.all([
+                        p.eq(post::Column::OrgId, actor.org_id),
+                        p.eq(post::Column::AuthorId, author),
+                    ])
+                })
+                .requires_scope(constants::POSTS_WRITE);
         }
     }
 }
@@ -57,7 +66,7 @@ mod tests {
     use std::any::TypeId;
 
     use nest_rs::authz::{Ability, AbilityBuilder, FieldSet};
-    use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
+    use sea_orm::{DatabaseBackend, EntityTrait, IdenStatic, QueryFilter, QueryTrait};
     use uuid::Uuid;
 
     use super::*;
@@ -68,8 +77,12 @@ mod tests {
     }
 
     fn ability_scoped(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>) -> Ability {
+        ability_of(roles, org_id, scopes, Subject::User(Uuid::nil()))
+    }
+
+    fn ability_of(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>, sub: Subject) -> Ability {
         let claims = Claims {
-            sub: Subject::User(Uuid::nil()),
+            sub,
             client_id: None,
             org_id,
             roles,
@@ -229,32 +242,80 @@ mod tests {
     }
 
     #[test]
-    fn member_can_create_posts_in_own_org() {
+    fn a_user_authors_posts_in_their_own_org_alone() {
         let org = Uuid::now_v7();
-        let ab = member(org);
-        assert!(ab.can_class(Action::Create, TypeId::of::<post::Entity>()));
+        for ab in [admin(org), member(org)] {
+            assert!(ab.can_class(Action::Create, TypeId::of::<post::Entity>()));
+            assert!(ab.can::<post::Entity>(
+                Action::Create,
+                &post_model(Uuid::now_v7(), org, Uuid::nil()),
+            ));
+            assert!(!ab.can::<post::Entity>(
+                Action::Create,
+                &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::nil()),
+            ));
+            assert!(!ab.can::<post::Entity>(
+                Action::Create,
+                &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
+            ));
+        }
+    }
+
+    #[test]
+    fn a_create_takes_the_callers_org_and_authorship_from_the_grants() {
+        let org = Uuid::now_v7();
+        for ab in [admin(org), member(org)] {
+            let pinned: Vec<_> = ab
+                .pinned_values::<post::Entity>(Action::Create)
+                .into_iter()
+                .map(|(column, value)| (column.as_str(), value))
+                .collect();
+            assert_eq!(
+                pinned,
+                [("org_id", org.into()), ("author_id", Uuid::nil().into())]
+            );
+            let pinned: Vec<_> = ab
+                .pinned_values::<user::Entity>(Action::Create)
+                .into_iter()
+                .map(|(column, value)| (column.as_str(), value))
+                .collect();
+            assert_eq!(pinned, [("org_id", org.into())]);
+        }
+    }
+
+    #[test]
+    fn a_machine_authors_no_post_and_no_wider_token_would_change_it() {
+        let org = Uuid::now_v7();
+        let ab = ability_of(
+            vec![Role::Admin],
+            org,
+            constants::all(),
+            Subject::Client("ci".into()),
+        );
+        assert!(!ab.can_class(Action::Create, TypeId::of::<post::Entity>()));
+        assert!(
+            ab.missing_scopes(Action::Create, TypeId::of::<post::Entity>())
+                .is_empty()
+        );
         assert!(ab.can::<post::Entity>(
-            Action::Create,
+            Action::Update,
             &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
-        ));
-        assert!(!ab.can::<post::Entity>(
-            Action::Create,
-            &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
         ));
     }
 
     #[test]
-    fn admin_manage_posts_scopes_to_caller_org() {
+    fn admin_update_and_delete_of_posts_scope_to_caller_org_whoever_wrote_them() {
         let org = Uuid::now_v7();
         let ab = admin(org);
-        assert!(ab.can::<post::Entity>(
-            Action::Delete,
-            &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
-        ));
-        assert!(!ab.can::<post::Entity>(
-            Action::Delete,
-            &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
-        ));
+        for action in [Action::Update, Action::Delete] {
+            assert!(
+                ab.can::<post::Entity>(action, &post_model(Uuid::now_v7(), org, Uuid::now_v7()))
+            );
+            assert!(!ab.can::<post::Entity>(
+                action,
+                &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
+            ));
+        }
     }
 
     #[test]
@@ -270,12 +331,14 @@ mod tests {
             ab.can_class(Action::Read, TypeId::of::<post::Entity>()),
             "the scope it does carry still works",
         );
-        assert!(!ab.can_class(Action::Manage, TypeId::of::<post::Entity>()));
-        assert_eq!(
-            ab.missing_scopes(Action::Manage, TypeId::of::<post::Entity>()),
-            [constants::POSTS_WRITE],
-            "and the refusal names what to go ask the authorization server for",
-        );
+        for action in [Action::Create, Action::Update, Action::Delete] {
+            assert!(!ab.can_class(action, TypeId::of::<post::Entity>()));
+            assert_eq!(
+                ab.missing_scopes(action, TypeId::of::<post::Entity>()),
+                [constants::POSTS_WRITE],
+                "and the refusal names what to go ask the authorization server for",
+            );
+        }
     }
 
     #[test]

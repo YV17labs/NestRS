@@ -306,20 +306,18 @@ async fn a_post_author_denial_files_one_line_on_every_edge() {
     let (_db, app) = boot().await;
     let client = format!("Bearer {}", login().await);
 
+    let post = Uuid::now_v7();
+
     let logs = nest_rs::testing::LogCapture::install();
     let refused = app
         .http()
-        .post("/posts")
+        .post(format!("/posts/{post}/publish"))
         .header(header::AUTHORIZATION, &client)
-        .body_json(&json!({ "title": "Launch", "body": "Big news" }))
         .send()
         .await;
     refused.assert_status(StatusCode::FORBIDDEN);
     let mutation = json!({
-        "query": format!(
-            "mutation {{ publishPost(id: \"{}\") {{ id }} }}",
-            Uuid::now_v7()
-        )
+        "query": format!("mutation {{ publishPost(id: \"{post}\") {{ id }} }}")
     });
     app.http()
         .post("/graphql")

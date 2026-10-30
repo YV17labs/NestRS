@@ -38,7 +38,7 @@ pub struct Model {
     pub title: String,
     #[expose(input(create, update), validate(length(min = 1)))]
     pub body: String,
-    #[expose]
+    #[expose(default = PostStatus::Draft)]
     pub status: PostStatus,
     #[expose]
     pub created_at: DateTimeWithTimeZone,

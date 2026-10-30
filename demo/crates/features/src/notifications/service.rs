@@ -3,7 +3,6 @@ use nest_rs::authz::Action;
 use nest_rs::core::injectable;
 use nest_rs::seaorm::{CrudService, Repo, ServiceError};
 use sea_orm::{ColumnTrait, QueryFilter, QuerySelect, Set};
-use uuid::Uuid;
 
 use super::command::NotifyCommand;
 use super::entity::{self, Entity as Notifications};
@@ -22,10 +21,9 @@ impl CrudService for NotificationsService {
 impl NotificationsService {
     pub async fn persist(&self, command: NotifyCommand) -> Result<(), ServiceError> {
         let active = entity::ActiveModel {
-            id: Set(Uuid::now_v7()),
             org_id: Set(command.org_id),
             message: Set(command.message),
-            created_at: Set(chrono::Utc::now().fixed_offset()),
+            ..Default::default()
         };
         let model = Repo::<Notifications>::insert_unscoped(active).await?;
         tracing::debug!(

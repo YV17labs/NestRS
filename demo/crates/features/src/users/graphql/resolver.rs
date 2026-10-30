@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
-use async_graphql::{Context, Result};
-use nest_rs::authz::Create;
 use nest_rs::graphql::{crud, resolver};
 
-use crate::Claims;
 use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
@@ -22,12 +19,4 @@ pub struct UsersResolver {
     create = CreateUser,
     update = UpdateUser,
 )]
-impl UsersResolver {
-    #[mutation]
-    #[authorize(Create, UserEntity)]
-    async fn create_user(&self, ctx: &Context<'_>, input: CreateUser) -> Result<User> {
-        let actor = ctx.data::<Claims>()?;
-        let user = self.svc.create_in_org(input, actor.org_id).await?;
-        Ok(User::from(&user))
-    }
-}
+impl UsersResolver {}

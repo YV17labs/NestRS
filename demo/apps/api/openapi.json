@@ -2371,7 +2371,16 @@
                 }
               }
             },
-            "description": "Created — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "Created — field-level authorization applies: properties the caller's ability does not grant are omitted from the response.",
+            "headers": {
+              "Location": {
+                "description": "URI of the resource that was just created.",
+                "schema": {
+                  "format": "uri-reference",
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2411,6 +2420,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "413": {
             "content": {
@@ -3083,7 +3102,16 @@
                 }
               }
             },
-            "description": "Created — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "Created — field-level authorization applies: properties the caller's ability does not grant are omitted from the response.",
+            "headers": {
+              "Location": {
+                "description": "URI of the resource that was just created.",
+                "schema": {
+                  "format": "uri-reference",
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -3123,6 +3151,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "413": {
             "content": {

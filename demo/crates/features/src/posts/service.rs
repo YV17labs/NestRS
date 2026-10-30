@@ -3,11 +3,8 @@ use std::sync::Arc;
 use nest_rs::core::injectable;
 use nest_rs::events::EventBus;
 use nest_rs::queue::{JobProducer, JobProducerExt};
-use nest_rs::seaorm::{
-    Creatable, CreateModel, CrudService, Deletable, Repo, ServiceError, Updatable,
-};
-use sea_orm::IntoActiveModel;
-use sea_orm::Set;
+use nest_rs::seaorm::{Creatable, CrudService, Deletable, Repo, ServiceError, Updatable};
+use sea_orm::{IntoActiveModel, Set};
 use uuid::Uuid;
 
 use super::entities::post::{CreatePost, Entity as Posts, Model, Post, PostStatus, UpdatePost};
@@ -39,26 +36,6 @@ impl Updatable for PostsService {
 impl Deletable for PostsService {}
 
 impl PostsService {
-    pub async fn create_in_org(
-        &self,
-        input: CreatePost,
-        org_id: Uuid,
-        author_id: Uuid,
-    ) -> Result<Post, ServiceError> {
-        let mut active = input.into_active_model();
-        active.org_id = Set(org_id);
-        active.author_id = Set(author_id);
-        active.status = Set(PostStatus::Draft);
-        let model = self.create_from_active(active).await?;
-        tracing::debug!(
-            target: crate::posts::TARGET,
-            id = %model.id,
-            %org_id,
-            "post created",
-        );
-        Ok(Post::from(&model))
-    }
-
     pub async fn publish(&self, model: Model, actor_id: Uuid) -> Result<Post, PostError> {
         if model.status == PostStatus::Published {
             return Err(PostError::AlreadyPublished { id: model.id });
@@ -80,10 +57,9 @@ impl PostsService {
         let receipt = self.queue.push(NotifyQueue, notification, None).await?;
 
         Repo::<publication::Entity>::insert_unscoped(publication::ActiveModel {
-            id: Set(Uuid::now_v7()),
             post_id: Set(post_id),
             actor_id: Set(actor_id),
-            published_at: Set(chrono::Utc::now().fixed_offset()),
+            ..Default::default()
         })
         .await
         .map_err(|err| match ServiceError::from(err) {

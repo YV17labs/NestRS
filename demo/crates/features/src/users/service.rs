@@ -7,17 +7,15 @@ use nest_rs::core::{Secret, error_message, hooks, injectable};
 use nest_rs::database::atomic;
 use nest_rs::graphql::dataloader;
 use nest_rs::seaorm::{
-    Creatable, CreateModel, CrudService, DbOutcome, Deletable, Repo, ServiceError, Updatable,
+    Creatable, CreateModel, CrudService, Deletable, Repo, ServiceError, Updatable,
 };
 use sea_orm::{ColumnTrait, DbErr, QueryFilter, Set};
 use uuid::Uuid;
 use validator::Validate;
 
 use super::entities::user as entity;
-use super::entities::user::{CreateUser, Entity as Users, UpdateUser, User, UserRole};
+use super::entities::user::{CreateUser, Entity as Users, UpdateUser, User};
 use super::entities::user_identity::{self, Entity as UserIdentities};
-
-const DEFAULT_ROLE: UserRole = UserRole::User;
 
 #[injectable]
 pub struct UsersService;
@@ -65,25 +63,6 @@ impl UsersService {
         let user = self.create_from_active(active).await?;
         tracing::debug!(target: crate::users::TARGET, id = %user.id, %org_id, "user registered with password");
         Ok(User::from(&user))
-    }
-
-    pub async fn create_in_org(
-        &self,
-        input: CreateUser,
-        org_id: Uuid,
-    ) -> Result<entity::Model, ServiceError> {
-        let active = prepare_new_user(input, org_id, None)?;
-        let user = match self.create_from_active(active).await {
-            Ok(user) => user,
-            Err(e) if DbOutcome::of(&e) == DbOutcome::Conflict => {
-                return Err(ServiceError::conflict(
-                    "a user with this email already exists",
-                ));
-            }
-            Err(e) => return Err(e.into()),
-        };
-        tracing::debug!(target: crate::users::TARGET, id = %user.id, %org_id, "user created");
-        Ok(user)
     }
 
     pub async fn resolve_social_identity(
@@ -240,7 +219,6 @@ impl SocialIdentity {
 
 fn new_identity_active(user_id: Uuid, identity: &SocialIdentity) -> user_identity::ActiveModel {
     user_identity::ActiveModel {
-        id: Set(Uuid::now_v7()),
         user_id: Set(user_id),
         provider: Set(identity.provider.to_owned()),
         subject: Set(identity.subject.clone()),
@@ -324,7 +302,6 @@ pub(crate) fn active_for_new_user(
 ) -> entity::ActiveModel {
     let mut active = input.into_active_model();
     active.org_id = Set(org_id);
-    active.role = Set(DEFAULT_ROLE);
     if password_hash.is_some() {
         active.password_hash = Set(password_hash);
     }
@@ -382,17 +359,12 @@ mod tests {
             org_id,
             name: name.into(),
             email: format!("{name}@example.com"),
-            role: UserRole::User,
+            role: entity::UserRole::User,
             password_hash: None,
             created_at: now,
             updated_at: now,
             deleted_at: None,
         }
-    }
-
-    #[test]
-    fn default_role_is_user() {
-        assert_eq!(DEFAULT_ROLE, UserRole::User);
     }
 
     #[test]
@@ -449,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn active_for_new_user_sets_org_id_and_default_role_without_password() {
+    fn active_for_new_user_sets_org_id_and_leaves_the_role_to_the_column_default() {
         let org = Uuid::now_v7();
         let active = active_for_new_user(input("ada", "ada@example.com"), org, None);
 
@@ -457,10 +429,10 @@ mod tests {
             active_into_get::<Uuid>(&active, entity::Column::OrgId),
             Some(org)
         );
-        assert_eq!(
-            active_into_get::<String>(&active, entity::Column::Role).as_deref(),
-            Some("user"),
-        );
+        assert!(matches!(
+            active.get(entity::Column::Role),
+            sea_orm::ActiveValue::NotSet
+        ));
         let pw = active.get(entity::Column::PasswordHash);
         assert!(
             matches!(pw, sea_orm::ActiveValue::NotSet),
@@ -547,7 +519,7 @@ mod tests {
             org_id: Uuid::now_v7(),
             name: "ada".into(),
             email: "ada@example.com".into(),
-            role: UserRole::User,
+            role: entity::UserRole::User,
             password_hash,
             created_at: now,
             updated_at: now,
@@ -659,38 +631,6 @@ mod tests {
             .register_with_password("not-an-email", "ada", "hunter2", Uuid::now_v7())
             .await
             .expect_err("invalid email ⇒ Validation");
-        assert!(matches!(err, ServiceError::Validation(_)));
-    }
-
-    #[tokio::test]
-    async fn create_in_org_surfaces_executor_error_as_db_variant() {
-        let svc = UsersService;
-        let err = svc
-            .create_in_org(
-                CreateUser {
-                    name: "ada".into(),
-                    email: "ada@example.com".into(),
-                },
-                Uuid::now_v7(),
-            )
-            .await
-            .expect_err("no executor ⇒ ServiceError::Db");
-        assert!(matches!(err, ServiceError::Db(_)));
-    }
-
-    #[tokio::test]
-    async fn create_in_org_surfaces_validation_error_before_touching_the_db() {
-        let svc = UsersService;
-        let err = svc
-            .create_in_org(
-                CreateUser {
-                    name: String::new(),
-                    email: "ada@example.com".into(),
-                },
-                Uuid::now_v7(),
-            )
-            .await
-            .expect_err("empty name ⇒ Validation");
         assert!(matches!(err, ServiceError::Validation(_)));
     }
 

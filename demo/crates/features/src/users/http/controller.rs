@@ -1,12 +1,7 @@
 use std::sync::Arc;
 
-use nest_rs::authz::Create;
-use nest_rs::http::{
-    Ctx, IntoResponse, Json, Request, Response, Result, Valid, caller_path, controller, crud,
-    set_created_location,
-};
+use nest_rs::http::{controller, crud};
 
-use crate::Claims;
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
@@ -24,33 +19,16 @@ pub struct UsersController {
     output = User,
     create = CreateUser,
     update = UpdateUser,
-    api(get(
-        summary = "Get a user in the caller's org by id",
-        description = "A user outside the caller's org answers 403, an absent one 404."
-    )),
+    api(
+        get(
+            summary = "Get a user in the caller's org by id",
+            description = "A user outside the caller's org answers 403, an absent one 404."
+        ),
+        create(
+            summary = "Create a user in the caller's org",
+            description = "Requires a bearer JWT (obtain one from `POST /login` on the auth app). \
+                           The user's org is taken from the caller's token, never the body."
+        ),
+    ),
 )]
-impl UsersController {
-    #[post("/")]
-    #[http_code(201)]
-    #[authorize(Create, UserEntity)]
-    #[api(
-        summary = "Create a user in the caller's org",
-        description = "Requires a bearer JWT (obtain one from `POST /login` on the auth app). The \
-                       user's org is taken from the caller's token, never the body.",
-        response = User
-    )]
-    async fn create(
-        &self,
-        req: &Request,
-        auth: Ctx<Claims>,
-        body: Valid<Json<CreateUser>>,
-    ) -> Result<Response> {
-        let user = self
-            .svc
-            .create_in_org(body.into_inner(), auth.org_id)
-            .await?;
-        let mut res = Json(User::from(&user)).into_response();
-        set_created_location(&mut res, caller_path(req), user.id);
-        Ok(res)
-    }
-}
+impl UsersController {}

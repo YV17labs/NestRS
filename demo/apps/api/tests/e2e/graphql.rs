@@ -447,6 +447,49 @@ async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
     );
 }
 
+#[tokio::test]
+async fn graphql_create_user_lands_in_the_callers_org_and_a_taken_email_is_a_conflict() {
+    use sea_orm::EntityTrait;
+
+    let (db, app) = boot().await;
+    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let org = create_org(&app, &admin, "GqlCreate").await;
+    let member = format!("Bearer {}", token_for(&org, "user").await);
+    let mutation = r#"mutation { createUser(input: {name: "Gql Hopper", email: "hopper@gqlcreate.test"}) { id name } }"#;
+
+    let created = graphql(&app, &member, mutation).await;
+    assert!(created.get("errors").is_none(), "{created}");
+    assert_eq!(
+        created["data"]["createUser"]["name"], "Gql Hopper",
+        "{created}"
+    );
+    let id = created["data"]["createUser"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the created user's id: {created}"));
+    let row = features::users::Entity::find_by_id(Uuid::parse_str(id).expect("a uuid id"))
+        .one(db.connection().as_ref())
+        .await
+        .expect("read the created row")
+        .expect("the created row persisted");
+    assert_eq!(
+        row.org_id.to_string(),
+        org,
+        "the create took the caller's org from its grant",
+    );
+    assert_eq!(
+        row.role,
+        features::users::UserRole::User,
+        "the column's default"
+    );
+
+    let taken = graphql(&app, &member, mutation).await;
+    assert_eq!(taken["data"], serde_json::Value::Null, "{taken}");
+    assert_eq!(
+        taken["errors"][0]["extensions"]["code"], "CONFLICT",
+        "{taken}"
+    );
+}
+
 pub(crate) async fn graphql(
     app: &nest_rs::testing::TestApp,
     bearer: &str,

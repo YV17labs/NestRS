@@ -1,14 +1,10 @@
 use std::sync::Arc;
 
-use nest_rs::authz::{Create, Update};
-use nest_rs::http::{
-    Ctx, IntoResponse, Json, Request, Response, Result, Valid, caller_path, controller, crud,
-    set_created_location,
-};
+use nest_rs::authz::Update;
+use nest_rs::http::{Ctx, Json, Result, controller, crud};
 use nest_rs::seaorm::Authorized;
 
 use super::interceptor::PostAuditInterceptor;
-use crate::Claims;
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::posts::{
@@ -30,35 +26,13 @@ pub struct PostsController {
     output = Post,
     create = CreatePost,
     update = UpdatePost,
-)]
-impl PostsController {
-    #[post("/")]
-    #[http_code(201)]
-    #[authorize(Create, PostEntity)]
-    #[use_guards(PostAuthorGuard)]
-    #[api(
+    api(create(
         summary = "Create a post in the caller's org",
         description = "Requires a bearer JWT naming a user. The org and author are taken from \
-                       the token, never the body.",
-        response = Post
-    )]
-    async fn create(
-        &self,
-        req: &Request,
-        auth: Ctx<Claims>,
-        author: Ctx<PostAuthor>,
-        body: Valid<Json<CreatePost>>,
-    ) -> Result<Response> {
-        let PostAuthor(author_id) = *author;
-        let post = self
-            .svc
-            .create_in_org(body.into_inner(), auth.org_id, author_id)
-            .await?;
-        let mut res = Json(&post).into_response();
-        set_created_location(&mut res, caller_path(req), &post.id);
-        Ok(res)
-    }
-
+                       the token, never the body."
+    )),
+)]
+impl PostsController {
     #[post("/{id}/publish")]
     #[authorize(Update, bind = PostsService)]
     #[use_guards(PostAuthorGuard)]

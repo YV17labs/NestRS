@@ -1,9 +1,10 @@
 use chrono::{TimeDelta, Utc};
-use features::notifications::{ActiveModel, Entity, NotificationsService};
+use features::notifications::{ActiveModel, Column, Entity, NotificationsService};
 use nest_rs::database::{with_job_executor, with_request_executor};
 use nest_rs::seaorm::SeaOrmExecutor;
 use nest_rs::testing::EphemeralDatabase;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
+use sea_orm::sea_query::Expr;
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use uuid::Uuid;
 
 async fn seed_notification(conn: &DatabaseConnection, age: TimeDelta) -> Uuid {
@@ -12,11 +13,21 @@ async fn seed_notification(conn: &DatabaseConnection, age: TimeDelta) -> Uuid {
         id: Set(id),
         org_id: Set(Uuid::now_v7()),
         message: Set("Post \"Seeded\" was published".to_owned()),
-        created_at: Set((Utc::now() - age).fixed_offset()),
+        ..Default::default()
     }
     .insert(conn)
     .await
     .expect("seed notification");
+    let backdated = Entity::update_many()
+        .col_expr(
+            Column::CreatedAt,
+            Expr::value((Utc::now() - age).fixed_offset()),
+        )
+        .filter(Column::Id.eq(id))
+        .exec(conn)
+        .await
+        .expect("backdate the notification");
+    assert_eq!(backdated.rows_affected, 1);
     id
 }
 

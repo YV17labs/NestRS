@@ -222,8 +222,9 @@ impl VersionedEdge {
                 instead: "Write the version into the path: `#[mcp(path = \"/mcp/v1\")]`. \
                           The server's own version is not a host's to state — a feature \
                           library knows neither the binary's version nor, on a shared \
-                          endpoint, the whole surface — so it is declared once, on the \
-                          app's single `McpModule::for_root(McpOptions { server, .. })`",
+                          endpoint, the whole surface — so it is the binary's, read off its \
+                          manifest by `#[nest_rs::main]`, or the app's, declared once on its \
+                          single `McpModule::for_root(McpOptions { server, .. })`",
             },
             Self::Queue => VersionAnswer {
                 decorator: "#[processor]",

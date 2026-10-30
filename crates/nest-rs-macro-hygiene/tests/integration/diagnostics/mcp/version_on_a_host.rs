@@ -5,7 +5,7 @@
 //! `serverInfo.version` — which a host cannot honestly state, since a feature
 //! library knows neither the binary's version nor, on a shared endpoint, the
 //! whole surface. Both get the same sentence: the address is the whole path, and
-//! the server's version is the app's single declaration.
+//! the server's version is the binary's, or the app's single declaration.
 //!
 //! The host structs are left undecorated beyond `#[mcp]` on purpose: the
 //! argument is refused before anything is emitted, so nothing else can bury the

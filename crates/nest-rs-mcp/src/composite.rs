@@ -1,7 +1,8 @@
 //! [`CompositeHandler`] — the one `ServerHandler` several `#[mcp]` hosts share.
 //!
 //! Every policy degenerates to the lone host's own answer, so one host on a path
-//! is served verbatim.
+//! is served verbatim, but for a `serverInfo` nobody named, which reports the
+//! binary's.
 //!
 //! | Kind | Methods | Behaviour |
 //! |---|---|---|
@@ -85,19 +86,23 @@ impl CompositeHandler {
     }
 
     /// The endpoint's own declaration laid over a host's `initialize` result; the
-    /// protocol version stays the host's, which it negotiated.
+    /// protocol version stays the host's, which it negotiated. A lone undeclared
+    /// host keeps its answer but for the name nobody gave it.
     fn overlay_own_declaration(&self, mut result: InitializeResult) -> InitializeResult {
         if self.declares_itself() {
             let merged = ServerHandler::get_info(self);
             result.capabilities = merged.capabilities;
             result.instructions = merged.instructions;
             result.server_info = merged.server_info;
+        } else {
+            result.server_info = self.identity.server_info(result.server_info);
         }
         result
     }
 
     /// Whether the endpoint, not its lone host, answers a declaration question:
-    /// a lone undeclared host's own `initialize` / `discover` override is the answer.
+    /// a lone undeclared host's own `initialize` / `discover` override is the
+    /// answer, its `serverInfo` settled by [`ResolvedIdentity::server_info`].
     fn declares_itself(&self) -> bool {
         self.identity.is_declared() || self.hosts.len() > 1
     }
@@ -382,7 +387,11 @@ impl ServerHandler for CompositeHandler {
             // Whether a lone host overrides `discover` cannot be asked; the
             // rebuild below would discard its override.
             if let Some(only) = self.single() {
-                return only.host.discover(context).await;
+                let mut result = only.host.discover(context).await?;
+                if let Some(own) = result.server_info() {
+                    result.set_server_info(self.identity.server_info(own));
+                }
+                return Ok(result);
             }
         }
         Ok(DiscoverResult::from_server_info(
@@ -577,7 +586,8 @@ impl ServerHandler for CompositeHandler {
     }
 
     /// A declaration replaces only `serverInfo` and `instructions`; capabilities
-    /// stay the union of what the hosts serve. Undeclared, the first host's identity stands.
+    /// stay the union of what the hosts serve. Undeclared, the first host's
+    /// identity stands, unless it is the SDK's default, which the binary's replaces.
     fn get_info(&self) -> ServerConfig {
         let mut infos = self.hosts.iter().map(|host| host.host.get_info());
         let Some(mut merged) = infos.next() else {
@@ -590,9 +600,7 @@ impl ServerHandler for CompositeHandler {
         }
         merged.instructions = (!instructions.is_empty()).then(|| instructions.join("\n\n"));
 
-        if let Some(info) = self.identity.implementation() {
-            merged.server_info = info.clone();
-        }
+        merged.server_info = self.identity.server_info(merged.server_info);
         if let Some(declared) = self.identity.instructions() {
             merged.instructions = Some(declared.to_owned());
         }

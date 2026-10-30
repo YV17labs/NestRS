@@ -87,7 +87,7 @@ impl ServerField {
         let mut message = format!(
             "#[mcp] takes no `{key}` — that describes the server, not one host, so it is \
              declared once: McpModule::for_root(McpOptions {{ server: \
-             Some(McpIdentity::new(name, version).{declares}), ..Default::default() }})",
+             Some(McpIdentity::default().{declares}), ..Default::default() }})",
         );
         if !instead.is_empty() {
             message.push_str(". ");

@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use nest_rs_config::{Config, ConfigError, ConfigService, Environment, Result, config};
+use nest_rs_core::AppIdentity;
 
 use crate::contact::OpenApiContact;
 use crate::license::OpenApiLicense;
@@ -22,13 +23,16 @@ pub struct OpenApiConfig {
     /// [`Config::defaults`] turns them on. Enabling them outside such a
     /// profile is honoured and logged at `warn`.
     pub enabled: bool,
-    /// The API title shown in the document `info` block and Swagger UI.
+    /// The API title shown in the document `info` block and Swagger UI;
+    /// defaults to the binary's package name ([`AppIdentity`]).
     pub title: String,
-    /// The API version string in the `info` block (the app's version, not nestrs').
+    /// The API version string in the `info` block — the app's version, not
+    /// nestrs'; defaults to the binary's package version.
     pub version: String,
     /// A one-line summary of the API for the `info` block.
     pub summary: Option<String>,
-    /// Optional long-form API description for the `info` block.
+    /// Long-form API description for the `info` block; defaults to the
+    /// binary's package description, when its manifest has one.
     pub description: Option<String>,
     /// A URL to the API's terms of service.
     pub terms_of_service: Option<String>,
@@ -51,14 +55,30 @@ pub struct OpenApiConfig {
     pub emit_path: PathBuf,
 }
 
+/// `info.title` and `info.version` in a process no `#[nest_rs::main]` named.
+const UNNAMED_TITLE: &str = "nestrs API";
+const UNNAMED_VERSION: &str = "0.1.0";
+
 impl Default for OpenApiConfig {
+    /// The binary's name, version and description (its [`AppIdentity`]) in
+    /// the `info` block, and every endpoint closed.
     fn default() -> Self {
+        Self::named_by(AppIdentity::current())
+    }
+}
+
+impl OpenApiConfig {
+    /// The defaults, with the `info` block naming `app`, or a placeholder when
+    /// no identity was captured.
+    fn named_by(app: Option<&AppIdentity>) -> Self {
         Self {
             enabled: false,
-            title: "nestrs API".into(),
-            version: "0.1.0".into(),
+            title: app.map_or(UNNAMED_TITLE, |app| app.name.as_str()).into(),
+            version: app
+                .map_or(UNNAMED_VERSION, |app| app.version.as_str())
+                .into(),
             summary: None,
-            description: None,
+            description: app.and_then(|app| app.description.clone()),
             terms_of_service: None,
             contact: None,
             license: None,
@@ -165,6 +185,8 @@ fn license_from_env(
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::__private::package_identity;
+
     use super::*;
 
     #[test]
@@ -177,6 +199,22 @@ mod tests {
         assert!(!d.title.is_empty());
         assert!(!d.version.is_empty());
         assert!(d.description.is_none());
+    }
+
+    #[test]
+    fn the_info_defaults_to_the_binarys_identity() {
+        let app = package_identity("api", "7.0.0", "The demo's API");
+        let named = OpenApiConfig::named_by(Some(&app));
+        assert_eq!(named.title, "api");
+        assert_eq!(named.version, "7.0.0");
+        assert_eq!(named.description.as_deref(), Some("The demo's API"));
+
+        let undescribed = OpenApiConfig::named_by(Some(&package_identity("api", "7.0.0", "")));
+        assert_eq!(undescribed.description, None);
+
+        let unnamed = OpenApiConfig::named_by(None);
+        assert!(!unnamed.title.is_empty() && !unnamed.version.is_empty());
+        assert_eq!(unnamed.description, None);
     }
 
     #[test]

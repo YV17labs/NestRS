@@ -11,7 +11,6 @@ use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::server_timing::ServerTimingModule;
 
-const SERVER_NAME: &str = "nestrs-assistant";
 const SERVER_TITLE: &str = "nestrs demo assistant";
 const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped to the \
                             caller's token — an empty result means not authorized, not \
@@ -26,7 +25,7 @@ const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped
         HttpModule::for_root(None),
         McpModule::for_root(McpOptions {
             server: Some(
-                McpIdentity::new(SERVER_NAME, env!("CARGO_PKG_VERSION"))
+                McpIdentity::default()
                     .title(SERVER_TITLE)
                     .instructions(INSTRUCTIONS),
             ),

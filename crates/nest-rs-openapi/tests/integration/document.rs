@@ -313,6 +313,24 @@ async fn the_two_controller_layout_names_its_two_versions_apart_as_well() {
     assert_eq!(operation_id(&v2, "/health", "get"), Some("health_live"));
 }
 
+/// The document names the app as its binary does: the tested package's name,
+/// version and description, which the harness publishes as `#[nest_rs::main]`
+/// publishes the binary's.
+#[tokio::test]
+async fn the_document_names_the_app_by_its_package() {
+    let app = TestApp::for_module::<RawIdentApp>().await.expect("boots");
+    let doc = document(&app, "/api-json").await;
+
+    assert_eq!(
+        doc["info"]["title"],
+        env!("CARGO_PKG_NAME"),
+        "{}",
+        doc["info"]
+    );
+    assert_eq!(doc["info"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(doc["info"]["description"], env!("CARGO_PKG_DESCRIPTION"));
+}
+
 #[tokio::test]
 async fn a_raw_ident_handler_publishes_an_id_a_client_can_be_generated_from() {
     let app = TestApp::for_module::<RawIdentApp>().await.expect("boots");

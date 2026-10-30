@@ -32,11 +32,14 @@ the first on a path the one `HttpEndpointMeta` that mounts them all).
   a boot error naming both owners (a duplicate tool or prompt name, or one
   resource template read by two hosts, within an MCP path).
 - **The mount's identity belongs to the app**, never to whichever contribution
-  registered first. The app declares it once; at most one contribution refines
+  registered first. Its name, version and description default to the binary's
+  (`AppIdentity`, which `#[nest_rs::main]` reads off the manifest); the app
+  declares the rest, or overrides them, once; at most one contribution refines
   it for its own mount; a declaration replaces only what it states, so
   capabilities stay observed from the contributions; a declaration reaching
   nothing, or two on one mount, fails the boot; a mount left at the SDK's
-  default identity is a boot `warn`, compared against the SDK's own constructor.
+  default identity — only where no binary identity was captured — is a boot
+  `warn`, compared against the SDK's own constructor.
 - **WS is the one argued exception.** A gateway owns its path (two on one path
   fail the boot): a socket per feature costs a client a connection and nothing
   structural, and cross-feature fan-out is `WsServer<N>`'s. Two features on one
@@ -510,7 +513,8 @@ router parses. The rewrite is skipped when nothing is versioned.
   `ErrorReport`, by its type, so the chain a frame withholds is read whenever
   the type has one, and filed as *Error opacity* says.
 - **MCP aggregates** behind one endpoint, since clients point at one URL; one
-  host on a path is served verbatim. Endpoint guards, posture and config
+  host on a path is served verbatim, but for a `serverInfo` nobody named,
+  which reports the binary's. Endpoint guards, posture and config
   resolve once per path. **A host's `path` is a join key, not a namespace**: written whole,
   defaulting to the `DEFAULT_PATH` constant, never config — a decorator's path is
   code everywhere (only a module owning its whole mount, as GraphQL does, may
@@ -519,8 +523,9 @@ router parses. The rewrite is skipped when nothing is versioned.
   its own `McpError` as built, a `ToProblem` error the problem it says, any
   other opaquely, its chain filed — and an exception filter may answer any of
   them with a problem; `Opaque` says the same at a call site. **Identity has two
-  owners**: the app declares `McpOptions { server }` — name, version, branding
-  and `instructions` — and a host may refine only `name` and `title` for its
+  owners** over the binary's name and version: the app declares `McpOptions {
+  server }` — branding and `instructions`, and a name or version only to
+  override the binary's — and a host may refine only `name` and `title` for its
   endpoint; `instructions` on `#[mcp]` is a compile error. Identity has no
   environment twin, which is why it travels in `McpOptions`.
 - **OpenAPI** self-mounts a document **composed from the route table** (schemas

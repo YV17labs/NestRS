@@ -867,13 +867,133 @@ async fn a_host_declares_its_own_endpoint_and_inherits_the_rest() {
     );
 }
 
-/// No app identity, so the host's name has no version behind it.
+/// An endpoint nobody named reports the binary's package, as `#[nest_rs::main]`
+/// and the harness publish it — never the SDK's own name, and with no word at
+/// boot.
+#[tokio::test]
+async fn an_endpoint_nobody_named_reports_the_binarys_name_and_version() {
+    let logs = LogCapture::install();
+    let app = shared_app().await;
+    assert!(
+        logs.find("nest_rs::mcp", SDK_DEFAULT_IDENTITY).is_empty()
+            && logs.find("nest_rs::mcp", UNDECLARED_IDENTITY).is_empty(),
+        "the binary named it: {:#?}",
+        logs.events(),
+    );
+    let body = initialize(app.http(), SHARED, None).await;
+    let advertised = &result(&body)["result"];
+
+    assert_eq!(
+        advertised["serverInfo"]["name"].as_str(),
+        Some(env!("CARGO_PKG_NAME")),
+        "{advertised}",
+    );
+    assert_eq!(
+        advertised["serverInfo"]["version"].as_str(),
+        Some(env!("CARGO_PKG_VERSION")),
+        "{advertised}",
+    );
+    assert_eq!(
+        advertised["serverInfo"]["description"].as_str(),
+        Some(env!("CARGO_PKG_DESCRIPTION")),
+        "{advertised}",
+    );
+}
+
+/// The `server/discover` request of a stateless client, which opens no session.
+async fn discover(client: &nest_rs_testing::TestClient, path: &str) -> String {
+    let version = nest_rs_mcp::ProtocolVersion::LATEST;
+    nest_rs_testing::mcp::post_message_with(
+        client,
+        path,
+        None,
+        None,
+        &[
+            ("mcp-protocol-version", version.as_str()),
+            ("mcp-method", "server/discover"),
+        ],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": { "_meta": {
+                "io.modelcontextprotocol/protocolVersion": version.as_str(),
+                "io.modelcontextprotocol/clientInfo": { "name": "nest-rs-testing", "version": "0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+            } },
+        }),
+    )
+    .await
+    .0
+    .into_body()
+    .into_string()
+    .await
+    .expect("a discover response body")
+}
+
+/// A lone host is served verbatim but for the name nobody gave it: over
+/// `initialize` and `discover`, the endpoint reports the binary's package.
+#[tokio::test]
+async fn a_lone_host_nobody_named_reports_the_binarys_name_and_version() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<AlphaOnlyApp>()
+        .await
+        .expect("one host boots");
+    assert!(
+        logs.find("nest_rs::mcp", SDK_DEFAULT_IDENTITY).is_empty(),
+        "the binary named it: {:#?}",
+        logs.events(),
+    );
+
+    let body = initialize(app.http(), SHARED, None).await;
+    let initialized = &result(&body)["result"]["serverInfo"];
+    let body = discover(app.http(), SHARED).await;
+    let discovered = &result(&body)["result"]["_meta"]["io.modelcontextprotocol/serverInfo"];
+
+    for (method, info) in [("initialize", initialized), ("discover", discovered)] {
+        assert_eq!(
+            (info["name"].as_str(), info["version"].as_str()),
+            (
+                Some(env!("CARGO_PKG_NAME")),
+                Some(env!("CARGO_PKG_VERSION"))
+            ),
+            "{method}: {info}",
+        );
+    }
+}
+
+/// No app identity declared, so the host's name stands on the binary's version.
 #[module(imports = [OwnedMcpModule])]
 struct UnbackedNameApp;
 
 #[tokio::test]
+async fn a_host_naming_its_endpoint_stands_on_the_binarys_version() {
+    let app = TestApp::for_module::<UnbackedNameApp>()
+        .await
+        .expect("the binary's version backs the host's name");
+    let body = initialize(app.http(), OWNED, None).await;
+    let advertised = &result(&body)["result"];
+
+    assert_eq!(
+        advertised["serverInfo"]["name"].as_str(),
+        Some("witness-owned")
+    );
+    assert_eq!(
+        advertised["serverInfo"]["version"].as_str(),
+        Some(env!("CARGO_PKG_VERSION")),
+        "{advertised}",
+    );
+}
+
+/// A process no `#[nest_rs::main]` nor harness named — a container built by
+/// hand — has no version behind a host's name.
+#[tokio::test]
 async fn a_name_with_no_version_behind_it_fails_boot() {
-    let err = match TestApp::for_module::<UnbackedNameApp>().await {
+    let err = match nest_rs_core::App::builder()
+        .module::<UnbackedNameApp>()
+        .build()
+        .await
+    {
         Ok(_) => panic!("a named endpoint with no version anywhere must not boot"),
         Err(err) => format!("{err:#}"),
     };
@@ -1076,13 +1196,13 @@ impl ServerHandler for SelfNamedTool {
     }
 }
 
-#[module(providers = [SelfNamedTool])]
+#[module(imports = [crate::open_mcp()], providers = [SelfNamedTool])]
 struct SelfNamedModule;
 
 #[tokio::test]
 async fn a_lone_host_that_names_itself_needs_no_declaration() {
     let logs = LogCapture::install();
-    let _app = TestApp::for_module::<SelfNamedModule>()
+    let app = TestApp::for_module::<SelfNamedModule>()
         .await
         .expect("one self-named host boots");
 
@@ -1092,6 +1212,13 @@ async fn a_lone_host_that_names_itself_needs_no_declaration() {
         "a lone host that named itself is a complete endpoint: {:#?}",
         logs.events(),
     );
+    let body = initialize(app.http(), "/named", None).await;
+    let info = &result(&body)["result"]["serverInfo"];
+    assert_eq!(
+        (info["name"].as_str(), info["version"].as_str()),
+        (Some("standalone-host"), Some("1.2.3")),
+        "its own name stands over the binary's: {info}",
+    );
 }
 
 const SDK_DEFAULT_IDENTITY: &str = "an MCP endpoint introduces itself with the SDK's own name and \
@@ -1100,11 +1227,13 @@ const UNDECLARED_IDENTITY: &str = "several MCP hosts share an endpoint whose ide
      declared — it reports the first host's";
 
 /// rmcp's `ServerConfig::new` leaves `serverInfo` at the SDK's own identity,
-/// and nothing fails.
+/// and nothing fails, in a process no `#[nest_rs::main]` nor harness named.
 #[tokio::test]
 async fn an_endpoint_nobody_named_reports_the_sdk_and_is_told_so() {
     let logs = LogCapture::install();
-    let _app = TestApp::for_module::<AlphaOnlyApp>()
+    let _app = nest_rs_core::App::builder()
+        .module::<AlphaOnlyApp>()
+        .build()
         .await
         .expect("one host boots");
 
@@ -1122,12 +1251,21 @@ async fn an_endpoint_nobody_named_reports_the_sdk_and_is_told_so() {
          own constructor, so it cannot drift from the rmcp the framework built \
          against",
     );
+    let hint = event.field("hint").unwrap_or_default();
+    assert!(
+        hint.contains("#[nest_rs::main]") && hint.contains("McpIdentity::new"),
+        "no binary named this process, so starting it from main is a remedy: {hint}",
+    );
 }
 
 #[tokio::test]
 async fn an_undeclared_shared_endpoint_is_reported_at_boot() {
     let logs = LogCapture::install();
-    let _app = shared_app().await;
+    let _app = nest_rs_core::App::builder()
+        .module::<SharedEndpointApp>()
+        .build()
+        .await
+        .expect("two #[mcp] hosts on one path boot");
 
     let event = logs.expect_one("nest_rs::mcp", SDK_DEFAULT_IDENTITY);
     assert_eq!(event.level, "warn");
@@ -1196,6 +1334,16 @@ async fn self_named_peers_are_told_the_endpoint_reports_the_first() {
         event.field("reports_as").as_deref(),
         Some("first-peer"),
         "the message and the field say the same thing",
+    );
+    let hint = event.field("hint").unwrap_or_default();
+    assert!(
+        hint.contains("#[mcp(name") && hint.contains("McpIdentity::new"),
+        "a binary identity already backs a host's name, so either declaration \
+         settles the endpoint: {hint}",
+    );
+    assert!(
+        !hint.contains("#[nest_rs::main]"),
+        "…and the binary, already in force, names no peer that named itself: {hint}",
     );
     assert!(
         logs.find("nest_rs::mcp", SDK_DEFAULT_IDENTITY).is_empty(),

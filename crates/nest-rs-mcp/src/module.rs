@@ -37,8 +37,9 @@ impl McpModule {
 }
 
 /// What an app declares about MCP: the server options every mount runs on, the
-/// identity every endpoint reports unless one of its hosts says otherwise, and
-/// who may call its endpoints.
+/// identity every endpoint reports unless one of its hosts says otherwise —
+/// over the binary's name, version and description — and who may call its
+/// endpoints.
 ///
 /// ```
 /// use nest_rs_core::module;
@@ -50,7 +51,8 @@ impl McpModule {
 /// #[module(imports = [
 ///     McpModule::for_root(McpOptions {
 ///         server: Some(
-///             McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))
+///             McpIdentity::default()
+///                 .title("Assistant")
 ///                 .instructions("Every result is scoped to the caller's token."),
 ///         ),
 /// #       posture: Posture::Public,
@@ -80,7 +82,10 @@ impl McpModule {
 /// # let app = nest_rs_testing::TestApp::for_module::<ServedModule>().await?;
 /// # let handshake = result(&initialize(app.http(), DEFAULT_PATH, None).await);
 ///
-/// assert_eq!(handshake["result"]["serverInfo"]["name"], "assistant");
+/// let server = &handshake["result"]["serverInfo"];
+/// assert_eq!(server["name"], env!("CARGO_PKG_NAME"), "the binary's, by default");
+/// assert_eq!(server["version"], env!("CARGO_PKG_VERSION"));
+/// assert_eq!(server["title"], "Assistant");
 /// assert_eq!(
 ///     handshake["result"]["instructions"],
 ///     "Every result is scoped to the caller's token.",
@@ -94,7 +99,9 @@ pub struct McpOptions {
     /// over [`McpConfig::default`]; a bare `McpConfig` would demote the `.env` cascade.
     pub config: Option<McpConfig>,
     /// Who this app is: the `serverInfo` every endpoint reports unless an `#[mcp]`
-    /// host overrides it per field. Declared where no `#[mcp]` host serves, it fails boot.
+    /// host overrides it per field, laid over the binary's name, version and
+    /// description ([`AppIdentity`](nest_rs_core::AppIdentity)). Declared where
+    /// no `#[mcp]` host serves, it fails boot.
     pub server: Option<McpIdentity>,
     /// Who may call the app's MCP endpoints. [`Posture::Gated`], the default:
     /// the global guard pool and the `EndpointGuards<McpView, _>` the app's

@@ -19,9 +19,7 @@ use nest_rs_core::{
 };
 use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
 use nest_rs_http::{DetachedWork, HttpEndpointMeta, HttpRoutes, normalize_mount_path};
-use rmcp::model::{
-    Prompt, ProtocolVersion, ResourceTemplate, ServerCapabilities, ServerConfig, Tool,
-};
+use rmcp::model::{Prompt, ProtocolVersion, ResourceTemplate, Tool};
 
 use crate::composite::{CompositeHandler, common_protocol_versions};
 use crate::endpoint::{McpMount, endpoint};
@@ -356,7 +354,8 @@ fn refused_origin(refused: &OriginRefused) {
 }
 
 /// The identity the endpoint at `path` reports: the declaring host's
-/// declaration laid over the app's [`McpIdentity`].
+/// declaration laid over the app's [`McpIdentity`], over the binary's
+/// [`AppIdentity`](nest_rs_core::AppIdentity).
 pub fn endpoint_identity(container: &Container, path: &str) -> ResolvedIdentity {
     // The `Err` arm is a boot failure `check_identity` already raised.
     resolve_identity(container, path, &hosts_on(container, path)).unwrap_or_default()
@@ -387,6 +386,7 @@ fn resolve_identity(
     crate::identity::resolve(
         host.map(|meta| meta.identity()),
         container.get::<McpIdentity>().as_deref(),
+        nest_rs_core::AppIdentity::current(),
     )
     .map_err(|err| err.report(path, host.map_or("<none>", |meta| meta.host())))
 }
@@ -681,8 +681,9 @@ fn warn_undeclared_tools(path: &str, hosts: &[ResolvedHost]) {
 }
 
 /// Settle what the endpoint at `path` calls itself: two hosts declaring it fail
-/// the boot; nobody naming it is a `warn`, compared against rmcp's own
-/// `ServerConfig::new` default rather than a literal.
+/// the boot; nobody naming it — no host, no app, and no binary identity in a
+/// process no `#[nest_rs::main]` started — is a `warn`, compared against rmcp's
+/// own `ServerConfig::new` default rather than a literal.
 fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> Result<(), String> {
     let metas: Vec<Arc<McpHostMeta>> = hosts.iter().map(|host| host.meta.clone()).collect();
     let identity = resolve_identity(container, path, &metas)?;
@@ -693,16 +694,18 @@ fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> 
         return Ok(());
     };
 
-    let sdk_default = ServerConfig::new(ServerCapabilities::default()).server_info;
+    let sdk_default = crate::identity::sdk_default();
     let reported = first.instance.get_info().server_info;
+    if reported == sdk_default && identity.names_the_unnamed() {
+        return Ok(());
+    }
     let names = hosts
         .iter()
         .map(|host| host.name)
         .collect::<Vec<_>>()
         .join(", ");
-    let hint = "name the app once: McpModule::for_root(McpOptions { \
-                server: Some(McpIdentity::new(name, env!(\"CARGO_PKG_VERSION\"))), \
-                ..Default::default() })";
+    let name_the_app = "McpModule::for_root(McpOptions { server: \
+                        Some(McpIdentity::new(name, version)), ..Default::default() })";
 
     if reported == sdk_default {
         tracing::warn!(
@@ -711,20 +714,32 @@ fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> 
             hosts = names.as_str(),
             reports_as = reported.name.as_str(),
             reason = "endpoint_identity_is_the_sdk_default",
-            hint,
+            hint = format!(
+                "start the process from #[nest_rs::main], which names every endpoint after \
+                 the binary, or name the app once: {name_the_app}"
+            )
+            .as_str(),
             "an MCP endpoint introduces itself with the SDK's own name and version — neither its hosts nor the app named it",
         );
         return Ok(());
     }
 
     if hosts.len() > 1 {
+        // A host naming itself keeps its name over the binary's, so only a
+        // declaration settles the endpoint; a host's own name needs the
+        // binary's version behind it.
+        let hint = if identity.names_the_unnamed() {
+            format!("name the endpoint once: #[mcp(name = \"…\")] on one host, or {name_the_app}")
+        } else {
+            format!("name the app once: {name_the_app}")
+        };
         tracing::warn!(
             target: crate::TARGET,
             path,
             hosts = names.as_str(),
             reports_as = reported.name.as_str(),
             reason = "endpoint_identity_undeclared",
-            hint,
+            hint = hint.as_str(),
             "several MCP hosts share an endpoint whose identity nobody declared — it reports the first host's",
         );
     }

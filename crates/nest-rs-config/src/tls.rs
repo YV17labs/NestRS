@@ -29,6 +29,7 @@ use crate::{
 ///
 /// A config holds it in a field named `tls`, the name every refusal of its
 /// material gives its variables; another name is refused at the read.
+///
 /// Read once, when the configuration resolves: a renewed file takes effect at
 /// the next boot. Every client the framework opens trusts through
 /// [`authorities_pem`](Self::authorities_pem), so the system's store is read

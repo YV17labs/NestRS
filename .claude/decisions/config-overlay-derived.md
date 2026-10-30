@@ -45,3 +45,45 @@ set, so a pin had to learn each struct's meaning.
 
 Decided 2026-10-30 by the identity audit's feat-12, cfg-6, cfg-12 and read-6,
 the owner's "Tout faire" (2026-10-28) agreeing the public API break.
+
+## 2026-10-30 — every key read off a field's name, `ClientTls` under `tls` alone
+
+The entry above kept two vocabularies whose keys were not their members'
+names: `HttpCors::exposed_headers` read `CORS_EXPOSED`, and
+`HttpSecurityHeaders` read its switch under the bare `SECURITY_HEADERS` and
+each header under a flat key (`HSTS`) beside it. Under the owner's "Tout
+faire", they now read `CORS_EXPOSED_HEADERS`, `SECURITY_HEADERS_ENABLED` and
+`SECURITY_HEADERS_<FIELD>`: a vocabulary's keys are its members' names after
+its field's key, so every variable is derived from the structs, and "no
+deployment variable moved" above no longer holds for these two. The retired
+spellings are read by nothing: the unread-variable report names each at boot,
+as it names every retired key of a namespace the binary reads, and a key that
+leads several read keys (the bare `SECURITY_HEADERS`) gets no suggestion,
+where the nearest by distance would have told an operator to write
+`SECURITY_HEADERS_HSTS=false`.
+
+A `ClientTls` is read under a field named `tls` alone, another refused at the
+read (`ConfigError::MisnamedField`): every check of its material, the
+handshake's remedy and the drivers' own refusals name `TLS_CA_CERT`,
+`TLS_CERT` and `TLS_KEY`. `HttpTls::with_reload_secs(u64)`, whose `0` stopped
+the watch, is `with_reload(Option<Duration>)`, the duration shape above.
+
+Refused:
+
+- **Carrying the key in `ClientTls`**, so its sentences name whatever field
+  read it. Every sentence naming its variables — `TlsNames`, the remedy a
+  failed handshake gets, Redis's plaintext refusal — would take the key as a
+  second input, and a namespace would spell its TLS material as its author
+  chose. One spelling in every namespace keeps each sentence true with one
+  naming path and lets an operator audit every client's material under the
+  same three keys (security, correctness); a config holding two TLS clients
+  holds two resources, each its own namespace.
+- **Reading a retired key, or refusing the boot on one.** Reading it is an
+  alias (`CLAUDE.md`, no alias inside a major); refusing it is a detector that
+  keeps the 6.x name in code for a deployment the report already names at
+  `warn`, the level every unread key earns (`container.md`, escalate no
+  further than the fact). A policy header set under its old name stops being
+  sent, which the upgrading guide's *What fails* says.
+
+Decided by correctness and security, the orchestrator's resumption of the
+identity audit's branch (B-152).

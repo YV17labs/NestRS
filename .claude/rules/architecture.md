@@ -134,8 +134,9 @@ rather than injecting it. **A module owning no config gets no `for_root`**
 
 **A `#[config]`'s keys are its fields' names**, the overlay derived from the
 struct (`from_env = "manual"` only where fields depend on each other); a
-vocabulary of several variables extends its field's key with `_`
-(`TLS_CA_CERT` under `tls`), never `__`, the namespace's separator.
+vocabulary of several variables extends its field's key with `_` and each
+member's name (`CORS_EXPOSED_HEADERS` for `cors.exposed_headers`,
+`TLS_CA_CERT` under `tls`), never `__`, the namespace's separator.
 **Its namespace is its stem, read and never chosen**, minus plural
 role folders and a product's container: `redis/src/queue/config.rs` →
 `<PREFIX>_REDIS__QUEUE__*`, `social/src/providers/github/config.rs` →

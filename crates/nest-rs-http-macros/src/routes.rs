@@ -871,8 +871,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }),
     );
 
-    // `Guard::check_http` defaults to `Ok(())`, so a guard without the HTTP
-    // capability would pass every request.
     let capability_bounds = guard_capability_bounds(
         routes_by_path
             .iter()

@@ -1506,7 +1506,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             __nestrs_sites.push(#site);
         }
     });
-    // `Guard::check` admits by default: the bound makes a guard declare it.
     let capability_bounds = guard_capability_bounds(
         all_guard_paths
             .iter()

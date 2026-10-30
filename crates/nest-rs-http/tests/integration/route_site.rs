@@ -138,6 +138,10 @@ impl Guard for Shadowing {
         cx.attach(Seen(seen));
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for Shadowing {}

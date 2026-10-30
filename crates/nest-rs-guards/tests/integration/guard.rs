@@ -98,6 +98,10 @@ impl Guard for WebhookSignature {
         req.set_body(body);
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for WebhookSignature {}

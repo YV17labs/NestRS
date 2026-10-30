@@ -89,7 +89,14 @@ struct PassGuard;
 impl Layer for PassGuard {}
 
 #[async_trait]
-impl Guard for PassGuard {}
+impl Guard for PassGuard {
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
 
 /// Builds the caller's ability from an `x-role` header: `admin` reads widgets
 /// unrestricted; `viewer` reads widgets but only the `id` field; `auditor`
@@ -125,6 +132,10 @@ impl Guard for AbilityInjector {
             _ => {}
         }
         cx.attach(b.build().expect("valid test ability"));
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }

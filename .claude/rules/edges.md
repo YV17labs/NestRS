@@ -130,11 +130,14 @@ guard, filter or interceptor loop of its own.
    one decision, `check`, which `check_http` runs unless the guard overrides
    it, which it does only where the request differs from the unit; a
    precondition an earlier guard attached is `cx.require::<T>()?`, a `500`
-   naming both. `check` admits by default, so without the bound an empty
-   `impl Guard for X {}` passes everything: each emitter asserts
+   naming both. **`check` has no default**, so no guard admits a unit it
+   never decided — one whose decision is the request's alone admits the
+   units it carries in one visible `Ok(())` — held by the trait, with a
+   trybuild snapshot per in-band edge. Each emitter asserts
    `GuardFor<<Edge>View>` (`guard_capability_bounds`; HTTP has three:
-   `#[controller]`, `#[routes]`, and `#[gateway]` for the upgrade), with a
-   trybuild snapshot each. Held by a test per edge.
+   `#[controller]`, `#[routes]`, and `#[gateway]` for the upgrade), so a guard
+   runs only on the units its decision was written for, with a trybuild
+   snapshot each. Held by a test per edge.
 9. **A named compile error for every layer family the edge does not run** —
    one row in `nest_rs_codegen::__private::layers`' table, read through
    `take_layers`, never a second refusal: a cell is built, pending (refused as a
@@ -341,8 +344,8 @@ the visible opening.
   declares — a missing declaration never opens an edge (held by a test per
   edge); the declaration matters only where a decorator binds the guard. A
   guard declaring `GuardFor<HttpView>` and writing only `check` refuses with
-  it; one declaring an in-band view without writing `check` is a visible line,
-  not a gap to close (`.claude/decisions/check-http-stays-on-guard.md`).
+  it, and none admits by default
+  (`.claude/decisions/check-http-stays-on-guard.md`).
 - **Only route mounts (global, controller and method scope composed), the global
   bucket and a self-mount's request stage are phase-validated**
   (`.claude/decisions/in-band-phase-validation.md`); **MCP discovery is gated at

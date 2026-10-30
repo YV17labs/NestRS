@@ -38,6 +38,13 @@ impl Guard for CountingDenyGuard {
         COUNTER.fetch_add(1, Ordering::SeqCst);
         Err(Denial::forbidden("counted-and-denied"))
     }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<nest_rs_http::HttpView> for CountingDenyGuard {}

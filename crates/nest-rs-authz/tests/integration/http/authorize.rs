@@ -135,6 +135,10 @@ mod gate_order {
             cx.attach(ab.build().expect("valid test ability"));
             Ok(())
         }
+
+        async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
     }
 
     impl GuardFor<nest_rs_http::HttpView> for Grants {}

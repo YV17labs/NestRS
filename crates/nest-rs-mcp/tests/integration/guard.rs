@@ -143,6 +143,10 @@ macro_rules! recording_guard {
                 nest_rs_core::__private::set_actor_id($label);
                 Ok(())
             }
+
+            async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+                Ok(())
+            }
         }
 
         impl GuardFor<HttpView> for $name {}
@@ -196,6 +200,10 @@ impl Layer for DenyEverything {}
 impl Guard for DenyEverything {
     async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("the pool refused"))
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
@@ -275,7 +283,12 @@ struct Authorizing;
 
 impl Layer for Authorizing {}
 
+#[async_trait]
 impl Guard for Authorizing {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
     fn phase(&self) -> GuardPhase {
         GuardPhase::Authorization
     }
@@ -290,7 +303,12 @@ struct Authenticating;
 
 impl Layer for Authenticating {}
 
+#[async_trait]
 impl Guard for Authenticating {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
     fn phase(&self) -> GuardPhase {
         GuardPhase::Authentication
     }
@@ -338,6 +356,10 @@ impl Guard for Attaching {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         nest_rs_core::__private::set_actor_id("ada");
         cx.attach(Caller("ada"));
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }

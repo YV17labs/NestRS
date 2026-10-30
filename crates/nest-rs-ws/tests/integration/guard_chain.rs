@@ -33,6 +33,10 @@ impl Guard for Authenticate {
         cx.attach(Caller);
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<nest_rs_http::HttpView> for Authenticate {}
@@ -46,6 +50,13 @@ impl Layer for Authorize {}
 
 #[async_trait]
 impl Guard for Authorize {
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
     fn phase(&self) -> GuardPhase {
         GuardPhase::Authorization
     }
@@ -151,7 +162,14 @@ struct Unprovided;
 impl Layer for Unprovided {}
 
 #[async_trait]
-impl Guard for Unprovided {}
+impl Guard for Unprovided {
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
 
 impl GuardFor<nest_rs_http::HttpView> for Unprovided {}
 impl GuardFor<nest_rs_ws::WsView> for Unprovided {}

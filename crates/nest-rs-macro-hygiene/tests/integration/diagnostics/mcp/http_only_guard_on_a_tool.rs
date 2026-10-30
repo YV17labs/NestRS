@@ -18,6 +18,10 @@ impl Guard for HttpOnlyGuard {
     async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for HttpOnlyGuard {}

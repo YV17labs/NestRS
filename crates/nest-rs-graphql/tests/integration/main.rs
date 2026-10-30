@@ -67,6 +67,10 @@ impl Guard for RequestStoreDown {
     async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(store_down())
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<nest_rs_http::HttpView> for RequestStoreDown {}

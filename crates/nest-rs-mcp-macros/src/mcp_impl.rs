@@ -378,7 +378,6 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         }}
     };
 
-    // `Guard::check` admits by default: the bound makes a guard declare MCP.
     let capability_bounds = guard_capability_bounds(
         operations.all().flat_map(|op| {
             op.guards.iter().map(|item| Conditional {

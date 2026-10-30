@@ -178,6 +178,10 @@ impl Guard for TicketGuard {
             None => Err(Denial::unauthorized("missing ticket")),
         }
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<nest_rs_http::HttpView> for TicketGuard {}

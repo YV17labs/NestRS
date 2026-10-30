@@ -48,6 +48,10 @@ impl Guard for BearerGuard {
         }
         Err(Denial::unauthorized("missing bearer token"))
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for BearerGuard {}
@@ -66,6 +70,10 @@ impl Guard for ApiKeyGuard {
             return Ok(());
         }
         Err(Denial::forbidden("an API key is required"))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
@@ -86,6 +94,10 @@ impl Guard for PublicOnlyGuard {
             return Ok(());
         }
         Err(Denial::unauthorized("only public handlers"))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
@@ -122,6 +134,10 @@ impl Guard for PostureProbe {
             .push(posture);
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 /// Admits everything: the authorization half of endpoint guards whose
@@ -132,7 +148,15 @@ struct PassGuard;
 
 impl Layer for PassGuard {}
 
-impl Guard for PassGuard {}
+#[async_trait]
+impl Guard for PassGuard {
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
 
 impl GuardFor<HttpView> for PassGuard {}
 
@@ -169,6 +193,10 @@ macro_rules! recording_guard {
             ) -> Result<(), Denial> {
                 self.trail.seen.lock().expect("trail lock").push($label);
                 nest_rs_core::__private::set_actor_id($label);
+                Ok(())
+            }
+
+            async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
                 Ok(())
             }
         }

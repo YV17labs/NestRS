@@ -81,6 +81,10 @@ impl Guard for AbilityInjector {
         cx.attach(b.build().expect("valid test ability"));
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
@@ -97,6 +101,10 @@ impl Guard for ListAbilityInjector {
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity);
         cx.attach(b.build().expect("valid test ability"));
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
@@ -411,6 +419,10 @@ impl Guard for PostAbilityInjector {
                 .when(|p| post::in_org(&p, 9));
         }
         cx.attach(b.build().expect("valid test ability"));
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }

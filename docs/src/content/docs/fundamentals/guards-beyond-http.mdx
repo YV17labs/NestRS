@@ -9,7 +9,8 @@ A guard is written once and bound wherever a caller reaches a unit: an HTTP
 route, a GraphQL field, a WebSocket message, an MCP tool call or prompt fetch.
 It writes its decision once, in `check`, which runs on every unit and, through
 `check_http`, on an HTTP request too; it overrides `check_http` only where the
-request differs from the unit. It declares, with one `GuardFor` line per edge,
+request differs from the unit. `check` has no default: a guard admitting a
+unit says so. It declares, with one `GuardFor` line per edge,
 that it checks those units. A job, a tick and a listener call have no caller,
 so no guard runs there: guard where the work is produced.
 
@@ -60,7 +61,9 @@ operation: `check_http` once on the request, `check` once per operation it
 carries — so a global `ThrottlerGuard` rate-limits the `/mcp` request and each
 tool call. A global guard writing only `check` runs it on every request too,
 the route, the WS upgrade and the `/graphql` and `/mcp` requests included; one
-whose decision is the unit's alone admits the request in `check_http`.
+whose decision is the unit's alone admits the request in `check_http`, and one
+whose decision is the request's alone — `AuthnGuard` — admits the units that
+request carries in `check`.
 
 The three multiplexed edges need one thing on top: the guards that build
 the caller's `Ability` at the request, because a unit below the request does
@@ -78,10 +81,11 @@ with the connection-vs-message split on
 
 ## A guard declares the edges it checks
 
-A guard writing neither entry admits — right as "this guard does not apply to
-that edge", and the reason a guard bound where it has no check would compile
-and pass everything. `GuardFor<V>`, `V` the view of the units a site
-dispatches, closes that:
+`check` has no default, so every guard writes its decision — an empty
+`impl Guard for X {}` does not compile, and neither does a guard writing only
+`check_http` — and none admits a unit it never decided. `GuardFor<V>`, `V` the
+view of the units a site dispatches, says which units that decision was
+written for:
 
 | Bound at | Requires | Because it runs |
 |---|---|---|
@@ -93,9 +97,9 @@ dispatches, closes that:
 Declare it next to the entry it covers — `impl GuardFor<GraphqlView> for
 RequireAdmin {}` — and the binding compiles. Bind a guard that lacks it and it
 does not, with a diagnostic naming the view and the way out. `AuthnGuard` is
-the guard it catches most often: it checks HTTP requests only, which is why a
-resolver binds `AuthzGuard` alone and leaves authentication to the guards
-at the `/graphql` request. Bound on one anyway:
+the guard it catches most often: its decision is the HTTP request's, which is
+why a resolver binds `AuthzGuard` alone and leaves authentication to the
+guards at the `/graphql` request. Bound on one anyway:
 
 ```text frame="terminal"
 $ cargo check -p features
@@ -105,28 +109,20 @@ error[E0277]: `nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>` does not
  14 | #[use_guards(AuthnGuard, AuthzGuard)]
     |              ^^^^^^^^^^ bound at a site whose units are `GraphqlView`
     |
-    = note: `check` admits by default and `check_http` runs it, so a guard bound here without its decision would pass every unit silently
-    = note: write the guard's decision in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<GraphqlView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
+    = note: a guard's `check` decides the units it declares; bound where its units are another edge's, it would run a decision written for a view they do not have
+    = note: write the guard's decision for `GraphqlView` units in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<GraphqlView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
 ```
 
-The declaration never proves the *entry* is overridden — the defaults give
-every guard both. It proves you **declared** that this guard checks this
-edge's units. On HTTP the gap is closed: a guard declaring `GuardFor<HttpView>`
-and writing only `check` refuses requests with it. On an in-band edge it is
-the line a reader sees: a guard declaring `GuardFor<GraphqlView>` and writing
-only `check_http` still admits every field. An empty `impl Guard for X {}` satisfies the compiler and
-passes every request; `GuardFor` is what turns that into an error at the
-`#[use_guards]` line rather than a chain entry that guards nothing. A guard
-whose one `check` is the same on every edge declares it once for all of them,
-`impl<V: UnitView> GuardFor<V> for X {}` — `ThrottlerGuard` does.
+A guard whose one `check` is the same on every edge declares it once for all
+of them, `impl<V: UnitView> GuardFor<V> for X {}` — `ThrottlerGuard` does.
 
-A guard bound **globally** takes no `GuardFor`, and that is a deliberate hole
-rather than an oversight. A global guard serves whichever edges it
-implements — its `check_http` on the request, its `check` on every unit.
-Requiring `GuardFor<HttpView>` there would refuse a GraphQL-only guard, and
-the alternative is four global lists where the developer wrote one. So an
-empty guard registered globally still passes everything: `GuardFor` binds
-`#[use_guards]` sites, not the pool.
+A guard bound **globally** takes no `GuardFor`. A global guard serves
+whichever edges it implements — its `check_http` on the request, its `check`
+on every unit — and requiring `GuardFor<HttpView>` there would refuse a
+GraphQL-only one, where the alternative is four global lists where the
+developer wrote one. Since every guard writes `check`, a pooled guard admits
+no unit it did not decide: one whose decision is the request's says
+`Ok(())` there, in one visible line.
 
 A guard on the `#[gateway]` **struct** declares `GuardFor<HttpView>`, not
 `GuardFor<WsView>` — the upgrade is an HTTP `GET`, and `WsView` belongs to the

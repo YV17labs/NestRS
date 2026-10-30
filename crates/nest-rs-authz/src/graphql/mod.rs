@@ -44,7 +44,11 @@
 //! # struct PassGuard;
 //! # impl Layer for PassGuard {}
 //! # #[async_trait]
-//! # impl Guard for PassGuard {}
+//! # impl Guard for PassGuard {
+//! #     async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+//! #         Ok(())
+//! #     }
+//! # }
 //! # impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 //! # #[injectable]
 //! # #[derive(Default)]
@@ -59,6 +63,9 @@
 //! #         }
 //! #         let ability = ab.build().map_err(|_| Denial::internal("malformed rules"))?;
 //! #         cx.attach(ability);
+//! #         Ok(())
+//! #     }
+//! #     async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
 //! #         Ok(())
 //! #     }
 //! # }

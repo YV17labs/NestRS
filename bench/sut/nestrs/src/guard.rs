@@ -8,7 +8,7 @@ pub struct BearerGuard;
 
 #[async_trait]
 impl Guard for BearerGuard {
-    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let bearer = HttpView::of(cx)?
             .request()
             .headers()

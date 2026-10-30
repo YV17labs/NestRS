@@ -70,6 +70,10 @@ impl Guard for Grants {
         cx.attach(ability_of(grant.as_deref()));
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for Grants {}

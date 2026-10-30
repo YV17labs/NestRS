@@ -69,6 +69,10 @@ impl Guard for CallerGuard {
         cx.attach(Caller("alice"));
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for CallerGuard {}

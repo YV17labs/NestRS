@@ -42,6 +42,10 @@ impl Guard for Attaching {
         cx.attach(Caller("ada"));
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for Attaching {}

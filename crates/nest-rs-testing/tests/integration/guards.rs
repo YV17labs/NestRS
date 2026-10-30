@@ -29,6 +29,13 @@ impl Guard for DenyGuard {
     ) -> std::result::Result<(), Denial> {
         Err(Denial::forbidden("forbidden"))
     }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for DenyGuard {}
@@ -47,6 +54,13 @@ impl Guard for ChallengeGuard {
         _cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
         Err(Denial::unauthorized("unauthorized"))
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
     }
 }
 
@@ -189,6 +203,13 @@ impl Guard for CountingGuard {
         _cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
         COUNTER.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }
@@ -334,6 +355,13 @@ impl Guard for PublicAwareGuard {
         }
         Err(Denial::forbidden("forbidden"))
     }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for PublicAwareGuard {}
@@ -408,6 +436,13 @@ impl Guard for TenantGuard {
             .unwrap_or("anon")
             .to_owned();
         cx.attach(Tenant(tenant));
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }
@@ -537,6 +572,13 @@ impl Guard for SessionGuard {
     ) -> std::result::Result<(), Denial> {
         Ok(())
     }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for SessionGuard {}
@@ -555,6 +597,13 @@ impl Guard for PolicyGuard {
     }
 
     async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
@@ -636,6 +685,13 @@ impl Guard for FreshSessionGuard {
         _cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
         FRESH_SESSION_RUNS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }

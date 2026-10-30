@@ -1,11 +1,12 @@
-//! A guard bound where it does not check is the fail-open this bound closes.
+//! A guard bound where it does not declare that it checks is refused at the
+//! binding.
 //!
-//! `Guard::check_http` admits by default like `Guard::check`, so without the
-//! `GuardFor<HttpView>` bound an empty `impl Guard for X {}` beside a verb
-//! compiled, read as a protection, and passed every request.
+//! The guard writes its decision, but no edge: without the `GuardFor<HttpView>`
+//! bound it would run beside a verb on a view its decision was never written
+//! for.
 
-use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::Guard;
+use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::guards::{Denial, Guard, async_trait};
 use nest_rs::http::{controller, routes};
 
 #[injectable]
@@ -14,7 +15,12 @@ struct UnattestedGuard;
 
 impl Layer for UnattestedGuard {}
 
-impl Guard for UnattestedGuard {}
+#[async_trait]
+impl Guard for UnattestedGuard {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
 
 #[controller(path = "/demo")]
 struct DemoController;

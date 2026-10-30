@@ -31,6 +31,10 @@ impl Guard for RolesGuard {
             Err(Denial::forbidden("forbidden"))
         }
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for RolesGuard {}

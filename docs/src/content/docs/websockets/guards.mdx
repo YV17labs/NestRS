@@ -131,10 +131,9 @@ its refusal, `guard denied the message` on `features::chat`, with
 connection `cx.peer()` names too.
 
 <Aside type="caution" title="A per-message guard must declare `GuardFor<WsView>`">
-`check` admits by default, which is right — "this guard does not apply to
-that transport" — and is also why binding a guard that only checks HTTP
-requests beside a `#[subscribe_message]` would compile, read as a protection,
-and pass every message.
+A guard's `check` is the decision it wrote for the units it declares; one
+whose decision reads the HTTP request would run it on a message, which carries
+none, and refuse or misread every message while reading as a protection.
 
 `#[messages]` requires `GuardFor<WsView>` of every guard in a per-message
 `#[use_guards]`. Declare it next to the `check` it covers. If you get this
@@ -148,8 +147,8 @@ error[E0277]: `nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>` does not
  21 |     #[use_guards(AuthnGuard)]
     |                  ^^^^^^^^^^ bound at a site whose units are `WsView`
     |
-    = note: `check` admits by default and `check_http` runs it, so a guard bound here without its decision would pass every unit silently
-    = note: write the guard's decision in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<WsView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
+    = note: a guard's `check` decides the units it declares; bound where its units are another edge's, it would run a decision written for a view they do not have
+    = note: write the guard's decision for `WsView` units in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<WsView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
 ```
 
 **A guard on the `#[gateway]` struct declares `GuardFor<HttpView>`, not

@@ -128,6 +128,10 @@ impl Guard for ChecksRequestsOnly {
         }
         Err(Denial::forbidden("refused by a request check"))
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 #[module(

@@ -19,7 +19,14 @@
 //! # impl Layer for AuthnGuard {}
 //! #
 //! # #[async_trait]
-//! # impl Guard for AuthnGuard {}
+//! # impl Guard for AuthnGuard {
+//! #     async fn check(
+//! #         &self,
+//! #         _cx: &mut nest_rs_core::UnitContext<'_>,
+//! #     ) -> Result<(), nest_rs_guards::Denial> {
+//! #         Ok(())
+//! #     }
+//! # }
 //! #
 //! # impl GuardFor<nest_rs_http::HttpView> for AuthnGuard {}
 //! #

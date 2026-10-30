@@ -10,8 +10,8 @@
 //! *does* check HTTP, refused per message where `check` is what runs. Between
 //! them the two scopes cannot be confused for one another.
 
-use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::Guard;
+use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::guards::{Denial, Guard, async_trait};
 use nest_rs::ws::{gateway, messages};
 
 #[injectable]
@@ -20,10 +20,14 @@ struct UnattestedGuard;
 
 impl Layer for UnattestedGuard {}
 
-// Empty: both entries admit by default, so this compiles and passes every
-// request. The declaration is the only thing standing between that and a
-// silent open door.
-impl Guard for UnattestedGuard {}
+// Its decision is written, its edge never declared: the declaration is what
+// says which units this decision was written for.
+#[async_trait]
+impl Guard for UnattestedGuard {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
 
 #[gateway(path = "/ws")]
 #[use_guards(UnattestedGuard)]

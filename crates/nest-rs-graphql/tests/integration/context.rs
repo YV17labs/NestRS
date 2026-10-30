@@ -26,6 +26,10 @@ impl Guard for TagGuard {
         cx.attach(RequestTag("hello".into()));
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<nest_rs_http::HttpView> for TagGuard {}
@@ -421,6 +425,10 @@ mod the_endpoint_guards_speak_the_request_vocabulary {
                 return Err(Denial::forbidden("name a tenant"));
             };
             cx.attach(Tenant(tenant));
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             Ok(())
         }
     }

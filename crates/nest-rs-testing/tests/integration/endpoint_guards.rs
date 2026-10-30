@@ -59,6 +59,10 @@ impl Guard for Bearer {
         }
         Err(Denial::unauthorized("missing bearer token"))
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for Bearer {}

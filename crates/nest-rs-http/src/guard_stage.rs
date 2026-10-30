@@ -633,6 +633,10 @@ mod tests {
             cx.attach(Tenant(tenant));
             Ok(())
         }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
     }
 
     /// Reads, in a later stage of the same request, what the first attached
@@ -651,6 +655,10 @@ mod tests {
                 seen => Err(Denial::internal(format!("saw {seen:?}"))),
             }
         }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
     }
 
     fn chain<G: Guard>(guard: G) -> Vec<ResolvedLayer<dyn Guard>> {
@@ -668,7 +676,12 @@ mod tests {
 
     impl Layer for Busy {}
 
+    #[async_trait]
     impl Guard for Busy {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
+            Ok(())
+        }
+
         fn denial_statuses(&self, _public: bool) -> &'static [u16] {
             &[503, 403]
         }
@@ -811,6 +824,10 @@ mod tests {
                     .with_source(ConnectionRefused),
             )
         }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
     }
 
     const STORE_DOWN_CHAIN: &str =
@@ -867,6 +884,10 @@ mod tests {
         async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             Ok(())
         }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
     }
 
     /// Refuses in its protocol's own words: the answer `status` carries,
@@ -885,6 +906,10 @@ mod tests {
             drop(HttpView::of(cx)?.respond(own));
             Err(Denial::unauthorized("the client did not authenticate"))
         }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
     }
 
     /// Writes an answer, then admits.
@@ -901,6 +926,10 @@ mod tests {
             drop(HttpView::of(cx)?.respond(stray));
             Ok(())
         }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
     }
 
     /// Refuses every request with a plain denial.
@@ -912,6 +941,10 @@ mod tests {
     impl Guard for Refusing {
         async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             Err(Denial::forbidden("not here"))
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
         }
     }
 

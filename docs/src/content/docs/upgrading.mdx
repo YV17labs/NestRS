@@ -374,6 +374,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | a guard's `async fn check_http(&self, req: &mut Request)` | `async fn check_http(&self, cx: &mut UnitContext<'_>)`: the request through `HttpView::of(cx)?.request()` — `request_mut()` to read the body and set it back — and the route's `#[meta]` and posture through `cx.reflector()` |
    | a guard's `check_graphql`, `check_ws_message` or `check_mcp` | one `async fn check(&self, cx: &mut UnitContext<'_>)`: the field, message or operation through `cx.switch_to::<GraphqlView>()`, `WsView` or `McpView`, its name through `cx.handler().address()` |
    | one decision written twice, in `check_http` and in an in-band entry | the decision once, in `check`: `check_http` runs it unless the guard overrides it, which it does only where the request differs from the unit (it reads the request, or a value missing at the request means something else) |
+   | an `impl Guard` writing only `check_http`, or nothing | its decision in `check`, which `check_http` runs: `check` has no default. A guard whose decision is the request's alone — an authentication guard in the global pool — keeps `check_http` and admits the units the request carries: `async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> { Ok(()) }` |
    | a guard whose decision is a field's, a message's or an operation's alone, registered with `use_guards_global` | the same `check`, and `async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> { Ok(()) }` beside it: a pooled guard's `check` now runs on every request too |
    | `impl Layer for X {}`, empty | `#[derive(Layer)]` on the struct — `#[layer(priority = …)]` for an override of `Layer::priority`; a layer overriding `serves` keeps its `impl` |
    | `#[derive(Default)]` beside `#[injectable]` on a struct with no field | nothing: a fieldless struct, unit or braced, is built as written |
@@ -1132,6 +1133,12 @@ lists what the boot, a log or the wire shows when one is missed.
   — answers the insert's NOT NULL violation as a `500`, filed at `error` on
   `nest_rs::orm`. Grant `Create` only where the grants pin every column the
   server owns, and `Update` and `Delete` beside it where `Manage` stood.
+- **An HTTP-only guard in the global pool whose decision moved into `check`**
+  runs it at every GraphQL field, WebSocket message and MCP operation too, where
+  `HttpView::of(cx)?` refuses each with the opaque `500`: the edge files every
+  refusal at `error` (`guard denied …`, `status=500`), and once per site
+  `an HTTP guard entry ran on a unit with no HTTP view`. Keep its decision in
+  `check_http` and admit the units in `check` (`Ok(())`).
 - **A `Ctx<T>` no guard attached on a resolver, a message handler or a tool** —
   the value an authentication guard attaches, read on an operation the guard
   never reached — answers the edge's opaque internal error, and the type is

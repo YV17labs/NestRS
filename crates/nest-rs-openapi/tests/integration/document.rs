@@ -386,6 +386,10 @@ mod guards {
             Err(Denial::forbidden("outside the office network"))
         }
 
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
         fn denial_statuses(&self, _public: bool) -> &'static [u16] {
             &[403]
         }

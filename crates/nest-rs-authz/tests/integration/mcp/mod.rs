@@ -24,6 +24,10 @@ impl Guard for PassGuard {
         nest_rs_core::__private::set_actor_id("caller");
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<nest_rs_http::HttpView> for PassGuard {}

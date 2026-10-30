@@ -139,11 +139,12 @@ pub fn boot_validate_guards(
 mod tests {
     use std::sync::Arc;
 
-    use nest_rs_core::Layer;
+    use async_trait::async_trait;
     use nest_rs_core::layer_chain::LayerSite;
+    use nest_rs_core::{Layer, UnitContext};
 
     use super::*;
-    use crate::PrincipalClaim;
+    use crate::{Denial, PrincipalClaim};
 
     #[derive(Clone)]
     struct ClaimsA;
@@ -152,7 +153,11 @@ mod tests {
 
     struct Authn;
     impl Layer for Authn {}
+    #[async_trait]
     impl Guard for Authn {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
         fn phase(&self) -> GuardPhase {
             GuardPhase::Authentication
         }
@@ -163,7 +168,11 @@ mod tests {
 
     struct Authz;
     impl Layer for Authz {}
+    #[async_trait]
     impl Guard for Authz {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
         fn phase(&self) -> GuardPhase {
             GuardPhase::Authorization
         }
@@ -174,7 +183,11 @@ mod tests {
 
     struct AuthzWantsB;
     impl Layer for AuthzWantsB {}
+    #[async_trait]
     impl Guard for AuthzWantsB {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
         fn phase(&self) -> GuardPhase {
             GuardPhase::Authorization
         }

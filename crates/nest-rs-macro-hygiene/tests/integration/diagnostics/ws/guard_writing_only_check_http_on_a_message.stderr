@@ -1,0 +1,7 @@
+error[E0046]: not all trait items implemented, missing: `check`
+  --> tests/integration/diagnostics/ws/guard_writing_only_check_http_on_a_message.rs:14:1
+   |
+14 | impl Guard for RequestOnlyGuard {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `check` in implementation
+   |
+   = help: implement the missing item: `fn check<'s: 'fut, 'c: 'fut, 'u: 'fut, 'fut>(&'s self, _: &'c mut UnitContext<'u>) -> Pin<Box<(dyn std::future::Future<Output = Result<(), Denial>> + std::marker::Send + 'fut)>> { todo!() }`

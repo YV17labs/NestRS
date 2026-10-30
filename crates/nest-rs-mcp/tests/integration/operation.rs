@@ -435,6 +435,10 @@ impl Guard for AdmitRequest {
         nest_rs_core::__private::set_actor_id("admitted");
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<nest_rs_http::HttpView> for AdmitRequest {}

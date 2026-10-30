@@ -29,12 +29,14 @@
 //!
 //! ## Defining a guard
 //!
-//! Write the decision in `check` — a guard writing neither entry admits —
-//! override `check_http` where the guard reads the HTTP request itself, then
-//! **declare each edge it checks** with [`GuardFor`]. The decorators bind a
-//! guard on the edges it declares, so a guard declared where its check is the
-//! default is a compile error at the `#[use_guards]` line instead of a chain
-//! entry that passes everything. `#[derive(Layer)]` writes the
+//! Write the decision in `check` — required, so no guard admits a unit by
+//! default — then **declare each edge it checks** with [`GuardFor`]. A guard
+//! bound on routes reads the HTTP request there, as `AuditGuard` below does;
+//! one in the global pool deciding on the request writes that decision in
+//! `check_http` instead (see *Registering globally*). The decorators bind a
+//! guard on the edges it declares, so a guard bound where its decision reads
+//! another edge's view is a compile error at the `#[use_guards]` line instead
+//! of a chain entry that refuses everything. `#[derive(Layer)]` writes the
 //! [`Layer`](nest_rs_core::Layer) impl every guard extends.
 //!
 //! ```
@@ -48,7 +50,7 @@
 //!
 //! #[async_trait]
 //! impl Guard for AuditGuard {
-//!     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+//!     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
 //!         let request = HttpView::of(cx)?.request();
 //!         tracing::info!(target: audit::TARGET, method = %request.method(), "request seen");
 //!         Ok(())
@@ -74,9 +76,13 @@
 //! and the boot fails naming both, instead of every request answering `500`.
 //!
 //! The pool holds `Arc<dyn Guard>` and runs whichever entry a site calls,
-//! declared or not — a guard writing only `check` runs it at every route and
-//! request stage too; the decorators bind on [`GuardFor`], so declare the edges
-//! anyway.
+//! declared or not: `check_http` at every route and request stage — the
+//! `/graphql` and `/mcp` requests, a WebSocket upgrade — and `check` at every
+//! GraphQL field, WebSocket message and MCP operation, which has no HTTP view.
+//! So a pooled guard deciding on the HTTP request writes it in `check_http`
+//! and admits in `check`, with `Ok(())`, the units the request it checked
+//! carries; one deciding on a unit admits the request in `check_http`. The
+//! decorators bind on [`GuardFor`], so declare the edges anyway.
 //!
 //! ## Where guards run
 //!

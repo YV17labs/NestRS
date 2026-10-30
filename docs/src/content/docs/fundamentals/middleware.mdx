@@ -102,6 +102,10 @@ impl Guard for RequireApiKey {
             Err(Denial::unauthorized("missing key"))
         }
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for RequireApiKey {}
@@ -109,7 +113,11 @@ impl GuardFor<HttpView> for RequireApiKey {}
 
 Bind with `#[use_guards(RequireApiKey)]` per controller or per handler,
 or globally via
-`App::builder().use_guards_global([guard::<RequireApiKey>()])`.
+`App::builder().use_guards_global([guard::<RequireApiKey>()])`. The key is
+the request's, so `check_http` decides it, and `check` admits the GraphQL
+fields, WebSocket messages and MCP operations a checked request carries: the
+global pool runs `check` on each of them, where there is no HTTP request to
+read.
 
 ### "I want to attach something to the request so the handler can read it."
 
@@ -123,6 +131,10 @@ impl Guard for AuthnGuard {
         let claims = verify_bearer(HttpView::of(cx)?.request())
             .map_err(|_| Denial::unauthorized("invalid token"))?;
         cx.attach(claims);
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }

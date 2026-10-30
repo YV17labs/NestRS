@@ -56,6 +56,10 @@ impl Guard for DecisionGuard {
             Some(d) => Err(d.clone()),
         }
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 fn entry(guard: DecisionGuard) -> ResolvedLayer<dyn Guard> {

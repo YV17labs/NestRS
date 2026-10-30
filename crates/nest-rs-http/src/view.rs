@@ -25,7 +25,7 @@ use crate::response::Response;
 ///
 /// #[async_trait]
 /// impl Guard for SignedBody {
-///     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+///     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
 ///         let request = HttpView::of(cx)?.request_mut();
 ///         let body = request
 ///             .take_body()

@@ -5,7 +5,6 @@ use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use nest_rs_core::{Layer, UnitContext, UnitView};
 
@@ -51,18 +50,6 @@ impl PrincipalClaim {
 /// The future a guard's check returns, as `#[async_trait]` writes an override.
 type Check<'fut> = Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>;
 
-/// What a guard overriding neither entry answers: admitted, with nothing
-/// allocated — a box of a zero-sized future holds no memory.
-struct Admit;
-
-impl Future for Admit {
-    type Output = Result<(), Denial>;
-
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(Ok(()))
-    }
-}
-
 /// A guard: decides whether a unit of work may run, before anything an app or
 /// a package adds around it.
 ///
@@ -72,9 +59,11 @@ impl Future for Admit {
 /// [`check_http`](Self::check_http) runs it unless the guard overrides it. A
 /// guard overrides `check_http` only where the request differs from the unit:
 /// it reads the request itself, answers in its protocol's own words, or what is
-/// missing at the request means something else than at the unit. Then declare
-/// each edge it checks with [`GuardFor`]: a decorator binds a guard only on the
-/// edges it declares.
+/// missing at the request means something else than at the unit. `check` has
+/// no default, so no guard admits a unit it never decided: one whose decision
+/// is the request's alone, made in `check_http`, admits the units that request
+/// carries in one visible `Ok(())`. Then declare each edge it checks with
+/// [`GuardFor`]: a decorator binds a guard only on the edges it declares.
 ///
 /// A refusal is a [`Denial`], filed by the edge that ran the guard — one line,
 /// on the guard's [`target`](Self::target), carrying the denial's
@@ -107,17 +96,14 @@ pub trait Guard: Layer {
     }
 
     /// The guard's decision on a unit; [`UnitContext::edge`] and
-    /// [`UnitContext::switch_to`] say which. The default admits.
+    /// [`UnitContext::switch_to`] say which. It has no default: a guard
+    /// admitting a unit says so.
     fn check<'s, 'c, 'u, 'fut>(&'s self, cx: &'c mut UnitContext<'u>) -> Check<'fut>
     where
         's: 'fut,
         'c: 'fut,
         'u: 'fut,
-        Self: 'fut,
-    {
-        let _ = cx;
-        Box::pin(Admit)
-    }
+        Self: 'fut;
 
     /// The chain phase this guard declares. Boot-time validation refuses a
     /// chain listing an [`Authentication`](GuardPhase::Authentication) guard
@@ -154,12 +140,16 @@ pub trait Guard: Layer {
     /// office network, on every route:
     ///
     /// ```
-    /// # use nest_rs_core::Layer;
-    /// # use nest_rs_guards::Guard;
+    /// # use nest_rs_core::{Layer, UnitContext};
+    /// # use nest_rs_guards::{Denial, Guard, async_trait};
     /// struct OfficeOnly;
     /// # impl Layer for OfficeOnly {}
     ///
+    /// #[async_trait]
     /// impl Guard for OfficeOnly {
+    ///     # async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    ///     #     Err(Denial::forbidden("outside the office network"))
+    ///     # }
     ///     fn denial_statuses(&self, _public: bool) -> &'static [u16] {
     ///         &[403]
     ///     }
@@ -188,10 +178,11 @@ pub trait Guard: Layer {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not declare that it checks `{V}` units",
     label = "bound at a site whose units are `{V}`",
-    note = "`check` admits by default and `check_http` runs it, so a guard bound here without its \
-            decision would pass every unit silently",
-    note = "write the guard's decision in `Guard::check` (overriding `Guard::check_http` only where \
-            the HTTP request differs from the unit), then declare `impl GuardFor<{V}> for {Self} {{}}`"
+    note = "a guard's `check` decides the units it declares; bound where its units are another \
+            edge's, it would run a decision written for a view they do not have",
+    note = "write the guard's decision for `{V}` units in `Guard::check` (overriding \
+            `Guard::check_http` only where the HTTP request differs from the unit), then declare \
+            `impl GuardFor<{V}> for {Self} {{}}`"
 )]
 pub trait GuardFor<V: UnitView>: Guard {}
 
@@ -249,7 +240,7 @@ mod tests {
     use nest_rs_core::{Handler, Posture};
 
     use super::*;
-    use crate::testing::run_counting;
+    use crate::testing::run;
 
     struct Socket;
 
@@ -266,12 +257,6 @@ mod tests {
         posture: Posture::Gated,
         meta: MetaLevels::default,
     });
-
-    /// Overrides neither entry.
-    struct Neither;
-
-    impl Layer for Neither {}
-    impl Guard for Neither {}
 
     /// Overrides both, as an app writes them.
     struct Both;
@@ -293,27 +278,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_guard_overriding_neither_entry_admits_without_allocating() {
-        let mut view = Socket;
-        let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
-        let guard: Arc<dyn Guard> = Arc::new(Neither);
-
-        let (http, made) = run_counting(|| guard.as_ref().check_http(&mut cx));
-        assert!(http.is_ok());
-        assert_eq!(made, 0, "the default HTTP entry allocates nothing");
-
-        let (unit, made) = run_counting(|| guard.as_ref().check(&mut cx));
-        assert!(unit.is_ok());
-        assert_eq!(made, 0, "the default unit entry allocates nothing");
-    }
-
     /// Refuses a caller outside the office network, wherever it is bound.
     struct OfficeOnly;
 
     impl Layer for OfficeOnly {}
 
+    #[async_trait]
     impl Guard for OfficeOnly {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Err(Denial::forbidden("outside the office network"))
+        }
+
         fn denial_statuses(&self, _public: bool) -> &'static [u16] {
             &[403]
         }
@@ -321,7 +296,7 @@ mod tests {
 
     #[test]
     fn a_guard_declaring_no_statuses_answers_an_authentication_guard_s_off_a_public_route() {
-        let guard: Arc<dyn Guard> = Arc::new(Neither);
+        let guard: Arc<dyn Guard> = Arc::new(OneDecision);
         assert_eq!(guard.denial_statuses(false), [401, 403]);
         assert!(
             guard.denial_statuses(true).is_empty(),
@@ -354,7 +329,7 @@ mod tests {
         let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
         let guard: Arc<dyn Guard> = Arc::new(OneDecision);
 
-        let (http, _) = run_counting(|| guard.as_ref().check_http(&mut cx));
+        let http = run(|| guard.as_ref().check_http(&mut cx));
         assert_eq!(
             http.map_err(|denial| denial.http_status()),
             Err(403),
@@ -386,7 +361,7 @@ mod tests {
         let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
         let guard: Arc<dyn Guard> = Arc::new(RequiresAuthor);
 
-        let (unit, _) = run_counting(|| guard.as_ref().check(&mut cx));
+        let unit = run(|| guard.as_ref().check(&mut cx));
         let denial = unit.expect_err("an unwired guard fails closed");
         assert_eq!(denial.http_status(), 500);
         assert_eq!(denial.reason(), Some(crate::denial::MISSING_AMBIENT));
@@ -394,7 +369,7 @@ mod tests {
         assert!(chain.contains(std::any::type_name::<Author>()), "{chain}");
 
         cx.attach(Author);
-        let (unit, _) = run_counting(|| guard.as_ref().check(&mut cx));
+        let unit = run(|| guard.as_ref().check(&mut cx));
         assert!(unit.is_ok(), "attached earlier in the stage, it is there");
     }
 
@@ -404,9 +379,9 @@ mod tests {
         let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
         let guard: Arc<dyn Guard> = Arc::new(Both);
 
-        let (http, _) = run_counting(|| guard.check_http(&mut cx));
+        let http = run(|| guard.check_http(&mut cx));
         assert_eq!(http.map_err(|d| d.http_status()), Err(401));
-        let (unit, _) = run_counting(|| guard.check(&mut cx));
+        let unit = run(|| guard.check(&mut cx));
         assert_eq!(unit.map_err(|d| d.http_status()), Err(403));
     }
 }

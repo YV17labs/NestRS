@@ -11,7 +11,7 @@
 //!
 //! #[async_trait]
 //! impl Guard for MyGuard {
-//!     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+//!     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
 //!         if cx.reflector().is_public() {
 //!             return Ok(());
 //!         }

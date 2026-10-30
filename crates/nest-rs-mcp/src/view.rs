@@ -39,7 +39,7 @@ use crate::operation::McpOperationKind;
 ///
 /// #[async_trait]
 /// impl Guard for ApiKeyGuard {
-///     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+///     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
 ///         match HttpView::of(cx)?.request().header("x-api-key") {
 ///             Some(_) => Ok(()),
 ///             None => Err(Denial::unauthorized("an API key is required")),

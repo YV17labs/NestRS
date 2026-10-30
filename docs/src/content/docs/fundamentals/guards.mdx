@@ -63,7 +63,7 @@ pub struct RateLimitGuard;
 
 #[async_trait]
 impl Guard for RateLimitGuard {
-    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         if over_quota(HttpView::of(cx)?.request()) {
             return Err(Denial::rate_limited(60, "rate limited").with_reason("over_quota"));
         }
@@ -86,12 +86,13 @@ a module that builds it.
 
 The trait carries two entries, both over the unit being dispatched, and a
 guard writes its decision once: `check` runs on every unit, and `check_http`
-runs `check` unless the guard overrides it. Override `check_http` only where
-the HTTP request differs from the unit — the guard reads the request itself,
-as `RateLimitGuard` does, answers in its protocol's own words, or what is
-missing at the request means something else than at the unit. A guard that
-writes neither admits — that means "doesn't apply here", not "skip
-security". Other guards on the same route still run.
+runs `check` unless the guard overrides it. `check` has no default, so every
+guard writes its decision: `RateLimitGuard` reads the HTTP request in it, and
+binds on HTTP alone. Override `check_http` only where the HTTP request differs
+from the unit — the guard answers in its protocol's own words, or what is
+missing at the request means something else than at the unit. A guard whose
+decision is the request's alone admits the units that request carries with an
+explicit `Ok(())` in `check`: no guard admits by default.
 
 | Entry | Runs on | Reads it through |
 |-------|---------|------------------|
@@ -102,7 +103,7 @@ security". Other guards on the same route still run.
 #[async_trait]
 pub trait Guard: Layer {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> { self.check(cx).await }
-    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> { Ok(()) }
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial>;
     fn target(&self) -> &'static str { "nest_rs::layers" }
 }
 ```
@@ -111,8 +112,7 @@ Whatever the edge, the [execution context](/fundamentals/execution-context/)
 answers the same questions: `cx.reflector()` reads what the site declared
 (`#[meta]`, its posture), `cx.ambient::<T>()` what an earlier guard attached,
 `cx.attach(value)` hands a value to everything after the guard, and
-`cx.edge()` and `cx.handler()` say which unit this is. A guard overriding
-neither entry costs nothing: it is answered without an allocation.
+`cx.edge()` and `cx.handler()` say which unit this is.
 
 ### A guard that needs an earlier one's work
 
@@ -336,7 +336,7 @@ impl AmbientValue for Tenant {}
 
 #[async_trait]
 impl Guard for TenantGuard {
-    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let tenant = HttpView::of(cx)?
             .request()
             .header("x-tenant")
@@ -426,6 +426,8 @@ impl Guard for ApiKeyGuard {
         }
         // ...standard policy...
     }
+
+    // … and `check`, its decision on each operation the request carries
 }
 ```
 
@@ -460,7 +462,7 @@ pub struct WebhookSignature {
 
 #[async_trait]
 impl Guard for WebhookSignature {
-    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         if self.config.webhook_secret.is_empty() {
             return Err(Denial::internal("no webhook secret is configured"));
         }

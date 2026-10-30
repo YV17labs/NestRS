@@ -445,6 +445,10 @@ impl Guard for AcmeUpgrade {
         }
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<nest_rs_ws::nest_rs_http::HttpView> for AcmeUpgrade {}

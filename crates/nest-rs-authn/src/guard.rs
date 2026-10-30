@@ -166,6 +166,12 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         }
     }
 
+    /// Its decision is the request's: a unit reaches this check only from the
+    /// pool, whose `check_http` already authenticated the request carrying it.
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
     fn phase(&self) -> GuardPhase {
         GuardPhase::Authentication
     }

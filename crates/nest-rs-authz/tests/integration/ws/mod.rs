@@ -43,6 +43,10 @@ impl Guard for RoleUpgrade {
         }
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for RoleUpgrade {}

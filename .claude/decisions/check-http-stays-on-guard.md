@@ -75,3 +75,29 @@ Refused: a `#[guard]` attribute emitting the injectable, the `Layer` and the
 `GuardFor` impls. It reads as `#[interceptor]`, which a module brings to every
 unit it serves, and a module-brought guard would decide posture outside
 `#[use_guards]`; `#[derive(Layer)]` drops the empty impl instead.
+
+## 2026-10-30 — `check` has no default: no guard admits a unit it never decided
+
+Agreed by the owner with the identity audit's breaking changes ("Tout faire",
+2026-10-28); the gap the 2026-10-29 entry left on the in-band views closes
+fail closed, at the type. `check` lost its admitting default, so a guard
+declaring `GuardFor<GraphqlView>`, `GuardFor<WsView>` or `GuardFor<McpView>`
+and writing only `check_http` no longer compiles, and neither does an empty
+`impl Guard for X {}`, which passed everything on every edge. A guard whose
+decision is the request's alone — `AuthnGuard`, `ClientAuthenticationGuard` —
+admits the units the request carries with one visible `Ok(())` in `check`,
+the mirror of a unit-only guard admitting the request in `check_http`.
+
+What the 2026-10-12 entry refused is not this: four `check_*` traits without
+defaults would need a container registration per edge. One required method
+on `Guard` keeps one registration and `Arc<dyn Guard>` at every site.
+
+Refused: `check` defaulting to a denial. It closes the gap at runtime only,
+fails a pooled request guard on every in-band unit until someone reads the
+`500`, and holds less than the compiler does. Refused too: detecting at a
+site whether `check` was overridden — Rust cannot tell, and a marker the
+developer writes would be the same visible line, weaker.
+
+What it costs: an admitting `check` is an `#[async_trait]` future, so a
+request-only guard in the pool allocates once per in-band unit where the
+default allocated nothing; on HTTP, `check_http` still runs one future.

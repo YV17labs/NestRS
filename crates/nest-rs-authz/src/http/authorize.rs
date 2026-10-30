@@ -64,7 +64,7 @@ use crate::{Ability, ActionMarker, Subject};
 /// # impl Layer for Grants {}
 /// # #[async_trait]
 /// # impl Guard for Grants {
-/// #     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> std::result::Result<(), Denial> {
+/// #     async fn check(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> std::result::Result<(), Denial> {
 /// #         let mut ab = AbilityBuilder::new();
 /// #         if nest_rs_http::HttpView::of(cx)?.request().header("x-admin").is_some() {
 /// #             ab.can(Action::Manage, users::Entity);

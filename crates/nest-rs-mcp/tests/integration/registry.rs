@@ -1374,6 +1374,13 @@ impl nest_rs_guards::Guard for AddressWitness {
             .push(address);
         Ok(())
     }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> Result<(), nest_rs_guards::Denial> {
+        Ok(())
+    }
 }
 
 impl nest_rs_guards::GuardFor<nest_rs_http::HttpView> for AddressWitness {}

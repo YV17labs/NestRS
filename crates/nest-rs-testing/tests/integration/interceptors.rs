@@ -54,6 +54,10 @@ impl Guard for DenyGuard {
     async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("denied"))
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for DenyGuard {}
@@ -487,6 +491,10 @@ impl Layer for AttachPrincipal {}
 impl Guard for AttachPrincipal {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         cx.attach(Principal("alice"));
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }

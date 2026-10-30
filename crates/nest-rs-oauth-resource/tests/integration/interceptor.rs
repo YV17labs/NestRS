@@ -109,6 +109,10 @@ impl Guard for TokenTooNarrow {
     async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::insufficient_scope([REQUIRED], "forbidden"))
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<nest_rs_http::HttpView> for TokenTooNarrow {}
@@ -124,6 +128,10 @@ impl Layer for NeverAllowed {}
 impl Guard for NeverAllowed {
     async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("forbidden"))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
@@ -291,6 +299,10 @@ impl Guard for ScopeOutsideTheGrammar {
             "forbidden",
         ))
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<nest_rs_http::HttpView> for ScopeOutsideTheGrammar {}
@@ -372,6 +384,10 @@ impl Guard for ExpiredCredential {
     async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         // What `AuthnGuard` returns for an expired token.
         Err(Denial::invalid_credential("invalid token", "invalid_token"))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 

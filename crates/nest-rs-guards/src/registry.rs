@@ -21,18 +21,28 @@ pub type GuardSpec = LayerSpec<dyn Guard>;
 /// guards run on every request across all transports.
 ///
 /// ```
-/// # use nest_rs_core::{App, Layer, injectable, module};
-/// # use nest_rs_guards::{AppBuilderGuardsExt, Guard, guard};
+/// # use nest_rs_core::{App, Layer, UnitContext, injectable, module};
+/// # use nest_rs_guards::{AppBuilderGuardsExt, Denial, Guard, async_trait, guard};
 /// # #[injectable]
 /// # #[derive(Default)]
 /// # struct AuthnGuard;
 /// # impl Layer for AuthnGuard {}
-/// # impl Guard for AuthnGuard {}
+/// # #[async_trait]
+/// # impl Guard for AuthnGuard {
+/// #     async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+/// #         Ok(())
+/// #     }
+/// # }
 /// # #[injectable]
 /// # #[derive(Default)]
 /// # struct AuthzGuard;
 /// # impl Layer for AuthzGuard {}
-/// # impl Guard for AuthzGuard {}
+/// # #[async_trait]
+/// # impl Guard for AuthzGuard {
+/// #     async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+/// #         Ok(())
+/// #     }
+/// # }
 /// # #[module(providers = [AuthnGuard, AuthzGuard])]
 /// # struct AppModule;
 /// # #[nest_rs_core::main]

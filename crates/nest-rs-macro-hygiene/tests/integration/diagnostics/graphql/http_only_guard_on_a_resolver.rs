@@ -1,8 +1,8 @@
-//! A guard bound where it does not check is the fail-open this bound closes.
+//! A guard bound where it does not check is refused at the binding.
 //!
-//! `Guard::check` admits by default, so without the `GuardFor<GraphqlView>`
-//! bound an HTTP-only guard beside a resolver compiled, read as a protection,
-//! and passed every operation.
+//! An HTTP-only guard's decision reads the request, which a field does not
+//! carry: without the `GuardFor<GraphqlView>` bound it would compile beside a
+//! resolver, read as a protection, and run on a view it was not written for.
 
 use nest_rs::core::{Layer, UnitContext, injectable};
 use nest_rs::graphql::{operations, resolver};
@@ -18,6 +18,10 @@ impl Layer for HttpOnlyGuard {}
 #[async_trait]
 impl Guard for HttpOnlyGuard {
     async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }

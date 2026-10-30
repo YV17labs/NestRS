@@ -529,8 +529,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         arms.push(quote! { #(#cfgs)* #event => { #arm_body } });
     }
 
-    // `Guard::check` admits by default, so each per-message guard must declare
-    // `GuardFor<WsView>`. Gateway-scope guards run on the HTTP upgrade instead.
+    // Gateway-scope guards run on the HTTP upgrade, so they owe `HttpView`.
     let capability_bounds = guard_capability_bounds(
         conditional(&message_guards),
         quote!(::nest_rs_guards::GuardFor<::nest_rs_ws::WsView>),

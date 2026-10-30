@@ -85,9 +85,11 @@ pub fn split_at_covered(pool: Guards, covers: &[TypeId]) -> (Guards, Guards) {
 mod tests {
     use std::sync::Arc;
 
-    use nest_rs_core::Layer;
+    use async_trait::async_trait;
+    use nest_rs_core::{Layer, UnitContext};
 
     use super::*;
+    use crate::Denial;
 
     struct First;
     struct Covered;
@@ -98,7 +100,12 @@ mod tests {
     macro_rules! admit_all {
         ($($guard:ident),*) => {$(
             impl Layer for $guard {}
-            impl Guard for $guard {}
+            #[async_trait]
+            impl Guard for $guard {
+                async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+                    Ok(())
+                }
+            }
         )*};
     }
 

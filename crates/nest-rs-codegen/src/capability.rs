@@ -1,10 +1,10 @@
 //! The compile-time bound an impl-half decorator emits for every guard declared
 //! at its site.
 //!
-//! `Guard::check_http` and `Guard::check` admit by default, so a guard bound at
-//! an edge it does not check would compile and pass every unit. Every declared
-//! guard is asserted to implement `GuardFor<V>`, `V` the view of the units the
-//! site dispatches.
+//! A guard's `check` is the decision it wrote for the units it declares; bound
+//! at an edge it does not check, it would run that decision on a view the units
+//! do not have. Every declared guard is asserted to implement `GuardFor<V>`, `V`
+//! the view of the units the site dispatches.
 
 use std::collections::HashSet;
 

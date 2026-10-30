@@ -185,6 +185,10 @@ impl Guard for Refusing {
         GUARD_SAW_UNOPENED_UNIT.store(unopened, Ordering::SeqCst);
         Err(Denial::forbidden("refused before the handler"))
     }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for Refusing {}

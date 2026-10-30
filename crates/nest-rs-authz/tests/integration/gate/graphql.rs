@@ -41,7 +41,14 @@ struct PassGuard;
 impl Layer for PassGuard {}
 
 #[async_trait]
-impl Guard for PassGuard {}
+impl Guard for PassGuard {
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
 
 /// Stands in for the `AbilityGuard` slot: reads the caller's role from a
 /// header and builds the matching `Ability` onto the request. An admin gets a
@@ -75,6 +82,10 @@ impl Guard for AbilityInjector {
             Some(_) => b.build(),
         };
         cx.attach(ability.expect("valid test ability"));
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }

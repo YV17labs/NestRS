@@ -58,6 +58,10 @@ impl Guard for NarrowToken {
         cx.attach(too_narrow());
         Ok(())
     }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
 }
 
 impl GuardFor<HttpView> for NarrowToken {}

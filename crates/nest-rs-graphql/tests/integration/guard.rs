@@ -678,3 +678,131 @@ mod owned_chain {
         );
     }
 }
+
+/// A pooled guard deciding on the HTTP request: in `check_http`, its `check`
+/// admitting, it gates the `/graphql` request and every field it carries
+/// answers; in `check`, it runs on each field too, which has no HTTP view.
+mod request_decided {
+    use nest_rs_core::{Layer, UnitContext, injectable, module};
+    use nest_rs_graphql::{GraphqlModule, async_trait, operations, resolver};
+    use nest_rs_guards::{Denial, Guard, GuardSpec, guard};
+    use nest_rs_http::{HttpView, StatusCode};
+    use nest_rs_testing::{LogCapture, TestApp, TestResponse};
+    use serde_json::{Value, json};
+
+    fn keyed(cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        match HttpView::of(cx)?.request().header("x-api-key") {
+            Some(_) => Ok(()),
+            None => Err(Denial::unauthorized("missing key")),
+        }
+    }
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct KeyAtTheRequest;
+
+    #[async_trait]
+    impl Guard for KeyAtTheRequest {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct KeyAtTheUnit;
+
+    #[async_trait]
+    impl Guard for KeyAtTheUnit {
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+    }
+
+    #[resolver]
+    struct PingResolver;
+
+    #[operations]
+    impl PingResolver {
+        #[query]
+        #[public]
+        async fn ping(&self) -> i32 {
+            1
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule::for_root(None)],
+        providers = [KeyAtTheRequest, KeyAtTheUnit, PingResolver],
+    )]
+    struct KeyModule;
+
+    async fn boot(pool: GuardSpec) -> TestApp {
+        TestApp::builder()
+            .module::<KeyModule>()
+            .use_guards_global([pool])
+            .build()
+            .await
+            .expect("boots")
+    }
+
+    async fn ping(app: &TestApp, key: Option<&str>) -> TestResponse {
+        let request = app.http().post("/graphql");
+        let request = match key {
+            Some(key) => request.header("x-api-key", key),
+            None => request,
+        };
+        request
+            .body_json(&json!({ "query": "{ ping }" }))
+            .send()
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_pooled_guard_deciding_in_check_http_gates_the_request_and_admits_its_fields() {
+        let app = boot(guard::<KeyAtTheRequest>()).await;
+
+        let admitted = ping(&app, Some("k")).await;
+        admitted.assert_status(StatusCode::OK);
+        let body: Value = admitted.json().await.value().deserialize();
+        assert_eq!(body, json!({ "data": { "ping": 1 } }));
+
+        ping(&app, None)
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_pooled_guard_reading_the_request_in_check_refuses_each_field_opaquely() {
+        let logs = LogCapture::install();
+        let app = boot(guard::<KeyAtTheUnit>()).await;
+
+        for _ in 0..2 {
+            let refused = ping(&app, Some("k")).await;
+            refused.assert_status(StatusCode::OK);
+            let body: Value = refused.json().await.value().deserialize();
+            assert_eq!(body["data"], Value::Null, "{body}");
+            assert_eq!(
+                body["errors"][0]["extensions"]["code"], "INTERNAL",
+                "{body}"
+            );
+        }
+
+        let viewless = logs.expect_one(
+            "nest_rs::http",
+            "an HTTP guard entry ran on a unit with no HTTP view",
+        );
+        assert_eq!(viewless.level, "error");
+        let denials = logs.find("nest_rs::layers", "guard denied the operation");
+        assert_eq!(denials.len(), 2, "each refused field is filed");
+        for denial in denials {
+            assert_eq!(denial.level, "error");
+            assert_eq!(denial.field("status").as_deref(), Some("500"));
+            assert_eq!(denial.field("unit").as_deref(), Some("graphql.field"));
+        }
+    }
+}

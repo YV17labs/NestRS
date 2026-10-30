@@ -242,7 +242,6 @@ fn emit_fk_loaders(
             quote! {
                 impl ::nest_rs_seaorm::graphql::RelatedTo<#target> for Entity {
                     type Loader = #loader_ident;
-                    type Wire = #wire;
                 }
             }
         });
@@ -347,7 +346,6 @@ fn emit_fk_loaders(
 
             impl ::nest_rs_seaorm::graphql::RelatedTo<#target, #via_ident> for Entity {
                 type Loader = #loader_ident;
-                type Wire = #wire;
             }
 
             #sole_impl
@@ -510,7 +508,7 @@ fn emit_has_many_method(
         ) -> #root::Result<
             #root::connection::Connection<
                 ::std::string::String,
-                <#target as #related>::Wire,
+                <#target as ::nest_rs_seaorm::Exposed>::Wire,
             >,
         > {
             let __after = ::nest_rs_seaorm::__private::graphql_page_cursor(

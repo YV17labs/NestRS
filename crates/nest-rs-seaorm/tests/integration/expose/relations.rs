@@ -123,6 +123,31 @@ fn a_sole_foreign_key_still_resolves_without_naming_a_column() {
     );
 }
 
+/// A child's page answers the wire type its own `#[expose]` names: the
+/// relation reads it off `Exposed`, never off a second association.
+#[test]
+fn a_child_of_a_relation_answers_the_wire_type_its_own_expose_names() {
+    use nest_rs_seaorm::Exposed;
+    use nest_rs_seaorm::graphql::RelatedTo;
+    use std::any::TypeId;
+
+    fn wire_of<Child, Parent, Via>() -> TypeId
+    where
+        Child: RelatedTo<Parent, Via>,
+    {
+        TypeId::of::<<Child as Exposed>::Wire>()
+    }
+
+    assert_eq!(
+        wire_of::<tickets::Entity, people::Entity, tickets::__ByReporterId>(),
+        TypeId::of::<tickets::Ticket>(),
+    );
+    assert_eq!(
+        wire_of::<notes::Entity, people::Entity, nest_rs_seaorm::graphql::SoleForeignKey>(),
+        TypeId::of::<notes::Note>(),
+    );
+}
+
 pub(super) mod notes {
     use super::*;
 

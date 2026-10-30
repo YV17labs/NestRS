@@ -102,7 +102,8 @@ pub trait PkLoadable: Exposed {
 pub struct SoleForeignKey;
 
 /// "This entity is the child of `Parent`, fetched in batches by its
-/// foreign-key column." Implemented by `#[expose]` on the entity owning the FK.
+/// foreign-key column." Implemented by `#[expose]` on the entity owning the FK;
+/// the wire type a page of children answers is the entity's [`Exposed::Wire`].
 ///
 /// `Via` names *which* foreign key: one `By<PascalColumn>` marker per
 /// `belongs_to`, plus [`SoleForeignKey`] when the child points at that parent
@@ -113,9 +114,7 @@ pub struct SoleForeignKey;
     note = "an auto-resolved `has_many` reaches its children through the child's own `#[sea_orm(belongs_to, from = \"…\")]`",
     note = "two `belongs_to` columns pointing at one parent leave no default — name the one this relation follows with `#[expose(via = \"<fk_column>\")]` on the `HasMany` field"
 )]
-pub trait RelatedTo<Parent: ?Sized, Via: ?Sized = SoleForeignKey> {
+pub trait RelatedTo<Parent: ?Sized, Via: ?Sized = SoleForeignKey>: Exposed {
     /// The FK loader that batches this child by its foreign-key column.
     type Loader: Send + Sync + 'static;
-    /// The GraphQL output type for this child entity.
-    type Wire: OutputType + Send + Sync + 'static;
 }

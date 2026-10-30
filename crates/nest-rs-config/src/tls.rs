@@ -1,5 +1,6 @@
 //! [`ClientTls`] — what a TLS client the framework opens trusts and presents,
-//! read under its namespace's `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY`;
+//! read under its namespace's `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY`, or the
+//! variables a specification names for them ([`TlsNames`]);
 //! [`TlsIdentity`], a certificate chain and the key it certifies; and
 //! [`crypto_provider`], the process's rustls provider.
 //!
@@ -77,17 +78,21 @@ impl ClientTls {
     /// certificate and its key move as one: half a pair is refused naming what
     /// was set and both spellings of what is missing.
     pub fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let authorities = match env.material("TLS_CA_CERT")? {
-            Some(pem) => Some(pem.value),
-            None => base.authorities,
-        };
+        let authorities = env.material("TLS_CA_CERT")?.map(|pem| pem.value);
         let identity = match (env.material("TLS_CERT")?, env.material("TLS_KEY")?) {
             (Some(cert), Some(key)) => Some(TlsIdentity::new(cert.value, key.value)),
-            (None, None) => base.identity,
+            (None, None) => None,
             (Some(cert), None) => return Err(half_an_identity(env, &cert, "TLS_KEY")),
             (None, Some(key)) => return Err(half_an_identity(env, &key, "TLS_CERT")),
         };
-        Ok(Self::new(authorities, identity))
+        Ok(base.overlaid(authorities, identity))
+    }
+
+    /// `authorities` and `identity`, read elsewhere than a namespace — the
+    /// variables a specification names — over `self`, per field: what is
+    /// `None` keeps `self`'s.
+    pub fn overlaid(self, authorities: Option<Material>, identity: Option<TlsIdentity>) -> Self {
+        Self::new(authorities.or(self.authorities), identity.or(self.identity))
     }
 
     /// Whether nothing is set: the system's authorities trusted, no certificate
@@ -101,10 +106,11 @@ impl ClientTls {
     /// cannot sign with, a certificate that is not the key's — naming `env`'s
     /// variables and never quoting the PEM, whose parser errors carry the line
     /// they choke on.
-    pub fn check(&self, env: &ConfigService) -> Result<()> {
+    pub fn check(&self, env: &dyn TlsNames) -> Result<()> {
         if let Some(authorities) = &self.authorities {
-            let refuse =
-                |reason: &str| ConfigError::parse(named(env, "TLS_CA_CERT", authorities), reason);
+            let refuse = |reason: &str| {
+                ConfigError::parse(env.named(TlsSetting::Authorities, authorities), reason)
+            };
             #[expect(
                 clippy::map_err_ignore,
                 reason = "the PEM parser's error quotes the line it choked on"
@@ -141,12 +147,12 @@ impl ClientTls {
     /// Refuse any material beside a connection `declared_by` declares
     /// plaintext — a variable whose scheme does not encrypt — where it would go
     /// unused and the connection unencrypted.
-    pub fn refuse_beside_plaintext(&self, env: &ConfigService, declared_by: &str) -> Result<()> {
-        let Some((key, material)) = self.first_set() else {
+    pub fn refuse_beside_plaintext(&self, env: &dyn TlsNames, declared_by: &str) -> Result<()> {
+        let Some((setting, material)) = self.first_set() else {
             return Ok(());
         };
         Err(ConfigError::parse(
-            named(env, key, material),
+            env.named(setting, material),
             format!(
                 "is set beside {declared_by}, which declares a connection in plaintext, where no \
                  certificate is checked or presented: declare an encrypted connection in \
@@ -159,16 +165,16 @@ impl ClientTls {
     /// Refuse an identity for a client that cannot present one, naming `client`
     /// — the certificate would go unused, and the peer would refuse a client it
     /// required one of.
-    pub fn refuse_identity(&self, env: &ConfigService, client: &'static str) -> Result<()> {
+    pub fn refuse_identity(&self, env: &dyn TlsNames, client: &'static str) -> Result<()> {
         let Some(identity) = &self.identity else {
             return Ok(());
         };
         Err(ConfigError::parse(
-            named(env, "TLS_CERT", &identity.cert),
+            env.named(TlsSetting::Certificate, &identity.cert),
             format!(
                 "is set, but {client} cannot present a client certificate, so it would go \
                  unused: remove it and {}",
-                env.spellings("TLS_KEY"),
+                env.spellings(TlsSetting::Key),
             ),
         ))
     }
@@ -289,27 +295,27 @@ impl ClientTls {
         })
     }
 
-    /// The first piece of material set, by the key it is read under.
-    fn first_set(&self) -> Option<(&'static str, &Material)> {
+    /// The first piece of material set, by the setting it is read under.
+    fn first_set(&self) -> Option<(TlsSetting, &Material)> {
         self.authorities
             .as_ref()
-            .map(|authorities| ("TLS_CA_CERT", authorities))
+            .map(|authorities| (TlsSetting::Authorities, authorities))
             .or_else(|| {
                 self.identity
                     .as_ref()
-                    .map(|identity| ("TLS_CERT", &identity.cert))
+                    .map(|identity| (TlsSetting::Certificate, &identity.cert))
             })
     }
 
-    /// Every setting holding material, both spellings each.
-    fn set_spellings(&self, env: &ConfigService) -> String {
+    /// Every setting holding material, every spelling each.
+    fn set_spellings(&self, env: &dyn TlsNames) -> String {
         let mut set = Vec::new();
         if self.authorities.is_some() {
-            set.push(env.spellings("TLS_CA_CERT"));
+            set.push(env.spellings(TlsSetting::Authorities));
         }
         if self.identity.is_some() {
-            set.push(env.spellings("TLS_CERT"));
-            set.push(env.spellings("TLS_KEY"));
+            set.push(env.spellings(TlsSetting::Certificate));
+            set.push(env.spellings(TlsSetting::Key));
         }
         set.join(" and ")
     }
@@ -352,7 +358,7 @@ pub struct ReqwestTls {
 /// conversion every reqwest client the framework opens builds from, async or
 /// blocking — refused naming `env`'s variables, never quoting the PEM.
 #[cfg(feature = "reqwest")]
-pub fn reqwest_tls(tls: &ClientTls, env: &ConfigService) -> Result<ReqwestTls> {
+pub fn reqwest_tls(tls: &ClientTls, env: &dyn TlsNames) -> Result<ReqwestTls> {
     tls.check(env)?;
     let roots = reqwest::Certificate::from_pem_bundle(tls.authorities_pem()).map_err(|error| {
         let reason = format!(
@@ -360,9 +366,11 @@ pub fn reqwest_tls(tls: &ClientTls, env: &ConfigService) -> Result<ReqwestTls> {
             nest_rs_core::error_message(&error)
         );
         match &tls.authorities {
-            Some(authorities) => ConfigError::parse(named(env, "TLS_CA_CERT", authorities), reason),
+            Some(authorities) => {
+                ConfigError::parse(env.named(TlsSetting::Authorities, authorities), reason)
+            }
             None => ConfigError::parse(
-                env.var_name("TLS_CA_CERT"),
+                env.spellings(TlsSetting::Authorities),
                 format!("is unset, and the system's authorities {reason}"),
             ),
         }
@@ -381,10 +389,10 @@ pub fn reqwest_tls(tls: &ClientTls, env: &ConfigService) -> Result<ReqwestTls> {
             )
             .map_err(|error| {
                 ConfigError::parse(
-                    named(env, "TLS_CERT", &identity.cert),
+                    env.named(TlsSetting::Certificate, &identity.cert),
                     format!(
                         "and {} could not be presented: {}",
-                        named(env, "TLS_KEY", identity.key.expose_secret()),
+                        env.named(TlsSetting::Key, identity.key.expose_secret()),
                         nest_rs_core::error_message(&error)
                     ),
                 )
@@ -456,9 +464,9 @@ pub fn certified_key(
 
 impl PairRefusal {
     /// The refusal of `identity`, naming `env`'s variable for the half refused.
-    fn naming(self, env: &ConfigService, identity: &TlsIdentity) -> ConfigError {
-        let cert = || named(env, "TLS_CERT", &identity.cert);
-        let key = || named(env, "TLS_KEY", identity.key.expose_secret());
+    fn naming(self, env: &dyn TlsNames, identity: &TlsIdentity) -> ConfigError {
+        let cert = || env.named(TlsSetting::Certificate, &identity.cert);
+        let key = || env.named(TlsSetting::Key, identity.key.expose_secret());
         match self {
             Self::CertificateNotPem => ConfigError::parse(cert(), NOT_PEM),
             Self::NoCertificate => ConfigError::parse(cert(), "holds no CERTIFICATE block"),
@@ -492,14 +500,57 @@ const NOT_PEM: &str = "is not valid PEM: each -----BEGIN and -----END line stand
      its own, with intact base64 between them, and a value whose line breaks were collapsed or \
      escaped does not parse";
 
-/// The variable `material` was read from under `key`: its `_FILE` spelling
-/// when a file was read, the inline one otherwise — what a pin in code is
-/// refused under too.
-fn named(env: &ConfigService, key: &str, material: &Material) -> String {
-    if material.path.is_some() {
-        env.var_name(&format!("{key}_FILE"))
-    } else {
-        env.var_name(key)
+/// One piece of a TLS client's material, by the setting that holds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a TLS client trusts authorities and presents a certificate with its key: three \
+              pieces, which TlsNames implementations match whole"
+)]
+pub enum TlsSetting {
+    /// The authorities a peer's certificate must chain to (`TLS_CA_CERT`).
+    Authorities,
+    /// The certificate chain presented to a peer (`TLS_CERT`).
+    Certificate,
+    /// The private key the certificate certifies (`TLS_KEY`).
+    Key,
+}
+
+impl TlsSetting {
+    /// The key a namespace reads it under.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Authorities => "TLS_CA_CERT",
+            Self::Certificate => "TLS_CERT",
+            Self::Key => "TLS_KEY",
+        }
+    }
+}
+
+/// Where a TLS client's material was read, as its refusals name it: a
+/// namespace's `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY` ([`ConfigService`]), or
+/// the variables a specification names for them.
+pub trait TlsNames {
+    /// The variable, or the field in code, `material` was read through for
+    /// `setting`.
+    fn named(&self, setting: TlsSetting, material: &Material) -> String;
+    /// Every spelling of `setting`, as a sentence cites one not refused.
+    fn spellings(&self, setting: TlsSetting) -> String;
+}
+
+impl TlsNames for ConfigService {
+    /// Its `_FILE` spelling when a file was read, the inline one otherwise —
+    /// what a pin in code is refused under too.
+    fn named(&self, setting: TlsSetting, material: &Material) -> String {
+        if material.path.is_some() {
+            self.var_name(&crate::service::file_key(setting.key()))
+        } else {
+            self.var_name(setting.key())
+        }
+    }
+
+    fn spellings(&self, setting: TlsSetting) -> String {
+        ConfigService::spellings(self, setting.key())
     }
 }
 
@@ -575,6 +626,72 @@ mod tests {
         tls.check(&redis())
             .expect_err("the material is refused")
             .to_string()
+    }
+
+    /// The variables a specification names, as a client reading them refuses
+    /// under.
+    struct Specified;
+
+    impl TlsNames for Specified {
+        fn named(&self, setting: TlsSetting, _: &Material) -> String {
+            format!("SPEC_{}", setting.key())
+        }
+
+        fn spellings(&self, setting: TlsSetting) -> String {
+            format!("SPEC_{} (or SPEC_ALL_{})", setting.key(), setting.key())
+        }
+    }
+
+    /// A client reading a specification's variables is refused under them, by
+    /// the same checks a namespace's are.
+    #[test]
+    fn material_is_refused_under_the_names_that_read_it() {
+        let refused = presenting(CLIENT.cert.as_bytes(), OTHER.key.as_bytes())
+            .check(&Specified)
+            .expect_err("the certificate is not the key's")
+            .to_string();
+        assert!(
+            refused.contains("SPEC_TLS_CERT") && refused.contains("SPEC_TLS_KEY"),
+            "{refused}"
+        );
+        assert!(!refused.contains(&var("TLS_CERT")), "{refused}");
+
+        let refused = ClientTls::new(Some(Material::inline(AUTHORITY.pem())), None)
+            .refuse_beside_plaintext(&Specified, "SPEC_ENDPOINT")
+            .expect_err("unused beside plaintext")
+            .to_string();
+        assert!(
+            refused.contains("SPEC_TLS_CA_CERT")
+                && refused.contains("SPEC_ENDPOINT")
+                && refused.contains("SPEC_ALL_TLS_CA_CERT"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn material_read_elsewhere_overlays_the_base_per_field() {
+        let base = presenting(CLIENT.cert.as_bytes(), CLIENT.key.as_bytes());
+        let overlaid = base
+            .clone()
+            .overlaid(Some(Material::inline(AUTHORITY.pem())), None);
+        assert_eq!(overlaid.authorities_pem(), AUTHORITY.pem().as_bytes());
+        assert_eq!(
+            overlaid.identity_pem(),
+            base.identity_pem(),
+            "an identity nothing read keeps the base's"
+        );
+        assert!(ClientTls::default().overlaid(None, None).is_empty());
+    }
+
+    #[test]
+    fn material_from_a_file_keeps_its_path() {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let path = scratch.path().join("authority.pem");
+        std::fs::write(&path, AUTHORITY.pem()).expect("a scratch file");
+        let read = Material::from_file(&path).expect("a regular file");
+        assert_eq!(read.bytes, AUTHORITY.pem().as_bytes());
+        assert_eq!(read.path.as_deref(), Some(path.as_path()));
+        assert!(Material::from_file(&path.with_extension("missing")).is_err());
     }
 
     #[test]

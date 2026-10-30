@@ -60,7 +60,7 @@ pub use service::{ConfigService, spellings, spellings_or_field, var_name, var_na
 pub use setting::Setting;
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
 #[cfg(feature = "tls")]
-pub use tls::{ClientTls, TlsIdentity};
+pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 
 /// The `#[config(namespace = "…")]` decorator — marks a struct as a namespaced,
 /// injectable [`Config`].

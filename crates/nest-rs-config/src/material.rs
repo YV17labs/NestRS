@@ -32,6 +32,15 @@ impl Material {
             path: None,
         }
     }
+
+    /// The file `path` names, read through [`read_material`]: for a variable a
+    /// specification defines as a path, where no `_FILE` spelling exists.
+    pub fn from_file(path: &Path) -> io::Result<Self> {
+        Ok(Self {
+            bytes: read_material(path)?,
+            path: Some(path.to_path_buf()),
+        })
+    }
 }
 
 impl fmt::Debug for Material {

@@ -21,7 +21,7 @@ use crate::error::{
     ScopedLayerError, UnbuiltCause, UngatedDiscoveryError,
 };
 
-pub(crate) use self::__private::{HostLayers, ModuleDescriptor, ProviderDescriptor};
+pub(crate) use self::__private::{HostLayers, HostRequires, ModuleDescriptor, ProviderDescriptor};
 
 /// How a boot error names a dependency whose provider reported no label.
 pub(crate) const UNNAMED_DEPENDENCY: &str = "<unnamed dependency>";
@@ -86,6 +86,17 @@ pub(crate) mod __private {
         pub layers: fn() -> Vec<(TypeId, &'static str)>,
     }
 
+    /// A key one decorator's generated code resolves through the container on
+    /// its host's behalf — the unit of work `#[crud]`'s operations run in —
+    /// submitted by that decorator, so the access graph checks it as a
+    /// dependency of its host, never for scope.
+    pub struct HostRequires {
+        /// The host provider's type.
+        pub host: fn() -> TypeId,
+        /// The container key required, with its label for boot errors.
+        pub requires: fn() -> (TypeId, &'static str),
+    }
+
     /// Per-module descriptor submitted to the link-time registry by `#[module]`.
     pub struct ModuleDescriptor {
         /// `TypeId` of the `#[module]` struct, matched against other modules'
@@ -102,22 +113,91 @@ pub(crate) mod __private {
     }
 }
 
+/// The line to add when a provider depends on `key` and no module the app
+/// imports provides it — submitted by the crate owning `key`'s type, so the
+/// boot's [`MissingDependencyError`] names the module that binds it instead of
+/// the kernel's generic remedy. Text only: it mounts nothing, so it is no
+/// discovery to gate.
+///
+/// A port names its first-party binding for its trait object, and an adapter
+/// the module opening its resource:
+///
+/// ```
+/// use std::any::TypeId;
+/// use std::sync::Arc;
+///
+/// pub trait Mailer: Send + Sync {}
+///
+/// nest_rs_core::inventory::submit! {
+///     nest_rs_core::DependencyRemedy::new(
+///         TypeId::of::<Arc<dyn Mailer>>,
+///         "Import exactly one mailer binding — `acme::SmtpMailerModule` sends over SMTP.",
+///     )
+/// }
+/// ```
+///
+/// One key takes one remedy, its owning crate's.
+pub struct DependencyRemedy {
+    key: fn() -> TypeId,
+    remedy: &'static str,
+}
+
+impl DependencyRemedy {
+    /// `remedy` for the container key `key` — `TypeId::of::<Arc<dyn Port>>`
+    /// for a trait object, the type itself otherwise.
+    pub const fn new(key: fn() -> TypeId, remedy: &'static str) -> Self {
+        Self { key, remedy }
+    }
+}
+
 inventory::collect!(ModuleDescriptor);
 inventory::collect!(HostLayers);
+inventory::collect!(HostRequires);
+inventory::collect!(DependencyRemedy);
 
-/// The layers each provider-hosted site binds, by host, with their labels.
-pub(crate) type BoundLayers = HashMap<TypeId, Vec<(TypeId, &'static str)>>;
+/// What a decorator declares of each host, by host, with the labels: the
+/// layers its sites bind, or the keys its generated code requires.
+pub(crate) type HostDependencies = HashMap<TypeId, Vec<(TypeId, &'static str)>>;
 
-/// Every [`HostLayers`] entry linked into the binary, by host.
-pub(crate) fn bound_layers() -> BoundLayers {
-    let mut by_host = BoundLayers::new();
-    for entry in inventory::iter::<HostLayers>() {
-        by_host
-            .entry((entry.host)())
-            .or_default()
-            .extend((entry.layers)());
+/// What the binary's link-time registries add to the access graph, read once
+/// per boot.
+#[derive(Default)]
+pub(crate) struct LinkedDeclarations {
+    /// Every [`HostLayers`] entry, by host — checked for scope too.
+    pub(crate) layers: HostDependencies,
+    /// Every [`HostRequires`] entry, by host.
+    pub(crate) required: HostDependencies,
+    /// Every [`DependencyRemedy`], by key.
+    pub(crate) remedies: HashMap<TypeId, &'static str>,
+}
+
+impl LinkedDeclarations {
+    /// The entries linked into this binary.
+    pub(crate) fn linked() -> Self {
+        let mut layers = HostDependencies::new();
+        for entry in inventory::iter::<HostLayers>() {
+            layers
+                .entry((entry.host)())
+                .or_default()
+                .extend((entry.layers)());
+        }
+        let mut required = HostDependencies::new();
+        for entry in inventory::iter::<HostRequires>() {
+            required
+                .entry((entry.host)())
+                .or_default()
+                .push((entry.requires)());
+        }
+        let mut remedies = HashMap::new();
+        for entry in inventory::iter::<DependencyRemedy>() {
+            remedies.entry((entry.key)()).or_insert(entry.remedy);
+        }
+        Self {
+            layers,
+            required,
+            remedies,
+        }
     }
-    by_host
 }
 
 /// Provider keys reachable from the running app's module tree — every provider
@@ -246,7 +326,8 @@ pub(crate) fn positions(order: impl IntoIterator<Item = TypeId>) -> HashMap<Type
 /// Pure over its inputs (no link-time registry access). `roots` without a
 /// descriptor terminate a branch, making a hand-written root a no-op. A
 /// provider in `overridden` is never built, so what it injects is not checked;
-/// `bound` holds the layers each provider-hosted site binds, by host.
+/// `linked` holds what each host's decorators declare of it, and the remedy a
+/// crate names for a key no module provides.
 pub(crate) fn validate_access_graph(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
@@ -254,7 +335,7 @@ pub(crate) fn validate_access_graph(
     registered: &HashSet<TypeId>,
     scoped_or_transient: &HashSet<TypeId>,
     overridden: &HashSet<TypeId>,
-    bound: &BoundLayers,
+    linked: &LinkedDeclarations,
 ) -> Result<(), AccessError> {
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
@@ -312,7 +393,12 @@ pub(crate) fn validate_access_graph(
                 }
                 .into());
             }
-            let bound_layers = bound.get(&(p.provider)()).into_iter().flatten().copied();
+            let bound_layers = linked
+                .layers
+                .get(&(p.provider)())
+                .into_iter()
+                .flatten()
+                .copied();
             // A site resolves its layers once, when it composes: a request-scoped one
             // would refuse there naming a missing import, a transient one be shared by
             // every run.
@@ -329,9 +415,16 @@ pub(crate) fn validate_access_graph(
             }
             // A request-scoped provider is what a handler's parameter is for,
             // so it is out of the scope check above.
+            let required = linked
+                .required
+                .get(&(p.provider)())
+                .into_iter()
+                .flatten()
+                .copied();
             let per_request = (p.injects_per_request)()
                 .into_iter()
                 .chain(bound_layers)
+                .chain(required)
                 .map(|(dep, name)| (dep, name, false));
             for (dep, name, optional) in deps.into_iter().chain(per_request) {
                 if global.contains(&dep) || closure_keys.contains(&dep) {
@@ -360,6 +453,7 @@ pub(crate) fn validate_access_graph(
                     module: desc.name,
                     consumer: p.name,
                     dependency: name,
+                    remedy: linked.remedies.get(&dep).copied(),
                 }
                 .into());
             }
@@ -927,7 +1021,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
-            &BoundLayers::new(),
+            &LinkedDeclarations::default(),
         )
         .expect("a dependency on global infrastructure is always reachable");
     }
@@ -970,7 +1064,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
-            &BoundLayers::new(),
+            &LinkedDeclarations::default(),
         )
         .expect("a provider may depend on another provider of the same module");
     }
@@ -1007,7 +1101,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
-            &BoundLayers::new(),
+            &LinkedDeclarations::default(),
         )
         .expect("an imported module's provider is reachable");
     }
@@ -1037,10 +1131,13 @@ mod tests {
             imports: &[|| TypeId::of::<BillingMod>(), || TypeId::of::<UsersMod>()],
             providers: &[],
         };
-        let bound = BoundLayers::from([(
-            TypeId::of::<BillingService>(),
-            vec![(TypeId::of::<UsersService>(), "UsersService")],
-        )]);
+        let bound = LinkedDeclarations {
+            layers: HostDependencies::from([(
+                TypeId::of::<BillingService>(),
+                vec![(TypeId::of::<UsersService>(), "UsersService")],
+            )]),
+            ..LinkedDeclarations::default()
+        };
         let check = |billing: &ModuleDescriptor| {
             validate_access_graph(
                 &[&app, billing, &users],
@@ -1096,7 +1193,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
-            &BoundLayers::new(),
+            &LinkedDeclarations::default(),
         )
         .expect_err("reaching an unimported module must fail");
 
@@ -1137,7 +1234,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
-            &BoundLayers::new(),
+            &LinkedDeclarations::default(),
         )
         .expect_err("a dependency no module provides must fail the boot");
 
@@ -1184,7 +1281,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
-            &BoundLayers::new(),
+            &LinkedDeclarations::default(),
         )
         .expect("a module outside the root's import tree is not validated");
     }
@@ -1198,7 +1295,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
-            &BoundLayers::new(),
+            &LinkedDeclarations::default(),
         )
         .expect("a root with no descriptor validates trivially");
     }

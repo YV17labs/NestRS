@@ -70,13 +70,22 @@ impl MissingAmbientError {
 /// A provider depends on something **no module provides** — not global
 /// infrastructure, not in its import closure, not registered anywhere. Raised
 /// at boot, for lazily- and eagerly-built providers alike.
+///
+/// When the crate owning the dependency's type names the line to add — a
+/// [`DependencyRemedy`](crate::DependencyRemedy), `RedisQueueModule` for the
+/// queue port's producer — the refusal says that line in place of the
+/// kernel's generic one:
+///
+/// ```
+/// let refused = nest_rs_core::MissingDependencyError::new("PostsModule", "PostsService", "dyn JobProducer")
+///     .with_remedy("Import exactly one queue backend's binding.");
+/// assert_eq!(
+///     refused.to_string(),
+///     "unmet dependency: `PostsService` (in module `PostsModule`) depends on `dyn JobProducer`, \
+///      which no module this app imports provides. Import exactly one queue backend's binding.",
+/// );
+/// ```
 #[derive(Debug, Error)]
-#[error(
-    "unmet dependency: `{consumer}` (in module `{module}`) depends on `{dependency}`, but no \
-     module provides it and it is not global infrastructure (a seed or factory output). Add a \
-     provider for `{dependency}` to a module reachable from the root, or seed it at \
-     `App::builder()`."
-)]
 #[non_exhaustive]
 pub struct MissingDependencyError {
     /// Module that owns the consumer whose dependency is unmet.
@@ -85,6 +94,9 @@ pub struct MissingDependencyError {
     pub consumer: &'static str,
     /// The dependency that is registered nowhere and is not global infra.
     pub dependency: &'static str,
+    /// The line to add, as the crate owning the dependency's type names it —
+    /// `None` when no crate names one, and the refusal says the generic remedy.
+    pub remedy: Option<&'static str>,
 }
 
 impl MissingDependencyError {
@@ -99,6 +111,40 @@ impl MissingDependencyError {
             module,
             consumer,
             dependency,
+            remedy: None,
+        }
+    }
+
+    /// The same refusal, naming `remedy` — the line the dependency's owning
+    /// crate prescribes — in place of the generic one.
+    pub const fn with_remedy(self, remedy: &'static str) -> Self {
+        Self {
+            remedy: Some(remedy),
+            ..self
+        }
+    }
+}
+
+impl std::fmt::Display for MissingDependencyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            module,
+            consumer,
+            dependency,
+            remedy,
+        } = self;
+        write!(
+            f,
+            "unmet dependency: `{consumer}` (in module `{module}`) depends on `{dependency}`, "
+        )?;
+        match remedy {
+            Some(remedy) => write!(f, "which no module this app imports provides. {remedy}"),
+            None => write!(
+                f,
+                "but no module provides it and it is not global infrastructure (a seed or \
+                 factory output). Add a provider for `{dependency}` to a module reachable from \
+                 the root, or seed it at `App::builder()`."
+            ),
         }
     }
 }

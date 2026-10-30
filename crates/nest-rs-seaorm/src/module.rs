@@ -26,6 +26,14 @@ pub(crate) const SUBSTRATE_REMEDY: &str = "import `SeaOrmModule::for_root(None)`
                                            `SeaOrmConfig` and opens the one pool every SeaORM \
                                            binding shares";
 
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        TypeId::of::<DatabaseConnection>,
+        "Import `nest_rs::seaorm::SeaOrmModule::for_root(None)`, which resolves `SeaOrmConfig` \
+         and opens the one pool every SeaORM binding shares.",
+    )
+}
+
 /// The SeaORM substrate. Import [`SeaOrmModule::for_root`] once, then the
 /// bindings your app needs beside it — they share the pool it opens.
 pub struct SeaOrmModule;

@@ -121,13 +121,19 @@ pub enum TransactionPolicy {
     Pool,
 }
 
-/// What a boot refusing two unit-of-work bindings tells the reader: a driver's
-/// binding declares `Arc<dyn UnitOfWork>` carrying it
+/// What a boot refusing two unit-of-work bindings, or none, tells the reader:
+/// a driver's binding declares `Arc<dyn UnitOfWork>` carrying it
 /// (`ContainerBuilder::provide_declared_factory`), so two drivers imported
-/// side by side fail the boot naming both.
+/// side by side fail the boot naming both; and a provider needing a unit of
+/// work — one injecting the port, a `#[crud]` host, a route loading a bound
+/// subject — with no binding imported fails it with this line.
 pub const BACKEND_REMEDY: &str = "Import exactly one unit-of-work binding: \
      `nest_rs::seaorm::SeaOrmDatabaseModule` runs every edge's units of work over SeaORM's \
-     executor; with none, a unit runs bare.";
+     executor.";
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(std::any::TypeId::of::<Arc<dyn UnitOfWork>>, BACKEND_REMEDY)
+}
 
 /// Bind the unit of work `factory` builds once `I` is provided, from a driver's
 /// `Module::collect`: as the app's one `Arc<dyn UnitOfWork>`, which every edge

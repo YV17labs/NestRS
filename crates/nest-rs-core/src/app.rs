@@ -13,7 +13,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use crate::access::{
-    Composition, ModuleDescriptor, ProviderOrder, ReachableProviders, bound_layers,
+    Composition, LinkedDeclarations, ModuleDescriptor, ProviderOrder, ReachableProviders,
     dependency_order, provider_order, reachable_descriptors, reachable_provider_ids, scoped_cycle,
     singleton_cycle, validate_access_graph,
 };
@@ -1272,7 +1272,7 @@ fn seal(
         &builder.registered_ids(),
         &builder.scoped_or_transient_ids(),
         &overridden,
-        &bound_layers(),
+        &LinkedDeclarations::linked(),
     )
     .map_err(AccessError::into_anyhow)?;
     let scopes = builder.dynamic_scopes();

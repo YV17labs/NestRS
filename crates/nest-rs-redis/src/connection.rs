@@ -54,6 +54,14 @@ pub(crate) fn connection_remedy<I: Instance>() -> String {
     )
 }
 
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<RedisConnection>,
+        "Import `nest_rs::redis::RedisModule::for_root(None)`, which opens the Redis connection \
+         every binding of the default instance shares.",
+    )
+}
+
 /// How many times one call loads its script, at most: a `SCRIPT FLUSH` or a
 /// failover landing between a load and the call that follows it would
 /// otherwise fail the call.

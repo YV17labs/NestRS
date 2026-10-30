@@ -896,7 +896,96 @@ async fn a_handler_resolving_a_provider_no_module_offers_fails_the_boot_naming_i
             "{}",
             missing.dependency
         );
+        assert_eq!(missing.remedy, None, "no crate names one for it");
+        assert!(
+            missing
+                .to_string()
+                .contains("or seed it at `App::builder()`")
+        );
     }
+}
+
+/// A key whose owning crate names the line to add, as a port names its
+/// binding.
+struct Remedied;
+
+const REMEDIED_REMEDY: &str = "Import `RemediedModule`, which opens it.";
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(TypeId::of::<Remedied>, REMEDIED_REMEDY)
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct RemediedConsumer {
+    #[inject]
+    remedied: Arc<Remedied>,
+}
+
+#[module(providers = [RemediedConsumer])]
+struct RemediedConsumerModule;
+
+#[tokio::test]
+async fn a_missing_dependency_whose_crate_names_a_remedy_is_refused_with_that_line() {
+    for refused in refused_on_both_paths::<RemediedConsumerModule>().await {
+        let missing = refused
+            .downcast::<MissingDependencyError>()
+            .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+        assert_eq!(missing.consumer, "RemediedConsumer");
+        assert_eq!(missing.remedy, Some(REMEDIED_REMEDY));
+        let said = missing.to_string();
+        assert!(
+            said.ends_with(&format!(
+                "which no module this app imports provides. {REMEDIED_REMEDY}"
+            )),
+            "{said}"
+        );
+        assert!(!said.contains("seed it"), "one remedy, the crate's: {said}");
+    }
+}
+
+/// What a decorator's generated code requires of its host, and nothing else
+/// declares.
+struct Required;
+
+struct RequiringHost;
+
+impl Discoverable for RequiringHost {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
+    }
+}
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::HostRequires {
+        host: || TypeId::of::<RequiringHost>(),
+        requires: || (TypeId::of::<Required>(), "Required"),
+    }
+}
+
+#[module(providers = [RequiringHost])]
+struct RequiringHostModule;
+
+#[tokio::test]
+async fn a_key_a_decorator_requires_of_its_host_is_checked_like_an_injected_one() {
+    for refused in refused_on_both_paths::<RequiringHostModule>().await {
+        let missing = refused
+            .downcast::<MissingDependencyError>()
+            .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+        assert_eq!(
+            (missing.module, missing.consumer, missing.dependency),
+            ("RequiringHostModule", "RequiringHost", "Required"),
+        );
+    }
+    App::builder()
+        .provide(Required)
+        .module::<RequiringHostModule>()
+        .build()
+        .await
+        .expect("a seed is global infrastructure, which meets it");
 }
 
 handler_host!(AuditHost takes AuditTrail);

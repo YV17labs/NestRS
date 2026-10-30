@@ -864,3 +864,31 @@ async fn two_bindings_through_the_helper_fail_the_boot_in_the_ports_words() {
         .unwrap_or_else(|| panic!("not the contest: {refused:#}"));
     assert_eq!(contested.remedy, BACKEND_REMEDY);
 }
+
+#[expect(
+    dead_code,
+    reason = "the binding is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct InjectsTheBinding {
+    #[inject]
+    units: Arc<dyn UnitOfWork>,
+}
+
+#[module(providers = [InjectsTheBinding])]
+struct NoBindingModule;
+
+#[tokio::test]
+async fn a_provider_injecting_the_port_with_no_binding_is_refused_naming_the_first_party_one() {
+    let Err(refused) = App::builder().module::<NoBindingModule>().build().await else {
+        panic!("nothing binds the port");
+    };
+    let missing = refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(missing.remedy, Some(BACKEND_REMEDY));
+    assert!(
+        BACKEND_REMEDY.contains("`nest_rs::seaorm::SeaOrmDatabaseModule`"),
+        "{BACKEND_REMEDY}"
+    );
+}

@@ -18,7 +18,8 @@
 //! The boot walks the module tree from the root and fails with a named error
 //! before any transport starts: [`AccessGraphError`] when a provider reaches
 //! across a module boundary no `import` covers, [`MissingDependencyError`] when
-//! no module provides a dependency, [`BudgetPastNetError`] when a resource's
+//! no module provides a dependency — naming the line to add when the crate
+//! owning its type submits a [`DependencyRemedy`] — [`BudgetPastNetError`] when a resource's
 //! [`Budget`] reaches past a [`Net`] that waits on it. The layers a site
 //! binds — `#[use_guards]`, `#[use_pipes]`, `#[use_interceptors]`,
 //! `#[use_exception_filters]` — are checked the same way.
@@ -156,7 +157,7 @@ mod unit_context;
 mod way_down;
 mod wiring;
 
-pub use access::{Composition, ProviderOrder, ReachableProviders};
+pub use access::{Composition, DependencyRemedy, ProviderOrder, ReachableProviders};
 pub use ambient::{AmbientValue, Continuation, Deadline, ambient, with_ambient};
 pub use app::{App, AppBuilder, BootStep};
 pub use app_identity::AppIdentity;
@@ -221,7 +222,7 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::access::__private::{
-        HostLayers, ModuleDescriptor, ProviderDescriptor, reachable_providers,
+        HostLayers, HostRequires, ModuleDescriptor, ProviderDescriptor, reachable_providers,
     };
     pub use crate::ambient::{
         Pending, UnmaskedReply, carries_ambient, install_pending, with_ambient_from,

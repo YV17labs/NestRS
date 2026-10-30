@@ -8,9 +8,17 @@ use nest_rs_core::{Unanswered, within};
 
 use crate::{Capabilities, QueueError, QueueName, TARGET};
 
-/// The remedy the boot names when two queue backends bind the queue port.
+/// The remedy the boot names when two queue backends bind the queue port, or
+/// none binds the producer a provider injects.
 pub const BACKEND_REMEDY: &str = "Import exactly one queue backend's binding — \
      `nest_rs::redis::RedisQueueModule` binds the queue port over Redis.";
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<std::sync::Arc<dyn crate::JobProducer>>,
+        BACKEND_REMEDY,
+    )
+}
 
 /// How long the port waits for a backend to answer any call it makes — a push's
 /// [`enqueue`](crate::JobProducer::enqueue), a cancel's

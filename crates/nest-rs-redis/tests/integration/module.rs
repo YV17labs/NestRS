@@ -332,3 +332,33 @@ fn the_unclaimed_report_leaves_a_named_instance_s_variables_alone() {
         logs.events()
     );
 }
+
+#[expect(
+    dead_code,
+    reason = "the connection is declared for the container to resolve, never read"
+)]
+#[nest_rs_core::injectable]
+struct ReadsTheConnection {
+    #[inject]
+    conn: std::sync::Arc<RedisConnection>,
+}
+
+#[module(providers = [ReadsTheConnection])]
+struct NoConnectionModule;
+
+#[tokio::test]
+async fn a_provider_injecting_a_connection_no_module_opens_is_refused_naming_the_module() {
+    let Err(refused) = App::builder().module::<NoConnectionModule>().build().await else {
+        panic!("no module opens the connection");
+    };
+    let missing = refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(missing.consumer, "ReadsTheConnection");
+    assert!(
+        missing
+            .remedy
+            .is_some_and(|remedy| remedy.contains("`nest_rs::redis::RedisModule::for_root(None)`")),
+        "{missing}"
+    );
+}

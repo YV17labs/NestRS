@@ -289,3 +289,33 @@ async fn a_starting_or_full_server_is_retried_and_said_per_attempt() {
         }
     }
 }
+
+#[expect(
+    dead_code,
+    reason = "the pool is declared for the container to resolve, never read"
+)]
+#[nest_rs_core::injectable]
+struct InjectsThePool {
+    #[inject]
+    db: Arc<sea_orm::DatabaseConnection>,
+}
+
+#[module(providers = [InjectsThePool])]
+struct NoPoolModule;
+
+#[tokio::test]
+async fn a_provider_injecting_a_pool_no_module_opens_is_refused_naming_the_module() {
+    let Err(refused) = App::builder().module::<NoPoolModule>().build().await else {
+        panic!("no module opens the pool");
+    };
+    let missing = refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(missing.consumer, "InjectsThePool");
+    assert!(
+        missing.remedy.is_some_and(
+            |remedy| remedy.contains("`nest_rs::seaorm::SeaOrmModule::for_root(None)`")
+        ),
+        "{missing}"
+    );
+}

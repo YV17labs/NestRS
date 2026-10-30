@@ -138,6 +138,7 @@ defaults:
   tolerations: []
   affinity: {}
   topologySpreadConstraints: []
+  # Unprefixed, so `OTEL_EXPORTER_OTLP_ENDPOINT` and the other `OTEL_*` go here.
   extraEnv: []
   pdb:
     enabled: false

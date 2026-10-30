@@ -50,6 +50,7 @@ async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suit
         .expect("create + migrate a throwaway database");
     let worker = HeadlessApp::builder()
         .module::<WorkerModule>()
+        .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(RedisDatabase::WorkerRuns.config())
         .build_headless()
@@ -106,6 +107,7 @@ async fn worker_app_binds_the_lock_its_one_replica_purge_claims_through() {
         .expect("create + migrate a throwaway database");
     let worker = HeadlessApp::builder()
         .module::<WorkerModule>()
+        .with_test_telemetry()
         .provide_arc(db.connection())
         .build_headless()
         .await

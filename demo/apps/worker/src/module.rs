@@ -2,6 +2,7 @@ use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::http::HttpModule;
+use nest_rs::opentelemetry::OpenTelemetryModule;
 use nest_rs::queue::QueueModule;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::schedule::ScheduleModule;
@@ -13,6 +14,7 @@ use features::notifications::{NotificationsQueueModule, NotificationsScheduleMod
 #[module(
     imports = [
         ConfigModule::for_root(),
+        OpenTelemetryModule,
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
         RedisModule::for_root(None),

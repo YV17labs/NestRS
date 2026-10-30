@@ -164,9 +164,11 @@ setups table, which imports every first-party `for_root` twice.
   `nest-rs-config`. We
   exceed NestJS here on purpose: a silently dropped declaration is a swallowed
   error.
-- **One exception: `OpenTelemetry::init` / `init_with(config)`** belongs to `main`,
-  because the global tracer must exist before any module registers and its
-  guard's `Drop` flushes. Any other claimed exception is reported, not written.
+- **One exception: `OpenTelemetry::init()` / `init_with(config)`** belongs to
+  `main`, because the global tracer must exist before any module registers and
+  its guard's `Drop` flushes — never a `#[nest_rs::main]` key, which could not
+  take the pinned config (`.claude/decisions/telemetry-reads-the-specification.md`).
+  Any other claimed exception is reported, not written.
 
 ## Configuration — the loader loads, the consumer judges
 
@@ -246,7 +248,9 @@ arbitrates between variables or tiers.
   `ConfigService::json`, never by a config's own `serde_json`, and redacted at
   the `ConfigError` sink (`CLAUDE.md`, no payload value in an error).
 - **A TLS client's material is `ClientTls`**, read under its namespace's
-  `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY`: the one client vocabulary lives
+  `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY` — or the variables a specification
+  names for them (OTLP's `OTEL_EXPORTER_OTLP_CERTIFICATE`, `CLIENT_CERTIFICATE`
+  and `CLIENT_KEY`), refused under those names: the one client vocabulary lives
   beside the loader, its checks run in the consumer's one constructor, and a
   driver converts it to its library's shape rather than writing a `*Tls` of
   its own. No switch turns verification off (`CLAUDE.md`), held by

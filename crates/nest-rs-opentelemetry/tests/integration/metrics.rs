@@ -22,7 +22,7 @@ struct Recorded {
 
 impl Recorded {
     fn boot() -> Self {
-        let otel = OpenTelemetry::init_with(OpenTelemetryConfig::new("metrics"))
+        let otel = OpenTelemetry::init_with(OpenTelemetryConfig::default())
             .expect("the console-only init");
         let exporter = InMemoryMetricExporter::default();
         let provider = SdkMeterProvider::builder()

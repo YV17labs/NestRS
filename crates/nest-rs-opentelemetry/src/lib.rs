@@ -1,8 +1,10 @@
 //! OpenTelemetry for nestrs.
 //!
-//! [`OpenTelemetry::init`] sets up `tracing` (console fmt always; OTLP exporter when the
-//! `otlp` feature is on and `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` is set). The returned
-//! guard flushes on drop, so it must outlive `main`.
+//! [`OpenTelemetry::init`] sets up `tracing` — the console always, and an OTLP
+//! exporter for each signal whose endpoint the OpenTelemetry specification's
+//! variables set (`OTEL_EXPORTER_OTLP_ENDPOINT`), under the `otlp` feature —
+//! with the service named after the binary `#[nest_rs::main]` started. The
+//! returned guard flushes on drop, so it must outlive `main`.
 //!
 //! [`OpenTelemetryModule`] provides [`Metrics`], where an app records its
 //! measurements through instruments named by the OpenTelemetry Metrics API —

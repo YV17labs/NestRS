@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
-use nest_rs_config::var_name;
 use nest_rs_opentelemetry::{
     FLUSH_TIMEOUT, OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError, TARGET,
 };
 use nest_rs_testing::{LogCapture, TestAuthority, TestCertificate};
-use opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT;
+use opentelemetry_otlp::{OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_TIMEOUT};
+use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 /// The authority the collector's certificate chains to; the system's store
@@ -117,25 +117,9 @@ impl Collector {
     }
 }
 
-/// The config `vars` set over the process's environment, read as `init` reads it.
-#[expect(
-    clippy::result_large_err,
-    reason = "figment::Jail fixes the closure's error type"
-)]
-fn from_env(vars: &[(&str, &str)]) -> Result<OpenTelemetryConfig, OpenTelemetryError> {
-    let mut read = None;
-    figment::Jail::expect_with(|jail| {
-        for (key, value) in vars {
-            jail.set_env(var_name("opentelemetry", key), value);
-        }
-        read = Some(OpenTelemetryConfig::from_env("otlp-tls"));
-        Ok(())
-    });
-    read.expect("the jail ran")
-}
-
-/// `config` initialised with `vars` — the SDK's own, unprefixed — set over the
-/// process's environment while the exporters are built.
+/// `config` initialised with `vars` — the OpenTelemetry specification's own,
+/// unprefixed — set over the process's environment while the exporters are
+/// built.
 #[expect(
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
@@ -155,31 +139,53 @@ fn init_under(
     init.expect("the jail ran")
 }
 
+/// A file `name` holding `contents` in `scratch`, which the test holds: the
+/// specification's certificate variables name paths.
+fn written(scratch: &TempDir, name: &str, contents: &str) -> String {
+    let path = scratch.path().join(name);
+    std::fs::write(&path, contents).expect("a scratch file");
+    path.to_string_lossy().into_owned()
+}
+
 /// Emit a span and a line, then flush them on the guard's drop.
 fn export_through(otel: OpenTelemetry) {
     tracing::info_span!("probe").in_scope(|| tracing::info!(target: "probe", "probe"));
     drop(otel);
 }
 
-/// A config exporting to `collector`, trusting [`AUTHORITY`], with `vars` over it.
-fn trusting(collector: &Collector, vars: &[(&str, &str)]) -> OpenTelemetryConfig {
+/// `OpenTelemetry::init_with` exporting to `collector`, trusting [`AUTHORITY`]
+/// through `OTEL_EXPORTER_OTLP_CERTIFICATE`, with `vars` over it.
+fn trusting(collector: &Collector, vars: &[(&str, &str)]) -> OpenTelemetry {
     let endpoint = collector.endpoint();
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let authority = written(&scratch, "authority.pem", AUTHORITY.pem());
     let mut set = vec![
-        ("OTLP_ENDPOINT", endpoint.as_str()),
-        ("TLS_CA_CERT", AUTHORITY.pem()),
+        (OTEL_EXPORTER_OTLP_ENDPOINT, endpoint.as_str()),
+        ("OTEL_EXPORTER_OTLP_CERTIFICATE", authority.as_str()),
     ];
     set.extend_from_slice(vars);
-    from_env(&set).expect("each value reads")
+    init_under(&set, OpenTelemetryConfig::default()).expect("the exporters build")
 }
 
 #[test]
-fn an_export_reaches_a_collector_behind_a_private_authority_named_by_tls_ca_cert() {
+fn an_export_reaches_a_collector_behind_a_private_authority_named_by_the_specification() {
     let collector = Collector::serving();
-    let config = from_env(&[
-        ("OTLP_ENDPOINT", &collector.endpoint()),
-        ("TLS_CA_CERT", AUTHORITY.pem()),
-    ])
-    .expect("the authority reads");
+
+    export_through(trusting(&collector, &[]));
+
+    assert!(collector.exports() > 0, "the flush reached the collector");
+}
+
+/// The endpoint pinned in code exports as the variable's does, under the
+/// authority a pinned `ClientTls` names.
+#[test]
+fn an_export_reaches_a_collector_named_in_code() {
+    let collector = Collector::serving();
+    let config = OpenTelemetryConfig {
+        otlp_endpoint: Some(collector.endpoint()),
+        tls: AUTHORITY.client_tls(),
+        ..OpenTelemetryConfig::default()
+    };
 
     export_through(OpenTelemetry::init_with(config).expect("the exporters build"));
 
@@ -189,9 +195,13 @@ fn an_export_reaches_a_collector_behind_a_private_authority_named_by_tls_ca_cert
 #[test]
 fn an_export_to_a_collector_no_trusted_authority_signed_never_lands() {
     let collector = Collector::serving();
-    let config = from_env(&[("OTLP_ENDPOINT", &collector.endpoint())]).expect("an endpoint reads");
+    let otel = init_under(
+        &[(OTEL_EXPORTER_OTLP_ENDPOINT, &collector.endpoint())],
+        OpenTelemetryConfig::default(),
+    )
+    .expect("the exporters build");
 
-    export_through(OpenTelemetry::init_with(config).expect("the exporters build"));
+    export_through(otel);
 
     assert_eq!(
         collector.exports(),
@@ -204,13 +214,15 @@ fn an_export_to_a_collector_no_trusted_authority_signed_never_lands() {
 /// it would go unused, and is refused naming both settings.
 #[test]
 fn tls_material_beside_a_plaintext_endpoint_is_refused_naming_both() {
-    let config = from_env(&[
-        ("OTLP_ENDPOINT", "http://127.0.0.1:4318"),
-        ("TLS_CA_CERT", AUTHORITY.pem()),
-    ])
-    .expect("each value reads");
-
-    let Err(refused) = OpenTelemetry::init_with(config) else {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let authority = written(&scratch, "plaintext-authority.pem", AUTHORITY.pem());
+    let Err(refused) = init_under(
+        &[
+            (OTEL_EXPORTER_OTLP_ENDPOINT, "http://127.0.0.1:4318"),
+            ("OTEL_EXPORTER_OTLP_CERTIFICATE", &authority),
+        ],
+        OpenTelemetryConfig::default(),
+    ) else {
         panic!("TLS material beside a plaintext endpoint must not boot");
     };
     assert!(
@@ -219,28 +231,30 @@ fn tls_material_beside_a_plaintext_endpoint_is_refused_naming_both() {
     );
     let sentence = refused.to_string();
     assert!(
-        sentence.contains(&var_name("opentelemetry", "TLS_CA_CERT"))
-            && sentence.contains(&var_name("opentelemetry", "OTLP_ENDPOINT")),
+        sentence.contains("OTEL_EXPORTER_OTLP_CERTIFICATE")
+            && sentence.contains(OTEL_EXPORTER_OTLP_ENDPOINT),
         "{sentence}"
     );
 }
 
 /// A collector requiring a client certificate is handed the one the deployment
-/// sets under `<PREFIX>_OPENTELEMETRY__TLS_CERT` and `TLS_KEY`.
+/// names under `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and `_CLIENT_KEY`.
 #[test]
 fn a_collector_requiring_a_client_certificate_is_handed_the_configured_one() {
     let clients = TestAuthority::new();
     let issued = clients.client("nestrs-test-client");
     let collector = Collector::serving_to(Behaviour::Answer(ACCEPTED.to_owned()), Some(&clients));
-    let config = trusting(
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let cert = written(&scratch, "client.pem", &issued.cert);
+    let key = written(&scratch, "client-key.pem", &issued.key);
+
+    export_through(trusting(
         &collector,
         &[
-            ("TLS_CERT", issued.cert.as_str()),
-            ("TLS_KEY", issued.key.as_str()),
+            ("OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE", &cert),
+            ("OTEL_EXPORTER_OTLP_CLIENT_KEY", &key),
         ],
-    );
-
-    export_through(OpenTelemetry::init_with(config).expect("the exporters build"));
+    ));
 
     assert!(collector.exports() > 0, "the flush reached the collector");
 }
@@ -252,9 +266,7 @@ fn a_collector_requiring_a_client_certificate_takes_nothing_without_one() {
     let clients = TestAuthority::new();
     let collector = Collector::serving_to(Behaviour::Answer(ACCEPTED.to_owned()), Some(&clients));
 
-    export_through(
-        OpenTelemetry::init_with(trusting(&collector, &[])).expect("the exporters build"),
-    );
+    export_through(trusting(&collector, &[]));
 
     assert_eq!(
         collector.exports(),
@@ -277,9 +289,7 @@ fn a_redirect_from_the_collector_is_never_followed() {
         None,
     );
 
-    export_through(
-        OpenTelemetry::init_with(trusting(&redirecting, &[])).expect("the exporters build"),
-    );
+    export_through(trusting(&redirecting, &[]));
 
     assert!(redirecting.exports() > 0, "the flush reached the collector");
     assert_eq!(elsewhere.exports(), 0, "the redirect was not followed");
@@ -291,11 +301,7 @@ fn a_redirect_from_the_collector_is_never_followed() {
 #[test]
 fn an_export_is_cut_at_the_timeout_the_sdk_reads() {
     let collector = Collector::serving_to(Behaviour::Silent, None);
-    let otel = init_under(
-        &[(OTEL_EXPORTER_OTLP_TIMEOUT, "200")],
-        trusting(&collector, &[]),
-    )
-    .expect("the exporters build");
+    let otel = trusting(&collector, &[(OTEL_EXPORTER_OTLP_TIMEOUT, "200")]);
 
     let started = Instant::now();
     export_through(otel);
@@ -315,15 +321,12 @@ fn an_export_timeout_that_is_not_milliseconds_is_ignored_and_said() {
     let collector = Collector::serving();
     let logs = LogCapture::install();
 
-    let otel = init_under(
-        &[(OTEL_EXPORTER_OTLP_TIMEOUT, "10s")],
-        trusting(&collector, &[]),
-    )
-    .expect("an ignored timeout fails no boot");
+    let otel = trusting(&collector, &[(OTEL_EXPORTER_OTLP_TIMEOUT, "10s")]);
 
     let event = logs.expect_one(
         TARGET,
-        "OTLP export timeout is not a whole number of milliseconds; ignored, as the SDK ignores it",
+        "an OpenTelemetry variable is not a whole number of milliseconds; ignored, as the SDK \
+         ignores it",
     );
     assert_eq!(event.level, "warn");
     assert_eq!(

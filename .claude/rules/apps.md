@@ -18,8 +18,7 @@ paths:
   the binary runs. No logic.
 - **`main.rs`** builds the app — `App::builder().module::<AppModule>()` — plus
   the imperative global seams (`use_*_global`, `edges.md`, *Request layers*)
-  and, where the app exports, `OpenTelemetry::init` (`container.md`, the one
-  `for_root` exception). Declaring the transport-wide pool is composition, not
+  and `OpenTelemetry::init()` (`container.md`, the one `for_root` exception). Declaring the transport-wide pool is composition, not
   business logic.
 
 No `services/`, no `examples/`, and never an edge folder under the app's
@@ -74,9 +73,10 @@ never through a `.transport(…)` call (`edges.md`, *Surface decisions*). A
 module's settings are pinned through its `for_root` or set through its
 variables (`architecture.md`, *Configuration*).
 
-**A deployed app exports OTLP**: `main` holds the `OpenTelemetry::init` guard
+**A deployed app exports OTLP**: `main` holds the `OpenTelemetry::init()` guard
 and the root imports `OpenTelemetryModule`, which refuses to register without
-it. The console format follows the declared profile — text under development
+it; the service is named after the binary, and where it exports is the
+deployment's `OTEL_*`. The console format follows the declared profile — text under development
 and test, JSON otherwise (`nest_rs_core::logging`).
 
 **A GraphQL app commits its SDL** (`apps/<app>/schema.graphql`), and an

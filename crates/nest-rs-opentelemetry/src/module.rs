@@ -5,8 +5,9 @@ use crate::OpenTelemetryError;
 /// Provides [`Metrics`](crate::Metrics) over the global meter, under the `otlp`
 /// feature; it mounts no per-request layer.
 ///
-/// **Ordering:** [`crate::OpenTelemetry::init`] must run before this module is
-/// registered, or the boot fails with [`OpenTelemetryError::InitMissing`].
+/// **Ordering:** [`OpenTelemetry::init()`](crate::OpenTelemetry::init) must run
+/// before this module is registered, or the boot fails with
+/// [`OpenTelemetryError::InitMissing`].
 pub struct OpenTelemetryModule;
 
 impl Module for OpenTelemetryModule {

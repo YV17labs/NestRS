@@ -22,11 +22,11 @@ impl std::fmt::Display for Unwritable {
 
 #[nest_rs_core::main]
 async fn inside_the_subscriber() -> nest_rs_core::anyhow::Result<()> {
-    let _otel = OpenTelemetry::init_with(
-        OpenTelemetryConfig::new("reentrant")
-            .with_log_format(LogFormat::Json)
-            .with_log_filter("info"),
-    )?;
+    let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
+        log_format: LogFormat::Json,
+        log_filter: "info".into(),
+        ..OpenTelemetryConfig::default()
+    })?;
     tracing::info!(target: "nest_rs::fixture", value = %Unwritable, "never written");
     Ok(())
 }
@@ -101,9 +101,9 @@ static KEPT_LOGGER: KeptLogger = KeptLogger;
 fn init_installs_its_subscriber_beside_a_log_logger_set_before() {
     log::set_logger(&KEPT_LOGGER).expect("the process's first `log` logger");
 
-    let first = OpenTelemetry::init_with(OpenTelemetryConfig::new("log-logger"));
+    let first = OpenTelemetry::init_with(OpenTelemetryConfig::default());
     assert!(first.is_ok(), "{:?}", first.err());
-    let second = OpenTelemetry::init_with(OpenTelemetryConfig::new("log-logger"));
+    let second = OpenTelemetry::init_with(OpenTelemetryConfig::default());
     assert!(
         matches!(second, Err(OpenTelemetryError::Init(_))),
         "{:?}",
@@ -118,9 +118,11 @@ fn init_installs_its_subscriber_beside_a_log_logger_set_before() {
 #[cfg(feature = "otlp")]
 #[test]
 fn init_with_clamps_the_exporter_s_debug_lines_under_a_bare_trace() {
-    let _otel =
-        OpenTelemetry::init_with(OpenTelemetryConfig::new("clamped").with_log_filter("trace"))
-            .expect("the process's first subscriber");
+    let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
+        log_filter: "trace".into(),
+        ..OpenTelemetryConfig::default()
+    })
+    .expect("the process's first subscriber");
 
     assert!(!tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::DEBUG));
     assert!(tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::INFO));
@@ -131,9 +133,10 @@ fn init_with_clamps_the_exporter_s_debug_lines_under_a_bare_trace() {
 #[cfg(feature = "otlp")]
 #[test]
 fn init_with_writes_the_exporter_s_debug_lines_a_filter_names() {
-    let _otel = OpenTelemetry::init_with(
-        OpenTelemetryConfig::new("opened").with_log_filter("info,opentelemetry-otlp=debug"),
-    )
+    let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
+        log_filter: "info,opentelemetry-otlp=debug".into(),
+        ..OpenTelemetryConfig::default()
+    })
     .expect("the process's first subscriber");
 
     assert!(tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::DEBUG));
@@ -166,9 +169,11 @@ fn the_test_subscriber_clamps_the_exporter_s_debug_lines_under_a_bare_trace() {
 #[cfg(feature = "otlp")]
 #[test]
 fn init_with_never_opens_what_a_stricter_filter_closes() {
-    let _otel =
-        OpenTelemetry::init_with(OpenTelemetryConfig::new("stricter").with_log_filter("warn"))
-            .expect("the process's first subscriber");
+    let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
+        log_filter: "warn".into(),
+        ..OpenTelemetryConfig::default()
+    })
+    .expect("the process's first subscriber");
 
     assert!(!tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::INFO));
     assert!(tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::WARN));
@@ -183,9 +188,10 @@ fn init_with_never_opens_what_a_stricter_filter_closes() {
 #[cfg(feature = "otlp")]
 #[test]
 fn init_with_a_filter_naming_one_target_writes_no_clamped_library() {
-    let _otel = OpenTelemetry::init_with(
-        OpenTelemetryConfig::new("one-target").with_log_filter("billing=debug"),
-    )
+    let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
+        log_filter: "billing=debug".into(),
+        ..OpenTelemetryConfig::default()
+    })
     .expect("the process's first subscriber");
 
     assert!(tracing::event_enabled!(target: "billing::service", tracing::Level::DEBUG));
@@ -212,5 +218,26 @@ fn the_test_subscriber_s_default_never_opens_a_clamped_library() {
     assert_eq!(
         tracing::level_filters::LevelFilter::current(),
         tracing::level_filters::LevelFilter::WARN
+    );
+}
+
+#[nest_rs_core::main]
+async fn initialised_under_main() -> nest_rs_core::anyhow::Result<()> {
+    let _otel = OpenTelemetry::init()?;
+    Ok(())
+}
+
+/// `init` takes no argument: the service is the binary `#[nest_rs::main]`
+/// started, read off its manifest.
+#[test]
+fn init_names_the_service_after_the_binary_main_started() {
+    let logs = nest_rs_testing::LogCapture::install();
+
+    initialised_under_main().expect("the process's first subscriber");
+
+    let event = logs.expect_one(nest_rs_opentelemetry::TARGET, "OpenTelemetry initialised");
+    assert_eq!(
+        event.field("service").as_deref(),
+        Some(env!("CARGO_PKG_NAME"))
     );
 }

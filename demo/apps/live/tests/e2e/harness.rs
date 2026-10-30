@@ -29,6 +29,7 @@ pub(crate) async fn boot_builder() -> (EphemeralDatabase, TestAppBuilder) {
     let builder = TestApp::builder()
         .use_guards_global([guard::<AuthnGuard>()])
         .module::<LiveModule>()
+        .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),

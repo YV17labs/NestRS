@@ -16,6 +16,7 @@ async fn the_live_app_requires_its_own_audience_read_from_its_own_file() {
     let app = TestApp::builder()
         .use_guards_global([guard::<AuthnGuard>()])
         .module::<LiveModule>()
+        .with_test_telemetry()
         .provide_arc(db.connection())
         .build_ws()
         .await

@@ -17,6 +17,7 @@ async fn the_api_requires_its_own_audience_read_from_its_own_file() {
     let app = TestApp::builder()
         .use_guards_global(global_guards())
         .module::<ApiModule>()
+        .with_test_telemetry()
         .provide_arc(db.connection())
         .build()
         .await
@@ -51,6 +52,7 @@ async fn api_app_binds_the_lock_its_one_replica_transcode_seed_claims_through() 
         .expect("create + migrate a throwaway database");
     let api = HeadlessApp::builder()
         .module::<ApiModule>()
+        .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),

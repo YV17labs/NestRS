@@ -139,9 +139,9 @@ A name and its path say the same thing, and a name is judged in its set.
   `nestrs` brand (CLI, `NESTRS_*`, nestrs.dev) differs on purpose.
 - No env-var name as a literal: `NESTRS_ENV_PREFIX=ACME` on the process renames
   every variable, so a name is built (`nest_rs_config::var_name`,
-  `EnvPrefix::var`) and prose writes `<PREFIX>_`. `RUST_LOG`,
-  `NESTRS_NO_BOOTSTRAP` and `NESTRS_ENV_PREFIX` are exempt; the prefix is set
-  on the process, never in `.env`.
+  `EnvPrefix::var`) and prose writes `<PREFIX>_`. `RUST_LOG` and `OTEL_*`,
+  the ecosystem's, `NESTRS_NO_BOOTSTRAP` and `NESTRS_ENV_PREFIX` are exempt;
+  the prefix is set on the process, never in `.env`.
 - No collapsing the workspaces; `demo/apps/`, `demo/crates/features/` are fixed.
 - No decorator forcing a manifest line, none on two item shapes (a struct host
   plus an impl sibling, `#[controller]`/`#[routes]`, held by

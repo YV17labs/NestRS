@@ -12,16 +12,18 @@ pub enum OpenTelemetryError {
     #[error(
         "OpenTelemetryModule was imported without calling `OpenTelemetry::init` first — the \
          global tracer and meter are no-ops, so traces and metrics would be silently dropped. \
-         Add `let _otel = nest_rs::opentelemetry::OpenTelemetry::init(\"<service>\")?;` at the \
-         top of `main`, before building the app."
+         Add `let _otel = nest_rs::opentelemetry::OpenTelemetry::init()?;` at the top of \
+         `main`, before building the app."
     )]
     InitMissing,
-    /// A `<PREFIX>_OPENTELEMETRY__*` variable could not be read — both of its
-    /// spellings set, or a `<KEY>_FILE` naming a file that cannot be read.
+    /// A setting was refused, named and never quoted: an `OTEL_*` variable or a
+    /// field set in code that does not parse or is outside its range, an
+    /// endpoint OTLP/HTTP cannot speak to, a file a certificate variable names
+    /// that cannot be read, or TLS material that cannot be used.
     #[error(transparent)]
     Config(#[from] nest_rs_config::ConfigError),
-    /// A console setting does not parse — `<PREFIX>_LOG*`, `RUST_LOG`, or a
-    /// filter set with `with_log_filter` — named, never quoted.
+    /// A console setting does not parse — `<PREFIX>_LOG*`, `RUST_LOG`, or
+    /// `OpenTelemetryConfig::log_filter` set in code — named, never quoted.
     #[error(transparent)]
     LogSettings(#[from] nest_rs_core::logging::LogSettingsError),
     /// Building the OTLP exporter pipeline failed (bad endpoint, transport

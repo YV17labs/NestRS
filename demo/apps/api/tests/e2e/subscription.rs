@@ -133,6 +133,7 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
     let served = HeadlessApp::builder()
         .use_guards_global(global_guards())
         .module::<ApiModule>()
+        .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),

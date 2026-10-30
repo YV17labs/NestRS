@@ -52,6 +52,7 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
     let app = builder
         .use_guards_global(global_guards())
         .module::<ApiModule>()
+        .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),

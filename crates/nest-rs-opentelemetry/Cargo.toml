@@ -12,12 +12,12 @@ categories = ["development-tools::debugging", "asynchronous"]
 
 
 [features]
-# OTLP exporter is default so a dev who sets <PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT
+# OTLP exporter is default so a deployment that sets OTEL_EXPORTER_OTLP_ENDPOINT
 # gets traces out of the box.
 #
 # There is no `http` feature, and its removal is the point: this crate used to
 # mount a per-request interceptor, which reached one edge. What it did now hangs
-# off the framework's span constructor, so a headless worker gets it too — and
+# off the framework's span constructor, so a headless worker gets it too â and
 # nothing here compiles the HTTP stack. Every `optional` dependency is named
 # by a `dep:` below: one that is not becomes a public feature Cargo synthesises.
 default = ["otlp"]
@@ -65,9 +65,9 @@ reqwest = { workspace = true, features = ["blocking"], optional = true }
 nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 # The collector double serves on a runtime of its own.
 tokio.workspace = true
-# `OpenTelemetryConfig::from_env` reads `<PREFIX>_OPENTELEMETRY__*` off the process
-# env; the tests isolate it with `figment::Jail`, matching how `nest-rs-config`
-# tests its env reads.
+# The console's `<PREFIX>_LOG*` and the specification's `OTEL_*` are read off the
+# process env; the tests isolate them with `figment::Jail`, matching how
+# `nest-rs-config` tests its env reads.
 figment = { workspace = true, features = ["test"] }
 # The SDK's in-memory span and metric exporters, which the ids and metrics
 # tests read what was exported from.
@@ -79,6 +79,9 @@ serde_json.workspace = true
 nestrs-unit-probe = { path = "tests/unit-probe" }
 # A `log` logger set before `init`, which keeps the `log` records.
 log.workspace = true
+# A test's scratch files — the certificate files the specification's
+# variables name — live in a directory removed when it drops, on every exit.
+tempfile.workspace = true
 
 [lints]
 workspace = true

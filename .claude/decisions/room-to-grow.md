@@ -106,3 +106,9 @@ newtypes over their one value: `Piped(x)` binds the pipe's output on every
 edge, so a second field would make it another type. `Decoded` is one too,
 the value an edge decodes as a pipe's source. Codegen's `PipeWrapper` leaves
 the tier-2 enums: one carrier left one shape, which `piped_input` reads.
+
+**2026-10-30 — `OpenTelemetryConfig` is built over `Default` or `from_env`.**
+`new(service_name)` and the `with_*` setters are gone, so a field is set one
+way, in a literal over its base, and a new field stays a minor as a config's
+is; `service_name` and `service_version` became `Option`, the binary's name and
+version when `None` (`telemetry-reads-the-specification.md`).

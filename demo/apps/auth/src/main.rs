@@ -6,7 +6,7 @@ use auth::AuthModule;
 
 #[nest_rs::main]
 async fn main() -> Result<()> {
-    let _otel = OpenTelemetry::init("auth")?;
+    let _otel = OpenTelemetry::init()?;
 
     App::builder()
         .module::<AuthModule>()

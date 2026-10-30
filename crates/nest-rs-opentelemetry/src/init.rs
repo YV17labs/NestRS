@@ -26,7 +26,9 @@ fn mark_initialized() {
 }
 
 /// Drop synchronously flushes pending traces/metrics/logs. Keep the binding
-/// alive for the whole program: `let _otel = OpenTelemetry::init("api")?;`.
+/// alive for the whole program: `let _otel = OpenTelemetry::init()?;`.
+#[must_use = "dropping the guard shuts the exporters down at once: bind it, \
+              `let _otel = OpenTelemetry::init()?;`, for the whole of `main`"]
 pub struct OpenTelemetry {
     #[cfg(feature = "otlp")]
     tracer_provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
@@ -37,25 +39,24 @@ pub struct OpenTelemetry {
 }
 
 impl OpenTelemetry {
-    /// Reads `<PREFIX>_OPENTELEMETRY__*`. Batch exporters are added only when an OTLP
-    /// endpoint is set, but the tracer is always installed so `trace_id` and
-    /// `traceparent` propagation work out of the box.
-    pub fn init(service_name: impl Into<String>) -> Result<Self, OpenTelemetryError> {
-        Self::init_with(OpenTelemetryConfig::from_env(service_name)?)
+    /// Install the subscriber from the environment
+    /// ([`OpenTelemetryConfig::from_env`]), the service named after the binary
+    /// `#[nest_rs::main]` started. A signal's batch exporter is added only when
+    /// an OTLP endpoint is set for it (`OTEL_EXPORTER_OTLP_ENDPOINT`), but the
+    /// tracer is always installed so `trace_id` and `traceparent` propagation
+    /// work out of the box.
+    pub fn init() -> Result<Self, OpenTelemetryError> {
+        Self::init_with(OpenTelemetryConfig::from_env()?)
     }
 
-    /// Install the subscriber from an explicit [`OpenTelemetryConfig`]. Returns the
-    /// flush guard that must outlive `main`, or an error that aborts boot on a
-    /// filter that does not parse, a metric interval outside its range or a failed
-    /// exporter build.
+    /// Install the subscriber from `config`, under the OpenTelemetry
+    /// specification's variables (`OTEL_*`), which override it field by field.
+    /// Returns the flush guard that must outlive `main`, or an error that aborts
+    /// boot on a filter or a setting that does not parse, a metric interval or
+    /// sample ratio outside its range, or a failed exporter build.
     pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
-        // A config built in code reaches here without `from_env`, so its interval and
-        // its filter are held to what the variables accept here.
-        crate::config::METRIC_INTERVAL.check(
-            crate::config::NAMESPACE,
-            "OpenTelemetryConfig::metric_interval",
-            config.metric_interval,
-        )?;
+        // A config built in code reaches here without `from_env`, so its filter is
+        // held to what the variables accept here.
         LogSettings::check_filter(&config.log_filter, "OpenTelemetryConfig::log_filter")?;
         let filter = log_filter(&config.log_filter);
         let console_layer = ConsoleLayer::new(config.log_format, config.log_source_location);
@@ -89,25 +90,26 @@ impl OpenTelemetry {
             }
             mark_initialized();
 
-            for variable in exporters.ignored_timeouts {
+            let summary = exporters.summary;
+            for variable in summary.ignored {
                 tracing::warn!(
                     target: crate::TARGET,
                     variable,
-                    "OTLP export timeout is not a whole number of milliseconds; ignored, as the \
-                     SDK ignores it",
+                    "an OpenTelemetry variable is not a whole number of milliseconds; ignored, \
+                     as the SDK ignores it",
                 );
             }
+            let [traces, metrics, logs] = summary.endpoints;
             tracing::info!(
                 target: crate::TARGET,
-                service = %config.service_name,
+                service = %summary.service,
                 mode = "otlp",
-                endpoint = config
-                    .otlp_endpoint
-                    .as_deref()
-                    .map_or_else(|| "<none>".to_owned(), nest_rs_config::endpoint_shown),
+                traces = %traces,
+                metrics = %metrics,
+                logs = %logs,
+                sampler = if summary.sampler_from_env { "OTEL_TRACES_SAMPLER" } else { "ratio" },
                 sample_ratio = config.trace_sample_ratio,
                 log_format = ?config.log_format,
-                otlp_export = exporters.meter_provider.is_some(),
                 "OpenTelemetry initialised"
             );
 
@@ -126,7 +128,11 @@ impl OpenTelemetry {
             mark_initialized();
             tracing::info!(
                 target: crate::TARGET,
-                service = %config.service_name,
+                service = config
+                    .service_name
+                    .as_deref()
+                    .or_else(|| nest_rs_core::AppIdentity::current().map(|app| app.name.as_str()))
+                    .unwrap_or_default(),
                 mode = "console",
                 log_format = ?config.log_format,
                 "OpenTelemetry initialised"
@@ -309,7 +315,10 @@ mod tests {
     /// the field and never quotes the directive.
     #[test]
     fn init_with_refuses_a_pinned_filter_that_does_not_parse_naming_the_field() {
-        let config = OpenTelemetryConfig::new("svc").with_log_filter("billing=notalevel");
+        let config = OpenTelemetryConfig {
+            log_filter: "billing=notalevel".into(),
+            ..OpenTelemetryConfig::default()
+        };
         // `OpenTelemetry` has no `Debug`, so no `expect_err`.
         let Err(refused) = OpenTelemetry::init_with(config) else {
             panic!("a filter that does not parse aborts init, never degrades to `info`");

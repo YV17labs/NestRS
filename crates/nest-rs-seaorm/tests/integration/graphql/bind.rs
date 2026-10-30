@@ -98,6 +98,31 @@ impl UngatedResolver {
     imports = [GraphqlModule::for_root(None)],
     providers = [ListedService, UngatedResolver],
 )]
+struct UnboundModule;
+
+#[tokio::test]
+async fn a_bound_field_with_no_unit_of_work_binding_is_refused_at_boot_naming_it() {
+    let refused = TestApp::for_module::<UnboundModule>()
+        .await
+        .err()
+        .expect("the subject loads through `Repo`, which no unit of work would serve");
+    let missing = refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(
+        (missing.consumer, missing.dependency, missing.remedy),
+        (
+            "UngatedResolver",
+            "dyn UnitOfWork",
+            Some(nest_rs_database::BACKEND_REMEDY)
+        ),
+    );
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(None), nest_rs_seaorm::SeaOrmDatabaseModule],
+    providers = [ListedService, UngatedResolver],
+)]
 struct UngatedModule;
 
 async fn answer(app: &TestApp, field: &str) -> serde_json::Value {
@@ -113,7 +138,11 @@ async fn answer(app: &TestApp, field: &str) -> serde_json::Value {
 
 #[tokio::test]
 async fn a_bind_with_no_ability_answers_opaquely_and_files_the_remedy() {
-    let app = TestApp::for_module::<UngatedModule>().await.expect("boots");
+    let app = crate::over_an_unconnected_pool()
+        .module::<UngatedModule>()
+        .build()
+        .await
+        .expect("boots");
     let logs = LogCapture::install();
 
     let body = answer(&app, "listedNote").await;

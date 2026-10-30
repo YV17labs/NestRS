@@ -139,11 +139,19 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 ///
 /// #[crud(service = svc)]
 /// impl UsersController {}
-/// # #[module(providers = [UsersService, UsersController])]
+/// # #[module(
+/// #     imports = [nest_rs_seaorm::SeaOrmDatabaseModule],
+/// #     providers = [UsersService, UsersController],
+/// # )]
 /// # struct UsersModule;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> anyhow::Result<()> {
-/// # let app = HeadlessApp::builder().module::<UsersModule>().build_headless().await?;
+/// # let app = HeadlessApp::builder()
+/// #     .provide(sea_orm::DatabaseConnection::default())
+/// #     .provide(nest_rs_seaorm::SeaOrmConfig::default())
+/// #     .module::<UsersModule>()
+/// #     .build_headless()
+/// #     .await?;
 /// # let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
 /// # let routes: Vec<_> = controllers[0]
 /// #     .meta
@@ -216,10 +224,13 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// #[crud(service = svc)]
 /// impl UsersResolver {}
 /// # #[module(
-/// #     imports = [GraphqlModule::for_root(GraphqlConfig {
-/// #         introspection: true,
-/// #         ..GraphqlConfig::default()
-/// #     })],
+/// #     imports = [
+/// #         GraphqlModule::for_root(GraphqlConfig {
+/// #             introspection: true,
+/// #             ..GraphqlConfig::default()
+/// #         }),
+/// #         nest_rs_seaorm::SeaOrmDatabaseModule,
+/// #     ],
 /// #     providers = [UsersService, UsersResolver],
 /// # )]
 /// # struct AppModule;
@@ -232,7 +243,12 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// # }
 /// # #[nest_rs_core::main]
 /// # async fn main() -> anyhow::Result<()> {
-/// # let app = TestApp::for_module::<AppModule>().await?;
+/// # let app = TestApp::builder()
+/// #     .provide(sea_orm::DatabaseConnection::default())
+/// #     .provide(nest_rs_seaorm::SeaOrmConfig::default())
+/// #     .module::<AppModule>()
+/// #     .build()
+/// #     .await?;
 ///
 /// assert_eq!(fields(&app, "Query").await, ["users", "user"]);
 /// assert_eq!(fields(&app, "Mutation").await, ["createUser", "updateUser", "deleteUser"]);

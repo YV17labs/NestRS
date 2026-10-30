@@ -98,6 +98,9 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
             .with("posture_note", adapter::GATED_ON_SUBJECT)
     };
     let (handler_tmpl, module_tmpl) = templates_for(transport, crud_port);
+    // A `#[crud]` handler runs every call in a unit of work, so it wires only into
+    // an app binding one, as `g resource` does: an app without is refused at boot.
+    let needs_unit_of_work = crud_port && matches!(transport, Transport::Http | Transport::Graphql);
     let mut s = Scaffold::new();
     s.create(dir.join(transport.handler_file()), r.render(handler_tmpl));
 
@@ -218,7 +221,12 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     if scaffolded_auth {
         imports.extend(auth::app_imports());
     }
-    let wired_app = wire_into_app(&ctx, &mut s, &imports, None);
+    let wired_app = wire_into_app(
+        &ctx,
+        &mut s,
+        &imports,
+        needs_unit_of_work.then_some("SeaOrmDatabaseModule"),
+    );
     // Read before the edit lands: the app's own binding of a queue backend.
     let backend_bound = transport == Transport::Queue
         && wired_app.as_deref().is_some_and(|module_rs| {
@@ -251,8 +259,11 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         &ctx,
         transport,
         &names,
-        wired_app.is_some(),
-        backend_bound,
+        Wiring {
+            wired: wired_app.is_some(),
+            backend_bound,
+            needs_unit_of_work,
+        },
         authz,
         grant,
     );
@@ -327,23 +338,48 @@ enum Grant {
     EveryAction(String),
 }
 
+/// What the next steps cannot derive from the transport: whether the adapter
+/// was wired into the current app, whether that app binds a queue backend, and
+/// whether serving it needs the app's unit-of-work binding.
+struct Wiring {
+    wired: bool,
+    backend_bound: bool,
+    needs_unit_of_work: bool,
+}
+
 fn print_next_steps(
     ctx: &Context,
     transport: Transport,
     names: &Names,
-    wired: bool,
-    backend_bound: bool,
+    wiring: Wiring,
     authz: Option<&'static auth::AuthzAdapter>,
     grant: Option<Grant>,
 ) {
+    let Wiring {
+        wired,
+        backend_bound,
+        needs_unit_of_work,
+    } = wiring;
     let tmodule = names.module_for(transport);
     println!();
     println!("Next steps:");
     if wired {
         println!("  {tmodule} is wired into the current app, and imports what serves it.");
+    } else if ctx.current_app.is_some() && needs_unit_of_work {
+        println!(
+            "  Add `SeaOrmModule::for_root(None)` and `SeaOrmDatabaseModule` to this app, then \
+             import `features::{}::{}`: it imports what serves it.",
+            names.snake, tmodule,
+        );
     } else if ctx.current_app.is_some() {
         println!(
             "  Import `features::{}::{}` in this app: it imports what serves it.",
+            names.snake, tmodule,
+        );
+    } else if needs_unit_of_work {
+        println!(
+            "  Import `features::{}::{}` in an app that has `SeaOrmDatabaseModule`: it \
+             imports what serves it.",
             names.snake, tmodule,
         );
     } else {

@@ -223,11 +223,18 @@ mod gate_order {
     #[crud(service = svc, ops = [list, get])]
     impl SecretsCrudController {}
 
-    #[module(providers = [Grants, Stored, Swallow, SecretsController, SecretsService, SecretsCrudController])]
+    #[module(
+        imports = [nest_rs_seaorm::SeaOrmDatabaseModule],
+        providers = [Grants, Stored, Swallow, SecretsController, SecretsService, SecretsCrudController],
+    )]
     struct GateOrderModule;
 
     async fn app() -> TestApp {
-        TestApp::for_module::<GateOrderModule>()
+        TestApp::builder()
+            .provide(sea_orm::DatabaseConnection::default())
+            .provide(nest_rs_seaorm::SeaOrmConfig::default())
+            .module::<GateOrderModule>()
+            .build()
             .await
             .expect("the gate-order module boots")
     }

@@ -89,6 +89,7 @@ mod specs;
 mod time_zone;
 mod ty;
 mod ungrouped;
+mod unit_of_work;
 mod validate;
 mod versioning;
 
@@ -167,6 +168,7 @@ pub mod __private {
         piped_input, returns_unit, shared_receiver, tail_param, type_label,
     };
     pub use crate::ungrouped::ungrouped_expr;
+    pub use crate::unit_of_work::unit_of_work_required;
     pub use crate::validate::validate_argument;
     pub use crate::versioning::{VersionAnswer, VersionedEdge};
 

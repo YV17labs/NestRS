@@ -231,3 +231,196 @@ async fn a_graphql_request_runs_on_the_pool_and_each_operation_opens_its_own_uni
         ]
     );
 }
+
+mod memo {
+    use nest_rs_seaorm::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[expose(name = "Memo", graphql)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[sea_orm(table_name = "memos")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[expose(input(create, update))]
+        pub body: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct MemosService;
+
+impl nest_rs_seaorm::CrudService for MemosService {
+    type Entity = memo::Entity;
+}
+
+impl nest_rs_seaorm::Creatable for MemosService {
+    type Create = memo::CreateMemo;
+}
+
+impl nest_rs_seaorm::Updatable for MemosService {
+    type Update = memo::UpdateMemo;
+}
+
+impl nest_rs_seaorm::Deletable for MemosService {}
+
+#[controller(path = "/memos")]
+struct MemosController {
+    #[inject]
+    svc: Arc<MemosService>,
+}
+
+#[nest_rs_http::crud(service = svc)]
+impl MemosController {}
+
+#[module(providers = [MemosService])]
+struct MemosModule;
+
+#[module(imports = [MemosModule], providers = [MemosController])]
+struct MemosHttpModule;
+
+#[nest_rs_graphql::resolver]
+struct MemosResolver {
+    #[inject]
+    svc: Arc<MemosService>,
+}
+
+#[nest_rs_graphql::crud(service = svc)]
+impl MemosResolver {}
+
+#[module(imports = [MemosModule], providers = [MemosResolver])]
+struct MemosGraphqlModule;
+
+/// The unmet dependency `module`'s boot fails with, when it fails with one.
+async fn unmet_dependency<M: nest_rs_core::Module>() -> nest_rs_core::MissingDependencyError {
+    let Err(refused) = nest_rs_core::App::builder().module::<M>().build().await else {
+        panic!("no unit-of-work binding is imported");
+    };
+    refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"))
+}
+
+#[tokio::test]
+async fn a_crud_host_with_no_unit_of_work_binding_is_refused_at_boot_naming_it() {
+    for (missing, host) in [
+        (
+            unmet_dependency::<MemosHttpModule>().await,
+            "MemosController",
+        ),
+        (
+            unmet_dependency::<MemosGraphqlModule>().await,
+            "MemosResolver",
+        ),
+    ] {
+        assert_eq!(
+            (missing.consumer, missing.dependency, missing.remedy),
+            (
+                host,
+                "dyn UnitOfWork",
+                Some(nest_rs_database::BACKEND_REMEDY)
+            ),
+        );
+        assert!(
+            missing
+                .to_string()
+                .contains("`nest_rs::seaorm::SeaOrmDatabaseModule`"),
+            "{missing}"
+        );
+    }
+}
+
+#[module(imports = [MemosHttpModule, MemosGraphqlModule, SeaOrmDatabaseModule])]
+struct BoundMemosModule;
+
+#[tokio::test]
+async fn a_crud_host_boots_beside_the_binding() {
+    nest_rs_core::App::builder()
+        .provide(DatabaseConnection::default())
+        .provide(SeaOrmConfig::default())
+        .module::<BoundMemosModule>()
+        .build()
+        .await
+        .expect("the binding meets every host's unit of work");
+}
+
+mod sheet {
+    use nest_rs_seaorm::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[expose(name = "Sheet", graphql, service = super::SheetsService)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[sea_orm(table_name = "sheets")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+/// The service an exposed entity names: its loader runs `Repo`.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct SheetsService;
+
+impl nest_rs_seaorm::CrudService for SheetsService {
+    type Entity = sheet::Entity;
+}
+
+#[module(providers = [SheetsService])]
+struct SheetsModule;
+
+#[tokio::test]
+async fn the_service_an_exposed_entity_names_is_refused_with_no_binding() {
+    let missing = unmet_dependency::<SheetsModule>().await;
+    assert_eq!(
+        (missing.consumer, missing.dependency, missing.remedy),
+        (
+            "SheetsService",
+            "dyn UnitOfWork",
+            Some(nest_rs_database::BACKEND_REMEDY)
+        ),
+    );
+}
+
+/// A provider reaching the pool by injection alone: no unit of work runs it.
+#[expect(
+    dead_code,
+    reason = "the pool is declared for the container to resolve, never read"
+)]
+#[nest_rs_core::injectable]
+struct ReadsThePool {
+    #[inject]
+    db: Arc<DatabaseConnection>,
+}
+
+#[module(providers = [ReadsThePool])]
+struct PoolOnlyModule;
+
+#[tokio::test]
+async fn a_pool_reached_only_by_injection_boots_with_no_binding_and_says_nothing() {
+    let logs = nest_rs_testing::LogCapture::install();
+    nest_rs_core::App::builder()
+        .provide(DatabaseConnection::default())
+        .module::<PoolOnlyModule>()
+        .build()
+        .await
+        .expect("a strategy that injects the pool needs no unit of work");
+    let said: Vec<_> = [tracing::Level::WARN, tracing::Level::ERROR]
+        .into_iter()
+        .flat_map(|level| logs.events_at(level))
+        .collect();
+    assert!(said.is_empty(), "correct wiring says nothing: {said:?}");
+}

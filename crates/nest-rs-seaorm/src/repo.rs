@@ -59,6 +59,18 @@ pub(crate) fn ability_scope<E: EntityTrait>(action: Action) -> Condition {
     }
 }
 
+/// The key a host whose generated code runs `Repo` requires — a `#[crud]`
+/// host, a route or a field loading a bound subject, the service an exposed
+/// entity names for its loaders — with its label: the unit of work its
+/// executor comes from, so a host reached with no binding fails the boot
+/// instead of every call.
+pub fn unit_of_work_required() -> (std::any::TypeId, &'static str) {
+    (
+        std::any::TypeId::of::<std::sync::Arc<dyn nest_rs_database::UnitOfWork>>(),
+        "dyn UnitOfWork",
+    )
+}
+
 /// Repository over entity `E`, bound to the ambient request executor and ability.
 ///
 /// It hands out no connection: every statement it runs carries the ambient

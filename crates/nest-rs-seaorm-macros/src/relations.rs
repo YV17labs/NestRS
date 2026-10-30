@@ -5,7 +5,7 @@
 //! The FK-side dataloader (`by_<fk_col>`) and its `RelatedTo<Parent, Via>` impl
 //! are emitted by the entity declaring `belongs_to`, never by the parent.
 
-use nest_rs_codegen::__private::{last_segment_ident, site};
+use nest_rs_codegen::__private::{last_segment_ident, site, unit_of_work_required};
 use nest_rs_codegen::pascal_case;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -55,12 +55,15 @@ pub(crate) fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
     let pk_trait_impl = emit_pk_loadable_impl(&pk_loader_ident);
     let fk_loaders = emit_fk_loaders(model, &service, pk)?;
     let field_resolvers = emit_field_resolvers(model, pk)?;
+    // Its loaders run `Repo`, so the service needs the unit of work they run in.
+    let unit_of_work = unit_of_work_required(&service, &[]);
 
     Ok(quote! {
         #pk_loader_block
         #pk_trait_impl
         #fk_loaders
         #field_resolvers
+        #unit_of_work
     })
 }
 

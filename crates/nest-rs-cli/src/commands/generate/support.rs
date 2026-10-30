@@ -25,8 +25,8 @@ pub(super) fn finish(s: Scaffold, dry_run: bool, base: &Path, what: &str) -> Cli
 /// Queue every `(use_path, ident)` import into the app the cursor sits in,
 /// returning the edited path. When `require_token` is set, wire only if the
 /// app's `module.rs` already contains it — a DB-backed module needs
-/// `SeaOrmDatabaseModule`, since mounting it into an app without one compiles yet
-/// panics at boot.
+/// `SeaOrmDatabaseModule`, since mounting it into an app without one compiles
+/// yet is refused at boot, naming the binding to import.
 ///
 /// Takes the whole set so `module.rs` gets one `edit`.
 pub(super) fn wire_into_app(

@@ -178,13 +178,13 @@ impl TicketsResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule::for_root(None), nest_rs_seaorm::SeaOrmDatabaseModule],
     providers = [ticket::TicketsService, GrantsCreate, TicketsController, TicketsResolver],
 )]
 struct TicketsModule;
 
 async fn tickets() -> TestApp {
-    TestApp::builder()
+    crate::over_an_unconnected_pool()
         .module::<TicketsModule>()
         .use_guards_global([guard::<GrantsCreate>()])
         .build()

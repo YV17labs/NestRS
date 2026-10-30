@@ -21,7 +21,7 @@ use nest_rs_codegen::__private::{
     injected_methods_with_layers, injected_per_request_method, layer_deps, mixed_site_ident,
     normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
     refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
-    takes_value, ungrouped_expr, unknown_argument, validate_argument,
+    takes_value, ungrouped_expr, unit_of_work_required, unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -355,6 +355,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 parsed_path.parameter_count(),
                 &cfgs,
             ));
+            wrappers.push(unit_of_work_required(&self_ty, &cfgs));
         }
         if let Some(AuthorizeSpec {
             entity,

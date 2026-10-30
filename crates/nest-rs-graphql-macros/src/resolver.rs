@@ -26,7 +26,8 @@ use nest_rs_codegen::__private::{
     injected_per_request_method, key_as_written, layer_deps, normalize_forwarded_args,
     one_role_per_method, piped_input, posture_contradiction, posture_required,
     reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident, site_fn_ident,
-    site_ref, tail_param, takes_value, type_label, unknown_argument, validate_argument,
+    site_ref, tail_param, takes_value, type_label, unit_of_work_required, unknown_argument,
+    validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -893,6 +894,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let mut entity_claims: Vec<TokenStream2> = Vec::new();
     // One per operation writing an entity beside `bind`: the service's own.
     let mut bound_entities: Vec<TokenStream2> = Vec::new();
+    // One per bound operation: the unit of work its subject loads in.
+    let mut unit_requirements: Vec<TokenStream2> = Vec::new();
     // Each field's handler and site, and the sites the boot composes.
     let mut site_items: Vec<TokenStream2> = Vec::new();
     let mut site_refs: Vec<(Vec<TokenStream2>, TokenStream2)> = Vec::new();
@@ -1186,6 +1189,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     cfgs.clone(),
                     parse_quote!(::nest_rs_graphql::Scoped<#service>),
                 ));
+                unit_requirements.push(unit_of_work_required(&self_ty, &cfgs));
             }
             if let Some(AuthorizeSpec {
                 entity: Some(entity),
@@ -1545,6 +1549,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         #markers
 
         #(#bound_entities)*
+
+        #(#unit_requirements)*
 
         #query_block
         #mutation_block

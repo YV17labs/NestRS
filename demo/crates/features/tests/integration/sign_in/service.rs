@@ -7,6 +7,7 @@ use nest_rs::authn::{AuthnConfig, AuthnModule, JwtOptions, JwtService};
 use nest_rs::core::module;
 use nest_rs::http::StatusCode;
 use nest_rs::oauth::server::{OAuthServerConfig, RegisteredClient, TokenError};
+use nest_rs::seaorm::{SeaOrmConfig, SeaOrmDatabaseModule};
 use nest_rs::social::{GithubSocialConfig, GithubSocialModule, SocialRegistry};
 use nest_rs::testing::{HeadlessApp, LogCapture, TestAppBuilder};
 use uuid::Uuid;
@@ -76,6 +77,7 @@ fn a_first_party_sign_in_is_delegated_every_scope_of_the_policy() {
         }),
         GithubSocialModule,
         SignInModule,
+        SeaOrmDatabaseModule,
     ],
 )]
 struct SignInApp;
@@ -96,6 +98,8 @@ fn registered(client_id: &str, scopes: &[&str]) -> RegisteredClient<ClientPayloa
 fn sign_in_app(clients: Vec<RegisteredClient<ClientPayload>>) -> TestAppBuilder {
     HeadlessApp::builder()
         .module::<SignInApp>()
+        .provide(sea_orm::DatabaseConnection::default())
+        .provide(SeaOrmConfig::default())
         .provide(SignInConfig {
             resources: vec![RESOURCE.into()],
             default_org_id: ORG,

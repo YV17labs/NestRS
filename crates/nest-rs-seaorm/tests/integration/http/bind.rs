@@ -7,7 +7,7 @@ use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
 use nest_rs_core::{AccessGraphError, App, Discovery, Layer, UnitContext, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs_http::{HttpControllerMeta, HttpView, StatusCode, controller, routes};
-use nest_rs_seaorm::{Authorized, CrudService};
+use nest_rs_seaorm::{Authorized, CrudService, SeaOrmDatabaseModule};
 use nest_rs_testing::TestApp;
 
 mod note {
@@ -103,10 +103,36 @@ async fn a_bound_service_whose_module_is_not_imported_fails_the_boot() {
 }
 
 #[module(imports = [NotesModule], providers = [Grants, NotesController])]
+struct UnboundNotesModule;
+
+#[tokio::test]
+async fn a_bound_route_with_no_unit_of_work_binding_is_refused_at_boot_naming_it() {
+    let Err(refused) = App::builder().module::<UnboundNotesModule>().build().await else {
+        panic!("the subject loads through `Repo`, which no unit of work would serve");
+    };
+    let missing = refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(
+        (missing.consumer, missing.dependency, missing.remedy),
+        (
+            "NotesController",
+            "dyn UnitOfWork",
+            Some(nest_rs_database::BACKEND_REMEDY)
+        ),
+    );
+}
+
+#[module(
+    imports = [NotesModule, SeaOrmDatabaseModule],
+    providers = [Grants, NotesController],
+)]
 struct BoundNotesModule;
 
 async fn app() -> TestApp {
-    TestApp::for_module::<BoundNotesModule>()
+    crate::over_an_unconnected_pool()
+        .module::<BoundNotesModule>()
+        .build()
         .await
         .expect("a bound route over an imported service boots")
 }
@@ -167,12 +193,17 @@ impl NoteSummaryController {
     }
 }
 
-#[module(imports = [NotesModule], providers = [Grants, NoteSummaryController])]
+#[module(
+    imports = [NotesModule, SeaOrmDatabaseModule],
+    providers = [Grants, NoteSummaryController],
+)]
 struct NoteSummaryModule;
 
 #[tokio::test]
 async fn a_bound_route_reads_the_id_its_controller_path_names() {
-    let app = TestApp::for_module::<NoteSummaryModule>()
+    let app = crate::over_an_unconnected_pool()
+        .module::<NoteSummaryModule>()
+        .build()
         .await
         .expect("a route bound on its controller's one parameter boots");
 

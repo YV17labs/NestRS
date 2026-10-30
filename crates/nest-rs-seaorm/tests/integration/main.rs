@@ -31,3 +31,11 @@ mod unit;
 pub struct Anyone;
 
 impl nest_rs_core::AmbientValue for Anyone {}
+
+/// A test app over a pool and a config seeded unconnected, for a module that
+/// imports `SeaOrmDatabaseModule` and refuses before any statement runs.
+pub(crate) fn over_an_unconnected_pool() -> nest_rs_testing::TestAppBuilder {
+    nest_rs_testing::TestApp::builder()
+        .provide(sea_orm::DatabaseConnection::default())
+        .provide(nest_rs_seaorm::SeaOrmConfig::default())
+}

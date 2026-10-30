@@ -985,6 +985,56 @@ fn generate_ws_over_a_feature_port_guards_the_upgrade_and_bootstraps_its_auth() 
     );
 }
 
+/// A `#[crud]` controller or resolver runs each call in the unit of work
+/// `SeaOrmDatabaseModule` binds, and an app without it is refused at boot: over
+/// a CRUD port, `g http` and `g graphql` wire only into an app importing the
+/// binding, as `g resource` does, and otherwise name it in the next step.
+#[test]
+fn a_crud_adapter_is_wired_only_into_an_app_binding_the_unit_of_work() {
+    for (transport, module) in [
+        ("http", "PostsHttpModule"),
+        ("graphql", "PostsGraphqlModule"),
+    ] {
+        for bound in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_workspace(dir.path());
+            let app = write_fake_app(dir.path(), "api");
+            let path = dir.path().to_str().unwrap();
+            run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+            let service = dir.path().join("crates/features/src/posts/service.rs");
+            let crud = format!(
+                "{}\nimpl CrudService for PostsService {{}}\n",
+                fs::read_to_string(&service).unwrap()
+            );
+            fs::write(&service, crud).unwrap();
+            let module_rs = app.join("src/module.rs");
+            if bound {
+                let with_db = fs::read_to_string(&module_rs).unwrap().replace(
+                    "    ],",
+                    "        SeaOrmModule::for_root(None),\n        SeaOrmDatabaseModule,\n    ],",
+                );
+                fs::write(&module_rs, with_db).unwrap();
+            }
+
+            let printed = run_ok(&app, &["g", transport, "posts"]);
+
+            let composed = fs::read_to_string(&module_rs).unwrap();
+            assert_eq!(
+                composed.contains(module),
+                bound,
+                "`g {transport}` wires {module} only beside the binding: {composed}"
+            );
+            assert_eq!(
+                printed.contains(
+                    "Add `SeaOrmModule::for_root(None)` and `SeaOrmDatabaseModule` to this app"
+                ),
+                !bound,
+                "the next step names the binding the app lacks: {printed}"
+            );
+        }
+    }
+}
+
 /// Over a CRUD port with no auth adapter, `g graphql` bootstraps one as
 /// `g resource` does, and announces it the same way: secrets included.
 #[test]

@@ -122,6 +122,7 @@ pub mod __private {
     pub use crate::http::http_bind;
     #[cfg(feature = "graphql")]
     pub use crate::page::graphql_page_cursor;
+    pub use crate::repo::unit_of_work_required;
     pub use crate::service::{SameEntity, bound_entity, created_key};
 
     pub use crate::column_default::ColumnDefaultRegistration;

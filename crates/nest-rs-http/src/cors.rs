@@ -13,7 +13,7 @@ use http::header::{
     ACCESS_CONTROL_REQUEST_HEADERS, ACCESS_CONTROL_REQUEST_METHOD, ORIGIN,
 };
 use http::{HeaderName, HeaderValue, Method, StatusCode};
-use nest_rs_config::{ConfigService, Namespaced};
+use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Namespaced};
 
 use crate::endpoint::Endpoint;
 use crate::error::{HttpError, ORIGIN_GRAMMAR};
@@ -22,6 +22,21 @@ use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 use crate::vary::vary_on;
+
+/// The preflight lifetime's range, the variable that sets it, and why.
+const MAX_AGE: DurationBounds = DurationBounds::secs(
+    "CORS_MAX_AGE_SECS",
+    "HttpCors::max_age",
+    Floor::UnitsOrOff(Bound::new(
+        1,
+        "a lifetime under a second caches no preflight, which leaving it off already says",
+    )),
+    Bound::new(
+        24 * 60 * 60,
+        "every browser caps a preflight's cache at a day or less (Firefox a day, Chromium \
+         two hours), so a longer lifetime is a unit slip",
+    ),
+);
 
 /// Cross-Origin Resource Sharing policy. `origins` empty ⇒ no CORS layer
 /// installed (the default). Lists are comma-separated in env vars.
@@ -61,6 +76,8 @@ pub struct HttpCors {
     /// Whether to allow credentialed requests (`Access-Control-Allow-Credentials`).
     pub credentials: bool,
     /// Preflight cache lifetime (`Access-Control-Max-Age`); `None` omits it.
+    /// `<PREFIX>_HTTP__CORS_MAX_AGE_SECS`, whole seconds from 1 to a day, or `0`
+    /// for none — refused outside, from the environment and from code alike.
     pub max_age: Option<Duration>,
 }
 
@@ -584,10 +601,9 @@ impl HttpCors {
             headers: env.list(CorsList::Headers.key(), base.headers)?,
             exposed_headers: env.list(CorsList::ExposedHeaders.key(), base.exposed_headers)?,
             credentials: env.flag("CORS_CREDENTIALS", base.credentials)?,
-            max_age: env
-                .parse::<u64>("CORS_MAX_AGE")?
-                .map(Duration::from_secs)
-                .or(base.max_age),
+            max_age: MAX_AGE
+                .read_optional(env, base.max_age)?
+                .map(|read| read.value),
         }))
     }
 }
@@ -654,7 +670,7 @@ mod tests {
             [
                 ("CORS_ORIGINS", "*"),
                 ("CORS_CREDENTIALS", "true"),
-                ("CORS_MAX_AGE", "600"),
+                ("CORS_MAX_AGE_SECS", "600"),
             ],
         );
         let cfg = HttpCors::from_env(&service, None)
@@ -662,6 +678,43 @@ mod tests {
             .expect("Some");
         assert!(cfg.credentials);
         assert_eq!(cfg.max_age, Some(Duration::from_secs(600)));
+    }
+
+    /// A preflight's lifetime is a duration like any other: its key names the
+    /// unit, `0` turns it off, and a value past a day — every browser's cap —
+    /// is refused from the environment and from code alike.
+    #[test]
+    fn the_preflight_lifetime_is_held_to_its_bounds() {
+        let read = |vars: &[(&str, &str)], base: Option<HttpCors>| {
+            let mut vars = vars.to_vec();
+            vars.push(("CORS_ORIGINS", "https://a.example"));
+            HttpCors::from_env(&ConfigService::with_vars("http", vars), base)
+        };
+        let off = read(&[("CORS_MAX_AGE_SECS", "0")], None)
+            .expect("`0` is off")
+            .expect("a policy");
+        assert_eq!(off.max_age, None);
+        let refused = read(&[("CORS_MAX_AGE_SECS", "86401")], None)
+            .expect_err("past a day")
+            .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name("http", "CORS_MAX_AGE_SECS"))
+                && refused.contains("must be at most 86400 seconds"),
+            "{refused}"
+        );
+        let pinned = read(
+            &[],
+            Some(HttpCors {
+                max_age: Some(Duration::from_secs(86_401)),
+                ..HttpCors::default()
+            }),
+        )
+        .expect_err("a pinned lifetime past a day")
+        .to_string();
+        assert!(
+            pinned.contains("`HttpCors::max_age` set in code"),
+            "{pinned}"
+        );
     }
 
     fn cfg(origins: &[&str]) -> HttpCors {

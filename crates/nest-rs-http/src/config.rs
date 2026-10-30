@@ -714,7 +714,7 @@ mod tests {
             ("TRUSTED_PROXIES", format!("10.0.0.1,{SECRET}")),
             ("VERSION_HEADER", format!("{SECRET} bad")),
             ("TLS_RELOAD_SECS", SECRET.to_owned()),
-            ("CORS_MAX_AGE", SECRET.to_owned()),
+            ("CORS_MAX_AGE_SECS", SECRET.to_owned()),
             ("HSTS", format!("{SECRET}\u{7}")),
             ("SHUTDOWN_TIMEOUT_SECS", SECRET.to_owned()),
             ("MAX_CONCURRENT_CONNECTIONS", SECRET.to_owned()),
@@ -727,7 +727,7 @@ mod tests {
                 jail.create_file("value", &content)?;
                 let file_key = format!("{key}_FILE");
                 let mut vars = vec![(file_key.as_str(), "value")];
-                if key == "CORS_MAX_AGE" {
+                if key == "CORS_MAX_AGE_SECS" {
                     vars.push(("CORS_ORIGINS", "https://a.example"));
                 }
                 let env = ConfigService::with_vars("http", vars);
@@ -754,7 +754,7 @@ mod tests {
             ("TRUSTED_PROXIES", format!("10.0.0.1,{SECRET}")),
             ("VERSION_HEADER", format!("{SECRET} bad")),
             ("TLS_RELOAD_SECS", SECRET.to_owned()),
-            ("CORS_MAX_AGE", SECRET.to_owned()),
+            ("CORS_MAX_AGE_SECS", SECRET.to_owned()),
             ("HSTS", format!("{SECRET}\u{7}")),
             ("PORT", SECRET.to_owned()),
             ("SHUTDOWN_TIMEOUT_SECS", SECRET.to_owned()),
@@ -764,7 +764,7 @@ mod tests {
             ("SEND_TIMEOUT_SECS", SECRET.to_owned()),
         ] {
             let mut vars = vec![(key, value.as_str())];
-            if key == "CORS_MAX_AGE" {
+            if key == "CORS_MAX_AGE_SECS" {
                 vars.push(("CORS_ORIGINS", "https://a.example"));
             }
             let env = ConfigService::with_vars("http", vars);

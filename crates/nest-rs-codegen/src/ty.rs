@@ -113,6 +113,45 @@ pub fn pipe_wrapper(ty: &Type) -> Option<PipeWrapper> {
     }
 }
 
+/// A parameter an in-band impl half's tail resolves rather than its protocol
+/// reading it, known by its type's last segment, since no value tells a macro
+/// what to leave out of the arguments `#[operations]`, `#[messages]` and
+/// `#[tools]` hand their protocol.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "tier 2: the `#[operations]`, `#[messages]` and `#[tools]` emitters match \
+              it, and a new parameter must reach each"
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TailParam {
+    /// `Scoped<T>`: a provider from the request's scope, which the access
+    /// graph checks.
+    Scoped,
+    /// `Ctx<T>`: what a guard attached, resolved through a function returning
+    /// core's own `Ctx`, so a namesake does not compile.
+    Ctx,
+}
+
+impl TailParam {
+    /// The tail's parameter a type whose last segment is `ident` is, if any.
+    pub fn named(ident: &Ident) -> Option<Self> {
+        if ident == "Scoped" {
+            Some(Self::Scoped)
+        } else if ident == "Ctx" {
+            Some(Self::Ctx)
+        } else {
+            None
+        }
+    }
+}
+
+/// What the tail resolves `ty` as: a path whose last segment is `Scoped` or
+/// `Ctx`, whatever its arguments.
+pub fn tail_param(ty: &Type) -> Option<TailParam> {
+    let Type::Path(tp) = ty else { return None };
+    TailParam::named(last_segment_ident(&tp.path))
+}
+
 /// The last segment's ident of a path — the readable name in a diagnostic or a
 /// generated identifier. `syn::Path` always has at least one segment.
 #[expect(
@@ -590,5 +629,27 @@ mod tests {
         assert!(
             shared_receiver(&plain, "#[routes]", &parse_quote!(Host), HostBorrow::Host).is_ok()
         );
+    }
+
+    #[test]
+    fn a_tail_parameter_is_read_off_its_last_segment_however_it_is_spelled() {
+        for (ty, read) in [
+            (parse_quote!(Scoped<Cart>), Some(TailParam::Scoped)),
+            (
+                parse_quote!(nest_rs::ws::Scoped<Cart>),
+                Some(TailParam::Scoped),
+            ),
+            (parse_quote!(Ctx<Claims>), Some(TailParam::Ctx)),
+            (
+                parse_quote!(nest_rs::core::Ctx<Claims>),
+                Some(TailParam::Ctx),
+            ),
+            (parse_quote!(Option<Ctx<Claims>>), None),
+            (parse_quote!(&Ctx<Claims>), None),
+            (parse_quote!(Context), None),
+        ] {
+            let ty: Type = ty;
+            assert_eq!(tail_param(&ty), read, "{}", quote!(#ty));
+        }
     }
 }

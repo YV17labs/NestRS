@@ -14,11 +14,12 @@ use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     Collision, Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta,
-    PipeWrapper, Posture, PostureRules, SitePosture, await_if_async, cfg_attrs, concrete_signature,
-    declared_handler, force_guard_typeids, guard_capability_bounds, handler_const, handler_ref,
-    impl_self_ident, injected_methods_with_layers, injected_per_request_method, layer_deps,
-    one_role_per_method, pipe_wrapper, reject_meta_on_operations, returns_unit, scoped_specs,
-    shared_receiver, takes_value, ungrouped_expr,
+    PipeWrapper, Posture, PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs,
+    concrete_signature, declared_handler, force_guard_typeids, guard_capability_bounds,
+    handler_const, handler_ref, impl_self_ident, injected_methods_with_layers,
+    injected_per_request_method, layer_deps, one_role_per_method, pipe_wrapper,
+    reject_meta_on_operations, returns_unit, scoped_specs, shared_receiver, tail_param,
+    takes_value, ungrouped_expr,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -325,7 +326,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let mut payload_ty: Option<&Type> = None;
         let mut takes_client = false;
-        let mut scoped: Vec<TokenStream2> = Vec::new();
+        let mut tail: Vec<TokenStream2> = Vec::new();
         let mut call_args: Vec<TokenStream2> = Vec::new();
         let mut arity_error: Option<syn::Error> = None;
         for arg in method.sig.inputs.iter().skip(1) {
@@ -341,24 +342,18 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 }
                 takes_client = true;
                 call_args.push(quote! { __client });
-            } else if is_scoped(pt.ty.as_ref()) {
+            } else if let Some(kind) = tail_param(pt.ty.as_ref()) {
+                // Read by spelling, so each resolves through a function
+                // returning the framework's own type: a namesake does not compile.
+                let resolved = match kind {
+                    TailParam::Scoped => quote!(::nest_rs_ws::__private::scoped_parameter()),
+                    TailParam::Ctx => quote!(::nest_rs_ws::__private::ctx_parameter(#event)),
+                };
                 let ty = pt.ty.as_ref();
-                let ident = format_ident!("__scoped_{}", scoped.len());
-                scoped.push(quote! {
-                    let #ident: #ty = match ::nest_rs_ws::__private::scoped_parameter() {
+                let ident = format_ident!("__tail_{}", tail.len());
+                tail.push(quote! {
+                    let #ident: #ty = match #resolved {
                         ::core::result::Result::Ok(__resolved) => __resolved,
-                        ::core::result::Result::Err(__missing) => {
-                            return ::core::result::Result::Ok(__missing);
-                        }
-                    };
-                });
-                call_args.push(quote! { #ident });
-            } else if is_ctx(pt.ty.as_ref()) {
-                let ty = pt.ty.as_ref();
-                let ident = format_ident!("__ctx_{}", scoped.len());
-                scoped.push(quote! {
-                    let #ident: #ty = match ::nest_rs_ws::__private::ctx_parameter(#event) {
-                        ::core::result::Result::Ok(__attached) => __attached,
                         ::core::result::Result::Err(__missing) => {
                             return ::core::result::Result::Ok(__missing);
                         }
@@ -429,7 +424,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // The class gate ran before any of this: in the message's guard stage
         // on a socket, ahead of this call in `Gateway::dispatch`.
         let call = quote! {
-            #(#scoped)*
+            #(#tail)*
             #deser
             #invoke
         };
@@ -807,33 +802,6 @@ fn message_site(site: &MessageSite<'_>) -> EmittedSite {
 /// declaring it.
 fn conditional<T>(items: &[(Vec<TokenStream2>, T)]) -> impl Iterator<Item = Conditional<'_, T>> {
     items.iter().map(|(cfgs, item)| Conditional { cfgs, item })
-}
-
-/// Whether a `#[subscribe_message]` parameter is a `Scoped<T>`, read by its
-/// last segment as `Piped<P, T>` and `Valid<T>` are: the expansion then
-/// resolves it through `nest_rs_ws`'s own `scoped_parameter`, which returns
-/// that crate's `Scoped`, so a type of another crate under that name does not
-/// compile.
-fn is_scoped(ty: &Type) -> bool {
-    last_segment_is(ty, "Scoped")
-}
-
-/// Whether a `#[subscribe_message]` parameter is a `Ctx<T>`, read by its last
-/// segment as `Scoped<T>` is: the expansion resolves it through `nest_rs_ws`'s
-/// `ctx_parameter`, which returns core's `Ctx`, so a namesake does not compile.
-fn is_ctx(ty: &Type) -> bool {
-    last_segment_is(ty, "Ctx")
-}
-
-/// Whether `ty` is a path whose last segment is `name`.
-fn last_segment_is(ty: &Type, name: &str) -> bool {
-    let Type::Path(path) = ty else {
-        return false;
-    };
-    path.path
-        .segments
-        .last()
-        .is_some_and(|segment| segment.ident == name)
 }
 
 enum ReturnKind {

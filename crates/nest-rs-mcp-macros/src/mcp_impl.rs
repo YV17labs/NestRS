@@ -26,11 +26,11 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     Collision, Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, PipeWrapper, Posture,
-    PostureRules, answer_span, await_if_async, cfg_attrs, concrete_signature, force_guard_typeids,
-    forwarded_arg_idents, generic_args, guard_capability_bounds, handler_const, handler_ref,
-    impl_self_ident, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
-    pipe_wrapper, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
-    site_fn_ident, ungrouped_expr,
+    PostureRules, TailParam, answer_span, await_if_async, cfg_attrs, concrete_signature,
+    force_guard_typeids, forwarded_arg_idents, generic_args, guard_capability_bounds,
+    handler_const, handler_ref, impl_self_ident, layer_deps, normalize_forwarded_args,
+    nth_generic_type, one_role_per_method, pipe_wrapper, reject_meta_on_operations, scoped_specs,
+    shared_receiver, site_const_ident, site_fn_ident, ungrouped_expr,
 };
 use nest_rs_codegen::snake_case;
 
@@ -237,18 +237,6 @@ struct TailArg {
     /// `Scoped<T>` or `Ctx<T>`, as written.
     ty: Type,
     kind: TailParam,
-}
-
-/// What an operation's tail fills a parameter from, read by its type's last
-/// segment.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TailParam {
-    /// `Scoped<T>`: a provider from the request's scope, which the access
-    /// graph checks.
-    Scoped,
-    /// `Ctx<T>`: what a guard attached, resolved through a function returning
-    /// core's own `Ctx`, so a namesake does not compile.
-    Ctx,
 }
 
 /// A `#[tool]` / `#[prompt]` parameter whose wire value goes through a pipe:
@@ -1252,13 +1240,10 @@ fn tail_args(sig: &Signature) -> Vec<TailArg> {
         .collect()
 }
 
-/// What the tail fills `ty` from, when it is a `Scoped<T>` or a `Ctx<T>`.
+/// What the tail fills `ty` from, when it is a `Scoped<T>` or a `Ctx<T>`
+/// written with its argument.
 pub(crate) fn tail_param(ty: &Type) -> Option<TailParam> {
-    match generic_args(ty)?.0.to_string().as_str() {
-        "Scoped" => Some(TailParam::Scoped),
-        "Ctx" => Some(TailParam::Ctx),
-        _ => None,
-    }
+    TailParam::named(generic_args(ty)?.0)
 }
 
 /// What each operation declares on its host: its `Handler`, `mcp.operation`

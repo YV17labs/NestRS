@@ -158,9 +158,9 @@ pub mod __private {
     pub use crate::specs::{force_guard_typeids, scoped_specs};
     pub use crate::time_zone::invalid_time_zone;
     pub use crate::ty::{
-        HostBorrow, PipeWrapper, answer_span, await_if_async, concrete_signature, generic_args,
-        impl_self_ident, last_segment_ident, nth_generic_type, path_label, payload_arg_type,
-        pipe_wrapper, returns_unit, shared_receiver, type_label,
+        HostBorrow, PipeWrapper, TailParam, answer_span, await_if_async, concrete_signature,
+        generic_args, impl_self_ident, last_segment_ident, nth_generic_type, path_label,
+        payload_arg_type, pipe_wrapper, returns_unit, shared_receiver, tail_param, type_label,
     };
     pub use crate::ungrouped::ungrouped_expr;
     pub use crate::versioning::{VersionAnswer, VersionedEdge};

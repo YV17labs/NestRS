@@ -17,15 +17,15 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Collision, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, InjectableBody, PipeWrapper, SitePosture, VersionedEdge,
-    answer_span, at_most_one_authorize, await_if_async, build_injectable_body, cfg_attrs,
-    concrete_signature, delegated_attrs, force_guard_typeids, forwarded_arg_idents,
+    HandlerSite, HostBorrow, HostMeta, InjectableBody, PipeWrapper, SitePosture, TailParam,
+    VersionedEdge, answer_span, at_most_one_authorize, await_if_async, build_injectable_body,
+    cfg_attrs, concrete_signature, delegated_attrs, force_guard_typeids, forwarded_arg_idents,
     forwarded_idents, from_container_method, guard_capability_bounds, handler_const, handler_ref,
     host_meta_fn, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, injected_per_request_method, key_as_written,
     layer_deps, normalize_forwarded_args, one_role_per_method, pipe_wrapper, posture_contradiction,
     posture_required, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
-    site_fn_ident, site_ref, takes_value, type_label, unknown_argument,
+    site_fn_ident, site_ref, tail_param, takes_value, type_label, unknown_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -707,34 +707,6 @@ fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenS
             ::nest_rs_graphql::__private::FieldFailure::from,
         )
     }}
-}
-
-/// A parameter the tail resolves rather than the schema reading it, known by
-/// its type's last segment, since no value tells a macro what to leave out of
-/// async-graphql's argument list.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TailParam {
-    /// `Scoped<T>`: a provider from the request's scope, which the access
-    /// graph checks.
-    Scoped,
-    /// `Ctx<T>`: what a guard attached, resolved through a function returning
-    /// core's own `Ctx`, so a namesake does not compile.
-    Ctx,
-}
-
-/// What the tail resolves `ty` as, when it is one of its parameters.
-fn tail_param(ty: &Type) -> Option<TailParam> {
-    let Type::Path(tp) = ty else {
-        return None;
-    };
-    let segment = tp.path.segments.last()?;
-    if segment.ident == "Scoped" {
-        Some(TailParam::Scoped)
-    } else if segment.ident == "Ctx" {
-        Some(TailParam::Ctx)
-    } else {
-        None
-    }
 }
 
 /// The parameters of `sig` the tail resolves, each with its type.

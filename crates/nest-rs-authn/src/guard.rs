@@ -1,7 +1,10 @@
 //! Per-route guard that runs a [`Strategy`] and attaches the principal.
 
 use std::any::TypeId;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Poll;
 
 use nest_rs_core::__private::TenantId;
 use nest_rs_core::trace_context::field;
@@ -168,8 +171,19 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
 
     /// Its decision is the request's: a unit reaches this check only from the
     /// pool, whose `check_http` already authenticated the request carrying it.
-    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        Ok(())
+    // Not an `async fn`: its zero-sized future boxes into no allocation on
+    // every unit the pool runs it on.
+    fn check<'s, 'c, 'u, 'fut>(
+        &'s self,
+        _cx: &'c mut UnitContext<'u>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
+    where
+        's: 'fut,
+        'c: 'fut,
+        'u: 'fut,
+        Self: 'fut,
+    {
+        Box::pin(std::future::poll_fn(|_| Poll::Ready(Ok(()))))
     }
 
     fn phase(&self) -> GuardPhase {
@@ -314,6 +328,9 @@ impl<S: Strategy> GuardFor<HttpView> for AuthnGuard<S> {}
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, declare_unit};
+    use nest_rs_core::operation_log::Kind;
+    use nest_rs_core::{Handler, UnitView};
     use nest_rs_http::Request;
 
     use super::*;
@@ -345,5 +362,40 @@ mod tests {
         let guard = AuthnGuard::new(Arc::new(Admits));
         assert_eq!(guard.denial_statuses(false), [401, 503]);
         assert_eq!(guard.denial_statuses(true), [503]);
+    }
+
+    struct Field;
+
+    impl UnitView for Field {}
+
+    static FIELD: Handler = declare_handler(HandlerDeclaration {
+        unit: declare_unit(
+            "nest-rs-graphql",
+            "nest_rs::graphql",
+            Kind::Server,
+            "graphql.field",
+        ),
+        host: TypeId::of::<Field>(),
+        host_name: "Field",
+        method: "me",
+        address: "me",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    #[tokio::test]
+    async fn it_admits_each_unit_of_the_request_it_authenticated_without_allocating() {
+        let guard = AuthnGuard::new(Arc::new(Admits));
+        let mut view = Field;
+        let mut cx = nest_rs_core::__private::new_unit_context(&FIELD, &mut view, None, None);
+
+        let admitted = guard.check(&mut cx);
+
+        assert_eq!(
+            std::mem::size_of_val(&*admitted),
+            0,
+            "a zero-sized future boxes into no allocation on every unit the pool runs it on",
+        );
+        assert!(admitted.await.is_ok());
     }
 }

@@ -98,6 +98,7 @@ fails a pooled request guard on every in-band unit until someone reads the
 site whether `check` was overridden — Rust cannot tell, and a marker the
 developer writes would be the same visible line, weaker.
 
-What it costs: an admitting `check` is an `#[async_trait]` future, so a
-request-only guard in the pool allocates once per in-band unit where the
-default allocated nothing; on HTTP, `check_http` still runs one future.
+What it costs: an admitting `check` written as an `#[async_trait]` future
+allocates once per in-band unit the pool runs it on, where the default
+allocated nothing. The framework's two return a zero-sized future instead, so
+they still allocate nothing; on HTTP, `check_http` still runs one future.

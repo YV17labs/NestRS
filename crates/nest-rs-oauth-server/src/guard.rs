@@ -2,7 +2,10 @@
 //! the token endpoint, refusing as §5.2 answers.
 
 use std::any::TypeId;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Poll;
 
 use nest_rs_authn::__private::{Verdict, authenticate};
 use nest_rs_authn::{AUTHENTICATE_TIMEOUT, Strategy};
@@ -186,8 +189,19 @@ impl<S: Strategy> Guard for ClientAuthenticationGuard<S> {
 
     /// Its decision is the request's: a unit reaches this check only from the
     /// pool, whose `check_http` already authenticated the request carrying it.
-    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        Ok(())
+    // Not an `async fn`: its zero-sized future boxes into no allocation on
+    // every unit the pool runs it on.
+    fn check<'s, 'c, 'u, 'fut>(
+        &'s self,
+        _cx: &'c mut UnitContext<'u>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
+    where
+        's: 'fut,
+        'c: 'fut,
+        'u: 'fut,
+        Self: 'fut,
+    {
+        Box::pin(std::future::poll_fn(|_| Poll::Ready(Ok(()))))
     }
 
     fn phase(&self) -> GuardPhase {
@@ -236,6 +250,10 @@ fn refuse(cx: &mut UnitContext<'_>, answer: Response, denial: Denial) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, declare_unit};
+    use nest_rs_core::operation_log::Kind;
+    use nest_rs_core::{Handler, Posture, UnitView};
+
     use super::*;
 
     fn headers(authorization: Option<&'static str>) -> HeaderMap {
@@ -270,23 +288,53 @@ mod tests {
 
     #[test]
     fn it_declares_both_refusals_and_an_unevaluated_client_on_every_route() {
-        struct Never;
-
-        #[async_trait]
-        impl Strategy for Never {
-            type Principal = crate::AuthenticatedClient<()>;
-
-            async fn authenticate(
-                &self,
-                _req: &mut nest_rs_http::Request,
-            ) -> Result<Self::Principal, nest_rs_authn::AuthError> {
-                Err(nest_rs_authn::AuthError::MissingCredentials)
-            }
-        }
-
         let guard = ClientAuthenticationGuard::new(Arc::new(Never));
         for public in [false, true] {
             assert_eq!(guard.denial_statuses(public), [400, 401, 503]);
         }
+    }
+
+    struct Never;
+
+    #[async_trait]
+    impl Strategy for Never {
+        type Principal = crate::AuthenticatedClient<()>;
+
+        async fn authenticate(
+            &self,
+            _req: &mut nest_rs_http::Request,
+        ) -> Result<Self::Principal, nest_rs_authn::AuthError> {
+            Err(nest_rs_authn::AuthError::MissingCredentials)
+        }
+    }
+
+    struct Operation;
+
+    impl UnitView for Operation {}
+
+    static OPERATION: Handler = declare_handler(HandlerDeclaration {
+        unit: declare_unit("nest-rs-mcp", "nest_rs::mcp", Kind::Server, "mcp.operation"),
+        host: TypeId::of::<Operation>(),
+        host_name: "Operation",
+        method: "token",
+        address: "token",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    #[tokio::test]
+    async fn it_admits_each_unit_of_the_request_it_authenticated_without_allocating() {
+        let guard = ClientAuthenticationGuard::new(Arc::new(Never));
+        let mut view = Operation;
+        let mut cx = nest_rs_core::__private::new_unit_context(&OPERATION, &mut view, None, None);
+
+        let admitted = guard.check(&mut cx);
+
+        assert_eq!(
+            std::mem::size_of_val(&*admitted),
+            0,
+            "a zero-sized future boxes into no allocation on every unit the pool runs it on",
+        );
+        assert!(admitted.await.is_ok());
     }
 }

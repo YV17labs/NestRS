@@ -52,7 +52,7 @@ pub(crate) fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
 
     let pk_loader_ident = format_ident!("{}ById", last_segment_ident(&service));
     let pk_loader_block = emit_pk_loader(model, &service, pk)?;
-    let pk_trait_impl = emit_pk_loadable_impl(model, &pk_loader_ident);
+    let pk_trait_impl = emit_pk_loadable_impl(&pk_loader_ident);
     let fk_loaders = emit_fk_loaders(model, &service, pk)?;
     let field_resolvers = emit_field_resolvers(model, pk)?;
 
@@ -123,14 +123,13 @@ fn emit_pk_loader(
     })
 }
 
-/// `impl PkLoadable for Entity { type Loader = <Service>ById; type Wire = User; }`
-/// — the link an outside entity uses to resolve a `belongs_to` pointing here.
-fn emit_pk_loadable_impl(model: &ResourceModel, loader: &Ident) -> TokenStream2 {
-    let wire = &model.output_ident;
+/// `impl PkLoadable for Entity { type Loader = <Service>ById; }` — the link an
+/// outside entity uses to resolve a `belongs_to` pointing here; the wire type
+/// it loads is the entity's `Exposed::Wire`.
+fn emit_pk_loadable_impl(loader: &Ident) -> TokenStream2 {
     quote! {
         impl ::nest_rs_seaorm::graphql::PkLoadable for Entity {
             type Loader = #loader;
-            type Wire = #wire;
         }
     }
 }
@@ -459,7 +458,7 @@ fn emit_belongs_to_method(
             &self,
             __ctx: &#root::Context<'_>,
         ) -> #root::Result<
-            ::core::option::Option<<#target as ::nest_rs_seaorm::graphql::PkLoadable>::Wire>,
+            ::core::option::Option<<#target as ::nest_rs_seaorm::Exposed>::Wire>,
         > {
             // Never `data_unchecked`: a loader whose owner module this app does
             // not import would panic at request time.

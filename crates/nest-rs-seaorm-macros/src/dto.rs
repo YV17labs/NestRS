@@ -1,4 +1,6 @@
-//! Emit the wire output object plus its `From<&Model>`. Only `#[expose]`d
+//! Emit the wire output object, its `From<&Model>` and the entity's `Exposed`
+//! impl naming it — the one association from an entity to its wire type,
+//! which `#[crud]` and the relation resolvers read. Only `#[expose]`d
 //! columns appear — an unexposed field is absent; a `Uuid` or a timestamp
 //! renders as a `String` on the wire, its schema keeping the `uuid` or
 //! `date-time` format. Derives `JsonSchema` for OpenAPI; with `graphql`, also
@@ -88,6 +90,12 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
             fn from(model: &#source) -> Self {
                 Self { #(#inits),* }
             }
+        }
+
+        impl ::nest_rs_seaorm::__private::ExposeDeclared for Entity {}
+
+        impl ::nest_rs_seaorm::Exposed for Entity {
+            type Wire = #output;
         }
     }
 }

@@ -2,6 +2,8 @@
 //! pointing at another entity's loader **without knowing its service name**.
 
 use nest_rs_graphql::async_graphql::OutputType;
+
+use crate::Exposed;
 use nest_rs_graphql::async_graphql::connection::{Connection, Edge};
 
 /// The dataloader key for **one parent's page** of an auto-resolved `has_many`.
@@ -84,13 +86,12 @@ impl<T: OutputType> RelationPage<T> {
     }
 }
 
-/// "This entity exposes a primary-key loader and a wire DTO." Implemented
-/// automatically by `#[expose]` on every entity that declares a `service = …`.
-pub trait PkLoadable {
+/// "This entity loads its wire type by primary key." Implemented
+/// automatically by `#[expose]` on every entity that declares a `service = …`;
+/// the wire type a load answers is the entity's [`Exposed::Wire`].
+pub trait PkLoadable: Exposed {
     /// The `#[dataloader]`-generated primary-key loader (`<Service>ById`).
     type Loader: Send + Sync + 'static;
-    /// The GraphQL output type `#[expose(name = "…")]` emits for this entity.
-    type Wire: OutputType + Send + Sync + 'static;
 }
 
 /// The `Via` a `HasMany` takes when it names no column: "the one foreign key

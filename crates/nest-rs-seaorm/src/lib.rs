@@ -59,6 +59,7 @@ mod config;
 mod database;
 mod error;
 mod executor;
+mod exposed;
 mod module;
 mod page;
 mod repo;
@@ -86,6 +87,7 @@ pub use config::SeaOrmConfig;
 pub use database::SeaOrmDatabaseModule;
 pub use error::{CommitError, DbOutcome, ServiceError};
 pub use executor::{FinalizeOutcome, LazyTransaction, SeaOrmExecutor};
+pub use exposed::Exposed;
 pub use module::{SeaOrmModule, SeaOrmSetup, connect_from_env};
 pub use page::{DEFAULT_PAGE_SIZE, LIST_CAP, Page, PageCursor, PageParams, clamp_page_size};
 pub use repo::{Repo, scope_for};
@@ -123,6 +125,7 @@ pub mod __private {
     pub use crate::service::{SameEntity, bound_entity, created_key};
 
     pub use crate::column_default::ColumnDefaultRegistration;
+    pub use crate::exposed::ExposeDeclared;
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
     pub use inventory;
 

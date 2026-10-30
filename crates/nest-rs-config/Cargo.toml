@@ -18,13 +18,14 @@ all-features = true
 
 [dependencies]
 thiserror.workspace = true
-# `Config::load` runs declarative `#[validate(...)]` checks after the explicit
-# `from_env` mapping — the same `validator` every edge checks a decoded
+# `Config::load` runs declarative `#[validate(...)]` checks after the
+# `from_env` overlay — the same `validator` every edge checks a decoded
 # argument with.
 validator.workspace = true
-# `ConfigModule::for_feature` queues a config-loading factory on the container,
-# so this crate reaches into the kernel. The reverse never holds — `nest-rs-core`
-# does not depend on `nest-rs-config`, so there is no cycle.
+# The boot queues a config-loading factory on the container for each config a
+# reached provider injects, and `ConfigModule::provide_feature` for one a module
+# reads, so this crate reaches into the kernel. The reverse never holds —
+# `nest-rs-core` does not depend on `nest-rs-config`, so there is no cycle.
 nest-rs-core.workspace = true
 # `anyhow::Error` is the factory's error type (a failed load aborts the boot).
 anyhow.workspace = true
@@ -81,8 +82,8 @@ figment = { workspace = true, features = ["test", "toml"] }
 # A test's scratch files live in a directory removed when it drops, on every
 # exit a test takes, a failing assertion included.
 tempfile.workspace = true
-# The custom-prefix suite boots a real app (`ConfigModule::for_feature` is an
-# async factory), which is what proves the declared prefix reaches the field —
+# The custom-prefix suite boots a real app (a config's load is an async
+# factory), which is what proves the declared prefix reaches the field —
 # compiling only proves the name was built.
 tokio.workspace = true
 

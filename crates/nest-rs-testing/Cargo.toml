@@ -140,9 +140,9 @@ async-graphql.workspace = true
 # `test-util` (not part of tokio's `full`) pauses time, so the close of a
 # transport that unwinds for seconds is asserted on a virtual clock.
 tokio = { workspace = true, features = ["test-util"] }
-# The config DI test boots a module wiring `ConfigModule::for_feature` and a
-# service injecting the loaded config; `nest-rs-config` is already a normal
-# dependency. `validator` backs the `#[config]` struct's `#[validate]` derive.
+# The config DI test boots a module whose provider injects the loaded config,
+# which loads it; `nest-rs-config` is already a normal dependency. `validator`
+# backs the `#[config]` struct's `#[validate]` derive.
 validator.workspace = true
 # The exception-filters test (`tests/integration/exception_filters.rs`) needs the
 # trait + a typed error to throw and catch.

@@ -1189,7 +1189,10 @@ lists what the boot, a log or the wire shows when one is missed.
   needs (`Duration` is read through its bounds, `#[config(bounds = …)]`), a
   field named for a unit (`window_secs`) names the field it should be, and a
   `DurationBounds` whose key is not its field's fails the `const` it is
-  checked in.
+  checked in. An `Option<Duration>` read through bounds with no off, or a
+  `Duration` through `Floor::UnitsOrOff`, fails the boot naming the field
+  (`ConfigError::MisshapenDuration`), and so does a `#[config(count)]` pinned
+  at `Some(0)` with its variable unset: unlimited in code is `None`.
 - **A deployment still setting `<PREFIX>_HTTP__CORS_MAX_AGE`** sends no
   `Access-Control-Max-Age`: the boot reports it at `warn` as read by no config
   (`config variable read by no config`), with `CORS_MAX_AGE_SECS` as the

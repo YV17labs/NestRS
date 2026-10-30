@@ -70,6 +70,12 @@ handshake's remedy and the drivers' own refusals name `TLS_CA_CERT`,
 `TLS_CERT` and `TLS_KEY`. `HttpTls::with_reload_secs(u64)`, whose `0` stopped
 the watch, is `with_reload(Option<Duration>)`, the duration shape above.
 
+The shape is held where the field is read: the derived read refuses an
+`Option<Duration>` whose bounds admit no off — its `None` would mean "unset"
+again — and a `Duration` whose bounds turn it off at `0`
+(`ConfigError::MisshapenDuration`), and a `#[config(count)]` pinned at
+`Some(0)` with its variable unset, as a pinned zero duration is refused.
+
 Refused:
 
 - **Carrying the key in `ClientTls`**, so its sentences name whatever field
@@ -80,6 +86,11 @@ Refused:
   naming path and lets an operator audit every client's material under the
   same three keys (security, correctness); a config holding two TLS clients
   holds two resources, each its own namespace.
+- **The shape checked at compile time.** The derive sees a field's type as
+  tokens, so it would judge `Option` by its spelling, blind to an alias; an
+  assertion on the type itself is a second obligation on it, and a field of
+  a type no bounds read would be reported twice. The read refuses every
+  shape, aliases included, at the first boot or test that reads the config.
 - **Reading a retired key, or refusing the boot on one.** Reading it is an
   alias (`CLAUDE.md`, no alias inside a major); refusing it is a detector that
   keeps the 6.x name in code for a deployment the report already names at

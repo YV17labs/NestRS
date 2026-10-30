@@ -236,7 +236,9 @@ arbitrates between variables or tiers.
   off and nothing else**: a duration is a `Duration`, or an `Option<Duration>`
   only where an off exists; a count the same, `0` from the environment its
   `None`; a default sits in `Default`, never behind a `None`, and no field
-  names a unit. Held by the derive's refusals and each config's unit tests.
+  names a unit. Held by the derive's compile errors and its reads, which
+  refuse a duration whose shape is not its bounds' floor
+  (`ConfigError::MisshapenDuration`) and a count pinned at `Some(0)`.
 - **A duration a deployment sets has a floor and a ceiling**, refused naming the
   variable whether pinned or read, never clamped. The floor is where the thing
   stops working; the ceiling is where a value becomes a slip, **and never above

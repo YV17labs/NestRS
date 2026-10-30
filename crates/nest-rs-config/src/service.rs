@@ -478,9 +478,18 @@ impl ConfigService {
     }
 
     /// A whole count, where **`0` means unlimited**: unset keeps `base`, and
-    /// set-but-unparseable is boot-fatal naming the variable.
+    /// set-but-unparseable is boot-fatal naming the variable. Unlimited in code
+    /// is `None`, so a `base` of `Some(0)` is refused under the variable that
+    /// would override it, as a pinned zero duration is.
     pub fn count(&self, key: &str, base: Option<usize>) -> Result<Option<usize>, ConfigError> {
         Ok(match self.parse::<usize>(key)? {
+            None if base == Some(0) => {
+                return Err(ConfigError::parse(
+                    self.var_name(key),
+                    "is not set, and the count set in code is `Some(0)` — a count is at least \
+                     1, and unlimited is `None`",
+                ));
+            }
             None => base,
             Some(0) => None,
             Some(count) => Some(count),
@@ -1227,6 +1236,21 @@ mod tests {
 
         let set = ConfigService::with_vars("probe", [("N", "7")]);
         assert_eq!(set.count("N", base_count).expect("set"), Some(7));
+
+        let refused = unset
+            .count("N", Some(0))
+            .expect_err("unlimited in code is `None`, never `Some(0)`");
+        assert!(
+            matches!(&refused, ConfigError::Parse { var, .. } if *var == var_name("probe", "N")),
+            "{refused}"
+        );
+        assert!(refused.to_string().contains("`Some(0)`"), "{refused}");
+        assert_eq!(
+            set.count("N", Some(0))
+                .expect("the variable outranks the pin"),
+            Some(7)
+        );
+        assert_eq!(unset.count("N", None).expect("unlimited"), None);
 
         for bad in ["-1", " 7 ", "abc", "3.0"] {
             let service = ConfigService::with_vars("probe", [("N", bad)]);

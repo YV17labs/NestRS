@@ -196,6 +196,107 @@ fn a_duration_reads_its_bounds_and_off_is_none_alone() {
     );
 }
 
+/// A count unlimited in code is `None`: a pinned `Some(0)` is refused under
+/// the variable that would override it, which still outranks the pin.
+#[test]
+fn a_count_pinned_at_zero_is_refused_and_none_is_unlimited() {
+    let zero = KilnConfig {
+        batches: Some(0),
+        ..KilnConfig::default()
+    };
+    let refused = read(&[], zero.clone()).expect_err("unlimited in code is `None`");
+    assert!(
+        matches!(&refused, ConfigError::Parse { var, .. } if *var == var_name("overlay_kiln", "BATCHES")),
+        "{refused}"
+    );
+    assert_eq!(
+        read(&[("BATCHES", "3")], zero)
+            .expect("the variable outranks the pin")
+            .batches,
+        Some(3)
+    );
+    let unlimited = KilnConfig {
+        batches: None,
+        ..KilnConfig::default()
+    };
+    assert_eq!(read(&[], unlimited).expect("unlimited").batches, None);
+}
+
+const LULL: DurationBounds = DurationBounds::secs(
+    "LULL_SECS",
+    "LullConfig::lull",
+    Floor::Units(Bound::new(1, "a shorter lull is no pause")),
+    Bound::new(3600, "past an hour it is a unit slip"),
+);
+
+/// An `Option<Duration>` read through bounds with no off: its `None` could
+/// only mean "unset", which no duration's `None` means.
+#[config(namespace = "overlay_lull")]
+#[derive(Clone, Debug, Default)]
+struct LullConfig {
+    #[config(bounds = LULL)]
+    lull: Option<Duration>,
+}
+
+const PAUSE: DurationBounds = DurationBounds::millis(
+    "PAUSE_MS",
+    "PauseConfig::pause",
+    Floor::UnitsOrOff(Bound::new(1, "a shorter pause is none")),
+    Bound::new(60_000, "past a minute it is a unit slip"),
+);
+
+/// A `Duration` read through bounds whose `0` is off, which it cannot hold.
+#[config(namespace = "overlay_pause")]
+#[derive(Clone, Debug)]
+struct PauseConfig {
+    #[config(bounds = PAUSE)]
+    pause: Duration,
+}
+
+impl Default for PauseConfig {
+    fn default() -> Self {
+        Self {
+            pause: Duration::from_millis(5),
+        }
+    }
+}
+
+/// A duration's shape is its bounds' floor: `Option<Duration>` exactly where
+/// `0` is off, refused otherwise at every read, before any variable is.
+#[test]
+fn a_duration_whose_shape_contradicts_its_bounds_is_refused_naming_the_field() {
+    let refused = LullConfig::from_env(
+        &ConfigService::with_vars("overlay_lull", []),
+        LullConfig::default(),
+    )
+    .expect_err("an `Option<Duration>` needs an off");
+    assert!(
+        matches!(&refused, ConfigError::MisshapenDuration { var, field: "LullConfig::lull", optional: true } if *var == var_name("overlay_lull", "LULL_SECS")),
+        "{refused:?}"
+    );
+    assert!(refused.to_string().contains("admit no off"), "{refused}");
+    let refused = PauseConfig::from_env(
+        &ConfigService::with_vars("overlay_pause", [("PAUSE_MS", "5")]),
+        PauseConfig::default(),
+    )
+    .expect_err("a `Duration` cannot be off");
+    assert!(
+        matches!(
+            &refused,
+            ConfigError::MisshapenDuration {
+                field: "PauseConfig::pause",
+                optional: false,
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    assert!(
+        refused.to_string().contains("turn it off at `0`"),
+        "{refused}"
+    );
+}
+
 #[test]
 fn a_value_that_does_not_read_is_refused_by_its_variable_never_by_its_value() {
     for (key, value, expected) in [

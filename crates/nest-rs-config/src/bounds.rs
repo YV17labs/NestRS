@@ -387,7 +387,9 @@ impl BoundedDuration {
 
 /// A `#[config]` field read through its [`DurationBounds`]: a `Duration` the
 /// range holds, or an `Option<Duration>` whose `None` is off — the only two
-/// shapes a duration takes. Not API: what `#[config(bounds = …)]` expands to.
+/// shapes a duration takes, each refused under bounds of the other's floor
+/// ([`ConfigError::MisshapenDuration`]), so `None` never means "unset". Not
+/// API: what `#[config(bounds = …)]` expands to.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
     message = "`#[config(bounds = …)]` reads a `Duration` or an `Option<Duration>`, not `{Self}`",
@@ -409,6 +411,7 @@ impl BoundedField for Duration {
         env: &ConfigService,
         base: Self,
     ) -> Result<Self, ConfigError> {
+        bounds.shaped(env, false)?;
         bounds.read(env, base).map(|read| read.value)
     }
 }
@@ -419,7 +422,25 @@ impl BoundedField for Option<Duration> {
         env: &ConfigService,
         base: Self,
     ) -> Result<Self, ConfigError> {
+        bounds.shaped(env, true)?;
         Ok(bounds.read_optional(env, base)?.map(|read| read.value))
+    }
+}
+
+impl DurationBounds {
+    /// Refused unless a field of this shape — an `Option<Duration>` when
+    /// `optional` — is the one these bounds' floor reads into: `None` exists
+    /// exactly where `0` is off.
+    fn shaped(&self, env: &ConfigService, optional: bool) -> Result<(), ConfigError> {
+        let off = matches!(self.least, Floor::UnitsOrOff(_));
+        if off == optional {
+            return Ok(());
+        }
+        Err(ConfigError::MisshapenDuration {
+            var: env.var_name(self.key),
+            field: self.field,
+            optional,
+        })
     }
 }
 

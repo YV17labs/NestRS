@@ -98,17 +98,20 @@ three lines saying what a refused value was expected to be.
 
 | Key | Reads |
 |---|---|
-| `bounds = CONST` | A `Duration`, or an `Option<Duration>` whose `None` turns it off, held to the `DurationBounds` named — whose key carries the unit (`CACHE_TTL_SECS`) and must be the field's, checked at compile time |
+| `bounds = CONST` | A `Duration`, or an `Option<Duration>` whose `None` turns it off — the shape the bounds' floor reads into, refused at the read otherwise — held to the `DurationBounds` named, whose key carries the unit (`CACHE_TTL_SECS`) and must be the field's, checked at compile time |
 | `json` | A structured value — a list of records, a map — written as JSON |
-| `count` | An `Option<usize>` where `0` from the environment is `None`, unlimited |
+| `count` | An `Option<usize>` where `0` from the environment is `None`, unlimited, and a pinned `Some(0)` is refused |
 | `with = path` | Through a function of yours, `fn(&ConfigService, &str, T) -> Result<T>`, handed the field's key and base |
 
 **A duration is a `Duration`; `None` is off and nothing else.** A field never
 names its unit — the key does, through its bounds — and its default sits in
 `Default`, never behind a `None` the code would read as "the default". A
 field named `ttl_secs`, or a `Duration` with no bounds, is a compile error
-saying so. A count follows the same rule: a plain number with its default in
-`Default`, or an `Option` whose `None` is unlimited.
+saying so, and the read refuses a field whose shape is not its bounds' floor:
+an `Option<Duration>` under bounds with no off, or a `Duration` under
+`Floor::UnitsOrOff`. A count follows the same rule: a plain number with its
+default in `Default`, or an `Option` whose `None` is unlimited, a pinned
+`Some(0)` refused.
 
 ## The dual-path rule
 
@@ -257,7 +260,7 @@ a `Result`, because reading can fail before parsing does.
 | `env.flag("KEY", default)?` → `bool`           | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
 | `env.list("KEY", default)?` → `Vec<String>`    | Comma-separated, trimmed, empties dropped   |
 | `env.json::<T>("KEY")?` → `Option<T>`          | A structured value — a list of records, a map — written as JSON |
-| `env.count("KEY", base)?` → `Option<usize>`    | A whole count; `0` means unlimited          |
+| `env.count("KEY", base)?` → `Option<usize>`    | A whole count; `0` means unlimited, and a `base` of `Some(0)` is refused |
 | `env.setting("KEY")?` → `Option<Setting>`      | The raw string and the spelling that supplied it — for a value your own code refuses |
 | `env.material("KEY")?` → `Option<Setting<Material>>` | The bytes as given, and the file they came from — for certificates and keys |
 | `env.var_name("KEY")` → `String`               | The full env-var **name** (for error messages) |

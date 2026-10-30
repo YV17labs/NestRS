@@ -58,9 +58,14 @@ from two namespaces at once (its timeouts under `OTEL_*`, the rest under ours).
   telemetry would have two spellings; `#[main]`'s grammar stays closed, and
   `init`'s error reaches the boot through the `?` the developer already
   writes. The trap it closed — `let _ = OpenTelemetry::init()?` dropping the
-  guard at once — closes at the type's rung instead: the guard is
+  guard at once — closes at the lint's rung instead: the guard is
   `#[must_use]`, and `clippy::let_underscore_must_use` refuses the discard
-  where it is on (the demo, the framework).
+  where it is on — the framework, the demo, and every workspace `nestrs new`
+  writes, whose root denies it and whose members inherit it (correctness: the
+  lint is in clippy's restriction group, off by default, so a scaffold that
+  left it off would leave the trap open in the developer's own app, and a
+  swallowed `Result` with it). A project the CLI did not write turns it on
+  itself, which the OpenTelemetry page says.
 - **A reload slot filled by `OpenTelemetryModule::for_root(config)`.** The
   `reload` layer takes a lock on every span and event, which every app would
   pay whether it exports or not, and what is emitted before the module

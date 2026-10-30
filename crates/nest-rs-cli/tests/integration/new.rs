@@ -423,6 +423,73 @@ fn no_generated_manifest_names_the_server_library() {
     }
 }
 
+/// A value its type marks `#[must_use]` is never discarded in a new workspace:
+/// the root denies `clippy::let_underscore_must_use`, and every member the CLI
+/// writes inherits it, a second app included.
+#[test]
+fn every_member_of_a_new_workspace_refuses_a_discarded_must_use_value() {
+    let dir = tempfile::tempdir().unwrap();
+    run_ok(dir.path(), &["new", "acme"]);
+    let root = dir.path().join("acme");
+    run_ok(&root, &["new", "blog"]);
+
+    let manifest = |path: &str| {
+        fs::read_to_string(root.join(path))
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap()
+    };
+    let workspace = manifest("Cargo.toml");
+    let denied = ["workspace", "lints", "clippy", "let_underscore_must_use"]
+        .iter()
+        .try_fold(workspace.as_item(), |item, key| item.get(key))
+        .and_then(toml_edit::Item::as_str);
+    assert_eq!(denied, Some("deny"), "{workspace}");
+    for member in [
+        "crates/features/Cargo.toml",
+        "crates/migrations/Cargo.toml",
+        "crates/seed/Cargo.toml",
+        "apps/hello/Cargo.toml",
+        "apps/blog/Cargo.toml",
+    ] {
+        let doc = manifest(member);
+        let inherits = doc
+            .get("lints")
+            .and_then(|lints| lints.get("workspace"))
+            .and_then(toml_edit::Item::as_bool);
+        assert_eq!(inherits, Some(true), "{member}: {doc}");
+    }
+}
+
+/// A workspace an older `nestrs new` wrote declares no lints, and inheriting a
+/// table that does not exist fails the build: what the CLI adds to it inherits
+/// none.
+#[test]
+fn what_joins_a_workspace_declaring_no_lints_inherits_none() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    run_ok(dir.path(), &["new", "blog"]);
+    run_ok(
+        dir.path(),
+        &[
+            "g",
+            "migration",
+            "create_widget",
+            "-p",
+            dir.path().to_str().unwrap(),
+        ],
+    );
+
+    for member in [
+        "apps/blog/Cargo.toml",
+        "crates/migrations/Cargo.toml",
+        "crates/seed/Cargo.toml",
+    ] {
+        let manifest = fs::read_to_string(dir.path().join(member)).unwrap();
+        assert!(!manifest.contains("[lints]"), "{member}: {manifest}");
+    }
+}
+
 /// The test harness is a dev-dependency of each app, never a feature of the
 /// workspace's `nest-rs`: a release build of any app links none of it.
 #[test]

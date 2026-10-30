@@ -23,6 +23,12 @@ nest-rs = { version = "{{nestrs_version}}", features = ["http", "seaorm"] }
 sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid", "with-chrono"] }
 sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio"] }
 
+# A value its type marks `#[must_use]` is never discarded with `let _ =`: a
+# swallowed `Result`, or a guard dropped on the spot (OpenTelemetry's flushes
+# and stops exporting there). Every member inherits it with `[lints]`.
+[workspace.lints.clippy]
+let_underscore_must_use = "deny"
+
 # Release: the smallest, fastest single binary — production defaults.
 [profile.release]
 opt-level = 3       # maximum runtime performance
@@ -50,7 +56,15 @@ publish = false
 nest-rs.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+
+[lints]
+workspace = true
 "#;
+
+/// What a member manifest adds when its workspace declares `[workspace.lints]`;
+/// a workspace an older `nestrs new` wrote declares none, and inheriting a
+/// table that does not exist fails its build.
+pub(crate) const INHERITED_LINTS: &str = "\n[lints]\nworkspace = true\n";
 
 /// The feature-crate root. Every workspace starts with the app's own `hello`
 /// feature declared here (see [`super::hello`]).

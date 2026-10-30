@@ -81,8 +81,10 @@ subscriber and must run **before** `App::builder()`. It takes no name: the
 service is the binary `#[nest_rs::main]` started, named and versioned from its
 package's manifest. The returned guard flushes batch exporters on Drop, so it
 must live until `main` returns — bind it to `_otel`, never `_`, which drops it
-on the spot; the guard is `#[must_use]`, and `clippy::let_underscore_must_use`
-refuses the discard. That flush is
+on the spot. The guard is `#[must_use]`, and `clippy::let_underscore_must_use`
+refuses the discard: a `nestrs new` workspace denies it for every member; a
+project of your own turns it on in its `[workspace.lints.clippy]`, or the
+trap stays open, since clippy leaves that lint off by default. That flush is
 bounded: the three providers export at once, and what is still exporting after
 three seconds (`FLUSH_TIMEOUT`) is abandoned with a line on stderr naming it,
 so a collector that stopped answering delays the exit by three seconds and

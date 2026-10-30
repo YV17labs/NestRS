@@ -26,6 +26,9 @@ pub(crate) const ENV_PREFIX_VAR: &str = "NESTRS_ENV_PREFIX";
 pub(crate) struct NestrsWorkspace {
     pub root: PathBuf,
     pub metadata: Metadata,
+    /// Whether the root declares `[workspace.lints]`, which a member the CLI
+    /// adds then inherits.
+    pub lints: bool,
 }
 
 /// Opt-in `[workspace.metadata.nestrs]` overrides. Every field has a default,
@@ -174,6 +177,7 @@ fn read_workspace(dir: &Path) -> CliResult<Option<NestrsWorkspace>> {
     Ok(Some(NestrsWorkspace {
         root: dir.to_path_buf(),
         metadata: read_metadata(workspace),
+        lints: workspace.contains_key("lints"),
     }))
 }
 

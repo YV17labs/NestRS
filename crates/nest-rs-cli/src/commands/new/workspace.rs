@@ -40,7 +40,7 @@ pub(super) fn scaffold_root(
         root.join("crates/features/Cargo.toml"),
         r.render(workspace::FEATURES_CARGO),
     );
-    queue_db_crates(&mut s, &root, &Registered::default());
+    queue_db_crates(&mut s, &root, &Registered::default(), true);
     queue_root_files(&mut s, &root, names, env_prefix);
 
     // The first app is always `hello`, whatever the workspace is called.
@@ -61,6 +61,7 @@ pub(super) fn scaffold_root(
         &hello_names,
         HELLO_APP_PORT,
         env_prefix,
+        true,
     );
 
     let report = s.apply(dry_run)?;
@@ -107,7 +108,7 @@ pub(super) fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -
     // The prefix belongs to the environment that runs the app, so it is read
     // from there.
     let env_prefix = crate::context::env_prefix();
-    queue_app(&mut s, &root, names, port, &env_prefix);
+    queue_app(&mut s, &root, names, port, &env_prefix, ws.lints);
     queue_root_files(&mut s, &ws.root, names, &env_prefix);
 
     let report = s.apply(dry_run)?;
@@ -155,9 +156,22 @@ fn queue_hello_feature(s: &mut Scaffold, feature_root: &Path, names: &Names) {
     );
 }
 
-fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, port: u16, env_prefix: &str) {
+/// Queue the app crate at `app_root`; `lints` says whether its workspace
+/// declares the lints its manifest inherits.
+fn queue_app(
+    s: &mut Scaffold,
+    app_root: &Path,
+    names: &Names,
+    port: u16,
+    env_prefix: &str,
+    lints: bool,
+) {
     let r = with_env_prefix(Renderer::new(names), env_prefix).with("port", port.to_string());
-    s.create(app_root.join("Cargo.toml"), r.render(workspace::APP_CARGO));
+    let mut manifest = r.render(workspace::APP_CARGO);
+    if lints {
+        manifest.push_str(workspace::INHERITED_LINTS);
+    }
+    s.create(app_root.join("Cargo.toml"), manifest);
     s.create(app_root.join(".env"), r.render(workspace::APP_ENV));
     s.create(app_root.join("src/lib.rs"), r.render(workspace::APP_LIB));
     s.create(app_root.join("src/main.rs"), r.render(workspace::APP_MAIN));

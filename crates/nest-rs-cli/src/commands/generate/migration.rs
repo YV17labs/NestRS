@@ -18,7 +18,7 @@ use crate::context::{Context, NestrsWorkspace};
 use crate::error::{CliError, CliResult};
 use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, Transform, ensure_decl};
-use crate::templates::migration;
+use crate::templates::{migration, workspace};
 
 pub(crate) struct MigrationOptions {
     pub name: String,
@@ -127,11 +127,19 @@ impl Registered {
 /// Queue the `migrations` + `seed` crates `db.just` names in every recipe,
 /// registering `registered` in both `lib.rs` and `migrator.rs` — nothing from
 /// `nestrs new`, the first migration from `g migration` on a workspace that
-/// predates the crates.
-pub(crate) fn queue_db_crates(s: &mut Scaffold, root: &Path, registered: &Registered) {
+/// predates the crates; `lints` says whether that workspace declares the lints
+/// their manifests inherit.
+pub(crate) fn queue_db_crates(s: &mut Scaffold, root: &Path, registered: &Registered, lints: bool) {
+    let manifest = |template: &str| {
+        let mut manifest = template.to_owned();
+        if lints {
+            manifest.push_str(workspace::INHERITED_LINTS);
+        }
+        manifest
+    };
     s.create(
         root.join("crates/migrations/Cargo.toml"),
-        migration::CRATE_CARGO.to_string(),
+        manifest(migration::CRATE_CARGO),
     );
     s.create(
         root.join("crates/migrations/src/lib.rs"),
@@ -147,7 +155,7 @@ pub(crate) fn queue_db_crates(s: &mut Scaffold, root: &Path, registered: &Regist
     );
     s.create(
         root.join("crates/seed/Cargo.toml"),
-        migration::SEED_CARGO.to_string(),
+        manifest(migration::SEED_CARGO),
     );
     s.create(
         root.join("crates/seed/src/main.rs"),
@@ -215,7 +223,7 @@ fn generate(ws: &NestrsWorkspace, names: &Names, subject: &Names, dry_run: bool)
             mods: vec![stem.clone()],
             ..Registered::default()
         };
-        queue_db_crates(&mut s, &ws.root, &registered);
+        queue_db_crates(&mut s, &ws.root, &registered, ws.lints);
         s.edit(
             ws.root.join("Cargo.toml"),
             ensure_workspace_deps(migrations_deps()),
@@ -259,7 +267,7 @@ fn register(
             framework: vec![framework],
             ..Registered::default()
         };
-        queue_db_crates(&mut s, &ws.root, &registered);
+        queue_db_crates(&mut s, &ws.root, &registered, ws.lints);
         deps.extend(migrations_deps());
         deps.push(framework.dep);
     }

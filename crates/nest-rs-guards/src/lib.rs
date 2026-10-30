@@ -103,8 +103,6 @@ mod reason;
 mod registry;
 mod scope;
 mod stage;
-#[cfg(test)]
-mod testing;
 mod validate;
 
 pub use builder::AppBuilderGuardsExt;

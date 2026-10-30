@@ -240,7 +240,6 @@ mod tests {
     use nest_rs_core::{Handler, Posture};
 
     use super::*;
-    use crate::testing::run;
 
     struct Socket;
 
@@ -323,13 +322,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_guard_writing_one_decision_refuses_an_http_request_with_it() {
+    #[tokio::test]
+    async fn a_guard_writing_one_decision_refuses_an_http_request_with_it() {
         let mut view = Socket;
         let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
         let guard: Arc<dyn Guard> = Arc::new(OneDecision);
 
-        let http = run(|| guard.as_ref().check_http(&mut cx));
+        let http = guard.as_ref().check_http(&mut cx).await;
         assert_eq!(
             http.map_err(|denial| denial.http_status()),
             Err(403),
@@ -355,13 +354,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_missing_precondition_refuses_with_a_500_naming_the_value() {
+    #[tokio::test]
+    async fn a_missing_precondition_refuses_with_a_500_naming_the_value() {
         let mut view = Socket;
         let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
         let guard: Arc<dyn Guard> = Arc::new(RequiresAuthor);
 
-        let unit = run(|| guard.as_ref().check(&mut cx));
+        let unit = guard.as_ref().check(&mut cx).await;
         let denial = unit.expect_err("an unwired guard fails closed");
         assert_eq!(denial.http_status(), 500);
         assert_eq!(denial.reason(), Some(crate::denial::MISSING_AMBIENT));
@@ -369,19 +368,19 @@ mod tests {
         assert!(chain.contains(std::any::type_name::<Author>()), "{chain}");
 
         cx.attach(Author);
-        let unit = run(|| guard.as_ref().check(&mut cx));
+        let unit = guard.as_ref().check(&mut cx).await;
         assert!(unit.is_ok(), "attached earlier in the stage, it is there");
     }
 
-    #[test]
-    fn an_async_trait_override_of_each_entry_is_the_one_that_runs() {
+    #[tokio::test]
+    async fn an_async_trait_override_of_each_entry_is_the_one_that_runs() {
         let mut view = Socket;
         let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
         let guard: Arc<dyn Guard> = Arc::new(Both);
 
-        let http = run(|| guard.check_http(&mut cx));
+        let http = guard.check_http(&mut cx).await;
         assert_eq!(http.map_err(|d| d.http_status()), Err(401));
-        let unit = run(|| guard.check(&mut cx));
+        let unit = guard.check(&mut cx).await;
         assert_eq!(unit.map_err(|d| d.http_status()), Err(403));
     }
 }

@@ -1,6 +1,6 @@
 ---
 title: Traces
-description: "Every request, job and scheduled tick opens a span; W3C traceparent propagation, sampling, and the HTTP interceptor stitch distributed traces together."
+description: "Every request, job and scheduled tick opens a span; W3C traceparent propagation and sampling, seeded onto the span every edge opens, stitch distributed traces together."
 sidebar:
   order: 2
 ---
@@ -101,11 +101,12 @@ The sampler comes from
 A pinned ratio outside `[0.0, 1.0]` fails `init_with`, naming
 `OpenTelemetryConfig::trace_sample_ratio`.
 
-## HTTP interceptor
+## The request span
 
-Importing `OpenTelemetryModule` activates the `OpenTelemetryHttp` interceptor
-automatically — there's nothing else to mount. It does **two** things, and both
-are things nothing else can supply:
+`OpenTelemetry::init` seeds what this crate adds onto the framework's span
+constructor, which every edge opens its unit through — there's nothing to
+mount, and no per-request interceptor. It does **two** things, and both are
+things nothing else can supply:
 
 1. **Links the remote parent** when the transport continued an upstream trace,
    so the exported span is a child of the caller's rather than a second root. A

@@ -444,7 +444,7 @@ rest of RFC 9110's) or one a route registers, spelled exactly, and `_OTHER`
 for any other token a client sent. There is no `user_agent`: it is free text
 the client writes, and a log pipeline keeps whatever a line hands it. The request's span still records the
 user agent, as the conventions recommend — see
-[Traces](/opentelemetry/traces/#http-interceptor) for that one stated exception.
+[Traces](/opentelemetry/traces/#the-request-span) for that one stated exception.
 
 `actor_id` joins the line once an authn guard resolved a principal, and is
 absent above because nobody was authenticated — which is why that request is a

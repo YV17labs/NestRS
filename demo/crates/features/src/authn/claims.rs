@@ -1,5 +1,6 @@
 use std::fmt;
 
+use nest_rs::authn::PrincipalIdentity;
 use nest_rs::seaorm::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -58,13 +59,16 @@ impl fmt::Display for Subject {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PrincipalIdentity)]
 pub struct Claims {
+    #[principal(actor)]
     pub sub: Subject,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    #[principal(tenant)]
     pub org_id: Uuid,
     pub roles: Vec<Role>,
+    #[principal(scopes)]
     #[serde(
         default,
         rename = "scope",
@@ -81,26 +85,8 @@ impl Claims {
     }
 }
 
-impl nest_rs::core::AmbientValue for Claims {}
-
-impl nest_rs::authn::PrincipalIdentity for Claims {
-    fn actor_id(&self) -> Option<String> {
-        Some(self.sub.to_string())
-    }
-
-    fn tenant_id(&self) -> Option<String> {
-        Some(self.org_id.to_string())
-    }
-
-    fn scopes(&self) -> Option<&[String]> {
-        Some(&self.scopes)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use nest_rs::authn::PrincipalIdentity;
-
     use super::*;
 
     fn claims(roles: Vec<Role>) -> Claims {

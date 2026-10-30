@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nest_rs::authn::{AuthError, JwtService};
+use nest_rs::authn::{AuthError, JwtService, PrincipalIdentity};
 use nest_rs::config::{ConfigError, Namespaced};
 use nest_rs::core::{async_trait, hooks, injectable};
 use nest_rs::oauth::client::AuthorizationRedirect;
@@ -15,8 +15,9 @@ use crate::authz::constants;
 use crate::users::{SocialIdentity, UserRole, UsersService};
 use crate::{Claims, Role, Subject};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PrincipalIdentity)]
 pub struct Caller {
+    #[principal(actor)]
     pub user_id: Uuid,
     pub org_id: Uuid,
     pub roles: Vec<Role>,
@@ -24,14 +25,6 @@ pub struct Caller {
 }
 
 pub type AuthenticatedClient = nest_rs::oauth::server::AuthenticatedClient<ClientPayload>;
-
-impl nest_rs::core::AmbientValue for Caller {}
-
-impl nest_rs::authn::PrincipalIdentity for Caller {
-    fn actor_id(&self) -> Option<String> {
-        Some(self.user_id.to_string())
-    }
-}
 
 #[injectable]
 pub struct SignInService {

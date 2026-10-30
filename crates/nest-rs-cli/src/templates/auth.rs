@@ -12,7 +12,6 @@
 pub(crate) const AUTHN_CLAIMS: &str = r#"use std::fmt;
 
 use nest_rs::authn::PrincipalIdentity;
-use nest_rs::core::AmbientValue;
 use nest_rs::seaorm::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -78,8 +77,15 @@ impl fmt::Display for Subject {
 /// The JWT payload this app verifies. Every field is read from the token, so
 /// whatever mints those tokens has to put them there; a token without a `sub`
 /// is refused.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// `PrincipalIdentity` makes the claims the principal: the authentication guard
+// puts `sub` on the request span as `actor_id`, so every downstream event —
+// denials included — is attributable, and attaches the claims for the rest of
+// the request, where `Ctx<Claims>` in a handler on every edge reads them back.
+// A tenant claim takes `#[principal(tenant)]`, a `scope` claim
+// `#[principal(scopes)]`.
+#[derive(Debug, Clone, Serialize, Deserialize, PrincipalIdentity)]
 pub struct Claims {
+    #[principal(actor)]
     pub sub: Subject,
     pub roles: Vec<Role>,
     pub exp: u64,
@@ -88,19 +94,6 @@ pub struct Claims {
 impl Claims {
     pub fn is_admin(&self) -> bool {
         self.roles.contains(&Role::Admin)
-    }
-}
-
-// The authentication guard attaches the claims for the rest of the request:
-// `Ctx<Claims>` in a handler on every edge, and every guard after it, reads
-// them back.
-impl AmbientValue for Claims {}
-
-// Puts `actor_id` on the request span, so every downstream event — denials
-// included — is attributable without threading the id through each call site.
-impl PrincipalIdentity for Claims {
-    fn actor_id(&self) -> Option<String> {
-        Some(self.sub.to_string())
     }
 }
 "#;

@@ -240,8 +240,13 @@ fn generate_auth_claims_name_a_subject_of_either_kind() {
         "no subject is optional:\n{claims}"
     );
     assert!(
-        claims.contains("Some(self.sub.to_string())"),
-        "`actor_id` returns the subject:\n{claims}"
+        claims.contains("Serialize, Deserialize, PrincipalIdentity)]\npub struct Claims {")
+            && claims.contains("#[principal(actor)]\n    pub sub: Subject,"),
+        "the claims derive their identity, `actor_id` reading the subject:\n{claims}"
+    );
+    assert!(
+        !claims.contains("impl PrincipalIdentity") && !claims.contains("impl AmbientValue"),
+        "the derive writes both impls, so the claims write neither:\n{claims}"
     );
     let controller = fs::read_to_string(authn.join("http/controller.rs")).unwrap();
     assert!(

@@ -9,7 +9,7 @@ use tracing_core::callsite::{self, Callsite};
 use tracing_core::field::{Field, FieldSet, Value};
 use tracing_core::metadata::{Kind, Level, LevelFilter, Metadata};
 use tracing_core::subscriber::Interest;
-use tracing_core::{Event, identify_callsite};
+use tracing_core::{Event, dispatcher, identify_callsite};
 
 use crate::Denial;
 use crate::denial::failure_chain;
@@ -37,8 +37,8 @@ struct Line {
 }
 
 impl Callsite for Line {
-    // Nothing cached: each denial asks the dispatcher, a denial being rare
-    // beside an admission.
+    // Nothing cached: each denial asks the dispatcher whether its line is
+    // enabled (`file_denial`), a denial being rare beside an admission.
     fn set_interest(&self, _interest: Interest) {}
 
     fn metadata(&self) -> &Metadata<'_> {
@@ -137,30 +137,108 @@ pub(crate) fn file_denial(
     else {
         return;
     };
-    let message = tracing_core::field::display(message);
-    let unit_name = cx.unit().name();
-    let host_name = cx.handler().host_name();
-    let addressed = cx.handler().address();
-    let arrived_on = cx.peer().and_then(|peer| peer.connection);
-    let code = denial.http_status();
-    let why = denial.reason();
-    let wait = denial.retry_after_secs();
-    let chain = failure_chain(denial);
-    // An absent value is a `None`, which records nothing, as the macros' do.
-    let values: [(&Field, Option<&dyn Value>); FIELDS.len()] = [
-        (said, Some(&message)),
-        (named, Some(&guard)),
-        (unit, Some(&unit_name)),
-        (host, Some(&host_name)),
-        (address, Some(&addressed)),
-        (conn_id, Some(&arrived_on)),
-        (status, Some(&code)),
-        (reason, Some(&why)),
-        (retry_after, Some(&wait)),
-        (error, Some(&chain)),
-    ];
     let metadata = line.metadata();
-    // `value_set` is how an event outside a macro is given its values: the
-    // way `tracing-log` dispatches a record.
-    Event::dispatch(metadata, &metadata.fields().value_set(&values));
+    // An event made outside the macros asks the dispatcher itself whether it is
+    // enabled, as `tracing-log` dispatches a record: `Event::dispatch` alone
+    // skips every per-target filter.
+    dispatcher::get_default(|dispatch| {
+        if !dispatch.enabled(metadata) {
+            return;
+        }
+        let message = tracing_core::field::display(message);
+        let unit_name = cx.unit().name();
+        let host_name = cx.handler().host_name();
+        let addressed = cx.handler().address();
+        let arrived_on = cx.peer().and_then(|peer| peer.connection);
+        let code = denial.http_status();
+        let why = denial.reason();
+        let wait = denial.retry_after_secs();
+        let chain = failure_chain(denial);
+        // An absent value is a `None`, which records nothing, as the macros' do.
+        let values: [(&Field, Option<&dyn Value>); FIELDS.len()] = [
+            (said, Some(&message)),
+            (named, Some(&guard)),
+            (unit, Some(&unit_name)),
+            (host, Some(&host_name)),
+            (address, Some(&addressed)),
+            (conn_id, Some(&arrived_on)),
+            (status, Some(&code)),
+            (reason, Some(&why)),
+            (retry_after, Some(&wait)),
+            (error, Some(&chain)),
+        ];
+        dispatch.event(&Event::new(metadata, &metadata.fields().value_set(&values)));
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+    use std::sync::{Arc, Mutex};
+
+    use nest_rs_core::__private::{
+        HandlerDeclaration, MetaLevels, declare_handler, declare_unit, log_filter, new_unit_context,
+    };
+    use nest_rs_core::operation_log::Kind;
+    use nest_rs_core::{Handler, Posture, UnitView};
+    use tracing_subscriber::Registry;
+    use tracing_subscriber::layer::{Context, SubscriberExt as _};
+
+    use super::*;
+
+    struct Socket;
+
+    impl UnitView for Socket {}
+
+    struct Host;
+
+    static MESSAGE: Handler = declare_handler(HandlerDeclaration {
+        unit: declare_unit("nest-rs-ws", "nest_rs::ws", Kind::Server, "ws.message"),
+        host: TypeId::of::<Host>(),
+        host_name: "Host",
+        method: "send",
+        address: "send",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    /// The target of every line a subscriber writes.
+    #[derive(Clone, Default)]
+    struct Written(Arc<Mutex<Vec<&'static str>>>);
+
+    impl<S: tracing_core::Subscriber> tracing_subscriber::Layer<S> for Written {
+        fn on_event(&self, event: &Event<'_>, _cx: Context<'_, S>) {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(event.metadata().target());
+        }
+    }
+
+    /// An operator silencing a guard's target silences its denials, as it
+    /// silences every line on it; the filter's other targets still write theirs.
+    #[test]
+    fn a_denial_line_on_a_target_the_filter_silences_is_not_written() {
+        let written = Written::default();
+        let subscriber = Registry::default()
+            .with(log_filter("warn,acme::silenced=off"))
+            .with(written.clone());
+        let mut view = Socket;
+        let cx = new_unit_context(&MESSAGE, &mut view, None, None);
+
+        tracing::subscriber::with_default(subscriber, || {
+            for target in ["acme::silenced", "acme::heard"] {
+                file_denial(
+                    "guard denied the message",
+                    "Door",
+                    target,
+                    &cx,
+                    &Denial::forbidden("closed"),
+                );
+            }
+        });
+
+        let written = written.0.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(*written, ["acme::heard"]);
+    }
 }

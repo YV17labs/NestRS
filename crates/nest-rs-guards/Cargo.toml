@@ -29,6 +29,8 @@ nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
 # Standard Webhooks spells them.
 aws-lc-rs.workspace = true
 base64.workspace = true
+# The denial line's unit tests write through the framework's own filter.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

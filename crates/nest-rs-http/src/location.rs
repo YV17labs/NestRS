@@ -26,14 +26,25 @@ pub(crate) fn caller_path(req: &Request) -> &str {
     }
 }
 
-/// Stamp `Location: <collection_path>/<id>` onto a create response.
+/// Stamp `Location: <collection_path>/<id>` onto a create response, the id
+/// percent-encoded as one path segment.
 ///
 /// An absolute-path reference (RFC 9110 §10.2.2): an absolute URI would name
 /// the client-controlled `Host`. The collection path is [`caller_path`].
 ///
-/// A header value that will not build is dropped, never raised.
+/// An id that is empty, `.` or `..` names no segment — a client resolves a dot
+/// segment away, encoded or not (RFC 3986 §5.2.4) — so no `Location` is
+/// written, and that is logged at `warn`.
 pub(crate) fn set_created_location(resp: &mut Response, collection_path: &str, id: &str) {
-    let location = crate::join_path(collection_path, id);
+    if matches!(id, "" | "." | "..") {
+        tracing::warn!(
+            target: crate::target::HTTP,
+            id_len = id.len(),
+            "a created resource's id names no path segment; its `Location` is not written",
+        );
+        return;
+    }
+    let location = crate::join_path(collection_path, &crate::router::percent_encoded(id));
     if let Ok(value) = HeaderValue::from_str(&location) {
         resp.headers_mut().insert(LOCATION, value);
     }
@@ -46,8 +57,12 @@ mod tests {
     const ID: &str = "018f3f9c-0000-7000-8000-000000000001";
 
     fn location_of(collection_path: &str) -> String {
+        location_of_id(collection_path, ID)
+    }
+
+    fn location_of_id(collection_path: &str, id: &str) -> String {
         let mut resp = Response::builder().finish();
-        set_created_location(&mut resp, collection_path, ID);
+        set_created_location(&mut resp, collection_path, id);
         resp.headers()
             .get(LOCATION)
             .and_then(|value| value.to_str().ok())
@@ -61,6 +76,30 @@ mod tests {
         assert_eq!(location_of("/api/v1/posts"), format!("/api/v1/posts/{ID}"));
         assert_eq!(location_of("/posts/"), format!("/posts/{ID}"));
         assert_eq!(location_of("/"), format!("/{ID}"));
+    }
+
+    #[test]
+    fn an_id_is_one_path_segment_whatever_it_holds() {
+        for (id, location) in [
+            ("a b", "/orgs/a%20b"),
+            ("x?y=1", "/orgs/x%3Fy%3D1"),
+            ("a/b", "/orgs/a%2Fb"),
+            ("#top", "/orgs/%23top"),
+            ("café", "/orgs/caf%C3%A9"),
+            ("100%", "/orgs/100%25"),
+            ("Ab-1.2_~", "/orgs/Ab-1.2_~"),
+        ] {
+            assert_eq!(location_of_id("/orgs", id), location, "{id}");
+        }
+    }
+
+    #[test]
+    fn an_id_no_segment_can_name_writes_no_location() {
+        for id in ["", ".", ".."] {
+            let mut resp = Response::builder().finish();
+            set_created_location(&mut resp, "/orgs", id);
+            assert!(resp.headers().get(LOCATION).is_none(), "{id:?}");
+        }
     }
 
     #[test]

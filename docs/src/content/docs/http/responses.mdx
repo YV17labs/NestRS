@@ -68,7 +68,8 @@ async fn create(&self, Json(input): Json<CreatePost>) -> Result<Created<Json<Pos
 
 `Created::at(id, body)` answers `201` with `Location: <collection>/<id>`, the
 collection being the path the caller addressed — global prefix and version
-included, the client-controlled `Host` never named. The route writes the
+included, the client-controlled `Host` never named — and the id one
+percent-encoded path segment, whatever it holds. The route writes the
 header, and the [OpenAPI document](/openapi/) reads the status, the `Location`
 and the body off the return type, alias included: no `#[http_code(201)]`, no
 `#[api(response = …)]`, no `&Request` taken for its path. The

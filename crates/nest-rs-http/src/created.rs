@@ -13,9 +13,10 @@ use crate::response::{IntoResponse, Response};
 ///
 /// The location is `<the path the caller addressed>/<id>`, an absolute-path
 /// reference, so a global prefix and a version survive and the
-/// client-controlled `Host` is never named. The route answering it writes the
-/// header, and `#[routes]` documents the status, the `Location` and the body
-/// off the return type.
+/// client-controlled `Host` is never named; the id is percent-encoded as one
+/// path segment, and one that is empty, `.` or `..` writes no `Location`. The
+/// route answering it writes the header, and `#[routes]` documents the status,
+/// the `Location` and the body off the return type.
 ///
 /// ```
 /// # use nest_rs_core::module;

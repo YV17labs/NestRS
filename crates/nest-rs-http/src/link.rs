@@ -14,26 +14,11 @@ use crate::response::Response;
 pub(crate) fn set_next_link(resp: &mut Response, collection_path: &str, first: u64, after: &str) {
     let link = format!(
         "<{collection_path}?first={first}&after={}>; rel=\"next\"",
-        encode_query_value(after),
+        crate::router::percent_encoded(after),
     );
     if let Ok(value) = HeaderValue::from_str(&link) {
         resp.headers_mut().insert(LINK, value);
     }
-}
-
-/// Percent-encode everything but RFC 3986's unreserved characters, so a cursor
-/// can never end the query value, the URI or the `<…>` that frames it.
-fn encode_query_value(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(char::from(byte));
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

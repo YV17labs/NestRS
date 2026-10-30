@@ -253,6 +253,30 @@ fn child<'a>(children: &'a mut Vec<(Box<str>, Node)>, key: Cow<'_, str>) -> &'a 
     &mut children[at].1
 }
 
+/// `value` with every byte but RFC 3986's unreserved characters
+/// percent-encoded, so it can end neither a path segment nor a query value:
+/// what [`percent_decoded`] reads back. Borrowed when nothing needs it.
+pub(crate) fn percent_encoded(value: &str) -> Cow<'_, str> {
+    let unreserved =
+        |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~');
+    if value.bytes().all(unreserved) {
+        return Cow::Borrowed(value);
+    }
+    let mut out = String::with_capacity(value.len() * 3);
+    for byte in value.bytes() {
+        if unreserved(byte) {
+            out.push(char::from(byte));
+        } else {
+            out.push('%');
+            out.push(char::from(HEX[usize::from(byte >> 4)]));
+            out.push(char::from(HEX[usize::from(byte & 0x0F)]));
+        }
+    }
+    Cow::Owned(out)
+}
+
+const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
 /// `raw` with each `%XX` escape decoded once, an escape that is not one left
 /// as written; `None` when the bytes are not UTF-8.
 fn percent_decoded(raw: &str) -> Option<Cow<'_, str>> {
@@ -396,6 +420,23 @@ mod tests {
             assert!(root.insert(first, 0));
             assert!(!root.insert(second, 1), "{second}");
         }
+    }
+
+    #[test]
+    fn an_encoded_value_decodes_back_to_itself() {
+        for value in [
+            "a b", "x?y=1&z", "a/b", "#top", "café", "100%", "%2F", "ab-1.2_~",
+        ] {
+            let encoded = percent_encoded(value);
+            assert!(
+                encoded
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-._~%".contains(&byte)),
+                "{encoded}"
+            );
+            assert_eq!(percent_decoded(&encoded).as_deref(), Some(value));
+        }
+        assert!(matches!(percent_encoded("ab-1"), Cow::Borrowed("ab-1")));
     }
 
     #[test]

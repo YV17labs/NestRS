@@ -1,6 +1,7 @@
 //! Emit `Create<Name>` / `Update<Name>` from `#[expose(input(...))]`
-//! fields. `validate(...)` bodies are re-emitted verbatim as `#[validate(...)]`
-//! so REST `Valid<Json<…>>` and the service enforce the same rules.
+//! fields. `validate(...)` bodies are re-emitted verbatim as `#[validate(...)]`,
+//! so every edge decoding one, and a service validating one it built, enforce
+//! the same rules.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;

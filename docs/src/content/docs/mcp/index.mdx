@@ -268,17 +268,17 @@ pub struct SearchPostsDto {
 }
 ```
 
-Wrap the arguments in `Valid<T>` and the check runs before the body — the same
-[pipe](/fundamentals/pipes/) binding GraphQL, WebSockets and queue handlers use:
+The rules run before the body, with nothing to wrap — the same check every
+edge runs on what it decodes, as [Pipes](/fundamentals/pipes/#validation-at-the-edge)
+describes:
 
 ```rust title="crates/features/src/posts/mcp/tool.rs (abridged)"
 #[tool(description = "Search the published posts' titles, most recent first.")]
 #[public]
 async fn search_posts(
     &self,
-    Parameters(params): Parameters<Valid<SearchPostsDto>>,
+    Parameters(params): Parameters<SearchPostsDto>,
 ) -> Result<String, McpError> {
-    let params = params.into_inner();
     let titles = self.svc
         .search_titles(&params.query, params.limit)
         .await
@@ -288,8 +288,8 @@ async fn search_posts(
 }
 ```
 
-`JsonSchema` derives the schema sent to the client — from `SearchPostsDto`, not from the
-carrier, so a client never sees `Valid` — and a rejection answers
+`JsonSchema` derives the schema sent to the client from `SearchPostsDto`, and a
+rejection answers
 `invalid_params` carrying its class and the field errors under `errors`, which
 is the one MCP error a model can act on:
 
@@ -298,8 +298,8 @@ is the one MCP error a model can act on:
  "data":{"code":"INVALID_ARGUMENT","errors":{"query":[{"code":"length"}]}}}
 ```
 
-`Piped<P, T>` runs any [pipe](/fundamentals/pipes/) in the same slot when the
-argument needs transforming rather than validating.
+`Parameters<Piped<P>>` runs any [pipe](/fundamentals/pipes/) over the
+arguments when they need transforming, once they passed their rules.
 
 ## Layers around an operation
 

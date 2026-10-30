@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use nest_rs::authz::Manage;
-use nest_rs::mcp::{McpError, Opaque, Parameters, Valid, mcp, tools};
+use nest_rs::mcp::{McpError, Opaque, Parameters, mcp, tools};
 
 use crate::audio::{AudioService, TranscodeDto, Transcoding};
 
@@ -23,10 +23,8 @@ impl AudioTool {
     #[authorize(Manage, Transcoding)]
     async fn transcode_status(
         &self,
-        Parameters(params): Parameters<Valid<TranscodeDto>>,
+        Parameters(params): Parameters<TranscodeDto>,
     ) -> Result<String, McpError> {
-        let params = params.into_inner();
-
         Ok(match self.svc.presign_result(params.file).await.opaque()? {
             Some(ticket) => format!("ready — download (15 min): {}", ticket.url),
             None => "pending — no transcoded object yet".to_owned(),

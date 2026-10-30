@@ -50,8 +50,9 @@ deep on each.
   `/graphql` or `/mcp`, beside the global pool; what they attach is ambient
   for every operation the request carries.
 - **[Pipe](/fundamentals/pipes/)** — a stateless edge transform that
-  parses and validates a single input, never a DI provider; bound to a
-  handler argument through `Valid<E>` or `Piped<P, E>`.
+  parses a single input, never a DI provider; bound to a handler argument
+  through `Piped<P, E>` on HTTP and `Piped<P>` on every other edge. Validation
+  needs none: each edge holds what it decoded to its type's rules.
 - **[Interceptor](/fundamentals/interceptors/)** — wraps a unit from the
   outside, after its guards; one declared `#[interceptor(stage = unit)]` runs
   around them, the seam that appends a `Server-Timing` entry.

@@ -1,13 +1,14 @@
-//! Autoref-specialization probe for *global* validation — the analog of NestJS's
-//! `app.useGlobalPipes(new ValidationPipe())`, minus the reflection Rust doesn't
-//! have.
+//! Validation at the edge, with no wrapper: every edge's tail probes each
+//! value it decoded, once its guards and class gate admitted the caller and
+//! before any pipe runs over it, and runs the rules the value's type declares.
 //!
-//! A transport macro emits one call for every typed input:
-//! `ValidateProbe(&input).maybe_validate()?` runs `Validate::validate` when
-//! `T: Validate`, and is a compile-time no-op for any other type.
-//!
-//! Bring the fallback trait into scope at the call site for the resolution to
-//! work: `use nest_rs_pipes::__private::MaybeValidateFallback as _;`.
+//! The probe is autoref specialization, resolved where the expansion names a
+//! concrete type: `(&&ValidateProbe(&arg)).maybe_validate()` runs
+//! `Validate::validate` when the type implements it, validates an `Option`'s
+//! value when it holds one, and is a compile-time no-op for any other type.
+//! The three traits must be in scope at the call site; the expansion imports
+//! them. An HTTP extractor and a list validate as their value does, so the one
+//! probe serves every edge.
 
 use validator::{Validate, ValidationErrors};
 
@@ -15,8 +16,36 @@ use crate::PipeError;
 
 /// Turn a `validator` failure into a [`PipeError`] whose `details` carry the
 /// field-level errors without any echoed submitted value ([`validation_details`]).
-pub(crate) fn validation_error(errors: ValidationErrors) -> PipeError {
-    PipeError::with_details("validation failed", validation_details(&errors))
+pub(crate) fn validation_error(errors: &ValidationErrors) -> PipeError {
+    PipeError::with_details("validation failed", validation_details(errors))
+}
+
+/// A `validator` failure as the refusal every edge renders: `validation failed`,
+/// its fields under `details`, none of the submitted values.
+///
+/// A hand-written check answers like a decorated edge through it:
+///
+/// ```
+/// use nest_rs_pipes::PipeError;
+/// use validator::Validate;
+///
+/// #[derive(Validate)]
+/// struct Signup {
+///     #[validate(length(min = 8))]
+///     password: String,
+/// }
+///
+/// let refused = Signup { password: "hunter2".into() }
+///     .validate()
+///     .map_err(PipeError::from)
+///     .unwrap_err();
+/// assert_eq!(refused.message(), "validation failed");
+/// assert!(!refused.details().unwrap().to_string().contains("hunter2"));
+/// ```
+impl From<ValidationErrors> for PipeError {
+    fn from(errors: ValidationErrors) -> Self {
+        validation_error(&errors)
+    }
 }
 
 /// The wire-safe JSON for a `validator` failure.
@@ -53,39 +82,63 @@ fn redact_submitted_values(value: &mut serde_json::Value) {
     }
 }
 
-/// Wraps a borrowed input so method resolution can pick the `Validate`-aware
-/// inherent method over the no-op trait fallback.
+/// A borrowed decoded argument, wrapped so method resolution picks the most
+/// specific of [`DeclaredRules`], [`OptionalRules`] and [`NoRules`].
 pub struct ValidateProbe<'a, T>(pub &'a T);
 
-/// Specialized path: an **inherent** method (higher priority than the trait
-/// fallback) exists only when `T: Validate`, so this runs the real validation.
-impl<T: Validate> ValidateProbe<'_, T> {
-    /// Run `validator::Validate` on the wrapped value (the specialized path when
-    /// `T: Validate`).
-    pub fn maybe_validate(&self) -> Result<(), PipeError> {
-        match self.0.validate() {
-            Ok(()) => Ok(()),
-            Err(errors) => Err(validation_error(errors)),
+impl<T> Clone for ValidateProbe<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for ValidateProbe<'_, T> {}
+
+/// First choice: the argument's type declares rules, which run.
+pub trait DeclaredRules {
+    /// Run the rules `T` declares.
+    fn maybe_validate(&self) -> Result<(), PipeError>;
+}
+
+impl<T: Validate> DeclaredRules for &ValidateProbe<'_, T> {
+    fn maybe_validate(&self) -> Result<(), PipeError> {
+        self.0.validate().map_err(PipeError::from)
+    }
+}
+
+/// Second choice: an optional argument whose value declares rules, which run
+/// when it holds one.
+pub trait OptionalRules {
+    /// Run the rules the value declares, if there is one.
+    fn maybe_validate(&self) -> Result<(), PipeError>;
+}
+
+impl<T: Validate> OptionalRules for ValidateProbe<'_, Option<T>> {
+    fn maybe_validate(&self) -> Result<(), PipeError> {
+        match self.0 {
+            Some(value) => value.validate().map_err(PipeError::from),
+            None => Ok(()),
         }
     }
 }
 
-/// Fallback path: available for **every** `T`, so an input type without
-/// `Validate` resolves here and skips validation. Shadowed by the inherent
-/// method above whenever `T: Validate`.
-pub trait MaybeValidateFallback {
-    /// No-op validation — the fallback for a `T` that does not implement
-    /// `Validate`.
-    fn maybe_validate(&self) -> Result<(), PipeError>;
+/// Last choice: a type declaring no rules, which nothing checks.
+pub trait NoRules {
+    /// Accept the argument.
+    fn maybe_validate(self) -> Result<(), PipeError>;
 }
 
-impl<T> MaybeValidateFallback for ValidateProbe<'_, T> {
-    fn maybe_validate(&self) -> Result<(), PipeError> {
+impl<T> NoRules for ValidateProbe<'_, T> {
+    fn maybe_validate(self) -> Result<(), PipeError> {
         Ok(())
     }
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::needless_borrow,
+    reason = "each probe is called as an expansion calls it, whichever choice resolves"
+)]
 mod tests {
     use super::*;
 
@@ -102,7 +155,7 @@ mod tests {
     #[test]
     fn a_validate_type_that_passes_is_ok() {
         let ok = Guarded { name: "x".into() };
-        assert!(ValidateProbe(&ok).maybe_validate().is_ok());
+        assert!((&&ValidateProbe(&ok)).maybe_validate().is_ok());
     }
 
     #[test]
@@ -110,11 +163,34 @@ mod tests {
         let bad = Guarded {
             name: String::new(),
         };
-        let Err(err) = ValidateProbe(&bad).maybe_validate() else {
+        let Err(err) = (&&ValidateProbe(&bad)).maybe_validate() else {
             panic!("empty name must fail the length rule");
         };
         assert_eq!(err.message(), "validation failed");
         assert!(err.details().is_some(), "field-level details are carried");
+    }
+
+    #[test]
+    fn an_optional_value_is_validated_when_it_is_there() {
+        let given = Some(Guarded {
+            name: String::new(),
+        });
+        assert!((&&ValidateProbe(&given)).maybe_validate().is_err());
+        let absent: Option<Guarded> = None;
+        assert!((&&ValidateProbe(&absent)).maybe_validate().is_ok());
+        let plain = Some(3_u8);
+        assert!((&&ValidateProbe(&plain)).maybe_validate().is_ok());
+    }
+
+    #[test]
+    fn a_list_is_validated_item_by_item() {
+        let listed = vec![
+            Guarded { name: "x".into() },
+            Guarded {
+                name: String::new(),
+            },
+        ];
+        assert!((&&ValidateProbe(&listed)).maybe_validate().is_err());
     }
 
     #[derive(Validate)]
@@ -146,6 +222,6 @@ mod tests {
         let plain = Plain {
             _name: "anything".into(),
         };
-        assert!(ValidateProbe(&plain).maybe_validate().is_ok());
+        assert!((&&ValidateProbe(&plain)).maybe_validate().is_ok());
     }
 }

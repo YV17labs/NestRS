@@ -11,7 +11,7 @@ use nest_rs_core::{
 use nest_rs_http::StatusCode;
 use nest_rs_http::{
     Form, HttpConfig, HttpError, Json, Opaque, ProblemDetails, Query, RawBody, ResponseError,
-    Result, SseEvent, SseStream, Valid, async_trait, controller, futures_util::stream, input,
+    Result, SseEvent, SseStream, async_trait, controller, futures_util::stream, input,
     problem_error, routes,
 };
 use nest_rs_testing::TestClient;
@@ -44,12 +44,6 @@ impl DecodeController {
     #[public]
     async fn json(&self, body: Json<Charge>) -> String {
         body.0.amount.to_string()
-    }
-
-    #[post("/valid")]
-    #[public]
-    async fn valid(&self, body: Valid<Json<Charge>>) -> String {
-        body.amount.to_string()
     }
 
     #[get("/query")]
@@ -542,32 +536,26 @@ fn quoting(logs: &nest_rs_testing::LogCapture, needle: &str) -> Vec<String> {
 async fn a_body_that_does_not_decode_is_refused_without_its_value() {
     let logs = nest_rs_testing::LogCapture::install();
     for client in clients::<DecodeModule>().await {
-        for path in ["/decode/json", "/decode/valid"] {
-            let resp = client
-                .post(path)
-                .content_type("application/json")
-                .body(secret_json())
-                .send()
-                .await;
-            assert_eq!(
-                detail(resp).await,
-                "JSON body at `amount`: invalid type: a string, expected u64",
-                "{path}",
-            );
-        }
-        for path in ["/decode/json", "/decode/valid"] {
-            let resp = client
-                .post(path)
-                .content_type("application/json")
-                .body(r#"{"amount":["x"]}"#)
-                .send()
-                .await;
-            assert_eq!(
-                detail(resp).await,
-                "JSON body at `amount`: invalid type: a sequence, expected u64",
-                "{path}",
-            );
-        }
+        let resp = client
+            .post("/decode/json")
+            .content_type("application/json")
+            .body(secret_json())
+            .send()
+            .await;
+        assert_eq!(
+            detail(resp).await,
+            "JSON body at `amount`: invalid type: a string, expected u64",
+        );
+        let resp = client
+            .post("/decode/json")
+            .content_type("application/json")
+            .body(r#"{"amount":["x"]}"#)
+            .send()
+            .await;
+        assert_eq!(
+            detail(resp).await,
+            "JSON body at `amount`: invalid type: a sequence, expected u64",
+        );
         let resp = client
             .post("/decode/json")
             .content_type("application/json")

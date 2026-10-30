@@ -7,12 +7,12 @@
 use nest_rs_codegen::__private::layers::{LayerScope, take_layers};
 use nest_rs_codegen::__private::pair;
 use nest_rs_codegen::__private::{
-    HandlerSite, HostMeta, JobDecorator, JobKey, PipeWrapper, ProviderSite, SitePosture,
-    VersionedEdge, await_if_async, cfg_attrs, concrete_signature, generic_args, handler_const,
-    host_layers_entry, impl_self_ident, job_key, job_returns_a_result, job_timeout,
-    job_transaction, missing_argument, one_role_per_method, payload_arg_type, pipe_wrapper,
-    returns_unit, site_const, site_ref, takes_value, timeout_value, transactional_value,
-    ungrouped_expr, unread_job_key,
+    HandlerSite, HostMeta, JobDecorator, JobKey, ProviderSite, SitePosture, VersionedEdge,
+    await_if_async, cfg_attrs, concrete_signature, generic_args, handler_const, host_layers_entry,
+    impl_self_ident, job_key, job_returns_a_result, job_timeout, job_transaction, missing_argument,
+    one_role_per_method, payload_arg_type, pipe_wrapper, returns_unit, site_const, site_ref,
+    takes_value, timeout_value, transactional_value, ungrouped_expr, unread_job_key,
+    validate_argument,
 };
 use nest_rs_codegen::{Grammar, Refusals, duration_millis, snake_case};
 use proc_macro::TokenStream;
@@ -222,8 +222,8 @@ fn emit_method(
             .collect();
         payload_arg_type(&signature, "#[process]", "job", provider)?
     };
-    // A `Piped<P, T>` / `Valid<T>` job argument is a per-argument pipe: the
-    // payload is `T`, the pipe runs after deserialization, and the handler
+    // A `Piped<P>` job argument is a per-argument pipe: the payload is the
+    // pipe's `In`, the pipe runs after deserialization, and the handler
     // receives the carrier.
     let (deser_ty, job_wrap) = pipe_binding(&job_ty);
 
@@ -341,10 +341,9 @@ fn emit_method(
                         );
                     }
                 };
-                // Identity when the argument is a plain job type; runs the
-                // pipe (surfacing a `PipeError` as the boxed job error) for a
-                // `Piped<P, T>` / `Valid<T>` argument.
-                let __job = #job_wrap;
+                // The rules the job's type declares, then the pipe of a
+                // `Piped<P>` argument, each refusal the boxed job error.
+                #job_wrap
                 let __provider = match ::nest_rs_core::Container::get::<#self_ty>(&__context.container) {
                     ::std::option::Option::Some(p) => p,
                     ::std::option::Option::None => {
@@ -473,35 +472,35 @@ fn reject_args(args: TokenStream) -> syn::Result<()> {
     pair::PROCESSOR.reject_args(&args, "the provider's scope is declared by")
 }
 
-/// Split a job argument into (type to deserialize, expression yielding what the
-/// handler receives). For a per-argument pipe `Piped<P, T>` / `Valid<T>` the wire
-/// type is `T`, and the expression runs the pipe over `__deser`, surfacing a
-/// `PipeError` as the queue's boxed error.
+/// Split a job argument into (type to deserialize, statements binding what the
+/// handler receives as `__job`). The decoded job is held to the rules its type
+/// declares first; for a `Piped<P>` argument the wire type is the pipe's `In`,
+/// and the pipe then runs over it. A refusal is the queue's boxed error.
 fn pipe_binding(job_ty: &Type) -> (Type, TokenStream2) {
-    // A pipe rejection is deterministic (the same payload fails the pipe again),
-    // so it aborts rather than retries.
+    // A refusal is deterministic (the same payload fails it again), so it
+    // aborts rather than retries.
     let box_err = quote! {
-        |__e: ::nest_rs_pipes::PipeError| {
+        |__e| {
             // The message *and* the per-field detail.
             let __msg = __e.message().to_string();
             ::nest_rs_queue::JobError::abort(__msg).with_details(__e.into_details())
         }
     };
-    match pipe_wrapper(job_ty) {
-        Some(PipeWrapper::Piped { pipe, value }) => (
-            value.clone(),
-            quote! {
-                ::nest_rs_pipes::Piped::<#pipe, #value>::apply(__deser).map_err(#box_err)?
-            },
-        ),
-        Some(PipeWrapper::Valid { value }) => (
-            value.clone(),
-            quote! {
-                ::nest_rs_pipes::Valid::<#value>::apply(__deser).map_err(#box_err)?
-            },
+    let validated = validate_argument(&quote!(::nest_rs_queue), &quote!(&__deser));
+    let (deser_ty, job) = match pipe_wrapper(job_ty) {
+        Some(wrapper) => (
+            wrapper.value(),
+            quote!(<#job_ty>::apply(__deser).map_err(#box_err)?),
         ),
         None => (job_ty.clone(), quote!(__deser)),
-    }
+    };
+    (
+        deser_ty,
+        quote! {
+            #validated.map_err(#box_err)?;
+            let __job = #job;
+        },
+    )
 }
 
 /// How a `#[process]` names its queue: the `Queue` type its `#[queue]` marker

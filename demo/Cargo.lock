@@ -3011,6 +3011,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-database",
+ "nest-rs-pipes",
  "nest-rs-queue-macros",
  "serde",
  "serde_json",

@@ -1,6 +1,7 @@
 /// Why a pipe rejected its input. A surface adapter renders it (the HTTP one as
 /// a `400`). Carries a human `message` plus optional structured `details` (e.g.
-/// the field-level errors from [`ValidationPipe`](crate::ValidationPipe)).
+/// the field-level errors of a type's `validator` rules, `From` its
+/// `ValidationErrors`).
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{message}")]
 pub struct PipeError {

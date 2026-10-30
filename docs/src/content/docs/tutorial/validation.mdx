@@ -1,6 +1,6 @@
 ---
 title: Validate inputs
-description: "Rules on the entity flow into #[crud]'s generated POST /posts — a malformed body becomes a structured 400 before the handler runs."
+description: "Rules on the entity flow into every edge that decodes a post — a malformed body becomes a structured 400 before the handler runs."
 sidebar:
   order: 7
 ---
@@ -9,8 +9,9 @@ import { Aside } from '@astrojs/starlight/components';
 
 You already wrote the validation rules on the entity in
 [Declare the entity](/tutorial/entity/). The `#[crud]` macro's generated
-`POST /posts` handler takes `Valid<Json<CreatePost>>`, so every request
-body is checked against those rules before `PostsService::create` runs.
+`POST /posts` handler takes `Json<CreatePost>`, and the edge holds every
+argument it decodes to the rules its type declares, so every request body is
+checked before `PostsService::create` runs.
 By the end of this page, `curl` returns a structured `400` for an empty
 title, and a well-formed body persists a post through the database you
 wired on the previous page.
@@ -19,8 +20,8 @@ wired on the previous page.
 
 On the previous page you left `impl PostsController {}` empty. That is
 not a shortcut — for a bare CRUD feature, the macro is the handler.
-`#[crud]` emits `create` and `update` methods that already wrap the
-body in `Valid<...>`:
+`#[crud]` emits `create` and `update` methods whose body is a plain
+`Json<…>`:
 
 ```rust title="from the #[crud] expansion, abridged — you don't write this"
 #[post("/")]
@@ -28,24 +29,21 @@ body in `Valid<...>`:
 async fn create(
     &self,
     __req: &Request,
-    __body: Valid<Json<CreatePost>>,
+    __body: Json<CreatePost>,
 ) -> Result<Response> {
     // Creatable::create, then the `Location` of the row it made
 }
 ```
 
-When you later override `create` on a richer feature — org id from a JWT,
-an explicit authz check — you keep the same extractor:
-`Valid<Json<CreatePost>>`. The
-[`users` controller in `api`](/tutorial/security/) is the
-reference override.
+There is nothing to wrap: the rules travel with the type. When you later
+write `create` by hand on a richer feature, `Json(input): Json<CreatePost>`
+is validated exactly as the generated one is — and so is a GraphQL mutation,
+a WebSocket message or an MCP tool taking a `CreatePost`.
 
 The crate driving this page is
 [**`nest-rs-pipes`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-pipes) —
-it provides the transport-agnostic `Pipe` trait, the bundled
-`ValidationPipe<T>`, and the value-form `Valid<T>` / `Piped<P, T>`
-carriers that GraphQL, WS, and queue handlers bind per argument. The
-HTTP binding lives in `nest-rs-http` as the `Valid<E>` extractor.
+it holds the check every edge runs on what it decoded, the transport-agnostic
+`Pipe` trait, and the `Piped` carrier a transform binds through.
 
 ## Where the rules live
 
@@ -70,9 +68,9 @@ A malformed body comes back as an RFC 9457 `application/problem+json`
 `400` with the structured field errors `validator` produces riding as an
 `errors` extension member.
 
-`AuthnGuard` runs **before** the validation pipe, so both calls below carry the
+`AuthnGuard` runs **before** the validation, so both calls below carry the
 `$TOKEN` you signed on [Persist through Postgres](/tutorial/database/) — drop
-the header and the answer is a `401` that never reaches the pipe this page is
+the header and the answer is a `401` that never reaches the rules this page is
 about.
 
 ```bash frame="terminal"
@@ -109,8 +107,8 @@ validator without locking the message string.
 
 ## The good-body path is unchanged
 
-A well-formed body flows straight through — the pipe is a no-op on
-successful validation — and, with the database wired on the previous
+A well-formed body flows straight through — a body keeping its rules is
+handed over untouched — and, with the database wired on the previous
 page, the handler persists the post and returns it.
 
 ```bash frame="terminal"
@@ -125,15 +123,15 @@ content-type: application/json
 ```
 
 A `201` with the created row, and the `Location` that names it — the body
-cleared validation and the service committed it in a transaction. The pipe
+cleared validation and the service committed it in a transaction. The check
 only ever intercepts the malformed case.
 
 ## Two failure modes worth the distinction
 
 | Failure | Status | Trigger |
 |---------|--------|---------|
-| The body isn't valid JSON | `400` | `Json` rejects before any pipe runs |
-| The body parses but a field is wrong | `400` with `errors` | `ValidationPipe` rejects after extraction |
+| The body isn't valid JSON | `400` | `Json` rejects before any rule runs |
+| The body parses but a field is wrong | `400` with `errors` | `CreatePost`'s rules reject after extraction |
 
 Both are `400`; the second carries the structured `errors` member a
 client form binds to. The handler never sees either.
@@ -171,10 +169,10 @@ The error `code` (`"placeholder_title"`) surfaces in `errors.title[].code`
   the service — wired by `#[crud]`, not by hand.
 - A structured `400` body with one entry per failing field, codes
   stable enough to assert on.
-- A pattern you carry forward: entity rules → generated or overridden
-  handlers that take `Valid<Json<E>>`.
+- A pattern you carry forward: entity rules → every handler, generated or
+  written by hand, that takes the input type.
 
 ## Going further
 
 - [Test it end to end](/tutorial/testing/) — the next step: lock the round-trip down with an e2e suite.
-- [Pipes](/fundamentals/pipes/) — the reference page for `Valid<E>` and the pipe layer.
+- [Pipes](/fundamentals/pipes/) — the reference page for validation at the edge and the pipe layer.

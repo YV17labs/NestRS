@@ -88,6 +88,7 @@ mod specs;
 mod time_zone;
 mod ty;
 mod ungrouped;
+mod validate;
 mod versioning;
 
 pub use attrs::{repeated_attribute, take_flag_attr, take_path_list, take_single_attr};
@@ -163,6 +164,7 @@ pub mod __private {
         payload_arg_type, pipe_wrapper, returns_unit, shared_receiver, tail_param, type_label,
     };
     pub use crate::ungrouped::ungrouped_expr;
+    pub use crate::validate::validate_argument;
     pub use crate::versioning::{VersionAnswer, VersionedEdge};
 
     /// Every decorator pair: the closed table both halves parse through.

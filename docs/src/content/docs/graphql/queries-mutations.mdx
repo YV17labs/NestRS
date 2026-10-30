@@ -95,16 +95,15 @@ Validation happens at deserialization: a missing required arg returns
 a parse error, a wrong scalar returns a coercion error. Both come back
 with no resolver call.
 
-Beyond shape checks, an argument binds a [pipe](/fundamentals/pipes/)
-per parameter: `Valid<T>` runs `validator` rules over an input object,
-`Piped<P, T>` names a custom transform. The SDL still shows `T`; a
-rejection surfaces in the response's `errors`, under `extensions.code:
-"INVALID_ARGUMENT"` — the resolver body never runs.
+Beyond shape checks, an argument whose type declares `validator` rules is
+held to them, and a custom transform binds a [pipe](/fundamentals/pipes/)
+per parameter, `Piped<P>`, whose input the SDL shows. A rejection surfaces
+in the response's `errors`, under `extensions.code: "INVALID_ARGUMENT"` —
+the resolver body never runs.
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 use async_graphql::InputObject;
 use nest_rs::core::input;
-use nest_rs::pipes::Valid;
 
 #[derive(InputObject)]
 #[input]
@@ -115,8 +114,8 @@ pub struct NameInput {
 
 #[query]
 #[public]
-async fn named(&self, input: Valid<NameInput>) -> async_graphql::Result<String> {
-    Ok(input.into_inner().name)
+async fn named(&self, input: NameInput) -> async_graphql::Result<String> {
+    Ok(input.name)
 }
 ```
 
@@ -322,7 +321,6 @@ use std::sync::Arc;
 use async_graphql::Result;
 use nest_rs::authz::{Create, Read};
 use nest_rs::graphql::{operations, resolver};
-use nest_rs::pipes::Valid;
 use nest_rs::seaorm::{Authorized, Creatable, ServiceError};
 
 use crate::authz::AuthzGuard;
@@ -345,10 +343,10 @@ impl UsersResolver {
 
     #[mutation]
     #[authorize(Create, UserEntity)]
-    async fn create_user(&self, input: Valid<CreateUser>) -> Result<User> {
+    async fn create_user(&self, input: CreateUser) -> Result<User> {
         let user = self
             .svc
-            .create(input.into_inner())
+            .create(input)
             .await
             .map_err(ServiceError::from)?;
         Ok(User::from(&user))
@@ -356,10 +354,10 @@ impl UsersResolver {
 }
 ```
 
-`Valid<CreateUser>` runs the input's rules before the body, as the generated
-`create_user` does; `Creatable::create` validates nothing itself. It takes the
-caller's org from the `Create` grant that pins it, so the mutation reads no
-principal. The service stays the single audited choke point to the database.
+`CreateUser`'s rules run before the body, as they do for the generated
+`create_user`: the edge holds every argument it decodes to them, so
+`Creatable::create` has nothing left to check. It takes the caller's org from
+the `Create` grant that pins it, so the mutation reads no principal. The service stays the single audited choke point to the database.
 The
 resolver only translates between the wire shape and the service —
 `#[authorize(Action, Entity)]` is each operation's access posture,

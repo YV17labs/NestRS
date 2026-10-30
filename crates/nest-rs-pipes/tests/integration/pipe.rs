@@ -1,11 +1,12 @@
 //! Covers `src/pipe.rs`: every built-in `Pipe` that refuses client input names
-//! what it expected, never what it was sent.
+//! what it expected, never what it was sent, and so does the refusal a type's
+//! `validator` rules give at an edge (`src/validate.rs`).
 
 use std::str::FromStr;
 
 use nest_rs_pipes::{
     Parse, ParseArray, ParseBool, ParseFloat, ParseInt, ParseUuid, ParseUuidV3, ParseUuidV4,
-    ParseUuidV5, ParseUuidV7, Pipe, ValidationPipe,
+    ParseUuidV5, ParseUuidV7, Pipe, PipeError,
 };
 use validator::Validate;
 
@@ -141,14 +142,14 @@ fn no_built_in_pipe_quotes_what_it_refuses() {
             ParseArray::<Plan>::transform(format!("free,{SECRET}")).err(),
         ),
         (
-            "ValidationPipe<Signup>",
+            "Signup's rules",
             SECRET,
-            ValidationPipe::<Signup>::transform(signup).err(),
+            signup.validate().err().map(PipeError::from),
         ),
         (
-            "ValidationPipe<PasswordChange>",
+            "PasswordChange's rules",
             SECRET,
-            ValidationPipe::<PasswordChange>::transform(change).err(),
+            change.validate().err().map(PipeError::from),
         ),
     ];
 

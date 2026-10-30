@@ -108,7 +108,7 @@ before the handler runs — there is no `name.parse::<i32>()` to handle
 manually.
 
 **Destructuring in the parameter list is supported** — `Path(name)`,
-`Query(q)`, `Json(body)`, `Valid(input)` — as long as the pattern binds one
+`Query(q)`, `Json(body)`, `Piped(id)` — as long as the pattern binds one
 name. `#[routes]` forwards the argument to the handler it generates under that
 name, so the pattern stays where you wrote it. A pattern binding two
 (`Path((a, b))`) has no single name to forward and is a compile error naming
@@ -188,7 +188,8 @@ Bonjour le monde
 ## Accepting a JSON body, validated
 
 ```rust title="crates/features/src/hello/http/controller.rs"
-use nest_rs::http::{Json, Result, Valid, input};
+use nest_rs::core::output;
+use nest_rs::http::{Json, Result, input};
 
 #[input]
 struct GreetInput {
@@ -196,32 +197,31 @@ struct GreetInput {
     name: String,
 }
 
-#[input]
+#[output]
 struct GreetReply {
     greeting: String,
 }
 
 #[post("/")]
 #[public]
-async fn shout(&self, Valid(input): Valid<Json<GreetInput>>) -> Result<Json<GreetReply>> {
+async fn shout(&self, Json(input): Json<GreetInput>) -> Result<Json<GreetReply>> {
     Ok(Json(GreetReply {
         greeting: format!("HELLO, {}!", input.name.to_uppercase()),
     }))
 }
 ```
 
-- **`#[input]`** is the shorthand for **wire** DTOs — the ones crossing the
-  edge in either direction. It appends
+- **`#[input]`** is the shorthand for a DTO the edge **decodes**. It appends
   `#[derive(::serde::Serialize, ::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]`
   and `#[serde(deny_unknown_fields)]` — an unknown field on the wire
   (`{"name":"Ada","is_admin":true}`) is rejected with `400` at parse time
-  instead of silently dropped. `Serialize` is in that list on purpose: it is
-  what lets the same attribute carry a *response* type such as `GreetReply`
-  below, returned as `Json<T>`. Don't top the list up by hand — a manual
+  instead of silently dropped. Don't top the list up by hand — a manual
   `#[derive(Serialize)]`, `#[derive(Deserialize)]` or `#[derive(Validate)]`
   next to `#[input]` is a conflicting impl (`E0119`), not an addition. Need a
   custom `Deserialize` shape (e.g. untagged enums)? Skip `#[input]` and derive
   all four by hand.
+- **`#[output]`** is its twin for a DTO the edge only **sends**, such as
+  `GreetReply`: `Serialize` and `JsonSchema`, nothing to decode or validate.
 - **`Json<T>`** parses the request body into `T`. A body that does not decode
   is `400`, and its `detail` says where, in the names `T` declares, what kind
   of value it found and what was expected — ``JSON body at `author.name`:
@@ -236,10 +236,11 @@ async fn shout(&self, Valid(input): Valid<Json<GreetInput>>) -> Result<Json<Gree
   string``), `Path<T>` and `Header<T>` refuse the same way, and so does a
   handler's own decode returned as a `400`
   (`HttpError::new(err, StatusCode::BAD_REQUEST)`).
-- **`Valid<E>`** runs [validator](https://docs.rs/validator) on the
-  extracted value. A failure returns `400` with the structured error list
-  — no manual checks in the handler. `Valid` is the ergonomic form of the
-  more general `Piped<P, E>` covered in [extractors](/http/extractors/).
+- **The rules `GreetInput` declares** run on the extracted value, after the
+  guards and before the handler, with nothing to wrap: a failure returns
+  `400` with the structured error list — no manual checks in the handler.
+  A transform other than validation is a pipe, `Piped<P, E>`, covered in
+  [extractors](/http/extractors/).
 
 ```bash frame="terminal"
 $ curl -sX POST http://localhost:3000/ \

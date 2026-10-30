@@ -64,14 +64,6 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let forbidden: TokenStream2 = quote! {
         ::nest_rs_authz::graphql::forbidden()
     };
-    let validate_input: TokenStream2 = quote! {
-        {
-            use ::nest_rs_graphql::__private::MaybeValidateFallback as _;
-            ::nest_rs_graphql::__private::ValidateProbe(&input)
-                .maybe_validate()
-                .map_err(|__e| ::nest_rs_graphql::pipe_error(&__e))?;
-        }
-    };
 
     let mut generated: Vec<ImplItem> = Vec::new();
 
@@ -157,7 +149,6 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 &self,
                 input: #create,
             ) -> ::nest_rs_graphql::async_graphql::Result<#output> {
-                #validate_input
                 let __row = ::nest_rs_seaorm::Creatable::create(&*self.#service, input)
                     .await
                     .map_err(#crud_error)?;
@@ -176,7 +167,6 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 input: #update,
             ) -> ::nest_rs_graphql::async_graphql::Result<::core::option::Option<#output>> {
                 #parse_id
-                #validate_input
                 match ::nest_rs_seaorm::CrudService::access(
                     &*self.#service,
                     ::nest_rs_authz::Action::Update,

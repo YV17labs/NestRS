@@ -28,7 +28,7 @@ use crate::{Ability, ActionMarker, Subject};
 /// # use nest_rs_authz::{AbilityBuilder, Action, Create};
 /// # use nest_rs_core::{Layer, injectable, input, module};
 /// # use nest_rs_guards::{Denial, Guard, GuardFor};
-/// # use nest_rs_http::{Json, Result, StatusCode, Valid, async_trait, controller, routes};
+/// # use nest_rs_http::{Json, Result, StatusCode, async_trait, controller, routes};
 /// # use nest_rs_testing::TestApp;
 /// # mod users {
 /// #     use sea_orm::entity::prelude::*;
@@ -83,8 +83,8 @@ use crate::{Ability, ActionMarker, Subject};
 /// # impl UsersController {
 /// #[post("/")]
 /// #[authorize(Create, users::Entity)]
-/// async fn create(&self, body: Valid<Json<CreateUser>>) -> Result<Json<User>> {
-///     Ok(Json(User::from(body.into_inner())))
+/// async fn create(&self, Json(input): Json<CreateUser>) -> Result<Json<User>> {
+///     Ok(Json(User::from(input)))
 /// }
 /// # }
 /// # #[module(providers = [Grants, UsersController])]

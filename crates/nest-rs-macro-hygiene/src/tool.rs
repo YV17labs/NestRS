@@ -10,11 +10,11 @@
 use nest_rs::core::{Ctx, Layer, UnitContext};
 use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
 use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Resource, Role};
-use nest_rs::mcp::{Json, McpError, McpView, Parameters, Scoped, Valid, input, mcp, tools};
+use nest_rs::mcp::{Json, McpError, McpView, Parameters, Scoped, input, mcp, tools};
 
 use crate::pipeline::{HygieneUnitAudit, HygieneUnitRefusal};
 
-/// The typed input a tool takes, validated through `Valid<HygieneArgs>`.
+/// The typed input a tool takes, held to its rules by the operation.
 #[input]
 pub struct HygieneArgs {
     #[validate(length(min = 1))]
@@ -74,11 +74,8 @@ impl HygieneTool {
     #[tool(description = "Echo the argument back.")]
     #[public]
     #[meta(HygieneLimit(10))]
-    async fn echo(
-        &self,
-        Parameters(args): Parameters<Valid<HygieneArgs>>,
-    ) -> Result<String, McpError> {
-        Ok(args.into_inner().value)
+    async fn echo(&self, Parameters(args): Parameters<HygieneArgs>) -> Result<String, McpError> {
+        Ok(args.value)
     }
 
     /// A prompt with no arguments.

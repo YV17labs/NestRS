@@ -1,7 +1,7 @@
-use nest_rs::core::input;
+use nest_rs::core::output;
 use uuid::Uuid;
 
-#[input]
+#[output]
 pub struct PersonDto {
     pub id: Uuid,
     pub name: String,

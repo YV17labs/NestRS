@@ -127,10 +127,12 @@ Adapters carry transport mechanics; the service carries intent.
   error naming both types. A queue is drained by one method: a second
   `#[process]` on the same queue fails the boot naming both.
 
-The job argument also binds a [pipe](/fundamentals/pipes/):
-`Piped<P, T>` / `Valid<T>` expose the wire payload `T`, run the pipe
-after deserialization, and hand the handler the transformed value — a
-rejection is a job error, so the queue's retry/failure policy applies.
+A job whose type declares `validator` rules is held to them once it decodes,
+and the job argument may bind a [pipe](/fundamentals/pipes/): `Piped<P>`
+exposes the pipe's input as the wire payload, runs the pipe after
+deserialization, and hands the handler the transformed value. Either
+rejection is a job error that dead-letters at once — the same payload would
+fail every attempt.
 
 Beside the job, a method may take what the port hands one attempt, recognised
 by its type, once each and in any order: an `Attempt` — the job's id, the one

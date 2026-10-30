@@ -222,7 +222,7 @@ pub use nest_rs_core::input;
 pub use nest_rs_core::{current_request_scope, with_request_scope};
 pub use opaque::Opaque;
 pub use path::Path;
-pub use pipe::{IntoInner, Piped, Valid, pipe_error};
+pub use pipe::pipe_error;
 pub use problem::{ProblemDetails, normalize_error_response};
 pub use query::Query;
 pub use raw_body::{RawBody, current_body_limit};
@@ -265,6 +265,7 @@ pub mod __private {
         denial_to_http_response,
     };
     pub use crate::origin::OriginScheme;
+    pub use crate::pipe::piped;
     pub use crate::problem::{framework_sentence, method_not_allowed};
     pub use crate::response::{IntoResult, RouteReturn, RouteReturnFallback};
     pub use crate::route_site::{
@@ -273,6 +274,7 @@ pub mod __private {
     pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
     pub use crate::versioning::{VersionLocation, version_location};
     pub use crate::view::with_view;
+    pub use nest_rs_pipes::__private::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
     pub use nest_rs_pipes::PipeSpec;
 
     pub use tracing;

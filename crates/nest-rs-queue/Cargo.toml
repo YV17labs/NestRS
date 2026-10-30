@@ -49,6 +49,10 @@ uuid.workspace = true
 tokio.workspace = true
 # The worker's shutdown token and the tracker its drain waits on.
 tokio-util.workspace = true
+# The check `#[process]` runs on the job it decoded, against the rules its type
+# declares, reached through this crate so a processor's crate names no
+# `nest_rs_pipes` of its own.
+nest-rs-pipes.workspace = true
 
 [dev-dependencies]
 # `test-util` (not part of tokio's `full`) pauses time, so a backend that never
@@ -66,8 +70,6 @@ anyhow.workspace = true
 # Pins the decorator's compile-time copy of the queue name rule against
 # `QueueName`'s (tests/integration/queue_name.rs).
 nest-rs-codegen = { path = "../nest-rs-codegen" }
-# A `Piped<P, T>` job argument, run by an attempt (tests/integration/consume.rs).
-nest-rs-pipes = { path = "../nest-rs-pipes" }
 # The HTTP edge's default request timeout, which `BACKEND_TIMEOUT` sits under
 # (tests/integration/producer.rs).
 nest-rs-http = { path = "../nest-rs-http" }

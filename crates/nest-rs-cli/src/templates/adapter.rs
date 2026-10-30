@@ -344,8 +344,8 @@ pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!   capability no table holds, and no mask: the answer is no row.
 //! * `#[public]` — no gate and no mask: any caller the endpoint admitted.
 //!
-//! Arguments validate through the same pipes every other transport uses:
-//! `Parameters<Valid<T>>` runs `validator` before the body and answers a
+//! Arguments are held to the rules their type declares, as on every other
+//! transport: `Parameters<T>` runs `validator` before the body and answers a
 //! rejection with `invalid_params`, which is the one MCP error a model can act
 //! on.
 use std::sync::Arc;

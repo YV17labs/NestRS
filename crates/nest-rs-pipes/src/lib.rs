@@ -1,13 +1,15 @@
-//! Transport-agnostic validation and transformation pipes.
+//! Transport-agnostic transformation pipes, and validation at the edge.
 //!
-//! Two flavors:
-//!
-//! - **Per-extractor [`Pipe`]** — pure transform run at a surface's
-//!   request boundary, between extraction and the handler. HTTP binds it
-//!   via the `Valid<E>` / `Piped<P, E>` extractors in `nest-rs-http`.
+//! - **Per-argument [`Pipe`]** — a pure transform an edge runs between decoding
+//!   an argument and the handler, bound as [`Piped`] on every edge: `Piped<P>`
+//!   where the edge decodes the argument itself, `Piped<P, Json<T>>` over an
+//!   HTTP extractor.
 //! - **[`GlobalPipe`]** — a provider registered once for the whole app, run
 //!   after Guards and before the handler — the
 //!   [`LayerKind::Pipe`](nest_rs_core::LayerKind) slot.
+//! - **Validation** needs neither: every edge validates each argument whose
+//!   type declares `validator` rules, once its guards admitted the caller, and
+//!   answers a refusal as the [`PipeError`] a pipe's would be.
 //!
 //! # Registering global pipes
 //!
@@ -30,10 +32,10 @@ mod validate;
 pub use error::PipeError;
 pub use global::{ArgumentKind, GlobalPipe};
 pub use pipe::Pipe;
-pub use piped::{Piped, Valid};
+pub use piped::{Decoded, PipeOver, Piped, Source};
 pub use pipes::{
     Lowercase, Parse, ParseArray, ParseBool, ParseFloat, ParseInt, ParseUuid, ParseUuidV3,
-    ParseUuidV4, ParseUuidV5, ParseUuidV7, ParseUuidVersion, Trim, Uppercase, ValidationPipe,
+    ParseUuidV4, ParseUuidV5, ParseUuidV7, ParseUuidVersion, Trim, Uppercase,
 };
 pub use registry::{AppBuilderPipesExt, PipeSpec, PipeSpecs, pipe};
 pub use validate::validation_details;
@@ -44,5 +46,5 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::registry::resolve_global_pipes;
-    pub use crate::validate::{MaybeValidateFallback, ValidateProbe};
+    pub use crate::validate::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
 }

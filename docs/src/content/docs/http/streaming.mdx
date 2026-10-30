@@ -14,8 +14,8 @@ decorator, `#[sse]`.
 ```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)" {6-8}
 #[get("/download")]
 // … #[meta(…)], #[api(…)]
-async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
-    let file = query.into_inner().file;
+async fn download(&self, Query(query): Query<TranscodeDto>) -> Result<Response> {
+    let file = query.file;
     match self.svc.open_result(file).await? {
         Some(stream) => Ok(Response::builder()
             .content_type(HeaderValue::from_static("audio/mpeg"))
@@ -59,10 +59,10 @@ decorator owns the response, the keep-alive and the connection ceiling.
 // … #[meta(…)], #[api(…)]
 async fn events(
     &self,
-    query: Valid<Query<TranscodeDto>>,
+    Query(query): Query<TranscodeDto>,
     resume: Header<StreamResumeDto>,
 ) -> SseStream {
-    let file = query.into_inner().file;
+    let file = query.file;
     let seen = resume.into_inner().last_event_id;
     let events = self
         .svc

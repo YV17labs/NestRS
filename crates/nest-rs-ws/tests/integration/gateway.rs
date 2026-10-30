@@ -4,9 +4,7 @@
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{StatusCode, header};
-use nest_rs_pipes::{
-    ArgumentKind, GlobalPipe, ParseArray, Pipe, PipeError, Piped, Trim, Valid, pipe,
-};
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, ParseArray, Pipe, PipeError, Piped, Trim, pipe};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, WsView, async_trait, gateway, messages};
 use serde::{Deserialize, Serialize};
@@ -122,20 +120,20 @@ impl TestGateway {
 
     #[subscribe_message("trim")]
     #[public]
-    async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
+    async fn trim_handler(&self, name: Piped<Trim>) -> String {
         name.into_inner()
     }
 
     #[subscribe_message("checked")]
     #[public]
-    async fn checked_handler(&self, name: Piped<Reject, String>) -> String {
+    async fn checked_handler(&self, name: Piped<Reject>) -> String {
         name.into_inner()
     }
 
     // A list whose items must parse: a refused item is said, never quoted.
     #[subscribe_message("ids")]
     #[public]
-    async fn ids_handler(&self, ids: Piped<ParseArray<u64>, String>) -> Vec<u64> {
+    async fn ids_handler(&self, ids: Piped<ParseArray<u64>>) -> Vec<u64> {
         ids.into_inner()
     }
 
@@ -160,8 +158,8 @@ impl TestGateway {
 
     #[subscribe_message("named")]
     #[public]
-    async fn named_handler(&self, input: Valid<NameInput>) -> String {
-        input.into_inner().name
+    async fn named_handler(&self, input: NameInput) -> String {
+        input.name
     }
 
     // `literal` is what the macro can see; `renamed_*` hide the `Result` behind an alias.
@@ -509,7 +507,7 @@ async fn a_rejecting_pipe_replies_with_an_error_frame() {
 }
 
 #[tokio::test]
-async fn a_valid_payload_is_validated_before_the_handler() {
+async fn a_payload_whose_type_declares_rules_is_validated_before_the_handler() {
     let ok = TestGateway
         .dispatch(
             &WsClient::for_test(),

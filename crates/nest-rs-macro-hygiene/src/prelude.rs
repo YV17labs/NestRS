@@ -5,8 +5,8 @@
 
 use nest_rs::prelude::*;
 
-/// A provider and a typed input, neither named by a `use` of its own;
-/// `#[module]`'s prelude witness is `module.rs`.
+/// A provider, a typed input and a typed reply, none named by a `use` of its
+/// own; `#[module]`'s prelude witness is `module.rs`.
 #[injectable]
 pub struct PreludeService;
 
@@ -14,6 +14,11 @@ pub struct PreludeService;
 #[derive(Clone)]
 pub struct PreludeInput {
     #[validate(length(min = 1))]
+    pub value: String,
+}
+
+#[output]
+pub struct PreludeOutput {
     pub value: String,
 }
 

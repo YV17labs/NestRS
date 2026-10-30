@@ -84,8 +84,9 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   what a guard attached when it is `Ctx` (`nest_rs_core::Ctx`) — each
 ///   resolved in the tail through a function returning its own type, so a
 ///   namesake does not compile, and neither an argument of the protocol —
-///   piped when it is `Parameters<Valid<T>>` or `Parameters<Piped<P, T>>`,
-///   and on a `#[resource]` the template variable its name spells;
+///   piped when it is `Parameters<Piped<P>>`, and on a `#[resource]` the
+///   template variable its name spells — each argument held to the rules its
+///   type declares;
 /// - a masked operation spells its return `Result<…>`, the mask reading
 ///   `Json<T>` or `Option<Json<T>>` to unwrap and a tool's opaque answers
 ///   (`CallToolResult`, `ContentBlock`, …) or a `ReadResourceResult`, bare or

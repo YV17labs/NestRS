@@ -330,3 +330,21 @@ over poem were removed on 2026-10-22
 `ExceptionFilter` absorbed `Filter`), and poem left every lockfile on
 2026-10-23 (`http-server.md`): the HTTP transport runs on hyper, and every edge
 runs this pipeline.
+
+**2026-10-30 — the tail validates every decoded argument, with no wrapper, by
+the owner's "Tout faire" of 2026-10-28.** Step 7 is now: the rules each
+decoded argument's type declares, then the pipes, the handler, the mask and
+the reply. Validation was a pipe each parameter had to remember (`Valid<Json<T>>`
+on HTTP, `Valid<T>` elsewhere), so a forgotten wrapper compiled and skipped
+the rules the type declared — a hand-written create taking a bare `Create<E>`
+stored what `#[crud]`'s refused. Each edge's expansion now probes every
+argument it decoded through one `validate_argument` (`nest-rs-codegen`), an
+autoref probe the pipes crate holds, after the gate as before: a refused caller
+still pays for nothing, and a refusal is still the edge's `PipeError` form.
+An HTTP extractor, a list and an `Option` answer for the value they hold, and
+a pipe's input is what is checked, never its output, as NestJS's global
+`ValidationPipe` runs before a parameter's pipes. `Valid` and `ValidationPipe` retire in the major; custom
+transforms stay pipes, one carrier `Piped<P, S>` on every edge. Refused: a
+blanket check in each edge's runtime (a `serde_json::Value` handed around, or
+a `Validate` bound every argument would have to meet), which would type no
+argument the handler did not already decode.

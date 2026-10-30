@@ -15,8 +15,8 @@
 //! `#[use_guards(...)]` / `#[force_guards(...)]`, a **mandatory** access
 //! posture (`#[authorize(Action, Entity)]` or `#[public]`),
 //! `#[use_exception_filters(...)]`, `#[use_interceptors(...)]`, `Scoped<T>`
-//! parameters and a pipe on its arguments (`Parameters<Valid<T>>` /
-//! `Parameters<Piped<P, T>>`), run in that order. The host's layers and the
+//! parameters and a pipe on its arguments (`Parameters<Piped<P>>`), then the
+//! rules its arguments' types declare, run in that order. The host's layers and the
 //! app-wide ones join each family once per site, deduplicated by `TypeId`; the
 //! guard stage runs each guard's `check`, the guards at the endpoint's request
 //! running `check_http` apart from it.
@@ -128,6 +128,7 @@ pub mod __private {
     };
     pub use crate::scope::scoped;
     pub use crate::uri_template::{TemplateMatch, TemplatePart, UriTemplate};
+    pub use nest_rs_pipes::__private::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
     pub use rmcp::handler::server::prompt::IntoGetPromptResult;
     pub use rmcp::handler::server::tool::IntoCallToolResult;
 }
@@ -183,14 +184,6 @@ pub use rmcp;
 /// The wire-DTO shorthand — same decorator the HTTP layer uses, re-exported
 /// here so a payload crossing this transport needs no `serde` of its own.
 pub use nest_rs_core::input;
-
-/// The two pipe carriers an operation's arguments go through.
-///
-/// `Valid<T>` validates the deserialized arguments; `Piped<P, T>` runs any
-/// [`Pipe`](nest_rs_pipes::Pipe) over them. `#[tools]` strips the carrier from
-/// the wire signature — the tool's JSON Schema stays `T`'s — and answers a
-/// rejection with `invalid_params`.
-pub use nest_rs_pipes::{Piped, Valid};
 
 /// Mark a struct as an MCP host that self-mounts over HTTP.
 ///
@@ -273,11 +266,13 @@ pub use nest_rs_mcp_macros::mcp;
 
 /// Declare an `#[mcp]` host's operations on its inherent impl block. Each tool
 /// declares its posture, `#[public]` or `#[authorize(Action, Entity)]`; the gate
-/// and the reply mask `#[authorize]` emits run in `nest_rs_authz::mcp`.
+/// and the reply mask `#[authorize]` emits run in `nest_rs_authz::mcp`. Its
+/// arguments are held to the rules their type declares, a refusal answered
+/// `invalid_params` before the body runs.
 ///
 /// ```
 /// use std::sync::Arc;
-/// use nest_rs_mcp::{McpError, Parameters, ServerHandler, Valid, input, mcp, tools};
+/// use nest_rs_mcp::{McpError, Parameters, ServerHandler, input, mcp, tools};
 /// # use nest_rs_core::{injectable, module};
 /// # use nest_rs_core::Posture;
 /// # use nest_rs_mcp::{DEFAULT_PATH, McpModule, McpOptions, hosts_on};
@@ -303,8 +298,8 @@ pub use nest_rs_mcp_macros::mcp;
 /// impl MyHandler {
 ///     #[tool(description = "Find a user by name.")]
 ///     #[public]
-///     async fn find(&self, Parameters(p): Parameters<Valid<FindDto>>) -> Result<String, McpError> {
-///         Ok(p.into_inner().name)
+///     async fn find(&self, Parameters(p): Parameters<FindDto>) -> Result<String, McpError> {
+///         Ok(p.name)
 ///     }
 /// }
 ///
@@ -323,6 +318,10 @@ pub use nest_rs_mcp_macros::mcp;
 /// let arguments = serde_json::json!({ "name": "ada" });
 /// let body = call_tool_with(app.http(), DEFAULT_PATH, "find", None, arguments).await;
 /// assert_eq!(result(&body)["result"]["content"][0]["text"], "ada");
+///
+/// let blank = serde_json::json!({ "name": "" });
+/// let body = call_tool_with(app.http(), DEFAULT_PATH, "find", None, blank).await;
+/// assert_eq!(result(&body)["error"]["code"], -32602);
 /// # Ok(())
 /// # }
 /// ```

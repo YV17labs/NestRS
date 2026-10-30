@@ -11,7 +11,7 @@ An extractor pulls a typed value out of the request before the handler
 runs. `Path<T>`, `Query<T>`, `Json<T>` and `Form<T>` cover the request line,
 query string, JSON body and form body; beside them sit the framework-specific
 extractors:
-the validated `Valid<E>`, the typed header reader `Header<T>`, the
+the typed header reader `Header<T>`, the
 raw-body reader `RawBody`, the spoofable but observation-grade
 `ClientIp`, the request-scoped DI resolver `Scoped<T>`, the
 guard-attached context reader `Ctx<T>`, and the route metadata a guard reads
@@ -31,13 +31,14 @@ Works as a return type too — serializes `T`, sets
 the same schema:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
+use nest_rs::core::output;
 use nest_rs::http::{Json, Path, Result, input};
 use uuid::Uuid;
 
 #[input]
 struct RenamePost { title: String }
 
-#[input]
+#[output]
 struct Post { id: Uuid, title: String }
 
 #[put("/posts/{id}/title")]
@@ -46,18 +47,16 @@ async fn rename(&self, id: Path<Uuid>, Json(body): Json<RenamePost>) -> Result<J
 }
 ```
 
-For validated bodies, wrap it in `Valid<Json<T>>` (covered next).
+## Validation — the rules a type declares
 
-## `Valid<E>` and `Piped<P, E>` — validate or transform at the edge
-
-`Valid<E>` runs [validator](https://docs.rs/validator) on whatever the
-inner extractor produced. The `E` is usually `Json<T>`, but `Path<T>`
-and `Query<T>` work the same way — every extractor that exposes
-`IntoInner` is composable:
+Every extractor's value is held to the [validator](https://docs.rs/validator)
+rules its type declares, after the guards and before the handler, with nothing
+to wrap. `Json<T>` is the usual carrier, and `Query<T>`, `Form<T>`, `Path<T>`
+and `Header<T>` answer the same way:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::http::{
-    IntoResponse, Json, Request, Response, Result, Valid, caller_path, input,
+    IntoResponse, Json, Request, Response, Result, caller_path, input,
     set_created_location,
 };
 
@@ -74,12 +73,13 @@ struct CreateUser {
 so a DTO behind it needs no second derive — not for validation, not for the
 OpenAPI document, and not to come back out as `Json<T>`. A DTO derived by hand
 carries all four itself; adding one of them *next to* `#[input]` is a
-conflicting impl (`E0119`).
+conflicting impl (`E0119`). A reply the route only sends takes `#[output]`,
+`Serialize` and `JsonSchema` alone.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[post("/users")]
 #[http_code(201)]
-async fn create(&self, req: &Request, Valid(body): Valid<Json<CreateUser>>) -> Result<Response> {
+async fn create(&self, req: &Request, Json(body): Json<CreateUser>) -> Result<Response> {
     let user = self.svc.create(body).await?;
     let mut res = Json(&user).into_response();
     set_created_location(&mut res, caller_path(req), user.id);
@@ -91,25 +91,21 @@ A validation failure returns `400` with a structured field-level error
 list — no manual checks in the handler. The rest is a create's own answer, a
 `201` naming what it made, which [Responses](/http/responses/) covers.
 
-`Valid<E>` is the ergonomic shortcut for the more general `Piped<P, E>`:
-apply any [transport-agnostic pipe](/fundamentals/pipes/) to whatever
-the inner extractor produced. `Valid<Json<T>>` is exactly
-`Piped<ValidationPipe<T>, Json<T>>`:
+## `Piped<P, E>` — transform at the edge
+
+`Piped<P, E>` applies any [transport-agnostic pipe](/fundamentals/pipes/) to
+the value extractor `E` produced, once that value passed its rules, and binds
+the pipe's output:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::{Path, Piped};
-use nest_rs::pipes::ParseUuid;
-use uuid::Uuid;
+use nest_rs::http::Path;
+use nest_rs::pipes::{ParseUuid, Piped};
 
 #[get("/posts/{id}")]
-async fn show(&self, id: Piped<ParseUuid, Path<String>>) -> Json<Post> {
-    let id: Uuid = id.into_inner();
+async fn show(&self, Piped(id): Piped<ParseUuid, Path<String>>) -> Json<Post> {
     Json(self.svc.find(id))
 }
 ```
-
-Reach for `Piped` when a reusable pipe exists for the job; `Valid` when
-the job is `validator::Validate`.
 
 ## `Header<T>` — typed request headers
 
@@ -144,8 +140,8 @@ logged, cached and proxied.
 
 Each property becomes an `in: header` parameter in the
 [OpenAPI document](/openapi/), `required` following the schema. It
-composes like every other extractor: `Valid<Header<T>>` validates the
-DTO, `Piped<P, Header<T>>` pipes it.
+composes like every other extractor: the rules its DTO declares hold,
+and `Piped<P, Header<T>>` pipes it.
 
 ## `RawBody` — exact bytes, with a size cap
 
@@ -336,8 +332,7 @@ use nest_rs::throttler::{Throttle, ThrottlerGuard};
 #[use_guards(ThrottlerGuard)]
 #[meta(Throttle::per_minute(10))]
 // … #[api(…)]
-async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse> {
-    let input = body.into_inner();
+async fn login(&self, Json(input): Json<LoginDto>) -> Result<AccessTokenResponse> {
     Ok(self
         .svc
         .grant_password(&input.email, &input.password, input.resource.as_deref())

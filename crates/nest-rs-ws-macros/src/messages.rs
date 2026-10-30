@@ -14,12 +14,11 @@ use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     Collision, Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta,
-    PipeWrapper, Posture, PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs,
-    concrete_signature, declared_handler, force_guard_typeids, guard_capability_bounds,
-    handler_const, handler_ref, impl_self_ident, injected_methods_with_layers,
-    injected_per_request_method, layer_deps, one_role_per_method, pipe_wrapper,
-    reject_meta_on_operations, returns_unit, scoped_specs, shared_receiver, tail_param,
-    takes_value, ungrouped_expr,
+    Posture, PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs, concrete_signature,
+    declared_handler, force_guard_typeids, guard_capability_bounds, handler_const, handler_ref,
+    impl_self_ident, injected_methods_with_layers, injected_per_request_method, layer_deps,
+    one_role_per_method, pipe_wrapper, reject_meta_on_operations, returns_unit, scoped_specs,
+    shared_receiver, tail_param, takes_value, ungrouped_expr, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -62,13 +61,11 @@ fn event_name(attr: &syn::Attribute) -> syn::Result<LitStr> {
     }
 }
 
-/// Split a `#[subscribe_message]` payload argument into the wire type and its
-/// pipe: `Some((Some(pipe), inner))` for `Piped<P, T>`, `Some((None, inner))`
-/// for `Valid<T>`, `None` for a plain payload.
-fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
+/// Split a `#[subscribe_message]` payload argument into the wire type and,
+/// for a `Piped<P>`, the carrier as the handler spells it.
+fn ws_pipe_binding(ty: &Type) -> (Type, Option<&Type>) {
     match pipe_wrapper(ty) {
-        Some(PipeWrapper::Piped { pipe, value }) => (value.clone(), Some((Some(pipe), value))),
-        Some(PipeWrapper::Valid { value }) => (value.clone(), Some((None, value))),
+        Some(wrapper) => (wrapper.value(), Some(ty)),
         None => (ty.clone(), None),
     }
 }
@@ -382,28 +379,22 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let deser = match payload_ty {
             Some(ty) => {
-                let (deser_ty, pipe) = ws_pipe_binding(ty);
-                let wrap = match &pipe {
+                let (deser_ty, carrier) = ws_pipe_binding(ty);
+                let wrap = match carrier {
                     None => quote! { let __payload = __deser; },
-                    Some((pipe_path, inner)) => {
-                        let apply = match pipe_path {
-                            Some(p) => {
-                                quote!(::nest_rs_pipes::Piped::<#p, #inner>::apply(__deser))
+                    Some(carrier) => quote! {
+                        let __payload = match <#carrier>::apply(__deser) {
+                            ::core::result::Result::Ok(__p) => __p,
+                            ::core::result::Result::Err(__e) => {
+                                return ::core::result::Result::Ok(
+                                    ::nest_rs_ws::WsReply::pipe_error(#event, "payload", __e),
+                                );
                             }
-                            None => quote!(::nest_rs_pipes::Valid::<#inner>::apply(__deser)),
                         };
-                        quote! {
-                            let __payload = match #apply {
-                                ::core::result::Result::Ok(__p) => __p,
-                                ::core::result::Result::Err(__e) => {
-                                    return ::core::result::Result::Ok(
-                                        ::nest_rs_ws::WsReply::pipe_error(#event, "payload", __e),
-                                    );
-                                }
-                            };
-                        }
-                    }
+                    },
                 };
+                // The decoded payload, before a pipe runs over it.
+                let validated = validate_argument(&quote!(::nest_rs_ws), &quote!(&__deser));
                 quote! {
                     let __deser: #deser_ty = match ::nest_rs_ws::__private::decode_payload::<#deser_ty>(#event, &__data) {
                         ::core::result::Result::Ok(__p) => __p,
@@ -411,6 +402,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             return ::core::result::Result::Ok(__refused);
                         }
                     };
+                    if let ::core::result::Result::Err(__e) = #validated {
+                        return ::core::result::Result::Ok(
+                            ::nest_rs_ws::WsReply::pipe_error(#event, "payload", __e),
+                        );
+                    }
                     #wrap
                 }
             }

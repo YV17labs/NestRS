@@ -166,8 +166,9 @@ reply and is not masked for them; see
 
 ## The payload
 
-Whatever you put in `data` arrives in your handler typed. The macro
-calls `serde_json::from_value` under the hood:
+Whatever you put in `data` arrives in your handler typed, and held to the
+rules its type declares. The macro calls `serde_json::from_value` under the
+hood:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[input]
@@ -189,16 +190,17 @@ type does not declare, so such a payload is an error frame.
 A malformed payload (wrong shape, missing fields) is treated as a
 dispatch error: the connection stays open, the client receives an error
 frame on the same event name (see below), naming where the payload failed
-and never its value — ``invalid payload for `message` at `text`: missing``. Richer checks bind a
-[pipe](/fundamentals/pipes/) on the payload argument: `Valid<T>` runs
-`validator` rules, `Piped<P, T>` names a custom transform — a rejection
-is an error frame, and the handler body never runs.
+and never its value — ``invalid payload for `message` at `text`: missing``. A
+payload type declaring `validator` rules is held to them as it decodes, and a
+custom transform binds a [pipe](/fundamentals/pipes/) on the payload argument,
+`Piped<P>` — either rejection is an error frame, and the handler body never
+runs.
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("trim")]
 #[public]
-async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
-    name.into_inner()
+async fn trim_handler(&self, Piped(name): Piped<Trim>) -> String {
+    name
 }
 ```
 
@@ -268,8 +270,8 @@ itself with `WsError::new` carries no class, as a GraphQL `Error::new` carries
 none.
 
 A rejection that carries **structured** detail adds an `errors` member beside
-its class — a `Valid<T>` payload names the offending fields, the same way the
-HTTP body does:
+its class — a payload breaking its type's rules names the offending fields,
+the same way the HTTP body does:
 
 ```json
 {

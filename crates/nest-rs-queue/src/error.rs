@@ -172,7 +172,7 @@ pub struct JobError {
     /// The underlying error, for the log and the backend's dead-letter record.
     pub source: Box<dyn std::error::Error + Send + Sync>,
     /// Structured detail the failure carried, when it had any — the per-field
-    /// errors of a `Valid<T>` job-argument rejection, logged as `errors`.
+    /// errors of a job the rules of its type refused, logged as `errors`.
     pub details: Option<serde_json::Value>,
 }
 

@@ -1,50 +1,49 @@
-//! HTTP binding for nestrs pipes — the extractor wrappers that apply a
-//! [`nest_rs_pipes::Pipe`] to a handler parameter between extraction and the
-//! handler.
+//! HTTP binding for nestrs pipes: the extractors as the [`Source`] a
+//! [`Piped`] argument reads, and as values that validate as theirs does.
 //!
-//! - [`Valid<E>`] (e.g. `Valid<Json<T>>`) validates with `validator::Validate`.
-//! - [`Piped<P, E>`] applies pipe `P` to what `E` produced.
+//! - `Piped<P, E>` (e.g. `Piped<ParseUuid, Path<String>>`) applies pipe `P` to
+//!   what `E` extracted, and binds its output: `Piped(id)`. `#[routes]`
+//!   extracts `E` itself, holds it to its rules, then runs [`piped`].
+//! - `Json<T>`, `Query<T>`, `Form<T>`, `Path<T>` and `Header<T>` implement
+//!   `validator::Validate` when `T` does, so `#[routes]` validates the value
+//!   they carry with no wrapper.
 //!
 //! Both reject through [`pipe_error`]: an RFC-9457 `application/problem+json`
 //! `400` ([`ProblemDetails`]) carrying the [`PipeError`]'s message as `detail`
 //! and any field-level errors as an `errors` extension member.
 
 use std::future::Future;
-use std::marker::PhantomData;
-use std::ops::Deref;
 use std::pin::Pin;
 
-use nest_rs_pipes::{Pipe, PipeError, ValidationPipe};
-use validator::Validate;
+use nest_rs_pipes::{Pipe, PipeError, Piped, Source};
+use validator::{Validate, ValidationErrors};
 
 use crate::{
     Form, FromRequest, Header, HttpError, Json, Path, ProblemDetails, Query, Request, RequestBody,
 };
 
-/// Owned-unwrap for an extractor, so a pipe can take the value it carries
-/// without cloning.
-pub trait IntoInner {
-    /// The value the wrapping extractor carries.
-    type Inner;
-    /// Unwrap the extractor into the value it carries, by value.
-    fn into_inner(self) -> Self::Inner;
-}
-
-/// `IntoInner` for each single-value extractor: its value, out of its wrapper.
-macro_rules! into_inner {
-    ($($extractor:ty),* $(,)?) => {
+/// Each single-value extractor is a source a pipe reads, and validates as the
+/// value it carries does.
+macro_rules! carries_one_value {
+    ($($extractor:ident),* $(,)?) => {
         $(
-            impl<T> IntoInner for $extractor {
-                type Inner = T;
-                fn into_inner(self) -> T {
+            impl<T> Source for $extractor<T> {
+                type Value = T;
+                fn into_value(self) -> T {
                     self.0
+                }
+            }
+
+            impl<T: Validate> Validate for $extractor<T> {
+                fn validate(&self) -> Result<(), ValidationErrors> {
+                    self.0.validate()
                 }
             }
         )*
     };
 }
 
-into_inner!(Json<T>, Path<T>, Query<T>, Form<T>, Header<T>);
+carries_one_value!(Json, Path, Query, Form, Header);
 
 /// Render a [`PipeError`] as the `400` problem document it answers, its
 /// field-level errors under the `errors` extension member.
@@ -66,92 +65,29 @@ pub fn pipe_error(err: &PipeError) -> HttpError {
     problem.into()
 }
 
-/// Extract `E` and unwrap it to its inner value; each extractor of the
-/// vocabulary that reads the body reads it under the cap itself. The future is
-/// boxed: a generic `async fn` delegating to another's trips rustc#100013.
-async fn extract_inner<'a, E>(req: &'a Request, body: &mut RequestBody) -> crate::Result<E::Inner>
+/// Run `P` over the value `extracted` carries — the step `#[routes]` takes once
+/// it held the extractor to the rules its value declares.
+pub fn piped<P, E>(extracted: E) -> crate::Result<Piped<P, E>>
 where
-    E: FromRequest<'a> + IntoInner,
+    P: Pipe,
+    E: Source<Value = P::In>,
 {
-    let extract: Pin<Box<dyn Future<Output = crate::Result<E>> + Send + '_>> =
-        Box::pin(E::from_request(req, body));
-    Ok(extract.await?.into_inner())
+    Piped::apply(extracted.into_value()).map_err(|refused| pipe_error(&refused))
 }
 
-/// Applies pipe `P` to the value extractor `E` produces, handing the handler
-/// the transformed `P::Out`.
-pub struct Piped<P: Pipe, E> {
-    value: P::Out,
-    _marker: PhantomData<fn() -> E>,
-}
-
-impl<P: Pipe, E> Piped<P, E> {
-    /// Take ownership of the pipe's output value.
-    pub fn into_inner(self) -> P::Out {
-        self.value
-    }
-
-    fn of(value: P::Out) -> Self {
-        Self {
-            value,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<P: Pipe, E> Deref for Piped<P, E> {
-    type Target = P::Out;
-    fn deref(&self) -> &P::Out {
-        &self.value
-    }
-}
-
+/// Each extractor of the vocabulary that reads the body reads it under the cap
+/// itself. The future is boxed: a generic `async fn` delegating to another's
+/// trips rustc#100013.
 impl<'a, P, E> FromRequest<'a> for Piped<P, E>
 where
     P: Pipe + Send + Sync,
     P::Out: Send,
-    E: FromRequest<'a> + IntoInner<Inner = P::In>,
+    E: FromRequest<'a> + Source<Value = P::In>,
 {
     async fn from_request(req: &'a Request, body: &mut RequestBody) -> crate::Result<Self> {
-        let input = extract_inner::<E>(req, body).await?;
-        P::transform(input)
-            .map(Self::of)
-            .map_err(|refused| pipe_error(&refused))
-    }
-}
-
-/// Validation pipe: extract `E`, validate with `validator::Validate`, reject
-/// invalid input with a field-level JSON `400`. `Valid<Json<T>>` is the
-/// ergonomic form of `Piped<ValidationPipe<T>, Json<T>>`.
-///
-/// The field is public so a handler can destructure it:
-/// `Valid(input): Valid<Json<CreateUser>>`.
-pub struct Valid<E: IntoInner>(pub E::Inner);
-
-impl<E: IntoInner> Valid<E> {
-    /// Take ownership of the validated inner value.
-    pub fn into_inner(self) -> E::Inner {
-        self.0
-    }
-}
-
-impl<E: IntoInner> Deref for Valid<E> {
-    type Target = E::Inner;
-    fn deref(&self) -> &E::Inner {
-        &self.0
-    }
-}
-
-impl<'a, E> FromRequest<'a> for Valid<E>
-where
-    E: FromRequest<'a> + IntoInner,
-    E::Inner: Validate,
-{
-    async fn from_request(req: &'a Request, body: &mut RequestBody) -> crate::Result<Self> {
-        let input = extract_inner::<E>(req, body).await?;
-        ValidationPipe::<E::Inner>::transform(input)
-            .map(Valid)
-            .map_err(|refused| pipe_error(&refused))
+        let extract: Pin<Box<dyn Future<Output = crate::Result<E>> + Send + '_>> =
+            Box::pin(E::from_request(req, body));
+        piped(extract.await?)
     }
 }
 
@@ -201,12 +137,12 @@ mod tests {
     }
 
     #[test]
-    fn into_inner_unwraps_each_single_value_extractor() {
-        assert_eq!(IntoInner::into_inner(Json(42)), 42);
-        assert_eq!(IntoInner::into_inner(Path("/users/123")), "/users/123");
-        assert_eq!(IntoInner::into_inner(Query(7)), 7);
-        assert_eq!(IntoInner::into_inner(Form(8)), 8);
-        assert_eq!(IntoInner::into_inner(Header("abc")), "abc");
+    fn each_single_value_extractor_hands_its_value_to_a_pipe() {
+        assert_eq!(Json(42).into_value(), 42);
+        assert_eq!(Path("/users/123").into_value(), "/users/123");
+        assert_eq!(Query(7).into_value(), 7);
+        assert_eq!(Form(8).into_value(), 8);
+        assert_eq!(Header("abc").into_value(), "abc");
     }
 
     struct ToUpper;
@@ -229,26 +165,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn piped_and_valid_hand_back_and_lend_their_value() {
-        let p: Piped<ToUpper, Json<String>> = Piped::of("HELLO".into());
-        assert_eq!(p.len(), 5);
-        assert_eq!(p.into_inner(), "HELLO");
-        let v: Valid<Json<String>> = Valid("ok".into());
-        assert_eq!(&*v, "ok");
-        assert_eq!(v.into_inner(), "ok");
-    }
-
     #[derive(Debug, Serialize, Deserialize, PartialEq, Validate)]
     struct Greeting {
         #[validate(length(min = 1))]
         msg: String,
     }
 
-    #[derive(Debug, Serialize, Deserialize, Validate)]
-    struct Login {
-        #[validate(length(min = 8))]
-        password: String,
+    #[test]
+    fn each_single_value_extractor_validates_as_its_value_does() {
+        let blank = || Greeting { msg: String::new() };
+        assert!(Json(blank()).validate().is_err());
+        assert!(Path(blank()).validate().is_err());
+        assert!(Query(blank()).validate().is_err());
+        assert!(Form(blank()).validate().is_err());
+        assert!(Header(blank()).validate().is_err());
+        assert!(
+            Json(Greeting { msg: "hi".into() }).validate().is_ok(),
+            "a value keeping its rules passes"
+        );
     }
 
     fn json_request<T: Serialize>(payload: &T) -> (Request, RequestBody) {
@@ -262,12 +196,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn piped_pipes_the_extracted_value() {
+    async fn piped_pipes_the_extracted_value_and_binds_the_output() {
         let (req, mut body) = json_request(&"hello".to_owned());
-        let piped = Piped::<ToUpper, Json<String>>::from_request(&req, &mut body)
+        let Piped(shouted) = Piped::<ToUpper, Json<String>>::from_request(&req, &mut body)
             .await
             .expect("happy path");
-        assert_eq!(piped.into_inner(), "HELLO");
+        assert_eq!(shouted, "HELLO");
     }
 
     #[tokio::test]
@@ -283,23 +217,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn valid_returns_the_validated_payload() {
-        let payload = Greeting { msg: "hi".into() };
-        let (req, mut body) = json_request(&payload);
-        let v = Valid::<Json<Greeting>>::from_request(&req, &mut body)
-            .await
-            .expect("validation passes");
-        assert_eq!(v.into_inner(), payload);
-    }
-
-    #[tokio::test]
-    async fn valid_rejects_a_body_past_the_configured_limit_with_413() {
-        let (req, mut body) = json_request(&Greeting {
-            msg: "well over four bytes".into(),
-        });
+    async fn piped_rejects_a_body_past_the_configured_limit_with_413() {
+        let (req, mut body) = json_request(&"well over four bytes".to_owned());
         let Err(err) = crate::raw_body::with_body_limit(
             4,
-            Valid::<Json<Greeting>>::from_request(&req, &mut body),
+            Piped::<ToUpper, Json<String>>::from_request(&req, &mut body),
         )
         .await
         else {
@@ -309,42 +231,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn valid_accepts_a_body_within_the_configured_limit() {
-        let payload = Greeting { msg: "hi".into() };
-        let (req, mut body) = json_request(&payload);
-        let v = crate::raw_body::with_body_limit(
+    async fn piped_accepts_a_body_within_the_configured_limit() {
+        let (req, mut body) = json_request(&"hi".to_owned());
+        let Piped(shouted) = crate::raw_body::with_body_limit(
             4096,
-            Valid::<Json<Greeting>>::from_request(&req, &mut body),
+            Piped::<ToUpper, Json<String>>::from_request(&req, &mut body),
         )
         .await
         .expect("body fits under the cap");
-        assert_eq!(v.into_inner(), payload);
+        assert_eq!(shouted, "HI");
+    }
+
+    #[derive(Debug, Serialize, Deserialize, Validate)]
+    struct Login {
+        #[validate(length(min = 8))]
+        password: String,
     }
 
     #[tokio::test]
-    async fn valid_rejects_with_400_and_field_details_on_invalid_input() {
-        let (req, mut body) = json_request(&Greeting { msg: String::new() });
-        let Err(err) = Valid::<Json<Greeting>>::from_request(&req, &mut body).await else {
-            panic!("validation should have rejected");
-        };
-        let (status, json, _) = problem_of(err).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(json["status"], 400);
-        assert!(
-            json.get("errors").and_then(|d| d.get("msg")).is_some(),
-            "errors should name the failing field: {json}",
-        );
-    }
-
-    #[tokio::test]
-    async fn a_valid_rejection_does_not_echo_the_submitted_value_in_the_400_body() {
-        let (req, mut body) = json_request(&Login {
+    async fn a_validation_refusal_names_the_field_and_never_echoes_the_value() {
+        let Err(errors) = (Login {
             password: "hunter2".into(),
-        });
-        let Err(err) = Valid::<Json<Login>>::from_request(&req, &mut body).await else {
+        })
+        .validate() else {
             panic!("validation should have rejected");
         };
-        let (status, json, text) = problem_of(err).await;
+        let (status, json, text) = problem_of(pipe_error(&PipeError::from(errors))).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(
             !text.contains("hunter2"),

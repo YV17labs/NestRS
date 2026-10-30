@@ -235,8 +235,8 @@ if actor.is_admin() {
 #[post("/transcode")]
 #[authorize(Manage, Transcoding)]
 #[http_code(202)]
-async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<()> {
-    self.svc.enqueue_transcode(body.into_inner().file).await?;
+async fn transcode(&self, Json(body): Json<TranscodeDto>) -> Result<()> {
+    self.svc.enqueue_transcode(body.file).await.opaque()?;
     Ok(())
 }
 ```

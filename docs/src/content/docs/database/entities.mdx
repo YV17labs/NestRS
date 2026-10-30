@@ -242,9 +242,9 @@ pub title: String,
 pub email: String,
 ```
 
-The input structs derive `Validate`. Validation runs at the HTTP edge
-when the handler binds the body through `Valid<Json<CreatePost>>` —
-the service never sees an invalid input. The full rule set
+The input structs derive `Validate`. Validation runs at whichever edge
+decodes one — a `Json<CreatePost>` body, a GraphQL `CreatePost` argument —
+so the service never sees an invalid input. The full rule set
 (`length`, `email`, `range`, `url`, custom validators, …) is the
 `validator` crate's; see its docs for the catalogue.
 

@@ -4,7 +4,7 @@
 //! `queue` feature must pull all four.
 
 use nest_rs::core::{injectable, input};
-use nest_rs::pipes::Valid;
+use nest_rs::pipes::{Piped, Trim};
 use nest_rs::queue::{Attempt, Checkpoint, QueueView, processor, queue};
 
 use crate::pipeline::{HygieneUnitAudit, HygieneUnitRefusal};
@@ -31,6 +31,9 @@ pub struct HygieneSyncQueue;
 #[queue(name = "hygiene-steady", job = HygieneCommand)]
 pub struct HygieneSteadyQueue;
 
+#[queue(name = "hygiene-names", job = String)]
+pub struct HygieneNamesQueue;
+
 #[injectable]
 pub struct HygieneProcessor;
 
@@ -47,14 +50,22 @@ pub fn processor_of(view: &QueueView) -> &'static str {
 #[use_interceptors(HygieneUnitAudit)]
 #[use_exception_filters(HygieneUnitRefusal)]
 impl HygieneProcessor {
-    /// `Valid<T>` reaches `nest-rs-pipes`; `transactional = false` names
-    /// `TransactionPolicy` through `nest-rs-database`.
+    /// A job whose type declares rules reaches the check through
+    /// `nest-rs-queue`; `transactional = false` names `TransactionPolicy`
+    /// through `nest-rs-database`.
     #[process(queue = HygieneQueue, retries = 1, transactional = false)]
     #[meta(HygieneLimit(10))]
     #[use_interceptors(HygieneUnitAudit)]
     #[use_exception_filters(HygieneUnitRefusal)]
-    async fn transcode(&self, job: Valid<HygieneCommand>) -> nest_rs::core::anyhow::Result<()> {
-        let _ = job.into_inner().file;
+    async fn transcode(&self, job: HygieneCommand) -> nest_rs::core::anyhow::Result<()> {
+        let _ = job.file;
+        Ok(())
+    }
+
+    /// `Piped<P>` reaches `nest-rs-pipes`.
+    #[process(queue = HygieneNamesQueue)]
+    async fn name(&self, Piped(name): Piped<Trim>) -> nest_rs::core::anyhow::Result<()> {
+        let _ = name;
         Ok(())
     }
 

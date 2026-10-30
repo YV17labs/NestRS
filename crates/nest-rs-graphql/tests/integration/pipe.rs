@@ -1,11 +1,12 @@
-//! Per-argument pipes on GraphQL operations: a `Piped<P, T>` / `Valid<T>`
-//! parameter exposes the wire type `T`, runs the pipe before the body, and
-//! surfaces a rejection as a GraphQL error.
+//! Per-argument pipes on GraphQL operations: a `Piped<P>` parameter exposes
+//! the pipe's input on the wire, runs the pipe before the body, and surfaces a
+//! rejection as a GraphQL error. An argument whose type declares rules is
+//! validated there unasked, an optional one when it is given.
 
 use async_graphql::InputObject;
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_pipes::{ParseArray, Pipe, PipeError, Piped, Trim, Valid};
+use nest_rs_pipes::{ParseArray, Pipe, PipeError, Piped, Trim};
 use nest_rs_testing::TestApp;
 use validator::Validate;
 
@@ -31,17 +32,17 @@ struct PipeResolver;
 
 #[operations]
 impl PipeResolver {
-    /// `Piped<Trim, String>`: the SDL arg is `String`; the body sees it trimmed.
+    /// `Piped<Trim>`: the SDL arg is `String`; the body sees it trimmed.
     #[query]
     #[public]
-    async fn trimmed(&self, raw: Piped<Trim, String>) -> async_graphql::Result<String> {
+    async fn trimmed(&self, raw: Piped<Trim>) -> async_graphql::Result<String> {
         Ok(raw.into_inner())
     }
 
     /// A rejecting pipe surfaces as a GraphQL error, never reaching the body.
     #[query]
     #[public]
-    async fn checked(&self, raw: Piped<Reject, String>) -> async_graphql::Result<String> {
+    async fn checked(&self, raw: Piped<Reject>) -> async_graphql::Result<String> {
         Ok(raw.into_inner())
     }
 
@@ -49,22 +50,29 @@ impl PipeResolver {
     /// `Result` whatever the method returns, so the pipe needs nothing of it.
     #[query]
     #[public]
-    async fn checked_bare(&self, raw: Piped<Reject, String>) -> String {
+    async fn checked_bare(&self, raw: Piped<Reject>) -> String {
         raw.into_inner()
     }
 
     /// A list whose items must parse: a refused item is said, never quoted.
     #[query]
     #[public]
-    async fn ids(&self, raw: Piped<ParseArray<u64>, String>) -> async_graphql::Result<String> {
+    async fn ids(&self, raw: Piped<ParseArray<u64>>) -> async_graphql::Result<String> {
         Ok(format!("{:?}", raw.into_inner()))
     }
 
-    /// `Valid<T>`: validates the input object, exposing `NameInput` on the wire.
+    /// A bare input object whose type declares rules.
     #[query]
     #[public]
-    async fn named(&self, input: Valid<NameInput>) -> async_graphql::Result<String> {
-        Ok(input.into_inner().name)
+    async fn named(&self, input: NameInput) -> async_graphql::Result<String> {
+        Ok(input.name)
+    }
+
+    /// The same input, optional: validated when it is given.
+    #[query]
+    #[public]
+    async fn maybe_named(&self, input: Option<NameInput>) -> async_graphql::Result<String> {
+        Ok(input.map_or_else(|| "nobody".to_owned(), |input| input.name))
     }
 }
 
@@ -141,8 +149,53 @@ async fn a_rejecting_pipe_surfaces_from_a_bare_return_operation() {
     assert_eq!(first.object().get("message").string(), "bad input");
 }
 
+/// The first error's message for `query`.
+async fn first_error(query: &str) -> String {
+    let app = boot().await;
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": query }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let json = resp.json().await;
+    let errors = json.value().object().get("errors").array();
+    let first = errors
+        .iter()
+        .next()
+        .expect("an invalid input yields one error");
+    first.object().get("message").string().to_owned()
+}
+
 #[tokio::test]
-async fn a_valid_arg_accepts_a_valid_input() {
+async fn an_optional_input_is_validated_when_it_is_given() {
+    assert_eq!(
+        first_error("{ maybeNamed(input: { name: \"\" }) }").await,
+        "validation failed"
+    );
+
+    let app = boot().await;
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ maybeNamed }" }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let json = resp.json().await;
+    let named = json
+        .value()
+        .object()
+        .get("data")
+        .object()
+        .get("maybeNamed")
+        .string();
+    assert_eq!(named, "nobody");
+}
+
+#[tokio::test]
+async fn an_input_keeping_its_rules_is_accepted() {
     let app = boot().await;
     let resp = app
         .http()
@@ -163,7 +216,7 @@ async fn a_valid_arg_accepts_a_valid_input() {
 }
 
 #[tokio::test]
-async fn a_valid_arg_rejects_an_invalid_input() {
+async fn an_input_breaking_its_rules_is_refused_before_the_body() {
     let app = boot().await;
     let resp = app
         .http()

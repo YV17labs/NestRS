@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use nest_rs::core::Ctx;
 use nest_rs::http::{
-    HeaderValue, HttpError, Json, Opaque, Path, Piped, Query, Response, Result, StatusCode, Valid,
-    controller, header, routes,
+    HeaderValue, HttpError, Json, Opaque, Path, Query, Response, Result, StatusCode, controller,
+    header, routes,
 };
 use nest_rs::oauth::server::{AccessTokenRequest, AccessTokenResponse};
-use nest_rs::pipes::Lowercase;
+use nest_rs::pipes::{Lowercase, Piped};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
 use super::guard::{ClientGuard, SocialGuard};
@@ -46,12 +46,12 @@ impl SignInController {
     )]
     async fn social_authorize(
         &self,
-        provider: Piped<Lowercase, Path<String>>,
+        Piped(provider): Piped<Lowercase, Path<String>>,
         query: Query<AuthorizeDto>,
     ) -> Result<Response> {
         let authorization = self
             .svc
-            .authorize(&provider.into_inner(), query.0.resource.as_deref())?
+            .authorize(&provider, query.0.resource.as_deref())?
             .ok_or_else(|| HttpError::from_status(StatusCode::NOT_FOUND))?;
         let set_cookie = HeaderValue::try_from(authorization.set_cookie()).opaque()?;
         let location = HeaderValue::try_from(authorization.url).opaque()?;
@@ -88,8 +88,7 @@ impl SignInController {
         tags("Auth"),
         response = AccessTokenResponse
     )]
-    async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse> {
-        let input = body.into_inner();
+    async fn login(&self, Json(input): Json<LoginDto>) -> Result<AccessTokenResponse> {
         Ok(self
             .svc
             .grant_password(&input.email, &input.password, input.resource.as_deref())

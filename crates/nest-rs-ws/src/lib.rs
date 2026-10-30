@@ -213,6 +213,7 @@ pub mod __private {
     pub use crate::message::{DeclaredMessage, MessageTable};
     pub use crate::namespace::WsNamespaceEntry;
     pub use crate::scope::scoped_parameter;
+    pub use nest_rs_pipes::__private::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
     pub use nest_rs_pipes::{GlobalPipe, PipeSpec};
 }
 

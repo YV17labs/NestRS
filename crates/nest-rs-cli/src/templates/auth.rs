@@ -155,7 +155,8 @@ pub use module::AuthnHttpModule;
 pub(crate) const AUTHN_HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::authn::{DevelopmentOnlyGuard, JwtService};
-use nest_rs::http::{Json, Opaque, Result, controller, input, routes};
+use nest_rs::core::{input, output};
+use nest_rs::http::{Json, Opaque, Result, controller, routes};
 use uuid::Uuid;
 
 use crate::authn::{Claims, Role, Subject};
@@ -168,7 +169,7 @@ pub struct DevTokenDto {
     pub roles: Vec<Role>,
 }
 
-#[input]
+#[output]
 pub struct DevTokenResponseDto {
     pub access_token: String,
     pub token_type: String,

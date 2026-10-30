@@ -17,15 +17,16 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Collision, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, InjectableBody, PipeWrapper, SitePosture, TailParam,
-    VersionedEdge, answer_span, at_most_one_authorize, await_if_async, build_injectable_body,
-    cfg_attrs, concrete_signature, delegated_attrs, force_guard_typeids, forwarded_arg_idents,
+    HandlerSite, HostBorrow, HostMeta, InjectableBody, SitePosture, TailParam, VersionedEdge,
+    answer_span, at_most_one_authorize, await_if_async, build_injectable_body, cfg_attrs,
+    concrete_signature, delegated_attrs, force_guard_typeids, forwarded_arg_idents,
     forwarded_idents, from_container_method, guard_capability_bounds, handler_const, handler_ref,
     host_meta_fn, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, injected_per_request_method, key_as_written,
     layer_deps, normalize_forwarded_args, one_role_per_method, pipe_wrapper, posture_contradiction,
     posture_required, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
     site_fn_ident, site_ref, tail_param, takes_value, type_label, unknown_argument,
+    validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -379,12 +380,13 @@ fn field_parent_key(ty: &Type) -> String {
     }
 }
 
-/// An operation parameter typed `Piped<P, T>` or `Valid<T>`: the wrapper exposes
-/// `T` in its place and hands the operation the carrier.
+/// An operation parameter typed `Piped<P>`: the wrapper exposes the pipe's
+/// input in its place and hands the operation the carrier.
 struct PipedArg {
     ident: Ident,
-    /// `None` for `Valid<T>`.
-    pipe: Option<Path>,
+    /// The carrier as the method spells it.
+    carrier: Type,
+    /// What the wire carries: the pipe's `In`.
     value_ty: Type,
 }
 
@@ -396,14 +398,37 @@ fn piped_args(sig: &Signature) -> Vec<PipedArg> {
             let syn::Pat::Ident(pi) = &*pt.pat else {
                 return None;
             };
-            let (pipe, value_ty) = match pipe_wrapper(&pt.ty)? {
-                PipeWrapper::Piped { pipe, value } => (Some(pipe), value),
-                PipeWrapper::Valid { value } => (None, value),
-            };
+            let wrapper = pipe_wrapper(&pt.ty)?;
             Some(PipedArg {
                 ident: pi.ident.clone(),
-                pipe,
-                value_ty,
+                carrier: (*pt.ty).clone(),
+                value_ty: wrapper.value(),
+            })
+        })
+        .collect()
+}
+
+/// Each decoded argument `args` binds, held to the rules its type declares
+/// and refused as a field error: every typed argument but a borrow (the
+/// `Context`, a provider) and the names `skip`. On the wrapper's signature a
+/// pipe's argument is still its wire value.
+fn validate_args<'a>(
+    args: impl IntoIterator<Item = &'a FnArg>,
+    skip: &[&Ident],
+) -> Vec<TokenStream2> {
+    args.into_iter()
+        .filter_map(|arg| {
+            let FnArg::Typed(pt) = arg else { return None };
+            let syn::Pat::Ident(pi) = &*pt.pat else {
+                return None;
+            };
+            if matches!(&*pt.ty, Type::Reference(_)) || skip.contains(&&pi.ident) {
+                return None;
+            }
+            let ident = &pi.ident;
+            let check = validate_argument(&quote!(::nest_rs_graphql), &quote!(&#ident));
+            Some(quote! {
+                #check.map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
             })
         })
         .collect()
@@ -1343,15 +1368,16 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             };
             let pipe_prelude = piped.iter().map(|pa| {
                 let ident = &pa.ident;
-                let ty = &pa.value_ty;
-                let apply = match &pa.pipe {
-                    Some(pipe) => quote!(::nest_rs_pipes::Piped::<#pipe, #ty>::apply(#ident)),
-                    None => quote!(::nest_rs_pipes::Valid::<#ty>::apply(#ident)),
-                };
+                let carrier = &pa.carrier;
                 quote! {
-                    let #ident = #apply.map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
+                    let #ident = <#carrier>::apply(#ident)
+                        .map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
                 }
             });
+            // The wire values, before a pipe runs over one and before a bound
+            // subject is read.
+            let bound_id = bind_info.as_ref().map(|(_, _, id_ident, _)| id_ident);
+            let validate_prelude = validate_args(&wrapper_sig.inputs, bound_id.as_slice());
             let tail_prelude = tail_bindings(&tail);
             // Bare on purpose: `graphql` is an inert helper the `#[Object]` derive
             // strips, not a path to resolve.
@@ -1388,6 +1414,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 #gsig {
                     #run(#site, #gctx, #site_kind, move || async move {
                         #(#tail_prelude)*
+                        #(#validate_prelude)*
                         #bind_prelude
                         #(#pipe_prelude)*
                         #body
@@ -1625,6 +1652,7 @@ fn field_method(
     let site = site_ref(self_ty, method_name);
     let site_kind = ChainSite::Field.path();
     let tail_prelude = tail_bindings(&tail);
+    let validate_prelude = validate_args(gql_args.iter().copied(), &[]);
     // By path: method lookup on a value tries a trait method taking `self` first.
     let call = call_as_result(
         sig,
@@ -1646,6 +1674,7 @@ fn field_method(
             ::nest_rs_graphql::__private::run_nested(#site, __ctx, #site_kind, move || async move {
                 let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
                 #(#tail_prelude)*
+                #(#validate_prelude)*
                 #(#dep_bindings)*
                 let __resolver = <#self_ty>::__nestrs_from_container(__container);
                 #call

@@ -13,11 +13,11 @@ help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
              &'a nest_rs::nest_rs_http::Request
              ClientIp
              Ctx<T>
+             Piped<P, E>
              RawBody
              Result<T, HttpError>
              nest_rs::nest_rs_authz::http::Authorize<A, S>
              nest_rs::nest_rs_authz::http::Scope<E, A>
-             nest_rs::nest_rs_http::Body
            and $N others
 
 error[E0277]: the trait bound `Authorize<u8>: FromRequest<'_>` is not satisfied
@@ -35,11 +35,11 @@ help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
              &'a nest_rs::nest_rs_http::Request
              ClientIp
              Ctx<T>
+             Piped<P, E>
              RawBody
              Result<T, HttpError>
              nest_rs::nest_rs_authz::http::Authorize<A, S>
              nest_rs::nest_rs_authz::http::Scope<E, A>
-             nest_rs::nest_rs_http::Body
            and $N others
    = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
 

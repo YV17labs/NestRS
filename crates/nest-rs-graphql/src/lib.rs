@@ -74,8 +74,9 @@ pub mod __private {
     pub use crate::subscription::{compose_schema, keep_masked_item};
 
     pub use inventory;
-    // For `#[crud]`-generated ops, so the consumer needs no nest-rs-pipes dependency.
-    pub use nest_rs_pipes::__private::{MaybeValidateFallback, ValidateProbe};
+    // Every operation's tail validates its arguments, with no dependency of the
+    // resolver's crate on nest-rs-pipes.
+    pub use nest_rs_pipes::__private::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
 }
 
 pub use async_graphql;

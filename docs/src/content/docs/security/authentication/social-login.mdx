@@ -169,12 +169,12 @@ impl SignInController {
     // … #[meta(…)], #[api(…)]
     async fn social_authorize(
         &self,
-        provider: Piped<Lowercase, Path<String>>,
+        Piped(provider): Piped<Lowercase, Path<String>>,
         query: Query<AuthorizeDto>,
     ) -> Result<Response> {
         let authorization = self
             .svc
-            .authorize(&provider.into_inner(), query.0.resource.as_deref())?
+            .authorize(&provider, query.0.resource.as_deref())?
             .ok_or_else(|| HttpError::from_status(StatusCode::NOT_FOUND))?;
         let set_cookie = HeaderValue::try_from(authorization.set_cookie()).opaque()?;
         let location = HeaderValue::try_from(authorization.url).opaque()?;

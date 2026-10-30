@@ -54,13 +54,13 @@ struct PipedController;
 impl PipedController {
     #[post("/detailed")]
     #[public]
-    async fn detailed(&self, text: nest_rs_http::Piped<Detailed<String>, Json<String>>) -> String {
+    async fn detailed(&self, text: Piped<Detailed<String>, Json<String>>) -> String {
         text.into_inner()
     }
 
     #[post("/bare")]
     #[public]
-    async fn bare(&self, text: nest_rs_http::Piped<Bare<String>, Json<String>>) -> String {
+    async fn bare(&self, text: Piped<Bare<String>, Json<String>>) -> String {
         text.into_inner()
     }
 }
@@ -72,13 +72,13 @@ struct PipedResolver;
 impl PipedResolver {
     #[query]
     #[public]
-    async fn detailed(&self, text: Piped<Detailed<String>, String>) -> GqlResult<String> {
+    async fn detailed(&self, text: Piped<Detailed<String>>) -> GqlResult<String> {
         Ok(text.into_inner())
     }
 
     #[query]
     #[public]
-    async fn bare(&self, text: Piped<Bare<String>, String>) -> GqlResult<String> {
+    async fn bare(&self, text: Piped<Bare<String>>) -> GqlResult<String> {
         Ok(text.into_inner())
     }
 }
@@ -99,7 +99,7 @@ impl PipedTools {
     #[public]
     async fn detailed(
         &self,
-        Parameters(args): Parameters<Piped<Detailed<TextArgs>, TextArgs>>,
+        Parameters(args): Parameters<Piped<Detailed<TextArgs>>>,
     ) -> Result<String, McpError> {
         Ok(args.into_inner().text)
     }
@@ -109,7 +109,7 @@ impl PipedTools {
     #[public]
     async fn bare(
         &self,
-        Parameters(args): Parameters<Piped<Bare<TextArgs>, TextArgs>>,
+        Parameters(args): Parameters<Piped<Bare<TextArgs>>>,
     ) -> Result<String, McpError> {
         Ok(args.into_inner().text)
     }
@@ -122,13 +122,13 @@ struct PipedGateway;
 impl PipedGateway {
     #[subscribe_message("detailed")]
     #[public]
-    async fn detailed(&self, text: Piped<Detailed<String>, String>) -> String {
+    async fn detailed(&self, text: Piped<Detailed<String>>) -> String {
         text.into_inner()
     }
 
     #[subscribe_message("bare")]
     #[public]
-    async fn bare(&self, text: Piped<Bare<String>, String>) -> String {
+    async fn bare(&self, text: Piped<Bare<String>>) -> String {
         text.into_inner()
     }
 }

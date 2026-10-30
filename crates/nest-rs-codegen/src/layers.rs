@@ -138,17 +138,17 @@ const NO_CONNECTION_HOOK: &str = "only a gateway's `#[messages]` block carries c
 const NO_CALLER: &str =
     "a job, a tick and an event have no caller to gate — guard where the work is produced";
 
-/// A worker's input is validated on its argument.
+/// A worker's input is piped on its argument.
 const WORKER_PIPES: &str = "a job's payload, a tick and an event take per-argument pipes alone \
-     — bind `Piped<P, T>` or `Valid<T>` on the argument";
+     — bind `Piped<P>` on the argument; a type declaring rules is validated there unasked";
 
 /// GraphQL's variables meet the global pipes at the request.
 const GRAPHQL_PIPES: &str = "a GraphQL operation's variables are folded once per request — bind \
-     `Piped<P, T>` or `Valid<T>` on the argument";
+     `Piped<P>` on the argument; a type declaring rules is validated there unasked";
 
 /// MCP's arguments are one value.
 const MCP_PIPES: &str = "an MCP operation's arguments are decoded once per call — bind \
-     `Piped<P, T>` or `Valid<T>` inside `Parameters<…>`";
+     `Piped<P>` inside `Parameters<…>`; a type declaring rules is validated there unasked";
 
 /// `#[use_filters]` bound HTTP's untyped `Filter`, which an exception filter
 /// replaced.

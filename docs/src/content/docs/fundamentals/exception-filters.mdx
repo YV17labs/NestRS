@@ -86,14 +86,13 @@ use nest_rs::seaorm::{Creatable, ServiceError};
 
 impl UsersService {
     pub async fn create(&self, input: CreateUser) -> Result<User, ServiceError> {
-        input.validate()?;                              // → ServiceError::Validation
         let row = self.create_from_active(active_for_new_user(input)).await?;  // → ServiceError::Conflict on a taken email
         Ok(User::from(&row))
     }
 }
 
 #[post("/")]
-async fn create(&self, Valid(input): Valid<Json<CreateUser>>)
+async fn create(&self, Json(input): Json<CreateUser>)
     -> Result<Json<User>, ServiceError>
 {
     Ok(Json(self.svc.create(input).await?))

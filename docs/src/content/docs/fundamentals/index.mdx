@@ -29,9 +29,9 @@ every binary leans on:
   `Guard::check`, which runs on every unit and on an HTTP request through
   `Guard::check_http`; it returns `Err(Denial)` to short-circuit the chain, or
   attaches context the handler reads back via `Ctx<T>`.
-- **Pipes** — convert and validate input at the request boundary.
-  Stateless transforms (`Parse<T>`, `ParseUuid`, `ValidationPipe<T>`, …)
-  bound by HTTP through the `Valid<E>` / `Piped<P, E>` extractors.
+- **Pipes** — convert input at the request boundary. Stateless transforms
+  (`Parse<T>`, `ParseUuid`, `Trim`, …) bound on any edge through `Piped`;
+  an argument whose type declares rules is validated there with no pipe.
 - **Interceptors** — wrap handler execution, after the guards: time it,
   decorate the reply, or answer in its place.
 - **Error handling** — map errors to responses. `ToProblem` on the

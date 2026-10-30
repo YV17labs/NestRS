@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
+use nest_rs::core::output;
 use nest_rs::storage::PresignedRequest;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[output]
+#[derive(Clone)]
 pub struct PresignedUrlDto {
     pub key: String,
     pub url: String,

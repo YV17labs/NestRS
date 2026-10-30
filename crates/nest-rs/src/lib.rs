@@ -158,11 +158,11 @@ pub mod prelude {
     };
 
     // Outside every edge's feature: a headless worker needs `#[input]` too.
-    pub use nest_rs_core::input;
+    pub use nest_rs_core::{input, output};
 
     #[cfg(feature = "http")]
     pub use nest_rs_http::{
-        ClientIp, HttpConfig, HttpModule, Json, Path, Query, RawBody, Scoped, Valid, controller,
+        ClientIp, HttpConfig, HttpModule, Json, Path, Query, RawBody, Scoped, controller,
         http_code, redirect, response_header, routes,
     };
 

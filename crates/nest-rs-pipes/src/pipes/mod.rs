@@ -5,7 +5,6 @@ mod parse_uuid;
 mod parse_uuid_version;
 mod trim;
 mod uppercase;
-mod validation;
 
 pub use lowercase::Lowercase;
 pub use parse::{Parse, ParseBool, ParseFloat, ParseInt};
@@ -16,4 +15,3 @@ pub use parse_uuid_version::{
 };
 pub use trim::Trim;
 pub use uppercase::Uppercase;
-pub use validation::ValidationPipe;

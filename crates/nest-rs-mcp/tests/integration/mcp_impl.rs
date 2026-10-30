@@ -6,7 +6,8 @@ use nest_rs_mcp::model::{GetPromptResult, PromptMessage, Role};
 // No `rmcp`, `tool`, `prompt` or `ServerHandler` import: `#[tools]` re-emits
 // them inside its generated module.
 use nest_rs_mcp::rmcp::serde_json::json;
-use nest_rs_mcp::{McpError, Parameters, Valid, hosts_on, input, mcp, tools};
+use nest_rs_mcp::{McpError, Parameters, hosts_on, input, mcp, tools};
+use nest_rs_pipes::{Pipe, PipeError, Piped};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{
     call_method, call_tool, call_tool_with, initialize, open_session, result,
@@ -29,6 +30,19 @@ type Answered<T> = Result<T, McpError>;
 struct GreetArgs {
     #[validate(length(min = 1, message = "name must not be empty"))]
     name: String,
+}
+
+/// Capitalizes the name a greeting carries.
+struct Capitalize;
+
+impl Pipe for Capitalize {
+    type In = GreetArgs;
+    type Out = GreetArgs;
+    fn transform(input: GreetArgs) -> Result<GreetArgs, PipeError> {
+        Ok(GreetArgs {
+            name: input.name.to_uppercase(),
+        })
+    }
 }
 
 #[mcp(path = "/mcp/impl-witness")]
@@ -70,9 +84,19 @@ impl WitnessTool {
     #[public]
     async fn greet_person(
         &self,
-        Parameters(args): Parameters<Valid<GreetArgs>>,
+        Parameters(args): Parameters<GreetArgs>,
     ) -> Result<String, McpError> {
-        Ok(format!("hello {}", args.into_inner().name))
+        Ok(format!("hello {}", args.name))
+    }
+
+    /// Greet one person loudly, their name capitalized before the body.
+    #[tool]
+    #[public]
+    async fn greet_loudly(
+        &self,
+        Parameters(Piped(args)): Parameters<Piped<Capitalize>>,
+    ) -> Result<String, McpError> {
+        Ok(format!("HELLO {}", args.name))
     }
 
     /// Look up one person.
@@ -108,11 +132,8 @@ impl WitnessTool {
     /// Greet one person by name, through a `Result` renamed by an alias.
     #[tool]
     #[public]
-    async fn greet_by_alias(
-        &self,
-        Parameters(args): Parameters<Valid<GreetArgs>>,
-    ) -> Answered<String> {
-        Ok(format!("hi {}", args.into_inner().name))
+    async fn greet_by_alias(&self, Parameters(args): Parameters<GreetArgs>) -> Answered<String> {
+        Ok(format!("hi {}", args.name))
     }
 
     /// Draft a greeting for the directory.
@@ -169,6 +190,7 @@ async fn the_boot_checks_still_read_the_tool_names() {
             "describe_retention",
             "describe_storage",
             "greet_by_alias",
+            "greet_loudly",
             "greet_person",
             "list_people",
             "look_up_person",
@@ -180,7 +202,7 @@ async fn the_boot_checks_still_read_the_tool_names() {
 }
 
 #[tokio::test]
-async fn a_valid_argument_is_validated_before_the_body_runs() {
+async fn arguments_whose_type_declares_rules_are_validated_before_the_body_runs() {
     let app = boot().await;
 
     let ok = call_tool_with(
@@ -239,7 +261,38 @@ async fn a_result_renamed_by_an_alias_answers_and_refuses_like_a_spelled_one() {
     .await;
     assert!(
         rejected.contains("name must not be empty") && !rejected.contains("hi "),
-        "…and its pipe's refusal is the operation's answer: {rejected}",
+        "…and the refusal is the operation's answer: {rejected}",
+    );
+}
+
+#[tokio::test]
+async fn a_piped_argument_is_validated_as_decoded_then_piped() {
+    let app = boot().await;
+
+    let ok = call_tool_with(
+        app.http(),
+        PATH,
+        "greet_loudly",
+        None,
+        json!({ "name": "ada" }),
+    )
+    .await;
+    assert!(
+        ok.contains("HELLO ADA"),
+        "the body saw the pipe's output: {ok}"
+    );
+
+    let rejected = call_tool_with(
+        app.http(),
+        PATH,
+        "greet_loudly",
+        None,
+        json!({ "name": "" }),
+    )
+    .await;
+    assert!(
+        rejected.contains("name must not be empty") && !rejected.contains("HELLO"),
+        "the decoded arguments are held to their rules before the pipe: {rejected}",
     );
 }
 
@@ -254,19 +307,19 @@ async fn the_wire_schema_is_the_value_type_not_the_carrier() {
         .as_array()
         .expect("tools/list carries an array")
         .iter()
-        .find(|tool| tool["name"] == "greet_person")
+        .find(|tool| tool["name"] == "greet_loudly")
         .expect("the piped tool is listed")
         .clone();
 
     let schema = &greet["inputSchema"];
     assert!(
         schema["properties"]["name"].is_object(),
-        "the schema is `GreetArgs`'s own: {schema}",
+        "the schema is the pipe's input, `GreetArgs`: {schema}",
     );
     assert!(
-        !schema.to_string().contains("Valid"),
+        !schema.to_string().contains("Piped"),
         "…and the carrier appears nowhere in it — a client asked to send a \
-         `Valid<GreetArgs>` would have nothing it could construct: {schema}",
+         `Piped<Capitalize>` would have nothing it could construct: {schema}",
     );
 }
 

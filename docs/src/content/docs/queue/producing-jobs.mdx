@@ -326,8 +326,8 @@ use std::sync::Arc;
 
 use nest_rs::authz::Manage;
 use nest_rs::http::{
-    Body, Header, HeaderValue, HttpError, Json, Query, Response, Result, SseEvent, SseStream,
-    StatusCode, Valid, controller, routes,
+    Body, Header, HeaderValue, HttpError, Json, Opaque, Query, Response, Result, SseEvent,
+    SseStream, StatusCode, controller, routes,
 };
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
@@ -352,8 +352,8 @@ impl AudioController {
     #[meta(Throttle::per_minute(20))]
     // … #[api(…)]
     #[http_code(202)]
-    async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<()> {
-        self.svc.enqueue_transcode(body.into_inner().file).await?;
+    async fn transcode(&self, Json(body): Json<TranscodeDto>) -> Result<()> {
+        self.svc.enqueue_transcode(body.file).await.opaque()?;
         Ok(())
     }
 }

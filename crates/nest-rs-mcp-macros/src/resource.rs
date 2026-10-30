@@ -3,7 +3,7 @@
 //! listing. rmcp routes neither, so the expansion writes the three
 //! `ServerHandler` methods that serve them itself.
 
-use nest_rs_codegen::__private::{PipeWrapper, generic_args, pipe_wrapper, tail_param};
+use nest_rs_codegen::__private::{generic_args, pipe_wrapper, tail_param};
 use nest_rs_codegen::Grammar;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
@@ -153,8 +153,8 @@ pub(crate) fn bind_variables(decl: &mut ResourceDecl, sig: &Signature) -> syn::R
                 pat_type,
                 format!(
                     "#[resource] reads `{{{ident}}}` off its URI with `FromStr`: write \
-                     `{ident}: T`, not `{carrier}<…>` — `Parameters`, `Valid` and `Piped` \
-                     carry a tool's JSON arguments, which a URI does not send",
+                     `{ident}: T`, not `{carrier}<…>` — `Parameters` and `Piped` carry a \
+                     tool's JSON arguments, which a URI does not send",
                 ),
             ));
         }
@@ -193,16 +193,13 @@ pub(crate) fn bind_variables(decl: &mut ResourceDecl, sig: &Signature) -> syn::R
     Ok(())
 }
 
-/// The wrapper a tool's argument travels in — `Parameters`, `Valid`,
-/// `Piped` — when `ty` is spelled in one.
+/// The wrapper a tool's argument travels in — `Parameters`, `Piped` — when
+/// `ty` is spelled in one.
 fn argument_carrier(ty: &Type) -> Option<&'static str> {
     if generic_args(ty).is_some_and(|(name, _)| name == "Parameters") {
         return Some("Parameters");
     }
-    pipe_wrapper(ty).map(|wrapper| match wrapper {
-        PipeWrapper::Valid { .. } => "Valid",
-        PipeWrapper::Piped { .. } => "Piped",
-    })
+    pipe_wrapper(ty).map(|_| "Piped")
 }
 
 /// Refuse a parameter of a `#[resources]` listing other than a `Scoped<T>` or a

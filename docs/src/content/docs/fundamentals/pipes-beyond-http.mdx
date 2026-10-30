@@ -5,30 +5,34 @@ sidebar:
   order: 7.2
 ---
 
-On GraphQL, WebSockets, MCP and queues the argument *is* the wire value, so
-the binding is `nest_rs::pipes::Piped<P, T>` / `Valid<T>`. `T` is what
-appears on the wire — the SDL argument type, the WS payload, the job payload
-— and the handler body sees `P::Out` through `into_inner()` / `Deref`,
-exactly as on HTTP. The edge's macro (`#[operations]`, `#[messages]`,
-`#[tools]`, `#[processor]`) does the stripping and the call; on MCP the
-carrier goes **inside** `Parameters<…>`, since that is what the protocol
-deserializes an operation's arguments into. The pipe runs in the unit's tail,
-after its guards and its class gate, so a caller the site refuses never pays
-for validation and never learns what a valid input looks like.
+On GraphQL, WebSockets, MCP and queues the edge decodes the argument itself,
+so the binding is `nest_rs::pipes::Piped<P>`: the wire value is the pipe's
+`In` — the SDL argument type, the WS payload, the tool's arguments, the job
+payload — and `Piped(value)` binds the pipe's output, exactly as on HTTP. The
+edge's macro (`#[operations]`, `#[messages]`, `#[tools]`, `#[processor]`)
+does the stripping and the call; on MCP the carrier goes **inside**
+`Parameters<…>`, since that is what the protocol deserializes an operation's
+arguments into.
+
+An argument whose type declares rules needs no carrier: the edge holds what it
+decoded to them, a pipe's input included, before the pipe runs. Both run in
+the unit's tail, after its guards and its class gate, so a caller the site
+refuses never pays for validation and never learns what a valid input looks
+like.
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 // GraphQL — the SDL argument is `String`; the body sees it trimmed.
 #[query]
 #[public]
-async fn trimmed(&self, raw: Piped<Trim, String>) -> async_graphql::Result<String> {
-    Ok(raw.into_inner())
+async fn trimmed(&self, Piped(raw): Piped<Trim>) -> async_graphql::Result<String> {
+    Ok(raw)
 }
 
-// GraphQL — validates the input object; the SDL argument is `NameInput`.
+// GraphQL — the SDL argument is `NameInput`, held to its rules before the body.
 #[query]
 #[public]
-async fn named(&self, input: Valid<NameInput>) -> async_graphql::Result<String> {
-    Ok(input.into_inner().name)
+async fn named(&self, input: NameInput) -> async_graphql::Result<String> {
+    Ok(input.name)
 }
 ```
 
@@ -36,20 +40,19 @@ async fn named(&self, input: Valid<NameInput>) -> async_graphql::Result<String> 
 // WebSockets — the message payload is a `String`, piped before the handler.
 #[subscribe_message("trim")]
 #[public]
-async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
-    name.into_inner()
+async fn trim_handler(&self, Piped(name): Piped<Trim>) -> String {
+    name
 }
 ```
 
 ```rust title="crates/features/src/posts/mcp/tool.rs"
-// MCP — the tool's schema is `SearchPostsDto`; the body sees it validated.
+// MCP — the tool's schema is `SearchPostsDto`, held to its rules before the body.
 #[tool]
 #[public]
 async fn search_posts(
     &self,
-    Parameters(search): Parameters<Valid<SearchPostsDto>>,
+    Parameters(search): Parameters<SearchPostsDto>,
 ) -> Result<String, McpError> {
-    let search = search.into_inner();
     /* ... */
 }
 ```
@@ -57,7 +60,7 @@ async fn search_posts(
 ```rust title="crates/features/src/users/queue/processor.rs"
 // Queue — the job payload is a `String`, piped after deserialization.
 #[process(queue = SignupsQueue, retries = 0)]
-async fn handle(&self, name: Piped<Trim, String>) -> anyhow::Result<()> {
+async fn handle(&self, Piped(name): Piped<Trim>) -> anyhow::Result<()> {
     /* ... */
 }
 ```
@@ -73,15 +76,15 @@ the handler body never runs:
 | GraphQL | An error in the response's `errors` array, under `extensions.code: "INVALID_ARGUMENT"` |
 | WebSockets | An error frame on the socket (`{ event, data: { error, code: "INVALID_ARGUMENT", errors? } }`) |
 | MCP | `invalid_params` (`-32602`), `{ code: "INVALID_ARGUMENT", errors? }` in the error's `data` |
-| Queue | A job error — the queue's retry/failure policy applies |
+| Queue | A job error that dead-letters at once: the same payload fails every attempt |
 
 A handler that parses a value itself answers its `PipeError` the same way,
 through its edge's `pipe_error`: `nest_rs::http::pipe_error`,
 `nest_rs::graphql::pipe_error`, `nest_rs::mcp::pipe_error`, and
 `WsReply::pipe_error` on WebSockets.
 
-`ValidationPipe<T>` attaches the structured field-level errors to the
-rejection, and **every** transport carries them through under the name
+A type's rules attach the structured field-level errors to the rejection, and
+**every** transport carries them through under the name
 `errors`: an RFC 9457 extension member on HTTP, `extensions.errors` on
 GraphQL, `data.errors` on a WebSocket frame and in an MCP error, an `errors`
 field on the queue's `job dead-lettered` event. A client (or an operator

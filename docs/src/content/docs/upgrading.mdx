@@ -298,6 +298,9 @@ lists what the boot, a log or the wire shows when one is missed.
    | `use nest_rs::http::poem::…` | `nest_rs::http::{Request, Response, Json, IntoResponse}`; `ProblemDetails` answers through `nest_rs::http::ResponseError` / `IntoResponse` |
    | `field.into_byte_stream()` through `nest_rs::http::PartExt` | `Field::into_byte_stream()` on `nest_rs::http::Multipart`'s field |
    | `RawBody::extract_with_limit(&mut poem_body, n)` in an extractor of your own | the extractor implements `nest_rs::http::FromRequest`, whose `RequestBody` `extract_with_limit` takes; a handler reads `body.into_bytes_limit(n)` |
+   | `body: Valid<Json<T>>`, `Valid(input): Valid<Json<T>>` — and over `Query`, `Form`, `Path`, `Header` | `Json(input): Json<T>`: every extracted value is held to the rules its type declares, with nothing to wrap |
+   | `nest_rs::http::Piped<P, E>`, read through `into_inner()` or `Deref` | `nest_rs::pipes::Piped<P, E>`, bound `Piped(value)` — `into_inner()` and `Deref` still read it |
+   | `impl nest_rs::http::IntoInner for MyExtractor<T>` | `impl nest_rs::pipes::Source for MyExtractor<T>` (`type Value`, `into_value`), and `validator::Validate` when `T` declares rules |
    | `SseEvent::retry(ms)` | `SseEvent::message("").retry(Duration::from_millis(ms))` |
    | `match event { SseEvent::Message { .. } => … }` | none: an event is written, never read back |
    | `SseSettings::respond(stream)`, answering poem's `SSE` | the same, answering a `Response` marked to end at the shutdown signal |
@@ -793,6 +796,8 @@ lists what the boot, a log or the wire shows when one is missed.
     | a host serving resources by hand — `#[tool_router]` tools, a `get_info`, `list_resources` / `read_resource` parsing its URIs | its tools, prompts and resources under `#[tools]`: `#[resources]` lists, `#[resource(template = "post://{id}")]` reads, `id` a typed parameter, each beside `#[authorize(…)]` or `#[public]` |
     | a `McpError::resource_not_found(…)` built for a row the caller may not read | `Ok(None)` from the `#[resource]` method, answered *Resource not found* under the `NOT_FOUND` class |
     | a `#[prompt]`, or a `#[tool]` answering `ContentBlock` or `InputRequiredResult`, beside `#[authorize(Action, Entity)]` | `#[authorize(Action, Entity, unmasked)]`: the mask failed every call closed on what is no row, and now does not compile |
+    | `input: Valid<T>` on a GraphQL argument, a WebSocket payload or a job; `Parameters<Valid<T>>` on MCP; `nest_rs::mcp::Valid` | `input: T`, `Parameters<T>`: each edge validates what it decodes |
+    | `Piped<P, T>` on a GraphQL argument, a WebSocket payload or a job, `Parameters<Piped<P, T>>` on MCP; `nest_rs::mcp::Piped` | `Piped<P>` from `nest_rs::pipes`, whose wire value is the pipe's `In`, bound `Piped(value)` |
 
 13. **Follow the remaining renamed types and signatures.** Each row is a compile
     error, so the compiler finds every site:
@@ -809,7 +814,9 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::health::unresolved_host` | `nest_rs::core::unresolved_host` |
     | `nest_rs::core::operation_log::EDGES` | `nest_rs::core::Edge::ALL`, each word through `Edge::as_str` |
     | `EventBus::subscribe(listener)` on a bus of your own | a `#[listeners]` host with an `#[on_event]` method |
-    | `nest_rs::pipes::{ValidateProbe, MaybeValidateFallback}`, `nest_rs::graphql::{ValidateProbe, MaybeValidateFallback}`, `nest_rs::ws::resolve_ws_data_pipe` | nothing public: the decorators emit them; a hand-written check runs `nest_rs::pipes::ValidationPipe`, or `validator::Validate` itself |
+    | `nest_rs::pipes::{ValidateProbe, MaybeValidateFallback}`, `nest_rs::graphql::{ValidateProbe, MaybeValidateFallback}`, `nest_rs::ws::resolve_ws_data_pipe` | nothing public: the decorators emit them |
+    | `nest_rs::pipes::ValidationPipe`, `Piped<ValidationPipe<T>, E>`, `nest_rs::pipes::Valid` | nothing: every edge validates what it decodes; a hand-written check runs `validator::Validate` and converts with `nest_rs::pipes::PipeError::from` |
+    | `#[input]` on a DTO an edge only sends | `#[output]` (`nest_rs::core::output`), `Serialize` and `JsonSchema` alone — not a compile error: `#[input]` still compiles, carrying a `Deserialize` and rules nothing reads |
     | any other item that was `#[doc(hidden)]` at a crate's root | nothing public: `__private` is not API |
     | `Correlation::mint()` | `Correlation::minted(None)` |
     | `TlsConfig`, `CorsConfig`, `SecurityHeadersConfig` | `HttpTls`, `HttpCors`, `HttpSecurityHeaders` |
@@ -1127,6 +1134,15 @@ lists what the boot, a log or the wire shows when one is missed.
 </Steps>
 
 ## What fails if you get it wrong
+
+- **A value breaking its type's rules that 6.x let through**, because no
+  `Valid` wrapped its parameter, is now refused at the edge that decodes it:
+  `400 validation failed` with its `errors` on HTTP, a field error under
+  `INVALID_ARGUMENT` on GraphQL, an error frame on WebSockets, `invalid_params`
+  on MCP, and a job dead-lettered at once. A service that validated such an
+  input itself no longer sees it: its `ServiceError::Validation` (`422`) gives
+  way to the edge's `400`. Keep `validate()` only where the service builds the
+  input — from a provider's profile, a seed.
 
 - **A `Create` grant the create cannot complete** — an org-wide `Manage` that
   lets a caller who authors nothing reach an insert whose author no grant pins

@@ -95,7 +95,8 @@ an edge may hand a new kind in a minor release.
 
 - An HTTP body that is not JSON reaches no pipe.
 - MCP tool arguments and queue payloads take no global pipe: bind a
-  per-argument pipe there (`Valid<T>`, `Piped<P, T>`).
+  per-argument pipe there (`Piped<P>`); a type declaring rules is validated
+  there all the same.
 - A WebSocket message whose event no handler serves meets no pipe: nothing
   would read what it made.
 - A pipe reads and writes a `serde_json::Value`, the one place the framework

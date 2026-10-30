@@ -1,17 +1,16 @@
-//! A **destructured** handler argument (`Path(name): Path<String>`) works on
-//! all four transports, each asserting a value that travelled through the
-//! binding.
+//! A **destructured** handler argument (`Path(name): Path<String>`,
+//! `Piped(pad): Piped<Trim>`) works on every transport, each asserting a value
+//! that travelled through the binding, and still held to its type's rules.
 
 use std::sync::{Arc, Mutex};
 
 use nest_rs_core::{Container, injectable, module};
 use nest_rs_graphql::async_graphql::{InputObject, Result as GqlResult};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-// Two `Valid` carriers (the orphan rule): the HTTP one wraps an extractor.
 use nest_rs_http::StatusCode;
-use nest_rs_http::{HttpModule, Valid as HttpValid, controller, routes};
+use nest_rs_http::{HttpModule, controller, routes};
 use nest_rs_http::{Json, Path};
-use nest_rs_pipes::{Pipe, PipeError, Piped, Valid};
+use nest_rs_pipes::{Pipe, PipeError, Piped};
 use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
 use nest_rs_queue::{Capabilities, ProcessMethod, QueueBackend, QueueName, processor, queue};
 use nest_rs_testing::TestApp;
@@ -26,7 +25,7 @@ struct Note {
     text: String,
 }
 
-/// A pipe with an observable effect, so a `Piped<Trim, T>` argument proves the
+/// A pipe with an observable effect, so a `Piped<Trim>` argument proves the
 /// pipe still ran alongside a destructured one.
 struct Trim;
 
@@ -51,8 +50,14 @@ impl NotesController {
 
     #[post("/")]
     #[public]
-    async fn create(&self, HttpValid(note): HttpValid<Json<Note>>) -> String {
+    async fn create(&self, Json(note): Json<Note>) -> String {
         note.text.clone()
+    }
+
+    #[post("/shout")]
+    #[public]
+    async fn shout(&self, Piped(text): Piped<Trim, Json<String>>) -> String {
+        text.to_uppercase()
     }
 }
 
@@ -61,10 +66,9 @@ struct NotesResolver;
 
 #[operations]
 impl NotesResolver {
-    // `Piped<P, T>` carries a phantom marker, so it binds under a plain name.
     #[query]
     #[public]
-    async fn shout(&self, Valid(note): Valid<Note>, pad: Piped<Trim, String>) -> GqlResult<String> {
+    async fn shout(&self, note: Note, Piped(pad): Piped<Trim>) -> GqlResult<String> {
         Ok(format!("{}{}", note.text.to_uppercase(), pad.len()))
     }
 }
@@ -76,8 +80,8 @@ struct NotesGateway;
 impl NotesGateway {
     #[subscribe_message("note.echo")]
     #[public]
-    async fn echo(&self, Valid(note): Valid<Note>) -> String {
-        note.text.clone()
+    async fn echo(&self, Piped(text): Piped<Trim>) -> String {
+        text
     }
 }
 
@@ -95,8 +99,8 @@ struct NotesProcessor;
 #[processor]
 impl NotesProcessor {
     #[process(queue = NotesQueue)]
-    async fn record(&self, Valid(note): Valid<Note>) -> anyhow::Result<()> {
-        *SEEN.lock().expect("lock") = Some(note.text.clone());
+    async fn record(&self, Note { text }: Note) -> anyhow::Result<()> {
+        *SEEN.lock().expect("lock") = Some(text);
         Ok(())
     }
 }
@@ -145,6 +149,19 @@ async fn http_forwards_a_nested_destructured_extractor_and_still_validates() {
 }
 
 #[tokio::test]
+async fn http_binds_a_destructured_piped_argument_to_its_output() {
+    let res = app()
+        .await
+        .http()
+        .post("/notes/shout")
+        .body_json(&serde_json::json!("  hey  "))
+        .send()
+        .await;
+    res.assert_status_is_ok();
+    res.assert_text("HEY").await;
+}
+
+#[tokio::test]
 async fn graphql_forwards_a_destructured_piped_argument() {
     let res = app()
         .await
@@ -159,8 +176,8 @@ async fn graphql_forwards_a_destructured_piped_argument() {
     let body = res.0.into_body().into_string().await.expect("body");
     assert!(
         body.contains("HI1"),
-        "the destructured `Valid` carried the note, and the plain-bound `Piped` \
-         still trimmed its own argument to one char: {body}",
+        "the note arrived, and the destructured `Piped` trimmed its own argument \
+         to one char: {body}",
     );
 }
 
@@ -172,7 +189,7 @@ async fn graphql_names_the_argument_after_the_pattern_binding() {
         .http()
         .post("/graphql")
         .body_json(&serde_json::json!({
-            "query": r#"{ shout(__nestrs_arg0: { text: "hi" }, pad: "x") }"#
+            "query": r#"{ shout(note: { text: "hi" }, __nestrs_arg1: "x") }"#
         }))
         .send()
         .await;
@@ -193,7 +210,7 @@ async fn ws_dispatches_to_a_destructured_payload_argument() {
         .dispatch(
             &WsClient::for_test(),
             "note.echo",
-            serde_json::json!({ "text": "framed" }),
+            serde_json::json!("  framed  "),
         )
         .await;
     match reply {
@@ -230,7 +247,7 @@ async fn a_process_method_dispatches_to_a_destructured_job_argument() {
     assert_eq!(
         SEEN.lock().expect("lock").as_deref(),
         Some("queued"),
-        "the destructured `Valid(note)` job argument reached the body",
+        "the destructured `Note {{ text }}` job argument reached the body",
     );
 }
 

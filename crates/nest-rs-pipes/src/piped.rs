@@ -1,78 +1,96 @@
-//! Value-form pipe carriers for transports whose handler argument *is* the wire
-//! value (GraphQL, WS, queue) — the analog of the HTTP `Piped<P, E>` / `Valid<E>`
-//! extractors, which wrap an HTTP *extractor* `E`.
+//! The per-argument pipe carrier: one type on every edge, over the [`Source`]
+//! its input is read from.
 //!
-//! Each transport's macro strips `Piped<P, T>` / `Valid<T>` from the wire
-//! signature, exposing `T`, runs the pipe and hands the handler this carrier.
+//! An edge that decodes its argument itself (GraphQL, WebSocket, MCP, a job)
+//! reads `Piped<P>`, whose wire type is the pipe's `In`; HTTP names the
+//! extractor that reads it, `Piped<P, Json<T>>`. Either way `Piped(value)`
+//! binds the pipe's output.
 
-use std::marker::PhantomData;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
-use validator::Validate;
+use crate::{Pipe, PipeError};
 
-use crate::{Pipe, PipeError, ValidationPipe};
-
-/// Applies pipe `P` to a handler argument whose wire type is `T` (`T` is
-/// `P::In`). The transport macro exposes `T` on the wire, calls [`Piped::apply`]
-/// with the extracted value, and hands the handler the transformed `P::Out`.
-pub struct Piped<P: Pipe, T> {
-    value: P::Out,
-    _marker: PhantomData<fn() -> (P, T)>,
+/// Where a [`Piped`] argument's input is read from: the value its edge decoded
+/// ([`Decoded`], the default) or what an HTTP extractor carries (`Json<T>`,
+/// `Query<T>`, `Form<T>`, `Path<T>`, `Header<T>`).
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a source a pipe reads",
+    note = "on GraphQL, WebSockets, MCP and queues write `Piped<P>`: the edge decodes the \
+            pipe's `In` itself; on HTTP name the extractor that reads it, `Piped<P, Json<T>>`"
+)]
+pub trait Source {
+    /// The value it hands the pipe.
+    type Value;
+    /// Hand that value over, by value.
+    fn into_value(self) -> Self::Value;
 }
 
-impl<P: Pipe<In = T>, T> Piped<P, T> {
-    /// Run `P` over an extracted wire value. Called by a transport's macro after
-    /// it deserializes `T`; the macro surfaces a [`PipeError`] as that
-    /// transport's native error.
-    pub fn apply(input: T) -> Result<Self, PipeError> {
-        Ok(Self {
-            value: P::transform(input)?,
-            _marker: PhantomData,
-        })
-    }
-}
+/// The value an edge decodes itself, as a [`Piped`] argument's source: the
+/// default, so `Piped<P>` reads `P::In` off the wire.
+pub struct Decoded<T>(pub T);
 
-impl<P: Pipe, T> Piped<P, T> {
-    /// Take ownership of the pipe's output value.
-    pub fn into_inner(self) -> P::Out {
-        self.value
-    }
-}
-
-impl<P: Pipe, T> Deref for Piped<P, T> {
-    type Target = P::Out;
-    fn deref(&self) -> &P::Out {
-        &self.value
-    }
-}
-
-/// Validates a handler argument of wire type `T` with `validator::Validate` —
-/// the value-form of the HTTP `Valid<E>`. `Valid<T>` is the ergonomic form of
-/// `Piped<ValidationPipe<T>, T>`; the transport macro exposes `T` on the wire
-/// and calls [`Valid::apply`].
-///
-/// The field is public so a handler can destructure it (`Valid(note): Valid<Note>`);
-/// a hand-built `Valid(x)` bypasses nothing, as a bare `T` is already unvalidated.
-pub struct Valid<T>(pub T);
-
-impl<T: Validate> Valid<T> {
-    /// Validate `input`, wrapping it on success or returning the field errors.
-    pub fn apply(input: T) -> Result<Self, PipeError> {
-        Ok(Valid(ValidationPipe::<T>::transform(input)?))
-    }
-}
-
-impl<T> Valid<T> {
-    /// Take ownership of the validated inner value.
-    pub fn into_inner(self) -> T {
+impl<T> Source for Decoded<T> {
+    type Value = T;
+    fn into_value(self) -> T {
         self.0
     }
 }
 
-impl<T> Deref for Valid<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
+/// Pipe `Self` run over source `S`, whose value is the pipe's input: what a
+/// [`Piped`] argument holds is its `Output`.
+#[diagnostic::on_unimplemented(
+    message = "pipe `{Self}` does not read what `{S}` carries",
+    note = "a pipe's `In` is the value its source hands over"
+)]
+pub trait PipeOver<S>: Pipe {
+    /// The pipe's output.
+    type Output;
+}
+
+impl<P: Pipe, S: Source<Value = P::In>> PipeOver<S> for P {
+    type Output = P::Out;
+}
+
+/// Runs pipe `P` over an argument read from `S`, and hands the handler the
+/// pipe's output: `Piped(id): Piped<ParseUuid, Path<String>>` on HTTP,
+/// `Piped(name): Piped<Trim>` where the edge decodes the argument itself.
+///
+/// The value the source hands over is held to the rules its type declares
+/// before the pipe runs, as every decoded argument is; the output is the
+/// pipe's own.
+///
+/// ```
+/// use nest_rs_pipes::{Piped, Trim};
+///
+/// let Piped(name) = Piped::<Trim>::apply("  ada ".to_owned())?;
+/// assert_eq!(name, "ada");
+/// # Ok::<(), nest_rs_pipes::PipeError>(())
+/// ```
+pub struct Piped<P: PipeOver<S>, S = Decoded<<P as Pipe>::In>>(pub P::Output);
+
+impl<P: Pipe, S: Source<Value = P::In>> Piped<P, S> {
+    /// Run `P` over a value read from `S`. Called by an edge once it decoded
+    /// the value; the edge renders a [`PipeError`] as its own error.
+    pub fn apply(input: P::In) -> Result<Self, PipeError> {
+        P::transform(input).map(Piped)
+    }
+
+    /// Take ownership of the pipe's output.
+    pub fn into_inner(self) -> P::Out {
+        self.0
+    }
+}
+
+impl<P: PipeOver<S>, S> Deref for Piped<P, S> {
+    type Target = P::Output;
+    fn deref(&self) -> &P::Output {
         &self.0
+    }
+}
+
+impl<P: PipeOver<S>, S> DerefMut for Piped<P, S> {
+    fn deref_mut(&mut self) -> &mut P::Output {
+        &mut self.0
     }
 }
 
@@ -100,45 +118,36 @@ mod tests {
         }
     }
 
-    #[test]
-    fn apply_transforms_then_into_inner_yields_the_output() {
-        let piped = Piped::<ToUpper, String>::apply("hello".into()).expect("happy path");
-        assert_eq!(piped.into_inner(), "HELLO");
+    /// A source of its own, as an HTTP extractor is.
+    struct Carried(String);
+
+    impl Source for Carried {
+        type Value = String;
+        fn into_value(self) -> String {
+            self.0
+        }
     }
 
     #[test]
-    fn deref_borrows_the_transformed_value() {
-        let piped = Piped::<ToUpper, String>::apply("world".into()).expect("happy path");
+    fn apply_transforms_and_the_carrier_destructures_to_the_output() {
+        let Piped(shouted) = Piped::<ToUpper>::apply("hello".into()).expect("happy path");
+        assert_eq!(shouted, "HELLO");
+    }
+
+    #[test]
+    fn a_source_names_where_the_input_was_read_and_changes_nothing_else() {
+        let carried = Carried("world".into());
+        let piped = Piped::<ToUpper, Carried>::apply(carried.into_value()).expect("happy path");
         assert_eq!(piped.len(), 5);
         assert_eq!(&*piped, "WORLD");
+        assert_eq!(piped.into_inner(), "WORLD");
     }
 
     #[test]
     fn apply_surfaces_the_pipe_error() {
-        let Err(err) = Piped::<AlwaysReject, String>::apply("x".into()) else {
+        let Err(err) = Piped::<AlwaysReject>::apply("x".into()) else {
             panic!("the pipe should have rejected");
         };
         assert_eq!(err.message(), "nope");
-    }
-
-    #[derive(Validate)]
-    struct Greeting {
-        #[validate(length(min = 1))]
-        msg: String,
-    }
-
-    #[test]
-    fn valid_apply_passes_a_valid_value() {
-        let v = Valid::apply(Greeting { msg: "hi".into() }).expect("valid");
-        assert_eq!(v.into_inner().msg, "hi");
-    }
-
-    #[test]
-    fn valid_apply_rejects_an_invalid_value_with_field_details() {
-        let Err(err) = Valid::apply(Greeting { msg: String::new() }) else {
-            panic!("validation should have rejected");
-        };
-        assert_eq!(err.message(), "validation failed");
-        assert!(err.details().is_some());
     }
 }

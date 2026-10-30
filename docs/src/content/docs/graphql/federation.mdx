@@ -47,7 +47,7 @@ It is therefore a `#[query]` in every respect that matters:
 |---|---|
 | Guard chain | runs — resolver-scope and method-scope, each declaring `GuardFor<GraphqlView>` |
 | Access posture | **mandatory** — `#[authorize(Action, Entity)]` or `#[public]`, no posture ⇒ compile error |
-| Argument pipes | run — `Valid<T>` / `Piped<P, T>` on the key arguments |
+| Argument rules and pipes | run — the key arguments' rules, then a `Piped<P>` on any of them |
 | Response mask | runs — the entity is masked against the caller's ability like any other row |
 
 Four things it refuses that a `#[query]` does not, each a named compile error:

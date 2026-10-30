@@ -63,51 +63,33 @@ pub fn generic_args(ty: &Type) -> Option<(&Ident, Vec<&Type>)> {
     Some((&seg.ident, tys))
 }
 
-/// A per-argument pipe binding read off a parameter's type — the shape
-/// `#[resolver]`, `#[messages]` and `#[processor]` each need to strip before
-/// deserializing the wire value.
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "tier 2: the `#[processor]`, `#[messages]`, `#[tools]` and `#[operations]` \
-              emitters match it, and a new wrapper must reach each"
-)]
-pub enum PipeWrapper {
-    /// `Piped<P, T>` — run pipe `P` over the wire value `T`.
-    Piped {
-        /// The pipe type to apply.
-        pipe: syn::Path,
-        /// The value that crosses the wire, and what the pipe consumes.
-        value: Type,
-    },
-    /// `Valid<T>` — validate the wire value `T`.
-    Valid {
-        /// The value that crosses the wire.
-        value: Type,
-    },
+/// A per-argument pipe read off a parameter's type, `Piped<P>` or
+/// `Piped<P, S>` — what `#[resolver]`, `#[messages]`, `#[tools]` and
+/// `#[processor]` strip before decoding the wire value.
+pub struct PipeWrapper {
+    /// The pipe type to apply.
+    pub pipe: syn::Path,
 }
 
 impl PipeWrapper {
-    /// The wire value the transport deserializes, whichever wrapper this is.
-    pub fn value(&self) -> &Type {
-        match self {
-            Self::Piped { value, .. } | Self::Valid { value } => value,
-        }
+    /// The wire value the edge decodes: the pipe's `In`, whatever source the
+    /// carrier names.
+    pub fn value(&self) -> Type {
+        let pipe = &self.pipe;
+        syn::parse_quote!(<#pipe as ::nest_rs_pipes::Pipe>::In)
     }
 }
 
-/// Recognise `Piped<P, T>` / `Valid<T>` on `ty`'s last path segment.
+/// Recognise `Piped<P>` / `Piped<P, S>` on `ty`'s last path segment.
 ///
-/// The three non-HTTP transports bind pipes per argument with this pair (HTTP
-/// wraps an extractor instead — orphan rule). `None` ⇒ a plain payload.
+/// The edges decoding their argument themselves bind a pipe with it (HTTP's
+/// `#[routes]` extracts the carrier like any other extractor). `None` ⇒ a
+/// plain payload.
 pub fn pipe_wrapper(ty: &Type) -> Option<PipeWrapper> {
     let (ident, tys) = generic_args(ty)?;
     match (ident.to_string().as_str(), tys.as_slice()) {
-        ("Piped", [Type::Path(pipe), value]) => Some(PipeWrapper::Piped {
+        ("Piped", [Type::Path(pipe)] | [Type::Path(pipe), _]) => Some(PipeWrapper {
             pipe: pipe.path.clone(),
-            value: (*value).clone(),
-        }),
-        ("Valid", [value]) => Some(PipeWrapper::Valid {
-            value: (*value).clone(),
         }),
         _ => None,
     }
@@ -213,8 +195,8 @@ pub fn path_label(path: &syn::Path) -> String {
 }
 
 /// The `idx`-th generic type argument of `ty` when its last segment is
-/// `name<...>` — peels a transport wrapper (`Json`, `Result`, `Valid`,
-/// `Piped`) off a payload type.
+/// `name<...>` — peels a transport wrapper (`Json`, `Result`, `Piped`) off a
+/// payload type.
 pub fn nth_generic_type<'a>(ty: &'a Type, name: &str, idx: usize) -> Option<&'a Type> {
     let Type::Path(tp) = ty else { return None };
     let seg = tp.path.segments.last()?;
@@ -514,6 +496,25 @@ mod tests {
     use syn::parse_quote;
 
     use super::*;
+
+    #[test]
+    fn a_pipe_carrier_is_read_with_or_without_its_source() {
+        for ty in [
+            parse_quote!(Piped<Trim>),
+            parse_quote!(nest_rs::pipes::Piped<Trim, Decoded<String>>),
+        ] {
+            let wrapper = pipe_wrapper(&ty).expect("a pipe carrier");
+            let pipe = &wrapper.pipe;
+            assert_eq!(quote::quote!(#pipe).to_string(), "Trim");
+            let value = wrapper.value();
+            assert_eq!(
+                quote::quote!(#value).to_string(),
+                "< Trim as :: nest_rs_pipes :: Pipe > :: In",
+            );
+        }
+        assert!(pipe_wrapper(&parse_quote!(Valid<NameInput>)).is_none());
+        assert!(pipe_wrapper(&parse_quote!(Piped)).is_none());
+    }
 
     fn receiver_answer(method: &syn::ImplItemFn, host: Ident) -> Result<(), String> {
         shared_receiver(method, "#[hooks]", &host, HostBorrow::Arc)

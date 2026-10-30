@@ -2,8 +2,8 @@
 
 use nest_rs_core::anyhow::{self, Context};
 use nest_rs_core::module;
-use nest_rs_mcp::{McpError, Opaque, Parameters, Piped, input, mcp, tools};
-use nest_rs_pipes::{ParseArray, Pipe, PipeError};
+use nest_rs_mcp::{McpError, Opaque, Parameters, input, mcp, tools};
+use nest_rs_pipes::{ParseArray, Pipe, PipeError, Piped};
 use nest_rs_testing::mcp::call_tool_with;
 use nest_rs_testing::{LogCapture, TestApp};
 use serde::de::Error as _;
@@ -81,7 +81,7 @@ impl IdListTool {
     #[public]
     async fn count_ids(
         &self,
-        Parameters(ids): Parameters<Piped<ParseIdList, IdListArgs>>,
+        Parameters(ids): Parameters<Piped<ParseIdList>>,
     ) -> Result<String, McpError> {
         Ok(ids.into_inner().len().to_string())
     }

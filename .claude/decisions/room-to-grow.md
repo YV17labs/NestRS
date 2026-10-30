@@ -98,3 +98,10 @@ of its own.
   soft-delete registration.
 - **`#[non_exhaustive]` on every tier-2 enum, as the lint's letter asks.**
   Above: it trades the compiler's check across the framework for nothing.
+
+**2026-10-30 — the newtype list, as validation left the carriers.** `Valid`
+is gone from both its families (every edge validates a decoded argument
+itself, `one-execution-pipeline.md`, 2026-10-30), and `Piped<P, S>` joins the
+newtypes over their one value: `Piped(x)` binds the pipe's output on every
+edge, so a second field would make it another type. `Decoded` is one too,
+the value an edge decodes as a pipe's source.

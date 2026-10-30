@@ -68,8 +68,12 @@ guard, filter or interceptor loop of its own.
    nothing provides fails it, and are held by their container, never a
    `static`; a unit nested in another folds only the app-wide buckets its
    parent did not run (`GlobalLayers`) and says where the others ran.
-4. **Its tail and rendering arm.** The tail runs the per-argument pipes after
-   the gate — a refused caller never pays for validation, and a validation
+4. **Its tail and rendering arm.** The tail holds every argument it decoded
+   to the rules its type declares — with no wrapper, through
+   `nest_rs_codegen`'s one `validate_argument`, an extractor, an `Option`
+   and a list answering for the value they hold, a pipe's input checked
+   before the pipe runs — then runs the per-argument pipes, all after the
+   gate: a refused caller never pays for validation, and a validation
    message is never an existence oracle; a rejection is the edge's native
    error — then the handler and the posture's mask, and writes the answer
    into the view. A failure no exception filter answered is rendered by the
@@ -237,7 +241,8 @@ carries the ability its upgrade's guards attached (`data-layer.md`,
 ## Request layers — one pool, exactly once
 
 **Controllers are thin.** A handler wires layers, each with one home: a guard
-gates access and attaches context, a pipe converts and validates at the edge,
+gates access and attaches context, a pipe converts at the edge, which holds
+every argument to the rules its type declares,
 `#[authorize(A, bind = S)]` loads and authorizes an entity, the service holds business logic and is
 the sole database gateway, an interceptor carries cross-cutting work such as a
 transaction. Inline conversion, permission checks or transaction management in a
@@ -477,9 +482,13 @@ router parses. The rewrite is skipped when nothing is versioned.
   Its connection ceiling lives in `HttpConfig`: SSE is not a module, so it owns no
   namespace, and it takes its peers' reading and `0`-is-off spelling.
 - **Pipes** are transport-agnostic, one per file, stateless, never DI providers,
-  and bind per argument on all five transports in two forms the orphan rule
-  forces: HTTP wraps the extractor (`nest_rs_http::Piped`), the others wrap the
-  wire value (`nest_rs_pipes::Piped`, inside `Parameters<…>` on MCP). Global
+  and bind per argument on all five transports through one carrier,
+  `nest_rs::pipes::Piped<P, S>`, over the `Source` its input is read from: an
+  HTTP extractor (`Piped<P, Json<T>>`), or the value the edge decodes itself,
+  the default (`Piped<P>`, inside `Parameters<…>` on MCP); `Piped(x)` binds the
+  output on every edge. Validation is no pipe and takes no wrapper: the edge
+  runs it (item 4), and a hand-written check converts `validator`'s errors
+  with `PipeError::from`, so it answers as the edge does. Global
   pipes register in `nest-rs-pipes`, beside their contract, and run over an
   HTTP body, `/graphql` variables — a POST's, or an operation's on the
   graphql-ws socket, a subscription included — and a WS message's `data`,

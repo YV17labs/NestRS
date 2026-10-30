@@ -25,12 +25,12 @@ use syn::{
 
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
-    Collision, Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, PipeWrapper, Posture,
-    PostureRules, TailParam, answer_span, await_if_async, cfg_attrs, concrete_signature,
-    force_guard_typeids, forwarded_arg_idents, generic_args, guard_capability_bounds,
-    handler_const, handler_ref, impl_self_ident, layer_deps, normalize_forwarded_args,
-    nth_generic_type, one_role_per_method, pipe_wrapper, reject_meta_on_operations, scoped_specs,
-    shared_receiver, site_const_ident, site_fn_ident, tail_param, ungrouped_expr,
+    Collision, Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, Posture, PostureRules,
+    TailParam, answer_span, await_if_async, cfg_attrs, concrete_signature, force_guard_typeids,
+    forwarded_arg_idents, generic_args, guard_capability_bounds, handler_const, handler_ref,
+    impl_self_ident, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
+    pipe_wrapper, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
+    site_fn_ident, tail_param, ungrouped_expr, validate_argument,
 };
 use nest_rs_codegen::snake_case;
 
@@ -240,12 +240,13 @@ struct TailArg {
 }
 
 /// A `#[tool]` / `#[prompt]` parameter whose wire value goes through a pipe:
-/// `Parameters<Valid<T>>` or `Parameters<Piped<P, T>>`.
+/// `Parameters<Piped<P>>`.
 struct PipedArg {
     ident: syn::Ident,
-    /// The pipe `P` in `Piped<P, T>`; `None` for `Valid<T>` (validation).
-    pipe: Option<Path>,
-    /// `T` — what the wire carries and what rmcp derives the schema from.
+    /// The carrier as the method spells it, inside `Parameters`.
+    carrier: Type,
+    /// The pipe's `In` — what the wire carries and what rmcp derives the
+    /// schema from.
     value_ty: Type,
 }
 
@@ -710,7 +711,15 @@ fn resource_wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2>
             quote!(::core::result::Result::Ok(#listed)),
         )
     };
-    let body = dispatch(self_ty, op, quote!(), answered)?;
+    let validate_prelude = op
+        .resource
+        .iter()
+        .flat_map(|decl| &decl.variables)
+        .map(|arg| {
+            let ident = &arg.ident;
+            validate_statement(&quote!(&#ident))
+        });
+    let body = dispatch(self_ty, op, quote!(#(#validate_prelude)*), answered)?;
     Ok(quote! {
         #(#cfgs)*
         async fn #wrapper(&self, #params)
@@ -783,10 +792,13 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
     };
 
     let pipe_prelude = pipes.iter().map(pipe_statement);
+    let validate_prelude = parameters_args(sig)
+        .into_iter()
+        .map(|ident| validate_statement(&quote!(&#ident.0)));
     let body = dispatch(
         self_ty,
         op,
-        quote!(#(#pipe_prelude)*),
+        quote!(#(#validate_prelude)* #(#pipe_prelude)*),
         masked(*role, posture, sig)?,
     )?;
     Ok(quote! {
@@ -892,21 +904,41 @@ fn class_gate(posture: &Posture) -> TokenStream2 {
 ///
 /// Runs after the gate, so a validation message is never an existence oracle.
 fn pipe_statement(arg: &PipedArg) -> TokenStream2 {
-    let PipedArg {
-        ident,
-        pipe,
-        value_ty,
-    } = arg;
-    let apply = match pipe {
-        Some(pipe) => quote!(::nest_rs_pipes::Piped::<#pipe, #value_ty>::apply(__nestrs_value)),
-        None => quote!(::nest_rs_pipes::Valid::<#value_ty>::apply(__nestrs_value)),
-    };
+    let PipedArg { ident, carrier, .. } = arg;
     quote! {
         let ::nest_rs_mcp::Parameters(__nestrs_value) = #ident;
         let #ident = ::nest_rs_mcp::Parameters(
-            #apply.map_err(::nest_rs_mcp::__private::OperationFailure::from)?,
+            <#carrier>::apply(__nestrs_value)
+                .map_err(::nest_rs_mcp::__private::OperationFailure::from)?,
         );
     }
+}
+
+/// Step 3, first — hold a decoded argument, `argument` borrowing it, to the
+/// rules its type declares, before a pipe runs over it.
+fn validate_statement(argument: &TokenStream2) -> TokenStream2 {
+    let check = validate_argument(&quote!(::nest_rs_mcp), argument);
+    quote! {
+        #check.map_err(::nest_rs_mcp::__private::OperationFailure::from)?;
+    }
+}
+
+/// Every `Parameters<…>` argument of `sig`, the arguments a tool or a prompt
+/// decodes, by the ident the normalized signature binds.
+fn parameters_args(sig: &Signature) -> Vec<&syn::Ident> {
+    sig.inputs
+        .iter()
+        .filter_map(|input| {
+            let FnArg::Typed(pat_type) = input else {
+                return None;
+            };
+            let syn::Pat::Ident(pat_ident) = &*pat_type.pat else {
+                return None;
+            };
+            let (ident, _) = generic_args(&pat_type.ty)?;
+            (ident == "Parameters").then_some(&pat_ident.ident)
+        })
+        .collect()
 }
 
 /// Step 4 — the answer's value, `__nestrs_value`, with response masking when
@@ -1607,8 +1639,8 @@ fn posture_rules(role: Role) -> PostureRules {
     }
 }
 
-/// Every `Parameters<Valid<T>>` / `Parameters<Piped<P, T>>` argument, matched on
-/// the normalized signature so each carries the ident the wrapper declares.
+/// Every `Parameters<Piped<P>>` argument, matched on the normalized signature
+/// so each carries the ident the wrapper declares.
 fn piped_args(sig: &Signature) -> syn::Result<Vec<PipedArg>> {
     let mut args = Vec::new();
     for input in &sig.inputs {
@@ -1624,9 +1656,8 @@ fn piped_args(sig: &Signature) -> syn::Result<Vec<PipedArg>> {
             return Err(syn::Error::new_spanned(
                 &pat_type.ty,
                 "a pipe on an MCP operation wraps the *arguments*, so it goes inside \
-                 `Parameters<…>` — write `Parameters<Valid<T>>` (or \
-                 `Parameters<Piped<P, T>>`), which is what exposes `T` as the \
-                 operation's schema",
+                 `Parameters<…>` — write `Parameters<Piped<P>>`, which exposes the \
+                 pipe's input as the operation's schema",
             ));
         }
         let Some((ident, params)) = generic_args(&pat_type.ty) else {
@@ -1641,14 +1672,10 @@ fn piped_args(sig: &Signature) -> syn::Result<Vec<PipedArg>> {
         let Some(wrapper) = pipe_wrapper(&carrier) else {
             continue;
         };
-        let (pipe, value_ty) = match wrapper {
-            PipeWrapper::Piped { pipe, value } => (Some(pipe), value),
-            PipeWrapper::Valid { value } => (None, value),
-        };
         args.push(PipedArg {
             ident: pat_ident.ident.clone(),
-            pipe,
-            value_ty,
+            value_ty: wrapper.value(),
+            carrier,
         });
     }
     Ok(args)

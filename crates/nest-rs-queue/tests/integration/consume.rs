@@ -368,10 +368,7 @@ impl nest_rs_core::ProviderResidency for TrimProcessor {
 #[processor]
 impl TrimProcessor {
     #[process(queue = TrimmedQueue)]
-    async fn trim(
-        &self,
-        name: nest_rs_pipes::Piped<nest_rs_pipes::Trim, String>,
-    ) -> anyhow::Result<()> {
+    async fn trim(&self, name: nest_rs_pipes::Piped<nest_rs_pipes::Trim>) -> anyhow::Result<()> {
         *TRIMMED.lock().expect("lock") = Some(name.into_inner());
         Ok(())
     }
@@ -418,7 +415,7 @@ impl IdListProcessor {
     #[process(queue = IdListsQueue)]
     async fn ids(
         &self,
-        _ids: nest_rs_pipes::Piped<nest_rs_pipes::ParseArray<u64>, String>,
+        _ids: nest_rs_pipes::Piped<nest_rs_pipes::ParseArray<u64>>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -461,6 +458,7 @@ async fn a_list_a_pipe_refuses_is_dead_lettered_without_the_refused_item() {
 
 /// A signup the processor validates itself, the way its service does.
 #[nest_rs_core::input]
+#[derive(Clone)]
 struct Signup {
     #[validate(length(min = 32))]
     password: String,
@@ -527,6 +525,70 @@ async fn a_validation_failure_a_handler_returns_is_said_without_the_submitted_va
     logs.expect_one(
         nest_rs_queue::TARGET,
         "job dead-lettered: retry budget spent",
+    );
+    assert_never_quoted(&logs, "sk_live");
+}
+
+/// The signups the processor below reached.
+static SIGNED_UP: AtomicU32 = AtomicU32::new(0);
+
+#[queue(name = "signup-forms", job = Signup)]
+struct SignupFormsQueue;
+
+struct SignupFormProcessor;
+
+impl nest_rs_core::ProviderResidency for SignupFormProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[processor]
+impl SignupFormProcessor {
+    #[process(queue = SignupFormsQueue, retries = 3)]
+    async fn sign_up(&self, _signup: Signup) -> anyhow::Result<()> {
+        SIGNED_UP.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// A job whose type declares rules is validated after it decodes, before the
+/// handler: the same payload fails every attempt, so it dead-letters at once.
+#[tokio::test]
+async fn a_job_whose_type_declares_rules_is_refused_before_the_handler() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let mut delivery = Delivery::new(
+        &BARE,
+        QueueName::new("signup-forms").expect("a valid name"),
+        json!({ "v": WIRE_FORMAT_VERSION, "payload": { "password": "sk_live_51Hsecret" } }),
+    );
+
+    let outcome = consume::attempt(
+        method("SignupFormProcessor::sign_up"),
+        &mut delivery,
+        Container::builder()
+            .provide(SignupFormProcessor)
+            .build()
+            .expect("the container builds"),
+        None,
+    )
+    .await;
+
+    let AttemptOutcome::DeadLetter(error) = outcome else {
+        panic!("a refusal repeats on every attempt, so it dead-letters: {outcome:?}");
+    };
+    assert_eq!(SIGNED_UP.load(Ordering::SeqCst), 0, "the handler ran");
+    let recorded = format!("{} {error:?}", nest_rs_core::error_message(&error));
+    assert!(recorded.contains("validation failed"), "{recorded}");
+    assert!(
+        recorded.contains("password"),
+        "the field is named: {recorded}"
+    );
+    assert!(
+        !recorded.contains("sk_live"),
+        "the value is quoted: {recorded}"
+    );
+    logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job dead-lettered: non-retryable failure",
     );
     assert_never_quoted(&logs, "sk_live");
 }

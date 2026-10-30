@@ -20,9 +20,10 @@ body.
 the same JSON schema:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::{Json, input};
+use nest_rs::core::output;
+use nest_rs::http::Json;
 
-#[input]
+#[output]
 struct GreetReply {
     greeting: String,
 }
@@ -58,15 +59,15 @@ macros sit beside the verb attribute:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::{
-    IntoResponse, Json, Request, Response, Result, Valid, caller_path, http_code, redirect,
+    IntoResponse, Json, Request, Response, Result, caller_path, http_code, redirect,
     response_header, set_created_location,
 };
 
 #[post("/posts")]
 #[http_code(201)]
 #[response_header("x-cache-status", "miss")]
-async fn create(&self, req: &Request, body: Valid<Json<CreatePost>>) -> Result<Response> {
-    let post = self.svc.create(body.into_inner()).await?;
+async fn create(&self, req: &Request, Json(input): Json<CreatePost>) -> Result<Response> {
+    let post = self.svc.create(input).await?;
     let mut res = Json(&post).into_response();
     set_created_location(&mut res, caller_path(req), &post.id);
     Ok(res)
@@ -132,8 +133,8 @@ practice:
 #[http_code(201)]
 #[response_header("x-cache-status", "miss")]
 #[response_header("link", "</posts>; rel=collection")]
-async fn create(&self, req: &Request, body: Valid<Json<CreatePost>>) -> Result<Response> {
-    let post = self.svc.create(body.into_inner()).await?;
+async fn create(&self, req: &Request, Json(input): Json<CreatePost>) -> Result<Response> {
+    let post = self.svc.create(input).await?;
     let mut res = Json(&post).into_response();
     set_created_location(&mut res, caller_path(req), &post.id);
     Ok(res)
@@ -159,13 +160,12 @@ user — go back to a plain tuple return and let the handler decide:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::{
-    IntoResponse, Json, Request, Response, Result, StatusCode, Valid, caller_path,
-    set_created_location,
+    IntoResponse, Json, Request, Response, Result, StatusCode, caller_path, set_created_location,
 };
 
 #[post("/posts")]
-async fn upsert(&self, req: &Request, body: Valid<Json<CreatePost>>) -> Result<Response> {
-    let (post, created) = self.svc.upsert(body.into_inner()).await?;
+async fn upsert(&self, req: &Request, Json(input): Json<CreatePost>) -> Result<Response> {
+    let (post, created) = self.svc.upsert(input).await?;
     if !created {
         return Ok(Json(post).into_response());
     }

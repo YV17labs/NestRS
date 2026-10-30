@@ -109,7 +109,7 @@ impl TickResolver {
     #[public]
     async fn labelled_ticks(
         &self,
-        label: Piped<Trim, String>,
+        label: Piped<Trim>,
     ) -> Result<impl futures_stream::Stream<Item = String>, async_graphql::Error> {
         Ok(futures_stream::iter([label.into_inner()]))
     }

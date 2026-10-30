@@ -3,7 +3,7 @@
 
 use nest_rs_core::module;
 use nest_rs_http::StatusCode;
-use nest_rs_http::{Header, Valid, controller, routes};
+use nest_rs_http::{Header, controller, routes};
 use serde::Deserialize;
 use validator::Validate;
 
@@ -35,10 +35,10 @@ impl HeadersController {
         format!("{} {}", trace.request_id, trace.retry.unwrap_or_default())
     }
 
-    /// A header DTO validated through the same carrier as every extractor.
+    /// A header DTO whose type declares rules, validated as every extractor's is.
     #[get("/tenant")]
     #[public]
-    async fn tenant(&self, tenant: Valid<Header<Tenant>>) -> String {
+    async fn tenant(&self, tenant: Header<Tenant>) -> String {
         tenant.into_inner().tenant
     }
 }
@@ -85,7 +85,7 @@ async fn a_missing_required_header_answers_400_naming_it() {
 }
 
 #[tokio::test]
-async fn a_header_dto_validates_through_the_shared_pipe_carrier() {
+async fn a_header_dto_whose_type_declares_rules_is_validated_at_the_edge() {
     let client = crate::boot::<HeadersApp>().await;
     client
         .get("/headers/tenant")
@@ -213,8 +213,11 @@ async fn the_vocabulary_answers_each_case_as_6x_did() {
         "/headers/tenant",
         |req, mut body| async move {
             let tenant =
-                <Valid<Header<Tenant>> as nest_rs_http::FromRequest>::from_request(&req, &mut body)
+                <Header<Tenant> as nest_rs_http::FromRequest>::from_request(&req, &mut body)
                     .await?;
+            tenant
+                .validate()
+                .map_err(|refused| nest_rs_http::pipe_error(&refused.into()))?;
             Ok(nest_rs_http::IntoResponse::into_response(
                 tenant.into_inner().tenant,
             ))

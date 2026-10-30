@@ -178,7 +178,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 &self,
                 // Read through `caller_path`: a version selector rewrites `uri()`.
                 __req: &::nest_rs_http::Request,
-                __body: ::nest_rs_http::Valid<::nest_rs_http::Json<#create>>,
+                __body: ::nest_rs_http::Json<#create>,
             ) -> ::nest_rs_http::Result<::nest_rs_http::Response> {
                 let __row = ::nest_rs_seaorm::Creatable::create(
                     &*self.#service,
@@ -216,7 +216,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             async fn update(
                 &self,
                 __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
-                __body: ::nest_rs_http::Valid<::nest_rs_http::Json<#update>>,
+                __body: ::nest_rs_http::Json<#update>,
             ) -> ::nest_rs_http::Result<::nest_rs_http::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(

@@ -21,7 +21,7 @@ use nest_rs_codegen::__private::{
     injected_methods_with_layers, injected_per_request_method, layer_deps, mixed_site_ident,
     normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
     refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
-    takes_value, ungrouped_expr, unknown_argument,
+    takes_value, ungrouped_expr, unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -467,6 +467,14 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             )
         };
 
+        if let Some(ty) = inputs.iter().find_map(|arg| match arg {
+            FnArg::Typed(pt) if matches!(piped_parts(&pt.ty), Some((_, None))) => Some(&pt.ty),
+            _ => None,
+        }) {
+            return syn::Error::new_spanned(ty, PIPED_NAMES_ITS_EXTRACTOR)
+                .to_compile_error()
+                .into();
+        }
         // Each parameter read off the request in order, the body by at most one;
         // the controller `Arc` is a captured field.
         let extractor_stmts: Vec<TokenStream2> = inputs
@@ -491,11 +499,49 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                                 .await?;
                             }
                         }
-                        _ => quote! {
-                            let #pat = <#ty as ::nest_rs_http::FromRequest>::from_request(
-                                #req_var, &mut #body_var,
-                            )
-                            .await?;
+                        // The rules the extracted value's type declares hold
+                        // before a pipe runs over it and before the next
+                        // parameter is read, the guards having run.
+                        _ => match piped_parts(ty) {
+                            Some((pipe, Some(source))) => {
+                                let validated = validate_argument(
+                                    &quote!(::nest_rs_http),
+                                    &quote!(&__nestrs_source),
+                                );
+                                quote! {
+                                    let #pat = {
+                                        // Typed, so a source that is no extractor is
+                                        // refused once, by its `FromRequest` bound.
+                                        let __nestrs_source: #source =
+                                            <#source as ::nest_rs_http::FromRequest>::from_request(
+                                                #req_var, &mut #body_var,
+                                            )
+                                            .await?;
+                                        #validated.map_err(|__refused| {
+                                            ::nest_rs_http::pipe_error(&__refused)
+                                        })?;
+                                        ::nest_rs_http::__private::piped::<#pipe, #source>(
+                                            __nestrs_source,
+                                        )?
+                                    };
+                                }
+                            }
+                            // Refused above, before any statement is built.
+                            Some((_, None)) | None => {
+                                let validated =
+                                    validate_argument(&quote!(::nest_rs_http), &quote!(&#pat));
+                                // Typed, so a parameter that is no extractor is
+                                // refused once, by its `FromRequest` bound.
+                                quote! {
+                                    let #pat: #ty = <#ty as ::nest_rs_http::FromRequest>::from_request(
+                                        #req_var, &mut #body_var,
+                                    )
+                                    .await?;
+                                    #validated.map_err(|__refused| {
+                                        ::nest_rs_http::pipe_error(&__refused)
+                                    })?;
+                                }
+                            }
                         },
                     })
                 }
@@ -1699,14 +1745,23 @@ fn api_errors(
     Ok(out)
 }
 
-/// The payload type behind an extractor named `name`: `Name<T>`,
-/// `Valid<Name<T>>` and `Piped<_, Name<T>>` all yield `T`.
+/// A route's pipe reads what an extractor carries, which the carrier names.
+const PIPED_NAMES_ITS_EXTRACTOR: &str = "a pipe on a route names the extractor it reads — write \
+     `Piped<P, Json<T>>` (or `Query<T>`, `Form<T>`, `Path<T>`, `Header<T>`); `Piped<P>` is the \
+     form of the edges that decode their argument themselves";
+
+/// A `Piped<P, S>` parameter, read off its spelling as `Scoped` and `Ctx` are:
+/// its pipe, and the extractor it reads when it names one.
+fn piped_parts(ty: &Type) -> Option<(&Type, Option<&Type>)> {
+    let pipe = nth_generic_type(ty, "Piped", 0)?;
+    Some((pipe, nth_generic_type(ty, "Piped", 1)))
+}
+
+/// The payload type behind an extractor named `name`: `Name<T>` and
+/// `Piped<_, Name<T>>` both yield `T`.
 fn extractor_payload(ty: &Type, name: &str) -> Option<Type> {
     if let Some(payload) = nth_generic_type(ty, name, 0) {
         return Some(payload.clone());
-    }
-    if let Some(inner) = nth_generic_type(ty, "Valid", 0) {
-        return extractor_payload(inner, name);
     }
     if let Some(inner) = nth_generic_type(ty, "Piped", 1) {
         return extractor_payload(inner, name);
@@ -1931,9 +1986,8 @@ mod tests {
     fn a_payload_is_unwrapped_through_the_pipe_carriers() {
         for name in ["Header", "Json", "Form", "Query", "Path"] {
             let name_ident = format_ident!("{name}");
-            let shapes: [Type; 3] = [
+            let shapes: [Type; 2] = [
                 parse_quote!(#name_ident<Tracing>),
-                parse_quote!(Valid<#name_ident<Tracing>>),
                 parse_quote!(Piped<Trim, #name_ident<Tracing>>),
             ];
             for ty in shapes {

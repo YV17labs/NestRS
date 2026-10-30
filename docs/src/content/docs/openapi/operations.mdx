@@ -47,7 +47,7 @@ async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrl
     summary = "Stream a transcoded object back through the server",
     response_content_type = "audio/mpeg",
 )]
-async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> { /* ... */ }
+async fn download(&self, Query(query): Query<TranscodeDto>) -> Result<Response> { /* ... */ }
 ```
 
 The form's parts are a type like any other payload — a `String` field carrying
@@ -132,7 +132,7 @@ a `#[crud]` controller and the routes written beside it share one group.
     tags("Auth"),
     response = AccessTokenResponse
 )]
-async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse> {
+async fn login(&self, Json(input): Json<LoginDto>) -> Result<AccessTokenResponse> {
     // …
 }
 ```

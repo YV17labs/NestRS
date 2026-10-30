@@ -7,7 +7,7 @@ use nest_rs::authz::Manage;
 use nest_rs::core::error_message;
 use nest_rs::http::{
     Body, Header, HeaderValue, HttpError, Json, Opaque, Query, Response, Result, SseEvent,
-    SseStream, StatusCode, Valid, controller, routes,
+    SseStream, StatusCode, controller, routes,
 };
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
@@ -56,8 +56,8 @@ impl AudioController {
                        worker produced, or `404` while it does not exist yet. Requires a bearer \
                        JWT granted the `audio:transcode` scope and the admin capability."
     )]
-    async fn result(&self, query: Valid<Query<TranscodeDto>>) -> Result<Json<PresignedUrlDto>> {
-        let file = query.into_inner().file;
+    async fn result(&self, Query(query): Query<TranscodeDto>) -> Result<Json<PresignedUrlDto>> {
+        let file = query.file;
         match self.svc.presign_result(file).await.opaque()? {
             Some(ticket) => Ok(Json(ticket)),
             None => Err(HttpError::from_status(StatusCode::NOT_FOUND)),
@@ -100,8 +100,8 @@ impl AudioController {
                        granted the `audio:transcode` scope and the admin capability.",
         response_content_type = "audio/mpeg"
     )]
-    async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
-        let file = query.into_inner().file;
+    async fn download(&self, Query(query): Query<TranscodeDto>) -> Result<Response> {
+        let file = query.file;
         match self.svc.open_result(file).await.opaque()? {
             Some(stream) => Ok(Response::builder()
                 .content_type(HeaderValue::from_static("audio/mpeg"))
@@ -126,10 +126,10 @@ impl AudioController {
     )]
     async fn events(
         &self,
-        query: Valid<Query<TranscodeDto>>,
+        Query(query): Query<TranscodeDto>,
         resume: Header<StreamResumeDto>,
     ) -> SseStream {
-        let file = query.into_inner().file;
+        let file = query.file;
         let seen = resume.into_inner().last_event_id;
         let events = self
             .svc
@@ -170,11 +170,8 @@ impl AudioController {
                        storage path."
     )]
     #[http_code(202)]
-    async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<()> {
-        self.svc
-            .enqueue_transcode(body.into_inner().file)
-            .await
-            .opaque()?;
+    async fn transcode(&self, Json(body): Json<TranscodeDto>) -> Result<()> {
+        self.svc.enqueue_transcode(body.file).await.opaque()?;
         Ok(())
     }
 }

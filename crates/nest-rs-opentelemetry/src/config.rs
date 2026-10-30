@@ -143,15 +143,24 @@ impl OpenTelemetryConfig {
     }
 }
 
-/// What the boot says of each variable under `<PREFIX>_OPENTELEMETRY__`, a
-/// namespace nothing reads since the specification's `OTEL_*` replaced it.
-pub(crate) const RETIRED_VARIABLE: &str = "variable read by nothing: OpenTelemetry reads the \
-                                           OpenTelemetry specification's OTEL_* variables";
+/// One `warn` per variable the process sets under `<PREFIX>_OPENTELEMETRY__`, a
+/// namespace nothing reads since the specification's `OTEL_*` replaced it,
+/// said once the subscriber can hear it.
+pub(crate) fn say_retired_variables() {
+    for variable in retired_variables() {
+        tracing::warn!(
+            target: crate::TARGET,
+            variable = variable.as_str(),
+            "variable read by nothing: OpenTelemetry reads the OpenTelemetry specification's \
+             OTEL_* variables",
+        );
+    }
+}
 
 /// The variables the process sets under `<PREFIX>_OPENTELEMETRY__`, by name:
 /// a deployment carried over from before the specification's variables, which
 /// would otherwise export nothing in silence.
-pub(crate) fn retired_variables() -> Vec<String> {
+fn retired_variables() -> Vec<String> {
     let retired = nest_rs_config::var_name("opentelemetry", "");
     let mut names: Vec<String> = std::env::vars_os()
         .filter_map(|(name, _)| name.into_string().ok())

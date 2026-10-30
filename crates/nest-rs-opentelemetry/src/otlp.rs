@@ -125,44 +125,23 @@ impl Signal {
     /// `_CLIENT_CERTIFICATE` and `_CLIENT_KEY`.
     fn tls_vars(self, setting: TlsSetting) -> [&'static str; 2] {
         use TlsSetting::{Authorities, Certificate, Key};
-        match (self, setting) {
-            (Self::Traces, Authorities) => [
-                "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
-                OTEL_EXPORTER_OTLP_CERTIFICATE,
-            ],
-            (Self::Traces, Certificate) => [
-                "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE",
-                OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE,
-            ],
-            (Self::Traces, Key) => [
-                "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY",
-                OTEL_EXPORTER_OTLP_CLIENT_KEY,
-            ],
-            (Self::Metrics, Authorities) => [
-                "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
-                OTEL_EXPORTER_OTLP_CERTIFICATE,
-            ],
-            (Self::Metrics, Certificate) => [
-                "OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE",
-                OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE,
-            ],
-            (Self::Metrics, Key) => [
-                "OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY",
-                OTEL_EXPORTER_OTLP_CLIENT_KEY,
-            ],
-            (Self::Logs, Authorities) => [
-                "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
-                OTEL_EXPORTER_OTLP_CERTIFICATE,
-            ],
-            (Self::Logs, Certificate) => [
-                "OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE",
-                OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE,
-            ],
-            (Self::Logs, Key) => [
-                "OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY",
-                OTEL_EXPORTER_OTLP_CLIENT_KEY,
-            ],
-        }
+        let own = match (self, setting) {
+            (Self::Traces, Authorities) => "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+            (Self::Traces, Certificate) => "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE",
+            (Self::Traces, Key) => "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY",
+            (Self::Metrics, Authorities) => "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+            (Self::Metrics, Certificate) => "OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE",
+            (Self::Metrics, Key) => "OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY",
+            (Self::Logs, Authorities) => "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
+            (Self::Logs, Certificate) => "OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE",
+            (Self::Logs, Key) => "OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY",
+        };
+        let general = match setting {
+            Authorities => OTEL_EXPORTER_OTLP_CERTIFICATE,
+            Certificate => OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE,
+            Key => OTEL_EXPORTER_OTLP_CLIENT_KEY,
+        };
+        [own, general]
     }
 }
 
@@ -487,25 +466,21 @@ fn export_timeout(
 #[derive(Clone, Copy, Debug)]
 struct SignalTls {
     signal: Signal,
-    /// Per [`TlsSetting`], the variable read, or `None` for the pinned one.
-    read: [Option<&'static str>; 3],
-}
-
-impl SignalTls {
-    fn at(setting: TlsSetting) -> usize {
-        match setting {
-            TlsSetting::Authorities => 0,
-            TlsSetting::Certificate => 1,
-            TlsSetting::Key => 2,
-        }
-    }
+    /// Per piece, the variable read, or `None` for the pinned one.
+    authorities: Option<&'static str>,
+    certificate: Option<&'static str>,
+    key: Option<&'static str>,
 }
 
 impl TlsNames for SignalTls {
     fn named(&self, setting: TlsSetting, _material: &Material) -> String {
-        self.read[Self::at(setting)]
-            .unwrap_or(PINNED_TLS)
-            .to_owned()
+        match setting {
+            TlsSetting::Authorities => self.authorities,
+            TlsSetting::Certificate => self.certificate,
+            TlsSetting::Key => self.key,
+        }
+        .unwrap_or(PINNED_TLS)
+        .to_owned()
     }
 
     fn spellings(&self, setting: TlsSetting) -> String {
@@ -541,12 +516,14 @@ fn signal_tls(
     let (cert, key) = (file(TlsSetting::Certificate)?, file(TlsSetting::Key)?);
     let mut names = SignalTls {
         signal,
-        read: [authorities.as_ref().map(|(_, var)| *var), None, None],
+        authorities: authorities.as_ref().map(|(_, var)| *var),
+        certificate: None,
+        key: None,
     };
     let identity = match (cert, key) {
         (Some((cert, cert_var)), Some((key, key_var))) => {
-            names.read[1] = Some(cert_var);
-            names.read[2] = Some(key_var);
+            names.certificate = Some(cert_var);
+            names.key = Some(key_var);
             Some(TlsIdentity::new(cert, key))
         }
         (None, None) => None,

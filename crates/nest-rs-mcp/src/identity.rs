@@ -7,6 +7,8 @@
 //! `name` and `title` for its endpoint, and two hosts declaring on one path fail
 //! the boot. Capabilities are never declared, only observed from the hosts.
 
+use std::sync::LazyLock;
+
 use nest_rs_core::AppIdentity;
 use rmcp::model::{Icon, Implementation};
 
@@ -105,7 +107,7 @@ impl ResolvedIdentity {
     pub fn server_info(&self, hosts_own: Implementation) -> Implementation {
         match (&self.info, &self.binary) {
             (Some(declared), _) => declared.clone(),
-            (None, Some(binary)) if hosts_own == sdk_default() => binary.clone(),
+            (None, Some(binary)) if hosts_own == *SDK_DEFAULT => binary.clone(),
             (None, _) => hosts_own,
         }
     }
@@ -183,9 +185,14 @@ pub(crate) fn resolve(
 }
 
 /// What rmcp reports for a server nobody named, read off its own constructor
-/// rather than a literal.
-pub(crate) fn sdk_default() -> Implementation {
+/// rather than a literal, once: every `initialize` compares against it.
+static SDK_DEFAULT: LazyLock<Implementation> = LazyLock::new(|| {
     rmcp::model::ServerConfig::new(rmcp::model::ServerCapabilities::default()).server_info
+});
+
+/// [`SDK_DEFAULT`], owned.
+pub(crate) fn sdk_default() -> Implementation {
+    SDK_DEFAULT.clone()
 }
 
 /// The one way [`resolve`] fails: a name nothing supplies a version for.

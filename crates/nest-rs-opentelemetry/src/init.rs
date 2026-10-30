@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use nest_rs_core::__private::{ConsoleLayer, install_global_subscriber, log_filter};
 use nest_rs_core::logging::LogSettings;
 
-use crate::config::{LogFormat, OpenTelemetryConfig};
+use crate::config::{LogFormat, OpenTelemetryConfig, say_retired_variables};
 use crate::error::OpenTelemetryError;
 
 /// `OpenTelemetryModule` reads this to fail fast rather than register no-op providers
@@ -141,19 +141,6 @@ impl OpenTelemetry {
             );
             Ok(OpenTelemetry {})
         }
-    }
-}
-
-/// One `warn` per variable under the retired `<PREFIX>_OPENTELEMETRY__`, said
-/// once the subscriber can hear it.
-fn say_retired_variables() {
-    use crate::config::RETIRED_VARIABLE;
-    for variable in crate::config::retired_variables() {
-        tracing::warn!(
-            target: crate::TARGET,
-            variable = variable.as_str(),
-            "{RETIRED_VARIABLE}",
-        );
     }
 }
 

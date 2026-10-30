@@ -71,7 +71,7 @@ Real env always wins over the `.env` cascade, and a pinned struct over every
 | `port` | `<PREFIX>_HTTP__PORT` | `3000` | `HttpConfig { port: 3002, ..Default::default() }` |
 | `tls.cert` | `<PREFIX>_HTTP__TLS_CERT` (inline PEM) or `<PREFIX>_HTTP__TLS_CERT_FILE` (path) | unset ⇒ plain HTTP | `HttpConfig { tls: Some(HttpTls::new(cert, key)), ..Default::default() }` |
 | `tls.key`  | `<PREFIX>_HTTP__TLS_KEY` or `<PREFIX>_HTTP__TLS_KEY_FILE`  | unset ⇒ plain HTTP | (set together with `tls.cert`) |
-| `tls.reload_secs` | `<PREFIX>_HTTP__TLS_RELOAD_SECS` (`1`–`86400`, `0` ⇒ unwatched) | `60` for a pair read from files | in a test: `HttpTls::from_files(cert_path, key_path)?.with_reload_secs(300)` — see [Renewal without a restart](#renewal-without-a-restart) |
+| `tls` reload interval | `<PREFIX>_HTTP__TLS_RELOAD_SECS` (`1`–`86400`, `0` ⇒ unwatched) | `60` for a pair read from files | in a test: `HttpTls::from_files(cert_path, key_path)?.with_reload(Some(Duration::from_secs(300)))`, `None` ⇒ unwatched — see [Renewal without a restart](#renewal-without-a-restart) |
 | `cors.origins` | `<PREFIX>_HTTP__CORS_ORIGINS` (comma list of `scheme://host[:port]`, or `*`; see [CORS](#cors)) | unset or empty ⇒ CORS off | `HttpCors { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
 | `cors.methods` | `<PREFIX>_HTTP__CORS_METHODS` | empty | `methods: vec!["GET".into(), "POST".into()]` |
 | `cors.headers` | `<PREFIX>_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
@@ -163,7 +163,8 @@ that writes the two files in sequence should write them together, or set
 
 Inline PEM has no source to watch, so it is loaded once. In code the two forms
 are two constructors: `HttpTls::from_files(cert_path, key_path)?` reads the pair
-and watches it (`.with_reload_secs(secs)` sets the interval), and
+and watches it (`.with_reload(Some(interval))` sets the interval, `None` stops
+the watch), and
 `HttpTls::new(cert, key)` takes inline PEM bytes. Production carries its
 material in the environment, so the pinned form is a test's: a suite hands
 `HttpTls::new` the pair `nest_rs::testing::TestAuthority` issues in process.

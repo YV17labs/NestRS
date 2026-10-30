@@ -56,8 +56,8 @@ fn key_b() -> &'static [u8] {
     PKI.b.key.as_bytes()
 }
 
-/// The shortest watch interval the seconds-grained knob allows.
-const RELOAD_SECS: u64 = 1;
+/// The shortest watch interval the bounds allow.
+const RELOAD: Duration = Duration::from_secs(1);
 
 #[controller(path = "/")]
 struct PingController;
@@ -161,15 +161,15 @@ async fn ping_until_ok(host: &str, port: u16, within: Duration) -> Option<String
 /// flight while the clock is paused, so no other timer is passed over.
 async fn watch(ticks: u32) {
     tokio::time::pause();
-    tokio::time::sleep(Duration::from_secs(RELOAD_SECS) * ticks).await;
+    tokio::time::sleep(RELOAD * ticks).await;
     tokio::time::resume();
 }
 
 /// A configured transport over the material on disk, not yet served.
-async fn transport_for(port: u16, material: &Material, reload_secs: u64) -> HttpTransport {
+async fn transport_for(port: u16, material: &Material, reload: Option<Duration>) -> HttpTransport {
     let tls = HttpTls::from_files(material.cert(), material.key())
         .expect("the test material reads")
-        .with_reload_secs(reload_secs);
+        .with_reload(reload);
     let app = App::builder()
         .module::<PingModule>()
         .build()
@@ -188,8 +188,8 @@ async fn transport_for(port: u16, material: &Material, reload_secs: u64) -> Http
     transport
 }
 
-async fn serve(port: u16, material: &Material, reload_secs: u64) -> CancellationToken {
-    let mut transport = transport_for(port, material, reload_secs).await;
+async fn serve(port: u16, material: &Material, reload: Option<Duration>) -> CancellationToken {
+    let mut transport = transport_for(port, material, reload).await;
     transport.listen().await.expect("the transport listens");
     let cancel = CancellationToken::new();
     let handle = cancel.clone();
@@ -203,7 +203,7 @@ async fn serve(port: u16, material: &Material, reload_secs: u64) -> Cancellation
 async fn a_renewed_certificate_is_served_without_dropping_the_listener() {
     let material = Material::new("swap");
     let port = free_port();
-    let cancel = serve(port, &material, RELOAD_SECS).await;
+    let cancel = serve(port, &material, Some(RELOAD)).await;
 
     let body = ping_until_ok(HOST_A, port, Duration::from_secs(10)).await;
     assert_eq!(body.as_deref(), Some("pong"), "leaf A serves {HOST_A}");
@@ -235,7 +235,7 @@ async fn a_renewed_certificate_is_served_without_dropping_the_listener() {
 async fn a_connection_open_across_the_swap_is_answered_not_reset() {
     let material = Material::new("in-flight");
     let port = free_port();
-    let cancel = serve(port, &material, RELOAD_SECS).await;
+    let cancel = serve(port, &material, Some(RELOAD)).await;
 
     assert_eq!(
         ping_until_ok(HOST_A, port, Duration::from_secs(10))
@@ -285,7 +285,7 @@ async fn a_connection_open_across_the_swap_is_answered_not_reset() {
 async fn watching_off_keeps_serving_the_certificate_it_booted_with() {
     let material = Material::new("pinned");
     let port = free_port();
-    let cancel = serve(port, &material, 0).await;
+    let cancel = serve(port, &material, None).await;
 
     assert_eq!(
         ping_until_ok(HOST_A, port, Duration::from_secs(10))
@@ -315,7 +315,7 @@ async fn material_that_cannot_serve_fails_the_boot_rather_than_binding() {
     // Leaf B's certificate beside leaf A's key: both parse, neither corresponds.
     material.write(cert_b(), key_a());
     let port = free_port();
-    let mut transport = transport_for(port, &material, 0).await;
+    let mut transport = transport_for(port, &material, None).await;
 
     let err = transport
         .listen()
@@ -339,7 +339,7 @@ async fn material_that_cannot_serve_fails_the_boot_rather_than_binding() {
 async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps_serving() {
     let material = Material::new("renewal-refused");
     let port = free_port();
-    let cancel = serve(port, &material, RELOAD_SECS).await;
+    let cancel = serve(port, &material, Some(RELOAD)).await;
 
     assert_eq!(
         ping_until_ok(HOST_A, port, Duration::from_secs(10))
@@ -434,7 +434,7 @@ async fn handshake(port: u16, alpn: &[&[u8]]) -> TlsStream<tokio::net::TcpStream
 async fn the_listener_offers_h2_then_http1() {
     let material = Material::new("alpn");
     let port = free_port();
-    let cancel = serve(port, &material, 0).await;
+    let cancel = serve(port, &material, None).await;
 
     let either = handshake(port, &[b"http/1.1", b"h2"]).await;
     assert_eq!(
@@ -456,7 +456,7 @@ async fn the_listener_offers_h2_then_http1() {
 async fn an_h2_client_over_tls_reads_the_stream_cap() {
     let material = Material::new("h2");
     let port = free_port();
-    let cancel = serve(port, &material, 0).await;
+    let cancel = serve(port, &material, None).await;
 
     let (client, mut connection) = h2::client::handshake(handshake(port, &[b"h2"]).await)
         .await
@@ -481,7 +481,7 @@ async fn an_h2_client_over_tls_reads_the_stream_cap() {
 async fn an_http1_head_past_64_kib_answers_431_over_tls() {
     let material = Material::new("head-cap");
     let port = free_port();
-    let cancel = serve(port, &material, 0).await;
+    let cancel = serve(port, &material, None).await;
 
     let mut stream = handshake(port, &[b"http/1.1"]).await;
     let filler = "a".repeat(70 * 1024);
@@ -509,7 +509,7 @@ async fn the_tls_listener_installs_the_default_crypto_provider_when_none_is() {
     );
     let material = Material::new("provider");
     let port = free_port();
-    let cancel = serve(port, &material, 0).await;
+    let cancel = serve(port, &material, None).await;
     drop(connect(port).await);
 
     let installed =
@@ -532,7 +532,7 @@ async fn the_tls_listener_installs_the_default_crypto_provider_when_none_is() {
 async fn a_tls_client_that_never_sends_a_client_hello_is_dropped_at_the_head_deadline() {
     let material = Material::new("silent");
     let port = free_port();
-    let cancel = serve(port, &material, 0).await;
+    let cancel = serve(port, &material, None).await;
     let mut silent = connect(port).await;
     // Answered over a handshake of its own: the silent socket was accepted first.
     assert_eq!(

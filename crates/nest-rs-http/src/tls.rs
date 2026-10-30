@@ -18,12 +18,12 @@ nest_rs_core::inventory::submit! {
     nest_rs_core::__private::LibraryClamp::new("rustls", tracing::level_filters::LevelFilter::ERROR)
 }
 
-/// How often a file-sourced certificate is re-read; `0` turns watching off.
-const DEFAULT_RELOAD_SECS: u64 = 60;
+/// How often a file-sourced certificate is re-read.
+const DEFAULT_RELOAD: Duration = Duration::from_secs(60);
 
 const RELOAD: DurationBounds = DurationBounds::secs(
     "TLS_RELOAD_SECS",
-    "HttpTls::with_reload_secs",
+    "HttpTls::with_reload",
     Floor::UnitsOrOff(Bound::new(
         1,
         "the kernel's timers and the files' own write settle are not finer than that, and \
@@ -63,8 +63,8 @@ enum TlsSource {
 ///
 /// Material read from files (`<PREFIX>_HTTP__TLS_CERT_FILE` +
 /// `<PREFIX>_HTTP__TLS_KEY_FILE`, or [`from_files`](Self::from_files)) is
-/// **watched**: every [`reload_secs`](Self::with_reload_secs) — 60 by default,
-/// `0` to disable — the pair is re-read, and a pair that has changed, *settled*
+/// **watched**: every [`reload`](Self::with_reload) interval — a minute by
+/// default, `None` to disable — the pair is re-read, and a pair that has changed, *settled*
 /// and can serve is swapped into the running listener without dropping a
 /// connection. Anything short of that keeps the previous certificate serving,
 /// with a `warn` on `nest_rs::http`. Inline PEM is loaded once.
@@ -73,7 +73,7 @@ pub struct HttpTls {
     cert: Vec<u8>,
     key: Secret<Vec<u8>>,
     source: TlsSource,
-    reload_secs: u64,
+    reload: Option<Duration>,
 }
 
 /// The certificate by its size, not its PEM.
@@ -83,7 +83,7 @@ impl std::fmt::Debug for HttpTls {
             .field("cert", &format_args!("<{} bytes>", self.cert.len()))
             .field("key", &self.key)
             .field("source", &self.source)
-            .field("reload_secs", &self.reload_secs)
+            .field("reload", &self.reload)
             .finish()
     }
 }
@@ -96,7 +96,7 @@ impl HttpTls {
             cert: cert.into(),
             key: Secret::new(key.into()),
             source: TlsSource::Inline,
-            reload_secs: 0,
+            reload: None,
         }
     }
 
@@ -114,16 +114,17 @@ impl HttpTls {
                 cert: cert_path,
                 key: key_path,
             },
-            reload_secs: DEFAULT_RELOAD_SECS,
+            reload: Some(DEFAULT_RELOAD),
         })
     }
 
-    /// How often a file-sourced pair is re-read, in seconds, from 1 to 86400 (a
-    /// day); `0` disables watching. Ignored by inline material, which has no
-    /// source to watch. A value outside the range fails the boot naming
+    /// How often a file-sourced pair is re-read, from a second to a day;
+    /// `None` turns the watch off. Ignored by inline material, which has no
+    /// source to watch. A value outside the range — `Duration::ZERO` included,
+    /// since off in code is `None` — fails the boot naming
     /// `<PREFIX>_HTTP__TLS_RELOAD_SECS`, as the variable's would.
-    pub fn with_reload_secs(mut self, secs: u64) -> Self {
-        self.reload_secs = secs;
+    pub fn with_reload(mut self, interval: Option<Duration>) -> Self {
+        self.reload = interval;
         self
     }
 
@@ -138,17 +139,13 @@ impl HttpTls {
         let cert = env.material("TLS_CERT")?;
         let key = env.material("TLS_KEY")?;
         // The base the variable overlays: the default for a pair read here,
-        // else the base's own, where `0` is off.
+        // else the base's own.
         let overlaid = match (&cert, &key, &base) {
-            (Some(_), Some(_), _) => Some(Duration::from_secs(DEFAULT_RELOAD_SECS)),
-            (_, _, Some(base)) => {
-                (base.reload_secs > 0).then(|| Duration::from_secs(base.reload_secs))
-            }
+            (Some(_), Some(_), _) => Some(DEFAULT_RELOAD),
+            (_, _, Some(base)) => base.reload,
             _ => None,
         };
-        let reload = RELOAD
-            .read_optional(env, overlaid)?
-            .map_or(0, |read| read.value.as_secs());
+        let reload = RELOAD.read_optional(env, overlaid)?.map(|read| read.value);
         match (cert, key) {
             (Some(Setting { value: cert, .. }), Some(Setting { value: key, .. })) => {
                 // A mixed pair is not watched: reloading one half would pair a
@@ -161,13 +158,13 @@ impl HttpTls {
                             cert: cert_path,
                             key: key_path,
                         },
-                        reload_secs: reload,
+                        reload,
                     },
                     _ => Self::new(cert.bytes, key.bytes),
                 };
                 Ok(Some(config))
             }
-            (None, None) => Ok(base.map(|base| base.with_reload_secs(reload))),
+            (None, None) => Ok(base.map(|base| base.with_reload(reload))),
             (Some(cert), None) => Err(half_pair(env, &cert, "TLS_KEY", base.is_some())),
             (None, Some(key)) => Err(half_pair(env, &key, "TLS_CERT", base.is_some())),
         }
@@ -181,11 +178,11 @@ impl HttpTls {
     pub(crate) fn into_listener(self) -> Result<ListenerTls> {
         let current = certified_key(&self.cert, self.key.expose_secret())?;
         // A pair built in code reaches here without a config read.
-        if self.reload_secs > 0 {
+        if let Some(interval) = self.reload {
             RELOAD.check(
                 <crate::HttpConfig as nest_rs_config::Namespaced>::NAMESPACE,
                 RELOAD.field(),
-                Duration::from_secs(self.reload_secs),
+                interval,
             )?;
         }
         let resolver = Arc::new(ReloadingResolver {
@@ -198,13 +195,13 @@ impl HttpTls {
             .with_cert_resolver(Arc::clone(&resolver) as Arc<dyn ResolvesServerCert>);
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         let renewal = match self.source {
-            TlsSource::Files { cert, key } if self.reload_secs > 0 => {
+            TlsSource::Files { cert, key } if let Some(interval) = self.reload => {
                 let watcher = Watcher {
                     cert_path: cert,
                     key_path: key,
                     cert: self.cert,
                     key: self.key,
-                    interval: Duration::from_secs(self.reload_secs),
+                    interval,
                 };
                 Some(Renewal { watcher, resolver })
             }
@@ -759,7 +756,7 @@ mod tests {
     fn inline_material_is_not_watchable() {
         let cfg = HttpTls::new(b"--CERT--".to_vec(), b"--KEY--".to_vec());
         assert_eq!(cfg.source, TlsSource::Inline);
-        assert_eq!(cfg.reload_secs, 0);
+        assert_eq!(cfg.reload, None);
     }
 
     #[test]
@@ -785,7 +782,7 @@ mod tests {
         let cfg = HttpTls::from_env(&tls_env([("TLS_RELOAD_SECS", "5")]), Some(base))
             .expect("no error")
             .expect("Some");
-        assert_eq!(cfg.reload_secs, 5);
+        assert_eq!(cfg.reload, Some(Duration::from_secs(5)));
     }
 
     #[test]
@@ -805,20 +802,29 @@ mod tests {
             from_env.contains(&var) && from_env.contains("must be at most 86400 seconds"),
             "{from_env}"
         );
-        let base =
-            HttpTls::new(b"--CERT--".to_vec(), b"--KEY--".to_vec()).with_reload_secs(u64::MAX);
-        let pinned = HttpTls::from_env(&tls_env([]), Some(base))
-            .expect_err("a pinned interval past a day")
-            .to_string();
+        let pinned = |interval| {
+            let base =
+                HttpTls::new(b"--CERT--".to_vec(), b"--KEY--".to_vec()).with_reload(Some(interval));
+            HttpTls::from_env(&tls_env([]), Some(base))
+                .expect_err("a pinned interval outside its range")
+                .to_string()
+        };
+        let past_a_day = pinned(Duration::from_secs(86_401));
         assert!(
-            pinned.contains(&var) && pinned.contains("`HttpTls::with_reload_secs` set in code"),
-            "{pinned}"
+            past_a_day.contains(&var) && past_a_day.contains("`HttpTls::with_reload` set in code"),
+            "{past_a_day}"
         );
-        let off = HttpTls::new(b"--CERT--".to_vec(), b"--KEY--".to_vec()).with_reload_secs(60);
-        let cfg = HttpTls::from_env(&tls_env([("TLS_RELOAD_SECS", "0")]), Some(off))
+        let zero = pinned(Duration::ZERO);
+        assert!(
+            zero.contains("`HttpTls::with_reload` set in code"),
+            "off in code is `None`: {zero}"
+        );
+        let watched = HttpTls::new(b"--CERT--".to_vec(), b"--KEY--".to_vec())
+            .with_reload(Some(Duration::from_secs(60)));
+        let cfg = HttpTls::from_env(&tls_env([("TLS_RELOAD_SECS", "0")]), Some(watched))
             .expect("`0` is off")
             .expect("Some");
-        assert_eq!(cfg.reload_secs, 0);
+        assert_eq!(cfg.reload, None);
     }
 
     #[test]
@@ -837,7 +843,7 @@ mod tests {
             .expect("no error")
             .expect("Some");
             assert!(matches!(cfg.source, TlsSource::Files { .. }));
-            assert_eq!(cfg.reload_secs, DEFAULT_RELOAD_SECS);
+            assert_eq!(cfg.reload, Some(DEFAULT_RELOAD));
 
             let mixed = HttpTls::from_env(
                 &tls_env([("TLS_CERT", "--INLINE-CERT--"), ("TLS_KEY_FILE", "key.pem")]),
@@ -846,7 +852,7 @@ mod tests {
             .expect("no error")
             .expect("Some");
             assert_eq!(mixed.source, TlsSource::Inline);
-            assert_eq!(mixed.reload_secs, 0);
+            assert_eq!(mixed.reload, None);
             Ok(())
         });
     }

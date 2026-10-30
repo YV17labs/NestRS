@@ -111,44 +111,6 @@ async fn a_piped_arg_runs_the_pipe_before_the_body() {
     assert_eq!(trimmed, "hi");
 }
 
-#[tokio::test]
-async fn a_rejecting_pipe_surfaces_a_graphql_error() {
-    let app = boot().await;
-    let resp = app
-        .http()
-        .post("/graphql")
-        .body_json(&serde_json::json!({ "query": "{ checked(raw: \"whatever\") }" }))
-        .send()
-        .await;
-    resp.assert_status_is_ok();
-    let json = resp.json().await;
-    let errors = json.value().object().get("errors").array();
-    let first = errors
-        .iter()
-        .next()
-        .expect("a pipe rejection yields one error");
-    assert_eq!(first.object().get("message").string(), "bad input");
-}
-
-#[tokio::test]
-async fn a_rejecting_pipe_surfaces_from_a_bare_return_operation() {
-    let app = boot().await;
-    let resp = app
-        .http()
-        .post("/graphql")
-        .body_json(&serde_json::json!({ "query": "{ checkedBare(raw: \"whatever\") }" }))
-        .send()
-        .await;
-    resp.assert_status_is_ok();
-    let json = resp.json().await;
-    let errors = json.value().object().get("errors").array();
-    let first = errors
-        .iter()
-        .next()
-        .expect("a pipe rejection yields one error");
-    assert_eq!(first.object().get("message").string(), "bad input");
-}
-
 /// The first error's message for `query`.
 async fn first_error(query: &str) -> String {
     let app = boot().await;
@@ -161,11 +123,24 @@ async fn first_error(query: &str) -> String {
     resp.assert_status_is_ok();
     let json = resp.json().await;
     let errors = json.value().object().get("errors").array();
-    let first = errors
-        .iter()
-        .next()
-        .expect("an invalid input yields one error");
+    let first = errors.iter().next().expect("the query yields an error");
     first.object().get("message").string().to_owned()
+}
+
+#[tokio::test]
+async fn a_rejecting_pipe_surfaces_a_graphql_error() {
+    assert_eq!(
+        first_error("{ checked(raw: \"whatever\") }").await,
+        "bad input"
+    );
+}
+
+#[tokio::test]
+async fn a_rejecting_pipe_surfaces_from_a_bare_return_operation() {
+    assert_eq!(
+        first_error("{ checkedBare(raw: \"whatever\") }").await,
+        "bad input"
+    );
 }
 
 #[tokio::test]
@@ -217,21 +192,10 @@ async fn an_input_keeping_its_rules_is_accepted() {
 
 #[tokio::test]
 async fn an_input_breaking_its_rules_is_refused_before_the_body() {
-    let app = boot().await;
-    let resp = app
-        .http()
-        .post("/graphql")
-        .body_json(&serde_json::json!({ "query": "{ named(input: { name: \"\" }) }" }))
-        .send()
-        .await;
-    resp.assert_status_is_ok();
-    let json = resp.json().await;
-    let errors = json.value().object().get("errors").array();
-    let first = errors
-        .iter()
-        .next()
-        .expect("an invalid input yields one error");
-    assert_eq!(first.object().get("message").string(), "validation failed");
+    assert_eq!(
+        first_error("{ named(input: { name: \"\" }) }").await,
+        "validation failed"
+    );
 }
 
 #[tokio::test]

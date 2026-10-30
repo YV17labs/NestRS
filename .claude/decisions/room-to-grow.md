@@ -104,4 +104,5 @@ is gone from both its families (every edge validates a decoded argument
 itself, `one-execution-pipeline.md`, 2026-10-30), and `Piped<P, S>` joins the
 newtypes over their one value: `Piped(x)` binds the pipe's output on every
 edge, so a second field would make it another type. `Decoded` is one too,
-the value an edge decodes as a pipe's source.
+the value an edge decodes as a pipe's source. Codegen's `PipeWrapper` leaves
+the tier-2 enums: one carrier left one shape, which `piped_input` reads.

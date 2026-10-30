@@ -14,14 +14,9 @@ use validator::{Validate, ValidationErrors};
 
 use crate::PipeError;
 
-/// Turn a `validator` failure into a [`PipeError`] whose `details` carry the
-/// field-level errors without any echoed submitted value ([`validation_details`]).
-pub(crate) fn validation_error(errors: &ValidationErrors) -> PipeError {
-    PipeError::with_details("validation failed", validation_details(errors))
-}
-
 /// A `validator` failure as the refusal every edge renders: `validation failed`,
-/// its fields under `details`, none of the submitted values.
+/// its fields under `details`, none of the submitted values
+/// ([`validation_details`]).
 ///
 /// A hand-written check answers like a decorated edge through it:
 ///
@@ -44,7 +39,7 @@ pub(crate) fn validation_error(errors: &ValidationErrors) -> PipeError {
 /// ```
 impl From<ValidationErrors> for PipeError {
     fn from(errors: ValidationErrors) -> Self {
-        validation_error(&errors)
+        PipeError::with_details("validation failed", validation_details(&errors))
     }
 }
 

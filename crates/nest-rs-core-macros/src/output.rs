@@ -1,6 +1,7 @@
 //! `#[output]` — the reply-DTO shorthand: `Serialize` and `JsonSchema` routed
 //! through `nest_rs_core`.
 
+use nest_rs_codegen::__private::item_shape;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -26,15 +27,7 @@ fn expand(args: TokenStream2, input: TokenStream2) -> TokenStream2 {
         Err(err) => return err.to_compile_error(),
     };
     if !matches!(item, Item::Struct(_) | Item::Enum(_)) {
-        let shape = match &item {
-            Item::Union(_) => "a union",
-            Item::Type(_) => "a type alias",
-            Item::Trait(_) => "a trait",
-            Item::Fn(_) => "a function",
-            Item::Impl(_) => "an impl block",
-            Item::Mod(_) => "a module",
-            _ => "neither a struct nor an enum",
-        };
+        let shape = item_shape(&item).unwrap_or("neither a struct nor an enum");
         return syn::Error::new_spanned(
             &item,
             format!(

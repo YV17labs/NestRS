@@ -2,6 +2,7 @@
 //! and `JsonSchema` routed through `nest_rs_core`, plus
 //! `#[serde(deny_unknown_fields)]`.
 
+use nest_rs_codegen::__private::item_shape;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -43,16 +44,7 @@ fn expand(args: TokenStream2, input: TokenStream2) -> TokenStream2 {
         Err(err) => return err.to_compile_error(),
     };
     let Item::Struct(item) = item else {
-        let shape = match &item {
-            Item::Enum(_) => "an enum",
-            Item::Union(_) => "a union",
-            Item::Type(_) => "a type alias",
-            Item::Trait(_) => "a trait",
-            Item::Fn(_) => "a function",
-            Item::Impl(_) => "an impl block",
-            Item::Mod(_) => "a module",
-            _ => "not a struct",
-        };
+        let shape = item_shape(&item).unwrap_or("not a struct");
         return refuse_shape(&item, shape).to_compile_error();
     };
     // Left to `validator`, a tuple struct is refused at a `#[derive(...)]` line

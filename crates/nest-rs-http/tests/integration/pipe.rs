@@ -5,11 +5,12 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use nest_rs_core::{Layer, UnitContext, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_core::module;
 use nest_rs_http::StatusCode;
-use nest_rs_http::{Form, HttpView, Json, Path, Query, async_trait, controller, input, routes};
+use nest_rs_http::{Form, Json, Path, Query, controller, input, routes};
 use nest_rs_pipes::{ParseArray, Piped};
+
+use crate::Refuse;
 
 #[input]
 struct Charge {
@@ -147,26 +148,6 @@ async fn every_extractor_carrying_a_type_with_rules_is_validated() {
         .assert_text("3")
         .await;
 }
-
-/// Refuses every request.
-#[injectable]
-#[derive(Default)]
-struct Refuse;
-
-impl Layer for Refuse {}
-
-#[async_trait]
-impl Guard for Refuse {
-    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        Err(Denial::unauthorized("no credential"))
-    }
-
-    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        Ok(())
-    }
-}
-
-impl GuardFor<HttpView> for Refuse {}
 
 #[controller(path = "/gated")]
 #[use_guards(Refuse)]

@@ -3,7 +3,7 @@
 //! listing. rmcp routes neither, so the expansion writes the three
 //! `ServerHandler` methods that serve them itself.
 
-use nest_rs_codegen::__private::{generic_args, pipe_wrapper, tail_param};
+use nest_rs_codegen::__private::{generic_args, piped_input, tail_param};
 use nest_rs_codegen::Grammar;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
@@ -199,7 +199,7 @@ fn argument_carrier(ty: &Type) -> Option<&'static str> {
     if generic_args(ty).is_some_and(|(name, _)| name == "Parameters") {
         return Some("Parameters");
     }
-    pipe_wrapper(ty).map(|_| "Piped")
+    piped_input(ty).map(|_| "Piped")
 }
 
 /// Refuse a parameter of a `#[resources]` listing other than a `Scoped<T>` or a

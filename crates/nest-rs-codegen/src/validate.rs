@@ -14,10 +14,6 @@ use quote::quote;
 /// dependency of its own on `nest-rs-pipes`.
 pub fn validate_argument(edge: &TokenStream, argument: &TokenStream) -> TokenStream {
     quote! {{
-        #[allow(
-            unused_imports,
-            reason = "one of the three choices resolves; which depends on the argument's type"
-        )]
         use #edge::__private::{DeclaredRules as _, NoRules as _, OptionalRules as _};
         (&&#edge::__private::ValidateProbe(#argument)).maybe_validate()
     }}

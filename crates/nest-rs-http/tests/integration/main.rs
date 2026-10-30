@@ -42,8 +42,11 @@ mod versioning;
 mod websocket;
 
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
-use nest_rs_core::{App, Handler, Module, Posture, Transport, module};
-use nest_rs_http::{HttpConfig, HttpTransport, controller, routes};
+use nest_rs_core::{
+    App, Handler, Layer, Module, Posture, Transport, UnitContext, injectable, module,
+};
+use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_http::{HttpConfig, HttpTransport, HttpView, async_trait, controller, routes};
 use nest_rs_testing::TestClient;
 
 /// The suite's own self-mounts.
@@ -117,6 +120,26 @@ impl MethodsController {
 
 #[module(providers = [MethodsController])]
 pub(crate) struct MethodsModule;
+
+/// Refuses every request at the guard stage, before anything reads its body.
+#[injectable]
+#[derive(Default)]
+pub(crate) struct Refuse;
+
+impl Layer for Refuse {}
+
+#[async_trait]
+impl Guard for Refuse {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::unauthorized("no credential"))
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for Refuse {}
 
 /// Boot `M` through a real `HttpTransport` and hand back a client over the
 /// composed endpoint; `nest-rs-testing`'s `TestApp` would be a dependency cycle.

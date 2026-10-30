@@ -29,7 +29,7 @@ use nest_rs_codegen::__private::{
     TailParam, answer_span, await_if_async, cfg_attrs, concrete_signature, force_guard_typeids,
     forwarded_arg_idents, generic_args, guard_capability_bounds, handler_const, handler_ref,
     impl_self_ident, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
-    pipe_wrapper, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
+    piped_input, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
     site_fn_ident, tail_param, ungrouped_expr, validate_argument,
 };
 use nest_rs_codegen::snake_case;
@@ -1652,7 +1652,7 @@ fn piped_args(sig: &Signature) -> syn::Result<Vec<PipedArg>> {
         };
         // A bare pipe carrier is taken by rmcp for a context extractor, which fails
         // with an unreadable trait error.
-        if pipe_wrapper(&pat_type.ty).is_some() {
+        if piped_input(&pat_type.ty).is_some() {
             return Err(syn::Error::new_spanned(
                 &pat_type.ty,
                 "a pipe on an MCP operation wraps the *arguments*, so it goes inside \
@@ -1669,12 +1669,12 @@ fn piped_args(sig: &Signature) -> syn::Result<Vec<PipedArg>> {
         let Some(carrier) = params.first().map(|ty| (*ty).clone()) else {
             continue;
         };
-        let Some(wrapper) = pipe_wrapper(&carrier) else {
+        let Some(value_ty) = piped_input(&carrier) else {
             continue;
         };
         args.push(PipedArg {
             ident: pat_ident.ident.clone(),
-            value_ty: wrapper.value(),
+            value_ty,
             carrier,
         });
     }

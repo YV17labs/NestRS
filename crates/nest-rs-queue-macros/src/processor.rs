@@ -10,7 +10,7 @@ use nest_rs_codegen::__private::{
     HandlerSite, HostMeta, JobDecorator, JobKey, ProviderSite, SitePosture, VersionedEdge,
     await_if_async, cfg_attrs, concrete_signature, generic_args, handler_const, host_layers_entry,
     impl_self_ident, job_key, job_returns_a_result, job_timeout, job_transaction, missing_argument,
-    one_role_per_method, payload_arg_type, pipe_wrapper, returns_unit, site_const, site_ref,
+    one_role_per_method, payload_arg_type, piped_input, returns_unit, site_const, site_ref,
     takes_value, timeout_value, transactional_value, ungrouped_expr, unread_job_key,
     validate_argument,
 };
@@ -487,11 +487,8 @@ fn pipe_binding(job_ty: &Type) -> (Type, TokenStream2) {
         }
     };
     let validated = validate_argument(&quote!(::nest_rs_queue), &quote!(&__deser));
-    let (deser_ty, job) = match pipe_wrapper(job_ty) {
-        Some(wrapper) => (
-            wrapper.value(),
-            quote!(<#job_ty>::apply(__deser).map_err(#box_err)?),
-        ),
+    let (deser_ty, job) = match piped_input(job_ty) {
+        Some(input) => (input, quote!(<#job_ty>::apply(__deser).map_err(#box_err)?)),
         None => (job_ty.clone(), quote!(__deser)),
     };
     (

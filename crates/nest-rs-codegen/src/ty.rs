@@ -63,34 +63,19 @@ pub fn generic_args(ty: &Type) -> Option<(&Ident, Vec<&Type>)> {
     Some((&seg.ident, tys))
 }
 
-/// A per-argument pipe read off a parameter's type, `Piped<P>` or
-/// `Piped<P, S>` — what `#[resolver]`, `#[messages]`, `#[tools]` and
-/// `#[processor]` strip before decoding the wire value.
-pub struct PipeWrapper {
-    /// The pipe type to apply.
-    pub pipe: syn::Path,
-}
-
-impl PipeWrapper {
-    /// The wire value the edge decodes: the pipe's `In`, whatever source the
-    /// carrier names.
-    pub fn value(&self) -> Type {
-        let pipe = &self.pipe;
-        syn::parse_quote!(<#pipe as ::nest_rs_pipes::Pipe>::In)
-    }
-}
-
-/// Recognise `Piped<P>` / `Piped<P, S>` on `ty`'s last path segment.
+/// The wire value a per-argument pipe reads, when `ty`'s last path segment is
+/// `Piped<P>` or `Piped<P, S>`: the pipe's `In`, whatever source the carrier
+/// names — what `#[operations]`, `#[messages]`, `#[tools]` and `#[processor]`
+/// decode in the carrier's place. `None` ⇒ a plain payload.
 ///
-/// The edges decoding their argument themselves bind a pipe with it (HTTP's
-/// `#[routes]` extracts the carrier like any other extractor). `None` ⇒ a
-/// plain payload.
-pub fn pipe_wrapper(ty: &Type) -> Option<PipeWrapper> {
+/// HTTP's `#[routes]` extracts the carrier's source like any other extractor.
+pub fn piped_input(ty: &Type) -> Option<Type> {
     let (ident, tys) = generic_args(ty)?;
     match (ident.to_string().as_str(), tys.as_slice()) {
-        ("Piped", [Type::Path(pipe)] | [Type::Path(pipe), _]) => Some(PipeWrapper {
-            pipe: pipe.path.clone(),
-        }),
+        ("Piped", [Type::Path(pipe)] | [Type::Path(pipe), _]) => {
+            let pipe = &pipe.path;
+            Some(syn::parse_quote!(<#pipe as ::nest_rs_pipes::Pipe>::In))
+        }
         _ => None,
     }
 }
@@ -503,17 +488,14 @@ mod tests {
             parse_quote!(Piped<Trim>),
             parse_quote!(nest_rs::pipes::Piped<Trim, Decoded<String>>),
         ] {
-            let wrapper = pipe_wrapper(&ty).expect("a pipe carrier");
-            let pipe = &wrapper.pipe;
-            assert_eq!(quote::quote!(#pipe).to_string(), "Trim");
-            let value = wrapper.value();
+            let input = piped_input(&ty).expect("a pipe carrier");
             assert_eq!(
-                quote::quote!(#value).to_string(),
+                quote::quote!(#input).to_string(),
                 "< Trim as :: nest_rs_pipes :: Pipe > :: In",
             );
         }
-        assert!(pipe_wrapper(&parse_quote!(Valid<NameInput>)).is_none());
-        assert!(pipe_wrapper(&parse_quote!(Piped)).is_none());
+        assert!(piped_input(&parse_quote!(Valid<NameInput>)).is_none());
+        assert!(piped_input(&parse_quote!(Piped)).is_none());
     }
 
     fn receiver_answer(method: &syn::ImplItemFn, host: Ident) -> Result<(), String> {

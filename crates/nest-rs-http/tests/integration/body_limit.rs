@@ -9,11 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use nest_rs_core::{Layer, UnitContext, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{
-    Body, HttpConfig, HttpError, HttpView, Json, RawBody, async_trait, controller, routes,
-};
+use nest_rs_core::module;
+use nest_rs_http::{Body, HttpConfig, HttpError, Json, RawBody, controller, routes};
 use nest_rs_http::{StatusCode, header};
 use nest_rs_testing::TestClient;
 use serde::Deserialize;
@@ -21,6 +18,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
 
+use crate::Refuse;
 use crate::transport::{PATIENCE, Serving, after, connect, read_head, read_to_end, serve_module};
 
 const CAP: usize = 64;
@@ -176,26 +174,6 @@ async fn a_body_within_the_cap_is_accepted() {
     resp.assert_status_is_ok();
     resp.assert_text("ok").await;
 }
-
-/// Refuses every request, before anything reads its body.
-#[injectable]
-#[derive(Default)]
-struct Refuse;
-
-impl Layer for Refuse {}
-
-#[async_trait]
-impl Guard for Refuse {
-    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        Err(Denial::unauthorized("no credential"))
-    }
-
-    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        Ok(())
-    }
-}
-
-impl GuardFor<HttpView> for Refuse {}
 
 /// Told once `/read/counted` has its body's first frame in hand.
 static FIRST_FRAME: Notify = Notify::const_new();

@@ -504,10 +504,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         // parameter is read, the guards having run.
                         _ => match piped_parts(ty) {
                             Some((pipe, Some(source))) => {
-                                let validated = validate_argument(
-                                    &quote!(::nest_rs_http),
-                                    &quote!(&__nestrs_source),
-                                );
+                                let validated = validate_statement(&quote!(&__nestrs_source));
                                 quote! {
                                     let #pat = {
                                         // Typed, so a source that is no extractor is
@@ -517,9 +514,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                                                 #req_var, &mut #body_var,
                                             )
                                             .await?;
-                                        #validated.map_err(|__refused| {
-                                            ::nest_rs_http::pipe_error(&__refused)
-                                        })?;
+                                        #validated
                                         ::nest_rs_http::__private::piped::<#pipe, #source>(
                                             __nestrs_source,
                                         )?
@@ -528,8 +523,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             }
                             // Refused above, before any statement is built.
                             Some((_, None)) | None => {
-                                let validated =
-                                    validate_argument(&quote!(::nest_rs_http), &quote!(&#pat));
+                                let validated = validate_statement(&quote!(&#pat));
                                 // Typed, so a parameter that is no extractor is
                                 // refused once, by its `FromRequest` bound.
                                 quote! {
@@ -537,9 +531,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                                         #req_var, &mut #body_var,
                                     )
                                     .await?;
-                                    #validated.map_err(|__refused| {
-                                        ::nest_rs_http::pipe_error(&__refused)
-                                    })?;
+                                    #validated
                                 }
                             }
                         },
@@ -1749,6 +1741,15 @@ fn api_errors(
 const PIPED_NAMES_ITS_EXTRACTOR: &str = "a pipe on a route names the extractor it reads — write \
      `Piped<P, Json<T>>` (or `Query<T>`, `Form<T>`, `Path<T>`, `Header<T>`); `Piped<P>` is the \
      form of the edges that decode their argument themselves";
+
+/// Hold an extracted argument, `argument` borrowing it, to the rules its type
+/// declares, a refusal answered as a pipe's `400`.
+fn validate_statement(argument: &TokenStream2) -> TokenStream2 {
+    let check = validate_argument(&quote!(::nest_rs_http), argument);
+    quote! {
+        #check.map_err(|__refused| ::nest_rs_http::pipe_error(&__refused))?;
+    }
+}
 
 /// A `Piped<P, S>` parameter, read off its spelling as `Scoped` and `Ctx` are:
 /// its pipe, and the extractor it reads when it names one.

@@ -17,7 +17,7 @@ use nest_rs_codegen::__private::{
     Posture, PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs, concrete_signature,
     declared_handler, force_guard_typeids, guard_capability_bounds, handler_const, handler_ref,
     impl_self_ident, injected_methods_with_layers, injected_per_request_method, layer_deps,
-    one_role_per_method, pipe_wrapper, reject_meta_on_operations, returns_unit, scoped_specs,
+    one_role_per_method, piped_input, reject_meta_on_operations, returns_unit, scoped_specs,
     shared_receiver, tail_param, takes_value, ungrouped_expr, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
@@ -64,8 +64,8 @@ fn event_name(attr: &syn::Attribute) -> syn::Result<LitStr> {
 /// Split a `#[subscribe_message]` payload argument into the wire type and,
 /// for a `Piped<P>`, the carrier as the handler spells it.
 fn ws_pipe_binding(ty: &Type) -> (Type, Option<&Type>) {
-    match pipe_wrapper(ty) {
-        Some(wrapper) => (wrapper.value(), Some(ty)),
+    match piped_input(ty) {
+        Some(input) => (input, Some(ty)),
         None => (ty.clone(), None),
     }
 }

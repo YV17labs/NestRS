@@ -23,7 +23,7 @@ use nest_rs_codegen::__private::{
     forwarded_idents, from_container_method, guard_capability_bounds, handler_const, handler_ref,
     host_meta_fn, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, injected_per_request_method, key_as_written,
-    layer_deps, normalize_forwarded_args, one_role_per_method, pipe_wrapper, posture_contradiction,
+    layer_deps, normalize_forwarded_args, one_role_per_method, piped_input, posture_contradiction,
     posture_required, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
     site_fn_ident, site_ref, tail_param, takes_value, type_label, unknown_argument,
     validate_argument,
@@ -398,11 +398,10 @@ fn piped_args(sig: &Signature) -> Vec<PipedArg> {
             let syn::Pat::Ident(pi) = &*pt.pat else {
                 return None;
             };
-            let wrapper = pipe_wrapper(&pt.ty)?;
             Some(PipedArg {
+                value_ty: piped_input(&pt.ty)?,
                 ident: pi.ident.clone(),
                 carrier: (*pt.ty).clone(),
-                value_ty: wrapper.value(),
             })
         })
         .collect()

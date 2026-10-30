@@ -4,7 +4,7 @@
 //! on its surface crate.
 
 use nest_rs_codegen::__private::{
-    invalid_queue_name, is_valid_queue_name, missing_argument, takes_value,
+    invalid_queue_name, is_valid_queue_name, item_shape, missing_argument, takes_value,
 };
 use nest_rs_codegen::Grammar;
 use proc_macro::TokenStream;
@@ -30,15 +30,7 @@ pub(crate) fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
         }
         other => {
             // Name the shape written, rather than syn's `expected struct`.
-            let shape = match &other {
-                Item::Enum(_) => "an enum",
-                Item::Union(_) => "a union",
-                Item::Impl(_) => "an impl block",
-                Item::Type(_) => "a type alias",
-                Item::Trait(_) => "a trait",
-                Item::Fn(_) => "a function",
-                _ => "not a struct",
-            };
+            let shape = item_shape(&other).unwrap_or("not a struct");
             return syn::Error::new_spanned(&other, not_a_unit_struct(shape))
                 .to_compile_error()
                 .into();

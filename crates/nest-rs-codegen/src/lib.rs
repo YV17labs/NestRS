@@ -70,6 +70,7 @@ mod grammar;
 mod identity;
 mod inject;
 mod instance;
+mod item;
 mod job;
 mod layers;
 mod mcp;
@@ -133,6 +134,7 @@ pub mod __private {
         optional_dependencies_method, optional_dependency_names_method,
     };
     pub use crate::instance::{DEFAULT_INSTANCE, INSTANCE, RESERVED_VOCABULARY, instance_name};
+    pub use crate::item::item_shape;
     pub use crate::job::{
         JobDecorator, JobKey, TIMEOUT, TRANSACTIONAL, job_argument_needs_a_value, job_key,
         job_keys, job_returns_a_result, job_timeout, job_transaction, timeout_value,
@@ -159,9 +161,9 @@ pub mod __private {
     pub use crate::specs::{force_guard_typeids, scoped_specs};
     pub use crate::time_zone::invalid_time_zone;
     pub use crate::ty::{
-        HostBorrow, PipeWrapper, TailParam, answer_span, await_if_async, concrete_signature,
-        generic_args, impl_self_ident, last_segment_ident, nth_generic_type, path_label,
-        payload_arg_type, pipe_wrapper, returns_unit, shared_receiver, tail_param, type_label,
+        HostBorrow, TailParam, answer_span, await_if_async, concrete_signature, generic_args,
+        impl_self_ident, last_segment_ident, nth_generic_type, path_label, payload_arg_type,
+        piped_input, returns_unit, shared_receiver, tail_param, type_label,
     };
     pub use crate::ungrouped::ungrouped_expr;
     pub use crate::validate::validate_argument;

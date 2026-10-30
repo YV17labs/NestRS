@@ -384,7 +384,8 @@ DEBUG nest_rs::layers: crates/nest-rs-core/src/layer_chain.rs: layer declared at
 Off by default — it widens every line and leaks source paths, so it stays out
 of production. Turn it on in `.env.development` (next to `<PREFIX>_LOG=debug`) so
 it is live while developing and off everywhere else, or pin it explicitly with
-`log_source_location: true` in the `OpenTelemetryConfig` `init_with` takes.
+`log_source_location: true` in the `OpenTelemetryConfig` `init_with` takes,
+which `<PREFIX>_LOG_SOURCE_LOCATION` still overrides.
 
 ## A console that stalls
 

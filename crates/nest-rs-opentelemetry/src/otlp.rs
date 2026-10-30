@@ -1,14 +1,16 @@
 //! OTel SDK wiring: a local tracer and W3C propagator always, and a batch OTLP
 //! exporter over HTTP/protobuf for each signal — traces, metrics, logs — whose
-//! endpoint is set.
+//! endpoint is set, unless its selector (`OTEL_TRACES_EXPORTER`, `_METRICS_`,
+//! `_LOGS_`) says `none` or `OTEL_SDK_DISABLED` turns them all off.
 //!
 //! **The OpenTelemetry specification's variables configure it** (`OTEL_*`),
 //! over what the app pinned in [`OpenTelemetryConfig`]: the SDK reads the
 //! resource's and the sampler's itself, and what it read is not overridden;
-//! the endpoints, the export timeouts, the metric period and the certificates
-//! are resolved here as the specification orders them — a signal's own
-//! variable, then the general one — through the SDK's constants where it
-//! exports them, so a value is refused naming its variable, never quoted.
+//! the selectors, the endpoints, the export timeouts, the metric period and
+//! the certificates are resolved here as the specification orders them — a
+//! signal's own variable, then the general one — through the SDK's constants
+//! where it exports them, so a value is refused naming its variable, never
+//! quoted.
 //!
 //! **The collector is not proved at boot** (`nest_rs_core::prove`): telemetry
 //! must never stop the app it observes, so an unreachable collector costs
@@ -45,6 +47,7 @@ use uuid::Uuid;
 
 use crate::config::OpenTelemetryConfig;
 use crate::error::OpenTelemetryError;
+use crate::signal::{Selection, Signal};
 
 // opentelemetry-otlp 0.33 quotes its request's URL, whose userinfo or query may
 // carry a collector's credential, and the collector's error body at `debug`.
@@ -55,10 +58,12 @@ nest_rs_core::inventory::submit! {
     )
 }
 
-// The specification's names for what the SDK reads itself, or not at all over
-// HTTP; opentelemetry_sdk 0.33 keeps its own private.
+// The specification's names for what the SDK reads itself, or not at all;
+// opentelemetry_sdk 0.33 keeps its own private, and neither it nor
+// opentelemetry-otlp 0.33 names the SDK's switch.
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 const OTEL_TRACES_SAMPLER: &str = "OTEL_TRACES_SAMPLER";
+const OTEL_SDK_DISABLED: &str = "OTEL_SDK_DISABLED";
 const OTEL_EXPORTER_OTLP_CERTIFICATE: &str = "OTEL_EXPORTER_OTLP_CERTIFICATE";
 const OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: &str = "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE";
 const OTEL_EXPORTER_OTLP_CLIENT_KEY: &str = "OTEL_EXPORTER_OTLP_CLIENT_KEY";
@@ -69,14 +74,7 @@ const PINNED_TLS: &str = "`OpenTelemetryConfig::tls` in code";
 const PINNED_INTERVAL: &str = "`OpenTelemetryConfig::metric_interval` in code";
 const PINNED_RATIO: &str = "`OpenTelemetryConfig::trace_sample_ratio` in code";
 
-/// One signal OTLP exports, and the variables the specification names for it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Signal {
-    Traces,
-    Metrics,
-    Logs,
-}
-
+/// The variables the specification names for one signal OTLP exports.
 impl Signal {
     fn name(self) -> &'static str {
         match self {
@@ -148,9 +146,9 @@ impl Signal {
 pub(crate) struct Exporters {
     pub tracer: opentelemetry_sdk::trace::Tracer,
     pub tracer_provider: SdkTracerProvider,
-    /// `Some` only when the metrics have an endpoint.
+    /// `Some` only when the metrics export.
     pub meter_provider: Option<SdkMeterProvider>,
-    /// `Some` only when the logs have an endpoint.
+    /// `Some` only when the logs export.
     pub logger_provider: Option<SdkLoggerProvider>,
     /// What the console's line about the exporters says.
     pub summary: Summary,
@@ -160,14 +158,49 @@ pub(crate) struct Exporters {
 pub(crate) struct Summary {
     /// The `service.name` the resource carries.
     pub service: String,
-    /// Each signal's endpoint, shown without its credential, or `<none>`.
-    pub endpoints: [String; 3],
+    /// Where each signal goes — traces, metrics, logs.
+    pub destinations: [Destination; 3],
     /// Whether `OTEL_TRACES_SAMPLER` chose the sampler.
     pub sampler_from_env: bool,
-    /// The variables passed over for not holding a whole number of
-    /// milliseconds, said once a subscriber can hear it.
-    pub ignored: Vec<&'static str>,
+    /// The variables passed over for a value the specification says to pass
+    /// over, said once a subscriber can hear it.
+    pub ignored: Vec<Ignored>,
 }
+
+/// Where one signal goes, as the boot line says it: an operator reads there
+/// why nothing is exported.
+#[derive(Debug)]
+pub(crate) enum Destination {
+    /// Exported to this endpoint, shown without its credential.
+    Endpoint(String),
+    /// Off: its selector says `none`.
+    SwitchedOff(Signal),
+    /// Off: `OTEL_SDK_DISABLED` is `true`.
+    SdkDisabled,
+    /// Off: nothing names an endpoint for it.
+    NoEndpoint,
+}
+
+impl std::fmt::Display for Destination {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Endpoint(shown) => f.write_str(shown),
+            Self::SwitchedOff(signal) => write!(f, "off ({}=none)", signal.exporter_var()),
+            Self::SdkDisabled => write!(f, "off ({OTEL_SDK_DISABLED}=true)"),
+            Self::NoEndpoint => f.write_str("off (no endpoint)"),
+        }
+    }
+}
+
+/// A variable passed over, and what it would have to hold to be read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Ignored {
+    pub variable: &'static str,
+    pub expected: &'static str,
+}
+
+/// What a variable read in milliseconds must hold.
+const MILLISECONDS: &str = "a whole number of milliseconds";
 
 pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelemetryError> {
     build_reading(config, AppIdentity::current(), nest_rs_config::env_var)
@@ -183,18 +216,12 @@ fn build_reading(
     let mut ignored = Vec::new();
     let sampler = sampler(config, &read)?;
     let interval = metric_interval(config, &read, &mut ignored)?;
-    let exports = [
-        export(Signal::Traces, config, &read, &mut ignored)?,
-        export(Signal::Metrics, config, &read, &mut ignored)?,
-        export(Signal::Logs, config, &read, &mut ignored)?,
-    ];
+    let disabled = sdk_disabled(&read, &mut ignored);
+    let (traces, to_traces) = route(Signal::Traces, disabled, config, &read, &mut ignored)?;
+    let (metrics, to_metrics) = route(Signal::Metrics, disabled, config, &read, &mut ignored)?;
+    let (logs, to_logs) = route(Signal::Logs, disabled, config, &read, &mut ignored)?;
+    let exports = [traces, metrics, logs];
     let [traces_client, metrics_client, logs_client] = exporter_clients(&exports)?;
-    let endpoints = exports.each_ref().map(|export| {
-        export.as_ref().map_or_else(
-            || "<none>".to_owned(),
-            |export| endpoint_shown(export.url.as_str()),
-        )
-    });
     let [traces, metrics, logs] = exports;
 
     global::set_text_map_propagator(TraceContextPropagator::new());
@@ -275,7 +302,7 @@ fn build_reading(
         logger_provider,
         summary: Summary {
             service,
-            endpoints,
+            destinations: [to_traces, to_metrics, to_logs],
             sampler_from_env,
             ignored,
         },
@@ -311,7 +338,7 @@ fn sampler(
 fn metric_interval(
     config: &OpenTelemetryConfig,
     read: &impl Fn(&str) -> Option<String>,
-    ignored: &mut Vec<&'static str>,
+    ignored: &mut Vec<Ignored>,
 ) -> Result<Duration, ConfigError> {
     if let Some(raw) = read(OTEL_METRIC_EXPORT_INTERVAL) {
         match raw.trim().parse::<u64>() {
@@ -321,7 +348,10 @@ fn metric_interval(
                     OTEL_METRIC_EXPORT_INTERVAL,
                 );
             }
-            Err(_) => ignored.push(OTEL_METRIC_EXPORT_INTERVAL),
+            Err(_) => ignored.push(Ignored {
+                variable: OTEL_METRIC_EXPORT_INTERVAL,
+                expected: MILLISECONDS,
+            }),
         }
     }
     bounded_interval(config.metric_interval, PINNED_INTERVAL)
@@ -363,6 +393,63 @@ fn bounded_interval(interval: Duration, named: &str) -> Result<Duration, ConfigE
     Ok(interval)
 }
 
+/// Whether `OTEL_SDK_DISABLED` turns every signal off: `true`, in any case,
+/// does. Anything else leaves the SDK on, as the specification orders, and a
+/// value that is not `false` either joins `ignored`.
+fn sdk_disabled(read: &impl Fn(&str) -> Option<String>, ignored: &mut Vec<Ignored>) -> bool {
+    let Some(raw) = read(OTEL_SDK_DISABLED) else {
+        return false;
+    };
+    let raw = raw.trim();
+    if raw.eq_ignore_ascii_case("true") {
+        return true;
+    }
+    if !raw.eq_ignore_ascii_case("false") {
+        ignored.push(Ignored {
+            variable: OTEL_SDK_DISABLED,
+            expected: "true or false",
+        });
+    }
+    false
+}
+
+/// Where `signal` goes: off under `OTEL_SDK_DISABLED` or its selector's
+/// `none`, else exported where [`export`] finds an endpoint. `otlp` named with
+/// no endpoint for the signal is refused, naming where one is set; unset, the
+/// signal stays quiet.
+fn route(
+    signal: Signal,
+    disabled: bool,
+    config: &OpenTelemetryConfig,
+    read: &impl Fn(&str) -> Option<String>,
+    ignored: &mut Vec<Ignored>,
+) -> Result<(Option<Export>, Destination), ConfigError> {
+    let selection = signal.selection(read)?;
+    if disabled {
+        return Ok((None, Destination::SdkDisabled));
+    }
+    if selection == Selection::None {
+        return Ok((None, Destination::SwitchedOff(signal)));
+    }
+    match export(signal, config, read, ignored)? {
+        Some(export) => {
+            let shown = endpoint_shown(export.url.as_str());
+            Ok((Some(export), Destination::Endpoint(shown)))
+        }
+        None if selection == Selection::Otlp => Err(ConfigError::parse(
+            signal.exporter_var(),
+            format!(
+                "asks for an OTLP export, but nothing sets an endpoint for {} — set {} or {} \
+                 (or {PINNED_ENDPOINT}), or turn the signal off with none",
+                signal.name(),
+                signal.endpoint_var(),
+                OTEL_EXPORTER_OTLP_ENDPOINT,
+            ),
+        )),
+        None => Ok((None, Destination::NoEndpoint)),
+    }
+}
+
 /// Where one signal exports, and what it exports through.
 struct Export {
     url: url::Url,
@@ -383,7 +470,7 @@ fn export(
     signal: Signal,
     config: &OpenTelemetryConfig,
     read: &impl Fn(&str) -> Option<String>,
-    ignored: &mut Vec<&'static str>,
+    ignored: &mut Vec<Ignored>,
 ) -> Result<Option<Export>, ConfigError> {
     let (raw, set_by) = if let Some(full) = read(signal.endpoint_var()) {
         (full.trim().to_owned(), signal.endpoint_var())
@@ -446,15 +533,19 @@ fn with_path(base: &str, signal: Signal) -> String {
 fn export_timeout(
     signal: &'static str,
     read: &impl Fn(&str) -> Option<String>,
-    ignored: &mut Vec<&'static str>,
+    ignored: &mut Vec<Ignored>,
 ) -> Duration {
     for variable in [signal, OTEL_EXPORTER_OTLP_TIMEOUT] {
         let Some(raw) = read(variable) else {
             continue;
         };
+        let passed_over = Ignored {
+            variable,
+            expected: MILLISECONDS,
+        };
         match raw.trim().parse::<u64>() {
             Ok(millis) => return Duration::from_millis(millis),
-            Err(_) if !ignored.contains(&variable) => ignored.push(variable),
+            Err(_) if !ignored.contains(&passed_over) => ignored.push(passed_over),
             Err(_) => {}
         }
     }
@@ -725,13 +816,15 @@ mod tests {
     static GLOBAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// The variables `set` holds, and nothing else.
-    fn reading(
-        set: &'static [(&'static str, &'static str)],
-    ) -> impl Fn(&str) -> Option<String> + Copy {
+    fn reading(set: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+        let set: Vec<(String, String)> = set
+            .iter()
+            .map(|(variable, value)| ((*variable).to_owned(), (*value).to_owned()))
+            .collect();
         move |name: &str| {
             set.iter()
-                .find(|(variable, _)| *variable == name)
-                .map(|(_, value)| (*value).to_owned())
+                .find(|(variable, _)| variable == name)
+                .map(|(_, value)| value.clone())
         }
     }
 
@@ -758,6 +851,15 @@ mod tests {
         if let Some(p) = exporters.logger_provider {
             let _ = p.shutdown();
         }
+    }
+
+    /// The three destinations as the boot line says them.
+    fn said(exporters: &Exporters) -> [String; 3] {
+        exporters
+            .summary
+            .destinations
+            .each_ref()
+            .map(ToString::to_string)
     }
 
     fn attribute(resource: &Resource, key: &'static str) -> Option<String> {
@@ -910,7 +1012,7 @@ mod tests {
         let exporters =
             build_reading(&OpenTelemetryConfig::default(), None, nothing).expect("builds");
         assert!(exporters.meter_provider.is_none() && exporters.logger_provider.is_none());
-        assert_eq!(exporters.summary.endpoints, ["<none>", "<none>", "<none>"]);
+        assert_eq!(said(&exporters), ["off (no endpoint)"; 3]);
         shut(exporters);
     }
 
@@ -921,7 +1023,7 @@ mod tests {
             let exporters = build_reading(&pinned_endpoint(base), None, nothing).expect("builds");
             assert!(exporters.meter_provider.is_some() && exporters.logger_provider.is_some());
             assert_eq!(
-                exporters.summary.endpoints,
+                said(&exporters),
                 [
                     "http://localhost:4318/v1/traces",
                     "http://localhost:4318/v1/metrics",
@@ -947,7 +1049,7 @@ mod tests {
         )
         .expect("builds");
         assert_eq!(
-            exporters.summary.endpoints,
+            said(&exporters),
             [
                 "http://collector:4318/v1/traces",
                 "http://collector:4318/v1/metrics",
@@ -969,10 +1071,7 @@ mod tests {
             exporters.meter_provider.is_none() && exporters.logger_provider.is_none(),
             "a signal no endpoint names exports nothing"
         );
-        assert_eq!(
-            exporters.summary.endpoints[0],
-            "http://traces:4318/v1/traces"
-        );
+        assert_eq!(said(&exporters)[0], "http://traces:4318/v1/traces");
         shut(exporters);
     }
 
@@ -1103,7 +1202,13 @@ mod tests {
             .expect("passed over"),
             Duration::from_secs(30)
         );
-        assert_eq!(ignored, [OTEL_METRIC_EXPORT_INTERVAL]);
+        assert_eq!(
+            ignored,
+            [Ignored {
+                variable: OTEL_METRIC_EXPORT_INTERVAL,
+                expected: MILLISECONDS,
+            }]
+        );
 
         let refused = metric_interval(
             &pinned,
@@ -1139,6 +1244,7 @@ mod tests {
                 OTEL_EXPORTER_OTLP_LOGS_TIMEOUT,
             ]
             .map(|signal| export_timeout(signal, &reading(set), &mut ignored));
+            let ignored: Vec<&str> = ignored.iter().map(|ignored| ignored.variable).collect();
             (timeouts.map(|t| t.as_millis()), ignored)
         };
 
@@ -1272,6 +1378,262 @@ mod tests {
             took >= bound && took < bound + std::time::Duration::from_secs(1),
             "shutdown gave the export its bound and no more, took {took:?}",
         );
+    }
+
+    /// The specification's exporter selectors, which no crate of the SDK names.
+    const SELECTORS: [&str; 3] = [
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_LOGS_EXPORTER",
+    ];
+
+    /// `none` turns its signal off whatever endpoint names it, in any case, and
+    /// leaves the others exporting.
+    #[test]
+    fn a_selector_set_to_none_switches_its_signal_off_whatever_the_endpoint() {
+        let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let exporters = build_reading(
+            &OpenTelemetryConfig::default(),
+            None,
+            reading(&[
+                (OTEL_EXPORTER_OTLP_ENDPOINT, "http://collector:4318"),
+                ("OTEL_METRICS_EXPORTER", "none"),
+                ("OTEL_LOGS_EXPORTER", " None "),
+            ]),
+        )
+        .expect("builds");
+        assert!(
+            exporters.meter_provider.is_none() && exporters.logger_provider.is_none(),
+            "a signal switched off builds no exporter"
+        );
+        assert_eq!(said(&exporters)[0], "http://collector:4318/v1/traces");
+        shut(exporters);
+    }
+
+    /// `otlp` keeps a signal its endpoint exports, named in any case, alone or
+    /// repeated in the specification's comma-separated list.
+    #[test]
+    fn otlp_alone_or_in_a_list_keeps_a_signal_its_endpoint_exports() {
+        let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let exporters = build_reading(
+            &pinned_endpoint("http://collector:4318"),
+            None,
+            reading(&[
+                ("OTEL_TRACES_EXPORTER", "otlp"),
+                ("OTEL_METRICS_EXPORTER", "OTLP"),
+                ("OTEL_LOGS_EXPORTER", "otlp, otlp"),
+            ]),
+        )
+        .expect("builds");
+        assert!(exporters.meter_provider.is_some() && exporters.logger_provider.is_some());
+        shut(exporters);
+    }
+
+    /// The refusal `build` fails with under `set`, as said.
+    fn refused_under(set: &[(&str, &str)]) -> String {
+        let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        match build_reading(
+            &pinned_endpoint("http://collector:4318"),
+            None,
+            reading(set),
+        ) {
+            Ok(exporters) => {
+                shut(exporters);
+                panic!("{set:?} must not build");
+            }
+            Err(refused) => refused.to_string(),
+        }
+    }
+
+    /// An exporter this crate does not build — one the specification knows, a
+    /// misspelling — is refused naming its selector and what it accepts, never
+    /// the value: a deployment believing it ships where nothing does is the
+    /// defect a warning would leave.
+    #[test]
+    fn an_exporter_this_crate_does_not_build_is_refused_naming_its_selector_and_never_the_value() {
+        for variable in SELECTORS {
+            for value in [
+                "console",
+                "zipkin",
+                "prometheus",
+                "logging",
+                "otlp/stdout",
+                "otpl",
+                "otlp,zipkin",
+            ] {
+                let said = refused_under(&[(variable, value)]);
+                assert!(
+                    said.contains(variable) && said.contains("otlp") && said.contains("none"),
+                    "{said}"
+                );
+                assert!(!said.contains(value), "{said}");
+            }
+            assert!(
+                refused_under(&[(variable, " , ")]).contains(variable),
+                "a list naming nothing"
+            );
+        }
+    }
+
+    /// `none` turns the signal's exporters off, so it stands alone.
+    #[test]
+    fn none_beside_otlp_is_refused() {
+        for value in ["otlp,none", "none, OTLP"] {
+            let said = refused_under(&[("OTEL_LOGS_EXPORTER", value)]);
+            assert!(
+                said.contains("OTEL_LOGS_EXPORTER") && said.contains("stands alone"),
+                "{said}"
+            );
+        }
+    }
+
+    /// `otlp` named for a signal nothing gives an endpoint is refused naming
+    /// where one is set: an unset selector, the specification's default, stays
+    /// quiet instead.
+    #[test]
+    fn otlp_named_for_a_signal_with_no_endpoint_is_refused_naming_where_one_is_set() {
+        let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Err(refused) = build_reading(
+            &OpenTelemetryConfig::default(),
+            None,
+            reading(&[
+                (
+                    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+                    "http://traces:4318/v1/traces",
+                ),
+                ("OTEL_METRICS_EXPORTER", "otlp"),
+            ]),
+        ) else {
+            panic!("otlp with no endpoint must not build");
+        };
+        let said = refused.to_string();
+        assert!(
+            said.contains("OTEL_METRICS_EXPORTER")
+                && said.contains(OTEL_EXPORTER_OTLP_METRICS_ENDPOINT)
+                && said.contains(OTEL_EXPORTER_OTLP_ENDPOINT)
+                && said.contains(PINNED_ENDPOINT),
+            "{said}"
+        );
+    }
+
+    /// `OTEL_SDK_DISABLED=true`, in any case, turns every signal off whatever the
+    /// endpoints and the selectors say; a selector that does not parse is still
+    /// refused.
+    #[test]
+    fn sdk_disabled_switches_every_signal_off() {
+        let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for disabled in ["true", "TRUE", " True "] {
+            let exporters = build_reading(
+                &OpenTelemetryConfig::default(),
+                None,
+                reading(&[
+                    (OTEL_EXPORTER_OTLP_ENDPOINT, "http://collector:4318"),
+                    ("OTEL_SDK_DISABLED", disabled),
+                ]),
+            )
+            .expect("builds");
+            assert!(
+                exporters.meter_provider.is_none() && exporters.logger_provider.is_none(),
+                "{disabled:?} disables the SDK"
+            );
+            assert_eq!(said(&exporters), ["off (OTEL_SDK_DISABLED=true)"; 3]);
+            assert!(exporters.summary.ignored.is_empty());
+            shut(exporters);
+        }
+        let exporters = build_reading(
+            &OpenTelemetryConfig::default(),
+            None,
+            reading(&[
+                ("OTEL_SDK_DISABLED", "true"),
+                ("OTEL_LOGS_EXPORTER", "otlp"),
+            ]),
+        )
+        .expect("otlp with no endpoint is no refusal once the SDK is disabled");
+        shut(exporters);
+        let refused = match build_reading(
+            &OpenTelemetryConfig::default(),
+            None,
+            reading(&[
+                ("OTEL_SDK_DISABLED", "true"),
+                ("OTEL_TRACES_EXPORTER", "zipkin"),
+            ]),
+        ) {
+            Ok(exporters) => {
+                shut(exporters);
+                panic!("a selector that does not parse is refused under OTEL_SDK_DISABLED");
+            }
+            Err(refused) => refused.to_string(),
+        };
+        assert!(refused.contains("OTEL_TRACES_EXPORTER"), "{refused}");
+    }
+
+    /// Any value but `true` leaves the SDK on, as the specification orders; one
+    /// neither true nor false is said by its variable.
+    #[test]
+    fn sdk_disabled_other_than_true_leaves_the_sdk_on_and_a_stray_value_is_said() {
+        let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for (value, said) in [
+            ("false", false),
+            ("FALSE", false),
+            ("1", true),
+            ("yes", true),
+        ] {
+            let exporters = build_reading(
+                &OpenTelemetryConfig::default(),
+                None,
+                reading(&[
+                    (OTEL_EXPORTER_OTLP_ENDPOINT, "http://collector:4318"),
+                    ("OTEL_SDK_DISABLED", value),
+                ]),
+            )
+            .expect("builds");
+            assert!(
+                exporters.meter_provider.is_some() && exporters.logger_provider.is_some(),
+                "{value:?} leaves the SDK on"
+            );
+            assert_eq!(
+                exporters
+                    .summary
+                    .ignored
+                    .iter()
+                    .any(|ignored| ignored.variable == "OTEL_SDK_DISABLED"),
+                said,
+                "{value:?}"
+            );
+            shut(exporters);
+        }
+    }
+
+    /// The boot line tells a signal its selector switched off from one no
+    /// endpoint names.
+    #[test]
+    fn the_boot_line_tells_a_signal_switched_off_from_one_with_no_endpoint() {
+        let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let exporters = build_reading(
+            &OpenTelemetryConfig::default(),
+            None,
+            reading(&[
+                (
+                    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+                    "http://traces:4318/v1/traces",
+                ),
+                (
+                    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
+                    "http://metrics:4318/v1/metrics",
+                ),
+                ("OTEL_TRACES_EXPORTER", "none"),
+            ]),
+        )
+        .expect("builds");
+        assert_eq!(
+            said(&exporters),
+            [
+                "off (OTEL_TRACES_EXPORTER=none)",
+                "http://metrics:4318/v1/metrics",
+                "off (no endpoint)",
+            ]
+        );
+        shut(exporters);
     }
 
     /// A `PeriodicReader` on a zero period is a tight export loop; an hourly

@@ -10,6 +10,8 @@ use nest_rs_core::logging::LogSettings;
 
 use crate::config::{LogFormat, OpenTelemetryConfig, say_retired_variables};
 use crate::error::OpenTelemetryError;
+#[cfg(not(feature = "otlp"))]
+use crate::signal::Signal;
 
 /// `OpenTelemetryModule` reads this to fail fast rather than register no-op providers
 /// when `OpenTelemetry::init` was forgotten.
@@ -42,24 +44,27 @@ impl OpenTelemetry {
     /// Install the subscriber from the environment
     /// ([`OpenTelemetryConfig::from_env`]), the service named after the binary
     /// `#[nest_rs::main]` started. A signal's batch exporter is added only when
-    /// an OTLP endpoint is set for it (`OTEL_EXPORTER_OTLP_ENDPOINT`), but the
-    /// tracer is always installed so `trace_id` and `traceparent` propagation
-    /// work out of the box.
+    /// an OTLP endpoint is set for it (`OTEL_EXPORTER_OTLP_ENDPOINT`) and
+    /// neither its selector (`OTEL_TRACES_EXPORTER`, `_METRICS_`, `_LOGS_`) nor
+    /// `OTEL_SDK_DISABLED` turns it off, but the tracer is always installed so
+    /// `trace_id` and `traceparent` propagation work out of the box.
     pub fn init() -> Result<Self, OpenTelemetryError> {
         Self::init_with(OpenTelemetryConfig::from_env()?)
     }
 
-    /// Install the subscriber from `config`, under the OpenTelemetry
-    /// specification's variables (`OTEL_*`), which override it field by field.
-    /// Returns the flush guard that must outlive `main`, or an error that aborts
-    /// boot on a filter or a setting that does not parse, a metric interval or
-    /// sample ratio outside its range, or a failed exporter build.
+    /// Install the subscriber from `config`, under the variables that override
+    /// it field by field: the OpenTelemetry specification's (`OTEL_*`) and the
+    /// console's (`<PREFIX>_LOG`, else `RUST_LOG`, `<PREFIX>_LOG_FORMAT`,
+    /// `<PREFIX>_LOG_SOURCE_LOCATION`), as [`OpenTelemetryConfig::from_env`]
+    /// reads them. Returns the flush guard that must outlive `main`, or an
+    /// error that aborts boot on a filter or a setting that does not parse, an
+    /// exporter selector naming one this binary does not build (any but `none`
+    /// without the `otlp` feature, which reads no other `OTEL_*`), a metric
+    /// interval or sample ratio outside its range, or a failed exporter build.
     pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
-        // A config built in code reaches here without `from_env`, so its filter is
-        // held to what the variables accept here.
-        LogSettings::check_filter(&config.log_filter, "OpenTelemetryConfig::log_filter")?;
-        let filter = log_filter(&config.log_filter);
-        let console_layer = ConsoleLayer::new(config.log_format, config.log_source_location);
+        let console = config.console()?;
+        let filter = log_filter(&console.filter);
+        let console_layer = ConsoleLayer::new(console.format, console.source_location);
 
         #[cfg(feature = "otlp")]
         {
@@ -74,7 +79,7 @@ impl OpenTelemetry {
             let appender_layer = match exporters.logger_provider.as_ref() {
                 Some(lp) => Some(
                     opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(lp)
-                        .with_filter(log_filter(&config.log_filter)),
+                        .with_filter(log_filter(&console.filter)),
                 ),
                 None => None,
             };
@@ -92,15 +97,16 @@ impl OpenTelemetry {
 
             say_retired_variables();
             let summary = exporters.summary;
-            for variable in summary.ignored {
+            for ignored in summary.ignored {
                 tracing::warn!(
                     target: crate::TARGET,
-                    variable,
-                    "an OpenTelemetry variable is not a whole number of milliseconds; ignored, \
-                     as the SDK ignores it",
+                    variable = ignored.variable,
+                    expected = ignored.expected,
+                    "an OpenTelemetry variable does not hold what it must; passed over, as the \
+                     specification orders",
                 );
             }
-            let [traces, metrics, logs] = summary.endpoints;
+            let [traces, metrics, logs] = summary.destinations;
             tracing::info!(
                 target: crate::TARGET,
                 service = %summary.service,
@@ -110,7 +116,7 @@ impl OpenTelemetry {
                 logs = %logs,
                 sampler = if summary.sampler_from_env { "OTEL_TRACES_SAMPLER" } else { "ratio" },
                 sample_ratio = config.trace_sample_ratio,
-                log_format = ?config.log_format,
+                log_format = ?console.format,
                 "OpenTelemetry initialised"
             );
 
@@ -123,6 +129,9 @@ impl OpenTelemetry {
 
         #[cfg(not(feature = "otlp"))]
         {
+            for signal in [Signal::Traces, Signal::Metrics, Signal::Logs] {
+                signal.selection(&nest_rs_config::env_var)?;
+            }
             if !install_global_subscriber(Registry::default().with(filter).with(console_layer)) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }
@@ -136,7 +145,7 @@ impl OpenTelemetry {
                     .or_else(|| nest_rs_core::AppIdentity::current().map(|app| app.name.as_str()))
                     .unwrap_or_default(),
                 mode = "console",
-                log_format = ?config.log_format,
+                log_format = ?console.format,
                 "OpenTelemetry initialised"
             );
             Ok(OpenTelemetry {})

@@ -216,6 +216,8 @@ names, unprefixed like `RUST_LOG`, over what `OpenTelemetryConfig` pins
 |---|---|
 | `OTEL_SERVICE_NAME` | service name; default the binary's package name |
 | `OTEL_RESOURCE_ATTRIBUTES` | resource attributes, `key=value` comma-separated: `service.version` (default the binary's package version), `deployment.environment.name`, `service.instance.id` (default a fresh UUIDv7) |
+| `OTEL_SDK_DISABLED` | `true`, in any case, switches every signal off whatever the endpoints and selectors say; anything else leaves the SDK on, a value neither `true` nor `false` said at `warn` |
+| `OTEL_TRACES_EXPORTER` · `OTEL_METRICS_EXPORTER` · `OTEL_LOGS_EXPORTER` | `otlp` (default) or `none`, in any case, or a comma-separated list of `otlp`: `none` switches the signal off whatever endpoint names it. Any exporter this crate does not build (`console`, `zipkin`, `prometheus`), `none` beside `otlp`, or `otlp` named with no endpoint for the signal fails the boot |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | collector base endpoint, each signal appending `/v1/traces`, `/v1/metrics`, `/v1/logs` (unset ⇒ no export): `http://` exports in plaintext, `https://` over TLS alone; another scheme, or a value that does not parse as a URL, fails the boot |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` · `_METRICS_ENDPOINT` · `_LOGS_ENDPOINT` | one signal's endpoint, used as given, over the base |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` (and per signal) | `http/protobuf`, the one protocol exported; any other fails the boot |
@@ -226,7 +228,8 @@ names, unprefixed like `RUST_LOG`, over what `OpenTelemetryConfig` pins
 | `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` / `OTEL_EXPORTER_OTLP_CLIENT_KEY` (and per signal) | paths to the PEM client certificate chain, leaf first, and its private key, presented to a collector that requires one. Both or neither; beside an `http://` endpoint, they fail the boot |
 
 The console layer reads the [`<PREFIX>_LOG*` family](#logging--prefix_log)
-above — there are no OTel-specific log variables.
+above, over a config pinned through `init_with` too — there are no
+OTel-specific log variables.
 
 ## `authn` — `<PREFIX>_AUTHN__*`
 

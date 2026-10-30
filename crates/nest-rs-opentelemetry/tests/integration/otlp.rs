@@ -4,7 +4,7 @@
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
 use nest_rs_opentelemetry::{
@@ -14,6 +14,8 @@ use nest_rs_testing::{LogCapture, TestAuthority, TestCertificate};
 use opentelemetry_otlp::{OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_TIMEOUT};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+use crate::init_under;
 
 /// The authority the collector's certificate chains to; the system's store
 /// does not hold it.
@@ -35,10 +37,11 @@ const ACCEPTED: &str = "HTTP/1.1 200 OK\r\ncontent-type: application/x-protobuf\
                         content-length: 0\r\nconnection: close\r\n\r\n";
 
 /// An OTLP/HTTP collector over TLS on loopback, on a runtime of its own, every
-/// export it reads counted.
+/// export it reads counted, and the path each was posted to kept.
 struct Collector {
     addr: SocketAddr,
     exports: Arc<AtomicUsize>,
+    paths: Arc<Mutex<Vec<String>>>,
 }
 
 impl Collector {
@@ -55,6 +58,8 @@ impl Collector {
         let addr = listener.local_addr().expect("its address");
         let exports = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&exports);
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&paths);
         let acceptor = CERTIFICATE.acceptor(clients);
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -64,8 +69,12 @@ impl Collector {
             runtime.block_on(async move {
                 let listener = tokio::net::TcpListener::from_std(listener).expect("a listener");
                 while let Ok((stream, _)) = listener.accept().await {
-                    let (acceptor, behaviour, counted) =
-                        (acceptor.clone(), behaviour.clone(), Arc::clone(&counted));
+                    let (acceptor, behaviour, counted, kept) = (
+                        acceptor.clone(),
+                        behaviour.clone(),
+                        Arc::clone(&counted),
+                        Arc::clone(&kept),
+                    );
                     tokio::spawn(async move {
                         let Ok(mut tls) = acceptor.accept(stream).await else {
                             return;
@@ -93,6 +102,13 @@ impl Collector {
                                 Ok(n) => read.extend_from_slice(&buf[..n]),
                             }
                         }
+                        if let Some(path) = head
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().nth(1))
+                        {
+                            kept.lock().expect("the paths").push(path.to_owned());
+                        }
                         counted.fetch_add(1, Ordering::SeqCst);
                         match behaviour {
                             Behaviour::Answer(answer) => {
@@ -105,7 +121,11 @@ impl Collector {
                 }
             });
         });
-        Self { addr, exports }
+        Self {
+            addr,
+            exports,
+            paths,
+        }
     }
 
     fn endpoint(&self) -> String {
@@ -115,28 +135,12 @@ impl Collector {
     fn exports(&self) -> usize {
         self.exports.load(Ordering::SeqCst)
     }
-}
 
-/// `config` initialised with `vars` — the OpenTelemetry specification's own,
-/// unprefixed — set over the process's environment while the exporters are
-/// built.
-#[expect(
-    clippy::result_large_err,
-    reason = "figment::Jail fixes the closure's error type"
-)]
-fn init_under(
-    vars: &[(&str, &str)],
-    config: OpenTelemetryConfig,
-) -> Result<OpenTelemetry, OpenTelemetryError> {
-    let mut init = None;
-    figment::Jail::expect_with(|jail| {
-        for (key, value) in vars {
-            jail.set_env(key, value);
-        }
-        init = Some(OpenTelemetry::init_with(config));
-        Ok(())
-    });
-    init.expect("the jail ran")
+    /// How many exports were posted to `path`.
+    fn exports_to(&self, path: &str) -> usize {
+        let paths = self.paths.lock().expect("the paths");
+        paths.iter().filter(|posted| *posted == path).count()
+    }
 }
 
 /// A file `name` holding `contents` in `scratch`, which the test holds: the
@@ -187,7 +191,7 @@ fn an_export_reaches_a_collector_named_in_code() {
         ..OpenTelemetryConfig::default()
     };
 
-    export_through(OpenTelemetry::init_with(config).expect("the exporters build"));
+    export_through(init_under(&[], config).expect("the exporters build"));
 
     assert!(collector.exports() > 0, "the flush reached the collector");
 }
@@ -314,6 +318,22 @@ fn an_export_is_cut_at_the_timeout_the_sdk_reads() {
     );
 }
 
+/// A signal its selector switches off ships nothing to the endpoint every
+/// signal shares, while the others export there.
+#[test]
+fn a_signal_its_selector_switches_off_exports_nothing_beside_one_that_exports() {
+    let collector = Collector::serving();
+
+    export_through(trusting(&collector, &[("OTEL_TRACES_EXPORTER", "none")]));
+
+    assert!(collector.exports_to("/v1/logs") > 0, "the logs exported");
+    assert_eq!(
+        collector.exports_to("/v1/traces"),
+        0,
+        "OTEL_TRACES_EXPORTER=none ships no span"
+    );
+}
+
 /// An export timeout that is not a whole number of milliseconds is passed over,
 /// as the SDK passes it over, and said once at `warn` by its variable.
 #[test]
@@ -325,14 +345,19 @@ fn an_export_timeout_that_is_not_milliseconds_is_ignored_and_said() {
 
     let event = logs.expect_one(
         TARGET,
-        "an OpenTelemetry variable is not a whole number of milliseconds; ignored, as the SDK \
-         ignores it",
+        "an OpenTelemetry variable does not hold what it must; passed over, as the \
+         specification orders",
     );
     assert_eq!(event.level, "warn");
     assert_eq!(
         event.field("variable").as_deref(),
         Some(OTEL_EXPORTER_OTLP_TIMEOUT)
     );
+    assert_eq!(
+        event.field("expected").as_deref(),
+        Some("a whole number of milliseconds")
+    );
+    assert!(!event.quotes("10s"), "{event:?}");
     drop(otel);
 }
 

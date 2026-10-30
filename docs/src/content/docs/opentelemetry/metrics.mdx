@@ -99,8 +99,8 @@ attribute combination becomes a separate time series.
 Metrics batch on a
 [`PeriodicReader`](https://docs.rs/opentelemetry_sdk) and export through the
 same OTLP endpoint as the traces (set `OTEL_EXPORTER_OTLP_ENDPOINT`, or
-`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` for the metrics alone). Without an endpoint, instrument
-construction still works — `counter()` and friends return real handles, so
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` for the metrics alone). Without an endpoint, or with
+`OTEL_METRICS_EXPORTER=none`, instrument construction still works — `counter()` and friends return real handles, so
 wiring compiles and runs — but the meter comes from a `NoopMeterProvider` and
 every reading is **dropped**. The SDK says so once, at `Meter was obtained from
 a NoopMeterProvider. No metrics will be recorded.` A test that needs to assert

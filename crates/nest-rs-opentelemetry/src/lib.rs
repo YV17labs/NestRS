@@ -2,7 +2,8 @@
 //!
 //! [`OpenTelemetry::init`] sets up `tracing` — the console always, and an OTLP
 //! exporter for each signal whose endpoint the OpenTelemetry specification's
-//! variables set (`OTEL_EXPORTER_OTLP_ENDPOINT`), under the `otlp` feature —
+//! variables set (`OTEL_EXPORTER_OTLP_ENDPOINT`) and whose selector does not
+//! switch it off (`OTEL_TRACES_EXPORTER=none`), under the `otlp` feature —
 //! with the service named after the binary `#[nest_rs::main]` started. The
 //! returned guard flushes on drop, so it must outlive `main`.
 //!
@@ -35,6 +36,7 @@ mod metrics;
 mod module;
 #[cfg(feature = "otlp")]
 mod otlp;
+mod signal;
 
 #[cfg(feature = "otlp")]
 pub use attribute::{Attribute, AttributeValue};

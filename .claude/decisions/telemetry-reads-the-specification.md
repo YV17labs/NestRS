@@ -72,3 +72,66 @@ from two namespaces at once (its timeouts under `OTEL_*`, the rest under ours).
   registers would reach the console only.
 - **Keeping `<PREFIX>_OPENTELEMETRY__*` beside `OTEL_*`.** Two names for one
   setting, one of them invented: 7.0 is the major, so no alias.
+
+## 2026-10-30 — the exporter selectors and `OTEL_SDK_DISABLED` are honoured or refused, and the console's variables overlay a pinned config
+
+Reading the specification's endpoints without its switches was a subset passed
+off as support: a deployment setting `OTEL_TRACES_EXPORTER=none` beside
+`OTEL_EXPORTER_OTLP_ENDPOINT` still shipped its traces. So:
+
+- **`OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` and `OTEL_LOGS_EXPORTER`
+  are read here**, under the specification's names (no crate of the SDK names
+  them): `otlp` — the default — or `none`, case-insensitive, or a
+  comma-separated list of `otlp`, as the specification allows. `none` switches
+  the signal off whatever endpoint names it, and its endpoint, protocol and
+  certificate variables are then not read.
+- **Anything else is refused at boot**, naming the variable and what it
+  accepts, never the value: an exporter the specification knows that this
+  crate does not build (`console`, `zipkin`, `prometheus`, `otlp/stdout`), a
+  misspelling, a list naming nothing, and `none` beside `otlp`. The
+  specification asks an implementation to warn and ignore an enum value it
+  does not recognise; correctness outranks the standard's letter here, since a
+  deployment believing a signal ships where nothing ships is the defect — the
+  reference SDK's autoconfiguration (Java) refuses an unknown exporter name and
+  `none` beside another at start too. The hard "no" on quoting a value
+  outranks the specification's wish to display it.
+- **`otlp` named for a signal no endpoint reaches is refused**, naming the
+  endpoint variables. An explicit request is never dropped in silence
+  (correctness), and the specification's fallback for it,
+  `http://localhost:4318`, is a plaintext export no line wrote (security). An
+  unset selector with no endpoint stays quiet, as before, and the boot line
+  says `off (no endpoint)`.
+- **A binary built without the `otlp` feature reads the selectors too**, and
+  refuses any value but `none` — `otlp` included — naming the variable and the
+  feature: it builds no exporter, and an explicit request is never dropped in
+  silence. `OTEL_SDK_DISABLED` is not read there: such a binary has no SDK to
+  disable, and no value of it asks for an export.
+- **`OTEL_SDK_DISABLED` is honoured as the specification orders**: `true`, in
+  any case, switches every signal off; anything else leaves the SDK on, and a
+  value neither `true` nor `false` is said at `warn` — the specification's
+  boolean rule ("MUST be interpreted as false"), whose false is the safe
+  default. The selectors are still checked under it.
+- **The boot line says where each signal goes**: its endpoint, or
+  `off (OTEL_<SIGNAL>_EXPORTER=none)`, `off (OTEL_SDK_DISABLED=true)` or
+  `off (no endpoint)`.
+- **`init_with` lays the console's variables over the config it takes, field
+  by field**, through the kernel's `LogSettings::overlaid_by_env`, which reads
+  and checks each as `from_env` does, and checks the filter set in code
+  whatever the variables set: a pinned base is the base the environment
+  overlays, and a filter that does not parse is a defect of the code. Every variable this crate reads — `OTEL_*` and the
+  console's — comes from the process environment, which `#[nest_rs::main]`
+  fills with the `.env` cascade, so a pin here does not cut the cascade off as
+  a `#[config]` pin does: telemetry starts before any module, from no
+  `ConfigService`, and `init()` — whose base is `from_env` — must keep reading
+  `.env`.
+
+**Refused:**
+
+- **Warning and ignoring an exporter this crate does not build**, as the
+  specification's enum rule reads: above.
+- **Building the specification's other exporters, gRPC or http/json**: a new
+  exporter is a dependency decision, and the OTLP exporter specification lets
+  an SDK build http/protobuf alone; they stay refused at boot.
+- **Reading the console's variables over a pin from the deployment tier
+  alone**, as a `#[config]` pin does: `OTEL_*` would then need the same cut,
+  and `init()` would stop reading a `.env` file's `OTEL_*`.

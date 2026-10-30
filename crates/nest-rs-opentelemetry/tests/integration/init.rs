@@ -4,7 +4,11 @@
 
 use std::process::{Command, Output};
 
+use nest_rs_core::EnvPrefix;
+use nest_rs_core::logging::var;
 use nest_rs_opentelemetry::{LogFormat, OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
+
+use crate::init_under;
 
 const CHILD_TEST: &str = "init::init_child_process";
 
@@ -47,6 +51,10 @@ fn child() -> Output {
     Command::new(std::env::current_exe().expect("the test binary"))
         .args(["--exact", CHILD_TEST, "--nocapture"])
         .env(CHILD_ROLE, "inside-the-subscriber")
+        .env_remove(EnvPrefix::var(var::FILTER))
+        .env_remove("RUST_LOG")
+        .env_remove(EnvPrefix::var(var::FORMAT))
+        .env_remove(EnvPrefix::var(var::SOURCE_LOCATION))
         .output()
         .expect("the child runs")
 }
@@ -118,10 +126,13 @@ fn init_installs_its_subscriber_beside_a_log_logger_set_before() {
 #[cfg(feature = "otlp")]
 #[test]
 fn init_with_clamps_the_exporter_s_debug_lines_under_a_bare_trace() {
-    let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
-        log_filter: "trace".into(),
-        ..OpenTelemetryConfig::default()
-    })
+    let _otel = init_under(
+        &[],
+        OpenTelemetryConfig {
+            log_filter: "trace".into(),
+            ..OpenTelemetryConfig::default()
+        },
+    )
     .expect("the process's first subscriber");
 
     assert!(!tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::DEBUG));
@@ -133,10 +144,13 @@ fn init_with_clamps_the_exporter_s_debug_lines_under_a_bare_trace() {
 #[cfg(feature = "otlp")]
 #[test]
 fn init_with_writes_the_exporter_s_debug_lines_a_filter_names() {
-    let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
-        log_filter: "info,opentelemetry-otlp=debug".into(),
-        ..OpenTelemetryConfig::default()
-    })
+    let _otel = init_under(
+        &[],
+        OpenTelemetryConfig {
+            log_filter: "info,opentelemetry-otlp=debug".into(),
+            ..OpenTelemetryConfig::default()
+        },
+    )
     .expect("the process's first subscriber");
 
     assert!(tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::DEBUG));
@@ -169,10 +183,13 @@ fn the_test_subscriber_clamps_the_exporter_s_debug_lines_under_a_bare_trace() {
 #[cfg(feature = "otlp")]
 #[test]
 fn init_with_never_opens_what_a_stricter_filter_closes() {
-    let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
-        log_filter: "warn".into(),
-        ..OpenTelemetryConfig::default()
-    })
+    let _otel = init_under(
+        &[],
+        OpenTelemetryConfig {
+            log_filter: "warn".into(),
+            ..OpenTelemetryConfig::default()
+        },
+    )
     .expect("the process's first subscriber");
 
     assert!(!tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::INFO));
@@ -188,10 +205,13 @@ fn init_with_never_opens_what_a_stricter_filter_closes() {
 #[cfg(feature = "otlp")]
 #[test]
 fn init_with_a_filter_naming_one_target_writes_no_clamped_library() {
-    let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
-        log_filter: "billing=debug".into(),
-        ..OpenTelemetryConfig::default()
-    })
+    let _otel = init_under(
+        &[],
+        OpenTelemetryConfig {
+            log_filter: "billing=debug".into(),
+            ..OpenTelemetryConfig::default()
+        },
+    )
     .expect("the process's first subscriber");
 
     assert!(tracing::event_enabled!(target: "billing::service", tracing::Level::DEBUG));
@@ -221,6 +241,63 @@ fn the_test_subscriber_s_default_never_opens_a_clamped_library() {
     );
 }
 
+/// A config pinned in code is the base the console's variables overlay, field
+/// by field, as from `init()`: the deployment raises a pinned filter.
+#[test]
+fn init_with_lays_the_console_s_variables_over_a_pinned_config() {
+    let filter = EnvPrefix::var(var::FILTER);
+    let _otel = init_under(
+        &[(filter.as_str(), "debug")],
+        OpenTelemetryConfig {
+            log_filter: "warn".into(),
+            ..OpenTelemetryConfig::default()
+        },
+    )
+    .expect("the process's first subscriber");
+
+    assert_eq!(
+        tracing::level_filters::LevelFilter::current(),
+        tracing::level_filters::LevelFilter::DEBUG,
+        "the deployment's filter, over the one pinned in code"
+    );
+    assert!(tracing::event_enabled!(target: "billing::service", tracing::Level::DEBUG));
+}
+
+/// The boot line says why a signal exports nothing: its selector switched it
+/// off, or nothing names an endpoint for it.
+#[cfg(feature = "otlp")]
+#[test]
+fn the_boot_line_tells_a_signal_switched_off_from_one_with_no_endpoint() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let otel = init_under(
+        &[
+            (
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                "http://127.0.0.1:4318/v1/traces",
+            ),
+            (
+                "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+                "http://127.0.0.1:4318/v1/metrics",
+            ),
+            ("OTEL_TRACES_EXPORTER", "none"),
+        ],
+        OpenTelemetryConfig::default(),
+    )
+    .expect("the process's first subscriber");
+
+    let event = logs.expect_one(nest_rs_opentelemetry::TARGET, "OpenTelemetry initialised");
+    assert_eq!(
+        event.field("traces").as_deref(),
+        Some("off (OTEL_TRACES_EXPORTER=none)")
+    );
+    assert_eq!(
+        event.field("metrics").as_deref(),
+        Some("http://127.0.0.1:4318/v1/metrics")
+    );
+    assert_eq!(event.field("logs").as_deref(), Some("off (no endpoint)"));
+    drop(otel);
+}
+
 #[nest_rs_core::main]
 async fn initialised_under_main() -> nest_rs_core::anyhow::Result<()> {
     let _otel = OpenTelemetry::init()?;
@@ -240,4 +317,41 @@ fn init_names_the_service_after_the_binary_main_started() {
         event.field("service").as_deref(),
         Some(env!("CARGO_PKG_NAME"))
     );
+}
+
+/// A binary built without the `otlp` feature builds no exporter, so a selector
+/// naming one is refused naming the variable and the feature, never the value,
+/// where a deployment would believe a signal ships; `none` boots.
+#[cfg(not(feature = "otlp"))]
+#[test]
+fn without_the_otlp_feature_a_selector_naming_an_exporter_is_refused_and_none_boots() {
+    for (variable, value) in [
+        ("OTEL_TRACES_EXPORTER", "OTLP"),
+        ("OTEL_METRICS_EXPORTER", "zipkin"),
+        ("OTEL_LOGS_EXPORTER", "none,console"),
+    ] {
+        let Err(refused) = init_under(&[(variable, value)], OpenTelemetryConfig::default()) else {
+            panic!("{variable}={value} must not boot a binary built without the otlp feature");
+        };
+        assert!(
+            matches!(refused, OpenTelemetryError::Config(_)),
+            "{refused:?}"
+        );
+        let said = refused.to_string();
+        assert!(
+            said.contains(variable) && said.contains("without the otlp feature"),
+            "{said}"
+        );
+        assert!(!said.contains(value), "{said}");
+    }
+
+    let _otel = init_under(
+        &[
+            ("OTEL_TRACES_EXPORTER", "none"),
+            ("OTEL_METRICS_EXPORTER", " None "),
+            ("OTEL_LOGS_EXPORTER", "none,none"),
+        ],
+        OpenTelemetryConfig::default(),
+    )
+    .expect("none is what a binary built without the otlp feature exports");
 }

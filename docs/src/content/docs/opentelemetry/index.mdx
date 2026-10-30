@@ -104,8 +104,8 @@ The exporter reads the variables the
 [OpenTelemetry specification](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/)
 names — the ones the OpenTelemetry Operator injects and every other SDK reads —
 with no prefix: `OTEL_*` belongs to the ecosystem, as `RUST_LOG` does. They
-override what `OpenTelemetryConfig` pins, field by field;
-`OpenTelemetry::init()` starts from the defaults, and
+and the console's `<PREFIX>_LOG*` override what `OpenTelemetryConfig` pins,
+field by field; `OpenTelemetry::init()` starts from the defaults, and
 `OpenTelemetry::init_with(cfg)` from a pinned config.
 
 | Env var | Field | Default |
@@ -123,10 +123,16 @@ override what `OpenTelemetryConfig` pins, field by field;
 | `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` (and per signal) | `tls` | the system's authorities, no client certificate |
 
 Any other variable the SDK reads — `OTEL_EXPORTER_OTLP_HEADERS`, the batch
-processors' `OTEL_BSP_*` and `OTEL_BLRP_*` — it reads as it always does.
+processors' `OTEL_BSP_*` and `OTEL_BLRP_*`, the span limits — it reads as it
+always does. `OTEL_EXPORTER_OTLP_COMPRESSION` takes `none` alone: this crate
+builds neither `gzip` nor `zstd`, which the SDK passes over with a `warn`.
 `OTEL_EXPORTER_OTLP_PROTOCOL` (or a signal's own) may only say
 `http/protobuf`, the one protocol this exporter speaks: any other fails the
 boot naming it, rather than send protobuf to a port that expects gRPC.
+`OTEL_PROPAGATORS` is read by nothing — the framework propagates W3C Trace
+Context at every edge itself ([Correlation](/fundamentals/correlation/)) —
+and neither is `OTEL_CONFIG_FILE`, since the Rust SDK has no file
+configuration.
 
 The three `<PREFIX>_LOG*` variables are read by the kernel's one parser, as
 the baseline logger reads them: a value that does not parse fails `init` with
@@ -141,6 +147,28 @@ given. Without any, the subscriber stays console-only; the W3C propagator is
 still installed so an inbound `traceparent` is continued behind a trusted proxy
 and the response carries `traceresponse`.
 
+The specification's selectors switch a signal off whatever endpoint names it.
+`OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` and `OTEL_LOGS_EXPORTER` take
+`otlp`, the default, or `none`, in any case, or a comma-separated list of
+`otlp`; `OTEL_SDK_DISABLED=true` turns all three off. Any other exporter —
+`console`, `zipkin`, `prometheus`, a misspelling — fails the boot naming the
+variable, and so do `none` beside `otlp` and `otlp` named for a signal no
+endpoint reaches: this crate builds the OTLP exporter alone, and a deployment
+that believes a signal ships where nothing ships is what the boot refuses. An
+`OTEL_SDK_DISABLED` that is neither `true` nor `false` leaves the SDK on, as
+the specification orders, and is said at `warn`.
+
+```bash frame="terminal"
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \
+OTEL_TRACES_EXPORTER=none \
+  nestrs run start api
+```
+
+The boot line, `OpenTelemetry initialised` on `nest_rs::opentelemetry`, says
+where each signal goes: its `traces`, `metrics` and `logs` fields hold the
+endpoint, or why nothing is exported — `off (OTEL_TRACES_EXPORTER=none)`,
+`off (OTEL_SDK_DISABLED=true)` or `off (no endpoint)`.
+
 ```bash frame="terminal"
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=production \
@@ -151,7 +179,8 @@ NESTRS_LOG=info \
 ```
 
 A pinned config holds the same settings in code, and the variables still
-override it:
+override it, `OTEL_*` and `<PREFIX>_LOG*` alike — a deployment's
+`<PREFIX>_LOG=debug` raises a filter pinned at `warn`:
 
 ```rust title="main.rs"
 let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
@@ -164,6 +193,13 @@ let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
 `OpenTelemetryConfig::default()` or `from_env()` — and a pinned ratio outside
 `[0, 1]` or a metric period outside a second to an hour fails `init_with`
 naming the field.
+
+Every variable here is read from the process environment, which
+`#[nest_rs::main]` fills with the [`.env` cascade](/configuration/env-cascade/)
+before `main` runs. Telemetry starts before any module, so a config pinned
+through `init_with` does not take its fields off the cascade as a module's
+`for_root` pin does: a `.env` file's value overrides it, as the deployment's
+does.
 
 The exporter uses HTTP/protobuf via `reqwest` (no `tonic`, no `openssl`) — the
 batch processors export from a dedicated non-Tokio thread so the blocking
@@ -211,6 +247,9 @@ umbrella's `opentelemetry` feature turns it on.
   framework's span constructor, and provides `Metrics`. Without it, the
   subscriber stays a console-only `tracing` setup and `OpenTelemetryModule`
   provides nothing — useful for a tiny binary that should not link the OTel SDK.
+  Such a binary still reads the three selectors: `none` is all it honours, and
+  any other value, `otlp` included, fails the boot naming the variable, since
+  nothing would ship.
 
 There is no `http` feature: the remote parent link and the sampling decision
 reach every edge through the span constructor, so a queue worker gets them as

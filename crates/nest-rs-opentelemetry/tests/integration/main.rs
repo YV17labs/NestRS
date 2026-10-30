@@ -15,3 +15,37 @@ mod metrics;
 mod module;
 #[cfg(feature = "otlp")]
 mod otlp;
+
+use nest_rs_core::EnvPrefix;
+use nest_rs_core::logging::var;
+use nest_rs_opentelemetry::{OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
+
+/// `config` initialised with `vars` set over the process's environment, every
+/// variable the console reads blanked first: a test reads what it pinned and
+/// set, whatever the shell running it exports.
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn init_under(
+    vars: &[(&str, &str)],
+    config: OpenTelemetryConfig,
+) -> Result<OpenTelemetry, OpenTelemetryError> {
+    let mut init = None;
+    figment::Jail::expect_with(|jail| {
+        for name in [
+            EnvPrefix::var(var::FILTER),
+            "RUST_LOG".to_owned(),
+            EnvPrefix::var(var::FORMAT),
+            EnvPrefix::var(var::SOURCE_LOCATION),
+        ] {
+            jail.set_env(name, "");
+        }
+        for (key, value) in vars {
+            jail.set_env(key, value);
+        }
+        init = Some(OpenTelemetry::init_with(config));
+        Ok(())
+    });
+    init.expect("the jail ran")
+}

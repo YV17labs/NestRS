@@ -69,6 +69,9 @@ tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
+# `figment::Jail` declares a deployed `<PREFIX>_ENV` for one test, which a
+# development-only guard refuses the boot under.
+figment = { workspace = true, features = ["test"] }
 # The guard's bound is witnessed on every edge it authenticates for — a route,
 # the GraphQL POST, the MCP POST, the WS upgrade — each booted as an app binds
 # it.

@@ -2628,6 +2628,7 @@ dependencies = [
  "argon2",
  "async-trait",
  "base64 0.23.1",
+ "figment",
  "jsonwebtoken",
  "nest-rs-config",
  "nest-rs-core",

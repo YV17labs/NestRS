@@ -1,5 +1,5 @@
 //! [`DevelopmentOnlyGuard`] — a route only a development or test process
-//! serves, and the boot that refuses to list it anywhere else.
+//! serves, and the refused boot of any other process listing it.
 
 use nest_rs_config::Environment;
 use nest_rs_core::{Layer, UnitContext, hooks, injectable};

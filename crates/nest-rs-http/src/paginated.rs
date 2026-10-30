@@ -85,7 +85,7 @@ impl<T: IntoResponse> IntoResponse for Paginated<T> {
 /// addressed.
 pub(crate) fn stamp_next_link(req: &Request, response: &mut Response) {
     if let Some(NextPage { first, after }) = response.extensions_mut().remove::<NextPage>() {
-        set_next_link(response, caller_path(req), first, after);
+        set_next_link(response, caller_path(req), first, &after);
     }
 }
 

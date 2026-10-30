@@ -81,6 +81,8 @@ pub fn singular(pascal: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn a_plural_reads_as_its_singular_and_a_singular_as_itself() {
         for (plural, singular) in [
@@ -96,8 +98,6 @@ mod tests {
             assert_eq!(super::singular(plural), singular, "{plural}");
         }
     }
-
-    use super::*;
 
     #[test]
     fn a_run_of_capitals_is_one_word() {

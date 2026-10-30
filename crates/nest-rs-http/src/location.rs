@@ -4,8 +4,6 @@
 //! with [`join_path`](crate::join_path), as the transport mounts the route, on
 //! the path a [`Created`](crate::Created) answer's route read off the edge.
 
-use std::fmt::Display;
-
 use http::{HeaderValue, Uri, header::LOCATION};
 
 use crate::request::Request;
@@ -34,8 +32,8 @@ pub(crate) fn caller_path(req: &Request) -> &str {
 /// the client-controlled `Host`. The collection path is [`caller_path`].
 ///
 /// A header value that will not build is dropped, never raised.
-pub(crate) fn set_created_location(resp: &mut Response, collection_path: &str, id: impl Display) {
-    let location = crate::join_path(collection_path, &id.to_string());
+pub(crate) fn set_created_location(resp: &mut Response, collection_path: &str, id: &str) {
+    let location = crate::join_path(collection_path, id);
     if let Ok(value) = HeaderValue::from_str(&location) {
         resp.headers_mut().insert(LOCATION, value);
     }

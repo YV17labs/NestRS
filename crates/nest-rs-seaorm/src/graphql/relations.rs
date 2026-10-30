@@ -2,9 +2,9 @@
 //! pointing at another entity's loader **without knowing its service name**.
 
 use nest_rs_graphql::async_graphql::OutputType;
+use nest_rs_graphql::async_graphql::connection::{Connection, Edge};
 
 use crate::Exposed;
-use nest_rs_graphql::async_graphql::connection::{Connection, Edge};
 
 /// The dataloader key for **one parent's page** of an auto-resolved `has_many`.
 ///

@@ -79,7 +79,7 @@ impl<T: IntoResponse> IntoResponse for Created<T> {
 /// addressed.
 pub(crate) fn stamp_location(req: &Request, response: &mut Response) {
     if let Some(CreatedAt(id)) = response.extensions_mut().remove::<CreatedAt>() {
-        set_created_location(response, caller_path(req), id);
+        set_created_location(response, caller_path(req), &id);
     }
 }
 

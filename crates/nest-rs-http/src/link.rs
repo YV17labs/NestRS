@@ -1,7 +1,5 @@
 //! The `Link` response header (RFC 8288), for a list that has another page.
 
-use std::fmt::Display;
-
 use http::{HeaderValue, header::LINK};
 
 use crate::response::Response;
@@ -13,17 +11,12 @@ use crate::response::Response;
 /// absolute URI would name the client-controlled `Host`. The collection path
 /// is the one the caller addressed. A header value that will not build is
 /// dropped, never raised.
-pub(crate) fn set_next_link(
-    resp: &mut Response,
-    collection_path: &str,
-    first: u64,
-    after: impl Display,
-) {
-    let target = format!(
-        "{collection_path}?first={first}&after={}",
-        encode_query_value(&after.to_string()),
+pub(crate) fn set_next_link(resp: &mut Response, collection_path: &str, first: u64, after: &str) {
+    let link = format!(
+        "<{collection_path}?first={first}&after={}>; rel=\"next\"",
+        encode_query_value(after),
     );
-    if let Ok(value) = HeaderValue::from_str(&format!("<{target}>; rel=\"next\"")) {
+    if let Ok(value) = HeaderValue::from_str(&link) {
         resp.headers_mut().insert(LINK, value);
     }
 }

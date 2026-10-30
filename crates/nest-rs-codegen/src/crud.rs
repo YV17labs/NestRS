@@ -269,23 +269,21 @@ impl CrudDeclaration {
         let output = alias("Output");
         let create = alias("Create");
         let update = alias("Update");
-        if !ops.any() {
-            return CrudTypes {
-                entity,
-                output,
-                create,
-                update,
-                aliases: TokenStream2::new(),
+        let entity_alias = ops.any().then(|| {
+            let key = crate::inject::injected_field_key(&self.service);
+            // Spanned on the key's value: a field the host does not inject is
+            // refused there.
+            let service_alias = quote_spanned! {self.service.span()=>
+                #[doc(hidden)]
+                type #service = <<#self_ty as ::nest_rs_core::__private::InjectedField<#key>>::Type
+                    as ::core::ops::Deref>::Target;
             };
-        }
-        let key = crate::inject::injected_field_key(&self.service);
-        // Spanned on the key's value: a field the host does not inject is
-        // refused there.
-        let service_alias = quote_spanned! {self.service.span()=>
-            #[doc(hidden)]
-            type #service = <<#self_ty as ::nest_rs_core::__private::InjectedField<#key>>::Type
-                as ::core::ops::Deref>::Target;
-        };
+            quote! {
+                #service_alias
+                #[doc(hidden)]
+                type #entity = <#service as ::nest_rs_seaorm::CrudService>::Entity;
+            }
+        });
         let output_alias = ops.answers_rows().then(|| {
             quote! {
                 #[doc(hidden)]
@@ -304,20 +302,12 @@ impl CrudDeclaration {
                 type #update = <#service as ::nest_rs_seaorm::Updatable>::Update;
             }
         });
-        let aliases = quote! {
-            #service_alias
-            #[doc(hidden)]
-            type #entity = <#service as ::nest_rs_seaorm::CrudService>::Entity;
-            #output_alias
-            #create_alias
-            #update_alias
-        };
         CrudTypes {
             entity,
             output,
             create,
             update,
-            aliases,
+            aliases: quote! { #entity_alias #output_alias #create_alias #update_alias },
         }
     }
 }

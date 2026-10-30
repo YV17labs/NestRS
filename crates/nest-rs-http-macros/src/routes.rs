@@ -839,11 +839,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Some(ty) if !is_sse => quote! { ::nest_rs_http::__answer_of!(#ty) },
             _ => quote! { ::core::option::Option::None },
         };
-        let success_status = match shaped_status {
-            true => quote! { #success_status },
-            false => quote! {
+        let success_status = if shaped_status {
+            quote! { #success_status }
+        } else {
+            quote! {
                 ::core::option::Option::map_or(__nestrs_answer, #success_status, |__a| __a.status)
-            },
+            }
         };
         let sets_location = quote! {
             #redirects

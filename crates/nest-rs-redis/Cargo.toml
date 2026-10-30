@@ -94,8 +94,6 @@ nest-rs-redis = { path = ".", features = ["queue", "throttler", "schedule", "hea
 # The suite mounts the probes each instance's indicator answers on.
 nest-rs-health = { path = "../nest-rs-health" }
 nest-rs-core = { path = "../nest-rs-core" }
-# Per-argument pipe on a `#[process]` job argument (`Piped<P, T>` / `Valid<T>`).
-nest-rs-pipes = { path = "../nest-rs-pipes" }
 # The suite drives the `RedisThrottler` store directly, and asks the guard to
 # count over a Redis that stopped: `Guard::check_http` and the request it reads.
 nest-rs-throttler = { path = "../nest-rs-throttler" }

@@ -3173,7 +3173,6 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-health",
  "nest-rs-http",
- "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-redis",
  "nest-rs-schedule",

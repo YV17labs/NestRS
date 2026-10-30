@@ -37,19 +37,20 @@ use features::blog::BlogController;
 use features::blog::BlogService;
 
 #[module(
-    imports = [HttpModule::for_root(None)],
+    imports = [HttpModule],
     providers = [BlogService, BlogController],
 )]
 pub struct BlogModule;
 ```
 
-`BlogModule` activates HTTP and registers its own service and controller.
+`BlogModule` serves its controller over HTTP, so it imports `HttpModule`, which
+starts the server, and registers its own service and controller.
 Providers in the same module share its name prefix — here, `BlogService`
 and `BlogController`.
 
 ```mermaid
 flowchart TB
-  BM[BlogModule] --> HM["HttpModule::for_root()"]
+  BM[BlogModule] --> HM[HttpModule]
   BM --> BS[BlogService]
   BM --> BC[BlogController]
   BC -. "injects" .-> BS
@@ -67,8 +68,8 @@ is flat. The access graph (see [Providers](/fundamentals/providers/))
 ensures every `#[inject]` resolves through `imports`.
 
 List order does not affect registration. We still list imports in a
-readable order: **config → infrastructure → transports → auth wiring →
-feature adapters**. The app root imports **`PostsHttpModule`**, not
+readable order: **config → infrastructure → the transports it pins → auth
+wiring → feature adapters**. The app root imports **`PostsHttpModule`**, not
 `PostsModule` — the port rides along inside the adapter's own `imports`.
 Business modules sit at the bottom of the list.
 
@@ -87,15 +88,15 @@ the app-root `Blog*` prefix anymore.
   - dto.rs
   - error.rs
   - http/
-    - module.rs (PostsHttpModule — imports PostsModule)
+    - module.rs (PostsHttpModule — imports PostsModule and HttpModule)
     - controller.rs (PostsController)
 </FileTree>
 
 One feature, several modules — never one umbrella import. The port
 (`PostsModule`) holds the data layer — `PostsService`, entity, repo wiring.
 It registers **no** controller, resolver, or gateway. Each transport
-adapter (`PostsHttpModule`, …) imports the port and mounts **its** edge
-only.
+adapter (`PostsHttpModule`, …) imports the port and the transport its edge
+runs on, and mounts **its** edge only.
 
 ### Why not put the controller in `PostsModule`?
 
@@ -109,7 +110,7 @@ Splitting keeps transport **opt-in per binary**:
 | Root imports | What activates |
 |--------------|----------------|
 | `PostsModule` only | Data layer — `PostsService` injectable, **no HTTP routes** |
-| `PostsHttpModule` | HTTP adapter — imports `PostsModule` transitively, mounts `PostsController` |
+| `PostsHttpModule` | HTTP adapter — imports `PostsModule` and `HttpModule`, mounts `PostsController` and serves it |
 
 `BlogModule` lists `PostsHttpModule`, not `PostsModule`. The adapter
 already imports the port; listing both would be redundant. A
@@ -120,6 +121,7 @@ without ever pulling in HTTP.
 flowchart TB
   PM[PostsModule] --> PS[PostsService]
   PHM[PostsHttpModule] --> PM
+  PHM --> HM[HttpModule]
   PHM --> PC[PostsController]
   PC -. "injects" .-> PS
 ```
@@ -169,15 +171,16 @@ beside the default's `for_root(None)`, and a static one as a type argument,
 `BucketModule::<Cache>` beside the default's bare `BucketModule`.
 
 <Aside type="tip">
-Env vars (`<PREFIX>_<NAMESPACE>__<KEY>`) fill a dynamic import's config at boot.
-Pass `None` for env-only; pass a config to set defaults in code that the
-real environment can still override **per field** — never a lock — while
-the `.env` files no longer reach that namespace at all, see
+Env vars (`<PREFIX>_<NAMESPACE>__<KEY>`) fill a module's config at boot. A
+bare import, or a dynamic one passed `None`, reads it from the environment
+alone; pass a config to set defaults in code that the real environment can
+still override **per field** — never a lock — while the `.env` files no longer
+reach that namespace at all, see
 [the dual-path rule](/configuration/#the-dual-path-rule). For the imports above:
 
 ```rust title="apps/blog/src/module.rs"
 SeaOrmModule::for_root(None)
-HttpModule::for_root(None)
+HttpModule
 ```
 
 ```bash title=".env"
@@ -204,20 +207,18 @@ providers — it only composes imports:
         ConfigModule::for_root(),
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        HttpModule::for_root(None),
         PostsHttpModule,
     ],
 )]
 pub struct BlogModule;
 ```
 
-`HttpModule` starts the transport. `PostsHttpModule` registers
-`PostsController` on it. Framework first, feature adapter second — same
-pattern for every HTTP feature.
-
-`PostsHttpModule` pulls in `PostsModule` through its own `imports` list.
-The root never lists the port when it only wants this transport — and
-never lists a transport it does not serve.
+`PostsHttpModule` registers `PostsController` and imports `HttpModule`, which
+starts the transport, and `PostsModule`, the port. The root lists the adapter
+and nothing it brings: it never lists the port when it only wants this
+transport, never a transport it does not serve, and names `HttpModule` only
+to pin its config (`HttpModule::for_root(HttpConfig { .. })`) — same pattern
+for every edge.
 
 Each import contributes its providers. HTTP mounts only what the import
 tree reaches. Linking a crate without importing its module keeps its
@@ -227,6 +228,18 @@ tree reaches into the container; a container built by hand with
 from it refuses with `UngatedDiscoveryError`, naming what it discovers, rather
 than activating everything linked.
 
+A module that lists a controller, a gateway, a resolver, an `#[mcp]`,
+`#[process]` or `#[scheduled]` host and imports nothing attaching its edge's
+transport — a hand-written adapter that forgot it — leaves the host inert, so
+`App::run` names it once the transports are attached:
+
+```text frame="terminal"
+ WARN nest_rs::app: host not served: its edge's transport is not attached edge="http" host="PostsController" module="PostsHttpModule" import="nest_rs::http::HttpModule"
+```
+
+An app run with no transport at all says `app serves nothing: no transport is
+attached`, runs its init hooks and stops.
+
 That is the usual shape of a root module: compose features and
 framework modules; let adapters own the handlers.
 
@@ -235,19 +248,19 @@ flowchart TB
   BM[BlogModule]
   BM --> CM[ConfigModule]
   BM --> DM[SeaOrmDatabaseModule]
-  BM --> HM[HttpModule]
   BM --> PHM[PostsHttpModule]
+  PHM --> HM[HttpModule]
   PHM --> PM[PostsModule]
   PM --> PS[PostsService]
   PHM --> PC[PostsController]
 ```
 
-Solid arrows from `BlogModule` are **direct** imports. `PostsModule` is
-reachable only through `PostsHttpModule` — that is the point.
+Solid arrows from `BlogModule` are **direct** imports. `PostsModule` and
+`HttpModule` are reachable only through `PostsHttpModule` — that is the point.
 
 <Aside type="note" title="What to remember">
 - **`#[module]` = two lists** — `providers` you build, `imports` you depend on.
-- **Port vs adapter** — data in `PostsModule`, routes in `PostsHttpModule`; import the adapter at the root when you want that transport.
+- **Port vs adapter** — data in `PostsModule`, routes in `PostsHttpModule`, which imports the transport it serves on; import the adapter at the root when you want that edge.
 - **Opt-in per binary** — import only the modules your deploy serves; everything else stays inert.
 </Aside>
 
@@ -331,10 +344,10 @@ flowchart TB
 
 `Common`'s providers are registered once, not twice.
 
-The same holds for a framework module you configure. A feature that serves
-over HTTP declares the dependency with a bare `HttpModule` beside the app's
-`HttpModule::for_root(...)`, and the app still runs one server; two
-`GraphqlModule::for_root(None)` mount `/graphql` once. What a setup wires per
+The same holds for a framework module you configure. Every adapter serving
+over HTTP imports a bare `HttpModule`, and an app pinning it with
+`HttpModule::for_root(...)` still runs one server; `GraphqlModule`, which
+every GraphQL adapter imports, mounts `/graphql` once. What a setup wires per
 app — its transport, its mount, the close of what it opened — sits in the
 module it imports by type, and an app runs one transport of each type.
 

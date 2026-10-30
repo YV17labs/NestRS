@@ -18,7 +18,7 @@ re-implemented per transport.
 ```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
-        HttpModule::for_root(None),
+        HttpModule,
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
         AuthnModule,

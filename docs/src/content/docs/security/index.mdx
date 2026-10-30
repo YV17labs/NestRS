@@ -73,8 +73,6 @@ The wiring sketch for an app that serves all three transports:
     imports = [
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        HttpModule::for_root(None),
-        GraphqlModule::for_root(None),
         AuthnModule,
         AuthzModule,
         AuthzGraphqlModule,

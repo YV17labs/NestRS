@@ -11,8 +11,9 @@ NestRS's HTTP layer accepts connections and routes requests itself, on
 request through nestrs's own [extractors](/http/extractors/) and answers with
 nestrs's response types. A controller is a struct, routes come from
 `#[routes]`, and the transport activates by importing
-[`HttpModule::for_root(...)`](/http/configuration/) in `AppModule.imports`
-— `main` never holds a transport.
+[`HttpModule`](/http/configuration/) in the module that serves on it — the
+feature's HTTP adapter — with `HttpModule::for_root(cfg)` at the app's root
+only to pin its config: `main` never holds a transport.
 
 Other HTTP-shaped surfaces — GraphQL, OpenAPI, MCP, WebSocket gateways —
 all mount on the same `HttpTransport` via `HttpEndpointMeta`, so a single

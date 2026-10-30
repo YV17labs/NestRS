@@ -83,27 +83,32 @@ consume in place — there is nothing to import for them. Only `resolver`
 and `operations` (and `crud` / `dataloader` on the pages that use them)
 come from `nest_rs::graphql`.
 
-Mount the GraphQL transport once at the app root:
+The resolver's adapter module imports `GraphqlModule` beside it, and the app
+imports the adapter:
+
+```rust title="crates/features/src/greeting/graphql/module.rs"
+use nest_rs::core::module;
+use nest_rs::graphql::GraphqlModule;
+
+use super::resolver::GreetingResolver;
+
+#[module(imports = [GraphqlModule], providers = [GreetingResolver])]
+pub struct GreetingGraphqlModule;
+```
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::graphql::GraphqlModule;
-use features::greeting::GreetingModule;
+use features::greeting::GreetingGraphqlModule;
 
-#[module(imports = [GreetingModule, GraphqlModule::for_root(None)])]
+#[module(imports = [GreetingGraphqlModule])]
 pub struct GreetingsAppModule;
 ```
 
-```rust title="crates/features/src/greeting/module.rs"
-use nest_rs::core::module;
-use super::resolver::GreetingResolver;
-
-#[module(providers = [GreetingResolver])]
-pub struct GreetingModule;
-```
-
-`GraphqlModule::for_root` mounts `POST /graphql` (the endpoint) and,
-when the playground is on, `GET /graphql` for the interactive client.
+`GraphqlModule` mounts `POST /graphql` (the endpoint) and, when the
+playground is on, `GET /graphql` for the interactive client, on the HTTP
+server it imports: importing the adapter is all the app does. However many
+adapters import it, the endpoint mounts once; the app writes
+`GraphqlModule::for_root(cfg)` only to pin a [`GraphqlConfig`](/graphql/configuration/).
 
 ## Run it
 

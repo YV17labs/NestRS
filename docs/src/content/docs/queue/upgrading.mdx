@@ -21,9 +21,10 @@ workers take over.
    waiting list `<queue>:active`, the schedule `<queue>:scheduled` and the
    in-flight sets `<queue>:inflight:*`.
 
-3. **Replace the 6.x workers with 7.0 workers.** A 7.0 worker imports
-   `QueueModule::for_root(None)` from `nest_rs::queue` where 6.x imported
-   `RedisWorkerModule::for_root(None)`.
+3. **Replace the 6.x workers with 7.0 workers.** A 7.0 worker's queue
+   adapters import `QueueModule` from `nest_rs::queue`, which attaches the
+   worker where 6.x imported `RedisWorkerModule::for_root(None)`; the root
+   writes `QueueModule::for_root(cfg)` only to pin the drain window.
 
 </Steps>
 
@@ -39,7 +40,7 @@ budget:
 | `queue.push("audio", job)` | the queue's marker, as above; `push_json("audio", value, None)` for a queue this binary does not declare |
 | `queue.push_json(name, value)` | `queue.push_json(name, value, None)` |
 | `<AudioQueue as QueueName>::NAME` | `<AudioQueue as Queue>::NAME` — `QueueName` is now the checked name a backend receives |
-| `RedisWorkerModule::for_root(cfg)` | `QueueModule::for_root(cfg)` from `nest_rs::queue`, beside `RedisQueueModule`, which now binds the consumer too |
+| `RedisWorkerModule::for_root(cfg)` | `QueueModule` from `nest_rs::queue`, imported bare by each queue adapter (`QueueModule::for_root(cfg)` at the root to pin it), beside `RedisQueueModule`, which now binds the consumer too |
 | `RedisWorkerConfig { shutdown_timeout }` | `QueueConfig { shutdown_timeout }`; the lease is `RedisQueueModule::for_root(RedisQueueConfig { lease })` |
 | `RedisWorker::new()`, spawned in a test | `QueueWorker::new()`, from `nest_rs::queue` |
 | `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`; the lease is `<PREFIX>_REDIS__QUEUE__LEASE_SECS` — see [Configuration](/queue/delivery/#configuration) |

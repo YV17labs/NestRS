@@ -95,12 +95,13 @@ did not authenticate.
 ## The GraphQL module
 
 The adapter imports the port (`UsersModule`), the authz module
-(`AuthzGraphqlModule`), and — because the entity exposes a
-`belongs_to` org relation (next section) — the org port whose service
-hosts the auto-emitted loader:
+(`AuthzGraphqlModule`), the org port whose service hosts the auto-emitted
+loader — the entity exposes a `belongs_to` org relation (next section) — and
+`GraphqlModule`, the endpoint its operations are served on:
 
 ```rust title="crates/features/src/users/graphql/module.rs (from the demo)"
 use nest_rs::core::module;
+use nest_rs::graphql::GraphqlModule;
 
 use super::resolver::UsersResolver;
 use crate::authz::graphql::AuthzGraphqlModule;
@@ -108,7 +109,7 @@ use crate::orgs::OrgsModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, OrgsModule, AuthzGraphqlModule],
+    imports = [UsersModule, OrgsModule, AuthzGraphqlModule, GraphqlModule],
     providers = [UsersResolver],
 )]
 pub struct UsersGraphqlModule;
@@ -140,18 +141,18 @@ pub use graphql::{UsersGraphqlModule, UsersResolver};
 pub use http::{UsersController, UsersHttpModule};
 ```
 
-## Wire the transport once
+## Wire the adapter
 
-The app root imports `GraphqlModule::for_root(None)` to mount the HTTP
-endpoint, and the feature's GraphQL adapter for the operations.
+The app root imports the feature's GraphQL adapter, which brings the endpoint
+with it: `GraphqlModule` mounts once however many adapters import it.
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
-        GraphqlModule::for_root(None),
+        AuthzGraphqlModule,
         // …
         UsersGraphqlModule,
 ```
 
-`GraphqlModule::for_root(...)` mounts `POST /graphql` on the HTTP transport.
+`GraphqlModule` mounts `POST /graphql` on the HTTP transport it imports.
 `GET /graphql` serves the playground, and introspection answers, **under a
 declared development or test profile alone** — `nestrs run dev` declares
 `development` — so a deployment exposes no interactive console and
@@ -256,8 +257,8 @@ $ nestrs g graphql posts
 ```
 
 That writes `crates/features/src/posts/graphql/{resolver.rs,module.rs,mod.rs}`
-and wires `PostsGraphqlModule` into `blog`. Add `GraphqlModule::for_root(None)`
-to the app's imports, restart, and `POST /graphql` answers
+— the module importing `GraphqlModule` — and wires `PostsGraphqlModule` into
+`blog`. Restart, and `POST /graphql` answers
 `{ posts { id title } }` through the same ability filter your HTTP routes go
 through. No `User.org` equivalent — that field is the one thing on this page
 that needs a relation `blog` does not have.

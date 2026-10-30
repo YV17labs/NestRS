@@ -33,7 +33,7 @@ socket on the same path as the POST endpoint the moment a `#[subscription]
 ` is discovered:
 
 ```rust title="apps/api/src/module.rs"
-#[module(imports = [GraphqlModule::for_root(None), PostsGraphqlModule])]
+#[module(imports = [PostsGraphqlModule])]
 pub struct ApiModule;
 ```
 

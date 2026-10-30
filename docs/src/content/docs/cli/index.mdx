@@ -297,9 +297,13 @@ the entity becomes a GraphQL object at the moment something asks for one.
 </Aside>
 
 Each adapter delegates to the port's service, so a freshly-generated port plus
-any adapter compiles immediately — the handler is the seam you fill in. The
-generator prints the import line and the app-level module each transport needs
-(`HttpModule`, `GraphqlModule`, `ScheduleModule`, …).
+any adapter compiles immediately — the handler is the seam you fill in. Its
+`module.rs` imports what serves its edge (`HttpModule`, `GraphqlModule`,
+`WsModule`, `QueueModule`, `ScheduleModule`), so an app importing the adapter
+serves it and imports nothing more; `g events` imports `EventsModule` into the
+port that emits. The queue's backend is the one line the app's root keeps,
+since the root chooses it: `g queue` names `RedisModule::for_root(None)` and
+`RedisQueueModule` when the app binds none.
 
 When the cursor isn't inside an app, wire the edge module by hand:
 
@@ -557,18 +561,18 @@ Then the edits a move cannot do:
    A single crate needs none, because `main.rs` declares its modules.
 3. **`crates/features/src/posts/http/mod.rs`** (new) — `mod controller; mod
    module;` plus its `pub use` lines, and a `http/module.rs` holding
-   `#[module(imports = [PostsModule], providers = [PostsController])]`.
+   `#[module(imports = [PostsModule, HttpModule], providers = [PostsController])]`.
 4. **`crates/features/src/posts/module.rs`** — drop `HttpModule::for_root(…)`
    and the controller from `providers`. In a workspace the transport is the
-   **app's** decision, and the port module provides only the service:
+   **adapter's** import, and the port module provides only the service:
    `#[module(providers = [PostsService])]`.
 5. **Imports** — `crate::service::PostsService` becomes
    `crate::posts::PostsService`; the app's `module.rs` adds
    `features::posts::PostsHttpModule` to its imports.
 
-Both halves of step 4 fail loudly if skipped. Leaving `HttpModule::for_root(…)`
-in the moved module attaches a **second** HTTP transport — a duplicated
-`attached module-contributed transport` line at boot. And a moved controller
+Both halves of step 4 matter. Leaving `HttpModule` in the port would open an
+HTTP server in every binary reaching `PostsService` — a worker included — and a
+config pinned there contests the app's own at boot. And a moved controller
 still declaring `#[controller(path = "/")]` collides with the starter one:
 
 ```text frame="terminal"

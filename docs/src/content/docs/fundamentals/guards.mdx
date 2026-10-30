@@ -235,11 +235,8 @@ The HTTP adapter imports the authz module transitively — same pattern as
 
 ```rust title="crates/features/src/posts/http/module.rs (from the demo, abridged)"
 #[module(
-    imports = [PostsModule, AuthzModule],
-    providers = [
-        PostsController,
-        // …
-    ],
+    imports = [PostsModule, AuthzModule, HttpModule],
+    providers = [PostsController, PostAuditInterceptor],
 )]
 pub struct PostsHttpModule;
 ```

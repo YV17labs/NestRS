@@ -6,8 +6,9 @@ description: A typed in-process event bus — emit any Clone event, listeners de
 import { Aside } from '@astrojs/starlight/components';
 
 An event listener is **a method** on any `#[injectable]` provider, tagged
-with `#[on_event]` inside a `#[listeners]` impl block. Importing
-`EventsModule` in the app's `AppModule` subscribes every discovered listener
+with `#[on_event]` inside a `#[listeners]` impl block. `EventsModule`, which
+the port emitting the event imports to inject the bus, subscribes every
+discovered listener
 from the fully-assembled container as the boot ends, before the first
 lifecycle hook — so an event an `#[on_module_init]` hook emits reaches its
 listeners.
@@ -210,6 +211,7 @@ it, and an app serving that adapter wires the listener with it:
 
 ```rust title="crates/features/src/posts/graphql/module.rs (from the demo)"
 use nest_rs::core::module;
+use nest_rs::graphql::GraphqlModule;
 
 use super::resolver::PostsResolver;
 use crate::authz::graphql::AuthzGraphqlModule;
@@ -218,7 +220,14 @@ use crate::posts::{PostsEventsModule, PostsModule};
 use crate::users::UsersModule;
 
 #[module(
-    imports = [PostsModule, PostsEventsModule, OrgsModule, UsersModule, AuthzGraphqlModule],
+    imports = [
+        PostsModule,
+        PostsEventsModule,
+        OrgsModule,
+        UsersModule,
+        AuthzGraphqlModule,
+        GraphqlModule,
+    ],
     providers = [PostsResolver],
 )]
 pub struct PostsGraphqlModule;
@@ -241,7 +250,7 @@ deadline, the order the bus keeps and what a failure changes.
 <Aside type="caution">
 Without `EventsModule` anywhere in the tree, the `EventBus` is absent —
 every `#[listeners]` provider compiles in but stays inert (no
-subscription is wired). This is the same "linked but unreachable"
+subscription is wired), and the boot names each one at `warn`. This is the same "linked but unreachable"
 property the rest of the framework relies on: an app that does not want
 the bus omits the module.
 </Aside>

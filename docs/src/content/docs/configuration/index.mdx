@@ -155,8 +155,8 @@ So pin only what the code means. A setting that varies by machine or by app —
 a port, an origin list, a certificate path — belongs in a `.env` file, the
 app's own when it identifies one app of a workspace
 ([an app's own files](/configuration/env-cascade/#an-apps-own-files)), and
-the module is imported with nothing pinned: `HttpModule::for_root(None)`.
-That is what `nestrs new` scaffolds, and what every demo app does.
+the module is imported with nothing pinned: bare, as every HTTP adapter imports
+`HttpModule`. That is what `nestrs new` scaffolds, and what every demo app does.
 
 The full precedence chain, highest first:
 
@@ -209,7 +209,7 @@ bases for one config fail the boot naming it.
 Most modules take the config itself:
 
 ```rust title="apps/api/src/module.rs"
-GraphqlModule::for_root(None),                                  // all from the environment
+GraphqlModule::for_root(GraphqlConfig { max_depth: Some(12), ..Default::default() }),
 HttpModule::for_root(HttpConfig { compression: true, ..Default::default() }),
 ```
 

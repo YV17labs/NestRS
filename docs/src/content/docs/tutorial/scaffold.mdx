@@ -65,7 +65,7 @@ See the [CLI reference](/cli/).
 `nestrs new blog` does not ask you to hand-edit the root `Cargo.toml`
 members list — workspace apps are discovered from `apps/*`. It writes a
 **thin** app plus the feature behind that greeting: `main.rs` boots the
-framework, `module.rs` composes transports and imports one feature module, and
+framework, `module.rs` imports one feature module's HTTP adapter, and
 there is no `controller.rs` or `service.rs` in the app crate — those live in
 `crates/features/`, which is where `posts` lands from the next page onward.
 
@@ -118,19 +118,19 @@ harness, to the tests alone, so no release binary carries it. `anyhow` is there
 because `main.rs` writes it, and `tokio` only for the tests, which write
 `#[tokio::test]`: `#[nest_rs::main]` builds the runtime `main` runs on itself.
 
-The root module is where transports come in. `HttpModule::for_root(None)`
-pins nothing, so every `<PREFIX>_HTTP__*` setting comes from the environment —
-the listen port from the app's own `.env`:
+The root module lists the edges the app serves. `BlogHttpModule`, the
+feature's HTTP adapter, imports `HttpModule` itself, so the app names no
+transport: it would write `HttpModule::for_root(..)` only to pin a setting in
+code. Every `<PREFIX>_HTTP__*` setting comes from the environment — the listen
+port from the app's own `.env`:
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
 
 use features::blog::BlogHttpModule;
 
 #[module(
     imports = [
-        HttpModule::for_root(None),
         BlogHttpModule,
     ],
 )]
@@ -224,7 +224,8 @@ this page replaces the greeting with real work.
 ## What you have now
 
 - A `blog` app under `apps/blog/`, scaffolded by `nestrs new blog`.
-- A `BlogModule` that activates the HTTP transport and imports one feature.
+- A `BlogModule` that imports one feature's HTTP adapter, which brings the
+  HTTP transport.
 - A `blog` feature answering `Hello World` on `/` — proof the framework boots
   and serves end to end.
 

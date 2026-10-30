@@ -512,7 +512,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `ThrottlerConfig { limit: Some(120), window_secs: Some(30), .. }` | `limit: 120, window: Duration::from_secs(30)` — `Default` holds 60 a minute |
    | `HttpConfig { max_body_bytes: Some(n), .. }` | `max_body_bytes: n` — `Default` holds 2 MiB, and there is no off |
    | `HttpTls::from_files(cert, key)?.with_reload_secs(300)`, or `.with_reload_secs(0)` | `.with_reload(Some(Duration::from_secs(300)))`, or `.with_reload(None)` to stop the watch; a pinned `Some(Duration::ZERO)` fails the boot |
-   | `HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })` — a pin of what varies by machine or by app — beside `<PREFIX>_HTTP__*` keys in `.env` files | `HttpModule::for_root(None)` and `<PREFIX>_HTTP__PORT=3002` in the app's own `apps/<app>/.env`, read over the root's under `development` and `test`; the deployment sets it on the process. A pin takes its whole namespace off every `.env` file, and the boot names each key it shadows |
+   | `HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })` — a pin of what varies by machine or by app — beside `<PREFIX>_HTTP__*` keys in `.env` files | no pin — the HTTP adapters import `HttpModule` bare — and `<PREFIX>_HTTP__PORT=3002` in the app's own `apps/<app>/.env`, read over the root's under `development` and `test`; the deployment sets it on the process. A pin takes its whole namespace off every `.env` file, and the boot names each key it shadows |
    | `RedisModule::for_root(RedisConfig { …, ..Default::default() })` relying on the loopback | `url` written in the pin, or `<PREFIX>_REDIS__URL` in the deployment: no profile holds a URL, and a pinned config reads the process environment, never `.env` |
    | `StorageModule::for_root(StorageConfig { …, ..Default::default() })` relying on the development pair or on plain HTTP | `..StorageConfig::defaults()` for plain HTTP in development and test (with `use nest_rs::config::Config;`); the pair from the deployment's environment in every profile |
    | `GraphqlConfig { emit_sdl, schema_path, .. }`, `OpenApiConfig { emit_document, document_path, .. }` | `emit` and `emit_path` on both; a relative `emit_path` is resolved against the app crate's directory |
@@ -593,7 +593,9 @@ lists what the boot, a log or the wire shows when one is missed.
    | `provide_factory_after::<T, A, _, _>(f)`, and the same for the declared and `dyn` forms | `provide_factory_after::<T, (A,), _, _>(f)` |
    | a module filling a registry the app reads from an `OnApplicationBootstrap` hook | `ContainerBuilder::provide_wiring("<crate>::<registry>", wire)` in its `register` |
    | `builder.provide_meta(TransportContribution { name: "MyTransport", build: \|c\| Ok(Box::new(MyTransport::new(c)?)) })` | `builder.provide_transport(\|c\| MyTransport::new(c))` — named `MyTransport`, read off the type |
-   | a feature module importing `HttpModule::for_root(None)` (or GraphQL's, OpenAPI's) to declare it serves over HTTP | a bare `HttpModule` (`GraphqlModule`, `OpenApiModule`) in its `imports`; the app keeps the one `for_root` |
+   | a feature module importing `HttpModule::for_root(None)` (or GraphQL's, OpenAPI's) to declare it serves over HTTP | a bare `HttpModule` (`GraphqlModule`, `OpenApiModule`) in its `imports`; the app keeps a `for_root` only to pin a config |
+   | an edge adapter importing its port alone, and the app root importing `HttpModule::for_root(None)`, `GraphqlModule::for_root(None)`, `QueueModule::for_root(None)` or `ScheduleModule` beside it | the adapter imports what serves its edge, bare — `HttpModule` (HTTP, WebSocket, MCP), plus `WsModule`, `GraphqlModule`, `QueueModule` or `ScheduleModule` — and the root drops the line unless it pins a value; the queue's backend binding (`RedisQueueModule`) stays at the root. Nothing refuses the old shape: it still runs one transport of each type |
+   | a container built by hand importing `GraphqlModule`, `HealthModule`, `OpenApiModule`, `McpModule`, `StaticFilesModule` or `OAuthResourceModule`, seeding the module's config | seed `HttpConfig::default()` beside it: each imports `HttpModule` |
    | `McpModule::for_root(..)` declaring `server` or opening the posture at two imports | declare it at one; the other imports leave it unset |
    | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` |
    | `ReachableProviders::reaches(Some(&set), id)`, `ReachableProviders(set)` built by hand | `ReachableProviders::of(container, "<what you discover>")?.reaches(id)`; a test boots the modules it means through `TestApp`, `HeadlessApp` or `App::builder`, which seal the set they reach |
@@ -1088,7 +1090,9 @@ lists what the boot, a log or the wire shows when one is missed.
     `<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`, a refused login fails at once naming
     the host and the SQLSTATE; a bucket that does not exist fails the boot
     naming `<PREFIX>_STORAGE__URL`, and credentials the store refuses leave one
-    `warn`. A host the app links but never reaches — a scheduled method, a
+    `warn`. A host the app reaches whose edge's transport no module attaches is
+    a `warn` too — `host not served: its edge's transport is not attached`, with
+    the host, its module and the import that serves it. A host the app links but never reaches — a scheduled method, a
     `#[process]` method, a listener, a lifecycle hook, a health indicator — is a
     `warn` naming its `cause` and the remedy when it is this app's own code, and
     a `debug` line when it belongs to a dependency (`cause="dependency"`). A
@@ -1291,6 +1295,19 @@ lists what the boot, a log or the wire shows when one is missed.
   Rename what the `suggestion` names. The report, and what it leaves silent, is
   described under
   [A variable nothing reads](/configuration/env-reference/#a-variable-nothing-reads).
+- **A hand-written adapter importing its port alone**, in an app whose root no
+  longer imports the transport, serves nothing on that edge: `App::run` names
+  each such host at `warn` on `nest_rs::app` (`host not served: its edge's
+  transport is not attached`, with `edge`, `host`, `module` and the `import`
+  that serves it). Import that module in the adapter. An app run with no
+  transport at all files `app serves nothing: no transport is attached` at
+  `warn` and stops once its init hooks ran, for `StopCause::NoTransport`, where
+  it said `app ready transports=""` then drained for `TransportFailed`.
+- **An app importing `GraphqlModule`, `HealthModule`, `OpenApiModule`,
+  `McpModule`, `StaticFilesModule` or `OAuthResourceModule` without `HttpModule`**
+  now serves HTTP: each imports it, so the binary listens on
+  `<PREFIX>_HTTP__PORT`. A worker serving `/health` with no HTTP line of its own
+  opens that port.
 - **A `.env` key beside a config the app pins in code** reaches nothing — the
   pin takes its whole namespace off the cascade — and the boot names it once,
   at `warn`, with the import that pinned it. An app still pinning its port:
@@ -1299,8 +1316,9 @@ lists what the boot, a log or the wire shows when one is missed.
    WARN nest_rs::config: config variable from the .env cascade shadowed by a config pinned in code; export it into the real environment, or set it in the pin variable="NESTRS_HTTP__CORS_ORIGINS" namespace="http" pinned_by="`HttpModule::for_root(..)` at `imports[4]` of `ApiModule`"
   ```
 
-  Pin nothing (`HttpModule::for_root(None)`) and write the port in the app's
-  own `apps/<app>/.env`, or move the key's value into the pin.
+  Pin nothing — drop the root's `HttpModule::for_root(..)`, the adapters import
+  `HttpModule` bare — and write the port in the app's own `apps/<app>/.env`, or
+  move the key's value into the pin.
 - **The worker's drain window kept under
   `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`** is the one renamed variable
   the boot does not name: it reads `redis__worker` as another binary's

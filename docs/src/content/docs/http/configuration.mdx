@@ -5,30 +5,33 @@ sidebar:
   order: 2
 ---
 
-Importing `HttpModule::for_root(...)` in `AppModule.imports` attaches the
-HTTP transport at boot. Pass `None` to read every option from the
-environment — what `nestrs new` scaffolds, the port in the app's own `.env`:
+`HttpModule` attaches the HTTP transport at boot, and every module serving on
+it imports it bare — each HTTP, WebSocket and MCP adapter, and the framework's
+own mounts (`GraphqlModule`, `HealthModule`, `OpenApiModule`, …) — so the app
+imports what it serves and the transport attaches once. A bare import reads
+every option from the environment — what `nestrs new` scaffolds, the port in
+the app's own `.env`:
 
-```rust title="apps/hello/src/module.rs"
+```rust title="crates/features/src/hello/http/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::HttpModule;
 
-use features::hello::HelloHttpModule;
+use super::controller::HelloController;
+use crate::hello::HelloModule;
 
 #[module(
-    imports = [
-        HttpModule::for_root(None),
-        HelloHttpModule,
-    ],
+    imports = [HelloModule, HttpModule],
+    providers = [HelloController],
 )]
-pub struct HelloModule;
+pub struct HelloHttpModule;
 ```
 
 ```bash title="apps/hello/.env" frame="terminal"
 NESTRS_HTTP__PORT=3000
 ```
 
-Or pin `HttpConfig` in code, for what the code means whatever the machine:
+Or pin `HttpConfig` in code at the app's root, for what the code means
+whatever the machine — the one reason a root names the transport:
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;

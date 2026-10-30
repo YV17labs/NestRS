@@ -131,7 +131,6 @@ to EdDSA means removing its secret.
         SeaOrmDatabaseModule,
         ThrottlerModule::for_root(None),
         HealthModule,
-        HttpModule::for_root(None),
         AuthnModule::for_root(None),
         SocialModule,
         GithubSocialModule,
@@ -148,19 +147,24 @@ endpoint, the password login and the social redirects — and the throttler; its
 `OAuthServerModule::for_root`. It does **not** import `UsersHttpModule` — the issuer
 mints tokens, not users.
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
 #[module(
     imports = [
         ConfigModule::for_root(),
+        // …
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
+        // …
         HealthModule,
-        HttpModule::for_root(None),
+        // …
         AuthnModule,
         AuthzModule,
         AuthzGraphqlModule,
+        // …
         OrgsHttpModule,
+        // …
         UsersHttpModule,
+        // …
     ],
 )]
 pub struct ApiModule;
@@ -277,7 +281,6 @@ that document onto every `401` the app emits.
 
 ```rust title="apps/api/src/module.rs"
 #[module(imports = [
-    HttpModule::for_root(None),
     AuthnModule::for_root(None),
     OAuthResourceModule::for_root(None),
 ])]

@@ -7,9 +7,9 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-`GraphqlModule::for_root(None)` reads `<PREFIX>_GRAPHQL__*` from the
-environment; `GraphqlModule::for_root(config)` pins a *base* those
-variables still overlay, field by field. Every field is settable both ways —
+A bare `GraphqlModule` import — the one every GraphQL adapter writes — reads
+`<PREFIX>_GRAPHQL__*` from the environment; `GraphqlModule::for_root(config)`
+at the app's root pins a *base* those variables still overlay, field by field. Every field is settable both ways —
 pin host behaviour in code, leave secrets and per-environment toggles to env.
 `Default` is production-safe: the playground, introspection and the SDL
 emit stay off, the mount path is `/graphql`. The bare import starts from
@@ -93,12 +93,15 @@ or the same in a pinned config — is honoured, and its boot says so once at
 
 Every module's config follows this rule (framework-wide):
 
-```rust title="apps/api/src/module.rs — env-driven"
+```rust title="crates/features/src/posts/graphql/module.rs — env-driven"
 use nest_rs::core::module;
 use nest_rs::graphql::GraphqlModule;
 
-#[module(imports = [GraphqlModule::for_root(None)])]
-pub struct AppModule;
+use super::resolver::PostsResolver;
+use crate::posts::PostsModule;
+
+#[module(imports = [PostsModule, GraphqlModule], providers = [PostsResolver])]
+pub struct PostsGraphqlModule;
 ```
 
 ```bash title=".env.production"
@@ -144,8 +147,9 @@ An operation's answer is `application/json`, status `200` whatever its
 operation in it succeeded, and every header a resolver set with
 `ctx.insert_http_header` or `ctx.append_http_header`.
 
-The path is a route on the HTTP transport, so the surrounding
-`HttpModule` config (host, port, CORS, TLS, the body cap) applies as usual.
+The path is a route on the HTTP transport, which `GraphqlModule` imports bare,
+so the surrounding `HttpModule` config (host, port, CORS, TLS, the body cap)
+applies as usual.
 [HTTP / Configuration](/http/) covers the transport itself.
 
 ## The playground

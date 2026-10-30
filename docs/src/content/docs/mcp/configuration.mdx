@@ -12,7 +12,6 @@ on the defaults.
 
 ```rust title="apps/api/src/module.rs"
 #[module(imports = [
-    HttpModule::for_root(None),
     McpModule::for_root(McpConfig {
         allowed_hosts: vec!["mcp.example.com".into()],
         ..Default::default()

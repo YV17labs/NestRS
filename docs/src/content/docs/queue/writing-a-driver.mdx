@@ -194,8 +194,8 @@ in lapses while your storage still answers: refuse it at boot with
 `nest_rs::queue::lease_fits_renewal(lease, answer_bound)`, naming the settings
 that lengthen the one or shorten the other, as `renewable` does.
 
-An app running jobs imports `QueueModule::for_root(None)` beside your module;
-one only pushing does not. Checkpoint: the worker app's boot logs
+An app running jobs imports your module beside its queue adapters, which
+import `QueueModule`; one only pushing imports no queue adapter, so no worker. Checkpoint: the worker app's boot logs
 `attached module-contributed transport transport="QueueWorker"`.
 
 ## Budget and net

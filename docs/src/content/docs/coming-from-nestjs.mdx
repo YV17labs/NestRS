@@ -82,13 +82,14 @@ exported. NestRS keeps one. `#[module]` accepts exactly two keys, `imports` and
 
 ```rust title="crates/features/src/users/http/module.rs (from the demo)"
 use nest_rs::core::module;
+use nest_rs::http::HttpModule;
 
 use super::controller::UsersController;
 use crate::authz::AuthzModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, AuthzModule],
+    imports = [UsersModule, AuthzModule, HttpModule],
     providers = [UsersController],
 )]
 pub struct UsersHttpModule;
@@ -101,7 +102,8 @@ resolved by the same access-graph check. What makes one an HTTP route table is
 module list has nothing left to say about it.
 
 The payoff is per-binary composition. A transport mounts only when its module is
-reachable from the running app's root, so one feature crate serves an API that
+reachable from the running app's root — the adapter imports it, as
+`UsersHttpModule` imports `HttpModule` — so one feature crate serves an API that
 imports `UsersHttpModule` and `UsersGraphqlModule` and a worker that imports
 neither. Dropping the import unmounts the routes, and there is no second list to
 keep in sync with the first.

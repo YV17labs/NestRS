@@ -397,12 +397,12 @@ pub struct OrgsModule;
 ```
 
 ```rust title="crates/features/src/orgs/http/module.rs"
-#[module(imports = [OrgsModule, AuthzModule], providers = [OrgsController])]
+#[module(imports = [OrgsModule, AuthzModule, HttpModule], providers = [OrgsController])]
 pub struct OrgsHttpModule;
 ```
 
-The HTTP transport and the unit of work each request runs in
-activate at the app root with `HttpModule::for_root(...)`,
+The HTTP transport comes with the adapter, which imports `HttpModule`; the
+unit of work each request runs in activates at the app root with
 `SeaOrmModule::for_root(...)` and `SeaOrmDatabaseModule`.
 Importing only `OrgsModule` (no HTTP module) gives a worker the same
 `OrgsService` without mounting the endpoints — that is the port + adapter

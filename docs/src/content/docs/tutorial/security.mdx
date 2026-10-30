@@ -149,15 +149,16 @@ tenant.
 
 The HTTP adapter now needs the authz module:
 
-```rust title="crates/features/src/users/http/module.rs (from the demo)" {3, 7}
+```rust title="crates/features/src/users/http/module.rs (from the demo)" {5, 9}
 use nest_rs::core::module;
+use nest_rs::http::HttpModule;
 
 use super::controller::UsersController;
 use crate::authz::AuthzModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, AuthzModule],
+    imports = [UsersModule, AuthzModule, HttpModule],
     providers = [UsersController],
 )]
 pub struct UsersHttpModule;
@@ -176,14 +177,12 @@ use features::authn::AuthnModule;
 use features::authz::AuthzModule;
 use features::users::UsersHttpModule;
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
 #[module(
     imports = [
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        HttpModule::for_root(None),
         AuthnModule,
         AuthzModule,
         UsersHttpModule,

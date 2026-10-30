@@ -98,7 +98,8 @@ fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
 }
 ```
 
-The app imports it beside `ScheduleModule` in every app that runs such a job.
+Every app that runs such a job imports it at its root, beside the schedule
+adapters, which import `ScheduleModule`.
 
 ## Budget and net
 

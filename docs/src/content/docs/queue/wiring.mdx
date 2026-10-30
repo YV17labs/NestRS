@@ -19,7 +19,7 @@ graph from each app's root.
 |---|---|---|
 | `RedisModule::for_root(cfg)` | Opens the Redis connection every Redis binding shares — the queue's producer and consumer, the rate-limit store, the schedule's lock; a [second Valkey](/queue/topologies/#a-second-valkey) is a named instance. | Every app that touches Redis. |
 | `RedisQueueModule` | Binds the queue port over that connection: the producer, `Arc<dyn JobProducer>`, the portable handle a feature injects to enqueue, and the consumer the worker runs jobs through. A bare import reads `<PREFIX>_REDIS__QUEUE__*`; `for_root(RedisQueueConfig { lease })` pins the base — see [Delivery on Redis](/queue/delivery/#configuration). | Every app that enqueues or runs jobs. |
-| `QueueModule::for_root(cfg)` | From `nest_rs::queue`: contributes the port's `QueueWorker` transport, which discovers the reachable `#[process]` methods at boot and runs each over the bound consumer; its own setting is the drain window, `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`. | Worker apps only. |
+| `QueueModule` | From `nest_rs::queue`: contributes the port's `QueueWorker` transport, which discovers the reachable `#[process]` methods at boot and runs each over the bound consumer; its own setting is the drain window, `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, which `for_root(cfg)` pins at the app's root. | Each queue adapter (`AudioQueueModule`), bare — so only an app importing one runs a worker. |
 
 The `redis-queue` feature compiles all three. Each Redis binding is a feature of
 its own — `redis-queue`, `redis-throttler`, `redis-schedule` — and `redis` is the
@@ -62,15 +62,15 @@ dead".
 
 ## The worker app
 
-The worker imports the connection, the queue's Redis binding, the port's worker
-and each feature's queue adapter. That's it — `AudioQueueModule` pulls in the
-`AudioModule` port itself.
+The worker imports the connection, the queue's Redis binding and each
+feature's queue adapter. That's it — `AudioQueueModule` pulls in the
+`AudioModule` port and the `QueueModule` that runs its jobs; the backend
+binding is the one line the adapter leaves to the root, which chooses it.
 
 ```rust title="apps/worker/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 // …
-use nest_rs::queue::QueueModule;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 // …
 
@@ -83,7 +83,6 @@ use features::notifications::{NotificationsQueueModule, NotificationsScheduleMod
         // …
         RedisModule::for_root(None),
         RedisQueueModule,
-        QueueModule::for_root(None),
         // …
         AudioQueueModule,
         NotificationsQueueModule,
@@ -107,11 +106,12 @@ At boot:
    connection's — that bind `RedisQueueProducer` as `Arc<dyn JobProducer>` and
    the Redis consumer as the port's `BoundConsumer`, with its lease read from
    `<PREFIX>_REDIS__QUEUE__*`.
-4. `QueueModule::for_root(None)` contributes the `QueueWorker` transport, with
-   its drain window read from `<PREFIX>_QUEUE__*`.
-5. `AudioQueueModule` brings `AudioProcessor` (the `#[processor]` host) and
-   its `#[process]` methods into the reachable set.
-6. `QueueWorker::configure` discovers `inventory::iter::<ProcessMethod>()`,
+4. `AudioQueueModule` brings `AudioProcessor` (the `#[processor]` host) and
+   its `#[process]` methods into the reachable set, and imports
+   `QueueModule`, which contributes the `QueueWorker` transport — once,
+   however many adapters import it — with its drain window read from
+   `<PREFIX>_QUEUE__*`.
+5. `QueueWorker::configure` discovers `inventory::iter::<ProcessMethod>()`,
    keeps only the methods whose provider is reachable, refuses what the
    backend cannot honour, and logs each one. It then prepares the consumer,
    which creates each queue's consumer group and loads the scripts. `serve`
@@ -120,30 +120,31 @@ At boot:
 ## The producer-only app
 
 A producer-only binary imports `RedisModule::for_root(...)` and
-`RedisQueueModule`, and skips `QueueModule` entirely. It gets
+`RedisQueueModule`, and no queue adapter — so no `QueueModule`. It gets
 `Arc<dyn JobProducer>` to push with — and no worker, no discovered
 inventory, no read of any queue.
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
+// …
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
-use nest_rs::schedule::ScheduleModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
-
+// …
 use features::audio::{AudioHttpModule, AudioScheduleModule};
+// …
 
 #[module(
     imports = [
         ConfigModule::for_root(),
+        // …
         SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
         RedisModule::for_root(None),
         RedisQueueModule,
-        ScheduleModule,
+        // …
         RedisScheduleModule,
-        HttpModule::for_root(None),
+        // …
         AudioHttpModule,
         AudioScheduleModule,
     ],
@@ -170,7 +171,7 @@ The worker depends on the shared `features` crate, so `AudioController`
 and `AudioResolver` are **compiled in**. They are not **active**: the
 worker doesn't import `AudioHttpModule` or `AudioGraphqlModule`, so
 the access graph never marks those providers as reachable. Every
-transport — `HttpTransport`, `QueueWorker`, `GraphqlTransport` — filters
+transport and mount — `HttpTransport`, `QueueWorker`, `/graphql` — filters
 its inventory through the `ReachableProviders` set the access graph
 computes from the running app's root. Linked but unreachable ⇒ inert,
 said once at boot — at `debug` for these, which live in a shared crate and

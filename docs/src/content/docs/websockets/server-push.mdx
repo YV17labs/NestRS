@@ -47,7 +47,9 @@ pub struct NotifyModule;
 That's the whole wiring. Any handler that calls
 `NotifyService::announce` reaches every live WebSocket connection, even
 the connections held by an entirely different gateway. The registry
-does not care who recorded the message.
+does not care who recorded the message. `WsModule` attaches no transport, so a
+binary that imports this port only to push — a worker — opens no listener; the
+sockets are served by the binary whose WebSocket adapter imports `HttpModule`.
 
 ## What the server exposes
 

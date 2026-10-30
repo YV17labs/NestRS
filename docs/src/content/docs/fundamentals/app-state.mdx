@@ -90,7 +90,7 @@ injects it like any other provider — and only the kernel moves it.
 | Method | Answers |
 |---|---|
 | `state()` | `AppState::Starting` from the start of the boot, `Ready` once every transport listens and they serve, `Draining` once a stop is asked |
-| `cause()` | `None` until the app drains, then why: `StopCause::Interrupt` (`SIGINT`, or Ctrl-C on Windows), `Terminate` (`SIGTERM`), `TransportFailed` (a transport returned an error, panicked, or stopped serving on its own), `BootFailed` (a transport's `configure` or `listen`, or an init hook, failed before it served), `Closed` (`App::close` ended an app that was not serving) |
+| `cause()` | `None` until the app drains, then why: `StopCause::Interrupt` (`SIGINT`, or Ctrl-C on Windows), `Terminate` (`SIGTERM`), `TransportFailed` (a transport returned an error, panicked, or stopped serving on its own), `NoTransport` (`run` found no transport attached, so nothing served), `BootFailed` (a transport's `configure` or `listen`, or an init hook, failed before it served), `Closed` (`App::close` ended an app that was not serving) |
 | `stopping()` | a `CancellationToken`, cancelled the instant the app turns `Draining` |
 | `ready().await` | `true` once the app is `Ready`, `false` once it drains, whether or not it served first |
 

@@ -45,8 +45,9 @@ use nest_rs::openapi::OpenApiModule;
 pub struct ApiModule;
 ```
 
-That's the whole opt-in. The module self-mounts both endpoints on the existing
-`HttpTransport` — same port, same CORS, no second server. `None` reads
+That's the whole opt-in. The module self-mounts both endpoints on the
+`HttpTransport` it imports — the one the app's HTTP adapters serve on: same
+port, same CORS, no second server. `None` reads
 `<PREFIX>_OPENAPI__*` from the [`.env` cascade](/configuration/); pass an
 `OpenApiConfig` to pin it in code instead.
 

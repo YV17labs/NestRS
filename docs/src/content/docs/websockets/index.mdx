@@ -71,26 +71,26 @@ wrap it, and so do the ones the gateway and the message bind — see
 
 Wire it in like any other provider:
 
-```rust title="apps/api/src/module.rs"
+```rust title="crates/features/src/chat/ws/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::HttpModule;
 use nest_rs::ws::WsModule;
 
-use features::chat::PingGateway;
+use super::gateway::PingGateway;
 
 #[module(
-    imports = [
-        HttpModule::for_root(None),
-        WsModule,
-    ],
+    imports = [HttpModule, WsModule],
     providers = [PingGateway],
 )]
-pub struct LiveModule;
+pub struct ChatWsModule;
 ```
 
-`HttpModule` for the transport, `WsModule` for the connection registry
-(`WsServer`). The gateway itself is listed in `providers` — no
-`.transport(...)` call, no second port.
+`HttpModule` for the transport the upgrade arrives on, `WsModule` for the
+connection registry (`WsServer`); the app imports `ChatWsModule`. The gateway
+itself is listed in `providers` — no `.transport(...)` call, no second port.
+`WsModule` attaches no transport of its own: a service that pushes to
+clients imports it at its port, and a binary reaching that port opens no
+listener unless an adapter serving on HTTP is imported too.
 
 `WsModule` is **not optional** for a default-namespace gateway: every
 `WsClient` a handler touches reads that registry. A gateway declares the
@@ -98,8 +98,8 @@ dependency, so leaving it out fails the boot through the access graph, naming
 both the missing type and the module that provides it:
 
 ```text frame="terminal"
-Error: module access violation: `PingGateway` (in module `LiveModule`) depends on
-`WsServer`, but `LiveModule` imports no module that provides it. `WsServer` is
+Error: module access violation: `PingGateway` (in module `ChatWsModule`) depends on
+`WsServer`, but `ChatWsModule` imports no module that provides it. `WsServer` is
 provided by `WsModule` — add `WsModule` to `#[module(imports = [...])]` …
 ```
 

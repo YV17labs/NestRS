@@ -10,10 +10,11 @@ import { Aside } from '@astrojs/starlight/components';
 Background work shares the rest of the framework's shape. A queue
 handler is a method on any `#[injectable]` provider, tagged
 `#[process(queue = <Name>Queue, retries)]` inside a
-`#[processor]` impl block. Importing `QueueModule` in the worker app
-attaches the port's worker at boot, which discovers the reachable methods
-and runs each with permits of its own. A producer-only app skips that
-import and only pushes — same crate, same types, one less module.
+`#[processor]` impl block. The queue adapter listing it imports
+`QueueModule`, which attaches the port's worker at boot; the worker discovers
+the reachable methods and runs each with permits of its own. A producer-only
+app imports no queue adapter and only pushes — same crate, same types, no
+worker.
 
 A queue is named by a **type**, not a string. `#[queue(name = "...", job =
 <Payload>)]` on a unit struct at the feature port declares the wire name
@@ -314,16 +315,17 @@ Three modules, three roles:
 - **`RedisQueueModule`** — binds the queue port over that connection: the
   producer, as `Arc<dyn JobProducer>`, and the consumer the worker runs jobs
   through. Every app that enqueues or runs jobs imports it.
-- **`QueueModule::for_root(None)`** — from `nest_rs::queue`, attaches the
-  port's `QueueWorker` transport. At boot it discovers the reachable
-  `#[process]` methods, runs each over the bound consumer, and drains them
-  with the app. A producer-only app does NOT import this.
+- **`QueueModule`** — from `nest_rs::queue`, attaches the port's
+  `QueueWorker` transport. At boot it discovers the reachable `#[process]`
+  methods, runs each over the bound consumer, and drains them with the app.
+  Each queue adapter imports it bare, so the app importing the adapter runs
+  its jobs and a producer-only app, which imports none, runs no worker;
+  `QueueModule::for_root(cfg)` at the root only pins the drain window.
 
 ```rust title="apps/worker/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 // …
-use nest_rs::queue::QueueModule;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 // …
 
@@ -336,7 +338,6 @@ use features::audio::AudioQueueModule;
         // …
         RedisModule::for_root(None),
         RedisQueueModule,
-        QueueModule::for_root(None),
         // …
         AudioQueueModule,
         // …
@@ -348,8 +349,8 @@ pub struct WorkerModule;
 The demo's worker also opens the database — its notifications job writes a
 row — runs the notifications purge on a schedule, and serves health probes on
 HTTP. `AudioQueueModule` imports the
-`AudioModule` port itself, so the app lists only the adapter — registration is
-idempotent.
+`AudioModule` port and `QueueModule` itself, so the app lists only the adapter
+and the backend binding it chooses — registration is idempotent.
 
 `main` is the universal skeleton:
 

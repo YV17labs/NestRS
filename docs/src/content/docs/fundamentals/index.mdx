@@ -99,7 +99,7 @@ use features::blog::BlogController;
 use features::blog::BlogService;
 
 #[module(
-    imports = [HttpModule::for_root(None)],
+    imports = [HttpModule],
     providers = [BlogService, BlogController],
 )]
 pub struct BlogModule;

@@ -95,9 +95,10 @@ did not authenticate.
 ## The GraphQL module
 
 The adapter imports the port (`UsersModule`), the authz module
-(`AuthzGraphqlModule`), the org port whose service hosts the auto-emitted
-loader — the entity exposes a `belongs_to` org relation (next section) — and
-`GraphqlModule`, the endpoint its operations are served on:
+(`AuthzGraphqlModule`), the org and post ports, whose services host the
+auto-emitted loaders — the entity exposes relations, a `belongs_to` org (next
+section) and a `has_many` of posts — and `GraphqlModule`, the endpoint its
+operations are served on:
 
 ```rust title="crates/features/src/users/graphql/module.rs (from the demo)"
 use nest_rs::core::module;
@@ -106,10 +107,11 @@ use nest_rs::graphql::GraphqlModule;
 use super::resolver::UsersResolver;
 use crate::authz::graphql::AuthzGraphqlModule;
 use crate::orgs::OrgsModule;
+use crate::posts::PostsModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, OrgsModule, AuthzGraphqlModule, GraphqlModule],
+    imports = [UsersModule, OrgsModule, PostsModule, AuthzGraphqlModule, GraphqlModule],
     providers = [UsersResolver],
 )]
 pub struct UsersGraphqlModule;
@@ -220,10 +222,11 @@ each batched query the loader issues.
 
 <Aside type="caution">
 Add the `OrgsModule` import to `UsersGraphqlModule` when the
-`belongs_to` is present — the auto-emitted `User.org` resolver needs
-`OrgsServiceById` reachable from the access graph. Without it, the
-boot warning surfaces and the field returns `null` instead of
-panicking. The reference module's doc comment carries the rationale.
+`belongs_to` is present — the auto-emitted `User.org` resolver reads
+`OrgsServiceById`, a loader of `OrgsService`, which the app must reach.
+Without it the app does not boot: the schema build names the field, the
+entity declaring it and the module to import, before any query could
+select it.
 </Aside>
 
 ## Emit the SDL

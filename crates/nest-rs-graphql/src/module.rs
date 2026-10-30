@@ -137,6 +137,7 @@ fn mount(
             ),
         }
     }
+    crate::loader::check_served_relations(container, &schema.names().into_iter().collect())?;
     let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
     let sdl = schema.sdl();
     let units = OperationUnits::new(

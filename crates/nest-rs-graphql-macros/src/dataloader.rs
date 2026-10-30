@@ -105,6 +105,16 @@ fn dataloader_for_method(
         }
 
         #(#cfgs)*
+        impl ::nest_rs_graphql::__private::LoaderOwner for #loader_name {
+            fn owner() -> (::core::any::TypeId, &'static str) {
+                (
+                    ::core::any::TypeId::of::<#self_ty>(),
+                    ::core::any::type_name::<#self_ty>(),
+                )
+            }
+        }
+
+        #(#cfgs)*
         impl ::nest_rs_graphql::async_graphql::dataloader::Loader<#key_ty> for #loader_name {
             type Value = #value_ty;
             type Error = #error_ty;

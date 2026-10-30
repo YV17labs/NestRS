@@ -230,3 +230,214 @@ fn a_key_is_named_by_the_variant_sea_orm_derives() {
         TypeId::of::<shelves::ShelvesServiceByOwnerID>(),
     );
 }
+
+pub(super) mod racks {
+    use super::*;
+
+    #[expose(name = "Rack", service = RacksService, graphql)]
+    #[sea_orm::model]
+    #[derive(Clone, Debug, DeriveEntityModel)]
+    #[sea_orm(
+        table_name = "racks",
+        model_attrs(derive(PartialEq, Serialize, Deserialize))
+    )]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[sea_orm(has_many)]
+        #[expose]
+        pub bins: HasMany<super::bins::Entity>,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    #[nest_rs_core::injectable]
+    pub(crate) struct RacksService;
+
+    impl CrudService for RacksService {
+        type Entity = Entity;
+    }
+}
+
+pub(super) mod bins {
+    use super::*;
+
+    #[expose(name = "Bin", service = BinsService, graphql)]
+    #[sea_orm::model]
+    #[derive(Clone, Debug, DeriveEntityModel)]
+    #[sea_orm(
+        table_name = "bins",
+        model_attrs(derive(PartialEq, Serialize, Deserialize))
+    )]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[expose]
+        pub rack_id: Uuid,
+        #[sea_orm(belongs_to, from = "rack_id", to = "id")]
+        #[expose]
+        pub rack: HasOne<super::racks::Entity>,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    #[nest_rs_core::injectable]
+    pub(crate) struct BinsService;
+
+    impl CrudService for BinsService {
+        type Entity = Entity;
+    }
+}
+
+#[nest_rs_core::module(providers = [racks::RacksService])]
+struct RacksModule;
+
+#[nest_rs_core::module(providers = [bins::BinsService])]
+struct BinsModule;
+
+/// Serves `Bin`, whose `rack` reads a loader `RacksService` owns.
+#[nest_rs_graphql::resolver]
+struct BinsResolver;
+
+#[nest_rs_graphql::operations]
+impl BinsResolver {
+    #[query]
+    #[public]
+    async fn bin(&self) -> Option<bins::Bin> {
+        None
+    }
+}
+
+#[nest_rs_core::module(
+    imports = [
+        nest_rs_graphql::GraphqlModule::for_root(None),
+        nest_rs_seaorm::SeaOrmDatabaseModule,
+        BinsModule,
+    ],
+    providers = [BinsResolver],
+)]
+struct BinsGraphqlModule;
+
+#[tokio::test]
+async fn a_served_relation_whose_loader_owner_is_not_imported_refuses_the_boot_naming_it() {
+    let refused = crate::over_an_unconnected_pool()
+        .module::<BinsGraphqlModule>()
+        .build()
+        .await
+        .err()
+        .expect("every query selecting `rack` would fail");
+    let refused = format!("{refused:#}");
+    for named in [
+        "`Bin.rack`",
+        "bins::Entity",
+        "RacksService",
+        "import `RacksModule`",
+    ] {
+        assert!(refused.contains(named), "names {named}: {refused}");
+    }
+}
+
+#[nest_rs_core::module(imports = [BinsGraphqlModule, RacksModule])]
+struct ShelvedBinsModule;
+
+#[tokio::test]
+async fn a_served_relation_whose_loader_owner_is_imported_boots() {
+    crate::over_an_unconnected_pool()
+        .module::<ShelvedBinsModule>()
+        .build()
+        .await
+        .expect("the loader `rack` reads is reached");
+}
+
+/// Serves `Rack`, whose `bins` reads the loader `BinsService` owns through the
+/// child's foreign key — never one of the parent's.
+#[nest_rs_graphql::resolver]
+struct RacksResolver;
+
+#[nest_rs_graphql::operations]
+impl RacksResolver {
+    #[query]
+    #[public]
+    async fn rack(&self) -> Option<racks::Rack> {
+        None
+    }
+}
+
+#[nest_rs_core::module(
+    imports = [
+        nest_rs_graphql::GraphqlModule::for_root(None),
+        nest_rs_seaorm::SeaOrmDatabaseModule,
+        RacksModule,
+    ],
+    providers = [RacksResolver],
+)]
+struct RacksGraphqlModule;
+
+#[tokio::test]
+async fn a_served_has_many_whose_child_service_is_not_imported_refuses_the_boot_naming_it() {
+    let refused = crate::over_an_unconnected_pool()
+        .module::<RacksGraphqlModule>()
+        .build()
+        .await
+        .err()
+        .expect("every query selecting `bins` would fail");
+    let refused = format!("{refused:#}");
+    for named in [
+        "`Rack.bins`",
+        "racks::Entity",
+        "BinsService",
+        "import `BinsModule`",
+    ] {
+        assert!(refused.contains(named), "names {named}: {refused}");
+    }
+    assert!(
+        !refused.contains("`Bin.rack`"),
+        "the child's own relation reads the parent's loader, which is reached: {refused}"
+    );
+}
+
+#[nest_rs_core::module(imports = [RacksGraphqlModule, BinsModule])]
+struct BinnedRacksModule;
+
+#[tokio::test]
+async fn a_served_has_many_whose_child_service_is_imported_boots() {
+    crate::over_an_unconnected_pool()
+        .module::<BinnedRacksModule>()
+        .build()
+        .await
+        .expect("the loader `bins` reads is reached");
+}
+
+/// Serves nothing that relates: `Bin` is not in its schema.
+#[nest_rs_graphql::resolver]
+struct RackCountResolver;
+
+#[nest_rs_graphql::operations]
+impl RackCountResolver {
+    #[query]
+    #[public]
+    async fn rack_count(&self) -> u32 {
+        0
+    }
+}
+
+#[nest_rs_core::module(
+    imports = [nest_rs_graphql::GraphqlModule::for_root(None), BinsModule],
+    providers = [RackCountResolver],
+)]
+struct UnrelatedGraphqlModule;
+
+#[tokio::test]
+async fn a_relation_its_schema_does_not_serve_boots_and_counts_its_loader_at_warn() {
+    let logs = nest_rs_testing::LogCapture::install();
+    crate::over_an_unconnected_pool()
+        .module::<UnrelatedGraphqlModule>()
+        .module::<nest_rs_seaorm::SeaOrmDatabaseModule>()
+        .build()
+        .await
+        .expect("a relation no served type carries is no defect of this app");
+    let line = logs.expect_one("nest_rs::graphql", "dataloaders linked but unreachable");
+    assert_eq!(line.level, "warn");
+}

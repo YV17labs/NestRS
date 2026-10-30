@@ -2,14 +2,19 @@
 //!
 //! `#[dataloader]` generates one batching loader per method and submits a
 //! [`GraphqlLoaderRegistration`]; [`LoaderExtension`] rebuilds it per request
-//! and seeds it into the GraphQL context for a `#[field_resolver]` to read.
+//! and seeds it into the GraphQL context for a `#[field_resolver]` to read. A
+//! field whose resolver reads one — an exposed relation — submits a
+//! [`GraphqlRelationRegistration`], so a served field whose loader's owner the
+//! app does not reach refuses the boot rather than every query selecting it.
 //!
 //! async-graphql runs every batch on a task of its own, so batches run in the
 //! `/graphql` mount's [`DetachedWork`], which the transport stops at the close
 //! of its shutdown window.
 
 use std::any::TypeId;
+use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_graphql::async_trait::async_trait;
@@ -19,7 +24,8 @@ use async_graphql::extensions::{
 use async_graphql::{Request, ServerResult};
 use futures_util::future::Either;
 use nest_rs_core::{
-    Container, Continuation, ReachableProviders, RequestContinuation, UngatedDiscoveryError,
+    Container, Continuation, InertHost, ReachableProviders, RequestContinuation,
+    UngatedDiscoveryError, anyhow,
 };
 use nest_rs_http::DetachedWork;
 use tracing::Instrument;
@@ -34,6 +40,35 @@ pub struct GraphqlLoaderRegistration {
 }
 
 inventory::collect!(GraphqlLoaderRegistration);
+
+/// The provider a `#[dataloader]` loader batches through, which a field
+/// reading the loader needs the app to reach — said by a function, since the
+/// provider may be private where its loader is not.
+pub trait LoaderOwner {
+    /// The `#[dataloader]` impl block's own type, and its name as
+    /// `std::any::type_name` spells it.
+    fn owner() -> (TypeId, &'static str);
+}
+
+/// One field whose resolver reads a loader — an exposed relation — with the
+/// object it is served on: the schema build refuses it when that object is
+/// served and the loader's owner is not reached.
+pub struct GraphqlRelationRegistration {
+    /// The GraphQL name of the object the field is served on.
+    pub parent: fn() -> String,
+    /// The field's GraphQL name.
+    pub field: &'static str,
+    /// The entity declaring the relation, as `std::any::type_name` spells it.
+    pub entity: fn() -> &'static str,
+    /// The loader's owner type, read against the reachable providers, and its
+    /// name ([`LoaderOwner::owner`]).
+    pub owner: fn() -> (TypeId, &'static str),
+    /// Where the relation is declared (`module_path!()`), which tells the app's
+    /// own declaration from a dependency's.
+    pub origin: &'static str,
+}
+
+inventory::collect!(GraphqlRelationRegistration);
 
 /// The spawner a request's DataLoader batches run through, filed under
 /// `batches`.
@@ -129,20 +164,72 @@ impl LoaderExtensionFactory {
     }
 }
 
-/// Freeze the seeds of the loaders the app reaches, counting at `warn` those
-/// it does not.
+/// Freeze the seeds of the loaders the app reaches.
 fn reachable_seeds(container: &Container) -> Result<Arc<[LoaderSeed]>, UngatedDiscoveryError> {
     let reachable = ReachableProviders::of(container, LOADERS)?;
-    warn_unreachable_loaders(&reachable);
     Ok(inventory::iter::<GraphqlLoaderRegistration>()
         .filter(|reg| reachable.reaches((reg.owner_type_id)()))
         .map(|reg| reg.seed)
         .collect())
 }
 
+/// Refuse every relation the schema serves whose loader's owner the app does
+/// not reach — each query selecting one would fail — naming the field, its
+/// entity and the module to import; then count at `warn` the unreached loaders
+/// no served relation reads. A relation is served when the schema's `names` —
+/// every type and field it declares (`Schema::names`) — hold its object and its
+/// field.
+pub(crate) fn check_served_relations(
+    container: &Container,
+    names: &HashSet<String>,
+) -> anyhow::Result<()> {
+    let reachable = ReachableProviders::of(container, LOADERS)?;
+    let mut unreached: Vec<String> = inventory::iter::<GraphqlRelationRegistration>()
+        .filter(|relation| {
+            names.contains((relation.parent)().as_str())
+                && names.contains(relation.field)
+                && !reachable.reaches((relation.owner)().0)
+        })
+        .map(|relation| unreached_relation(container, relation))
+        .collect();
+    if !unreached.is_empty() {
+        unreached.sort_unstable();
+        anyhow::bail!(
+            "a served relation reads a loader this app does not reach, so every query \
+             selecting it would fail: {}",
+            unreached.join("; ")
+        );
+    }
+    warn_unreachable_loaders(&reachable);
+    Ok(())
+}
+
+/// What a refusal says of one relation: the field, its entity, the loader's
+/// owner and the import its cause prescribes.
+fn unreached_relation(container: &Container, relation: &GraphqlRelationRegistration) -> String {
+    let (owner_type, owner) = (relation.owner)();
+    let remedy = match nest_rs_core::inert_host(container, relation.origin, owner_type) {
+        InertHost::ModuleNotImported { module }
+        | InertHost::Dependency {
+            module: Some(module),
+        } => Cow::Owned(format!(
+            "import `{module}` into the module serving `{}`",
+            (relation.parent)()
+        )),
+        cause => cause.hint(),
+    };
+    format!(
+        "`{}.{}` (declared on `{}`) reads a loader of `{owner}`: {remedy}",
+        (relation.parent)(),
+        relation.field,
+        (relation.entity)(),
+    )
+}
+
 /// Warn once at schema build about `#[dataloader]`s linked into the binary
-/// whose owner's module is unreachable. Only a count: a registration carries
-/// the owner's `TypeId`, not a name.
+/// whose owner's module is unreachable, which no served `#[expose]` relation
+/// reads. Only a count: a registration carries the owner's `TypeId`, not a
+/// name, and a hand-written `#[field_resolver]` registers no loader it reads.
 fn warn_unreachable_loaders(reachable: &ReachableProviders) {
     let skipped = inventory::iter::<GraphqlLoaderRegistration>()
         .filter(|reg| !reachable.reaches((reg.owner_type_id)()))
@@ -151,7 +238,7 @@ fn warn_unreachable_loaders(reachable: &ReachableProviders) {
         tracing::warn!(
             target: crate::TARGET,
             count = skipped,
-            hint = "import the modules that provide these loaders; relation fields backed by them error at query time",
+            hint = "no exposed relation this schema serves reads them, and a #[field_resolver] reading one fails at query time; import the modules that provide them if one should",
             "dataloaders linked but unreachable",
         );
     }
@@ -224,6 +311,39 @@ mod tests {
         }
     }
 
+    inventory::submit! {
+        GraphqlRelationRegistration {
+            parent: || "Shelf".to_owned(),
+            field: "owner",
+            entity: || "shelves::Entity",
+            owner: || (TypeId::of::<AbsentOwner>(), "AbsentOwner"),
+            origin: module_path!(),
+        }
+    }
+
+    #[test]
+    fn a_served_relation_whose_loader_owner_is_unreached_is_refused_naming_the_field() {
+        let served = names(&["Query", "shelf", "Shelf", "owner"]);
+
+        let refused = check_served_relations(&reached(&[]), &served)
+            .expect_err("every query selecting `owner` would fail")
+            .to_string();
+
+        assert!(
+            refused.contains(
+                "`Shelf.owner` (declared on `shelves::Entity`) reads a loader of `AbsentOwner`"
+            ),
+            "{refused}"
+        );
+        check_served_relations(&reached(&[TypeId::of::<AbsentOwner>()]), &served)
+            .expect("its owner reached, the relation is served");
+    }
+
+    /// A schema's names, as `Schema::names` lists them.
+    fn names(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
     /// `ReachableProviders` seeded with exactly `types`.
     fn reached(types: &[TypeId]) -> Container {
         Container::builder()
@@ -237,7 +357,8 @@ mod tests {
     #[test]
     fn a_loader_whose_owner_module_is_not_imported_is_counted_at_boot() {
         let logs = nest_rs_testing::LogCapture::install();
-        reachable_seeds(&reached(&[])).expect("the set is seeded");
+        check_served_relations(&reached(&[]), &names(&["Query", "ok"]))
+            .expect("no served field reads it");
 
         let event = logs.expect_one("nest_rs::graphql", "dataloaders linked but unreachable");
         assert_eq!(event.level, "warn");
@@ -262,8 +383,10 @@ mod tests {
     fn a_loader_whose_owner_is_reachable_is_not_reported() {
         let logs = nest_rs_testing::LogCapture::install();
         let container = reached(&[TypeId::of::<AbsentOwner>()]);
-        let seeds = reachable_seeds(&container).expect("the set is seeded");
+        check_served_relations(&container, &names(&["Query", "ok"]))
+            .expect("no served relation is unreached");
         logs.expect_none("nest_rs::graphql", "dataloaders linked but unreachable");
+        let seeds = reachable_seeds(&container).expect("the set is seeded");
         assert!(!seeds.is_empty(), "and it is seeded rather than skipped");
     }
 

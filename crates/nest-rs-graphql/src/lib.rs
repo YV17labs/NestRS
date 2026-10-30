@@ -61,7 +61,9 @@ pub mod __private {
     pub use crate::context::{ENDPOINT, connection_data};
     pub use crate::ctx::ctx_parameter;
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate, FieldFailure};
-    pub use crate::loader::{GraphqlLoaderRegistration, batch_spawner};
+    pub use crate::loader::{
+        GraphqlLoaderRegistration, GraphqlRelationRegistration, LoaderOwner, batch_spawner,
+    };
     pub use crate::operation::{
         FieldGuards, GraphqlSite, IsStreamReturn, ROOT_FIELD, answers_a_stream, field_guard_stage,
         field_name, run_field, run_nested,

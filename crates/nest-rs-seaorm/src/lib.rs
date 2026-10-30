@@ -135,6 +135,8 @@ pub mod __private {
     pub use async_trait::async_trait;
     pub use chrono;
     #[cfg(feature = "graphql")]
+    pub use nest_rs_graphql::__private::{GraphqlRelationRegistration, LoaderOwner};
+    #[cfg(feature = "graphql")]
     pub use nest_rs_graphql::{async_graphql, dataloader};
     pub use schemars;
     pub use serde;

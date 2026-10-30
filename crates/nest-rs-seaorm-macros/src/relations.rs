@@ -405,9 +405,12 @@ fn target_key(target: &syn::Path) -> String {
         .to_owned()
 }
 
-/// `#[ComplexObject] impl <Wire> { … }` — one method per exposed relation.
+/// `#[ComplexObject] impl <Wire> { … }` — one method per exposed relation —
+/// and each relation's registration, which refuses the schema build when the
+/// object is served and its loader's owner is not reached.
 fn emit_field_resolvers(model: &ResourceModel, pk: &ResourceField) -> syn::Result<TokenStream2> {
     let mut methods = Vec::new();
+    let mut registrations = Vec::new();
     for field in &model.fields {
         if !field.read {
             continue;
@@ -415,14 +418,18 @@ fn emit_field_resolvers(model: &ResourceModel, pk: &ResourceField) -> syn::Resul
         let Some(kind) = &field.relation else {
             continue;
         };
-        match kind {
+        let loader = match kind {
             RelationKind::BelongsTo { from, target, .. } => {
                 methods.push(emit_belongs_to_method(model, field, from, target)?);
+                quote! { <#target as ::nest_rs_seaorm::graphql::PkLoadable>::Loader }
             }
             RelationKind::HasMany { target, via } => {
                 methods.push(emit_has_many_method(field, target, via.as_ref(), pk)?);
+                let related = related_to_path(target, via.as_ref())?;
+                quote! { <#target as #related>::Loader }
             }
-        }
+        };
+        registrations.push(relation_registration(model, &field.ident, &loader));
     }
     if methods.is_empty() {
         return Ok(TokenStream2::new());
@@ -435,7 +442,40 @@ fn emit_field_resolvers(model: &ResourceModel, pk: &ResourceField) -> syn::Resul
         impl #wire {
             #(#methods)*
         }
+
+        #(#registrations)*
     })
+}
+
+/// The registration of the relation `field`, read through `loader`: the object
+/// it is served on, its GraphQL name — async-graphql's camelCase of the method
+/// — the entity declaring it, and the loader's owner.
+fn relation_registration(
+    model: &ResourceModel,
+    field: &Ident,
+    loader: &TokenStream2,
+) -> TokenStream2 {
+    let wire = &model.output_ident;
+    let root = graphql_root();
+    let pascal = pascal_case(field).to_string();
+    let mut chars = pascal.chars();
+    let name: String = chars
+        .next()
+        .map(|first| first.to_lowercase().chain(chars).collect())
+        .unwrap_or_default();
+    quote! {
+        ::nest_rs_seaorm::__private::inventory::submit! {
+            ::nest_rs_seaorm::__private::GraphqlRelationRegistration {
+                parent: || ::std::string::ToString::to_string(
+                    &<#wire as #root::OutputType>::type_name(),
+                ),
+                field: #name,
+                entity: || ::core::any::type_name::<Entity>(),
+                owner: <#loader as ::nest_rs_seaorm::__private::LoaderOwner>::owner,
+                origin: ::core::module_path!(),
+            }
+        }
+    }
 }
 
 /// One BelongsTo field resolver: load the parent's FK column via the target

@@ -162,17 +162,29 @@ what its request carries: the executor `SeaOrmDatabaseModule` installs around
 `/graphql`, as the pool, and the ability the endpoint's guards attach.
 There is nothing to bind for it.
 
-Without an executor — `SeaOrmDatabaseModule` not imported — `Repo` finds none
-and **every relation field fails before a single statement reaches the
-database**: the operation answers `internal error` under the `INTERNAL` code
-on each relation path, scalars resolve normally, and the query log stays
-empty. Without those guards there is no ability, and `Repo` denies every row,
-saying so at `warn` on `nest_rs::orm`.
+Two wiring mistakes stop the boot, each naming the line to add:
 
-The missing executor is logged — `error` on `nest_rs::orm`, naming the entity
-and every binding that installs an executor — because the wire form of
-`ServiceError::Db` is the opaque `internal error` and carries nothing an
-operator can act on.
+- **`SeaOrmDatabaseModule` not imported.** The service a GraphQL-exposed
+  entity names (`#[expose(service = S, graphql)]`) hosts loaders that run
+  `Repo`, which needs the unit of work the binding provides, so the app is
+  refused at boot:
+
+  ```text frame="terminal"
+  unmet dependency: `UsersService` (in module `UsersModule`) depends on `dyn UnitOfWork`, which no module this app imports provides. Import exactly one unit-of-work binding: `nest_rs::seaorm::SeaOrmDatabaseModule` runs every edge's units of work over SeaORM's executor.
+  ```
+
+- **The target's module not imported.** A relation the schema serves reads a
+  loader of the target entity's service; when the app does not reach that
+  service, the schema build refuses, naming the field, the entity declaring
+  it and the module to import — `` `User.org` (declared on
+  `features::users::entities::user::Entity`) reads a loader of
+  `features::orgs::service::OrgsService`: import `OrgsModule` into the module
+  serving `User` ``. A relation on an object the schema does not serve is no
+  defect of this app: its loader is only counted, once, at `warn`
+  (`dataloaders linked but unreachable`).
+
+Without those guards there is no ability, and `Repo` denies every row,
+saying so at `warn` on `nest_rs::orm`.
 
 ## Fanout-aware complexity
 

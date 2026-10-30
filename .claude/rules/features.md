@@ -15,7 +15,9 @@ slice: the port at the feature root, one adapter folder per edge.
   entity's column declarations and its OpenAPI text; `users/` is the
   measurement — a tenant-scoped entity on HTTP and GraphQL, whose create takes
   its org from the grant. When that breaks, open an issue — never rewrite the
-  boilerplate.
+  boilerplate. Each fact is stated once: the entity names its wire type
+  (`#[expose]`), the service its entity and inputs (its trait impls), and an
+  adapter only the field it delegates to (`#[crud(service = svc)]`).
 - **Adding a feature is copying `users/`**, plus the two edits a copy cannot
   carry: `pub mod <feature>;` in `lib.rs` and the `<Feature><Edge>Module`
   entry in the serving app's `module.rs`. `nestrs g feature/resource/<edge>`
@@ -72,8 +74,9 @@ writes no `for_root`**: the in-code path for a config you own is its
 
 ## One `service.rs` per feature
 
-Extra `impl` blocks (`CrudService`, `Creatable`/`Updatable`/`Deletable`,
-`#[dataloader]`, `#[hooks]`) are macro requirements, not extra files.
+Extra `impl` blocks (`CrudService`, `Creatable`/`Updatable`/`Deletable` —
+where `#[crud]` reads its types —, `#[dataloader]`, `#[hooks]`) are macro
+requirements, not extra files.
 Splitting is a last resort, chosen by `architecture.md`'s three provider
 questions, never by file size:
 

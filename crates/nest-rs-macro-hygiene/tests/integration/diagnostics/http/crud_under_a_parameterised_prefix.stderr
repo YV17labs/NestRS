@@ -1,5 +1,5 @@
 error[E0080]: evaluation panicked: #[crud] reads the id of `get` from the route's one path parameter, and the `#[controller]` path names parameters of its own — mount the resource under a path naming none, or write `get` by hand
   --> tests/integration/diagnostics/http/crud_under_a_parameterised_prefix.rs:45:1
    |
-45 | #[crud(service = svc, entity = note::Entity, output = note::Note, ops = [get])]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here
+45 | #[crud(service = svc, ops = [get])]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here

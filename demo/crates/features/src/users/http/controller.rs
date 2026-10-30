@@ -4,7 +4,7 @@ use nest_rs::http::{controller, crud};
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
-use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
+use crate::users::UsersService;
 
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
@@ -15,10 +15,6 @@ pub struct UsersController {
 
 #[crud(
     service = svc,
-    entity = UserEntity,
-    output = User,
-    create = CreateUser,
-    update = UpdateUser,
     api(
         get(
             summary = "Get a user in the caller's org by id",

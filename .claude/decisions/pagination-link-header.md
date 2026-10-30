@@ -41,3 +41,13 @@ change for every client, and the masking cost an envelope body was refused for
 above. The type gives the Rust side room: a later key type's cursor is that
 key's own text, added beside `From<Uuid>`, and a keyset order other than the
 primary key reopens this.
+
+## 2026-10-30 — the link is written by a typed answer
+
+The rule above holds; what writes it moved. A list returns
+`Paginated<Json<Vec<T>>>`, which marks its response with the next page, and
+the route's tail writes the `Link` on the path the caller addressed, as
+`set_next_link` built it — so a hand-written list takes no `&Request` and the
+document declares the `Link` off the return type, where it declared one only
+for `#[crud]`'s internal marker. `set_next_link` and `caller_path` left the
+public API (`crud-reads-the-service.md`).

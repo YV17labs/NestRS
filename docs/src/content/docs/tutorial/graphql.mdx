@@ -36,7 +36,7 @@ use std::sync::Arc;
 use nest_rs::graphql::{crud, resolver};
 
 use crate::authz::AuthzGuard;
-use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
+use crate::users::UsersService;
 
 #[resolver]
 #[use_guards(AuthzGuard)]
@@ -45,18 +45,15 @@ pub struct UsersResolver {
     svc: Arc<UsersService>,
 }
 
-#[crud(
-    service = svc,
-    entity = UserEntity,
-    output = User,
-    create = CreateUser,
-    update = UpdateUser,
-)]
+#[crud(service = svc)]
 impl UsersResolver {}
 ```
 
 `#[crud]` generates `users`, `user`, `create_user`, `update_user` and
-`delete_user`, each declaring `#[authorize(Action, UserEntity)]`. The
+`delete_user` — named for the resolver's resource, `UsersResolver` without
+`Resolver`, made singular — each typed off `UsersService` and its entity's
+`#[expose]`, and each declaring `#[authorize(Action, Entity)]` on the
+service's entity. The
 generated `create_user` needs nothing from you to land in the caller's org:
 the `Create` grant pins `org_id`, and the create fills it from there.
 

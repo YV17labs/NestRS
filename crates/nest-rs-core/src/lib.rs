@@ -117,6 +117,7 @@ mod exception_filter;
 mod factory_inputs;
 mod handler;
 mod identifier;
+mod injected_field;
 mod instance;
 mod interceptor;
 mod job;
@@ -237,6 +238,7 @@ pub mod __private {
     pub use crate::handler::{
         HandlerDeclaration, MetaLevels, MetaValue, declare_handler, meta_value,
     };
+    pub use crate::injected_field::InjectedField;
     pub use crate::instance::{InstanceDeclaration, InstanceSeal};
     pub use crate::interceptor::__private::{
         InterceptorRegistration, InterceptorStage, register_interceptor,

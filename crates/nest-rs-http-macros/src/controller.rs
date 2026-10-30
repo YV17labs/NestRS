@@ -11,9 +11,9 @@ use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
     InjectableBody, MountPath, RoutePath, build_injectable_body, from_container_method,
-    guard_capability_bounds, host_meta_fn, injected_keys_with_layers, injected_names_with_layers,
-    injected_optional_fns, layer_deps, missing_argument, refuse_rust_deprecated, reject_path,
-    scoped_specs,
+    guard_capability_bounds, host_meta_fn, injected_field_impls, injected_keys_with_layers,
+    injected_names_with_layers, injected_optional_fns, layer_deps, missing_argument,
+    refuse_rust_deprecated, reject_path, scoped_specs,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -44,6 +44,9 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     let host_meta = host_meta_fn(&meta);
 
+    // Read before the body strips `#[inject]`: `#[crud]` reads its service's
+    // type off the field its key names.
+    let injected_fields = injected_field_impls(&item);
     let InjectableBody {
         ctor,
         dep_keys,
@@ -90,6 +93,8 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         #capability_bounds
 
         #residency
+
+        #injected_fields
 
         impl #impl_generics #name #ty_generics #where_clause {
             /// The controller's route prefix, from `#[controller(path = "…")]`.

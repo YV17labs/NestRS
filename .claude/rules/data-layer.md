@@ -228,12 +228,15 @@ traits a resource implements when it genuinely offers the operation:
 `Creatable`, `Updatable`, `Deletable`. A read-only resource declares no
 `Create`/`Update` type — no `_unused` stub, no no-op conversion.
 
-**`#[crud]` generates only the operations a resource has** (`ops = [..]`, all
-five when omitted), over HTTP and GraphQL alike. An op listed without its input
-type is a compile error, and an op whose trait the service lacks fails to
-resolve: a forgotten operation is a build break, never a no-op mutation on the
-wire. A method the block writes takes its op over, and a key only that op
-reads (`api(<op>(…))`, `paginate`) is then refused, never dropped.
+**`#[crud(service = svc)]` reads every type off the service its field
+holds** — the entity off `CrudService`, the inputs off `Creatable` and
+`Updatable`, the answer off the entity's sealed `Exposed` — and **generates
+only the operations a resource has** (`ops = [..]`, all five when omitted),
+over HTTP and GraphQL alike: an op whose trait the service lacks fails to
+resolve, so a forgotten operation is a build break, never a no-op mutation on
+the wire (`.claude/decisions/crud-reads-the-service.md`). A method the block
+writes takes its op over, and a key only that op reads (`api(<op>(…))`,
+`paginate`) is then refused, never dropped.
 
 ## Response masking — one core, every transport
 

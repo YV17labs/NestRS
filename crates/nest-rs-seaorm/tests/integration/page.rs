@@ -105,7 +105,7 @@ struct AlbumsController {
     svc: Arc<AlbumsService>,
 }
 
-#[nest_rs_http::crud(service = svc, entity = album::Entity, output = album::PagedAlbum, ops = [list])]
+#[nest_rs_http::crud(service = svc, ops = [list])]
 impl AlbumsController {}
 
 #[resolver]
@@ -114,7 +114,7 @@ struct AlbumsResolver {
     svc: Arc<AlbumsService>,
 }
 
-#[nest_rs_graphql::crud(service = svc, entity = album::Entity, output = album::PagedAlbum, ops = [list])]
+#[nest_rs_graphql::crud(service = svc, ops = [list])]
 impl AlbumsResolver {}
 
 /// A parent built in memory, so its relation is reached with no row read.
@@ -234,7 +234,7 @@ async fn a_graphql_list_refuses_a_cursor_it_did_not_issue() {
 
     let answer = graphql(
         &app,
-        &format!(r#"{{ pagedAlbums(first: 2, after: "{NOT_A_CURSOR}") {{ id }} }}"#),
+        &format!(r#"{{ albums(first: 2, after: "{NOT_A_CURSOR}") {{ id }} }}"#),
     )
     .await;
 

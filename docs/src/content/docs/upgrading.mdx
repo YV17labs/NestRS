@@ -854,6 +854,9 @@ lists what the boot, a log or the wire shows when one is missed.
     | a hand-written `get` or `user` override on a `#[crud]` block, kept only for its `#[api]` text | `api(get(summary = "…", description = "…"))` in the `#[crud]` arguments, the override deleted |
     | `paginate = …` on a `#[crud]` block that writes its list operation by hand | the key dropped: nothing generated read it, and your method bounds its own list |
     | a `#[crud]` block generating `get`, `update` or `delete` under a controller path naming a parameter (`/orgs/{org}/users`) | those operations written by hand, reading every parameter, or the resource mounted under a path naming none: the generated ones answered `500` on every request |
+    | `#[crud(service = svc, entity = E, output = Dto, create = CreateDto, update = UpdateDto)]` | `#[crud(service = svc)]`: every type is read off the service's `CrudService`, `Creatable` and `Updatable` impls and the entity's `#[expose]` |
+    | a bare `#[crud(service = svc, entity = …, output = …)]` over a read-only service (`list`, `get` and `delete` by default) | `#[crud(service = svc, ops = [list, get])]`, or `ops = [list, get, delete]` beside a `Deletable` impl: the default is all five |
+    | `<E as PkLoadable>::Wire` | `<E as Exposed>::Wire`, `nest_rs::seaorm::Exposed` |
 
     Name your own log target by the constant the feature declares, as a 7.0
     scaffold does (`pub const TARGET: &str = "features::chat";` in
@@ -1152,6 +1155,12 @@ lists what the boot, a log or the wire shows when one is missed.
   way to the edge's `400`. Keep `validate()` only where the service builds the
   input — from a provider's profile, a seed.
 
+- **A GraphQL `#[crud]` resolver named apart from its wire type** answers new
+  field names with no compile error: the names come off the resolver's name
+  (`AlbumsResolver` → `albums`), where they came off `output =` (`PagedAlbum`
+  → `pagedAlbums`), and a client asking the old field gets `Unknown field`.
+  Name the resolver after its resource, or write the operation by hand under
+  the name the client asks.
 - **A `Create` grant the create cannot complete** — an org-wide `Manage` that
   lets a caller who authors nothing reach an insert whose author no grant pins
   — answers the insert's NOT NULL violation as a `500`, filed at `error` on

@@ -1,5 +1,5 @@
 error: #[crud] `paginate` configures the `list` op, which this block writes by hand as `fn orgs` — drop `paginate = …`: the method bounds its own list
-  --> tests/integration/diagnostics/graphql/crud_paginate_beside_a_hand_written_list.rs:10:57
+  --> tests/integration/diagnostics/graphql/crud_paginate_beside_a_hand_written_list.rs:10:23
    |
-10 | #[crud(service = svc, entity = OrgEntity, output = Org, paginate = none)]
-   |                                                         ^^^^^^^^
+10 | #[crud(service = svc, paginate = none)]
+   |                       ^^^^^^^^

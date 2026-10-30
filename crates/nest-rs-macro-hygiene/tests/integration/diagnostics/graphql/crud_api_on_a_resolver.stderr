@@ -1,5 +1,5 @@
 error: #[crud] `api` documents the generated routes' OpenAPI operations, and a resolver serves none — write the operation by hand, with its doc comment as its description
-  --> tests/integration/diagnostics/graphql/crud_api_on_a_resolver.rs:13:5
-   |
-13 |     api(get(summary = "Get an org by id")),
-   |     ^^^
+ --> tests/integration/diagnostics/graphql/crud_api_on_a_resolver.rs:9:23
+  |
+9 | #[crud(service = svc, api(get(summary = "Get an org by id")))]
+  |                       ^^^

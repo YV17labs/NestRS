@@ -42,7 +42,7 @@ struct NotesController {
     svc: Arc<NotesService>,
 }
 
-#[crud(service = svc, entity = note::Entity, output = note::Note, ops = [get])]
+#[crud(service = svc, ops = [get])]
 impl NotesController {}
 
 fn main() {}

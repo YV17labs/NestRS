@@ -92,7 +92,7 @@ a set of bare flags.
 
 | Flag | Kind | Effect |
 |---|---|---|
-| `name = "Post"` | **required** | The wire DTO / GraphQL object / OpenAPI schema name. |
+| `name = "Post"` | **required** | The wire DTO / GraphQL object / OpenAPI schema name. The entity names it as `<Entity as Exposed>::Wire`, which is what a `#[crud]` operation answers; only `#[expose]` implements `Exposed`. |
 | `service = …` | path | The service that owns the entity. Required as soon as the entity exposes a relation or another feature needs its PK loader — it's where the macro emits the loaders. |
 | `graphql` | flag | Emit the GraphQL object + input objects, and auto-resolve exposed relations through dataloaders. An exposed relation **without** `graphql` is a compile error. |
 | `timestamps` | flag | Emit an `ActiveModelBehavior` that stamps `created_at` on insert and, when the entity has one, `updated_at` on every save. Requires `created_at`: an append-only entity has no `updated_at`. |

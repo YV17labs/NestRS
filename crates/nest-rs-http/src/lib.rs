@@ -368,12 +368,14 @@ pub use nest_rs_http_macros::controller;
 /// ```
 pub use nest_rs_http_macros::routes;
 
-/// `#[crud(...)]` — generates the standard REST operations (list, get,
-/// create, update, delete) on a [`#[controller]`](macro@controller) impl block,
-/// re-emitted under [`#[routes]`](macro@routes).
+/// `#[crud(service = svc)]` — generates the standard REST operations (list,
+/// get, create, update, delete) on a [`#[controller]`](macro@controller) impl
+/// block, re-emitted under [`#[routes]`](macro@routes).
 ///
-/// Each route delegates to the service's `nest_rs_seaorm::CrudService` and
-/// declares its posture with `#[authorize(Action, Entity)]`.
+/// Each route delegates to the service the `svc` field injects, its
+/// `nest_rs_seaorm::CrudService`, reads every type it names off that service
+/// and its entity's `#[expose]`, and declares its posture with
+/// `#[authorize(Action, Entity)]`.
 pub use nest_rs_http_macros::crud;
 
 pub use nest_rs_http_macros::http_code;

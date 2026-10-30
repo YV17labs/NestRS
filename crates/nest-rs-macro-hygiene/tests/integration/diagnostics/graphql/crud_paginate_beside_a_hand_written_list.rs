@@ -7,7 +7,7 @@ use nest_rs::graphql::{crud, resolver};
 #[resolver]
 struct OrgsResolver;
 
-#[crud(service = svc, entity = OrgEntity, output = Org, paginate = none)]
+#[crud(service = svc, paginate = none)]
 impl OrgsResolver {
     #[query]
     #[public]

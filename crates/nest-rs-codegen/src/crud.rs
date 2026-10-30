@@ -1,11 +1,14 @@
 //! Shared parser for `#[crud(...)]`, consumed by the HTTP and GraphQL CRUD
-//! generators; each reads every key [`CrudDeclaration`] carries.
+//! generators: each reads every key [`CrudDeclaration`] carries, and the types
+//! its operations name off the service the `service` key points at
+//! ([`CrudDeclaration::types`]).
 
 use std::collections::HashSet;
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
+use quote::{format_ident, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
-use syn::{Ident, LitStr, Path, Token};
+use syn::{Ident, LitStr, Token, Type};
 
 use crate::grammar::Grammar;
 
@@ -24,9 +27,9 @@ pub enum Paginate {
 }
 
 /// One CRUD operation a `#[crud]` block may generate. The write ops
-/// (`Create`/`Update`/`Delete`) each require the resource to implement the
-/// matching opt-in trait (`Creatable`/`Updatable`/`Deletable`); `Create`/`Update`
-/// additionally require an input type (`create = ` / `update = `).
+/// (`Create`/`Update`/`Delete`) each require the service to implement the
+/// matching opt-in trait (`Creatable`/`Updatable`/`Deletable`), whose input
+/// type the op reads: a missing impl fails to resolve.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[non_exhaustive]
 pub enum CrudOp {
@@ -34,9 +37,9 @@ pub enum CrudOp {
     List,
     /// `GET /{id}` — one resource by primary key.
     Get,
-    /// `POST /` — needs `create = <InputType>` and `Creatable`.
+    /// `POST /` — needs `Creatable`.
     Create,
-    /// `PUT /{id}` — needs `update = <InputType>` and `Updatable`.
+    /// `PUT /{id}` — needs `Updatable`.
     Update,
     /// `DELETE /{id}` — needs `Deletable`.
     Delete,
@@ -55,8 +58,8 @@ impl CrudOp {
         }
     }
 
-    /// The method a resolver writes to take the op over, over the output's
-    /// [`singular_of`]: `users`, `user`, `create_user`, `update_user`,
+    /// The method a resolver writes to take the op over, over the resource's
+    /// [`resolver_singular`]: `users`, `user`, `create_user`, `update_user`,
     /// `delete_user`.
     pub fn resolver_method(self, singular: &str) -> String {
         match self {
@@ -83,43 +86,68 @@ pub struct CrudOpApi {
 /// Which operations a `#[crud]` block generates.
 #[non_exhaustive]
 pub enum OpsSelection {
-    /// No `ops = [...]` given: `list` + `get` + `delete` always, plus
-    /// `create`/`update` when their input type is given.
+    /// No `ops = [...]` given: all five, each resolving only when the service
+    /// implements its trait.
     Default,
-    /// Explicit `ops = [...]`: exactly the listed ops, validated against the
-    /// input types that are present. Carries the `ops` key span for diagnostics.
+    /// Explicit `ops = [...]`: exactly the listed ops. Carries the `ops` key
+    /// span for diagnostics.
     Explicit(Vec<CrudOp>, Span),
 }
 
 /// Resolved per-op generation decision — the answer the generators consume:
-/// an op selected and not written by hand; a write op is generated when its
-/// input type is `Some`.
-pub struct GeneratedOps<'a> {
+/// an op selected and not written by hand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per operation `ops` names, read by both generators"
+)]
+pub struct GeneratedOps {
     /// Generate the collection read.
     pub list: bool,
     /// Generate the by-id read.
     pub get: bool,
-    /// The create-input type when the op is generated, `None` when it is not.
-    pub create: Option<&'a Path>,
-    /// The update-input type when the op is generated, `None` when it is not.
-    pub update: Option<&'a Path>,
+    /// Generate the create.
+    pub create: bool,
+    /// Generate the update.
+    pub update: bool,
     /// Generate the delete.
     pub delete: bool,
+}
+
+impl GeneratedOps {
+    /// Whether any op is generated, so the block names the entity at all.
+    pub fn any(self) -> bool {
+        self.list || self.get || self.create || self.update || self.delete
+    }
+
+    /// Whether a generated op answers the entity's wire type.
+    pub fn answers_rows(self) -> bool {
+        self.list || self.get || self.create || self.update
+    }
+}
+
+/// The types a `#[crud]` block's generated operations name, each a hidden
+/// alias [`CrudDeclaration::types`] declares beside the block: read off the
+/// service's `CrudService`, `Creatable` and `Updatable` impls and the entity's
+/// `Exposed` one.
+pub struct CrudTypes {
+    /// The service's `CrudService::Entity`.
+    pub entity: Ident,
+    /// The entity's `Exposed::Wire`.
+    pub output: Ident,
+    /// The service's `Creatable::Create`.
+    pub create: Ident,
+    /// The service's `Updatable::Update`.
+    pub update: Ident,
+    /// The aliases, declared beside the block.
+    pub aliases: TokenStream2,
 }
 
 /// The parsed `#[crud(...)]` declaration both surface generators consume.
 pub struct CrudDeclaration {
     /// Field holding the entity's `CrudService`, which every generated op
-    /// delegates to.
+    /// delegates to and whose type every generated op reads its types off.
     pub service: Ident,
-    /// The SeaORM entity the operations target.
-    pub entity: Path,
-    /// The `#[expose]` wire DTO returned by the generated read ops.
-    pub output: Path,
-    /// The create-input type (`create = `); `None` disables the `create` op.
-    pub create: Option<Path>,
-    /// The update-input type (`update = `); `None` disables the `update` op.
-    pub update: Option<Path>,
     /// Which operations to generate.
     pub ops: OpsSelection,
     /// How the generated list op bounds its result set. Defaults to
@@ -151,15 +179,14 @@ impl CrudDeclaration {
     /// `written` holds their names, `method_of` names the method that takes an
     /// op over on this edge. A selected op the block writes is not generated.
     ///
-    /// Refused, never a silently dropped declaration: a `create`/`update` op
-    /// without `create = ` / `update = `, a key configuring an op `ops` leaves
-    /// out, and `api(<op>(…))` or `paginate` beside the op written by hand,
-    /// which nothing generated would read.
+    /// Refused, never a silently dropped declaration: a key configuring an op
+    /// `ops` leaves out, and `api(<op>(…))` or `paginate` beside the op written
+    /// by hand, which nothing generated would read.
     pub fn generated_ops(
         &self,
         written: &HashSet<String>,
         method_of: impl Fn(CrudOp) -> String,
-    ) -> syn::Result<GeneratedOps<'_>> {
+    ) -> syn::Result<GeneratedOps> {
         let selected = self.selected_ops()?;
         let by_hand = |op: CrudOp| {
             let method = method_of(op);
@@ -188,28 +215,24 @@ impl CrudDeclaration {
         Ok(GeneratedOps {
             list: selected.list && by_hand(CrudOp::List).is_none(),
             get: selected.get && by_hand(CrudOp::Get).is_none(),
-            create: selected
-                .create
-                .filter(|_| by_hand(CrudOp::Create).is_none()),
-            update: selected
-                .update
-                .filter(|_| by_hand(CrudOp::Update).is_none()),
+            create: selected.create && by_hand(CrudOp::Create).is_none(),
+            update: selected.update && by_hand(CrudOp::Update).is_none(),
             delete: selected.delete && by_hand(CrudOp::Delete).is_none(),
         })
     }
 
-    /// The ops the declaration selects, validating that any explicitly
-    /// requested `create`/`update` op has its input type.
-    fn selected_ops(&self) -> syn::Result<GeneratedOps<'_>> {
+    /// The ops the declaration selects, refusing a key that configures an op
+    /// `ops` leaves out.
+    fn selected_ops(&self) -> syn::Result<GeneratedOps> {
         match &self.ops {
             OpsSelection::Default => Ok(GeneratedOps {
                 list: true,
                 get: true,
-                create: self.create.as_ref(),
-                update: self.update.as_ref(),
+                create: true,
+                update: true,
                 delete: true,
             }),
-            OpsSelection::Explicit(ops, span) => {
+            OpsSelection::Explicit(ops, _) => {
                 let wants = |op| ops.contains(&op);
                 if let (false, Some(written)) = (wants(CrudOp::List), self.paginate_written) {
                     return Err(excluded_op_key(written, "paginate", "list", "paginate = …"));
@@ -226,61 +249,81 @@ impl CrudDeclaration {
                 Ok(GeneratedOps {
                     list: wants(CrudOp::List),
                     get: wants(CrudOp::Get),
-                    create: resolve_write_op(
-                        wants(CrudOp::Create),
-                        self.create.as_ref(),
-                        *span,
-                        "create",
-                        "Creatable",
-                    )?,
-                    update: resolve_write_op(
-                        wants(CrudOp::Update),
-                        self.update.as_ref(),
-                        *span,
-                        "update",
-                        "Updatable",
-                    )?,
+                    create: wants(CrudOp::Create),
+                    update: wants(CrudOp::Update),
                     delete: wants(CrudOp::Delete),
                 })
             }
         }
     }
-}
 
-/// A requested write op without its input type, and an input type for an op
-/// `ops` leaves out, are both refused — never a silently dropped declaration.
-fn resolve_write_op<'a>(
-    wanted: bool,
-    ty: Option<&'a Path>,
-    span: Span,
-    key: &str,
-    trait_name: &str,
-) -> syn::Result<Option<&'a Path>> {
-    if wanted && ty.is_none() {
-        return Err(syn::Error::new(
-            span,
-            format!(
-                "{} lists `{key}` but no `{key} = <InputType>` was given — a resource generates \
-                 `{key}` only when it provides the input type and implements `{trait_name}`",
-                crate::args::site("crud", Some("ops")),
-            ),
-        ));
+    /// The types `ops` name on the block `#[crud]` decorates, `self_ty` its
+    /// host named `host`: aliases of the projections off the type of the
+    /// field `service` names, which the host's struct half hands over through
+    /// `InjectedField` under [`injected_field_key`](crate::__private::injected_field_key).
+    /// Only what a generated op reads is declared, so none is left unused.
+    pub fn types(&self, host: &Ident, self_ty: &Type, ops: GeneratedOps) -> CrudTypes {
+        let alias = |what: &str| format_ident!("__NestrsCrud{}{}", host, what);
+        let service = alias("Service");
+        let entity = alias("Entity");
+        let output = alias("Output");
+        let create = alias("Create");
+        let update = alias("Update");
+        if !ops.any() {
+            return CrudTypes {
+                entity,
+                output,
+                create,
+                update,
+                aliases: TokenStream2::new(),
+            };
+        }
+        let key = crate::inject::injected_field_key(&self.service);
+        // Spanned on the key's value: a field the host does not inject is
+        // refused there.
+        let service_alias = quote_spanned! {self.service.span()=>
+            #[doc(hidden)]
+            type #service = <<#self_ty as ::nest_rs_core::__private::InjectedField<#key>>::Type
+                as ::core::ops::Deref>::Target;
+        };
+        let output_alias = ops.answers_rows().then(|| {
+            quote! {
+                #[doc(hidden)]
+                type #output = <#entity as ::nest_rs_seaorm::Exposed>::Wire;
+            }
+        });
+        let create_alias = ops.create.then(|| {
+            quote! {
+                #[doc(hidden)]
+                type #create = <#service as ::nest_rs_seaorm::Creatable>::Create;
+            }
+        });
+        let update_alias = ops.update.then(|| {
+            quote! {
+                #[doc(hidden)]
+                type #update = <#service as ::nest_rs_seaorm::Updatable>::Update;
+            }
+        });
+        let aliases = quote! {
+            #service_alias
+            #[doc(hidden)]
+            type #entity = <#service as ::nest_rs_seaorm::CrudService>::Entity;
+            #output_alias
+            #create_alias
+            #update_alias
+        };
+        CrudTypes {
+            entity,
+            output,
+            create,
+            update,
+            aliases,
+        }
     }
-    if let (false, Some(ty)) = (wanted, ty) {
-        return Err(syn::Error::new_spanned(
-            ty,
-            format!(
-                "{} names the input of an op `ops` leaves out — list `{key}` in `ops` to \
-                 generate it, or drop `{key} = …`",
-                crate::args::site("crud", Some(key)),
-            ),
-        ));
-    }
-    Ok(ty)
 }
 
 /// The refusal of a key that configures one op, declared beside an `ops` that
-/// leaves that op out; `create`/`update` go through [`resolve_write_op`].
+/// leaves that op out.
 fn excluded_op_key(written: Span, key: &str, op: &str, drop: &str) -> syn::Error {
     syn::Error::new(
         written,
@@ -313,12 +356,7 @@ fn hand_written_op_key(
 }
 
 /// Every key `#[crud]` takes, in declaration order.
-const CRUD: Grammar = Grammar::new(
-    "crud",
-    &[
-        "service", "entity", "output", "create", "update", "ops", "paginate", "api",
-    ],
-);
+const CRUD: Grammar = Grammar::new("crud", &["service", "ops", "paginate", "api"]);
 
 /// The operations `api(…)` documents, named as `ops` names them.
 const CRUD_API: Grammar =
@@ -400,10 +438,6 @@ fn value_of<T: Parse>(input: ParseStream, key: &str, what: &str) -> syn::Result<
 impl Parse for CrudDeclaration {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut service = None;
-        let mut entity = None;
-        let mut output = None;
-        let mut create = None;
-        let mut update = None;
         let mut ops = OpsSelection::Default;
         let mut paginate = Paginate::Cursor;
         let mut paginate_written = None;
@@ -417,34 +451,6 @@ impl Parse for CrudDeclaration {
                         arg.value()?,
                         "service",
                         "the name of the injected `CrudService` field, e.g. `service = svc`",
-                    )?);
-                }
-                "entity" => {
-                    entity = Some(value_of(
-                        arg.value()?,
-                        "entity",
-                        "the entity's path, e.g. `entity = users::Entity`",
-                    )?);
-                }
-                "output" => {
-                    output = Some(value_of(
-                        arg.value()?,
-                        "output",
-                        "the response type's path, e.g. `output = User`",
-                    )?);
-                }
-                "create" => {
-                    create = Some(value_of(
-                        arg.value()?,
-                        "create",
-                        "the input type's path, e.g. `create = CreateUser`",
-                    )?);
-                }
-                "update" => {
-                    update = Some(value_of(
-                        arg.value()?,
-                        "update",
-                        "the input type's path, e.g. `update = UpdateUser`",
                     )?);
                 }
                 "ops" => {
@@ -522,30 +528,15 @@ impl Parse for CrudDeclaration {
             syn::Error::new(
                 Span::call_site(),
                 format!(
-                    "{} (the injected `CrudService` field to delegate to)",
+                    "{} (the injected `CrudService` field to delegate to, whose service \
+                     every generated operation reads its types off)",
                     crate::args::missing_argument("crud", "service", "svc"),
                 ),
-            )
-        })?;
-        let entity = entity.ok_or_else(|| {
-            syn::Error::new(
-                Span::call_site(),
-                crate::args::missing_argument("crud", "entity", "users::Entity"),
-            )
-        })?;
-        let output = output.ok_or_else(|| {
-            syn::Error::new(
-                Span::call_site(),
-                crate::args::missing_argument("crud", "output", "User"),
             )
         })?;
 
         Ok(CrudDeclaration {
             service,
-            entity,
-            output,
-            create,
-            update,
             ops,
             paginate,
             paginate_written,
@@ -560,24 +551,34 @@ pub fn parse_crud_args(args: TokenStream2) -> syn::Result<CrudDeclaration> {
     syn::parse2(args)
 }
 
-/// Snake-cased last segment of the output type (`ArtistExhibition` →
-/// `artist_exhibition`); base for generated operation method names (the list op
-/// is `<base>s`), which async-graphql camelCases.
+/// The resource a `#[crud]` host serves, read off its name: its `role` suffix
+/// dropped and the rest made [`singular`](crate::__private::singular) —
+/// `UsersController` → `User`. A host named for its role alone keeps its
+/// name.
+pub fn resource_noun(host: &Ident, role: &str) -> String {
+    let name = host.to_string();
+    let stem = name
+        .strip_suffix(role)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(&name);
+    crate::casing::singular(stem)
+}
+
+/// The snake-cased resource a `#[crud]` resolver serves, the base of the
+/// operation names it generates (`UsersResolver` → `user`, so `users`, `user`,
+/// `create_user`, …), which async-graphql camelCases.
 ///
 /// Pluralization is naive (`Category` → `categorys`); hand-write the operation
 /// when that matters — `#[crud]` skips any op a method of that name defines
 /// ([`CrudOp::resolver_method`]).
-pub fn singular_of(output: &Path) -> String {
-    output
-        .segments
-        .last()
-        .map(|s| crate::snake_case(&s.ident.to_string()))
-        .unwrap_or_else(|| "item".to_owned())
+pub fn resolver_singular(host: &Ident) -> String {
+    crate::casing::snake_case(&resource_noun(host, "Resolver"))
 }
 
 #[cfg(test)]
 mod tests {
     use quote::quote;
+    use syn::parse_quote;
 
     use super::*;
 
@@ -586,16 +587,131 @@ mod tests {
     }
 
     /// The ops a controller block writing none by hand generates.
-    fn resolve(cfg: &CrudDeclaration) -> syn::Result<GeneratedOps<'_>> {
+    fn resolve(cfg: &CrudDeclaration) -> syn::Result<GeneratedOps> {
         cfg.generated_ops(&HashSet::new(), |op| op.name().to_owned())
+    }
+
+    const ALL: GeneratedOps = GeneratedOps {
+        list: true,
+        get: true,
+        create: true,
+        update: true,
+        delete: true,
+    };
+
+    #[test]
+    fn the_service_alone_generates_all_five_ops() {
+        let cfg = parse(quote! { service = svc }).expect("the service alone parses");
+        assert_eq!(resolve(&cfg).expect("resolves"), ALL);
+    }
+
+    #[test]
+    fn the_keys_restating_the_services_types_are_refused() {
+        for key in ["entity", "output", "create", "update"] {
+            let ident = Ident::new(key, Span::call_site());
+            let Err(refusal) = parse(quote! { service = svc, #ident = T }) else {
+                panic!("`{key}` is no `#[crud]` key");
+            };
+            assert_eq!(
+                refusal.to_string(),
+                format!(
+                    "unknown #[crud] argument `{key}`; expected `service`, `ops`, `paginate` or \
+                     `api`"
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn a_crud_without_its_service_is_refused_naming_the_key() {
+        let Err(refusal) = parse(quote! { ops = [list] }) else {
+            panic!("the service is required");
+        };
+        assert!(refusal.to_string().contains("`service`"), "{refusal}");
+    }
+
+    #[test]
+    fn the_types_are_read_off_the_field_the_service_key_names() {
+        let cfg = parse(quote! { service = svc }).expect("parses");
+        let host: Ident = parse_quote!(UsersController);
+        let self_ty: Type = parse_quote!(UsersController);
+        let types = cfg.types(&host, &self_ty, ALL);
+        let aliases = types.aliases.to_string();
+        let key = crate::inject::injected_field_key(&parse_quote!(svc));
+        assert!(
+            aliases.contains("type __NestrsCrudUsersControllerService =")
+                && aliases.contains(&format!(
+                    "UsersController as :: nest_rs_core :: __private :: InjectedField < {key}u64 >"
+                )),
+            "{aliases}",
+        );
+        for read in [
+            "< __NestrsCrudUsersControllerService as :: nest_rs_seaorm :: CrudService > :: Entity",
+            "< __NestrsCrudUsersControllerEntity as :: nest_rs_seaorm :: Exposed > :: Wire",
+            "< __NestrsCrudUsersControllerService as :: nest_rs_seaorm :: Creatable > :: Create",
+            "< __NestrsCrudUsersControllerService as :: nest_rs_seaorm :: Updatable > :: Update",
+        ] {
+            assert!(aliases.contains(read), "{read}: {aliases}");
+        }
+        assert_eq!(
+            types.entity.to_string(),
+            "__NestrsCrudUsersControllerEntity"
+        );
+    }
+
+    #[test]
+    fn only_the_types_a_generated_op_reads_are_declared() {
+        let cfg = parse(quote! { service = svc }).expect("parses");
+        let host: Ident = parse_quote!(NotesController);
+        let self_ty: Type = parse_quote!(NotesController);
+        let read_only = GeneratedOps {
+            create: false,
+            update: false,
+            delete: false,
+            ..ALL
+        };
+        let aliases = cfg.types(&host, &self_ty, read_only).aliases.to_string();
+        assert!(aliases.contains("Exposed"), "{aliases}");
+        assert!(!aliases.contains("Creatable") && !aliases.contains("Updatable"));
+        let delete_only = GeneratedOps {
+            list: false,
+            get: false,
+            ..read_only
+        };
+        let delete_only = GeneratedOps {
+            delete: true,
+            ..delete_only
+        };
+        let aliases = cfg.types(&host, &self_ty, delete_only).aliases.to_string();
+        assert!(aliases.contains("CrudService") && !aliases.contains("Exposed"));
+        let none = GeneratedOps {
+            delete: false,
+            ..delete_only
+        };
+        assert!(cfg.types(&host, &self_ty, none).aliases.is_empty());
+    }
+
+    #[test]
+    fn the_resource_is_read_off_the_hosts_name() {
+        for (host, role, noun) in [
+            ("UsersController", "Controller", "User"),
+            ("PostController", "Controller", "Post"),
+            ("CategoriesResolver", "Resolver", "Category"),
+            ("Things", "Controller", "Thing"),
+            ("Controller", "Controller", "Controller"),
+        ] {
+            let host = Ident::new(host, Span::call_site());
+            assert_eq!(resource_noun(&host, role), noun);
+        }
+        let host: Ident = parse_quote!(ArtistExhibitionsResolver);
+        assert_eq!(resolver_singular(&host), "artist_exhibition");
     }
 
     #[test]
     fn a_key_beside_the_op_written_by_hand_is_refused_naming_the_method() {
         let written: HashSet<String> = ["users".to_owned(), "user".to_owned()].into();
         let resolver = |op: CrudOp| op.resolver_method("user");
-        let paginated = parse(quote! { service = svc, entity = E, output = User, paginate = none })
-            .expect("the arguments parse");
+        let paginated = parse(quote! { service = svc, paginate = none }).expect("parses");
         let Err(refusal) = paginated.generated_ops(&written, resolver) else {
             panic!("a `paginate` beside the hand-written list is refused");
         };
@@ -604,10 +720,8 @@ mod tests {
             "#[crud] `paginate` configures the `list` op, which this block writes by hand as \
              `fn users` — drop `paginate = …`: the method bounds its own list",
         );
-        let documented = parse(quote! {
-            service = svc, entity = E, output = User, api(get(summary = "Get a user")),
-        })
-        .expect("the arguments parse");
+        let documented =
+            parse(quote! { service = svc, api(get(summary = "Get a user")) }).expect("parses");
         let Err(refusal) = documented.generated_ops(&written, resolver) else {
             panic!("an `api` for the hand-written op is refused");
         };
@@ -621,18 +735,14 @@ mod tests {
     }
 
     #[test]
-    fn an_op_written_by_hand_is_not_generated_beside_its_selection_keys() {
+    fn an_op_written_by_hand_is_not_generated() {
         let written: HashSet<String> = ["create".to_owned(), "delete".to_owned()].into();
-        let cfg = parse(quote! { service = svc, entity = E, output = O, create = C, update = U })
-            .expect("parses");
+        let cfg = parse(quote! { service = svc }).expect("parses");
         let ops = cfg
             .generated_ops(&written, |op| op.name().to_owned())
-            .expect("selection keys beside an override resolve");
-        assert!(ops.list && ops.get && ops.update.is_some());
-        assert!(
-            ops.create.is_none() && !ops.delete,
-            "the block's own methods win"
-        );
+            .expect("the block's own methods resolve");
+        assert!(ops.list && ops.get && ops.update);
+        assert!(!ops.create && !ops.delete, "the block's own methods win");
     }
 
     #[test]
@@ -664,36 +774,10 @@ mod tests {
     }
 
     #[test]
-    fn singular_of_snake_cases_compound_entity_names() {
-        let compound: syn::Path = syn::parse_quote!(ArtistExhibition);
-        assert_eq!(singular_of(&compound), "artist_exhibition");
-        let single: syn::Path = syn::parse_quote!(User);
-        assert_eq!(singular_of(&single), "user");
-    }
-
-    #[test]
-    fn an_input_type_for_an_excluded_op_is_refused() {
-        let cfg = parse(quote! {
-            service = svc, entity = E, output = O, create = C, update = U, ops = [list, get]
-        })
-        .expect("the arguments parse");
-        let Err(refusal) = resolve(&cfg) else {
-            panic!("an input type for an excluded op is refused");
-        };
-        let refusal = refusal.to_string();
-        assert!(
-            refusal.contains("`create`") && refusal.contains("an op `ops` leaves out"),
-            "{refusal}",
-        );
-    }
-
-    #[test]
     fn a_paginate_for_an_excluded_list_is_refused() {
         for mode in [quote!(none), quote!(cursor)] {
-            let cfg = parse(quote! {
-                service = svc, entity = E, output = O, ops = [get], paginate = #mode
-            })
-            .expect("the arguments parse");
+            let cfg = parse(quote! { service = svc, ops = [get], paginate = #mode })
+                .expect("the arguments parse");
             let Err(refusal) = resolve(&cfg) else {
                 panic!("a `paginate` for an excluded `list` is refused");
             };
@@ -703,93 +787,31 @@ mod tests {
                  `list` in `ops` to generate it, or drop `paginate = …`",
             );
         }
-        let reversed = parse(quote! {
-            service = svc, entity = E, output = O, paginate = none, ops = [get, delete]
-        })
-        .expect("the arguments parse");
-        assert!(resolve(&reversed).is_err());
-        let unwritten = parse(quote! { service = svc, entity = E, output = O, ops = [get] })
+        let reversed = parse(quote! { service = svc, paginate = none, ops = [get, delete] })
             .expect("the arguments parse");
+        assert!(resolve(&reversed).is_err());
+        let unwritten = parse(quote! { service = svc, ops = [get] }).expect("parses");
         assert!(resolve(&unwritten).is_ok());
-        let listed = parse(quote! {
-            service = svc, entity = E, output = O, ops = [list], paginate = none
-        })
-        .expect("the arguments parse");
+        let listed =
+            parse(quote! { service = svc, ops = [list], paginate = none }).expect("parses");
         assert!(resolve(&listed).is_ok_and(|ops| ops.list));
     }
 
     #[test]
-    fn default_with_both_inputs_generates_all_five() {
-        let cfg = parse(quote! {
-            service = svc, entity = E, output = O, create = C, update = U
-        })
-        .expect("parses");
-        let ops = resolve(&cfg).expect("resolves");
-        assert!(ops.list && ops.get && ops.delete);
-        assert!(ops.create.is_some() && ops.update.is_some());
-    }
-
-    #[test]
-    fn default_without_inputs_skips_create_and_update() {
-        let cfg = parse(quote! { service = svc, entity = E, output = O }).expect("parses");
-        let ops = resolve(&cfg).expect("resolves");
-        assert!(ops.list && ops.get && ops.delete);
-        assert!(ops.create.is_none() && ops.update.is_none());
-    }
-
-    #[test]
     fn explicit_partial_selection_generates_only_listed_ops() {
-        let cfg = parse(quote! {
-            service = svc, entity = E, output = O, ops = [list, get, delete]
-        })
-        .expect("parses");
+        let cfg = parse(quote! { service = svc, ops = [list, get, delete] }).expect("parses");
         let ops = resolve(&cfg).expect("resolves");
         assert!(ops.list && ops.get && ops.delete);
-        assert!(ops.create.is_none() && ops.update.is_none());
-    }
-
-    #[test]
-    fn explicit_create_without_input_type_is_an_error() {
-        let cfg = parse(quote! {
-            service = svc, entity = E, output = O, ops = [list, create]
-        })
-        .expect("parses");
-        let err = match resolve(&cfg) {
-            Ok(_) => panic!("create without an input type must fail"),
-            Err(e) => e,
-        };
-        assert!(err.to_string().contains("create"));
-    }
-
-    #[test]
-    fn explicit_update_without_input_type_is_an_error() {
-        let cfg = parse(quote! {
-            service = svc, entity = E, output = O, ops = [update]
-        })
-        .expect("parses");
-        let err = match resolve(&cfg) {
-            Ok(_) => panic!("update without an input type must fail"),
-            Err(e) => e,
-        };
-        assert!(err.to_string().contains("update"));
-    }
-
-    #[test]
-    fn explicit_create_with_input_type_resolves() {
-        let cfg = parse(quote! {
-            service = svc, entity = E, output = O, create = C, ops = [get, create]
-        })
-        .expect("parses");
+        assert!(!ops.create && !ops.update);
+        let cfg = parse(quote! { service = svc, ops = [get, create] }).expect("parses");
         let ops = resolve(&cfg).expect("resolves");
-        assert!(ops.get && ops.create.is_some());
-        assert!(!ops.list && ops.update.is_none() && !ops.delete);
+        assert!(ops.get && ops.create);
+        assert!(!ops.list && !ops.update && !ops.delete);
     }
 
     #[test]
     fn unknown_op_name_is_rejected() {
-        let err = match parse(quote! {
-            service = svc, entity = E, output = O, ops = [list, frobnicate]
-        }) {
+        let err = match parse(quote! { service = svc, ops = [list, frobnicate] }) {
             Ok(_) => panic!("unknown op must fail to parse"),
             Err(e) => e,
         };

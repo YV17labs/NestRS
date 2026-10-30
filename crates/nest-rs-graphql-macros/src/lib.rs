@@ -107,19 +107,23 @@ pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Generates the CRUD operations of a resolver; it stands in for
-/// `#[operations]`, never beside it. Operation names derive from the output type
-/// (`User` → `users`/`user`/`create_user`/…).
+/// `#[operations]`, never beside it. Operation names derive from the
+/// resolver's resource, its name without `Resolver`, made singular
+/// (`UsersResolver` → `users`/`user`/`create_user`/…).
 ///
-/// `#[crud(service = svc, entity = …::Entity, output = Dto, create = CreateDto,
-/// update = UpdateDto, ops = [list, get, ...], paginate = cursor|none)]`, where
-/// `service` names the injected `CrudService` field. Write a matching
-/// operation method to override it — the macro keeps yours and skips its own,
-/// and refuses a `paginate` beside your list, which nothing generated reads.
+/// `#[crud(service = svc, ops = [list, get, ...], paginate = cursor|none)]`,
+/// where `service` names the resolver's `#[inject]` field holding the entity's
+/// `CrudService`. Every type an operation names is read off that service — the
+/// entity, the create and update inputs (`Creatable::Create`,
+/// `Updatable::Update`) — and the entity's `#[expose]`d wire type
+/// (`Exposed::Wire`); `#[resolver]` hands the field's type over, so a name the
+/// resolver does not inject is refused at the key. Write a matching operation
+/// method to override it — the macro keeps yours and skips its own, and
+/// refuses a `paginate` beside your list, which nothing generated reads.
 ///
-/// `ops` selects which operations to generate (omit for all five). A `create`/
-/// `update` op needs its input type and the service's `Creatable`/`Updatable`
-/// impl; `delete` needs `Deletable`. Requesting an op without its type is a
-/// compile error.
+/// `ops` selects which operations to generate (omit for all five). A write op
+/// reads the service's trait — `create` `Creatable`, `update` `Updatable`,
+/// `delete` `Deletable` — so one the service does not offer fails to resolve.
 ///
 /// The generated list query is **keyset-paginated by default**
 /// (`first: Int, after: ID` — `after` is the previous page's last `id`,
@@ -131,9 +135,10 @@ pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// # Expands to
 ///
-/// The missing operation methods — each delegating to the entity's
-/// `CrudService` and declaring `#[authorize(Action, Entity)]` — prepended to the
-/// impl block, then the whole block re-emitted under `#[operations]`.
+/// A hidden alias per type the operations name, read off the service; the
+/// missing operation methods — each delegating to the entity's `CrudService`
+/// and declaring `#[authorize(Action, Entity)]` — prepended to the impl block,
+/// then the whole block re-emitted under `#[operations]`.
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(crud::entry(args, input).into()).into()

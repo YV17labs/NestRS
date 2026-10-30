@@ -567,6 +567,31 @@ mod tests {
         assert_eq!(names.singular, "BlogPost");
     }
 
+    /// `#[crud]` reads a host's resource off its name with its own copy of
+    /// the rule: the CLI links no framework crate, so the two are held here.
+    #[test]
+    fn the_generator_and_crud_singularize_alike() {
+        for word in [
+            "Users",
+            "Categories",
+            "Statuses",
+            "Boxes",
+            "Matches",
+            "Wishes",
+            "Quizzes",
+            "Address",
+            "Post",
+            "BlogPosts",
+            "ArtistExhibitions",
+        ] {
+            assert_eq!(
+                singularize(word),
+                nest_rs_codegen::__private::singular(word),
+                "{word}"
+            );
+        }
+    }
+
     #[test]
     fn singularizes_entity_names() {
         assert_eq!(Names::parse("users").entity(), "User");

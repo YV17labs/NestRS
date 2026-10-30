@@ -127,7 +127,7 @@ pub(crate) const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
 use nest_rs::graphql::{crud, resolver};
 
 use crate::authz::AuthzGuard;
-use crate::{{snake}}::{{{create_op}}, Entity as {{entity}}Entity, {{entity}}, {{service}}, {{update_op}}};
+use crate::{{snake}}::{{service}};
 
 // `/graphql` authenticates at its request, through the guards
 // AuthzGraphqlModule declares for it, so the resolver binds the ability guard
@@ -144,13 +144,7 @@ pub struct {{resolver}} {
 // authenticated, ability-filtered, transactional and field-masked — generated
 // by #[crud], the same way the HTTP controller is. Each answers FORBIDDEN until
 // AuthzAbility grants its action on `crate::{{snake}}::Entity`.
-#[crud(
-    service = svc,
-    entity = {{entity}}Entity,
-    output = {{entity}},
-    create = {{create_op}},
-    update = {{update_op}},
-)]
+#[crud(service = svc)]
 impl {{resolver}} {}
 "#;
 

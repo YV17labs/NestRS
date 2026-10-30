@@ -56,8 +56,47 @@ pub fn pascal_case(ident: &Ident) -> Ident {
     Ident::new(&out, ident.span())
 }
 
+/// Naive English singularization over the last word of a PascalCase name:
+/// `Users` → `User`, `Categories` → `Category`, `Statuses` → `Status`; a word
+/// already singular passes through. `#[crud]` reads a host's resource by it,
+/// and `nestrs g` names an entity by its own copy, which links no framework
+/// crate: a test there holds the two alike.
+pub fn singular(pascal: &str) -> String {
+    let lower = pascal.to_lowercase();
+    if let Some(stem) = pascal.get(..pascal.len().saturating_sub(3))
+        && lower.ends_with("ies")
+    {
+        return format!("{stem}y");
+    }
+    for suffix in ["ses", "xes", "zes", "ches", "shes"] {
+        if lower.ends_with(suffix) {
+            return pascal[..pascal.len() - 2].to_owned();
+        }
+    }
+    if lower.ends_with("ss") {
+        return pascal.to_owned();
+    }
+    pascal.strip_suffix('s').unwrap_or(pascal).to_owned()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_plural_reads_as_its_singular_and_a_singular_as_itself() {
+        for (plural, singular) in [
+            ("Users", "User"),
+            ("Categories", "Category"),
+            ("Statuses", "Status"),
+            ("Boxes", "Box"),
+            ("Address", "Address"),
+            ("Post", "Post"),
+            ("BlogPosts", "BlogPost"),
+            ("", ""),
+        ] {
+            assert_eq!(super::singular(plural), singular, "{plural}");
+        }
+    }
+
     use super::*;
 
     #[test]

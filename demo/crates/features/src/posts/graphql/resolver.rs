@@ -21,12 +21,7 @@ pub struct PostsResolver {
     feed: Arc<PostFeed>,
 }
 
-#[crud(
-    service = svc,
-    entity = PostEntity,
-    output = Post,
-    ops = [list, get],
-)]
+#[crud(service = svc, ops = [list, get])]
 impl PostsResolver {
     #[mutation]
     #[authorize(Update, bind = PostsService)]

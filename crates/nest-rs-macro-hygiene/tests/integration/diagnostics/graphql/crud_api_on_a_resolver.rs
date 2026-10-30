@@ -6,12 +6,7 @@ use nest_rs::graphql::{crud, resolver};
 #[resolver]
 struct OrgsResolver;
 
-#[crud(
-    service = svc,
-    entity = OrgEntity,
-    output = Org,
-    api(get(summary = "Get an org by id")),
-)]
+#[crud(service = svc, api(get(summary = "Get an org by id")))]
 impl OrgsResolver {}
 
 fn main() {}

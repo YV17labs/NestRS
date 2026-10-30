@@ -10,8 +10,6 @@ struct OrgsController;
 
 #[crud(
     service = svc,
-    entity = OrgEntity,
-    output = Org,
     ops = [list, get],
     api(get(summary = "Get an org by id")),
 )]

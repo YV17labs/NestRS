@@ -1,6 +1,6 @@
 //! `#[crud]` — synthesise the standard resolver operations the developer did
-//! not hand-write, each delegating to the entity's `CrudService`, then re-emit
-//! under `#[operations]`.
+//! not hand-write, each delegating to the entity's `CrudService` and typed off
+//! it, then re-emit under `#[operations]`.
 
 use nest_rs_codegen::__private::pair;
 use std::collections::HashSet;
@@ -10,7 +10,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl, parse_quote};
 
-use nest_rs_codegen::__private::{CrudOp, Paginate, parse_crud_args, singular_of};
+use nest_rs_codegen::__private::{
+    CrudOp, CrudTypes, Paginate, impl_self_ident, parse_crud_args, resolver_singular,
+};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = match pair::GRAPHQL.parse_operations(input.into()) {
@@ -44,11 +46,17 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         })
         .collect();
 
+    let host = impl_self_ident(&item.self_ty, "#[crud]")?;
     let service = &cfg.service;
-    let entity = &cfg.entity;
-    let output = &cfg.output;
-    let singular = singular_of(output);
+    let singular = resolver_singular(&host);
     let ops = cfg.generated_ops(&existing, |op| op.resolver_method(&singular))?;
+    let CrudTypes {
+        entity,
+        output,
+        create,
+        update,
+        aliases,
+    } = cfg.types(&host, &item.self_ty, ops);
     let list_op = format_ident!("{}", CrudOp::List.resolver_method(&singular));
     let get_op = format_ident!("{}", CrudOp::Get.resolver_method(&singular));
     let create_op = format_ident!("{}", CrudOp::Create.resolver_method(&singular));
@@ -92,7 +100,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     .await
                     .map_err(#crud_error)?;
                     ::core::result::Result::Ok(
-                        __page.items.iter().map(#output::from).collect(),
+                        __page.items.iter().map(<#output>::from).collect(),
                     )
                 }
             },
@@ -105,7 +113,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
                         .await
                         .map_err(#crud_error)?;
-                    ::core::result::Result::Ok(__rows.iter().map(#output::from).collect())
+                    ::core::result::Result::Ok(__rows.iter().map(<#output>::from).collect())
                 }
             },
         };
@@ -130,7 +138,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 .map_err(#crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => ::core::result::Result::Ok(
-                        ::core::option::Option::Some(#output::from(&__m)),
+                        ::core::option::Option::Some(<#output>::from(&__m)),
                     ),
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
                     ::nest_rs_seaorm::Access::Missing => {
@@ -141,7 +149,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         });
     }
 
-    if let Some(create) = ops.create {
+    if ops.create {
         generated.push(parse_quote! {
             #[mutation]
             #[authorize(::nest_rs_authz::Create, #entity)]
@@ -152,12 +160,12 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 let __row = ::nest_rs_seaorm::Creatable::create(&*self.#service, input)
                     .await
                     .map_err(#crud_error)?;
-                ::core::result::Result::Ok(#output::from(&__row))
+                ::core::result::Result::Ok(<#output>::from(&__row))
             }
         });
     }
 
-    if let Some(update) = ops.update {
+    if ops.update {
         generated.push(parse_quote! {
             #[mutation]
             #[authorize(::nest_rs_authz::Update, #entity)]
@@ -184,7 +192,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         .await
                         .map_err(#crud_error)?;
                         ::core::result::Result::Ok(::core::option::Option::Some(
-                            #output::from(&__row),
+                            <#output>::from(&__row),
                         ))
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
@@ -230,6 +238,8 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     item.items = generated;
 
     Ok(quote! {
+        #aliases
+
         #[::nest_rs_graphql::operations]
         #item
     })
@@ -242,53 +252,48 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn create_op_without_input_type_fails_to_expand() {
-        let item: ItemImpl = parse_quote! { impl Things {} };
-        let err = crud(
-            quote! { service = svc, entity = E, output = Thing, ops = [create] },
-            item,
-        )
-        .expect_err("create without an input type must fail to expand");
-        assert!(err.to_string().contains("create"), "names the op: {}", err);
+    fn generated(args: TokenStream2, item: ItemImpl) -> syn::Result<String> {
+        crud(args, item).map(|tokens| tokens.to_string())
     }
 
     #[test]
-    fn update_op_without_input_type_fails_to_expand() {
-        let item: ItemImpl = parse_quote! { impl Things {} };
-        let err = crud(
-            quote! { service = svc, entity = E, output = Thing, ops = [update] },
-            item,
-        )
-        .expect_err("update without an input type must fail to expand");
-        assert!(err.to_string().contains("update"), "names the op: {}", err);
-    }
-
-    #[test]
-    fn an_input_type_for_an_excluded_op_fails_to_expand() {
-        let item: ItemImpl = parse_quote! { impl Things {} };
-        let err = crud(
-            quote! {
-                service = svc, entity = E, output = Thing, update = UpdateThing, ops = [list]
-            },
-            item,
-        )
-        .expect_err("an input type for an excluded op must fail to expand");
+    fn the_service_alone_names_every_operation_off_the_resolvers_resource() {
+        let item: ItemImpl = parse_quote! { impl ThingsResolver {} };
+        let out = generated(quote! { service = svc }, item).expect("expands");
+        for op in [
+            "fn things",
+            "fn thing",
+            "fn create_thing",
+            "fn update_thing",
+            "fn delete_thing",
+        ] {
+            assert!(out.contains(op), "{op}: {out}");
+        }
         assert!(
-            err.to_string().contains("`update`"),
-            "names the op: {}",
-            err
+            out.contains("input : __NestrsCrudThingsResolverCreate"),
+            "the create input is the service's: {out}"
+        );
+        assert!(
+            out.contains("Result < __NestrsCrudThingsResolverOutput >"),
+            "the answer is the entity's wire type: {out}"
+        );
+    }
+
+    #[test]
+    fn a_host_named_in_the_singular_still_lists_in_the_plural() {
+        let item: ItemImpl = parse_quote! { impl ThingResolver {} };
+        let out = generated(quote! { service = svc, ops = [list, get] }, item).expect("expands");
+        assert!(
+            out.contains("fn things") && out.contains("fn thing ("),
+            "{out}"
         );
     }
 
     #[test]
     fn a_paginate_for_an_excluded_list_fails_to_expand() {
-        let item: ItemImpl = parse_quote! { impl Things {} };
-        let err = crud(
-            quote! { service = svc, entity = E, output = Thing, ops = [get], paginate = none },
-            item,
-        )
-        .expect_err("a `paginate` for an excluded `list` must fail to expand");
+        let item: ItemImpl = parse_quote! { impl ThingsResolver {} };
+        let err = generated(quote! { service = svc, ops = [get], paginate = none }, item)
+            .expect_err("a `paginate` for an excluded `list` must fail to expand");
         assert!(
             err.to_string()
                 .contains("`paginate` configures the `list` op"),
@@ -299,15 +304,12 @@ mod tests {
     #[test]
     fn a_paginate_beside_a_hand_written_list_fails_to_expand() {
         let item: ItemImpl = parse_quote! {
-            impl Things {
+            impl ThingsResolver {
                 async fn things(&self) -> Vec<Thing> { Vec::new() }
             }
         };
-        let err = crud(
-            quote! { service = svc, entity = E, output = Thing, paginate = none },
-            item,
-        )
-        .expect_err("a `paginate` beside a hand-written list must fail to expand");
+        let err = generated(quote! { service = svc, paginate = none }, item)
+            .expect_err("a `paginate` beside a hand-written list must fail to expand");
         assert_eq!(
             err.to_string(),
             "#[crud] `paginate` configures the `list` op, which this block writes by hand as \
@@ -316,16 +318,17 @@ mod tests {
     }
 
     #[test]
-    fn create_op_with_input_type_expands() {
-        let item: ItemImpl = parse_quote! { impl Things {} };
-        let out = crud(
-            quote! {
-                service = svc, entity = E, output = Thing, ops = [create], create = CreateThing
-            },
-            item,
-        )
-        .expect("create paired with its input type expands")
-        .to_string();
-        assert!(out.contains("create_thing"), "emits the create op: {out}");
+    fn an_op_the_block_writes_is_not_generated_nor_its_input_named() {
+        let item: ItemImpl = parse_quote! {
+            impl ThingsResolver {
+                async fn create_thing(&self) -> bool { true }
+            }
+        };
+        let out = generated(quote! { service = svc }, item).expect("expands");
+        assert!(
+            !out.contains("type __NestrsCrudThingsResolverCreate"),
+            "{out}"
+        );
+        assert!(out.contains("fn update_thing"), "{out}");
     }
 }

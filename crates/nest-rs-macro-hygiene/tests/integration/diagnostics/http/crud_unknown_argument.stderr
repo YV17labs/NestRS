@@ -1,5 +1,5 @@
-error: unknown #[crud] argument `cached`; expected `service`, `entity`, `output`, `create`, `update`, `ops`, `paginate` or `api`
-  --> tests/integration/diagnostics/http/crud_unknown_argument.rs:13:57
+error: unknown #[crud] argument `cached`; expected `service`, `ops`, `paginate` or `api`
+  --> tests/integration/diagnostics/http/crud_unknown_argument.rs:13:23
    |
-13 | #[crud(service = svc, entity = OrgEntity, output = Org, cached = true)]
-   |                                                         ^^^^^^
+13 | #[crud(service = svc, cached = true)]
+   |                       ^^^^^^

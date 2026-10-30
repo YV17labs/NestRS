@@ -17,13 +17,7 @@ keyset-paginated unless you opt out.
 A `#[crud]` list — REST or GraphQL — is keyset-paginated out of the box:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-#[crud(
-    service = svc,
-    entity = PostEntity,
-    output = Post,
-    create = CreatePost,
-    update = UpdatePost,
-)]
+#[crud(service = svc)]
 impl PostsController {}
 ```
 

@@ -178,6 +178,51 @@ fn removed_key(key: &str) -> Option<String> {
     })
 }
 
+/// The key a host's `#[inject]` field is read by across its decorator pair:
+/// 64-bit FNV-1a over the field's name, which the struct half declaring the
+/// field and the impl half naming it compute alike.
+pub fn injected_field_key(field: &Ident) -> u64 {
+    field
+        .to_string()
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325, |hash: u64, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        })
+}
+
+/// Per `#[inject]` field of `item`, the `InjectedField` impl naming its type
+/// under [`injected_field_key`], compiled out with the field. Read before
+/// [`build_injectable_body`] strips the attribute.
+pub fn injected_field_impls(item: &ItemStruct) -> TokenStream2 {
+    let Fields::Named(fields) = &item.fields else {
+        return TokenStream2::new();
+    };
+    let name = &item.ident;
+    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    let impls = fields.named.iter().filter_map(|field| {
+        let ident = field.ident.as_ref()?;
+        if !field
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("inject"))
+        {
+            return None;
+        }
+        let key = injected_field_key(ident);
+        let ty = &field.ty;
+        let cfgs = crate::attrs::cfg_attrs(&field.attrs);
+        Some(quote! {
+            #(#cfgs)*
+            impl #impl_generics ::nest_rs_core::__private::InjectedField<#key>
+                for #name #ty_generics #where_clause
+            {
+                type Type = #ty;
+            }
+        })
+    });
+    quote! { #(#impls)* }
+}
+
 /// The hidden `__nestrs_from_container` constructor emitted by every decorator
 /// macro: the macro ABI its own expansions call, never an API of the type.
 pub fn from_container_method(ctor: &TokenStream2) -> TokenStream2 {

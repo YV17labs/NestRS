@@ -78,14 +78,15 @@ pub struct PostsModule;
 ## The controller
 
 A controller is a struct with `#[controller(path = ...)]` and a
-`#[crud(...)]` impl block that declares the entity. The macro generates
-every CRUD verb — `list`, `page`, `create`, `get`, `update`, `delete` —
-from the service's trait impls: the read verbs from `CrudService`, and
-each mutating verb only if the matching write trait is implemented.
-Naming `create = ...` without a `Creatable` impl is a build break, not
-a silent no-op — a forgotten write path fails to compile. You don't
-write handler bodies unless you need domain logic the trait doesn't
-cover.
+`#[crud(service = svc)]` impl block naming the field that holds the
+service. The macro generates every CRUD verb — `list`, `get`, `create`,
+`update`, `delete` — and reads every type they name off that service: the
+entity off `CrudService`, the bodies off `Creatable` and `Updatable`, and
+the answer off the entity's `#[expose(name = "Post")]`. Each verb reads its
+trait, so a resource missing one — a `create` with no `Creatable` impl — is
+a build break, not a silent no-op; `ops = [list, get]` lists the verbs a
+read-only resource has. You don't write handler bodies unless you need
+domain logic the trait doesn't cover.
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use std::sync::Arc;
@@ -94,7 +95,7 @@ use nest_rs::http::{controller, crud};
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
-use crate::posts::{CreatePost, Entity as PostEntity, Post, PostsService, UpdatePost};
+use crate::posts::PostsService;
 
 #[controller(path = "/posts")]
 #[use_guards(AuthnGuard, AuthzGuard)]
@@ -103,13 +104,7 @@ pub struct PostsController {
     svc: Arc<PostsService>,
 }
 
-#[crud(
-    service = svc,
-    entity = PostEntity,
-    output = Post,
-    create = CreatePost,
-    update = UpdatePost,
-)]
+#[crud(service = svc)]
 impl PostsController {}
 ```
 

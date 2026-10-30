@@ -8,8 +8,10 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 A REST CRUD or a GraphQL CRUD is **one attribute** on the controller or
-resolver impl block. `#[crud(...)]` reads the entity's [`CrudService`](/database/),
-synthesises every operation the developer did not hand-write, and re-emits
+resolver impl block. `#[crud(service = svc)]` reads the entity's
+[`CrudService`](/database/) off the field it names, types every operation off
+that service and its entity's `#[expose]`, synthesises every operation the
+developer did not hand-write, and re-emits
 the block under `#[routes]` (HTTP) or `#[operations]` (GraphQL). Auth, row-level
 filtering, by-id binding and response masking come from the same data context
 described in [Database](/database/) and [Security](/security/) — `#[crud]`
@@ -26,7 +28,7 @@ the model they decorate: `nest_rs::seaorm`, one feature. `#[crud]` belongs to
 the edge it serves — `nest_rs::http::crud`, on by default, or
 `nest_rs::graphql::crud`.
 
-## A full REST CRUD, 22 lines
+## A full REST CRUD, 16 lines
 
 ```rust title="crates/features/src/orgs/http/controller.rs (from the demo)"
 use std::sync::Arc;
@@ -35,7 +37,7 @@ use nest_rs::http::{controller, crud};
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
-use crate::orgs::{CreateOrg, Entity as OrgEntity, Org, OrgsService, UpdateOrg};
+use crate::orgs::OrgsService;
 
 #[controller(path = "/orgs")]
 #[use_guards(AuthnGuard, AuthzGuard)]
@@ -44,13 +46,7 @@ pub struct OrgsController {
     svc: Arc<OrgsService>,
 }
 
-#[crud(
-    service = svc,
-    entity = OrgEntity,
-    output = Org,
-    create = CreateOrg,
-    update = UpdateOrg,
-)]
+#[crud(service = svc)]
 impl OrgsController {}
 ```
 
@@ -69,13 +65,19 @@ Every handler delegates to the same `OrgsService` instance, which goes through
 `Repo` against the ambient executor — so reads are pool, mutations sit inside
 the request's transaction, and `Ability` filters every row.
 
-The `201` carries `Location: /orgs/<id>` — the row it just minted, as RFC 9110
-§15.3.2 asks. The path is the one the caller posted to, so a global prefix or a
-`/v1` segment is already part of it, and the value is an absolute-path
-reference: naming a host would mean trusting the `Host` header. The OpenAPI
-document declares the header, so a generated client reads it rather than
-discarding it. An entity keyed on something other than a `Uuid` gets the `201`
-and the body without the header.
+Every type in that table is read off `OrgsService`: the entity off its
+`CrudService::Entity`, the bodies off `Creatable::Create` and
+`Updatable::Update`, and the answer off the entity's `#[expose(name = "Org")]`
+wire type. The entity, the service and its trait impls each state a fact once;
+the controller states none of them again.
+
+The `201` is a `Created<Json<Org>>`: it carries `Location: /orgs/<id>` — the
+row it just minted, as RFC 9110 §15.3.2 asks. The path is the one the caller
+posted to, so a global prefix or a `/v1` segment is already part of it, and the
+value is an absolute-path reference: naming a host would mean trusting the
+`Host` header. The OpenAPI document reads the status, the header and the body
+off that type, so a generated client reads the `Location` rather than
+discarding it. The resource is keyed by a `Uuid`, as its by-id routes are.
 
 ### `PUT` takes a whole `Update<Name>`
 
@@ -98,10 +100,6 @@ that is the one knob, and it makes the field nullable on the wire too.
 ```rust title="crates/features/src/orgs/http/controller.rs"
 #[crud(
     service = svc,        // the field on the struct holding Arc<…Service>
-    entity = OrgEntity,   // the SeaORM entity (used in authz Authorize<A, S>)
-    output = Org,         // the #[expose]-generated wire type returned by handlers
-    create = CreateOrg,   // the bare entity-derived input (no `Dto` suffix)
-    update = UpdateOrg,
     paginate = cursor,    // optional — cursor is already the default; `none` opts out
     ops = [list, get, create, update, delete],  // optional — omit for all five
     api(get(summary = "Get an org by id")),     // optional — one operation's OpenAPI text
@@ -111,27 +109,28 @@ impl OrgsController {}
 
 - `service` is the **field name** on the struct, not the type. Follow the
   framework convention: a single service is named `svc`, several are
-  `<thing>_svc`.
-- `output` is the type the handler returns — typically the `#[expose]`
-  output (`Org`), not the SeaORM `Model`. The shaper runs response masking
-  on it.
-- `create` and `update` map to the `#[expose(input(create), input(update))]`
-  generated input types (bare `CreateOrg` / `UpdateOrg`, not `…Dto`). List only
-  the operations a resource has with `ops = [list, get]`; omit `ops` for all
-  five. A create/update op requires its input type **and** the service's
-  `Creatable`/`Updatable` impl, or the build fails — never a silent no-op. The
-  mirror holds too: an input type for an op `ops` leaves out fails the build
-  rather than being dropped, since the two declarations disagree.
+  `<thing>_svc`. `#[controller]` and `#[resolver]` hand the field's type
+  over, so a name the struct does not `#[inject]` fails the build at the key.
+- Every type an operation names comes off that service and its entity: the
+  answer is the entity's `#[expose]`d wire type (`Org`), never the SeaORM
+  `Model`, and the shaper masks it; the create and update bodies are the
+  service's `Creatable::Create` and `Updatable::Update`, the
+  `#[expose(input(create), input(update))]` types (bare `CreateOrg` /
+  `UpdateOrg`, not `…Dto`).
+- `ops` lists the operations a resource has (`ops = [list, get]`); omit it for
+  all five. Each write op reads its trait, so one the service does not offer —
+  a `create` with no `Creatable` impl — fails the build, never a silent no-op.
 - `paginate` defaults to `cursor` — every generated list is keyset-paginated
   (the next page in a `Link: <…>; rel="next"` header on REST, `first`/`after` arguments on
   GraphQL). `paginate = none` opts out into the full collection (backstopped
   by `CrudService::list`'s hard cap). It configures `list` and nothing else, so
-  writing it beside an `ops` that leaves `list` out fails the build for the
-  same reason an input type for an excluded op does, and so does writing it
-  beside a `list` you write by hand.
+  writing it beside an `ops` that leaves `list` out fails the build, since the
+  two declarations disagree, and so does writing it beside a `list` you write
+  by hand.
 - `api(<op>(summary = "…", description = "…"))` gives a generated route the
   OpenAPI text a hand-written one carries in `#[api]`; an operation it does
-  not name keeps its default summary (`Fetch Org by id`). Naming an op `ops`
+  not name keeps its default summary, worded off the controller's name
+  (`OrgsController` → `Fetch Org by id`). Naming an op `ops`
   leaves out or one you write by hand fails the build — give your method its
   own `#[api]` — and a resolver refuses the key: a GraphQL field you want
   described is one you write, with its doc comment.
@@ -149,10 +148,6 @@ create lands in the caller's org without a handler.
 ```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)"
 #[crud(
     service = svc,
-    entity = UserEntity,
-    output = User,
-    create = CreateUser,
-    update = UpdateUser,
     api(
         get(
             summary = "Get a user in the caller's org by id",
@@ -196,13 +191,7 @@ it. Constants the server owns, such as a new post's status, are the entity's
 the ones that need custom logic — the rest are filled in:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-#[crud(
-    service = svc,
-    entity = PostEntity,
-    output = Post,
-    create = CreatePost,
-    update = UpdatePost,
-)]
+#[crud(service = svc)]
 impl PostsController {
     #[get("/")]
     #[authorize(Read, PostEntity)]
@@ -223,8 +212,9 @@ generated method does: a hand-written `create` keeps the `201` and its
 
 ## The GraphQL twin
 
-The same attribute, with `query`/`mutation` names derived from the output
-type. `User` ⇒ `users`, `user`, `create_user`, `update_user`,
+The same attribute, with `query`/`mutation` names derived from the
+resolver's resource — its name without `Resolver`, made singular.
+`UsersResolver` ⇒ `users`, `user`, `create_user`, `update_user`,
 `delete_user`:
 
 ```rust title="crates/features/src/users/graphql/resolver.rs (from the demo)"
@@ -235,13 +225,7 @@ pub struct UsersResolver {
     svc: Arc<UsersService>,
 }
 
-#[crud(
-    service = svc,
-    entity = UserEntity,
-    output = User,
-    create = CreateUser,
-    update = UpdateUser,
-)]
+#[crud(service = svc)]
 impl UsersResolver {}
 ```
 
@@ -449,7 +433,8 @@ pub struct Model {
 The flag is the whole declaration: the service writes nothing for it.
 `CrudService` carries the **read** half; the write half is opt-in — implement
 `Creatable`, `Updatable`, `Deletable` only for the operations the resource
-offers (the framework cannot infer opt-in per service without specialization):
+offers (the framework cannot infer opt-in per service without specialization).
+These impls are where `#[crud]` reads the entity and the inputs:
 
 ```rust title="crates/features/src/posts/service.rs"
 impl CrudService for PostsService {
@@ -491,8 +476,8 @@ matching the migration it tells you to generate next.
 ## Reference
 
 - `crates/features/src/orgs/` — the empty-impl exemplar (cursor pagination).
-- `crates/features/src/users/` — the override exemplar (`create` + `get`
-  custom, the rest generated).
+- `crates/features/src/users/` — the tenant-scoped exemplar: every operation
+  generated, the create's org taken from the grant.
 - `crates/nest-rs-http-macros/src/crud.rs` — the REST expansion.
 - `crates/nest-rs-graphql-macros/src/crud.rs` — the GraphQL expansion.
 - `crates/nest-rs-seaorm/` — `CrudService`, `Access`, `Repo`.

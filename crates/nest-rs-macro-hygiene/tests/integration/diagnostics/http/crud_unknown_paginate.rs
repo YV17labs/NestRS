@@ -7,7 +7,7 @@ use nest_rs::http::{controller, crud};
 #[controller(path = "/orgs")]
 struct OrgsController;
 
-#[crud(service = svc, entity = OrgEntity, output = Org, paginate = pages)]
+#[crud(service = svc, paginate = pages)]
 impl OrgsController {}
 
 fn main() {}

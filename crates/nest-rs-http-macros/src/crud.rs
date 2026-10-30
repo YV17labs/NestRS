@@ -1,5 +1,6 @@
 //! `#[crud]` — generate standard REST operations on a `#[controller]` impl
-//! block and re-emit it under `#[routes]`.
+//! block, typed off the service its key names, and re-emit it under
+//! `#[routes]`.
 
 use nest_rs_codegen::__private::pair;
 use std::collections::HashSet;
@@ -10,7 +11,8 @@ use quote::quote;
 use syn::{ImplItem, ItemImpl, parse_quote};
 
 use nest_rs_codegen::__private::{
-    CrudDeclaration, CrudOp, GeneratedOps, Paginate, impl_self_ident, parse_crud_args,
+    CrudDeclaration, CrudOp, CrudTypes, GeneratedOps, Paginate, impl_self_ident, parse_crud_args,
+    resource_noun,
 };
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -27,8 +29,7 @@ pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
 pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let cfg = parse_crud_args(args)?;
     let self_ty = item.self_ty.clone();
-    // Kept for the diagnostic it raises on a non-path `impl` target.
-    let _ = impl_self_ident(&self_ty, "#[crud]")?;
+    let host = impl_self_ident(&self_ty, "#[crud]")?;
 
     let existing: HashSet<String> = item
         .items
@@ -39,16 +40,17 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         })
         .collect();
     let ops = cfg.generated_ops(&existing, |op| op.name().to_owned())?;
-    let prefix_check = by_id_path_check(&self_ty, &ops);
+    let prefix_check = by_id_path_check(&self_ty, ops);
 
     let service = &cfg.service;
-    let entity = &cfg.entity;
-    let output = &cfg.output;
-    let noun = output
-        .segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .unwrap_or_else(|| "Resource".to_owned());
+    let CrudTypes {
+        entity,
+        output,
+        create,
+        update,
+        aliases,
+    } = cfg.types(&host, &self_ty, ops);
+    let noun = resource_noun(&host, "Controller");
 
     // Emitted as a path, not interpolated: the loader `bind = Service` runs on
     // every edge enforces the same rule and must read the same sentence.
@@ -86,7 +88,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                         .await
                         .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                     ::core::result::Result::Ok(::nest_rs_http::Json(
-                        __rows.iter().map(#output::from).collect(),
+                        __rows.iter().map(<#output>::from).collect(),
                     ))
                 }
             },
@@ -113,7 +115,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     .await
                     .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                     let __items: ::std::vec::Vec<#output> =
-                        __p.items.iter().map(#output::from).collect();
+                        __p.items.iter().map(<#output>::from).collect();
                     ::core::result::Result::Ok(::nest_rs_http::Paginated::new(
                         ::nest_rs_http::Json(__items),
                         __first,
@@ -145,7 +147,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 .map_err(::nest_rs_seaorm::__private::http_crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
-                        ::core::result::Result::Ok(::nest_rs_http::Json(#output::from(&__m)))
+                        ::core::result::Result::Ok(::nest_rs_http::Json(<#output>::from(&__m)))
                     }
                     #access_refused
                 }
@@ -153,7 +155,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         });
     }
 
-    if let Some(create) = ops.create {
+    if ops.create {
         let api = api_args(&cfg, CrudOp::Create, format!("Create {noun}"));
         generated.push(parse_quote! {
             #[post("/")]
@@ -172,13 +174,13 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                 ::core::result::Result::Ok(::nest_rs_http::Created::at(
                     ::nest_rs_seaorm::__private::created_key::<#entity>(&__row),
-                    ::nest_rs_http::Json(#output::from(&__row)),
+                    ::nest_rs_http::Json(<#output>::from(&__row)),
                 ))
             }
         });
     }
 
-    if let Some(update) = ops.update {
+    if ops.update {
         let api = api_args(&cfg, CrudOp::Update, format!("Update {noun} by id"));
         generated.push(parse_quote! {
             // RFC 9110 §9.3.4: `Update<E>` carries every writable field, which
@@ -209,7 +211,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                         )
                         .await
                         .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
-                        ::core::result::Result::Ok(::nest_rs_http::Json(#output::from(&__row)))
+                        ::core::result::Result::Ok(::nest_rs_http::Json(<#output>::from(&__row)))
                     }
                     #access_refused
                 }
@@ -255,6 +257,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     item.items = generated;
 
     Ok(quote! {
+        #aliases
+
         #[::nest_rs_http::routes]
         #item
 
@@ -265,10 +269,10 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
 /// The assertion that the controller's path names no parameter of its own
 /// when a generated op reads the id — `#[crud]` never sees that path, and
 /// each by-id op reads one parameter, its route's.
-fn by_id_path_check(self_ty: &syn::Type, ops: &GeneratedOps<'_>) -> Option<TokenStream2> {
+fn by_id_path_check(self_ty: &syn::Type, ops: GeneratedOps) -> Option<TokenStream2> {
     let by_id: Vec<String> = [
         (ops.get, CrudOp::Get),
-        (ops.update.is_some(), CrudOp::Update),
+        (ops.update, CrudOp::Update),
         (ops.delete, CrudOp::Delete),
     ]
     .into_iter()
@@ -321,7 +325,7 @@ mod tests {
     #[test]
     fn partial_ops_generate_only_the_listed_routes() {
         let out = generated_methods(quote! {
-            service = svc, entity = E, output = Thing, ops = [list, get, delete]
+            service = svc, ops = [list, get, delete]
         });
         assert!(out.contains("fn list"), "list expected: {out}");
         assert!(out.contains("fn get"), "get expected: {out}");
@@ -333,7 +337,7 @@ mod tests {
     #[test]
     fn the_create_answers_a_created_and_the_cursor_list_a_paginated_answer() {
         let out = generated_methods(quote! {
-            service = svc, entity = E, output = Thing, create = CreateThing
+            service = svc
         });
         assert!(out.contains(":: nest_rs_http :: Created <"), "{out}");
         assert!(out.contains(":: nest_rs_http :: Paginated <"), "{out}");
@@ -342,7 +346,7 @@ mod tests {
             "the answer says its status: {out}"
         );
         let whole = generated_methods(quote! {
-            service = svc, entity = E, output = Thing, ops = [list], paginate = none
+            service = svc, ops = [list], paginate = none
         });
         assert!(
             !whole.contains("Paginated"),
@@ -355,12 +359,13 @@ mod tests {
     #[test]
     fn every_op_declares_its_posture_with_authorize() {
         let out = generated_methods(quote! {
-            service = svc, entity = E, output = Thing, create = CreateThing,
-            update = UpdateThing
+            service = svc
         });
         for action in ["Read", "Create", "Update", "Delete"] {
             assert!(
-                out.contains(&format!("# [authorize (:: nest_rs_authz :: {action} , E)]")),
+                out.contains(&format!(
+                    "# [authorize (:: nest_rs_authz :: {action} , __NestrsCrudThingsEntity)]"
+                )),
                 "{action}: {out}",
             );
         }
@@ -372,7 +377,7 @@ mod tests {
     #[test]
     fn the_update_op_replaces_the_row_through_put() {
         let out = generated_methods(quote! {
-            service = svc, entity = E, output = Thing, update = UpdateThing
+            service = svc, ops = [update]
         });
         assert!(out.contains("# [put (\"/{id}\")]"), "{out}");
         assert!(!out.contains("patch"), "{out}");
@@ -381,7 +386,7 @@ mod tests {
     #[test]
     fn api_documents_the_operation_it_names_and_leaves_the_others_their_default() {
         let out = generated_methods(quote! {
-            service = svc, entity = E, output = Thing, ops = [list, get],
+            service = svc, ops = [list, get],
             api(get(summary = "Get a thing in the caller's org", description = "Absent: 404.")),
         });
         assert!(
@@ -397,7 +402,7 @@ mod tests {
     fn api_naming_an_op_ops_leaves_out_fails_to_expand() {
         let item: ItemImpl = parse_quote! { impl Things {} };
         let err = crud(
-            quote! { service = svc, entity = E, output = Thing, ops = [list], api(get(summary = "x")) },
+            quote! { service = svc, ops = [list], api(get(summary = "x")) },
             item,
         )
         .expect_err("docs for an op that is not generated must fail");
@@ -413,14 +418,14 @@ mod tests {
         for (args, refusal) in [
             (
                 quote! {
-                    service = svc, entity = E, output = Thing, ops = [list, get],
+                    service = svc, ops = [list, get],
                     api(get(summary = "Get a thing")),
                 },
                 "#[crud] `api` configures the `get` op, which this block writes by hand as \
                  `fn get` — drop `get(…)`: give that method its own `#[api]`",
             ),
             (
-                quote! { service = svc, entity = E, output = Thing, paginate = none },
+                quote! { service = svc, paginate = none },
                 "#[crud] `paginate` configures the `list` op, which this block writes by hand \
                  as `fn list` — drop `paginate = …`: the method bounds its own list",
             ),
@@ -437,13 +442,23 @@ mod tests {
     }
 
     #[test]
-    fn create_op_without_input_type_fails_to_expand() {
-        let item: ItemImpl = parse_quote! { impl Things {} };
-        let err = crud(
-            quote! { service = svc, entity = E, output = Thing, ops = [create] },
-            item,
-        )
-        .expect_err("create without an input type must fail");
-        assert!(err.to_string().contains("create"));
+    fn the_service_alone_generates_every_route_typed_off_the_service() {
+        let out = generated_methods(quote! { service = svc });
+        for method in ["fn list", "fn get", "fn create", "fn update", "fn delete"] {
+            assert!(out.contains(method), "{method}: {out}");
+        }
+        for alias in [
+            "type __NestrsCrudThingsService",
+            "type __NestrsCrudThingsEntity",
+            "type __NestrsCrudThingsOutput",
+            "type __NestrsCrudThingsCreate",
+            "type __NestrsCrudThingsUpdate",
+        ] {
+            assert!(out.contains(alias), "{alias}: {out}");
+        }
+        assert!(
+            out.contains("summary = \"List Thing\""),
+            "the noun is read off the host: {out}"
+        );
     }
 }

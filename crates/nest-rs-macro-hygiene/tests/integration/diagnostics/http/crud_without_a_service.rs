@@ -1,13 +1,13 @@
-//! `#[crud]` has three required keys, all through the one
-//! `nest_rs::codegen::missing_argument` sentence — the crate that owns the
-//! wording was itself three of the family's eight hand-written copies.
+//! `#[crud]` has one required key, the service its operations delegate to and
+//! read their types off, refused through the one
+//! `nest_rs::codegen::missing_argument` sentence.
 
 use nest_rs::http::{controller, crud};
 
 #[controller(path = "/widgets")]
 pub struct WidgetsController;
 
-#[crud(entity = widgets::Entity, output = Widget)]
+#[crud(ops = [list])]
 impl WidgetsController {}
 
 fn main() {}

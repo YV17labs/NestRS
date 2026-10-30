@@ -64,7 +64,7 @@ mod gate_order {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use nest_rs_authz::http::Authorize;
-    use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
+    use nest_rs_authz::{AbilityBuilder, Action, Read};
     use nest_rs_core::{
         Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, injectable, module,
     };
@@ -77,16 +77,17 @@ mod gate_order {
     use nest_rs_testing::TestApp;
 
     mod secret {
+        use nest_rs_seaorm::expose;
         use sea_orm::entity::prelude::*;
         use serde::{Deserialize, Serialize};
 
-        #[derive(
-            Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize, schemars::JsonSchema,
-        )]
+        #[expose(name = "SecretDto")]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
         #[sea_orm(table_name = "secrets")]
         pub(crate) struct Model {
             #[sea_orm(primary_key, auto_increment = false)]
             pub id: Uuid,
+            #[expose]
             pub name: String,
         }
 
@@ -96,20 +97,7 @@ mod gate_order {
         impl ActiveModelBehavior for ActiveModel {}
     }
 
-    impl WireModelDefaults for secret::Entity {}
-
-    #[derive(serde::Serialize, schemars::JsonSchema)]
-    pub(crate) struct SecretDto {
-        name: String,
-    }
-
-    impl From<&secret::Model> for SecretDto {
-        fn from(model: &secret::Model) -> Self {
-            Self {
-                name: model.name.clone(),
-            }
-        }
-    }
+    use secret::SecretDto;
 
     /// What a stored answer looks like: the handler is never called.
     const STORED: &str = r#"{"id":"0195b4a6-4c1c-7d3e-8f00-000000000001","name":"stored"}"#;
@@ -232,7 +220,7 @@ mod gate_order {
         svc: Arc<SecretsService>,
     }
 
-    #[crud(service = svc, entity = secret::Entity, output = SecretDto, ops = [list, get])]
+    #[crud(service = svc, ops = [list, get])]
     impl SecretsCrudController {}
 
     #[module(providers = [Grants, Stored, Swallow, SecretsController, SecretsService, SecretsCrudController])]

@@ -8,25 +8,25 @@ use nest_rs::http::{controller, crud};
 #[controller(path = "/a")]
 struct AController;
 
-#[crud(service = "svc", entity = OrgEntity, output = Org)]
+#[crud(service = "svc")]
 impl AController {}
 
 #[controller(path = "/b")]
 struct BController;
 
-#[crud(service = svc, entity = OrgEntity, output = Org, ops = list)]
+#[crud(service = svc, ops = list)]
 impl BController {}
 
 #[controller(path = "/c")]
 struct CController;
 
-#[crud(service = svc, entity = OrgEntity, output = Org, ops = ["list"])]
+#[crud(service = svc, ops = ["list"])]
 impl CController {}
 
 #[controller(path = "/d")]
 struct DController;
 
-#[crud(service = svc, entity = OrgEntity, output = Org, paginate = "cursor")]
+#[crud(service = svc, paginate = "cursor")]
 impl DController {}
 
 fn main() {}

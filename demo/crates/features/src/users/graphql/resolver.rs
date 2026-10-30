@@ -3,7 +3,7 @@ use std::sync::Arc;
 use nest_rs::graphql::{crud, resolver};
 
 use crate::authz::AuthzGuard;
-use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
+use crate::users::UsersService;
 
 #[resolver]
 #[use_guards(AuthzGuard)]
@@ -12,11 +12,5 @@ pub struct UsersResolver {
     svc: Arc<UsersService>,
 }
 
-#[crud(
-    service = svc,
-    entity = UserEntity,
-    output = User,
-    create = CreateUser,
-    update = UpdateUser,
-)]
+#[crud(service = svc)]
 impl UsersResolver {}

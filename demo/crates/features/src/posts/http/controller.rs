@@ -9,8 +9,7 @@ use super::interceptor::PostAuditInterceptor;
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::posts::{
-    CreatePost, Entity as PostEntity, Post, PostAuthor, PostAuthorGuard, PostError, PostsService,
-    UpdatePost,
+    Entity as PostEntity, Post, PostAuthor, PostAuthorGuard, PostError, PostsService,
 };
 
 #[controller(path = "/posts")]
@@ -23,10 +22,6 @@ pub struct PostsController {
 
 #[crud(
     service = svc,
-    entity = PostEntity,
-    output = Post,
-    create = CreatePost,
-    update = UpdatePost,
     api(create(
         summary = "Create a post in the caller's org",
         description = "Requires a bearer JWT naming a user. The org and author are taken from \

@@ -91,18 +91,25 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(routes::routes(args, input).into()).into()
 }
 
-/// Grammar: `#[crud(entity = …::Entity, output = Dto, create = CreateDto,
-/// update = UpdateDto, ops = [list, get, ...], paginate = cursor|none,
-/// api(get(summary = "…", description = "…"), ...))]`.
+/// Grammar: `#[crud(service = svc, ops = [list, get, ...], paginate = cursor|none,
+/// api(get(summary = "…", description = "…"), ...))]`, where `service` names
+/// the controller's `#[inject]` field holding the entity's `CrudService`.
+///
+/// Every type a generated route names is read off that service: the entity
+/// off `CrudService::Entity`, the create and update bodies off
+/// `Creatable::Create` and `Updatable::Update`, and the answer off the
+/// entity's `#[expose]`d wire type (`Exposed::Wire`). `#[controller]` hands
+/// the field's type over, so a name the controller does not inject is refused
+/// at the key.
 ///
 /// `api` gives a generated route the OpenAPI text a hand-written one carries in
-/// `#[api]`; an operation it does not name keeps its default summary.
+/// `#[api]`; an operation it does not name keeps its default summary, worded
+/// off the controller's name (`UsersController` → `List User`).
 ///
 /// `ops` selects which operations to generate; omit it for all five. A write
-/// op is generated only when the resource offers it: `create`/`update` require
-/// their input type **and** that the service implements
-/// `Creatable`/`Updatable`; `delete` requires `Deletable`. Listing
-/// `ops = [create]` without `create = <Type>` is a compile error.
+/// op reads the service's trait — `create` `Creatable`, `update`
+/// `Updatable`, `delete` `Deletable` — so one the service does not offer
+/// fails to resolve: list only what it offers.
 ///
 /// The generated list is **keyset-paginated by default** (`?first=&after=`,
 /// the next page linked by `Link: <…>; rel="next"`, body a plain maskable array);
@@ -119,9 +126,12 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// # Expands to
 ///
-/// The missing CRUD methods synthesized onto the impl block (each delegating
+/// A hidden alias per type the generated methods name, read off the service;
+/// the missing CRUD methods synthesized onto the impl block (each delegating
 /// to `CrudService` behind `#[authorize(Action, Entity)]`, with its own verb
-/// and `#[api]` attrs), the whole block re-emitted under `#[routes]`. A write
+/// and `#[api]` attrs — the create answering `Created<Json<T>>`, the cursor
+/// list `Paginated<Json<Vec<T>>>`), the whole block re-emitted under
+/// `#[routes]`. A write
 /// failure maps to 409/403/404; an unexpected `DbErr` is logged and answers an
 /// empty-bodied 500.
 #[proc_macro_attribute]

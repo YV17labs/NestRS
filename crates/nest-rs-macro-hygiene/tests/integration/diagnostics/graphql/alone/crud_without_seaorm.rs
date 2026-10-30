@@ -6,17 +6,9 @@
 
 use std::sync::Arc;
 
-use nest_rs::graphql::async_graphql::SimpleObject;
 use nest_rs::graphql::{crud, resolver};
 
-struct Note;
 struct NotesService;
-
-#[derive(SimpleObject)]
-#[graphql(crate = "::nest_rs::graphql::async_graphql")]
-struct NoteView {
-    id: i32,
-}
 
 #[resolver]
 struct NotesResolver {
@@ -24,7 +16,7 @@ struct NotesResolver {
     svc: Arc<NotesService>,
 }
 
-#[crud(service = svc, entity = Note, output = NoteView, ops = [get])]
+#[crud(service = svc, ops = [get])]
 impl NotesResolver {}
 
 fn main() {}

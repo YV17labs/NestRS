@@ -137,13 +137,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 ///     svc: Arc<UsersService>,
 /// }
 ///
-/// #[crud(
-///     service = svc,
-///     entity = users::Entity,
-///     output = users::User,
-///     create = users::CreateUser,
-///     update = users::UpdateUser,
-/// )]
+/// #[crud(service = svc)]
 /// impl UsersController {}
 /// # #[module(providers = [UsersService, UsersController])]
 /// # struct UsersModule;
@@ -219,13 +213,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 ///     svc: Arc<UsersService>,
 /// }
 ///
-/// #[crud(
-///     service = svc,
-///     entity = users::Entity,
-///     output = users::User,
-///     create = users::CreateUser,
-///     update = users::UpdateUser,
-/// )]
+/// #[crud(service = svc)]
 /// impl UsersResolver {}
 /// # #[module(
 /// #     imports = [GraphqlModule::for_root(GraphqlConfig {

@@ -114,9 +114,10 @@ pub mod __private {
     };
     pub use crate::attrs::{Conditional, cfg_attrs, delegated_attrs};
     pub use crate::capability::guard_capability_bounds;
+    pub use crate::casing::singular;
     pub use crate::crud::{
-        CrudDeclaration, CrudOp, CrudOpApi, GeneratedOps, OpsSelection, Paginate, parse_crud_args,
-        singular_of,
+        CrudDeclaration, CrudOp, CrudOpApi, CrudTypes, GeneratedOps, OpsSelection, Paginate,
+        parse_crud_args, resolver_singular, resource_noun,
     };
     pub use crate::deprecation::{deprecation_header, refuse_rust_deprecated};
     pub use crate::dispatch::{Collision, DispatchKeys};
@@ -127,11 +128,11 @@ pub mod __private {
     pub use crate::inject::{
         InjectableBody, LayerDeps, build_injectable_body, dependencies_method,
         dependency_names_method, forwarded_arg_idents, forwarded_idents, from_container_method,
-        from_scope_method, injected_keys_with_layers, injected_method,
-        injected_methods_with_layers, injected_names_method, injected_names_with_layers,
-        injected_optional_fns, injected_optional_method, injected_optional_names_method,
-        injected_per_request_method, layer_deps, mixed_site_ident, normalize_forwarded_args,
-        optional_dependencies_method, optional_dependency_names_method,
+        from_scope_method, injected_field_impls, injected_field_key, injected_keys_with_layers,
+        injected_method, injected_methods_with_layers, injected_names_method,
+        injected_names_with_layers, injected_optional_fns, injected_optional_method,
+        injected_optional_names_method, injected_per_request_method, layer_deps, mixed_site_ident,
+        normalize_forwarded_args, optional_dependencies_method, optional_dependency_names_method,
     };
     pub use crate::instance::{DEFAULT_INSTANCE, INSTANCE, RESERVED_VOCABULARY, instance_name};
     pub use crate::item::item_shape;

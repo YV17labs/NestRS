@@ -163,8 +163,9 @@ The document composes from the route table, so everything in it is derived:
   pool included: `401` with its `WWW-Authenticate` challenge, `429` and `503`
   with their `Retry-After` — as RFC 9457 `ProblemDetails`, beside any body
   `#[api(error(...))]` declares;
-- the response headers the framework sends: `Location`, the `Link` to a
-  paginated `#[crud]` list's next page, `Deprecation` on a deprecated route,
+- the response headers the framework sends: the `Location` of a `Created`
+  answer or a `#[redirect]`, the `Link` of a `Paginated` answer's next page,
+  `Deprecation` on a deprecated route,
   and every `#[response_header]` with its value;
 - `deprecated: true` on a route `#[api(deprecated = "…")]` marks.
 

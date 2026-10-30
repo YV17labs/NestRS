@@ -225,7 +225,7 @@ const UNGUARDED_CRUD_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
 
-use crate::post::{CreatePost, Entity as PostEntity, Post, PostService, UpdatePost};
+use crate::post::PostService;
 
 #[controller(path = "/post")]
 pub struct PostController {
@@ -233,13 +233,7 @@ pub struct PostController {
     svc: Arc<PostService>,
 }
 
-#[crud(
-    service = svc,
-    entity = PostEntity,
-    output = Post,
-    create = CreatePost,
-    update = UpdatePost,
-)]
+#[crud(service = svc)]
 impl PostController {}
 "#;
 

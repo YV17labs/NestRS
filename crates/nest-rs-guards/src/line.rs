@@ -103,7 +103,7 @@ fn line(target: &'static str, message: &'static str, level: Level) -> &'static L
 /// denial's reason and `Retry-After`, and the chain behind a denial keeping a
 /// cause — never a denial's own text otherwise, which may name what no line
 /// carries.
-pub fn file_denial(
+pub(crate) fn file_denial(
     message: &'static str,
     guard: &'static str,
     target: &'static str,
@@ -146,20 +146,18 @@ pub fn file_denial(
     let why = denial.reason();
     let wait = denial.retry_after_secs();
     let chain = failure_chain(denial);
+    // An absent value is a `None`, which records nothing, as the macros' do.
     let values: [(&Field, Option<&dyn Value>); FIELDS.len()] = [
         (said, Some(&message)),
         (named, Some(&guard)),
         (unit, Some(&unit_name)),
         (host, Some(&host_name)),
         (address, Some(&addressed)),
-        (
-            conn_id,
-            arrived_on.as_ref().map(|value| value as &dyn Value),
-        ),
+        (conn_id, Some(&arrived_on)),
         (status, Some(&code)),
-        (reason, why.as_ref().map(|value| value as &dyn Value)),
-        (retry_after, wait.as_ref().map(|value| value as &dyn Value)),
-        (error, chain.as_ref().map(|value| value as &dyn Value)),
+        (reason, Some(&why)),
+        (retry_after, Some(&wait)),
+        (error, Some(&chain)),
     ];
     let metadata = line.metadata();
     // `value_set` is how an event outside a macro is given its values: the

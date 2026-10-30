@@ -212,7 +212,7 @@ impl Denial {
 /// for it: the whole chain, its message first, when the denial keeps a cause,
 /// and nothing otherwise — a guard's own text may name what no line carries.
 /// The client never reads it.
-pub fn failure_chain(denial: &Denial) -> Option<String> {
+pub(crate) fn failure_chain(denial: &Denial) -> Option<String> {
     Error::source(denial).map(|_| nest_rs_core::error_message(denial))
 }
 

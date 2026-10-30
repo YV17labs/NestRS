@@ -225,11 +225,12 @@ async fn booted(pool: nest_rs_guards::GuardSpec) -> TestApp {
         .expect("every edge boots")
 }
 
-/// Every edge's request, refused by the pool's guard, `named`, writing its
-/// one decision in `check`.
-async fn requests_refused(pool: nest_rs_guards::GuardSpec, declared: bool, named: &str) {
+/// Every edge's request, refused by `G` in the pool, writing its one decision
+/// in `check`.
+async fn requests_refused<G: Guard + 'static>(declared: bool) {
+    let named = std::any::type_name::<G>();
     let logs = LogCapture::install();
-    let app = booted(pool).await;
+    let app = booted(guard::<G>()).await;
 
     let seen = filed(&logs);
     app.http()
@@ -269,30 +270,21 @@ async fn requests_refused(pool: nest_rs_guards::GuardSpec, declared: bool, named
 
 #[tokio::test]
 async fn a_request_a_declaring_guard_refuses_files_one_line_on_its_target() {
-    requests_refused(
-        guard::<DeclaredDoor>(),
-        true,
-        std::any::type_name::<DeclaredDoor>(),
-    )
-    .await;
+    requests_refused::<DeclaredDoor>(true).await;
 }
 
 #[tokio::test]
 async fn a_request_a_silent_guard_refuses_files_one_line_on_the_layers_target() {
-    requests_refused(
-        guard::<SilentDoor>(),
-        false,
-        std::any::type_name::<SilentDoor>(),
-    )
-    .await;
+    requests_refused::<SilentDoor>(false).await;
 }
 
-/// Every in-band edge's unit, refused by the pool's guard, `named`.
-async fn units_refused(pool: nest_rs_guards::GuardSpec, declared: bool, named: &str) {
+/// Every in-band edge's unit, refused by `G` in the pool.
+async fn units_refused<G: Guard + 'static>(declared: bool) {
+    let named = std::any::type_name::<G>();
     let logs = LogCapture::install();
     let app = TestApp::builder()
         .module::<EveryEdgeModule>()
-        .use_guards_global([pool])
+        .use_guards_global([guard::<G>()])
         .build_ws()
         .await
         .expect("every edge serves");
@@ -309,11 +301,7 @@ async fn units_refused(pool: nest_rs_guards::GuardSpec, declared: bool, named: &
     drop(socket);
     app.close().await;
 
-    let app = booted(match declared {
-        true => guard::<DeclaredField>(),
-        false => guard::<SilentField>(),
-    })
-    .await;
+    let app = booted(guard::<G>()).await;
 
     let seen = filed(&logs);
     let graphql = app
@@ -336,20 +324,10 @@ async fn units_refused(pool: nest_rs_guards::GuardSpec, declared: bool, named: &
 
 #[tokio::test]
 async fn a_unit_a_declaring_guard_refuses_files_one_line_on_its_target() {
-    units_refused(
-        guard::<DeclaredField>(),
-        true,
-        std::any::type_name::<DeclaredField>(),
-    )
-    .await;
+    units_refused::<DeclaredField>(true).await;
 }
 
 #[tokio::test]
 async fn a_unit_a_silent_guard_refuses_files_one_line_on_the_layers_target() {
-    units_refused(
-        guard::<SilentField>(),
-        false,
-        std::any::type_name::<SilentField>(),
-    )
-    .await;
+    units_refused::<SilentField>(false).await;
 }

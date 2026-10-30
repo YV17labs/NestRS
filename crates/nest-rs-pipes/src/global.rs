@@ -18,7 +18,7 @@
 //! use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError};
 //!
 //! #[injectable]
-//! #[derive(Default, Layer)]
+//! #[derive(Layer)]
 //! pub struct StripUnknownFields;
 //!
 //! impl GlobalPipe for StripUnknownFields {

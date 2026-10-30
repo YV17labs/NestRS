@@ -47,7 +47,7 @@ pub struct HygieneLimit(pub u32);
 /// Reads a message's `data` and changes nothing: the pipe a gateway and its
 /// messages bind.
 #[injectable]
-#[derive(Default, Layer)]
+#[derive(Layer)]
 pub struct HygieneDataPipe;
 
 impl GlobalPipe for HygieneDataPipe {}

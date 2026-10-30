@@ -503,7 +503,7 @@ fn batch_response(executed: &BatchResponse) -> nest_rs_http::Result<Response> {
 ///
 /// /// Attaches the caller the way an authentication guard does.
 /// #[injectable]
-/// #[derive(Default, Layer)]
+/// #[derive(Layer)]
 /// struct NameGuard;
 ///
 /// #[async_trait]

@@ -115,8 +115,7 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::chain::{GlobalBucket, SiteChainSources, compose_site_chain, split_at_covered};
-    pub use crate::denial::{denial_of, failure_chain};
-    pub use crate::line::file_denial;
+    pub use crate::denial::denial_of;
     pub use crate::reason::{client_message, denial_code, denial_reason};
     pub use crate::registry::{global_guards_active, resolve_global_chain, resolve_global_guards};
     pub use crate::stage::{RefusalMark, Refused, check_guards};

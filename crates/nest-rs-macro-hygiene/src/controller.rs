@@ -183,7 +183,7 @@ impl GuardFor<HttpView> for HygieneRouteGuard {}
 
 /// Reads a body and changes nothing: the pipe a controller and a route bind.
 #[injectable]
-#[derive(Default, Layer)]
+#[derive(Layer)]
 pub struct HygieneBodyPipe;
 
 impl GlobalPipe for HygieneBodyPipe {}

@@ -41,7 +41,7 @@ impl Refused {
     }
 
     /// The denial to render, a guard's filed first as `message` on the unit
-    /// `cx` ([`file_denial`]).
+    /// `cx`: the one line its denial files, on the target the guard declares.
     pub fn into_denial(self, message: &'static str, cx: &UnitContext<'_>) -> Denial {
         match self {
             Self::Guard {

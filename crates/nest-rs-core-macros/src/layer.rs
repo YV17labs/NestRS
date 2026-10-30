@@ -6,7 +6,7 @@ use syn::{DeriveInput, Expr};
 const LAYER: nest_rs_codegen::Grammar = nest_rs_codegen::Grammar::new("layer", &["priority"]);
 
 pub(crate) fn derive_layer(input: TokenStream) -> TokenStream {
-    match syn::parse::<DeriveInput>(input).and_then(|item| layer(&item)) {
+    match syn::parse::<DeriveInput>(input).and_then(layer) {
         Ok(expanded) => expanded.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -14,21 +14,10 @@ pub(crate) fn derive_layer(input: TokenStream) -> TokenStream {
 
 /// `impl Layer` for `item`, its `priority` the one `#[layer(priority = …)]`
 /// names, or the trait's default.
-fn layer(item: &DeriveInput) -> syn::Result<TokenStream2> {
+fn layer(mut item: DeriveInput) -> syn::Result<TokenStream2> {
     let mut priority: Option<Expr> = None;
-    let mut written = false;
-    for attr in item
-        .attrs
-        .iter()
-        .filter(|attr| attr.path().is_ident("layer"))
-    {
-        if std::mem::replace(&mut written, true) {
-            return Err(syn::Error::new_spanned(
-                attr,
-                "#[layer] is written once — put every key in one `#[layer(…)]`",
-            ));
-        }
-        LAYER.parse_attr(attr, |arg| {
+    if let Some(attr) = nest_rs_codegen::take_single_attr(&mut item.attrs, "layer")? {
+        LAYER.parse_attr(&attr, |arg| {
             priority = Some(arg.expr()?);
             Ok(())
         })?;

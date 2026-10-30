@@ -4,7 +4,7 @@ error: unknown #[layer] argument `order`; expected `priority`
 8 | #[layer(order = 1)]
   |         ^^^^^
 
-error: #[layer] is written once — put every key in one `#[layer(…)]`
+error: `#[layer]` is written twice here — it declares once, and a second copy would be read by nothing. Keep one, with everything it says
   --> tests/integration/diagnostics/core/layer_derive_unknown_argument.rs:13:1
    |
 13 | #[layer(priority = 2)]

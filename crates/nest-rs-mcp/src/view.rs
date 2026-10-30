@@ -34,7 +34,7 @@ use crate::operation::McpOperationKind;
 /// # use serde_json::{Value, json};
 ///
 /// #[injectable]
-/// #[derive(Default, Layer)]
+/// #[derive(Layer)]
 /// struct ApiKeyGuard;
 ///
 /// #[async_trait]

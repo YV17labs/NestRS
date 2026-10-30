@@ -11,10 +11,6 @@ use nest_rs_http::async_trait;
 use crate::gate::reason;
 use crate::{Ability, AbilityBuilder, AbilityFactory};
 
-/// Why the ability guard refused a request whose rules would not build, the
-/// `reason` of its denial's line.
-const RULES_MISCONFIGURED: &str = "rules_misconfigured";
-
 /// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AuthzAbility>)]`.
 /// `F::Actor` is the principal the authentication guard attached; its absence
 /// on a non-public route is a `500` (an authn guard must run first). On a
@@ -70,7 +66,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
                 Ok(())
             }
             Some(Err(err)) => Err(Denial::internal("authorization rules are misconfigured")
-                .with_reason(RULES_MISCONFIGURED)
+                .with_reason(reason::RULES_MISCONFIGURED)
                 .with_source(err)),
             // Off a `#[public]` or in-band site, an actor is an earlier guard's
             // work: its absence is a wiring defect.

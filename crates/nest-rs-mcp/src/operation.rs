@@ -140,8 +140,9 @@ pub struct OperationGuards {
 /// [`check`](Guard::check) on the operation — `None` when it runs none.
 ///
 /// The pool is part of it, as on a GraphQL root field: the endpoint's request
-/// runs `check_http`, never `check`, so leaving it out here would leave a
-/// global guard overriding only `check` never consulted.
+/// runs `check_http`, which a guard deciding the operation alone overrides to
+/// admit the request, so leaving the pool out here would leave that guard's
+/// `check` never consulted.
 pub fn operation_guard_stage(
     container: &Container,
     handler: &Handler,

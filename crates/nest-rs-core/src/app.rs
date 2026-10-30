@@ -823,7 +823,7 @@ impl AppBuilder {
     /// };
     ///
     /// #[injectable]
-    /// #[derive(Default, Layer)]
+    /// #[derive(Layer)]
     /// struct Audit;
     ///
     /// #[async_trait]
@@ -874,7 +874,7 @@ impl AppBuilder {
     /// };
     ///
     /// #[injectable]
-    /// #[derive(Default, Layer)]
+    /// #[derive(Layer)]
     /// struct Logged;
     ///
     /// #[async_trait]

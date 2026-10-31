@@ -1300,8 +1300,8 @@ lists what the boot, a log or the wire shows when one is missed.
   `nest_rs::prelude::*`; `nest_rs::guards::prelude` is gone the same way.
 - **`McpOptions`, or `posture: Posture::InBand` on it,** fails to compile:
   `McpModule::for_root` takes an `McpIdentity`, an `McpAccess` or an
-  `McpConfig`, alone or as a tuple, and `McpAccess` has `Gated` and `Public`
-  alone.
+  `McpConfig`, alone or as a tuple, and `McpAccess` has `Public` alone: a gated
+  endpoint is the bare import, `McpModule`.
 
 - **A value breaking its type's rules that 6.x let through**, because no
   `Valid` wrapped its parameter, is now refused at the edge that decodes it:

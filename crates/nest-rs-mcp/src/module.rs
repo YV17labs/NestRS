@@ -99,14 +99,14 @@ impl McpModule {
 /// [`McpConfig`] (env over the pinned base, when one is), and declares the
 /// app's [`McpIdentity`] and its opening.
 pub struct McpSetup {
-    access: McpAccess,
+    access: Option<McpAccess>,
     server: Option<McpIdentity>,
     config: Option<McpConfig>,
 }
 
 /// The setup declaring `access`, `server` and `config`.
 fn declaring(
-    access: McpAccess,
+    access: Option<McpAccess>,
     server: Option<McpIdentity>,
     config: Option<McpConfig>,
 ) -> McpSetup {
@@ -119,43 +119,43 @@ fn declaring(
 
 impl From<McpConfig> for McpSetup {
     fn from(config: McpConfig) -> Self {
-        declaring(McpAccess::Gated, None, Some(config))
+        declaring(None, None, Some(config))
     }
 }
 
 impl From<McpIdentity> for McpSetup {
     fn from(server: McpIdentity) -> Self {
-        declaring(McpAccess::Gated, Some(server), None)
+        declaring(None, Some(server), None)
     }
 }
 
 impl From<McpAccess> for McpSetup {
     fn from(access: McpAccess) -> Self {
-        declaring(access, None, None)
+        declaring(Some(access), None, None)
     }
 }
 
 impl From<(McpIdentity, McpConfig)> for McpSetup {
     fn from((server, config): (McpIdentity, McpConfig)) -> Self {
-        declaring(McpAccess::Gated, Some(server), Some(config))
+        declaring(None, Some(server), Some(config))
     }
 }
 
 impl From<(McpAccess, McpConfig)> for McpSetup {
     fn from((access, config): (McpAccess, McpConfig)) -> Self {
-        declaring(access, None, Some(config))
+        declaring(Some(access), None, Some(config))
     }
 }
 
 impl From<(McpAccess, McpIdentity)> for McpSetup {
     fn from((access, server): (McpAccess, McpIdentity)) -> Self {
-        declaring(access, Some(server), None)
+        declaring(Some(access), Some(server), None)
     }
 }
 
 impl From<(McpAccess, McpIdentity, McpConfig)> for McpSetup {
     fn from((access, server, config): (McpAccess, McpIdentity, McpConfig)) -> Self {
-        declaring(access, Some(server), Some(config))
+        declaring(Some(access), Some(server), Some(config))
     }
 }
 
@@ -200,11 +200,11 @@ impl DynamicModule for McpSetup {
         // Declarations, so a second import declaring one fails the boot naming
         // both, before any factory runs.
         let builder = match self.access {
-            McpAccess::Public => builder
+            Some(McpAccess::Public) => builder
                 .provide_declared_factory::<McpOpening, _, _>(ONE_OPENING, |_| async {
                     Ok(McpOpening)
                 }),
-            McpAccess::Gated => builder,
+            None => builder,
         };
         match self.server.clone() {
             Some(server) => builder
@@ -220,8 +220,8 @@ impl DynamicModule for McpSetup {
         // a second import of the module, a library's, cannot close what the app
         // opened, and `collect` lets one import open it.
         let builder = match self.access {
-            McpAccess::Gated => builder,
-            McpAccess::Public => {
+            None => builder,
+            Some(McpAccess::Public) => {
                 builder.provide_meta(EndpointPosture::of::<McpView>(Posture::Public))
             }
         };
@@ -285,15 +285,11 @@ mod tests {
     fn each_declaration_reaches_the_setup_and_nothing_else_does() {
         let identity = McpModule::for_root(McpIdentity::default().title("Assistant"));
         assert!(identity.server.is_some() && identity.config.is_none());
-        assert_eq!(
-            identity.access,
-            McpAccess::Gated,
-            "gated unless opened in code"
-        );
+        assert_eq!(identity.access, None, "gated unless opened in code");
 
         let opened = McpModule::for_root((McpAccess::Public, McpConfig::default()));
         assert!(opened.server.is_none() && opened.config.is_some());
-        assert_eq!(opened.access, McpAccess::Public);
+        assert_eq!(opened.access, Some(McpAccess::Public));
 
         let all = McpModule::for_root((
             McpAccess::Public,

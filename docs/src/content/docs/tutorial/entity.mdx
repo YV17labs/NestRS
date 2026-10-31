@@ -97,10 +97,12 @@ uuid = { workspace = true }
 ```
 
 Three third-party lines, and each is there because the feature's own source
-writes it: `sea_orm::entity::prelude::*`, `serde` on the derive list SeaORM
-generates, `Uuid` as the primary-key type. The derives `#[expose]` emits —
-`schemars::JsonSchema`, `validator::Validate` — are routed back through the
-framework with a `crate = ` override, so neither appears here.
+writes it: `sea_orm::entity::prelude::*`, `serde` on the claims the auth
+adapter derives, `Uuid` as the primary-key type. The entity itself derives no
+serde: what `#[expose]` emits — the wire type's `serde` and
+`schemars::JsonSchema`, `validator::Validate`, the round trip a mask reads a
+row through — is routed back through the framework with a `crate = `
+override, so none of it appears here.
 
 ## The post's columns
 
@@ -113,7 +115,6 @@ opt-in — a field surfaces only when it carries `#[expose]`.
 ```rust title="crates/features/src/posts/entity.rs"
 use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
 // `soft_delete` + `timestamps` match the three columns this table's migration
 // creates, and the `users/` exemplar. `soft_delete` makes DELETE stamp
@@ -128,10 +129,7 @@ use serde::{Deserialize, Serialize};
 )]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "post",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "post")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
@@ -151,10 +149,10 @@ pub struct Model {
 
 The crate this page builds on is
 [**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) —
-it provides the `#[expose]` macro, which also implements the
-`WireModelDefaults` trait the masking layer reads when a feature adds
-authorization. SeaORM itself is the source of truth for entities, columns,
-and migrations.
+it provides the `#[expose]` macro, which also writes the round trip the
+masking layer reads a row through when a feature adds authorization — so the
+`Model` derives no serde, and serializes nowhere but as `Post`. SeaORM itself
+is the source of truth for entities, columns, and migrations.
 
 ## What `#[expose]` decides
 
@@ -185,7 +183,7 @@ Two patterns cover this entity; a third shows up when you copy
 | `#[expose]` | Bare — the field is read-only on the wire (appears in `Post`), but not in any input |
 | `#[expose(input(create, update), validate(length(min = 1)))]` | Field appears in `Post` (input implies read) and in `CreatePost` and `UpdatePost`, with the `validator` rule wired |
 | `#[expose(input(create))]` | Field appears in `Post` and only in `CreatePost` — common for fields that can be set but not edited |
-| *(no `#[expose]`)* | Field is hidden from `Post` and from every input — `deleted_at` here; the masker fills it back in from defaults so `Ability::mask` sees the whole row |
+| *(no `#[expose]`)* | Field is hidden from `Post` and from every input — `deleted_at` here; the masker rebuilds it from a placeholder so the ability's rules see the whole row |
 
 Leaving a field unexposed matters once a feature carries server-side
 columns — password hashes, tenant ids set from a JWT. Because exposure
@@ -194,10 +192,10 @@ is opt-in, those columns stay off the wire by default;
 load-bearing.
 
 <Aside type="caution">
-An unexposed column whose type isn't trivial to default (a `Decimal`, a
-custom enum) takes `#[wire_default]` so the masker can still rebuild the
-row. Without it, a masked response carrying that row fails closed with a
-500.
+An unexposed column whose type isn't trivial to default (a tenant `Uuid`, a
+`Decimal`, a custom enum) takes `#[wire_default]` or
+`#[wire_default(expr)]`, so the masker can rebuild the row. Without one,
+`#[expose]` refuses the column at compile time, naming the three ways out.
 </Aside>
 
 ## The mod entry

@@ -112,9 +112,9 @@ way.
   leaves — even an unrestricted grant cannot leak an unexposed column
   like `password_hash`.
 - **Fail-closed.** A successful body that cannot be reconciled with the
-  entity's `Model` yields 500 rather than shipping unmasked. A
-  misconfigured route surfaces as a 500 in prod; the alternative —
-  shipping unmasked data — is worse.
+  entity's `Model` yields 500 rather than shipping unmasked; a hidden
+  column the mask could not rebuild never gets that far, refused by
+  `#[expose]` at compile time.
 
 Non-2xx, non-JSON, and scalar responses pass through untouched.
 
@@ -144,8 +144,8 @@ from.
   with `reason = "undecidable_on_push"`.
 
 A rule on a column the value does carry is decided on the spot, so a feed
-scoped by `org_id` keeps working: expose the column the rule reads,
-read-only, and pushed rows are decided like any other.
+scoped by an exposed `org_id` keeps working, and pushed rows are decided
+like any other.
 
 `masked_reply` masks for the caller whose ability is ambient — the right
 answer for a reply to that caller. A push to *other* connections
@@ -156,25 +156,25 @@ every recipient may read.
 
 <Aside type="note">
 Everything below is the mechanism, not the surface — first-time builders
-can stop here and come back when they hit a hidden column `#[expose]`
-cannot default or want to audit the fail-closed path.
+can stop here and come back when they want to audit the fail-closed path.
 </Aside>
 
 ### The pipeline after a 2xx
 
 ```text
-Handler returns Json<UserWire>
+Handler returns Json<User>
        │
        ▼
   body in bytes
        │
 parse JSON → Value
        │
-wire_to_model::<S>     ← fill unexposed columns via WireModelDefaults
+read each row back     ← exposed columns from the object, hidden ones
+into S::Model            from the placeholder #[expose] checked
        │
-ability.mask::<S>      ← typed: filters by row, masks by field
+judge the row          ← the ability drops it, or names the fields it keeps
        │
-retain_wire_keys       ← drop anything not on the wire DTO
+keep the wire keys     ← what the row carried, among the exposed columns
        │
 serialize → response body
 ```
@@ -182,14 +182,43 @@ serialize → response body
 Each step has a defined failure mode:
 
 - **Parse fails** (the body was not JSON) → 500. Fail closed.
-- **`wire_to_model` fails** (object shape does not match `Model`) →
-  500. Fail closed — and the same for a failure on any array element,
-  or a re-serialize failure.
-- **`Ability::mask` runs** — any row the caller cannot read drops
-  out (collection responses) and every restricted key is stripped from
-  the object (`map.retain` keeps only the permitted keys).
-- **`retain_wire_keys`** — strips back any field the wire DTO never
-  carried.
+- **A row does not read back** (an exposed column it leaves out or carries
+  in another shape) → 500. Fail closed — and the same for any array element.
+- **The judgement runs** — any row the caller cannot read drops out
+  (collection responses), and the fields its grants permit are named.
+- **Only exposed keys ship** — the row keeps the keys it carried that are
+  both exposed and permitted; nothing else reaches the client.
+
+### The round trip `#[expose]` writes
+
+The `Model` derives no serde, so it serializes nowhere: a route answers
+its exposed type, and a hidden column has no way onto a wire. To judge a
+row, the mask reads it back through what `#[expose]` declares — each
+exposed column through its own `Deserialize`, each hidden one from its
+placeholder — and the decorator names exactly the columns it invents, so
+a rule is never decided on a placeholder or on a column the body left
+out ([What the mask cannot see](#what-the-mask-cannot-see)). Placeholders
+never reach the wire.
+
+A hidden `String`, `Option`, `bool` or number takes its type's `Default`,
+and a `Secret` its value's. Any other hidden column — a tenant `Uuid`, a
+timestamp, a custom enum — names its own with `#[wire_default]` (the
+type's `Default`) or `#[wire_default(expr)]`:
+
+```rust title="crates/features/src/users/entities/user.rs"
+#[wire_default(UserRole::User)]
+pub role: UserRole,
+```
+
+Without one, `#[expose]` refuses the column at compile time, before a
+masked reply could ever need it:
+
+```text
+error: #[expose]: `org_id: Uuid` is not exposed, and a masked reply must rebuild it — write `#[wire_default]` (its type's `Default`), `#[wire_default(expr)]`, or `#[expose]` it
+```
+
+A hidden primary key is refused the same way: a masked reply reads a
+row's identity off the wire and never invents one.
 
 ### `Ability::mask` — what it strips
 
@@ -197,9 +226,10 @@ Each step has a defined failure mode:
 pub fn mask<E>(&self, action: Action, model: &E::Model) -> serde_json::Value
 ```
 
-Serializes the model, then keeps only the fields permitted by the
-matching grants. The rule shape (`.fields([cols])`) decides; the
-union across matching grants wins.
+Writes the model's exposed columns, then keeps only the fields permitted
+by the matching grants. The rule shape (`.fields([cols])`) decides; the
+union across matching grants wins. A hidden column is never written: an
+unrestricted grant opens every exposed column and no other.
 
 ```rust title="nest_rs::authz::Ability::mask_many"
 pub fn mask_many<'m, E>(
@@ -213,71 +243,24 @@ For a collection read through `Repo` for the same action: drops the
 models the caller cannot see, masks the rest. A rule the row cannot
 decide counts as that read counted it — where `Ability::can`, which
 knows of no read, grants nothing on such a grant and refuses on such a
-denial, and `Repo::can` asks SQL. The `retain_wire_keys` step runs per
-item afterwards.
+denial, and `Repo::can` asks SQL.
 
-A grant with no `.fields` returns `FieldSet::All` — every column is
-permitted. A grant with `.fields([Id, Name])` returns
+A grant with no `.fields` returns `FieldSet::All` — every exposed column
+is permitted. A grant with `.fields([Id, Name])` returns
 `FieldSet::Only({"id", "name"})`. The masker unions:
 `FieldSet::Only(union_of_grants)` unless any matching grant is
 `FieldSet::All`, which clears the restriction. A grant the mask cannot
 decide on the row widens nothing; when only such grants admitted a row
 read through `Repo`, it keeps the fields every one of them permits.
 
-### `retain_wire_keys` — the defense in depth
+### Only exposed keys ship — the defense in depth
 
-After `Ability::mask` produces a `serde_json::Value`, the shaper keeps
-only the keys the body carried among those `#[expose]` lists for the
-entity — `WireModelDefaults::wire_keys`. A key the body left out never
-comes back with the value the rebuild gave it.
-
-Why this step exists: an `Ability` grant with no `.fields` permits
-every column on the `Model`. If the `Model` carries a
-`password_hash` field (server-only, never carries `#[expose]` so it is
-absent from the wire DTO), an unrestricted grant would have it pass `Ability::mask`
-untouched. `retain_wire_keys` then drops it, even from a handler that
-returned the raw `Model`.
-
-### `WireModelDefaults` — filling the gaps
-
-To run `Ability::mask` the shaper needs a typed `S::Model`. The wire
-body, by design, omits every unexposed column. `WireModelDefaults`
-fills them with placeholder values so deserialization succeeds, and
-says which columns it filled:
-
-```rust title="nest_rs::authz::WireModelDefaults"
-pub trait WireModelDefaults: EntityTrait {
-    fn fill_wire_defaults(_map: &mut Map<String, Value>) {}
-    fn wire_keys() -> Option<&'static [&'static str]> { None }
-    fn is_placeholdered(_column: Self::Column) -> bool { false }
-    fn wire_key(column: Self::Column) -> Option<&'static str> { /* its name, if a wire key */ }
-}
-```
-
-The `#[expose]` macro emits the impl: every unexposed scalar column gets
-a JSON default (`""`, `0`, `false`, `null`), `is_placeholdered` names
-exactly those columns, and `wire_key` names the key each exposed column
-crosses the wire under, so a rule is never decided on a placeholder or
-on a column the body left out
-([What the mask cannot see](#what-the-mask-cannot-see)).
-The defaults are discarded again by `retain_wire_keys` before the body
-ships — they never reach the wire.
-
-A hidden column of any other type — a non-`Option` `Uuid` or timestamp,
-a `Decimal`, a custom enum — has no automatic placeholder, so the
-round-trip fails closed. Give it one with `#[wire_default]`, the type's
-`Default`, or `#[wire_default(expr)]`:
-
-```rust title="crates/features/src/users/entities/user.rs"
-#[wire_default]
-pub role: UserRole,
-```
-
-A handler returning a body that does not deserialize even with
-defaults yields 500 with `"response masking failed: body did not
-match the authorized subject type"`. The test bench is the right
-home for noticing this — a unit test that runs the shaper against
-the handler's `Json<T>` shape pins it.
+An `Ability` grant with no `.fields` permits every column. If the entity
+carries a `password_hash` (server-only, no `#[expose]`), the grant alone
+would not stop it; the mask's last step keeps only the keys the body
+carried among those `#[expose]` lists, so it never ships — not even from
+a value a handler built by hand. A key the body left out never comes back
+with the value the rebuild gave it.
 
 ## Going further
 

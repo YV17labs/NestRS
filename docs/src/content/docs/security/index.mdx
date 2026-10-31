@@ -63,7 +63,7 @@ ability they attached — see [Endpoint guards](/security/authorization/endpoint
 - **Every response is masked.** The
   [`Authorize` shaper](/security/authorization/response-masking/) runs
   after a 2xx handler: fields the caller cannot read are stripped from
-  the body, and `retain_wire_keys` drops anything outside the wire DTO so an
+  the body, and only the columns `#[expose]` lists ship, so an
   unrestricted grant cannot leak an unexposed column.
 
 The wiring sketch for an app that serves all three transports:
@@ -110,7 +110,7 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
     - [policies.mdx](/security/authorization/policies/) — `Subject`, `Action`, `RuleSpec`, predicates, fields
     - [row-level-filtering.mdx](/security/authorization/row-level-filtering/) — `condition_for`, `Repo::scoped`
     - [by-id-binding.mdx](/security/authorization/by-id-binding/) — `#[authorize(A, bind = S)]`, the `Access` outcome
-    - [response-masking.mdx](/security/authorization/response-masking/) — `Authorize`, `mask`, `WireModelDefaults`
+    - [response-masking.mdx](/security/authorization/response-masking/) — `Authorize`, `mask`, `#[wire_default]`
     - [endpoint-guards.mdx](/security/authorization/endpoint-guards/) — HTTP / GraphQL / WS / MCP
   - [threat-model.mdx](/security/threat-model/) — the boundary each layer enforces (read before production, not needed for your first feature)
 </FileTree>

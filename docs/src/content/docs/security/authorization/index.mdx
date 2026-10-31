@@ -159,9 +159,9 @@ included, and arms no mask, since there is no row to mask.
    joins. Missing row ⇒ 404, present but denied ⇒ 403. See
    [By-id binding](/security/authorization/by-id-binding/).
 3. **`Authorize<A, S>` — the response shaper.** After a 2xx, the
-   shaper deserializes the body into `S::Model`, runs `Ability::mask`,
-   then `retain_wire_keys` to strip back anything outside the wire
-   DTO. See [Response masking](/security/authorization/response-masking/).
+   shaper reads each row of the body back into `S::Model`, judges it
+   as `Ability::mask_many` does, and keeps only the exposed columns its
+   grants permit. See [Response masking](/security/authorization/response-masking/).
 
 ## Reading the ambient ability
 
@@ -251,8 +251,8 @@ controller with the transport's authz module, and write a
   `#[authorize(A, bind = S)]` and the 404/403 distinction.
 - [Response masking](/security/authorization/response-masking/) —
   declare `#[authorize(Action, Entity)]` and masking is automatic; the
-  `mask`/`retain_wire_keys`/`WireModelDefaults` pipeline is documented
-  as internals (skip on a first pass).
+  round trip `#[expose]` writes and the mask's steps are documented as
+  internals (skip on a first pass).
 - [Public reads](/security/authorization/public-reads/) —
   `define_visitor`, the anonymous branch a `#[public]` route reads.
 - [OAuth scopes](/security/authorization/scopes/) — `.requires_scope(...)`

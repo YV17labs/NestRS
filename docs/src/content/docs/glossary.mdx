@@ -129,10 +129,12 @@ deep on each.
 - **[Wire model](/security/authorization/response-masking/)** — the
   `#[expose]` output struct (`User`) the wire produces; distinct from
   the SeaORM `Model` the database returns.
-- **[Wire model defaults](/security/authorization/response-masking/)**
-  — `impl WireModelDefaults for Entity`, emitted by the `#[expose]`
-  macro, that fills unexposed columns (those without `#[expose]`) the
-  masker cannot infer from the wire body.
+- **[Wire default](/security/authorization/response-masking/)**
+  — `#[wire_default]` or `#[wire_default(expr)]` on an unexposed column:
+  the placeholder the masker rebuilds the row with, since the wire body
+  never carries it. A `String`, `Option`, `bool`, number or `Secret` of
+  one takes its own; any other hidden column without one is refused by
+  `#[expose]` at compile time.
 
 ## Security
 

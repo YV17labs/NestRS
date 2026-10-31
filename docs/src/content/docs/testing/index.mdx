@@ -61,7 +61,7 @@ what doesn't:
 | Risk you carry | Technique it earns |
 |---|---|
 | Wiring (DI graph, routes mounted, guards bound) | E2E — `TestApp` boots the real module tree |
-| Security policy regressions (`Ability::mask`, `condition_for`, `WireModelDefaults`) | [Policy tests](/testing/policy/) — pure unit tests on the policy types |
+| Security policy regressions (`Ability::mask`, `condition_for`, `permitted_fields`) | [Policy tests](/testing/policy/) — pure unit tests on the policy types |
 | Failure modes (401 / 403 / 400 / rollback) | [Negative-path tests](/testing/negative-path/) in the app's e2e |
 | Pure logic — calculations, conversions, validators | [Unit tests](/testing/unit/) next to the code |
 | Edge cases in parsers and validators | Property-based testing with [`proptest`](https://crates.io/crates/proptest) |

@@ -824,7 +824,14 @@ lists what the boot, a log or the wire shows when one is missed.
     | `ab.cannot(action, E).fields([...])` | drop `.fields`: a denial hides rows, never columns. Narrow what a grant exposes with the grant's own `.fields` |
     | `RuleSpec<'_, E>` naming what `cannot` returns, a helper's return type or a binding's | `RuleSpec<'_, E, Cannot>`, `Cannot` from `nest_rs::authz`; a grant's stays `RuleSpec<'_, E>` |
     | `masked_item_for::<A, E, _>(ctx, item)` | `masked_item_for::<A, E, _>(ctx, &nest_rs::authz::graphql::ability()?, item)` |
-    | a hand-written `impl WireModelDefaults` | it lives at `nest_rs::authz::WireModelDefaults`, and adds `fn is_placeholdered(column)` for each column `fill_wire_defaults` fills and `fn wire_key(column)` for a key other than the column's name |
+    | `model_attrs(derive(PartialEq, Serialize, Deserialize))` and `use serde::{Deserialize, Serialize}` on an `#[expose]`d entity | delete both, and the features crate's `serde` line if nothing else names serde: `#[expose]` writes the round trip a mask reads a row through, so the `Model` derives no serde. Keep `model_attrs(derive(PartialEq))` only where your code compares rows |
+    | `Json(model)`, `WsReply::reply(&model)` answering a row | its exposed type, `Json(User::from(&model))`: once the derive goes, a raw `Model` answers nowhere, and its hidden columns with it |
+    | a hidden column of a type with no placeholder — a `Uuid`, a timestamp, a `Decimal`, a custom enum, a `Secret<Vec<u8>>` — with no `#[wire_default]` | refused at the field, where a masked reply carrying its row answered `500`: `#[wire_default]` (its type's `Default`), `#[wire_default(expr)]`, or `#[expose]` it |
+    | a primary key with no `#[expose]` | `#[expose]` it: a masked reply reads a row's identity off the wire and never invents one |
+    | `#[derive(Default)]` and `#[wire_enum]` on an enum a hidden column alone holds, there for the mask | optional: drop both and write `#[wire_default(Role::User)]` on the column — a hidden column's type needs no serde |
+    | a hand-written `impl WireModelDefaults`, or `use nest_rs::authz::WireModelDefaults` | `#[expose(name = "…")]` on the entity: the trait is gone, and the round trip, the keys and the invented columns are the decorator's alone |
+    | `Ability::mask`, `mask_many`, `masked_output_ambient`, `masked_reply` or an `#[authorize(Action, Entity)]` mask on an entity no `#[expose]` decorates | `#[expose]` it — the rustc error says so |
+    | a hidden column read off `Ability::mask`'s value | not a compile error: the value carries the exposed columns alone, whatever the grant |
     | a subscription or a `masked_reply` push whose grant is a relation, or reads a column the pushed type leaves out | refused: expose the column the rule reads, read-only, and send it |
 
     A project scaffolded by an earlier `nestrs g auth` keeps

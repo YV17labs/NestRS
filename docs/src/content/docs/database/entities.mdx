@@ -35,7 +35,6 @@ Copy it before inventing a second shape.
 ```rust title="crates/features/src/posts/entity.rs"
 use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
 #[expose(
     name = "Post",
@@ -46,10 +45,7 @@ use serde::{Deserialize, Serialize};
 )]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "post",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "post")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
@@ -80,7 +76,10 @@ pub struct Model {
 types and the `#[sea_orm(...)]` attributes — `#[expose]` only **reads**
 them and decides what crosses the wire. The two decorators compose:
 `#[sea_orm::model]` builds the `Entity`, `Column`, `ActiveModel`, and
-`Relation` machinery; `#[expose]` builds the transport surface on top.
+`Relation` machinery; `#[expose]` builds the transport surface on top. The
+`Model` derives no serde: `#[expose]` writes the wire type and the round
+trip a mask reads a row through, so the row serializes nowhere but as
+`Post`, and a hidden column has no way onto a wire.
 For everything about columns, types, relations, and migrations, the
 [official SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/)
 is the source of truth.
@@ -174,18 +173,16 @@ The service that verifies the hash reads it with `expose_secret()`, and
 the wire.
 
 <Aside type="caution">
-Response masking reconstructs the full row from the wire body to apply
-`Ability::mask`, which needs a default for every unexposed column. The
-macro provides one for the trivial scalar types (`String`, `Option`,
-`bool`, numbers), and a `Secret` column takes its value's. A hidden
-column of a type it can't default — `Uuid`, a timestamp, `Decimal`, a
-custom enum, a `Secret<Vec<u8>>` — takes `#[wire_default]` (its
-type's `Default`) or `#[wire_default(expr)]`; without one, a masked
-response fails closed with a **500**. A `Secret` column is filled with
-the value it holds, never the `<redacted>` it serializes as. A rule
-reading a hidden column decides no pushed row, so a column an ability
-rule predicates on is best left **exposed**, read-only.
-See [Response masking](/security/authorization/response-masking/).
+Response masking rebuilds the full row from the wire body to judge it,
+which needs a placeholder for every unexposed column. The macro provides
+one for the trivial scalar types (`String`, `Option`, `bool`, numbers),
+and a `Secret` column takes its value's. A hidden column of a type it
+can't default — `Uuid`, a timestamp, `Decimal`, a custom enum, a
+`Secret<Vec<u8>>` — takes `#[wire_default]` (its type's `Default`) or
+`#[wire_default(expr)]`; without one, `#[expose]` refuses the column at
+compile time. A rule reading a hidden column is decided by the `Repo`
+read on a reply, and decides no pushed row.
+See [Response masking](/security/authorization/response-masking/#what-the-mask-cannot-see).
 </Aside>
 
 ### Enum columns
@@ -223,6 +220,11 @@ It deliberately emits **nothing from SeaORM**: `EnumIter`,
 decision, not the wire's. Your own `#[serde(rename_all = …)]` and
 `#[derive(Default)]` sit beside it untouched. Drop `graphql` for an enum
 that only crosses HTTP.
+
+An enum a **hidden** column holds never crosses a wire, so it takes no
+`#[wire_enum]`: SeaORM's derives are its own, and the column names the
+placeholder a masked reply rebuilds it with —
+`#[wire_default(UserRole::User)]`, as the `users` exemplar's `role` does.
 
 ## Write side — inputs and validation
 
@@ -402,6 +404,6 @@ See [Migrations](/database/migrations/) for writing and running them
 - [CRUD](/database/crud/) — `#[crud]` generates the endpoints over the
   entity's service.
 - [Response masking](/security/authorization/response-masking/) — what
-  unexposed columns and `WireModelDefaults` are for.
+  unexposed columns and their placeholders are for.
 - [SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/) — the
   reference for the columns, relations and migrations under `#[expose]`.

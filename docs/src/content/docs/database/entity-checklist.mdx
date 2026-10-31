@@ -44,15 +44,14 @@ carries the wire derives, so the field can be `#[expose]`d like any scalar.
 
 ## What fails on its own, and how loudly
 
-Two of the traps on this page announce themselves. Neither is a compile error,
-and the difference matters when you are deciding what to test:
+One trap on this page announces itself at compile time, the other only at
+runtime, and the difference matters when you are deciding what to test:
 
-- **A hidden column with no default** surfaces as a **runtime 500** on the first
-  masked response, not at build time. Reconstructing the model for masking needs
-  a value for every unexposed column; the macro supplies one for safe scalars
-  and deliberately emits nothing for a hidden `Uuid`, timestamp, `Decimal` or
-  enum without `Default`, so `wire_to_model` fails closed. Give those an explicit
-  [`#[wire_default(…)]`](/security/authorization/response-masking/).
+- **A hidden column with no placeholder** is refused by `#[expose]` at the
+  field. Rebuilding the row for masking needs a value for every unexposed
+  column; where the macro has none to give — a hidden `Uuid`, timestamp,
+  `Decimal` or enum — the error names
+  [`#[wire_default(…)]`](/security/authorization/response-masking/#the-round-trip-expose-writes).
 - **A unique column on a `soft_delete` table** answers `409` for a value every
   read calls free, when its index is a full one: index it `WHERE deleted_at IS
   NULL`. See [CRUD](/database/crud/#soft-delete-and-timestamps).

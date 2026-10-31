@@ -1,6 +1,6 @@
 //! `service = <Type>` names the service every generated operation delegates
 //! to, through the host's `#[inject]` field of that type: a service the host
-//! does not inject is refused once, at the key, saying what to add.
+//! does not inject is refused once, at the block, saying what to add.
 
 use std::sync::Arc;
 

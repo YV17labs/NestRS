@@ -153,8 +153,8 @@ one file stopped working under a `use`.
 Decided, by elegance with correctness held: **`#[crud(service = NotesService)]`
 names the service's type**, and `#[controller]` / `#[resolver]` implement a
 hidden `Injects<S>` for each `#[inject] Arc<S>` field, which every generated
-operation reaches the field through, by one hidden function spanned on the
-key. The refusal of E0446 above does not apply: a trait keyed by its type
+operation reaches the field through, by one hidden function. The refusal
+of E0446 above does not apply: a trait keyed by its type
 parameter puts the service in the impl's header, and rustc makes an impl as
 visible as the least visible type there, so a public host injecting a
 crate-private service compiles and no associated type names it. The per-host

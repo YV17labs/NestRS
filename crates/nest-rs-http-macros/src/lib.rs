@@ -113,7 +113,7 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// service through the controller's `#[inject]` field of its type, which
 /// `#[controller]` declares by type, so the block may name its host through an
 /// alias, an import or another module, and a service the controller does not
-/// inject is refused at the key.
+/// inject is refused once, at the block.
 ///
 /// `api` gives a generated route the OpenAPI text a hand-written one carries in
 /// `#[api]`; an operation it does not name keeps its default summary, worded

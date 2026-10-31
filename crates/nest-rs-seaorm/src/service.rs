@@ -491,7 +491,7 @@ where
 /// Opt-in write capability: the resource accepts **updates**.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` offers no update: implement `Updatable` for it, or drop `update` from `#[crud(ops = …)]`",
-    label = "`#[crud]` generates a update for this service",
+    label = "`#[crud]` generates an update for this service",
     note = "`#[crud]` generates every op `ops` lists, all five by default, each typed off the service's trait: `impl Updatable for {Self}` declares the input it applies"
 )]
 #[async_trait]

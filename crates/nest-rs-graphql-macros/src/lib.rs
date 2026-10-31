@@ -121,7 +121,7 @@ pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `Updatable::Update`) — and the entity's `#[expose]`d wire type
 /// (`Exposed::Wire`); each operation reaches the service through the
 /// resolver's `#[inject]` field of its type, so a service the resolver does
-/// not inject is refused at the key. Write a matching operation
+/// not inject is refused once, at the block. Write a matching operation
 /// method to override it — the macro keeps yours and skips its own, and
 /// refuses a `paginate` beside your list, which nothing generated reads.
 ///

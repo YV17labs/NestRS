@@ -6,10 +6,9 @@
 use std::collections::HashSet;
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{format_ident, quote, quote_spanned};
+use quote::{format_ident, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
-use syn::spanned::Spanned as _;
 use syn::{Ident, LitStr, Token, Type};
 
 use crate::grammar::Grammar;
@@ -267,9 +266,8 @@ impl CrudDeclaration {
     /// The types `ops` name on the block `#[crud]` decorates, `self_ty` its
     /// host named `host`: aliases of the projections off the service, and the
     /// one function reaching the service through the host's `#[inject]` field
-    /// of its type, spanned on the key, so a host injecting none is refused
-    /// there once. Only what a generated op reads is declared, so none is left
-    /// unused.
+    /// of its type, so a host injecting none is refused once, at the block.
+    /// Only what a generated op reads is declared, so none is left unused.
     pub fn types(&self, host: &Ident, self_ty: &Type, ops: GeneratedOps) -> CrudTypes {
         let host = host.unraw();
         let alias = |what: &str| format_ident!("__NestrsCrud{}{}", host, what);
@@ -283,13 +281,10 @@ impl CrudDeclaration {
         let create = alias("Create");
         let update = alias("Update");
         let reached = ops.any().then(|| {
-            let reach = quote_spanned! {service.span()=>
-                <#self_ty as ::nest_rs_core::__private::Injects<#service>>::injected(host)
-            };
             quote! {
                 #[doc(hidden)]
                 fn #accessor(host: &#self_ty) -> &#service {
-                    #reach
+                    <#self_ty as ::nest_rs_core::__private::Injects<#service>>::injected(host)
                 }
                 #[doc(hidden)]
                 type #entity = <#service as ::nest_rs_seaorm::CrudService>::Entity;

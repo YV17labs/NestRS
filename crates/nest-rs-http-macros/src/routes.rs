@@ -236,10 +236,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let mut unprobed: Vec<usize> = Vec::new();
         for (index, arg) in method.sig.inputs.iter_mut().skip(1).enumerate() {
             if let FnArg::Typed(pt) = arg {
-                let written = pt.attrs.len();
-                pt.attrs.retain(|attr| !attr.path().is_ident(UNPROBED));
-                if pt.attrs.len() != written {
-                    unprobed.push(index);
+                match take_flag_attr(&mut pt.attrs, UNPROBED) {
+                    Ok(true) => unprobed.push(index),
+                    Ok(false) => {}
+                    Err(err) => return err.to_compile_error().into(),
                 }
             }
         }
@@ -248,8 +248,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(idents) => idents,
             Err(err) => return err.to_compile_error().into(),
         };
-        let authorize = match take_authorize(&mut method.attrs) {
-            Ok(spec) => spec.map(|spec| spec.reading_the_subject_of(&inputs)),
+        let authorize = match take_authorize(&mut method.attrs, &inputs) {
+            Ok(spec) => spec,
             Err(err) => return err.to_compile_error().into(),
         };
         // A hand-written `Authorize<A, E>` arms the shaper too, and the mask
@@ -1080,34 +1080,9 @@ struct AuthorizeSpec {
     /// The entity written, or under `bind = Service` alone the one its
     /// `Authorized<Action, E>` parameter names.
     entity: Type,
-    /// Whether the entity was written, or is still to be read off the
-    /// parameter `bind` fills.
-    entity_written: bool,
     /// `bind = Service`: the service that loads the subject into the route's
     /// `Authorized<Action, E>` parameter.
     bind: Option<Path>,
-}
-
-impl AuthorizeSpec {
-    /// Under `bind = Service` with no entity written, the posture's entity is
-    /// the `E` of the route's `Authorized<Action, E>` parameter, which the
-    /// service's own is asserted to be once (`bound_entity`) rather than
-    /// projected in every probe. With none, `bound_subject` refuses the route.
-    fn reading_the_subject_of(mut self, inputs: &[FnArg]) -> Self {
-        if self.entity_written || self.bind.is_none() {
-            return self;
-        }
-        let subject = inputs.iter().find_map(|arg| match arg {
-            FnArg::Typed(pt) if spelled(arg, "Authorized") => {
-                nth_generic_type(&pt.ty, "Authorized", 1).cloned()
-            }
-            _ => None,
-        });
-        if let Some(entity) = subject {
-            self.entity = entity;
-        }
-        self
-    }
 }
 
 /// The parameter `#[authorize(Action, bind = Service)]` fills: where the
@@ -1213,12 +1188,16 @@ fn take_version_attr(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<LitStr>> {
     versioning::parse_version_args(&attr)
 }
 
-/// Take `#[authorize(Action, Entity)]` off a route method.
+/// Take `#[authorize(Action, Entity)]` off a route method whose parameters,
+/// the receiver left out, are `inputs`.
 #[expect(
     clippy::map_err_ignore,
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
 )]
-fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpec>> {
+fn take_authorize(
+    attrs: &mut Vec<Attribute>,
+    inputs: &[FnArg],
+) -> syn::Result<Option<AuthorizeSpec>> {
     let Some(pos) = attrs.iter().position(|a| a.path().is_ident("authorize")) else {
         return Ok(None);
     };
@@ -1295,16 +1274,23 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     let (Some(action), written, None) = (paths.next(), paths.next(), paths.next()) else {
         return Err(malformed_authorize(&attr));
     };
-    let entity_written = written.is_some();
     let entity: Type = match (written, &bind) {
         (Some(entity), _) => parse_quote!(#entity),
-        (None, Some(service)) => parse_quote!(<#service as ::nest_rs_seaorm::CrudService>::Entity),
+        // The `E` of the `Authorized<Action, E>` parameter, asserted the
+        // service's once (`bound_entity`) rather than projected in every probe;
+        // a route with none is refused by `bound_subject`.
+        (None, Some(service)) => inputs
+            .iter()
+            .find_map(|arg| match arg {
+                FnArg::Typed(pt) => nth_generic_type(&pt.ty, "Authorized", 1).cloned(),
+                FnArg::Receiver(_) => None,
+            })
+            .unwrap_or_else(|| parse_quote!(<#service as ::nest_rs_seaorm::CrudService>::Entity)),
         (None, None) => return Err(malformed_authorize(&attr)),
     };
     Ok(Some(AuthorizeSpec {
         action,
         entity,
-        entity_written,
         bind,
     }))
 }
@@ -1331,7 +1317,8 @@ fn malformed_authorize(attr: &Attribute) -> syn::Error {
 
 /// The type `#[authorize(Action, Entity)]` declares, the same one `#[crud]`
 /// writes: probed for its class gate and its shaper, never extracted. Under
-/// `bind = Service` alone, the entity is the service's.
+/// `bind = Service` alone, the entity is the `Authorized<Action, E>`
+/// parameter's.
 fn authorize_type(spec: &AuthorizeSpec, inputs: &[FnArg]) -> syn::Result<Type> {
     if let Some(param) = inputs.iter().find(|arg| spelled(arg, "Authorize")) {
         return Err(syn::Error::new_spanned(

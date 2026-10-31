@@ -8,7 +8,7 @@ use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
 use nest_rs_opentelemetry::{LogFormat, OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
 
-use crate::{console_vars, init_under};
+use crate::{console_vars, init_under, refused_under};
 
 const CHILD_TEST: &str = "init::init_child_process";
 
@@ -355,14 +355,7 @@ fn without_the_otlp_feature_a_selector_naming_an_exporter_is_refused_and_none_bo
         ("OTEL_METRICS_EXPORTER", "zipkin"),
         ("OTEL_LOGS_EXPORTER", "none,console"),
     ] {
-        let Err(refused) = init_under(&[(variable, value)], OpenTelemetryConfig::default()) else {
-            panic!("{variable}={value} must not boot a binary built without the otlp feature");
-        };
-        assert!(
-            matches!(refused, OpenTelemetryError::Config(_)),
-            "{refused:?}"
-        );
-        let said = refused.to_string();
+        let said = refused_under(&[(variable, value)], OpenTelemetryConfig::default());
         assert!(
             said.contains(variable) && said.contains("without the otlp feature"),
             "{said}"
@@ -386,17 +379,10 @@ fn without_the_otlp_feature_a_selector_naming_an_exporter_is_refused_and_none_bo
 /// named, its path never quoted.
 #[test]
 fn otel_config_file_is_refused_naming_it() {
-    let Err(refused) = init_under(
+    let said = refused_under(
         &[("OTEL_CONFIG_FILE", "/etc/nestrs/otel-config.yaml")],
         OpenTelemetryConfig::default(),
-    ) else {
-        panic!("a configuration file nothing reads must not boot");
-    };
-    assert!(
-        matches!(refused, OpenTelemetryError::Config(_)),
-        "{refused:?}"
     );
-    let said = refused.to_string();
     assert!(said.contains("OTEL_CONFIG_FILE"), "{said}");
     assert!(!said.contains("otel-config.yaml"), "{said}");
 }
@@ -405,17 +391,10 @@ fn otel_config_file_is_refused_naming_it() {
 /// at boot, naming the variable and what it accepts, never the value.
 #[test]
 fn otel_propagators_naming_a_format_the_framework_does_not_speak_is_refused() {
-    let Err(refused) = init_under(
+    let said = refused_under(
         &[("OTEL_PROPAGATORS", "tracecontext,baggage,b3multi")],
         OpenTelemetryConfig::default(),
-    ) else {
-        panic!("a propagator the framework does not speak must not boot");
-    };
-    assert!(
-        matches!(refused, OpenTelemetryError::Config(_)),
-        "{refused:?}"
     );
-    let said = refused.to_string();
     assert!(
         said.contains("OTEL_PROPAGATORS") && said.contains("tracecontext and baggage"),
         "{said}"
@@ -505,17 +484,10 @@ fn the_boot_line_s_signal_states_read_whole_as_logfmt() {
 #[cfg(not(feature = "otlp"))]
 #[test]
 fn without_the_otlp_feature_an_endpoint_is_refused_and_none_boots() {
-    let Err(refused) = init_under(
+    let said = refused_under(
         &[("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")],
         OpenTelemetryConfig::default(),
-    ) else {
-        panic!("an endpoint nothing exports to must not boot");
-    };
-    assert!(
-        matches!(refused, OpenTelemetryError::Config(_)),
-        "{refused:?}"
     );
-    let said = refused.to_string();
     assert!(
         said.contains("OTEL_EXPORTER_OTLP_ENDPOINT") && said.contains("otlp feature"),
         "{said}"

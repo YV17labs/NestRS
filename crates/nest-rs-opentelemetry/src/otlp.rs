@@ -19,6 +19,7 @@
 
 use std::time::Duration;
 
+use nest_rs_config::__private::is_loopback;
 use nest_rs_config::{
     ClientTls, ConfigError, Material, TlsIdentity, TlsNames, TlsSetting, endpoint_shown,
 };
@@ -349,19 +350,6 @@ fn sampler(
         ));
     }
     let argument = read(OTEL_TRACES_SAMPLER_ARG);
-    let unread = Ignored {
-        variable: OTEL_TRACES_SAMPLER_ARG,
-        expected: "OTEL_TRACES_SAMPLER naming a ratio sampler",
-    };
-    let Some(name) = read(OTEL_TRACES_SAMPLER) else {
-        if argument.is_some() {
-            ignored.push(unread);
-        }
-        return Ok((
-            Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(pinned))),
-            false,
-        ));
-    };
     let ratio = || -> Result<f64, ConfigError> {
         let Some(raw) = argument.as_deref() else {
             return Ok(1.0);
@@ -376,28 +364,27 @@ fn sampler(
                 )
             })
     };
-    let takes_none = |sampler: Sampler, ignored: &mut Vec<Ignored>| {
-        if argument.is_some() {
-            ignored.push(unread);
+    let parent_based = |root: Sampler| Sampler::ParentBased(Box::new(root));
+    let name = read(OTEL_TRACES_SAMPLER);
+    let (sampler, reads_argument) = match name.as_deref() {
+        None => (parent_based(Sampler::TraceIdRatioBased(pinned)), false),
+        Some("always_on") => (Sampler::AlwaysOn, false),
+        Some("always_off") => (Sampler::AlwaysOff, false),
+        Some("traceidratio") => (Sampler::TraceIdRatioBased(ratio()?), true),
+        Some("parentbased_always_on") => (parent_based(Sampler::AlwaysOn), false),
+        Some("parentbased_always_off") => (parent_based(Sampler::AlwaysOff), false),
+        Some("parentbased_traceidratio") => {
+            (parent_based(Sampler::TraceIdRatioBased(ratio()?)), true)
         }
-        sampler
+        Some(_) => return Err(ConfigError::parse(OTEL_TRACES_SAMPLER, SAMPLERS)),
     };
-    let sampler = match name.as_str() {
-        "always_on" => takes_none(Sampler::AlwaysOn, ignored),
-        "always_off" => takes_none(Sampler::AlwaysOff, ignored),
-        "traceidratio" => Sampler::TraceIdRatioBased(ratio()?),
-        "parentbased_always_on" => {
-            takes_none(Sampler::ParentBased(Box::new(Sampler::AlwaysOn)), ignored)
-        }
-        "parentbased_always_off" => {
-            takes_none(Sampler::ParentBased(Box::new(Sampler::AlwaysOff)), ignored)
-        }
-        "parentbased_traceidratio" => {
-            Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(ratio()?)))
-        }
-        _ => return Err(ConfigError::parse(OTEL_TRACES_SAMPLER, SAMPLERS)),
-    };
-    Ok((sampler, true))
+    if argument.is_some() && !reads_argument {
+        ignored.push(Ignored {
+            variable: OTEL_TRACES_SAMPLER_ARG,
+            expected: "OTEL_TRACES_SAMPLER naming a ratio sampler",
+        });
+    }
+    Ok((sampler, name.is_some()))
 }
 
 /// The metric exporter's temporality, `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`,
@@ -426,21 +413,10 @@ fn metric_interval(
     read: &impl Fn(&str) -> Option<String>,
     ignored: &mut Vec<Ignored>,
 ) -> Result<Duration, ConfigError> {
-    if let Some(raw) = read(OTEL_METRIC_EXPORT_INTERVAL) {
-        match raw.trim().parse::<u64>() {
-            Ok(millis) => {
-                return bounded_interval(
-                    Duration::from_millis(millis),
-                    OTEL_METRIC_EXPORT_INTERVAL,
-                );
-            }
-            Err(_) => ignored.push(Ignored {
-                variable: OTEL_METRIC_EXPORT_INTERVAL,
-                expected: MILLISECONDS,
-            }),
-        }
+    match milliseconds(OTEL_METRIC_EXPORT_INTERVAL, read, ignored) {
+        Some(interval) => bounded_interval(interval, OTEL_METRIC_EXPORT_INTERVAL),
+        None => bounded_interval(config.metric_interval, PINNED_INTERVAL),
     }
-    bounded_interval(config.metric_interval, PINNED_INTERVAL)
 }
 
 /// The shortest metric export period: a periodic reader on a shorter one
@@ -612,7 +588,7 @@ fn export(
     }
     let compression = compression(signal, read)?;
     let (tls, names) = signal_tls(signal, &config.tls, read)?;
-    let loopback = is_loopback(&url);
+    let loopback = url.host_str().is_some_and(is_loopback);
     if plaintext {
         tls.refuse_beside_plaintext(&names, set_by)?;
         if !loopback {
@@ -708,16 +684,6 @@ fn refuse_credentials_in_clear(
     Ok(())
 }
 
-/// Whether `url` names this host's loopback interface.
-fn is_loopback(url: &url::Url) -> bool {
-    match url.host() {
-        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    }
-}
-
 /// How long the metric reader lets one export take:
 /// `OTEL_METRIC_EXPORT_TIMEOUT`, in milliseconds, else the specification's
 /// 30 s. The exporter's own timeout bounds the same export, so the earlier of
@@ -727,22 +693,7 @@ fn metric_export_timeout(
     read: &impl Fn(&str) -> Option<String>,
     ignored: &mut Vec<Ignored>,
 ) -> Duration {
-    let Some(raw) = read(OTEL_METRIC_EXPORT_TIMEOUT) else {
-        return METRIC_EXPORT_TIMEOUT_DEFAULT;
-    };
-    match raw.trim().parse::<u64>() {
-        Ok(millis) => Duration::from_millis(millis),
-        Err(_) => {
-            let passed_over = Ignored {
-                variable: OTEL_METRIC_EXPORT_TIMEOUT,
-                expected: MILLISECONDS,
-            };
-            if !ignored.contains(&passed_over) {
-                ignored.push(passed_over);
-            }
-            METRIC_EXPORT_TIMEOUT_DEFAULT
-        }
-    }
+    milliseconds(OTEL_METRIC_EXPORT_TIMEOUT, read, ignored).unwrap_or(METRIC_EXPORT_TIMEOUT_DEFAULT)
 }
 
 /// `base` with `signal`'s path, one slash between.
@@ -762,21 +713,32 @@ fn export_timeout(
     read: &impl Fn(&str) -> Option<String>,
     ignored: &mut Vec<Ignored>,
 ) -> Duration {
-    for variable in [signal, OTEL_EXPORTER_OTLP_TIMEOUT] {
-        let Some(raw) = read(variable) else {
-            continue;
-        };
-        let passed_over = Ignored {
-            variable,
-            expected: MILLISECONDS,
-        };
-        match raw.trim().parse::<u64>() {
-            Ok(millis) => return Duration::from_millis(millis),
-            Err(_) if !ignored.contains(&passed_over) => ignored.push(passed_over),
-            Err(_) => {}
-        }
+    [signal, OTEL_EXPORTER_OTLP_TIMEOUT]
+        .into_iter()
+        .find_map(|variable| milliseconds(variable, read, ignored))
+        .unwrap_or(OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT)
+}
+
+/// `variable`, a whole number of milliseconds, or `None` when unset. Any other
+/// value is passed over, as the SDK and the specification pass it over, and
+/// joins `ignored` once, however many signals read it.
+fn milliseconds(
+    variable: &'static str,
+    read: &impl Fn(&str) -> Option<String>,
+    ignored: &mut Vec<Ignored>,
+) -> Option<Duration> {
+    let raw = read(variable)?;
+    if let Ok(millis) = raw.trim().parse::<u64>() {
+        return Some(Duration::from_millis(millis));
     }
-    OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT
+    let passed_over = Ignored {
+        variable,
+        expected: MILLISECONDS,
+    };
+    if !ignored.contains(&passed_over) {
+        ignored.push(passed_over);
+    }
+    None
 }
 
 /// Which variable set each piece of one signal's TLS material, as its refusals
@@ -1045,23 +1007,11 @@ mod tests {
     use opentelemetry_sdk::metrics::OTEL_METRIC_EXPORT_INTERVAL_DEFAULT;
 
     use super::*;
+    use crate::testing::reading;
 
     /// `build` mutates `opentelemetry::global`, so every `build()` in this file is
     /// serialized.
     static GLOBAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// The variables `set` holds, and nothing else.
-    fn reading(set: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
-        let set: Vec<(String, String)> = set
-            .iter()
-            .map(|(variable, value)| ((*variable).to_owned(), (*value).to_owned()))
-            .collect();
-        move |name: &str| {
-            set.iter()
-                .find(|(variable, _)| variable == name)
-                .map(|(_, value)| value.clone())
-        }
-    }
 
     fn nothing(_: &str) -> Option<String> {
         None
@@ -1970,13 +1920,12 @@ mod tests {
             ("LOWMEMORY", Temporality::LowMemory),
         ] {
             assert_eq!(
-                temporality(&move |name: &str| (name == variable).then(|| value.to_owned()))
-                    .expect(value),
+                temporality(&reading(&[(variable, value)])).expect(value),
                 Some(read)
             );
         }
         for value in ["deltas", " delta", "gauge"] {
-            let said = temporality(&move |name: &str| (name == variable).then(|| value.to_owned()))
+            let said = temporality(&reading(&[(variable, value)]))
                 .expect_err(value)
                 .to_string();
             assert!(
@@ -2025,8 +1974,7 @@ mod tests {
             (OTEL_EXPORTER_OTLP_TRACES_COMPRESSION, "brotli"),
             (OTEL_EXPORTER_OTLP_COMPRESSION, " gzip"),
         ] {
-            let read = move |name: &str| (name == variable).then(|| value.to_owned());
-            let said = compression(Signal::Traces, &read)
+            let said = compression(Signal::Traces, &reading(&[(variable, value)]))
                 .expect_err(value)
                 .to_string();
             assert!(
@@ -2224,7 +2172,7 @@ mod tests {
             ("OTEL_CONFIG_FILE", "/etc/otel.yaml"),
             ("OTEL_PROPAGATORS", "b3"),
         ] {
-            let read = move |name: &str| (name == variable).then(|| value.to_owned());
+            let read = reading(&[(variable, value)]);
             let Err(refused) = build_reading(&OpenTelemetryConfig::default(), None, read) else {
                 panic!("{variable} must not build");
             };

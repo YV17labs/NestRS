@@ -1,4 +1,6 @@
-//! [`endpoint_shown`] — a URL as a sentence may show it.
+//! What the framework reads off a configured endpoint: [`endpoint_shown`], a
+//! URL as a sentence may show it, and whether its host is this machine's
+//! loopback.
 
 /// `url` as a sentence may show it: scheme, host, port and path — never
 /// userinfo, query or fragment, where a credential travels; a value that does
@@ -27,6 +29,20 @@ pub fn endpoint_shown(url: &str) -> String {
         Some(port) => format!("{scheme}://{host}:{port}{path}"),
         None => format!("{scheme}://{host}{path}"),
     }
+}
+
+/// Whether `host`, a URL's host, names this machine's loopback: `localhost`
+/// in any case, or a loopback address, an IPv6 literal with or without its
+/// brackets.
+pub fn is_loopback(host: &str) -> bool {
+    let host = host
+        .strip_prefix('[')
+        .and_then(|literal| literal.strip_suffix(']'))
+        .unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 #[cfg(test)]
@@ -77,5 +93,31 @@ mod tests {
     #[test]
     fn an_address_with_no_hierarchy_is_named_by_its_scheme_alone() {
         assert_eq!(endpoint_shown("mailto:s3cr3t@example.com"), "a mailto: URL");
+    }
+
+    #[test]
+    fn loopback_is_localhost_or_a_loopback_address_on_every_spelling() {
+        for host in [
+            "localhost",
+            "LOCALHOST",
+            "127.0.0.1",
+            "127.3.2.1",
+            "::1",
+            "[::1]",
+            "[0:0:0:0:0:0:0:1]",
+        ] {
+            assert!(is_loopback(host), "{host}");
+        }
+        for host in [
+            "localhost.example",
+            "collector.internal",
+            "10.0.0.7",
+            "2001:db8::1",
+            "[2001:db8::1]",
+            "[::1",
+            "",
+        ] {
+            assert!(!is_loopback(host), "{host}");
+        }
     }
 }

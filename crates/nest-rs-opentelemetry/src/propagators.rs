@@ -61,10 +61,7 @@ pub(crate) fn global_propagator() -> opentelemetry::propagation::TextMapComposit
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn reading(value: &'static str) -> impl Fn(&str) -> Option<String> {
-        move |name: &str| (name == OTEL_PROPAGATORS).then(|| value.to_owned())
-    }
+    use crate::testing::reading;
 
     /// Unset, blank, or both W3C formats in any order and case: what the
     /// framework propagates.
@@ -79,7 +76,10 @@ mod tests {
             "TraceContext,BAGGAGE",
             "tracecontext,baggage,tracecontext",
         ] {
-            assert!(read_propagators(&reading(value)).is_ok(), "{value:?}");
+            assert!(
+                read_propagators(&reading(&[(OTEL_PROPAGATORS, value)])).is_ok(),
+                "{value:?}"
+            );
         }
     }
 
@@ -99,7 +99,7 @@ mod tests {
             "baggage",
             " , ",
         ] {
-            let said = read_propagators(&reading(value))
+            let said = read_propagators(&reading(&[(OTEL_PROPAGATORS, value)]))
                 .expect_err(value)
                 .to_string();
             assert!(
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn none_is_refused_saying_the_framework_s_correlation_is_not_switched_off() {
         for value in ["none", "NONE", "tracecontext,none"] {
-            let said = read_propagators(&reading(value))
+            let said = read_propagators(&reading(&[(OTEL_PROPAGATORS, value)]))
                 .expect_err(value)
                 .to_string();
             assert!(

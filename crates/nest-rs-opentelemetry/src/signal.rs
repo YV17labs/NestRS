@@ -145,11 +145,7 @@ impl SdkSwitch {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// `variable` set to `value`, and nothing else.
-    fn reading(variable: &'static str, value: &'static str) -> impl Fn(&str) -> Option<String> {
-        move |name: &str| (name == variable).then(|| value.to_owned())
-    }
+    use crate::testing::reading;
 
     /// `none`, in any case, alone or repeated, switches a signal off in every
     /// build, and a blank selector is unset.
@@ -159,13 +155,17 @@ mod tests {
             let variable = signal.exporter_var();
             for value in ["none", " NONE ", "none,none"] {
                 assert_eq!(
-                    signal.selection(&reading(variable, value)).expect(value),
+                    signal
+                        .selection(&reading(&[(variable, value)]))
+                        .expect(value),
                     Selection::None
                 );
             }
             for value in ["", "  "] {
                 assert_eq!(
-                    signal.selection(&reading(variable, value)).expect(value),
+                    signal
+                        .selection(&reading(&[(variable, value)]))
+                        .expect(value),
                     Selection::Unset
                 );
             }
@@ -187,7 +187,7 @@ mod tests {
             ("yes", SdkSwitch::Unrecognised),
         ] {
             assert_eq!(
-                SdkSwitch::read(&reading(OTEL_SDK_DISABLED, value)),
+                SdkSwitch::read(&reading(&[(OTEL_SDK_DISABLED, value)])),
                 switch,
                 "{value:?}"
             );
@@ -224,12 +224,14 @@ mod tests {
             let variable = signal.exporter_var();
             for value in ["otlp", "OTLP", "otlp, otlp"] {
                 assert_eq!(
-                    signal.selection(&reading(variable, value)).expect(value),
+                    signal
+                        .selection(&reading(&[(variable, value)]))
+                        .expect(value),
                     Selection::Otlp
                 );
             }
             let said = signal
-                .selection(&reading(variable, "zipkin"))
+                .selection(&reading(&[(variable, "zipkin")]))
                 .expect_err("an exporter the crate does not build")
                 .to_string();
             assert!(
@@ -258,7 +260,7 @@ mod tests {
                 " , ",
             ] {
                 let said = signal
-                    .selection(&reading(variable, value))
+                    .selection(&reading(&[(variable, value)]))
                     .expect_err(value)
                     .to_string();
                 assert!(

@@ -7,15 +7,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
-use nest_rs_opentelemetry::{
-    FLUSH_TIMEOUT, OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError, TARGET,
-};
+use nest_rs_opentelemetry::{FLUSH_TIMEOUT, OpenTelemetry, OpenTelemetryConfig, TARGET};
 use nest_rs_testing::{LogCapture, TestAuthority, TestCertificate};
 use opentelemetry_otlp::{OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_TIMEOUT};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-use crate::init_under;
+use crate::{init_under, refused_under};
 
 /// The authority the collector's certificate chains to; the system's store
 /// does not hold it.
@@ -245,20 +243,13 @@ fn an_export_to_a_collector_no_trusted_authority_signed_never_lands() {
 fn tls_material_beside_a_plaintext_endpoint_is_refused_naming_both() {
     let scratch = tempfile::tempdir().expect("a scratch directory");
     let authority = written(&scratch, "plaintext-authority.pem", AUTHORITY.pem());
-    let Err(refused) = init_under(
+    let sentence = refused_under(
         &[
             (OTEL_EXPORTER_OTLP_ENDPOINT, "http://127.0.0.1:4318"),
             ("OTEL_EXPORTER_OTLP_CERTIFICATE", &authority),
         ],
         OpenTelemetryConfig::default(),
-    ) else {
-        panic!("TLS material beside a plaintext endpoint must not boot");
-    };
-    assert!(
-        matches!(refused, OpenTelemetryError::Config(_)),
-        "{refused}"
     );
-    let sentence = refused.to_string();
     assert!(
         sentence.contains("OTEL_EXPORTER_OTLP_CERTIFICATE")
             && sentence.contains(OTEL_EXPORTER_OTLP_ENDPOINT),
@@ -459,20 +450,13 @@ fn a_signal_s_own_compression_wins_over_the_general_one() {
 /// never passed over while the deployment believes its exports compressed.
 #[test]
 fn a_compression_this_exporter_does_not_build_is_refused_naming_its_variable() {
-    let Err(refused) = init_under(
+    let said = refused_under(
         &[
             (OTEL_EXPORTER_OTLP_ENDPOINT, "http://127.0.0.1:4318"),
             ("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", "zstd"),
         ],
         OpenTelemetryConfig::default(),
-    ) else {
-        panic!("zstd must not boot an exporter that builds gzip alone");
-    };
-    assert!(
-        matches!(refused, OpenTelemetryError::Config(_)),
-        "{refused}"
     );
-    let said = refused.to_string();
     assert!(
         said.contains("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION") && said.contains("gzip"),
         "{said}"
@@ -485,7 +469,7 @@ fn a_compression_this_exporter_does_not_build_is_refused_naming_its_variable() {
 /// variables and quoting neither value.
 #[test]
 fn a_header_beside_a_plaintext_endpoint_on_another_host_is_refused_naming_both() {
-    let Err(refused) = init_under(
+    let said = refused_under(
         &[
             (
                 OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -494,14 +478,7 @@ fn a_header_beside_a_plaintext_endpoint_on_another_host_is_refused_naming_both()
             ("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer s3cr3t"),
         ],
         OpenTelemetryConfig::default(),
-    ) else {
-        panic!("a header over plaintext to another host must not boot");
-    };
-    assert!(
-        matches!(refused, OpenTelemetryError::Config(_)),
-        "{refused}"
     );
-    let said = refused.to_string();
     assert!(
         said.contains("OTEL_EXPORTER_OTLP_HEADERS") && said.contains(OTEL_EXPORTER_OTLP_ENDPOINT),
         "{said}"
@@ -619,7 +596,7 @@ fn otel_metric_export_timeout_cuts_a_metric_export() {
 /// over the ratio the app pinned.
 #[test]
 fn a_sampler_or_a_ratio_the_sdk_would_pass_over_is_refused_naming_its_variable() {
-    let Err(refused) = init_under(
+    let said = refused_under(
         &[
             ("OTEL_TRACES_SAMPLER", "parentbased_traceidratio"),
             ("OTEL_TRACES_SAMPLER_ARG", "10%"),
@@ -628,14 +605,7 @@ fn a_sampler_or_a_ratio_the_sdk_would_pass_over_is_refused_naming_its_variable()
             trace_sample_ratio: 0.1,
             ..OpenTelemetryConfig::default()
         },
-    ) else {
-        panic!("a ratio that does not read must not sample every trace");
-    };
-    assert!(
-        matches!(refused, OpenTelemetryError::Config(_)),
-        "{refused}"
     );
-    let said = refused.to_string();
     assert!(
         said.contains("OTEL_TRACES_SAMPLER_ARG") && said.contains("between 0 and 1"),
         "{said}"
@@ -647,7 +617,7 @@ fn a_sampler_or_a_ratio_the_sdk_would_pass_over_is_refused_naming_its_variable()
 /// where the SDK would export cumulative sums the backend did not ask for.
 #[test]
 fn a_metric_temporality_the_sdk_does_not_know_is_refused_naming_its_variable() {
-    let Err(refused) = init_under(
+    let said = refused_under(
         &[
             (OTEL_EXPORTER_OTLP_ENDPOINT, "http://127.0.0.1:4318"),
             (
@@ -656,14 +626,7 @@ fn a_metric_temporality_the_sdk_does_not_know_is_refused_naming_its_variable() {
             ),
         ],
         OpenTelemetryConfig::default(),
-    ) else {
-        panic!("a temporality the SDK does not know must not boot");
-    };
-    assert!(
-        matches!(refused, OpenTelemetryError::Config(_)),
-        "{refused}"
     );
-    let said = refused.to_string();
     assert!(
         said.contains("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
             && said.contains("cumulative"),

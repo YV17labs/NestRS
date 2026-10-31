@@ -131,6 +131,7 @@ pub mod __private {
 
     pub use crate::bounds::{BoundedField, reads_field};
     pub use crate::dotenv::load_app_cascade;
+    pub use crate::endpoint::is_loopback;
     pub use crate::field::overlay_json;
     pub use crate::module::{ConfigFeatureSetup, check_feature, feature, queue_feature};
     pub use crate::namespace::ConfigNamespace;

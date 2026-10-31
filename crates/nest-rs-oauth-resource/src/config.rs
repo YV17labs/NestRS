@@ -1,6 +1,7 @@
 //! [`OAuthResourceConfig`] — who this resource server is, and which
 //! authorization servers issue tokens for it (RFC 9728 §2).
 
+use nest_rs_config::__private::is_loopback;
 use nest_rs_config::{Environment, Namespaced, config};
 
 use crate::metadata::ProtectedResourceMetadata;
@@ -197,14 +198,6 @@ fn host_of(authority: &str) -> &str {
         Some(literal) => literal.split_once(']').map_or("", |(inner, _)| inner),
         None => authority.split(':').next().unwrap_or(authority),
     }
-}
-
-/// Whether `host` names loopback.
-fn is_loopback(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|addr| addr.is_loopback())
 }
 
 /// The MCP authorization spec's canonical-URI rules: absolute, with a scheme

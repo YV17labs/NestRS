@@ -349,6 +349,8 @@ impl OpenTelemetry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "otlp"))]
+    use crate::testing::reading;
 
     /// `INITIALIZED` is a process-wide `AtomicBool`; tests that mutate it must
     /// serialize so an interleaved check does not see another test's write.
@@ -475,23 +477,10 @@ mod tests {
         );
     }
 
-    /// The variables `set` holds, and nothing else.
-    #[cfg(not(feature = "otlp"))]
-    fn reading(set: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
-        move |name: &str| {
-            set.iter()
-                .find(|(variable, _)| *variable == name)
-                .map(|(_, value)| (*value).to_owned())
-        }
-    }
-
     /// The refusal of an endpoint `set` names, in a binary built without the
     /// `otlp` feature, as said.
     #[cfg(not(feature = "otlp"))]
-    fn refused(
-        config: &OpenTelemetryConfig,
-        set: &'static [(&'static str, &'static str)],
-    ) -> String {
+    fn refused(config: &OpenTelemetryConfig, set: &[(&str, &str)]) -> String {
         refuse_what_no_exporter_serves(config, &reading(set))
             .expect_err("an endpoint nothing exports to")
             .to_string()

@@ -1,9 +1,10 @@
 //! [`OAuthClientConfig`] — env-driven OAuth2 provider endpoints.
 
 use nest_rs_authn::AuthError;
+use nest_rs_config::__private::is_loopback;
 use nest_rs_config::{ClientTls, ConfigService, Environment, config, endpoint_shown};
 use nest_rs_core::Secret;
-use oauth2::url::{Host, Url};
+use oauth2::url::Url;
 
 /// Env-driven OAuth2 provider endpoints (namespace `oauth__client`); every URL and
 /// credential is required.
@@ -168,7 +169,9 @@ fn refuse_plaintext_redirect_in(
     environment: Environment,
 ) -> Result<(), AuthError> {
     let redirect = parsed(redirect_url, setting)?;
-    let local = redirect.scheme() == "http" && is_loopback(&redirect) && !environment.is_deployed();
+    let local = redirect.scheme() == "http"
+        && redirect.host_str().is_some_and(is_loopback)
+        && !environment.is_deployed();
     if redirect.scheme() != "https" && !local {
         return Err(refused(
             setting,
@@ -208,16 +211,6 @@ fn parsed(raw: &str, setting: &str) -> Result<Url, AuthError> {
 /// The refusal of `setting`, saying `why`.
 fn refused(setting: &str, why: &str) -> AuthError {
     AuthError::failed(format!("{setting}, {why}"))
-}
-
-/// Whether `url` names this host's loopback interface.
-fn is_loopback(url: &Url) -> bool {
-    match url.host() {
-        Some(Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    }
 }
 
 #[cfg(test)]

@@ -54,3 +54,15 @@ fn init_under(
     });
     init.expect("the jail ran")
 }
+
+/// What refuses `config` at boot under `vars`, a configuration error, as said.
+fn refused_under(vars: &[(&str, &str)], config: OpenTelemetryConfig) -> String {
+    let Err(refused) = init_under(vars, config) else {
+        panic!("{vars:?} must not boot");
+    };
+    assert!(
+        matches!(refused, OpenTelemetryError::Config(_)),
+        "{refused:?}"
+    );
+    refused.to_string()
+}

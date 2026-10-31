@@ -227,6 +227,7 @@ fn retired_variables() -> Vec<String> {
 )]
 mod tests {
     use super::*;
+    use crate::testing::reading;
     use nest_rs_core::EnvPrefix;
     use nest_rs_core::logging::var;
 
@@ -447,9 +448,7 @@ mod tests {
     #[test]
     fn a_configuration_file_is_refused_naming_its_variable() {
         for variable in CONFIG_FILES {
-            let read =
-                move |name: &str| (name == variable).then(|| "/etc/otel/sdk.yaml".to_owned());
-            let refused = refuse_config_file(&read)
+            let refused = refuse_config_file(&reading(&[(variable, "/etc/otel/sdk.yaml")]))
                 .expect_err("a file nothing reads")
                 .to_string();
             assert!(
@@ -457,8 +456,7 @@ mod tests {
                 "{refused}"
             );
             assert!(!refused.contains("sdk.yaml"), "{refused}");
-            let blank = move |name: &str| (name == variable).then(|| " ".to_owned());
-            assert!(refuse_config_file(&blank).is_ok());
+            assert!(refuse_config_file(&reading(&[(variable, " ")])).is_ok());
         }
         assert!(refuse_config_file(&|_: &str| None).is_ok());
     }

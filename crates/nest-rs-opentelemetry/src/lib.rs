@@ -38,6 +38,8 @@ mod module;
 mod otlp;
 mod propagators;
 mod signal;
+#[cfg(test)]
+mod testing;
 
 #[cfg(feature = "otlp")]
 pub use attribute::{Attribute, AttributeValue};

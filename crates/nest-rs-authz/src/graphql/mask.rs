@@ -7,7 +7,6 @@
 
 use nest_rs_core::Edge;
 use nest_rs_graphql::async_graphql::{Context, Error};
-use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -16,8 +15,11 @@ use super::context::forbidden_fields;
 use crate::ability::{Provenance, mask_reason};
 use crate::gate::{Refusal, reason};
 use crate::subject::{NoRows, Rows, SubjectMask};
-use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
-use crate::{Ability, Action, ActionMarker, WireModelDefaults};
+use crate::wire_mask::{
+    MaskedWire, judged, mask_row, mask_wire_detail, mask_wire_json, warn_mask_failure,
+};
+use crate::wire_model::WireModel;
+use crate::{Ability, Action, ActionMarker};
 
 /// Mask **one item of a subscription stream** through `ability`, and report
 /// whether it survives — `Ok(None)` meaning this subscriber may not read this
@@ -42,8 +44,7 @@ pub fn masked_item_for<A, E, O>(
 ) -> Result<Option<O>, Error>
 where
     A: ActionMarker,
-    E: EntityTrait + WireModelDefaults,
-    E::Model: Serialize + DeserializeOwned,
+    E: WireModel,
     O: Serialize + DeserializeOwned,
 {
     let action = A::ACTION;
@@ -59,7 +60,7 @@ where
     if !wire.is_object() {
         return Ok(Some(item));
     }
-    let model = crate::wire_mask::wire_to_model::<E>(&wire).map_err(|err| {
+    let verdict = judged::<E>(ability, action, &wire, Provenance::Pushed).map_err(|err| {
         mask_failure::<E>(
             action,
             mask_reason::IRRECONCILABLE,
@@ -67,16 +68,10 @@ where
             &err,
         )
     })?;
-    let verdict = ability.evaluate::<E>(
-        action,
-        &model,
-        Provenance::Pushed,
-        &crate::wire_mask::invented_in::<E>(&wire),
-    );
     if !verdict.allowed {
         return Ok(None);
     }
-    let masked = crate::wire_mask::mask_row::<E>(ability, action, &model, verdict, &wire);
+    let masked = mask_row::<E>(&verdict, wire);
     match serde_json::from_value(masked.masked) {
         Ok(masked) => Ok(Some(masked)),
         // The mask took a key the item's own type requires. Not a failure in
@@ -91,10 +86,10 @@ where
 
 /// Mask a resolver's already-built wire value through the ambient ability —
 /// the GraphQL analog of the HTTP response shaper, sharing its value-level
-/// round-trip (`crate::wire_mask`): serialize the value, reconstruct each
-/// object into `E::Model` (filling unexposed columns via
-/// [`WireModelDefaults`]), run [`Ability::mask`] / [`Ability::mask_many`],
-/// retain only the exposed wire keys, deserialize back. Handles the wire DTO
+/// round-trip (`crate::wire_mask`): serialize the value, read each object back
+/// into `E::Model` through what `#[expose]` declares, judge it as
+/// [`Ability::mask_many`] does, retain the exposed wire keys its verdict
+/// grants, deserialize back. Handles the wire DTO
 /// itself, `Option<…>`, `Vec<…>`; scalars and `None` pass through untouched.
 ///
 /// A stripped **non-null** field cannot mask to `null`: when the operation
@@ -107,13 +102,11 @@ where
 /// ability, so a rule reading a relation or an unexposed column is the read's
 /// to have decided.
 ///
-/// [`Ability::mask`]: crate::Ability::mask
 /// [`Ability::mask_many`]: crate::Ability::mask_many
 pub fn masked_value_for<A, E, O>(ctx: &Context<'_>, value: O) -> Result<O, Error>
 where
     A: ActionMarker,
-    E: EntityTrait + WireModelDefaults,
-    E::Model: Serialize + DeserializeOwned,
+    E: WireModel,
     O: Serialize + DeserializeOwned,
 {
     let ability = ability()?;
@@ -126,13 +119,13 @@ where
             &err,
         )
     })?;
-    match mask_wire_json::<E>(&ability, action, &wire, Provenance::Loaded) {
-        Ok(MaskedWire::Passthrough) => Ok(value),
+    match mask_wire_json::<E>(&ability, action, wire, Provenance::Loaded) {
+        Ok(MaskedWire::Passthrough(_)) => Ok(value),
         Ok(MaskedWire::Masked(masked)) => match serde_json::from_value(masked) {
             Ok(masked) => Ok(masked),
             // The mask took a key the wire type requires — not a failure in
             // itself, only if the operation asked for that key.
-            Err(_) => unrepresentable::<E, O>(ctx, &ability, action, wire, value),
+            Err(_) => unrepresentable::<E, O>(ctx, &ability, action, value),
         },
         Err(err) => Err(mask_failure::<E>(
             action,
@@ -163,8 +156,7 @@ pub trait GraphqlMask<A, O> {
 impl<A, E, O> GraphqlMask<A, O> for Rows<E>
 where
     A: ActionMarker,
-    E: EntityTrait + WireModelDefaults,
-    E::Model: Serialize + DeserializeOwned,
+    E: WireModel,
     O: Serialize + DeserializeOwned,
 {
     fn masked_value(ctx: &Context<'_>, value: O) -> Result<O, Error> {
@@ -215,14 +207,22 @@ fn unrepresentable<E, O>(
     ctx: &Context<'_>,
     ability: &Ability,
     action: Action,
-    wire: serde_json::Value,
     value: O,
 ) -> Result<O, Error>
 where
-    E: EntityTrait + WireModelDefaults,
-    E::Model: Serialize + DeserializeOwned,
-    O: DeserializeOwned,
+    E: WireModel,
+    O: Serialize + DeserializeOwned,
 {
+    // Written again rather than kept: the mask consumed the first, and only a
+    // field grant the type cannot express comes this way.
+    let wire = serde_json::to_value(&value).map_err(|err| {
+        mask_failure::<E>(
+            action,
+            mask_reason::NOT_SERIALIZABLE,
+            "resolver value did not serialize",
+            &err,
+        )
+    })?;
     let detail = mask_wire_detail::<E>(ability, action, wire).map_err(|err| {
         mask_failure::<E>(
             action,

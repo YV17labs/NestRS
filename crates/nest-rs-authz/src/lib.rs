@@ -79,7 +79,6 @@ pub use subject::{RowSubject, Subject};
 pub use nest_rs_authz_macros::subject;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 pub use wire_mask::masked_reply;
-pub use wire_model::WireModelDefaults;
 
 #[cfg(feature = "graphql")]
 pub mod graphql;
@@ -103,6 +102,7 @@ pub mod __private {
     #[cfg(feature = "mcp")]
     pub use crate::mcp::mask::{McpMask, mcp_masked_value};
     pub use crate::subject::{NoRows, Rows, SubjectMask};
+    pub use crate::wire_model::{WireModel, wire_column};
     #[cfg(feature = "ws")]
     pub use crate::ws::mask::{WsMask, ws_masked_reply};
 }

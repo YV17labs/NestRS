@@ -15,13 +15,13 @@ use nest_rs_guards::Denial;
 use nest_rs_ws::{WsError, WsReply, denial_to_ws_error};
 use sea_orm::EntityTrait;
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::ability::{Provenance, mask_reason};
 use crate::subject::{NoRows, Rows, SubjectMask};
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
-use crate::{Action, ActionMarker, WireModelDefaults, current_ability};
+use crate::wire_model::WireModel;
+use crate::{Action, ActionMarker, current_ability};
 
 /// Mask a message reply through the ambient ability and return the JSON the frame
 /// should carry.
@@ -35,8 +35,7 @@ use crate::{Action, ActionMarker, WireModelDefaults, current_ability};
 pub fn masked_reply_for<A, E, O>(event: &'static str, value: &O) -> Result<Value, WsError>
 where
     A: ActionMarker,
-    E: EntityTrait + WireModelDefaults,
-    E::Model: Serialize + DeserializeOwned,
+    E: WireModel,
     O: Serialize + ?Sized,
 {
     let action = A::ACTION;
@@ -62,9 +61,8 @@ where
             ));
         }
     };
-    match mask_wire_json::<E>(&ability, action, &wire, Provenance::Loaded) {
-        Ok(MaskedWire::Masked(masked)) => Ok(masked),
-        Ok(MaskedWire::Passthrough) => Ok(wire),
+    match mask_wire_json::<E>(&ability, action, wire, Provenance::Loaded) {
+        Ok(MaskedWire::Masked(value) | MaskedWire::Passthrough(value)) => Ok(value),
         Err(err) => Err(mask_failure::<E>(
             event,
             action,
@@ -92,8 +90,7 @@ pub trait WsMask<A, O: ?Sized> {
 impl<A, E, O> WsMask<A, O> for Rows<E>
 where
     A: ActionMarker,
-    E: EntityTrait + WireModelDefaults,
-    E::Model: Serialize + DeserializeOwned,
+    E: WireModel,
     O: Serialize + ?Sized,
 {
     fn masked_reply(event: &'static str, value: &O) -> WsReply {

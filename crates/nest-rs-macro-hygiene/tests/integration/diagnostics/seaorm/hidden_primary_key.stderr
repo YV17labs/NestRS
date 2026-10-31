@@ -1,0 +1,5 @@
+error: #[expose]: `id: i32` is the primary key, which a masked reply reads off the wire and never invents — `#[expose]` it
+  --> tests/integration/diagnostics/seaorm/hidden_primary_key.rs:12:9
+   |
+12 |     pub id: i32,
+   |         ^^

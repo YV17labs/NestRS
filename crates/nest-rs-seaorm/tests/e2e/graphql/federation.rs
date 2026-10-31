@@ -2,7 +2,7 @@
 //! operation: a row the ability does not reach is not reachable by key either.
 
 use nest_rs_authz::AbilityGuard;
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
 use nest_rs_core::{injectable, module};
 use nest_rs_graphql::GraphqlView;
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
@@ -19,15 +19,19 @@ use serde::{Deserialize, Serialize};
 use crate::always_authenticated::AlwaysAuthenticated;
 
 mod post {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
+    #[expose(name = "PostRow")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "federated_probe_posts")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: Uuid,
+        #[expose]
         pub title: String,
+        #[expose]
         pub published: bool,
         pub secret: String,
     }
@@ -36,22 +40,6 @@ mod post {
     pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
-}
-
-/// Stands in for what `#[expose]` emits: `secret` carries no exposure.
-impl WireModelDefaults for post::Entity {
-    fn fill_wire_defaults(map: &mut serde_json::Map<String, serde_json::Value>) {
-        map.entry(String::from("secret"))
-            .or_insert_with(|| serde_json::Value::String(String::new()));
-    }
-
-    fn wire_keys() -> Option<&'static [&'static str]> {
-        Some(&["id", "title", "published"])
-    }
-
-    fn is_placeholdered(column: post::Column) -> bool {
-        matches!(column, post::Column::Secret)
-    }
 }
 
 /// The federated type; its `@key` is the entity resolver's `id` argument.

@@ -3,7 +3,7 @@
 //! GraphQL having no rendering choke point.
 
 use nest_rs_authz::AbilityGuard;
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
 use nest_rs_core::{injectable, module};
 use nest_rs_graphql::GraphqlView;
 use nest_rs_graphql::async_graphql::SimpleObject;
@@ -17,14 +17,17 @@ use crate::always_authenticated::AlwaysAuthenticated;
 
 /// An entity whose table is never created, so every read is a driver error.
 mod ghost {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
+    #[expose(name = "GhostRow")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "bind_probe_table_that_does_not_exist")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: Uuid,
+        #[expose]
         pub title: String,
     }
 
@@ -32,14 +35,6 @@ mod ghost {
     pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
-}
-
-impl WireModelDefaults for ghost::Entity {
-    fn fill_wire_defaults(_map: &mut serde_json::Map<String, serde_json::Value>) {}
-
-    fn wire_keys() -> Option<&'static [&'static str]> {
-        Some(&["id", "title"])
-    }
 }
 
 #[derive(SimpleObject, Serialize, Deserialize)]

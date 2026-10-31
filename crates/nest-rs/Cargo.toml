@@ -84,7 +84,7 @@ database = ["dep:nest-rs-database", "nest-rs-testing?/database"]
 # `authz` is not optional here even though `#[authorize]` is: `#[crud]` writes
 # an `#[authorize(::nest_rs_authz::<marker>, Entity)]` on *every* operation it
 # generates and an `::nest_rs_authz::Action` on each one that loads a row, and
-# `#[expose]` implements `::nest_rs_authz::WireModelDefaults` on every entity,
+# `#[expose]` implements the round trip `nest_rs_authz`'s masks read on every entity,
 # whether or not the developer writes a posture attribute. `nest-rs-seaorm`
 # depends on the crate already, so the feature carries what the expansion names
 # and costs no compilation.

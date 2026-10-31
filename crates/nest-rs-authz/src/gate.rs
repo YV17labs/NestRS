@@ -192,7 +192,7 @@ pub(crate) fn error_unreached(refusal: Refusal<'_>) {
 /// # use nest_rs_core::{Handler, Posture, UnitView, operation_log::Kind};
 /// # mod posts {
 /// #     use sea_orm::entity::prelude::*;
-/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 /// #     #[sea_orm(table_name = "posts")]
 /// #     pub struct Model {
 /// #         #[sea_orm(primary_key)]
@@ -292,7 +292,7 @@ mod tests {
     mod post {
         use sea_orm::entity::prelude::*;
 
-        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "posts")]
         pub(crate) struct Model {
             #[sea_orm(primary_key)]

@@ -1,15 +1,15 @@
 error[E0277]: `nest_rs::authz::Update` is not a resource service
-  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:39:32
+  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:40:32
    |
-39 |     #[authorize(Update, bind = Update)]
+40 |     #[authorize(Update, bind = Update)]
    |                                ^^^^^^ expected a service implementing `CrudService`
    |
    = help: the trait `CrudService` is not implemented for `nest_rs::authz::Update`
    = note: `#[crud(service = Service)]` and `#[authorize(Action, bind = Service)]` name a type implementing `CrudService`; beside `bind =`, the action comes first, so an action marker there is the two swapped
 help: the trait `CrudService` is implemented for `NotesService`
-  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:29:1
+  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:30:1
    |
-29 | impl CrudService for NotesService {
+30 | impl CrudService for NotesService {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `nest_rs::seaorm::__private::graphql_bind`
   --> $WORKSPACE/crates/nest-rs-seaorm/src/graphql/bind.rs
@@ -21,17 +21,17 @@ note: required by a bound in `nest_rs::seaorm::__private::graphql_bind`
    |        ^^^^^^^^^^^ required by this bound in `graphql_bind`
 
 error[E0277]: `nest_rs::authz::Update` is not a resource service
-  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:36:1
+  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:37:1
    |
-36 | #[operations]
+37 | #[operations]
    | ^^^^^^^^^^^^^ expected a service implementing `CrudService`
    |
    = help: the trait `CrudService` is not implemented for `nest_rs::authz::Update`
    = note: `#[crud(service = Service)]` and `#[authorize(Action, bind = Service)]` name a type implementing `CrudService`; beside `bind =`, the action comes first, so an action marker there is the two swapped
 help: the trait `CrudService` is implemented for `NotesService`
-  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:29:1
+  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:30:1
    |
-29 | impl CrudService for NotesService {
+30 | impl CrudService for NotesService {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `nest_rs::seaorm::__private::graphql_bind`
   --> $WORKSPACE/crates/nest-rs-seaorm/src/graphql/bind.rs
@@ -44,17 +44,17 @@ note: required by a bound in `nest_rs::seaorm::__private::graphql_bind`
    = note: this error originates in the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: `nest_rs::authz::Update` is not a resource service
-  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:39:32
+  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:40:32
    |
-39 |     #[authorize(Update, bind = Update)]
+40 |     #[authorize(Update, bind = Update)]
    |                                ^^^^^^ expected a service implementing `CrudService`
    |
    = help: the trait `CrudService` is not implemented for `nest_rs::authz::Update`
    = note: `#[crud(service = Service)]` and `#[authorize(Action, bind = Service)]` name a type implementing `CrudService`; beside `bind =`, the action comes first, so an action marker there is the two swapped
 help: the trait `CrudService` is implemented for `NotesService`
-  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:29:1
+  --> tests/integration/diagnostics/graphql/bind_names_no_service.rs:30:1
    |
-29 | impl CrudService for NotesService {
+30 | impl CrudService for NotesService {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `nest_rs::seaorm::__private::bound_entity`
   --> $WORKSPACE/crates/nest-rs-seaorm/src/service.rs

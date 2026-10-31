@@ -15,14 +15,17 @@ use crate::graphql::query;
 
 /// A throwaway SeaORM entity to act as the authorization `Subject`.
 mod widget {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[expose(name = "Widget")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "widgets")]
     pub(super) struct Model {
         #[sea_orm(primary_key)]
+        #[expose]
         pub id: i32,
+        #[expose]
         pub name: String,
     }
 
@@ -95,8 +98,6 @@ impl Guard for AbilityInjector {
 impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
 impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
-
-impl nest_rs_authz::WireModelDefaults for widget::Entity {}
 
 #[resolver]
 struct WidgetResolver;

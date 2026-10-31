@@ -1,6 +1,5 @@
 use nest_rs::seaorm::{expose, wire_enum};
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
 #[wire_enum(graphql)]
 #[derive(EnumIter, DeriveActiveEnum)]
@@ -22,10 +21,7 @@ pub enum PostStatus {
 )]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "post",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "post")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]

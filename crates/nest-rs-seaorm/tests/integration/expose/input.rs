@@ -20,7 +20,7 @@ mod booking {
 
     // A `graphql` exposure requires `Serialize`: masking reconstructs from it.
     #[expose(name = "Booking", service = BookingsService, graphql)]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "bookings")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -82,7 +82,7 @@ mod ticket {
     use super::*;
 
     #[expose(name = "Ticket", service = TicketsService, graphql)]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "tickets")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]

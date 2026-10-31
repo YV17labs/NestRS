@@ -17,7 +17,7 @@
 //! #     use nest_rs_seaorm::expose;
 //! #     use sea_orm::entity::prelude::*;
 //! #     #[expose(name = "User")]
-//! #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+//! #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 //! #     #[sea_orm(table_name = "users")]
 //! #     pub struct Model {
 //! #         #[sea_orm(primary_key)]

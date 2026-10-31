@@ -2,17 +2,20 @@
 //! route; an action marker there — the action and the service swapped — is
 //! refused with the note saying so.
 
-use nest_rs::authz::{Update, WireModelDefaults};
+use nest_rs::authz::Update;
 use nest_rs::graphql::{operations, resolver};
 use nest_rs::seaorm::{Authorized, CrudService};
 
 mod note {
+    use nest_rs::seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[expose(name = "Note")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "swapped_bind_notes")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: Uuid,
     }
 
@@ -21,8 +24,6 @@ mod note {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
-
-impl WireModelDefaults for note::Entity {}
 
 struct NotesService;
 

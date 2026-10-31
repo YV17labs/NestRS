@@ -1,5 +1,5 @@
 error[E0080]: evaluation panicked: `#[authorize(.., bind = Service)]` loads the subject from the route's one path parameter, and `/{id}` under its `#[controller]` path does not name exactly one — bind on a route whose path, its controller's included, names the subject's id alone, as `/{id}` or `/{id}/publish`
-  --> tests/integration/diagnostics/http/authorize_bind_under_a_parameterised_prefix.rs:39:11
+  --> tests/integration/diagnostics/http/authorize_bind_under_a_parameterised_prefix.rs:40:11
    |
-39 |     #[get("/{id}")]
+40 |     #[get("/{id}")]
    |           ^^^^^^^ evaluation of `_` failed here

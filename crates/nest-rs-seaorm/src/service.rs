@@ -103,7 +103,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// #     use nest_rs_seaorm::expose;
 /// #     use sea_orm::entity::prelude::*;
 /// #     #[expose(name = "User")]
-/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 /// #     #[sea_orm(table_name = "users")]
 /// #     pub struct Model {
 /// #         #[sea_orm(primary_key, auto_increment = false)]
@@ -188,7 +188,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// #     use nest_rs_seaorm::expose;
 /// #     use sea_orm::entity::prelude::*;
 /// #     #[expose(name = "User", graphql)]
-/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 /// #     #[sea_orm(table_name = "users")]
 /// #     pub struct Model {
 /// #         #[sea_orm(primary_key, auto_increment = false)]

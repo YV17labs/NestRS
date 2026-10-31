@@ -15,10 +15,9 @@ use nest_rs_testing::TestApp;
 mod note {
     use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
     #[expose(name = "Note")]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "notes")]
     pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]

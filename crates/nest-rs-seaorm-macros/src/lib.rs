@@ -45,12 +45,18 @@ mod wire_enum;
 ///
 /// The original entity unchanged, plus: the wire DTO (`Serialize` +
 /// `JsonSchema`, GraphQL `SimpleObject` under `graphql`), the `Create`/`Update`
-/// input types, active-model write glue, `impl WireModelDefaults` (for response
-/// masking to rebuild unexposed columns), lifecycle glue (the column defaults'
-/// registration, `soft_delete`'s `SoftDeletable` and registration,
-/// `timestamps`' `ActiveModelBehavior`), and — under `graphql` — the relation
-/// loaders +
-/// `#[ComplexObject]` field resolvers for `#[expose]`d relations.
+/// input types, active-model write glue, the round trip a masked reply runs on
+/// a row — each column through its own serde impls, never a `Serialize` on the
+/// `Model` — lifecycle glue (the column defaults' registration, `soft_delete`'s
+/// `SoftDeletable` and registration, `timestamps`' `ActiveModelBehavior`), and
+/// — under `graphql` — the relation loaders + `#[ComplexObject]` field
+/// resolvers for `#[expose]`d relations.
+///
+/// A masked reply rebuilds every hidden column, so each one needs a
+/// placeholder: a `String`, `Option`, `bool` or number takes its `Default`, a
+/// `Secret` its value's, and any other takes `#[wire_default]` (its type's
+/// `Default`) or `#[wire_default(expr)]`. A hidden column with none, and a
+/// hidden primary key, are refused at the field.
 #[proc_macro_attribute]
 pub fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(expose::expose(args, item).into()).into()

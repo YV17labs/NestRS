@@ -8,14 +8,19 @@ use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
 use nest_rs_authz::{Ability, AbilityBuilder, Action, FieldSet};
 
 mod widget {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[expose(name = "Widget")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "widgets")]
     pub(super) struct Model {
         #[sea_orm(primary_key)]
+        #[expose]
         pub id: i32,
+        #[expose]
         pub org_id: i32,
+        #[expose]
         pub name: String,
         pub secret: String,
     }
@@ -119,6 +124,16 @@ fn mask_strips_unpermitted_fields_from_the_body() {
     assert!(obj.contains_key("name"));
     assert!(!obj.contains_key("secret"), "secret must be stripped");
     assert!(!obj.contains_key("org_id"), "org_id must be stripped");
+}
+
+#[test]
+fn mask_answers_the_exposed_columns_alone_under_an_unrestricted_grant() {
+    let json = ability(7, false).mask::<widget::Entity>(Action::Read, &model(7));
+    assert_eq!(
+        json,
+        serde_json::json!({ "id": 1, "org_id": 7, "name": "ada" }),
+        "a hidden column is no field a grant can open",
+    );
 }
 
 #[test]

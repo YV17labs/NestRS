@@ -214,7 +214,7 @@ impl<S: Subject> RuleSpec<'_, S> {
     /// # use nest_rs_authz::{AbilityBuilder, Action};
     /// # mod post {
     /// #     use sea_orm::entity::prelude::*;
-    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     /// #     #[sea_orm(table_name = "posts")]
     /// #     pub struct Model {
     /// #         #[sea_orm(primary_key)]

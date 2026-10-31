@@ -54,10 +54,13 @@ fn generate_entity_writes_the_lone_entity_and_wires_the_port() {
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
     assert!(features_cargo.contains("\"seaorm\""), "{features_cargo}");
     assert!(root_cargo.contains("\"seaorm\""), "{root_cargo}");
-    for krate in ["sea-orm", "serde"] {
-        assert!(root_cargo.contains(krate), "{root_cargo}");
-        assert!(features_cargo.contains(krate), "{features_cargo}");
-    }
+    assert!(root_cargo.contains("sea-orm"), "{root_cargo}");
+    assert!(features_cargo.contains("sea-orm"), "{features_cargo}");
+    assert!(
+        !features_cargo.contains("serde") && !root_cargo.contains("serde"),
+        "`#[expose]` carries the round trip a mask needs, so an entity derives no serde: \
+         {root_cargo}\n{features_cargo}",
+    );
     assert!(
         !features_cargo.contains("authz"),
         "an entity alone needs no authz feature: {features_cargo}",

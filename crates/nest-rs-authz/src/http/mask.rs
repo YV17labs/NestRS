@@ -5,13 +5,12 @@
 //!
 //! 1. A masked route is one whose reads run under that ability: the data layer
 //!    scopes every query via `current_ability()` — no hand-written filter.
-//! 2. Masks the JSON response: parse into `S::Model` (filling the unexposed
-//!    columns the `#[expose]` output omits via [`WireModelDefaults`]), run typed
-//!    [`Ability::mask`] / [`Ability::mask_many`], then retain only the entity's
-//!    statically-known exposed columns ([`WireModelDefaults::wire_keys`]) so
-//!    neither an unrestricted field grant nor a handler returning a raw `Model`
-//!    can leak an unexposed column (e.g. `password_hash`, which carries no
-//!    `#[expose]`).
+//! 2. Masks the JSON response: read each row back into `S::Model` through what
+//!    `#[expose]` declares (an unexposed column takes the placeholder it
+//!    checked at compile time), judge it as [`Ability::mask_many`] does, then
+//!    retain only the entity's exposed columns its verdict grants, so neither
+//!    an unrestricted field grant nor a body carrying a hidden column can leak
+//!    one (e.g. `password_hash`, which carries no `#[expose]`).
 //!
 //! Fails **closed**: a successful JSON body that cannot be reconciled with
 //! `S::Model` yields 500 rather than shipping data unmasked.
@@ -24,15 +23,13 @@ use nest_rs_core::Edge;
 use nest_rs_http::{
     Request, Response, ResponseShaping, RouteFuture, RouteResponseShaper, StatusCode, header,
 };
-use sea_orm::EntityTrait;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::authorize::Authorize;
 use crate::subject::{NoRows, Rows, SubjectMask};
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
-use crate::{Ability, Action, ActionMarker, WireModelDefaults};
+use crate::wire_model::WireModel;
+use crate::{Ability, Action, ActionMarker};
 
 impl<A, S> RouteResponseShaper for Authorize<A, S>
 where
@@ -69,8 +66,7 @@ pub trait RouteMask {
 #[diagnostic::do_not_recommend]
 impl<E> RouteMask for Rows<E>
 where
-    E: EntityTrait + WireModelDefaults,
-    E::Model: DeserializeOwned + Serialize,
+    E: WireModel,
 {
     const SHAPES: bool = true;
 
@@ -109,8 +105,7 @@ impl<S> AbilityShaping<S> {
 
 impl<S> ResponseShaping for AbilityShaping<S>
 where
-    S: EntityTrait + WireModelDefaults,
-    S::Model: DeserializeOwned + Serialize,
+    S: WireModel,
 {
     fn apply<'a>(self: Box<Self>, inner: RouteFuture<'a>) -> RouteFuture<'a> {
         Box::pin(async move {
@@ -179,8 +174,8 @@ fn refuse_unclassifiable<S>(mut resp: Response, action: Action) -> Response {
     )
 }
 
-/// Mask a successful JSON body: deserialize it into `S::Model`(s), run the typed
-/// masking, and re-serialize. A non-success response, or one whose handler
+/// Mask a successful JSON body of an `#[expose]`d entity: read each row back into
+/// `S::Model`, judge it, and serialize what its verdict grants. A non-success response, or one whose handler
 /// declared a non-JSON media type, passes through; a JSON object/array that does
 /// not match `S::Model`, and a body with no declared type at all, fail closed
 /// (see module docs).
@@ -190,8 +185,7 @@ pub async fn mask_entity_response<S>(
     mut resp: Response,
 ) -> Response
 where
-    S: EntityTrait + WireModelDefaults,
-    S::Model: DeserializeOwned + Serialize,
+    S: WireModel,
 {
     if !resp.status().is_success() {
         return resp;
@@ -232,8 +226,8 @@ where
         }
     };
 
-    match mask_wire_json::<S>(ability, action, &wire, Provenance::Loaded) {
-        Ok(MaskedWire::Passthrough) => {
+    match mask_wire_json::<S>(ability, action, wire, Provenance::Loaded) {
+        Ok(MaskedWire::Passthrough(_)) => {
             resp.set_body(bytes);
             resp
         }

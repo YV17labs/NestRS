@@ -1,14 +1,10 @@
 use nest_rs::core::Secret;
-use nest_rs::seaorm::{expose, wire_enum};
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
-#[wire_enum]
-#[derive(Default, EnumIter, DeriveActiveEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
-#[serde(rename_all = "lowercase")]
 pub enum UserRole {
-    #[default]
     #[sea_orm(string_value = "user")]
     User,
     #[sea_orm(string_value = "admin")]
@@ -24,10 +20,7 @@ pub enum UserRole {
 )]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "user",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "user")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
@@ -38,7 +31,7 @@ pub struct Model {
     pub name: String,
     #[expose(input(create, update), validate(email))]
     pub email: String,
-    #[wire_default]
+    #[wire_default(UserRole::User)]
     pub role: UserRole,
     pub password_hash: Option<Secret<String>>,
     #[expose]
@@ -56,31 +49,7 @@ pub struct Model {
 
 #[cfg(test)]
 mod tests {
-    use nest_rs::authz::WireModelDefaults;
-    use serde_json::Map;
-
     use super::*;
-
-    #[test]
-    fn wire_defaults_fill_in_role_and_password_hash_when_absent() {
-        let mut body: Map<String, serde_json::Value> = Map::new();
-        Entity::fill_wire_defaults(&mut body);
-
-        assert_eq!(
-            body.get("role"),
-            Some(&serde_json::Value::String("user".into()))
-        );
-        assert_eq!(body.get("password_hash"), Some(&serde_json::Value::Null));
-    }
-
-    #[test]
-    fn a_rule_on_a_filled_column_is_never_decided_on_its_placeholder() {
-        assert!(Entity::is_placeholdered(Column::Role));
-        assert!(Entity::is_placeholdered(Column::PasswordHash));
-        assert!(Entity::is_placeholdered(Column::DeletedAt));
-        assert!(!Entity::is_placeholdered(Column::OrgId));
-        assert!(!Entity::is_placeholdered(Column::Id));
-    }
 
     #[test]
     fn debug_redacts_the_password_hash() {
@@ -107,25 +76,6 @@ mod tests {
     }
 
     #[test]
-    fn serializing_a_row_never_writes_the_password_hash() {
-        let model = Model {
-            id: Uuid::nil(),
-            org_id: Uuid::nil(),
-            name: "Ada".into(),
-            email: "ada@example.com".into(),
-            role: UserRole::User,
-            password_hash: Some("$argon2id$v=19$secret".into()),
-            created_at: DateTimeWithTimeZone::default(),
-            updated_at: DateTimeWithTimeZone::default(),
-            deleted_at: None,
-        };
-
-        let written = serde_json::to_string(&model).expect("the row serializes");
-        assert!(!written.contains("argon2id"), "{written}");
-        assert!(written.contains("ada@example.com"), "{written}");
-    }
-
-    #[test]
     fn active_models_debug_redacts_the_password_hash() {
         let active = ActiveModel {
             password_hash: sea_orm::Set(Some("$argon2id$v=19$secret".into())),
@@ -139,14 +89,5 @@ mod tests {
             assert!(!printed.contains("argon2id"), "{printed}");
             assert!(printed.contains("password_hash"), "{printed}");
         }
-    }
-
-    #[test]
-    fn wire_defaults_do_not_overwrite_already_present_keys() {
-        let mut body: Map<String, serde_json::Value> = Map::new();
-        body.insert("role".into(), serde_json::Value::String("admin".into()));
-        Entity::fill_wire_defaults(&mut body);
-
-        assert_eq!(body["role"], serde_json::Value::String("admin".into()));
     }
 }

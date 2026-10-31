@@ -22,15 +22,11 @@ const NOT_A_CURSOR: &str = "not-a-cursor";
 pub(super) mod album {
     use super::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
     #[expose(name = "PagedAlbum", service = super::AlbumsService, graphql)]
     #[sea_orm::model]
     #[derive(Clone, Debug, DeriveEntityModel)]
-    #[sea_orm(
-        table_name = "paged_albums",
-        model_attrs(derive(PartialEq, Serialize, Deserialize))
-    )]
+    #[sea_orm(table_name = "paged_albums")]
     pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
@@ -46,15 +42,11 @@ pub(super) mod album {
 pub(super) mod track {
     use super::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
     #[expose(name = "PagedTrack", service = super::TracksService, graphql)]
     #[sea_orm::model]
     #[derive(Clone, Debug, DeriveEntityModel)]
-    #[sea_orm(
-        table_name = "paged_tracks",
-        model_attrs(derive(PartialEq, Serialize, Deserialize))
-    )]
+    #[sea_orm(table_name = "paged_tracks")]
     pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]

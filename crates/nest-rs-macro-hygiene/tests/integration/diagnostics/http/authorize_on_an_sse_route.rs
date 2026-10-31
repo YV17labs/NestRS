@@ -3,16 +3,19 @@
 //! subject no table holds — decided by the posture's type, after name
 //! resolution — and the refusal names that remedy.
 
-use nest_rs::authz::{Read, WireModelDefaults};
+use nest_rs::authz::Read;
 use nest_rs::http::{SseEvent, SseStream, controller, futures_util::stream, routes};
 
 mod post {
+    use nest_rs::seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[expose(name = "Post")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "streamed_posts")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: Uuid,
     }
 
@@ -21,8 +24,6 @@ mod post {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
-
-impl WireModelDefaults for post::Entity {}
 
 #[controller(path = "/feed")]
 struct FeedController;

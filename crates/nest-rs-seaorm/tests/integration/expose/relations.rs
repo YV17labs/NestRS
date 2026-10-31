@@ -3,7 +3,6 @@
 
 use nest_rs_seaorm::{CrudService, expose};
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
 pub(super) mod tickets {
     use super::*;
@@ -11,10 +10,7 @@ pub(super) mod tickets {
     #[expose(name = "Ticket", service = TicketsService, graphql)]
     #[sea_orm::model]
     #[derive(Clone, Debug, DeriveEntityModel)]
-    #[sea_orm(
-        table_name = "tickets",
-        model_attrs(derive(PartialEq, Serialize, Deserialize))
-    )]
+    #[sea_orm(table_name = "tickets")]
     pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
@@ -58,10 +54,7 @@ pub(super) mod people {
     #[expose(name = "Person", service = PeopleService, graphql)]
     #[sea_orm::model]
     #[derive(Clone, Debug, DeriveEntityModel)]
-    #[sea_orm(
-        table_name = "people",
-        model_attrs(derive(PartialEq, Serialize, Deserialize))
-    )]
+    #[sea_orm(table_name = "people")]
     pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
@@ -154,10 +147,7 @@ pub(super) mod notes {
     #[expose(name = "Note", service = NotesService, graphql)]
     #[sea_orm::model]
     #[derive(Clone, Debug, DeriveEntityModel)]
-    #[sea_orm(
-        table_name = "notes",
-        model_attrs(derive(PartialEq, Serialize, Deserialize))
-    )]
+    #[sea_orm(table_name = "notes")]
     pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
@@ -194,10 +184,7 @@ pub(super) mod shelves {
     #[expose(name = "Shelf", service = ShelvesService, graphql)]
     #[sea_orm::model]
     #[derive(Clone, Debug, DeriveEntityModel)]
-    #[sea_orm(
-        table_name = "shelves",
-        model_attrs(derive(PartialEq, Serialize, Deserialize))
-    )]
+    #[sea_orm(table_name = "shelves")]
     pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false, enum_name = "Key")]
         #[expose]
@@ -237,10 +224,7 @@ pub(super) mod racks {
     #[expose(name = "Rack", service = RacksService, graphql)]
     #[sea_orm::model]
     #[derive(Clone, Debug, DeriveEntityModel)]
-    #[sea_orm(
-        table_name = "racks",
-        model_attrs(derive(PartialEq, Serialize, Deserialize))
-    )]
+    #[sea_orm(table_name = "racks")]
     pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
@@ -266,10 +250,7 @@ pub(super) mod bins {
     #[expose(name = "Bin", service = BinsService, graphql)]
     #[sea_orm::model]
     #[derive(Clone, Debug, DeriveEntityModel)]
-    #[sea_orm(
-        table_name = "bins",
-        model_attrs(derive(PartialEq, Serialize, Deserialize))
-    )]
+    #[sea_orm(table_name = "bins")]
     pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]

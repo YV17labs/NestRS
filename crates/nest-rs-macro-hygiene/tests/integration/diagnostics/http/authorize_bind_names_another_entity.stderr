@@ -1,13 +1,13 @@
 error[E0277]: the route names `gadget::Entity`, and the service `bind` names loads `note::Entity`
-  --> tests/integration/diagnostics/http/authorize_bind_names_another_entity.rs:57:46
+  --> tests/integration/diagnostics/http/authorize_bind_names_another_entity.rs:60:46
    |
-57 |     #[authorize(Read, gadget::Entity, bind = NotesService)]
+60 |     #[authorize(Read, gadget::Entity, bind = NotesService)]
    |                                              ^^^^^^^^^^^^ the service loads another entity
    |
 help: the trait `nest_rs::seaorm::__private::SameEntity<gadget::Entity>` is not implemented for `note::Entity`
-  --> tests/integration/diagnostics/http/authorize_bind_names_another_entity.rs:13:39
+  --> tests/integration/diagnostics/http/authorize_bind_names_another_entity.rs:15:39
    |
-13 |     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+15 |     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
    |                                       ^^^^^^^^^^^^^^^^^
    = note: the class gate, the response mask and the `Authorized<Action, E>` parameter read the entity the route names, the load reads the service's: name `note::Entity` in both, or bind the service loading `gadget::Entity`
 note: required by a bound in `nest_rs::seaorm::__private::bound_entity`

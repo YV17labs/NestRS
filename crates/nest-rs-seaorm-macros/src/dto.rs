@@ -42,8 +42,8 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
                 #[schemars(extend("format" = "date-time"))]
                 pub #name: ::std::string::String
             });
-            // chrono's own `Serialize` spelling (`Z` for UTC), which a masked
-            // reply re-serialized from the model ships: one instant, one string.
+            // chrono's own `Serialize` spelling (`Z` for UTC), which the round
+            // trip a mask runs writes too: one instant, one string.
             inits.push(quote! {
                 #name: ::nest_rs_seaorm::__private::chrono::DateTime::<::nest_rs_seaorm::__private::chrono::FixedOffset>::to_rfc3339_opts(
                     &model.#name,

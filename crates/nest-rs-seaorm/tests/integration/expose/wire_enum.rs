@@ -54,7 +54,7 @@ mod graphql {
     }
 
     #[expose(name = "Release", service = ReleasesService, graphql)]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "releases")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]

@@ -1,21 +1,19 @@
-//! Transport-shared wire-value masking: round-trip a handler's wire JSON
-//! through the entity model so the typed [`Ability::mask`] policy can run,
-//! then strain the result against the entity's statically-known exposed
-//! columns ([`WireModelDefaults::wire_keys`]).
+//! Transport-shared wire-value masking: each row of a handler's wire JSON is
+//! read back into the entity's model, through what `#[expose]` declares, so
+//! the ability's rules run on it, then cut to the exposed keys its verdict
+//! grants.
 
-use crate::ability::{Provenance, mask_reason};
+use crate::ability::{Provenance, Verdict, mask_reason};
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 use std::collections::BTreeSet;
 
-use sea_orm::EntityTrait;
-use serde::Serialize;
-use serde::de::{Deserialize, DeserializeOwned};
+use serde::de::Error as _;
+use serde::de::Unexpected;
 use serde_json::Value;
 
-#[cfg(any(feature = "graphql", feature = "mcp"))]
-use crate::FieldSet;
 use crate::error::MaskReplyError;
-use crate::{Ability, Action, WireModelDefaults};
+use crate::wire_model::WireModel;
+use crate::{Ability, Action, FieldSet};
 
 pub(crate) use crate::ability::warn_mask_failure;
 
@@ -38,17 +36,12 @@ pub(crate) use crate::ability::warn_mask_failure;
 /// that principal. A push to other connections (`WsServer::emit`,
 /// `broadcast`) carries what this caller may see, not what each recipient may:
 /// the framework does not mask per recipient.
-pub fn masked_reply<S>(action: Action, wire: Value) -> Result<Value, MaskReplyError>
-where
-    S: EntityTrait + WireModelDefaults,
-    S::Model: DeserializeOwned + Serialize,
-{
+pub fn masked_reply<S: WireModel>(action: Action, wire: Value) -> Result<Value, MaskReplyError> {
     let Some(ability) = crate::current_ability() else {
         return Err(MaskReplyError::NoAmbientAbility);
     };
-    match mask_wire_json::<S>(&ability, action, &wire, Provenance::Pushed) {
-        Ok(MaskedWire::Masked(masked)) => Ok(masked),
-        Ok(MaskedWire::Passthrough) => Ok(wire),
+    match mask_wire_json::<S>(&ability, action, wire, Provenance::Pushed) {
+        Ok(MaskedWire::Masked(value) | MaskedWire::Passthrough(value)) => Ok(value),
         Err(err) => {
             warn_mask_failure(
                 std::any::type_name::<S>(),
@@ -70,56 +63,59 @@ where
 pub(crate) enum MaskedWire {
     /// An object or array body, masked and strained — ship this instead.
     Masked(Value),
-    /// A scalar or `null` body — nothing entity-shaped to strip.
-    Passthrough,
+    /// A scalar or `null` body, handed back — nothing entity-shaped to strip.
+    Passthrough(Value),
 }
 
-/// Mask a wire JSON value (an object or an array of objects) by
-/// reconstructing each into `S::Model`, judging it as `provenance` says, and
-/// retaining only the exposed wire keys it carried. Scalars and `null` pass
-/// through. `Err` means the value could not be reconciled with `S::Model` —
-/// callers must fail **closed**.
-pub(crate) fn mask_wire_json<S>(
+/// Mask a wire JSON value (an object or an array of objects) by reading each
+/// row back into `S::Model`, judging it as `provenance` says, and retaining
+/// only the exposed wire keys it carried that the verdict grants, in place.
+/// Scalars and `null` pass through. `Err` means the value could not be
+/// reconciled with `S::Model` — callers must fail **closed**.
+pub(crate) fn mask_wire_json<S: WireModel>(
     ability: &Ability,
     action: Action,
-    wire: &Value,
+    wire: Value,
     provenance: Provenance,
-) -> Result<MaskedWire, serde_json::Error>
-where
-    S: EntityTrait + WireModelDefaults,
-    S::Model: DeserializeOwned + Serialize,
-{
+) -> Result<MaskedWire, serde_json::Error> {
     let masked = match wire {
         Value::Array(items) => {
             let mut masked = Vec::with_capacity(items.len());
-            for item in items {
-                let model = wire_to_model::<S>(item)?;
-                let verdict =
-                    ability.evaluate::<S>(action, &model, provenance, &invented_in::<S>(item));
+            for mut item in items {
+                let verdict = judged::<S>(ability, action, &item, provenance)?;
                 if verdict.allowed {
-                    masked.push(strained::<S>(
-                        ability.mask_with::<S>(action, &model, verdict.fields),
-                        item,
-                    ));
+                    retain_granted::<S>(&mut item, &verdict.fields);
+                    masked.push(item);
                 }
             }
             Value::Array(masked)
         }
-        Value::Object(_) => {
-            let model = wire_to_model::<S>(wire)?;
-            let verdict =
-                ability.evaluate::<S>(action, &model, provenance, &invented_in::<S>(wire));
+        mut row @ Value::Object(_) => {
+            let verdict = judged::<S>(ability, action, &row, provenance)?;
             // A reply's lone row is the one its read admitted; a pushed one had
             // no read, so it is judged like any row of a list.
             if provenance == Provenance::Pushed && !verdict.allowed {
                 Value::Null
             } else {
-                strained::<S>(ability.mask_with::<S>(action, &model, verdict.fields), wire)
+                retain_granted::<S>(&mut row, &verdict.fields);
+                row
             }
         }
-        _ => return Ok(MaskedWire::Passthrough),
+        other => return Ok(MaskedWire::Passthrough(other)),
     };
     Ok(MaskedWire::Masked(masked))
+}
+
+/// The verdict on one wire row, read back into `S::Model` for the rules to run
+/// on, the columns it was given rather than sent named as invented.
+pub(crate) fn judged<S: WireModel>(
+    ability: &Ability,
+    action: Action,
+    row: &Value,
+    provenance: Provenance,
+) -> Result<Verdict, serde_json::Error> {
+    let model = wire_to_model::<S>(row)?;
+    Ok(ability.evaluate::<S>(action, &model, provenance, &invented_in::<S>(row)))
 }
 
 /// What [`mask_wire_detail`] found: the rows that survived, still carrying
@@ -149,36 +145,25 @@ pub(crate) struct MaskedDetail {
 /// The row/field verdicts behind [`mask_wire_json`] on a decorated reply,
 /// reported instead of applied.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
-pub(crate) fn mask_wire_detail<S>(
+pub(crate) fn mask_wire_detail<S: WireModel>(
     ability: &Ability,
     action: Action,
     wire: Value,
-) -> Result<MaskedDetail, serde_json::Error>
-where
-    S: EntityTrait + WireModelDefaults,
-    S::Model: DeserializeOwned + Serialize,
-{
+) -> Result<MaskedDetail, serde_json::Error> {
     let mut removed = BTreeSet::new();
-    let exposed = S::wire_keys();
     let mut dropped_rows = false;
     let kept = match wire {
         Value::Array(items) => {
             let mut kept = Vec::with_capacity(items.len());
             for item in items {
-                let model = wire_to_model::<S>(&item)?;
-                let verdict = ability.evaluate::<S>(
-                    action,
-                    &model,
-                    Provenance::Loaded,
-                    &invented_in::<S>(&item),
-                );
+                let verdict = judged::<S>(ability, action, &item, Provenance::Loaded)?;
                 // Same verdict `mask_many` applies — a refused row is dropped,
                 // never handed back for the caller to render.
                 if !verdict.allowed {
                     dropped_rows = true;
                     continue;
                 }
-                collect_removed(&verdict.fields, exposed, &item, &mut removed);
+                collect_removed::<S>(&verdict.fields, &item, &mut removed);
                 kept.push(item);
             }
             Value::Array(kept)
@@ -186,14 +171,8 @@ where
         // A lone object is never dropped by `mask` (the class gate and `bind`
         // decide a singleton's visibility); only its fields go.
         other => {
-            let model = wire_to_model::<S>(&other)?;
-            let verdict = ability.evaluate::<S>(
-                action,
-                &model,
-                Provenance::Loaded,
-                &invented_in::<S>(&other),
-            );
-            collect_removed(&verdict.fields, exposed, &other, &mut removed);
+            let verdict = judged::<S>(ability, action, &other, Provenance::Loaded)?;
+            collect_removed::<S>(&verdict.fields, &other, &mut removed);
             other
         }
     };
@@ -214,73 +193,61 @@ pub(crate) struct MaskedRow {
     pub(crate) removed: BTreeSet<String>,
 }
 
-/// [`mask_wire_json`] for a single row whose model and verdict the caller
-/// **already holds**.
-///
-/// Takes the verdict by value because [`Ability::mask_with`] consumes the field
-/// set; `removed` is collected first, off the same one.
+/// [`mask_wire_json`] for a single row whose verdict the caller **already
+/// holds**.
 #[cfg(feature = "graphql")]
-pub(crate) fn mask_row<S>(
-    ability: &Ability,
-    action: Action,
-    model: &S::Model,
-    verdict: crate::ability::Verdict,
-    wire: &Value,
-) -> MaskedRow
-where
-    S: EntityTrait + WireModelDefaults,
-    S::Model: Serialize,
-{
+pub(crate) fn mask_row<S: WireModel>(verdict: &Verdict, mut wire: Value) -> MaskedRow {
     let mut removed = BTreeSet::new();
-    collect_removed(&verdict.fields, S::wire_keys(), wire, &mut removed);
-    let masked = strained::<S>(ability.mask_with::<S>(action, model, verdict.fields), wire);
-    MaskedRow { masked, removed }
+    collect_removed::<S>(&verdict.fields, &wire, &mut removed);
+    retain_granted::<S>(&mut wire, &verdict.fields);
+    MaskedRow {
+        masked: wire,
+        removed,
+    }
 }
 
 /// The keys [`mask_wire_json`] strips from this row: those outside the row's
-/// field grant or the entity's statically exposed columns.
+/// field grant or the entity's exposed columns.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
-fn collect_removed(
-    granted: &FieldSet,
-    exposed: Option<&'static [&'static str]>,
-    row: &Value,
-    out: &mut BTreeSet<String>,
-) {
+fn collect_removed<S: WireModel>(granted: &FieldSet, row: &Value, out: &mut BTreeSet<String>) {
     let Some(obj) = row.as_object() else { return };
     for key in obj.keys() {
-        let ungranted = match granted {
-            FieldSet::All => false,
-            FieldSet::Only(cols) => !cols.contains(key.as_str()),
-        };
-        let unexposed = exposed.is_some_and(|keys| !keys.contains(&key.as_str()));
         // `contains` first: every row of a list strips the same keys, so the
         // insert would otherwise allocate a `String` per row to keep one.
-        if (ungranted || unexposed) && !out.contains(key.as_str()) {
+        if !kept_key::<S>(granted, key) && !out.contains(key.as_str()) {
             out.insert(key.clone());
         }
     }
 }
 
-/// Deserialize a handler JSON object into `S::Model`, filling columns the wire
-/// DTO omits so policy can run. The placeholder defaults are stripped again by
-/// [`strained`] before the response ships — they never reach the wire.
-pub(crate) fn wire_to_model<S>(wire: &Value) -> Result<S::Model, serde_json::Error>
-where
-    S: EntityTrait + WireModelDefaults,
-    S::Model: DeserializeOwned,
-{
-    let Value::Object(map) = wire else {
-        // Not an object: nothing to fill, and no clone on the error path.
-        return S::Model::deserialize(wire);
-    };
-    let mut map = map.clone();
-    S::fill_wire_defaults(&mut map);
-    serde_json::from_value(Value::Object(map))
+/// Read a wire row back into `S::Model` so the rules can run on it: its
+/// exposed columns from the object, every other one from the placeholder
+/// `#[expose]` gave it, which never reaches the wire.
+pub(crate) fn wire_to_model<S: WireModel>(wire: &Value) -> Result<S::Model, serde_json::Error> {
+    match wire {
+        Value::Object(row) => S::from_wire(row),
+        other => Err(serde_json::Error::invalid_type(
+            Unexpected::Other(json_kind(other)),
+            &"a row object",
+        )),
+    }
+}
+
+/// The kind of a JSON value, never its content: a refusal names what it met.
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
 }
 
 /// The columns a row rebuilt from `wire` was given rather than sent: one the
-/// fill may invent, and one the object left out, which serde defaulted.
-pub(crate) fn invented_in<S: WireModelDefaults>(wire: &Value) -> impl Fn(S::Column) -> bool + '_ {
+/// rebuild invents, and one the object left out.
+pub(crate) fn invented_in<S: WireModel>(wire: &Value) -> impl Fn(S::Column) -> bool + '_ {
     let sent = wire.as_object();
     move |column| {
         S::is_placeholdered(column)
@@ -288,18 +255,20 @@ pub(crate) fn invented_in<S: WireModelDefaults>(wire: &Value) -> impl Fn(S::Colu
     }
 }
 
-/// A masked row cut back to the keys its wire row carried, among the entity's
-/// exposed (`#[expose]`) columns when it states them: neither an unrestricted
-/// field grant nor a handler returning a raw `Model` leaks an unexposed column,
-/// and no key the row left out comes back with the value the rebuild gave it.
-fn strained<S: WireModelDefaults>(mut masked: Value, wire: &Value) -> Value {
-    let exposed = S::wire_keys();
-    let sent = wire.as_object();
-    if let Some(row) = masked.as_object_mut() {
-        row.retain(|key, _| {
-            sent.is_some_and(|sent| sent.contains_key(key))
-                && exposed.is_none_or(|keys| keys.contains(&key.as_str()))
-        });
+/// Cut a wire row to the keys it carried that are the entity's exposed
+/// (`#[expose]`) columns and that `fields` grants: neither an unrestricted
+/// field grant nor a body carrying a hidden column ships one.
+fn retain_granted<S: WireModel>(row: &mut Value, fields: &FieldSet) {
+    if let Value::Object(row) = row {
+        row.retain(|key, _| kept_key::<S>(fields, key));
     }
-    masked
+}
+
+/// Whether a key ships: an exposed column the field grant permits.
+fn kept_key<S: WireModel>(fields: &FieldSet, key: &str) -> bool {
+    S::WIRE_KEYS.contains(&key)
+        && match fields {
+            FieldSet::All => true,
+            FieldSet::Only(granted) => granted.contains(key),
+        }
 }

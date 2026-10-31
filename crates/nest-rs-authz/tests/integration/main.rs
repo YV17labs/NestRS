@@ -44,7 +44,7 @@ mod wire_mask;
 pub(crate) mod org {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "orgs")]
     pub(crate) struct Model {
         #[sea_orm(primary_key)]
@@ -66,7 +66,7 @@ pub(crate) mod post {
     use sea_orm::entity::prelude::*;
 
     #[expose(name = "Post")]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "posts")]
     pub(crate) struct Model {
         #[sea_orm(primary_key)]
@@ -114,7 +114,7 @@ pub(crate) mod post {
 pub(crate) mod parent {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "parents")]
     pub(crate) struct Model {
         #[sea_orm(primary_key)]
@@ -131,7 +131,7 @@ pub(crate) mod parent {
 pub(crate) mod child {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "children")]
     pub(crate) struct Model {
         #[sea_orm(primary_key)]
@@ -153,19 +153,22 @@ pub(crate) mod child {
 }
 
 /// A throwaway SeaORM entity to act as the authorization `Subject`, with a
-/// server-only column (`secret`) the wire DTOs never carry —
-/// [`WireModelDefaults`](nest_rs_authz::WireModelDefaults) reconstructs it so
-/// policy can read it, and the exposed-key strainer drops it again.
+/// server-only column (`secret`) the wire DTOs never carry — `#[expose]`
+/// rebuilds it from its placeholder so policy can read the row, and the
+/// exposed-key strainer drops it again.
 #[cfg(any(feature = "mcp", feature = "ws"))]
 pub(crate) mod widget {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[expose(name = "Widget")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "widgets")]
     pub(crate) struct Model {
         #[sea_orm(primary_key)]
+        #[expose]
         pub id: i32,
+        #[expose]
         pub name: String,
         pub secret: String,
     }
@@ -174,20 +177,4 @@ pub(crate) mod widget {
     pub(crate) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
-}
-
-#[cfg(any(feature = "mcp", feature = "ws"))]
-impl nest_rs_authz::WireModelDefaults for widget::Entity {
-    fn fill_wire_defaults(map: &mut serde_json::Map<String, serde_json::Value>) {
-        map.entry("secret")
-            .or_insert(serde_json::Value::String(String::new()));
-    }
-
-    fn wire_keys() -> Option<&'static [&'static str]> {
-        Some(&["id", "name"])
-    }
-
-    fn is_placeholdered(column: widget::Column) -> bool {
-        matches!(column, widget::Column::Secret)
-    }
 }

@@ -110,7 +110,7 @@ const SEA_ORM_MIGRATION: Dep = Dep {
 /// The crates a resource port (DB-backed CRUD + HTTP) needs; `authz`, with the
 /// `http` it carries, because `#[crud]` writes an `#[authorize]` on every route.
 pub(super) fn resource_deps() -> Vec<&'static Dep> {
-    vec![&SEAORM, &AUTHZ, &SEA_ORM, &SERDE]
+    vec![&SEAORM, &AUTHZ, &SEA_ORM]
 }
 
 /// What an app's `e2e` suite needs to run a resource's round-trip test: the
@@ -122,7 +122,7 @@ pub(super) fn round_trip_dev_deps() -> Vec<&'static Dep> {
 
 /// The crates one `#[expose]`d entity needs — [`resource_deps`] without `authz`.
 pub(super) fn entity_deps() -> Vec<&'static Dep> {
-    vec![&SEAORM, &SEA_ORM, &SERDE]
+    vec![&SEAORM, &SEA_ORM]
 }
 
 /// The crates the authn/authz adapter (`g auth`) needs.

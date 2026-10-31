@@ -10,6 +10,7 @@ use sea_orm::{EntityTrait, IdenStatic, Value};
 
 use crate::action::Action;
 use crate::predicate::{Predicate, Truth, nothing_invented};
+use crate::wire_model::WireModel;
 
 /// The one fail-closed masking warn, for every edge and the ambient
 /// [`Ability::mask`]; here, always compiled, so a feature-less build reaches it.
@@ -577,29 +578,24 @@ impl Ability {
         }
     }
 
-    /// Layer ③ — serialize a model and strip the fields this ability does not
-    /// permit for `action`.
-    pub fn mask<E>(&self, action: Action, model: &E::Model) -> serde_json::Value
-    where
-        E: EntityTrait,
-        E::Model: serde::Serialize,
-    {
+    /// Layer ③ — the model's exposed columns, stripped of those this ability
+    /// does not permit for `action`.
+    ///
+    /// Only what `#[expose]` declares is ever written: an unrestricted grant
+    /// opens every exposed column, never a hidden one.
+    pub fn mask<E: WireModel>(&self, action: Action, model: &E::Model) -> serde_json::Value {
         self.mask_with::<E>(action, model, self.permitted_fields::<E>(action, model))
     }
 
     /// [`mask`](Self::mask) with the field verdict already known.
-    pub(crate) fn mask_with<E>(
+    fn mask_with<E: WireModel>(
         &self,
         action: Action,
         model: &E::Model,
         fields: FieldSet,
-    ) -> serde_json::Value
-    where
-        E: EntityTrait,
-        E::Model: serde::Serialize,
-    {
-        let mut json = match serde_json::to_value(model) {
-            Ok(json) => json,
+    ) -> serde_json::Value {
+        let mut wire = match E::to_wire(model) {
+            Ok(wire) => wire,
             // Fail closed: an empty body, never the unmasked model.
             Err(err) => {
                 warn_mask_failure(
@@ -614,12 +610,10 @@ impl Ability {
                 return serde_json::Value::Null;
             }
         };
-        if let FieldSet::Only(allowed) = fields
-            && let serde_json::Value::Object(map) = &mut json
-        {
-            map.retain(|key, _| allowed.contains(key.as_str()));
+        if let FieldSet::Only(allowed) = fields {
+            wire.retain(|key, _| allowed.contains(key.as_str()));
         }
-        json
+        serde_json::Value::Object(wire)
     }
 
     /// Layer ③ over a collection: drop the instances the actor may not see and
@@ -635,8 +629,8 @@ impl Ability {
         models: impl IntoIterator<Item = &'m E::Model>,
     ) -> Vec<serde_json::Value>
     where
-        E: EntityTrait,
-        E::Model: serde::Serialize + 'm,
+        E: WireModel,
+        E::Model: 'm,
     {
         models
             .into_iter()
@@ -702,7 +696,7 @@ mod tests {
     mod widget {
         use sea_orm::entity::prelude::*;
 
-        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "widgets")]
         pub(super) struct Model {
             #[sea_orm(primary_key)]
@@ -718,7 +712,7 @@ mod tests {
     mod gadget {
         use sea_orm::entity::prelude::*;
 
-        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "gadgets")]
         pub(super) struct Model {
             #[sea_orm(primary_key)]
@@ -734,7 +728,7 @@ mod tests {
     mod org {
         use sea_orm::entity::prelude::*;
 
-        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "orgs")]
         pub(super) struct Model {
             #[sea_orm(primary_key)]
@@ -750,7 +744,7 @@ mod tests {
     mod post {
         use sea_orm::entity::prelude::*;
 
-        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "posts")]
         pub(super) struct Model {
             #[sea_orm(primary_key)]
@@ -785,6 +779,23 @@ mod tests {
 
     fn in_org(id: i32) -> impl FnOnce(PredicateBuilder<post::Entity>) -> Predicate<post::Entity> {
         move |p| p.related::<org::Entity, _>(post::Relation::Org, |o| o.eq(org::Column::Id, id))
+    }
+
+    /// How many of `rows` a reply to a read keeps: the verdict `mask_many` drops
+    /// a row on.
+    fn kept(ability: &Ability, rows: &[post::Model]) -> usize {
+        rows.iter()
+            .filter(|row| {
+                ability
+                    .evaluate::<post::Entity>(
+                        Action::Read,
+                        row,
+                        Provenance::Loaded,
+                        &nothing_invented,
+                    )
+                    .allowed
+            })
+            .count()
     }
 
     /// The columns a narrowed set keeps, sorted; `None` for every column.
@@ -837,12 +848,7 @@ mod tests {
         b.can(Action::Read, post::Entity).when(in_org(7));
         let ability = b.build().unwrap();
 
-        assert_eq!(
-            ability
-                .mask_many::<post::Entity>(Action::Read, [a_post()].iter())
-                .len(),
-            1,
-        );
+        assert_eq!(kept(&ability, &[a_post()]), 1);
         assert_eq!(
             only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
             None,
@@ -856,12 +862,7 @@ mod tests {
         b.cannot(Action::Read, post::Entity).when(in_org(9));
         let ability = b.build().unwrap();
 
-        assert_eq!(
-            ability
-                .mask_many::<post::Entity>(Action::Read, [a_post(), a_post()].iter())
-                .len(),
-            2,
-        );
+        assert_eq!(kept(&ability, &[a_post(), a_post()]), 2);
     }
 
     /// The model was read for some action, perhaps not this one, so no read is
@@ -936,12 +937,7 @@ mod tests {
         let ability = b.build().unwrap();
 
         assert!(!ability.can::<post::Entity>(Action::Read, &a_post()));
-        assert_eq!(
-            ability
-                .mask_many::<post::Entity>(Action::Read, [a_post()].iter())
-                .len(),
-            1,
-        );
+        assert_eq!(kept(&ability, &[a_post()]), 1);
     }
 
     /// SQL renders `eq(parent_id, None)` as `IS NULL`, so it admitted a root

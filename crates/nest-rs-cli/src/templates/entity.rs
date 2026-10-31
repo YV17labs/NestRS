@@ -8,15 +8,11 @@
 
 pub(crate) const ENTITY: &str = r#"use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
 #[expose(name = "{{entity}}", soft_delete, timestamps)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "{{table}}",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "{{table}}")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]

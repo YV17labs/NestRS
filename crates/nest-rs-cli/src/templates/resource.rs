@@ -22,7 +22,6 @@ pub use http::{{http_module}};
 
 pub(crate) const ENTITY: &str = r#"use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
 // `soft_delete` + `timestamps` match the three columns this table's migration
 // creates, and the `users/` exemplar. `soft_delete` makes DELETE stamp
@@ -37,10 +36,7 @@ use serde::{Deserialize, Serialize};
 )]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "{{table}}",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "{{table}}")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]

@@ -31,19 +31,22 @@ use crate::{ActionMarker, Subject};
 /// # use nest_rs_http::{Json, Result, StatusCode, controller, routes};
 /// # use nest_rs_testing::TestApp;
 /// # mod users {
+/// #     use nest_rs_seaorm::expose;
 /// #     use sea_orm::entity::prelude::*;
-/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+/// #     #[expose(name = "UserRow")]
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 /// #     #[sea_orm(table_name = "users")]
 /// #     pub struct Model {
 /// #         #[sea_orm(primary_key)]
+/// #         #[expose]
 /// #         pub id: i32,
+/// #         #[expose]
 /// #         pub name: String,
 /// #     }
 /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 /// #     pub enum Relation {}
 /// #     impl ActiveModelBehavior for ActiveModel {}
 /// # }
-/// # impl nest_rs_authz::WireModelDefaults for users::Entity {}
 /// # #[input]
 /// # struct CreateUser {
 /// #     name: String,

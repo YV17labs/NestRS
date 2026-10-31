@@ -6,7 +6,7 @@
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::http::Authorize;
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
 use nest_rs_core::module;
 use nest_rs_guards::GlobalGuards;
 use nest_rs_http::futures_util::stream;
@@ -20,14 +20,17 @@ const TABLE: &str = "continuation_probe_items";
 const STREAMED: &str = "sse_probe_items";
 
 mod item {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
+    #[expose(name = "Item")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "continuation_probe_items")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: i32,
+        #[expose]
         pub published: bool,
     }
 
@@ -36,8 +39,6 @@ mod item {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
-
-impl WireModelDefaults for item::Entity {}
 
 struct ItemsService;
 
@@ -46,14 +47,17 @@ impl CrudService for ItemsService {
 }
 
 mod streamed {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
+    #[expose(name = "Streamed")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "sse_probe_items")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: i32,
+        #[expose]
         pub published: bool,
     }
 
@@ -62,8 +66,6 @@ mod streamed {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
-
-impl WireModelDefaults for streamed::Entity {}
 
 struct StreamedService;
 

@@ -32,7 +32,7 @@ mod gizmo {
     use sea_orm::entity::prelude::*;
 
     #[expose(name = "Gizmo", graphql)]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "crud_probe_gizmos")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]

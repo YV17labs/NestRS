@@ -237,7 +237,7 @@ mod memo {
     use sea_orm::entity::prelude::*;
 
     #[expose(name = "Memo", graphql)]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "memos")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -356,7 +356,7 @@ mod sheet {
     use sea_orm::entity::prelude::*;
 
     #[expose(name = "Sheet", graphql, service = super::SheetsService)]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "sheets")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]

@@ -10,12 +10,15 @@ use nest_rs_seaorm::{Authorized, CrudService};
 use nest_rs_testing::{LogCapture, TestApp};
 
 mod note {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[expose(name = "Note")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "notes")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: Uuid,
     }
 
@@ -24,8 +27,6 @@ mod note {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
-
-impl nest_rs_authz::WireModelDefaults for note::Entity {}
 
 #[injectable]
 #[derive(Default)]

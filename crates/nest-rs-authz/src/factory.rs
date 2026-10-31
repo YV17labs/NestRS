@@ -12,7 +12,7 @@ use crate::builder::AbilityBuilder;
 /// # use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
 /// # mod users {
 /// #     use sea_orm::entity::prelude::*;
-/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 /// #     #[sea_orm(table_name = "users")]
 /// #     pub struct Model {
 /// #         #[sea_orm(primary_key)]
@@ -61,7 +61,7 @@ pub trait AbilityFactory: Send + Sync + 'static {
     /// # use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
     /// # mod post {
     /// #     use sea_orm::entity::prelude::*;
-    /// #     #[derive(Clone, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, serde::Serialize)]
+    /// #     #[derive(Clone, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
     /// #     #[sea_orm(rs_type = "String", db_type = "Text")]
     /// #     pub enum PostStatus {
     /// #         #[sea_orm(string_value = "draft")]
@@ -69,7 +69,7 @@ pub trait AbilityFactory: Send + Sync + 'static {
     /// #         #[sea_orm(string_value = "published")]
     /// #         Published,
     /// #     }
-    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     /// #     #[sea_orm(table_name = "posts")]
     /// #     pub struct Model {
     /// #         #[sea_orm(primary_key)]

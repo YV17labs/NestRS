@@ -1,6 +1,5 @@
 use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
 #[expose(
     name = "Notification",
@@ -9,10 +8,7 @@ use serde::{Deserialize, Serialize};
 )]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "notification",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "notification")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]

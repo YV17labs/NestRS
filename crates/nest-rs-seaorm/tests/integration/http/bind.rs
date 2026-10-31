@@ -3,7 +3,7 @@
 //! posture's class gate runs before the load, and the load refuses an id that
 //! is not a UUID v7 before it reads anything.
 
-use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
+use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{
     AccessGraphError, App, Discovery, Layer, UnitContext, async_trait, injectable, module,
 };
@@ -13,12 +13,15 @@ use nest_rs_seaorm::{Authorized, CrudService, SeaOrmDatabaseModule};
 use nest_rs_testing::TestApp;
 
 mod note {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[expose(name = "Note")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "notes")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: Uuid,
     }
 
@@ -27,8 +30,6 @@ mod note {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
-
-impl WireModelDefaults for note::Entity {}
 
 #[injectable(scope = request)]
 #[derive(Default)]

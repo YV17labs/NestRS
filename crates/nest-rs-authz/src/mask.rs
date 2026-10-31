@@ -3,22 +3,20 @@
 //! read the ability from [`current_ability`].
 
 use crate::ability::mask_reason;
-use sea_orm::EntityTrait;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::wire_model::WireModel;
 use crate::{ActionMarker, current_ability};
 
-/// Mask `model` into the wire DTO `O` for action `A` using the ambient
-/// [`Ability`](crate::Ability). Fails **closed**: with no ambient ability the
-/// masked value is an empty object, so only unrestricted fields survive — a
-/// wire type with required restricted fields errors rather than leaking a
-/// fully-populated row.
+/// Mask `model` of an `#[expose]`d entity into the wire DTO `O` for action `A`
+/// using the ambient [`Ability`](crate::Ability). Fails **closed**: with no
+/// ambient ability the masked value is an empty object, so only unrestricted
+/// fields survive — a wire type with required restricted fields errors rather
+/// than leaking a fully-populated row.
 pub fn masked_output_ambient<A, E, O>(model: &E::Model) -> Result<O, serde_json::Error>
 where
     A: ActionMarker,
-    E: EntityTrait,
-    E::Model: Serialize,
+    E: WireModel,
     O: DeserializeOwned,
 {
     let masked = match current_ability() {

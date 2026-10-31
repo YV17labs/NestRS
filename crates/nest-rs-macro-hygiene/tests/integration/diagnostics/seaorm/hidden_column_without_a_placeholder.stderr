@@ -1,0 +1,17 @@
+error: #[expose]: `org_id: Uuid` is not exposed, and a masked reply must rebuild it — write `#[wire_default]` (its type's `Default`), `#[wire_default(expr)]`, or `#[expose]` it
+  --> tests/integration/diagnostics/seaorm/hidden_column_without_a_placeholder.rs:17:9
+   |
+17 |     pub org_id: Uuid,
+   |         ^^^^^^
+
+error: #[expose]: `published_at: DateTimeWithTimeZone` is not exposed, and a masked reply must rebuild it — write `#[wire_default]` (its type's `Default`), `#[wire_default(expr)]`, or `#[expose]` it
+  --> tests/integration/diagnostics/seaorm/hidden_column_without_a_placeholder.rs:18:9
+   |
+18 |     pub published_at: DateTimeWithTimeZone,
+   |         ^^^^^^^^^^^^
+
+error: #[expose]: `seed: Secret<Vec<u8>>` is not exposed, and a masked reply must rebuild it — write `#[wire_default]` (its type's `Default`) or `#[wire_default(expr)]`: a `Secret` never crosses the wire
+  --> tests/integration/diagnostics/seaorm/hidden_column_without_a_placeholder.rs:20:9
+   |
+20 |     pub seed: nest_rs::core::Secret<Vec<u8>>,
+   |         ^^^^

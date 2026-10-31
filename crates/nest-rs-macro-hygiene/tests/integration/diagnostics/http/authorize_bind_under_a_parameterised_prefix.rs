@@ -3,17 +3,20 @@
 //! a parameter beside the route's `{id}` leaves the id ambiguous, so the route
 //! is refused at compile time rather than answering `500` on every request.
 
-use nest_rs::authz::{Read, WireModelDefaults};
+use nest_rs::authz::Read;
 use nest_rs::http::{controller, routes};
 use nest_rs::seaorm::{Authorized, CrudService};
 
 mod note {
+    use nest_rs::seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[expose(name = "Note")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "prefixed_bind_notes")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: Uuid,
     }
 
@@ -22,8 +25,6 @@ mod note {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
-
-impl WireModelDefaults for note::Entity {}
 
 struct NotesService;
 

@@ -98,3 +98,55 @@ not safe by default.
 
 **The limit kept:** a decorated reply whose rows did not come through `Repo`
 under the same ability keeps the trust a read earns, as stated above.
+
+## 2026-10-31 — `#[expose]` writes the round trip, and a column it cannot rebuild does not compile
+
+The rebuild above went through serde on the `Model`: every masked entity
+wrote `model_attrs(derive(Serialize, Deserialize))`, its crate a `serde`
+line, and a `Model` that serialized was accepted by `Json` and a WS reply with
+its hidden columns, on a route no mask shaped. A hidden column of a type with
+no automatic placeholder — a tenant `Uuid`, a timestamp — compiled, and failed
+every masked reply carrying its row with a `500`, although the decorator saw
+the field. The owner agreed to the change, a public API break, with the
+identity audit's second pass ("Tout faire", 2026-10-31).
+
+- **`#[expose]` emits the round trip on the entity, in `nest-rs-authz`'s
+  `__private`**: each exposed column read and written through its own serde
+  impls, each hidden one given a placeholder written as a Rust value, the
+  invented columns and the wire keys named beside them, as before. One trait
+  on the entity, so every mask takes one bound. The `Model` derives no serde.
+- **A hidden column with no placeholder is refused at the field**, naming
+  `#[wire_default]`, `#[wire_default(expr)]` and `#[expose]`; a hidden primary
+  key is refused naming `#[expose]`, since a key is never invented.
+- **A hidden column is never read off the wire**: its placeholder stands,
+  whatever an object carries under its key, which a rule never decided on
+  anyway.
+- **The mask cuts the wire row** to its exposed, granted keys in place rather
+  than writing the rebuilt model again, and `Ability::mask` writes the exposed
+  columns alone — before, an unrestricted grant handed a hidden column out of
+  it.
+
+The provenance reading above is unchanged.
+
+**Refused:**
+
+- **A `Serialize` on the `Model` emitted by `#[expose]`** (routed through the
+  framework, so no manifest line): it keeps `Json(model)` compiling for every
+  entity, the path this closes.
+- **Skipping the rebuild when no rule of the caller's has a `when`**, keeping
+  only the cut to exposed keys. Measured in release on a 100-row list of a
+  user-shaped entity: the rebuild costs 23.5 µs of the shaper's 100.5 µs
+  (parse and serialize alone 51.4 µs). The rebuild is also the check that the
+  body is the entity's: without it, `Json<Vec<Post>>` under
+  `#[authorize(Read, User)]` would ship its matching keys to an unconditional
+  caller instead of failing closed, so the fail-closed check would depend on
+  who calls.
+- **`Default` for every hidden column**: a type without one would fail inside
+  the expansion naming the trait, not the column, and an alias of a scalar
+  could not be told from a domain type; the narrow set and an explicit
+  `#[wire_default]` keep the sentence at the field.
+
+**Still open, the owner's:** judging a loaded row on its `Model` before the
+wire conversion, so a reply's rows are never rebuilt (this decision's
+`Loaded` reading for loaded rows); and serving a field a grant may mask as
+nullable on the GraphQL wire type rather than requiring an `Option` column.

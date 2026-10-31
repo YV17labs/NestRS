@@ -260,20 +260,23 @@ writes takes its op over, and a key only that op reads (`api(<op>(…))`,
 
 Exposure is `#[expose]` (`CLAUDE.md`, hard "no"); a column a later migration
 adds never leaks by omission, and the entity *is* the wire contract, so a
-handler returns the exposed type (`Json<User>`), never `Model`.
+handler returns the exposed type (`Json<User>`), never `Model` — held by
+types: **the `Model` derives no serde**, and `#[expose]` writes the round trip
+a mask reads a row through, column by column, in its own sealed seam.
 
 The mask is `nest-rs-authz`'s `wire_mask`, value-level and **fail-closed**:
-the wire JSON is rebuilt into a `Model`, masked by the ability, and cut back to
-the exposed keys, so an unrestricted field grant cannot leak an unexposed
-column. An irreconcilable body or a missing ambient ability fails closed on
-every transport.
+each wire row is read back into a `Model`, judged by the ability, and cut to
+the exposed keys its verdict grants, so an unrestricted field grant cannot
+leak an unexposed column. An irreconcilable body or a missing ambient ability
+fails closed on every transport.
 
 Rebuilding needs a value for every unexposed column. The macro defaults the
 safe scalars and a `Secret` of one (a secret column is never exposed, held by
 `#[expose]`'s refusal), any other hidden column takes `#[wire_default(…)]` (a
-placeholder stripped before the body ships), a `Secret` filled with its
-value's, over the `<redacted>` a raw `Model` carries; and the macro names
-every column it may invent and the key of every column it exposes. **A rule
+placeholder that never ships), and a hidden column with none, or a hidden
+primary key, is refused at the field — held by rustc, never a `500`; the
+macro names every column it invents and the key of every column it exposes.
+**A rule
 the in-memory mask cannot decide — a relation, an unexposed column, one the
 value left out — is trusted to the `Repo` read on a decorated reply and refused
 on a pushed value** (a subscription item, `masked_reply`): only the read

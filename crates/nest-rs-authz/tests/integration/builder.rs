@@ -11,7 +11,7 @@ use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
 mod widget {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "widgets")]
     pub(super) struct Model {
         #[sea_orm(primary_key)]

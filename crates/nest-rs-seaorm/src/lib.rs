@@ -149,8 +149,9 @@ pub mod __private {
 
 /// Expose a SeaORM entity to REST/OpenAPI (and optionally GraphQL) from one
 /// declaration: its wire DTO (`Serialize` + `JsonSchema`), its `Create`/`Update`
-/// inputs, and the [`WireModelDefaults`](nest_rs_authz::WireModelDefaults) impl
-/// response masking reads.
+/// inputs, and the round trip response masking reads a row through — each
+/// column by its own serde impls, so the `Model` itself derives no serde and
+/// serializes nowhere.
 ///
 /// **Exposure is opt-in:** a column reaches the wire only when its field
 /// carries `#[expose]` (or `#[expose(input(...))]`, which implies read). A field
@@ -158,7 +159,6 @@ pub mod __private {
 /// later migration never leaks by omission.
 ///
 /// ```
-/// # use nest_rs_authz::WireModelDefaults;
 /// # use nest_rs_seaorm::expose;
 /// # mod service {
 /// #     pub struct UsersService;
@@ -187,7 +187,7 @@ pub mod __private {
 /// # }
 /// # fn main() -> Result<(), serde_json::Error> {
 /// # use sea_orm::prelude::Uuid;
-/// # use user::{CreateUser, Entity, Model, UpdateUser, User};
+/// # use user::{CreateUser, Model, UpdateUser, User};
 /// # let id = Uuid::nil();
 ///
 /// let model = Model {
@@ -203,12 +203,41 @@ pub mod __private {
 /// );
 /// let _ = CreateUser { name: "Ada".into(), email: "ada@example.com".into() };
 /// let _ = UpdateUser { name: "Ada L.".into() };
-///
-/// fn implements<T: WireModelDefaults>() {}
-/// implements::<Entity>();
 /// # Ok(())
 /// # }
 /// ```
+///
+/// The `Model` is no wire type: a handler answers its exposed type, so a
+/// hidden column never crosses a route no mask shapes.
+///
+/// ```compile_fail,E0277
+/// # use nest_rs_seaorm::expose;
+/// # mod post {
+/// #     use super::*;
+/// #     use sea_orm::entity::prelude::*;
+/// #[expose(name = "Post")]
+/// # #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+/// # #[sea_orm(table_name = "posts")]
+/// pub struct Model {
+///     #[sea_orm(primary_key)]
+///     #[expose]
+///     pub id: i32,
+///     pub deleted_at: Option<DateTimeWithTimeZone>,
+/// }
+/// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// #     pub enum Relation {}
+/// #     impl ActiveModelBehavior for ActiveModel {}
+/// # }
+/// # let row = post::Model { id: 1, deleted_at: None };
+/// serde_json::to_value(&row)?;
+/// # Ok::<(), serde_json::Error>(())
+/// ```
+///
+/// A masked reply rebuilds every hidden column, so each takes a placeholder:
+/// a `String`, `Option`, `bool` or number its `Default`, a `Secret` its
+/// value's, and any other `#[wire_default]` (its type's `Default`) or
+/// `#[wire_default(expr)]`. A hidden column with none, and a hidden primary
+/// key, are refused at the field.
 ///
 /// Add the `graphql` flag, with this crate's `graphql` feature, and the DTO is
 /// also a GraphQL object, its `#[expose]`d relations resolved through
@@ -239,7 +268,7 @@ pub mod __private {
 /// #     use super::*;
 /// #     use sea_orm::entity::prelude::*;
 /// #[expose(name = "Item", service = super::service::ItemsService, graphql)]
-/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 /// #     #[sea_orm(table_name = "items")]
 /// #     pub struct Model {
 /// #         #[sea_orm(primary_key)]

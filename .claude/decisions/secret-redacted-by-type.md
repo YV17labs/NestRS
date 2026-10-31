@@ -87,3 +87,15 @@ wrap it. The limit above holds for the rest — `verify_password`'s and
 `authenticate_against_registry`'s parameters, `ThrottlerGuard::new`'s — which
 borrow a value in flight, read once where it arrives; a `&Secret` there would
 add an `expose_secret()` at every caller and keep nothing.
+
+## 2026-10-31 — the mask writes no row: a hidden secret is never serialized there
+
+The response mask no longer serializes a row, nor rebuilds one through serde
+(the mask-provenance decision, same date): `#[expose]` writes the exposed
+columns alone and gives every hidden column its placeholder without reading the
+wire, so a `Secret` column reaches neither side of a mask. The reasons above
+that cite the mask — the fill written over a raw `Model`'s `"<redacted>"`, and
+the refusal of failing serialization because the mask serialized the whole
+row — no longer bind; the rule stands for every other path a `Secret` is
+written through: a stored document, a `validator` refusal, a type that derives
+`Serialize` of its own.

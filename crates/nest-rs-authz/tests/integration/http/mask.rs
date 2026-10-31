@@ -2,7 +2,7 @@
 //! handler and the `Authorize` response shaper — no live database.
 
 use nest_rs_authz::http::Authorize;
-use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
+use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::Json;
@@ -11,16 +11,21 @@ use nest_rs_testing::TestApp;
 use serde::Serialize;
 
 mod widget {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
+    use serde::Serialize;
 
-    #[derive(
-        Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize, schemars::JsonSchema,
-    )]
+    // `Serialize` and `JsonSchema` are the developer's own, opted into so a
+    // handler can answer the raw row: the mask still strains it to `id` and
+    // `name`, the columns `#[expose]` declares.
+    #[expose(name = "Widget")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, schemars::JsonSchema)]
     #[sea_orm(table_name = "widgets")]
     pub(super) struct Model {
         #[sea_orm(primary_key)]
+        #[expose]
         pub id: i32,
+        #[expose]
         pub name: String,
         pub secret: String,
     }
@@ -29,23 +34,6 @@ mod widget {
     pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
-}
-
-impl WireModelDefaults for widget::Entity {
-    fn fill_wire_defaults(map: &mut serde_json::Map<String, serde_json::Value>) {
-        map.entry(String::from("secret"))
-            .or_insert_with(|| serde_json::Value::String(String::new()));
-    }
-
-    // `secret` is unexposed — mirrors what `#[expose]` emits for a real entity,
-    // so the masker strains against the static set rather than the body keys.
-    fn wire_keys() -> Option<&'static [&'static str]> {
-        Some(&["id", "name"])
-    }
-
-    fn is_placeholdered(column: widget::Column) -> bool {
-        matches!(column, widget::Column::Secret)
-    }
 }
 
 // `JsonSchema` too: an `Authorize`-shaped route publishes its response schema.

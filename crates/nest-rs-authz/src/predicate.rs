@@ -459,7 +459,7 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     /// # use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
     /// # mod conversation {
     /// #     use sea_orm::entity::prelude::*;
-    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     /// #     #[sea_orm(table_name = "conversations")]
     /// #     pub struct Model {
     /// #         #[sea_orm(primary_key)]
@@ -472,7 +472,7 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     /// # }
     /// # mod message {
     /// #     use sea_orm::entity::prelude::*;
-    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     /// #     #[sea_orm(table_name = "messages")]
     /// #     pub struct Model {
     /// #         #[sea_orm(primary_key)]

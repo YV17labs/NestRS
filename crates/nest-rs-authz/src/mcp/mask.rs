@@ -19,7 +19,8 @@ use crate::ability::{Provenance, mask_reason};
 use crate::gate::{Refusal, reason};
 use crate::subject::{NoRows, Rows, SubjectMask};
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
-use crate::{Ability, Action, ActionMarker, WireModelDefaults, current_ability};
+use crate::wire_model::WireModel;
+use crate::{Ability, Action, ActionMarker, current_ability};
 
 /// What the developer changes so this refusal has a representation; rides in `remedy`.
 const NULLABLE_REMEDY: &str = "make the column `Option` on the entity, so a field grant's refusal has a \
@@ -27,11 +28,10 @@ const NULLABLE_REMEDY: &str = "make the column `Option` on the entity, so a fiel
 
 /// Mask an operation's already-built value through the ambient ability, sharing
 /// the value-level round-trip every transport masks with
-/// (`crate::wire_mask`): serialize, reconstruct each object into `E::Model`
-/// (filling unexposed columns via [`WireModelDefaults`]), run
-/// [`Ability::mask`](crate::Ability::mask) /
-/// [`Ability::mask_many`](crate::Ability::mask_many), retain only the exposed
-/// wire keys, deserialize back. Rows the ability refuses are dropped; scalars
+/// (`crate::wire_mask`): serialize, read each object back into `E::Model`
+/// through what `#[expose]` declares, judge it as
+/// [`Ability::mask_many`](crate::Ability::mask_many) does, retain the exposed
+/// wire keys its verdict grants, deserialize back. Rows the ability refuses are dropped; scalars
 /// and `null` pass through untouched.
 ///
 /// MCP has no selection set: a mask that takes a key the return type requires
@@ -40,8 +40,7 @@ const NULLABLE_REMEDY: &str = "make the column `Option` on the entity, so a fiel
 pub fn masked_value_for<A, E, O>(value: O) -> Result<O, McpError>
 where
     A: ActionMarker,
-    E: EntityTrait + WireModelDefaults,
-    E::Model: Serialize + DeserializeOwned,
+    E: WireModel,
     O: Serialize + DeserializeOwned,
 {
     let action = A::ACTION;
@@ -65,13 +64,13 @@ where
             ));
         }
     };
-    match mask_wire_json::<E>(&ability, action, &wire, Provenance::Loaded) {
-        Ok(MaskedWire::Passthrough) => Ok(value),
+    match mask_wire_json::<E>(&ability, action, wire, Provenance::Loaded) {
+        Ok(MaskedWire::Passthrough(_)) => Ok(value),
         Ok(MaskedWire::Masked(masked)) => match serde_json::from_value(masked) {
             Ok(masked) => Ok(masked),
             // The mask took a key the return type requires. Unlike GraphQL there
             // is no selection set to acquit it with, so this is the refusal.
-            Err(_) => Err(refused_fields::<E>(&ability, action, wire)),
+            Err(_) => Err(refused_fields::<E, O>(&ability, action, &value)),
         },
         Err(err) => Err(mask_failure::<E>(
             action,
@@ -86,17 +85,30 @@ where
 ///
 /// Filed as a denial: the same event and `reason` GraphQL files for a selected
 /// stripped key.
-fn refused_fields<E>(ability: &Ability, action: Action, wire: serde_json::Value) -> McpError
+fn refused_fields<E, O>(ability: &Ability, action: Action, value: &O) -> McpError
 where
-    E: EntityTrait + WireModelDefaults,
-    E::Model: Serialize + DeserializeOwned,
+    E: WireModel,
+    O: Serialize,
 {
+    // Written again rather than kept: the mask consumed the first, and only a
+    // refusal comes this way.
+    let wire = match serde_json::to_value(value) {
+        Ok(wire) => wire,
+        Err(err) => {
+            return mask_failure::<E>(
+                action,
+                mask_reason::NOT_SERIALIZABLE,
+                "operation value did not serialize",
+                Some(&err),
+            );
+        }
+    };
     // Counted before the mask consumes the value, to tell two refusals apart
     // below.
     let declared = wire.as_object().map_or(0, serde_json::Map::len);
     let removed = match mask_wire_detail::<E>(ability, action, wire) {
         Ok(detail) => detail.removed,
-        // Unreachable short of a `Serialize`/`Deserialize` disagreement; reported
+        // Unreachable short of the value's and the entity's serde disagreeing; reported
         // as the masking failure it then is.
         Err(err) => {
             return mask_failure::<E>(
@@ -145,8 +157,7 @@ pub trait McpMask<A, O> {
 impl<A, E, O> McpMask<A, O> for Rows<E>
 where
     A: ActionMarker,
-    E: EntityTrait + WireModelDefaults,
-    E::Model: Serialize + DeserializeOwned,
+    E: WireModel,
     O: Serialize + DeserializeOwned,
 {
     fn masked_value(value: O) -> Result<O, McpError> {

@@ -10,9 +10,7 @@ use nest_rs_http::EndpointGuards;
 use std::sync::Arc;
 
 use nest_rs_authz::__private::install_ability;
-use nest_rs_authz::{
-    AbilityBuilder, Action, MaskReplyError, Read, WireModelDefaults, masked_reply,
-};
+use nest_rs_authz::{AbilityBuilder, Action, MaskReplyError, Read, masked_reply};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream, StreamExt};
 use nest_rs_graphql::async_graphql::{
@@ -27,17 +25,20 @@ use tokio::sync::broadcast;
 use super::query;
 
 /// A throwaway SeaORM entity with a server-only column (`secret`) the wire
-/// DTOs never carry — [`WireModelDefaults`] reconstructs it for policy and the
-/// exposed-key strainer drops it again.
+/// DTOs never carry — `#[expose]` rebuilds it from its placeholder for policy,
+/// and the exposed-key strainer drops it again.
 mod widget {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[expose(name = "Widget")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "widgets")]
     pub(super) struct Model {
         #[sea_orm(primary_key)]
+        #[expose]
         pub id: i32,
+        #[expose]
         pub name: String,
         pub secret: String,
     }
@@ -46,21 +47,6 @@ mod widget {
     pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
-}
-
-impl WireModelDefaults for widget::Entity {
-    fn fill_wire_defaults(map: &mut serde_json::Map<String, serde_json::Value>) {
-        map.entry("secret")
-            .or_insert(serde_json::Value::String(String::new()));
-    }
-
-    fn wire_keys() -> Option<&'static [&'static str]> {
-        Some(&["id", "name"])
-    }
-
-    fn is_placeholdered(column: widget::Column) -> bool {
-        matches!(column, widget::Column::Secret)
-    }
 }
 
 /// The wire shape: `name` optional so a field-restricted mask yields `None`

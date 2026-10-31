@@ -9,7 +9,7 @@ use nest_rs_testing::LogCapture;
 mod widget {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "widgets")]
     pub(super) struct Model {
         #[sea_orm(primary_key)]
@@ -79,13 +79,13 @@ mod gate_order {
     mod secret {
         use nest_rs_seaorm::expose;
         use sea_orm::entity::prelude::*;
-        use serde::{Deserialize, Serialize};
 
         #[expose(name = "SecretDto")]
-        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "secrets")]
         pub(crate) struct Model {
             #[sea_orm(primary_key, auto_increment = false)]
+            #[expose]
             pub id: Uuid,
             #[expose]
             pub name: String,

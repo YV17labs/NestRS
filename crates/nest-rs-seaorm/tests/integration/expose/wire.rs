@@ -1,10 +1,12 @@
 //! Wire-only `#[expose]` (`src/wire.rs` in the macro crate): the emitted
-//! surface must not pull in `async_graphql`, and [`WireModelDefaults`]
-//! reconstruction must fill — and masking must strip — an unexposed column's
-//! audited placeholder.
+//! surface pulls in no `async_graphql`, and the round trip a masked reply runs
+//! on a row writes the exposed columns as the wire type does and rebuilds every
+//! hidden one from its placeholder — the `Model` itself derives no serde.
 
+use nest_rs_authz::__private::WireModel;
 use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable, expose};
 use sea_orm::entity::prelude::*;
+use serde_json::{Map, Value, json};
 
 mod thing {
     use super::*;
@@ -72,25 +74,12 @@ mod reading {
 }
 
 // An unexposed custom-enum column: only `#[wire_default]` can default it for
-// masking reconstruction.
+// masking reconstruction, and it needs no serde of its own.
 mod account {
     use super::*;
-    use serde::{Deserialize, Serialize};
 
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Default,
-        Serialize,
-        Deserialize,
-        EnumIter,
-        DeriveActiveEnum,
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, EnumIter, DeriveActiveEnum)]
     #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
-    #[serde(rename_all = "lowercase")]
     pub enum Tier {
         #[default]
         #[sea_orm(string_value = "free")]
@@ -138,22 +127,9 @@ mod account {
 // `Column` variant or its key away from its ident.
 mod ledger {
     use super::*;
-    use serde::{Deserialize, Serialize};
 
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Default,
-        Serialize,
-        Deserialize,
-        EnumIter,
-        DeriveActiveEnum,
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, EnumIter, DeriveActiveEnum)]
     #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
-    #[serde(rename_all = "lowercase")]
     pub enum Tier {
         #[default]
         #[sea_orm(string_value = "free")]
@@ -163,10 +139,11 @@ mod ledger {
     }
 
     #[expose(name = "Ledger")]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "ledgers")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: Uuid,
         #[expose]
         pub name: String,
@@ -181,6 +158,7 @@ mod ledger {
         pub revision: i64,
         #[wire_default]
         pub tier: Tier,
+        #[wire_default]
         pub owner_id: Uuid,
         #[sea_orm(enum_name = "Kind")]
         pub category: String,
@@ -198,10 +176,9 @@ mod ledger {
 mod vault {
     use super::*;
     use nest_rs_core::Secret;
-    use serde::{Deserialize, Serialize};
 
     #[expose(name = "Vault")]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "vaults")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -220,14 +197,13 @@ mod vault {
 }
 
 // Hidden byte-like secret columns: outside the narrow set, so each is filled
-// from the value its `#[wire_default]` holds, or `null` where it is optional.
+// from the value its `#[wire_default]` holds, or `None` where it is optional.
 mod keyring {
     use super::*;
     use nest_rs_core::Secret;
-    use serde::{Deserialize, Serialize};
 
     #[expose(name = "Keyring")]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "keyrings")]
     pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -248,85 +224,38 @@ mod keyring {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-// A hidden byte-like secret with no `#[wire_default]`: no placeholder exists.
-mod sealed {
-    use super::*;
-    use nest_rs_core::Secret;
-    use serde::{Deserialize, Serialize};
-
-    #[expose(name = "Sealed")]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
-    #[sea_orm(table_name = "sealeds")]
-    pub(super) struct Model {
-        #[sea_orm(primary_key, auto_increment = false)]
-        #[expose]
-        pub id: Uuid,
-        pub seed: Secret<Vec<u8>>,
+/// A wire object as a masked reply carries one.
+fn object(wire: Value) -> Map<String, Value> {
+    match wire {
+        Value::Object(row) => row,
+        other => panic!("a row is an object, not {other}"),
     }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub(super) enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-}
-
-/// What the mask's rebuild does with a wire object: fill, then deserialize.
-fn rebuilt<E>(wire: serde_json::Value) -> (serde_json::Value, Result<E::Model, serde_json::Error>)
-where
-    E: nest_rs_authz::WireModelDefaults,
-    E::Model: serde::de::DeserializeOwned,
-{
-    let serde_json::Value::Object(mut row) = wire else {
-        panic!("a row is an object");
-    };
-    E::fill_wire_defaults(&mut row);
-    let filled = serde_json::Value::Object(row);
-    let model = serde_json::from_value(filled.clone());
-    (filled, model)
 }
 
 /// A secret column is never exposed, so a masked reply rebuilds it: bare, it
-/// takes its value's placeholder, and optional, `null` — never a 500 for want
+/// takes its value's placeholder, and optional, `None` — never a 500 for want
 /// of one.
 #[test]
 fn a_hidden_secret_column_is_rebuilt_from_its_value_s_placeholder() {
-    use nest_rs_authz::WireModelDefaults;
-    use vault::{Column, Entity, Model};
+    use vault::{Column, Entity};
 
-    let mut row = serde_json::Map::new();
-    row.insert("id".into(), serde_json::json!(Uuid::nil()));
-    row.insert("name".into(), serde_json::json!("ops"));
-    Entity::fill_wire_defaults(&mut row);
-    assert_eq!(row.get("api_key_hash"), Some(&serde_json::json!("")));
-    assert_eq!(row.get("recovery_hash"), Some(&serde_json::Value::Null));
-    let rebuilt: Model =
-        serde_json::from_value(serde_json::Value::Object(row)).expect("the row rebuilds");
+    let rebuilt = Entity::from_wire(&object(json!({ "id": Uuid::nil(), "name": "ops" })))
+        .expect("the row rebuilds");
     assert_eq!(rebuilt.api_key_hash.expose_secret(), "");
+    assert!(rebuilt.recovery_hash.is_none());
+    assert_eq!(rebuilt.name, "ops");
     assert!(Entity::is_placeholdered(Column::ApiKeyHash));
     assert!(Entity::is_placeholdered(Column::RecoveryHash));
     assert_eq!(Entity::wire_key(Column::ApiKeyHash), None);
 }
 
-/// A byte-like secret's `#[wire_default]` fills the value the column holds —
-/// its type's `Default` or the expression's — never the `"<redacted>"` a
-/// `Secret` serializes as, which its value type does not read back.
+/// A byte-like secret's `#[wire_default]` gives the value the column holds —
+/// its type's `Default` or the expression's.
 #[test]
 fn a_hidden_byte_like_secret_is_rebuilt_from_its_wire_default_s_value() {
     use keyring::{Column, Entity};
-    use nest_rs_authz::WireModelDefaults;
 
-    let (filled, model) = rebuilt::<Entity>(serde_json::json!({ "id": Uuid::nil() }));
-    assert_eq!(
-        filled,
-        serde_json::json!({
-            "id": Uuid::nil(),
-            "seed": [],
-            "pepper": [7],
-            "backup": null,
-            "spare": [9],
-        })
-    );
-    let model = model.expect("the row rebuilds");
+    let model = Entity::from_wire(&object(json!({ "id": Uuid::nil() }))).expect("the row rebuilds");
     assert!(model.seed.expose_secret().is_empty());
     assert_eq!(model.pepper.expose_secret(), &[7]);
     assert!(model.backup.is_none());
@@ -342,66 +271,36 @@ fn a_hidden_byte_like_secret_is_rebuilt_from_its_wire_default_s_value() {
     }
 }
 
-/// A handler returning the raw `Model` sends each secret as `"<redacted>"`:
-/// the fill writes over it, so the row still rebuilds, whatever the value type.
+/// A hidden column is never read off the wire, whatever an object carries
+/// under its key — a `"<redacted>"` a byte-like secret could not read back
+/// included: the rebuild gives it its placeholder.
 #[test]
-fn a_raw_model_s_redacted_secrets_are_written_over_before_the_rebuild() {
-    let keys = keyring::Model {
-        id: Uuid::nil(),
-        seed: vec![1, 2, 3].into(),
-        pepper: vec![4].into(),
-        backup: Some(vec![5].into()),
-        spare: None,
-    };
-    let (filled, model) =
-        rebuilt::<keyring::Entity>(serde_json::to_value(&keys).expect("the row serializes"));
-    assert_eq!(
-        filled,
-        serde_json::json!({
-            "id": Uuid::nil(),
-            "seed": [],
-            "pepper": [7],
-            "backup": null,
-            "spare": [9],
-        })
-    );
-    model.expect("the row rebuilds");
+fn a_hidden_column_an_object_carries_is_rebuilt_from_its_placeholder() {
+    let keys = keyring::Entity::from_wire(&object(json!({
+        "id": Uuid::nil(),
+        "seed": "<redacted>",
+        "pepper": [1, 2, 3],
+    })))
+    .expect("the row rebuilds");
+    assert!(keys.seed.expose_secret().is_empty());
+    assert_eq!(keys.pepper.expose_secret(), &[7]);
 
-    let vault = vault::Model {
-        id: Uuid::nil(),
-        name: "ops".into(),
-        api_key_hash: "$argon2id$v=19$key".into(),
-        recovery_hash: Some("$argon2id$v=19$recovery".into()),
-    };
-    let (filled, model) =
-        rebuilt::<vault::Entity>(serde_json::to_value(&vault).expect("the row serializes"));
-    assert_eq!(filled["api_key_hash"], serde_json::json!(""));
-    assert_eq!(filled["recovery_hash"], serde_json::Value::Null);
-    assert_eq!(filled["name"], serde_json::json!("ops"));
-    model.expect("the row rebuilds");
+    let ledger = ledger::Entity::from_wire(&object(json!({
+        "id": Uuid::nil(),
+        "name": "books",
+        "type": "cash",
+        "note": "the wire's",
+        "tier": "pro",
+    })))
+    .expect("the row rebuilds");
+    assert_eq!(ledger.note, "");
+    assert_eq!(ledger.tier, ledger::Tier::Free);
 }
 
-/// A byte-like secret has no placeholder of its own: with no `#[wire_default]`
-/// the fill invents nothing, and the rebuild fails closed.
+/// The row's own `Debug` says nothing of a secret column, and the round trip
+/// writes none: a secret is never exposed.
 #[test]
-fn a_hidden_byte_like_secret_without_a_wire_default_fails_closed() {
-    use nest_rs_authz::WireModelDefaults;
-    use sealed::{Column, Entity};
-
-    let (filled, model) = rebuilt::<Entity>(serde_json::json!({ "id": Uuid::nil() }));
-    assert_eq!(filled, serde_json::json!({ "id": Uuid::nil() }));
-    let refused = model.expect_err("a missing column fails the rebuild");
-    assert!(
-        refused.to_string().contains("missing field `seed`"),
-        "{refused}"
-    );
-    assert!(!Entity::is_placeholdered(Column::Seed));
-}
-
-/// The row's own derives say nothing of a secret column: `Debug` and its
-/// serialization print the placeholder.
-#[test]
-fn a_secret_column_prints_and_serializes_as_its_placeholder() {
+fn a_secret_column_prints_as_its_placeholder_and_never_reaches_the_wire() {
     let model = vault::Model {
         id: Uuid::nil(),
         name: "ops".into(),
@@ -409,42 +308,24 @@ fn a_secret_column_prints_and_serializes_as_its_placeholder() {
         recovery_hash: Some("$argon2id$v=19$recovery".into()),
     };
     let active = vault::ActiveModel::from(model.clone());
-    for printed in [
-        format!("{model:?}"),
-        format!("{active:?}"),
-        serde_json::to_string(&model).expect("the row serializes"),
-    ] {
+    for printed in [format!("{model:?}"), format!("{active:?}")] {
         assert!(!printed.contains("argon2id"), "{printed}");
         assert!(printed.contains("<redacted>"), "{printed}");
         assert!(printed.contains("ops"), "the other columns stay: {printed}");
     }
+    let wire = vault::Entity::to_wire(&model).expect("the row writes");
+    assert_eq!(
+        Value::Object(wire),
+        json!({ "id": Uuid::nil(), "name": "ops" })
+    );
 }
 
 /// A rule reading a column the rebuilt row invented cannot be decided there, so
-/// the derive names exactly the columns its fill may invent.
+/// the derive names exactly the columns its rebuild invents.
 #[test]
-fn a_placeholdered_column_is_exactly_one_the_fill_may_invent() {
+fn a_placeholdered_column_is_exactly_one_the_rebuild_invents() {
     use ledger::{Column, Entity};
-    use nest_rs_authz::WireModelDefaults;
     use sea_orm::Iterable;
-
-    let mut filled = serde_json::Map::new();
-    Entity::fill_wire_defaults(&mut filled);
-    let mut invented: Vec<&str> = filled.keys().map(String::as_str).collect();
-    invented.sort_unstable();
-    assert_eq!(
-        invented,
-        [
-            "archived_at",
-            "category",
-            "locked",
-            "note",
-            "ref",
-            "revision",
-            "tier"
-        ],
-        "a primary key, an exposed column and a type with no placeholder are never invented",
-    );
 
     let placeholdered: Vec<String> = Column::iter()
         .filter(|column| Entity::is_placeholdered(*column))
@@ -458,11 +339,45 @@ fn a_placeholdered_column_is_exactly_one_the_fill_may_invent() {
             "Locked",
             "Revision",
             "Tier",
+            "OwnerId",
             "Kind",
             "Ref"
         ],
-        "the variant of each invented column, `enum_name` and `r#` read as sea-orm reads them",
+        "every hidden column, the variant of each read as sea-orm reads `enum_name` and `r#`; \
+         an exposed column is never invented",
     );
+    let rebuilt = Entity::from_wire(&object(json!({
+        "id": Uuid::nil(),
+        "name": "books",
+        "type": "cash",
+    })))
+    .expect("the row rebuilds");
+    assert_eq!(
+        (
+            rebuilt.note.as_str(),
+            rebuilt.archived_at,
+            rebuilt.locked,
+            rebuilt.revision
+        ),
+        ("", None, false, 0),
+    );
+    assert_eq!(
+        (rebuilt.owner_id, rebuilt.r#ref.as_str()),
+        (Uuid::nil(), "")
+    );
+    assert!(
+        rebuilt.headline.is_none(),
+        "an `Option` the object left out reads `None`"
+    );
+}
+
+/// An exposed column the object leaves out is no placeholder to invent: the
+/// rebuild fails, and the reply with it, closed.
+#[test]
+fn an_exposed_column_the_object_leaves_out_fails_the_rebuild() {
+    let refused = ledger::Entity::from_wire(&object(json!({ "id": Uuid::nil(), "type": "cash" })))
+        .expect_err("`name` is exposed and absent");
+    assert_eq!(refused.to_string(), "missing field `name`");
 }
 
 /// An exposed column is keyed as its field serializes, whatever name the
@@ -470,8 +385,8 @@ fn a_placeholdered_column_is_exactly_one_the_fill_may_invent() {
 #[test]
 fn an_exposed_column_is_keyed_by_its_field_and_a_hidden_one_is_not() {
     use ledger::{Column, Entity};
-    use nest_rs_authz::WireModelDefaults;
 
+    assert_eq!(Entity::wire_key(Column::Id), Some("id"));
     assert_eq!(Entity::wire_key(Column::Name), Some("name"));
     assert_eq!(Entity::wire_key(Column::Type), Some("type"));
     assert_eq!(
@@ -479,7 +394,7 @@ fn an_exposed_column_is_keyed_by_its_field_and_a_hidden_one_is_not() {
         Some("headline"),
         "`column_name` moves the database's name, not the wire's",
     );
-    for hidden in [Column::Id, Column::Note, Column::Kind, Column::Ref] {
+    for hidden in [Column::Note, Column::Kind, Column::Ref, Column::OwnerId] {
         assert_eq!(Entity::wire_key(hidden), None, "{hidden:?}");
     }
 }
@@ -487,12 +402,38 @@ fn an_exposed_column_is_keyed_by_its_field_and_a_hidden_one_is_not() {
 /// A raw identifier serializes without its `r#`, so its key does too.
 #[test]
 fn a_raw_identifier_is_keyed_as_it_serializes() {
-    use ledger::Entity;
-    use nest_rs_authz::WireModelDefaults;
-
-    let keys = Entity::wire_keys().expect("an #[expose]d entity yields a key set");
+    let keys = ledger::Entity::WIRE_KEYS;
     assert!(keys.contains(&"type"), "{keys:?}");
     assert!(!keys.iter().any(|key| key.starts_with("r#")), "{keys:?}");
+}
+
+/// The round trip writes a row as its exposed type does, so a masked reply and
+/// an unmasked one spell every column alike, an id and a timestamp included.
+#[test]
+fn the_round_trip_writes_a_row_as_its_exposed_type_does() {
+    for raw in ["2026-10-08T12:30:00.250+00:00", "2026-10-08T14:30:00+02:00"] {
+        let model = reading::Model {
+            id: Uuid::now_v7(),
+            label: "x".into(),
+            taken_at: DateTimeWithTimeZone::parse_from_rfc3339(raw).expect("a timestamp"),
+        };
+        let wire = reading::Entity::to_wire(&model).expect("the row writes");
+        assert_eq!(
+            Value::Object(wire.clone()),
+            serde_json::to_value(reading::Reading::from(&model)).expect("the wire type writes"),
+            "{raw}",
+        );
+        let back = reading::Entity::from_wire(&wire).expect("the row reads back");
+        assert_eq!(back, model, "{raw}");
+    }
+    let utc = reading::Model {
+        id: Uuid::nil(),
+        label: "x".into(),
+        taken_at: DateTimeWithTimeZone::parse_from_rfc3339("2026-10-08T12:30:00+00:00")
+            .expect("a timestamp"),
+    };
+    let wire = reading::Entity::to_wire(&utc).expect("the row writes");
+    assert_eq!(wire["taken_at"], json!("2026-10-08T12:30:00Z"));
 }
 
 #[test]
@@ -504,27 +445,28 @@ fn wire_only_expose_compiles_without_graphql_tokens() {
 }
 
 #[test]
-fn wire_default_reconstructs_and_strips_an_unexposed_custom_enum() {
+fn wire_default_rebuilds_and_strips_an_unexposed_custom_enum() {
     use account::{Entity, Tier};
-    use nest_rs_authz::WireModelDefaults;
 
-    let mut body: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-    Entity::fill_wire_defaults(&mut body);
+    let rebuilt = Entity::from_wire(&object(json!({ "id": Uuid::nil(), "name": "Ada" })))
+        .expect("the row rebuilds");
     assert_eq!(
-        body.get("tier"),
-        Some(&serde_json::to_value(Tier::default()).expect("serialize default")),
-        "bare #[wire_default] fills the column type's Default",
+        rebuilt.tier,
+        Tier::default(),
+        "bare #[wire_default] is the type's Default"
     );
-    assert_eq!(body["tier"], serde_json::json!("free"));
 
-    let mut present = serde_json::Map::new();
-    present.insert("tier".into(), serde_json::json!("pro"));
-    Entity::fill_wire_defaults(&mut present);
-    assert_eq!(present["tier"], serde_json::json!("pro"));
-
-    let keys = Entity::wire_keys().expect("an #[expose]d entity yields a key set");
-    assert!(keys.contains(&"id") && keys.contains(&"name"));
-    assert!(!keys.contains(&"tier"), "the placeholder is not a wire key");
+    let wire = Entity::to_wire(&account::Model {
+        tier: Tier::Pro,
+        ..rebuilt
+    })
+    .expect("the row writes");
+    assert!(
+        !wire.contains_key("tier"),
+        "the placeholder is not a wire key"
+    );
+    assert!(Entity::WIRE_KEYS.contains(&"id") && Entity::WIRE_KEYS.contains(&"name"));
+    assert!(!Entity::WIRE_KEYS.contains(&"tier"));
 }
 
 #[test]
@@ -540,31 +482,4 @@ fn an_id_and_a_timestamp_keep_their_format_on_the_wire_string() {
         properties["label"].get("format").is_none(),
         "a plain String claims no format: {json}",
     );
-}
-
-#[test]
-fn a_timestamp_reads_as_the_model_itself_serializes_it() {
-    use sea_orm::prelude::DateTimeWithTimeZone;
-
-    for raw in ["2026-10-08T12:30:00.250+00:00", "2026-10-08T14:30:00+02:00"] {
-        let taken_at = DateTimeWithTimeZone::parse_from_rfc3339(raw).expect("a timestamp");
-        let model = reading::Model {
-            id: Uuid::nil(),
-            label: "x".into(),
-            taken_at,
-        };
-        let wire = reading::Reading::from(&model);
-        assert_eq!(
-            serde_json::Value::String(wire.taken_at),
-            serde_json::to_value(taken_at).expect("serialize"),
-            "a masked reply is re-serialized from the model: both paths spell {raw} alike",
-        );
-    }
-    let utc = reading::Reading::from(&reading::Model {
-        id: Uuid::nil(),
-        label: "x".into(),
-        taken_at: DateTimeWithTimeZone::parse_from_rfc3339("2026-10-08T12:30:00+00:00")
-            .expect("a timestamp"),
-    });
-    assert_eq!(utc.taken_at, "2026-10-08T12:30:00Z");
 }

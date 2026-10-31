@@ -1,49 +1,66 @@
-//! Defaults for unexposed columns (those without `#[expose]`) when reconciling
-//! a wire DTO back into a SeaORM `Model` for response masking.
+//! The round trip a reply mask runs on an `#[expose]`d entity's rows: a row
+//! read back from what the wire carries, and written as the wire carries it.
 
-use sea_orm::{EntityTrait, IdenStatic};
+use sea_orm::EntityTrait;
+use serde::de::{DeserializeOwned, Error as _};
 use serde_json::{Map, Value};
 
-/// Fills absent JSON keys for server-only columns before deserializing a
-/// handler DTO into `Self::Model`; emitted by `#[expose]`.
-pub trait WireModelDefaults: EntityTrait {
-    /// Insert default JSON values for the entity's unexposed columns into `map`
-    /// so a wire DTO (which omits them) can deserialize into the full `Model`.
-    fn fill_wire_defaults(_map: &mut Map<String, Value>) {}
+/// How a reply mask reads an `#[expose]`d entity's row off the wire and writes
+/// it back, emitted by `#[expose]` and never written by hand.
+///
+/// Each column goes through its own serde impls, so the `Model` itself
+/// serializes nowhere: a row crosses a wire only as its exposed type.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an `#[expose]`d entity, so no reply mask reads its rows",
+    label = "no `#[expose]` on this entity's `Model`",
+    note = "a mask rebuilds each row of a reply from the columns `#[expose]` declares: decorate the entity's `Model` with `#[expose(name = \"…\")]`"
+)]
+pub trait WireModel: EntityTrait {
+    /// The key of every exposed column, as the entity's wire type writes it.
+    const WIRE_KEYS: &'static [&'static str];
 
-    /// The exposed (`#[expose]`) column names that may cross the wire: response
-    /// masking retains **only** these keys, even from a raw `Model`.
+    /// The row's exposed columns, keyed as [`WIRE_KEYS`](Self::WIRE_KEYS)
+    /// names them.
     ///
-    /// `None` (the default, entities without `#[expose]`) retains the body's own
-    /// keys, which is only sound when the body is already the wire shape.
-    fn wire_keys() -> Option<&'static [&'static str]> {
-        None
-    }
+    /// # Errors
+    ///
+    /// A column whose value does not serialize.
+    fn to_wire(model: &Self::Model) -> Result<Map<String, Value>, serde_json::Error>;
 
-    /// Whether [`fill_wire_defaults`](Self::fill_wire_defaults) may invent this
-    /// column's value: a rule reading it cannot be decided on a rebuilt model.
+    /// The row a wire object describes: each exposed column read back, every
+    /// other one given the placeholder `#[expose]` checked at compile time.
     ///
-    /// An impl that fills a column answers `true` for it; `#[expose]` emits the
-    /// answer from the same walk that emits the fill.
-    fn is_placeholdered(_column: Self::Column) -> bool {
-        false
-    }
+    /// # Errors
+    ///
+    /// An exposed column the object leaves out or carries in another shape.
+    fn from_wire(wire: &Map<String, Value>) -> Result<Self::Model, serde_json::Error>;
+
+    /// Whether [`from_wire`](Self::from_wire) invents this column's value, so a
+    /// rule reading it is never decided on a rebuilt row.
+    fn is_placeholdered(column: Self::Column) -> bool;
 
     /// The key this column crosses the wire under, `None` for one the wire
     /// never carries: an object that leaves the key out did not send the
-    /// column, so a rule reading it cannot be decided on the value serde gave
-    /// the rebuilt model.
-    ///
-    /// By default, the column's own name when [`wire_keys`](Self::wire_keys)
-    /// lists it, or whenever there is no such list; `#[expose]` emits the key
-    /// each exposed field serializes under, which a `column_name` moves away
-    /// from the column's name.
-    fn wire_key(column: Self::Column) -> Option<&'static str> {
-        let name = column.as_str();
-        match Self::wire_keys() {
-            Some(keys) => keys.iter().copied().find(|key| *key == name),
-            None => Some(name),
-        }
+    /// column, so a rule reading it is not decided on the value the rebuild
+    /// gave it.
+    fn wire_key(column: Self::Column) -> Option<&'static str>;
+}
+
+/// The exposed column `key` of a wire object, read through its own
+/// `Deserialize`: a key the object leaves out reads as `null`, which only an
+/// `Option` column takes, as serde's derive reads a missing field.
+///
+/// # Errors
+///
+/// The key absent from a column no `null` reads, or a value of another shape.
+pub fn wire_column<T: DeserializeOwned>(
+    wire: &Map<String, Value>,
+    key: &'static str,
+) -> Result<T, serde_json::Error> {
+    match wire.get(key) {
+        Some(value) => T::deserialize(value),
+        None => T::deserialize(&Value::Null)
+            .map_err(|_refused_null| serde_json::Error::missing_field(key)),
     }
 }
 
@@ -51,76 +68,34 @@ pub trait WireModelDefaults: EntityTrait {
 mod tests {
     use super::*;
 
-    mod widget {
-        use sea_orm::entity::prelude::*;
-
-        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-        #[sea_orm(table_name = "widgets")]
-        pub(super) struct Model {
-            #[sea_orm(primary_key)]
-            pub id: i32,
-            pub name: String,
-        }
-
-        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub(super) enum Relation {}
-
-        impl ActiveModelBehavior for ActiveModel {}
-    }
-
-    impl WireModelDefaults for widget::Entity {}
-
-    mod gadget {
-        use sea_orm::entity::prelude::*;
-
-        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-        #[sea_orm(table_name = "gadgets")]
-        pub(super) struct Model {
-            #[sea_orm(primary_key)]
-            pub id: i32,
-            pub name: String,
-            pub secret: String,
-        }
-
-        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub(super) enum Relation {}
-
-        impl ActiveModelBehavior for ActiveModel {}
-    }
-
-    impl WireModelDefaults for gadget::Entity {
-        fn wire_keys() -> Option<&'static [&'static str]> {
-            Some(&["id", "name"])
-        }
-    }
-
     #[test]
-    fn default_impl_invents_no_column() {
-        use sea_orm::Iterable;
-
-        assert!(widget::Column::iter().all(|column| !widget::Entity::is_placeholdered(column)));
-    }
-
-    #[test]
-    fn default_impl_keys_a_column_by_its_name_among_the_wire_keys() {
-        assert_eq!(widget::Entity::wire_key(widget::Column::Name), Some("name"));
-        assert_eq!(gadget::Entity::wire_key(gadget::Column::Name), Some("name"));
+    fn a_present_column_reads_through_its_own_type() {
+        let mut wire = Map::new();
+        wire.insert("count".into(), serde_json::json!(7));
+        assert_eq!(wire_column::<i64>(&wire, "count").ok(), Some(7));
         assert_eq!(
-            gadget::Entity::wire_key(gadget::Column::Secret),
-            None,
-            "a column outside the wire keys never crosses the wire",
+            wire_column::<Option<i64>>(&wire, "count").ok(),
+            Some(Some(7))
         );
     }
 
     #[test]
-    fn default_impl_leaves_the_wire_body_untouched() {
-        let mut body: Map<String, Value> = Map::new();
-        body.insert("id".into(), serde_json::json!(1));
-        body.insert("name".into(), serde_json::json!("ada"));
+    fn a_missing_column_reads_as_none_only_where_it_is_optional() {
+        let wire = Map::new();
+        assert_eq!(
+            wire_column::<Option<String>>(&wire, "note").ok(),
+            Some(None)
+        );
+        let refused = wire_column::<String>(&wire, "note")
+            .err()
+            .map(|err| err.to_string());
+        assert_eq!(refused.as_deref(), Some("missing field `note`"));
+    }
 
-        let before = body.clone();
-        widget::Entity::fill_wire_defaults(&mut body);
-
-        assert_eq!(body, before, "default impl must not add or rename keys");
+    #[test]
+    fn a_value_of_another_shape_is_refused_without_quoting_it() {
+        let mut wire = Map::new();
+        wire.insert("count".into(), serde_json::json!("seven"));
+        assert!(wire_column::<i64>(&wire, "count").is_err());
     }
 }

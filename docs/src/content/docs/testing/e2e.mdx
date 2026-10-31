@@ -221,10 +221,9 @@ key — mints a test's bearer with its own `JwtService`, so the token carries th
 key the app verifies with and the expiry it stamps:
 
 ```rust title="apps/blog/tests/e2e/main.rs"
-let auth = app.bearer(|exp| Claims {
+let auth = app.bearer(&Claims {
     sub: Subject::User(Uuid::now_v7()),
     roles: vec![Role::User],
-    exp,
 });
 ```
 

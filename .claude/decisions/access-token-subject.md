@@ -52,3 +52,33 @@ all the same. `PostAuthorGuard` therefore answers a client's create or publish
 `403 FORBIDDEN` before the scope gate, with or without `posts:write`, and a
 user lacking the scope still gets the challenge. A write a client may do — an
 update, a delete — keeps the challenge for the scope it lacks.
+
+## 2026-10-31 — `exp` is the signer's too
+
+The 2026-10-25 entry left `exp` to the claims type beside `sub` and
+`client_id`, without a reason ranked above elegance. Unlike those two, `exp`
+names no one: it is `iat` plus the lifetime the signer itself is configured
+with, so every claims literal asked the signer for that value
+(`JwtService::expiry()`) only to hand it back, and every test wrote `exp: 0` or
+a closure passing it in. Decided on the owner's agreement to the identity
+audit's second pass ("Tout faire (Recommandé)", 2026-10-31, its item 11),
+which covers this public API break:
+
+- **The signer stamps an access token's `exp` = `iat` + `expires_in`** when
+  the claims leave it out or serialize it as `null`, under the rule above: a
+  claim the claims carry is kept, so a test forging an expired token keeps
+  its own. **The claims type names who and for whom**: `sub` and
+  `client_id`. `JwtService::expiry()` is gone.
+- **A handshake names its own lifetime**: `sign_handshake` stamps no `exp`
+  and refuses claims carrying none, so a flow's token (the OAuth
+  transaction's ten minutes, `expiry_in(secs)`) never inherits the
+  access-token lifetime — one hour by default, up to thirty days — by
+  omission. A handshake without `exp` failed closed before this entry, at
+  verification, which requires the claim; it now fails at signing, naming
+  `expiry_in`.
+- `TestApp::bearer` takes the claims value it signs, as the closure existed
+  only to pass `exp` in.
+
+Refused: **an `exp` the claims type must still declare** (a field the
+signer then overwrites): a value written twice, once ignored, is the drift
+this entry removes.

@@ -578,7 +578,7 @@ fn generate_resource_writes_the_round_trip_test_of_the_app_it_wires() {
         "use crate::boot;",
         "async fn posts_round_trip() {",
         ".post(\"/posts\")",
-        "let bearer = app.bearer(|exp| Claims {",
+        "let bearer = app.bearer(&Claims {",
         "created.assert_status(StatusCode::CREATED);",
     ] {
         assert!(test.contains(line), "{line}: {test}");

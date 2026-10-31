@@ -954,7 +954,7 @@ mod tests {
                 csrf: csrf.into(),
                 pkce: "verifier".into(),
                 resource: None,
-                exp: jwt.expiry(),
+                exp: jwt.expiry_in(OAuthClient::TRANSACTION_TTL_SECS),
             },
         )
         .expect("sign")

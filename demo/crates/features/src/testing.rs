@@ -41,10 +41,6 @@ fn issuer_named(name: &str) -> JwtService {
     JwtService::new(options).expect("the dev keypair parses")
 }
 
-fn issuer() -> JwtService {
-    issuer_named(ISSUER)
-}
-
 pub fn signed_for(resource: &str, claims: &impl Serialize) -> String {
     signed_by(ISSUER, resource, claims)
 }
@@ -67,7 +63,6 @@ pub fn claims(org_id: Uuid, roles: Vec<Role>, sub: Subject, scopes: Vec<String>)
         org_id,
         roles,
         scopes,
-        exp: issuer().expiry(),
     }
 }
 

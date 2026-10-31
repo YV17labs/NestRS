@@ -76,7 +76,6 @@ pub struct Claims {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub scopes: Vec<String>,
-    pub exp: u64,
 }
 
 impl Claims {
@@ -96,7 +95,6 @@ mod tests {
             org_id: Uuid::nil(),
             roles,
             scopes: Vec::new(),
-            exp: 0,
         }
     }
 
@@ -170,7 +168,6 @@ mod tests {
             org_id: Uuid::now_v7(),
             roles: vec![Role::User],
             scopes: vec![POSTS_READ.into()],
-            exp: 100,
         };
         let json = serde_json::to_value(&user).expect("serialize");
         assert_eq!(json["sub"], sub.to_string());
@@ -181,7 +178,6 @@ mod tests {
         );
         let back: Claims = serde_json::from_value(json).expect("deserialize");
         assert_eq!(back.sub.user_id(), Some(sub));
-        assert_eq!(back.exp, 100);
         assert_eq!(back.scopes, [POSTS_READ]);
     }
 

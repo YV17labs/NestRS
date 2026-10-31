@@ -93,8 +93,8 @@ nextest prints each test's time: compare before and after.
   `database`) — a service's body run in one unit of the app's bound
   `UnitOfWork`, as a request granted the ability or as system work,
   committed on `Ok`: never an executor or an ability installed by hand.
-- **`TestApp::bearer(|exp| claims)`** (`authn`) — the `Authorization` value
-  of a token the app's own `JwtService` signs.
+- **`TestApp::bearer(&claims)`** (`authn`) — the `Authorization` value
+  of a token the app's own `JwtService` signs over `claims`.
 - **`load_project_env`** — the `.env` cascade, so a test reaches the
   devcontainer's `postgres`, `valkey-standalone` and `rustfs`.
 

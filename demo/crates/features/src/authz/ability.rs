@@ -87,7 +87,6 @@ mod tests {
             org_id,
             roles,
             scopes: scopes.clone(),
-            exp: 0,
         };
         let mut b = AbilityBuilder::new().with_granted_scopes(Some(scopes.into()));
         AuthzAbility.define(&claims, &mut b);
@@ -398,7 +397,6 @@ mod tests {
             org_id: Uuid::now_v7(),
             roles: vec![Role::Admin],
             scopes: Vec::new(),
-            exp: 0,
         };
         let mut b = AbilityBuilder::new();
         AuthzAbility.define(&claims, &mut b);

@@ -15,8 +15,6 @@ const PINNED_ISSUER: &str = "pinned-through-for-root";
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct Claims {
     sub: String,
-    // `exp` is the caller's to set; `JwtService` stamps only `iss` and `aud`.
-    exp: u64,
 }
 
 fn pinned() -> AuthnSetup {
@@ -54,7 +52,6 @@ async fn for_root_pins_the_config_and_provides_a_service_built_from_it() {
     let token = jwt
         .sign(&Claims {
             sub: "user-1".into(),
-            exp: jwt.expiry(),
         })
         .expect("the pinned secret signs");
     let verified: Claims = jwt
@@ -98,7 +95,6 @@ fn minted(iss: Option<&str>, aud: &str) -> String {
             aud,
             &Claims {
                 sub: "user-1".into(),
-                exp: jsonwebtoken::get_current_timestamp() + 3600,
             },
         )
         .expect("sign")
@@ -164,7 +160,6 @@ async fn without_a_binding_the_config_alone_decides() {
     let token = jwt
         .sign(&Claims {
             sub: "user-1".into(),
-            exp: jwt.expiry(),
         })
         .expect("sign");
     jwt.verify::<Claims>(&token)
@@ -188,11 +183,16 @@ async fn a_bound_service_still_verifies_its_own_handshakes() {
         .expect("boots");
     let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
 
+    #[derive(Serialize)]
+    struct Transaction {
+        sub: &'static str,
+        exp: u64,
+    }
     let transaction = jwt
         .sign_handshake(
             "oauth-tx",
-            &Claims {
-                sub: "state".into(),
+            &Transaction {
+                sub: "state",
                 exp: jwt.expiry_in(600),
             },
         )

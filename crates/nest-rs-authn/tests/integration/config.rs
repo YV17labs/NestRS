@@ -739,7 +739,6 @@ async fn a_secret_signs_with_the_hmac_algorithm_named() {
     #[derive(Serialize, Deserialize)]
     struct Claims {
         sub: String,
-        exp: u64,
     }
 
     let jwt = JwtService::new(
@@ -752,12 +751,7 @@ async fn a_secret_signs_with_the_hmac_algorithm_named() {
         .expect("options"),
     )
     .expect("a 64-byte secret fits HS512");
-    let token = jwt
-        .sign(&Claims {
-            sub: "ada".into(),
-            exp: jwt.expiry(),
-        })
-        .expect("signs");
+    let token = jwt.sign(&Claims { sub: "ada".into() }).expect("signs");
     assert_eq!(
         jsonwebtoken::decode_header(&token).expect("a header").alg,
         jsonwebtoken::Algorithm::HS512

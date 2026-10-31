@@ -22,7 +22,6 @@ const SECRET: &str = "binding-flow-secret-0123456789ab";
 #[derive(Serialize, Deserialize)]
 struct Claims {
     sub: String,
-    exp: u64,
 }
 
 fn resource() -> OAuthResourceConfig {
@@ -46,13 +45,12 @@ fn authn(audience: Option<&str>, issuer: Option<&str>) -> AuthnConfig {
 fn minted(iss: Option<&str>, aud: &str) -> String {
     let mut options = JwtOptions::new(SECRET);
     options.issuer = iss.map(str::to_owned);
-    let issuer = JwtService::new(options).expect("issuer");
-    issuer
+    JwtService::new(options)
+        .expect("issuer")
         .sign_for(
             aud,
             &Claims {
                 sub: "client-1".into(),
-                exp: issuer.expiry(),
             },
         )
         .expect("sign")

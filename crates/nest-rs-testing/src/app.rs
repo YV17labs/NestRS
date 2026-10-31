@@ -231,8 +231,8 @@ mod http {
     #[cfg(feature = "authn")]
     impl TestApp {
         /// The `Authorization` value of a bearer token the app's own
-        /// `JwtService` signs over the claims `claims` builds from the expiry
-        /// the service stamps: a token the app's authentication guard admits,
+        /// `JwtService` signs over `claims`, stamping what the signer owns —
+        /// `exp` among it: a token the app's authentication guard admits,
         /// signed with the key it verifies with. Panics when the app provides
         /// no `JwtService` or one holding no signing key.
         ///
@@ -244,7 +244,6 @@ mod http {
         /// #[derive(Serialize)]
         /// struct Claims {
         ///     sub: String,
-        ///     exp: u64,
         /// }
         ///
         /// #[module(imports = [AuthnModule])]
@@ -260,7 +259,7 @@ mod http {
         /// #   })
         ///     .build()
         ///     .await?;
-        /// let authorization = app.bearer(|exp| Claims { sub: "ada".into(), exp });
+        /// let authorization = app.bearer(&Claims { sub: "ada".into() });
         /// # let jwt = app.container().get::<JwtService>().expect("provided");
         /// # let token = authorization.strip_prefix("Bearer ").expect("a bearer value");
         /// # let read: serde_json::Value = jwt.verify(token).await?;
@@ -268,13 +267,13 @@ mod http {
         /// # Ok(())
         /// # }
         /// ```
-        pub fn bearer<C: serde::Serialize>(&self, claims: impl FnOnce(u64) -> C) -> String {
+        pub fn bearer(&self, claims: &impl serde::Serialize) -> String {
             let jwt = self
                 .container()
                 .get::<nest_rs_authn::JwtService>()
                 .expect("the app provides no JwtService: import the module authenticating it");
             let token = jwt
-                .sign(&claims(jwt.expiry()))
+                .sign(claims)
                 .unwrap_or_else(|refused| panic!("the app's JwtService signs no token: {refused}"));
             format!("Bearer {token}")
         }

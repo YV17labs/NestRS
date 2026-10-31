@@ -321,7 +321,7 @@ page 7 signs its tokens as a plain user, so its writes now answer `403`: sign
 them as an admin, and pin the refusal a plain user gets — the policy is as
 much the feature as its routes:
 
-```rust title="apps/blog/tests/e2e/posts.rs" {9, 12, 20, 51, 69-79}
+```rust title="apps/blog/tests/e2e/posts.rs" {9, 12, 19, 50, 68-78}
 use nest_rs::http::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
@@ -331,10 +331,9 @@ use features::authn::{Claims, Role, Subject};
 use crate::boot;
 
 fn bearer(app: &nest_rs::testing::TestApp, role: Role) -> String {
-    app.bearer(|exp| Claims {
+    app.bearer(&Claims {
         sub: Subject::User(Uuid::now_v7()),
         roles: vec![role],
-        exp,
     })
 }
 

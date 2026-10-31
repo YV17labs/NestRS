@@ -81,7 +81,6 @@ fn an_access_token_is_not_accepted_as_a_transaction() {
             "provider": "acme",
             "csrf": "forged",
             "pkce": "forged",
-            "exp": jwt.expiry(),
         }))
         .expect("sign an access token shaped like a transaction");
 
@@ -130,7 +129,6 @@ async fn a_callback_reports_a_transaction_cookie_that_does_not_verify() {
             "provider": "acme",
             "csrf": "agreed-state",
             "pkce": "verifier",
-            "exp": attacker.expiry(),
         }))
         .expect("sign with the wrong key");
 

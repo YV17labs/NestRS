@@ -93,6 +93,17 @@ fn is_reserved_handshake_typ(typ: &str) -> bool {
         && typ[..HANDSHAKE_TYP_PREFIX.len()].eq_ignore_ascii_case(HANDSHAKE_TYP_PREFIX)
 }
 
+/// Whose lifetime a token's `exp` states.
+#[derive(Clone, Copy)]
+enum Lifetime {
+    /// The signer's `expires_in` after `iat`, unless the claims name their own:
+    /// an access token.
+    Signer,
+    /// The claims' own, which they must carry: a handshake never inherits the
+    /// access-token lifetime.
+    Claims,
+}
+
 /// The media type RFC 9068 §2.1 assigns to a JWT access token. `at+jwt` is the
 /// SHOULD-form; §4 also obliges a verifier to accept the long form, so both are
 /// spelled here and nowhere else.
@@ -165,7 +176,8 @@ pub struct JwtOptions {
     /// an `HS*` one. Narrowing it binds a key that names no `alg` to the one
     /// algorithm its issuer signs with (RFC 8725 §3.1).
     pub algorithms: Vec<Algorithm>,
-    /// Lifetime applied to minted tokens' `exp` (default 1 hour).
+    /// The lifetime the signer stamps as a minted token's `exp`, after its
+    /// `iat`, unless its claims name their own (default 1 hour).
     pub expires_in: Duration,
     /// Clock skew tolerated when validating `exp` / `nbf`.
     pub leeway: Duration,
@@ -546,13 +558,14 @@ impl JwtService {
     /// on a verify-only service (no encoding key) or a serialization failure.
     ///
     /// The token carries what the signer owns of RFC 9068 §2.2's required set
-    /// — `iat`, a fresh `jti`, and the configured `aud` and `iss` — beside
-    /// `claims`, which name the rest: `sub`, `client_id` and `exp`. A claim
-    /// `claims` already carry is never overwritten. A token for another
-    /// resource is [`sign_for`](Self::sign_for)'s.
+    /// — `iat`, `exp` this service's lifetime after it, a fresh `jti`, and the
+    /// configured `aud` and `iss` — beside `claims`, which name the rest:
+    /// `sub` and `client_id`. A claim `claims` already carry is never
+    /// overwritten. A token for another resource is
+    /// [`sign_for`](Self::sign_for)'s.
     pub fn sign<C: Serialize>(&self, claims: &C) -> Result<String, AuthError> {
         let signer = self.signer()?;
-        self.encode_with(signer, &signer.header, claims, None)
+        self.encode_with(signer, &signer.header, claims, None, Lifetime::Signer)
     }
 
     /// Sign `claims` into a compact JWT for `resource`, the RFC 8707 §2
@@ -572,7 +585,13 @@ impl JwtService {
             ));
         }
         let signer = self.signer()?;
-        self.encode_with(signer, &signer.header, claims, Some(resource))
+        self.encode_with(
+            signer,
+            &signer.header,
+            claims,
+            Some(resource),
+            Lifetime::Signer,
+        )
     }
 
     /// The signing half, or the refusal a verify-only service answers.
@@ -583,37 +602,56 @@ impl JwtService {
     }
 
     /// Sign `claims` under `header` for `resource` — this service itself when
-    /// `None` — stamping the signer's claims first.
+    /// `None` — stamping the signer's claims first, `exp` as `lifetime` says.
     fn encode_with<C: Serialize>(
         &self,
         signer: &Signer,
         header: &Header,
         claims: &C,
         resource: Option<&str>,
+        lifetime: Lifetime,
     ) -> Result<String, AuthError> {
-        encode(header, &self.stamped(claims, resource)?, &signer.key)
-            .map_err(|e| AuthError::failed_because("the claims could not be signed", e))
+        encode(
+            header,
+            &self.stamped(claims, resource, lifetime)?,
+            &signer.key,
+        )
+        .map_err(|e| AuthError::failed_because("the claims could not be signed", e))
     }
 
-    /// `claims` as a JSON object carrying `iat`, a fresh `jti`, the configured
-    /// `iss`, and as `aud` either `resource` or, for a token this service mints
-    /// for itself, the configured audience.
+    /// `claims` as a JSON object carrying `iat`, `exp` the configured lifetime
+    /// after it (for a [`Lifetime::Signer`] token), a fresh `jti`, the
+    /// configured `iss`, and as `aud` either `resource` or, for a token this
+    /// service mints for itself, the configured audience.
     ///
     /// Verification requires `aud` and `iss` when configured, so a claims
     /// struct omitting them would mint tokens its own verifier rejects. A claim
     /// the claims type carries is never overwritten — but an `aud` beside
-    /// `resource`, which it would contradict, is refused; one it serializes as
-    /// `null` is absent.
+    /// `resource`, which it would contradict, is refused, and so are
+    /// [`Lifetime::Claims`] claims carrying no `exp`; one serialized as `null`
+    /// is absent.
     fn stamped<C: Serialize>(
         &self,
         claims: &C,
         resource: Option<&str>,
+        lifetime: Lifetime,
     ) -> Result<serde_json::Value, AuthError> {
         let mut value = serde_json::to_value(claims)
             .map_err(|e| AuthError::failed_because("the claims could not be serialized", e))?;
         let Some(map) = value.as_object_mut() else {
             // A non-object body cannot carry registered claims; the encoder fails it.
             return Ok(value);
+        };
+        let signer_s_lifetime = match lifetime {
+            Lifetime::Signer => Some(self.expires_in.as_secs()),
+            Lifetime::Claims if map.get("exp").is_none_or(serde_json::Value::is_null) => {
+                return Err(AuthError::failed(
+                    "a handshake's claims carry no `exp` — name its lifetime with \
+                     `JwtService::expiry_in(secs)`: a handshake never inherits the access-token \
+                     lifetime",
+                ));
+            }
+            Lifetime::Claims => None,
         };
         let audience = match resource {
             Some(resource) => {
@@ -627,8 +665,13 @@ impl JwtService {
             }
             None => self.audience.clone(),
         };
-        let stamps: [(&str, Option<serde_json::Value>); 4] = [
-            ("iat", Some(get_current_timestamp().into())),
+        let issued = get_current_timestamp();
+        let stamps: [(&str, Option<serde_json::Value>); 5] = [
+            ("iat", Some(issued.into())),
+            (
+                "exp",
+                signer_s_lifetime.map(|secs| issued.saturating_add(secs).into()),
+            ),
             ("jti", Some(Uuid::new_v4().to_string().into())),
             ("aud", audience.map(Into::into)),
             ("iss", self.issuer.clone().map(Into::into)),
@@ -694,6 +737,10 @@ impl JwtService {
     /// [`verify_handshake`](Self::verify_handshake) refuses an access token.
     /// `purpose` names the flow (`"oauth-tx"`); the reserved media type is built
     /// from it.
+    ///
+    /// The token carries the stamps [`sign`](Self::sign) does but `exp`, which
+    /// `claims` name themselves with [`expiry_in`](Self::expiry_in): claims
+    /// carrying none are refused rather than given the access-token lifetime.
     pub fn sign_handshake<C: Serialize>(
         &self,
         purpose: &str,
@@ -702,7 +749,7 @@ impl JwtService {
         let signer = self.signer()?;
         let mut header = signer.header.clone();
         header.typ = Some(handshake_typ(purpose));
-        self.encode_with(signer, &header, claims, None)
+        self.encode_with(signer, &header, claims, None, Lifetime::Claims)
     }
 
     /// Verify a handshake token minted by [`sign_handshake`](Self::sign_handshake)
@@ -734,15 +781,9 @@ impl JwtService {
         Ok(data.claims)
     }
 
-    /// Absolute `exp` for a token minted now with the default TTL — the value
-    /// callers put in a claims struct's `exp` field.
-    pub fn expiry(&self) -> u64 {
-        self.expiry_in(self.expires_in.as_secs())
-    }
-
     /// Absolute `exp` for a token that should live exactly `secs` seconds —
-    /// used for short-lived handshake tokens (e.g. the OAuth transaction) that
-    /// must not inherit the full access-token TTL.
+    /// a short-lived handshake token (the OAuth transaction), whose claims must
+    /// name it: [`sign_handshake`](Self::sign_handshake) stamps no lifetime.
     ///
     /// Saturates rather than wrapping: a wrapped sum would mint a token already expired.
     pub fn expiry_in(&self, secs: u64) -> u64 {

@@ -1,19 +1,33 @@
-//! `TestApp::bearer`: a token the app's own `JwtService` signs, over claims
-//! built from the expiry it stamps, which that service then verifies.
+//! `TestApp::bearer`: a token the app's own `JwtService` signs over a claims
+//! value, stamping its lifetime, which that service then verifies.
+
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use nest_rs_authn::{AuthnConfig, AuthnModule, JwtService};
 use nest_rs_core::{Secret, module};
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct Claims {
+    sub: String,
+}
+
+#[derive(Deserialize)]
+struct Verified {
     sub: String,
     exp: u64,
 }
 
 #[module(imports = [AuthnModule])]
 struct SigningModule;
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("after the epoch")
+        .as_secs()
+}
 
 const SECRET: &str = "a-test-secret-of-thirty-two-bytes!";
 
@@ -30,22 +44,19 @@ async fn the_bearer_is_one_the_apps_own_service_verifies() {
         .expect("the app boots signing with its secret");
     let jwt = app.container().get::<JwtService>().expect("provided");
 
-    let authorization = app.bearer(|exp| Claims {
-        sub: "ada".into(),
-        exp,
-    });
+    let authorization = app.bearer(&Claims { sub: "ada".into() });
 
     let token = authorization
         .strip_prefix("Bearer ")
         .expect("an Authorization value of the Bearer scheme");
-    let claims: Claims = jwt
+    let claims: Verified = jwt
         .verify(token)
         .await
         .expect("the app's service verifies it");
     assert_eq!(claims.sub, "ada");
     assert!(
-        claims.exp.abs_diff(jwt.expiry()) <= 1,
-        "the claims carry the expiry the service stamps",
+        claims.exp.abs_diff(now() + jwt.ttl_secs()) <= 1,
+        "the token carries the expiry the service stamps",
     );
 }
 
@@ -61,10 +72,7 @@ async fn an_app_that_only_verifies_signs_no_bearer() {
         .build()
         .await
         .expect("the app boots verifying only");
-    let _ = app.bearer(|exp| Claims {
-        sub: "ada".into(),
-        exp,
-    });
+    let _ = app.bearer(&Claims { sub: "ada".into() });
 }
 
 /// The public half of an Ed25519 pair, with no private key beside it.

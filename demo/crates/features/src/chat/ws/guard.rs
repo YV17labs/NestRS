@@ -47,7 +47,6 @@ mod tests {
             org_id: Uuid::now_v7(),
             roles: Vec::new(),
             scopes: Vec::new(),
-            exp: 0,
         };
         ModerationGuard::decide(&caller)
     }

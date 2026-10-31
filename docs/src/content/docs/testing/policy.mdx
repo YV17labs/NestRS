@@ -42,7 +42,6 @@ fn ability_scoped(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>) -> Abilit
         org_id,
         roles,
         scopes: scopes.clone(),
-        exp: 0,
     };
     let mut b = AbilityBuilder::new().with_granted_scopes(Some(scopes.into()));
     AuthzAbility.define(&claims, &mut b);

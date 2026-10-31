@@ -76,7 +76,8 @@ impl fmt::Display for Subject {
 
 /// The JWT payload this app verifies. Every field is read from the token, so
 /// whatever mints those tokens has to put them there; a token without a `sub`
-/// is refused.
+/// is refused. `exp` is the signer's: `JwtService` stamps it, and the verifier
+/// refuses a token past it.
 // `PrincipalIdentity` makes the claims the principal: the authentication guard
 // puts `sub` on the request span as `actor_id`, so every downstream event —
 // denials included — is attributable, and attaches the claims for the rest of
@@ -88,7 +89,6 @@ pub struct Claims {
     #[principal(actor)]
     pub sub: Subject,
     pub roles: Vec<Role>,
-    pub exp: u64,
 }
 
 impl Claims {
@@ -188,7 +188,6 @@ impl DevTokenController {
         let claims = Claims {
             sub: Subject::User(sub.unwrap_or_else(Uuid::now_v7)),
             roles: if roles.is_empty() { vec![Role::User] } else { roles },
-            exp: self.jwt.expiry(),
         };
         let access_token = self.jwt.sign(&claims).opaque()?;
         Ok(Json(DevTokenResponseDto {

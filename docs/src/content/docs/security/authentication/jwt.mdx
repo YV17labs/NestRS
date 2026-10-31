@@ -84,8 +84,8 @@ with `WWW-Authenticate: Bearer`.
 
 The framework's `JwtStrategy<C>` is generic. `C` is any
 `DeserializeOwned + PrincipalIdentity + AmbientValue + Clone` type — usually a
-struct with the standard `sub`, `exp`, plus whatever your app needs, which
-derives the two traits:
+struct with the standard `sub` plus whatever your app needs, which derives the
+two traits. `exp` is the signer's, so the struct needs no field for it:
 
 ```rust title="crates/features/src/authn/claims.rs"
 use nest_rs::authn::PrincipalIdentity;
@@ -107,7 +107,6 @@ pub struct Claims {
     #[principal(tenant)]
     pub org_id: Uuid,
     pub roles: Vec<Role>,
-    pub exp: u64,
 }
 ```
 
@@ -135,9 +134,11 @@ id, or the client's own when it acts on its own behalf (the
 refused before any route, and `actor_id` always returns it — which is what an
 [MCP session](/mcp/configuration/#a-session-belongs-to-the-principal-that-opened-it)
 binds to. `Subject` keeps the two kinds apart: one string on the wire, read
-back by its shape, a UUID being a user. Whatever registers your clients
-therefore refuses a client id a UUID parses, so no client passes for a user
-(RFC 9068 §5). A route writing a user's row reads `claims.sub.user_id()`, which
+back by its shape, a UUID being a user. The registry of your clients therefore
+refuses a client id a UUID parses, so no client passes for a user (RFC 9068
+§5): with `nest_rs::oauth::server`, a module-init hook of yours over
+`OAuthServerConfig`, since the scheme reading a subject is yours
+([OAuth 2.0](/security/authentication/oauth2/#the-registry-is-the-frameworks-the-policy-yours)). A route writing a user's row reads `claims.sub.user_id()`, which
 a client answers with `None`. `nestrs g auth` writes the enum, its conversions
 and the struct with its derive.
 
@@ -161,23 +162,25 @@ let claims = Claims {
     sub: Subject::User(user.id),
     org_id: user.org_id,
     roles: user.roles.clone(),
-    exp: self.jwt.expiry(),
 };
 let token = self.jwt.sign(&claims)?;
 ```
 
 `sign` is `Result<String, AuthError>` — on a verify-only service
 (EdDSA with no private key), it returns `AuthError::Failed { .. }`.
-`expiry()` returns `now + ttl` from `JwtOptions::expires_in`
-(default one hour); `ttl_secs()` exposes the duration directly so the
-issuer can return it alongside the token.
+`ttl_secs()` is the token's lifetime, `JwtOptions::expires_in` (default one
+hour), so the issuer can return it alongside the token.
 
 [RFC 9068 §2.2](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2)
 lists the claims every JWT access token carries, and `sign` writes the ones
-only the signer knows: `iat`, the time it signs; `jti`, an identifier no other
-token shares; and the `aud` and `iss` you configured. Your claims name the
-rest — `sub`, `exp`, and the `client_id` of the OAuth client the token is
-issued to — and a claim they already carry is kept as written.
+only the signer knows: `iat`, the time it signs; `exp`, its lifetime after
+that; `jti`, an identifier no other token shares; and the `aud` and `iss` you
+configured. Your claims name the rest — `sub`, and the `client_id` of the
+OAuth client the token is issued to — and a claim they already carry is kept
+as written: an `exp` of their own outlives or undercuts the signer's.
+`sign_handshake`, for a flow's short-lived token, stamps the same but `exp`:
+its claims name their lifetime with `expiry_in(secs)`, and claims naming none
+are refused rather than given the access token's.
 
 `sign` mints a token for this app itself: its `aud` is this app's own
 audience, the one its verifier requires. An issuer minting a token another app

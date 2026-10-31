@@ -34,6 +34,11 @@ fn service(label: &str) -> JwtService {
     JwtService::new(JwtOptions::new(secret)).expect("HMAC service")
 }
 
+/// An `exp` an hour from now, for claims naming their own.
+fn in_an_hour() -> u64 {
+    get_current_timestamp() + 3600
+}
+
 fn claims(exp: u64, nbf: Option<u64>) -> TestClaims {
     TestClaims {
         sub: "alice".into(),
@@ -114,7 +119,7 @@ fn an_algorithm_that_does_not_fit_the_key_is_refused_at_construction() {
 #[tokio::test]
 async fn sign_and_verify_round_trip() {
     let jwt = service("round-trip-secret");
-    let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
+    let token = jwt.sign(&claims(in_an_hour(), None)).expect("sign");
     let decoded: TestClaims = jwt.verify(&token).await.expect("verify");
     assert_eq!(decoded.sub, "alice");
 }
@@ -147,7 +152,7 @@ async fn not_yet_valid_token_is_rejected() {
 async fn invalid_signature_is_rejected() {
     let issuer = service("issuer-secret");
     let verifier = service("other-secret");
-    let token = issuer.sign(&claims(issuer.expiry(), None)).expect("sign");
+    let token = issuer.sign(&claims(in_an_hour(), None)).expect("sign");
     assert!(matches!(
         verifier.verify::<TestClaims>(&token).await,
         Err(AuthError::InvalidSignature)
@@ -159,7 +164,7 @@ fn verify_only_service_cannot_sign() {
     let jwt =
         JwtService::new(JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY)).expect("verify-only");
     assert!(matches!(
-        jwt.sign(&claims(jwt.expiry(), None)),
+        jwt.sign(&claims(in_an_hour(), None)),
         Err(AuthError::Failed { .. })
     ));
 }
@@ -177,12 +182,12 @@ async fn audience_must_match_when_configured() {
     let mut options = JwtOptions::new("aud-secret-padded-to-thirty-two-bytes");
     options.audience = Some("api".into());
     let jwt = JwtService::new(options).expect("service");
-    let mut ok = claims(jwt.expiry(), None);
+    let mut ok = claims(in_an_hour(), None);
     ok.aud = Some("api".into());
     let token = jwt.sign(&ok).expect("sign");
     assert!(jwt.verify::<TestClaims>(&token).await.is_ok());
 
-    let mut bad = claims(jwt.expiry(), None);
+    let mut bad = claims(in_an_hour(), None);
     bad.aud = Some("other".into());
     let token = jwt.sign(&bad).expect("sign");
     assert!(matches!(
@@ -200,7 +205,7 @@ async fn audience_omitted_is_rejected_when_configured() {
     let jwt = JwtService::new(options).expect("service");
 
     // Forged with the raw encoder by another holder of the shared key.
-    let omitted = claims(jwt.expiry(), None);
+    let omitted = claims(in_an_hour(), None);
     assert!(omitted.aud.is_none());
     let forged = jsonwebtoken::encode(
         &at_jwt_header(Algorithm::HS256),
@@ -214,12 +219,12 @@ async fn audience_omitted_is_rejected_when_configured() {
     ));
 
     // The signer stamps the configured audience onto claims that leave `aud` unset.
-    let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
+    let token = jwt.sign(&claims(in_an_hour(), None)).expect("sign");
     let round_tripped: TestClaims = jwt.verify(&token).await.expect("stamped aud verifies");
     assert_eq!(round_tripped.aud.as_deref(), Some("api"));
 
     // An explicit audience in the claims is never overwritten.
-    let mut present = claims(jwt.expiry(), None);
+    let mut present = claims(in_an_hour(), None);
     present.aud = Some("api".into());
     let token = jwt.sign(&present).expect("sign");
     assert!(jwt.verify::<TestClaims>(&token).await.is_ok());
@@ -242,7 +247,7 @@ async fn a_configured_issuer_is_stamped_and_required() {
 
     let minted = IssClaims {
         sub: "alice".into(),
-        exp: jwt.expiry(),
+        exp: in_an_hour(),
         iss: None,
     };
     let token = jwt.sign(&minted).expect("sign");
@@ -267,7 +272,7 @@ async fn invalid_algorithm_is_rejected() {
     let jwt = service("alg-secret");
     let header = at_jwt_header(Algorithm::HS384);
     let key = EncodingKey::from_secret(b"alg-secret");
-    let token = jsonwebtoken::encode(&header, &claims(jwt.expiry(), None), &key)
+    let token = jsonwebtoken::encode(&header, &claims(in_an_hour(), None), &key)
         .expect("encode with mismatched alg");
     assert!(matches!(
         jwt.verify::<TestClaims>(&token).await,
@@ -300,7 +305,7 @@ async fn eddsa_sign_and_verify_round_trip() {
         crate::DEV_PUBLIC_KEY,
     ))
     .expect("EdDSA service");
-    let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
+    let token = jwt.sign(&claims(in_an_hour(), None)).expect("sign");
     let decoded: TestClaims = jwt.verify(&token).await.expect("verify");
     assert_eq!(decoded.sub, "alice");
 }
@@ -364,7 +369,7 @@ async fn an_audience_less_token_still_verifies_when_no_audience_is_configured() 
     // §4.1.3 fires only when the claim is present: no audience configured and
     // none stamped verifies.
     let jwt = service("no-aud-anywhere-secret");
-    let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
+    let token = jwt.sign(&claims(in_an_hour(), None)).expect("sign");
     let decoded: TestClaims = jwt.verify(&token).await.expect("verify");
     assert!(decoded.aud.is_none());
 }
@@ -442,7 +447,7 @@ fn a_minted_token_carries_the_rfc9068_media_type() {
 #[tokio::test]
 async fn a_minted_token_carries_its_issue_time_and_an_identifier_of_its_own() {
     let jwt = service("iat-jti-secret");
-    let mint = || jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
+    let mint = || jwt.sign(&claims(in_an_hour(), None)).expect("sign");
     let before = get_current_timestamp();
     let first: serde_json::Value = jwt.verify(&mint()).await.expect("verify");
     let second: serde_json::Value = jwt.verify(&mint()).await.expect("verify");
@@ -463,7 +468,7 @@ async fn a_minted_token_carries_its_issue_time_and_an_identifier_of_its_own() {
     }
     let own = OwnClaims {
         sub: "alice",
-        exp: jwt.expiry(),
+        exp: in_an_hour(),
         iat: 7,
         jti: "chosen-by-the-issuer",
     };
@@ -482,7 +487,7 @@ async fn a_minted_token_carries_its_issue_time_and_an_identifier_of_its_own() {
     }
     let null = NullClaims {
         sub: "alice",
-        exp: jwt.expiry(),
+        exp: in_an_hour(),
         jti: None,
     };
     let filled: serde_json::Value = jwt
@@ -493,6 +498,104 @@ async fn a_minted_token_carries_its_issue_time_and_an_identifier_of_its_own() {
         filled["jti"].as_str().is_some_and(|id| !id.is_empty()),
         "a claim serialized as null is no claim: {filled}"
     );
+}
+
+/// RFC 9068 §2.2 requires `exp`, and the signer alone knows the lifetime it
+/// grants: claims leaving `exp` out, or serializing it as `null`, expire
+/// `expires_in` after the token's `iat` — through either signing path — and
+/// claims naming their own keep it.
+#[tokio::test]
+async fn a_minted_token_expires_its_signer_s_lifetime_after_it_was_issued() {
+    let mut options = JwtOptions::new("exp-stamp-secret-padded-to-32-bytes");
+    options.expires_in = Duration::from_secs(900);
+    let jwt = JwtService::new(options).expect("service");
+
+    #[derive(Serialize)]
+    struct Anonymous {
+        sub: &'static str,
+    }
+    #[derive(Serialize)]
+    struct NullExpiry {
+        sub: &'static str,
+        exp: Option<u64>,
+    }
+    for token in [
+        jwt.sign(&Anonymous { sub: "alice" }).expect("sign"),
+        jwt.sign_for("https://api.example", &Anonymous { sub: "alice" })
+            .expect("sign for a resource"),
+        jwt.sign(&NullExpiry {
+            sub: "alice",
+            exp: None,
+        })
+        .expect("sign"),
+    ] {
+        let minted = payload(&token);
+        let issued = minted["iat"].as_u64().expect("`iat` is a NumericDate");
+        assert_eq!(minted["exp"].as_u64(), Some(issued + 900), "{minted}");
+    }
+
+    let own = claims(get_current_timestamp() + 60, None);
+    let kept: TestClaims = jwt
+        .verify(&jwt.sign(&own).expect("sign"))
+        .await
+        .expect("verify");
+    assert_eq!(
+        kept.exp, own.exp,
+        "a claims type's own `exp` is never overwritten"
+    );
+}
+
+/// A handshake lives the time its flow names, never the access-token
+/// lifetime: claims leaving `exp` out, or serializing it as `null`, are
+/// refused naming `expiry_in`, and claims naming it keep it.
+#[test]
+fn a_handshake_naming_no_exp_is_refused_rather_than_given_the_access_token_lifetime() {
+    let jwt = service("handshake-exp");
+
+    #[derive(Serialize)]
+    struct Transaction {
+        csrf: &'static str,
+        exp: Option<u64>,
+    }
+    for claims in [
+        serde_json::json!({ "csrf": "state" }),
+        serde_json::to_value(Transaction {
+            csrf: "state",
+            exp: None,
+        })
+        .expect("serialize"),
+    ] {
+        let refused = jwt
+            .sign_handshake("oauth-tx", &claims)
+            .expect_err("a handshake carrying no `exp` is refused");
+        assert!(
+            matches!(refused, AuthError::Failed { .. })
+                && nest_rs_core::error_message(&refused).contains("expiry_in"),
+            "{refused:?}"
+        );
+    }
+
+    let ten_minutes = jwt.expiry_in(600);
+    let token = jwt
+        .sign_handshake(
+            "oauth-tx",
+            &Transaction {
+                csrf: "state",
+                exp: Some(ten_minutes),
+            },
+        )
+        .expect("a handshake naming its lifetime signs");
+    let back: serde_json::Value = jwt
+        .verify_handshake("oauth-tx", &token)
+        .expect("and verifies");
+    assert_eq!(back["exp"].as_u64(), Some(ten_minutes), "{back}");
+}
+
+/// The claims `token` carries, read without verifying it.
+fn payload(token: &str) -> serde_json::Value {
+    let encoded = token.split('.').nth(1).expect("a compact JWS");
+    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).expect("base64url"))
+        .expect("a JSON payload")
 }
 
 /// RFC 9068 §4: the resource server "MUST verify that the `typ` header value is
@@ -604,7 +707,6 @@ fn a_lifetime_or_a_leeway_built_in_code_outside_its_range_is_refused_at_construc
 fn an_expiry_past_the_end_of_time_saturates() {
     let jwt = service("saturate");
     assert_eq!(jwt.expiry_in(u64::MAX), u64::MAX);
-    assert!(jwt.expiry() > get_current_timestamp());
 }
 
 /// RFC 8707 §2: a token minted for a resource names that resource as its
@@ -623,7 +725,7 @@ async fn a_token_signed_for_a_resource_names_it_and_verifies_only_there() {
     let assistant = with_audience("https://assistant.example");
 
     let token = issuer
-        .sign_for("https://api.example", &claims(issuer.expiry(), None))
+        .sign_for("https://api.example", &claims(in_an_hour(), None))
         .expect("sign for the api");
 
     let decoded: TestClaims = api.verify(&token).await.expect("the api accepts it");
@@ -646,7 +748,7 @@ fn signing_for_a_resource_refuses_a_blank_one_and_claims_naming_another() {
     let jwt = service("resource-refusals");
     for blank in ["", "  "] {
         let Err(refused @ AuthError::Failed { .. }) =
-            jwt.sign_for(blank, &claims(jwt.expiry(), None))
+            jwt.sign_for(blank, &claims(in_an_hour(), None))
         else {
             panic!("a blank resource must be refused");
         };
@@ -656,7 +758,7 @@ fn signing_for_a_resource_refuses_a_blank_one_and_claims_naming_another() {
         );
     }
 
-    let mut naming_another = claims(jwt.expiry(), None);
+    let mut naming_another = claims(in_an_hour(), None);
     naming_another.aud = Some("https://billing.example".into());
     let Err(refused @ AuthError::Failed { .. }) =
         jwt.sign_for("https://api.example", &naming_another)
@@ -682,7 +784,7 @@ async fn a_token_signed_for_a_resource_carries_the_signers_stamps() {
     let api = JwtService::new(options).expect("api");
 
     let token = issuer
-        .sign_for("https://api.example", &claims(issuer.expiry(), None))
+        .sign_for("https://api.example", &claims(in_an_hour(), None))
         .expect("sign");
     let stamped: serde_json::Value = api.verify(&token).await.expect("verify");
     assert_eq!(stamped["iss"], "https://auth.example");

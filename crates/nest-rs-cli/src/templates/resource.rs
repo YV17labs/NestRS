@@ -184,10 +184,9 @@ use crate::boot;
 #[tokio::test]
 async fn {{snake}}_round_trip() {
     let app = boot().await;
-    let bearer = app.bearer(|exp| Claims {
+    let bearer = app.bearer(&Claims {
         sub: Subject::User(Uuid::now_v7()),
         roles: vec![Role::User],
-        exp,
     });
 
     let created = app

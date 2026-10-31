@@ -87,7 +87,6 @@ impl SignInService {
                 org_id,
                 roles,
                 scopes: constants::all(),
-                exp: self.jwt_svc.expiry(),
             },
         )
     }
@@ -225,7 +224,6 @@ pub(crate) fn grant_client_credentials_with_jwt(
             org_id: client.payload.org_id,
             roles: client.payload.roles.clone(),
             scopes,
-            exp: jwt_svc.expiry(),
         },
     )
 }
@@ -263,14 +261,13 @@ mod tests {
         JwtService::new(opts).expect("verifier")
     }
 
-    fn user_claims(jwt_svc: &JwtService, roles: Vec<Role>, scopes: Vec<String>) -> Claims {
+    fn user_claims(roles: Vec<Role>, scopes: Vec<String>) -> Claims {
         Claims {
             sub: Subject::User(Uuid::now_v7()),
             client_id: None,
             org_id: Uuid::now_v7(),
             roles,
             scopes,
-            exp: jwt_svc.expiry(),
         }
     }
 
@@ -283,7 +280,7 @@ mod tests {
     #[test]
     fn issue_returns_a_bearer_token_envelope_with_the_jwt_ttl() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(900));
-        let claims = user_claims(&jwt_svc, vec![Role::User], constants::all());
+        let claims = user_claims(vec![Role::User], constants::all());
         let token = issue_with_jwt(&jwt_svc, RESOURCE, claims).expect("issue");
 
         assert_eq!(token.token_type, "Bearer");
@@ -294,7 +291,7 @@ mod tests {
     #[tokio::test]
     async fn issue_round_trips_user_subject_through_verify() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
-        let issued = user_claims(&jwt_svc, vec![Role::Admin], constants::all());
+        let issued = user_claims(vec![Role::Admin], constants::all());
         let token = issue_with_jwt(&jwt_svc, RESOURCE, issued.clone()).expect("issue");
 
         let claims: Claims = verifier(RESOURCE)
@@ -310,7 +307,7 @@ mod tests {
     #[tokio::test]
     async fn the_token_and_its_response_carry_the_scopes_granted() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
-        let issued = user_claims(&jwt_svc, vec![Role::User], vec![POSTS_READ.to_owned()]);
+        let issued = user_claims(vec![Role::User], vec![POSTS_READ.to_owned()]);
         let token = issue_with_jwt(&jwt_svc, RESOURCE, issued).expect("issue");
 
         let claims: Claims = verifier(RESOURCE)
@@ -325,7 +322,7 @@ mod tests {
     fn issue_surfaces_signing_failure_as_server_error() {
         let verify_only_svc = JwtService::new(JwtOptions::eddsa_verify(test_ed25519_public_pem()))
             .expect("verify-only jwt");
-        let claims = user_claims(&verify_only_svc, vec![Role::User], constants::all());
+        let claims = user_claims(vec![Role::User], constants::all());
         let err = issue_with_jwt(&verify_only_svc, RESOURCE, claims)
             .expect_err("sign without key ⇒ Sign(_)");
         assert!(matches!(err, TokenError::Sign(_)));

@@ -208,15 +208,37 @@ pub(crate) fn refuse_config_file(
 
 /// One `warn` per variable the process sets under `<PREFIX>_OPENTELEMETRY__`, a
 /// namespace nothing reads since the specification's `OTEL_*` replaced it,
-/// said once the subscriber can hear it.
+/// said once the subscriber can hear it, naming the variable that replaced it.
 pub(crate) fn say_retired_variables() {
     for variable in retired_variables() {
         tracing::warn!(
             target: crate::TARGET,
             variable = variable.as_str(),
-            "variable read by nothing: OpenTelemetry reads the OpenTelemetry specification's \
-             OTEL_* variables",
+            read_as = read_as(&variable),
+            "{}",
+            nest_rs_core::RETIRED_VARIABLE,
         );
+    }
+}
+
+/// The specification's variable that reads what `variable`, under the retired
+/// namespace, set — its whole family where 6.x had no such key.
+fn read_as(variable: &str) -> &'static str {
+    let key = variable
+        .strip_prefix(&nest_rs_config::var_name("opentelemetry", ""))
+        .unwrap_or(variable);
+    match key.strip_suffix("_FILE").unwrap_or(key) {
+        "SERVICE_NAME" => "OTEL_SERVICE_NAME",
+        "SERVICE_VERSION" | "SERVICE_ENVIRONMENT" | "SERVICE_INSTANCE_ID" => {
+            "OTEL_RESOURCE_ATTRIBUTES"
+        }
+        "OTLP_ENDPOINT" => "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "SAMPLE_RATIO" => "OTEL_TRACES_SAMPLER_ARG",
+        "METRIC_INTERVAL_SECS" => "OTEL_METRIC_EXPORT_INTERVAL",
+        "TLS_CA_CERT" => "OTEL_EXPORTER_OTLP_CERTIFICATE",
+        "TLS_CERT" => "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
+        "TLS_KEY" => "OTEL_EXPORTER_OTLP_CLIENT_KEY",
+        _ => "OTEL_*",
     }
 }
 
@@ -273,6 +295,25 @@ mod tests {
             );
             Ok(())
         });
+    }
+
+    /// Each retired key names the specification's variable that reads what it
+    /// set; one 7.0 never read names the namespace's successor whole.
+    #[test]
+    fn a_retired_key_names_the_specifications_variable_it_became() {
+        for (key, expected) in [
+            ("SERVICE_NAME", "OTEL_SERVICE_NAME"),
+            ("SERVICE_VERSION", "OTEL_RESOURCE_ATTRIBUTES"),
+            ("OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"),
+            ("SAMPLE_RATIO", "OTEL_TRACES_SAMPLER_ARG"),
+            ("METRIC_INTERVAL_SECS", "OTEL_METRIC_EXPORT_INTERVAL"),
+            ("TLS_CA_CERT_FILE", "OTEL_EXPORTER_OTLP_CERTIFICATE"),
+            ("TLS_KEY", "OTEL_EXPORTER_OTLP_CLIENT_KEY"),
+            ("NEVER_A_KEY", "OTEL_*"),
+        ] {
+            let variable = nest_rs_config::var_name("opentelemetry", key);
+            assert_eq!(read_as(&variable), expected, "{key}");
+        }
     }
 
     #[test]

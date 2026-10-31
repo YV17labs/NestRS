@@ -83,7 +83,7 @@ default.
 
 `<PREFIX>_LOG`, the filter's second name before 7.0, is read by nothing: set —
 by a `.env` file or the deployment — it is said once at `warn` on
-`nest_rs::app` (`variable read by nothing: the console's filter is RUST_LOG`),
+`nest_rs::app` (`variable read by nothing since 7.0`, naming `RUST_LOG` as `read_as`),
 and the filter is `RUST_LOG`'s. A real `RUST_LOG` in the shell outranks one a
 committed `.env` writes, as every real variable outranks the files.
 
@@ -380,7 +380,8 @@ default in place and nothing said so. The boot now does, once per variable, at
 
 | Message | When | Fields |
 |---|---|---|
-| `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough, or the one key it names once renamed (`HSTS` for `SECURITY_HEADERS_HSTS`, `CORS_EXPOSED` for `CORS_EXPOSED_HEADERS`) |
+| `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough, or the one key it names once renamed (`HSTS` for `SECURITY_HEADERS_HSTS`) |
+| `variable read by nothing since 7.0` | the key is one 7.0 retired, which the crate that retired it declares (`<PREFIX>_HTTP__CORS_EXPOSED`, `CORS_MAX_AGE`, the bare `SECURITY_HEADERS`) — the words OpenTelemetry's retired namespace and the console's `<PREFIX>_LOG` are said in too | `variable`, `namespace`, and `read_as` — the key it became |
 | `config variable from the .env cascade shadowed by a config pinned in code; export it into the real environment, or set it in the pin` | a `.env` file sets a key a config reads, but the app pinned that config in code (`Module::for_root(cfg)`), which cuts its whole namespace off the cascade | `variable`, `namespace`, and `pinned_by` — the import that pinned it, `` `HttpModule::for_root(..)` at `imports[4]` of `ApiModule` `` |
 | `config variable under a misspelled namespace` | the variable's namespace is a near miss of one this binary read — other separators (`<PREFIX>_OAUTH_RESOURCE__RESOURCE` for `oauth__resource`, `<PREFIX>_SEAORM_URL` for `seaorm`), another case, the prefix's included, since the loader folds none (`<PREFIX>_Seaorm__URL`, `nestrs_seaorm__url`), or one misspelled segment of six letters or more, a family member's included (`<PREFIX>_SEAROM__URL`, `<PREFIX>_OAUTH__RESOURSE__RESOURCE`) — **and its key is one that namespace reads**, or one edit from one | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
 

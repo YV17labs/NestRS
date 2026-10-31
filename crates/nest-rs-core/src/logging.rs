@@ -137,7 +137,9 @@ pub(crate) fn say_retired_filter() {
         tracing::warn!(
             target: crate::target::APP,
             variable = variable.as_str(),
-            "variable read by nothing: the console's filter is RUST_LOG",
+            read_as = "RUST_LOG",
+            "{}",
+            crate::RETIRED_VARIABLE,
         );
     }
 }

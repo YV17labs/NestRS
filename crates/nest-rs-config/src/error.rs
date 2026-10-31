@@ -66,6 +66,20 @@ pub enum ConfigError {
         /// The stem its refusals name, the field's key under the namespace.
         named: String,
     },
+    /// A variable 7.0 retired, set: read by nothing, it is refused where losing
+    /// what it set in silence would open what it closed — a security header
+    /// left unsent. The key is refused, never its value, in the words every
+    /// retired variable is said with at `warn` (`nest_rs_core::RETIRED_VARIABLE`).
+    #[error("{var} is read by nothing since 7.0 — set {read_as}: {why}")]
+    Retired {
+        /// The retired variable as the deployment set it — `<KEY>` or
+        /// `<KEY>_FILE`.
+        var: String,
+        /// The variable that reads what it set now.
+        read_as: String,
+        /// What setting it alone would lose — never quoting its value.
+        why: &'static str,
+    },
     /// A loaded config failed `validator::Validate`.
     ///
     /// Renders the namespace's variables and one line per offending field —
@@ -361,6 +375,27 @@ mod tests {
     use validator::Validate;
 
     use super::*;
+
+    /// A retired key is refused as a key, never as a value: the sentence opens
+    /// with the variable, says since when nothing reads it, and names the one
+    /// that does.
+    #[test]
+    fn a_retired_key_says_it_is_retired_and_names_the_key_it_became() {
+        let refused = ConfigError::Retired {
+            var: crate::var_name("fixture", "FRAME_OPTIONS"),
+            read_as: crate::var_name("fixture", "SECURITY_HEADERS_FRAME_OPTIONS"),
+            why: "the header it set would not be sent as set",
+        };
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "{} is read by nothing since 7.0 — set {}: the header it set would not be sent \
+                 as set",
+                crate::var_name("fixture", "FRAME_OPTIONS"),
+                crate::var_name("fixture", "SECURITY_HEADERS_FRAME_OPTIONS"),
+            ),
+        );
+    }
 
     #[derive(Validate)]
     struct Issuer {

@@ -574,14 +574,31 @@ const RETIRED_HEADER_KEYS: [&str; 9] = [
 fn refuse_retired_header_keys(env: &ConfigService) -> Result<()> {
     for retired in RETIRED_HEADER_KEYS {
         if let Some(setting) = env.setting(retired)? {
-            return Err(setting.refuse(format_args!(
-                "is the 6.x key of a security header, read by nothing since 7.0, so the header \
-                 it set would not be sent as set — set {} instead",
-                env.var_name(&format!("SECURITY_HEADERS_{retired}"))
-            )));
+            return Err(nest_rs_config::ConfigError::Retired {
+                var: setting.var().to_owned(),
+                read_as: env.var_name(&format!("SECURITY_HEADERS_{retired}")),
+                why: "it was a security header's 6.x key, and the header it set would not be \
+                      sent as set",
+            });
         }
     }
     Ok(())
+}
+
+// The vocabularies' other 6.x keys: losing one leaves a policy more closed
+// than the one set, so the report says it at `warn`.
+nest_rs_core::inventory::submit! {
+    nest_rs_config::__private::RetiredKey::new("http", "CORS_EXPOSED", "CORS_EXPOSED_HEADERS")
+}
+nest_rs_core::inventory::submit! {
+    nest_rs_config::__private::RetiredKey::new("http", "CORS_MAX_AGE", "CORS_MAX_AGE_SECS")
+}
+nest_rs_core::inventory::submit! {
+    nest_rs_config::__private::RetiredKey::new(
+        "http",
+        "SECURITY_HEADERS",
+        "SECURITY_HEADERS_ENABLED",
+    )
 }
 
 /// The global prefix, trimmed; blank is none.
@@ -793,19 +810,17 @@ mod tests {
                 &ConfigService::with_vars("http", [(retired, SECRET)]),
                 HttpConfig::default(),
             )
-            .expect_err("a retired key is refused")
-            .to_string();
+            .expect_err("a retired key is refused");
+            assert!(
+                matches!(&refused, nest_rs_config::ConfigError::Retired { .. }),
+                "a key is refused, never its value: {refused:?}"
+            );
+            let refused = refused.to_string();
             assert!(
                 refused.starts_with(&format!(
-                    "invalid value for {}:",
-                    nest_rs_config::var_name("http", retired)
-                )),
-                "{refused}"
-            );
-            assert!(
-                refused.contains(&nest_rs_config::var_name(
-                    "http",
-                    &format!("SECURITY_HEADERS_{retired}")
+                    "{} is read by nothing since 7.0 — set {}:",
+                    nest_rs_config::var_name("http", retired),
+                    nest_rs_config::var_name("http", &format!("SECURITY_HEADERS_{retired}")),
                 )),
                 "{refused}"
             );
@@ -973,9 +988,9 @@ mod tests {
     }
 
     /// The 6.x spellings of the vocabularies' keys are read by nothing, and
-    /// the boot names each once with the key it became — but the bare
-    /// `SECURITY_HEADERS`, which leads every security header's key, and gets
-    /// none of them.
+    /// the boot says each once as retired, naming the key it became — the
+    /// bare `SECURITY_HEADERS`, which leads every security header's key, the
+    /// switch's.
     #[test]
     fn a_retired_vocabulary_key_is_named_at_boot() {
         let var = |key| nest_rs_config::var_name("http", key);
@@ -986,20 +1001,28 @@ mod tests {
             }
             let logs = nest_rs_testing::LogCapture::install();
             HttpConfig::resolve(None).expect("an unread variable is no refusal");
-            let lines = logs.find(
-                nest_rs_config::TARGET,
-                nest_rs_config::unclaimed::UNREAD_CONFIG_VARIABLE,
-            );
+            let lines = logs.find(nest_rs_config::TARGET, nest_rs_core::RETIRED_VARIABLE);
             let named = |retired| {
                 lines
                     .iter()
                     .find(|line| line.field("variable") == Some(var(retired)))
-                    .unwrap_or_else(|| panic!("{retired} is named: {lines:#?}"))
-                    .field("suggestion")
+                    .unwrap_or_else(|| panic!("{retired} is said retired: {lines:#?}"))
+                    .field("read_as")
             };
             assert_eq!(named("CORS_MAX_AGE"), Some(var("CORS_MAX_AGE_SECS")));
             assert_eq!(named("CORS_EXPOSED"), Some(var("CORS_EXPOSED_HEADERS")));
-            assert_eq!(named("SECURITY_HEADERS"), None);
+            assert_eq!(
+                named("SECURITY_HEADERS"),
+                Some(var("SECURITY_HEADERS_ENABLED"))
+            );
+            assert!(
+                logs.find(
+                    nest_rs_config::TARGET,
+                    nest_rs_config::unclaimed::UNREAD_CONFIG_VARIABLE,
+                )
+                .is_empty(),
+                "a retired key is said once, as retired"
+            );
             Ok(())
         });
     }

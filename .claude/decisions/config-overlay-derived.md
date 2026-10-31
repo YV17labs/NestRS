@@ -107,7 +107,7 @@ Refused:
 Decided by correctness and security, the orchestrator's resumption of the
 identity audit's branch (B-152).
 
-## 2026-10-31 — a bound names only its range, and counts get bounds
+## 2026-10-31 — a bound names only its range; counts get bounds; a retired key says it is retired
 
 The entries above held a duration through bounds "whose key carries the unit
 and is asserted at compile time to be the field's": every bounded field cost a
@@ -130,6 +130,16 @@ reason at each end is a `CountBounds` on a `usize`, which retired three
 hand-written readers (HTTP's connection cap, MCP's session cap, the outbox's
 batch), and a `with = path` reader is handed its `Field`, key and path, for
 the refusal of a value set in code.
+
+The previous entry's "refusing the boot on" a retired key no longer holds
+whole: the nine security-header keys are refused at boot (B-160, security
+first: a header the deployment set would go unsent where a `warn` is all it
+would hear), and the refusal reads as a retirement,
+`ConfigError::Retired` — "<VAR> is read by nothing since 7.0 — set <NEW>:
+<why>" — never "invalid value", the key and not its value being refused. A
+retired key the crate that retired it declares is named by the unread-variable
+report in the same words at `warn`, as are OpenTelemetry's retired namespace
+and the kernel's `<PREFIX>_LOG`; reading one stays refused (an alias).
 
 Refused:
 

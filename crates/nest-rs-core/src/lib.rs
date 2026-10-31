@@ -176,7 +176,7 @@ pub use discoverable::{
 };
 pub use discovery::{Discovered, Discovery};
 pub use env_flag::parse_bool;
-pub use env_prefix::EnvPrefix;
+pub use env_prefix::{EnvPrefix, RETIRED_VARIABLE};
 pub use error::{
     AccessGraphError, BootInterruptedError, BudgetPastNetError, ContainerError,
     ContestedDeclarationError, DecodeError, DuplicateMetaError, DuplicateProviderError,

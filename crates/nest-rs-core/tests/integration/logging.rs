@@ -105,8 +105,9 @@ async fn console_child(role: String) -> anyhow::Result<()> {
 /// A `debug` line a filter at `info` closes.
 const RETIRED_DEBUG: &str = "a line only the retired filter would open";
 
-/// The line the console says a set `<PREFIX>_LOG` with.
-const RETIRED_SAID: &str = "variable read by nothing: the console's filter is RUST_LOG";
+/// The line the console says a set `<PREFIX>_LOG` with: every retired
+/// variable's.
+const RETIRED_SAID: &str = nest_rs_core::RETIRED_VARIABLE;
 
 /// An app booted twice under a set `<PREFIX>_LOG`, filing a `debug` line.
 #[nest_rs_core::main]
@@ -566,4 +567,5 @@ fn a_set_prefixed_log_opens_nothing_and_is_said_once_naming_rust_log() {
         "{}",
         said[0]
     );
+    assert_eq!(said[0]["fields"]["read_as"], RUST_LOG, "{}", said[0]);
 }

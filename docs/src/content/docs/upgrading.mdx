@@ -1273,7 +1273,7 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A `.env` file or a deployment still setting `<PREFIX>_LOG`** filters
   nothing: the console logs at `info`, or at what `RUST_LOG` says, and says
   once at `warn` on `nest_rs::app` that the variable is read by nothing
-  (`variable read by nothing: the console's filter is RUST_LOG`). Rename it
+  (`variable read by nothing since 7.0`, `read_as` naming `RUST_LOG`). Rename it
   `RUST_LOG` (step 3).
 - **`nestrs g migration create_posts` — or `create_post` — after `nestrs g
   resource posts`** writes nothing: ``a migration creates the table `post`
@@ -1285,8 +1285,9 @@ lists what the boot, a log or the wire shows when one is missed.
   written alone.
 - **A deployment still setting `<PREFIX>_OPENTELEMETRY__*`** exports nothing
   through it: `OpenTelemetry::init` names each such variable once at `warn` on
-  `nest_rs::opentelemetry` (`variable read by nothing: OpenTelemetry reads the
-  OpenTelemetry specification's OTEL_* variables`). Set the `OTEL_*` of step 3.
+  `nest_rs::opentelemetry` (`variable read by nothing since 7.0`, `read_as`
+  naming the specification's variable that replaced it). Set the `OTEL_*` of
+  step 3.
   An `OTEL_EXPORTER_OTLP_PROTOCOL` other than `http/protobuf` fails the boot
   naming it.
 - **An `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` or `OTEL_LOGS_EXPORTER`
@@ -1402,20 +1403,20 @@ lists what the boot, a log or the wire shows when one is missed.
   1048576** fails its boot naming the variable — a million idle sessions hold
   over 100 GiB — and so does a cap pinned past it in code.
 - **A deployment still setting `<PREFIX>_HTTP__CORS_MAX_AGE`** sends no
-  `Access-Control-Max-Age`: the boot reports it at `warn` as read by no config
-  (`config variable read by no config`), with `CORS_MAX_AGE_SECS` as the
-  suggestion.
+  `Access-Control-Max-Age`: the boot says it at `warn` as retired (`variable
+  read by nothing since 7.0`), `read_as` naming `CORS_MAX_AGE_SECS`.
 - **A deployment still setting a security header's flat key**
   (`<PREFIX>_HTTP__HSTS`, `<PREFIX>_HTTP__CONTENT_SECURITY_POLICY`, …) fails
-  the boot naming the key it became
-  (`<PREFIX>_HTTP__SECURITY_HEADERS_CONTENT_SECURITY_POLICY`): read by nothing,
+  the boot as retired, naming the key it became —
+  `<PREFIX>_HTTP__CONTENT_SECURITY_POLICY is read by nothing since 7.0 — set
+  <PREFIX>_HTTP__SECURITY_HEADERS_CONTENT_SECURITY_POLICY: …`: read by nothing,
   it would have left the header to its default, and a
   `Content-Security-Policy`, `Permissions-Policy` or
   `Cross-Origin-Embedder-Policy` it set not sent at all. One still setting
   `CORS_EXPOSED` or the bare `SECURITY_HEADERS` has the default in its place —
   the exposed list empty, every default-on header sent, both more closed than
-  what it set — and the boot names each at `warn` as read by no config, with
-  `CORS_EXPOSED_HEADERS` as the suggestion for the first. Move each to its row
+  what it set — and the boot says each at `warn` as retired, `read_as` naming
+  `CORS_EXPOSED_HEADERS` and `SECURITY_HEADERS_ENABLED`. Move each to its row
   in step 3.
 - **`ConfigModule::for_feature` left in an import list** fails to compile; a
   config no provider of an imported module injects is no longer loaded — read

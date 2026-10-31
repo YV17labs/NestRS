@@ -400,13 +400,13 @@ fn a_variable_of_the_retired_namespace_is_said_at_warn() {
     )
     .expect("a retired variable fails no boot");
 
-    let event = logs.expect_one(
-        TARGET,
-        "variable read by nothing: OpenTelemetry reads the OpenTelemetry specification's OTEL_* \
-         variables",
-    );
+    let event = logs.expect_one(TARGET, nest_rs_core::RETIRED_VARIABLE);
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("variable").as_deref(), Some(retired.as_str()));
+    assert_eq!(
+        event.field("read_as").as_deref(),
+        Some("OTEL_EXPORTER_OTLP_ENDPOINT")
+    );
     assert!(!event.quotes("collector:4318"), "{event:?}");
     drop(otel);
 }

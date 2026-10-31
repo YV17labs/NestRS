@@ -297,20 +297,20 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
     build_reading(config, AppIdentity::current(), nest_rs_config::env_var)
 }
 
-/// [`build`], with the binary's identity and the variables read through `read`.
+/// [`build`], with the binary's identity and the variables read through
+/// `as_written`.
 fn build_reading(
     config: &OpenTelemetryConfig,
     binary: Option<&AppIdentity>,
-    read: impl Fn(&str) -> Option<String>,
+    as_written: impl Fn(&str) -> Option<String>,
 ) -> Result<Exporters, OpenTelemetryError> {
-    let raw = read;
-    let read = blank_as_unset(&raw);
+    let read = blank_as_unset(&as_written);
     refuse_config_file(&read)?;
     read_propagators(&read)?;
     let mut passed_over = Vec::new();
     let (sampler, sampler_from_env) = sampler(config, &read, &mut passed_over)?;
     let span_limits = span_limits(&read)?;
-    let resource = build_resource(config, binary, &raw)?;
+    let resource = build_resource(config, binary, &as_written)?;
     let interval = metric_interval(config, &read)?;
     let disabled = sdk_disabled(&read, &mut passed_over);
     let [traces, metrics, logs] = Signal::ALL.map(|signal| route(signal, disabled, config, &read));
@@ -819,26 +819,19 @@ fn refuse_unservable_batch_numbers(
     };
     let as_the_sdk_reads =
         |expected: String| format!("{expected}, its digits alone, as the SDK reads it");
-    if read(processor.delay).is_some_and(|raw| raw.parse::<u64>().is_err()) {
-        return Err(ConfigError::parse(
-            processor.delay,
-            as_the_sdk_reads(format!("{MILLISECONDS} up to {}", u64::MAX)),
-        ));
-    }
+    parsed(
+        processor.delay,
+        read,
+        |raw| raw.parse::<u64>().ok(),
+        || as_the_sdk_reads(format!("{MILLISECONDS} up to {}", u64::MAX)),
+    )?;
     let size = |variable: &'static str| {
-        read(variable)
-            .map(|raw| {
-                raw.parse::<usize>()
-                    .ok()
-                    .filter(|size| *size > 0)
-                    .ok_or_else(|| {
-                        ConfigError::parse(
-                            variable,
-                            as_the_sdk_reads(format!("{SIZE} up to {}", usize::MAX)),
-                        )
-                    })
-            })
-            .transpose()
+        parsed(
+            variable,
+            read,
+            |raw| raw.parse::<usize>().ok().filter(|size| *size > 0),
+            || as_the_sdk_reads(format!("{SIZE} up to {}", usize::MAX)),
+        )
     };
     let queue = size(processor.queue)?.unwrap_or(processor.default_queue);
     if size(processor.batch)?.is_some_and(|batch| batch > queue) {
@@ -1023,19 +1016,21 @@ fn export_timeout(
 /// zero — a zero handed to the client would cut every export before it is
 /// sent. Both at zero leave nothing bounding the export, and every wait the
 /// framework owns is bounded: refused naming both.
-fn export_bound(exporter: Bound, processor: Bound) -> Result<Duration, ConfigError> {
-    [exporter.1, processor.1]
+fn export_bound(
+    (exporter, exporter_length): Bound,
+    (processor, processor_length): Bound,
+) -> Result<Duration, ConfigError> {
+    [exporter_length, processor_length]
         .into_iter()
-        .filter(|bound| !bound.is_zero())
+        .filter(|length| !length.is_zero())
         .min()
         .ok_or_else(|| {
             ConfigError::parse(
-                exporter.0,
+                exporter,
                 format!(
-                    "reads as no limit, as the specification reads a zero, and so does {} — \
-                     nothing would bound an export, and every wait this framework owns is \
-                     bounded: set either to a positive number of milliseconds",
-                    processor.0,
+                    "reads as no limit, as the specification reads a zero, and so does \
+                     {processor} — nothing would bound an export, and every wait this framework \
+                     owns is bounded: set either to a positive number of milliseconds"
                 ),
             )
         })
@@ -1048,16 +1043,25 @@ fn milliseconds(
     variable: &'static str,
     read: &impl Fn(&str) -> Option<String>,
 ) -> Result<Option<Duration>, ConfigError> {
+    parsed(
+        variable,
+        read,
+        |raw| raw.trim().parse().ok().map(Duration::from_millis),
+        || format!("{MILLISECONDS} up to {}", u64::MAX),
+    )
+}
+
+/// `variable` as `parse` reads it, or `None` when unset; a value `parse`
+/// reads as nothing is refused naming the variable and what it must hold,
+/// never quoted.
+fn parsed<T>(
+    variable: &'static str,
+    read: &impl Fn(&str) -> Option<String>,
+    parse: impl FnOnce(&str) -> Option<T>,
+    must: impl FnOnce() -> String,
+) -> Result<Option<T>, ConfigError> {
     read(variable)
-        .map(|raw| {
-            raw.trim()
-                .parse::<u64>()
-                .ok()
-                .map(Duration::from_millis)
-                .ok_or_else(|| {
-                    ConfigError::parse(variable, format!("{MILLISECONDS} up to {}", u64::MAX))
-                })
-        })
+        .map(|raw| parse(&raw).ok_or_else(|| ConfigError::parse(variable, must())))
         .transpose()
 }
 
@@ -1070,13 +1074,12 @@ fn milliseconds(
 /// is refused naming its variable.
 fn span_limits(read: &impl Fn(&str) -> Option<String>) -> Result<SpanLimits, ConfigError> {
     let count = |variable: &'static str| {
-        read(variable)
-            .map(|raw| {
-                raw.trim().parse::<u32>().ok().ok_or_else(|| {
-                    ConfigError::parse(variable, format!("{COUNT} up to {}", u32::MAX))
-                })
-            })
-            .transpose()
+        parsed(
+            variable,
+            read,
+            |raw| raw.trim().parse::<u32>().ok(),
+            || format!("{COUNT} up to {}", u32::MAX),
+        )
     };
     let general = count(OTEL_ATTRIBUTE_COUNT_LIMIT)?;
     let defaults = SpanLimits::default();

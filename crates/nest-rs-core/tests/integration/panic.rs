@@ -126,10 +126,7 @@ fn a_panic_no_unit_contains_is_one_redacted_error_on_the_app_target() {
                 EnvPrefix::var(nest_rs_core::logging::var::FORMAT),
                 "json".to_owned(),
             ),
-            (
-                EnvPrefix::var(nest_rs_core::logging::var::FILTER),
-                "info".to_owned(),
-            ),
+            ("RUST_LOG".to_owned(), "info".to_owned()),
         ],
     );
 
@@ -178,10 +175,7 @@ fn a_panic_inside_the_subscriber_s_own_dispatch_is_one_line_on_stderr() {
                 EnvPrefix::var(nest_rs_core::logging::var::FORMAT),
                 "json".to_owned(),
             ),
-            (
-                EnvPrefix::var(nest_rs_core::logging::var::FILTER),
-                "info".to_owned(),
-            ),
+            ("RUST_LOG".to_owned(), "info".to_owned()),
         ],
     );
 

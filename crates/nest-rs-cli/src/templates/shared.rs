@@ -190,8 +190,9 @@ pub(crate) const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-o
 # Committed; layered on top of `.env`, below `.env.local` and the real environment.
 
 # Verbose logs, each line naming where it was emitted. The console already
-# writes text under this profile, JSON under any other.
-{{env_prefix}}_LOG=debug
+# writes text under this profile, JSON under any other. The filter is the
+# ecosystem's RUST_LOG, which a real one in your shell outranks.
+RUST_LOG=debug
 {{env_prefix}}_LOG_SOURCE_LOCATION=true
 "#;
 

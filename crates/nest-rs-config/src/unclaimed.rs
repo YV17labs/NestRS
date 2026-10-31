@@ -238,17 +238,17 @@ impl Ledger {
 
 /// The framework's variables no config reads, named by the constants that
 /// declare them: the prefix's bootstrap variable, the environment selector and
-/// the kernel's log settings.
+/// the kernel's log settings — its filter being `RUST_LOG`, which no prefix
+/// names.
 ///
 /// Known by declaration because no read makes them known: the kernel reads its
 /// log settings before this crate is reached, and the selector is read to pick
 /// the cascade every later read consults.
-fn framework_wide() -> [String; 5] {
+fn framework_wide() -> [String; 4] {
     use nest_rs_core::logging::var;
     [
         EnvPrefix::VAR.to_owned(),
         crate::Environment::var_name(),
-        EnvPrefix::var(var::FILTER),
         EnvPrefix::var(var::FORMAT),
         EnvPrefix::var(var::SOURCE_LOCATION),
     ]

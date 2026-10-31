@@ -487,7 +487,6 @@ fn framework_wide_variables_are_never_reported() {
         jail.set_env(EnvPrefix::VAR, "");
         let names = [
             EnvPrefix::VAR.to_owned(),
-            EnvPrefix::var(nest_rs_core::logging::var::FILTER),
             EnvPrefix::var(nest_rs_core::logging::var::FORMAT),
             EnvPrefix::var(nest_rs_core::logging::var::SOURCE_LOCATION),
             Environment::var_name(),

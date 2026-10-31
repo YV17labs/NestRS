@@ -3,8 +3,8 @@
 //!
 //! Two shapes sit under it:
 //!
-//! - **framework-wide** — `<PREFIX>_ENV`, `<PREFIX>_LOG*`, built by
-//!   [`EnvPrefix::var`];
+//! - **framework-wide** — `<PREFIX>_ENV`, `<PREFIX>_LOG_FORMAT`,
+//!   `<PREFIX>_LOG_SOURCE_LOCATION`, built by [`EnvPrefix::var`];
 //! - **namespaced config** — `<PREFIX>_<DOMAIN>__<KEY>`, built by
 //!   `nest_rs_config::var_name` on top of the same value.
 //!

@@ -42,7 +42,7 @@ pub fn load_project_env() {
             // the same process, which nextest's process-per-test model rules
             // out.
             //
-            // The write is what `<PREFIX>_LOG` and `OpenTelemetry::init` read
+            // The write is what the console's settings and `OpenTelemetry::init` read
             // through bare `std::env::var`, which is the whole reason a
             // resolution-only cascade is not enough. `load_app_cascade` below does
             // one further `unsafe set_var` per key under its own note — so

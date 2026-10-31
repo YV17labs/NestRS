@@ -68,7 +68,7 @@ reqwest = { workspace = true, features = ["blocking"], optional = true }
 nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 # The collector double serves on a runtime of its own.
 tokio.workspace = true
-# The console's `<PREFIX>_LOG*` and the specification's `OTEL_*` are read off the
+# The console's `RUST_LOG` and `<PREFIX>_LOG_*` and the specification's `OTEL_*` are read off the
 # process env; the tests isolate them with `figment::Jail`, matching how
 # `nest-rs-config` tests its env reads.
 figment = { workspace = true, features = ["test"] }

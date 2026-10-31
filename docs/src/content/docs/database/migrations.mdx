@@ -159,7 +159,7 @@ in a tool of your own works only when the variable is really in the process
 environment; `connect_from_env` works either way.
 
 The binary runs no `App`, so it installs the console an app would have — the
-same filter, format and source location, from `<PREFIX>_LOG`,
+same filter, format and source location, from `RUST_LOG`,
 `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION` — with one line at the
 top of `main`. A tool of your own does the same:
 

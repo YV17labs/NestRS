@@ -22,9 +22,8 @@ use nest_rs_opentelemetry::{OpenTelemetry, OpenTelemetryConfig, OpenTelemetryErr
 
 /// Every variable the console reads, which a test clears so that it reads what
 /// it pinned and set, whatever the shell running it exports.
-fn console_vars() -> [String; 4] {
+fn console_vars() -> [String; 3] {
     [
-        EnvPrefix::var(var::FILTER),
         "RUST_LOG".to_owned(),
         EnvPrefix::var(var::FORMAT),
         EnvPrefix::var(var::SOURCE_LOCATION),

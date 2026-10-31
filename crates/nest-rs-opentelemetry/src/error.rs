@@ -22,8 +22,9 @@ pub enum OpenTelemetryError {
     /// that cannot be read, or TLS material that cannot be used.
     #[error(transparent)]
     Config(#[from] nest_rs_config::ConfigError),
-    /// A console setting does not parse — `<PREFIX>_LOG*`, `RUST_LOG`, or
-    /// `OpenTelemetryConfig::log_filter` set in code — named, never quoted.
+    /// A console setting does not parse — `RUST_LOG`, `<PREFIX>_LOG_FORMAT`,
+    /// `<PREFIX>_LOG_SOURCE_LOCATION`, or `OpenTelemetryConfig::log_filter` set
+    /// in code — named, never quoted.
     #[error(transparent)]
     LogSettings(#[from] nest_rs_core::logging::LogSettingsError),
     /// Building the OTLP exporter pipeline failed (bad endpoint, transport

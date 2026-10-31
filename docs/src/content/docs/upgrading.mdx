@@ -152,6 +152,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION` | `<PREFIX>_GRAPHQL__INTROSPECTION`, its opposite: `DISABLE_INTROSPECTION=false` is `INTROSPECTION=true`. On by default under a declared development or test profile, so a `.env.development` setting it drops the line |
    | `<PREFIX>_OPENAPI__EMIT_DOCUMENT` | `<PREFIX>_OPENAPI__EMIT` — on by default under a declared development profile |
    | `<PREFIX>_OPENAPI__DOCUMENT_PATH` | `<PREFIX>_OPENAPI__EMIT_PATH`, relative to the app crate: `apps/api/openapi.json` becomes `openapi.json`, the default |
+   | `<PREFIX>_LOG`, in a `.env` file or the deployment | `RUST_LOG`, unprefixed: the console's filter is the ecosystem's variable alone, and a real `RUST_LOG` outranks one a committed file writes |
    | `<PREFIX>_OPENTELEMETRY__SERVICE_NAME` | `OTEL_SERVICE_NAME`, unprefixed — or nothing: the service is named after the binary |
    | `<PREFIX>_OPENTELEMETRY__SERVICE_VERSION`, `SERVICE_ENVIRONMENT`, `SERVICE_INSTANCE_ID` | `OTEL_RESOURCE_ATTRIBUTES=service.version=…,deployment.environment.name=…,service.instance.id=…` — the version defaults to the binary's |
    | `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` | `OTEL_EXPORTER_OTLP_ENDPOINT` |
@@ -160,7 +161,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT`, `TLS_CERT`, `TLS_KEY` (or their `_FILE`) | `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, each a path to the PEM file |
 
    OpenTelemetry's are the specification's own, so they take no prefix: no
-   `ACME_` renames `OTEL_*`. Under a prefix of your own, the rest holds with
+   `ACME_` renames `OTEL_*`, nor `RUST_LOG`. Under a prefix of your own, the rest holds with
    `ACME_` for `NESTRS_`. Every
    one of them — every namespaced variable, in fact — can now be given as a file
    instead, through its `_FILE` spelling; see the
@@ -892,6 +893,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `use nest_rs::guards::prelude::*;` | `use nest_rs::core::{Layer, UnitContext, async_trait, injectable};` and `use nest_rs::guards::{Denial, Guard, GuardFor};` — the names the guard uses |
     | `nest_rs::http::{current_request_scope, with_request_scope}` | `nest_rs::core::{current_request_scope, with_request_scope}` |
     | `nest_rs::opentelemetry::LogFormat` | `nest_rs::core::logging::LogFormat`, the one type it re-exported |
+    | `EnvPrefix::var(nest_rs::core::logging::var::FILTER)` | `"RUST_LOG"`: the console's filter is the ecosystem's variable, which no prefix renames |
     | `nest_rs::http::{version_path, versions_declare, join_path, normalize_mount_path, literal_mount_path, declared_versions}` | nothing public: `#[controller]`, `#[gateway]` and the framework's own mounts call them |
     | `nest_rs::ws::{ReplyValue, ReplyOutcome, ErrorReport, HandlerFailed}` and their fallbacks, `nest_rs::ws::target` | nothing public: `#[messages]` emits them; a handler returns its value or its `Result` |
     | `nest_rs::ws::nest_rs_http::…` | `nest_rs::http::…`, which the `ws` feature turns on |
@@ -1108,7 +1110,7 @@ lists what the boot, a log or the wire shows when one is missed.
       `503` at `warn`. See the table in [Logs](/opentelemetry/logs/).
     - **A library's own lines are clamped.** rmcp's, h2's, rustls's,
       tungstenite's, sqlx-postgres's and the OTLP exporter's lines are written
-      only once `<PREFIX>_LOG` names the library (`info,rmcp=info`), and that
+      only once `RUST_LOG` names the library (`info,rmcp=info`), and that
       directive writes what the library quotes; see
       [the libraries the framework wires](/opentelemetry/logs/#the-libraries-the-framework-wires).
     - **Every duration has a range**, checked at boot whether it comes from the
@@ -1232,6 +1234,11 @@ lists what the boot, a log or the wire shows when one is missed.
 
 ## What fails if you get it wrong
 
+- **A `.env` file or a deployment still setting `<PREFIX>_LOG`** filters
+  nothing: the console logs at `info`, or at what `RUST_LOG` says, and says
+  once at `warn` on `nest_rs::app` that the variable is read by nothing
+  (`variable read by nothing: the console's filter is RUST_LOG`). Rename it
+  `RUST_LOG` (step 3).
 - **A deployment still setting `<PREFIX>_OPENTELEMETRY__*`** exports nothing
   through it: `OpenTelemetry::init` names each such variable once at `warn` on
   `nest_rs::opentelemetry` (`variable read by nothing: OpenTelemetry reads the
@@ -1327,7 +1334,7 @@ lists what the boot, a log or the wire shows when one is missed.
   `traces="off (no endpoint)"` on a text console now; JSON is unchanged.
 - **A log setting pinned through `OpenTelemetry::init_with`** — a
   `log_filter`, `log_format` or `log_source_location` in the config it takes —
-  gives way to `<PREFIX>_LOG` (else `RUST_LOG`), `<PREFIX>_LOG_FORMAT` or
+  gives way to `RUST_LOG`, `<PREFIX>_LOG_FORMAT` or
   `<PREFIX>_LOG_SOURCE_LOCATION` where one is set, the `.env` cascade's
   included, where 6.x kept the pin. Leave the variable unset where the pin
   must hold.
@@ -1576,7 +1583,7 @@ lists what the boot, a log or the wire shows when one is missed.
   length``, never the value; code downcasting the boot's error to
   `FactoryFailedError` to read a config failure finds the `ConfigError` itself.
   A log setting that does not parse — `<PREFIX>_LOG_FORMAT=jsno`, a
-  `<PREFIX>_LOG` directive with a wrong level — stops the boot naming the
+  `RUST_LOG` directive with a wrong level — stops the boot naming the
   variable, where 6.x took the default in silence.
 - **A log filter or a dashboard keyed on a unit's boot line** — `mounted route`,
   `mounted operation`, `mounted message`, `mounted mcp host`,

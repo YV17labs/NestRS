@@ -82,6 +82,18 @@ mod tests {
         assert!(!development.contains("_LOG_FORMAT="), "{development}");
     }
 
+    /// The console's filter is the ecosystem's `RUST_LOG`, which no prefix
+    /// renames: the retired `<PREFIX>_LOG` would filter nothing.
+    #[test]
+    fn the_development_file_sets_the_filter_through_rust_log() {
+        let development = super::shared::ENV_DEVELOPMENT;
+        assert!(development.contains("\nRUST_LOG="), "{development}");
+        assert!(
+            !development.contains("{{env_prefix}}_LOG="),
+            "{development}"
+        );
+    }
+
     /// `container.md`, *Every wait the framework owns is bounded*: a scaffolded
     /// binary's `main` is `#[nest_rs::main]`, never `#[tokio::main]`.
     #[test]

@@ -5,10 +5,12 @@
 //! ([`LogSettings::overlaid_by_env`]), or the variables alone
 //! ([`LogSettings::from_env`]):
 //!
-//! - `<PREFIX>_LOG` (falling back to `RUST_LOG`) — `EnvFilter` directives,
-//!   default `info`, narrowed by the clamp of each library the framework wires
-//!   that quotes a client's payload or a secret: a clamp never opens what the
+//! - `RUST_LOG` — `EnvFilter` directives, the ecosystem's variable, default
+//!   `info`, narrowed by the clamp of each library the framework wires that
+//!   quotes a client's payload or a secret: a clamp never opens what the
 //!   filter closes, and a directive naming such a library replaces its clamp.
+//!   `<PREFIX>_LOG`, its second name before 7.0, is read by nothing: set, it is
+//!   said once at `warn` naming `RUST_LOG`, once a subscriber can hear it.
 //! - `<PREFIX>_LOG_FORMAT` — `text` or `json`; defaults by the declared
 //!   profile (text under development and test, JSON otherwise).
 //! - `<PREFIX>_LOG_SOURCE_LOCATION` — append the emitting `file:line` to each
@@ -46,13 +48,12 @@ use crate::stderr_lines::write_stderr_line;
 use crate::trace_context::{Correlation, field};
 
 /// The tails of the framework-wide logging variables, joined with the
-/// deployment's prefix by [`EnvPrefix::var`](crate::EnvPrefix::var).
+/// deployment's prefix by [`EnvPrefix::var`](crate::EnvPrefix::var); the
+/// filter is the ecosystem's `RUST_LOG`, which takes no prefix.
 ///
 /// `nest-rs-cli` spells them again in its templates: it links no `nest-rs-*`
 /// crate.
 pub mod var {
-    /// `<PREFIX>_LOG` — the `EnvFilter` directive the process logs under.
-    pub const FILTER: &str = "LOG";
     /// `<PREFIX>_LOG_FORMAT` — `text` or `json`.
     pub const FORMAT: &str = "LOG_FORMAT";
     /// `<PREFIX>_LOG_SOURCE_LOCATION` — whether a line carries file and line.
@@ -98,16 +99,51 @@ impl LogFormat {
     }
 }
 
-/// The filter a process logs under when neither `<PREFIX>_LOG` nor `RUST_LOG`
-/// sets one.
+/// The filter a process logs under when `RUST_LOG` sets none.
 const DEFAULT_FILTER: &str = "info";
 
-/// The ecosystem's own filter variable, read after `<PREFIX>_LOG`.
+/// The ecosystem's filter variable, the console's.
 const RUST_LOG: &str = "RUST_LOG";
 
+/// The tail of `<PREFIX>_LOG`, the filter's second name before 7.0, which
+/// nothing reads: two names for one setting, one of them invented.
+const RETIRED_FILTER: &str = "LOG";
+
+/// `<PREFIX>_LOG`, when `get` sets it to anything but blank.
+fn retired_filter_set(get: impl Fn(&str) -> Option<OsString>) -> Option<String> {
+    let retired = EnvPrefix::var(RETIRED_FILTER);
+    get(&retired)
+        .is_some_and(|value| !value.to_string_lossy().trim().is_empty())
+        .then_some(retired)
+}
+
+/// Whether [`say_retired_filter`] has run in this process.
+static RETIRED_FILTER_SAID: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Say a set `<PREFIX>_LOG` once at `warn`, naming `RUST_LOG`, through
+/// whichever subscriber the process has: a committed `.env` setting it would
+/// otherwise filter nothing in silence, the cascade publishing it as a real
+/// variable.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the logging bootstrap runs before any config exists"
+)]
+pub(crate) fn say_retired_filter() {
+    if RETIRED_FILTER_SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if let Some(variable) = retired_filter_set(|name| std::env::var_os(name)) {
+        tracing::warn!(
+            target: crate::target::APP,
+            variable = variable.as_str(),
+            "variable read by nothing: the console's filter is RUST_LOG",
+        );
+    }
+}
+
 /// The console settings every subscriber the framework ships reads:
-/// `<PREFIX>_LOG` (else `RUST_LOG`), `<PREFIX>_LOG_FORMAT` and
-/// `<PREFIX>_LOG_SOURCE_LOCATION`.
+/// `RUST_LOG`, `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION`.
 ///
 /// They are read from the process environment, which `#[nest_rs::main]` fills
 /// with the `.env` cascade before `main` runs. Every subscriber the framework
@@ -185,17 +221,14 @@ impl LogSettings {
             Err(_) => Some(None),
         };
 
-        let filter = match [EnvPrefix::var(var::FILTER), RUST_LOG.to_owned()]
-            .into_iter()
-            .find_map(|name| set(&name).map(|directive| (name, directive)))
-        {
-            Some((setting, Some(directive))) => {
-                Self::check_filter(&directive, &setting)?;
+        let filter = match set(RUST_LOG) {
+            Some(Some(directive)) => {
+                Self::check_filter(&directive, RUST_LOG)?;
                 directive
             }
-            Some((setting, None)) => {
+            Some(None) => {
                 return Err(LogSettingsError::Filter {
-                    setting,
+                    setting: RUST_LOG.to_owned(),
                     reason: "the value is not UTF-8",
                 });
             }
@@ -258,8 +291,7 @@ fn filter_fault(error: &ParseError) -> &'static str {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum LogSettingsError {
-    /// `<PREFIX>_LOG`, `RUST_LOG` or a filter set in code is not an
-    /// `EnvFilter` directive.
+    /// `RUST_LOG` or a filter set in code is not an `EnvFilter` directive.
     #[error("{setting} is not a log filter: {reason}")]
     Filter {
         /// The variable or the field carrying the directive.
@@ -573,7 +605,8 @@ pub(crate) mod __private {
     /// Install `subscriber` as the process's global one and bridge `log`
     /// records into it: `false` when the process already has a global
     /// subscriber, which is kept. A `log` logger set before keeps the `log`
-    /// records, said once at `warn` through the subscriber just installed.
+    /// records, said once at `warn` through the subscriber just installed, as
+    /// a set `<PREFIX>_LOG` is.
     pub fn install_global_subscriber(subscriber: impl Into<Dispatch>) -> bool {
         let subscriber = subscriber.into();
         // `try_init` sets the global subscriber before the `log` bridge, and a
@@ -582,7 +615,7 @@ pub(crate) mod __private {
         let installed = subscriber.downgrade();
         let tried = subscriber.try_init();
         crate::panic::hold_dispatch_reentrance();
-        match tried {
+        let installed = match tried {
             Ok(()) => true,
             Err(error) if installed.upgrade().is_some() => {
                 tracing::warn!(
@@ -594,7 +627,11 @@ pub(crate) mod __private {
                 true
             }
             Err(_) => false,
+        };
+        if installed {
+            super::say_retired_filter();
         }
+        installed
     }
 }
 
@@ -1453,12 +1490,13 @@ impl Visit for EventSource {
     fn record_debug(&mut self, _field: &Field, _value: &dyn fmt::Debug) {}
 }
 
-/// Install the fallback console subscriber unless one is already set.
+/// Install the fallback console subscriber unless one is already set, then
+/// say a set `<PREFIX>_LOG` through whichever subscriber the process has.
 pub(crate) fn init_fallback() -> Result<()> {
-    if crate::process_start::subscriber_set() {
-        return Ok(());
+    if !crate::process_start::subscriber_set() {
+        install_console(&LogSettings::from_env()?);
     }
-    install_console(&LogSettings::from_env()?);
+    say_retired_filter();
     Ok(())
 }
 
@@ -2156,7 +2194,6 @@ mod tests {
         use std::os::unix::ffi::OsStringExt as _;
 
         for variable in [
-            EnvPrefix::var(var::FILTER),
             RUST_LOG.to_owned(),
             EnvPrefix::var(var::FORMAT),
             EnvPrefix::var(var::SOURCE_LOCATION),
@@ -2181,8 +2218,7 @@ mod tests {
         };
         assert_eq!(settings_under(&[]).expect("the defaults"), defaults);
         let blank = [
-            (EnvPrefix::var(var::FILTER), " "),
-            (RUST_LOG.to_owned(), ""),
+            (RUST_LOG.to_owned(), " "),
             (EnvPrefix::var(var::FORMAT), ""),
             (EnvPrefix::var(var::SOURCE_LOCATION), "  "),
         ];
@@ -2218,7 +2254,7 @@ mod tests {
         assert_eq!(under(&[]).expect("the base"), base);
         assert_eq!(
             under(&[
-                (EnvPrefix::var(var::FILTER), " "),
+                (RUST_LOG.to_owned(), " "),
                 (EnvPrefix::var(var::FORMAT), ""),
             ])
             .expect("the base"),
@@ -2239,10 +2275,9 @@ mod tests {
         let read = under(&[(EnvPrefix::var(var::SOURCE_LOCATION), "off")]).expect("a boolean");
         assert!(!read.source_location);
 
-        let refused =
-            under(&[(EnvPrefix::var(var::FILTER), "billing=notalevel")]).expect_err("a level");
+        let refused = under(&[(RUST_LOG.to_owned(), "billing=notalevel")]).expect_err("a level");
         assert!(
-            matches!(&refused, LogSettingsError::Filter { setting, .. } if *setting == EnvPrefix::var(var::FILTER)),
+            matches!(&refused, LogSettingsError::Filter { setting, .. } if setting == RUST_LOG),
             "{refused:?}"
         );
     }
@@ -2256,7 +2291,7 @@ mod tests {
             filter: "billing=notalevel".to_owned(),
             ..LogSettings::default()
         };
-        for set in [vec![], vec![(EnvPrefix::var(var::FILTER), "debug")]] {
+        for set in [vec![], vec![(RUST_LOG.to_owned(), "debug")]] {
             let refused = base
                 .clone()
                 .overlaid_from(|name| {
@@ -2322,17 +2357,23 @@ mod tests {
         );
     }
 
+    /// The filter is the ecosystem's `RUST_LOG`, read alone: the retired
+    /// `<PREFIX>_LOG` sets nothing, whatever it holds — a directive that does
+    /// not parse included, since nothing reads it.
     #[test]
-    fn rust_log_answers_when_the_prefixed_filter_is_unset_and_is_named_when_refused() {
-        let read = settings_under(&[(RUST_LOG.to_owned(), "debug")]).expect("a filter");
-        assert_eq!(read.filter, "debug");
+    fn the_filter_is_rust_log_and_the_retired_prefixed_variable_sets_nothing() {
+        let retired = EnvPrefix::var(RETIRED_FILTER);
+        let read = settings_under(&[(retired.clone(), "debug")]).expect("the defaults");
+        assert_eq!(read.filter, "info", "the retired variable opens nothing");
 
-        let first = settings_under(&[
-            (EnvPrefix::var(var::FILTER), "warn"),
-            (RUST_LOG.to_owned(), "debug"),
-        ])
-        .expect("a filter");
-        assert_eq!(first.filter, "warn", "the prefixed variable wins");
+        let read = settings_under(&[(retired.clone(), "warn"), (RUST_LOG.to_owned(), "debug")])
+            .expect("a filter");
+        assert_eq!(read.filter, "debug", "RUST_LOG alone");
+
+        assert!(
+            settings_under(&[(retired, "billing=notalevel")]).is_ok(),
+            "read by nothing, so refused by nothing"
+        );
 
         let refused =
             settings_under(&[(RUST_LOG.to_owned(), "billing=notalevel")]).expect_err("refused");
@@ -2340,6 +2381,24 @@ mod tests {
             matches!(&refused, LogSettingsError::Filter { setting, .. } if setting == RUST_LOG),
             "{refused:?}"
         );
+    }
+
+    /// A set `<PREFIX>_LOG` is named, for the console to say once that nothing
+    /// reads it; unset or blank, nothing is.
+    #[test]
+    fn the_retired_filter_is_named_when_set_and_only_then() {
+        let retired = EnvPrefix::var(RETIRED_FILTER);
+        let under = |set: &[(String, &str)]| {
+            retired_filter_set(|name| {
+                set.iter()
+                    .find(|(variable, _)| variable == name)
+                    .map(|(_, value)| OsString::from(value))
+            })
+        };
+        assert_eq!(under(&[(retired.clone(), "debug")]), Some(retired.clone()));
+        assert_eq!(under(&[(retired, " ")]), None);
+        assert_eq!(under(&[(RUST_LOG.to_owned(), "debug")]), None);
+        assert_eq!(under(&[]), None);
     }
 
     #[test]

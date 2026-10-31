@@ -18,8 +18,8 @@ shadowed ([the dual-path rule](/configuration/#the-dual-path-rule)).
 
 `NESTRS` is the default prefix. An app that declared its own
 ([Your own prefix](/configuration/#your-own-prefix)) reads every name below
-with that prefix instead — `ACME_HTTP__PORT`, `ACME_LOG` — and the `NESTRS_`
-spellings resolve nothing.
+with that prefix instead — `ACME_HTTP__PORT`, `ACME_LOG_FORMAT` — and the
+`NESTRS_` spellings resolve nothing.
 
 **Every namespaced variable can also be given as a file.**
 `<PREFIX>_<NAMESPACE>__<KEY>_FILE` names a file whose content is the value — the
@@ -65,14 +65,14 @@ binding of it `<PREFIX>_<VENDOR>__CACHE__<PORT>__*`: vendor, instance, port, in
 that order. An instance whose namespace another config already declares fails the
 boot naming both.
 
-## Logging — `<PREFIX>_LOG*`
+## Logging — `RUST_LOG` and `<PREFIX>_LOG_*`
 
 The baseline console logger is part of `nest-rs-core` — no module to
 import, no config struct. It reads three process-level variables:
 
 | Key | Meaning |
 |---|---|
-| `<PREFIX>_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`); falls back to `RUST_LOG`, default `info`. A library that quotes a client's payload or a secret is [clamped](/opentelemetry/logs/#the-libraries-the-framework-wires) until a directive names it |
+| `RUST_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`), the ecosystem's variable, so no prefix renames it; default `info`. A library that quotes a client's payload or a secret is [clamped](/opentelemetry/logs/#the-libraries-the-framework-wires) until a directive names it |
 | `<PREFIX>_LOG_FORMAT` | `text` or `json`; defaults to `text` under a declared development or test profile, `json` otherwise — a deployment and an undeclared process alike, whatever the cargo build profile |
 | `<PREFIX>_LOG_SOURCE_LOCATION` | append the emitting `file:line` to each event — default `false` |
 
@@ -80,6 +80,12 @@ Unset or blank keeps the default. A value that does not parse stops the
 boot, naming the variable and never its value — a mistyped
 `<PREFIX>_LOG_FORMAT=jsno` is said, never quietly replaced by the profile's
 default.
+
+`<PREFIX>_LOG`, the filter's second name before 7.0, is read by nothing: set —
+by a `.env` file or the deployment — it is said once at `warn` on
+`nest_rs::app` (`variable read by nothing: the console's filter is RUST_LOG`),
+and the filter is `RUST_LOG`'s. A real `RUST_LOG` in the shell outranks one a
+committed `.env` writes, as every real variable outranks the files.
 
 A `text` line is coloured only on a terminal: piped or written to a file it
 carries no escape code, and `NO_COLOR` set to anything but empty turns the
@@ -236,11 +242,11 @@ names, unprefixed like `RUST_LOG`, over what `OpenTelemetryConfig` pins
 | `OTEL_METRIC_EXPORT_TIMEOUT` · `OTEL_BSP_EXPORT_TIMEOUT` · `OTEL_BLRP_EXPORT_TIMEOUT` | the metric reader's, the batch span processor's and the batch log processor's bound on one export in milliseconds (default `30000`), the earlier of it and the exporter's cutting it, `0` no limit; not a whole number, or both at `0`, fails the boot |
 | `OTEL_BSP_SCHEDULE_DELAY` · `OTEL_BSP_MAX_QUEUE_SIZE` · `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` (and the `OTEL_BLRP_*` three) | the batch processors' delay in milliseconds, queue and batch sizes, read by the SDK; not a whole number, digits alone as the SDK reads it, a size of `0`, a batch above its queue, a delay under 1 ms (on which the SDK's worker polls without pause) or a queue above 1,048,576 (allocated whole when the processor starts) fails the boot |
 | `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` · `OTEL_SPAN_EVENT_COUNT_LIMIT` · `OTEL_SPAN_LINK_COUNT_LIMIT` · `OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT` · `OTEL_LINK_ATTRIBUTE_COUNT_LIMIT` | a span's attribute, event and link counts and an event's and a link's attribute counts (default `128` each), the three attribute counts falling back on `OTEL_ATTRIBUTE_COUNT_LIMIT`; not a whole number fails the boot |
-| `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT` · `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT` · `OTEL_LOGRECORD_ATTRIBUTE_*` · `OTEL_METRICS_EXEMPLAR_FILTER` · `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION` · `OTEL_LOG_LEVEL` · `OTEL_BSP_MAX_CONCURRENT_EXPORTS` | served by no crate this build links: set, each is said once at `warn`, unless its value names what the build does (`always_off`, `explicit_bucket_histogram`, `1`); `OTEL_LOG_LEVEL`'s subject follows `<PREFIX>_LOG` |
+| `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT` · `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT` · `OTEL_LOGRECORD_ATTRIBUTE_*` · `OTEL_METRICS_EXEMPLAR_FILTER` · `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION` · `OTEL_LOG_LEVEL` · `OTEL_BSP_MAX_CONCURRENT_EXPORTS` | served by no crate this build links: set, each is said once at `warn`, unless its value names what the build does (`always_off`, `explicit_bucket_histogram`, `1`); `OTEL_LOG_LEVEL`'s subject follows `RUST_LOG` |
 | `OTEL_EXPORTER_OTLP_CERTIFICATE` (and per signal) | path to the PEM authorities an `https://` collector's certificate must chain to, replacing the system's. Holding no certificate, or beside an `http://` endpoint, fails the boot |
 | `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` / `OTEL_EXPORTER_OTLP_CLIENT_KEY` (and per signal) | paths to the PEM client certificate chain, leaf first, and its private key, presented to a collector that requires one. Both or neither; beside an `http://` endpoint, they fail the boot |
 
-The console layer reads the [`<PREFIX>_LOG*` family](#logging--prefix_log)
+The console layer reads [`RUST_LOG` and `<PREFIX>_LOG_*`](#logging--rust_log-and-prefix_log_)
 above, over a config pinned through `init_with` too — there are no
 OTel-specific log variables.
 
@@ -392,8 +398,9 @@ binary's variable carries its own — `<PREFIX>_OPENAI__API_KEY` beside a linked
 namespaces are held apart from each other by the conformance suite. A key holding
 `__` under a namespace it does read is a sub-namespace another binary links —
 `redis__queue` under `redis` — reported only when it is a near miss of a key
-read here. The framework's process-level names, `<PREFIX>_LOG*`,
-`<PREFIX>_ENV` and `NESTRS_ENV_PREFIX`, are never reported.
+read here. The framework's process-level names, `<PREFIX>_LOG_FORMAT`,
+`<PREFIX>_LOG_SOURCE_LOCATION`, `<PREFIX>_ENV` and `NESTRS_ENV_PREFIX`, are
+never reported; the retired `<PREFIX>_LOG` is said by the console itself.
 
 The check runs where each config is read, against the keys its overlay
 actually asked for — the namespace's misspellings included, at that same read,

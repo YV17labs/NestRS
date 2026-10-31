@@ -307,7 +307,10 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
             );
             assert!(read(workspace, ".env.development").contains("ACME_SEAORM__URL="));
             assert!(read(workspace, ".env.test").contains("ACME_SEAORM__URL="));
-            assert!(read(workspace, ".env.development").contains("ACME_LOG="));
+            assert!(
+                read(workspace, ".env.development").contains("\nRUST_LOG="),
+                "the console's filter is the ecosystem's, which no prefix renames",
+            );
             assert!(
                 read(workspace, "db.just").contains(r#"export ACME_ENV := "development""#),
                 "the db recipes declare the profile under the project's own prefix",
@@ -386,7 +389,6 @@ fn the_generated_migration_binary_writes_the_console_its_log_settings_describe()
     let workspace = dir.path().join("acme");
     patch_to_working_tree(&workspace);
 
-    let filter = EnvPrefix::var(var::FILTER);
     let format = EnvPrefix::var(var::FORMAT);
     let url = nest_rs_config::var_name("seaorm", "URL");
     let budget = nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS");
@@ -403,7 +405,7 @@ fn the_generated_migration_binary_writes_the_console_its_log_settings_describe()
             "status",
         ],
         &[
-            (filter.as_str(), "info"),
+            ("RUST_LOG", "info"),
             (format.as_str(), "json"),
             (
                 url.as_str(),

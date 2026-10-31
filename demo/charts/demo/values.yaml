@@ -44,10 +44,6 @@ config:
   STORAGE__URL: s3://nestrs
   STORAGE__REGION: us-east-1
   STORAGE__FORCE_PATH_STYLE: "true"
-  # `<PREFIX>_LOG` — the framework's own EnvFilter directive (it falls back to
-  # the ecosystem's unprefixed RUST_LOG). `nest_rs::operation=off` silences
-  # every edge's one-line-per-unit-of-work at once.
-  LOG: info
   # `text` or `json`. A production process already defaults to json; stated
   # because a log shipper reads it and nobody should have to know the profile.
   LOG_FORMAT: json
@@ -138,7 +134,9 @@ defaults:
   tolerations: []
   affinity: {}
   topologySpreadConstraints: []
-  # Unprefixed, so `OTEL_EXPORTER_OTLP_ENDPOINT` and the other `OTEL_*` go here.
+  # Unprefixed, so `RUST_LOG` (the console's filter, `info` when unset;
+  # `info,nest_rs::operation=off` silences every edge's one line per unit of
+  # work), `OTEL_EXPORTER_OTLP_ENDPOINT` and the other `OTEL_*` go here.
   extraEnv: []
   pdb:
     enabled: false

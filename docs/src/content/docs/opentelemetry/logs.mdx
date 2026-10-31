@@ -47,7 +47,7 @@ The framework's subscribers write the events of every library in the process,
 and a few of them quote what a client sent, or a secret, below some level. A
 line never carries either, so each of those libraries is clamped: its events
 are written from the level below which it quotes nothing at most. A clamp only
-narrows `<PREFIX>_LOG`, never opens what it closes: under `warn`, `tungstenite`
+narrows `RUST_LOG`, never opens what it closes: under `warn`, `tungstenite`
 writes its warnings and nothing below, and under `nest_rs=debug` no library
 writes at all.
 
@@ -62,7 +62,7 @@ writes at all.
 
 A directive naming the library — or one of its modules — replaces its clamp,
 because `EnvFilter` keeps the later of two directives for one target and yours
-come after the framework's: `<PREFIX>_LOG=info,rmcp=debug` writes rmcp's debug
+come after the framework's: `RUST_LOG=info,rmcp=debug` writes rmcp's debug
 lines, and with them what the table says they quote, so keep it to a
 development run. Under the clamp, one `/mcp` denial files one line, the
 framework's: rmcp's own `response error` is a `warn`, and a `Host` rmcp refuses
@@ -313,7 +313,7 @@ INFO nest_rs::operation: http.request method=GET route="/users" status=401 bytes
 INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" replicas="each" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
 ```
 
-**The target is the toggle.** `<PREFIX>_LOG=info,nest_rs::operation=off` silences the
+**The target is the toggle.** `RUST_LOG=info,nest_rs::operation=off` silences the
 whole family at once, which is why no edge carries a config flag for it.
 `<PREFIX>_HTTP__ACCESS_LOG` predates the family and stays, as an app's pinned
 config rather than a deployment's filter — it is one edge's line, not the
@@ -393,7 +393,7 @@ DEBUG nest_rs::layers: crates/nest-rs-core/src/layer_chain.rs: layer declared at
 ```
 
 Off by default — it widens every line and leaks source paths, so it stays out
-of production. Turn it on in `.env.development` (next to `<PREFIX>_LOG=debug`) so
+of production. Turn it on in `.env.development` (next to `RUST_LOG=debug`) so
 it is live while developing and off everywhere else, or pin it explicitly with
 `log_source_location: true` in the `OpenTelemetryConfig` `init_with` takes,
 which `<PREFIX>_LOG_SOURCE_LOCATION` still overrides.

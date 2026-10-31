@@ -52,7 +52,7 @@ impl OpenTelemetry {
 
     /// Install the subscriber from `config`, under the variables that override
     /// it field by field: the OpenTelemetry specification's (`OTEL_*`) and the
-    /// console's (`<PREFIX>_LOG`, else `RUST_LOG`, `<PREFIX>_LOG_FORMAT`,
+    /// console's (`RUST_LOG`, `<PREFIX>_LOG_FORMAT`,
     /// `<PREFIX>_LOG_SOURCE_LOCATION`), as [`OpenTelemetryConfig::from_env`]
     /// reads them. Returns the flush guard that must outlive `main`, or an
     /// error that aborts boot on a filter, a setting, a number the SDK reads
@@ -208,12 +208,12 @@ fn refuse_what_no_exporter_serves(
     Ok(())
 }
 
-/// The filter a test run logs under when neither `<PREFIX>_LOG` nor `RUST_LOG`
-/// sets one: a passing test says little.
+/// The filter a test run logs under when `RUST_LOG` sets none: a passing test
+/// says little.
 const TEST_FILTER: &str = "warn";
 
 /// Console-only init for tests. Idempotent; first call wins. No flush
-/// guard. Log level honours `<PREFIX>_LOG` then `RUST_LOG`, default `warn`; a
+/// guard. Log level honours `RUST_LOG`, default `warn`; a
 /// setting that does not parse panics with the sentence naming it.
 pub fn init_for_tests() {
     if initialized() {
@@ -238,21 +238,14 @@ pub fn init_for_tests() {
     mark_initialized();
 }
 
-/// Whether `<PREFIX>_LOG` or `RUST_LOG` holds a directive, as `LogSettings`
-/// reads them: blank is unset.
+/// Whether `RUST_LOG` holds a directive, as `LogSettings` reads it: blank is
+/// unset.
 #[expect(
     clippy::disallowed_methods,
     reason = "the logging bootstrap runs before any config exists"
 )]
 fn filter_is_set() -> bool {
-    [
-        nest_rs_core::EnvPrefix::var(nest_rs_core::logging::var::FILTER),
-        "RUST_LOG".to_owned(),
-    ]
-    .iter()
-    .any(|name| {
-        std::env::var_os(name).is_some_and(|value| !value.to_string_lossy().trim().is_empty())
-    })
+    std::env::var_os("RUST_LOG").is_some_and(|value| !value.to_string_lossy().trim().is_empty())
 }
 
 /// How long the final telemetry flush may hold the exit, every provider at once.

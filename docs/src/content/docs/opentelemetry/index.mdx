@@ -103,7 +103,7 @@ The exporter reads the variables the
 [OpenTelemetry specification](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/)
 names — the ones the OpenTelemetry Operator injects and every other SDK reads —
 with no prefix: `OTEL_*` belongs to the ecosystem, as `RUST_LOG` does. They
-and the console's `<PREFIX>_LOG*` override what `OpenTelemetryConfig` pins,
+and the console's three override what `OpenTelemetryConfig` pins,
 field by field; `OpenTelemetry::init()` starts from the defaults, and
 `OpenTelemetry::init_with(cfg)` from a pinned config.
 
@@ -113,7 +113,7 @@ field by field; `OpenTelemetry::init()` starts from the defaults, and
 | `service.version` in `OTEL_RESOURCE_ATTRIBUTES` | `service_version` | the binary's package version |
 | `deployment.environment.name` in `OTEL_RESOURCE_ATTRIBUTES` | `deployment_environment` | none |
 | `service.instance.id` in `OTEL_RESOURCE_ATTRIBUTES` | `service_instance_id` | fresh UUIDv7 per process |
-| `<PREFIX>_LOG` | `log_filter` | `info` (the framework-wide logging family) |
+| `RUST_LOG` | `log_filter` | `info`, the baseline logger's |
 | `<PREFIX>_LOG_FORMAT` | `log_format` | `text` under a declared development or test profile, `json` otherwise |
 | `<PREFIX>_LOG_SOURCE_LOCATION` | `log_source_location` | `false` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, then per signal `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (`_METRICS_`, `_LOGS_`) | `otlp_endpoint` | none: console-only |
@@ -191,11 +191,11 @@ while the logs export: no log record's attributes are limited),
 `OTEL_METRICS_EXEMPLAR_FILTER`, `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION`,
 the SDK's own `OTEL_BSP_MAX_CONCURRENT_EXPORTS`, and `OTEL_LOG_LEVEL`, whose
 subject — the SDK's own lines — follows the console's filter here, as every
-library's does (`<PREFIX>_LOG=info,opentelemetry_sdk=debug`). A value that names what the
+library's does (`RUST_LOG=info,opentelemetry_sdk=debug`). A value that names what the
 build does says nothing: `OTEL_METRICS_EXEMPLAR_FILTER=always_off`,
 `explicit_bucket_histogram`, one concurrent export.
 
-The three `<PREFIX>_LOG*` variables are read by the kernel's one parser, as
+The console's three variables are read by the kernel's one parser, as
 the baseline logger reads them: a value that does not parse fails `init` with
 `OpenTelemetryError::LogSettings`, naming the variable and never its value, and
 a `log_filter` pinned in code is checked the same way at `init_with`, naming
@@ -239,13 +239,13 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=production \
 OTEL_TRACES_SAMPLER=parentbased_traceidratio \
 OTEL_TRACES_SAMPLER_ARG=0.1 \
-NESTRS_LOG=info \
+RUST_LOG=info \
   nestrs run start api
 ```
 
 A pinned config holds the same settings in code, and the variables still
-override it, `OTEL_*` and `<PREFIX>_LOG*` alike — a deployment's
-`<PREFIX>_LOG=debug` raises a filter pinned at `warn`:
+override it, `OTEL_*` and the console's alike — a deployment's
+`RUST_LOG=debug` raises a filter pinned at `warn`:
 
 ```rust title="main.rs"
 let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {

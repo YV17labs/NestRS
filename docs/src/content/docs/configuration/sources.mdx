@@ -125,7 +125,7 @@ against a concurrent `getenv` on another thread, so no read path may write.
 One step publishes the cascade into the process environment:
 `#[nest_rs::main]` runs it before your `main`, before the runtime exists. It
 exists for the consumers that only know `std::env::var` and never see a
-`ConfigService` — the framework's own `<PREFIX>_LOG*` setup,
+`ConfigService` — the console's `RUST_LOG` and `<PREFIX>_LOG_*`,
 `OpenTelemetry::init` and the OpenTelemetry SDK's `OTEL_*`, your `migrate`/`seed` binaries. It writes set-if-absent
 (the real env still wins), and it runs before the runtime precisely because a
 process with one thread is what makes the write sound. A binary without

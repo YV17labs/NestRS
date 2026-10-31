@@ -167,7 +167,7 @@ and is said at `debug`: `skipped #[process] method: not this app's to run`, with
 apps each binary links every other one's handlers, and a `warn` for each on every
 boot of a correct deployment would teach the reader to ignore the target. So when
 a handler in a shared crate does not run, read that target at `debug`
-(`<PREFIX>_LOG=info,nest_rs::queue=debug`). See [Wiring the worker](/queue/wiring/) for
+(`RUST_LOG=info,nest_rs::queue=debug`). See [Wiring the worker](/queue/wiring/) for
 the module-gating rule.
 
 <Aside type="caution">

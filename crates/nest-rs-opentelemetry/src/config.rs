@@ -24,8 +24,9 @@ pub(crate) const PINNED_SERVICE_NAME: &str = "`OpenTelemetryConfig::service_name
 const CONFIG_FILES: [&str; 2] = ["OTEL_CONFIG_FILE", "OTEL_EXPERIMENTAL_CONFIG_FILE"];
 
 /// What an app pins about its telemetry, under what the variables set: the
-/// OpenTelemetry specification's own (`OTEL_*`) and the console's
-/// (`<PREFIX>_LOG*`) overlay it, field by field, when
+/// OpenTelemetry specification's own (`OTEL_*`) and the console's (`RUST_LOG`,
+/// `<PREFIX>_LOG_FORMAT`, `<PREFIX>_LOG_SOURCE_LOCATION`) overlay it, field by
+/// field, when
 /// [`OpenTelemetry::init_with`](crate::OpenTelemetry::init_with) builds the
 /// SDK, which reads most of the specification's itself.
 ///
@@ -65,7 +66,7 @@ pub struct OpenTelemetryConfig {
     /// `EnvFilter` syntax; applied to console layer and OTel log appender,
     /// narrowed by the clamps of the libraries the framework wires, and checked
     /// at [`init_with`](crate::OpenTelemetry::init_with).
-    /// `<PREFIX>_LOG`, else `RUST_LOG`, overrides it.
+    /// `RUST_LOG` overrides it.
     pub log_filter: String,
     /// Console output shape; defaults by the declared profile
     /// ([`LogFormat::by_profile`]). The OTLP appender is unaffected.
@@ -144,10 +145,9 @@ impl std::fmt::Debug for OpenTelemetryConfig {
 }
 
 impl OpenTelemetryConfig {
-    /// The defaults, with the console's three settings read from the
-    /// framework-wide logging family (`<PREFIX>_LOG`, `<PREFIX>_LOG_FORMAT`,
-    /// `<PREFIX>_LOG_SOURCE_LOCATION`) by the kernel's [`LogSettings`], as its
-    /// fallback subscriber reads them. Everything OpenTelemetry's own is read
+    /// The defaults, with the console's three settings read by the kernel's
+    /// [`LogSettings`] (`RUST_LOG`, `<PREFIX>_LOG_FORMAT`,
+    /// `<PREFIX>_LOG_SOURCE_LOCATION`), as its fallback subscriber reads them. Everything OpenTelemetry's own is read
     /// at [`init_with`](crate::OpenTelemetry::init_with), from `OTEL_*`.
     ///
     /// `Err`, naming the variable and never quoting it, when one cannot be read
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn from_env_reads_the_console_settings_over_the_defaults() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env(EnvPrefix::var(var::FILTER), "debug,hyper=warn");
+            jail.set_env("RUST_LOG", "debug,hyper=warn");
             jail.set_env(EnvPrefix::var(var::FORMAT), "json");
             jail.set_env(EnvPrefix::var(var::SOURCE_LOCATION), "true");
 
@@ -314,28 +314,17 @@ mod tests {
         });
     }
 
+    /// The filter is `RUST_LOG`: the retired `<PREFIX>_LOG` sets nothing.
     #[test]
-    fn from_env_falls_back_to_rust_log_when_nestrs_log_is_unset() {
+    fn from_env_reads_the_filter_from_rust_log_alone() {
         figment::Jail::expect_with(|jail| {
+            jail.set_env(EnvPrefix::var("LOG"), "debug");
             jail.set_env("RUST_LOG", "warn,tower=off");
             assert_eq!(
                 OpenTelemetryConfig::from_env()
                     .expect("readable config")
                     .log_filter,
                 "warn,tower=off"
-            );
-            Ok(())
-        });
-        figment::Jail::expect_with(|jail| {
-            jail.set_env(EnvPrefix::var(var::FILTER), "debug");
-            jail.set_env("RUST_LOG", "warn");
-            assert_eq!(
-                OpenTelemetryConfig::from_env()
-                    .expect("readable config")
-                    .log_filter,
-                "debug",
-                "{} wins over RUST_LOG",
-                EnvPrefix::var(var::FILTER),
             );
             Ok(())
         });
@@ -346,17 +335,17 @@ mod tests {
     /// refuses it, and never quoted.
     #[test]
     fn from_env_refuses_a_log_setting_that_does_not_parse_naming_it_and_not_its_value() {
-        for (tail, value) in [
-            (var::FORMAT, "console"),
-            (var::SOURCE_LOCATION, "ture"),
-            (var::FILTER, "billing=notalevel"),
+        for (variable, value) in [
+            (EnvPrefix::var(var::FORMAT), "console"),
+            (EnvPrefix::var(var::SOURCE_LOCATION), "ture"),
+            ("RUST_LOG".to_owned(), "billing=notalevel"),
         ] {
             figment::Jail::expect_with(|jail| {
-                jail.set_env(EnvPrefix::var(tail), value);
+                jail.set_env(&variable, value);
                 let refused = OpenTelemetryConfig::from_env()
                     .expect_err("a setting that does not parse")
                     .to_string();
-                assert!(refused.contains(&EnvPrefix::var(tail)), "{refused}");
+                assert!(refused.contains(&variable), "{refused}");
                 assert!(!refused.contains(value), "{refused}");
                 Ok(())
             });
@@ -378,7 +367,6 @@ mod tests {
             let mut console = None;
             figment::Jail::expect_with(|jail| {
                 for name in [
-                    EnvPrefix::var(var::FILTER),
                     "RUST_LOG".to_owned(),
                     EnvPrefix::var(var::FORMAT),
                     EnvPrefix::var(var::SOURCE_LOCATION),
@@ -397,10 +385,6 @@ mod tests {
 
         assert_eq!(under(&[]), ("warn".into(), LogFormat::Json, true));
         assert_eq!(
-            under(&[(EnvPrefix::var(var::FILTER), "debug")]),
-            ("debug".into(), LogFormat::Json, true)
-        );
-        assert_eq!(
             under(&[("RUST_LOG".to_owned(), "trace")]),
             ("trace".into(), LogFormat::Json, true)
         );
@@ -416,18 +400,18 @@ mod tests {
     /// A variable over a pinned config is held to what `from_env` accepts.
     #[test]
     fn a_console_variable_over_a_pinned_config_that_does_not_parse_is_refused_naming_it() {
-        for (tail, value) in [
-            (var::FORMAT, "console"),
-            (var::SOURCE_LOCATION, "ture"),
-            (var::FILTER, "billing=notalevel"),
+        for (variable, value) in [
+            (EnvPrefix::var(var::FORMAT), "console"),
+            (EnvPrefix::var(var::SOURCE_LOCATION), "ture"),
+            ("RUST_LOG".to_owned(), "billing=notalevel"),
         ] {
             figment::Jail::expect_with(|jail| {
-                jail.set_env(EnvPrefix::var(tail), value);
+                jail.set_env(&variable, value);
                 let refused = OpenTelemetryConfig::default()
                     .console()
                     .expect_err("a setting that does not parse")
                     .to_string();
-                assert!(refused.contains(&EnvPrefix::var(tail)), "{refused}");
+                assert!(refused.contains(&variable), "{refused}");
                 assert!(!refused.contains(value), "{refused}");
                 Ok(())
             });
@@ -439,7 +423,7 @@ mod tests {
     #[test]
     fn a_pinned_filter_that_does_not_parse_is_refused_whatever_the_environment_sets() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env(EnvPrefix::var(var::FILTER), "debug");
+            jail.set_env("RUST_LOG", "debug");
             let refused = OpenTelemetryConfig {
                 log_filter: "billing=notalevel".into(),
                 ..OpenTelemetryConfig::default()

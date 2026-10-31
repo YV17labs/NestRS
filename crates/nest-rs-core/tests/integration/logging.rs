@@ -70,6 +70,9 @@ fn logging_child_process() {
         Some("app-less") => {
             let _ = app_less_child();
         }
+        Some("retired-filter") => {
+            let _ = retired_filter_child();
+        }
         Some("app-less-log-logger") => {
             log::set_logger(&STDERR_LOGGER).expect("the child's first `log` logger");
             log::set_max_level(log::LevelFilter::Info);
@@ -96,6 +99,21 @@ async fn console_child(role: String) -> anyhow::Result<()> {
             wait_for_release().await;
         }
     }
+    Ok(())
+}
+
+/// A `debug` line a filter at `info` closes.
+const RETIRED_DEBUG: &str = "a line only the retired filter would open";
+
+/// The line the console says a set `<PREFIX>_LOG` with.
+const RETIRED_SAID: &str = "variable read by nothing: the console's filter is RUST_LOG";
+
+/// An app booted twice under a set `<PREFIX>_LOG`, filing a `debug` line.
+#[nest_rs_core::main]
+async fn retired_filter_child() -> anyhow::Result<()> {
+    App::builder().module::<Bare>().build().await?;
+    App::builder().module::<Bare>().build().await?;
+    tracing::debug!(target: FIXTURE_TARGET, step = 1, "{RETIRED_DEBUG}");
     Ok(())
 }
 
@@ -215,10 +233,14 @@ fn boot() {
     }
 }
 
-/// The three settings, each valid, with `overrides` written over them.
+/// The ecosystem's filter variable, the one the console reads.
+const RUST_LOG: &str = "RUST_LOG";
+
+/// The three settings, each valid, with `overrides` written over them: each
+/// named by its tail under the prefix, the filter by [`RUST_LOG`].
 fn settings(overrides: &[(&str, &str)]) -> Vec<(String, String)> {
     let mut set = vec![
-        (var::FILTER, "info"),
+        (RUST_LOG, "info"),
         (var::FORMAT, "text"),
         (var::SOURCE_LOCATION, "false"),
     ];
@@ -228,7 +250,14 @@ fn settings(overrides: &[(&str, &str)]) -> Vec<(String, String)> {
         }
     }
     set.into_iter()
-        .map(|(tail, value)| (EnvPrefix::var(tail), value.to_owned()))
+        .map(|(name, value)| {
+            let name = if name == RUST_LOG {
+                name.to_owned()
+            } else {
+                EnvPrefix::var(name)
+            };
+            (name, value.to_owned())
+        })
         .collect()
 }
 
@@ -272,10 +301,10 @@ fn a_source_location_that_is_not_a_boolean_stops_the_boot_naming_the_variable() 
 
 #[test]
 fn a_filter_that_does_not_parse_stops_the_boot_without_quoting_the_directive() {
-    let said = booted_under(&[(var::FILTER, "billing=notalevel")]);
+    let said = booted_under(&[(RUST_LOG, "billing=notalevel")]);
 
     assert!(said.starts_with(REFUSED), "{said}");
-    assert!(said.contains(&EnvPrefix::var(var::FILTER)), "{said}");
+    assert!(said.contains(RUST_LOG), "{said}");
     assert!(
         !said.contains("notalevel"),
         "the value is never quoted: {said}"
@@ -497,7 +526,7 @@ fn a_log_logger_set_before_the_console_keeps_its_records_and_the_console_is_inst
 /// A filter the settings hold is the one the installed console applies.
 #[test]
 fn the_installed_console_applies_the_settings_filter() {
-    let env = settings(&[(var::FORMAT, "json"), (var::FILTER, "warn")]);
+    let env = settings(&[(var::FORMAT, "json"), (RUST_LOG, "warn")]);
     let mut child = ChildProcess::spawn_with(CHILD_TEST, "app-less", &env);
 
     child.expect_stderr_line(INSTALLED, Duration::from_secs(10));
@@ -507,5 +536,34 @@ fn the_installed_console_applies_the_settings_filter() {
         saying(&console_events(&printed), APP_LESS_LINE),
         0,
         "an `info` line under `warn`: {printed:#?}"
+    );
+}
+
+/// The console's filter is `RUST_LOG`: a set `<PREFIX>_LOG`, read by nothing
+/// since 7.0, opens nothing, and is said once at `warn` naming `RUST_LOG`,
+/// however many times the app boots.
+#[test]
+fn a_set_prefixed_log_opens_nothing_and_is_said_once_naming_rust_log() {
+    let retired = EnvPrefix::var("LOG");
+    let mut env = settings(&[(var::FORMAT, "json"), (RUST_LOG, "")]);
+    env.push((retired.clone(), "debug".to_owned()));
+    let mut child = ChildProcess::spawn_with(CHILD_TEST, "retired-filter", &env);
+
+    let (code, printed) = child.exit_within(Duration::from_secs(10));
+    assert_eq!(code, Some(0), "{printed:#?}");
+    let events = console_events(&printed);
+    assert_eq!(saying(&events, RETIRED_DEBUG), 0, "{events:#?}");
+    let said: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|event| event["fields"]["message"] == RETIRED_SAID)
+        .collect();
+    assert_eq!(said.len(), 1, "said once: {events:#?}");
+    assert_eq!(said[0]["level"], "WARN", "{}", said[0]);
+    assert_eq!(said[0]["target"], nest_rs_core::target::APP, "{}", said[0]);
+    assert_eq!(
+        said[0]["fields"]["variable"],
+        retired.as_str(),
+        "{}",
+        said[0]
     );
 }

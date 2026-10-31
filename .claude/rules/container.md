@@ -219,14 +219,15 @@ arbitrates between variables or tiers.
   the test harness and `nestrs doctor` read it alike, each held by its tests.
 
 - **`<KEY>_FILE` is a spelling of `<KEY>`, never a second variable**, and every
-  namespaced variable has it (the kernel's pre-container `<PREFIX>_LOG*` and
-  `<PREFIX>_ENV` do not), so a secret never has to sit in the process
-  environment. Every file is read through the one bounded reader
-  (`read_material`), at the boot: only the HTTP server's certificate renews
-  in place, and a consumer that comes to re-read on renewal reuses it. The
-  deployment chooses the spelling: either one present in the deployment tier
-  shadows both in `.env`; both set in the answering tier is refused naming both
-  — the loader's one refusal, about spelling, never meaning. A refusal never
+  namespaced variable has it (the kernel's pre-container `<PREFIX>_LOG_FORMAT`,
+  `<PREFIX>_LOG_SOURCE_LOCATION` and `<PREFIX>_ENV` do not), so a secret never
+  has to sit in the process environment. Every file is read through the one
+  bounded reader (`read_material`), at the boot: only the HTTP server's
+  certificate renews in place, and a consumer that comes to re-read on
+  renewal reuses it. The deployment chooses the spelling: either one present
+  in the deployment tier shadows both in `.env`; both set in the answering
+  tier is refused naming both — the loader's one refusal, about spelling,
+  never meaning. A refusal never
   repeats a value read from a file.
 - **A combination of variables is the consumer's**, refused at boot in the one
   constructor every path reaches — config-driven or built in code — naming what

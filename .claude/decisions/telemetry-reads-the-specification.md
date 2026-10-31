@@ -444,3 +444,34 @@ admits**, as the metric period outside a second to an hour already is.
   spins nothing.
 - **A lower queue ceiling, chosen for a pod's memory**: no number fits every
   pod, and the sentence states the cost where the operator reads it.
+
+## 2026-10-31 — the console's filter is `RUST_LOG` alone
+
+`<PREFIX>_LOG` was a second name for `RUST_LOG`, read first: the case this
+decision's first refusal names for `<PREFIX>_OPENTELEMETRY__*`, "two names for
+one setting, one of them invented". Worse, the `.env` cascade publishes a
+committed file's keys into the process environment, so a committed
+`.env.development`'s `NESTRS_LOG=debug` outranked an operator's real
+`RUST_LOG`, inverting the "real environment over files" order with no word
+said. Decided on the owner's agreement to the identity audit's second pass
+("Tout faire (Recommandé)", 2026-10-31, its item 6):
+
+- **The kernel's console reads its filter from `RUST_LOG` alone**, in every
+  subscriber the framework ships — the boot's fallback, `install_console`,
+  `OpenTelemetry::init` and `init_with`. `nest_rs::core::logging::var::FILTER`
+  is gone; `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION` stay, since
+  the ecosystem has no name for either.
+- **A set `<PREFIX>_LOG` is said once at `warn`** on `nest_rs::app`, naming
+  `RUST_LOG`, through whichever subscriber the process has — after the
+  framework installs one, and at every `App` boot when the app installed its
+  own — as the retired OpenTelemetry namespace is said. It is never read, so
+  a value that does not parse refuses nothing.
+
+**Refused:**
+
+- **Keeping `<PREFIX>_LOG` as a fallback after `RUST_LOG`**: two names still,
+  and a committed file's fallback would still apply over no real variable.
+- **Refusing the boot on a set `<PREFIX>_LOG`**: a 6.x `.env` carrying it would
+  stop every boot over a filter, where the variable costs nothing but the
+  filter it no longer sets; said at `warn`, as the retired OpenTelemetry
+  namespace is.

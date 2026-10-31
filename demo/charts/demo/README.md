@@ -37,7 +37,8 @@ The framework reads its settings from the environment, so a cluster only ever
 sets variables — `.env` is a local convenience the image does not carry.
 
 - `config` — non-secret keys, spelled **without** the prefix, written to a
-  ConfigMap. `LOG: info` becomes `NESTRS_LOG`.
+  ConfigMap. `LOG_FORMAT: json` becomes `NESTRS_LOG_FORMAT`. The ecosystem's
+  unprefixed variables, `RUST_LOG` and `OTEL_*`, go in `extraEnv`.
 - `secrets` — same spelling, written to a Secret this chart owns. Bring your own
   with `existingSecret` instead; the two are alternatives, not layers. The
   signing key, `AUTHN__PRIVATE_KEY`, goes into a Secret of its own that only

@@ -4,8 +4,7 @@
 
 use std::process::{Command, Output};
 
-use nest_rs_core::EnvPrefix;
-use nest_rs_core::logging::{LogFormat, var};
+use nest_rs_core::logging::LogFormat;
 use nest_rs_opentelemetry::{OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
 
 use crate::{console_vars, init_under, refused_under};
@@ -190,10 +189,7 @@ fn init_with_writes_the_exporter_s_debug_lines_a_filter_names() {
 )]
 fn the_test_subscriber_clamps_the_exporter_s_debug_lines_under_a_bare_trace() {
     figment::Jail::expect_with(|jail| {
-        jail.set_env(
-            nest_rs_core::EnvPrefix::var(nest_rs_core::logging::var::FILTER),
-            "trace",
-        );
+        jail.set_env("RUST_LOG", "trace");
         nest_rs_opentelemetry::__private::init_for_tests();
         Ok(())
     });
@@ -270,9 +266,8 @@ fn the_test_subscriber_s_default_never_opens_a_clamped_library() {
 /// by field, as from `init()`: the deployment raises a pinned filter.
 #[test]
 fn init_with_lays_the_console_s_variables_over_a_pinned_config() {
-    let filter = EnvPrefix::var(var::FILTER);
     let _otel = init_under(
-        &[(filter.as_str(), "debug")],
+        &[("RUST_LOG", "debug")],
         OpenTelemetryConfig {
             log_filter: "warn".into(),
             ..OpenTelemetryConfig::default()

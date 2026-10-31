@@ -86,9 +86,9 @@ what that app reads.
 The `<environment>` segment is the variant of `Environment`, read from
 the reserved `<PREFIX>_ENV` variable. It sits **outside** the
 `<PREFIX>_<DOMAIN>__<KEY>` scheme, as the kernel's
-[logging family](/configuration/env-reference/#logging--prefix_log),
-`<PREFIX>_LOG`, `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION`, does —
-the four are read before any config exists. `<PREFIX>_ENV` selects which `.env`
+[console settings](/configuration/env-reference/#logging--rust_log-and-prefix_log_),
+`<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION`, do — the three are
+read before any config exists. `<PREFIX>_ENV` selects which `.env`
 files to load, so it must come from the real process environment, not a
 `.env` file. Writing it into one is a **boot error** naming the fix, the
 same refusal `NESTRS_ENV_PREFIX` gets: the value arrives after the
@@ -153,7 +153,7 @@ Exactly once per process, before your `main` runs:
   (set-if-absent, so the real environment still wins) before it builds the
   runtime, while the process still has one thread. Everything `main` does
   therefore sees the cascade, including the many consumers that only know
-  `std::env::var`: `<PREFIX>_LOG` / `<PREFIX>_LOG_FORMAT` /
+  `std::env::var`: `RUST_LOG` / `<PREFIX>_LOG_FORMAT` /
   `<PREFIX>_LOG_SOURCE_LOCATION` in `.env.development` reach the logging setup,
   which reads the process environment long before a `ConfigService` exists, and
   `OTEL_*` reaches the OpenTelemetry SDK. Your `main` writes no line for it.

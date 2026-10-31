@@ -82,9 +82,9 @@ fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     };
 
     let ident = &item.ident;
-    let actor = identifier(&actor);
+    let actor = identifier(&actor, Role::Actor);
     let tenant = roles.tenant.map(|tenant| {
-        let read = identifier(&tenant);
+        let read = identifier(&tenant, Role::Tenant);
         quote! {
             fn tenant_id(&self) -> ::std::option::Option<::std::string::String> {
                 #read
@@ -93,12 +93,12 @@ fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     });
     let scopes = roles.scopes.map(|Marked { member, span }| {
         // A list, never an `Option`, so a credential sent without its scope
-        // claim stays scope-aware; the annotation puts a refusal at the field.
-        let list = quote_spanned!(span=> &[::std::string::String]);
+        // claim stays scope-aware; spanned at the field, so its refusal is.
+        let member = at(&member, span);
+        let read = quote_spanned!(span=> ::nest_rs_authn::__private::scope_list(&self.#member));
         quote! {
             fn scopes(&self) -> ::std::option::Option<&[::std::string::String]> {
-                let scopes: #list = &self.#member;
-                ::std::option::Option::Some(scopes)
+                ::std::option::Option::Some(#read)
             }
         }
     });
@@ -181,15 +181,50 @@ fn keys(attr: &Attribute) -> syn::Result<Vec<Ident>> {
     Ok(keys)
 }
 
+/// `member` spanned at `span`, so the expression reading it is too.
+fn at(member: &Member, span: Span) -> Member {
+    match member {
+        Member::Named(ident) => {
+            let mut ident = ident.clone();
+            ident.set_span(span);
+            Member::Named(ident)
+        }
+        Member::Unnamed(index) => Member::Unnamed(syn::Index {
+            index: index.index,
+            span,
+        }),
+    }
+}
+
+/// The identifier roles, each with its probe's marker and its refusal.
+#[derive(Clone, Copy)]
+enum Role {
+    Actor,
+    Tenant,
+}
+
 /// What an `actor` or `tenant` field answers, read by its type: the text its
-/// value prints, or `None` for an optional field holding none.
-fn identifier(field: &Marked) -> TokenStream {
+/// value prints, `None` for an optional field holding none, and a type that
+/// prints nothing refused in its role's words at the field.
+fn identifier(field: &Marked, role: Role) -> TokenStream {
     let Marked { member, span } = field;
-    let answer = Ident::new("identifier", *span);
+    let (marker, refusal) = match role {
+        Role::Actor => (quote!(Actor), quote!(ActorRefusal)),
+        Role::Tenant => (quote!(Tenant), quote!(TenantRefusal)),
+    };
+    // Spanned at the field, so a refusal points at the type it refuses.
+    let read = quote_spanned! {*span=>
+        (&&::nest_rs_authn::__private::IdentifierProbe(
+            &self.#member,
+            ::std::marker::PhantomData::<::nest_rs_authn::__private::#marker>,
+        ))
+        .identifier()
+    };
     quote! {
         {
             use ::nest_rs_authn::__private::IdentifierAnswer as _;
-            (&&::nest_rs_authn::__private::IdentifierProbe(&self.#member)).#answer()
+            use ::nest_rs_authn::__private::#refusal as _;
+            #read
         }
     }
 }
@@ -231,18 +266,17 @@ mod tests {
             "{expanded}"
         );
         assert!(
-            expanded.contains("IdentifierProbe (& self . sub)"),
+            expanded.contains("IdentifierProbe (& self . sub") && expanded.contains("ActorRefusal"),
             "{expanded}"
         );
         assert!(
             expanded.contains("fn tenant_id")
-                && expanded.contains("IdentifierProbe (& self . org_id)"),
+                && expanded.contains("IdentifierProbe (& self . org_id")
+                && expanded.contains("TenantRefusal"),
             "{expanded}"
         );
         assert!(
-            expanded.contains("fn scopes")
-                && expanded
-                    .contains("let scopes : & [:: std :: string :: String] = & self . scope"),
+            expanded.contains("fn scopes") && expanded.contains("scope_list (& self . scope)"),
             "{expanded}"
         );
         assert!(!expanded.contains("roles"), "{expanded}");
@@ -267,7 +301,7 @@ mod tests {
             pub struct ApiKey(u32, #[principal(actor, tenant)] String);
         });
         assert_eq!(
-            expanded.matches("IdentifierProbe (& self . 1)").count(),
+            expanded.matches("IdentifierProbe (& self . 1").count(),
             2,
             "{expanded}"
         );

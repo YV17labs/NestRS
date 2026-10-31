@@ -1,49 +1,33 @@
-error[E0599]: the method `identifier` exists for reference `&&nest_rs::authn::__private::IdentifierProbe<'_, Vec<u8>>`, but its trait bounds were not satisfied
+error[E0277]: `Vec<u8>` cannot be the principal's actor: `#[principal(actor)]` reads its field as the text it prints
   --> tests/integration/diagnostics/authn/principal_identity_actor_without_display.rs:12:14
    |
 12 |     pub sub: Vec<u8>,
-   |              ^^^ method cannot be called due to unsatisfied trait bounds
+   |              ^^^ prints no identifier
    |
-  ::: $WORKSPACE/crates/nest-rs-authn/src/principal.rs
+   = help: the trait `nest_rs::authn::__private::ActorField` is not implemented for `Vec<u8>`
+   = note: an actor field holds a type implementing `Display` — a `String`, a `Uuid`, a number — or an `Option` of one for a credential that may name no subject
+note: required by a bound in `nest_rs::authn::__private::ActorRefusal::identifier`
+  --> $WORKSPACE/crates/nest-rs-authn/src/principal.rs
    |
-   | pub struct IdentifierProbe<'a, T: ?Sized>(pub &'a T);
-   | ----------------------------------------- doesn't satisfy `_: IdentifierAnswer`
-   |
-  ::: $RUST/alloc/src/vec/mod.rs
-   |
-   | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
-   | ------------------------------------------------------------------------------------------------ doesn't satisfy `Vec<u8>: std::fmt::Display`
-   |
-   = note: the following trait bounds were not satisfied:
-           `Vec<u8>: std::fmt::Display`
-           which is required by `nest_rs::authn::__private::IdentifierProbe<'_, Vec<u8>>: nest_rs::authn::__private::IdentifierAnswer`
+   |     fn identifier(self) -> Option<String>
+   |        ---------- required by a bound in this associated function
+   |     where
+   |         Self::Field: ActorField;
+   |                      ^^^^^^^^^^ required by this bound in `ActorRefusal::identifier`
 
-error[E0599]: the method `identifier` exists for reference `&&nest_rs::authn::__private::IdentifierProbe<'_, std::option::Option<Opaque>>`, but its trait bounds were not satisfied
+error[E0277]: `std::option::Option<Opaque>` cannot be the principal's tenant: `#[principal(tenant)]` reads its field as the text it prints
   --> tests/integration/diagnostics/authn/principal_identity_actor_without_display.rs:14:14
    |
- 7 | pub struct Opaque;
-   | ----------------- doesn't satisfy `Opaque: std::fmt::Display`
-...
 14 |     pub org: Option<Opaque>,
-   |              ^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |              ^^^^^^ prints no identifier
    |
-  ::: $RUST/core/src/option.rs
+   = help: the trait `nest_rs::authn::__private::TenantField` is not implemented for `std::option::Option<Opaque>`
+   = note: a tenant field holds a type implementing `Display` — a `String`, a `Uuid`, a number — or an `Option` of one for a credential bound to no tenant
+note: required by a bound in `nest_rs::authn::__private::TenantRefusal::identifier`
+  --> $WORKSPACE/crates/nest-rs-authn/src/principal.rs
    |
-   | pub enum Option<T> {
-   | ------------------ doesn't satisfy `std::option::Option<Opaque>: std::fmt::Display`
-   |
-  ::: $WORKSPACE/crates/nest-rs-authn/src/principal.rs
-   |
-   | pub struct IdentifierProbe<'a, T: ?Sized>(pub &'a T);
-   | ----------------------------------------- doesn't satisfy `_: IdentifierAnswer`
-   |
-   = note: the following trait bounds were not satisfied:
-           `Opaque: std::fmt::Display`
-           which is required by `&nest_rs::authn::__private::IdentifierProbe<'_, std::option::Option<Opaque>>: nest_rs::authn::__private::IdentifierAnswer`
-           `std::option::Option<Opaque>: std::fmt::Display`
-           which is required by `nest_rs::authn::__private::IdentifierProbe<'_, std::option::Option<Opaque>>: nest_rs::authn::__private::IdentifierAnswer`
-note: the trait `std::fmt::Display` must be implemented
-  --> $RUST/core/src/fmt/mod.rs
-   |
-   | pub trait Display: PointeeSized {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     fn identifier(self) -> Option<String>
+   |        ---------- required by a bound in this associated function
+   |     where
+   |         Self::Field: TenantField;
+   |                      ^^^^^^^^^^^ required by this bound in `TenantRefusal::identifier`

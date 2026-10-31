@@ -131,5 +131,8 @@ pub mod __private {
 
     pub use crate::binding::ResourceBinding;
     pub use crate::guard::{Verdict, authenticate};
-    pub use crate::principal::{IdentifierAnswer, IdentifierProbe};
+    pub use crate::principal::{
+        Actor, ActorField, ActorRefusal, IdentifierAnswer, IdentifierProbe, ScopeList, Tenant,
+        TenantField, TenantRefusal, scope_list,
+    };
 }

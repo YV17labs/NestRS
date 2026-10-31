@@ -26,7 +26,7 @@
 //! `pub(crate)`, so [`ALL`] is the whole population.
 
 use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
+use quote::{ToTokens, quote, quote_spanned};
 use syn::{Item, ItemImpl, ItemStruct};
 
 /// One edge's decorator pair: the vocabulary its two wrong-shape diagnostics are
@@ -247,19 +247,26 @@ impl DecoratorPair {
             self.host == "#[injectable]",
             "only an on_provider pair reads a host's residency",
         );
-        quote! {
-            const _: () = ::core::assert!(
-                <#self_ty as ::nest_rs_core::ProviderResidency>::SINGLETON,
-                "a provider-hosted decorator (#[hooks], #[scheduled], #[listeners], \
-                 #[indicators], #[processor]) resolves its host with Container::get::<Self>(), \
-                 outside any request, so the host must be a provider the container holds under \
-                 its own type for the app's lifetime. This one is not: an edge host \
-                 (#[controller], #[gateway], #[resolver], #[mcp]) is built at mount, \
-                 `scope = request` builds one per request, and `scope = transient` would hand \
-                 it a throwaway whose effects are dropped. Move these methods to a plain \
-                 #[injectable] provider.",
-            );
-        }
+        let decorator = self.operations;
+        let host = crate::ty::type_label(self_ty);
+        let refusal = |cause: &str| {
+            format!(
+                "`{decorator}` runs on a provider built once for the app, and `{host}` {cause}: \
+                 move these methods to a plain `#[injectable]` provider"
+            )
+        };
+        residency_match(
+            proc_macro2::Span::call_site(),
+            &quote!(#self_ty),
+            [
+                refusal("is an edge host, built at mount"),
+                refusal("is `scope = request`, built per request"),
+                refusal(
+                    "is `scope = transient`, rebuilt at every resolution, so what they do is dropped",
+                ),
+                refusal("states `ProviderResidency::SINGLETON = false`"),
+            ],
+        )
     }
 
     /// Emit the struct half's record of what the container will hold under this
@@ -273,7 +280,7 @@ impl DecoratorPair {
             self.host != "#[injectable]",
             "a provider-hosted pair records residency through `#[injectable]`, not its impl half",
         );
-        provider_residency(name, generics, false)
+        provider_residency(name, generics, Residency::EdgeHost)
     }
 
     /// Refuse an argument list on the **impl** half, naming what does declare
@@ -459,21 +466,68 @@ pub fn parse_provider_host(input: TokenStream) -> syn::Result<ItemStruct> {
     }
 }
 
+/// What the container holds under a provider's own type, as the decorator
+/// that builds the provider knows it: the `RESIDENCY` its
+/// `impl ProviderResidency` states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Residency {
+    /// One instance for the app's lifetime.
+    Singleton,
+    /// An edge host, built at mount.
+    EdgeHost,
+    /// `scope = request`.
+    Request,
+    /// `scope = transient`.
+    Transient,
+}
+
 /// The `impl ProviderResidency` a provider-building decorator emits:
-/// `#[injectable]` (with `singleton` from its scope) and the four edge hosts
-/// (always `false`, through [`DecoratorPair::host_residency`]).
+/// `#[injectable]` (from its scope) and the four edge hosts
+/// ([`Residency::EdgeHost`], through [`DecoratorPair::host_residency`]).
 pub fn provider_residency(
     name: &syn::Ident,
     generics: &syn::Generics,
-    singleton: bool,
+    residency: Residency,
 ) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let singleton = residency == Residency::Singleton;
+    let variant = match residency {
+        Residency::Singleton => quote!(Singleton),
+        Residency::EdgeHost => quote!(EdgeHost),
+        Residency::Request => quote!(Request),
+        Residency::Transient => quote!(Transient),
+    };
     quote! {
         impl #impl_generics ::nest_rs_core::ProviderResidency
             for #name #ty_generics #where_clause
         {
             const SINGLETON: bool = #singleton;
+            const RESIDENCY: ::nest_rs_core::__private::Residency =
+                ::nest_rs_core::__private::Residency::#variant;
         }
+    }
+}
+
+/// A `const` refusing `ty` unless the container holds it as a singleton,
+/// with one sentence per cause, in the order edge host, request-scoped,
+/// transient, and a hand-written `SINGLETON = false`: a hint prescribes only
+/// the edit its cause has, so each shape reads its own.
+pub fn residency_match(
+    span: proc_macro2::Span,
+    ty: &TokenStream,
+    sentences: [String; 4],
+) -> TokenStream {
+    let [edge, request, transient, unknown] =
+        sentences.map(|sentence| sentence.replace('{', "{{").replace('}', "}}"));
+    quote_spanned! {span=>
+        const _: () = match <#ty as ::nest_rs_core::ProviderResidency>::RESIDENCY {
+            ::nest_rs_core::__private::Residency::Singleton => {}
+            ::nest_rs_core::__private::Residency::EdgeHost => ::core::panic!(#edge),
+            ::nest_rs_core::__private::Residency::Request => ::core::panic!(#request),
+            ::nest_rs_core::__private::Residency::Transient => ::core::panic!(#transient),
+            ::nest_rs_core::__private::Residency::Unknown => ::core::panic!(#unknown),
+        };
     }
 }
 

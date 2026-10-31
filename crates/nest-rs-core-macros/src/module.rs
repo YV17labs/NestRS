@@ -1,7 +1,7 @@
-use nest_rs_codegen::__private::{path_label, site, takes_value};
+use nest_rs_codegen::__private::{path_label, residency_match, site, takes_value, type_label};
 use nest_rs_codegen::Refusals;
 use proc_macro::TokenStream;
-use quote::{ToTokens, quote, quote_spanned};
+use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -323,19 +323,35 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     // A const item, so `cargo check` evaluates it; spanned on the provider path
-    // the developer wrote, since `assert!` takes a literal naming no type.
+    // the developer wrote, since a const panic takes a literal naming no type.
     let residency_checks = groups.iter().filter_map(|group| match group {
-        ProviderGroup::Dyn { provider, .. } => Some(quote_spanned! {provider.span()=>
-            const _: () = ::core::assert!(
-                <#provider as ::nest_rs_core::ProviderResidency>::SINGLETON,
-                "`as dyn Trait` binds one instance built at boot for the app's lifetime, so the \
-                 provider must be a singleton the container holds. This one is not: an edge host \
-                 (#[controller], #[gateway], #[resolver], #[mcp]) is built at mount, \
-                 `scope = request` builds one per request, and `scope = transient` one per \
-                 resolution. Bind a plain #[injectable] singleton; reach a scoped provider \
-                 through the edge's `Scoped<T>`.",
-            );
-        }),
+        ProviderGroup::Dyn { provider, traits } => {
+            let name = path_label(provider);
+            let bound = traits
+                .iter()
+                .map(|t| format!("as {}", type_label(t)))
+                .collect::<Vec<_>>()
+                .join(" and ");
+            let refusal = |cause: &str, remedy: &str| {
+                format!(
+                    "`{name}` is bound `{bound}`, which holds one instance for the app's \
+                     lifetime, and `{name}` {cause}: bind a plain `#[injectable]` singleton{remedy}"
+                )
+            };
+            Some(residency_match(
+                provider.span(),
+                &quote!(#provider),
+                [
+                    refusal("is an edge host, built at mount", ""),
+                    refusal(
+                        "is `scope = request`, built per request",
+                        &format!(", and reach `{name}` through the edge's `Scoped<T>`"),
+                    ),
+                    refusal("is `scope = transient`, rebuilt at every resolution", ""),
+                    refusal("states `ProviderResidency::SINGLETON = false`", ""),
+                ],
+            ))
+        }
         ProviderGroup::Concrete(_) => None,
     });
 

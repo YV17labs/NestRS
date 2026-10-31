@@ -244,6 +244,7 @@ pub mod __private {
         record_stall, refuse_site, register_dynamic_import, site_chains, stand_down,
         take_site_refusal,
     };
+    pub use crate::discoverable::__private::Residency;
     pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};
     pub use crate::edge_runtime::{EdgeHosts, EdgeRuntime, attaches_transport, registered_hosts};
     pub use crate::error_message::__private::find_in_chain;

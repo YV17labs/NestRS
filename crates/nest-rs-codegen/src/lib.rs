@@ -150,7 +150,9 @@ pub mod __private {
     };
     pub use crate::mount::{MountPath, reject_path};
     pub use crate::on_event::{ON_EVENT_GRAMMAR, OnEventArgs, parse_on_event_args};
-    pub use crate::pair::{DecoratorPair, parse_provider_host, provider_residency};
+    pub use crate::pair::{
+        DecoratorPair, Residency, parse_provider_host, provider_residency, residency_match,
+    };
     pub use crate::posture::{
         AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, ID_ARG_UNSUPPORTED_BECAUSE, Posture,
         PostureRules, at_most_one_authorize, posture_contradiction, posture_key_unsupported,

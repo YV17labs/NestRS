@@ -4,7 +4,7 @@ use quote::quote;
 use syn::{Expr, ItemStruct};
 
 use nest_rs_codegen::__private::{
-    InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
+    InjectableBody, Residency, build_injectable_body, dependencies_method, dependency_names_method,
     from_container_method, from_scope_method, injected_method, injected_names_method,
     injected_optional_method, injected_optional_names_method, key_as_written,
     optional_dependencies_method, optional_dependency_names_method, parse_provider_host,
@@ -54,7 +54,11 @@ pub(crate) fn provider(
     let singleton_marker = provider_residency(
         &name,
         &item.generics,
-        matches!(scope, InjectableScope::Singleton),
+        match scope {
+            InjectableScope::Singleton => Residency::Singleton,
+            InjectableScope::Request => Residency::Request,
+            InjectableScope::Transient => Residency::Transient,
+        },
     );
 
     let (scope_variant, then_overridden) = match scope {

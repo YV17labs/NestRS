@@ -233,8 +233,11 @@ sentence with the site in front.
 **A provider-hosted decorator states its residency.** `Container::get::<Host>()`
 answers only for a singleton under its own type, so every decorator that builds
 a provider writes `ProviderResidency` (held by the trait: a contradiction is
-`E0119`). A refusal lands at the earliest site that can know it — the host's
-own decorator, then the impl half's expansion, then the boot (*Discovery* in
+`E0119`), its hidden `RESIDENCY` naming the shape — edge host, request-scoped,
+transient — so the refusal of an impl half or of `as dyn Trait` says the one
+cause it has, naming its decorator and its host, never every cause at once. A
+refusal lands at the earliest site that can know it — the host's own
+decorator, then the impl half's expansion, then the boot (*Discovery* in
 `container.md`) — with a trybuild snapshot per refused shape and one that tries
 the escape.
 

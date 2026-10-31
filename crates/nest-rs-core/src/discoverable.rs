@@ -144,6 +144,39 @@ pub trait ProviderResidency {
     /// this very type, for the application's lifetime** — `false` for every
     /// other shape in the table above.
     const SINGLETON: bool;
+
+    /// Which row of the table above this is, so a refusal names its own cause
+    /// — the decorator that built the provider writes it; an impl written by
+    /// hand leaves it to follow `SINGLETON`.
+    #[doc(hidden)]
+    const RESIDENCY: __private::Residency = if Self::SINGLETON {
+        __private::Residency::Singleton
+    } else {
+        __private::Residency::Unknown
+    };
+}
+
+pub(crate) mod __private {
+    /// What the container holds under a provider's own type, as the
+    /// decorator that built it states it, read by the compile-time refusals
+    /// of a provider-hosted decorator and of `as dyn Trait`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[expect(
+        clippy::exhaustive_enums,
+        reason = "matched whole by the `const` a decorator emits into the app's crate"
+    )]
+    pub enum Residency {
+        /// One instance for the app's lifetime: the one shape they accept.
+        Singleton,
+        /// An edge host, whose instance is built at mount.
+        EdgeHost,
+        /// `scope = request`, built per request.
+        Request,
+        /// `scope = transient`, rebuilt at every resolution.
+        Transient,
+        /// Not a singleton, by an impl written by hand that says no more.
+        Unknown,
+    }
 }
 
 /// The sentence a discovery site appends when it skips an operation whose host

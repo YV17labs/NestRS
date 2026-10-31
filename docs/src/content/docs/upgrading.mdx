@@ -949,9 +949,10 @@ lists what the boot, a log or the wire shows when one is missed.
     | a hand-written `get` or `user` override on a `#[crud]` block, kept only for its `#[api]` text | `api(get(summary = "…", description = "…"))` in the `#[crud]` arguments, the override deleted |
     | `paginate = …` on a `#[crud]` block that writes its list operation by hand | the key dropped: nothing generated read it, and your method bounds its own list |
     | a `#[crud]` block generating `get`, `update` or `delete` under a controller path naming a parameter (`/orgs/{org}/users`) | those operations written by hand, reading every parameter, or the resource mounted under a path naming none: the generated ones answered `500` on every request |
-    | `#[crud(service = svc, entity = E, output = Dto, create = CreateDto, update = UpdateDto)]` | `#[crud(service = svc)]`: every type is read off the service's `CrudService`, `Creatable` and `Updatable` impls and the entity's `#[expose]` |
-    | a bare `#[crud(service = svc, entity = …, output = …)]` over a read-only service (`list`, `get` and `delete` by default) | `#[crud(service = svc, ops = [list, get])]`, or `ops = [list, get, delete]` beside a `Deletable` impl: the default is all five |
-    | a `#[crud(service = svc, entity = …, output = …)]` that left `create` or `update` out, over a service implementing `Creatable` or `Updatable` | `#[crud(service = svc, ops = [list, get, delete])]`, the operations it served: without `ops`, the block serves every write its service implements |
+    | `#[crud(service = svc, entity = E, output = Dto, create = CreateDto, update = UpdateDto)]` | `#[crud(service = UsersService)]`, naming the type of the service `svc` holds: every type is read off the service's `CrudService`, `Creatable` and `Updatable` impls and the entity's `#[expose]`, and every operation reaches it through the host's `#[inject]` field of that type |
+    | a bare `#[crud(service = svc, entity = …, output = …)]` over a read-only service (`list`, `get` and `delete` by default) | `#[crud(service = UsersService, ops = [list, get])]`, or `ops = [list, get, delete]` beside a `Deletable` impl: the default is all five |
+    | a `#[crud(service = svc, entity = …, output = …)]` that left `create` or `update` out, over a service implementing `Creatable` or `Updatable` | `#[crud(service = UsersService, ops = [list, get, delete])]`, the operations it served: without `ops`, the block serves every write its service implements |
+    | a `#[controller]` or `#[resolver]` injecting one type in two fields | one field: the container holds one instance of the type, and the second field is refused at compile time |
     | `<E as PkLoadable>::Wire`, `<E as RelatedTo<P, V>>::Wire` | `<E as Exposed>::Wire`, `nest_rs::seaorm::Exposed` |
 
     Name your own log target by the constant the feature declares, as a 7.0
@@ -1451,6 +1452,13 @@ lists what the boot, a log or the wire shows when one is missed.
   `createX` and `updateX` on a resolver, each behind the block's guards and the
   caller's grants. List `ops` with the operations it served to keep the write
   closed.
+- **A `#[controller]` or `#[resolver]` injecting one type in two fields**
+  fails to compile at the second field (`` `again` injects `UsersService`, which
+  `svc` already injects ``): both held the one instance the container
+  provides. Two fields spelling the type two ways (`UsersService` and
+  `users::UsersService`, or an alias), or under two `cfg`s that both hold, fail
+  at the struct's decorator with rustc's E0119, `conflicting implementations of
+  trait …::Injects<UsersService>`. Keep one field.
 - **A GraphQL `#[crud]` resolver named apart from its wire type** answers new
   field names with no compile error: the names come off the resolver's name
   (`AlbumsResolver` → `albums`), where they came off `output =` (`PagedAlbum`

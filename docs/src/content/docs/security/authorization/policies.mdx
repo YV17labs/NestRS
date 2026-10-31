@@ -97,12 +97,20 @@ reply goes out as written. An HTTP route gated this way still withholds
 the ability from its reads, as every route no mask shapes does.
 
 The type system keeps the two kinds apart. `when` and `fields` narrow an
-entity's rows and columns, so they do not exist on a subject no table
-holds; neither does `cannot`, because the class gate is that subject's one
-layer and a grant you do not write is already the denial. Don't borrow an
-entity for a capability (`Manage` on `org::Entity` to mean "may
-transcode"): a rule on the entity then grants or withholds the capability
-by accident, and a grep for the capability finds nothing.
+entity's rows and columns, so a subject no table holds refuses them; so
+does `cannot`, because the class gate is that subject's one layer and a
+grant you do not write is already the denial. Each is bounded on
+`RowSubject`, which every entity is, and a capability is told why:
+
+```text
+error[E0277]: `Exporting` has no rows to deny or narrow: `cannot`, `when` and `fields` take a SeaORM entity
+   = note: a capability `#[subject]` declares has no rows: a grant covers it
+           whole, and a grant not written is its denial
+```
+
+Don't borrow an entity for a capability (`Manage` on `org::Entity` to mean
+"may transcode"): a rule on the entity then grants or withholds the
+capability by accident, and a grep for the capability finds nothing.
 
 ## Actions
 

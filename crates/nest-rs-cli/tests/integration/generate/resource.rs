@@ -2,8 +2,8 @@
 //! one list writes into its entity, its migration and its round trip.
 
 use crate::harness::{
-    assert_256_bit_hex, assigned, files_under, run_err, run_ok, scaffolded_var, write_fake_app,
-    write_fake_migrations_crate, write_fake_workspace,
+    assert_256_bit_hex, assigned, files_under, migration_named, run_err, run_ok, scaffolded_var,
+    write_fake_app, write_fake_migrations_crate, write_fake_workspace,
 };
 use std::fs;
 
@@ -161,24 +161,6 @@ fn generate_resource_from_the_root_wires_everything_its_code_needs() {
             "the adapter imports {ident}, not the root: {module}"
         );
     }
-}
-
-/// The one migration `crates/migrations/src` holds under `name`, by its
-/// stem and its contents.
-fn migration_named(root: &std::path::Path, name: &str) -> (String, String) {
-    let dir = root.join("crates/migrations/src");
-    let found: Vec<std::path::PathBuf> = fs::read_dir(&dir)
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .is_some_and(|n| n.to_string_lossy().ends_with(&format!("_{name}.rs")))
-        })
-        .collect();
-    assert_eq!(found.len(), 1, "one `{name}` migration: {found:?}");
-    let stem = found[0].file_stem().unwrap().to_string_lossy().into_owned();
-    (stem, fs::read_to_string(&found[0]).unwrap())
 }
 
 /// Unedited, the three files `g resource` writes about one table agree: the

@@ -98,3 +98,18 @@ pub(crate) fn cargo_check(workspace: &Path) -> Result<(), String> {
     }
     Err(String::from_utf8_lossy(&output.stderr).into_owned())
 }
+
+/// Every column type `g resource`'s grammar reads, once, the last one
+/// nullable: what the scaffold suite compiles and the tutorial replay runs.
+pub(crate) const EVERY_COLUMN_TYPE: [&str; 10] = [
+    "title:string",
+    "body:text",
+    "views:integer",
+    "total:bigint",
+    "score:float",
+    "published:boolean",
+    "author_id:uuid",
+    "due_on:date",
+    "published_at:datetime",
+    "bio:text:nullable",
+];

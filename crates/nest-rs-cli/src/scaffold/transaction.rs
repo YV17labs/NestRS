@@ -377,7 +377,8 @@ impl Report {
     }
 }
 
-fn rel(path: &Path, base: &Path) -> String {
+/// `path` as a reader standing at `base` names it: relative when under it.
+pub(crate) fn rel(path: &Path, base: &Path) -> String {
     path.strip_prefix(base)
         .unwrap_or(path)
         .display()
@@ -421,11 +422,10 @@ pub(crate) fn rustfmt_source(source: &str) -> Option<String> {
         .ok()?;
     child.stdin.take()?.write_all(source.as_bytes()).ok()?;
     let output = child.wait_with_output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8(output.stdout).ok())
-        .flatten()
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
 }
 
 #[cfg(test)]

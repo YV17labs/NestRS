@@ -1,6 +1,8 @@
 //! `nestrs g migration` — registration in both `lib.rs` and `migrator.rs`.
 
-use crate::harness::{run_err, run_ok, write_fake_migrations_crate, write_fake_workspace};
+use crate::harness::{
+    migration_named, run_err, run_ok, write_fake_migrations_crate, write_fake_workspace,
+};
 use std::fs;
 
 #[test]
@@ -240,15 +242,6 @@ fn a_nestrs_name_the_framework_does_not_ship_is_refused() {
     }
 }
 
-/// The one migration `crates/migrations/src` holds under `name`.
-fn read_migration(root: &std::path::Path, name: &str) -> String {
-    let file = migration_files(root)
-        .into_iter()
-        .find(|file| file.ends_with(&format!("_{name}.rs")))
-        .unwrap_or_else(|| panic!("the `{name}` migration is written"));
-    fs::read_to_string(root.join("crates/migrations/src").join(file)).unwrap()
-}
-
 /// `g migration create_<x>` over a feature whose entity declares the table
 /// writes the table that entity's `Model` declares, its columns in the
 /// builder and in the enum alike.
@@ -266,7 +259,7 @@ fn a_create_migration_takes_its_columns_from_the_entity() {
         &["g", "migration", "create_comments", "-p", root],
     );
 
-    let migration = read_migration(dir.path(), "create_comments");
+    let (_, migration) = migration_named(dir.path(), "create_comments");
     for line in [
         ".table(Comment::Table)",
         ".col(ColumnDef::new(Comment::Id).uuid().not_null().primary_key())",
@@ -305,7 +298,7 @@ fn a_field_the_builder_cannot_type_is_named_for_the_developer() {
 
     let printed = run_ok(dir.path(), &["g", "migration", "create_posts", "-p", root]);
 
-    let migration = read_migration(dir.path(), "create_posts");
+    let (_, migration) = migration_named(dir.path(), "create_posts");
     assert!(migration.contains("Post::Name"), "{migration}");
     for absent in ["Status", "Author"] {
         assert!(!migration.contains(absent), "{absent}: {migration}");
@@ -334,7 +327,7 @@ fn a_create_migration_with_no_entity_is_the_skeleton() {
         &["g", "migration", "create_widgets", "-p", root],
     );
 
-    let migration = read_migration(dir.path(), "create_widgets");
+    let (_, migration) = migration_named(dir.path(), "create_widgets");
     for line in ["Widget::Id", "Widget::DeletedAt", "TODO"] {
         assert!(migration.contains(line), "{line}: {migration}");
     }

@@ -6,7 +6,7 @@ use std::path::Path;
 use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
 
-use crate::generated::{cargo, cargo_check, nestrs, patch_to_working_tree};
+use crate::generated::{EVERY_COLUMN_TYPE, cargo, cargo_check, nestrs, patch_to_working_tree};
 
 /// Scaffold `acme`, run `generate` inside it, and compile the result.
 fn scaffold_and_check(generate: &[&[&str]], what: &str) {
@@ -76,20 +76,6 @@ fn a_greenfield_workspace_compiles() {
 
 /// The empty `define` the auth adapter scaffolds, as `ability.rs` spells it.
 const EMPTY_DEFINE: &str = "fn define(&self, _actor: &Claims, _ab: &mut AbilityBuilder) {}";
-
-/// Every column type the grammar reads, once, the last one nullable.
-const EVERY_COLUMN_TYPE: [&str; 10] = [
-    "title:string",
-    "body:text",
-    "views:integer",
-    "total:bigint",
-    "score:float",
-    "published:boolean",
-    "author_id:uuid",
-    "due_on:date",
-    "published_at:datetime",
-    "bio:text:nullable",
-];
 
 #[test]
 fn a_generated_resource_and_entity_compile_with_the_grants_they_print() {

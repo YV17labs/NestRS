@@ -20,7 +20,7 @@ use crate::commands::resolve_start;
 use crate::context::{Context, NestrsWorkspace};
 use crate::error::{CliError, CliResult, FileAction, read_if_exists};
 use crate::naming::Names;
-use crate::scaffold::{Renderer, Scaffold, Transform, ensure_decl};
+use crate::scaffold::{Renderer, Scaffold, Transform, ensure_decl, rel};
 use crate::templates::{migration, workspace};
 
 pub(crate) struct MigrationOptions {
@@ -521,19 +521,13 @@ fn render_migrator(registered: &Registered) -> String {
 }
 
 fn print_next_steps(stem: &str, table: &str, entity: &Declared, root: &Path) {
-    let rel = |file: &Path| {
-        file.strip_prefix(root)
-            .unwrap_or(file)
-            .display()
-            .to_string()
-    };
     println!();
     println!("Next steps:");
     match entity {
         Declared::Once { file, model } => {
             println!(
                 "  Its columns are the ones `{}` declares, in the builder and in the enum.",
-                rel(file)
+                rel(file, root)
             );
             for field in &model.untyped {
                 println!(
@@ -546,7 +540,10 @@ fn print_next_steps(stem: &str, table: &str, entity: &Declared, root: &Path) {
             return;
         }
         Declared::Several(files) => {
-            let files: Vec<String> = files.iter().map(|f| format!("`{}`", rel(f))).collect();
+            let files: Vec<String> = files
+                .iter()
+                .map(|f| format!("`{}`", rel(f, root)))
+                .collect();
             println!(
                 "  Several entities declare `{table}` ({}): the builder reads none of them.",
                 files.join(", ")

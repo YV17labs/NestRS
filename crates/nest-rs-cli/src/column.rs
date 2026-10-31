@@ -6,7 +6,7 @@
 //! beside it.
 
 use heck::{ToSnakeCase, ToUpperCamelCase};
-use syn::{Fields, GenericArgument, Item, LitStr, PathArguments, Type};
+use syn::{Fields, GenericArgument, Item, PathArguments, Type};
 
 /// What a column holds, by the word the command line spells it with — the
 /// words Rails' and Phoenix's generators share, each mapped onto the type
@@ -88,18 +88,18 @@ impl ColumnType {
         }
     }
 
-    /// The `ColumnDef` method that types its column.
+    /// The `ColumnDef` call that types its column.
     fn def(self) -> &'static str {
         match self {
-            Self::String => "string()",
-            Self::Text => "text()",
-            Self::Integer => "integer()",
-            Self::Bigint => "big_integer()",
-            Self::Float => "double()",
-            Self::Boolean => "boolean()",
-            Self::Uuid => "uuid()",
-            Self::Date => "date()",
-            Self::Datetime => "timestamp_with_time_zone()",
+            Self::String => ".string()",
+            Self::Text => ".text()",
+            Self::Integer => ".integer()",
+            Self::Bigint => ".big_integer()",
+            Self::Float => ".double()",
+            Self::Boolean => ".boolean()",
+            Self::Uuid => ".uuid()",
+            Self::Date => ".date()",
+            Self::Datetime => ".timestamp_with_time_zone()",
         }
     }
 
@@ -107,14 +107,11 @@ impl ColumnType {
     fn sample(self, name: &str) -> String {
         match self {
             Self::String | Self::Text => {
-                let words = name.replace('_', " ");
-                let mut chars = words.chars();
-                let first = chars.next().map(|c| c.to_ascii_uppercase());
-                format!(
-                    "\"{}{} 1\"",
-                    first.into_iter().collect::<String>(),
-                    chars.as_str()
-                )
+                let mut words = name.replace('_', " ");
+                if let Some(first) = words.get_mut(..1) {
+                    first.make_ascii_uppercase();
+                }
+                format!("\"{words} 1\"")
             }
             Self::Integer | Self::Bigint => "1".to_owned(),
             Self::Float => "1.5".to_owned(),
@@ -207,25 +204,28 @@ impl Column {
 
     /// The `Model` field, with the attributes that expose it as an input of
     /// both writes, a non-null string holding at least one character.
-    pub(crate) fn field(&self) -> String {
-        let mut field = String::new();
-        if self.ty == ColumnType::Text {
-            field.push_str("    #[sea_orm(column_type = \"Text\")]\n");
-        }
-        let string = matches!(self.ty, ColumnType::String | ColumnType::Text);
-        if string && !self.nullable {
-            field.push_str("    #[expose(input(create, update), validate(length(min = 1)))]\n");
+    fn field(&self) -> String {
+        let text = if self.ty == ColumnType::Text {
+            "    #[sea_orm(column_type = \"Text\")]\n"
         } else {
-            field.push_str("    #[expose(input(create, update))]\n");
-        }
+            ""
+        };
+        let string = matches!(self.ty, ColumnType::String | ColumnType::Text);
+        let validate = if string && !self.nullable {
+            ", validate(length(min = 1))"
+        } else {
+            ""
+        };
         let rust = self.ty.rust();
         let ty = if self.nullable {
             format!("Option<{rust}>")
         } else {
             rust.to_owned()
         };
-        field.push_str(&format!("    pub {}: {ty},\n", self.name));
-        field
+        format!(
+            "{text}    #[expose(input(create, update){validate})]\n    pub {}: {ty},\n",
+            self.name
+        )
     }
 
     /// The `"name": value` member a request body carries for it.
@@ -260,8 +260,7 @@ impl Column {
 /// Refuse a column name a field, a JSON member and an SQL column cannot all
 /// spell alike.
 fn check_name(name: &str) -> Result<(), String> {
-    let words: Vec<&str> = name.split('_').collect();
-    let snake = words.iter().all(|word| {
+    let snake = name.split('_').all(|word| {
         word.chars().next().is_some_and(|c| c.is_ascii_lowercase())
             && word
                 .chars()
@@ -357,20 +356,19 @@ impl TableColumn {
     fn builder(&self, singular: &str) -> String {
         let (variant, _) = self.variant();
         let head = format!("ColumnDef::new({singular}::{variant})");
-        let mut calls = vec![format!(".{}", self.column.ty.def())];
-        calls.push(
+        let mut calls = vec![
+            self.column.ty.def(),
             if self.column.nullable {
                 ".null()"
             } else {
                 ".not_null()"
-            }
-            .to_owned(),
-        );
+            },
+        ];
         if self.key {
-            calls.push(".primary_key()".to_owned());
+            calls.push(".primary_key()");
         }
         if self.stamped {
-            calls.push(".default(Expr::current_timestamp())".to_owned());
+            calls.push(".default(Expr::current_timestamp())");
         }
         let chain = format!("{head}{}", calls.concat());
         if chain.len() <= 60 {
@@ -553,7 +551,7 @@ fn read_field(field: &syn::Field) -> Read {
                     Some(syn::Expr::Lit(syn::ExprLit {
                         lit: syn::Lit::Str(lit),
                         ..
-                    })) if lit_is(&lit, "Text") => text = true,
+                    })) if lit.value() == "Text" => text = true,
                     _ => unread = Some("its `column_type`".to_owned()),
                 }
             } else if !READ_KEYS.contains(&ident.as_str()) {
@@ -580,10 +578,6 @@ fn read_field(field: &syn::Field) -> Read {
         Some(ty) => Read::Column { ty, nullable, key },
         None => Read::Untyped(format!("`{rust}`")),
     }
-}
-
-fn lit_is(lit: &LitStr, value: &str) -> bool {
-    lit.value() == value
 }
 
 /// `T` when `ty` is `Option<T>`.

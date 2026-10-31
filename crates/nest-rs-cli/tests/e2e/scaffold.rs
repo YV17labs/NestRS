@@ -4,7 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::generated::{cargo, cargo_check, nestrs, patch_to_working_tree, repo};
+use crate::generated::{
+    EVERY_COLUMN_TYPE, cargo, cargo_check, nestrs, patch_to_working_tree, repo,
+};
 
 /// Every tutorial page that edits `blog`, in reading order: the checkpoint
 /// runs the reference `api` and is no step of `blog`'s; `security` and
@@ -23,22 +25,6 @@ const PAGES: [&str; 8] = [
     "testing",
     "security",
     "graphql",
-];
-
-/// A resource of every column type the grammar reads, generated into `blog`
-/// beside the tutorial's, so its round trip writes and reads each against the
-/// live Postgres.
-const EVERY_COLUMN_TYPE: [&str; 10] = [
-    "title:string",
-    "body:text",
-    "views:integer",
-    "total:bigint",
-    "score:float",
-    "published:boolean",
-    "author_id:uuid",
-    "due_on:date",
-    "published_at:datetime",
-    "bio:text:nullable",
 ];
 
 /// What a page asks of the reader, or shows them, in its order.

@@ -25,7 +25,9 @@ use crate::commands::resolve_start;
 use crate::context::Context;
 use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::{Names, Transport};
-use crate::scaffold::{Renderer, Scaffold, Transform, ensure_decl, ensure_lines, rustfmt_source};
+use crate::scaffold::{
+    Renderer, Scaffold, Transform, ensure_decl, ensure_lines, rel, rustfmt_source,
+};
 use crate::templates::{entity, feature};
 
 pub(crate) struct EntityOptions {
@@ -201,11 +203,7 @@ impl Retirement {
         let edited = |file: &Path| CliError::SubjectEdited {
             feature: feature.snake.clone(),
             name: name.clone(),
-            file: file
-                .strip_prefix(ws_root)
-                .unwrap_or(file)
-                .display()
-                .to_string(),
+            file: rel(file, ws_root),
         };
 
         let subject = root.join("subject.rs");

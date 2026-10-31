@@ -134,6 +134,24 @@ pub(crate) fn write_fake_migrations_crate(root: &Path) {
     fs::write(dir.join("m20260101_000000_init.rs"), "// init\n").unwrap();
 }
 
+/// The one migration `crates/migrations/src` holds under `name`, by its
+/// stem and its contents.
+pub(crate) fn migration_named(root: &Path, name: &str) -> (String, String) {
+    let dir = root.join("crates/migrations/src");
+    let found: Vec<PathBuf> = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with(&format!("_{name}.rs")))
+        })
+        .collect();
+    assert_eq!(found.len(), 1, "one `{name}` migration: {found:?}");
+    let stem = found[0].file_stem().unwrap().to_string_lossy().into_owned();
+    (stem, fs::read_to_string(&found[0]).unwrap())
+}
+
 /// The one value of `var` that `file` assigns, read the way the cascade reads it.
 pub(crate) fn assigned(file: &Path, var: &str) -> Option<String> {
     let body = fs::read_to_string(file).ok()?;

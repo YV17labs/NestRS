@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote, quote_spanned};
+use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token, Type};
 
@@ -265,6 +266,21 @@ impl CrudDeclaration {
     /// reads is declared, so none is left unused.
     pub fn types(&self, host: &Ident, self_ty: &Type, ops: GeneratedOps) -> CrudTypes {
         let alias = |what: &str| format_ident!("__NestrsCrud{}{}", host, what);
+        // The trait is reached by the name written here, from this module:
+        // anything else is said in the struct's words before rustc's own.
+        let written = host.unraw().to_string();
+        let reach = ops.any().then(|| {
+            quote_spanned! {host.span()=>
+                const _: () = if !::nest_rs_core::__private::reaches_host(
+                    <#self_ty>::__NESTRS_HOST,
+                    #written,
+                    <#self_ty>::__NESTRS_HOST_MODULE,
+                    ::core::module_path!(),
+                ) {
+                    ::core::panic!("{}", <#self_ty>::__NESTRS_CRUD_REFUSAL)
+                };
+            }
+        });
         let service = alias("Service");
         let entity = alias("Entity");
         let output = alias("Output");
@@ -307,7 +323,7 @@ impl CrudDeclaration {
             output,
             create,
             update,
-            aliases: quote! { #entity_alias #output_alias #create_alias #update_alias },
+            aliases: quote! { #reach #entity_alias #output_alias #create_alias #update_alias },
         }
     }
 }

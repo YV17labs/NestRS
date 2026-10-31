@@ -224,6 +224,13 @@ pub fn injected_field_types(item: &ItemStruct) -> TokenStream2 {
     let name = &item.ident;
     let types = injected_field_types_trait(name);
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    let host = name.unraw().to_string();
+    let refusal = format!(
+        "`#[crud]` reads `{host}`'s injected fields through the struct's own name and module: \
+         write it on `impl {host}` in the struct's module, or on the path to it from a module \
+         below (`impl super::{host}`) — a `use … as` rename, a type alias or another module \
+         does not reach them"
+    );
     quote! {
         #[doc(hidden)]
         // Named for the fields, and read by `#[crud]` alone.
@@ -234,6 +241,16 @@ pub fn injected_field_types(item: &ItemStruct) -> TokenStream2 {
 
         impl #impl_generics #types for #name #ty_generics #where_clause {
             #(#defined)*
+        }
+
+        // Where `#[crud]` may reach the trait above from, read by its check.
+        impl #impl_generics #name #ty_generics #where_clause {
+            #[doc(hidden)]
+            pub const __NESTRS_HOST: &'static str = #host;
+            #[doc(hidden)]
+            pub const __NESTRS_HOST_MODULE: &'static str = ::core::module_path!();
+            #[doc(hidden)]
+            pub const __NESTRS_CRUD_REFUSAL: &'static str = #refusal;
         }
     }
 }
@@ -713,8 +730,12 @@ mod tests {
             assert!(emitted.contains(declared), "{declared}: {emitted}");
         }
         assert!(
-            !emitted.contains("plain") && !emitted.contains("pub"),
+            !emitted.contains("plain") && !emitted.contains("pub trait"),
             "{emitted}"
+        );
+        assert!(
+            emitted.contains("pub const __NESTRS_HOST : & 'static str = \"UsersController\""),
+            "the name a `#[crud]` block is checked against: {emitted}"
         );
         let generic: ItemStruct = parse_quote! {
             pub struct Host<T: Send> {

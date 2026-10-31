@@ -21,6 +21,41 @@ pub fn shorten(name: &str) -> String {
     out
 }
 
+/// Whether a block written `impl {written}` in the module `here` reaches the
+/// private items beside the struct `host` of the module `host_module`: by the
+/// struct's own name, from its module or one below it.
+pub const fn reaches_host(host: &str, written: &str, host_module: &str, here: &str) -> bool {
+    if !same(host.as_bytes(), written.as_bytes()) {
+        return false;
+    }
+    let (inner, outer) = (here.as_bytes(), host_module.as_bytes());
+    if inner.len() < outer.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < outer.len() {
+        if inner[i] != outer[i] {
+            return false;
+        }
+        i += 1;
+    }
+    inner.len() == outer.len() || (inner.len() > outer.len() + 1 && inner[outer.len()] == b':')
+}
+
+const fn same(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 fn leaf(segment: &str) -> &str {
     segment.rsplit("::").next().unwrap_or(segment)
 }
@@ -35,6 +70,25 @@ mod tests {
             shorten("a::b::AuthnGuard<c::d::JwtStrategy<e::Claims>>"),
             "AuthnGuard<JwtStrategy<Claims>>"
         );
+    }
+
+    #[test]
+    fn a_block_reaches_its_host_by_its_name_from_its_module_or_below() {
+        assert!(reaches_host("Notes", "Notes", "app::notes", "app::notes"));
+        assert!(reaches_host(
+            "Notes",
+            "Notes",
+            "app::notes",
+            "app::notes::http"
+        ));
+        assert!(!reaches_host("Notes", "Alias", "app::notes", "app::notes"));
+        assert!(!reaches_host("Notes", "Notes", "app::notes", "app::other"));
+        assert!(!reaches_host(
+            "Notes",
+            "Notes",
+            "app::notes",
+            "app::notes_admin"
+        ));
     }
 
     #[test]

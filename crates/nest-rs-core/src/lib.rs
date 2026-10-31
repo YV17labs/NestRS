@@ -286,7 +286,7 @@ pub mod __private {
         current_correlation, hex, link_span, pending_ids, set_actor_id, set_sampled,
         set_span_linker, with_pending_ids,
     };
-    pub use crate::type_name::{short_type_name, shorten};
+    pub use crate::type_name::{reaches_host, short_type_name, shorten};
     pub use crate::unit_context::{
         new_unit_context, pending_of, run_layer, running_layer, take_pending,
     };

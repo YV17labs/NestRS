@@ -81,6 +81,25 @@ The limit of the path: a block naming its host through a `use … as` rename
 or a type alias, or from outside the struct's module and its descendants,
 does not reach the trait and fails to resolve the field's type.
 
+**2026-10-31 — the limit is said in the struct's words.** rustc's refusal of
+such a block named the private trait (`cannot find trait
+__NestrsInjectedNotes`, `trait __NestrsInjectedNotesController is private`)
+and nothing a developer wrote. The struct half now writes, beside the trait,
+the host's name, its module and the sentence, as hidden inherent consts the
+type reaches whatever names it; `#[crud]` compares them with the name it is
+written under and the module it expands in, in a `const`, and refuses a block
+that cannot reach the trait: "`#[crud]` reads `NotesController`'s injected
+fields through the struct's own name and module: write it on
+`impl NotesController` in the struct's module, or on the path to it from a
+module below (`impl super::NotesController`)". rustc's own error stays beside
+it: the projection is resolved by name before any `const` runs, and reaching
+the field's type another way is the path refused above (a key hash, an alias
+per field). A block below the struct's module naming it through a named
+import (`use super::NotesController;`) passes the check — a `const` sees no
+import — and meets rustc's error alone; a glob import of the parent reaches
+the trait, so refusing every bare name below the module would refuse working
+code.
+
 Not done: `#[expose(service = …, writes = [create, update, delete])]` emitting
 the service's trait impls, the audit's optional second step. It would move the
 service's capabilities out of its own file, which a reader of the service no

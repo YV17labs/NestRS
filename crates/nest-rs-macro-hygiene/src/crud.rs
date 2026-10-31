@@ -38,6 +38,21 @@ pub struct HygieneCrudController {
 #[crud(service = svc)]
 impl HygieneCrudController {}
 
+/// A host whose block is written in a module below the struct's, which reaches
+/// its injected fields as the struct's own module does.
+#[controller(path = "/notes/read-only")]
+pub struct HygieneReadOnlyCrudController {
+    #[inject]
+    svc: Arc<HygieneCrudService>,
+}
+
+mod read_only {
+    use nest_rs::http::crud;
+
+    #[crud(service = svc, ops = [list, get])]
+    impl super::HygieneReadOnlyCrudController {}
+}
+
 /// The GraphQL member of the pair, generating every operation.
 #[cfg(feature = "graphql")]
 pub mod graphql {

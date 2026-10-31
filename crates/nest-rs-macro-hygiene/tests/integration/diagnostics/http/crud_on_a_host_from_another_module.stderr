@@ -1,0 +1,20 @@
+error[E0603]: trait `__NestrsInjectedNotesController` is private
+  --> tests/integration/diagnostics/http/crud_on_a_host_from_another_module.rs:53:23
+   |
+52 |     #[crud(service = svc, ops = [get])]
+   |                      --- associated type `svc` is not publicly re-exported
+53 |     impl super::host::NotesController {}
+   |                       ^^^^^^^^^^^^^^^ private trait
+   |
+note: the trait `__NestrsInjectedNotesController` is defined here
+  --> tests/integration/diagnostics/http/crud_on_a_host_from_another_module.rs:42:5
+   |
+42 |     #[controller(path = "/notes")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `controller` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0080]: evaluation panicked: `#[crud]` reads `NotesController`'s injected fields through the struct's own name and module: write it on `impl NotesController` in the struct's module, or on the path to it from a module below (`impl super::NotesController`) — a `use … as` rename, a type alias or another module does not reach them
+  --> tests/integration/diagnostics/http/crud_on_a_host_from_another_module.rs:53:23
+   |
+53 |     impl super::host::NotesController {}
+   |                       ^^^^^^^^^^^^^^^ evaluation of `elsewhere::_` failed here

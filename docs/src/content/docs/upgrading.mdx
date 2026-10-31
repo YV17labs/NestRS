@@ -1332,14 +1332,18 @@ lists what the boot, a log or the wire shows when one is missed.
   `Access-Control-Max-Age`: the boot reports it at `warn` as read by no config
   (`config variable read by no config`), with `CORS_MAX_AGE_SECS` as the
   suggestion.
-- **A deployment still setting `CORS_EXPOSED`, the bare `SECURITY_HEADERS` or a
-  security header's flat key** (`<PREFIX>_HTTP__HSTS`) has the default in its
-  place: the exposed list empty, every default-on header sent, and a
+- **A deployment still setting a security header's flat key**
+  (`<PREFIX>_HTTP__HSTS`, `<PREFIX>_HTTP__CONTENT_SECURITY_POLICY`, …) fails
+  the boot naming the key it became
+  (`<PREFIX>_HTTP__SECURITY_HEADERS_CONTENT_SECURITY_POLICY`): read by nothing,
+  it would have left the header to its default, and a
   `Content-Security-Policy`, `Permissions-Policy` or
-  `Cross-Origin-Embedder-Policy` it set no longer sent at all. The boot names
-  each variable at `warn` as read by no config, with the key it became as the
-  suggestion (`SECURITY_HEADERS_HSTS` for `HSTS`); `SECURITY_HEADERS` gets
-  none, since it leads every header's key. Move each to its row in step 3.
+  `Cross-Origin-Embedder-Policy` it set not sent at all. One still setting
+  `CORS_EXPOSED` or the bare `SECURITY_HEADERS` has the default in its place —
+  the exposed list empty, every default-on header sent, both more closed than
+  what it set — and the boot names each at `warn` as read by no config, with
+  `CORS_EXPOSED_HEADERS` as the suggestion for the first. Move each to its row
+  in step 3.
 - **`ConfigModule::for_feature` left in an import list** fails to compile; a
   config no provider of an imported module injects is no longer loaded — read
   it through a provider, or queue it from the module's `collect`.

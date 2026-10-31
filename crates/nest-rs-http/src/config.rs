@@ -564,7 +564,8 @@ fn cors(env: &ConfigService, key: &str, base: Option<HttpCors>) -> Result<Option
     HttpCors::from_env(env, base)
 }
 
-/// The security headers, each key its field's name after `SECURITY_HEADERS_`.
+/// The security headers, each key its field's name after `SECURITY_HEADERS_`;
+/// a header's 6.x flat key is refused naming the one it became.
 fn security_headers(
     env: &ConfigService,
     key: &str,
@@ -574,7 +575,38 @@ fn security_headers(
         key, "SECURITY_HEADERS",
         "HttpSecurityHeaders reads its fields' names under `security_headers`"
     );
+    refuse_retired_header_keys(env)?;
     HttpSecurityHeaders::from_env(env, base)
+}
+
+/// Each security header's 6.x key, a flat one beside `SECURITY_HEADERS`.
+const RETIRED_HEADER_KEYS: [&str; 9] = [
+    "HSTS",
+    "FRAME_OPTIONS",
+    "CONTENT_TYPE_OPTIONS",
+    "REFERRER_POLICY",
+    "CROSS_ORIGIN_OPENER_POLICY",
+    "CROSS_ORIGIN_RESOURCE_POLICY",
+    "CROSS_ORIGIN_EMBEDDER_POLICY",
+    "PERMISSIONS_POLICY",
+    "CONTENT_SECURITY_POLICY",
+];
+
+/// Refuse a security header set under its 6.x key: read by nothing, it would
+/// leave the header to its default — a policy the deployment wrote not sent at
+/// all — where an unread variable's `warn` is all a deployment would hear. A
+/// detector of the old spelling, never an alias of it.
+fn refuse_retired_header_keys(env: &ConfigService) -> Result<()> {
+    for retired in RETIRED_HEADER_KEYS {
+        if let Some(setting) = env.setting(retired)? {
+            return Err(setting.refuse(format_args!(
+                "is the 6.x key of a security header, read by nothing since 7.0, so the header \
+                 it set would not be sent as set — set {} instead",
+                env.var_name(&format!("SECURITY_HEADERS_{retired}"))
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The global prefix, trimmed; blank is none.
@@ -787,9 +819,8 @@ mod tests {
 
     /// A vocabulary's keys are its fields' names under the field holding it —
     /// `CORS_EXPOSED_HEADERS` for `cors.exposed_headers`, the security
-    /// headers' switch `SECURITY_HEADERS_ENABLED` — and the 6.x spellings,
-    /// `CORS_EXPOSED`, the bare `SECURITY_HEADERS` and the flat `HSTS`, are
-    /// read by nothing.
+    /// headers' switch `SECURITY_HEADERS_ENABLED` — and the 6.x spellings
+    /// `CORS_EXPOSED` and the bare `SECURITY_HEADERS` are read by nothing.
     #[test]
     fn a_vocabularys_keys_are_its_fields_names_under_the_field_holding_it() {
         let read = |vars: &[(&str, &str)]| {
@@ -814,11 +845,7 @@ mod tests {
         assert_eq!(headers.frame_options.as_deref(), Some("SAMEORIGIN"));
         assert_eq!(headers.hsts, None);
 
-        let retired = read(&[
-            ("CORS_EXPOSED", "x-cost"),
-            ("SECURITY_HEADERS", "false"),
-            ("HSTS", "off"),
-        ]);
+        let retired = read(&[("CORS_EXPOSED", "x-cost"), ("SECURITY_HEADERS", "false")]);
         assert!(
             retired
                 .cors
@@ -827,6 +854,37 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(retired.security_headers, HttpSecurityHeaders::default());
+    }
+
+    /// A header a deployment set under its 6.x flat key would be sent as its
+    /// default, or not at all: the boot refuses it, naming the key it became
+    /// and never the value.
+    #[test]
+    fn a_security_header_set_under_its_6x_key_is_refused_naming_its_7_0_key() {
+        const SECRET: &str = "default-src 'self' hunter2_secret";
+        for retired in RETIRED_HEADER_KEYS {
+            let refused = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [(retired, SECRET)]),
+                HttpConfig::default(),
+            )
+            .expect_err("a retired key is refused")
+            .to_string();
+            assert!(
+                refused.starts_with(&format!(
+                    "invalid value for {}:",
+                    nest_rs_config::var_name("http", retired)
+                )),
+                "{refused}"
+            );
+            assert!(
+                refused.contains(&nest_rs_config::var_name(
+                    "http",
+                    &format!("SECURITY_HEADERS_{retired}")
+                )),
+                "{refused}"
+            );
+            assert!(!refused.contains(SECRET), "{refused}");
+        }
     }
 
     #[test]
@@ -997,14 +1055,7 @@ mod tests {
         let var = |key| nest_rs_config::var_name("http", key);
         figment::Jail::expect_with(|jail| {
             jail.set_env(var("CORS_ORIGINS"), "https://a.example");
-            for retired in [
-                "CORS_EXPOSED",
-                "CORS_MAX_AGE",
-                "SECURITY_HEADERS",
-                "HSTS",
-                "CONTENT_SECURITY_POLICY",
-                "CROSS_ORIGIN_EMBEDDER_POLICY",
-            ] {
+            for retired in ["CORS_EXPOSED", "CORS_MAX_AGE", "SECURITY_HEADERS"] {
                 jail.set_env(var(retired), "off");
             }
             let logs = nest_rs_testing::LogCapture::install();
@@ -1022,21 +1073,25 @@ mod tests {
             };
             assert_eq!(named("CORS_MAX_AGE"), Some(var("CORS_MAX_AGE_SECS")));
             assert_eq!(named("CORS_EXPOSED"), Some(var("CORS_EXPOSED_HEADERS")));
-            for header in [
-                "HSTS",
-                "CONTENT_SECURITY_POLICY",
-                "CROSS_ORIGIN_EMBEDDER_POLICY",
-            ] {
-                assert_eq!(
-                    named(header),
-                    Some(nest_rs_config::var_name(
-                        "http",
-                        &format!("SECURITY_HEADERS_{header}")
-                    )),
-                    "{header}"
-                );
-            }
             assert_eq!(named("SECURITY_HEADERS"), None);
+            Ok(())
+        });
+    }
+
+    /// A security header's 6.x key read from the environment fails the boot,
+    /// where an unread variable is only said at `warn`.
+    #[test]
+    fn a_security_headers_6x_key_in_the_environment_fails_the_boot() {
+        let var = |key| nest_rs_config::var_name("http", key);
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(var("CONTENT_SECURITY_POLICY"), "default-src 'self'");
+            let refused = HttpConfig::resolve(None)
+                .expect_err("a retired security header key fails the boot")
+                .to_string();
+            assert!(
+                refused.contains(&var("SECURITY_HEADERS_CONTENT_SECURITY_POLICY")),
+                "{refused}"
+            );
             Ok(())
         });
     }

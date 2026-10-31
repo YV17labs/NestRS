@@ -10,6 +10,7 @@
 
 mod ability;
 mod builder;
+mod context;
 
 // `src/guard.rs` is transport-agnostic, so its mirror sits here, not under an edge.
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]

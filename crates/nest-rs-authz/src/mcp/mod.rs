@@ -67,7 +67,7 @@
 //! #             ab.can(Action::Read, users::Entity).fields([users::Column::Id]);
 //! #         }
 //! #         let ability = ab.build().map_err(|_| Denial::internal("malformed rules"))?;
-//! #         cx.attach(ability);
+//! #         cx.attach(nest_rs_authz::__private::AmbientAbility::new(ability));
 //! #         Ok(())
 //! #     }
 //! #     async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {

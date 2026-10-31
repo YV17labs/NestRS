@@ -33,6 +33,15 @@ impl AmbientValue for TenantId {
     fn carry(self: Arc<Self>, _into: Continuation) -> Option<Arc<Self>> {
         Some(self)
     }
+
+    /// Re-entered inside a unit served for another tenant, a capture is served
+    /// for none: one tenant's work never runs as another's.
+    fn reenter(self: Arc<Self>) -> Option<Arc<Self>> {
+        match ambient::<TenantId>() {
+            Some(running) if *running != *self => None,
+            _ => Some(self),
+        }
+    }
 }
 
 /// The tenant this unit of work is served for — `None` where no verified
@@ -90,5 +99,20 @@ mod tests {
                 "{into:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_capture_re_entered_for_another_tenant_is_served_for_none() {
+        let captured = with_ambient(acme(), async {
+            RequestContinuation::capture(Continuation::Commit)
+        })
+        .await
+        .expect("a unit is running where it was captured");
+        let globex = Arc::new(TenantId::new("globex").expect("a tenant"));
+        let read = || captured.scope(async { current_tenant_id() });
+
+        assert_eq!(with_ambient(globex, read()).await, None);
+        assert_eq!(with_ambient(acme(), read()).await.as_deref(), Some("acme"));
+        assert_eq!(read().await.as_deref(), Some("acme"), "outside every unit");
     }
 }

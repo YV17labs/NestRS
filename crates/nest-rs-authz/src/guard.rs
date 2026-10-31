@@ -1,5 +1,5 @@
 //! [`AbilityGuard<F>`] — request-scoped bridge from the authenticated actor to
-//! the [`Ability`] the enforcement layers read. Generic over
+//! the [`Ability`](crate::Ability) the enforcement layers read. Generic over
 //! the app's [`AbilityFactory`].
 
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use nest_rs_core::{
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 
 use crate::gate::reason;
-use crate::{Ability, AbilityBuilder, AbilityFactory};
+use crate::{AbilityBuilder, AbilityFactory};
 
 /// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AuthzAbility>)]`.
 /// `F::Actor` is the principal the authentication guard attached; its absence
@@ -63,7 +63,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
             // A malformed rule fails construction (fail-closed): deny the
             // request rather than attach an ability whose denial evaporates.
             Some(Ok(ability)) => {
-                cx.attach(ability);
+                cx.attach(crate::context::AmbientAbility::new(ability));
                 Ok(())
             }
             Some(Err(err)) => Err(Denial::internal("authorization rules are misconfigured")
@@ -78,7 +78,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     /// Refuse a unit no ability reaches: the request that carried it did not
     /// authenticate, or nothing re-established the ability for it.
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        if cx.ambient::<Ability>().is_some() {
+        if crate::context::carried(cx).is_some() {
             return Ok(());
         }
         let refused = Denial::unauthorized(match cx.edge() {
@@ -147,7 +147,8 @@ mod tests {
     use nest_rs_http::Request;
 
     use super::*;
-    use crate::{AbilityBuilder, Action, with_ability};
+    use crate::__private::{AmbientAbility, install_ability};
+    use crate::{Ability, AbilityBuilder, Action};
 
     mod post {
         use sea_orm::entity::prelude::*;
@@ -241,7 +242,7 @@ mod tests {
     ) -> Result<Option<Arc<Ability>>, Denial> {
         let mut req = Request::builder().finish();
         check_request(route, [("AbilityGuard", guard as &dyn Guard)], &mut req).await?;
-        Ok(attached::<Ability>(&req))
+        Ok(attached::<AmbientAbility>(&req).and_then(|held| held.ability()))
     }
 
     #[tokio::test]
@@ -345,7 +346,7 @@ mod tests {
         .expect_err("a malformed visitor rule must deny");
         assert_eq!(denial.http_status(), 500);
         assert!(
-            attached::<Ability>(&req).is_none(),
+            attached::<AmbientAbility>(&req).is_none(),
             "a denied request must carry no ability at all",
         );
     }
@@ -390,7 +391,7 @@ mod tests {
     async fn ws_message_with_ambient_ability_passes() {
         let ability: Arc<Ability> =
             Arc::new(AbilityBuilder::new().build().expect("empty ability builds"));
-        with_ability(ability, async {
+        install_ability(ability, async {
             let mut view = Message;
             let mut cx = new_unit_context(&PING, &mut view, None, None);
             guard()

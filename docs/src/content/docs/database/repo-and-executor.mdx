@@ -133,10 +133,12 @@ context of their own.
 `current_executor_scope()` distinguishes Request from Job — `Repo` uses it
 to fail closed when a request runs with no ambient ability, while a job — a
 worker's attempt, a tick, a lifecycle hook — runs unscoped (no caller ⇒ no
-scope to apply). An install never widens the unit it runs in:
-`with_job_executor` inside a request, or a body that continues one, runs as
-the request, so a read that fails closed there stays closed. See
-[Security](/security/) for the ability half.
+scope to apply). Only the unit an edge opens chooses its scope, and never one
+wider than the unit it opens in: a job unit opened inside a request runs under
+the request's scope, and so does work a job captured and a request re-enters.
+No public function installs an executor of its own, so feature code cannot take
+a request's reads out of its scope. See [Security](/security/) for the ability
+half.
 
 An anonymous caller is a request, not a job: on a `#[public]` route the
 ability guard still installs one, built from `define_visitor`, and `Repo`
@@ -253,7 +255,9 @@ than acted on, because there is nothing there for it to decide.
 
 No caller means no ambient ability, which means `Repo` reads and writes are
 **unscoped** — correct for system work with no principal to scope to. A job
-that needs scoping wraps its body in `with_ability(...)` explicitly.
+acting for a principal wraps its body in `with_ability(ability, body)`, which
+scopes it to that principal's rules; it only ever narrows, so inside a request
+it intersects with the caller's ability, never replaces it.
 
 ### The opt-out, and when it is right
 

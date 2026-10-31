@@ -78,7 +78,9 @@ impl Guard for AbilityInjector {
                 .when(|p| p.eq(widget::Column::Id, 1))
                 .fields([widget::Column::Name]);
         }
-        cx.attach(b.build().expect("valid test ability"));
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+            b.build().expect("valid test ability"),
+        ));
         Ok(())
     }
 
@@ -100,7 +102,9 @@ impl Guard for ListAbilityInjector {
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity);
-        cx.attach(b.build().expect("valid test ability"));
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+            b.build().expect("valid test ability"),
+        ));
         Ok(())
     }
 
@@ -422,7 +426,9 @@ impl Guard for PostAbilityInjector {
             b.cannot(Action::Read, post::Entity)
                 .when(|p| post::in_org(&p, 9));
         }
-        cx.attach(b.build().expect("valid test ability"));
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+            b.build().expect("valid test ability"),
+        ));
         Ok(())
     }
 

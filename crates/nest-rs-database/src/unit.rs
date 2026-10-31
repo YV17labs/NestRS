@@ -292,7 +292,10 @@ impl Bound {
 /// With no binding (`None`) the body runs bare. Otherwise the binding opens the
 /// unit `spec` declares — or refuses it, and `unhonoured` answers without
 /// running the body — and `body` runs with the unit's executor installed under
-/// the spec's scope, the binding ambient for [`current_unit_of_work`]. Once the
+/// the spec's scope, never wider than the unit it opens in (a job unit inside
+/// a request runs under the request's), the binding ambient for
+/// [`current_unit_of_work`]. Outside every unit the spec's scope stands, so a
+/// job unit is an edge's, opened on a task of its own. Once the
 /// body ended and was dropped, the unit settles on `ok(&outcome)`: a unit the
 /// driver could not honour turns a success into `unhonoured(why)`, and a
 /// failure stands unless the driver answers it [`Unhonoured::IN_DOUBT`].

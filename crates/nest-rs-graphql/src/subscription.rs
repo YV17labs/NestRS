@@ -130,9 +130,9 @@ impl SocketData {
                 );
                 nest_rs_database::run_unit(Some(&binding), unit, socket, |_| true, refused).await;
             }),
-            Self::Installed(executor) => {
-                Box::pin(nest_rs_database::with_request_executor(executor, socket))
-            }
+            Self::Installed(executor) => Box::pin(
+                nest_rs_database::__private::with_request_executor(executor, socket),
+            ),
         }
     }
 }
@@ -1042,10 +1042,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_socket_never_carries_the_upgrades_transaction() {
-        let captured = nest_rs_database::with_request_executor(Arc::new(Transaction), async {
-            socket_executor()
-        })
-        .await;
+        let captured =
+            nest_rs_database::__private::with_request_executor(Arc::new(Transaction), async {
+                socket_executor()
+            })
+            .await;
 
         let captured = captured.expect("the upgrade runs inside the request boundary");
         assert!(
@@ -1083,9 +1084,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_socket_keeps_a_handle_that_is_already_the_pool() {
-        let captured =
-            nest_rs_database::with_request_executor(Arc::new(Pool), async { socket_executor() })
-                .await;
+        let captured = nest_rs_database::__private::with_request_executor(Arc::new(Pool), async {
+            socket_executor()
+        })
+        .await;
 
         assert!(
             captured.is_some_and(|executor| executor.as_any().is::<Pool>()),

@@ -29,7 +29,7 @@ impl Guard for Granting {
         let ability = AbilityBuilder::new()
             .build()
             .expect("an ability with no rule builds");
-        cx.attach(ability);
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(ability));
         Ok(())
     }
 

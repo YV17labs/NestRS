@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_database::with_request_executor;
+use nest_rs_database::__private::with_request_executor;
 use nest_rs_seaorm::__private::current_executor;
 use nest_rs_seaorm::{LazyTransaction, SeaOrmExecutor};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -172,7 +172,7 @@ async fn a_boundary_abandoned_mid_statement_says_so() {
     let conn = crate::harness::connect().await;
     let lazy = Arc::new(LazyTransaction::new(conn.clone(), "worker"));
     {
-        let attempt = nest_rs_database::with_job_executor(
+        let attempt = nest_rs_database::__private::with_job_executor(
             SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
             async {
                 let executor = current_executor().expect("ambient executor installed");

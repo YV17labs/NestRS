@@ -56,11 +56,11 @@ impl Guard for Grants {
         if read {
             ability.can(Action::Read, note::Entity);
         }
-        cx.attach(
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
             ability
                 .build()
                 .map_err(|_malformed| Denial::internal("malformed rules"))?,
-        );
+        ));
         Ok(())
     }
 

@@ -6,8 +6,9 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::{AbilityBuilder, Action, with_ability};
-use nest_rs_database::{with_job_executor, with_request_executor};
+use nest_rs_authz::__private::install_ability;
+use nest_rs_authz::{AbilityBuilder, Action};
+use nest_rs_database::__private::{with_job_executor, with_request_executor};
 use nest_rs_seaorm::{Creatable, CrudService, Repo, SeaOrmExecutor};
 use sea_orm::prelude::Uuid;
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseConnection, EntityTrait, Set};
@@ -77,7 +78,7 @@ async fn repo_update_runs_active_model_behavior_so_updated_at_moves() {
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        with_ability(allow_everything(), async {
+        install_ability(allow_everything(), async {
             let updated = Repo::<stamped::Entity>::update(stamped::ActiveModel {
                 id: ActiveValue::Unchanged(id),
                 name: Set("after".to_owned()),
@@ -213,7 +214,7 @@ async fn a_create_fills_the_column_defaults_its_input_does_not_carry() {
 
     let created = with_request_executor(
         SeaOrmExecutor::Pool(conn.clone()).into(),
-        with_ability(Arc::new(b.build().expect("a valid ability")), async {
+        install_ability(Arc::new(b.build().expect("a valid ability")), async {
             HookedService
                 .create(hooked::CreateHooked {
                     name: "  created  ".to_owned(),

@@ -261,16 +261,20 @@ impl RequestContinuation {
         current_request_ctx(|ctx| Self(ctx.captured(into)))
     }
 
-    /// Run `fut` under this context.
+    /// Run `fut` under this context, re-entered where `fut` first runs: inside
+    /// another unit, each value it carries is what its
+    /// [`reenter`](crate::AmbientValue::reenter) returns there.
     pub fn scope<F: Future>(&self, fut: F) -> impl Future<Output = F::Output> + use<F> {
-        REQUEST_CTX.scope(Arc::clone(&self.0), fut)
+        let captured = Arc::clone(&self.0);
+        Install::new(move || Some(reentered(&captured)), fut)
     }
 
     /// Run `f` under this context — `current_trace_id()`, `current_actor_id()`
     /// and [`current_request_scope`] answer what they answered inside the
-    /// handler. Synchronous, since a body's `poll` is not a future.
+    /// handler. Synchronous, since a body's `poll` is not a future; re-entered
+    /// as [`scope`](Self::scope) is.
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
-        REQUEST_CTX.sync_scope(Arc::clone(&self.0), f)
+        REQUEST_CTX.sync_scope(reentered(&self.0), f)
     }
 
     #[cfg(test)]
@@ -315,13 +319,37 @@ impl TaskContext {
     }
 
     /// Wrap `fut` so it runs under the captured span and request context — what
-    /// goes to `spawn`, which starts with neither.
+    /// goes to `spawn`, which starts with neither — re-entered as
+    /// [`RequestContinuation::scope`] is.
     pub fn carry<F: Future>(self, fut: F) -> impl Future<Output = F::Output> {
         let Self { span, request } = self;
         tracing::Instrument::instrument(
-            Install::new(move || request.map(|request| request.0), fut),
+            Install::new(move || request.map(|request| reentered(&request.0)), fut),
             span,
         )
+    }
+}
+
+/// The context `captured` installs where this runs: itself outside every unit
+/// — a capture continuing its own unit — and inside a unit carrying exactly
+/// its values; inside any other, each value through its type's `reenter`,
+/// called there, so a capture never takes a unit past what that unit already
+/// runs under.
+fn reentered(captured: &Arc<RequestCtx>) -> Arc<RequestCtx> {
+    let alike = current_request_ctx(|running| {
+        Arc::ptr_eq(running, captured) || running.ambient.alike(&captured.ambient)
+    });
+    if alike.unwrap_or(true) {
+        return Arc::clone(captured);
+    }
+    match captured.ambient.reentered() {
+        None => Arc::clone(captured),
+        Some(ambient) => Arc::new(RequestCtx {
+            scope: captured.scope.clone(),
+            correlation: captured.correlation.clone(),
+            ambient,
+            parent: captured.parent.clone(),
+        }),
     }
 }
 

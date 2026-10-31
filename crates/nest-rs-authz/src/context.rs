@@ -5,13 +5,59 @@ use std::future::Future;
 use std::sync::Arc;
 
 use nest_rs_core::__private::UnmaskedReply;
-use nest_rs_core::AmbientValue;
+use nest_rs_core::{AmbientValue, UnitContext};
+use nest_rs_database::__private::installed_scope;
+use nest_rs_database::ExecutorScope;
 
 use crate::Ability;
 
+/// The ability a unit runs under as the ambient context holds it — a type only
+/// this crate builds, so no `with_ambient` or `cx.attach` elsewhere puts a
+/// wider one there. `None` where [`with_ability`] had nothing to narrow.
+pub struct AmbientAbility(Option<Arc<Ability>>);
+
+impl AmbientAbility {
+    /// `ability`, held as the ability guard attaches the caller's.
+    pub fn new(ability: impl Into<Arc<Ability>>) -> Self {
+        Self(Some(ability.into()))
+    }
+
+    /// The ability held, or `None` where nothing was narrowed.
+    pub fn ability(&self) -> Option<Arc<Ability>> {
+        self.0.clone()
+    }
+}
+
 /// The caller's rules travel wherever the unit continues, and never into a
 /// job's envelope: a job is system work.
-impl AmbientValue for Ability {}
+impl AmbientValue for AmbientAbility {
+    /// Re-entered inside another unit, a capture's ability is narrowed to the
+    /// one that unit reads under, kept where that unit is a job or no unit at
+    /// all — the capture continuing its own — and dropped in a request reading
+    /// under none, whose reads stay closed.
+    fn reenter(self: Arc<Self>) -> Option<Arc<Self>> {
+        let Some(captured) = self.ability() else {
+            return Some(self);
+        };
+        match current_ability() {
+            Some(held) if Arc::ptr_eq(&held, &captured) => Some(self),
+            Some(held) => Some(Arc::new(Self::new(held.intersection(&captured)))),
+            None => (installed_scope(ExecutorScope::Job) == ExecutorScope::Job).then_some(self),
+        }
+    }
+}
+
+/// The ability installed for the running unit, withheld from its reads or not.
+pub(crate) fn installed() -> Option<Arc<Ability>> {
+    nest_rs_core::ambient::<AmbientAbility>().and_then(|held| held.ability())
+}
+
+/// The ability the unit `cx` runs carries: attached earlier in its stage, else
+/// ambient.
+pub(crate) fn carried(cx: &UnitContext<'_>) -> Option<Arc<Ability>> {
+    cx.ambient::<AmbientAbility>()
+        .and_then(|held| held.ability())
+}
 
 /// The [`Ability`] the running unit's reads run under, or `None` outside a
 /// request, in a request that runs no authorization, and on a route whose reply
@@ -22,26 +68,82 @@ pub fn current_ability() -> Option<Arc<Ability>> {
     if nest_rs_core::ambient::<UnmaskedReply>().is_some() {
         return None;
     }
-    nest_rs_core::ambient::<Ability>()
+    installed()
 }
 
-/// Run `fut` with `ability` installed as the ambient capability set, in place
-/// of the one the running unit carries.
+/// Run `fut` under `ability` narrowed to what the running unit already runs
+/// under, never wider.
 ///
-/// Bar: the framework's edges installing the caller's ability (route-model
-/// binding, the response shaper), a job narrowing its system work to a
-/// principal's, and a test. A service never runs a request's reads under an
-/// ability it built: `Repo` filters by whatever is installed here.
+/// Inside a unit holding an ability — a request its guard authorized, a job
+/// already narrowed — `fut` runs under what both allow. A job holds none and
+/// reads unscoped, so there `fut` runs under `ability`: a job narrowing its
+/// system work to a principal's. Anywhere else — a request no ability guard
+/// authorized, outside every unit — nothing is installed, and a read that
+/// failed closed still does.
+///
+/// No public function widens it: the ability is ambient through a type only
+/// this crate builds, so the kernel's own install refuses one.
+///
+/// ```compile_fail,E0277
+/// # use std::sync::Arc;
+/// # use nest_rs_authz::AbilityBuilder;
+/// # let ability = AbilityBuilder::new().build()?;
+/// let widened = nest_rs_core::with_ambient(Arc::new(ability), async {});
+/// # Ok::<(), nest_rs_authz::MalformedRuleError>(())
+/// ```
 pub fn with_ability<F: Future>(ability: Arc<Ability>, fut: F) -> impl Future<Output = F::Output> {
-    nest_rs_core::with_ambient(ability, fut)
+    nest_rs_core::__private::with_ambient_from(
+        move || Arc::new(AmbientAbility(narrowed(ability))),
+        fut,
+    )
+}
+
+/// What [`with_ability`] installs where it runs: the intersection with the
+/// ability held, `ability` in a job holding none, and nothing elsewhere.
+fn narrowed(ability: Arc<Ability>) -> Option<Arc<Ability>> {
+    match installed() {
+        Some(held) if Arc::ptr_eq(&held, &ability) => Some(held),
+        Some(held) => Some(Arc::new(held.intersection(&ability))),
+        None => (nest_rs_database::current_executor_scope() == Some(ExecutorScope::Job))
+            .then_some(ability),
+    }
+}
+
+/// Run `fut` under `ability`, in place of whatever the unit carries: the
+/// testing harness's request unit, and a framework suite's.
+pub fn install_ability<F: Future>(
+    ability: Arc<Ability>,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    nest_rs_core::with_ambient(Arc::new(AmbientAbility::new(ability)), fut)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::any::{Any, TypeId};
+
     use nest_rs_core::{Continuation, RequestContinuation};
+    use nest_rs_database::__private::{with_job_executor, with_request_executor};
+    use nest_rs_database::Executor;
 
     use super::*;
-    use crate::AbilityBuilder;
+    use crate::{AbilityBuilder, Action};
+
+    mod widget {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "widgets")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
 
     fn ability() -> Arc<Ability> {
         Arc::new(
@@ -49,6 +151,70 @@ mod tests {
                 .build()
                 .expect("an empty rule set builds"),
         )
+    }
+
+    /// An ability reading every widget.
+    fn reading() -> Arc<Ability> {
+        let mut ab = AbilityBuilder::new();
+        ab.can(Action::Read, widget::Entity);
+        Arc::new(ab.build().expect("a valid rule set"))
+    }
+
+    /// Whether the ability the running unit reads under may read widgets, or
+    /// `None` when it runs under none.
+    fn reads_widgets() -> Option<bool> {
+        current_ability()
+            .map(|ability| ability.can_class(Action::Read, TypeId::of::<widget::Entity>()))
+    }
+
+    struct Handle;
+
+    impl Executor for Handle {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn a_request_holding_no_ability_is_given_none() {
+        let read = with_request_executor(
+            Arc::new(Handle),
+            with_ability(reading(), async { reads_widgets() }),
+        )
+        .await;
+        assert_eq!(read, None, "a request's reads fail closed, and stay so");
+    }
+
+    #[tokio::test]
+    async fn no_unit_is_given_an_ability() {
+        assert_eq!(
+            with_ability(reading(), async { reads_widgets() }).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_job_narrows_its_unscoped_reads_to_the_ability_it_is_handed() {
+        let narrowed = reading();
+        let installed = with_job_executor(
+            Arc::new(Handle),
+            with_ability(Arc::clone(&narrowed), async { current_ability() }),
+        )
+        .await;
+        assert!(installed.is_some_and(|installed| Arc::ptr_eq(&installed, &narrowed)));
+    }
+
+    #[tokio::test]
+    async fn a_unit_holding_an_ability_runs_under_what_both_allow() {
+        let read = with_job_executor(
+            Arc::new(Handle),
+            with_ability(
+                ability(),
+                with_ability(reading(), async { reads_widgets() }),
+            ),
+        )
+        .await;
+        assert_eq!(read, Some(false), "the held ability reads no widget");
     }
 
     #[test]
@@ -77,7 +243,7 @@ mod tests {
             Continuation::Connection,
             Continuation::Envelope,
         ] {
-            let carried = with_ability(Arc::clone(&ability), async {
+            let carried = install_ability(Arc::clone(&ability), async {
                 RequestContinuation::capture(into)
             })
             .await
@@ -91,5 +257,68 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// What a request holding `reading()` carries into its commit.
+    async fn a_readers_commit() -> RequestContinuation {
+        with_request_executor(
+            Arc::new(Handle),
+            install_ability(reading(), async {
+                RequestContinuation::capture(Continuation::Commit)
+            }),
+        )
+        .await
+        .expect("a unit runs")
+    }
+
+    #[tokio::test]
+    async fn a_capture_re_entered_inside_another_unit_reads_under_what_both_allow() {
+        let captured = a_readers_commit().await;
+        let read = |held: Arc<Ability>| {
+            with_request_executor(
+                Arc::new(Handle),
+                install_ability(held, captured.scope(async { reads_widgets() })),
+            )
+        };
+
+        assert_eq!(read(reading()).await, Some(true));
+        assert_eq!(
+            read(ability()).await,
+            Some(false),
+            "the running unit reads no widget"
+        );
+        assert_eq!(
+            with_request_executor(Arc::new(Handle), captured.scope(async { reads_widgets() }))
+                .await,
+            None,
+            "a request holding none stays closed",
+        );
+        assert_eq!(
+            with_job_executor(Arc::new(Handle), captured.scope(async { reads_widgets() })).await,
+            Some(true),
+            "a job reads under the principal its capture carries",
+        );
+        assert_eq!(
+            captured.scope(async { reads_widgets() }).await,
+            Some(true),
+            "outside every unit, the capture continues its own",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_capture_re_entered_where_no_mask_shapes_the_reply_reads_nothing() {
+        let captured = a_readers_commit().await;
+        let read = with_request_executor(
+            Arc::new(Handle),
+            install_ability(
+                reading(),
+                nest_rs_core::with_ambient(
+                    Arc::new(UnmaskedReply),
+                    captured.scope(async { reads_widgets() }),
+                ),
+            ),
+        )
+        .await;
+        assert_eq!(read, None, "the running route withholds its ability");
     }
 }

@@ -12,7 +12,7 @@ use sea_orm::sea_query::Condition;
 use sea_orm::{EntityTrait, IdenStatic};
 
 use crate::Subject;
-use crate::ability::{Ability, FieldSet, Rule};
+use crate::ability::{Ability, FieldSet, Rule, When};
 use crate::action::Action;
 use crate::error::MalformedRuleError;
 use crate::predicate::{Predicate, PredicateBuilder};
@@ -115,7 +115,7 @@ pub struct RuleSpec<'a, S: Subject> {
     inverted: bool,
     /// The predicate [`when`](Self::when) narrowed the rule's rows to, `None`
     /// while the rule holds for every row.
-    rows: Option<Box<dyn ErasedPredicate>>,
+    rows: Option<Arc<dyn ErasedPredicate>>,
     fields: FieldSet,
     required_scopes: Vec<String>,
     subject: PhantomData<fn() -> S>,
@@ -215,7 +215,7 @@ where
 {
     /// `.when(|p| p.eq(users::Column::OrgId, actor.org_id))`.
     pub fn when(mut self, build: impl FnOnce(PredicateBuilder<E>) -> Predicate<E>) -> Self {
-        self.rows = Some(Box::new(build(PredicateBuilder::new())));
+        self.rows = Some(Arc::new(build(PredicateBuilder::new())));
         self
     }
 
@@ -269,10 +269,10 @@ impl<S: Subject> Drop for RuleSpec<'_, S> {
             Rule {
                 inverted: self.inverted,
                 condition,
-                predicate: self
+                when: self
                     .rows
                     .take()
-                    .map(|rows| rows as Box<dyn Any + Send + Sync>),
+                    .map(|rows| When::Predicate(rows as Arc<dyn Any + Send + Sync>)),
                 fields: std::mem::take(&mut self.fields),
             },
         );

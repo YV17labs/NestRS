@@ -89,3 +89,67 @@ under the ability given or as system work, committed on `Ok`: the demo's
 service tests stopped installing `SeaOrmExecutor::Pool(..)` and an ability by
 hand. The ambient installers' residual named above loses its last test
 caller in the demo; taking them out of the public API is the next branch's.
+
+## 2026-10-31 — no public function widens what a unit runs under
+
+The ambient installers' limit above is closed, with the owner's agreement to
+break the API before 7.0 publishes ("Tout faire", 2026-10-28), security
+first. `nest_rs::authz::with_ability` only narrows: inside a unit holding an
+ability it installs the intersection — rules of both, a subject allowed only
+where both allow it, conditions conjoined, columns both expose, either
+denial denying, either's anonymity anonymous — in a job, which holds none, the
+ability given, and elsewhere nothing, so a read that failed closed still
+does. The ability is ambient through `AmbientAbility`, a type only
+`nest-rs-authz` builds (its constructor is `__private`, for the testing
+harness and the framework's suites), so `with_ambient` and a layer's
+`cx.attach` install none: `Ability` no longer implements `AmbientValue`, and
+the ability guard is the one place an ability comes from.
+`with_request_executor` and `with_job_executor` moved to the port's
+`__private`; the testing harness's `TestApp::unit` and `system_unit` open a
+service test's unit, and `GraphqlSocketBuilder::ability` subscribes as a
+caller.
+
+The two public ways left in are held by behaviour. `run_unit`, the edge port,
+tags no scope wider than the unit it opens in, as the installers do: a job
+unit opened inside a request runs under the request's. A capture re-entered
+inside another unit (`RequestContinuation::scope` and `enter`,
+`TaskContext::carry`) holds each value as its `AmbientValue::reenter` returns
+there (`ambient-carry.md`, 2026-10-31): the executor's scope no wider than the
+running unit's, the ability what `with_ability` would install there, read off
+`current_ability`, so a route no mask shapes stays closed. An ability
+intersection keeps every condition of both sides, an empty one included:
+sea-query renders an empty `any` as FALSE and a negated empty `all` as NOT
+TRUE, so a part skipped for being empty read a grant admitting no row as
+admitting every row.
+
+**Limit:** outside every unit `run_unit` tags the scope its spec declares —
+that is how a queue attempt, a tick, a lifecycle hook and a third-party
+consumer open theirs — so feature code holding the binding
+(`current_unit_of_work`, an injected `dyn UnitOfWork`) can open a job unit on
+a task of its own and read unscoped. Types cannot tell an edge's task from a
+feature's; the data-layer rule names it as an escape, read by grepping
+`ExecutorScope::Job` in feature code.
+
+**Refused:**
+
+- **`with_ability` moved whole to `__private`, the job given an API of its
+  own.** A narrowing cannot widen, so it needs no second name; a job acting
+  for a principal is its one service use, and a second function for it would
+  be a second way to install an ability.
+- **Narrowing `with_ability` and leaving `Ability: AmbientValue`.**
+  `with_ambient(Arc::new(ability), fut)` was the same install under the
+  kernel's name, and `cx.attach(ability)` in an interceptor an authz decision
+  outside a guard.
+- **An empty ability installed in a request holding none.** The request's
+  reads already fail closed with a line naming the missing guard; an empty
+  ability would turn that wiring defect into silent empty answers.
+- **The intersection kept as a pair of abilities, each read in turn.** Every
+  read of an ability would branch on it; the flat rule set it builds is read
+  as any other, and the cost is paid once, by the narrowing.
+- **The continuation named as an escape, held by review.** A third-party
+  transport and driver re-enter captures, so the functions stay public; each
+  value deciding what it is inside another unit holds the rule where review
+  would only read it.
+- **`RequestContinuation` and `TaskContext` moved to `__private`.** The
+  transport and driver pages hand them to third parties, which tier 2 does
+  not serve.

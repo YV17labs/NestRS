@@ -1,6 +1,6 @@
 use std::any::type_name;
 
-use nest_rs_authz::{Ability, ActionMarker, with_ability};
+use nest_rs_authz::{ActionMarker, current_ability};
 use nest_rs_http::{HttpError, ProblemDetails, StatusCode};
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
@@ -55,14 +55,14 @@ where
     if id.get_version_num() != 7 {
         return Err(Unbound::NotV7);
     }
-    let Some(ability) = nest_rs_core::ambient::<Ability>() else {
+    if current_ability().is_none() {
         tracing::error!(
             target: crate::target::ORM,
             provider = type_name::<S>(),
             "missing request `Ability` — is the ability guard applied to this route?",
         );
         return Err(Unbound::Unwired);
-    };
+    }
     let Some(scope) = nest_rs_core::current_request_scope() else {
         tracing::error!(
             target: crate::target::ORM,
@@ -79,7 +79,7 @@ where
         );
         return Err(Unbound::Unwired);
     };
-    match with_ability(ability.clone(), service.access(A::ACTION, id)).await {
+    match service.access(A::ACTION, id).await {
         Ok(Access::Found(model)) => Ok(Authorized::new(model)),
         Ok(Access::Denied) => Err(Unbound::Denied),
         Ok(Access::Missing) => Err(Unbound::Missing),

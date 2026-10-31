@@ -151,6 +151,19 @@ where
 ///     }
 /// }
 /// ```
+///
+/// The unit an edge opens through [`run_unit`](crate::run_unit) tags it, never
+/// wider than the unit it opens in — inside a request, a job unit runs under
+/// the request's scope, and so does a job's capture re-entered there — and no
+/// other public function does: feature code cannot take a request's reads out
+/// of its scope.
+///
+/// ```compile_fail,E0425
+/// # use std::sync::Arc;
+/// # fn handle() -> Arc<dyn nest_rs_database::Executor> { unimplemented!() }
+/// # async fn reads() {}
+/// let unscoped = nest_rs_database::with_job_executor(handle(), reads());
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExecutorScope {
@@ -209,6 +222,44 @@ impl AmbientValue for AmbientExecutor {
             _ => None,
         }
     }
+
+    /// Re-entered inside another unit, a capture runs under no wider scope
+    /// than that unit's: a job's capture inside a request runs as the request.
+    fn reenter(self: Arc<Self>) -> Option<Arc<Self>> {
+        let Some(scope) = self.scope else {
+            return Some(self);
+        };
+        let running = nest_rs_core::ambient::<AmbientExecutor>();
+        let installed = within(running.as_deref(), scope);
+        if installed == scope {
+            return Some(self);
+        }
+        Some(Arc::new(Self {
+            executor: match &self.executor {
+                Handle::Installed(executor) => Handle::Installed(Arc::clone(executor)),
+                // Its pool opens under the scope it now runs under.
+                Handle::Pool(_) => Handle::Pool(OnceLock::new()),
+            },
+            scope: Some(installed),
+            bound: self.bound.clone(),
+        }))
+    }
+}
+
+/// `scope`, or [`Request`](ExecutorScope::Request) inside a unit `running`
+/// tags anything but [`Job`](ExecutorScope::Job): an install never widens the
+/// unit it runs in, and outside every unit it tags what it is given.
+fn within(running: Option<&AmbientExecutor>, scope: ExecutorScope) -> ExecutorScope {
+    match running.map(|ambient| ambient.scope) {
+        None | Some(Some(ExecutorScope::Job)) => scope,
+        Some(_) => ExecutorScope::Request,
+    }
+}
+
+/// The scope an install of `scope` is tagged with where this runs: never wider
+/// than the running unit's.
+pub fn installed_scope(scope: ExecutorScope) -> ExecutorScope {
+    within(nest_rs_core::ambient::<AmbientExecutor>().as_deref(), scope)
 }
 
 /// The installed ambient executor, or `None` outside any scope. An
@@ -249,6 +300,10 @@ pub fn with_executor<F: Future>(
 
 /// Install `executor` and tag the scope as a request — the path on which a
 /// `Repo` fails closed when no ambient authorization context is present.
+///
+/// Framework plumbing, beside [`with_job_executor`]: a unit is the edge's own,
+/// opened through [`run_unit`](crate::run_unit), and a service test's the
+/// testing harness's; a framework suite installs a handle of its own here.
 pub fn with_request_executor<F: Future>(
     executor: Arc<dyn Executor>,
     fut: F,
@@ -261,12 +316,10 @@ pub fn with_request_executor<F: Future>(
 ///
 /// It never widens the unit it runs in: inside a request, a continuation of
 /// one or an untagged install, `fut` runs under the request scope, so a unit
-/// that fails closed stays closed. Outside every unit — a test, a task
-/// spawned off one — it grants the job scope to whatever handle it is given.
-///
-/// Bar: a test running a service as system work, and a driver re-installing
-/// its pool for held work under the scope that work was registered in — never
-/// a service, whose system work is a queue attempt or a tick of its own.
+/// that fails closed stays closed. Outside every unit it grants the job scope
+/// to whatever handle it is given, which is why it is no public function: a
+/// framework suite running system work on a handle of its own calls it, and a
+/// service's system work is a queue attempt or a tick of its own.
 pub fn with_job_executor<F: Future>(
     executor: Arc<dyn Executor>,
     fut: F,
@@ -285,13 +338,9 @@ fn install<F: Future>(
     nest_rs_core::__private::with_ambient_from(
         move || {
             let running = nest_rs_core::ambient::<AmbientExecutor>();
-            let scope = match running.as_ref().map(|ambient| ambient.scope) {
-                None | Some(Some(ExecutorScope::Job)) => scope,
-                Some(_) => ExecutorScope::Request,
-            };
             Arc::new(AmbientExecutor {
                 executor: Handle::Installed(executor),
-                scope: Some(scope),
+                scope: Some(within(running.as_deref(), scope)),
                 bound: running.and_then(|ambient| ambient.bound.clone()),
             })
         },
@@ -299,19 +348,25 @@ fn install<F: Future>(
     )
 }
 
-/// Install a unit's `executor` under `scope`, with the binding that opened it.
+/// Install a unit's `executor` under `scope`, with the binding that opened it,
+/// never wider than the unit it opens in, as [`install`].
 pub(crate) fn install_unit<F: Future>(
     executor: Arc<dyn Executor>,
     scope: ExecutorScope,
     bound: Bound,
     fut: F,
 ) -> impl Future<Output = F::Output> {
-    let ambient = AmbientExecutor {
-        executor: Handle::Installed(executor),
-        scope: Some(scope),
-        bound: Some(bound),
-    };
-    nest_rs_core::with_ambient(Arc::new(ambient), fut)
+    nest_rs_core::__private::with_ambient_from(
+        move || {
+            let running = nest_rs_core::ambient::<AmbientExecutor>();
+            Arc::new(AmbientExecutor {
+                executor: Handle::Installed(executor),
+                scope: Some(within(running.as_deref(), scope)),
+                bound: Some(bound),
+            })
+        },
+        fut,
+    )
 }
 
 #[cfg(test)]
@@ -422,6 +477,50 @@ mod tests {
                 ("a request", Some(ExecutorScope::Request)),
                 ("an untagged install", Some(ExecutorScope::Request)),
                 ("a request's streaming body", Some(ExecutorScope::Request)),
+                ("a job", Some(ExecutorScope::Job)),
+                ("no unit", Some(ExecutorScope::Job)),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn a_jobs_capture_re_entered_inside_a_request_runs_under_the_request() {
+        let (captured, task) = with_job_executor(stub(), async {
+            (
+                RequestContinuation::capture(Continuation::Commit)
+                    .expect("a job carries its commit"),
+                nest_rs_core::TaskContext::capture(Continuation::Commit),
+            )
+        })
+        .await;
+        let scoped = || captured.scope(async { current_executor_scope() });
+
+        let ran = [
+            ("a request", with_request_executor(stub(), scoped()).await),
+            (
+                "a request, entered",
+                with_request_executor(stub(), async { captured.enter(current_executor_scope) })
+                    .await,
+            ),
+            (
+                "a task carried into a request",
+                with_request_executor(stub(), task.carry(async { current_executor_scope() })).await,
+            ),
+            ("an untagged install", with_executor(stub(), scoped()).await),
+            ("a job", with_job_executor(stub(), scoped()).await),
+            ("no unit", scoped().await),
+        ];
+
+        assert_eq!(
+            ran,
+            [
+                ("a request", Some(ExecutorScope::Request)),
+                ("a request, entered", Some(ExecutorScope::Request)),
+                (
+                    "a task carried into a request",
+                    Some(ExecutorScope::Request)
+                ),
+                ("an untagged install", Some(ExecutorScope::Request)),
                 ("a job", Some(ExecutorScope::Job)),
                 ("no unit", Some(ExecutorScope::Job)),
             ],

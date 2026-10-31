@@ -95,6 +95,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::context::{AmbientAbility, install_ability};
     #[cfg(feature = "graphql")]
     pub use crate::graphql::mask::{GraphqlMask, graphql_masked_item, graphql_masked_value};
     #[cfg(feature = "http")]

@@ -40,10 +40,10 @@ That type, `Authorize<Read, user::Entity>`, does two things:
    unless the ability's `can_class(Read, TypeId::of::<user::Entity>())` is
    true — before any interceptor or filter the route declares, so a cache
    never answers the caller it refuses.
-2. **Shaper trigger.** The `RouteResponseShaper` impl wraps the
-   handler in `with_ability(ability, inner)` (so `Repo::scoped`
-   reads the right ability) and runs `mask_entity_response::<user::Entity>`
-   on the way out.
+2. **Shaper trigger.** The `RouteResponseShaper` impl captures the
+   ability the route's guards attached — the one `Repo::scoped` reads in
+   the handler — and runs `mask_entity_response::<user::Entity>` on the way
+   out.
 
 <Aside type="caution">
 Write the extractor by hand only where the decorator cannot go: a

@@ -2667,6 +2667,7 @@ dependencies = [
  "nest-rs-authz",
  "nest-rs-authz-macros",
  "nest-rs-core",
+ "nest-rs-database",
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",

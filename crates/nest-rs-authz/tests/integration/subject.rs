@@ -65,7 +65,9 @@ impl Guard for Grants {
             .and_then(|grant| grant.to_str().ok())
             .map(str::to_owned);
         nest_rs_core::__private::set_actor_id("exporter");
-        cx.attach(ability_of(grant.as_deref()));
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(ability_of(
+            grant.as_deref(),
+        )));
         Ok(())
     }
 

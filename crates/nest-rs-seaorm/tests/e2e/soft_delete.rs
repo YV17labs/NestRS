@@ -5,8 +5,9 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::{Ability, AbilityBuilder, Action, with_ability};
-use nest_rs_database::with_request_executor;
+use nest_rs_authz::__private::install_ability;
+use nest_rs_authz::{Ability, AbilityBuilder, Action};
+use nest_rs_database::__private::with_request_executor;
 use nest_rs_seaorm::{
     Access, Creatable, CrudService, Deletable, Repo, SeaOrmExecutor, SoftDeletable,
 };
@@ -90,7 +91,7 @@ async fn a_soft_deleted_row_is_hidden_from_every_read_and_update_but_with_tombst
     let id = row.id;
 
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        with_ability(manage(), async {
+        install_ability(manage(), async {
             GravestonesService
                 .delete(row.clone())
                 .await
@@ -194,7 +195,7 @@ async fn a_row_inserted_already_deleted_passes_the_create_check_and_reads_as_abs
     let id = Uuid::now_v7();
 
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        with_ability(manage(), async {
+        install_ability(manage(), async {
             let archived = gravestone::ActiveModel {
                 id: Set(id),
                 name: Set("archived".to_owned()),

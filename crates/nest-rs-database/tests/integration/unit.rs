@@ -16,10 +16,11 @@ use nest_rs_core::{
     App, Collecting, ContainerBuilder, ContestedDeclarationError, Continuation, Module,
     Registering, RequestContinuation, hooks, injectable, module,
 };
+use nest_rs_database::__private::with_job_executor;
 use nest_rs_database::{
     BACKEND_REMEDY, Executor, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured,
     UnitOfWork, UnitSpec, current_executor, current_executor_scope, current_unit_of_work,
-    provide_unit_of_work, run_unit, with_job_executor,
+    provide_unit_of_work, run_unit,
 };
 
 const MESSAGE: Unit =
@@ -191,6 +192,41 @@ async fn a_job_install_inside_a_unit_keeps_the_units_scope() {
         .await;
         assert_eq!(reinstalled, Some(scope), "a {scope:?} unit");
     }
+}
+
+#[tokio::test]
+async fn a_job_unit_opened_inside_a_request_runs_under_the_request() {
+    let (binding, record) = Stub::answering(Settlement::Settled);
+    let job = || {
+        run_unit(
+            Some(&binding),
+            spec(ExecutorScope::Job),
+            async { current_executor_scope() },
+            |_| true,
+            |_| None,
+        )
+    };
+    for (outer, inner) in [
+        (ExecutorScope::Request, ExecutorScope::Request),
+        (ExecutorScope::Job, ExecutorScope::Job),
+    ] {
+        let seen = run_unit(Some(&binding), spec(outer), job(), |_| true, |_| None).await;
+        assert_eq!(seen, Some(inner), "a job unit inside a {outer:?} unit");
+    }
+    assert_eq!(
+        job().await,
+        Some(ExecutorScope::Job),
+        "outside every unit, the job's own"
+    );
+    assert!(
+        seen(&record)
+            .opened
+            .iter()
+            .filter(|opened| opened.1 == ExecutorScope::Job)
+            .count()
+            >= 3,
+        "each job unit is opened as the edge declared it",
+    );
 }
 
 #[tokio::test]

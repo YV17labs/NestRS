@@ -4,7 +4,8 @@
 use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_authz::{Ability, AbilityBuilder, AbilityFactory, AbilityGuard, Action};
+use nest_rs_authz::__private::AmbientAbility;
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{AmbientValue, Container, Discoverable, Handler, Posture, with_ambient};
 use nest_rs_guards::{Denial, Guard};
@@ -121,7 +122,9 @@ async fn an_in_band_request_with_no_actor_gets_the_visitor_ability() {
     check(&*guard, &IN_BAND, &mut req)
         .await
         .expect("an anonymous in-band request is left to its operations' gates");
-    let ability = attached::<Ability>(&req).expect("the visitor ability is attached");
+    let ability = attached::<AmbientAbility>(&req)
+        .and_then(|held| held.ability())
+        .expect("the visitor ability is attached");
     assert!(ability.is_visitor());
 }
 

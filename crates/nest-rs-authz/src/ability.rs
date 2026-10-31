@@ -3,7 +3,7 @@
 
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use sea_orm::sea_query::{Condition, Expr};
 use sea_orm::{EntityTrait, IdenStatic, Value};
@@ -141,6 +141,17 @@ impl FieldSet {
             (FieldSet::Only(mine), FieldSet::Only(theirs)) => mine.retain(|f| theirs.contains(f)),
         }
     }
+
+    /// The fields both sets permit.
+    fn narrowed(mut self, other: &FieldSet) -> FieldSet {
+        self.narrow(other);
+        self
+    }
+
+    /// The same fields, in a set of its own.
+    fn copy_of(set: &FieldSet) -> FieldSet {
+        FieldSet::All.narrowed(set)
+    }
 }
 
 /// One grant or denial. The condition is precomputed at build time (the actor's
@@ -150,8 +161,91 @@ impl FieldSet {
 pub(crate) struct Rule {
     pub(crate) inverted: bool,
     pub(crate) condition: Condition,
-    pub(crate) predicate: Option<Box<dyn Any + Send + Sync>>,
+    pub(crate) when: Option<When>,
     pub(crate) fields: FieldSet,
+}
+
+impl Rule {
+    /// The grant a row meets by meeting both: the two conditions conjoined, the
+    /// two `when`s, the columns both permit.
+    fn and(&self, other: &Rule) -> Rule {
+        Rule {
+            inverted: false,
+            // Every part kept, an empty one included: sea-query renders an empty
+            // `any` as FALSE and a negated empty `all` as NOT TRUE.
+            condition: Condition::all()
+                .add(self.condition.clone())
+                .add(other.condition.clone()),
+            when: match (&self.when, &other.when) {
+                (None, None) => None,
+                (Some(when), None) | (None, Some(when)) => Some(when.clone()),
+                (Some(mine), Some(theirs)) => {
+                    Some(When::Both(Arc::new(mine.clone()), Arc::new(theirs.clone())))
+                }
+            },
+            fields: FieldSet::copy_of(&self.fields).narrowed(&other.fields),
+        }
+    }
+
+    /// The same rule, kept by a second ability.
+    fn duplicate(&self) -> Rule {
+        Rule {
+            inverted: self.inverted,
+            condition: self.condition.clone(),
+            when: self.when.clone(),
+            fields: FieldSet::copy_of(&self.fields),
+        }
+    }
+}
+
+/// The rows a rule's `when` narrows it to, its entity erased: the predicate a
+/// factory wrote, or two that [`Ability::intersection`] conjoined.
+#[derive(Clone)]
+pub(crate) enum When {
+    /// A `Predicate` of the rule's keyed subject.
+    Predicate(Arc<dyn Any + Send + Sync>),
+    /// Two narrowings a row meets only by meeting both.
+    Both(Arc<When>, Arc<When>),
+}
+
+impl When {
+    /// What it is on `model`, as SQL would compute it, or `None` when a
+    /// predicate is not the keyed subject's (see `predicate_of`).
+    fn decide<E: EntityTrait>(
+        &self,
+        model: &E::Model,
+        invented: &dyn Fn(E::Column) -> bool,
+    ) -> Option<Truth> {
+        match self {
+            When::Predicate(predicate) => {
+                predicate_of::<E>(&**predicate).map(|predicate| predicate.decide(model, invented))
+            }
+            When::Both(mine, theirs) => Some(Truth::all(
+                [
+                    mine.decide::<E>(model, invented)?,
+                    theirs.decide::<E>(model, invented)?,
+                ]
+                .into_iter(),
+            )),
+        }
+    }
+
+    /// The columns its conjunction pins by equality, and those it constrains
+    /// any other way; `false` when a predicate is not the keyed subject's.
+    fn pins<E: EntityTrait>(
+        &self,
+        pinned: &mut Vec<(E::Column, Value)>,
+        other: &mut Vec<E::Column>,
+    ) -> bool {
+        match self {
+            When::Predicate(predicate) => predicate_of::<E>(&**predicate)
+                .map(|predicate| predicate.pins(pinned, other))
+                .is_some(),
+            When::Both(mine, theirs) => {
+                mine.pins::<E>(pinned, other) && theirs.pins::<E>(pinned, other)
+            }
+        }
+    }
 }
 
 /// The authorization rules compiled for a single actor. Built by an
@@ -221,6 +315,67 @@ impl Ability {
         self.visitor
     }
 
+    /// The rules both abilities allow: a subject granted where both grant it,
+    /// a row where both conditions admit it, a column where both expose it;
+    /// either's denial denies, and either's anonymity makes it anonymous.
+    pub(crate) fn intersection(&self, other: &Ability) -> Ability {
+        let mut both = Ability {
+            visitor: self.visitor || other.visitor,
+            ..Ability::default()
+        };
+        let keys: HashSet<(Action, TypeId)> = self
+            .rules
+            .keys()
+            .chain(other.rules.keys())
+            .copied()
+            .collect();
+        for key @ (action, subject) in keys {
+            for side in [self, other] {
+                for denial in side.rules.get(&key).into_iter().flatten() {
+                    if denial.inverted {
+                        both.add_rule(action, subject, denial.duplicate());
+                    }
+                }
+            }
+            // A query reads its action's rules and the wildcard's, so each
+            // pair of grants that query would meet lands under one key.
+            let wildcard = (Action::Manage, subject);
+            let pairs: &[_] = if action == Action::Manage {
+                &[(key, key)]
+            } else {
+                &[(key, key), (key, wildcard), (wildcard, key)]
+            };
+            for &(mine, theirs) in pairs {
+                for grant in self.grants_under(mine) {
+                    for their_grant in other.grants_under(theirs) {
+                        both.add_rule(action, subject, grant.and(their_grant));
+                    }
+                }
+            }
+        }
+        // A grant withheld from one side is worth asking for only where the
+        // other side grants the subject.
+        for (side, beside) in [(self, other), (other, self)] {
+            for (&(action, subject), scopes) in &side.withheld {
+                if beside.can_class(action, subject) {
+                    for lacking in scopes {
+                        both.withhold(action, subject, lacking.clone());
+                    }
+                }
+            }
+        }
+        both
+    }
+
+    /// The grants keyed under exactly `key`, the wildcard's not added.
+    fn grants_under(&self, key: (Action, TypeId)) -> impl Iterator<Item = &Rule> {
+        self.rules
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .filter(|rule| !rule.inverted)
+    }
+
     /// Rules relevant to `action` on `subject`: those keyed under the action
     /// itself plus those under [`Action::Manage`] (the action wildcard).
     fn rules_for(&self, action: Action, subject: TypeId) -> impl Iterator<Item = &Rule> {
@@ -276,15 +431,14 @@ impl Ability {
             if rule.inverted {
                 continue;
             }
-            let Some(predicate) = rule.predicate.as_deref() else {
+            let Some(when) = &rule.when else {
                 continue;
             };
             // Unreachable (see `predicate_of`): a rule this read cannot see
             // pins nothing at all.
-            let Some(predicate) = predicate_of::<E>(predicate) else {
+            if !when.pins::<E>(&mut pinned, &mut contested) {
                 return Vec::new();
-            };
-            predicate.pins(&mut pinned, &mut contested);
+            }
             for (column, value) in pinned.drain(..) {
                 match agreed.iter().find(|(held, _)| same_column(held, &column)) {
                     Some((_, held)) if *held == value => {}
@@ -335,10 +489,10 @@ impl Ability {
         let mut undecided_grants: Option<FieldSet> = None;
         let mut undecided_denial = false;
         for rule in self.rules_for(action, TypeId::of::<E>()) {
-            let truth = match rule.predicate.as_deref() {
+            let truth = match &rule.when {
                 None => Truth::True,
-                Some(predicate) => match predicate_of::<E>(predicate) {
-                    Some(predicate) => predicate.decide(model, invented),
+                Some(when) => match when.decide::<E>(model, invented) {
+                    Some(truth) => truth,
                     None => {
                         // Unreachable type mismatch (see `predicate_of`) — fail
                         // closed: a broken denial denies, a broken grant never widens.
@@ -824,8 +978,18 @@ mod tests {
         Rule {
             inverted: false,
             condition: Condition::all(),
-            predicate: Some(Box::new(Predicate::<gadget::Entity>::Always)),
+            when: Some(When::Predicate(Arc::new(
+                Predicate::<gadget::Entity>::Always,
+            ))),
             fields: FieldSet::All,
+        }
+    }
+
+    /// The one predicate a factory's rule narrows its rows by.
+    fn narrowing(rule: &Rule) -> &(dyn Any + Send + Sync) {
+        match &rule.when {
+            Some(When::Predicate(predicate)) => &**predicate,
+            _ => panic!("a rule narrowed by one predicate"),
         }
     }
 
@@ -835,8 +999,7 @@ mod tests {
         let rule = mismatched_rule();
 
         assert!(
-            predicate_of::<widget::Entity>(rule.predicate.as_deref().expect("a narrowed rule"))
-                .is_none(),
+            predicate_of::<widget::Entity>(narrowing(&rule)).is_none(),
             "a predicate that is not this subject's grants nothing — reading it \
              as unrestricted is the one answer that opens rows",
         );
@@ -860,14 +1023,13 @@ mod tests {
         let rule = Rule {
             inverted: false,
             condition: Condition::all(),
-            predicate: Some(Box::new(Predicate::<widget::Entity>::Always)),
+            when: Some(When::Predicate(Arc::new(
+                Predicate::<widget::Entity>::Always,
+            ))),
             fields: FieldSet::All,
         };
 
-        assert!(
-            predicate_of::<widget::Entity>(rule.predicate.as_deref().expect("a narrowed rule"))
-                .is_some()
-        );
+        assert!(predicate_of::<widget::Entity>(narrowing(&rule)).is_some());
         logs.expect_none(
             "nest_rs::authz",
             "ability rule predicate does not match its keyed subject — failing closed",
@@ -1033,5 +1195,324 @@ mod tests {
         let ability = b.build().unwrap();
 
         assert_eq!(pins(&ability), []);
+    }
+
+    /// The query `condition_for` lowers `action` on posts to, as Postgres reads it.
+    fn sql(ability: &Ability, action: Action) -> String {
+        use sea_orm::{DatabaseBackend, QueryFilter, QueryTrait};
+        post::Entity::find()
+            .filter(ability.condition_for::<post::Entity>(action))
+            .build(DatabaseBackend::Postgres)
+            .to_string()
+    }
+
+    fn posts() -> TypeId {
+        TypeId::of::<post::Entity>()
+    }
+
+    #[test]
+    fn an_intersection_grants_a_subject_only_where_both_do() {
+        let mut mine = crate::AbilityBuilder::new();
+        mine.can(Action::Read, post::Entity);
+        mine.can(Action::Read, widget::Entity);
+        let mut theirs = crate::AbilityBuilder::new();
+        theirs.can(Action::Read, post::Entity);
+        theirs.can(Action::Delete, post::Entity);
+        let both = mine.build().unwrap().intersection(&theirs.build().unwrap());
+
+        assert!(both.can_class(Action::Read, posts()));
+        assert!(!both.can_class(Action::Read, TypeId::of::<widget::Entity>()));
+        assert!(!both.can_class(Action::Delete, posts()));
+        assert!(sql(&both, Action::Delete).contains("1 = 0"));
+    }
+
+    #[test]
+    fn the_wildcard_meets_the_other_sides_action_and_nothing_more() {
+        let mut managing = crate::AbilityBuilder::new();
+        managing
+            .can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        let mut reading = crate::AbilityBuilder::new();
+        reading.can(Action::Read, post::Entity);
+        let (managing, reading) = (managing.build().unwrap(), reading.build().unwrap());
+
+        for both in [
+            managing.intersection(&reading),
+            reading.intersection(&managing),
+        ] {
+            assert!(both.can_class(Action::Read, posts()));
+            assert!(!both.can_class(Action::Delete, posts()));
+            assert!(!both.can_class(Action::Manage, posts()));
+            assert!(both.can::<post::Entity>(Action::Read, &a_post()));
+            assert!(!both.can::<post::Entity>(
+                Action::Read,
+                &post::Model {
+                    org_id: 8,
+                    ..a_post()
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn an_intersection_admits_a_row_both_conditions_admit() {
+        let mut in_org = crate::AbilityBuilder::new();
+        in_org
+            .can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        let mut titled = crate::AbilityBuilder::new();
+        titled
+            .can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "hello"));
+        let both = in_org
+            .build()
+            .unwrap()
+            .intersection(&titled.build().unwrap());
+
+        let read = |org_id, title: &str| {
+            let row = post::Model {
+                org_id,
+                title: title.into(),
+                ..a_post()
+            };
+            both.can::<post::Entity>(Action::Read, &row)
+        };
+        assert!(read(7, "hello"));
+        assert!(!read(7, "other"));
+        assert!(!read(8, "hello"));
+        let filter = sql(&both, Action::Read);
+        assert!(
+            filter.contains(r#""org_id" = 7"#) && filter.contains(r#""title" = 'hello'"#),
+            "{filter}"
+        );
+    }
+
+    #[test]
+    fn either_sides_denial_denies() {
+        let mut reading = crate::AbilityBuilder::new();
+        reading.can(Action::Read, post::Entity);
+        let mut barred = crate::AbilityBuilder::new();
+        barred.can(Action::Read, post::Entity);
+        barred
+            .cannot(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 8));
+        let (reading, barred) = (reading.build().unwrap(), barred.build().unwrap());
+
+        for both in [reading.intersection(&barred), barred.intersection(&reading)] {
+            assert!(both.can::<post::Entity>(Action::Read, &a_post()));
+            assert!(!both.can::<post::Entity>(
+                Action::Read,
+                &post::Model {
+                    org_id: 8,
+                    ..a_post()
+                }
+            ));
+            assert!(sql(&both, Action::Read).contains("NOT"));
+        }
+    }
+
+    #[test]
+    fn an_intersection_exposes_the_columns_both_expose() {
+        let mut mine = crate::AbilityBuilder::new();
+        mine.can(Action::Read, post::Entity)
+            .fields([post::Column::Title, post::Column::OrgId]);
+        let mut theirs = crate::AbilityBuilder::new();
+        theirs
+            .can(Action::Read, post::Entity)
+            .fields([post::Column::Title, post::Column::Id]);
+        let both = mine.build().unwrap().intersection(&theirs.build().unwrap());
+
+        assert_eq!(
+            only(both.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            Some(vec!["title"]),
+        );
+    }
+
+    #[test]
+    fn a_relation_one_side_cannot_decide_stays_undecided_on_a_pushed_row() {
+        let mut related = crate::AbilityBuilder::new();
+        related.can(Action::Read, post::Entity).when(in_org(7));
+        let mut in_org = crate::AbilityBuilder::new();
+        in_org
+            .can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        let both = related
+            .build()
+            .unwrap()
+            .intersection(&in_org.build().unwrap());
+
+        let verdict = |provenance| {
+            both.evaluate::<post::Entity>(Action::Read, &a_post(), provenance, &nothing_invented)
+                .allowed
+        };
+        assert!(verdict(Provenance::Loaded), "the read's SQL applied both");
+        assert!(!verdict(Provenance::Pushed), "no read applied the relation");
+    }
+
+    #[test]
+    fn an_intersection_pins_what_either_side_pins_unless_they_disagree() {
+        let creating = |column: post::Column, value: sea_orm::Value| {
+            let mut b = crate::AbilityBuilder::new();
+            b.can(Action::Create, post::Entity)
+                .when(move |p| p.eq(column, value));
+            b.build().unwrap()
+        };
+        let in_org = creating(post::Column::OrgId, 7.into());
+
+        assert_eq!(
+            pins(&in_org.intersection(&creating(post::Column::Title, "draft".into()))),
+            [org(7), ("title", "draft".into())],
+        );
+        assert_eq!(
+            pins(&in_org.intersection(&creating(post::Column::OrgId, 8.into()))),
+            []
+        );
+    }
+
+    #[test]
+    fn a_visitor_on_either_side_is_a_visitor() {
+        let caller = crate::AbilityBuilder::new().build().unwrap();
+        let visitor = crate::AbilityBuilder::new().build_visitor().unwrap();
+
+        assert!(caller.intersection(&visitor).is_visitor());
+        assert!(visitor.intersection(&caller).is_visitor());
+        assert!(!caller.intersection(&caller).is_visitor());
+    }
+
+    #[test]
+    fn a_withheld_grant_is_named_only_where_the_other_side_grants() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut scoped = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        scoped
+            .can(Action::Read, post::Entity)
+            .requires_scope("posts:read");
+        let scoped = scoped.build().unwrap();
+        let mut reading = crate::AbilityBuilder::new();
+        reading.can(Action::Read, post::Entity);
+        let nothing = crate::AbilityBuilder::new().build().unwrap();
+
+        assert_eq!(
+            scoped
+                .intersection(&reading.build().unwrap())
+                .missing_scopes(Action::Read, posts()),
+            ["posts:read"],
+        );
+        assert!(
+            scoped
+                .intersection(&nothing)
+                .missing_scopes(Action::Read, posts())
+                .is_empty(),
+            "the scope alone would not grant it",
+        );
+    }
+
+    /// A `when` as a factory writes one; `None` is a grant no `when` narrows.
+    type Shape = Option<fn(PredicateBuilder<post::Entity>) -> Predicate<post::Entity>>;
+
+    /// Every shape a grant's narrowing takes, the ones admitting no row or
+    /// every row without a column among them.
+    fn shapes() -> [Shape; 13] {
+        [
+            None,
+            Some(|p| p.all(Vec::new())),
+            Some(|p| p.any(Vec::new())),
+            Some(|p| p.not(p.all(Vec::new()))),
+            Some(|p| p.not(p.any(Vec::new()))),
+            Some(|p| p.eq(post::Column::OrgId, 7)),
+            Some(|p| p.not(p.eq(post::Column::OrgId, 7))),
+            Some(|p| p.is_in(post::Column::OrgId, [7, 8])),
+            Some(|p| p.is_in(post::Column::OrgId, Vec::<i32>::new())),
+            Some(|p| p.ne(post::Column::Title, "hello")),
+            Some(|p| p.gt(post::Column::Id, 1)),
+            Some(|p| p.is_null(post::Column::ParentId)),
+            Some(|p| {
+                p.any([
+                    p.eq(post::Column::OrgId, 8),
+                    p.eq(post::Column::Title, "hello"),
+                ])
+            }),
+        ]
+    }
+
+    /// The predicate `shape` narrows to, every row where it narrows nothing.
+    fn lowered(shape: Shape) -> Predicate<post::Entity> {
+        match shape {
+            Some(shape) => shape(PredicateBuilder::new()),
+            None => PredicateBuilder::new().all(Vec::new()),
+        }
+    }
+
+    /// An ability granting `Read` on posts where `shape` admits the row.
+    fn reading_where(shape: Shape) -> Ability {
+        let mut b = crate::AbilityBuilder::new();
+        match shape {
+            Some(shape) => {
+                b.can(Action::Read, post::Entity).when(shape);
+            }
+            None => {
+                b.can(Action::Read, post::Entity);
+            }
+        }
+        b.build().unwrap()
+    }
+
+    #[test]
+    fn an_intersection_keeps_a_grant_admitting_no_row_admitting_none() {
+        let in_org = reading_where(Some(|p| p.eq(post::Column::OrgId, 7)));
+        let every = reading_where(None);
+        for nothing in [
+            reading_where(Some(|p| p.any(Vec::new()))),
+            reading_where(Some(|p| p.not(p.all(Vec::new())))),
+        ] {
+            for wider in [&in_org, &every] {
+                for both in [nothing.intersection(wider), wider.intersection(&nothing)] {
+                    assert!(!both.can::<post::Entity>(Action::Read, &a_post()));
+                    let filter = sql(&both, Action::Read);
+                    assert!(
+                        filter.contains("FALSE") || filter.contains("NOT TRUE"),
+                        "the intersection reads rows its caller's grant admits none of: {filter}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_intersection_reads_as_the_conjunction_a_factory_would_write() {
+        let rows = [
+            a_post(),
+            post::Model {
+                org_id: 8,
+                ..a_post()
+            },
+            post::Model {
+                id: 2,
+                title: "other".into(),
+                parent_id: Some(1),
+                ..a_post()
+            },
+        ];
+        for mine in shapes() {
+            for theirs in shapes() {
+                let both = reading_where(mine).intersection(&reading_where(theirs));
+                let mut b = crate::AbilityBuilder::new();
+                b.can(Action::Read, post::Entity)
+                    .when(|p| p.all([lowered(mine), lowered(theirs)]));
+                let written = b.build().unwrap();
+
+                assert_eq!(
+                    sql(&both, Action::Read),
+                    sql(&written, Action::Read),
+                    "SQL reads the intersection as the conjunction",
+                );
+                for row in &rows {
+                    assert_eq!(
+                        both.can::<post::Entity>(Action::Read, row),
+                        written.can::<post::Entity>(Action::Read, row),
+                        "the instance check reads it as SQL does: {row:?}",
+                    );
+                }
+            }
+        }
     }
 }

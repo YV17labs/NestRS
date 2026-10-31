@@ -147,11 +147,11 @@ impl nest_rs_database::Executor for OpenTransaction {
     fn after_commit(&self, work: nest_rs_database::Deferred) -> Option<nest_rs_database::Deferred> {
         let pool: Arc<dyn nest_rs_database::Executor> = Arc::new(Pool);
         let work: nest_rs_database::Deferred = match nest_rs_database::current_executor_scope() {
-            Some(nest_rs_database::ExecutorScope::Request) => {
-                Box::pin(nest_rs_database::with_request_executor(pool, work))
-            }
+            Some(nest_rs_database::ExecutorScope::Request) => Box::pin(
+                nest_rs_database::__private::with_request_executor(pool, work),
+            ),
             Some(nest_rs_database::ExecutorScope::Job) => {
-                Box::pin(nest_rs_database::with_job_executor(pool, work))
+                Box::pin(nest_rs_database::__private::with_job_executor(pool, work))
             }
             _ => Box::pin(nest_rs_database::__private::with_executor(pool, work)),
         };
@@ -203,7 +203,7 @@ async fn an_event_emitted_inside_a_transaction_is_dispatched_once_it_commits() {
     let (_app, awarder, ledger) = booted().await;
     let transaction = Arc::new(OpenTransaction::default());
 
-    nest_rs_database::with_request_executor(transaction.clone(), awarder.award(7)).await;
+    nest_rs_database::__private::with_request_executor(transaction.clone(), awarder.award(7)).await;
     assert_eq!(
         ledger.credited.load(Ordering::SeqCst),
         0,
@@ -220,7 +220,7 @@ async fn an_event_whose_transaction_rolls_back_is_never_dispatched() {
     let transaction = Arc::new(OpenTransaction::default());
     let logs = nest_rs_testing::LogCapture::install();
 
-    nest_rs_database::with_request_executor(transaction.clone(), awarder.award(7)).await;
+    nest_rs_database::__private::with_request_executor(transaction.clone(), awarder.award(7)).await;
     transaction.roll_back();
 
     assert_eq!(ledger.credited.load(Ordering::SeqCst), 0);
@@ -238,7 +238,7 @@ async fn an_event_whose_transaction_rolls_back_is_never_dispatched() {
 #[tokio::test]
 async fn an_event_with_no_transaction_to_wait_for_is_dispatched_before_emit_returns() {
     let (_app, awarder, ledger) = booted().await;
-    nest_rs_database::with_request_executor(Arc::new(Pool), awarder.award(7)).await;
+    nest_rs_database::__private::with_request_executor(Arc::new(Pool), awarder.award(7)).await;
     assert_eq!(ledger.credited.load(Ordering::SeqCst), 7);
 }
 
@@ -447,7 +447,10 @@ async fn a_listener_held_for_the_commit_still_reads_what_its_emitter_carried() {
 
     nest_rs_core::with_ambient(
         Arc::new(Tenant("acme")),
-        nest_rs_database::with_request_executor(transaction.clone(), bus.emit(TenantTouched)),
+        nest_rs_database::__private::with_request_executor(
+            transaction.clone(),
+            bus.emit(TenantTouched),
+        ),
     )
     .await;
     assert!(seen(&probe).is_empty(), "held until the commit");
@@ -534,7 +537,7 @@ fn ran_on(probe: &ExecutorProbe) -> Vec<RanOn> {
 async fn a_listener_run_at_once_runs_on_its_emitters_executor() {
     let (_app, bus, probe) = executor_booted().await;
 
-    nest_rs_database::with_request_executor(Arc::new(Pool), bus.emit(Recorded)).await;
+    nest_rs_database::__private::with_request_executor(Arc::new(Pool), bus.emit(Recorded)).await;
 
     assert_eq!(
         ran_on(&probe),
@@ -548,7 +551,7 @@ async fn a_listener_held_for_the_commit_runs_on_what_its_driver_installed() {
     let (_app, bus, probe) = executor_booted().await;
     let transaction = Arc::new(OpenTransaction::default());
 
-    nest_rs_database::with_job_executor(transaction.clone(), bus.emit(Recorded)).await;
+    nest_rs_database::__private::with_job_executor(transaction.clone(), bus.emit(Recorded)).await;
     assert!(ran_on(&probe).is_empty(), "held until the commit");
 
     transaction.commit().await;

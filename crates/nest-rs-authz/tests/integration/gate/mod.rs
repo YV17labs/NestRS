@@ -55,7 +55,7 @@ impl Layer for NarrowToken {}
 impl Guard for NarrowToken {
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         nest_rs_core::__private::set_actor_id("narrow");
-        cx.attach(too_narrow());
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(too_narrow()));
         Ok(())
     }
 

@@ -3,8 +3,9 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::{Ability, AbilityBuilder, Action, with_ability};
-use nest_rs_database::with_request_executor;
+use nest_rs_authz::__private::install_ability;
+use nest_rs_authz::{Ability, AbilityBuilder, Action};
+use nest_rs_database::__private::with_request_executor;
 use nest_rs_seaorm::{
     Access, Creatable, CreateModel, CrudService, Deletable, Repo, SeaOrmExecutor, Updatable,
     UpdateModel,
@@ -193,7 +194,7 @@ async fn list_returns_only_items_whose_parent_is_in_the_callers_org() {
     } = seed_two_orgs(&conn).await;
 
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        with_ability(items_in_org(org_a), async {
+        install_ability(items_in_org(org_a), async {
             let rows = ItemsService.list().await.expect("list succeeds");
             let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
             assert!(ids.contains(&item_a), "own-org item is visible: {ids:?}");
@@ -221,7 +222,7 @@ async fn access_distinguishes_found_denied_and_missing() {
 
     let logs = nest_rs_testing::LogCapture::install();
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        with_ability(items_in_org(org_a), async {
+        install_ability(items_in_org(org_a), async {
             assert!(
                 matches!(
                     ItemsService.access(Action::Read, item_a).await.expect("a"),
@@ -285,7 +286,7 @@ async fn the_instance_check_in_sql_decides_the_relation_a_row_read_for_another_a
 
     let ability = reads_all_updates_in_org(org_a);
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        with_ability(ability.clone(), async {
+        install_ability(ability.clone(), async {
             let mine = Repo::<item::Entity>::find_by_id(item_a)
                 .await
                 .expect("read a")
@@ -350,7 +351,7 @@ async fn the_instance_check_in_sql_refuses_the_row_a_relational_denial_names() {
     let ability = Arc::new(b.build().expect("valid test ability"));
 
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        with_ability(ability.clone(), async {
+        install_ability(ability.clone(), async {
             let mine = Repo::<item::Entity>::find_by_id(item_a)
                 .await
                 .expect("read a")
@@ -393,7 +394,7 @@ async fn create_under_an_out_of_scope_parent_is_rejected() {
     seed_container(&conn, cont_b, org_b).await;
 
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        with_ability(items_in_org(org_a), async {
+        install_ability(items_in_org(org_a), async {
             let ok = ItemsService
                 .create(CreateItem {
                     container_id: cont_a,
@@ -438,7 +439,7 @@ async fn out_of_scope_update_is_denied_and_leaves_the_row_unchanged() {
         .expect("item_b exists");
 
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        with_ability(items_in_org(org_a), async {
+        install_ability(items_in_org(org_a), async {
             let denied = ItemsService
                 .update(
                     model,
@@ -486,7 +487,7 @@ async fn out_of_scope_delete_is_denied_and_leaves_the_row() {
         .expect("item_b exists");
 
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        with_ability(items_in_org(org_a), async {
+        install_ability(items_in_org(org_a), async {
             let denied = ItemsService.delete(model).await;
             assert!(
                 matches!(denied, Err(DbErr::RecordNotFound(_))),
@@ -530,7 +531,7 @@ async fn a_list_that_hits_the_hard_cap_says_so() {
 
     let logs = nest_rs_testing::LogCapture::install();
     let rows = with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        with_ability(items_in_org(org), async { ItemsService.list().await }).await
+        install_ability(items_in_org(org), async { ItemsService.list().await }).await
     })
     .await
     .expect("the list succeeds — truncation is not an error");

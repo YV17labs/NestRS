@@ -201,7 +201,9 @@ mod ability_of_the_unit {
         async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             let mut builder = AbilityBuilder::new();
             builder.can(Action::Read, ghost::Entity);
-            cx.attach(builder.build().expect("a valid ability"));
+            cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+                builder.build().expect("a valid ability"),
+            ));
             Ok(())
         }
     }

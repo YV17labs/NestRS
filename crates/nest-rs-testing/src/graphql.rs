@@ -91,14 +91,26 @@ impl GraphqlSocketBuilder {
         }
     }
 
-    /// Attach `value` as the guards at a real upgrade would — the caller's
-    /// `Ability`, a principal: ambient for every operation the socket runs
-    /// when its type crosses into a connection, and forwarded into the
-    /// connection's context by the app's seeds.
+    /// Attach `value` as the guards at a real upgrade would — a principal:
+    /// ambient for every operation the socket runs when its type crosses into
+    /// a connection, and forwarded into the connection's context by the app's
+    /// seeds. The caller's ability goes through `ability`, under the `authz`
+    /// feature.
     #[must_use]
     pub fn attach<T: AmbientValue>(mut self, value: Arc<T>) -> Self {
         self.attached.attach(value);
         self
+    }
+
+    /// Subscribe as a caller granted `ability`, as the ability guard at a
+    /// real upgrade attaches it: every operation's class gate and mask read
+    /// it.
+    #[cfg(feature = "authz")]
+    #[must_use]
+    pub fn ability(self, ability: Arc<nest_rs_authz::Ability>) -> Self {
+        self.attach(Arc::new(nest_rs_authz::__private::AmbientAbility::new(
+            ability,
+        )))
     }
 
     /// Put `value` in the connection's context, beside what the app's seeds

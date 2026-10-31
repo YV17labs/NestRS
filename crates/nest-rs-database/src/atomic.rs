@@ -182,7 +182,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
-    use crate::{ExecutorScope, current_executor_scope, with_job_executor, with_request_executor};
+    use crate::executor::{with_job_executor, with_request_executor};
+    use crate::{ExecutorScope, current_executor_scope};
 
     #[derive(Debug)]
     enum Failure {

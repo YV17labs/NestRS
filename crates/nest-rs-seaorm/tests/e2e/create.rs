@@ -3,8 +3,9 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::{AbilityBuilder, Action, with_ability};
-use nest_rs_database::with_request_executor;
+use nest_rs_authz::__private::install_ability;
+use nest_rs_authz::{AbilityBuilder, Action};
+use nest_rs_database::__private::with_request_executor;
 use nest_rs_seaorm::{Creatable, CreateModel, CrudService, SeaOrmExecutor};
 use sea_orm::prelude::Uuid;
 use sea_orm::{
@@ -84,7 +85,7 @@ async fn out_of_scope_create_over_the_pool_executor_persists_nothing() {
     // The WS-message shape: the pool, with no surrounding transaction.
     let result = with_request_executor(
         SeaOrmExecutor::Pool(conn.clone()).into(),
-        with_ability(org_scoped_ability(1), async {
+        install_ability(org_scoped_ability(1), async {
             GadgetsService.create(CreateGadget { id, org_id: 2 }).await
         }),
     )
@@ -129,7 +130,7 @@ async fn a_create_that_cannot_open_its_savepoint_poisons_the_boundary() {
     let lazy = Arc::new(nest_rs_seaorm::LazyTransaction::new(starved, "test"));
     let result = with_request_executor(
         SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
-        with_ability(org_scoped_ability(1), async {
+        install_ability(org_scoped_ability(1), async {
             GadgetsService
                 .create(CreateGadget {
                     id: Uuid::now_v7(),
@@ -168,7 +169,7 @@ async fn in_scope_create_over_the_pool_executor_commits() {
 
     let result = with_request_executor(
         SeaOrmExecutor::Pool(conn.clone()).into(),
-        with_ability(org_scoped_ability(7), async {
+        install_ability(org_scoped_ability(7), async {
             GadgetsService.create(CreateGadget { id, org_id: 7 }).await
         }),
     )
@@ -257,7 +258,7 @@ async fn create_tenanted(
 ) -> Result<tenanted::Model, DbErr> {
     with_request_executor(
         SeaOrmExecutor::Pool(conn.clone()).into(),
-        with_ability(Arc::new(ability), async {
+        install_ability(Arc::new(ability), async {
             TenantedService
                 .create(CreateTenanted {
                     id,
@@ -386,7 +387,7 @@ async fn a_create_whose_undo_cannot_be_issued_says_so() {
 
     let outcome = with_request_executor(
         SeaOrmExecutor::Pool(crate::harness::connect().await).into(),
-        with_ability(ability, async {
+        install_ability(ability, async {
             FragileService
                 .create(CreateFragile {
                     id: Uuid::now_v7(),

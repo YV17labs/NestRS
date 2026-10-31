@@ -213,7 +213,7 @@ impl HeadlessApp {
         crate::unit::run(
             self.container(),
             nest_rs_database::ExecutorScope::Request,
-            nest_rs_authz::with_ability(ability, body()),
+            nest_rs_authz::__private::install_ability(ability, body()),
         )
         .await
     }

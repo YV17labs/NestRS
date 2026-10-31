@@ -49,12 +49,16 @@ impl Guard for AbilityInjector {
             // The anonymous branch holds a real grant; the gate must still refuse it.
             "visitor" => {
                 builder.can(Action::Read, widget::Entity);
-                cx.attach(builder.build_visitor().expect("valid test ability"));
+                cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+                    builder.build_visitor().expect("valid test ability"),
+                ));
                 return Ok(());
             }
             _ => {}
         }
-        cx.attach(builder.build().expect("valid test ability"));
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+            builder.build().expect("valid test ability"),
+        ));
         Ok(())
     }
 

@@ -192,6 +192,14 @@ to the pool wherever the unit outlives its transaction, and the ability
 crosses everywhere but an envelope — see
 [transactions](/database/transactions/).
 
+Work a unit captured usually continues where no other unit runs: a spawned
+task, a body polled after the handler. Re-entered inside another unit, each
+value is what its `AmbientValue::reenter` returns there — the value itself by
+default. A value that grants something answers no wider than what the running
+unit holds, as the framework's do: a job's scope runs as the request's inside
+a request, the ability narrows to the one that request reads under, and the
+tenant is dropped inside a unit served for another.
+
 ## Limits
 
 - The context lives on the edge's stack for one unit: it is never boxed,

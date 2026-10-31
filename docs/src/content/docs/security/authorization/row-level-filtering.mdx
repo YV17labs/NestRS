@@ -92,12 +92,11 @@ service.
 
 `Repo::scoped(...)` reads the ability via
 `nest_rs::authz::current_ability()` — a value of the request's ambient
-context, installed by the transport's authz layer. Three install depths
-cooperate:
+context, attached by the `AbilityGuard` and by nothing else. Three install
+depths cooperate:
 
-- **HTTP** — the `Authorize` shaper installs `with_ability(ability,
-  handler)` after the `AbilityGuard` attached the ability to the
-  request. The handler sees it, and so does a streaming body it returns.
+- **HTTP** — the route's guards attach it, and the `Authorize` shaper reads
+  it there. The handler sees it, and so does a streaming body it returns.
 - **GraphQL and MCP** — the [endpoint guards](/security/authorization/endpoint-guards/)
   an app's modules declare attach it at the request, and every operation
   the request carries runs under it. Resolvers see it, and so do the
@@ -112,6 +111,15 @@ That is correct for system work: a cron deleting expired sessions
 should not be filtered by a caller's ability because there is no
 caller. See [Threat model](/security/threat-model/) for what that
 buys you and what it does not.
+
+`with_ability(ability, body)` only ever narrows. In a job it scopes the
+body's reads to `ability`, a principal's the job acts for; inside a unit
+already holding an ability, the body runs under what both allow; in a
+request no ability guard authorized, it installs nothing and the reads
+still fail closed. No function hands a body a wider ability than the one it
+runs under — the guard is the one place an ability comes from — and work a
+unit captured, re-entered inside another, runs under what that unit allows
+too.
 
 ## No ambient ability: unscoped for workers, denied for requests
 

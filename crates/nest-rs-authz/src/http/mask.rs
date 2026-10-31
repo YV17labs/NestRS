@@ -46,7 +46,7 @@ where
     fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
         // A missing ability means the class gate already answered 500, so there
         // is nothing to shape.
-        let ability = nest_rs_core::ambient::<Ability>()?;
+        let ability = crate::context::installed()?;
         <S::Mask as RouteMask>::shaping(ability, A::ACTION)
     }
 }

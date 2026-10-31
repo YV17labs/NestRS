@@ -2636,6 +2636,7 @@ version = "7.0.0"
 dependencies = [
  "nest-rs-authz-macros",
  "nest-rs-core",
+ "nest-rs-database",
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",

@@ -1025,7 +1025,7 @@ impl DatabaseExecutor for OnThePool {
 
 /// `push` run with `executor` as the ambient one.
 async fn inside<F: Future>(executor: Arc<dyn DatabaseExecutor>, push: F) -> F::Output {
-    nest_rs_database::with_request_executor(executor, push).await
+    nest_rs_database::__private::with_request_executor(executor, push).await
 }
 
 #[tokio::test]

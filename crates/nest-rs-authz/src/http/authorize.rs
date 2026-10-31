@@ -10,7 +10,7 @@ use nest_rs_http::__private::denial_to_http_error;
 use nest_rs_http::{FromRequest, Request, RequestBody, Result};
 
 use crate::gate::{Refusal, decide, warn_denied};
-use crate::{Ability, ActionMarker, Subject};
+use crate::{ActionMarker, Subject};
 
 /// Enforcement plumbing for action `A` on subject `S`. A route declaring it —
 /// through `#[authorize(A, S)]` or as a handler parameter — runs
@@ -70,7 +70,7 @@ use crate::{Ability, ActionMarker, Subject};
 /// #             ab.can(Action::Manage, users::Entity);
 /// #         }
 /// #         let ability = ab.build().map_err(|_| Denial::internal("malformed rules"))?;
-/// #         cx.attach(ability);
+/// #         cx.attach(nest_rs_authz::__private::AmbientAbility::new(ability));
 /// #         Ok(())
 /// #     }
 /// # }
@@ -133,7 +133,7 @@ where
 /// `#[public]` route a hand-written parameter is written for.
 fn checked<A: ActionMarker, S: Subject>() -> std::result::Result<(), Denial> {
     let refusal = Refusal::on(Edge::Http.as_str()).declaring::<A, S>();
-    let Some(ability) = nest_rs_core::ambient::<Ability>() else {
+    let Some(ability) = crate::context::installed() else {
         crate::gate::error_unreached(Refusal {
             remedy: Some(EXTRACTED_UNREACHED),
             ..refusal

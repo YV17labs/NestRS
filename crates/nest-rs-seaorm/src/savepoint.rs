@@ -342,7 +342,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use nest_rs_database::{AtomicError, after_commit, atomic, with_request_executor};
+    use nest_rs_database::__private::with_request_executor;
+    use nest_rs_database::{AtomicError, after_commit, atomic};
     use nest_rs_testing::LogCapture;
     use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr};
 

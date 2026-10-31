@@ -33,10 +33,9 @@ pub enum SeaOrmExecutor {
     /// The shared connection pool — safe (read) methods and system/job work run
     /// here, outside any transaction.
     Pool(DatabaseConnection),
-    /// A transaction the **caller** opened and installed itself, through
-    /// [`with_request_executor`](nest_rs_database::with_request_executor) or
-    /// [`with_job_executor`](nest_rs_database::with_job_executor); the
-    /// framework never builds one.
+    /// A transaction the **caller** opened and installed itself — a framework
+    /// suite, through the port's plumbing; no unit the framework opens holds
+    /// one.
     ///
     /// Its commit is the caller's, so work handed to
     /// [`after_commit`](nest_rs_database::after_commit) inside it runs at once:
@@ -977,9 +976,9 @@ impl nest_rs_database::Executor for Installed {
     }
 }
 
-/// The handle installed, for [`nest_rs_database::with_request_executor`] and
-/// [`with_job_executor`](nest_rs_database::with_job_executor): the one way a
-/// caller hands the port a SeaORM executor of its own building.
+/// The handle installed, the one way a SeaORM executor of a caller's own
+/// building reaches the port: a framework suite's, through the port's
+/// plumbing.
 impl From<SeaOrmExecutor> for Arc<dyn nest_rs_database::Executor> {
     fn from(executor: SeaOrmExecutor) -> Self {
         Arc::new(Installed(executor))
@@ -1007,9 +1006,8 @@ pub fn current_executor() -> Option<SeaOrmExecutor> {
 #[cfg(test)]
 mod tests {
     use nest_rs_database::__private::with_executor;
-    use nest_rs_database::{
-        ExecutorScope, current_executor_scope, with_job_executor, with_request_executor,
-    };
+    use nest_rs_database::__private::{with_job_executor, with_request_executor};
+    use nest_rs_database::{ExecutorScope, current_executor_scope};
 
     use super::*;
 
@@ -1152,7 +1150,8 @@ mod ambient_tests {
     use std::any::Any;
     use std::sync::Arc;
 
-    use nest_rs_database::{Executor as DynExecutor, with_request_executor};
+    use nest_rs_database::__private::with_request_executor;
+    use nest_rs_database::Executor as DynExecutor;
 
     struct ForeignHandle;
 
@@ -1190,10 +1189,10 @@ mod after_commit_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use nest_rs_authz::{AbilityBuilder, current_ability, with_ability};
-    use nest_rs_database::{
-        ExecutorScope, current_executor_scope, with_job_executor, with_request_executor,
-    };
+    use nest_rs_authz::__private::install_ability;
+    use nest_rs_authz::{AbilityBuilder, current_ability};
+    use nest_rs_database::__private::{with_job_executor, with_request_executor};
+    use nest_rs_database::{ExecutorScope, current_executor_scope};
     use nest_rs_testing::LogCapture;
     use sea_orm::DatabaseConnection;
 
@@ -1232,7 +1231,7 @@ mod after_commit_tests {
 
         with_request_executor(
             SeaOrmExecutor::Lazy(lazy.clone()).into(),
-            with_ability(ability.clone(), nest_rs_database::after_commit(work)),
+            install_ability(ability.clone(), nest_rs_database::after_commit(work)),
         )
         .await;
         assert!(

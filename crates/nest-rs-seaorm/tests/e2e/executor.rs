@@ -308,7 +308,7 @@ async fn a_listener_run_at_once_under_a_callers_own_transaction_runs_in_a_unit_o
                 .begin()
                 .await
                 .expect("the caller opens its own transaction");
-            nest_rs_database::with_request_executor(
+            nest_rs_database::__private::with_request_executor(
                 nest_rs_seaorm::SeaOrmExecutor::Txn(std::sync::Arc::new(txn)).into(),
                 bus.emit(Recorded),
             )

@@ -4,13 +4,14 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::{Ability, AbilityBuilder, Action, masked_reply, with_ability};
+use nest_rs_authz::__private::install_ability;
+use nest_rs_authz::{Ability, AbilityBuilder, Action, masked_reply};
 use serde_json::{Value, json};
 
 use crate::post;
 
 async fn push(ability: Ability, wire: Value) -> Value {
-    with_ability(Arc::new(ability), async move {
+    install_ability(Arc::new(ability), async move {
         masked_reply::<post::Entity>(Action::Read, wire)
     })
     .await

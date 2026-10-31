@@ -70,7 +70,6 @@ pub use atomic::{AtomicBlock, atomic};
 pub use error::{AtomicError, OutboxError, Unhonoured};
 pub use executor::{
     Deferred, Executor, ExecutorScope, after_commit, current_executor, current_executor_scope,
-    with_job_executor, with_request_executor,
 };
 pub use outbox::{ClaimedRecord, OutboxClaim, OutboxRecord, OutboxStore};
 pub use unit::{
@@ -83,6 +82,8 @@ pub mod __private {
     //! Called by this framework's sibling crates. Not API: may change in any
     //! release.
 
-    pub use crate::executor::with_executor;
+    pub use crate::executor::{
+        installed_scope, with_executor, with_job_executor, with_request_executor,
+    };
     pub use crate::unit::run_unit_bounded;
 }

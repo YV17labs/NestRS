@@ -81,7 +81,9 @@ impl Guard for AbilityInjector {
             }
             Some(_) => b.build(),
         };
-        cx.attach(ability.expect("valid test ability"));
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+            ability.expect("valid test ability"),
+        ));
         Ok(())
     }
 

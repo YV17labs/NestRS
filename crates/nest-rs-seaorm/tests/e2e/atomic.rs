@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use nest_rs_core::module;
-use nest_rs_database::{AtomicError, atomic, with_request_executor};
+use nest_rs_database::__private::with_request_executor;
+use nest_rs_database::{AtomicError, atomic};
 use nest_rs_seaorm::__private::current_executor;
 use nest_rs_seaorm::{DbOutcome, FinalizeOutcome, LazyTransaction, SeaOrmExecutor};
 use sea_orm::prelude::Uuid;

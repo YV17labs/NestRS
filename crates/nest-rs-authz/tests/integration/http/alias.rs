@@ -70,7 +70,9 @@ impl Guard for GrantInjector {
         if granted {
             b.can(Action::Read, gadget::Entity);
         }
-        cx.attach(b.build().expect("valid test ability"));
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+            b.build().expect("valid test ability"),
+        ));
         Ok(())
     }
 

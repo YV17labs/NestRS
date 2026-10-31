@@ -330,9 +330,11 @@ pub(crate) fn pk_condition<E: EntityTrait>(model: &E::Model) -> Condition {
 mod tests {
     use std::sync::Arc;
 
-    use nest_rs_authz::{AbilityBuilder, with_ability};
+    use nest_rs_authz::__private::install_ability;
+    use nest_rs_authz::AbilityBuilder;
     use nest_rs_database::__private::with_executor;
-    use nest_rs_database::{Executor, with_job_executor, with_request_executor};
+    use nest_rs_database::__private::{with_job_executor, with_request_executor};
+    use nest_rs_database::Executor;
     use sea_orm::sea_query::{Condition, Expr};
     use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait, Set};
 
@@ -512,7 +514,7 @@ mod tests {
         let pool = pool();
         let carried = with_request_executor(
             pool,
-            with_ability(ability, async {
+            install_ability(ability, async {
                 assert!(Repo::<widget::Entity>::conn().is_ok(), "the unit has one");
                 nest_rs_core::TaskContext::current()
             }),
@@ -626,7 +628,7 @@ mod tests {
         let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
-            with_ability(ability, async {
+            install_ability(ability, async {
                 let s = sql(scope_for::<widget::Entity>(Action::Read));
                 assert!(s.contains("org_id"), "ability condition is applied: {s}");
                 assert!(!s.contains("1 = 0"));
@@ -680,7 +682,7 @@ mod tests {
         let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
-            with_ability(ability, async {
+            install_ability(ability, async {
                 let s = select_sql(Repo::<widget::Entity>::scoped(Action::Read));
                 assert!(!s.contains("1 = 0"), "admin should not be denied: {s}");
             })
@@ -704,7 +706,7 @@ mod tests {
         let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
-            with_ability(ability, async {
+            install_ability(ability, async {
                 let read = sql(scope_for::<widget::Entity>(Action::Read));
                 let create = sql(scope_for::<widget::Entity>(Action::Create));
                 let update = sql(scope_for::<widget::Entity>(Action::Update));
@@ -733,7 +735,7 @@ mod tests {
         let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
-            with_ability(ability, async {
+            install_ability(ability, async {
                 let s = sql(scope_for::<widget::Entity>(Action::Delete));
                 assert!(s.contains("1 = 0"), "missing action denies: {s}");
             })
@@ -787,7 +789,7 @@ mod tests {
         let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
-            with_ability(ability, async {
+            install_ability(ability, async {
                 let mut active = widget::ActiveModel {
                     id: Set(424242),
                     ..Default::default()
@@ -829,7 +831,7 @@ mod tests {
         let ability = Arc::new(b.build().expect("valid test ability"));
 
         with_request_executor(pool, async move {
-            with_ability(ability, async {
+            install_ability(ability, async {
                 let active = widget::ActiveModel {
                     id: Set(424242),
                     ..Default::default()

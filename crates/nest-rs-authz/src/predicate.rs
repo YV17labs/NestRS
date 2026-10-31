@@ -286,7 +286,7 @@ impl Truth {
     }
 
     /// SQL's `AND`: one `FALSE` decides it whatever the others are.
-    fn all(parts: impl Iterator<Item = Truth>) -> Self {
+    pub(crate) fn all(parts: impl Iterator<Item = Truth>) -> Self {
         let mut out = Truth::True;
         for part in parts {
             match part {

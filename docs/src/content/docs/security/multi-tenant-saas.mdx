@@ -176,21 +176,23 @@ read:
 1. **Grep for `Repo::unscoped`, `unscoped_by_id`, `insert_unscoped` and
    `with_tombstones`** in feature code. Confirm each call site clears the bar
    the method's rustdoc states, and is not a forgotten scope.
-2. **Grep for `.query()`, `with_ability` and `with_job_executor`** in
-   feature code. A `.query()` on a `Repo` select hands out the statement
-   itself, and one rewritten there runs past the filter: chain the builder
-   methods instead. `with_ability` runs `Repo` under the ability it is
-   handed, not the caller's — in a service, only a job narrowing its reads to
-   a principal. `with_job_executor` belongs nowhere in feature code: inside a
-   request it runs as the request, but in a task spawned off one it reads
-   unscoped; a test runs a service through `TestApp::unit` instead.
-3. **Grep for `Arc<DatabaseConnection>`** outside the framework crates.
+2. **Grep for `.query()`** in feature code. A `.query()` on a `Repo`
+   select hands out the statement itself, and one rewritten there runs past
+   the filter: chain the builder methods instead. `with_ability` needs no
+   such read: it only narrows the ability the unit runs under, and nothing
+   public widens one — no function installs an executor of its own, and a
+   unit opened or work re-entered inside a request runs as that request. A
+   test runs a service through `TestApp::unit`.
+3. **Grep for `ExecutorScope::Job`** in feature code. A job unit is an
+   edge's — a queue attempt, a tick — and one a feature opens on a task of its
+   own reads unscoped.
+4. **Grep for `Arc<DatabaseConnection>`** outside the framework crates.
    Each injection should be a contextless path (a one-shot command), never
    a request handler or a lifecycle hook, which runs in a unit of work.
-4. **Confirm every `#[processor]` re-scopes.** Trace the tenant —
+5. **Confirm every `#[processor]` re-scopes.** Trace the tenant —
    `current_tenant_id()`, or the id a tick puts in the payload — into the
    service's query. A load-by-id with no `org_id` predicate is the bug.
-5. **Confirm every controller carries `#[use_guards(AuthnGuard,
+6. **Confirm every controller carries `#[use_guards(AuthnGuard,
    AuthzGuard)]`.** A missing binding fails closed to empty results, but
    a [negative-path test](/testing/negative-path/) pins it.
 

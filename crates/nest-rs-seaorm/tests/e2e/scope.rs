@@ -2,7 +2,7 @@
 //! ability, asserted on executed queries rather than rendered SQL.
 
 use nest_rs_authz::Action;
-use nest_rs_database::with_request_executor;
+use nest_rs_database::__private::with_request_executor;
 use nest_rs_seaorm::{SeaOrmExecutor, scope_for};
 use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter};
 
@@ -62,17 +62,20 @@ async fn request_scope_without_ability_denies_all_rows() {
 async fn job_scope_without_ability_remains_unscoped() {
     let conn = db().await;
 
-    nest_rs_database::with_job_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
-        let rows = widget::Entity::find()
-            .filter(scope_for::<widget::Entity>(Action::Read))
-            .all(&conn)
-            .await
-            .expect("the scoped query executes");
-        assert!(
-            rows.len() >= 2,
-            "worker paths stay unscoped when no ability is present, got {} row(s)",
-            rows.len(),
-        );
-    })
+    nest_rs_database::__private::with_job_executor(
+        SeaOrmExecutor::Pool(conn.clone()).into(),
+        async {
+            let rows = widget::Entity::find()
+                .filter(scope_for::<widget::Entity>(Action::Read))
+                .all(&conn)
+                .await
+                .expect("the scoped query executes");
+            assert!(
+                rows.len() >= 2,
+                "worker paths stay unscoped when no ability is present, got {} row(s)",
+                rows.len(),
+            );
+        },
+    )
     .await;
 }

@@ -1,7 +1,7 @@
 //! Mirror tests for `src/ws/` — only compiled when the `ws` feature is on.
 //!
 //! A gateway is `Gated`, so these suites install the ambient ability with
-//! [`with_ability`] and drive `Gateway::dispatch` directly — the class gate,
+//! [`install_ability`] and drive `Gateway::dispatch` directly — the class gate,
 //! the handler's own call and its mask; on a socket the gate runs in a
 //! message's guard stage, so the gate's suites also send their messages over a
 //! real upgrade whose guard attached the ability ([`RoleUpgrade`]).
@@ -10,7 +10,8 @@ mod mask;
 
 use std::sync::Arc;
 
-use nest_rs_authz::{Ability, AbilityBuilder, Action, with_ability};
+use nest_rs_authz::__private::install_ability;
+use nest_rs_authz::{Ability, AbilityBuilder, Action};
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::HttpView;
@@ -39,7 +40,9 @@ impl Guard for RoleUpgrade {
             .and_then(|role| role.to_str().ok())
             .map(str::to_owned);
         if let Some(role) = role {
-            cx.attach(ability_of(&role));
+            cx.attach(nest_rs_authz::__private::AmbientAbility::new(ability_of(
+                &role,
+            )));
         }
         Ok(())
     }
@@ -76,7 +79,7 @@ pub(crate) async fn dispatch_with<G: Gateway>(
     ability: Arc<Ability>,
     event: &str,
 ) -> WsReply {
-    with_ability(
+    install_ability(
         ability,
         gateway.dispatch(&WsClient::for_test(), event, serde_json::Value::Null),
     )

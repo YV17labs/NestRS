@@ -19,7 +19,7 @@ all-features = true
 
 [features]
 default = []
-# HTTP surface: the extractors (`Authorize`, `Scope`), the `AbilityGuard`'s
+# HTTP surface: the `Authorize` extractor, the `AbilityGuard`'s
 # HTTP entry, and the `RouteResponseShaper` that masks responses transparently.
 # The row `#[authorize(A, bind = S)]` loads is `nest-rs-seaorm`'s (it must use
 # the data layer). `AbilityGuard` itself is at the crate root and every
@@ -84,6 +84,9 @@ nest-rs-core.workspace = true
 # The class gate answers with the guards' `Denial`, which every edge renders;
 # the guard contract depends on the kernel alone, so the gate stays ungated.
 nest-rs-guards.workspace = true
+# `with_ability` narrows what the unit runs under, and a job's unit holds no
+# ability: the port's executor scope tells a job from a request holding none.
+nest-rs-database.workspace = true
 # `#[subject]`, re-exported at the root beside the trait it implements.
 nest-rs-authz-macros.workspace = true
 
@@ -119,9 +122,10 @@ nest-rs-ws = { path = "../nest-rs-ws" }
 # a versionless dev-edge keeps that from being a cycle a publish cannot order.
 # `http`, for the class gate's order on a `#[crud]` controller.
 nest-rs-seaorm = { path = "../nest-rs-seaorm", features = ["http"] }
-# `graphql`: a gated subscription driven as a caller (`graphql_socket`); `ws`:
-# a gated message sent over a real upgrade, where its class gate runs.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql", "http", "ws"] }
+# `graphql` and `authz`: a gated subscription driven as a caller
+# (`graphql_socket().ability(..)`); `ws`: a gated message sent over a real
+# upgrade, where its class gate runs.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["authz", "graphql", "http", "ws"] }
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,
 # since the generated `#[Object]` code names `async_graphql::` paths.
 async-graphql.workspace = true

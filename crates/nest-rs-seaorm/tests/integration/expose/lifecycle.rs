@@ -10,7 +10,7 @@
 use std::any::TypeId;
 
 use nest_rs_authz::Action;
-use nest_rs_database::with_job_executor;
+use nest_rs_database::__private::with_job_executor;
 use nest_rs_seaorm::__private::{ColumnDefaultRegistration, inventory};
 use nest_rs_seaorm::sea_orm::sea_query::SelectStatement;
 use nest_rs_seaorm::sea_orm::{DatabaseBackend, QueryTrait};

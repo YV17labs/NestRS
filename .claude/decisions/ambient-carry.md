@@ -162,3 +162,34 @@ rest of the concept already used, and each edge's reading lives in its
 names what the value is (carried for the code the unit calls), `ctx` only
 where a parameter sits.
 
+**2026-10-31 — a capture re-entered inside another unit never widens it.**
+`RequestContinuation::scope` and `enter` and `TaskContext::carry` installed
+their capture whole, in place of the running unit's context: a job's
+capture re-entered inside a request ran that request's work as a job,
+unscoped, and one caller's capture re-entered in another's request read under
+the first caller's ability. `AmbientValue` gains `reenter(self: Arc<Self>) ->
+Option<Arc<Self>>`, beside `carry`: where a capture is re-entered inside a
+running unit that does not carry exactly its values, each value passes its
+type's `reenter`, called there so it can read what that unit holds — itself
+by default, a narrower value, or nothing. The executor's tags no scope wider
+than the running unit's; the ability's is what `with_ability` would install
+there (`repo-hands-out-no-connection.md`, 2026-10-31); the tenant, an
+authorization input, is dropped inside a unit served for another tenant. Where no unit of work
+runs — a spawned task, a body polled after its handler, a settle's task — a
+capture continues its own unit and keeps every value, installed as captured
+where no context runs at all; a running unit carrying its very values
+installs it untouched, so the per-poll re-entries pay one task-local read.
+
+**Refused:**
+
+- **`reenter` folded into `carry` as a seventh `Continuation`.** `carry` runs
+  where the capture is taken, `reenter` where it is re-entered: two moments,
+  two methods.
+- **The running unit's values kept beside the capture's.** A capture
+  continues its own unit; a value only the running unit carries (the
+  `UnmaskedReply` marker) is honoured by the values that read it, the ability
+  through `current_ability`.
+- **The re-entry refused, or the capture dropped, inside another unit.** A
+  graphql-ws operation's unit is entered inside its socket's on every poll,
+  and a capture moved on purpose keeps working, only no wider than where it
+  runs.

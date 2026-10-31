@@ -10,7 +10,8 @@
 //!
 //! ```
 //! # use std::sync::Arc;
-//! # use nest_rs_authz::{AbilityBuilder, Action, Read, with_ability};
+//! # use nest_rs_authz::{AbilityBuilder, Action, Read};
+//! # use nest_rs_authz::__private::install_ability;
 //! # use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};
 //! # mod users {
 //! #     use nest_rs_seaorm::expose;
@@ -57,7 +58,7 @@
 //! # let gateway = UsersGateway { svc: Arc::new(UsersService) };
 //! # let client = WsClient::for_test();
 //! # let list = |ability| {
-//! #     with_ability(Arc::new(ability), gateway.dispatch(&client, "users.list", serde_json::Value::Null))
+//! #     install_ability(Arc::new(ability), gateway.dispatch(&client, "users.list", serde_json::Value::Null))
 //! # };
 //!
 //! let mut ids_only = AbilityBuilder::new();

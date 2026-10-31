@@ -120,7 +120,9 @@ mod gate_order {
             {
                 ab.can(Action::Read, secret::Entity);
             }
-            cx.attach(ab.build().expect("valid test ability"));
+            cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+                ab.build().expect("valid test ability"),
+            ));
             Ok(())
         }
 

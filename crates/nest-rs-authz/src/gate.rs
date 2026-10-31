@@ -212,7 +212,7 @@ pub(crate) fn error_unreached(refusal: Refusal<'_>) {
 /// # let mut cx = new_unit_context(&REVIEW, &mut view, None, None);
 /// # let mut reader = AbilityBuilder::new();
 /// # reader.can(Action::Read, posts::Entity);
-/// # cx.attach(reader.build()?);
+/// # cx.attach(nest_rs_authz::__private::AmbientAbility::new(reader.build()?));
 ///
 /// let gate: nest_rs_core::__private::ClassGate = class_gate::<Read, posts::Entity>;
 /// assert!(gate(&mut cx).is_ok());
@@ -220,7 +220,7 @@ pub(crate) fn error_unreached(refusal: Refusal<'_>) {
 /// ```
 pub fn class_gate<A: ActionMarker, S: Subject>(cx: &mut UnitContext<'_>) -> Result<(), Failure> {
     let refusal = Refusal::of_unit(cx).declaring::<A, S>();
-    let Some(ability) = cx.ambient::<Ability>() else {
+    let Some(ability) = crate::context::carried(cx) else {
         error_unreached(Refusal {
             remedy: Some(
                 "bind the ability guard on this site's request — \
@@ -330,7 +330,7 @@ mod tests {
         let mut view = JobView;
         let mut cx = new_unit_context(site, &mut view, None, None);
         if let Some(ability) = ability {
-            cx.attach(ability);
+            cx.attach(crate::context::AmbientAbility::new(ability));
         }
         class_gate::<Read, Post>(&mut cx)
     }

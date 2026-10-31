@@ -9,8 +9,9 @@ use nest_rs_graphql::GraphqlView;
 use nest_rs_http::EndpointGuards;
 use std::sync::Arc;
 
+use nest_rs_authz::__private::install_ability;
 use nest_rs_authz::{
-    AbilityBuilder, Action, MaskReplyError, Read, WireModelDefaults, masked_reply, with_ability,
+    AbilityBuilder, Action, MaskReplyError, Read, WireModelDefaults, masked_reply,
 };
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream, StreamExt};
@@ -130,7 +131,9 @@ impl Guard for AbilityInjector {
             }
             _ => {}
         }
-        cx.attach(b.build().expect("valid test ability"));
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+            b.build().expect("valid test ability"),
+        ));
         Ok(())
     }
 
@@ -441,7 +444,7 @@ async fn a_socket_attaching_an_ability_reaches_a_gated_masked_subscription() {
         .container()
         .get::<WidgetFeed>()
         .expect("the feed is a provider of the booted app");
-    let mut socket = app.graphql_socket().attach(ability_for("auditor")).open();
+    let mut socket = app.graphql_socket().ability(ability_for("auditor")).open();
     socket.connect().await;
     socket.subscribe("1", "subscription { widgetFeed { id name } }");
     let emit = async {
@@ -490,7 +493,7 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
         .get::<WidgetFeed>()
         .expect("the feed is a provider of the booted app");
 
-    let admin = nest_rs_authz::with_ability(
+    let admin = nest_rs_authz::__private::install_ability(
         ability_for("admin"),
         schema
             .execute_stream(subscribe(), None)
@@ -498,7 +501,7 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
             .take(3)
             .collect::<Vec<_>>(),
     );
-    let auditor = nest_rs_authz::with_ability(
+    let auditor = nest_rs_authz::__private::install_ability(
         ability_for("auditor"),
         schema
             .execute_stream(subscribe(), None)
@@ -638,7 +641,7 @@ async fn first_post_pushed(ability: AbilityBuilder, posts: &[(i32, i32)]) -> ser
         .expect("the feed is a provider of the booted app");
     let ability = Arc::new(ability.build().expect("valid test ability"));
     // Ambient, as the request's ability guard leaves it.
-    let received = nest_rs_authz::with_ability(
+    let received = nest_rs_authz::__private::install_ability(
         ability,
         schema
             .execute_stream(
@@ -675,7 +678,8 @@ async fn posts_read(ability: AbilityBuilder, query: &str) -> serde_json::Value {
     let ability = Arc::new(ability.build().expect("valid test ability"));
     // Ambient, as the request's ability guard leaves it.
     let response =
-        nest_rs_authz::with_ability(ability, schema.execute(GqlRequest::new(query))).await;
+        nest_rs_authz::__private::install_ability(ability, schema.execute(GqlRequest::new(query)))
+            .await;
     serde_json::to_value(response).expect("a GraphQL response is JSON")
 }
 
@@ -782,7 +786,7 @@ async fn a_caller_with_no_grant_is_refused_at_subscribe() {
         &nest_rs_graphql::GraphqlConfig::default(),
     )
     .expect("the app's boot sealed its reachability set");
-    let responses: Vec<_> = nest_rs_authz::with_ability(
+    let responses: Vec<_> = nest_rs_authz::__private::install_ability(
         ability_for(""),
         schema.execute_stream(subscribe(), None).collect(),
     )
@@ -826,7 +830,7 @@ async fn masked_reply_strips_unpermitted_fields_and_unexposed_columns() {
     let ability = Arc::new(b.build().expect("valid ability"));
     let wire = serde_json::json!({ "id": 1, "name": "ada" });
 
-    let masked = with_ability(ability, async move {
+    let masked = install_ability(ability, async move {
         masked_reply::<widget::Entity>(Action::Read, wire)
     })
     .await
@@ -855,7 +859,7 @@ async fn masked_reply_masks_every_row_of_an_array() {
         { "id": 2, "name": "grace" },
     ]);
 
-    let masked = with_ability(ability, async move {
+    let masked = install_ability(ability, async move {
         masked_reply::<widget::Entity>(Action::Read, wire)
     })
     .await
@@ -999,7 +1003,9 @@ mod ability_of_the_unit {
             builder
                 .can(Action::Read, widget::Entity)
                 .fields([widget::Column::Id]);
-            cx.attach(builder.build().expect("a valid ability"));
+            cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+                builder.build().expect("a valid ability"),
+            ));
             Ok(())
         }
     }

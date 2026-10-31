@@ -122,11 +122,11 @@ impl Guard for GrantsCreate {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let mut ability = AbilityBuilder::new();
         ability.can(nest_rs_authz::Action::Create, ticket::Entity);
-        cx.attach(
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
             ability
                 .build()
                 .map_err(|_malformed| Denial::internal("malformed rules"))?,
-        );
+        ));
         Ok(())
     }
 

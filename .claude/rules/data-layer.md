@@ -52,15 +52,26 @@ callers must clear; the method's doc is the authority, not this list.
   on its own table, `nestrs_outbox`: a push's record and a cancel's removal
   join the transaction the caller's unit already holds, and the relay claims
   on a transaction of its own. No developer row is read or written.
-- **The ambient installers** — `nest_rs::authz::with_ability` runs `Repo`
-  under the ability it is handed: the framework's edges installing the
-  caller's, a job narrowing its system work to a principal's, a test.
-  `nest_rs::database::with_job_executor` never widens the unit it runs in (a
-  request stays a request, held by the port's tests), but outside every unit
-  — a task spawned off one — it grants the job scope to the handle it is
-  given. A service test runs its body in a unit of the app's binding instead
-  (`TestApp::unit` under an ability, `system_unit` as system work), so no
-  test installs an executor by hand.
+- **A job unit opened outside every unit** — `nest_rs::database::run_unit` is
+  the edge port, so a unit opened on a task of its own takes the scope its
+  spec declares: a job unit is an edge's (a queue attempt, a tick, a
+  lifecycle hook, a third-party consumer). Feature code naming
+  `ExecutorScope::Job` — a job unit opened on a task spawned off a request —
+  is read as an escape.
+
+**No public function widens the unit it runs in.**
+`nest_rs::authz::with_ability` only narrows — the intersection with the
+ability the unit holds, the given one in a job, which holds none, nothing in
+a request no guard authorized — and the ability is ambient through a type only
+`nest-rs-authz` builds, so the ability guard is the one place it comes from
+(held by types). A unit `run_unit` opens inside a request runs under the
+request's scope whatever its spec declares, and a capture re-entered inside
+another unit (`RequestContinuation::scope` and `enter`, `TaskContext::carry`)
+holds each value as its `AmbientValue::reenter` returns there: a job's scope
+as the request's, the ability narrowed to the one that unit reads under
+(held by the port's and `nest-rs-authz`'s tests). The executor installers are
+the port's `__private`. A service test runs its body in a unit of the app's
+binding (`TestApp::unit` under an ability, `system_unit` as system work).
 
 No webhook ingress exists; `Repo::unscoped`'s rustdoc states the bar a
 signature-authenticated one must clear before it ships. Auditing the escapes
@@ -97,7 +108,8 @@ a task-local of their own: the **executor** (`nest-rs-database` owns the seam,
 the `Executor` trait and the one install and read API, `nest-rs-seaorm` the
 pool-or-transaction `SeaOrmExecutor`) and the **ability** (`nest-rs-authz`)
 are two of its values, and a package adds its own by implementing
-`AmbientValue`, whose `carry` says how far the value travels
+`AmbientValue`, whose `carry` says how far the value travels and `reenter`
+what a captured value is inside another unit it is re-entered in
 (`.claude/decisions/ambient-carry.md`).
 
 **A continuation that can outlive the transaction never holds it.** Where a

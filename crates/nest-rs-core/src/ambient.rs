@@ -46,6 +46,14 @@ pub trait AmbientValue: Any + Send + Sync {
     fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
         (into != Continuation::Envelope).then_some(self)
     }
+
+    /// What a captured value is where its capture is re-entered inside another
+    /// running unit, read there: the value itself (the default), a narrower
+    /// value, or nothing. A value that grants returns none wider than what the
+    /// running unit already holds.
+    fn reenter(self: Arc<Self>) -> Option<Arc<Self>> {
+        Some(self)
+    }
 }
 
 /// Where a unit continues once the future that accepted it is no longer the
@@ -134,12 +142,17 @@ type Erased = Arc<dyn Any + Send + Sync>;
 /// How one erased value crosses a continuation: its type's own `carry`.
 type CarryFn = fn(Erased, Continuation) -> Option<Erased>;
 
-/// One ambient value, with the `carry` of the type it was added as.
+/// How one erased value is re-entered: its type's own `reenter`.
+type ReenterFn = fn(Erased) -> Option<Erased>;
+
+/// One ambient value, with the `carry` and `reenter` of the type it was added
+/// as.
 #[derive(Clone)]
 pub(crate) struct Entry {
     id: TypeId,
     value: Erased,
     carry: CarryFn,
+    reenter: ReenterFn,
 }
 
 impl Entry {
@@ -148,6 +161,17 @@ impl Entry {
             id: TypeId::of::<T>(),
             value,
             carry: carry_erased::<T>,
+            reenter: reenter_erased::<T>,
+        }
+    }
+
+    /// The same value's entry, holding `value` in its place.
+    fn holding(&self, value: Erased) -> Self {
+        Self {
+            id: self.id,
+            value,
+            carry: self.carry,
+            reenter: self.reenter,
         }
     }
 }
@@ -158,6 +182,13 @@ fn carry_erased<T: AmbientValue>(value: Erased, into: Continuation) -> Option<Er
     let typed = value.downcast::<T>().ok()?;
     let carried: Erased = T::carry(typed, into)?;
     Some(carried)
+}
+
+/// `T::reenter` behind the erased value, as [`carry_erased`].
+fn reenter_erased<T: AmbientValue>(value: Erased) -> Option<Erased> {
+    let typed = value.downcast::<T>().ok()?;
+    let reentered: Erased = T::reenter(typed)?;
+    Some(reentered)
 }
 
 /// How many values ride inside the context's own allocation.
@@ -213,22 +244,36 @@ impl Entries {
     /// What crosses into `into`, each value through its own `carry`; `None`
     /// when every value crosses unchanged.
     pub(crate) fn carried(&self, into: Continuation) -> Option<Self> {
+        self.mapped(|entry| (entry.carry)(Arc::clone(&entry.value), into))
+    }
+
+    /// What a capture holding these values installs inside the running unit,
+    /// each value through its own `reenter`, called there; `None` when every
+    /// value is re-entered unchanged.
+    pub(crate) fn reentered(&self) -> Option<Self> {
+        self.mapped(|entry| (entry.reenter)(Arc::clone(&entry.value)))
+    }
+
+    /// Whether `other` holds the very values these are, and no other.
+    pub(crate) fn alike(&self, other: &Self) -> bool {
+        self.len() == other.len() && other.iter().all(|entry| self.holds(entry))
+    }
+
+    /// Each value as `map` returns it, or dropped; `None` when every value is
+    /// returned unchanged.
+    fn mapped(&self, map: impl Fn(&Entry) -> Option<Erased>) -> Option<Self> {
         let mut changed = false;
-        let mut crossed = Self::default();
+        let mut mapped = Self::default();
         for entry in self.iter() {
-            match (entry.carry)(Arc::clone(&entry.value), into) {
+            match map(entry) {
                 Some(value) => {
                     changed |= !Arc::ptr_eq(&value, &entry.value);
-                    crossed.push(Entry {
-                        id: entry.id,
-                        value,
-                        carry: entry.carry,
-                    });
+                    mapped.push(entry.holding(value));
                 }
                 None => changed = true,
             }
         }
-        changed.then_some(crossed)
+        changed.then_some(mapped)
     }
 
     /// Add an entry whose type is not held yet.
@@ -557,6 +602,61 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// A value that grants: re-entered inside another unit, it keeps the lower
+    /// of its own and the one that unit holds.
+    #[derive(Debug, PartialEq)]
+    struct Clearance(u8);
+
+    impl AmbientValue for Clearance {
+        fn reenter(self: Arc<Self>) -> Option<Arc<Self>> {
+            match ambient::<Clearance>() {
+                Some(running) if running.0 < self.0 => Some(running),
+                _ => Some(self),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_capture_re_entered_inside_another_unit_holds_what_each_value_reenters_as() {
+        let (captured, task) = with_ambient(
+            Arc::new(Clearance(9)),
+            with_ambient(Arc::new(Tenant("acme")), async {
+                (
+                    RequestContinuation::capture(Continuation::Commit).expect("installed"),
+                    TaskContext::capture(Continuation::Commit),
+                )
+            }),
+        )
+        .await;
+        let read = || {
+            (
+                ambient::<Clearance>().map(|clearance| clearance.0),
+                ambient::<Tenant>().map(|tenant| tenant.0),
+            )
+        };
+        let lower = || Arc::new(Clearance(1));
+
+        let ran = [
+            with_ambient(lower(), captured.scope(async { read() })).await,
+            with_ambient(lower(), async { captured.enter(read) }).await,
+            with_ambient(lower(), task.carry(async { read() })).await,
+            with_ambient(Arc::new(Clearance(10)), captured.scope(async { read() })).await,
+            captured.scope(async { read() }).await,
+        ];
+
+        assert_eq!(
+            ran,
+            [
+                (Some(1), Some("acme")),
+                (Some(1), Some("acme")),
+                (Some(1), Some("acme")),
+                (Some(9), Some("acme")),
+                (Some(9), Some("acme")),
+            ],
+            "scope, enter and carry re-enter alike; a higher clearance and no unit keep the captured one",
+        );
     }
 
     #[tokio::test]

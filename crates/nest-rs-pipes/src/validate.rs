@@ -45,24 +45,30 @@ impl From<ValidationErrors> for PipeError {
 
 /// The wire-safe JSON for a `validator` failure.
 ///
-/// A failure keeps its field name, `code` and `message` at every depth and no
-/// `params`, which echo submitted input (`params.value`, `params.other`, a bound
-/// reading another field). Any layer putting `ValidationErrors` on a wire must use
-/// it. An unserializable error map collapses to `Null`.
+/// A failure keeps its field name, `code` and the `message` its rule declares
+/// at every depth — none where the rule declares none, never a `null` a client
+/// must handle — and no `params`, which echo submitted input (`params.value`,
+/// `params.other`, a bound reading another field). Any layer putting
+/// `ValidationErrors` on a wire must use it. An unserializable error map
+/// collapses to `Null`.
 pub fn validation_details(errors: &ValidationErrors) -> serde_json::Value {
     let mut details = serde_json::to_value(errors).unwrap_or(serde_json::Value::Null);
     redact_submitted_values(&mut details);
     details
 }
 
-/// Recursively drop the `params` of serialized `validator` errors. Nested
-/// (`#[validate(nested)]`) and list validations embed further error maps, so
-/// the walk descends through every object and array.
+/// Recursively drop the `params` of serialized `validator` errors, and a
+/// `message` no rule declared. Nested (`#[validate(nested)]`) and list
+/// validations embed further error maps, so the walk descends through every
+/// object and array.
 fn redact_submitted_values(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             if matches!(map.get("params"), Some(serde_json::Value::Object(_))) {
                 map.remove("params");
+            }
+            if matches!(map.get("message"), Some(serde_json::Value::Null)) {
+                map.remove("message");
             }
             for nested in map.values_mut() {
                 redact_submitted_values(nested);
@@ -210,6 +216,37 @@ mod tests {
         assert_eq!(details["amount"][0]["code"], "range");
         assert!(details["amount"][0].get("params").is_none(), "{details}");
         assert!(!details.to_string().contains("4242424242"), "{details}");
+    }
+
+    #[derive(Validate)]
+    struct Signup {
+        #[validate(email)]
+        email: String,
+        #[validate(length(min = 8, message = "at least eight characters"))]
+        password: String,
+    }
+
+    /// A rule declaring no message carries none, never a `null`; one that
+    /// declares its message keeps it.
+    #[test]
+    fn an_entry_carries_the_message_its_rule_declares_or_none() {
+        let signup = Signup {
+            email: "not-an-email".into(),
+            password: "short".into(),
+        };
+        let Err(errors) = signup.validate() else {
+            panic!("both rules refuse");
+        };
+        let details = validation_details(&errors);
+        assert_eq!(details["email"][0]["code"], "email");
+        assert!(
+            details["email"][0].get("message").is_none(),
+            "no `message` member: {details}"
+        );
+        assert_eq!(
+            details["password"][0]["message"],
+            "at least eight characters"
+        );
     }
 
     #[test]

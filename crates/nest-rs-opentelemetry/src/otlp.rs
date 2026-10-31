@@ -897,12 +897,7 @@ fn refuse_unservable_batch_numbers(
 /// queues each processor's items on: std's bounded channel allocates every
 /// slot up front, each a stamp beside the item.
 const fn slot_bytes<T>() -> usize {
-    let align = if align_of::<T>() > align_of::<usize>() {
-        align_of::<T>()
-    } else {
-        align_of::<usize>()
-    };
-    (size_of::<usize>() + size_of::<T>()).next_multiple_of(align)
+    size_of::<(usize, T)>()
 }
 
 /// The headers one signal's exports carry, and the variable that set them.

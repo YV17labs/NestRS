@@ -25,7 +25,7 @@ const SIGNALS: [(&str, &str); 3] = [
 /// is off when `OTEL_SDK_DISABLED` is `true` or its selector names `none`
 /// alone, in any case; blank is unset. Any other selector is the exporter's to
 /// judge, so it leaves the signal on here.
-pub(crate) fn unserved_export(read: impl Fn(&str) -> Option<String>) -> Option<&'static str> {
+fn unserved_export(read: impl Fn(&str) -> Option<String>) -> Option<&'static str> {
     let read = |name: &str| read(name).filter(|value| !value.trim().is_empty());
     if read(OTEL_SDK_DISABLED).is_some_and(|value| value.trim().eq_ignore_ascii_case("true")) {
         return None;

@@ -25,6 +25,7 @@ use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fmt::{self, Write as _};
 use std::io::{self, IsTerminal as _};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -118,8 +119,7 @@ fn retired_filter_set(get: impl Fn(&str) -> Option<OsString>) -> Option<String> 
 }
 
 /// Whether [`say_retired_filter`] has run in this process.
-static RETIRED_FILTER_SAID: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static RETIRED_FILTER_SAID: AtomicBool = AtomicBool::new(false);
 
 /// Say a set `<PREFIX>_LOG` once at `warn`, naming `RUST_LOG`, through
 /// whichever subscriber the process has: a committed `.env` setting it would
@@ -130,7 +130,7 @@ static RETIRED_FILTER_SAID: std::sync::atomic::AtomicBool =
     reason = "the logging bootstrap runs before any config exists"
 )]
 pub(crate) fn say_retired_filter() {
-    if RETIRED_FILTER_SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+    if RETIRED_FILTER_SAID.swap(true, Ordering::Relaxed) {
         return;
     }
     if let Some(variable) = retired_filter_set(|name| std::env::var_os(name)) {
@@ -1523,19 +1523,19 @@ pub(crate) fn init_fallback() -> Result<()> {
 pub fn install_console(settings: &LogSettings) -> bool {
     let installed = __private::install_global_subscriber(console(settings));
     if installed {
-        KERNEL_CONSOLE.store(true, std::sync::atomic::Ordering::Relaxed);
+        KERNEL_CONSOLE.store(true, Ordering::Relaxed);
     }
     installed
 }
 
 /// Whether [`install_console`] made the kernel's console the process's global
 /// subscriber, which exports nothing.
-static KERNEL_CONSOLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static KERNEL_CONSOLE: AtomicBool = AtomicBool::new(false);
 
 /// Whether the process logs through the kernel's console alone — the one
 /// subscriber of which the kernel knows that nothing is exported.
 pub(crate) fn kernel_console_installed() -> bool {
-    KERNEL_CONSOLE.load(std::sync::atomic::Ordering::Relaxed)
+    KERNEL_CONSOLE.load(Ordering::Relaxed)
 }
 
 /// The kernel's console subscriber, as `settings` describe it.
@@ -2193,13 +2193,18 @@ mod tests {
         assert_eq!(buf, "src/lib.rs:", "{buf:?}");
     }
 
-    /// The settings `set` describes, every other variable unset.
-    fn settings_under(set: &[(String, &str)]) -> Result<LogSettings, LogSettingsError> {
-        LogSettings::default().overlaid_from(|name| {
+    /// The environment `set` describes, every other variable unset.
+    fn environment(set: &[(String, &str)]) -> impl Fn(&str) -> Option<OsString> {
+        move |name: &str| {
             set.iter()
                 .find(|(variable, _)| variable == name)
                 .map(|(_, value)| OsString::from(value))
-        })
+        }
+    }
+
+    /// The settings `set` describes, every other variable unset.
+    fn settings_under(set: &[(String, &str)]) -> Result<LogSettings, LogSettingsError> {
+        LogSettings::default().overlaid_from(environment(set))
     }
 
     #[cfg(unix)]
@@ -2257,13 +2262,7 @@ mod tests {
             format: LogFormat::Json,
             source_location: true,
         };
-        let under = |set: &[(String, &str)]| {
-            base.clone().overlaid_from(|name| {
-                set.iter()
-                    .find(|(variable, _)| variable == name)
-                    .map(|(_, value)| OsString::from(value))
-            })
-        };
+        let under = |set: &[(String, &str)]| base.clone().overlaid_from(environment(set));
 
         assert_eq!(under(&[]).expect("the base"), base);
         assert_eq!(
@@ -2308,11 +2307,7 @@ mod tests {
         for set in [vec![], vec![(RUST_LOG.to_owned(), "debug")]] {
             let refused = base
                 .clone()
-                .overlaid_from(|name| {
-                    set.iter()
-                        .find(|(variable, _)| variable == name)
-                        .map(|(_, value)| OsString::from(value))
-                })
+                .overlaid_from(environment(&set))
                 .expect_err("a filter set in code that does not parse");
             assert!(
                 matches!(&refused, LogSettingsError::Filter { setting, .. } if setting == "LogSettings::filter"),
@@ -2402,13 +2397,7 @@ mod tests {
     #[test]
     fn the_retired_filter_is_named_when_set_and_only_then() {
         let retired = EnvPrefix::var(RETIRED_FILTER);
-        let under = |set: &[(String, &str)]| {
-            retired_filter_set(|name| {
-                set.iter()
-                    .find(|(variable, _)| variable == name)
-                    .map(|(_, value)| OsString::from(value))
-            })
-        };
+        let under = |set: &[(String, &str)]| retired_filter_set(environment(set));
         assert_eq!(under(&[(retired.clone(), "debug")]), Some(retired.clone()));
         assert_eq!(under(&[(retired, " ")]), None);
         assert_eq!(under(&[(RUST_LOG.to_owned(), "debug")]), None);

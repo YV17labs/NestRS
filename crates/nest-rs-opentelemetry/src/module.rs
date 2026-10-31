@@ -24,7 +24,6 @@ pub struct OpenTelemetryModule;
 
 impl Module for OpenTelemetryModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        let meter = opentelemetry::global::meter("nestrs");
-        builder.provide_arc(std::sync::Arc::new(Metrics::new(meter)))
+        builder.provide(Metrics::new(opentelemetry::global::meter("nestrs")))
     }
 }

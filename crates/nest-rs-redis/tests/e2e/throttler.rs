@@ -1,7 +1,7 @@
 //! The cross-process [`RedisThrottler`] store against a real Redis: **one
 //! budget shared across `RedisThrottler` instances**, i.e. across app replicas.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nest_rs_redis::RedisThrottler;
 use nest_rs_throttler::{Throttle, ThrottlerStore};
@@ -73,6 +73,10 @@ async fn allows_up_to_the_limit_then_denies_with_a_retry_after() {
 async fn a_hit_in_a_windows_last_millisecond_opens_the_next() {
     let limit = Throttle::new(1, Duration::from_secs(30));
     let ending = Duration::from_millis(3);
+    // A window ending in 3 ms denies at most the hits whose round trips fit in
+    // it, fewer the more loaded the machine; this many would each take 300 ns,
+    // far below any round trip to Valkey.
+    let denials_it_fits = 10_000;
     let conn = connect().await;
     let store = RedisThrottler::new(conn.clone());
     for round in 0..20 {
@@ -85,8 +89,7 @@ async fn a_hit_in_a_windows_last_millisecond_opens_the_next() {
             .query_async(&mut conn.clone())
             .await
             .expect("a full window ending soon");
-        let set = Instant::now();
-        loop {
+        for denied in 0.. {
             let decision = store.hit(&subject, limit).await.expect("counted");
             if decision.allowed {
                 break;
@@ -97,8 +100,8 @@ async fn a_hit_in_a_windows_last_millisecond_opens_the_next() {
                 decision.retry_after,
             );
             assert!(
-                set.elapsed() < Duration::from_secs(1),
-                "round {round}: a window ending in {ending:?} still denies a second later",
+                denied < denials_it_fits,
+                "round {round}: a window ending in {ending:?} still denies after {denied} hits",
             );
         }
     }

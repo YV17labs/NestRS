@@ -4,19 +4,18 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisError};
-use nest_rs_testing::url_at;
+use nest_rs_testing::{LogCapture, url_at};
 
-use super::AT_ONCE;
-use super::tls;
+use super::{no_attempt_retried, tls};
 
-/// A budget far above [`AT_ONCE`], so a refusal that retried would show,
-/// trusting what the framework trusts by default: Valkey itself.
+/// A budget a refusal that retried would announce its retries in, trusting
+/// what the framework trusts by default: Valkey itself.
 pub(crate) fn config(url: String) -> RedisConfig {
     RedisConfig {
         url: url.into(),
@@ -40,15 +39,11 @@ pub(crate) async fn database_refused_at_once(
     index: i64,
     case: &str,
 ) -> RedisError {
-    let started = Instant::now();
+    let logs = LogCapture::install();
     let Err(error) = RedisConnection::connect(&config).await else {
         panic!("{case} must not connect")
     };
-    let took = started.elapsed();
-    assert!(
-        took < AT_ONCE,
-        "{case}: a refusal spends none of the budget, took {took:?}"
-    );
+    no_attempt_retried(&logs, case);
     assert!(
         matches!(&error, RedisError::DatabaseRefused { database, .. } if *database == index),
         "{case}: {error}"

@@ -14,7 +14,7 @@
 //! never answers first.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nest_rs_queue::__private::producer_of;
 use nest_rs_queue::{JobId, Jobs, PushOptions, PushReceipt, QueueError, QueueName};
@@ -294,12 +294,10 @@ mod standalone {
         );
 
         let queue = format!("nestrs-e2e-silent-{}", crate::this_run());
-        let started = Instant::now();
         let refused = producer
             .push(Named::of(&queue), json!({ "probe": true }))
             .await
             .expect_err("nothing answers once the proxy is dark");
-        let took = started.elapsed();
 
         assert!(
             matches!(refused, QueueError::Backend(_)),
@@ -310,6 +308,10 @@ mod standalone {
             cause.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
             "{cause}"
         );
-        assert!(took < budget * 3 / 2, "one budget: took {took:?}");
+        let dials = proxy.dials_while_dark();
+        assert!(
+            dials < crate::client_gives_a_reopen_up_after(),
+            "one budget, not the client's own reconnection attempts: {dials} dials by then"
+        );
     }
 }

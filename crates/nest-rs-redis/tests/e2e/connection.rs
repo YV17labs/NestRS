@@ -9,26 +9,24 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use nest_rs_testing::LogCapture;
+
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisError, RedisThrottler, RedisTopology};
 use nest_rs_throttler::{Throttle, ThrottlerStore};
 
-use crate::harness::AT_ONCE;
 use crate::harness::connection::{
     NOT_READY, ScriptedRedis, answer, config, database_refused_at_once,
 };
+use crate::harness::no_attempt_retried;
 
 /// Connect to `url`, which Redis refuses, and return the refusal once it is
 /// shown to have come at once, as a refusal, naming the variable to fix.
 async fn refused_at_once(url: String, case: &str) -> RedisError {
-    let started = Instant::now();
+    let logs = LogCapture::install();
     let Err(error) = RedisConnection::connect(&config(url)).await else {
         panic!("{case} must not connect")
     };
-    let took = started.elapsed();
-    assert!(
-        took < AT_ONCE,
-        "{case}: a refusal spends none of the budget, took {took:?}"
-    );
+    no_attempt_retried(&logs, case);
     assert!(
         matches!(error, RedisError::Refused { .. }),
         "{case}: {error}"
@@ -52,6 +50,7 @@ async fn a_url_declaring_a_topology_its_server_does_not_serve_fails_at_once_nami
         RedisTopology::Standalone | RedisTopology::Sentinel => RedisTopology::Standalone,
         other => panic!("the suite serves no {other} topology"),
     };
+    let logs = LogCapture::install();
     let mut servers = vec![(crate::node_addresses(false).await.remove(0), data)];
     if crate::topology() == RedisTopology::Sentinel {
         servers.push((crate::named_hosts().remove(0), RedisTopology::Sentinel));
@@ -75,15 +74,10 @@ async fn a_url_declaring_a_topology_its_server_does_not_serve_fails_at_once_nami
                 RedisTopology::Cluster => one_server.replacen("://", "-cluster://", 1),
                 other => panic!("no scheme declares a {other} topology"),
             };
-            let started = Instant::now();
             let Err(refused) = RedisConnection::connect(&config(url.clone())).await else {
                 panic!("{url} must not connect");
             };
-            assert!(
-                started.elapsed() < AT_ONCE,
-                "{declared} at a {serves} server: at once, took {:?}",
-                started.elapsed()
-            );
+            no_attempt_retried(&logs, &format!("{declared} at a {serves} server"));
             assert!(
                 matches!(
                     &refused,
@@ -177,18 +171,15 @@ async fn an_acl_denying_select_fails_the_boot_at_once_naming_the_index() {
     // — `no permissions`, never `out of range` — passes the assertion below.
     let index = past_every_database().await;
     let url = crate::url_as(&crate::redis_url_on(index), &user, SECRET);
-    let outcome = tokio::time::timeout(
-        AT_ONCE * 2,
-        database_refused_at_once(config(url), i64::from(index), "an ACL user without +select"),
-    )
-    .await;
+    let error =
+        database_refused_at_once(config(url), i64::from(index), "an ACL user without +select")
+            .await;
     redis::cmd("ACL")
         .arg("DELUSER")
         .arg(&user)
         .query_async::<i64>(&mut admin)
         .await
         .expect("ACL DELUSER");
-    let error = outcome.expect("refused at once, not retried for the budget");
     assert!(
         answer(&error).contains("no permissions"),
         "the source says what Redis answered: {}",
@@ -223,9 +214,8 @@ async fn an_acl_denying_the_proof_fails_the_boot_at_once() {
         .expect("ACL SETUSER");
 
     let url = crate::url_as(&crate::redis_url(), &user, SECRET);
-    let started = Instant::now();
+    let logs = LogCapture::install();
     let outcome = RedisConnection::connect(&config(url)).await;
-    let took = started.elapsed();
     redis::cmd("ACL")
         .arg("DELUSER")
         .arg(&user)
@@ -236,10 +226,7 @@ async fn an_acl_denying_the_proof_fails_the_boot_at_once() {
     let Err(error) = outcome else {
         panic!("a user the ACL denies the proof must not connect")
     };
-    assert!(
-        took < AT_ONCE,
-        "a refusal spends none of the budget, took {took:?}"
-    );
+    no_attempt_retried(&logs, "a user the ACL denies the proof");
     assert!(matches!(error, RedisError::Refused { .. }), "{error}");
     assert!(
         answer(&error).contains("no permissions to run the 'ping' command"),
@@ -437,21 +424,21 @@ mod standalone {
             "the proxy going dark must drop the connection"
         );
 
-        let started = Instant::now();
         let error = redis::cmd("PING")
             .query_async::<()>(&mut conn)
             .await
             .expect_err("nothing answers once the proxy is dark");
-        let took = started.elapsed();
 
         assert!(error.is_timeout(), "it fails as a timeout: {error}");
+        let dials = proxy.dials_while_dark();
         assert!(
-            took < budget * 2,
-            "and within the budget, not after the client's own reconnection attempts: took {took:?}",
+            dials >= 1,
+            "the command waited on a reopened connection, not on the dropped one",
         );
         assert!(
-            proxy.dials_while_dark() >= 1,
-            "the command waited on a reopened connection, not on the dropped one",
+            dials < crate::client_gives_a_reopen_up_after(),
+            "and was cut at the budget, not after the client's own reconnection attempts: \
+             {dials} dials by then",
         );
     }
 
@@ -475,9 +462,10 @@ mod standalone {
         let mut admin = crate::connect().await;
         let key = crate::unique_key("held-write");
 
+        // Past any stall the test meets, so the write ends by the budget alone.
         redis::cmd("CLIENT")
             .arg("PAUSE")
-            .arg(3_000)
+            .arg(30_000)
             .arg("WRITE")
             .query_async::<()>(&mut admin)
             .await
@@ -498,8 +486,8 @@ mod standalone {
         let error = held.expect_err("a write Redis holds is ended by the budget");
         assert!(error.is_timeout(), "it fails as a timeout: {error}");
         assert!(
-            took >= budget && took < budget * 3,
-            "and at the budget, took {took:?}",
+            took >= budget,
+            "and at the budget, while Redis still held it: took {took:?}"
         );
         assert!(
             error

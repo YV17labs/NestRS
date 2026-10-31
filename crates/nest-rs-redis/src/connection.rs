@@ -887,9 +887,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_url_asking_for_resp3_is_refused_at_once() {
-        let started = Instant::now();
+        let started = tokio::time::Instant::now();
         let Err(error) = RedisConnection::connect(&config(
             "redis://127.0.0.1:9/?protocol=resp3",
             Duration::from_secs(5),
@@ -898,7 +898,7 @@ mod tests {
         else {
             panic!("RESP3 must not connect")
         };
-        assert!(started.elapsed() < Duration::from_secs(1), "at once");
+        assert_eq!(started.elapsed(), Duration::ZERO, "at once");
         assert!(
             matches!(error, RedisError::UnsupportedProtocol { .. }),
             "{error}"
@@ -911,14 +911,14 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_tls_host_no_certificate_can_name_is_an_invalid_url() {
         for url in [
             "rediss://-leading:9/",
             "rediss-cluster://-leading:9",
             "rediss-sentinel://-leading:9?sentinelServiceName=nestrs",
         ] {
-            let started = Instant::now();
+            let started = tokio::time::Instant::now();
             let Err(error) = RedisConnection::connect(&config(url, Duration::from_secs(5))).await
             else {
                 panic!("a host no certificate can name must not connect")
@@ -927,10 +927,10 @@ mod tests {
                 matches!(error, RedisError::InvalidUrl { .. }),
                 "{url}: {error}"
             );
-            assert!(
-                started.elapsed() < Duration::from_secs(1),
-                "nothing was dialled, took {:?}",
+            assert_eq!(
                 started.elapsed(),
+                Duration::ZERO,
+                "{url}: nothing was dialled, so no wait was scheduled"
             );
         }
     }
@@ -955,7 +955,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn tls_material_no_handshake_could_use_fails_before_anything_is_dialled() {
         for url in [
             "rediss://127.0.0.1:9/",
@@ -969,14 +969,14 @@ mod tests {
             mismatched.tls = presenting(&CLIENT.cert, &SERVER.key);
 
             for (pinned, variable) in [(trusting_nothing, "TLS_CA_CERT"), (mismatched, "TLS_KEY")] {
-                let started = Instant::now();
+                let started = tokio::time::Instant::now();
                 let Err(error) = RedisConnection::connect(&pinned).await else {
                     panic!("material {variable} cannot use must not connect")
                 };
-                assert!(
-                    started.elapsed() < Duration::from_secs(1),
-                    "{url}: nothing was dialled, took {:?}",
+                assert_eq!(
                     started.elapsed(),
+                    Duration::ZERO,
+                    "{url}: nothing was dialled, so no wait was scheduled",
                 );
                 assert!(
                     matches!(error, RedisError::TlsRefused { .. }),
@@ -991,24 +991,21 @@ mod tests {
         }
     }
 
+    /// At once: refused on its first attempt, which no retry followed — what
+    /// holds however long the machine stalls the handshake.
     #[tokio::test]
     async fn a_certificate_the_client_does_not_accept_fails_the_boot_at_once() {
+        let logs = nest_rs_testing::LogCapture::install();
         let (addr, serving) = tls_listener().await;
         for url in [
             format!("rediss://{addr}/"),
             format!("rediss-sentinel://{addr}?sentinelServiceName=nestrs"),
             format!("rediss-cluster://{addr}"),
         ] {
-            let started = Instant::now();
             let outcome = RedisConnection::connect(&config(&url, Duration::from_secs(5))).await;
             let Err(error) = outcome else {
                 panic!("a certificate no trusted authority signed must not connect")
             };
-            assert!(
-                started.elapsed() < Duration::from_secs(1),
-                "{url}: a refused certificate spends none of the budget, took {:?}",
-                started.elapsed(),
-            );
             assert!(
                 matches!(error, RedisError::TlsRefused { .. }),
                 "{url}: {error}"
@@ -1021,6 +1018,10 @@ mod tests {
             );
         }
         serving.abort();
+        logs.expect_none(
+            crate::TARGET,
+            "redis unreachable — retrying within the connect budget",
+        );
     }
 
     /// TLS 1.3 settles a client certificate after the client's side of the
@@ -1047,15 +1048,9 @@ mod tests {
         ] {
             let mut pinned = config(&url, Duration::from_secs(5));
             pinned.tls = trusting_the_authority();
-            let started = Instant::now();
             let Err(error) = RedisConnection::connect(&pinned).await else {
                 panic!("{case}: a client presenting no certificate must be refused")
             };
-            assert!(
-                started.elapsed() < Duration::from_secs(3),
-                "{case}: a refused certificate spends none of the budget, took {:?}",
-                started.elapsed(),
-            );
             assert!(
                 matches!(error, RedisError::TlsRefused { .. }),
                 "{case}: {error}"
@@ -1139,7 +1134,7 @@ mod tests {
         .await;
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_budget_past_the_ceiling_is_refused_before_any_dial() {
         for budget in [
             Duration::from_secs(60 * 60 + 1),
@@ -1335,9 +1330,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_rejected_url_fails_at_once_with_the_credentials_redacted() {
-        let started = Instant::now();
+        let started = tokio::time::Instant::now();
         let Err(err) = RedisConnection::connect(&config(
             "redis://user:secret@[::bad-host/",
             Duration::from_secs(5),
@@ -1347,10 +1342,10 @@ mod tests {
             panic!("a URL the client rejects must fail the boot")
         };
 
-        assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "a deterministic failure spends none of the budget, took {:?}",
+        assert_eq!(
             started.elapsed(),
+            Duration::ZERO,
+            "a deterministic failure spends none of the budget",
         );
         assert!(matches!(err, RedisError::InvalidUrl { .. }), "{err}");
         let rendered = err.to_string();
@@ -1546,20 +1541,16 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_command_that_never_answers_fails_at_the_budget_as_a_timeout() {
         let budget = Duration::from_millis(150);
-        let started = Instant::now();
+        let started = tokio::time::Instant::now();
         let error = bounded(&unnamed(), budget, std::future::pending::<()>())
             .await
             .expect_err("a call that never answers is ended by the budget");
 
         assert!(error.is_timeout(), "it fails as a timeout: {error}");
-        assert!(
-            started.elapsed() < budget * 4,
-            "and at the budget, took {:?}",
-            started.elapsed(),
-        );
+        assert_eq!(started.elapsed(), budget, "and at the budget");
         assert!(
             error
                 .to_string()

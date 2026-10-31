@@ -511,12 +511,12 @@ async fn on_every_node<T: redis::FromRedisValue>(cmd: &redis::Cmd) -> Vec<T> {
     on_each(&data_nodes().await, cmd).await
 }
 
-/// How many clients selected on `db` sit blocked in `XREADGROUP` on `nodes`.
-/// `CLIENT LIST` names every client of a Redis the suites share, so only a
-/// database one test owns makes a client its worker's, and `cmd` is only the
-/// last command a client sent: the `b` flag of a client waiting in a blocking
-/// call is what says the read waits there.
-async fn blocked_reads_among(nodes: &[redis::Client], db: u8) -> usize {
+/// The names of the clients selected on `db` that sit blocked in `XREADGROUP`
+/// on `nodes`, empty for one never named. `CLIENT LIST` names every client of a
+/// Redis the suites share, so only a database one test owns makes a client its
+/// worker's, and `cmd` is only the last command a client sent: the `b` flag of
+/// a client waiting in a blocking call is what says the read waits there.
+async fn blocked_reads_among(nodes: &[redis::Client], db: u8) -> Vec<String> {
     let selected = format!("db={db}");
     on_each::<String>(nodes, redis::cmd("CLIENT").arg("LIST"))
         .await
@@ -532,25 +532,46 @@ async fn blocked_reads_among(nodes: &[redis::Client], db: u8) -> usize {
                         .is_some_and(|flags| flags.contains('b'))
                 })
         })
-        .count()
+        .map(|client| {
+            client
+                .split(' ')
+                .find_map(|field| field.strip_prefix("name="))
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
 }
 
-/// [`blocked_reads_among`] every data node.
+/// How many reads [`blocked_reads_among`] every data node finds.
 async fn blocked_reads_on(db: u8) -> usize {
-    blocked_reads_among(&data_nodes().await, db).await
+    blocked_reads_among(&data_nodes().await, db).await.len()
 }
 
-/// Whether a read blocks on `db` within a second: a worker sends its read
-/// again at the end of each wait, so one listing can fall between two.
-async fn a_read_blocks_on(db: u8) -> bool {
+/// The names of the reads blocked on `db`, once one is: a worker sends its read
+/// again at the end of each wait, so one listing can fall between two. The
+/// wait only guards against a read that never blocks.
+async fn reads_blocking_on(db: u8) -> Vec<String> {
     let nodes = data_nodes().await;
-    for _ in 0..20 {
-        if blocked_reads_among(&nodes, db).await > 0 {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    false
+    let found = Mutex::new(Vec::new());
+    nest_rs_testing::wait_for(Duration::from_secs(60), || async {
+        let blocked = blocked_reads_among(&nodes, db).await;
+        let any = !blocked.is_empty();
+        *found
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = blocked;
+        any
+    })
+    .await;
+    found
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// How many attempts the client's own reopening of a dropped connection makes
+/// before it gives up — its first and its retries, which the framework leaves
+/// at `redis`'s default: what a caller cut at its budget sees fewer of.
+fn client_gives_a_reopen_up_after() -> usize {
+    1 + redis::aio::ConnectionManagerConfig::new().number_of_retries()
 }
 
 /// Close, from the server's side, every client connection selected on `db`,
@@ -722,15 +743,9 @@ async fn a_client_certificate_is_required_at(url: String) {
         connect_timeout: Duration::from_secs(30),
         ..redis_config()
     };
-    let started = Instant::now();
     let Err(error) = RedisConnection::connect(&absent).await else {
         panic!("{url}: a client presenting no certificate must be refused");
     };
-    let took = started.elapsed();
-    assert!(
-        took < harness::AT_ONCE,
-        "{url}: refused at once, never after the budget, took {took:?}"
-    );
     assert!(
         matches!(error, nest_rs_redis::RedisError::TlsRefused { .. }),
         "{url}: {error}"
@@ -741,10 +756,7 @@ async fn a_client_certificate_is_required_at(url: String) {
             && rendered.contains(&nest_rs_config::var_name("redis", "TLS_CERT")),
         "{url}: the refusal sends the operator to the certificate: {rendered}"
     );
-    logs.expect_none(
-        nest_rs_redis::TARGET,
-        "redis unreachable — retrying within the connect budget",
-    );
+    harness::no_attempt_retried(&logs, &url);
 }
 
 /// How long [`freeze`] holds a node: longer than the suite's topologies take
@@ -998,6 +1010,8 @@ impl MutingProxy {
 struct Replica {
     worker: TransportHandle,
     producer: Jobs,
+    /// The connection the app shares between its callers, its pushes among them.
+    shared: RedisConnection,
 }
 
 /// Boot the worker app `M` and start its worker — one replica, leasing for
@@ -1019,12 +1033,21 @@ async fn replica_of<M: nest_rs_core::Module + 'static>(
     builder: nest_rs_testing::TestAppBuilder,
 ) -> Replica {
     let (app, producer) = booted::<M>(builder).await;
+    let shared = RedisConnection::clone(
+        &app.container()
+            .get::<RedisConnection>()
+            .expect("RedisModule opens the app's connection"),
+    );
     let worker = app
         .spawn_transport(QueueWorker::new())
         .await
         .expect("the queue worker transport starts");
     Box::leak(Box::new(app));
-    Replica { worker, producer }
+    Replica {
+        worker,
+        producer,
+        shared,
+    }
 }
 
 /// The worker app `M`, booted through its init phases, and the producer it

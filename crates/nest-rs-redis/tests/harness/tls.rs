@@ -6,7 +6,7 @@
 //! holds back is the protocol.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -84,6 +84,8 @@ pub(crate) struct TlsProxy {
     /// another host in place of the right one — a renewal that installed the
     /// wrong file.
     misnamed: Arc<AtomicBool>,
+    /// Every connection it accepted, each one handshake.
+    handshakes: Arc<AtomicUsize>,
 }
 
 impl TlsProxy {
@@ -93,6 +95,7 @@ impl TlsProxy {
         let right = DOUBLE.acceptor(clients);
         let wrong = MISNAMED.acceptor(clients);
         let misnamed = Arc::new(AtomicBool::new(false));
+        let handshakes = Arc::new(AtomicUsize::new(0));
         let fronts = upstream
             .clone()
             .unwrap_or_else(|| "rediss://localhost".to_owned());
@@ -102,8 +105,10 @@ impl TlsProxy {
             .expect("bind the proxy");
         let addr = listener.local_addr().expect("the proxy's address");
         let presents_wrong = Arc::clone(&misnamed);
+        let accepted = Arc::clone(&handshakes);
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
+                accepted.fetch_add(1, Ordering::SeqCst);
                 let acceptor = if presents_wrong.load(Ordering::SeqCst) {
                     wrong.clone()
                 } else {
@@ -129,11 +134,18 @@ impl TlsProxy {
             addr,
             fronts,
             misnamed,
+            handshakes,
         }
     }
 
     pub(crate) fn present_a_certificate_issued_for_another_host(&self) {
         self.misnamed.store(true, Ordering::SeqCst);
+    }
+
+    /// How many handshakes it has been asked for: a client's attempts, counted
+    /// before its certificate reaches the client, so before any refusal of it.
+    pub(crate) fn handshakes(&self) -> usize {
+        self.handshakes.load(Ordering::SeqCst)
     }
 
     /// The proxy's URL on database `db`: a test that drops every connection on

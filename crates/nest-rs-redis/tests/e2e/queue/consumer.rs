@@ -609,19 +609,30 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
     );
 
     assert!(
-        crate::a_read_blocks_on(crate::DB_BLOCKED_READ).await,
-        "an idle worker's read blocks on a connection of its own",
+        !crate::reads_blocking_on(crate::DB_BLOCKED_READ)
+            .await
+            .is_empty(),
+        "an idle worker's read blocks"
     );
-    let started = std::time::Instant::now();
     replica
         .producer
         .push(PlainQueue, PlainCommand { run: run + 1 })
         .await
         .expect("a push while the read blocks");
+    // Every node the shared connection reaches takes the name, the stream's
+    // among them, so a read sent on it would carry it.
+    let shared = format!("nestrs-e2e-shared-{run}");
+    let () = redis::cmd("CLIENT")
+        .arg("SETNAME")
+        .arg(&shared)
+        .query_async(&mut replica.shared.clone())
+        .await
+        .expect("the shared connection takes a name");
+    let readers = crate::reads_blocking_on(crate::DB_BLOCKED_READ).await;
     assert!(
-        started.elapsed() < Duration::from_millis(500),
-        "a push does not wait behind the read: {:?}",
-        started.elapsed(),
+        !readers.contains(&shared),
+        "the read blocks on a connection of its own, never the one pushes go on: \
+         {shared} among {readers:?}",
     );
     crate::wait_until(Duration::from_secs(10), || PLAIN.of(run + 1).len() == 1).await;
 

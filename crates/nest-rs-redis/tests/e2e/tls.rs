@@ -4,7 +4,7 @@
 //! Valkey itself, every connection verified against the development services'
 //! authority.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{QueueModule, processor, queue};
@@ -17,7 +17,7 @@ use nest_rs_testing::TestAuthority;
 use nest_rs_throttler::{Throttle, ThrottlerStore};
 
 use crate::Runs;
-use crate::harness::AT_ONCE;
+use crate::harness::no_attempt_retried;
 use crate::harness::tls::{TlsProxy, config, trusting_the_test_authority};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,7 +69,7 @@ async fn a_queue_runs_over_a_redis_speaking_tls_every_connection_verified() {
         .await
         .expect("a push over TLS");
     crate::wait_until(Duration::from_secs(10), || SEALED.of(run).len() == 1).await;
-    let blocked = crate::a_read_blocks_on(db).await;
+    let blocked = crate::reads_blocking_on(db).await;
     replica.worker.shutdown().await.expect("clean shutdown");
     crate::flush(&mut admin)
         .await
@@ -77,7 +77,7 @@ async fn a_queue_runs_over_a_redis_speaking_tls_every_connection_verified() {
 
     assert_eq!(SEALED.of(run).len(), 1, "the job ran once over TLS");
     assert!(
-        blocked,
+        !blocked.is_empty(),
         "the worker's read blocks on a connection of its own to the TLS Redis",
     );
 }
@@ -87,7 +87,7 @@ async fn a_queue_runs_over_a_redis_speaking_tls_every_connection_verified() {
 /// fails at once naming what to set — verification is never skipped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_redis_speaking_tls_under_an_authority_not_trusted_fails_the_boot_at_once() {
-    let started = Instant::now();
+    let logs = nest_rs_testing::LogCapture::install();
     let untrusted = RedisConfig {
         tls: trusting_the_test_authority(),
         ..crate::redis_config()
@@ -95,8 +95,8 @@ async fn a_redis_speaking_tls_under_an_authority_not_trusted_fails_the_boot_at_o
     let Err(error) = RedisConnection::connect(&untrusted).await else {
         panic!("a certificate no trusted authority signed must not connect");
     };
-    assert!(started.elapsed() < AT_ONCE, "took {:?}", started.elapsed());
     assert!(matches!(error, RedisError::TlsRefused { .. }), "{error}");
+    no_attempt_retried(&logs, "an authority not trusted");
 }
 
 /// What holds on one server alone: a double in front of it stands where a
@@ -116,39 +116,40 @@ mod standalone {
         let budget = Duration::from_secs(1);
         let logs = nest_rs_testing::LogCapture::install_global();
         let proxy = TlsProxy::start(Some(crate::redis_url()), None).await;
-        let conn = RedisConnection::connect(&RedisConfig {
+        let conn = crate::connected(&RedisConfig {
             connect_timeout: budget,
             ..config(
                 proxy.url_on(crate::DB_TLS_REFUSED_REOPEN),
                 trusting_the_test_authority(),
             )
         })
-        .await
-        .expect("connect over TLS");
+        .await;
         redis::cmd("PING")
             .query_async::<()>(&mut conn.clone())
             .await
             .expect("it answers before the renewal");
 
         proxy.present_a_certificate_issued_for_another_host();
+        let renewed_at = proxy.handshakes();
         assert!(
             crate::drop_every_connection_on(crate::DB_TLS_REFUSED_REOPEN).await > 0,
             "the drop reaches the app's connection"
         );
 
-        let met = Instant::now();
         let _ = redis::cmd("PING")
             .query_async::<()>(&mut conn.clone())
             .await;
-        crate::wait_until(budget.saturating_sub(met.elapsed()), || {
+        crate::wait_until(Duration::from_secs(10), || {
             !logs.find(nest_rs_redis::TARGET, REFUSED).is_empty()
         })
         .await;
+        // A report waiting for the client to give its reopen up would follow
+        // every one of its attempts, each refused.
+        let refused = proxy.handshakes() - renewed_at;
         assert!(
-            met.elapsed() < budget,
-            "reported before a caller's budget ran out, not once the client stopped retrying: \
-             took {:?}",
-            met.elapsed()
+            refused < crate::client_gives_a_reopen_up_after(),
+            "reported with the first command that met the drop, not once the client stopped \
+             retrying: {refused} handshakes refused by then",
         );
         for _ in 0..2 {
             assert!(
@@ -253,18 +254,14 @@ mod standalone {
             .await
             .expect("and it answers");
 
-        let started = Instant::now();
+        let logs = nest_rs_testing::LogCapture::install();
         let Err(error) =
             RedisConnection::connect(&config(proxy.url_on(0), trusting_the_test_authority())).await
         else {
             panic!("a Redis requiring a client certificate must refuse a client presenting none")
         };
-        let took = started.elapsed();
         assert!(matches!(error, RedisError::TlsRefused { .. }), "{error}");
-        assert!(
-            took < AT_ONCE,
-            "a refused client spends none of the budget, took {took:?}"
-        );
+        no_attempt_retried(&logs, "a client presenting no certificate");
         let rendered = error.to_string();
         assert!(
             rendered.contains(&nest_rs_config::var_name("redis", "TLS_CERT")),

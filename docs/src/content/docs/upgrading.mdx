@@ -1379,9 +1379,12 @@ lists what the boot, a log or the wire shows when one is missed.
   `400 validation failed` with its `errors` on HTTP, a field error under
   `INVALID_ARGUMENT` on GraphQL, an error frame on WebSockets, `invalid_params`
   on MCP, and a job dead-lettered at once. A service that validated such an
-  input itself no longer sees it: its `ServiceError::Validation` (`422`) gives
-  way to the edge's `400`. Keep `validate()` only where the service builds the
-  input — from a provider's profile, a seed.
+  input itself no longer sees it, and its `ServiceError::Validation`, which
+  6.x answered `422`, answers `400` wherever it is still raised: one mistake,
+  one status, whoever checks it. `422` stays `ServiceError::Invalid`'s, a
+  well-formed value the service refuses on business grounds. Keep `validate()`
+  only where the service builds the input — from a provider's profile, a
+  seed.
 
 - **A `#[crud]` block that left `create` or `update` out, over a service that
   implements `Creatable` or `Updatable`,** serves that write once its keys are

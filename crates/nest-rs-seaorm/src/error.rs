@@ -25,9 +25,10 @@ use validator::ValidationErrors;
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum ServiceError {
-    /// Edge validation (`validator`) rejected the input — maps to a 422. The
-    /// fields ride under `errors` ([`field_errors`](Self::field_errors)), never
-    /// `validator`'s `Debug`, which echoes the rejected value.
+    /// The input breaks the rules its type declares (`validator`) — maps to a
+    /// **400**, as the edge's own refusal of that value does, whoever checks
+    /// it. The fields ride under `errors` ([`field_errors`](Self::field_errors)),
+    /// never `validator`'s `Debug`, which echoes the rejected value.
     #[error("validation failed")]
     Validation(#[from] ValidationErrors),
     /// A `Repo`/ORM query failed for a reason the caller cannot act on
@@ -408,7 +409,8 @@ impl nest_rs_core::ToProblem for ServiceError {
         use nest_rs_core::problem::code;
 
         let problem = match self {
-            Self::Validation(_) | Self::Invalid(_) => Problem::new(422, code::INVALID_ARGUMENT),
+            Self::Validation(_) => Problem::new(400, code::INVALID_ARGUMENT),
+            Self::Invalid(_) => Problem::new(422, code::INVALID_ARGUMENT),
             Self::Conflict(_) => Problem::new(409, code::CONFLICT),
             Self::Forbidden(_) => Problem::new(403, code::FORBIDDEN),
             Self::NotFound(_) => Problem::new(404, code::NOT_FOUND),
@@ -650,13 +652,16 @@ mod http {
         use super::super::ServiceError;
         use super::*;
 
+        /// A value breaking its type's rules answers what the edge's own check
+        /// of it answers, whoever checks it.
         #[test]
-        fn validation_is_422() {
+        fn validation_is_400_as_the_edges_check_is() {
             let err = ServiceError::Validation(validator::ValidationErrors::new());
-            assert_eq!(
-                HttpError::from(err).status(),
-                StatusCode::UNPROCESSABLE_ENTITY
-            );
+            assert_eq!(HttpError::from(err).status(), StatusCode::BAD_REQUEST);
+            let edge = nest_rs_http::pipe_error(&nest_rs_pipes::PipeError::from(
+                validator::ValidationErrors::new(),
+            ));
+            assert_eq!(edge.status(), StatusCode::BAD_REQUEST);
         }
 
         #[test]
@@ -907,7 +912,7 @@ mod http {
             let mut errs = validator::ValidationErrors::new();
             errs.add("email", validator::ValidationError::new("not_an_email"));
             let (status, ct, body) = body_json(ServiceError::Validation(errs)).await;
-            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(status, StatusCode::BAD_REQUEST);
             assert_eq!(ct.as_deref(), Some("application/problem+json"));
             assert!(
                 body.get("errors").and_then(|e| e.get("email")).is_some(),
@@ -1481,7 +1486,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             said(ServiceError::Validation(validator::ValidationErrors::new())),
-            Some((422, code::INVALID_ARGUMENT, "validation failed".into()))
+            Some((400, code::INVALID_ARGUMENT, "validation failed".into()))
         );
         for opaque in [
             ServiceError::Db(DbErr::Custom("relation \"posts\" does not exist".into())),

@@ -21,7 +21,10 @@
 //! [`SocialProvider::exchange`] default to the shared PKCE/CSRF flow, so a
 //! standard provider implements only [`SocialProvider::profile`].
 //!
-//! The redirect URI is [`SocialStrategy`]'s: it reads RFC 6749 §4.1.2's
+//! The authorization request is [`SocialRegistry::authorize`]'s: a handler
+//! returns the [`SocialRedirect`] it builds — the `302` to the provider with
+//! the transaction cookie, or a `404` for a provider the registry does not
+//! hold. The redirect URI is [`SocialStrategy`]'s: it reads RFC 6749 §4.1.2's
 //! authorization response — or §4.1.2.1's refusal — against the transaction
 //! cookie, exchanges the code and fetches the profile, and the product's
 //! [`SocialSignIn`] says who that profile is in this app, which is all the
@@ -39,6 +42,7 @@ pub const TARGET: &str = "nest_rs::social";
 
 mod module;
 mod provider;
+mod redirect;
 mod registry;
 mod strategy;
 
@@ -46,6 +50,7 @@ pub mod providers;
 
 pub use module::SocialModule;
 pub use provider::{ProfileFuture, SocialProfile, SocialProvider, TokenFuture};
+pub use redirect::SocialRedirect;
 pub use registry::{
     BuiltProvider, SocialProviderConfig, SocialProviderEntry, SocialRegistry, resolve_provider,
 };

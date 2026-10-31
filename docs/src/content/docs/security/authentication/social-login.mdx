@@ -101,13 +101,16 @@ profile is a user here" means. Everything RFC 6749 fixes is the framework's.
 
 Two legs, both dispatched by a `{provider}` path segment:
 
-- `GET /social/{provider}/authorize` — begins the redirect. A plain handler:
-  ask the registry for the provider, call `authorize(jwt, resource)`, return
-  a `302` with the PKCE/CSRF transaction in a signed, short-lived cookie
-  (`authorization.set_cookie()`). The transaction carries the
+- `GET /social/{provider}/authorize` — begins the redirect. A plain handler
+  returns what `SocialRegistry::authorize(provider, jwt, resource)` answers, a
+  `SocialRedirect`: a `302` to the provider with the PKCE/CSRF transaction in
+  a signed, short-lived cookie, under `Cache-Control: no-store`, so no cache
+  keeps the response that set it. The transaction carries the
   [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) `resource` the
-  sign-in asked for (`?resource=`), signed, so the callback mints for it.
-  Unknown provider ⇒ `404`.
+  sign-in asked for (`?resource=`), signed, so the callback mints for it. A
+  provider no imported module registers answers the `404` problem a route
+  that does not exist does. Which resources a sign-in may name is yours to
+  check before you ask.
 - `GET /social/{provider}/callback` — the redirect URI, guarded by
   `AuthnGuard<SocialStrategy<S>>`. The strategy reads RFC 6749 §4.1.2's
   response against the transaction cookie, exchanges the code, fetches the
@@ -148,6 +151,19 @@ impl SocialSignIn for SignInService {
 }
 ```
 
+```rust title="crates/features/src/sign_in/service.rs (from the demo, abridged)"
+pub fn authorize(
+    &self,
+    provider: &str,
+    resource: Option<&str>,
+) -> Result<SocialRedirect, TokenError> {
+    self.sign_in_audience(resource)?;
+    self.providers
+        .authorize(provider, &self.jwt_svc, resource)
+        .map_err(|error| TokenError::Sign(error.into()))
+}
+```
+
 ```rust title="crates/features/src/sign_in/http/guard.rs (from the demo, abridged)"
 // …
 pub type SocialGuard = AuthnGuard<SocialStrategy<SignInService>>;
@@ -171,18 +187,8 @@ impl SignInController {
         &self,
         Piped(provider): Piped<Lowercase, Path<String>>,
         query: Query<AuthorizeDto>,
-    ) -> Result<Response> {
-        let authorization = self
-            .svc
-            .authorize(&provider, query.0.resource.as_deref())?
-            .ok_or_else(|| HttpError::from_status(StatusCode::NOT_FOUND))?;
-        let set_cookie = HeaderValue::try_from(authorization.set_cookie()).opaque()?;
-        let location = HeaderValue::try_from(authorization.url).opaque()?;
-        Ok(Response::builder()
-            .status(StatusCode::FOUND)
-            .header(header::SET_COOKIE, set_cookie)
-            .header(header::LOCATION, location)
-            .finish())
+    ) -> Result<SocialRedirect> {
+        Ok(self.svc.authorize(&provider, query.0.resource.as_deref())?)
     }
 
     #[get("/social/{provider}/callback")]

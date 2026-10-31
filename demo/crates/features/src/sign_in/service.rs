@@ -3,11 +3,10 @@ use std::sync::Arc;
 use nest_rs::authn::{AuthError, JwtService, PrincipalIdentity};
 use nest_rs::config::{ConfigError, Namespaced};
 use nest_rs::core::{async_trait, hooks, injectable};
-use nest_rs::oauth::client::AuthorizationRedirect;
 use nest_rs::oauth::server::{
     AccessTokenRequest, AccessTokenResponse, OAuthServerConfig, TokenError,
 };
-use nest_rs::social::{SocialProfile, SocialRegistry, SocialSignIn};
+use nest_rs::social::{SocialProfile, SocialRedirect, SocialRegistry, SocialSignIn};
 use uuid::Uuid;
 
 use super::config::{ClientPayload, SignInConfig, registered_within_policy};
@@ -115,14 +114,10 @@ impl SignInService {
         &self,
         provider: &str,
         resource: Option<&str>,
-    ) -> Result<Option<AuthorizationRedirect>, TokenError> {
+    ) -> Result<SocialRedirect, TokenError> {
         self.sign_in_audience(resource)?;
-        let Some(provider) = self.providers.get(provider) else {
-            return Ok(None);
-        };
-        provider
-            .authorize(&self.jwt_svc, resource)
-            .map(Some)
+        self.providers
+            .authorize(provider, &self.jwt_svc, resource)
             .map_err(|error| TokenError::Sign(error.into()))
     }
 
@@ -237,6 +232,7 @@ mod tests {
     use super::*;
 
     use nest_rs::authn::{JwtOptions, JwtService};
+    use nest_rs::http::{IntoResponse, StatusCode};
     use std::time::Duration;
 
     use crate::authz::constants::{POSTS_READ, POSTS_WRITE};
@@ -387,9 +383,10 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_provider_is_none_and_an_unserved_resource_refused_before_it() {
+    fn an_unknown_provider_is_not_found_and_an_unserved_resource_refused_before_it() {
         let svc = sign_in_service(Duration::from_secs(60));
-        assert!(matches!(svc.authorize("github", None), Ok(None)));
+        let unknown = svc.authorize("github", None).expect("answered");
+        assert_eq!(unknown.into_response().status(), StatusCode::NOT_FOUND);
         assert!(matches!(
             svc.authorize("github", Some("https://billing.example.com")),
             Err(TokenError::InvalidTarget)

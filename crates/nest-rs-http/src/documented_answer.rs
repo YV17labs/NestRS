@@ -23,7 +23,9 @@ pub struct AnswerDoc {
 }
 
 /// A return type that answers a status or a header of its own: [`Created`],
-/// [`Paginated`] and a `Result` holding one. Implemented here alone.
+/// [`Paginated`] and a `Result` holding one, here, and a framework crate's
+/// own answer type — `nest-rs-social`'s redirect to a provider — whose
+/// `Result` the blanket impl covers.
 pub trait DocumentedAnswer {
     /// What it answers beside its body.
     const ANSWER: AnswerDoc;
@@ -45,16 +47,12 @@ impl<T> DocumentedAnswer for Created<T> {
     const ANSWER: AnswerDoc = CREATED;
 }
 
-impl<T, E> DocumentedAnswer for Result<Created<T>, E> {
-    const ANSWER: AnswerDoc = CREATED;
-}
-
 impl<T> DocumentedAnswer for Paginated<T> {
     const ANSWER: AnswerDoc = PAGINATED;
 }
 
-impl<T, E> DocumentedAnswer for Result<Paginated<T>, E> {
-    const ANSWER: AnswerDoc = PAGINATED;
+impl<R: DocumentedAnswer, E> DocumentedAnswer for Result<R, E> {
+    const ANSWER: AnswerDoc = R::ANSWER;
 }
 
 /// Asks the compiler whether `R` is a [`DocumentedAnswer`]: the inherent arm

@@ -73,6 +73,7 @@ impl OAuthController {
             .status(StatusCode::FOUND)
             .header(header::SET_COOKIE, auth.set_cookie())
             .header(header::LOCATION, auth.url)
+            .header(header::CACHE_CONTROL, "no-store")
             .finish())
     }
 
@@ -316,9 +317,14 @@ pub struct AuthorizationRedirect {
 }
 ```
 
-- `url` — set `Location: <url>` and return `302`.
+- `url` — set `Location: <url>` and return `302`, with `Cache-Control:
+  no-store` so no cache keeps the response setting the cookie.
 - `transaction` — set as a cookie through `set_cookie()`:
   `__Host-oauth_tx=<token>; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax`.
+
+Behind a social provider, `SocialRegistry::authorize` answers all of it as a
+`SocialRedirect` the handler returns
+([Social login](/security/authentication/social-login/#the-request-flow)).
 
 The cookie's name is `OAuthClient::TRANSACTION_COOKIE`, the framework's
 rather than yours. Its `__Host-` prefix makes a browser refuse it unless

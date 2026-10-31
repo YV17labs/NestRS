@@ -13,10 +13,12 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
+use nest_rs_authn::{AuthError, JwtService};
 use nest_rs_config::{Config, ConfigService};
 use nest_rs_core::{Composition, Container, Module, injectable, inventory};
 
 use crate::provider::SocialProvider;
+use crate::redirect::SocialRedirect;
 
 /// The outcome of building a provider from configuration: `None` means "no
 /// credentials set" — the provider stays inert rather than failing boot.
@@ -204,10 +206,27 @@ impl SocialRegistry {
         Ok(())
     }
 
-    /// The provider registered under `key`, or `None` for an unknown key
-    /// (the caller maps that to a 404).
+    /// The provider registered under `key`, or `None` for an unknown key.
     pub fn get(&self, key: &str) -> Option<Arc<dyn SocialProvider>> {
         self.resolved.get()?.get(key).cloned()
+    }
+
+    /// Begin the sign-in flow at the provider registered under `key`, for
+    /// `resource` (RFC 8707), the one this app's own token is asked for: the
+    /// [`SocialRedirect`] a handler returns, its transaction signed by `jwt`.
+    /// A key no imported module registers answers the `404` a route that does
+    /// not exist does; a transaction `jwt` cannot sign is an error. Which
+    /// resources a sign-in may name is the product's to check first.
+    pub fn authorize(
+        &self,
+        key: &str,
+        jwt: &JwtService,
+        resource: Option<&str>,
+    ) -> Result<SocialRedirect, AuthError> {
+        match self.get(key) {
+            Some(provider) => SocialRedirect::to(&provider.authorize(jwt, resource)?),
+            None => Ok(SocialRedirect::unknown()),
+        }
     }
 
     /// The registered provider keys, sorted. Empty only on a container no boot

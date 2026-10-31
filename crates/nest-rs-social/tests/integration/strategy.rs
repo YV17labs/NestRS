@@ -3,7 +3,6 @@
 //! through the product's `SocialSignIn`, carrying the resource the flow asked
 //! for; §4.1.2.1's refusal and a response nobody began never reach it.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_authn::{
@@ -11,76 +10,11 @@ use nest_rs_authn::{
 };
 use nest_rs_core::{Ambient, AmbientValue, async_trait, injectable, module};
 use nest_rs_http::{HttpModule, Json, StatusCode, controller, routes};
-use nest_rs_oauth_client::{
-    AuthorizationRedirect, AuthorizationResponse, OAuthClient, OAuthClientConfig, TokenSet,
-};
-use nest_rs_social::{
-    ProfileFuture, SocialModule, SocialProfile, SocialProvider, SocialProviderEntry, SocialSignIn,
-    SocialStrategy, TokenFuture,
-};
+use nest_rs_oauth_client::AuthorizationRedirect;
+use nest_rs_social::{SocialModule, SocialProfile, SocialProvider, SocialSignIn, SocialStrategy};
 use nest_rs_testing::{TestApp, TestResponse};
 
-const KEY: &str = "callback-stub";
-const SECRET: &str = "social-strategy-secret-padded-32b";
-const CODE: &str = "the-code-never-logged";
-const MCP: &str = "https://mcp.example.com/mcp";
-
-/// A provider whose exchange and profile answer in process: what the strategy
-/// hands it, it checks.
-struct StubProvider {
-    client: OAuthClient,
-}
-
-impl SocialProvider for StubProvider {
-    fn key(&self) -> &'static str {
-        KEY
-    }
-
-    fn client(&self) -> &OAuthClient {
-        &self.client
-    }
-
-    fn exchange(&self, response: AuthorizationResponse) -> TokenFuture<'_> {
-        Box::pin(async move {
-            assert_eq!(response.code().expose_secret(), CODE);
-            Ok(TokenSet::new("provider-access-token"))
-        })
-    }
-
-    fn profile<'a>(&'a self, tokens: &'a TokenSet) -> ProfileFuture<'a> {
-        Box::pin(async move {
-            assert_eq!(tokens.access_token.expose_secret(), "provider-access-token");
-            Ok(SocialProfile::new(KEY, "provider-subject-42"))
-        })
-    }
-}
-
-fn stub_provider() -> StubProvider {
-    StubProvider {
-        client: OAuthClient::new(OAuthClientConfig {
-            client_id: "id".into(),
-            client_secret: "secret".into(),
-            auth_url: "https://provider.example/authorize".into(),
-            token_url: "https://provider.example/token".into(),
-            redirect_url: "https://app.example/social/callback-stub/callback".into(),
-            userinfo_url: "https://provider.example/userinfo".into(),
-            scopes: vec!["read".into()],
-            tls: nest_rs_config::ClientTls::default(),
-        })
-        .expect("a valid client"),
-    }
-}
-
-#[module]
-struct StubSocialModule;
-
-nest_rs_core::inventory::submit! {
-    SocialProviderEntry::new::<StubProvider, StubSocialModule>(
-        KEY,
-        "SOCIAL__CALLBACK_STUB",
-        |_container| Ok(Some(Arc::new(stub_provider()))),
-    )
-}
+use crate::{CODE, KEY, MCP, SECRET, StubSocialModule, stub_provider};
 
 #[derive(Clone)]
 struct Member {

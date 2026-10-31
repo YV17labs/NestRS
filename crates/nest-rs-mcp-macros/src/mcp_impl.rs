@@ -981,7 +981,7 @@ fn masked(role: Role, posture: &Posture, sig: &Signature) -> syn::Result<TokenSt
                 "`#[authorize(...)]` cannot mask a `{opaque}` — its contents are opaque to \
                  the entity round-trip. Return the wire type ({remedy}) and let the \
                  mask run, or keep the gate and mask by hand with \
-                 `#[authorize(Action, Entity, unmasked)]` + `nest_rs_authz::masked_reply`",
+                 `#[authorize(Action, Entity, unmasked)]` + `nest_rs::authz::masked_reply`",
             ),
         ));
     }

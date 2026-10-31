@@ -2,4 +2,4 @@ error[E0080]: evaluation panicked: an `#[sse]` route's `#[authorize]` names a su
   --> tests/integration/diagnostics/http/authorize_on_an_sse_route.rs:33:23
    |
 33 |     #[authorize(Read, post::Entity)]
-   |                       ^^^^ evaluation of `<FeedController as nest_rs::nest_rs_core::Discoverable>::register::{closure#0}::_` failed here
+   |                       ^^^^ evaluation of `<FeedController as nest_rs::core::Discoverable>::register::{closure#0}::_` failed here

@@ -4,18 +4,18 @@ error[E0277]: `Forgetful` is not an interceptor
 6 | #[interceptor]
   | ^^^^^^^^^^^^^^ bound as an interceptor here
   |
-help: the trait `nest_rs::nest_rs_core::Interceptor` is not implemented for `Forgetful`
+help: the trait `nest_rs::core::Interceptor` is not implemented for `Forgetful`
  --> tests/integration/diagnostics/core/interceptor_on_a_type_that_does_not_intercept.rs:8:1
   |
 8 | struct Forgetful;
   | ^^^^^^^^^^^^^^^^
   = note: implement `Interceptor` for it — `async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome` — beside `Layer`
-help: the trait `nest_rs::nest_rs_core::Interceptor` is implemented for `Arc<T>`
+help: the trait `nest_rs::core::Interceptor` is implemented for `Arc<T>`
  --> $WORKSPACE/crates/nest-rs-core/src/interceptor.rs
   |
   | impl<T: Interceptor + ?Sized> Interceptor for Arc<T> {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required by a bound in `nest_rs::nest_rs_core::__private::register_interceptor`
+note: required by a bound in `nest_rs::core::__private::register_interceptor`
  --> $WORKSPACE/crates/nest-rs-core/src/interceptor.rs
   |
   |     pub fn register_interceptor<I: Interceptor>(

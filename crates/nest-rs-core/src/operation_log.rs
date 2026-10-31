@@ -270,7 +270,7 @@ pub(crate) mod __private {
             }
             panic!(
                 "a unit's edge is one of the closed edge vocabulary in \
-                 `nest_rs_core::Edge::ALL`"
+                 `nest_rs::core::Edge::ALL`"
             );
         }
         if !named_after_owner {

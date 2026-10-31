@@ -5,7 +5,15 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-pub use nest_rs_core as core;
+// A module over a glob, never `pub use nest_rs_core as core`: rustc names a crate
+// re-exported under another name by its own, `nest_rs::nest_rs_core::…`, in every
+// diagnostic, a path no app can write.
+
+/// The DI container, modules, the lifecycle and the unit pipeline every edge runs through.
+pub mod core {
+    #[doc(no_inline)]
+    pub use nest_rs_core::*;
+}
 
 /// The binary's entry point: `#[nest_rs::main] async fn main()`. It builds the
 /// runtime, runs the app on it, and ends the process within the shutdown
@@ -14,44 +22,96 @@ pub use nest_rs_core as core;
 /// before any app exists exits at once with 130 / 143 — see [`core::main`].
 pub use nest_rs_core::main;
 
+/// The HTTP edge: controllers, routes, the request vocabulary and the server.
 #[cfg(feature = "http")]
-pub use nest_rs_http as http;
+pub mod http {
+    #[doc(no_inline)]
+    pub use nest_rs_http::*;
+}
 
+/// Typed configuration, read from the environment under each config's namespace.
 #[cfg(feature = "config")]
-pub use nest_rs_config as config;
+pub mod config {
+    #[doc(no_inline)]
+    pub use nest_rs_config::*;
+}
 
+/// The data-layer port: the unit of work every edge runs through.
 #[cfg(feature = "database")]
-pub use nest_rs_database as database;
+pub mod database {
+    #[doc(no_inline)]
+    pub use nest_rs_database::*;
+}
 
+/// SeaORM: the pool, the database binding, `Repo`, `#[expose]` and `#[crud]`'s services.
 #[cfg(feature = "seaorm")]
-pub use nest_rs_seaorm as seaorm;
+pub mod seaorm {
+    #[doc(no_inline)]
+    pub use nest_rs_seaorm::*;
+}
 
+/// The GraphQL edge: resolvers, operations and the schema, on async-graphql.
 #[cfg(feature = "graphql")]
-pub use nest_rs_graphql as graphql;
+pub mod graphql {
+    #[doc(no_inline)]
+    pub use nest_rs_graphql::*;
+}
 
+/// The WebSocket edge: gateways and their messages.
 #[cfg(feature = "ws")]
-pub use nest_rs_ws as ws;
+pub mod ws {
+    #[doc(no_inline)]
+    pub use nest_rs_ws::*;
+}
 
+/// The Model Context Protocol edge: hosts, tools, prompts and resources, on rmcp.
 #[cfg(feature = "mcp")]
-pub use nest_rs_mcp as mcp;
+pub mod mcp {
+    #[doc(no_inline)]
+    pub use nest_rs_mcp::*;
+}
 
+/// The queue port: queues, jobs and the `#[processor]` that drains them.
 #[cfg(feature = "queue")]
-pub use nest_rs_queue as queue;
+pub mod queue {
+    #[doc(no_inline)]
+    pub use nest_rs_queue::*;
+}
 
+/// Redis: the connection, and the queue, throttler and schedule bindings over it.
 #[cfg(feature = "redis")]
-pub use nest_rs_redis as redis;
+pub mod redis {
+    #[doc(no_inline)]
+    pub use nest_rs_redis::*;
+}
 
+/// Scheduled jobs: `#[scheduled]` with `#[every]`, `#[cron]` and `#[after]`.
 #[cfg(feature = "schedule")]
-pub use nest_rs_schedule as schedule;
+pub mod schedule {
+    #[doc(no_inline)]
+    pub use nest_rs_schedule::*;
+}
 
+/// The in-process event bus and its `#[listeners]`.
 #[cfg(feature = "events")]
-pub use nest_rs_events as events;
+pub mod events {
+    #[doc(no_inline)]
+    pub use nest_rs_events::*;
+}
 
+/// Authentication: `JwtService`, the `Strategy` port and `AuthnGuard`.
 #[cfg(feature = "authn")]
-pub use nest_rs_authn as authn;
+pub mod authn {
+    #[doc(no_inline)]
+    pub use nest_rs_authn::*;
+}
 
+/// Authorization: abilities, `#[authorize]`, the query filter and field masking.
 #[cfg(feature = "authz")]
-pub use nest_rs_authz as authz;
+pub mod authz {
+    #[doc(no_inline)]
+    pub use nest_rs_authz::*;
+}
 
 /// RFC 6749 §1.1's roles, one module per role, spelled in the RFC's own words.
 #[cfg(any(
@@ -60,47 +120,103 @@ pub use nest_rs_authz as authz;
     feature = "oauth-resource"
 ))]
 pub mod oauth {
+    /// RFC 6749 §1.1's client: the Authorization Code flow with PKCE.
     #[cfg(feature = "oauth-client")]
-    pub use nest_rs_oauth_client as client;
+    pub mod client {
+        #[doc(no_inline)]
+        pub use nest_rs_oauth_client::*;
+    }
+    /// RFC 6749 §1.1's resource server: RFC 9728's Protected Resource Metadata.
     #[cfg(feature = "oauth-resource")]
-    pub use nest_rs_oauth_resource as resource;
+    pub mod resource {
+        #[doc(no_inline)]
+        pub use nest_rs_oauth_resource::*;
+    }
+    /// RFC 6749 §1.1's authorization server: client authentication and the token response.
     #[cfg(feature = "oauth-server")]
-    pub use nest_rs_oauth_server as server;
+    pub mod server {
+        #[doc(no_inline)]
+        pub use nest_rs_oauth_server::*;
+    }
 }
+/// Social login: the `SocialProvider` contract and its registry.
 #[cfg(feature = "social")]
-pub use nest_rs_social as social;
+pub mod social {
+    #[doc(no_inline)]
+    pub use nest_rs_social::*;
+}
 
+/// OpenTelemetry: traces, metrics, logs and the OTLP export.
 #[cfg(feature = "opentelemetry")]
-pub use nest_rs_opentelemetry as opentelemetry;
+pub mod opentelemetry {
+    #[doc(no_inline)]
+    pub use nest_rs_opentelemetry::*;
+}
 
+/// The OpenAPI 3.1 document and its Swagger UI.
 #[cfg(feature = "openapi")]
-pub use nest_rs_openapi as openapi;
+pub mod openapi {
+    #[doc(no_inline)]
+    pub use nest_rs_openapi::*;
+}
 
+/// Liveness, readiness and startup probes, and their indicators.
 #[cfg(feature = "health")]
-pub use nest_rs_health as health;
+pub mod health {
+    #[doc(no_inline)]
+    pub use nest_rs_health::*;
+}
 
+/// Rate limiting: `ThrottlerGuard` and the `ThrottlerStore` port.
 #[cfg(feature = "throttler")]
-pub use nest_rs_throttler as throttler;
+pub mod throttler {
+    #[doc(no_inline)]
+    pub use nest_rs_throttler::*;
+}
 
+/// The W3C Server-Timing response header.
 #[cfg(feature = "server-timing")]
-pub use nest_rs_server_timing as server_timing;
+pub mod server_timing {
+    #[doc(no_inline)]
+    pub use nest_rs_server_timing::*;
+}
 
+/// Static files and single-page apps, served beside the API.
 #[cfg(feature = "static-files")]
-pub use nest_rs_static_files as static_files;
+pub mod static_files {
+    #[doc(no_inline)]
+    pub use nest_rs_static_files::*;
+}
 
+/// The in-process test harness: `TestApp`, its client and provider overrides.
 #[cfg(feature = "testing")]
-pub use nest_rs_testing as testing;
+pub mod testing {
+    #[doc(no_inline)]
+    pub use nest_rs_testing::*;
+}
 
 // The layer contracts an edge's decorators name, so a custom `Guard` or `Pipe`
 // needs no per-crate dependency; `Interceptor` and `ExceptionFilter` are core's.
+/// The guard contract every edge checks, and the app-wide `GlobalGuards`.
 #[cfg(feature = "guards")]
-pub use nest_rs_guards as guards;
+pub mod guards {
+    #[doc(no_inline)]
+    pub use nest_rs_guards::*;
+}
 
+/// Validation and transformation pipes.
 #[cfg(feature = "pipes")]
-pub use nest_rs_pipes as pipes;
+pub mod pipes {
+    #[doc(no_inline)]
+    pub use nest_rs_pipes::*;
+}
 
+/// Object storage over `object_store`, its backend picked by the URL's scheme.
 #[cfg(feature = "storage")]
-pub use nest_rs_storage as storage;
+pub mod storage {
+    #[doc(no_inline)]
+    pub use nest_rs_storage::*;
+}
 
 // What codegen appends after an expansion reaching a feature an attribute
 // pulls in (`#[authorize]`, `#[crud]`), with the sentence naming it. Written

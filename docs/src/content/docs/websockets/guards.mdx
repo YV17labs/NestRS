@@ -141,14 +141,14 @@ error, the guard almost certainly belongs on the **gateway struct** instead:
 
 ```text frame="terminal"
 $ cargo check -p features
-error[E0277]: `nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>` does not declare that it checks `WsView` units
+error[E0277]: `nest_rs::authn::AuthnGuard<JwtStrategy<Claims>>` does not declare that it checks `WsView` units
    --> crates/features/src/users/ws/gateway.rs:21:18
     |
  21 |     #[use_guards(AuthnGuard)]
     |                  ^^^^^^^^^^ bound at a site whose units are `WsView`
     |
     = note: a guard's `check` decides the units it declares; bound where its units are another edge's, it would run a decision written for a view they do not have
-    = note: write the guard's decision for `WsView` units in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<WsView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
+    = note: write the guard's decision for `WsView` units in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<WsView> for nest_rs::authn::AuthnGuard<JwtStrategy<Claims>> {}`
 ```
 
 **A guard on the `#[gateway]` struct declares `GuardFor<HttpView>`, not

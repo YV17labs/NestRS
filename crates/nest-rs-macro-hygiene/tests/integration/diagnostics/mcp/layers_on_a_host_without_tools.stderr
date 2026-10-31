@@ -4,7 +4,7 @@ error[E0277]: `RawHost` declares this beside its `#[mcp]`, but no `#[tools]` imp
 59 | #[use_guards(Shut)]
    |   ^^^^^^^^^^ reaches no operation of `RawHost`
    |
-help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented for `RawHost`
+help: the trait `nest_rs::mcp::__private::ToolsHost` is not implemented for `RawHost`
   --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:64:1
    |
 64 | struct RawHost;
@@ -22,7 +22,7 @@ error[E0277]: `RawHost` declares this beside its `#[mcp]`, but no `#[tools]` imp
 60 | #[use_interceptors(Around)]
    |   ^^^^^^^^^^^^^^^^ reaches no operation of `RawHost`
    |
-help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented for `RawHost`
+help: the trait `nest_rs::mcp::__private::ToolsHost` is not implemented for `RawHost`
   --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:64:1
    |
 64 | struct RawHost;
@@ -40,7 +40,7 @@ error[E0277]: `RawHost` declares this beside its `#[mcp]`, but no `#[tools]` imp
 61 | #[use_exception_filters(Declines)]
    |   ^^^^^^^^^^^^^^^^^^^^^ reaches no operation of `RawHost`
    |
-help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented for `RawHost`
+help: the trait `nest_rs::mcp::__private::ToolsHost` is not implemented for `RawHost`
   --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:64:1
    |
 64 | struct RawHost;
@@ -58,7 +58,7 @@ error[E0277]: `RawHost` declares this beside its `#[mcp]`, but no `#[tools]` imp
 62 | #[meta(Limit(10))]
    |   ^^^^ reaches no operation of `RawHost`
    |
-help: the trait `nest_rs::nest_rs_mcp::__private::ToolsHost` is not implemented for `RawHost`
+help: the trait `nest_rs::mcp::__private::ToolsHost` is not implemented for `RawHost`
   --> tests/integration/diagnostics/mcp/layers_on_a_host_without_tools.rs:64:1
    |
 64 | struct RawHost;

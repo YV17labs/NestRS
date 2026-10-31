@@ -104,14 +104,14 @@ guards at the `/graphql` request. Bound on one anyway:
 
 ```text frame="terminal"
 $ cargo check -p features
-error[E0277]: `nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>` does not declare that it checks `GraphqlView` units
+error[E0277]: `nest_rs::authn::AuthnGuard<JwtStrategy<Claims>>` does not declare that it checks `GraphqlView` units
    --> crates/features/src/users/graphql/resolver.rs:14:14
     |
  14 | #[use_guards(AuthnGuard, AuthzGuard)]
     |              ^^^^^^^^^^ bound at a site whose units are `GraphqlView`
     |
     = note: a guard's `check` decides the units it declares; bound where its units are another edge's, it would run a decision written for a view they do not have
-    = note: write the guard's decision for `GraphqlView` units in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<GraphqlView> for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`
+    = note: write the guard's decision for `GraphqlView` units in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<GraphqlView> for nest_rs::authn::AuthnGuard<JwtStrategy<Claims>> {}`
 ```
 
 A guard whose one `check` is the same on every edge declares it once for all

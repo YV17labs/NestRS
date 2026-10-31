@@ -10,14 +10,14 @@ help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
 11 | struct Authorize<T>(T);
    | ^^^^^^^^^^^^^^^^^^^
    = help: the following other types implement trait `FromRequest<'a>`:
-             &'a nest_rs::nest_rs_http::Request
+             &'a nest_rs::http::Request
              Ambient<T>
              ClientIp
              RawBody
              Result<T, HttpError>
-             nest_rs::nest_rs_authz::http::Authorize<A, S>
-             nest_rs::nest_rs_http::Body
-             nest_rs::nest_rs_http::Form<T>
+             nest_rs::authz::http::Authorize<A, S>
+             nest_rs::http::Body
+             nest_rs::http::Form<T>
            and $N others
 
 error[E0277]: the trait bound `Authorize<u8>: FromRequest<'_>` is not satisfied
@@ -32,14 +32,14 @@ help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
 11 | struct Authorize<T>(T);
    | ^^^^^^^^^^^^^^^^^^^
    = help: the following other types implement trait `FromRequest<'a>`:
-             &'a nest_rs::nest_rs_http::Request
+             &'a nest_rs::http::Request
              Ambient<T>
              ClientIp
              RawBody
              Result<T, HttpError>
-             nest_rs::nest_rs_authz::http::Authorize<A, S>
-             nest_rs::nest_rs_http::Body
-             nest_rs::nest_rs_http::Form<T>
+             nest_rs::authz::http::Authorize<A, S>
+             nest_rs::http::Body
+             nest_rs::http::Form<T>
            and $N others
    = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
 
@@ -54,7 +54,7 @@ help: the trait `RouteResponseShaper` is not implemented for `Authorize<u8>`
    |
 11 | struct Authorize<T>(T);
    | ^^^^^^^^^^^^^^^^^^^
-help: the trait `RouteResponseShaper` is implemented for `nest_rs::nest_rs_authz::http::Authorize<A, S>`
+help: the trait `RouteResponseShaper` is implemented for `nest_rs::authz::http::Authorize<A, S>`
   --> $WORKSPACE/crates/nest-rs-authz/src/http/mask.rs
    |
    | / impl<A, S> RouteResponseShaper for Authorize<A, S>

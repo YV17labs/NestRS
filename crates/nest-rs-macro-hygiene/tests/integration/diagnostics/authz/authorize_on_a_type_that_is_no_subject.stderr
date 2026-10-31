@@ -34,7 +34,7 @@ help: the trait `WireModelDefaults` is not implemented for `Exporting`
    |
  7 | struct Exporting;
    | ^^^^^^^^^^^^^^^^
-help: the trait `nest_rs::nest_rs_authz::__private::McpMask<A, O>` is implemented for `nest_rs::nest_rs_authz::__private::Rows<E>`
+help: the trait `nest_rs::authz::__private::McpMask<A, O>` is implemented for `nest_rs::authz::__private::Rows<E>`
   --> $WORKSPACE/crates/nest-rs-authz/src/mcp/mask.rs
    |
    | / impl<A, E, O> McpMask<A, O> for Rows<E>
@@ -44,8 +44,8 @@ help: the trait `nest_rs::nest_rs_authz::__private::McpMask<A, O>` is implemente
    | |     E::Model: Serialize + DeserializeOwned,
    | |     O: Serialize + DeserializeOwned,
    | |____________________________________^
-   = note: required for `nest_rs::nest_rs_authz::__private::Rows<Exporting>` to implement `nest_rs::nest_rs_authz::__private::McpMask<nest_rs::nest_rs_authz::Manage, _>`
-note: required by a bound in `nest_rs::nest_rs_authz::__private::mcp_masked_value`
+   = note: required for `nest_rs::authz::__private::Rows<Exporting>` to implement `nest_rs::authz::__private::McpMask<nest_rs::authz::Manage, _>`
+note: required by a bound in `nest_rs::authz::__private::mcp_masked_value`
   --> $WORKSPACE/crates/nest-rs-authz/src/mcp/mask.rs
    |
    | pub fn mcp_masked_value<A, S, O>(value: O) -> Result<O, McpError>
@@ -70,5 +70,5 @@ help: the trait `EntityTrait` is implemented for `sea_orm_migration::seaql_migra
    |
    | #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
    |                                       ^^^^^^^^^^^^^^^^^
-   = note: required for `Exporting` to implement `nest_rs::nest_rs_authz::__private::SubjectMask`
+   = note: required for `Exporting` to implement `nest_rs::authz::__private::SubjectMask`
    = note: this error originates in the attribute macro `tools` which comes from the expansion of the derive macro `sea_orm::prelude::DeriveEntity` (in Nightly builds, run with -Z macro-backtrace for more info)

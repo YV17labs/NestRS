@@ -4,13 +4,13 @@ error[E0277]: `#[authorize]` names `gadget::Entity` beside `bind`, and the servi
 57 |     #[authorize(Update, gadget::Entity, bind = NotesService)]
    |                                                ^^^^^^^^^^^^ the service loads another entity
    |
-help: the trait `nest_rs::nest_rs_seaorm::__private::SameEntity<gadget::Entity>` is not implemented for `note::Entity`
+help: the trait `nest_rs::seaorm::__private::SameEntity<gadget::Entity>` is not implemented for `note::Entity`
   --> tests/integration/diagnostics/graphql/authorize_bind_names_another_entity.rs:13:39
    |
 13 |     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
    |                                       ^^^^^^^^^^^^^^^^^
    = note: the class gate and the response mask read the entity written, the load reads the service's: write `note::Entity`, or drop it — `bind = Service` derives it
-note: required by a bound in `nest_rs::nest_rs_seaorm::__private::bound_entity`
+note: required by a bound in `nest_rs::seaorm::__private::bound_entity`
   --> $WORKSPACE/crates/nest-rs-seaorm/src/service.rs
    |
    | pub const fn bound_entity<S, E>()

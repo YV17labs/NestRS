@@ -4,7 +4,6 @@
 //! and its origin list's, the WebSocket handshake's and the header binding's.
 
 use std::borrow::Cow;
-use std::convert::Infallible;
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
@@ -87,9 +86,9 @@ impl ResponseError for BodyError {
 /// An error that builds its own HTTP answer, so `?` on it answers its status.
 ///
 /// A domain error implements [`ToProblem`] instead, its one mapping on every
-/// edge: a route returning it answers the problem it says, and
-/// [`problem_error`] converts one where a body answers an [`HttpError`]. This
-/// trait is for an answer that is no problem — another protocol's (RFC 6749
+/// edge, which makes it a `ResponseError` answering the problem it says: a
+/// route returning it answers that problem, and so does `?` on it where a body
+/// answers an [`HttpError`]. This trait is for an answer that is no problem — another protocol's (RFC 6749
 /// §5.2's token error), a challenge, a response of its own — and for the
 /// edge's own refusals ([`BodyError`]).
 ///
@@ -119,6 +118,31 @@ impl ResponseError for BodyError {
 /// assert_eq!(error.status(), StatusCode::BAD_REQUEST);
 /// assert!(error.is::<InvalidGrant>());
 /// ```
+///
+/// An error maps to the wire once: a [`ToProblem`] error is a `ResponseError`
+/// through its problem already, so a second mapping of it does not compile.
+///
+/// ```compile_fail,E0119
+/// use nest_rs_core::problem::code;
+/// use nest_rs_core::{Problem, ToProblem};
+/// use nest_rs_http::{ResponseError, StatusCode};
+///
+/// #[derive(Debug, thiserror::Error)]
+/// #[error("the order is already paid")]
+/// struct AlreadyPaid;
+///
+/// impl ToProblem for AlreadyPaid {
+///     fn to_problem(&self) -> Option<Problem> {
+///         Some(Problem::new(409, code::CONFLICT))
+///     }
+/// }
+///
+/// impl ResponseError for AlreadyPaid {
+///     fn status(&self) -> StatusCode {
+///         StatusCode::BAD_REQUEST
+///     }
+/// }
+/// ```
 pub trait ResponseError {
     /// The status this error answers.
     fn status(&self) -> StatusCode;
@@ -134,43 +158,18 @@ pub trait ResponseError {
     }
 }
 
-/// A [`Problem`] answers its status, its document — its `type`, `title` and
-/// `code` member, its `detail` and field map on a `4xx` — and its
-/// `Retry-After`, so `?` on one answers it.
-///
-/// ```
-/// use nest_rs_core::Problem;
-/// use nest_rs_core::problem::code;
-/// use nest_rs_http::{HttpError, StatusCode};
-///
-/// let error = HttpError::from(Problem::new(409, code::CONFLICT));
-/// assert_eq!(error.status(), StatusCode::CONFLICT);
-/// ```
-impl ResponseError for Problem {
-    fn status(&self) -> StatusCode {
-        status_of(self)
-    }
-
-    fn as_response(&self) -> Response {
-        problem_response(self)
-    }
-}
-
-/// The [`HttpError`] a [`ToProblem`] error answers: the problem it says — its
-/// status, and its document with its `type`, `title` and `code` member, its
-/// `detail` and field map on a `4xx`, and its `Retry-After` — or, when it says
-/// none, the opaque `500`. The error stays its cause, for an exception filter
-/// and for the operator: the chain a `5xx` answer withholds is filed once the
-/// answer is final, as on every edge.
-///
-/// A route returning the error answers through it already; a body answering
-/// an [`HttpError`] converts with it, as GraphQL's and MCP's `problem_error`
-/// convert for theirs.
+/// A [`ToProblem`] error — a [`Problem`] among them — answers the problem it
+/// says: its status, and its document with its `type`, `title` and `code`
+/// member, its `detail` and field map on a `4xx`, and its `Retry-After` — or,
+/// when it says none, the opaque `500`. So `?` on one in a body answering an
+/// [`HttpError`] answers it, as a route returning it does, and the error stays
+/// the cause, for an exception filter and for the operator: the chain a `5xx`
+/// answer withholds is filed once the answer is final, as on every edge.
 ///
 /// ```
 /// use nest_rs_core::problem::code;
 /// use nest_rs_core::{Problem, ToProblem};
-/// use nest_rs_http::StatusCode;
+/// use nest_rs_http::{HttpError, StatusCode};
 ///
 /// #[derive(Debug, thiserror::Error)]
 /// #[error("the order is already paid")]
@@ -182,22 +181,26 @@ impl ResponseError for Problem {
 ///     }
 /// }
 ///
-/// let error = nest_rs_http::problem_error(AlreadyPaid);
+/// let error = HttpError::from(AlreadyPaid);
 /// assert_eq!(error.status(), StatusCode::CONFLICT);
 /// assert!(error.is::<AlreadyPaid>());
+///
+/// let problem = HttpError::from(Problem::new(409, code::CONFLICT));
+/// assert_eq!(problem.status(), StatusCode::CONFLICT);
 /// ```
-pub fn problem_error<E: ToProblem>(error: E) -> HttpError {
-    let status = error
-        .to_problem()
-        .as_ref()
-        .map_or(StatusCode::INTERNAL_SERVER_ERROR, status_of);
-    HttpError::with(
-        status,
-        Cause::Typed {
-            error: Box::new(error),
-            render: render_problem::<E>,
-        },
-    )
+impl<E: ToProblem> ResponseError for E {
+    fn status(&self) -> StatusCode {
+        self.to_problem()
+            .as_ref()
+            .map_or(StatusCode::INTERNAL_SERVER_ERROR, status_of)
+    }
+
+    fn as_response(&self) -> Response {
+        match self.to_problem() {
+            Some(problem) => problem_response(&problem),
+            None => ProblemDetails::from_status(StatusCode::INTERNAL_SERVER_ERROR).into_response(),
+        }
+    }
 }
 
 /// An HTTP failure: a status, the error that caused it, and typed extensions
@@ -239,8 +242,6 @@ enum Cause {
         error: BoxError,
         render: RenderTyped,
     },
-    /// `500`, opaque on the wire, its chain kept for the log.
-    Anyhow(anyhow::Error),
 }
 
 impl HttpError {
@@ -281,6 +282,13 @@ impl HttpError {
         Self::with(response.status(), Cause::Response(response))
     }
 
+    /// The opaque `500` a route's error answers when it neither says a problem
+    /// nor renders itself — an `anyhow` chain among them: what the chain
+    /// carries is read for a [`Problem`], and the rest is filed, never answered.
+    pub(crate) fn failed(error: BoxError) -> Self {
+        Self::with(StatusCode::INTERNAL_SERVER_ERROR, Cause::Error(error))
+    }
+
     fn with(status: StatusCode, cause: Cause) -> Self {
         Self(Box::new(Repr {
             status,
@@ -294,7 +302,7 @@ impl HttpError {
     /// ```
     /// use nest_rs_http::{HttpError, StatusCode};
     ///
-    /// assert_eq!(HttpError::from(StatusCode::GONE).status(), StatusCode::GONE);
+    /// assert_eq!(HttpError::from_status(StatusCode::GONE).status(), StatusCode::GONE);
     /// ```
     pub fn status(&self) -> StatusCode {
         self.0.status
@@ -324,7 +332,6 @@ impl HttpError {
     pub fn downcast_ref<T: Error + Send + Sync + 'static>(&self) -> Option<&T> {
         match &self.0.cause {
             Cause::Error(error) | Cause::Typed { error, .. } => error.downcast_ref::<T>(),
-            Cause::Anyhow(error) => error.downcast_ref::<T>(),
             Cause::Status | Cause::Response(_) => None,
         }
     }
@@ -347,10 +354,6 @@ impl HttpError {
             Cause::Typed { error, render } => match error.downcast::<T>() {
                 Ok(cause) => return Ok(*cause),
                 Err(error) => Cause::Typed { error, render },
-            },
-            Cause::Anyhow(error) => match error.downcast::<T>() {
-                Ok(cause) => return Ok(cause),
-                Err(error) => Cause::Anyhow(error),
             },
             other => other,
         };
@@ -407,7 +410,7 @@ impl HttpError {
             extensions,
         } = *self.0;
         let mut response = match cause {
-            Cause::Status | Cause::Anyhow(_) => ProblemDetails::from_status(status).into_response(),
+            Cause::Status => ProblemDetails::from_status(status).into_response(),
             Cause::Response(response) => response,
             Cause::Error(error) => ProblemDetails::answering(status, &*error).into_response(),
             Cause::Typed { error, render } => render(&error, status),
@@ -494,7 +497,6 @@ impl HttpError {
     /// read for a [`Problem`].
     fn chain(&self) -> Option<&(dyn Error + 'static)> {
         match &self.0.cause {
-            Cause::Anyhow(error) => Some(error.as_ref()),
             Cause::Error(error) => Some(&**error),
             Cause::Status | Cause::Response(_) | Cause::Typed { .. } => None,
         }
@@ -523,15 +525,6 @@ pub(crate) fn file(withheld: Withheld) {
     }
 }
 
-/// A [`ToProblem`] error's problem, behind the box that erased its type; the
-/// status's own document, the opaque `500`, when it says none.
-fn render_problem<E: ToProblem>(error: &BoxError, status: StatusCode) -> Response {
-    match error.downcast_ref::<E>().and_then(ToProblem::to_problem) {
-        Some(problem) => problem_response(&problem),
-        None => ProblemDetails::from_status(status).into_response(),
-    }
-}
-
 /// A [`ResponseError`]'s own rendering, behind the box that erased its type.
 fn render_typed<E>(error: &BoxError, status: StatusCode) -> Response
 where
@@ -552,7 +545,6 @@ impl fmt::Debug for HttpError {
             Cause::Status => debug.field("cause", &"none"),
             Cause::Response(_) => debug.field("cause", &"a ready response"),
             Cause::Error(error) | Cause::Typed { error, .. } => debug.field("cause", error),
-            Cause::Anyhow(error) => debug.field("cause", error),
         };
         debug.finish()
     }
@@ -563,7 +555,6 @@ impl fmt::Display for HttpError {
         match &self.0.cause {
             Cause::Status | Cause::Response(_) => fmt::Display::fmt(&self.0.status, f),
             Cause::Error(error) | Cause::Typed { error, .. } => fmt::Display::fmt(error, f),
-            Cause::Anyhow(error) => fmt::Display::fmt(error, f),
         }
     }
 }
@@ -572,7 +563,6 @@ impl Error for HttpError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.0.cause {
             Cause::Error(error) | Cause::Typed { error, .. } => Some(&**error),
-            Cause::Anyhow(error) => Some(error.as_ref()),
             Cause::Status | Cause::Response(_) => None,
         }
     }
@@ -588,24 +578,6 @@ impl<E: ResponseError + Error + Send + Sync + 'static> From<E> for HttpError {
                 render: render_typed::<E>,
             },
         )
-    }
-}
-
-impl From<StatusCode> for HttpError {
-    fn from(status: StatusCode) -> Self {
-        Self::from_status(status)
-    }
-}
-
-impl From<anyhow::Error> for HttpError {
-    fn from(error: anyhow::Error) -> Self {
-        Self::with(StatusCode::INTERNAL_SERVER_ERROR, Cause::Anyhow(error))
-    }
-}
-
-impl From<Infallible> for HttpError {
-    fn from(never: Infallible) -> Self {
-        match never {}
     }
 }
 
@@ -1556,12 +1528,6 @@ mod tests {
             Ok(BodyError::NotUtf8)
         ));
 
-        let from_anyhow = HttpError::from(anyhow::Error::new(AlreadyPaid(9)));
-        assert_eq!(
-            from_anyhow.downcast::<AlreadyPaid>().ok(),
-            Some(AlreadyPaid(9))
-        );
-
         assert!(!HttpError::from_status(StatusCode::NOT_FOUND).is::<AlreadyPaid>());
     }
 
@@ -1641,9 +1607,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_anyhow_error_answers_an_opaque_500_and_keeps_its_chain_for_the_log() {
+    async fn a_failed_route_answers_an_opaque_500_and_keeps_its_chain_for_the_log() {
         let failure = anyhow::anyhow!("pool exhausted on db-primary").context("loading order 42");
-        let error = HttpError::from(failure);
+        let error = HttpError::failed(nest_rs_core::boxed_error(failure));
 
         assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let logged = nest_rs_core::error_message(&error);
@@ -1667,7 +1633,7 @@ mod tests {
         let status = StatusCode::INTERNAL_SERVER_ERROR;
 
         for opaque in [
-            HttpError::from(anyhow::Error::from(refused())),
+            HttpError::failed(nest_rs_core::boxed_error(anyhow::Error::from(refused()))),
             HttpError::new(refused(), status),
         ] {
             let body = problem_of(opaque.rendered_ref()).await;

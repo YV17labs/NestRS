@@ -601,21 +601,21 @@ impl FiledController {
     #[get("/as-a-503")]
     #[public]
     #[use_exception_filters(AsUnavailable)]
-    async fn as_a_503(&self) -> nest_rs_http::Result<&'static str> {
-        Err(anyhow::anyhow!("db down").into())
+    async fn as_a_503(&self) -> anyhow::Result<&'static str> {
+        Err(anyhow::anyhow!("db down"))
     }
 
     #[get("/as-its-own-500")]
     #[public]
     #[use_exception_filters(AsItsOwn500)]
-    async fn as_its_own_500(&self) -> nest_rs_http::Result<&'static str> {
-        Err(anyhow::anyhow!("db down").into())
+    async fn as_its_own_500(&self) -> anyhow::Result<&'static str> {
+        Err(anyhow::anyhow!("db down"))
     }
 
     #[get("/unfiltered")]
     #[public]
-    async fn unfiltered(&self) -> nest_rs_http::Result<&'static str> {
-        Err(anyhow::anyhow!("db down").into())
+    async fn unfiltered(&self) -> anyhow::Result<&'static str> {
+        Err(anyhow::anyhow!("db down"))
     }
 
     #[get("/typed/as-a-4xx")]

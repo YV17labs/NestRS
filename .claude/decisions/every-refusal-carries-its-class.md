@@ -212,3 +212,25 @@ faire", the identity audit's public-API series).
   reason phrase (§4.2.1), so a title alone is a problem the standard
   advises against, and a type alone has no summary a registry would list
   (§4.2). `ProblemDetails`, the raw document, keeps a setter per member.
+
+**2026-10-31 — the blanket is taken: an error maps to HTTP once by types.**
+The refusal above weighed the blanket against `?` on an `anyhow` error and
+`HttpError::from(status)`, "a break nobody agreed". The owner's agreement of
+2026-10-28 ("Tout faire", the identity audit's public-API series) covers it,
+and the values decide it: correctness first, so the compiler holds what
+review held — every `ToProblem` error is a `ResponseError` answering its
+problem (`impl<E: ToProblem> ResponseError for E`), and a second mapping of
+one is E0119 — and one way to do a thing, so `?` on a domain error in a body
+answering an `HttpError` answers its problem, where it was refused and the
+docs carried the trap. `HttpError` loses `From<anyhow::Error>` and
+`From<StatusCode>`, the two impls the blanket overlaps, and `From<Infallible>`
+moves into it, `Infallible` saying no problem in core. What they gave is kept
+by other means: a route returning `anyhow::Result<T>` — or any error
+converting into no `HttpError` — answers the opaque `500` through the route
+probe, reading a `Problem` its chain carries, as GraphQL, WebSocket and MCP
+read any handler's error; a body says `.opaque()?`, which says at the call
+site that the failure is none of the client's business; a bare status is `HttpError::from_status`, the
+spelling the docs already taught. `nest_rs_http::problem_error` goes: `?` and
+`HttpError::from` do what it did. GraphQL's and MCP's stay, their error
+types being their libraries'.
+

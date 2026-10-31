@@ -459,9 +459,10 @@ const fn is_uri_byte(byte: u8) -> bool {
 ///
 /// The handler wrappers of every edge probe a handler's error for it by type —
 /// HTTP's `#[routes]`, GraphQL's `#[operations]`, WebSocket's `#[messages]`,
-/// MCP's `#[tools]` — and where a body answers the edge's own error, its
-/// `problem_error` converts one (`nest_rs_http::problem_error`,
-/// `nest_rs_graphql::problem_error`, `nest_rs_mcp::problem_error`).
+/// MCP's `#[tools]` — and where a body answers the edge's own error, `?`
+/// converts one on HTTP, whose `ResponseError` every `ToProblem` error is, and
+/// `problem_error` on GraphQL and MCP (`nest_rs_graphql::problem_error`,
+/// `nest_rs_mcp::problem_error`), whose error types are their libraries'.
 /// `Some(problem)` answers that problem in the edge's standard form; `None`
 /// answers opaquely. Either way, what the answer withholds of the error's
 /// chain is logged at `error`, at `warn` behind a `503`.
@@ -474,6 +475,14 @@ pub trait ToProblem: Error + Send + Sync + 'static {
 impl ToProblem for Problem {
     fn to_problem(&self) -> Option<Problem> {
         Some(self.clone())
+    }
+}
+
+/// An error that cannot happen says no problem, so a `?` on an infallible
+/// result converts wherever a `ToProblem` error does.
+impl ToProblem for std::convert::Infallible {
+    fn to_problem(&self) -> Option<Problem> {
+        match *self {}
     }
 }
 

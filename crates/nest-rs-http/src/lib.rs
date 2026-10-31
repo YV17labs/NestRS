@@ -214,7 +214,7 @@ pub use deprecation::DeprecationMeta;
 pub use detached::DetachedWork;
 pub use endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, declare_endpoint, endpoint_fn};
 pub use endpoint_guards::{CarriedView, EndpointGuards, GuardList};
-pub use error::{BodyError, HttpError, ResponseError, Result, RouteTemplateError, problem_error};
+pub use error::{BodyError, HttpError, ResponseError, Result, RouteTemplateError};
 pub use fallback::HttpFallbackMeta;
 pub use form::Form;
 pub use headers::Header;

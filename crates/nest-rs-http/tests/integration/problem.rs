@@ -11,7 +11,7 @@ use nest_rs_core::{async_trait, input, problem::code};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{
     Form, HttpConfig, HttpError, Json, Opaque, ProblemDetails, Query, RawBody, ResponseError,
-    Result, SseEvent, SseStream, controller, futures_util::stream, problem_error, routes,
+    Result, SseEvent, SseStream, controller, futures_util::stream, routes,
 };
 use nest_rs_testing::TestClient;
 use serde::{Deserialize, Serialize};
@@ -121,6 +121,11 @@ struct MustBePositive;
 #[module(providers = [DecodeController, Forwarding])]
 struct DecodeModule;
 
+/// What the search index's failure says of itself, its problem beneath.
+#[derive(Debug, thiserror::Error)]
+#[error("the search index at 10.0.0.1 refused")]
+struct IndexRefused(#[source] nest_rs_core::Problem);
+
 #[controller(path = "/failure")]
 struct FailureController;
 
@@ -164,13 +169,13 @@ impl FailureController {
         Err(HttpError::from(taken))
     }
 
-    /// An `anyhow` chain returned as an `HttpError`.
+    /// An `anyhow` chain said opaque where the body answers an `HttpError`.
     #[get("/ledger")]
     #[public]
     async fn ledger(&self) -> Result<String> {
-        Err(HttpError::from(anyhow::anyhow!(
-            "the ledger at 10.0.0.1 refused"
-        )))
+        let refused: anyhow::Result<String> =
+            Err(anyhow::anyhow!("the ledger at 10.0.0.1 refused"));
+        refused.opaque()
     }
 
     /// A server `Problem` an anyhow chain carries, behind what the chain says
@@ -181,12 +186,14 @@ impl FailureController {
         Err(anyhow::Error::from(server_problem()).context("the search index at 10.0.0.1 refused"))
     }
 
-    /// The same chain, returned as an `HttpError`.
+    /// The same server `Problem`, its chain kept where the body answers an
+    /// `HttpError`.
     #[get("/outage-carried")]
     #[public]
     async fn outage_carried(&self) -> Result<String> {
-        Err(HttpError::from(
-            anyhow::Error::from(server_problem()).context("the search index at 10.0.0.1 refused"),
+        Err(HttpError::new(
+            IndexRefused(server_problem()),
+            StatusCode::INTERNAL_SERVER_ERROR,
         ))
     }
 
@@ -395,11 +402,12 @@ impl DomainController {
         Err(LedgerError::Overdrawn)
     }
 
-    /// The same error, converted where the body answers the edge's own error.
+    /// The same error, `?`'d where the body answers the edge's own error.
     #[get("/converted")]
     #[public]
     async fn converted(&self) -> Result<String> {
-        Err(problem_error(LedgerError::Overdrawn))
+        let overdrawn: std::result::Result<String, LedgerError> = Err(LedgerError::Overdrawn);
+        Ok(overdrawn?)
     }
 
     #[get("/refused")]

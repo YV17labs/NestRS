@@ -182,10 +182,12 @@ guard, filter or interceptor loop of its own.
     `.claude/decisions/every-refusal-carries-its-class.md`). The edge decides **by type**
     where it names the handler's error — every edge's wrapper, HTTP's
     `#[routes]` included, probes `ToProblem` before the chain, and a body
-    answering the edge's own error converts one with the edge's
-    `problem_error` — so a domain error maps to the wire once, and a
-    hand-written HTTP `ResponseError` is an answer that is no problem
-    (another protocol's body, a challenge); a `Problem`, `PipeError` or
+    answering the edge's own error converts one — by `?` on HTTP, every
+    `ToProblem` error being a `ResponseError`, with `problem_error` where
+    the error type is a library's — so a domain error maps to the wire once,
+    held by the compiler on HTTP, and a hand-written `ResponseError` is an
+    answer that is no problem (another protocol's body, a challenge); a
+    `Problem`, `PipeError` or
     decode failure its chain carries answers itself, HTTP reading the chain
     of what it would otherwise render as text. GraphQL holds the rule at
     compile time: async-graphql's `custom-error-conversion` is on, so a `?`

@@ -632,8 +632,6 @@ mod graphql {
 mod http {
     use nest_rs_http::HttpError;
 
-    use super::ServiceError;
-
     /// A `#[crud]` operation's failure as the problem document of its class:
     /// `409` for a unique violation, `403` for a create its scope re-check
     /// rolled back, `404` for a row gone before the write, `503` for a
@@ -644,20 +642,12 @@ mod http {
         HttpError::from(super::crud_problem(&err))
     }
 
-    /// `?` on a `ServiceError` in a body answering an `HttpError` answers as a
-    /// route returning it would: through
-    /// [`ToProblem`](nest_rs_core::ToProblem).
-    impl From<ServiceError> for HttpError {
-        fn from(error: ServiceError) -> Self {
-            nest_rs_http::problem_error(error)
-        }
-    }
-
     #[cfg(test)]
     mod tests {
         use nest_rs_core::problem::code;
         use nest_rs_http::{Response, StatusCode};
 
+        use super::super::ServiceError;
         use super::*;
 
         #[test]

@@ -454,7 +454,9 @@ impl SessionController {
     #[get("/expired")]
     #[public]
     async fn expired(&self) -> nest_rs_http::Result<&'static str> {
-        Err(StatusCode::UNAUTHORIZED.into())
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::UNAUTHORIZED,
+        ))
     }
 }
 

@@ -5,7 +5,6 @@ use std::fmt;
 use bytes::Bytes;
 use http::response::Parts as ResponseParts;
 use http::{Extensions, HeaderMap, HeaderName, HeaderValue, StatusCode, Version, header};
-use nest_rs_core::ToProblem;
 
 use crate::body::Body;
 use crate::error::{BoxError, HttpError, Result};
@@ -408,7 +407,9 @@ impl<T: IntoResponse> IntoResponse for (StatusCode, T) {
 }
 
 /// What a handler wrapper turns a handler's return value into: a value is
-/// `Ok`, a `Result`'s error becomes an [`HttpError`].
+/// `Ok`, and a `Result`'s error that converts into no [`HttpError`] — an
+/// `anyhow` chain, an error of a library's — answers the opaque `500`, its
+/// chain read for a carried `Problem` and filed.
 pub trait IntoResult<T: IntoResponse> {
     /// The value as a result.
     fn into_result(self) -> Result<T>;
@@ -420,27 +421,28 @@ impl<T: IntoResponse> IntoResult<T> for T {
     }
 }
 
-impl<T: IntoResponse, E: Into<HttpError>> IntoResult<T> for std::result::Result<T, E> {
+impl<T: IntoResponse, E: Into<BoxError> + 'static> IntoResult<T> for std::result::Result<T, E> {
     fn into_result(self) -> Result<T> {
-        self.map_err(Into::into)
+        self.map_err(|error| HttpError::failed(nest_rs_core::boxed_error(error)))
     }
 }
 
 /// A handler's return, read by its type, as every edge reads one: the
-/// inherent method takes a `Result` whose error is a [`ToProblem`] error,
-/// answered by the problem it says ([`problem_error`](crate::problem_error));
+/// inherent method takes a `Result` whose error converts into an
+/// [`HttpError`] — a [`ToProblem`](nest_rs_core::ToProblem) error answering
+/// the problem it says, a `ResponseError` its own answer;
 /// [`RouteReturnFallback`] any other return, through [`IntoResult`].
 pub struct RouteReturn<R>(pub R);
 
-impl<T: IntoResponse, E: ToProblem> RouteReturn<std::result::Result<T, E>> {
-    /// The value, or the problem its error says.
+impl<T: IntoResponse, E: Into<HttpError>> RouteReturn<std::result::Result<T, E>> {
+    /// The value, or the answer its error converts into.
     pub fn into_result(self) -> Result<T> {
-        self.0.map_err(crate::problem_error)
+        self.0.map_err(Into::into)
     }
 }
 
-/// The [`RouteReturn`] of a return whose error is no [`ToProblem`] error: a
-/// value, or an error converting into an [`HttpError`].
+/// The [`RouteReturn`] of a return whose error converts into no
+/// [`HttpError`]: a value, or the opaque `500`.
 pub trait RouteReturnFallback<T: IntoResponse> {
     /// The value as a result.
     fn into_result(self) -> Result<T>;
@@ -543,13 +545,30 @@ mod tests {
     }
 
     #[test]
-    fn a_result_error_becomes_an_http_error() {
-        let failed: std::result::Result<&'static str, StatusCode> = Err(StatusCode::CONFLICT);
+    fn a_result_error_converting_into_no_http_error_answers_the_opaque_500() {
+        let failed: std::result::Result<&'static str, anyhow::Error> =
+            Err(anyhow::anyhow!("the ledger refused"));
         let error = match failed.into_result() {
             Err(error) => error,
             Ok(_) => panic!("an Err stays an Err"),
         };
-        assert_eq!(error.status(), StatusCode::CONFLICT);
+        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(matches!("ok".into_result(), Ok("ok")));
+    }
+
+    #[test]
+    fn a_route_s_error_converting_into_an_http_error_answers_as_it_converts() {
+        use super::{RouteReturn, RouteReturnFallback as _};
+
+        let conflict: std::result::Result<&'static str, nest_rs_core::Problem> = Err(
+            nest_rs_core::Problem::new(409, nest_rs_core::problem::code::CONFLICT),
+        );
+        let answered = RouteReturn(conflict).into_result();
+        assert!(answered.is_err_and(|error| error.status() == StatusCode::CONFLICT));
+
+        let opaque: std::result::Result<&'static str, std::io::Error> =
+            Err(std::io::Error::other("the ledger refused"));
+        let answered = RouteReturn(opaque).into_result();
+        assert!(answered.is_err_and(|error| error.status() == StatusCode::INTERNAL_SERVER_ERROR));
     }
 }

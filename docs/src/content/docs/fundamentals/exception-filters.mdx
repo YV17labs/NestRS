@@ -119,8 +119,9 @@ status, a `Code`, a problem type and its title, a detail, a field map — is
 what HTTP, GraphQL, WebSockets and MCP answer, each in its own form (see
 [HTTP errors](/http/errors/) and [GraphQL errors](/graphql/errors/)). A route,
 a resolver, a gateway handler or an MCP tool returning the error is read by
-its type; a body answering the edge's own error converts it with that edge's
-`problem_error` (`nest_rs::http::problem_error`,
+its type; a body answering the edge's own error converts it — with `?` on
+HTTP, where every `ToProblem` error is a `ResponseError`, and with that edge's
+`problem_error` on GraphQL and MCP (`nest_rs::graphql::problem_error`,
 `nest_rs::mcp::problem_error`). `nest_rs::http::ResponseError` is for an
 answer that is no problem document — another protocol's body, a challenge.
 What no seam answers — no `ToProblem`, no `ResponseError`, no framework type

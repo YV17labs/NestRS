@@ -8,7 +8,7 @@
 //! returned guard flushes on drop, so it must outlive `main`.
 //!
 //! That line is the whole wiring: no module to import, nothing for a suite to
-//! call. Under the `otlp` feature, [`OpenTelemetryModule`] provides `Metrics`
+//! call. Under the `otlp` feature, `OpenTelemetryModule` provides `Metrics`
 //! to the module whose provider injects them, where an app records its
 //! measurements through instruments named by the OpenTelemetry Metrics API —
 //! `Counter`, `UpDownCounter`, `Histogram`, `Gauge` — with no `opentelemetry`

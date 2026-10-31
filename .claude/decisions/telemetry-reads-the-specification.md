@@ -498,9 +498,13 @@ agreement to the identity audit's second pass ("Tout faire (Recommandé)",
   with the umbrella's `opentelemetry` feature on the app's own dependency.
 - **`OpenTelemetryModule` provides `Metrics` and refuses nothing**, under
   `otlp` alone, over the global meter: it is imported by the module whose
-  provider injects `Metrics`, and a provider injecting them with no import is
-  refused naming it (its `DependencyRemedy`). In a suite, which never runs
-  `main`, `Metrics` record on a meter nothing exports.
+  provider injects `Metrics`. It installs them in its own `register`, as
+  `EventsModule` installs `EventBus`, which the access graph does not gate:
+  an app in which nothing imports it is refused naming the module (its
+  `DependencyRemedy`), and a provider whose module skips the import reaches
+  `Metrics` when a module importing it registered first, and fails the boot
+  (`UnbuiltProviderError`) when it registers before. In a suite, which never
+  runs `main`, `Metrics` record on a meter nothing exports.
   `OpenTelemetryError::InitMissing`, `TestAppBuilder::with_test_telemetry`,
   `nest-rs-testing`'s `opentelemetry` feature and the crate's private test
   subscriber are gone.
@@ -532,3 +536,7 @@ agreement to the identity audit's second pass ("Tout faire (Recommandé)",
 - **Keeping the module's guard beside the new refusal**: it caught a missing
   `init` only in an app that remembered the import, and only cost a line in
   every root and suite that did.
+- **Gating `Metrics` by the access graph**, so the import is required
+  wherever they are injected, whatever the order: a hand-written `register`
+  has no gated seam, and `EventBus` is installed the same way; a seam serving
+  both is a kernel change of its own, not this one.

@@ -1,10 +1,12 @@
 //! Covers `src/init.rs` — the subscriber `OpenTelemetry::init_with` installs as
 //! the process's global one, which the panic hook `#[nest_rs::main]` installs
-//! files through. Process-wide, so the case runs in a child process.
+//! files through, and which `App::run` tells from the kernel's console under an
+//! OTLP endpoint. Process-wide, so the panic's case runs in a child process.
 
 use std::process::{Command, Output};
 
 use nest_rs_core::logging::LogFormat;
+use nest_rs_core::{App, UnservedExportError, module};
 use nest_rs_opentelemetry::{OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
 
 use crate::{console_vars, init_under, refused_under};
@@ -463,4 +465,84 @@ fn without_the_otlp_feature_an_endpoint_is_refused_and_none_boots() {
         OpenTelemetryConfig::default(),
     )
     .expect("every signal switched off exports nothing, as the binary does");
+}
+
+/// Every variable `App::run`'s export check reads, blanked so a test reads the
+/// endpoint it set alone, whatever the shell running it exports.
+const EXPORT_VARS: [&str; 7] = [
+    "OTEL_SDK_DISABLED",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    "OTEL_TRACES_EXPORTER",
+    "OTEL_METRICS_EXPORTER",
+    "OTEL_LOGS_EXPORTER",
+];
+
+#[module]
+struct ServingNothing;
+
+/// `App::run` on an app serving nothing, which stops for want of a transport
+/// once it booted, under an OTLP endpoint no collector answers — after
+/// `OpenTelemetry::init()` when `initialised`, as `main` writes it.
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn run_under_an_endpoint(initialised: bool) -> nest_rs_core::anyhow::Result<()> {
+    let mut ran = None;
+    figment::Jail::expect_with(|jail| {
+        for name in console_vars() {
+            jail.set_env(name, "");
+        }
+        for name in EXPORT_VARS {
+            jail.set_env(name, "");
+        }
+        jail.set_env("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:9");
+        let otel =
+            initialised.then(|| OpenTelemetry::init().expect("the process's first subscriber"));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime the app runs on");
+        ran = Some(runtime.block_on(async {
+            App::builder()
+                .module::<ServingNothing>()
+                .build()
+                .await?
+                .run()
+                .await
+        }));
+        drop(otel);
+        Ok(())
+    });
+    ran.expect("the jail ran")
+}
+
+/// The production shape: `main` calls `init`, whose subscriber exports, so
+/// `App::run` runs under the deployment's endpoint — the kernel's check reads
+/// its own console alone, which `init` never installs.
+#[cfg(feature = "otlp")]
+#[test]
+fn app_run_runs_under_an_endpoint_once_init_installed_its_exporter() {
+    if let Err(refused) = run_under_an_endpoint(true) {
+        panic!("init's subscriber exports, so nothing is refused: {refused:#}");
+    }
+}
+
+/// A binary linking this crate whose `main` forgot `init` logs through the
+/// kernel's console alone: `App::run` refuses the endpoint, naming the line.
+#[test]
+fn app_run_refuses_an_endpoint_when_main_never_called_init() {
+    let Err(refused) = run_under_an_endpoint(false) else {
+        panic!("nothing exports to the endpoint the deployment set");
+    };
+    assert!(
+        refused.downcast_ref::<UnservedExportError>().is_some(),
+        "{refused:#}"
+    );
+    assert!(
+        format!("{refused:#}").contains("OpenTelemetry::init()"),
+        "{refused:#}"
+    );
 }

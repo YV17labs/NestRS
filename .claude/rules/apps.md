@@ -84,8 +84,9 @@ the service is named after the binary, and where it exports is the
 deployment's `OTEL_*`. `App::run` refuses an OTLP endpoint while the kernel's
 console is all the process logs through (`UnservedExportError`), so a `main`
 that forgot the line fails its first deploy rather than exporting nothing.
-`OpenTelemetryModule` is imported only by the module whose provider injects
-`Metrics`. The console reads `RUST_LOG` and follows the declared profile —
+`OpenTelemetryModule` is imported by each module whose provider injects
+`Metrics`, and nowhere else: its `register` installs them ungated, so that
+import is what registers it first. The console reads `RUST_LOG` and follows the declared profile —
 text under development and test, JSON otherwise (`nest_rs_core::logging`).
 
 **A GraphQL app commits its SDL** (`apps/<app>/schema.graphql`), and an

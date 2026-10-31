@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{App, MissingDependencyError, injectable, module};
+use nest_rs_core::{App, MissingDependencyError, UnbuiltProviderError, injectable, module};
 use nest_rs_opentelemetry::{Metrics, OpenTelemetryModule};
 
 #[injectable]
@@ -17,6 +17,21 @@ struct Recording;
 
 #[module(providers = [SignupMetrics])]
 struct Unimported;
+
+#[injectable]
+struct AuditMetrics {
+    #[inject]
+    metrics: Arc<Metrics>,
+}
+
+#[module(providers = [AuditMetrics])]
+struct Skipping;
+
+#[module(imports = [Recording, Skipping])]
+struct ImporterFirst;
+
+#[module(imports = [Skipping, Recording])]
+struct SkipperFirst;
 
 /// A suite never runs `main`, so it boots with no `OpenTelemetry::init`: the
 /// module provides `Metrics` over the global meter, which records nothing
@@ -50,5 +65,31 @@ async fn a_provider_injecting_metrics_without_the_module_is_refused_naming_it() 
     assert!(
         said.contains("nest_rs::opentelemetry::OpenTelemetryModule"),
         "the remedy names the module: {said}"
+    );
+}
+
+/// The module installs `Metrics` in its own `register`, which the access graph
+/// does not gate: a provider whose module skips the import reaches them when a
+/// module importing it registered first, and fails the boot when it registers
+/// before — so the import goes beside each provider injecting them.
+#[tokio::test]
+async fn a_module_skipping_the_import_reaches_metrics_by_registration_order_alone() {
+    let app = App::builder()
+        .module::<ImporterFirst>()
+        .build()
+        .await
+        .expect("`Metrics` were registered before the module skipping the import");
+    let audit = app
+        .container()
+        .get::<AuditMetrics>()
+        .expect("the provider skipping the import is built");
+    audit.metrics.counter("audit.recorded").add(1, &[]);
+
+    let Err(refused) = App::builder().module::<SkipperFirst>().build().await else {
+        panic!("`Metrics` are registered only after the module skipping the import");
+    };
+    assert!(
+        refused.downcast_ref::<UnbuiltProviderError>().is_some(),
+        "{refused:#}"
     );
 }

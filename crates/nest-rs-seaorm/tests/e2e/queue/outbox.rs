@@ -29,7 +29,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::harness::answered;
+use crate::harness::{NoMigrations, answered};
 
 /// How long a test waits for the relay or for Postgres.
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -40,15 +40,6 @@ struct OutboxMigrator;
 impl MigratorTrait for OutboxMigrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![Box::new(OutboxMigration)]
-    }
-}
-
-/// A database whose outbox table was never created.
-struct NoMigrations;
-
-impl MigratorTrait for NoMigrations {
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        Vec::new()
     }
 }
 

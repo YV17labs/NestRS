@@ -31,6 +31,15 @@ pub(crate) async fn connect_arc() -> Arc<DatabaseConnection> {
     Arc::new(connect().await)
 }
 
+/// A database of its own with no table in it.
+pub(crate) struct NoMigrations;
+
+impl sea_orm_migration::MigratorTrait for NoMigrations {
+    fn migrations() -> Vec<Box<dyn sea_orm_migration::MigrationTrait>> {
+        Vec::new()
+    }
+}
+
 /// Run the one-time DDL (+ seed) for a probe table shared by several tests.
 ///
 /// nextest gives each test its own process, and `CREATE TABLE IF NOT EXISTS`

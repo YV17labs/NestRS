@@ -167,12 +167,14 @@ fn acquire_budget(db: &DatabaseConnection) -> Option<Duration> {
 const RETURN_POLL: Duration = Duration::from_millis(5);
 
 /// Close `db`'s pool once every unit of work settled — the binding's close
-/// drains them first: each connection says goodbye as it comes back, waited for
-/// [`SHUTDOWN_SETTLE_TIMEOUT`] at most, and one still checked out then closes
-/// when it returns, said at `warn`.
+/// drains them first: each connection is taken back as it comes, waited for
+/// [`SHUTDOWN_SETTLE_TIMEOUT`] at most, and has said goodbye when this
+/// returns, a failed goodbye the close's error once every other is said; one
+/// still checked out then falls with the process, said at `warn`.
 ///
 /// Not sqlx's close alone, which says goodbye to none until every connection
-/// is back (`.claude/decisions/pool-closes-at-the-settle.md`).
+/// is back, and none for one still out: sqlx 0.9 hands it back from a task
+/// begun before the close (`.claude/decisions/pool-closes-at-the-settle.md`).
 async fn close(db: &DatabaseConnection) -> anyhow::Result<()> {
     let DatabaseConnectionType::SqlxPostgresPoolConnection(_) = db.inner else {
         return Ok(db.close_by_ref().await?);
@@ -192,19 +194,45 @@ async fn close(db: &DatabaseConnection) -> anyhow::Result<()> {
     }
     let checked_out = (pool.size() as usize).saturating_sub(idle.len());
     let closing = pool.close();
-    // Handed back to a closed pool, each says its goodbye on a task of sqlx's.
-    drop(idle);
+    // Awaited here, never left to sqlx's tasks: the process may end as soon as
+    // the close returns, and a goodbye still queued would fall with it.
+    let said = every_goodbye(idle.into_iter().map(|connection| connection.close())).await;
     if checked_out == 0 {
         closing.await;
-        return Ok(());
+    } else {
+        tracing::warn!(
+            target: crate::target::ORM,
+            checked_out,
+            waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "pool closed with connections still checked out: each falls with the process",
+        );
     }
-    tracing::warn!(
-        target: crate::target::ORM,
-        checked_out,
-        waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        "pool closed with connections still checked out: each closes as it comes back",
-    );
-    Ok(())
+    said
+}
+
+/// Await each of `goodbyes` in turn, one failing stopping none of the others,
+/// as sqlx's own close goes on: the first failure, with how many failed, or
+/// none.
+async fn every_goodbye<E>(
+    goodbyes: impl IntoIterator<Item = impl Future<Output = Result<(), E>>>,
+) -> anyhow::Result<()>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    let (mut taken, mut failed, mut first) = (0_usize, 0_usize, None);
+    for goodbye in goodbyes {
+        taken += 1;
+        if let Err(error) = goodbye.await {
+            failed += 1;
+            first.get_or_insert(error);
+        }
+    }
+    first.map_or(Ok(()), |error| {
+        Err(anyhow::Error::new(error).context(format!(
+            "{failed} of the {taken} connections the pool's close took back failed their \
+             goodbye, the first for this reason"
+        )))
+    })
 }
 
 /// Open a standalone connection from `<PREFIX>_SEAORM__*`, resolving the same
@@ -392,5 +420,35 @@ mod tests {
         ] {
             assert_eq!(statement_timeout_in(options), bound, "{options}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_goodbye_that_fails_stops_none_of_the_others_and_the_first_is_the_closes_error() {
+        let said = std::sync::Mutex::new(Vec::new());
+        let goodbye = |n: u8, refused: bool| {
+            let said = &said;
+            async move {
+                said.lock().unwrap_or_else(|e| e.into_inner()).push(n);
+                if refused {
+                    Err(std::io::Error::other(format!("goodbye {n} refused")))
+                } else {
+                    Ok(())
+                }
+            }
+        };
+
+        let failed = every_goodbye([goodbye(1, true), goodbye(2, false), goodbye(3, true)])
+            .await
+            .expect_err("two goodbyes failed");
+
+        assert_eq!(*said.lock().unwrap_or_else(|e| e.into_inner()), [1, 2, 3]);
+        assert_eq!(
+            nest_rs_core::error_message(&*failed),
+            "2 of the 3 connections the pool's close took back failed their goodbye, the first \
+             for this reason: goodbye 1 refused"
+        );
+        every_goodbye([goodbye(4, false)])
+            .await
+            .expect("every goodbye said");
     }
 }

@@ -11,7 +11,10 @@ use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, Strategy};
 use nest_rs_core::{App, BudgetPastNetError, hooks, injectable, module};
 use nest_rs_http::Request;
 use nest_rs_seaorm::{SeaOrmConfig, SeaOrmModule};
+use nest_rs_testing::EphemeralDatabase;
 use sea_orm::{ConnectionTrait, DatabaseConnection};
+
+use crate::harness::NoMigrations;
 
 /// A strategy that injects the pool, as one looking an identity up does.
 #[injectable]
@@ -301,14 +304,39 @@ async fn connections_named(observer: &DatabaseConnection, name: &str) -> i64 {
     row.try_get::<i64>("", "open").expect("the count")
 }
 
+/// How long a test waits for Postgres to end a session told goodbye: a guard
+/// against a hang alone, since the server runs a goodbye whenever it next
+/// schedules its session, however late.
+const GOODBYES: Duration = Duration::from_secs(60);
+
+/// How many sessions to `database` ended on a socket cut rather than a goodbye,
+/// as Postgres counts them for that database alone.
+async fn sessions_cut(database: &EphemeralDatabase) -> i64 {
+    database
+        .connection()
+        .query_one_raw(sea_orm::Statement::from_string(
+            sea_orm::DbBackend::Postgres,
+            "SELECT sessions_abandoned AS cut FROM pg_stat_database \
+             WHERE datname = current_database()",
+        ))
+        .await
+        .expect("pg_stat_database answers")
+        .expect("one row for the database")
+        .try_get::<i64>("", "cut")
+        .expect("the count")
+}
+
 /// The pool says goodbye to Postgres when the app ends — every connection
 /// closed by the app, never left for the server to notice a dropped socket.
 #[tokio::test]
 async fn closing_the_app_closes_every_connection_its_pool_opened() {
+    let database = EphemeralDatabase::create::<NoMigrations>()
+        .await
+        .expect("a database of its own, whose sessions are the app's");
     let name = format!("nestrs-close-{}", std::process::id());
     let app = App::builder()
         .provide(SeaOrmConfig {
-            url: with_application_name(&crate::harness::url(), &name).into(),
+            url: with_application_name(database.url(), &name).into(),
             ..config(None)
         })
         .module::<PoolModule>()
@@ -334,10 +362,15 @@ async fn closing_the_app_closes_every_connection_its_pool_opened() {
         db.get_postgres_connection_pool().is_closed(),
         "the app closed its pool"
     );
-    nest_rs_testing::wait_for(Duration::from_secs(5), || async {
+    nest_rs_testing::wait_for(GOODBYES, || async {
         connections_named(&observer, &name).await == 0
     })
     .await;
+    assert_eq!(
+        sessions_cut(&database).await,
+        0,
+        "a connection was dropped rather than told goodbye",
+    );
 }
 
 /// A request's unit, as the HTTP edge declares it.
@@ -372,29 +405,18 @@ impl ReadsAtShutdown {
 struct ClosingModule;
 
 /// How long the cut unit's statement runs on: past any stall the test meets,
-/// so its connection is still out whenever the close returns, and cancelled
-/// once the test has read that.
+/// so its connection is still out whenever the close returns; the test's
+/// database ends it, dropped with the test.
 const OUTLASTS_THE_CLOSE: &str = "SELECT pg_sleep(60)";
 
-/// The server's connections named `name` still running [`OUTLASTS_THE_CLOSE`],
-/// asked from `observer`: cancelled when `cancel` says so, counted otherwise.
-async fn statements_outlasting_the_close(
-    observer: &DatabaseConnection,
-    name: &str,
-    cancel: bool,
-) -> i64 {
-    let selected = if cancel {
-        "count(pg_cancel_backend(pid))"
-    } else {
-        "count(*)"
-    };
+/// How many of the server's connections named `name` still run
+/// [`OUTLASTS_THE_CLOSE`], asked from `observer`.
+async fn statements_outlasting_the_close(observer: &DatabaseConnection, name: &str) -> i64 {
     let row = observer
         .query_one_raw(sea_orm::Statement::from_sql_and_values(
             sea_orm::DbBackend::Postgres,
-            format!(
-                "SELECT {selected} AS running FROM pg_stat_activity \
-                 WHERE application_name = $1 AND state = 'active' AND query = $2"
-            ),
+            "SELECT count(*) AS running FROM pg_stat_activity \
+             WHERE application_name = $1 AND state = 'active' AND query = $2",
             [name.into(), OUTLASTS_THE_CLOSE.into()],
         ))
         .await
@@ -403,33 +425,20 @@ async fn statements_outlasting_the_close(
     row.try_get::<i64>("", "running").expect("the count")
 }
 
-/// How many of the server's connections named `name` sit idle, asked from
-/// `observer`.
-async fn idle_connections_named(observer: &DatabaseConnection, name: &str) -> i64 {
-    let row = observer
-        .query_one_raw(sea_orm::Statement::from_sql_and_values(
-            sea_orm::DbBackend::Postgres,
-            "SELECT count(*) AS idle FROM pg_stat_activity \
-             WHERE application_name = $1 AND state = 'idle'",
-            [name.into()],
-        ))
-        .await
-        .expect("pg_stat_activity answers")
-        .expect("a count is one row");
-    row.try_get::<i64>("", "idle").expect("the count")
-}
-
 /// A pool unit cut while Postgres still runs its statement leaves its
 /// connection checked out until the statement ends; the pool closes anyway once
-/// every hook's unit ended, never waiting it out to the hooks' budget, and the
-/// connections it can reach still say goodbye.
+/// every hook's unit ended, never waiting it out to the hooks' budget, and
+/// every connection it took back says goodbye.
 #[tokio::test]
 async fn the_pool_closes_promptly_while_a_cut_unit_still_holds_a_connection() {
     let logs = nest_rs_testing::LogCapture::install();
+    let database = EphemeralDatabase::create::<NoMigrations>()
+        .await
+        .expect("a database of its own, whose sessions are the app's");
     let name = format!("nestrs-cut-close-{}", std::process::id());
     let app = App::builder()
         .provide(SeaOrmConfig {
-            url: with_application_name(&crate::harness::url(), &name).into(),
+            url: with_application_name(database.url(), &name).into(),
             ..config(None)
         })
         .module::<ClosingModule>()
@@ -441,41 +450,51 @@ async fn the_pool_closes_promptly_while_a_cut_unit_still_holds_a_connection() {
         .container()
         .get_dyn::<dyn nest_rs_database::UnitOfWork>()
         .expect("the binding");
-    let cut = tokio::time::timeout(
-        Duration::from_millis(300),
-        nest_rs_database::run_unit(
-            Some(&binding),
-            nest_rs_database::UnitSpec::new(
-                REQUEST,
-                nest_rs_database::ExecutorScope::Request,
-                nest_rs_database::TransactionPolicy::Pool,
-            ),
-            async {
-                nest_rs_seaorm::__private::current_executor()
-                    .expect("the unit's pool")
-                    .execute_unprepared(OUTLASTS_THE_CLOSE)
-                    .await
-                    .map(drop)
-            },
-            Result::is_ok,
-            |_| Ok(()),
+    let observer = crate::harness::connect().await;
+    let unit = nest_rs_database::run_unit(
+        Some(&binding),
+        nest_rs_database::UnitSpec::new(
+            REQUEST,
+            nest_rs_database::ExecutorScope::Request,
+            nest_rs_database::TransactionPolicy::Pool,
         ),
-    )
-    .await;
+        async {
+            nest_rs_seaorm::__private::current_executor()
+                .expect("the unit's pool")
+                .execute_unprepared(OUTLASTS_THE_CLOSE)
+                .await
+                .map(drop)
+        },
+        Result::is_ok,
+        |_| Ok(()),
+    );
+    let cut = tokio::select! {
+        ran = unit => Some(ran),
+        () = nest_rs_testing::wait_for(Duration::from_secs(60), || async {
+            statements_outlasting_the_close(&observer, &name).await == 1
+        }) => None,
+    };
     assert!(
-        cut.is_err(),
+        cut.is_none(),
         "the unit is cut while Postgres still runs its statement"
     );
-    let observer = crate::harness::connect().await;
 
     app.close().await;
 
     assert_eq!(
-        statements_outlasting_the_close(&observer, &name, false).await,
+        statements_outlasting_the_close(&observer, &name).await,
         1,
         "the close returned while the cut unit still held its connection: it waited on none",
     );
-    statements_outlasting_the_close(&observer, &name, true).await;
+    nest_rs_testing::wait_for(GOODBYES, || async {
+        connections_named(&observer, &name).await == 1
+    })
+    .await;
+    assert_eq!(
+        sessions_cut(&database).await,
+        0,
+        "a connection the close took back was dropped rather than told goodbye",
+    );
     logs.expect_none(
         nest_rs_core::target::LIFECYCLE,
         "resource close abandoned: the shutdown hooks' budget was spent while it waited, and \
@@ -483,7 +502,7 @@ async fn the_pool_closes_promptly_while_a_cut_unit_still_holds_a_connection() {
     );
     let left = logs.expect_one(
         nest_rs_seaorm::target::ORM,
-        "pool closed with connections still checked out: each closes as it comes back",
+        "pool closed with connections still checked out: each falls with the process",
     );
     assert_eq!(left.level, "warn");
     assert_eq!(left.field("checked_out").as_deref(), Some("1"));
@@ -500,8 +519,4 @@ async fn the_pool_closes_promptly_while_a_cut_unit_still_holds_a_connection() {
         Some(nest_rs_core::operation_log::OK),
         "the hook got a connection while the cut one was still out",
     );
-    nest_rs_testing::wait_for(Duration::from_secs(5), || async {
-        idle_connections_named(&observer, &name).await == 0
-    })
-    .await;
 }

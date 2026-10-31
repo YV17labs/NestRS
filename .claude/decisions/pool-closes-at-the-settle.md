@@ -34,3 +34,29 @@ back, and one `warn` on `nest_rs::orm` counts it.
   that opened the pool, until a statement nobody waits for ends.
 
 The `close_hard` hang is sqlx's to fix; reporting it upstream is the owner's.
+
+## 2026-10-31 — what is still checked out falls with the process, and the goodbyes are awaited
+
+The entry above said a connection still checked out at the close closes as it
+comes back. It does not, under sqlx 0.9: a cut unit's connection starts back
+at the cut, before the close, on a task that pings it and so waits for the
+statement Postgres still runs. A statement that then ends is released into
+the closed pool's idle queue, which nothing pops once the close returned, so
+the connection falls when the pool drops; one that fails — cancelled, or past
+its `statement_timeout` — fails the ping, and sqlx closes it hard, the flush
+above that never returns on a quiet TLS socket. Neither sends a goodbye. Seen
+on the e2e test that cancels the statement after the close: the server kept
+the connection idle until the test process exited.
+
+**Chosen — say what holds, and await what can be.** The `warn` now says each
+such connection falls with the process, and the docs say so. The connections
+the close took back say their goodbye before it returns, awaited in place
+rather than handed to sqlx's tasks, which the process's exit could cut.
+
+**Refused — a goodbye for the connection still out.** It needs a drain of
+the close's own on every release (an `after_release` callback pinging before
+sqlx's ping, to read the pool's state once the statement ended): a round
+trip more on every statement the pool serves, for a connection the process
+is about to drop. sqlx closing gracefully what it releases into a closed
+pool, or after an error the server answered, is upstream's, beside the
+`close_hard` hang the owner reports.

@@ -4,8 +4,8 @@
 //! operation's own for its body — and no argument of the protocol.
 //!
 //! ```
-//! use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, injectable};
-//! use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+//! use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, async_trait, injectable};
+//! use nest_rs_guards::{Denial, Guard, GuardFor};
 //! use nest_rs_http::{EndpointGuards, HttpView};
 //! use nest_rs_mcp::{DEFAULT_PATH, McpError, McpView, mcp, tools};
 //! # use nest_rs_core::module;

@@ -17,7 +17,8 @@ use crate::response::Response;
 /// A guard that reads the body sets it back for the handler:
 ///
 /// ```
-/// use nest_rs_guards::prelude::*;
+/// use nest_rs_core::{Layer, UnitContext, async_trait};
+/// use nest_rs_guards::{Denial, Guard, GuardFor};
 /// use nest_rs_http::HttpView;
 ///
 /// #[derive(Layer)]

@@ -35,8 +35,7 @@ async-graphql.workspace = true
 # through the re-exported `ValidateProbe`, so a resolver's crate needs no
 # nest-rs-pipes dep of its own; a refusal renders from its `PipeError`.
 nest-rs-pipes.workspace = true
-# Re-exported as `nest_rs_graphql::async_trait` for implementors of its async
-# seams.
+# The async seams it implements and declares.
 async-trait.workspace = true
 # The edge runs its guards itself: the pool at the request, each field's chain,
 # the federation gate; it renders a denial in GraphQL's error form.

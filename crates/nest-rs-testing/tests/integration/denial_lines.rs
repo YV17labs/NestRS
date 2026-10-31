@@ -4,12 +4,12 @@
 //! writes no line of its own. A guard writing its decision once in `check`
 //! refuses an HTTP request with it too.
 
-use nest_rs_core::{Layer, UnitContext, injectable, module};
+use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::StatusCode;
-use nest_rs_http::{HttpView, async_trait, controller, routes};
+use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_mcp::{McpError, McpView, mcp, tools};
 use nest_rs_testing::mcp::{call_tool_statelessly, initialize_request, post_message};
 use nest_rs_testing::{CapturedEvent, LogCapture, TestApp};

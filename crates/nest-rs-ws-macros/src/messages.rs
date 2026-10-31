@@ -231,7 +231,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         mounted_logs.push(quote! {
             #(#cfgs)*
             ::nest_rs_ws::tracing::info!(
-                target: ::nest_rs_ws::target::ROUTES,
+                target: ::nest_rs_ws::__private::target::ROUTES,
                 gateway = #gateway_name,
                 path = __path.as_str(),
                 event = #event,
@@ -462,7 +462,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let report = quote! {
             {
                 #[allow(unused_imports)]
-                use ::nest_rs_ws::{
+                use ::nest_rs_ws::__private::{
                     ErrorReportChain as _, ErrorReportFallback as _, ErrorReportLocal as _,
                 };
                 #[allow(unused_mut)]
@@ -475,10 +475,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let split_then_reply = quote! {
             {
                 #[allow(unused_imports)]
-                use ::nest_rs_ws::ReplyValueFallback as _;
-                match ::nest_rs_ws::ReplyValue(__ret).into_outcome() {
-                    ::nest_rs_ws::ReplyOutcome::Value(__ret) => { #reply }
-                    ::nest_rs_ws::ReplyOutcome::Failed(__report) => #report,
+                use ::nest_rs_ws::__private::ReplyValueFallback as _;
+                match ::nest_rs_ws::__private::ReplyValue(__ret).into_outcome() {
+                    ::nest_rs_ws::__private::ReplyOutcome::Value(__ret) => { #reply }
+                    ::nest_rs_ws::__private::ReplyOutcome::Failed(__report) => #report,
                 }
             }
         };
@@ -494,15 +494,15 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 let __ret = { #call };
                 {
                     #[allow(unused_imports)]
-                    use ::nest_rs_ws::ReplyValueFallback as _;
-                    match ::nest_rs_ws::ReplyValue(__ret).into_outcome() {
-                        ::nest_rs_ws::ReplyOutcome::Value(__ret) => #split_then_reply,
-                        ::nest_rs_ws::ReplyOutcome::Failed(__report) => #report,
+                    use ::nest_rs_ws::__private::ReplyValueFallback as _;
+                    match ::nest_rs_ws::__private::ReplyValue(__ret).into_outcome() {
+                        ::nest_rs_ws::__private::ReplyOutcome::Value(__ret) => #split_then_reply,
+                        ::nest_rs_ws::__private::ReplyOutcome::Failed(__report) => #report,
                     }
                 }
             },
             ReturnKind::ResultUnit => quote! {
-                match ::core::result::Result::map_err({ #call }, ::nest_rs_ws::ErrorReport::new) {
+                match ::core::result::Result::map_err({ #call }, ::nest_rs_ws::__private::ErrorReport::new) {
                     ::core::result::Result::Ok(()) => {
                         ::core::result::Result::Ok(::nest_rs_ws::WsReply::None)
                     }
@@ -510,7 +510,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 }
             },
             ReturnKind::Result => quote! {
-                match ::core::result::Result::map_err({ #call }, ::nest_rs_ws::ErrorReport::new) {
+                match ::core::result::Result::map_err({ #call }, ::nest_rs_ws::__private::ErrorReport::new) {
                     ::core::result::Result::Ok(__ret) => #split_then_reply,
                     ::core::result::Result::Err(__report) => #report,
                 }
@@ -527,7 +527,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     );
     let host_name = host.unraw().to_string();
     let upgrade_handler = declared_handler(&HandlerDeclaration {
-        unit: quote!(::nest_rs_ws::nest_rs_http::unit::REQUEST),
+        unit: quote!(::nest_rs_ws::__private::nest_rs_http::unit::REQUEST),
         host: quote!(#self_ty),
         host_name: &host_name,
         method: "",
@@ -599,14 +599,14 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         #markers
 
-        #[::nest_rs_ws::async_trait]
+        #[::nest_rs_core::async_trait]
         impl ::nest_rs_ws::Gateway for #self_ty {
             async fn __nestrs_handle(
                 &self,
                 __client: &::nest_rs_ws::WsClient,
                 __event: &str,
                 __data: ::nest_rs_ws::serde_json::Value,
-            ) -> ::core::result::Result<::nest_rs_ws::WsReply, ::nest_rs_ws::HandlerFailed> {
+            ) -> ::core::result::Result<::nest_rs_ws::WsReply, ::nest_rs_ws::__private::HandlerFailed> {
                 let _ = &__data;
                 let _ = __client;
                 // Two arms for one event are refused — by the macro, or by rustc
@@ -641,12 +641,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             ) -> ::nest_rs_core::ContainerBuilder {
                 // An upgraded socket outlives its HTTP connection: the `DetachedWork`
                 // lets the transport tell each socket at shutdown and bound its window.
-                let __sockets = ::nest_rs_ws::nest_rs_http::DetachedWork::new();
+                let __sockets = ::nest_rs_ws::__private::nest_rs_http::DetachedWork::new();
                 let __carried = __sockets.clone();
-                builder.attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpEndpointMeta>(
-                    ::nest_rs_ws::nest_rs_http::__private::checks_origin(
-                    ::nest_rs_ws::nest_rs_http::__private::guarded_by(
-                    ::nest_rs_ws::nest_rs_http::HttpEndpointMeta::new(
+                builder.attach_meta::<#self_ty, ::nest_rs_ws::__private::nest_rs_http::HttpEndpointMeta>(
+                    ::nest_rs_ws::__private::nest_rs_http::__private::checks_origin(
+                    ::nest_rs_ws::__private::nest_rs_http::__private::guarded_by(
+                    ::nest_rs_ws::__private::nest_rs_http::HttpEndpointMeta::new(
                         <#self_ty>::__NESTRS_UPGRADE,
                         <#self_ty>::__nestrs_mount_path(),
                         ::nest_rs_ws::__private::GATEWAY_LABEL,
@@ -668,7 +668,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                                 ::core::clone::Clone::clone(&__carried),
                             );
                             __routes.route(
-                                ::nest_rs_ws::nest_rs_http::Method::GET,
+                                ::nest_rs_ws::__private::nest_rs_http::Method::GET,
                                 &__path,
                                 __ep,
                             );
@@ -678,7 +678,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     .runs_detached(__sockets),
                     <#self_ty>::__nestrs_edge_guard_specs(),
                     ),
-                    ::nest_rs_ws::nest_rs_http::__private::OriginCheck::Upgrades,
+                    ::nest_rs_ws::__private::nest_rs_http::__private::OriginCheck::Upgrades,
                     ::nest_rs_ws::__private::refused_origin,
                 ))
                 // Every app importing the gateway checks it, whatever it serves.

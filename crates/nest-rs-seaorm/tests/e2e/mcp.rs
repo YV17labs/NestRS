@@ -22,7 +22,7 @@ struct Granting;
 
 impl Layer for Granting {}
 
-#[nest_rs_guards::async_trait]
+#[nest_rs_core::async_trait]
 impl Guard for Granting {
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         nest_rs_core::__private::set_actor_id("granted");

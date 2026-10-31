@@ -1,7 +1,7 @@
 //! The `Location` response header, for a route that mints a resource.
 //!
 //! RFC 9110 §15.3.2 asks a `201` to name what it created. The value is composed
-//! with [`join_path`](crate::join_path), as the transport mounts the route, on
+//! with [`join_path`](crate::transport::join_path), as the transport mounts the route, on
 //! the path a [`Created`](crate::Created) answer's route read off the edge.
 
 use http::{HeaderValue, Uri, header::LOCATION};
@@ -44,7 +44,8 @@ pub(crate) fn set_created_location(resp: &mut Response, collection_path: &str, i
         );
         return;
     }
-    let location = crate::join_path(collection_path, &crate::router::percent_encoded(id));
+    let location =
+        crate::transport::join_path(collection_path, &crate::router::percent_encoded(id));
     if let Ok(value) = HeaderValue::from_str(&location) {
         resp.headers_mut().insert(LOCATION, value);
     }

@@ -6,11 +6,11 @@
 
 use crate::AlwaysUnauthorized;
 use nest_rs_authn::{AuthnConfig, AuthnModule};
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::challenge::{BEARER, NoBearerChallenge};
 use nest_rs_http::{StatusCode, header};
-use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_http::{controller, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule, WELL_KNOWN_PATH};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{WsModule, gateway, messages};

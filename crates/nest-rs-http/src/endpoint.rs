@@ -220,7 +220,7 @@ impl HttpEndpointMeta {
         Self {
             // Canonical before anything compares it, so two spellings of one
             // mount cannot blind the collision check.
-            path: crate::normalize_mount_path(&path.into()).into(),
+            path: crate::transport::normalize_mount_path(&path.into()).into(),
             also: Vec::new(),
             label: label.into(),
             owner: None,
@@ -248,7 +248,7 @@ impl HttpEndpointMeta {
         self.also.extend(
             paths
                 .into_iter()
-                .map(|path| Cow::Owned(crate::normalize_mount_path(&path.into()))),
+                .map(|path| Cow::Owned(crate::transport::normalize_mount_path(&path.into()))),
         );
         self
     }

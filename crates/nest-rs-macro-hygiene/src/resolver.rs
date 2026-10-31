@@ -6,11 +6,11 @@
 //! the call site's manifest, falling back to a bare `::async_graphql`; this
 //! compile fails if the `crate = ` override is ever dropped.
 
-use nest_rs::core::{Ctx, Layer, UnitContext};
+use nest_rs::core::{Ctx, Layer, UnitContext, async_trait};
 use nest_rs::graphql::async_graphql::SimpleObject;
 use nest_rs::graphql::async_graphql::futures_util::stream::{self, Stream};
 use nest_rs::graphql::{GraphqlView, Scoped, operations, resolver};
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 
 /// The federated type; its `@key` comes from the entity resolver's arguments.
 #[derive(SimpleObject)]

@@ -3,10 +3,10 @@
 //! argument of the schema; absent, the field answers opaquely and files the
 //! type.
 
-use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, injectable, module};
+use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::SimpleObject;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, async_trait, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::HttpView;
 use nest_rs_testing::{LogCapture, TestApp};
 use serde_json::{Value, json};

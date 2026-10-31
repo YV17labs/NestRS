@@ -2,8 +2,8 @@
 //! guards and the operation's own fold into one per-operation chain, so both run
 //! `check` and both owe `GuardFor<McpView>`.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::HttpView;
 use nest_rs::mcp::{McpError, mcp, tools};
 

@@ -86,7 +86,8 @@ line or a queued job are filed under.
 That's a guard. Gate the request, return `Err(Denial)` on rejection.
 
 ```rust title="apps/api/src/guard.rs"
-use nest_rs::guards::prelude::*;
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::HttpView;
 
 #[injectable]

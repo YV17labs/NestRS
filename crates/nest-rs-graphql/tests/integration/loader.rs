@@ -3,12 +3,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use nest_rs_core::{AmbientValue, Layer, UnitContext, ambient, injectable, module};
+use nest_rs_core::{AmbientValue, Layer, UnitContext, ambient, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::dataloader::{DataLoader, Loader};
 use nest_rs_graphql::async_graphql::{self, Context};
 use nest_rs_graphql::{GraphqlModule, GraphqlView, dataloader, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{EndpointGuards, HttpConfig, HttpModule, HttpView, async_trait};
+use nest_rs_http::{EndpointGuards, HttpConfig, HttpModule, HttpView};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// A trait whose method shares the batch's name, implemented for the `Arc` the

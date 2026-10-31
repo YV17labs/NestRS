@@ -6,12 +6,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use futures_util::future::BoxFuture;
+use nest_rs_core::async_trait;
 use nest_rs_database::{Executor as DatabaseExecutor, OutboxError, OutboxRecord};
 use nest_rs_http::HttpConfig;
 use nest_rs_queue::{
     BACKEND_TIMEOUT, Capabilities, Capability, ENQUEUE_BATCH, Envelope, JobId, JobProducer,
     JobProducerExt, PushOptions, PushReceipt, QueueBackend, QueueError, QueueName,
-    WIRE_FORMAT_VERSION, async_trait,
+    WIRE_FORMAT_VERSION,
 };
 use serde_json::{Value, json};
 

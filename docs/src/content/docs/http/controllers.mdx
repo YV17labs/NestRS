@@ -163,7 +163,8 @@ and at boot across two, naming both handlers.
 ## Reading query parameters
 
 ```rust title="crates/features/src/hello/http/controller.rs"
-use nest_rs::http::{Query, input};
+use nest_rs::http::Query;
+use nest_rs::core::input;
 
 #[input]
 struct Greet {
@@ -188,8 +189,8 @@ Bonjour le monde
 ## Accepting a JSON body, validated
 
 ```rust title="crates/features/src/hello/http/controller.rs"
-use nest_rs::core::output;
-use nest_rs::http::{Json, Result, input};
+use nest_rs::core::{input, output};
+use nest_rs::http::{Json, Result};
 
 #[input]
 struct GreetInput {

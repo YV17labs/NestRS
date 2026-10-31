@@ -3,8 +3,8 @@
 //! message of the socket, the message's own for its handler.
 //!
 //! ```
-//! use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, injectable};
-//! use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+//! use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, async_trait, injectable};
+//! use nest_rs_guards::{Denial, Guard, GuardFor};
 //! use nest_rs_http::HttpView;
 //! use nest_rs_ws::{gateway, messages};
 //! # use nest_rs_core::module;

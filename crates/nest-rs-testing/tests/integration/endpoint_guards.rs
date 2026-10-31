@@ -8,11 +8,11 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, Posture, UnitContext, injectable, module};
+use nest_rs_core::{Layer, Posture, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::{EndpointGuards, HttpView, StatusCode, async_trait};
+use nest_rs_http::{EndpointGuards, HttpView, StatusCode};
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::{McpView, ServerHandler, mcp, tool_handler, tool_router};
 use nest_rs_testing::TestApp;

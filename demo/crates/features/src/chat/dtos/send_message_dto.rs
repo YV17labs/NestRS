@@ -1,4 +1,4 @@
-use nest_rs::ws::input;
+use nest_rs::core::input;
 
 #[input]
 #[derive(Debug, Clone)]

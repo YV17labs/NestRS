@@ -82,7 +82,6 @@ pub mod __private {
 }
 
 pub use async_graphql;
-pub use async_trait::async_trait;
 
 /// Generate a resolver's standard CRUD operations on its impl block, in place
 /// of [`operations`]; each one delegates to the entity's `CrudService` and

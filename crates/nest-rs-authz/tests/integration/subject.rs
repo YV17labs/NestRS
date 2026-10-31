@@ -7,14 +7,12 @@ use std::sync::Arc;
 
 use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{Ability, AbilityBuilder, Action, Manage, Read, current_ability, subject};
-use nest_rs_core::{Layer, UnitContext, injectable, module};
+use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::futures_util::stream;
-use nest_rs_http::{
-    HttpView, Json, SseEvent, SseStream, StatusCode, async_trait, controller, header, routes,
-};
+use nest_rs_http::{HttpView, Json, SseEvent, SseStream, StatusCode, controller, header, routes};
 use nest_rs_mcp::{McpError, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool_as;

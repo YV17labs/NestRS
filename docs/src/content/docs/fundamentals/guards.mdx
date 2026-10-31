@@ -54,7 +54,8 @@ guard orders itself within its site.
 ### A minimal custom guard
 
 ```rust title="crates/features/src/posts/guard.rs"
-use nest_rs::guards::prelude::*;
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::HttpView;
 
 #[injectable]
@@ -415,7 +416,8 @@ operation declares its own — so a guard that lets anonymous callers through
 admits both:
 
 ```rust title="crates/features/src/posts/guard.rs"
-use nest_rs::guards::prelude::*;
+use nest_rs::core::{Posture, UnitContext, async_trait};
+use nest_rs::guards::{Denial, Guard};
 
 #[async_trait]
 impl Guard for ApiKeyGuard {
@@ -447,7 +449,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aws_lc_rs::hmac;
 use base64::{Engine, engine::general_purpose::STANDARD};
-use nest_rs::guards::prelude::*;
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::{HttpView, current_body_limit};
 
 use crate::upstream::UpstreamConfig;

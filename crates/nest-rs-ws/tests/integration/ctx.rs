@@ -3,12 +3,12 @@
 //! is never the payload; absent, the message answers opaquely and files the
 //! type.
 
-use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, injectable, module};
+use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::HttpView;
 use nest_rs_testing::ws::{WsApp, WsSocket};
 use nest_rs_testing::{LogCapture, TestApp};
-use nest_rs_ws::{WsModule, WsView, async_trait, gateway, messages};
+use nest_rs_ws::{WsModule, WsView, gateway, messages};
 
 /// Who the upgrade's guard says is calling.
 #[derive(Clone)]

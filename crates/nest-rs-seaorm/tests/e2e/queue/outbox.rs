@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nest_rs_core::{Transport, injectable, module};
+use nest_rs_core::{Transport, async_trait, injectable, module};
 use nest_rs_database::{
     AtomicError, ExecutorScope, OutboxStore, TransactionPolicy, UnitOfWork, UnitSpec, atomic,
     run_unit,
@@ -18,7 +18,6 @@ use nest_rs_http::{Response, StatusCode};
 use nest_rs_queue::{
     Capabilities, Capability, Envelope, JobId, JobProducer, JobProducerExt, OutboxConfig,
     OutboxRelay, PushOptions, PushReceipt, QueueBackend, QueueError, QueueName, TARGET,
-    async_trait,
 };
 use nest_rs_seaorm::queue::OutboxMigration;
 use nest_rs_seaorm::{SeaOrmDatabaseModule, SeaOrmModule};

@@ -9,9 +9,9 @@
 //! either half of `#[operations]`' bound could be deleted and the pair stayed
 //! proved by the other decorator's snapshot.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
 use nest_rs::graphql::{operations, resolver};
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::HttpView;
 
 #[injectable]

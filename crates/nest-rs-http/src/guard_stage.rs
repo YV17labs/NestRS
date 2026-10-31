@@ -388,8 +388,8 @@ mod tests {
     use std::any::TypeId;
 
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, meta_value};
+    use nest_rs_core::async_trait;
     use nest_rs_core::{Layer, LayerSite, Posture, UnitContext};
-    use nest_rs_guards::async_trait;
 
     use super::*;
     use crate::endpoint::{BoxEndpoint, Endpoint};

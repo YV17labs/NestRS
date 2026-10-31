@@ -60,3 +60,21 @@ or across crates, so the check reads the name anywhere in the `href`. A link is
 held by the build; a name written in a code span or in words, which rustdoc
 renders as text, is still review's. The first run over the workspace found one
 such link, `nest_rs_mcp::PropagatingHandler`'s builder, now said in words.
+
+**2026-10-31 — the code is brought to the rule, and an item has one path.**
+The identity audit found tier 1 holding what only expansions and sibling
+crates call — the WebSocket edge's reply and error probes, which GraphQL and
+MCP already kept here, the HTTP edge's path and version helpers, the global
+pools' spec holders, MCP's `hosts_on` — and `async_trait` reachable at seven
+paths, `#[input]` at five. With the owner's agreement to break the API before
+7.0 publishes ("Tout faire", 2026-10-28), each moved to its crate's
+`__private`; a whole-crate re-export a macro emits through
+(`nest_rs_ws::nest_rs_http`, the scheduler's `nest_rs_database`) moved with
+them; `current_container`, MCP's own, became crate-private, a locator no
+operation needs beside `#[inject]`. **An item has one path**: its crate's, plus
+`nest_rs::prelude`, the one prelude — a crate's own prelude
+(`nest_rs::guards::prelude`) is a second path to every name it holds, and is
+gone. What the docs, the CLI or a package hand out stays tier 1 whoever else
+calls it, as `SchemaFn` did: the test is a developer's line, not the caller
+count. A foreign library re-exported whole (`rmcp`, `sea_orm`,
+`async_graphql`) keeps the paths `public-dependencies.md` gives it.

@@ -9,7 +9,8 @@ use nest_rs_core::__private::{
 use nest_rs_core::Container;
 use nest_rs_core::Handler;
 use nest_rs_core::layer_chain::LayerSite;
-use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeSpec, PipeSpecs};
+use nest_rs_pipes::__private::PipeSpecs;
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeSpec};
 use serde_json::Value;
 
 use crate::body::Body;

@@ -11,11 +11,10 @@ use nest_rs_authn::__private::{Verdict, authenticate};
 use nest_rs_authn::{AUTHENTICATE_TIMEOUT, Strategy};
 use nest_rs_core::{
     Container, ContainerBuilder, Discoverable, Layer, Net, ProviderResidency, UnitContext,
+    async_trait,
 };
 use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
-use nest_rs_http::{
-    HeaderMap, HeaderValue, HttpView, Response, ResponseError, async_trait, header,
-};
+use nest_rs_http::{HeaderMap, HeaderValue, HttpView, Response, ResponseError, header};
 
 use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
 
@@ -46,8 +45,8 @@ use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
 ///
 /// ```
 /// use nest_rs_authn::{AuthError, Strategy, basic_credentials};
-/// use nest_rs_core::{Ctx, injectable};
-/// use nest_rs_http::{Request, async_trait, controller, routes};
+/// use nest_rs_core::{Ctx, async_trait, injectable};
+/// use nest_rs_http::{Request, controller, routes};
 /// use nest_rs_oauth_server::{
 ///     AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientAuthenticationGuard,
 ///     RegisteredClient, authenticate_against_registry,

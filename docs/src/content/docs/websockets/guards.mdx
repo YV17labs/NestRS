@@ -84,9 +84,9 @@ A per-message guard runs every time the envelope's `event` matches a
 handler the guard is attached to:
 
 ```rust title="crates/features/src/chat/ws/guard.rs (from the demo, abridged)"
-use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
 use nest_rs::guards::{Denial, Guard, GuardFor};
-use nest_rs::ws::{WsView, async_trait};
+use nest_rs::ws::WsView;
 
 use crate::Claims;
 

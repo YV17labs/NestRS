@@ -5,8 +5,10 @@ use nest_rs_core::module;
 use nest_rs_mcp::model::{GetPromptResult, PromptMessage, Role};
 // No `rmcp`, `tool`, `prompt` or `ServerHandler` import: `#[tools]` re-emits
 // them inside its generated module.
+use nest_rs_core::input;
+use nest_rs_mcp::__private::hosts_on;
 use nest_rs_mcp::rmcp::serde_json::json;
-use nest_rs_mcp::{McpError, Parameters, hosts_on, input, mcp, tools};
+use nest_rs_mcp::{McpError, Parameters, mcp, tools};
 use nest_rs_pipes::{Pipe, PipeError, Piped};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{

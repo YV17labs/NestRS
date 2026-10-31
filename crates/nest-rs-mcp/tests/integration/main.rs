@@ -132,8 +132,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use nest_rs_core::{App, Layer, Module, Transport, UnitContext, injectable};
-use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs_core::{App, Layer, Module, Transport, UnitContext, async_trait, injectable};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{HttpConfig, HttpTransport};
 use nest_rs_mcp::rmcp::transport::streamable_http_server::session::store::{
     SessionState, SessionStore, SessionStoreError,

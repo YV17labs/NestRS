@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use nest_rs_core::{Discovery, module};
 use nest_rs_http::HttpEndpointMeta;
+use nest_rs_mcp::__private::hosts_on;
 use nest_rs_mcp::model::{
     CallToolRequestParams, CallToolResponse, CompleteRequestParams, CompleteResult,
     GetPromptRequestParams, GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult,
@@ -17,8 +18,8 @@ use nest_rs_mcp::rmcp::serde_json::json;
 use nest_rs_mcp::service::{RequestContext, RoleServer};
 use nest_rs_mcp::{
     CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpIdentity, McpModule, McpSetup,
-    ServerHandler, hosts_on, mcp, prompt, prompt_handler, prompt_router, tool, tool_handler,
-    tool_router, tools,
+    ServerHandler, mcp, prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router,
+    tools,
 };
 use nest_rs_testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use nest_rs_testing::{LogCapture, TestApp};
@@ -1503,7 +1504,7 @@ struct AddressWitness;
 
 impl nest_rs_core::Layer for AddressWitness {}
 
-#[nest_rs_guards::async_trait]
+#[nest_rs_core::async_trait]
 impl nest_rs_guards::Guard for AddressWitness {
     async fn check_http(
         &self,

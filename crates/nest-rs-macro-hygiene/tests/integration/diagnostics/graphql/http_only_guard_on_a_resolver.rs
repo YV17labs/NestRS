@@ -4,9 +4,9 @@
 //! carry: without the `GuardFor<GraphqlView>` bound it would compile beside a
 //! resolver, read as a protection, and run on a view it was not written for.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
 use nest_rs::graphql::{operations, resolver};
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::HttpView;
 
 #[injectable]

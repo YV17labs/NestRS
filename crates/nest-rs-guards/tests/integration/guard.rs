@@ -8,10 +8,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aws_lc_rs::hmac;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use nest_rs_core::{Layer, UnitContext, injectable, module};
+use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::StatusCode;
-use nest_rs_http::{HttpConfig, HttpModule, HttpView, RawBody, async_trait, controller, routes};
+use nest_rs_http::{HttpConfig, HttpModule, HttpView, RawBody, controller, routes};
 use nest_rs_testing::TestApp;
 
 /// The secret the sender signs with.

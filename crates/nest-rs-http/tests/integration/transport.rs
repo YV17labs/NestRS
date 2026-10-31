@@ -11,13 +11,13 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{
     App, AppLifecycle, ContainerBuilder, Interceptor, Layer, Next, Outcome, Transport, UnitContext,
-    interceptor, module, target,
+    async_trait, interceptor, module, target,
 };
 use nest_rs_http::__private::websocket::{WebSocketLimits, WebSocketUpgrade};
 use nest_rs_http::Body;
 use nest_rs_http::{
     DetachedWork, HttpConfig, HttpEndpointMeta, HttpModule, HttpTransport, Method, SseStream,
-    async_trait, controller, routes,
+    controller, routes,
 };
 use nest_rs_testing::LogCapture;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};

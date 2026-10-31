@@ -1,10 +1,10 @@
 //! `#[meta(...)]` + `Reflector`: guard reads route metadata (the `@Roles`
 //! pattern), end-to-end through the HTTP harness.
 
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::StatusCode;
-use nest_rs_http::{HttpView, async_trait, controller, routes};
+use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_testing::TestApp;
 
 #[derive(Clone)]

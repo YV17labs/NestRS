@@ -7,10 +7,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use nest_rs_core::__private::retry_after_secs;
+use nest_rs_core::{__private::retry_after_secs, async_trait};
 use nest_rs_core::{Edge, Layer, Unanswered, UnitContext, UnitView, injectable, within};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{ClientOrigin, HttpView, async_trait};
+use nest_rs_http::{ClientOrigin, HttpView};
 
 use crate::error::UncountedError;
 use crate::pseudonym::PseudonymStore;

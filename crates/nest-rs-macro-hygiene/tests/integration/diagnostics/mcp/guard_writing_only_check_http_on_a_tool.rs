@@ -2,8 +2,8 @@
 //! operations writes the decision an operation runs, or it would pass every
 //! tool it is bound beside.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::mcp::{McpError, McpView, mcp, tools};
 
 #[injectable]

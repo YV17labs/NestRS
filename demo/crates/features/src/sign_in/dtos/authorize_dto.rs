@@ -1,4 +1,4 @@
-use nest_rs::http::input;
+use nest_rs::core::input;
 
 #[input]
 pub struct AuthorizeDto {

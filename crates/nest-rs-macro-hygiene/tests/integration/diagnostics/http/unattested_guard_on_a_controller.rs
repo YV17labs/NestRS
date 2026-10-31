@@ -5,8 +5,8 @@
 //! `#[controller]`, not `#[routes]`, that must say so: the guard is written on
 //! the struct, and that is where the error has to point.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
-use nest_rs::guards::{Denial, Guard, async_trait};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard};
 use nest_rs::http::{controller, routes};
 
 #[injectable]

@@ -98,9 +98,9 @@ pub use guard::{BoxFuture, denial_to_mcp_error};
 pub use host::McpHost;
 pub use identity::{McpIdentity, ResolvedIdentity};
 pub use module::{McpModule, McpSetup};
-pub use operation::{McpOperationKind, current_container};
+pub use operation::McpOperationKind;
 pub use propagate::PropagatingHandler;
-pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity, hosts_on};
+pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity};
 /// The `#[injectable(scope = request)]` provider an operation takes as a
 /// parameter — the MCP mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::Scoped;
@@ -124,7 +124,7 @@ pub mod __private {
     };
     pub use crate::registry::{
         DeclaredRoutes, DefaultDeclaredRoutes, DefaultOperationLayers, DefaultPromptRouter,
-        DefaultToolRouter, ENDPOINT, ToolsHost, declare_endpoint, register_host,
+        DefaultToolRouter, ENDPOINT, ToolsHost, declare_endpoint, hosts_on, register_host,
     };
     pub use crate::resource::{
         MimeProbe, MimeProbeFallback, MimeProbeReads, ResourceBody, ResourceListing,
@@ -184,16 +184,12 @@ pub use rmcp::transport::streamable_http_server::{
 /// an `rmcp` manifest entry that could drift from this major.
 pub use rmcp;
 
-/// The wire-DTO shorthand — same decorator the HTTP layer uses, re-exported
-/// here so a payload crossing this transport needs no `serde` of its own.
-pub use nest_rs_core::input;
-
 /// Mark a struct as an MCP host that self-mounts over HTTP.
 ///
 /// ```
 /// use std::sync::Arc;
-/// use nest_rs_core::Discoverable;
-/// use nest_rs_mcp::{DEFAULT_PATH, hosts_on, mcp};
+/// use nest_rs_core::{Discoverable, Discovery};
+/// use nest_rs_mcp::{DEFAULT_PATH, McpHostMeta, mcp};
 /// # use nest_rs_core::{injectable, module};
 /// # use nest_rs_mcp::{McpError, McpIdentity, McpAccess, McpModule, tools};
 /// # use nest_rs_testing::mcp::{initialize, result};
@@ -252,8 +248,9 @@ pub use nest_rs_core::input;
 /// implements::<MyHandler>();
 /// # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
 ///
-/// assert_eq!(hosts_on(app.container(), DEFAULT_PATH).len(), 1);
-/// assert_eq!(hosts_on(app.container(), "/mcp/posts").len(), 1);
+/// let hosts = Discovery::new(app.container()).meta::<McpHostMeta>();
+/// let on = |path: &str| hosts.iter().filter(|host| host.meta.path() == path).count();
+/// assert_eq!((on(DEFAULT_PATH), on("/mcp/posts")), (1, 1));
 ///
 /// let handshake = result(&initialize(app.http(), "/mcp/posts", None).await);
 /// assert_eq!(handshake["result"]["serverInfo"]["name"], "assistant-posts");
@@ -270,9 +267,11 @@ pub use nest_rs_mcp_macros::mcp;
 ///
 /// ```
 /// use std::sync::Arc;
-/// use nest_rs_mcp::{McpError, Parameters, ServerHandler, input, mcp, tools};
+/// use nest_rs_mcp::{McpError, Parameters, ServerHandler, mcp, tools};
+/// use nest_rs_core::input;
 /// # use nest_rs_core::{injectable, module};
-/// # use nest_rs_mcp::{DEFAULT_PATH, McpAccess, McpModule, hosts_on};
+/// # use nest_rs_core::Discovery;
+/// # use nest_rs_mcp::{DEFAULT_PATH, McpAccess, McpHostMeta, McpModule};
 /// # use nest_rs_testing::mcp::{call_tool_with, result};
 /// #
 /// # #[injectable]
@@ -309,8 +308,8 @@ pub use nest_rs_mcp_macros::mcp;
 /// implements::<MyHandler>();
 /// # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
 ///
-/// let declared = hosts_on(app.container(), DEFAULT_PATH)[0].declared_tools();
-/// assert_eq!(declared[0].name, "find");
+/// let hosts = Discovery::new(app.container()).meta::<McpHostMeta>();
+/// assert_eq!(hosts[0].meta.declared_tools()[0].name, "find");
 ///
 /// let arguments = serde_json::json!({ "name": "ada" });
 /// let body = call_tool_with(app.http(), DEFAULT_PATH, "find", None, arguments).await;

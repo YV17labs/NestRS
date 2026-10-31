@@ -11,11 +11,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use nest_rs_core::{Layer, Posture, injectable, module};
+use nest_rs_core::{Layer, Posture, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::{EndpointGuards, HttpView, async_trait};
+use nest_rs_http::{EndpointGuards, HttpView};
 use nest_rs_mcp::{McpView, ServerHandler, mcp, tool_handler, tool_router};
 // The name rmcp's `#[tool_router]` / `#[tool_handler]` expansions resolve.
 use nest_rs_http::StatusCode;

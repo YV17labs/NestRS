@@ -5,9 +5,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use nest_rs_core::{AmbientValue, Layer, UnitContext, injectable, module};
+use nest_rs_core::{AmbientValue, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, guard};
-use nest_rs_http::{EndpointGuards, HttpView, StatusCode, async_trait};
+use nest_rs_http::{EndpointGuards, HttpView, StatusCode};
 use nest_rs_mcp::{
     CallToolResult, ContentBlock, McpAccess, McpError, McpModule, McpView, ServerHandler, mcp,
     tool, tool_handler, tool_router,

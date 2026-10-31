@@ -6,11 +6,11 @@
 
 use std::marker::PhantomData;
 
-use nest_rs_core::module;
+use nest_rs_core::{input, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::{Json, controller, routes};
-use nest_rs_mcp::{McpError, Parameters, input, mcp, tools};
+use nest_rs_mcp::{McpError, Parameters, mcp, tools};
 use nest_rs_pipes::{Pipe, PipeError, Piped};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{call_tool_statelessly, result};

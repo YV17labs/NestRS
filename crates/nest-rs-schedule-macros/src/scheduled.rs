@@ -100,7 +100,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
         let timeout_tokens = job_timeout(timeout);
-        let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_schedule));
+        let transaction_tokens =
+            job_transaction(transactional, &quote!(::nest_rs_schedule::__private));
         let replicas_tokens = replicas.tokens(&quote!(::nest_rs_schedule));
         let method_ident = method.sig.ident.clone();
         let method_name = method_ident.unraw().to_string();

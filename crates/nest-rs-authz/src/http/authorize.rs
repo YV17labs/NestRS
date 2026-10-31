@@ -26,9 +26,9 @@ use crate::{Ability, ActionMarker, Subject};
 ///
 /// ```
 /// # use nest_rs_authz::{AbilityBuilder, Action, Create};
-/// # use nest_rs_core::{Layer, injectable, input, module};
+/// # use nest_rs_core::{Layer, async_trait, injectable, input, module};
 /// # use nest_rs_guards::{Denial, Guard, GuardFor};
-/// # use nest_rs_http::{Json, Result, StatusCode, async_trait, controller, routes};
+/// # use nest_rs_http::{Json, Result, StatusCode, controller, routes};
 /// # use nest_rs_testing::TestApp;
 /// # mod users {
 /// #     use sea_orm::entity::prelude::*;

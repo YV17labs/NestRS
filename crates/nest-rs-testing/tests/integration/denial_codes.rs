@@ -3,12 +3,12 @@
 //! `extensions.code` on GraphQL, `data.code` in a WebSocket frame and in an MCP
 //! error — the same one wherever it is read, an internal denial's included.
 
-use nest_rs_core::problem::code;
 use nest_rs_core::{Code, Layer, UnitContext, injectable, module};
+use nest_rs_core::{async_trait, problem::code};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::{HttpView, async_trait, controller, routes};
+use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_mcp::{McpError, McpView, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{call_tool_statelessly, result};

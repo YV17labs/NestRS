@@ -1,13 +1,13 @@
 //! The documented import, booted, and the header a caller reads back: the
 //! interceptor is registered by the import, so only a boot can see it.
 
-use nest_rs_core::__private::InterceptorRegistration;
+use nest_rs_core::{__private::InterceptorRegistration, async_trait};
 use nest_rs_core::{
     Discovery, Interceptor, Layer, Next, Outcome, UnitContext, injectable, interceptor, module,
 };
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::StatusCode;
-use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_http::{controller, routes};
 use nest_rs_server_timing::ServerTimingModule;
 use nest_rs_testing::TestApp;
 

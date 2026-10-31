@@ -12,14 +12,13 @@ use std::sync::Arc;
 use nest_rs_authz::{
     AbilityBuilder, Action, MaskReplyError, Read, WireModelDefaults, masked_reply, with_ability,
 };
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream, StreamExt};
 use nest_rs_graphql::async_graphql::{
     Error as GqlError, Executor, Request as GqlRequest, Result as GqlResult, SimpleObject,
 };
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -976,12 +975,12 @@ async fn an_entity_refuses_a_caller_with_no_rule() {
 mod ability_of_the_unit {
     use super::{WidgetDto, WidgetFeed, widget};
     use nest_rs_authz::{AbilityBuilder, Action, Read};
+    use nest_rs_core::async_trait;
     use nest_rs_core::{Layer, UnitContext, injectable, module};
     use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
     use nest_rs_graphql::async_graphql::{Error as GqlError, Result as GqlResult};
     use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
     use nest_rs_guards::{Denial, Guard, GuardFor};
-    use nest_rs_http::async_trait;
     use nest_rs_testing::TestApp;
 
     use super::super::query;

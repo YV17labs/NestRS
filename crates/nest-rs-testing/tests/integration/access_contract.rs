@@ -5,10 +5,12 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{AccessGraphError, App, Layer, MissingDependencyError, injectable, module};
+use nest_rs_core::{
+    AccessGraphError, App, Layer, MissingDependencyError, async_trait, injectable, module,
+};
 use nest_rs_graphql::{async_graphql, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{Scoped, async_trait, controller, routes};
+use nest_rs_http::{Scoped, controller, routes};
 // The name rmcp's `#[tool_router]` / `#[tool_handler]` expansions resolve.
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::{ServerHandler, mcp, tool_handler, tool_router};

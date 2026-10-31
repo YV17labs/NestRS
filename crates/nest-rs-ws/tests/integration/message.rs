@@ -6,16 +6,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use nest_rs_core::problem::code;
 use nest_rs_core::{
     Caught, DuplicateMetaError, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem,
     UnitContext, WiringFailedError, injectable, module,
 };
+use nest_rs_core::{async_trait, problem::code};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_testing::{LogCapture, TestApp};
-use nest_rs_ws::{
-    CloseCode, Scoped, WsConfig, WsModule, WsReply, WsView, async_trait, gateway, messages,
-};
+use nest_rs_ws::{CloseCode, Scoped, WsConfig, WsModule, WsReply, WsView, gateway, messages};
 
 /// The messages [`Counting`] wrapped.
 static WRAPPED: AtomicUsize = AtomicUsize::new(0);
@@ -451,7 +449,7 @@ impl Guard for AcmeUpgrade {
     }
 }
 
-impl GuardFor<nest_rs_ws::nest_rs_http::HttpView> for AcmeUpgrade {}
+impl GuardFor<nest_rs_http::HttpView> for AcmeUpgrade {}
 
 #[gateway(path = "/tenant")]
 #[use_guards(AcmeUpgrade)]

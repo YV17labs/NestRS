@@ -5,9 +5,10 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_graphql::{Result, SimpleObject};
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, GuardSpecs, async_trait, guard};
+use nest_rs_guards::__private::GuardSpecs;
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::StatusCode;
 use nest_rs_testing::TestApp;
 
@@ -1388,7 +1389,8 @@ mod keyed_outside_a_subgraph {
     use async_graphql::{Executor, Object, Request};
     use nest_rs_core::{Container, module};
     use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-    use nest_rs_guards::{GuardSpecs, guard};
+    use nest_rs_guards::__private::GuardSpecs;
+    use nest_rs_guards::guard;
     use nest_rs_testing::TestApp;
 
     use super::{Closed, Widget};
@@ -1479,13 +1481,13 @@ mod keyed_outside_a_subgraph {
 mod around_the_federation_fields {
     use std::sync::Mutex;
 
+    use nest_rs_core::async_trait;
     use nest_rs_core::problem::code;
     use nest_rs_core::{
         Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext,
         exception_filter, injectable, interceptor, module,
     };
     use nest_rs_graphql::{FieldRole, GraphqlView};
-    use nest_rs_guards::async_trait;
     use nest_rs_testing::TestApp;
 
     use super::{FederatedModule, entities_for, service_sdl};

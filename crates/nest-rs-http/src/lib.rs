@@ -221,8 +221,6 @@ pub use headers::Header;
 pub use json::Json;
 pub use module::{HttpModule, HttpSetup};
 pub use multipart::{Field, Multipart, PartStream};
-pub use nest_rs_core::input;
-pub use nest_rs_core::{current_request_scope, with_request_scope};
 pub use opaque::Opaque;
 pub use paginated::Paginated;
 pub use path::Path;
@@ -243,11 +241,8 @@ pub use tls::HttpTls;
 pub use trace_context::{
     TRACEPARENT_HEADER, TRACERESPONSE_HEADER, TRACESTATE_HEADER, UPSTREAM_REQUEST_ID_HEADER,
 };
-pub use transport::{
-    HttpTransport, join_path, literal_mount_path, normalize_mount_path, version_path,
-    versions_declare,
-};
-pub use versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM, declared_versions};
+pub use transport::HttpTransport;
+pub use versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM};
 pub use view::HttpView;
 
 #[doc(hidden)]
@@ -279,7 +274,10 @@ pub mod __private {
         RouteGuards, RoutePipes, RouteWrapper, mount_controller, mount_route, route_guard_stage,
     };
     pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
-    pub use crate::versioning::{VersionLocation, version_location};
+    pub use crate::transport::{
+        join_path, literal_mount_path, normalize_mount_path, version_path, versions_declare,
+    };
+    pub use crate::versioning::{VersionLocation, declared_versions, version_location};
     pub use crate::view::with_view;
     pub use nest_rs_pipes::__private::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
     pub use nest_rs_pipes::PipeSpec;
@@ -304,8 +302,6 @@ pub mod __private {
 // The stream vocabulary an `#[sse]` route is built from.
 pub use futures_util;
 pub use schemars;
-
-pub use async_trait::async_trait;
 
 /// `#[controller(path = "/users")]` — the HTTP host on a struct, paired with
 /// [`#[routes]`](macro@routes) on its impl block.

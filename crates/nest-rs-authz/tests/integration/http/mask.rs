@@ -3,10 +3,10 @@
 
 use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::Json;
-use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_http::{controller, routes};
 use nest_rs_testing::TestApp;
 use serde::Serialize;
 

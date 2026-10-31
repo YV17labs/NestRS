@@ -140,8 +140,8 @@ pub trait Guard: Layer {
     /// office network, on every route:
     ///
     /// ```
-    /// # use nest_rs_core::{Layer, UnitContext};
-    /// # use nest_rs_guards::{Denial, Guard, async_trait};
+    /// # use nest_rs_core::{Layer, UnitContext, async_trait};
+    /// # use nest_rs_guards::{Denial, Guard};
     /// struct OfficeOnly;
     /// # impl Layer for OfficeOnly {}
     ///

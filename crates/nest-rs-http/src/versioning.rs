@@ -25,7 +25,7 @@ use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 use crate::route_template::{segment_parameter, strip_literal};
-use crate::version_path;
+use crate::transport::version_path;
 
 /// The media-type parameter the [`MediaType`](ApiVersioning::MediaType)
 /// strategy reads (`Accept: application/json; version=2`).

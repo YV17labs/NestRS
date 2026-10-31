@@ -1,12 +1,12 @@
 //! `#[messages]`-generated `Gateway::dispatch` — its return-type shapes — and
 //! the address the generated `Discoverable` mounts it at.
 
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{StatusCode, header};
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, ParseArray, Pipe, PipeError, Piped, Trim, pipe};
 use nest_rs_testing::TestApp;
-use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, WsView, async_trait, gateway, messages};
+use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, WsView, gateway, messages};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
@@ -2015,7 +2015,7 @@ const WINDOW: Duration = Duration::from_secs(1);
 #[module(
     imports = [
         WsModule,
-        nest_rs_ws::nest_rs_http::HttpModule::for_root(nest_rs_ws::nest_rs_http::HttpConfig {
+        nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
             shutdown_timeout: WINDOW,
             ..Default::default()
         }),
@@ -2350,7 +2350,7 @@ async fn a_socket_whose_peer_stopped_reading_goes_with_its_connection() {
     tokio::time::resume();
 
     let cut = logs.expect_one(
-        nest_rs_ws::nest_rs_http::target::HTTP,
+        nest_rs_http::target::HTTP,
         "connections still open as the shutdown window closes are cut; a request still \
          running is dropped unanswered and a stream ends mid-flow",
     );
@@ -2369,7 +2369,7 @@ const SEND_DEADLINE: Duration = Duration::from_secs(2);
 #[module(
     imports = [
         WsModule,
-        nest_rs_ws::nest_rs_http::HttpModule::for_root(nest_rs_ws::nest_rs_http::HttpConfig {
+        nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
             send_timeout: SEND_DEADLINE,
             ..Default::default()
         }),
@@ -2424,7 +2424,7 @@ async fn a_socket_whose_client_stops_reading_is_closed_at_the_send_deadline() {
     );
     app.shutdown().await.expect("the transport stops cleanly");
     logs.expect_none(
-        nest_rs_ws::nest_rs_http::target::HTTP,
+        nest_rs_http::target::HTTP,
         "connections still open as the shutdown window closes are cut; a request still \
          running is dropped unanswered and a stream ends mid-flow",
     );

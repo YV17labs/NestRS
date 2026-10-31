@@ -14,11 +14,11 @@
 //!
 //! ```
 //! # use nest_rs_authz::{AbilityBuilder, Action, Read};
-//! # use nest_rs_core::{Layer, injectable, module};
+//! # use nest_rs_core::{Layer, async_trait, injectable, module};
 //! # use nest_rs_graphql::async_graphql::{Result, SimpleObject};
 //! # use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 //! # use nest_rs_guards::{Denial, Guard, GuardFor};
-//! # use nest_rs_http::{EndpointGuards, async_trait};
+//! # use nest_rs_http::EndpointGuards;
 //! # use nest_rs_testing::TestApp;
 //! # mod users {
 //! #     use sea_orm::entity::prelude::*;

@@ -2,8 +2,8 @@
 //! messages writes the decision a message runs, or it would pass every message
 //! it is bound beside.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::ws::{WsView, gateway, messages};
 
 #[injectable]

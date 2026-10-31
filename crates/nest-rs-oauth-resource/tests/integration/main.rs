@@ -13,9 +13,8 @@ mod controller;
 mod interceptor;
 mod module;
 
-use nest_rs_core::{Layer, injectable};
+use nest_rs_core::{Layer, async_trait, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::async_trait;
 use nest_rs_http::header;
 use nest_rs_mcp::{ServerHandler, mcp, rmcp, tool_handler, tool_router};
 

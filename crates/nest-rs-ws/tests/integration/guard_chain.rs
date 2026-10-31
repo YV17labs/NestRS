@@ -2,10 +2,10 @@
 //! chains are not validated: they run `check`, where the principal contract
 //! this check reads does not hold.
 
-use nest_rs_core::{AmbientValue, Layer, injectable, module};
+use nest_rs_core::{AmbientValue, Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
 use nest_rs_testing::TestApp;
-use nest_rs_ws::{WsClient, WsConfig, WsModule, async_trait, gateway, messages};
+use nest_rs_ws::{WsClient, WsConfig, WsModule, gateway, messages};
 
 /// What the authentication guard attaches and the authorization guard reads.
 #[derive(Clone)]
@@ -200,10 +200,9 @@ async fn a_message_guard_no_module_provides_fails_the_boot_naming_it_and_its_mes
         .import::<UnprovidedModule>()
         .build()
         .expect("the container builds");
-    let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::from_config(
-        &nest_rs_ws::nest_rs_http::HttpConfig::default(),
-    )
-    .expect("the defaults are in range");
+    let mut transport =
+        nest_rs_http::HttpTransport::from_config(&nest_rs_http::HttpConfig::default())
+            .expect("the defaults are in range");
     nest_rs_core::Transport::configure(&mut transport, &container)
         .await
         .expect("the mount files its refusal rather than returning it");
@@ -245,10 +244,9 @@ async fn an_upgrade_guard_no_module_provides_fails_the_boot_naming_it_and_the_ga
         .import::<UnprovidedUpgradeModule>()
         .build()
         .expect("the container builds");
-    let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::from_config(
-        &nest_rs_ws::nest_rs_http::HttpConfig::default(),
-    )
-    .expect("the defaults are in range");
+    let mut transport =
+        nest_rs_http::HttpTransport::from_config(&nest_rs_http::HttpConfig::default())
+            .expect("the defaults are in range");
     let Err(err) = nest_rs_core::Transport::configure(&mut transport, &container).await else {
         panic!("the upgrade would run without the guard it declares");
     };

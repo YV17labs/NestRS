@@ -1,7 +1,7 @@
-use nest_rs::core::{AmbientValue, Layer, UnitContext, injectable};
+use nest_rs::core::{AmbientValue, Layer, UnitContext, async_trait, injectable};
 use nest_rs::graphql::GraphqlView;
 use nest_rs::guards::{Denial, Guard, GuardFor};
-use nest_rs::http::{HttpView, async_trait};
+use nest_rs::http::HttpView;
 use uuid::Uuid;
 
 use crate::Claims;

@@ -50,7 +50,8 @@ A host that needs the raw SDK reaches it through `nest_rs::mcp::rmcp`.
 The fastest way to see the shape: one tool, one string in, one string out.
 
 ```rust title="crates/features/src/hello/mcp/tool.rs"
-use nest_rs::mcp::{McpError, Parameters, input, mcp, tools};
+use nest_rs::mcp::{McpError, Parameters, mcp, tools};
+use nest_rs::core::input;
 
 #[input]
 pub struct HelloParams {
@@ -255,7 +256,7 @@ For extra checks beyond shape — ranges, enums, mutual exclusion — add
 so no extra import and no extra manifest line.
 
 ```rust title="crates/features/src/posts/dtos/search_posts_dto.rs"
-use nest_rs::mcp::input;
+use nest_rs::core::input;
 
 #[derive(Debug)]
 #[input]

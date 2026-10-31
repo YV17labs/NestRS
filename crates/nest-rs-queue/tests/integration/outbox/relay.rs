@@ -9,12 +9,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-use nest_rs_core::{Container, Transport};
+use nest_rs_core::{Container, Transport, async_trait};
 use nest_rs_database::{Executor as DatabaseExecutor, OutboxError, OutboxRecord, OutboxStore};
 use nest_rs_queue::{
     BACKEND_TIMEOUT, Capabilities, Capability, Delay, Envelope, JobId, JobProducer, JobProducerExt,
     OutboxConfig, OutboxRelay, PushOptions, PushReceipt, QueueBackend, QueueError, QueueName,
-    TARGET, async_trait,
+    TARGET,
 };
 use nest_rs_testing::{LogCapture, wait_until};
 use tokio::sync::Notify;

@@ -1,10 +1,10 @@
 //! `Parameters<T>` refuses arguments that do not decode without quoting the
 //! value into the model's transcript, as rmcp's own extractor does.
 
-use nest_rs_core::module;
+use nest_rs_core::{input, module};
 use nest_rs_mcp::model::{GetPromptResult, PromptMessage, Role};
 use nest_rs_mcp::rmcp::serde_json::json;
-use nest_rs_mcp::{McpError, Parameters, input, mcp, tools};
+use nest_rs_mcp::{McpError, Parameters, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{call_method, call_tool_with, open_session, result};
 

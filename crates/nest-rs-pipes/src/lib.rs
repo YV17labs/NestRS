@@ -37,7 +37,7 @@ pub use pipes::{
     Lowercase, Parse, ParseArray, ParseBool, ParseFloat, ParseInt, ParseUuid, ParseUuidV3,
     ParseUuidV4, ParseUuidV5, ParseUuidV7, ParseUuidVersion, Trim, Uppercase,
 };
-pub use registry::{AppBuilderPipesExt, PipeSpec, PipeSpecs, pipe};
+pub use registry::{AppBuilderPipesExt, PipeSpec, pipe};
 pub use validate::validation_details;
 
 #[doc(hidden)]
@@ -45,6 +45,6 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::registry::resolve_global_pipes;
+    pub use crate::registry::{PipeSpecs, resolve_global_pipes};
     pub use crate::validate::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
 }

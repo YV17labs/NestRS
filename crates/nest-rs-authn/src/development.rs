@@ -2,9 +2,9 @@
 //! serves, and the refused boot of any other process listing it.
 
 use nest_rs_config::Environment;
-use nest_rs_core::{Layer, UnitContext, hooks, injectable};
+use nest_rs_core::{Layer, UnitContext, async_trait, hooks, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{HttpView, async_trait};
+use nest_rs_http::HttpView;
 
 /// Serves a route only in a process that declares `development` or `test`
 /// (`<PREFIX>_ENV`), and refuses the boot of any other process whose modules

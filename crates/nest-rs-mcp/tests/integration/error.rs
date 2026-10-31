@@ -1,8 +1,11 @@
 //! Covers `src/error.rs`: `.opaque()` and `pipe_error` never say a refused value.
 
-use nest_rs_core::anyhow::{self, Context};
 use nest_rs_core::module;
-use nest_rs_mcp::{McpError, Opaque, Parameters, input, mcp, tools};
+use nest_rs_core::{
+    anyhow::{self, Context},
+    input,
+};
+use nest_rs_mcp::{McpError, Opaque, Parameters, mcp, tools};
 use nest_rs_pipes::{ParseArray, Pipe, PipeError, Piped};
 use nest_rs_testing::mcp::call_tool_with;
 use nest_rs_testing::{LogCapture, TestApp};

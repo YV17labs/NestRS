@@ -30,8 +30,8 @@ use crate::error::HeaderError;
 /// Request headers deserialized into `T`.
 ///
 /// ```
-/// # use nest_rs_core::module;
-/// # use nest_rs_http::{Header, Json, controller, input, routes};
+/// # use nest_rs_core::{input, module};
+/// # use nest_rs_http::{Header, Json, controller, routes};
 /// # use nest_rs_testing::TestApp;
 /// #[input]
 /// struct Tracing {

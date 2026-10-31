@@ -3,7 +3,8 @@
 //! would contradict what the handler actually reads — so the decorator refuses,
 //! naming both halves.
 
-use nest_rs::http::{controller, input, routes};
+use nest_rs::http::{controller, routes};
+use nest_rs::core::input;
 
 #[input]
 struct CreatePost {

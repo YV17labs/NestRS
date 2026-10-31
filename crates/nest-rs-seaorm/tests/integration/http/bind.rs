@@ -4,8 +4,10 @@
 //! is not a UUID v7 before it reads anything.
 
 use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
-use nest_rs_core::{AccessGraphError, App, Discovery, Layer, UnitContext, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs_core::{
+    AccessGraphError, App, Discovery, Layer, UnitContext, async_trait, injectable, module,
+};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{HttpControllerMeta, HttpView, StatusCode, controller, routes};
 use nest_rs_seaorm::{Authorized, CrudService, SeaOrmDatabaseModule};
 use nest_rs_testing::TestApp;

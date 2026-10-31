@@ -1,6 +1,6 @@
-use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
 use nest_rs::guards::{Denial, Guard, GuardFor};
-use nest_rs::ws::{WsView, async_trait};
+use nest_rs::ws::WsView;
 
 use crate::Claims;
 

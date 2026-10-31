@@ -454,7 +454,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `fn transform_graphql_variables(&self, v: &mut Value)` | the same `transform`, on `ArgumentKind::Variables` |
    | `fn transform_ws_data(&self, event: &str, v: &mut Value)` | the same `transform`, on `ArgumentKind::Data`; the event is `cx.handler().address()`, or `cx.switch_to::<WsView>()`'s `event()` |
    | `use nest_rs::guards::{AppBuilderPipesExt, pipe};` | `use nest_rs::pipes::{AppBuilderPipesExt, pipe};` |
-   | `nest_rs::guards::{PipeSpec, PipeSpecs}` | `nest_rs::pipes::{PipeSpec, PipeSpecs}` |
+   | `nest_rs::guards::PipeSpec` | `nest_rs::pipes::PipeSpec` |
 
    **Interceptors and exception filters**
 
@@ -825,7 +825,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::ws::WsScopeError` | nothing |
     | `#[query]` + `#[graphql(entity)]` | `#[entity]`, with `GraphqlConfig::federation` |
     | `GraphqlContextSeed { owner_type_id: \|\| Some(TypeId::of::<R>()), lifetime, seed }` | `GraphqlContextSeed::new(Some(TypeId::of::<R>), lifetime, seed)` |
-    | `ErrorReport(error).into_frame(event)` | `ErrorReport::new(error).into_failure().into_reply(event)` |
+    | `ErrorReport(error).into_frame(event)` | `Err(error)` returned from the `#[subscribe_message]` handler: its frame is rendered by the error's type |
     | `impl Gateway for X { async fn dispatch(..) }` written by hand | `#[subscribe_message]` methods in a `#[messages]` block: `#[messages]` alone writes a `Gateway` |
     | `WsReply::unknown(event)` | `WsReply::unknown()` |
     | `WsReply::payload_error(event, &error)` with any `Display` | the same with any `Into<DecodeError>` — a `serde_json::Error` among them — reported without the value |
@@ -866,6 +866,17 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::pipes::ValidationPipe`, `Piped<ValidationPipe<T>, E>`, `nest_rs::pipes::Valid` | nothing: every edge validates what it decodes; a hand-written check runs `validator::Validate` and converts with `nest_rs::pipes::PipeError::from` |
     | `#[input]` on a DTO an edge only sends | `#[output]` (`nest_rs::core::output`), `Serialize` and `JsonSchema` alone — not a compile error: `#[input]` still compiles, carrying a `Deserialize` and rules nothing reads |
     | any other item that was `#[doc(hidden)]` at a crate's root | nothing public: `__private` is not API |
+    | `async_trait` from `nest_rs::http`, `ws`, `graphql`, `guards` or `queue` | `nest_rs::core::async_trait`, or `use nest_rs::prelude::*` |
+    | `input` from `nest_rs::http`, `ws`, `mcp` or `queue` | `nest_rs::core::input`, or `use nest_rs::prelude::*` |
+    | `use nest_rs::guards::prelude::*;` | `use nest_rs::core::{Layer, UnitContext, async_trait, injectable};` and `use nest_rs::guards::{Denial, Guard, GuardFor};` — the names the guard uses |
+    | `nest_rs::http::{current_request_scope, with_request_scope}` | `nest_rs::core::{current_request_scope, with_request_scope}` |
+    | `nest_rs::http::{version_path, versions_declare, join_path, normalize_mount_path, literal_mount_path, declared_versions}` | nothing public: `#[controller]`, `#[gateway]` and the framework's own mounts call them |
+    | `nest_rs::ws::{ReplyValue, ReplyOutcome, ErrorReport, HandlerFailed}` and their fallbacks, `nest_rs::ws::target` | nothing public: `#[messages]` emits them; a handler returns its value or its `Result` |
+    | `nest_rs::ws::nest_rs_http::…` | `nest_rs::http::…`, which the `ws` feature turns on |
+    | `nest_rs::guards::GuardSpecs(vec![…])`, `nest_rs::pipes::PipeSpecs(vec![…])` seeded by hand | `App::builder().use_guards_global([…])`, `.use_pipes_global([…])` |
+    | `nest_rs::mcp::hosts_on(container, path)` | `Discovery::new(container).meta::<McpHostMeta>()`, filtered on `meta.path()` |
+    | `nest_rs::mcp::current_container()` in a tool's body | an `#[inject]`ed field on the `#[mcp]` host, or a `Scoped<T>` parameter |
+    | `nest_rs::schedule::nest_rs_database::TransactionPolicy` | `nest_rs::database::TransactionPolicy`, which the `schedule` feature turns on |
     | `Correlation::mint()` | `Correlation::minted(None)` |
     | `TlsConfig`, `CorsConfig`, `SecurityHeadersConfig` | `HttpTls`, `HttpCors`, `HttpSecurityHeaders` |
     | `method.retries`, `method.queue` on a `ProcessMethod` | `method.options().retries()`, `method.queue()` |
@@ -1278,6 +1289,15 @@ lists what the boot, a log or the wire shows when one is missed.
   included, which never said it in 6.x. An app that reads no config gets no
   `Environment`: a provider injecting it, or a test overriding it, is refused
   at boot naming the type — read `Environment::from_env()` there.
+- **`async_trait` or `input` imported from an edge** — `nest_rs::http`,
+  `ws`, `graphql`, `guards`, `queue` or `mcp` — fails to compile:
+
+  ```text frame="terminal"
+  error[E0432]: unresolved import `nest_rs::http::async_trait`
+  ```
+
+  Import it from `nest_rs::core`, its one path, or through
+  `nest_rs::prelude::*`; `nest_rs::guards::prelude` is gone the same way.
 - **`McpOptions`, or `posture: Posture::InBand` on it,** fails to compile:
   `McpModule::for_root` takes an `McpIdentity`, an `McpAccess` or an
   `McpConfig`, alone or as a tuple, and `McpAccess` has `Gated` and `Public`

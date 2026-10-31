@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use nest_rs_authn::{AuthError, Strategy, basic_credentials};
-use nest_rs_core::injectable;
-use nest_rs_http::{Request, async_trait};
+use nest_rs_core::{async_trait, injectable};
+use nest_rs_http::Request;
 
 use crate::config::OAuthServerConfig;
 use crate::registry::{AuthenticatedClient, authenticate_against_registry};

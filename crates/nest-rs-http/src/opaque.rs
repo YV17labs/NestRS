@@ -3,8 +3,8 @@
 //!
 //! ```
 //! # use std::sync::Arc;
-//! # use nest_rs_core::{injectable, module};
-//! # use nest_rs_http::{Json, Opaque, Path, Result, StatusCode, controller, input, routes};
+//! # use nest_rs_core::{injectable, input, module};
+//! # use nest_rs_http::{Json, Opaque, Path, Result, StatusCode, controller, routes};
 //! # use nest_rs_testing::TestApp;
 //! # #[input]
 //! # struct Report {

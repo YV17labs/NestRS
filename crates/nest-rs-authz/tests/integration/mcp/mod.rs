@@ -2,9 +2,8 @@
 
 mod mask;
 
-use nest_rs_core::{Layer, Module, injectable};
+use nest_rs_core::{Layer, Module, async_trait, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool_as;
 

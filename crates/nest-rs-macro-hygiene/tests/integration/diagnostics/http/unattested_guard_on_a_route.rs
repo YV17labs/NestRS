@@ -5,8 +5,8 @@
 //! bound it would run beside a verb on a view its decision was never written
 //! for.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
-use nest_rs::guards::{Denial, Guard, async_trait};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard};
 use nest_rs::http::{controller, routes};
 
 #[injectable]

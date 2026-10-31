@@ -2,11 +2,10 @@
 //! `/graphql` request reaches a GraphQL resolver — end-to-end through the
 //! harness.
 
-use nest_rs_core::{AmbientValue, Layer, injectable, module};
+use nest_rs_core::{AmbientValue, Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Context;
 use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, SeedLifetime, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
 
 #[derive(Clone)]
@@ -392,13 +391,14 @@ async fn a_request_denial_keeping_its_cause_files_the_chain() {
 /// they read, a seed forwards it into the operation's context, and a refusal is
 /// the edge's problem document, its reason the `detail`.
 mod the_endpoint_guards_speak_the_request_vocabulary {
+    use nest_rs_core::async_trait;
     use nest_rs_core::{AmbientValue, Container, Layer, UnitContext, injectable, module};
     use nest_rs_graphql::async_graphql::{Context, Request as GqlRequest, Result as GqlResult};
     use nest_rs_graphql::{
         GraphqlContextSeed, GraphqlModule, GraphqlView, SeedLifetime, operations, resolver,
     };
     use nest_rs_guards::{Denial, Guard, GuardFor};
-    use nest_rs_http::{EndpointGuards, HttpView, Request, async_trait};
+    use nest_rs_http::{EndpointGuards, HttpView, Request};
     use nest_rs_testing::TestApp;
 
     #[derive(Clone)]

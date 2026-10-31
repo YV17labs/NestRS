@@ -367,7 +367,7 @@ impl HttpControllerMeta {
     }
 
     /// The versions this controller mounts under, as
-    /// [`version_path`](crate::version_path) wants them: one `None` when it is
+    /// [`version_path`](crate::transport::version_path) wants them: one `None` when it is
     /// unversioned, otherwise one `Some(v)` per declared version.
     pub fn mounted_versions(&self) -> impl Iterator<Item = Option<&'static str>> + '_ {
         // Yielding nothing for an unversioned controller would unmount it.
@@ -380,7 +380,7 @@ impl HttpControllerMeta {
     /// Mount prefix for one of [`mounted_versions`](Self::mounted_versions)
     /// (`/v1/users`, or `/users` for `None`).
     pub fn effective_prefix(&self, version: Option<&str>) -> String {
-        crate::version_path(version, self.path)
+        crate::transport::version_path(version, self.path)
     }
 
     /// Whether `route` is served under `version`. An undecorated route serves
@@ -515,13 +515,13 @@ mod tests {
 
     #[test]
     fn versions_declare_accepts_a_subset_and_refuses_a_stranger() {
-        assert!(crate::versions_declare(&["1", "2"], &["2"]));
-        assert!(crate::versions_declare(&["1", "2"], &["1", "2"]));
-        assert!(crate::versions_declare(&["1"], &[]));
-        assert!(!crate::versions_declare(&["1", "2"], &["3"]));
-        assert!(!crate::versions_declare(&[], &["1"]));
+        assert!(crate::transport::versions_declare(&["1", "2"], &["2"]));
+        assert!(crate::transport::versions_declare(&["1", "2"], &["1", "2"]));
+        assert!(crate::transport::versions_declare(&["1"], &[]));
+        assert!(!crate::transport::versions_declare(&["1", "2"], &["3"]));
+        assert!(!crate::transport::versions_declare(&[], &["1"]));
         // Length-first comparison must not report a prefix as equal.
-        assert!(!crate::versions_declare(&["1"], &["11"]));
+        assert!(!crate::transport::versions_declare(&["1"], &["11"]));
     }
 
     fn show_parts() -> HttpRouteParts {

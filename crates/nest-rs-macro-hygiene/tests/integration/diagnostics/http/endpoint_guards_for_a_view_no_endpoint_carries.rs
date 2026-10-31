@@ -2,8 +2,8 @@
 //! a gateway's messages take their guards from `#[use_guards]`, never from an
 //! `EndpointGuards`.
 
-use nest_rs::core::{Layer, UnitContext, injectable, module};
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable, module};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::{EndpointGuards, HttpView};
 use nest_rs::ws::WsView;
 

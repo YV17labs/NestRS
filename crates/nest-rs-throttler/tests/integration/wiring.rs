@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{App, Layer, MissingDependencyError, injectable, module};
+use nest_rs_core::{App, Layer, MissingDependencyError, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
+use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule, ThrottlerStore};
 
 #[controller(path = "/limited")]

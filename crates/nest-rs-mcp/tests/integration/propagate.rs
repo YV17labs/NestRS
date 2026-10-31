@@ -1281,7 +1281,7 @@ async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
 
 const REPORTING: &str = "/mcp/reporting";
 
-#[nest_rs_mcp::input]
+#[nest_rs_core::input]
 struct AmountArgs {
     amount: u64,
 }

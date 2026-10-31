@@ -3,16 +3,15 @@
 //! fails without saying why — one document, its class's `code` and no `detail` —
 //! on every path an `Err` is rendered by.
 
-use nest_rs_core::problem::code;
 use nest_rs_core::{
     App, Interceptor, Layer, Module, Next, Outcome, Problem, ToProblem, Transport, UnitContext,
     injectable, interceptor, module,
 };
+use nest_rs_core::{async_trait, input, problem::code};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{
     Form, HttpConfig, HttpError, Json, Opaque, ProblemDetails, Query, RawBody, ResponseError,
-    Result, SseEvent, SseStream, async_trait, controller, futures_util::stream, input,
-    problem_error, routes,
+    Result, SseEvent, SseStream, controller, futures_util::stream, problem_error, routes,
 };
 use nest_rs_testing::TestClient;
 use serde::{Deserialize, Serialize};

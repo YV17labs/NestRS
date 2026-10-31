@@ -43,12 +43,15 @@ mod transport;
 mod versioning;
 mod websocket;
 
-use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+use nest_rs_core::{
+    __private::{HandlerDeclaration, MetaLevels, declare_handler},
+    async_trait,
+};
 use nest_rs_core::{
     App, Handler, Layer, Module, Posture, Transport, UnitContext, injectable, module,
 };
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{HttpConfig, HttpTransport, HttpView, async_trait, controller, routes};
+use nest_rs_http::{HttpConfig, HttpTransport, HttpView, controller, routes};
 use nest_rs_testing::TestClient;
 
 /// The suite's own self-mounts.

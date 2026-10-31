@@ -9,10 +9,9 @@
 //! A `#[resource]` read takes the same gate and mask, inside its `Option`.
 
 use nest_rs_authz::{AbilityBuilder, Action, Read};
-use nest_rs_core::{Layer, injectable, input, module};
+use nest_rs_core::{Layer, async_trait, injectable, input, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::EndpointGuards;
-use nest_rs_http::async_trait;
 use nest_rs_mcp::McpView;
 use nest_rs_mcp::{Json, McpError, mcp, tools};
 use nest_rs_testing::mcp::{call_method_with, open_session_with};

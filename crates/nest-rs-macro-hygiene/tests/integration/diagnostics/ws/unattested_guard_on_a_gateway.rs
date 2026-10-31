@@ -10,8 +10,8 @@
 //! *does* check HTTP, refused per message where `check` is what runs. Between
 //! them the two scopes cannot be confused for one another.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
-use nest_rs::guards::{Denial, Guard, async_trait};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard};
 use nest_rs::ws::{gateway, messages};
 
 #[injectable]

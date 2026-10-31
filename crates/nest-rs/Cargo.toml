@@ -160,7 +160,9 @@ redis-throttler = ["redis", "throttler", "nest-rs-redis/throttler"]
 # The occurrence lock a `replicas = "one"` job claims through
 # (`RedisScheduleModule`).
 redis-schedule = ["redis", "schedule", "nest-rs-redis/schedule"]
-schedule = ["dep:nest-rs-schedule"]
+# A scheduled method's `TransactionPolicy` is the database port's, a crate
+# `nest-rs-schedule` links already.
+schedule = ["dep:nest-rs-schedule", "database"]
 events = ["dep:nest-rs-events"]
 # `Strategy::authenticate` takes a `nest_rs::http::Request` and a custom
 # strategy's neighbouring guard names `nest_rs::guards` — both are types the

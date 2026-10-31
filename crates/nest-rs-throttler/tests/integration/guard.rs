@@ -9,10 +9,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, module};
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, async_trait, module};
 use nest_rs_guards::guard;
 use nest_rs_http::StatusCode;
-use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
+use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_testing::{CapturedEvent, LogCapture, TestApp};
 use nest_rs_throttler::{
     BACKEND_REMEDY, Decision, HIT_TIMEOUT, Throttle, ThrottlerConfig, ThrottlerGuard,

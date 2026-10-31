@@ -4,9 +4,10 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{Edge, Layer, MissingAmbientError, Posture, UnitContext, injectable};
+use nest_rs_core::{
+    Edge, Layer, MissingAmbientError, Posture, UnitContext, async_trait, injectable,
+};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
-use nest_rs_http::async_trait;
 
 use crate::gate::reason;
 use crate::{Ability, AbilityBuilder, AbilityFactory};

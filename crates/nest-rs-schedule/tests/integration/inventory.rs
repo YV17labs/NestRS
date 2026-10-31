@@ -5,7 +5,7 @@ use std::any::TypeId;
 use std::time::Duration;
 
 use nest_rs_core::{JOB_TIMEOUT, injectable};
-use nest_rs_schedule::nest_rs_database::TransactionPolicy;
+use nest_rs_database::TransactionPolicy;
 use nest_rs_schedule::{CronJobMeta, Replicas, RunFn, ScheduledMethod, Trigger, scheduled};
 
 #[injectable]

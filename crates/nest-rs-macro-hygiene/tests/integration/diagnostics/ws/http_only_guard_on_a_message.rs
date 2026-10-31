@@ -5,8 +5,8 @@
 //! the request belongs on the `#[gateway]` struct, whose guards run on the HTTP
 //! upgrade.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::HttpView;
 use nest_rs::ws::{gateway, messages};
 

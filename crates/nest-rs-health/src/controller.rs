@@ -4,9 +4,9 @@ use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::{Container, Discovery};
+use nest_rs_http::__private::{join_path, normalize_mount_path};
 use nest_rs_http::{
-    HeaderValue, HttpConfig, HttpControllerMeta, Response, StatusCode, controller, join_path,
-    normalize_mount_path, routes,
+    HeaderValue, HttpConfig, HttpControllerMeta, Response, StatusCode, controller, routes,
 };
 
 use crate::indicator::{IndicatorStatus, ProbeKind, ProbeReport};

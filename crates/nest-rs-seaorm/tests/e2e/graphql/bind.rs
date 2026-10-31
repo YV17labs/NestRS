@@ -180,9 +180,10 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
 /// context.
 mod ability_of_the_unit {
     use nest_rs_authz::{AbilityBuilder, Action, Read};
+    use nest_rs_core::async_trait;
     use nest_rs_core::{Layer, UnitContext, injectable, module};
     use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, operations, resolver};
-    use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+    use nest_rs_guards::{Denial, Guard, GuardFor};
     use nest_rs_seaorm::{Authorized, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
     use nest_rs_testing::{LogCapture, TestApp};
 

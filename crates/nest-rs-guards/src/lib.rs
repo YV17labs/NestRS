@@ -40,7 +40,8 @@
 //! [`Layer`](nest_rs_core::Layer) impl every guard extends.
 //!
 //! ```
-//! use nest_rs_guards::prelude::*;
+//! use nest_rs_core::{Layer, UnitContext, async_trait, injectable};
+//! use nest_rs_guards::{Denial, Guard, GuardFor};
 //! use nest_rs_http::HttpView;
 //! # mod audit { pub const TARGET: &str = "features::audit"; }
 //!
@@ -98,7 +99,6 @@ mod chain;
 mod denial;
 mod guard;
 mod line;
-pub mod prelude;
 mod reason;
 mod registry;
 mod scope;
@@ -108,10 +108,8 @@ mod validate;
 pub use builder::AppBuilderGuardsExt;
 pub use denial::Denial;
 pub use guard::{Guard, GuardFor, GuardPhase, PrincipalClaim};
-pub use registry::{GuardSpec, GuardSpecs, guard};
+pub use registry::{GuardSpec, guard};
 pub use scope::{GrantedScopes, RequiredScopes};
-// Re-exported so a `Guard` impl needs no `async-trait` dependency of its own.
-pub use async_trait::async_trait;
 
 #[doc(hidden)]
 pub mod __private {
@@ -121,7 +119,9 @@ pub mod __private {
     pub use crate::chain::{GlobalBucket, SiteChainSources, compose_site_chain, split_at_covered};
     pub use crate::denial::denial_of;
     pub use crate::reason::{client_message, denial_code, denial_reason};
-    pub use crate::registry::{global_guards_active, resolve_global_chain, resolve_global_guards};
+    pub use crate::registry::{
+        GuardSpecs, global_guards_active, resolve_global_chain, resolve_global_guards,
+    };
     pub use crate::stage::{RefusalMark, Refused, check_guards};
     pub use crate::validate::{boot_validate_guards, validate_guard_chain, validate_route_chain};
 

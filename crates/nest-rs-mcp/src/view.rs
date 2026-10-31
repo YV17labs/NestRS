@@ -24,9 +24,9 @@ use crate::operation::McpOperationKind;
 /// session is bound to the subject an authentication guard names.
 ///
 /// ```
-/// use nest_rs_core::{Layer, UnitContext, injectable, module};
+/// use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 /// use nest_rs_guards::{Denial, Guard, GuardFor};
-/// use nest_rs_http::{EndpointGuards, HttpView, async_trait};
+/// use nest_rs_http::{EndpointGuards, HttpView};
 /// use nest_rs_mcp::McpView;
 /// # use nest_rs_mcp::{McpError, mcp, tools};
 /// # use nest_rs_testing::TestApp;

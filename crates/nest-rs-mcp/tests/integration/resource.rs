@@ -4,11 +4,11 @@
 
 use std::sync::Mutex;
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs_core::{Layer, async_trait, injectable, input, module};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_mcp::model::Resource;
 use nest_rs_mcp::rmcp::serde_json::{Value, json};
-use nest_rs_mcp::{Json, McpError, McpOperationKind, input, mcp, tools};
+use nest_rs_mcp::{Json, McpError, McpOperationKind, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{call_method, initialize, open_session, result};
 

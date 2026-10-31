@@ -5,9 +5,9 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use nest_rs_core::module;
+use nest_rs_core::{input, module};
 use nest_rs_http::StatusCode;
-use nest_rs_http::{Form, Json, Path, Query, controller, input, routes};
+use nest_rs_http::{Form, Json, Path, Query, controller, routes};
 use nest_rs_pipes::{ParseArray, Pipe, PipeError, Piped};
 
 use crate::Refuse;

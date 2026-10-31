@@ -6,9 +6,9 @@ use std::sync::Mutex;
 
 use async_graphql::parser::types::OperationType;
 use async_graphql::{Result, SimpleObject};
-use nest_rs_core::{Layer, UnitContext, injectable, module};
+use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::{FieldRole, GraphqlConfig, GraphqlModule, GraphqlView, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, async_trait, guard};
+use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_testing::TestApp;
 
 /// One field as a guard saw it.

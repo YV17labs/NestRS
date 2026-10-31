@@ -89,8 +89,8 @@ impl CheckpointCell {
 ///
 /// ```
 /// # use anyhow::Result;
-/// # use nest_rs_core::injectable;
-/// # use nest_rs_queue::{Checkpoint, ProcessMethod, input, processor, queue};
+/// # use nest_rs_core::{injectable, input};
+/// # use nest_rs_queue::{Checkpoint, ProcessMethod, processor, queue};
 /// # #[input]
 /// # #[derive(Clone)]
 /// # pub struct ImportCommand { pub rows: u32 }

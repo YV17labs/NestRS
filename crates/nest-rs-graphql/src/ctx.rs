@@ -4,9 +4,9 @@
 //! field's own for its body — and no argument of the schema.
 //!
 //! ```
-//! use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, injectable};
+//! use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, async_trait, injectable};
 //! use nest_rs_graphql::{operations, resolver};
-//! use nest_rs_guards::{Denial, Guard, async_trait};
+//! use nest_rs_guards::{Denial, Guard};
 //! use nest_rs_http::HttpView;
 //! # use nest_rs_core::module;
 //! # use nest_rs_graphql::GraphqlModule;

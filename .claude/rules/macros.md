@@ -155,8 +155,8 @@ with a trybuild snapshot per decorator:
 decorator resolves no name, so a renamed `Result` or a type alias must behave
 as the literal does. Behaviour is decided through a type probe —
 `nest_rs_core::__private::Answer` at `#[routes]` and `#[operations]`,
-`nest_rs_mcp::__private::OperationAnswer` at `#[tools]`, `ReplyValue` at
-`#[messages]`, `nest_rs_events::__private::ListenerAnswer` at `#[listeners]`.
+`nest_rs_mcp::__private::OperationAnswer` at `#[tools]`,
+`nest_rs_ws::__private::ReplyValue` at `#[messages]`, `nest_rs_events::__private::ListenerAnswer` at `#[listeners]`.
 What a parameter resolves is read the same way: an extractor that resolves a
 provider implements `nest_rs_core::ResolvesProvider`, and the impl half asks
 `nest_rs_core::__private::ParamProbe` per parameter type — called on

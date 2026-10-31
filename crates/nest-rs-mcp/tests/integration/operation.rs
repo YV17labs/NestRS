@@ -3,8 +3,8 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs_core::{Layer, async_trait, injectable, module};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_mcp::rmcp::serde_json::json;
 use nest_rs_mcp::{McpError, McpOperationKind, mcp, tools};
 use nest_rs_testing::TestApp;

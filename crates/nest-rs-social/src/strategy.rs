@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use nest_rs_authn::{AuthError, JwtService, PrincipalIdentity, Strategy};
-use nest_rs_core::{AmbientValue, injectable};
-use nest_rs_http::{Request, async_trait, header};
+use nest_rs_core::{AmbientValue, async_trait, injectable};
+use nest_rs_http::{Request, header};
 use nest_rs_oauth_client::OAuthClient;
 
 use crate::provider::SocialProfile;
@@ -18,8 +18,7 @@ use crate::registry::SocialRegistry;
 ///
 /// ```
 /// use nest_rs_authn::{AuthError, PrincipalIdentity};
-/// use nest_rs_core::injectable;
-/// use nest_rs_http::async_trait;
+/// use nest_rs_core::{async_trait, injectable};
 /// use nest_rs_social::{SocialProfile, SocialSignIn};
 ///
 /// #[derive(Clone, PrincipalIdentity)]

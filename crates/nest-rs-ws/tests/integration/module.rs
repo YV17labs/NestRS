@@ -224,11 +224,10 @@ async fn a_service_in_a_module_the_gateway_imports_still_resolves_the_registry()
     assert_eq!(notifier.live(), 0, "and it holds a real, empty registry");
 }
 
-use nest_rs_core::{Layer, Transport, injectable};
+use nest_rs_core::{Layer, Transport, async_trait, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_http::{HttpConfig, HttpModule, HttpTransport};
 use nest_rs_testing::LogCapture;
-use nest_rs_ws::async_trait;
-use nest_rs_ws::nest_rs_http::{HttpConfig, HttpModule, HttpTransport};
 
 #[injectable]
 #[derive(Default)]

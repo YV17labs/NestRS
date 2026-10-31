@@ -1,4 +1,4 @@
-use nest_rs::http::input;
+use nest_rs::core::input;
 use uuid::Uuid;
 
 #[input]

@@ -2,8 +2,8 @@
 //! `Anyone`, since on GraphQL a visitor ability cannot satisfy an
 //! `#[authorize]`.
 
-use nest_rs_core::{Layer, UnitContext, injectable};
-use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs_core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 
 /// Authenticates every caller as `crate::Anyone`.
 #[injectable]

@@ -4,9 +4,10 @@
 //! would gate nothing — so each is refused at its attribute.
 
 use nest_rs::core::{
-    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, injectable,
+    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
+    injectable,
 };
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::mcp::{McpView, ServerHandler, mcp};
 
 #[injectable]

@@ -65,13 +65,13 @@ mod gate_order {
 
     use nest_rs_authz::http::Authorize;
     use nest_rs_authz::{AbilityBuilder, Action, Read};
+    use nest_rs_core::async_trait;
     use nest_rs_core::{
         Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, injectable, module,
     };
     use nest_rs_guards::{Denial, Guard, GuardFor};
     use nest_rs_http::{
-        HeaderValue, HttpView, Json, Response, StatusCode, async_trait, controller, crud, header,
-        routes,
+        HeaderValue, HttpView, Json, Response, StatusCode, controller, crud, header, routes,
     };
     use nest_rs_seaorm::CrudService;
     use nest_rs_testing::TestApp;

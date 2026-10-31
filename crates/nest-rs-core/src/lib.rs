@@ -294,6 +294,10 @@ pub use anyhow;
 pub use inventory;
 pub use tracing;
 
+/// The attribute every async trait of the framework is implemented through —
+/// a `Guard`, an `Interceptor`, a `JobProducer` — so an implementation needs
+/// no `async-trait` dependency of its own; the one path to it, beside
+/// `nest_rs::prelude`.
 pub use async_trait::async_trait;
 
 /// Declare application lifecycle hooks on a provider's impl block, for the

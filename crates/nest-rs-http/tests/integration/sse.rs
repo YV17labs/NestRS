@@ -487,7 +487,7 @@ impl VisitFeedController {
         let given = visit.into_inner();
         SseStream::new(stream::iter(1..=3).map(move |n| {
             let resolved =
-                nest_rs_http::current_request_scope().and_then(|scope| scope.get::<Visit>());
+                nest_rs_core::current_request_scope().and_then(|scope| scope.get::<Visit>());
             let which = match resolved {
                 Some(resolved) if Arc::ptr_eq(&resolved, &given) => "the request's",
                 Some(_) => "another",

@@ -380,9 +380,10 @@ async fn the_uri_strategy_document_does_not_move() {
 /// global pool's, its controller's and its own — whatever the guard is named.
 mod guards {
     use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy};
+    use nest_rs_core::async_trait;
     use nest_rs_core::{AmbientValue, Layer, UnitContext, injectable, module};
     use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-    use nest_rs_http::{HttpView, Request, async_trait, controller, routes};
+    use nest_rs_http::{HttpView, Request, controller, routes};
     use nest_rs_testing::TestApp;
     use nest_rs_throttler::ThrottlerGuard as Limit;
     use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};

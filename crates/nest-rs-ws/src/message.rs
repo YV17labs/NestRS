@@ -15,7 +15,8 @@ use nest_rs_core::__private::{
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, Failure, Handler, Outcome, Peer, Settled, UnitContext};
 use nest_rs_guards::Denial;
-use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeSpec, PipeSpecs};
+use nest_rs_pipes::__private::PipeSpecs;
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeSpec};
 
 use crate::envelope::{Rendered, WsError, WsReply, chain_rendered, problem_rendered};
 use crate::gateway::Gateway;

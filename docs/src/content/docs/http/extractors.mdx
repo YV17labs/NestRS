@@ -31,8 +31,8 @@ Works as a return type too — serializes `T`, sets
 the same schema:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::core::output;
-use nest_rs::http::{Json, Path, Result, input};
+use nest_rs::core::{input, output};
+use nest_rs::http::{Json, Path, Result};
 use uuid::Uuid;
 
 #[input]
@@ -55,7 +55,8 @@ to wrap. `Json<T>` is the usual carrier, and `Query<T>`, `Form<T>`, `Path<T>`
 and `Header<T>` answer the same way:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::{Created, Json, Result, input};
+use nest_rs::http::{Created, Json, Result};
+use nest_rs::core::input;
 
 #[input]
 struct CreateUser {

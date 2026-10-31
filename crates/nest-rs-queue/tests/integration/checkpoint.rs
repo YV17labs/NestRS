@@ -7,12 +7,11 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nest_rs_core::Container;
+use nest_rs_core::{Container, async_trait};
 use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
 use nest_rs_queue::__private::nest_rs_database;
 use nest_rs_queue::{
-    Checkpoint, CheckpointStore, QueueError, QueueName, WIRE_FORMAT_VERSION, async_trait,
-    processor, queue,
+    Checkpoint, CheckpointStore, QueueError, QueueName, WIRE_FORMAT_VERSION, processor, queue,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

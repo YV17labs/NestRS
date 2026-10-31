@@ -78,7 +78,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     // `GuardFor<HttpView>`, not the `GuardFor<WsView>` per-event ones owe.
     let capability_bounds = guard_capability_bounds(
         guards.iter(),
-        quote!(::nest_rs_guards::GuardFor<::nest_rs_ws::nest_rs_http::HttpView>),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_ws::__private::nest_rs_http::HttpView>),
     );
 
     let ns_ty = match &namespace {
@@ -138,7 +138,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             /// The address a client connects to — `PATH` with the version folded in.
             #[doc(hidden)]
             pub fn __nestrs_mount_path() -> ::std::string::String {
-                ::nest_rs_ws::nest_rs_http::version_path(Self::VERSION, Self::PATH)
+                ::nest_rs_ws::__private::nest_rs_http::__private::version_path(Self::VERSION, Self::PATH)
             }
 
             /// The upgrade-scope guards, as the specs the boot check reads.

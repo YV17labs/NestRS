@@ -5,9 +5,8 @@ use nest_rs_config::{ConfigModule, ConfigSetup};
 use nest_rs_core::{
     Collecting, Container, ContainerBuilder, Handler, Module, Posture, Registering, Unnamed,
 };
-use nest_rs_http::{
-    HttpEndpointMeta, HttpModule, Method, declare_endpoint, join_path, version_path,
-};
+use nest_rs_http::__private::{join_path, version_path};
+use nest_rs_http::{HttpEndpointMeta, HttpModule, Method, declare_endpoint};
 
 use crate::config::OpenApiConfig;
 use crate::document::{Reported, build_document, versioned_documents};

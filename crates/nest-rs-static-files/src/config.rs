@@ -66,7 +66,7 @@ impl Default for StaticFilesConfig {
 /// The mount path, held to a literal the router matches as written.
 fn mount_path(env: &ConfigService, key: &str, base: String) -> Result<String> {
     let path = env.get(key)?.unwrap_or(base);
-    nest_rs_http::literal_mount_path(&path).ok_or_else(|| {
+    nest_rs_http::__private::literal_mount_path(&path).ok_or_else(|| {
         ConfigError::parse(
             env.var_name(key),
             "must be a literal URL path such as `/` or `/assets`, which the router matches as \

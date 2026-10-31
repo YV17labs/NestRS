@@ -3,9 +3,9 @@
 //! `GuardFor<GraphqlView>` and writing only `check_http` — which would read as a
 //! protection and pass every field — does not compile.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
 use nest_rs::graphql::{GraphqlView, operations, resolver};
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 
 #[injectable]
 #[derive(Layer)]

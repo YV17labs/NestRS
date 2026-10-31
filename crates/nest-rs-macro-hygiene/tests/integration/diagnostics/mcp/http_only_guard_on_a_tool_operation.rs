@@ -9,8 +9,8 @@
 //! scope did not, so deleting either half of `#[tools]`' bound left the pair
 //! proved by the other's snapshot.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::HttpView;
 use nest_rs::mcp::{McpError, mcp, tools};
 

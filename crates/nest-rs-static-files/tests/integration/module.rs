@@ -2,10 +2,10 @@
 //! boot refuses, and where the files sit among routes, the global prefix and
 //! the self-mounts: last, outside the prefix, and public.
 
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::StatusCode;
-use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
+use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 use nest_rs_static_files::{Embedded, StaticFilesConfig, StaticFilesModule};
 use nest_rs_testing::{LogCapture, TestApp};

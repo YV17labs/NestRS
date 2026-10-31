@@ -103,10 +103,8 @@ whose catch-all replaced it.
 | `#[input]` | struct | Shorthand for any type that crosses a wire: `Serialize` + `Deserialize` + `Validate` + `JsonSchema` + `deny_unknown_fields` | [Extractors](/http/extractors/) |
 
 One decorator, one definition — an HTTP body, a GraphQL input, a queue
-payload, a WS message and a tool's arguments all take it. Every surface crate
-re-exports it, so import it from the one the file already uses
-(`nest_rs::http::input`, `nest_rs::queue::input`, `nest_rs::mcp::input`,
-`nest_rs::ws::input`, or `nest_rs::core::input`) — they are the same macro.
+payload, a WS message and a tool's arguments all take it, from one path:
+`nest_rs::core::input`, which `nest_rs::prelude` carries too.
 
 ## GraphQL
 

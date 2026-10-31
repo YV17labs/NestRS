@@ -7,13 +7,11 @@ use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
-    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, injectable,
-    interceptor, module,
+    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
+    injectable, interceptor, module,
 };
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::{
-    HeaderName, HeaderValue, HttpView, Response, StatusCode, async_trait, controller, routes,
-};
+use nest_rs_http::{HeaderName, HeaderValue, HttpView, Response, StatusCode, controller, routes};
 use nest_rs_testing::TestApp;
 use tokio::sync::Mutex;
 

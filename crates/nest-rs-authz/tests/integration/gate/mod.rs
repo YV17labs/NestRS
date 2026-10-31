@@ -10,12 +10,12 @@ mod ws;
 use std::sync::Arc;
 
 use nest_rs_authz::{Ability, AbilityBuilder, Action, Read};
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::StatusCode;
-use nest_rs_http::{HttpView, async_trait, controller, routes};
+use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_mcp::{McpError, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool_as;

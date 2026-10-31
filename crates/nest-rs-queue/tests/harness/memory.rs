@@ -7,10 +7,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
+use nest_rs_core::async_trait;
 use nest_rs_queue::{
     Ask, Capabilities, Capability, CheckpointStore, Delivery, Disposition, Envelope, JobConsumer,
     JobId, JobProducer, LeaseHold, Prepared, ProcessMethod, PushOptions, QueueBackend, QueueError,
-    QueueName, Received, async_trait,
+    QueueName, Received,
 };
 use serde_json::Value;
 use tokio::sync::Notify;

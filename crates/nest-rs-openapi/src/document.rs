@@ -4,10 +4,11 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use nest_rs_core::{Container, Discovery};
-use nest_rs_http::__private::{VersionLocation, route_denial_statuses, version_location};
+use nest_rs_http::__private::{
+    VersionLocation, declared_versions, join_path, route_denial_statuses, version_location,
+};
 use nest_rs_http::{
     HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RouteTemplate,
-    declared_versions, join_path,
 };
 use nest_rs_http::{ProblemDetails, StatusCode, header};
 use schemars::SchemaGenerator;

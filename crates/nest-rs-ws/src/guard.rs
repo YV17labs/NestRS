@@ -159,9 +159,9 @@ pub fn refused_origin(refused: &OriginRefused) {
 #[cfg(test)]
 mod tests {
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+    use nest_rs_core::async_trait;
     use nest_rs_core::layer_chain::LayerSite;
     use nest_rs_core::{AmbientValue, Layer, Posture};
-    use nest_rs_guards::async_trait;
     use serde_json::json;
 
     use super::*;

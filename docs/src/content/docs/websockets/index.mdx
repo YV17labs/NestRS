@@ -241,8 +241,8 @@ window closes is dropped with its socket, and files `cancelled`.
 ## Version the socket
 
 `#[gateway(path = "/ws", version = "1")]` serves at `/v1/ws`. It is the same
-`version` argument `#[controller]` takes, resolved through the same
-`version_path`, because a gateway's mount is an address the client selects —
+`version` argument `#[controller]` takes, prefixed to the path the same way,
+because a gateway's mount is an address the client selects —
 [the edges where it is not](/http/versioning/) refuse the argument with a named
 compile error rather than accept a version nothing could apply.
 

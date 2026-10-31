@@ -33,7 +33,7 @@ use crate::view::McpView;
 
 /// The container serving the current MCP operation, read off the ambient request
 /// scope; `None` outside a dispatch nested under the HTTP transport edge.
-pub fn current_container() -> Option<Container> {
+pub(crate) fn current_container() -> Option<Container> {
     crate::scope::current_scope().map(|scope| scope.root().clone())
 }
 

@@ -7,11 +7,12 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nest_rs_core::{Correlation, Transport, current_trace_id, operation_log, with_request_scope};
+use nest_rs_core::{
+    Correlation, Transport, async_trait, current_trace_id, operation_log, with_request_scope,
+};
 use nest_rs_queue::{
     Capability, Destination, Envelope, JobProducer, JobProducerExt, PushOptions, PushReceipt,
-    Queue, QueueBackend, QueueConfig, QueueError, QueueName, QueueWorker, TARGET, async_trait,
-    unit,
+    Queue, QueueBackend, QueueConfig, QueueError, QueueName, QueueWorker, TARGET, unit,
 };
 use tokio::task::JoinHandle;
 use tokio::time::Instant;

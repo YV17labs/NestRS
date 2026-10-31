@@ -1,14 +1,11 @@
 //! `#[use_guards]` on a `#[resolver]` impl — end-to-end through the in-process
 //! harness.
 
-use nest_rs_core::{AmbientValue, Layer, injectable, module};
+use nest_rs_core::{AmbientValue, Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result, Result as GqlResult};
-use nest_rs_graphql::{
-    GraphqlContextSeed, GraphqlModule, SeedLifetime, async_trait, operations, resolver,
-};
+use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, SeedLifetime, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::StatusCode;
-use nest_rs_http::async_trait as http_async_trait;
 use nest_rs_testing::TestApp;
 
 #[derive(Clone)]
@@ -22,7 +19,7 @@ struct RoleHeaderGuard;
 
 impl Layer for RoleHeaderGuard {}
 
-#[http_async_trait]
+#[async_trait]
 impl Guard for RoleHeaderGuard {
     async fn check_http(
         &self,
@@ -490,10 +487,11 @@ async fn the_app_wide_pool_runs_once_per_root_field_not_per_parent() {
 mod unresolvable {
     use std::any::TypeId;
 
+    use nest_rs_core::async_trait;
     use nest_rs_core::{Container, Layer, injectable, module};
     use nest_rs_graphql::GraphqlConfig;
     use nest_rs_graphql::async_graphql::{Executor, Request, Result};
-    use nest_rs_graphql::{async_trait, operations, resolver};
+    use nest_rs_graphql::{operations, resolver};
     use nest_rs_guards::{Denial, Guard, GuardFor};
     use nest_rs_testing::LogCapture;
 
@@ -596,9 +594,10 @@ mod unresolvable {
 mod owned_chain {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use nest_rs_core::async_trait;
     use nest_rs_core::{Layer, injectable, module};
     use nest_rs_graphql::async_graphql::Result;
-    use nest_rs_graphql::{GraphqlModule, async_trait, operations, resolver};
+    use nest_rs_graphql::{GraphqlModule, operations, resolver};
     use nest_rs_guards::{Denial, Guard, GuardFor};
     use nest_rs_http::StatusCode;
     use nest_rs_testing::TestApp;
@@ -683,8 +682,9 @@ mod owned_chain {
 /// admitting, it gates the `/graphql` request and every field it carries
 /// answers; in `check`, it runs on each field too, which has no HTTP view.
 mod request_decided {
+    use nest_rs_core::async_trait;
     use nest_rs_core::{Layer, UnitContext, injectable, module};
-    use nest_rs_graphql::{GraphqlModule, async_trait, operations, resolver};
+    use nest_rs_graphql::{GraphqlModule, operations, resolver};
     use nest_rs_guards::{Denial, Guard, GuardSpec, guard};
     use nest_rs_http::{HttpView, StatusCode};
     use nest_rs_testing::{LogCapture, TestApp, TestResponse};

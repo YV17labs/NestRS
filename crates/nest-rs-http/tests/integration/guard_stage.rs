@@ -6,11 +6,14 @@ use std::any::TypeId;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler};
+use nest_rs_core::{
+    __private::{HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler},
+    async_trait,
+};
 use nest_rs_core::{Handler, Layer, LayerSite, Posture, UnitContext};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::behind_guards;
-use nest_rs_http::{BoxEndpoint, Endpoint, Request, Response, async_trait, endpoint_fn};
+use nest_rs_http::{BoxEndpoint, Endpoint, Request, Response, endpoint_fn};
 use nest_rs_testing::LogCapture;
 
 struct Mount;

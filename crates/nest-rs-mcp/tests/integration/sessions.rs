@@ -60,7 +60,7 @@ impl PrincipalIdentity for Named {
 #[derive(Default)]
 struct ByName;
 
-#[nest_rs_http::async_trait]
+#[nest_rs_core::async_trait]
 impl Strategy for ByName {
     type Principal = Named;
 
@@ -579,7 +579,7 @@ impl HeldStore {
     }
 }
 
-#[nest_rs_http::async_trait]
+#[nest_rs_core::async_trait]
 impl SessionStore for HeldStore {
     async fn load(&self, session: &str) -> Result<Option<SessionState>, SessionStoreError> {
         if self.hold_next.swap(false, Ordering::SeqCst) {

@@ -555,7 +555,7 @@ impl Transport for HttpTransport {
             && selector.rewrites()
             && let Some(default) = selector.default_version()
         {
-            let declared = crate::declared_versions(container);
+            let declared = crate::versioning::declared_versions(container);
             if !declared.iter().any(|v| v == default) {
                 let var = nest_rs_config::var_name("http", "DEFAULT_VERSION");
                 anyhow::bail!(match declared.is_empty() {
@@ -742,7 +742,7 @@ impl Transport for HttpTransport {
                     versioned_routes,
                     self_mounts,
                     unversioned_routes,
-                    crate::declared_versions(container),
+                    crate::versioning::declared_versions(container),
                 )
                 .under(prefix.as_deref());
             // An inert selector changes nothing and costs a layer on the hot path.

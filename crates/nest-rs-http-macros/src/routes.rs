@@ -828,7 +828,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             wrappers.push(quote_spanned! {span=>
                 #(#cfgs)*
                 const _: () = ::core::assert!(
-                    ::nest_rs_http::versions_declare(<#self_ty>::VERSIONS, #route_versions),
+                    ::nest_rs_http::__private::versions_declare(<#self_ty>::VERSIONS, #route_versions),
                     #message,
                 );
             });
@@ -983,7 +983,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         route_entries.push(quote! {
             {
                 #[allow(unused_variables)]
-                let __path = ::nest_rs_http::join_path(&__prefix, #path);
+                let __path = ::nest_rs_http::__private::join_path(&__prefix, #path);
                 #(#arms)*
             }
         });
@@ -1040,7 +1040,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             };
                         for __version in __versions {
                             let __prefix =
-                                ::nest_rs_http::version_path(__version, <#self_ty>::PATH);
+                                ::nest_rs_http::__private::version_path(__version, <#self_ty>::PATH);
                             #(#route_entries)*
                         }
                     },

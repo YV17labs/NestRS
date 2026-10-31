@@ -161,20 +161,13 @@ pub mod __private {
     pub use serde_json;
 }
 
-// Backends implement this crate's async traits without depending on it.
-pub use async_trait::async_trait;
-
-/// The wire-DTO shorthand, so a payload crossing this transport needs no `serde`
-/// of its own.
-pub use nest_rs_core::input;
-
 /// Orchestrator on an `#[injectable]` provider's `impl` block. Each method
 /// tagged with `#[process(queue = <Queue>, …)]` becomes a queue consumer — a
 /// [`ProcessMethod`] — that a backend's worker transport drains at boot.
 ///
 /// ```
-/// use nest_rs_core::injectable;
-/// use nest_rs_queue::{ProcessMethod, Queue, input, processor, queue};
+/// use nest_rs_core::{injectable, input};
+/// use nest_rs_queue::{ProcessMethod, Queue, processor, queue};
 ///
 /// #[input]
 /// #[derive(Clone)]
@@ -212,7 +205,8 @@ pub use nest_rs_queue_macros::processor;
 ///
 /// ```
 /// # use std::any::TypeId;
-/// # use nest_rs_queue::{Destination, Queue, input, queue};
+/// # use nest_rs_queue::{Destination, Queue, queue};
+/// # use nest_rs_core::input;
 /// # #[input]
 /// # #[derive(Clone)]
 /// # pub struct TranscodeCommand {

@@ -17,7 +17,7 @@ static ELSEWHERE: QueueBackend = QueueBackend::new("elsewhere", Capabilities::NO
 /// Another backend's producer — what a second queue binding would declare.
 struct ElsewhereProducer;
 
-#[nest_rs_queue::async_trait]
+#[nest_rs_core::async_trait]
 impl JobProducer for ElsewhereProducer {
     fn backend(&self) -> &'static QueueBackend {
         &ELSEWHERE

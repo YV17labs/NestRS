@@ -32,8 +32,8 @@ impl PostsV1Controller {
 ```
 
 Routes mount under `/v1/posts`. The boot log, the OpenAPI document and the
-served path all route through the same `version_path` helper, so under the
-default strategy they cannot drift:
+served path all build that path the same way, so under the default strategy
+they cannot drift:
 
 ```bash frame="terminal"
 $ nestrs run dev api

@@ -63,7 +63,7 @@ where
         );
         return Err(Unbound::Unwired);
     };
-    let Some(scope) = nest_rs_http::current_request_scope() else {
+    let Some(scope) = nest_rs_core::current_request_scope() else {
         tracing::error!(
             target: crate::target::ORM,
             provider = type_name::<S>(),

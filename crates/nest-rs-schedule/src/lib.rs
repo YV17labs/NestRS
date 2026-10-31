@@ -36,9 +36,6 @@ pub use inventory::{CronJobMeta, RunFn, ScheduledMethod};
 pub use module::ScheduleModule;
 pub use occurrence::{BACKEND_REMEDY, LOCK_TIMEOUT, Occurrence, OccurrenceClaim, OccurrenceLock};
 pub use replicas::Replicas;
-// The path `#[every]` / `#[cron]` / `#[after]` emit their `TransactionPolicy`
-// through.
-pub use nest_rs_database;
 pub use scheduler::Scheduler;
 pub use trigger::{CronExpression, Trigger};
 pub use view::ScheduleView;
@@ -49,6 +46,7 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::inventory::{ScheduledMethodParts, scheduled_method};
+    pub use nest_rs_database;
 }
 
 /// Orchestrator on a provider's `impl` block: each `#[every]`, `#[after]` or

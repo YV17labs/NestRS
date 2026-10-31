@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::{Container, DuplicateMetaError, Transport, injectable};
-use nest_rs_schedule::nest_rs_database::{
+use nest_rs_database::{
     self, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec,
 };
 use nest_rs_schedule::{

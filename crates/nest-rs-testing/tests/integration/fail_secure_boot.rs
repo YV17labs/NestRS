@@ -3,11 +3,11 @@
 //! controllers on one prefix, fail the boot.
 
 use nest_rs_core::{
-    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, exception_filter,
-    injectable, interceptor, module,
+    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
+    exception_filter, injectable, interceptor, module,
 };
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_http::{controller, routes};
 use nest_rs_pipes::{GlobalPipe, pipe};
 use nest_rs_testing::{HeadlessApp, TestApp};
 

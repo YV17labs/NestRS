@@ -3,8 +3,8 @@
 //! disagree on the winner: the `match` keeps the first method, the chain table
 //! keeps the second method's guards, so the first ran under the second's chain.
 
-use nest_rs::core::{Layer, UnitContext, injectable};
-use nest_rs::guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::ws::{WsView, gateway, messages};
 
 #[injectable]

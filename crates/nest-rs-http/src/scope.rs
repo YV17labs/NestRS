@@ -54,7 +54,7 @@ impl<T: Send + Sync + 'static> Scoped<T> {
     /// `T` from the running request's scope, or a miss, the type filed at
     /// `error`.
     fn resolve() -> Option<Self> {
-        let Some(scope) = crate::current_request_scope() else {
+        let Some(scope) = nest_rs_core::current_request_scope() else {
             tracing::error!(
                 target: crate::target::HTTP,
                 provider = type_name::<T>(),
@@ -127,7 +127,7 @@ mod tests {
 
     async fn in_scope<F: std::future::Future>(container: Container, extract: F) -> F::Output {
         let scope = Arc::new(RequestScope::new(container));
-        crate::with_request_scope(Some(scope), Correlation::minted(None), extract).await
+        nest_rs_core::with_request_scope(Some(scope), Correlation::minted(None), extract).await
     }
 
     #[tokio::test]

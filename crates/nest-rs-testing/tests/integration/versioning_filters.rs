@@ -8,11 +8,9 @@ use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
-    Caught, ExceptionFilter, Layer, UnitContext, exception_filter, injectable, module,
+    Caught, ExceptionFilter, Layer, UnitContext, async_trait, exception_filter, injectable, module,
 };
-use nest_rs_http::{
-    HttpView, IntoResponse, ProblemDetails, StatusCode, async_trait, controller, routes,
-};
+use nest_rs_http::{HttpView, IntoResponse, ProblemDetails, StatusCode, controller, routes};
 use nest_rs_testing::TestApp;
 use tokio::sync::Mutex;
 

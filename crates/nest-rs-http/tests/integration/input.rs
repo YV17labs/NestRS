@@ -1,6 +1,7 @@
 //! `#[input]` carries every derive an HTTP wire DTO needs.
 
-use nest_rs_http::{IntoResponse, Json, input};
+use nest_rs_core::input;
+use nest_rs_http::{IntoResponse, Json};
 use schemars::JsonSchema;
 use validator::Validate;
 

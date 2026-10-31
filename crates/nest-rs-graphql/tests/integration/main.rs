@@ -30,8 +30,8 @@ mod subscription;
 mod unit;
 mod view;
 
-use nest_rs_core::{Layer, UnitContext, injectable};
-use nest_rs_guards::{Denial, Guard, GuardFor, async_trait};
+use nest_rs_core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 
 /// What a store refusing the connection reports: the cause a guard keeps.
 #[derive(Debug)]

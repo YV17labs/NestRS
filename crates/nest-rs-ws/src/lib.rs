@@ -8,9 +8,8 @@
 //!
 //! ```
 //! use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};
-//! # use nest_rs_core::{Layer, injectable};
+//! # use nest_rs_core::{Layer, async_trait, injectable, input};
 //! # use nest_rs_guards::{Guard, GuardFor};
-//! # use nest_rs_ws::{async_trait, input};
 //! #
 //! # #[injectable]
 //! # #[derive(Default)]
@@ -121,8 +120,8 @@
 //!
 //! # Versioning the mount
 //!
-//! `#[gateway(path = "/ws", version = "1")]` serves at `/v1/ws`, through
-//! [`nest_rs_http::version_path`] as `#[controller]` does. Two gateways may share
+//! `#[gateway(path = "/ws", version = "1")]` serves at `/v1/ws`, the version
+//! prefixed to the path as `#[controller]` prefixes it. Two gateways may share
 //! a path under two versions; sharing a path *and* a version fails boot.
 //!
 //! **A gateway is selected by URI only**: under `<PREFIX>_HTTP__VERSIONING`'s
@@ -162,15 +161,6 @@
 /// This crate's span target — the WebSocket edge: upgrades, connections, message dispatch.
 pub const TARGET: &str = "nest_rs::ws";
 
-/// The two targets this crate **emits on but does not own**, re-exported so
-/// `nest-rs-ws-macros` reaches them through its own surface crate.
-pub mod target {
-    /// Layer composition and scope resolution, owned by `nest-rs-core`.
-    pub use nest_rs_core::target::LAYERS;
-    /// Mounted addresses, owned by `nest-rs-http`, which serves the upgrade.
-    pub use nest_rs_http::target::ROUTES;
-}
-
 mod config;
 mod ctx;
 mod envelope;
@@ -188,10 +178,7 @@ pub mod unit;
 mod view;
 
 pub use config::WsConfig;
-pub use envelope::{
-    ErrorReport, ErrorReportChain, ErrorReportFallback, ErrorReportLocal, HandlerFailed,
-    ReplyOutcome, ReplyValue, ReplyValueFallback, WsEnvelope, WsError, WsProblemType, WsReply,
-};
+pub use envelope::{WsEnvelope, WsError, WsProblemType, WsReply};
 pub use gateway::Gateway;
 pub use guard::denial_to_ws_error;
 pub use module::{WsModule, WsSetup};
@@ -207,7 +194,10 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::ctx::ctx_parameter;
-    pub use crate::envelope::decode_payload;
+    pub use crate::envelope::{
+        ErrorReport, ErrorReportChain, ErrorReportFallback, ErrorReportLocal, HandlerFailed,
+        ReplyOutcome, ReplyValue, ReplyValueFallback, decode_payload,
+    };
     pub use crate::gateway::{GATEWAY_LABEL, gateway_endpoint, wire_gateway};
     pub use crate::guard::{MessageGuards, message_guard_stage, refused_origin};
     pub use crate::message::{DeclaredMessage, MessageTable};
@@ -215,10 +205,17 @@ pub mod __private {
     pub use crate::scope::scoped_parameter;
     pub use nest_rs_pipes::__private::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
     pub use nest_rs_pipes::{GlobalPipe, PipeSpec};
+
+    // So a crate on this one alone reaches the HTTP edge the upgrade rides.
+    pub use nest_rs_http;
+
+    /// The targets this crate emits on but does not own.
+    pub mod target {
+        pub use nest_rs_core::target::LAYERS;
+        pub use nest_rs_http::target::ROUTES;
+    }
 }
 
-// Re-exported so macro-generated code resolves these through the framework.
-pub use async_trait::async_trait;
 /// The JSON a message's `data` is, re-exported so a gateway, a guard or a
 /// broadcast names `serde_json::Value` without its own dependency.
 pub use serde_json;
@@ -237,13 +234,6 @@ pub use tracing;
 /// assert_eq!(u16::from(CloseCode::from(4409)), 4409);
 /// ```
 pub use nest_rs_http::__private::websocket::CloseCode;
-
-// Re-exported so a WS-only crate needs no direct `nest-rs-http` dependency.
-pub use nest_rs_http;
-
-/// The wire-DTO shorthand, so a payload crossing this transport needs no
-/// `serde` of its own.
-pub use nest_rs_core::input;
 
 /// Bind a `#[gateway]` impl block's message handlers.
 ///

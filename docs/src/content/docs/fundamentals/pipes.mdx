@@ -92,7 +92,8 @@ wherever it is decoded. `#[input]` carries the `Validate` derive, so the rules
 on the DTO are the whole declaration:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::{Created, Json, Result, input};
+use nest_rs::http::{Created, Json, Result};
+use nest_rs::core::input;
 
 #[input]
 pub struct CreateUser {

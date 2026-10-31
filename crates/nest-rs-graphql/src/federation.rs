@@ -29,8 +29,8 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::anyhow;
 use nest_rs_core::{Container, Handler, Posture};
+use nest_rs_guards::__private::GuardSpecs;
 use nest_rs_guards::__private::resolve_global_chain;
-use nest_rs_guards::GuardSpecs;
 
 use crate::config::GraphqlConfig;
 use crate::error::{FieldFailure, Unserved, opaque_error};

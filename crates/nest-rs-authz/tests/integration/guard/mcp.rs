@@ -7,9 +7,9 @@
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{EndpointGuards, async_trait};
+use nest_rs_http::EndpointGuards;
 use nest_rs_mcp::{McpAccess, McpError, McpModule, McpView, mcp, tools};
 use nest_rs_testing::{LogCapture, TestApp, mcp::call_tool};
 

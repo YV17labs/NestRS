@@ -21,8 +21,8 @@ pub type GuardSpec = LayerSpec<dyn Guard>;
 /// guards run on every request across all transports.
 ///
 /// ```
-/// # use nest_rs_core::{App, Layer, UnitContext, injectable, module};
-/// # use nest_rs_guards::{AppBuilderGuardsExt, Denial, Guard, async_trait, guard};
+/// # use nest_rs_core::{App, Layer, UnitContext, async_trait, injectable, module};
+/// # use nest_rs_guards::{AppBuilderGuardsExt, Denial, Guard, guard};
 /// # #[injectable]
 /// # #[derive(Default)]
 /// # struct AuthnGuard;

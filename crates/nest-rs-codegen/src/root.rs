@@ -380,8 +380,8 @@ fn walk(
                     buf.push(TokenTree::Ident(Ident::new(segment, ident.span())));
                 }
                 i += 3;
-                // One root per path: `::nest_rs_ws::nest_rs_http::X` becomes
-                // `::nest_rs::ws::nest_rs_http::X`.
+                // One root per path: `::nest_rs_ws::__private::nest_rs_http::X`
+                // becomes `::nest_rs::ws::__private::nest_rs_http::X`.
                 while segment_at(trees, i).is_some() {
                     buf.extend(trees[i..i + 3].iter().cloned());
                     i += 3;
@@ -838,8 +838,10 @@ mod tests {
     #[test]
     fn rewrites_only_the_root_of_a_re_exported_path() {
         assert_eq!(
-            rewritten(quote!(::nest_rs_ws::nest_rs_http::HttpEndpointMeta)),
-            quote!(::nest_rs::ws::nest_rs_http::HttpEndpointMeta).to_string()
+            rewritten(quote!(
+                ::nest_rs_ws::__private::nest_rs_http::HttpEndpointMeta
+            )),
+            quote!(::nest_rs::ws::__private::nest_rs_http::HttpEndpointMeta).to_string()
         );
     }
 

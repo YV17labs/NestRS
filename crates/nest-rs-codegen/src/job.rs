@@ -421,7 +421,7 @@ pub fn job_returns_a_result(member: JobDecorator) -> String {
 
 /// The `TransactionPolicy` variant a parsed value selects, rooted at the
 /// surface path re-exporting `nest_rs_database` that the calling macro emits
-/// through (`::nest_rs_queue::__private`, `::nest_rs_schedule`).
+/// through (`::nest_rs_queue::__private`, `::nest_rs_schedule::__private`).
 ///
 /// `None` — the key was not written — is `PerUnit`, spelled out.
 pub fn job_transaction(value: Option<bool>, surface: &TokenStream) -> TokenStream {

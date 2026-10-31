@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use nest_rs_authn::{
     AuthError, AuthnConfig, AuthnGuard, AuthnModule, JwtService, PrincipalIdentity,
 };
-use nest_rs_core::{AmbientValue, Ctx, injectable, module};
-use nest_rs_http::{HttpModule, Json, StatusCode, async_trait, controller, routes};
+use nest_rs_core::{AmbientValue, Ctx, async_trait, injectable, module};
+use nest_rs_http::{HttpModule, Json, StatusCode, controller, routes};
 use nest_rs_oauth_client::{
     AuthorizationRedirect, AuthorizationResponse, OAuthClient, OAuthClientConfig, TokenSet,
 };

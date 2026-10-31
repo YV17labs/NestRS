@@ -5,11 +5,13 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Interceptor, Layer, Next, Outcome, UnitContext, injectable, module};
+use nest_rs_core::{
+    Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable, module,
+};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
-use nest_rs_http::{EndpointGuards, async_trait};
+use nest_rs_http::EndpointGuards;
 use nest_rs_testing::TestApp;
 use tokio::sync::Mutex;
 
@@ -190,6 +192,7 @@ mod pipeline {
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use nest_rs_core::async_trait;
     use nest_rs_core::problem::code;
     use nest_rs_core::{
         Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext,
@@ -198,7 +201,6 @@ mod pipeline {
     use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
     use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
     use nest_rs_graphql::{FieldRole, GraphqlModule, GraphqlView, operations, resolver};
-    use nest_rs_http::async_trait;
     use nest_rs_testing::TestApp;
     use tokio::sync::broadcast;
 

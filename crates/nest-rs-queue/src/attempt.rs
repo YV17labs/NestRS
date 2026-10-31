@@ -14,8 +14,8 @@ use crate::{JobId, QueueName};
 ///
 /// ```
 /// # use anyhow::Result;
-/// # use nest_rs_core::injectable;
-/// # use nest_rs_queue::{Attempt, input, processor, queue};
+/// # use nest_rs_core::{injectable, input};
+/// # use nest_rs_queue::{Attempt, processor, queue};
 /// # #[input]
 /// # #[derive(Clone)]
 /// # pub struct NotifyCommand { pub to: String }

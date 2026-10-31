@@ -147,16 +147,12 @@ async fn a_statement_past_its_bound_is_cancelled_by_postgres() {
         .container()
         .get::<DatabaseConnection>()
         .expect("the pool");
-    let started = std::time::Instant::now();
+    // Run whole, the sleep succeeds: only Postgres cancelling it fails it, so
+    // the failure is the bound's, however long the machine took to say so.
     let cancelled = db
         .execute_unprepared("SELECT pg_sleep(3)")
         .await
         .expect_err("a statement past its bound is cancelled");
-    assert!(
-        started.elapsed() < Duration::from_millis(2500),
-        "{:?}",
-        started.elapsed()
-    );
     assert!(
         cancelled.to_string().contains("statement timeout"),
         "{cancelled}"
@@ -366,6 +362,38 @@ impl ReadsAtShutdown {
 )]
 struct ClosingModule;
 
+/// How long the cut unit's statement runs on: past any stall the test meets,
+/// so its connection is still out whenever the close returns, and cancelled
+/// once the test has read that.
+const OUTLASTS_THE_CLOSE: &str = "SELECT pg_sleep(60)";
+
+/// The server's connections named `name` still running [`OUTLASTS_THE_CLOSE`],
+/// asked from `observer`: cancelled when `cancel` says so, counted otherwise.
+async fn statements_outlasting_the_close(
+    observer: &DatabaseConnection,
+    name: &str,
+    cancel: bool,
+) -> i64 {
+    let selected = if cancel {
+        "count(pg_cancel_backend(pid))"
+    } else {
+        "count(*)"
+    };
+    let row = observer
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            format!(
+                "SELECT {selected} AS running FROM pg_stat_activity \
+                 WHERE application_name = $1 AND state = 'active' AND query = $2"
+            ),
+            [name.into(), OUTLASTS_THE_CLOSE.into()],
+        ))
+        .await
+        .expect("pg_stat_activity answers")
+        .expect("a count is one row");
+    row.try_get::<i64>("", "running").expect("the count")
+}
+
 /// How many of the server's connections named `name` sit idle, asked from
 /// `observer`.
 async fn idle_connections_named(observer: &DatabaseConnection, name: &str) -> i64 {
@@ -416,7 +444,7 @@ async fn the_pool_closes_promptly_while_a_cut_unit_still_holds_a_connection() {
             async {
                 nest_rs_seaorm::__private::current_executor()
                     .expect("the unit's pool")
-                    .execute_unprepared("SELECT pg_sleep(10)")
+                    .execute_unprepared(OUTLASTS_THE_CLOSE)
                     .await
                     .map(drop)
             },
@@ -431,14 +459,14 @@ async fn the_pool_closes_promptly_while_a_cut_unit_still_holds_a_connection() {
     );
     let observer = crate::harness::connect().await;
 
-    let started = std::time::Instant::now();
     app.close().await;
-    let took = started.elapsed();
 
-    assert!(
-        took < Duration::from_secs(2),
-        "the close waited on a connection no unit holds: {took:?}"
+    assert_eq!(
+        statements_outlasting_the_close(&observer, &name, false).await,
+        1,
+        "the close returned while the cut unit still held its connection: it waited on none",
     );
+    statements_outlasting_the_close(&observer, &name, true).await;
     logs.expect_none(
         nest_rs_core::target::LIFECYCLE,
         "resource close abandoned: the shutdown hooks' budget was spent while it waited, and \

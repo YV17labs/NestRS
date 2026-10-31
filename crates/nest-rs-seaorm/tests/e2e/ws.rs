@@ -408,16 +408,20 @@ async fn a_message_whose_statement_is_blocked_is_answered_at_its_deadline() {
         .await
         .expect("the gateway boots over live Postgres");
 
-    let mut socket = app.socket("/ws/unit/blocked").connect().await;
+    // The lock goes only once the message is answered, so the deadline alone
+    // can answer it; the read's bound turns a message waiting on the lock into
+    // a failure rather than a hang.
+    let mut socket = app
+        .socket("/ws/unit/blocked")
+        .timeout(std::time::Duration::from_secs(60))
+        .connect()
+        .await;
     socket.send("write", json!(null)).await;
     BLOCKED_STARTED.notified().await;
-    let sent = std::time::Instant::now();
     let answer = socket.next_envelope().await;
-    let took = sent.elapsed();
-    assert_eq!(answer["data"]["reason"], "timeout", "{answer}");
-    assert!(
-        took < MESSAGE_DEADLINE + std::time::Duration::from_secs(2),
-        "answered at its deadline while the lock is still held, took {took:?}",
+    assert_eq!(
+        answer["data"]["reason"], "timeout",
+        "answered at its deadline while the lock is still held: {answer}"
     );
 
     locker.rollback().await.expect("the lock goes");

@@ -875,10 +875,12 @@ lists what the boot, a log or the wire shows when one is missed.
     | `input` from `nest_rs::http`, `ws`, `mcp` or `queue` | `nest_rs::core::input`, or `use nest_rs::prelude::*` |
     | `use nest_rs::guards::prelude::*;` | `use nest_rs::core::{Layer, UnitContext, async_trait, injectable};` and `use nest_rs::guards::{Denial, Guard, GuardFor};` — the names the guard uses |
     | `nest_rs::http::{current_request_scope, with_request_scope}` | `nest_rs::core::{current_request_scope, with_request_scope}` |
+    | `nest_rs::opentelemetry::LogFormat` | `nest_rs::core::logging::LogFormat`, the one type it re-exported |
     | `nest_rs::http::{version_path, versions_declare, join_path, normalize_mount_path, literal_mount_path, declared_versions}` | nothing public: `#[controller]`, `#[gateway]` and the framework's own mounts call them |
     | `nest_rs::ws::{ReplyValue, ReplyOutcome, ErrorReport, HandlerFailed}` and their fallbacks, `nest_rs::ws::target` | nothing public: `#[messages]` emits them; a handler returns its value or its `Result` |
     | `nest_rs::ws::nest_rs_http::…` | `nest_rs::http::…`, which the `ws` feature turns on |
     | `nest_rs::guards::GuardSpecs(vec![…])`, `nest_rs::pipes::PipeSpecs(vec![…])` seeded by hand | `App::builder().use_guards_global([…])`, `.use_pipes_global([…])` |
+    | `nest_rs::core::layer_chain::GlobalSpecs` | nothing public: the guards', pipes', interceptors' and exception filters' global pools implement it, and `App::builder().use_*_global([…])` seeds each |
     | `nest_rs::mcp::hosts_on(container, path)` | `Discovery::new(container).meta::<McpHostMeta>()`, filtered on `meta.path()` |
     | `nest_rs::mcp::current_container()` in a tool's body | an `#[inject]`ed field on the `#[mcp]` host, or a `Scoped<T>` parameter |
     | `nest_rs::schedule::nest_rs_database::TransactionPolicy` | `nest_rs::database::TransactionPolicy`, which the `schedule` feature turns on |
@@ -1303,7 +1305,8 @@ lists what the boot, a log or the wire shows when one is missed.
   ```
 
   Import it from `nest_rs::core`, its one path, or through
-  `nest_rs::prelude::*`; `nest_rs::guards::prelude` is gone the same way.
+  `nest_rs::prelude::*`; `nest_rs::guards::prelude` is gone the same way, and
+  `nest_rs::opentelemetry::LogFormat` is `nest_rs::core::logging::LogFormat`.
 - **A provider still injecting `Arc<dyn JobProducer>`** fails the boot: no
   binding registers a backend's contract any more, and the refusal names the
   handle to inject, `Arc<nest_rs::queue::Jobs>`. A `push` still passing a third

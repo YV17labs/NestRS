@@ -248,9 +248,9 @@ pub mod __private {
         InterceptorRegistration, InterceptorStage, register_interceptor,
     };
     pub use crate::layer_chain::__private::{
-        ResolvedLayer, SiteChains, check_specs_resolvable, compose_chain, dedup_bucket,
-        log_effective_chain, refuse_unresolved, report_unresolved, resolve_global_layers,
-        resolve_scoped,
+        GlobalSpecs, ResolvedLayer, SiteChains, check_specs_resolvable, compose_chain,
+        dedup_bucket, log_effective_chain, refuse_unresolved, report_unresolved,
+        resolve_global_layers, resolve_scoped,
     };
     pub use crate::lifecycle::__private::{HookFuture, LifecycleHook, LifecycleUnitOfWork};
     #[cfg(feature = "logging")]

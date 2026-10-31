@@ -1,7 +1,7 @@
-//! `src/ctx.rs`: an `Ambient<T>` parameter reads what a guard attached — the
-//! upgrade's guards for every message, a message's own for its handler — and
-//! is never the payload; absent, the message answers opaquely and files the
-//! type.
+//! `src/ambient.rs`: an `Ambient<T>` parameter reads what a guard attached —
+//! the upgrade's guards for every message, a message's own for its handler —
+//! and is never the payload; absent, the message answers opaquely and files
+//! the type.
 
 use nest_rs_core::{Ambient, AmbientValue, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};

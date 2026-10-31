@@ -6,9 +6,9 @@ use tracing_subscriber::layer::SubscriberExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use nest_rs_core::__private::{ConsoleLayer, install_global_subscriber, log_filter};
-use nest_rs_core::logging::LogSettings;
+use nest_rs_core::logging::{LogFormat, LogSettings};
 
-use crate::config::{LogFormat, OpenTelemetryConfig, say_retired_variables};
+use crate::config::{OpenTelemetryConfig, say_retired_variables};
 use crate::error::OpenTelemetryError;
 
 /// `OpenTelemetryModule` reads this to fail fast rather than register no-op providers

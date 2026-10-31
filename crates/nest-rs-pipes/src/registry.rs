@@ -4,8 +4,9 @@
 use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_core::__private::{check_specs_resolvable, compose_chain, resolve_global_layers};
-use nest_rs_core::layer_chain::GlobalSpecs;
+use nest_rs_core::__private::{
+    GlobalSpecs, check_specs_resolvable, compose_chain, resolve_global_layers,
+};
 use nest_rs_core::{AppBuilder, Container, LayerSpec};
 
 use crate::GlobalPipe;

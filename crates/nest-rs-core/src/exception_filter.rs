@@ -11,8 +11,8 @@ use async_trait::async_trait;
 
 use crate::dispatch::BoxFuture;
 use crate::layer::Layer;
-use crate::layer_chain::__private::ResolvedLayer;
-use crate::layer_chain::{GlobalSpecs, LayerSpec};
+use crate::layer_chain::__private::{GlobalSpecs, ResolvedLayer};
+use crate::layer_chain::LayerSpec;
 use crate::outcome::{Failure, Outcome, Settled};
 use crate::problem::Problem;
 use crate::unit_context::UnitContext;

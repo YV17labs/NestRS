@@ -1,7 +1,7 @@
-//! `src/ctx.rs`: an `Ambient<T>` parameter reads what a guard attached — the
-//! request's guards for every field, a field's own for its body — and is no
-//! argument of the schema; absent, the field answers opaquely and files the
-//! type.
+//! `src/ambient.rs`: an `Ambient<T>` parameter reads what a guard attached —
+//! the request's guards for every field, a field's own for its body — and is
+//! no argument of the schema; absent, the field answers opaquely and files
+//! the type.
 
 use nest_rs_core::{Ambient, AmbientValue, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::SimpleObject;

@@ -366,8 +366,8 @@ impl HttpControllerMeta {
         &self.routes
     }
 
-    /// The versions this controller mounts under, as
-    /// [`version_path`](crate::transport::version_path) wants them: one `None` when it is
+    /// The versions this controller mounts under, each prefixed to its path by
+    /// [`effective_prefix`](Self::effective_prefix): one `None` when it is
     /// unversioned, otherwise one `Some(v)` per declared version.
     pub fn mounted_versions(&self) -> impl Iterator<Item = Option<&'static str>> + '_ {
         // Yielding nothing for an unversioned controller would unmount it.

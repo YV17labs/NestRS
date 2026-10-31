@@ -5,8 +5,8 @@
 use std::process::{Command, Output};
 
 use nest_rs_core::EnvPrefix;
-use nest_rs_core::logging::var;
-use nest_rs_opentelemetry::{LogFormat, OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
+use nest_rs_core::logging::{LogFormat, var};
+use nest_rs_opentelemetry::{OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
 
 use crate::{console_vars, init_under, refused_under};
 

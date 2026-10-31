@@ -338,9 +338,10 @@ A test that does **not** import `OpenTelemetryModule` does not need it.
 ## Reference
 
 - `crates/nest-rs-opentelemetry/` — `OpenTelemetry::init`,
-  `OpenTelemetryConfig`, `OpenTelemetryModule`, `LogFormat`, and the metrics
+  `OpenTelemetryConfig`, `OpenTelemetryModule`, and the metrics
   vocabulary: `Metrics`, `Counter`, `UpDownCounter`, `Histogram`, `Gauge`,
-  `Attribute`, `AttributeValue`, `Describe`.
+  `Attribute`, `AttributeValue`, `Describe`. The console's format,
+  `OpenTelemetryConfig::log_format`, is `nest_rs::core::logging::LogFormat`.
 - `crates/nest-rs-server-timing/` — the `Server-Timing` header middleware.
 
 ## Going further

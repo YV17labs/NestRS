@@ -6,7 +6,7 @@
 //! broadest in, each ordered by [`Layer::priority`](crate::Layer::priority),
 //! declaration order breaking a tie.
 
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 use std::sync::Arc;
 
 use crate::container::Container;
@@ -44,26 +44,27 @@ impl<L: ?Sized> LayerSpec<L> {
     }
 }
 
-/// The container-registered global registry of one Layer-System family
-/// (`GuardSpecs`, `FilterSpecs`, …), read when a chain is composed.
-pub trait GlobalSpecs: Any + Send + Sync {
-    /// The erased layer trait this family's specs resolve to.
-    type Layer: ?Sized;
-
-    /// The registered specs, in declaration order.
-    fn specs(&self) -> &[LayerSpec<Self::Layer>];
-}
-
 /// `layer_chain` is public: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::{Any, TypeId};
     use std::sync::{Arc, Mutex, PoisonError};
 
-    use super::GlobalSpecs;
+    use super::LayerSpec;
     use crate::container::Container;
     use crate::error::UnresolvedLayerError;
     use crate::layer::{Layer, LayerSite};
+
+    /// The container-registered global registry of one Layer-System family
+    /// (the guards', the pipes', the interceptors', the exception filters'),
+    /// read when a chain is composed.
+    pub trait GlobalSpecs: Any + Send + Sync {
+        /// The erased layer trait this family's specs resolve to.
+        type Layer: ?Sized;
+
+        /// The registered specs, in declaration order.
+        fn specs(&self) -> &[LayerSpec<Self::Layer>];
+    }
 
     /// Resolve a family's global registry into [`LayerSite::Global`] entries.
     ///
@@ -254,7 +255,7 @@ pub(crate) mod __private {
     /// it: a site never runs without a layer it declares.
     pub fn resolve_scoped<'s, L: ?Sized + 's>(
         container: &Container,
-        specs: impl IntoIterator<Item = &'s super::LayerSpec<L>>,
+        specs: impl IntoIterator<Item = &'s LayerSpec<L>>,
         source: LayerSite,
         site: &str,
     ) -> Result<Vec<ResolvedLayer<L>>, UnresolvedLayerError> {

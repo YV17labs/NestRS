@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use nest_rs_config::{ClientTls, ConfigError, endpoint_shown};
-use nest_rs_core::logging::LogSettings;
+use nest_rs_core::logging::{LogFormat, LogSettings};
 
 use crate::error::OpenTelemetryError;
 
@@ -136,9 +136,6 @@ impl std::fmt::Debug for OpenTelemetryConfig {
             .finish()
     }
 }
-
-/// The kernel's console format, whose grammar this crate's console shares.
-pub use nest_rs_core::logging::LogFormat;
 
 impl OpenTelemetryConfig {
     /// The defaults, with the console's three settings read from the

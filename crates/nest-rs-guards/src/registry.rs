@@ -5,7 +5,7 @@
 use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_core::__private::{ResolvedLayer, compose_chain, resolve_global_layers};
+use nest_rs_core::__private::{GlobalSpecs, ResolvedLayer, compose_chain, resolve_global_layers};
 use nest_rs_core::{Container, LayerSpec};
 
 use crate::Guard;
@@ -65,7 +65,7 @@ pub fn guard<G: Guard + 'static>() -> GuardSpec {
 /// site and resolves it against the live container.
 pub struct GuardSpecs(pub Vec<GuardSpec>);
 
-impl nest_rs_core::layer_chain::GlobalSpecs for GuardSpecs {
+impl GlobalSpecs for GuardSpecs {
     type Layer = dyn Guard;
     fn specs(&self) -> &[GuardSpec] {
         &self.0

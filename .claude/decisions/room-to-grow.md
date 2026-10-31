@@ -112,3 +112,11 @@ the tier-2 enums: one carrier left one shape, which `piped_input` reads.
 way, in a literal over its base, and a new field stays a minor as a config's
 is; `service_name` and `service_version` became `Option`, the binary's name and
 version when `None` (`telemetry-reads-the-specification.md`).
+
+**2026-10-31 — the newtype list, as tier 1 was trimmed.** `Ctx` is
+`Ambient`, the ambient context's one word (`ambient-carry.md`, 2026-10-31),
+and `GuardSpecs` and `PipeSpecs`, the global pools' holders, moved to their
+crates' `__private` with the trait they implement (`visibility-tiers.md`,
+2026-10-31): tier 2, they leave the list, which reads `Json`, `Query`,
+`Path`, `Form`, `Header`, `Ambient`, `RawBody`, `Scoped`, `Parameters`,
+`Piped`, `Decoded` and `TestResponse`.

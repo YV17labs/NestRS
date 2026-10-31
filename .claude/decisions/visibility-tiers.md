@@ -65,7 +65,9 @@ such link, `nest_rs_mcp::PropagatingHandler`'s builder, now said in words.
 The identity audit found tier 1 holding what only expansions and sibling
 crates call — the WebSocket edge's reply and error probes, which GraphQL and
 MCP already kept here, the HTTP edge's path and version helpers, the global
-pools' spec holders, MCP's `hosts_on` — and `async_trait` reachable at seven
+pools' spec holders and `layer_chain::GlobalSpecs`, the trait they implement
+(cited above as a read path; `layer_chain` stays public for `LayerSpec`),
+MCP's `hosts_on` — and `async_trait` reachable at seven
 paths, `#[input]` at five. With the owner's agreement to break the API before
 7.0 publishes ("Tout faire", 2026-10-28), each moved to its crate's
 `__private`; a whole-crate re-export a macro emits through

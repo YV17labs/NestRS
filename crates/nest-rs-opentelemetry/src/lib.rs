@@ -43,7 +43,7 @@ mod testing;
 
 #[cfg(feature = "otlp")]
 pub use attribute::{Attribute, AttributeValue};
-pub use config::{DEFAULT_METRIC_INTERVAL, LogFormat, OpenTelemetryConfig};
+pub use config::{DEFAULT_METRIC_INTERVAL, OpenTelemetryConfig};
 pub use error::OpenTelemetryError;
 pub use init::{FLUSH_TIMEOUT, OpenTelemetry};
 #[cfg(feature = "otlp")]

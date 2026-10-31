@@ -1296,6 +1296,13 @@ lists what the boot, a log or the wire shows when one is missed.
   variable: a queue of none dropped every span or log record, and the SDK
   lowered the batch to the queue in silence. Write a positive size, the
   batch at most the queue.
+- **An `OTEL_BSP_SCHEDULE_DELAY` or `OTEL_BLRP_SCHEDULE_DELAY` of `0`**, on
+  which the SDK's worker polled its channel without pause, a core per
+  processor, or an **`OTEL_BSP_MAX_QUEUE_SIZE` or `OTEL_BLRP_MAX_QUEUE_SIZE`
+  above 1,048,576**, which the SDK allocates whole when the processor starts,
+  fails the boot naming the variable, the queue's sentence saying what the
+  ceiling costs. Write a delay of 1 ms or more, and a queue within the
+  ceiling.
 - **A zero export timeout** is no limit now, as the specification reads it:
   the processor's bound (`OTEL_BSP_EXPORT_TIMEOUT`,
   `OTEL_METRIC_EXPORT_TIMEOUT`, `OTEL_BLRP_EXPORT_TIMEOUT`, 30 s by default)

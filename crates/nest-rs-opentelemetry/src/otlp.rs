@@ -31,7 +31,7 @@ use nest_rs_config::{
 };
 use nest_rs_core::{AppIdentity, Secret};
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry::{Key, KeyValue, global};
+use opentelemetry::{InstrumentationScope, Key, KeyValue, global};
 use opentelemetry_otlp::{
     Compression, LogExporter, MetricExporter, OTEL_EXPORTER_OTLP_COMPRESSION,
     OTEL_EXPORTER_OTLP_HEADERS, OTEL_EXPORTER_OTLP_LOGS_COMPRESSION,
@@ -49,7 +49,7 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{
     OTEL_BLRP_EXPORT_TIMEOUT, OTEL_BLRP_EXPORT_TIMEOUT_DEFAULT, OTEL_BLRP_MAX_EXPORT_BATCH_SIZE,
     OTEL_BLRP_MAX_QUEUE_SIZE, OTEL_BLRP_MAX_QUEUE_SIZE_DEFAULT, OTEL_BLRP_SCHEDULE_DELAY,
-    SdkLoggerProvider,
+    SdkLogRecord, SdkLoggerProvider,
 };
 use opentelemetry_sdk::metrics::{
     OTEL_METRIC_EXPORT_INTERVAL, PeriodicReader, SdkMeterProvider, Temporality,
@@ -58,7 +58,7 @@ use opentelemetry_sdk::resource::{SdkProvidedResourceDetector, TelemetryResource
 use opentelemetry_sdk::trace::{
     OTEL_BSP_EXPORT_TIMEOUT, OTEL_BSP_EXPORT_TIMEOUT_DEFAULT, OTEL_BSP_MAX_EXPORT_BATCH_SIZE,
     OTEL_BSP_MAX_QUEUE_SIZE, OTEL_BSP_MAX_QUEUE_SIZE_DEFAULT, OTEL_BSP_SCHEDULE_DELAY, Sampler,
-    SdkTracerProvider, SpanLimits, TracerProviderBuilder,
+    SdkTracerProvider, SpanData, SpanLimits, TracerProviderBuilder,
 };
 use opentelemetry_semantic_conventions::{
     SCHEMA_URL,
@@ -182,6 +182,8 @@ impl Signal {
                 queue: OTEL_BSP_MAX_QUEUE_SIZE,
                 batch: OTEL_BSP_MAX_EXPORT_BATCH_SIZE,
                 default_queue: OTEL_BSP_MAX_QUEUE_SIZE_DEFAULT,
+                item: "span",
+                slot_bytes: slot_bytes::<SpanData>(),
             }),
             Self::Metrics => None,
             Self::Logs => Some(BatchProcessor {
@@ -189,6 +191,8 @@ impl Signal {
                 queue: OTEL_BLRP_MAX_QUEUE_SIZE,
                 batch: OTEL_BLRP_MAX_EXPORT_BATCH_SIZE,
                 default_queue: OTEL_BLRP_MAX_QUEUE_SIZE_DEFAULT,
+                item: "log record",
+                slot_bytes: slot_bytes::<Box<(SdkLogRecord, InstrumentationScope)>>(),
             }),
         }
     }
@@ -282,15 +286,30 @@ const MILLISECONDS: &str = "must be a whole number of milliseconds";
 const COUNT: &str = "must be a whole number";
 const SIZE: &str = "must be a positive whole number";
 
+/// The shortest schedule delay, in milliseconds: the SDK's worker waits for
+/// each message no longer than the delay, so on a zero one it polls its
+/// channel without pause.
+const DELAY_FLOOR_MS: u64 = 1;
+
+/// The largest queue a batch processor may hold: the SDK allocates every slot
+/// of it when the processor starts, so a size past what the process holds
+/// aborts the boot naming no variable.
+const QUEUE_CEILING: usize = 1 << 20;
+
 /// The variables a batch processor reads itself — its delay, in
-/// milliseconds, and its queue and batch sizes — and the queue size it takes
-/// when its variable is unset.
+/// milliseconds, and its queue and batch sizes — the queue size it takes
+/// when its variable is unset, and what one slot of that queue holds.
 #[derive(Clone, Copy, Debug)]
 struct BatchProcessor {
     delay: &'static str,
     queue: &'static str,
     batch: &'static str,
     default_queue: usize,
+    /// What the queue holds, as a refusal names it.
+    item: &'static str,
+    /// The bytes one slot of the queue takes — the channel's stamp beside the
+    /// item the SDK queues, a span whole, a log record boxed.
+    slot_bytes: usize,
 }
 
 pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelemetryError> {
@@ -806,10 +825,13 @@ fn compression(
 /// not parse, which it would replace by its default in silence — parsed as the
 /// SDK parses it, untrimmed, so the two never read one apart; a queue or batch
 /// size of zero, which the specification calls invalid and with which a queue
-/// takes no span or record, every one dropped; and a batch written above its
+/// takes no span or record, every one dropped; a batch written above its
 /// queue, which the specification forbids and the SDK lowers to the queue in
-/// silence. A zero delay is the specification's no pause between exports, and
-/// runs.
+/// silence; and, as the metric period is bounded, what the SDK would turn
+/// into a spin or into an allocation no process holds whatever the
+/// specification's type admits — a delay under [`DELAY_FLOOR_MS`], on which
+/// its worker polls without pause, and a queue above [`QUEUE_CEILING`], every
+/// slot of which it allocates when the processor starts.
 fn refuse_unservable_batch_numbers(
     signal: Signal,
     read: &impl Fn(&str) -> Option<String>,
@@ -819,12 +841,22 @@ fn refuse_unservable_batch_numbers(
     };
     let as_the_sdk_reads =
         |expected: String| format!("{expected}, its digits alone, as the SDK reads it");
-    parsed(
+    let delay = parsed(
         processor.delay,
         read,
         |raw| raw.parse::<u64>().ok(),
         || as_the_sdk_reads(format!("{MILLISECONDS} up to {}", u64::MAX)),
     )?;
+    if delay.is_some_and(|delay| delay < DELAY_FLOOR_MS) {
+        return Err(ConfigError::parse(
+            processor.delay,
+            format!(
+                "must be at least {DELAY_FLOOR_MS} ms — the SDK's worker waits for each message \
+                 no longer than the delay, so on a zero one it polls its channel without pause: \
+                 a core for this processor, idle or not"
+            ),
+        ));
+    }
     let size = |variable: &'static str| {
         parsed(
             variable,
@@ -834,6 +866,19 @@ fn refuse_unservable_batch_numbers(
         )
     };
     let queue = size(processor.queue)?.unwrap_or(processor.default_queue);
+    if queue > QUEUE_CEILING {
+        return Err(ConfigError::parse(
+            processor.queue,
+            format!(
+                "must be at most {QUEUE_CEILING} — the SDK allocates the whole queue when the \
+                 processor starts, {} bytes a {} slot, {} MiB at that ceiling, and a queue \
+                 past what the process holds would abort the boot naming nothing",
+                processor.slot_bytes,
+                processor.item,
+                (QUEUE_CEILING * processor.slot_bytes).div_ceil(1 << 20),
+            ),
+        ));
+    }
     if size(processor.batch)?.is_some_and(|batch| batch > queue) {
         return Err(ConfigError::parse(
             processor.batch,
@@ -846,6 +891,18 @@ fn refuse_unservable_batch_numbers(
         ));
     }
     Ok(())
+}
+
+/// The bytes one slot of a `sync_channel` of `T` takes, the channel the SDK
+/// queues each processor's items on: std's bounded channel allocates every
+/// slot up front, each a stamp beside the item.
+const fn slot_bytes<T>() -> usize {
+    let align = if align_of::<T>() > align_of::<usize>() {
+        align_of::<T>()
+    } else {
+        align_of::<usize>()
+    };
+    (size_of::<usize>() + size_of::<T>()).next_multiple_of(align)
 }
 
 /// The headers one signal's exports carry, and the variable that set them.
@@ -2928,8 +2985,7 @@ mod tests {
     /// calls invalid — a queue of none takes no span or record, every one
     /// dropped — and a batch written above its queue, which the SDK lowers to
     /// the queue in silence. A queue below the default batch with no batch
-    /// written runs, the SDK lowering its own default; a zero delay, which the
-    /// specification reads as no pause between exports, runs.
+    /// written runs, the SDK lowering its own default.
     #[test]
     fn a_queue_or_batch_size_its_processor_cannot_run_with_is_refused_naming_it() {
         for (signal, set, variable, expected) in [
@@ -2992,12 +3048,66 @@ mod tests {
                     (OTEL_BLRP_MAX_EXPORT_BATCH_SIZE, "1"),
                 ][..],
             ),
-            (Signal::Traces, &[(OTEL_BSP_SCHEDULE_DELAY, "0")][..]),
-            (Signal::Logs, &[(OTEL_BLRP_SCHEDULE_DELAY, "0")][..]),
         ] {
             assert!(
                 resolved(signal, Some("http://collector:4318"), set)
                     .expect("a size its processor runs with")
+                    .is_some(),
+                "{set:?}"
+            );
+        }
+    }
+
+    /// A number its batch processor would turn into a spin or into an
+    /// allocation no process holds is refused naming it, never quoting it,
+    /// as the metric period is: a schedule delay under a millisecond, on which
+    /// the SDK's worker polls its channel without pause, a core per processor
+    /// idle or not; and a queue above the ceiling, every slot of which the SDK
+    /// allocates when its processor starts, said with what the ceiling costs.
+    /// Each at its bound runs.
+    #[test]
+    fn a_batch_number_the_sdk_would_spin_on_or_allocate_without_bound_is_refused_naming_it() {
+        let above = (QUEUE_CEILING + 1).to_string();
+        let huge = usize::MAX.to_string();
+        for (signal, variable, value, expected) in [
+            (
+                Signal::Traces,
+                OTEL_BSP_SCHEDULE_DELAY,
+                "0",
+                "without pause",
+            ),
+            (Signal::Logs, OTEL_BLRP_SCHEDULE_DELAY, "0", "without pause"),
+            (
+                Signal::Traces,
+                OTEL_BSP_MAX_QUEUE_SIZE,
+                above.as_str(),
+                "MiB",
+            ),
+            (Signal::Logs, OTEL_BLRP_MAX_QUEUE_SIZE, huge.as_str(), "MiB"),
+        ] {
+            let Err(refused) =
+                resolved(signal, Some("http://collector:4318"), &[(variable, value)])
+            else {
+                panic!("{variable}={value:?} must not build");
+            };
+            let said = refused.to_string();
+            assert!(said.contains(variable) && said.contains(expected), "{said}");
+            assert!(!said.contains(&huge) && !said.contains(&above), "{said}");
+        }
+
+        let ceiling = QUEUE_CEILING.to_string();
+        for (signal, set) in [
+            (Signal::Traces, [(OTEL_BSP_SCHEDULE_DELAY, "1")]),
+            (Signal::Logs, [(OTEL_BLRP_SCHEDULE_DELAY, "1")]),
+            (
+                Signal::Traces,
+                [(OTEL_BSP_MAX_QUEUE_SIZE, ceiling.as_str())],
+            ),
+            (Signal::Logs, [(OTEL_BLRP_MAX_QUEUE_SIZE, ceiling.as_str())]),
+        ] {
+            assert!(
+                resolved(signal, Some("http://collector:4318"), &set)
+                    .expect("a number its processor runs with")
                     .is_some(),
                 "{set:?}"
             );

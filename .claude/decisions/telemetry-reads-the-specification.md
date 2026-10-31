@@ -407,3 +407,40 @@ a blank one. So:
   other bound serves.
 - **Refusing, or flooring, a zero schedule delay**: a value the specification
   gives a meaning, and a floor would be a number of ours.
+
+## 2026-10-31 — a batch number the SDK turns into a spin or an unbounded allocation is refused
+
+Reopens the refusal above, "refusing, or flooring, a zero schedule delay", on
+the owner's agreement to the identity audit's second pass ("Tout faire
+(Recommandé)", 2026-10-31, its item 6). That refusal ranked standards over
+invention, which `CLAUDE.md` places under elegance, above performance; and the
+crate already bounded the metric period, a number of its own for a duration the
+specification types the same way. One crate, one class of value, two answers.
+So, one rule for the family: **a value the SDK turns into a spin or into an
+allocation no process holds is refused, whatever the specification's type
+admits**, as the metric period outside a second to an hour already is.
+
+- **`OTEL_BSP_SCHEDULE_DELAY` and `OTEL_BLRP_SCHEDULE_DELAY` under 1 ms are
+  refused**, naming the SDK's busy poll: opentelemetry_sdk 0.33's worker waits
+  for each message no longer than the delay (`recv_timeout`), so on a zero one
+  it polls its channel without pause, a core per processor, idle or not. The
+  delay is read in whole milliseconds, so the floor refuses `0` alone.
+- **`OTEL_BSP_MAX_QUEUE_SIZE` and `OTEL_BLRP_MAX_QUEUE_SIZE` above 1,048,576
+  are refused**, the sentence stating what the ceiling costs up front: the SDK
+  queues on std's bounded channel (`sync_channel(max_queue_size)`), which
+  allocates every slot when the processor starts — under opentelemetry_sdk 0.33
+  368 bytes a span, 16 a boxed log record — so a size past what the process
+  holds aborted the boot naming no variable. The batch, held at most the queue,
+  is bounded with it. The ceiling is 512 times the specification's default
+  queue, past what a deployment tuning for throughput writes; the sentence
+  computes each slot's size from the linked SDK's types.
+
+**Refused:**
+
+- **Flooring the delay at the metric period's second**: a batch processor's
+  delay trades latency for export size, and a deployment exporting every few
+  milliseconds is a choice the specification serves; only the spin is refused.
+- **A ceiling on the delay**: a long delay exports when the batch fills, and
+  spins nothing.
+- **A lower queue ceiling, chosen for a pod's memory**: no number fits every
+  pod, and the sentence states the cost where the operator reads it.

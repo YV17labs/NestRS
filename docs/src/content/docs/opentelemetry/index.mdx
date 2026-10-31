@@ -138,10 +138,17 @@ variable and never its value:
 - A batch processor's queue or batch size of zero fails, as the
   specification's sizes are positive: a queue of none takes no span or
   record. So does a batch written above its queue (`OTEL_BSP_MAX_QUEUE_SIZE`,
-  2048 when unset), which the SDK would lower to the queue in silence. A zero
-  `OTEL_BSP_SCHEDULE_DELAY` or `OTEL_BLRP_SCHEDULE_DELAY` is honoured as no
-  pause between exports, at a cost: the SDK's worker then polls without
-  pause, a core each for the span and log processors, idle or not.
+  2048 when unset), which the SDK would lower to the queue in silence.
+- A batch processor's number the SDK would turn into a spin or into an
+  allocation no process holds fails, as the metric period outside a second to
+  an hour does: an `OTEL_BSP_SCHEDULE_DELAY` or `OTEL_BLRP_SCHEDULE_DELAY`
+  under 1 ms, on which the SDK's worker polls its channel without pause — a
+  core for each processor, idle or not — and an `OTEL_BSP_MAX_QUEUE_SIZE` or
+  `OTEL_BLRP_MAX_QUEUE_SIZE` above 1,048,576. The SDK allocates the whole
+  queue when its processor starts: under opentelemetry_sdk 0.33 a span takes
+  368 bytes of it, so the ceiling holds 368 MiB of spans up front, and a log
+  record 16 bytes, the record itself allocated as it is queued. The refusal
+  says what the linked SDK takes.
 - A service name that names nothing fails: a blank `OTEL_SERVICE_NAME`,
   which the SDK would export under, an empty or blank `service.name` in
   `OTEL_RESOURCE_ATTRIBUTES`, or a pinned `service_name` of either. An empty

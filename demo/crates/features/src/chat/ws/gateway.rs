@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nest_rs::core::{Ctx, error_message};
+use nest_rs::core::{Ambient, error_message};
 use nest_rs::ws::{Opaque, Scoped, WsClient, WsError, gateway, messages};
 
 use super::guard::ModerationGuard;
@@ -35,7 +35,7 @@ impl ChatGateway {
     #[use_guards(ModerationGuard)]
     async fn on_message(
         &self,
-        caller: Ctx<Claims>,
+        caller: Ambient<Claims>,
         message: SendMessageDto,
     ) -> Result<(), WsError> {
         self.svc.record(caller.into_inner().sub, message).opaque()?;
@@ -65,7 +65,7 @@ impl ChatGateway {
     #[use_guards(ModerationGuard)]
     async fn typing(
         &self,
-        caller: Ctx<Claims>,
+        caller: Ambient<Claims>,
         message: SendMessageDto,
         client: &WsClient,
     ) -> Result<(), WsError> {

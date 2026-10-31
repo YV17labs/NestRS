@@ -105,7 +105,6 @@ mod backoff;
 mod budget;
 mod close;
 pub mod container;
-mod ctx;
 pub(crate) mod cycle_guard;
 mod decode_path;
 pub mod discoverable;
@@ -158,7 +157,7 @@ mod way_down;
 mod wiring;
 
 pub use access::{Composition, DependencyRemedy, ProviderOrder, ReachableProviders};
-pub use ambient::{AmbientValue, Continuation, Deadline, ambient, with_ambient};
+pub use ambient::{Ambient, AmbientValue, Continuation, Deadline, ambient, with_ambient};
 pub use app::{App, AppBuilder, BootStep};
 pub use app_identity::AppIdentity;
 pub use app_lifecycle::{AppLifecycle, AppState, StopCause};
@@ -166,7 +165,6 @@ pub use backoff::{Backoff, Retries, process_seed};
 pub use budget::Budget;
 pub use close::CloseContribution;
 pub use container::{Container, ContainerBuilder, ContainerId, ProviderScope};
-pub use ctx::Ctx;
 pub use discoverable::{
     Discoverable, INERT_HOST_HINT, InertHost, ProviderResidency, inert_host, unresolved_host,
 };
@@ -225,7 +223,7 @@ pub mod __private {
         HostLayers, HostRequires, ModuleDescriptor, ProviderDescriptor, reachable_providers,
     };
     pub use crate::ambient::{
-        Pending, UnmaskedReply, carries_ambient, install_pending, with_ambient_from,
+        Pending, UnmaskedReply, attached, carries_ambient, install_pending, with_ambient_from,
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{check_stop_bound, close_after, init_tearing_down_after};
@@ -237,7 +235,6 @@ pub mod __private {
         record_stall, refuse_site, register_dynamic_import, site_chains, stand_down,
         take_site_refusal,
     };
-    pub use crate::ctx::attached;
     pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};
     pub use crate::edge_runtime::{EdgeHosts, EdgeRuntime, attaches_transport, registered_hosts};
     pub use crate::error_message::__private::find_in_chain;

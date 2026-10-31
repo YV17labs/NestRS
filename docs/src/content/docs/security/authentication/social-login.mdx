@@ -112,7 +112,7 @@ Two legs, both dispatched by a `{provider}` path segment:
   `AuthnGuard<SocialStrategy<S>>`. The strategy reads RFC 6749 §4.1.2's
   response against the transaction cookie, exchanges the code, fetches the
   profile, and hands it to your `SocialSignIn`, which says who that profile
-  is here; the handler reads the principal as `Ctx<…>` and issues this app's
+  is here; the handler reads the principal as `Ambient<…>` and issues this app's
   token. A forged, expired or foreign transaction, or another `state`, is a
   `401` before anything else in the response is read. A provider's own
   refusal (§4.1.2.1's `error`: `access_denied` when the user cancelled),
@@ -188,7 +188,7 @@ impl SignInController {
     #[get("/social/{provider}/callback")]
     #[use_guards(ThrottlerGuard, SocialGuard)]
     // … #[meta(…)], #[api(…, response = AccessTokenResponse)]
-    async fn social_callback(&self, caller: Ctx<Caller>) -> Result<AccessTokenResponse> {
+    async fn social_callback(&self, caller: Ambient<Caller>) -> Result<AccessTokenResponse> {
         Ok(self.svc.issue(
             caller.resource.as_deref(),
             caller.user_id,

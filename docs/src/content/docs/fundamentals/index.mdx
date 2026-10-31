@@ -28,7 +28,7 @@ every binary leans on:
 - **Guards** — decide *who* gets through. A guard writes its decision once,
   `Guard::check`, which runs on every unit and on an HTTP request through
   `Guard::check_http`; it returns `Err(Denial)` to short-circuit the chain, or
-  attaches context the handler reads back via `Ctx<T>`.
+  attaches context the handler reads back via `Ambient<T>`.
 - **Pipes** — convert input at the request boundary. Stateless transforms
   (`Parse<T>`, `ParseUuid`, `Trim`, …) bound on any edge through `Piped`;
   an argument whose type declares rules is validated there with no pipe.

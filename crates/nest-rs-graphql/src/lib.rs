@@ -23,9 +23,9 @@
 /// This crate's span target — schema execution, subscriptions, and federation entities.
 pub const TARGET: &str = "nest_rs::graphql";
 
+mod ambient;
 mod config;
 mod context;
-mod ctx;
 mod endpoint;
 mod error;
 mod federation;
@@ -58,8 +58,8 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::ambient::ambient_parameter;
     pub use crate::context::{ENDPOINT, connection_data};
-    pub use crate::ctx::ctx_parameter;
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate, FieldFailure};
     pub use crate::loader::{
         GraphqlLoaderRegistration, GraphqlRelationRegistration, LoaderOwner, batch_spawner,

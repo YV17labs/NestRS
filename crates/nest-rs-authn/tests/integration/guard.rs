@@ -12,7 +12,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, PrincipalIdentity, Strategy};
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, install_pending};
-use nest_rs_core::{AmbientValue, Ctx, Handler, Posture, injectable, module};
+use nest_rs_core::{Ambient, AmbientValue, Handler, Posture, injectable, module};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::{attached, attached_pending, check_request};
 use nest_rs_http::{
@@ -720,7 +720,7 @@ struct HooksController;
 #[routes]
 impl HooksController {
     #[post("/{sender}")]
-    async fn deliver(&self, sender: Ctx<Sender>, body: RawBody) -> String {
+    async fn deliver(&self, sender: Ambient<Sender>, body: RawBody) -> String {
         format!(
             "{} sent {}",
             sender.0.0,

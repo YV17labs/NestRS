@@ -165,14 +165,14 @@ impl ChatGateway {
     #[subscribe_message("message")]
     #[public]
     #[use_guards(ModerationGuard)]
-    async fn on_message(&self, caller: Ctx<Claims>, msg: SendMessageDto) -> Result<(), WsError> {
+    async fn on_message(&self, caller: Ambient<Claims>, msg: SendMessageDto) -> Result<(), WsError> {
         self.svc.record(caller.into_inner().sub, msg).opaque()?;
         Ok(())
     }
 }
 ```
 
-The handler names the author from the same principal, the `Ctx<Claims>`
+The handler names the author from the same principal, the `Ambient<Claims>`
 parameter the upgrade's `AuthnGuard` attached, so `SendMessageDto` carries the
 text alone: it is an `#[input]`, and a payload naming an author is refused as
 an unknown field before the handler runs.

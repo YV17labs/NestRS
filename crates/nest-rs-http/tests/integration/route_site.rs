@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures_util::StreamExt;
-use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, async_trait, injectable, module};
+use nest_rs_core::{Ambient, AmbientValue, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{Body, Bytes, HttpConfig, HttpModule, HttpView, RawBody, controller, routes};
@@ -159,18 +159,18 @@ impl MetaController {
     #[get("/declared")]
     #[meta(Throttle(10))]
     #[meta(Counted(3))]
-    async fn declared(&self, seen: Ctx<Seen>) -> String {
+    async fn declared(&self, seen: Ambient<Seen>) -> String {
         seen.into_inner().0
     }
 
     #[get("/inherited")]
-    async fn inherited(&self, seen: Ctx<Seen>) -> String {
+    async fn inherited(&self, seen: Ambient<Seen>) -> String {
         seen.into_inner().0
     }
 
     #[get("/own")]
     #[meta(Throttle(Self::QUOTA))]
-    async fn own(&self, seen: Ctx<Seen>) -> String {
+    async fn own(&self, seen: Ambient<Seen>) -> String {
         seen.into_inner().0
     }
 }

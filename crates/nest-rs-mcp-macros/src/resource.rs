@@ -165,7 +165,7 @@ pub(crate) fn bind_variables(decl: &mut ResourceDecl, sig: &Signature) -> syn::R
                     "#[resource] reads its arguments off its URI template: `{ident}` names no \
                      variable of `{template}` — name it after one (`{{id}}` is read into \
                      `id: T`, where `T: FromStr`), or take a request-scoped provider as \
-                     `Scoped<T>` or what a guard attached as `Ctx<T>`",
+                     `Scoped<T>` or what a guard attached as `Ambient<T>`",
                     template = decl.template.value(),
                 ),
             ));
@@ -203,7 +203,7 @@ fn argument_carrier(ty: &Type) -> Option<&'static str> {
 }
 
 /// Refuse a parameter of a `#[resources]` listing other than a `Scoped<T>` or a
-/// `Ctx<T>`.
+/// `Ambient<T>`.
 pub(crate) fn refuse_listing_arguments(sig: &Signature) -> syn::Result<()> {
     for input in &sig.inputs {
         if let FnArg::Typed(pat_type) = input
@@ -213,7 +213,7 @@ pub(crate) fn refuse_listing_arguments(sig: &Signature) -> syn::Result<()> {
                 pat_type,
                 "#[resources] lists every resource a caller may read, so it takes no \
                  argument but a request-scoped provider (`Scoped<T>`) or what a guard \
-                 attached (`Ctx<T>`) — a resource read by its own arguments is a \
+                 attached (`Ambient<T>`) — a resource read by its own arguments is a \
                  `#[resource(template = \"…\")]`",
             ));
         }

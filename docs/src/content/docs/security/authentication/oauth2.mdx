@@ -83,7 +83,7 @@ impl OAuthController {
     #[get("/callback")]
     #[use_guards(OAuthGuard)]
     #[api(response = AccessTokenResponse)]
-    async fn callback(&self, caller: Ctx<Caller>) -> Result<AccessTokenResponse> {
+    async fn callback(&self, caller: Ambient<Caller>) -> Result<AccessTokenResponse> {
         Ok(self
             .issuer
             .issue(caller.user_id, caller.org_id, caller.roles.clone())?)
@@ -367,7 +367,7 @@ pub type SocialGuard = AuthnGuard<SocialStrategy<SignInService>>;
 // …
 async fn token(
     &self,
-    client: Ctx<AuthenticatedClient>,
+    client: Ambient<AuthenticatedClient>,
     request: AccessTokenRequest,
 ) -> Result<AccessTokenResponse> {
     Ok(self.svc.grant_client_credentials(&request, &client)?)
@@ -380,7 +380,7 @@ async fn token(
 `ClientSecretBasicStrategy<P>` reads HTTP Basic and checks it, in constant
 time, against the registry — the way
 `AuthnGuard` runs one: under the same bound, a panic contained, the client
-attached as the request's principal (`Ctx<AuthenticatedClient<P>>`) and
+attached as the request's principal (`Ambient<AuthenticatedClient<P>>`) and
 named as its `actor_id`. What differs is the refusal, decided by how the
 client tried, which the guard reads off the request's head alone:
 

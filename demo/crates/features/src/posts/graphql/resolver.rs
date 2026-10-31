@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_graphql::Error;
 use async_graphql::futures_util::stream::Stream;
 use nest_rs::authz::{Read, Update};
-use nest_rs::core::Ctx;
+use nest_rs::core::Ambient;
 use nest_rs::graphql::{crud, resolver};
 use nest_rs::seaorm::Authorized;
 
@@ -29,7 +29,7 @@ impl PostsResolver {
     async fn publish_post(
         &self,
         post: Authorized<Update, PostEntity>,
-        actor: Ctx<PostAuthor>,
+        actor: Ambient<PostAuthor>,
     ) -> Result<Post, PostError> {
         let PostAuthor(actor_id) = *actor;
         self.svc.publish(post.into_inner(), actor_id).await

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nest_rs::core::Ctx;
+use nest_rs::core::Ambient;
 use nest_rs::http::{
     HeaderValue, HttpError, Json, Opaque, Path, Query, Response, Result, StatusCode, controller,
     header, routes,
@@ -30,7 +30,7 @@ impl SignInController {
     )]
     async fn token(
         &self,
-        client: Ctx<AuthenticatedClient>,
+        client: Ambient<AuthenticatedClient>,
         request: AccessTokenRequest,
     ) -> Result<AccessTokenResponse> {
         Ok(self.svc.grant_client_credentials(&request, &client)?)
@@ -70,7 +70,7 @@ impl SignInController {
         tags("OAuth2"),
         response = AccessTokenResponse
     )]
-    async fn social_callback(&self, caller: Ctx<Caller>) -> Result<AccessTokenResponse> {
+    async fn social_callback(&self, caller: Ambient<Caller>) -> Result<AccessTokenResponse> {
         Ok(self.svc.issue(
             caller.resource.as_deref(),
             caller.user_id,

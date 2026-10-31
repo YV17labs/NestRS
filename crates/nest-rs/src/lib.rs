@@ -153,8 +153,8 @@ macro_rules! __requires_seaorm {
 /// HTTP-API case.
 pub mod prelude {
     pub use nest_rs_core::{
-        App, AppBuilder, Container, ContainerBuilder, Ctx, Module, Reflector, async_trait, hooks,
-        injectable, interceptor, module,
+        Ambient, App, AppBuilder, Container, ContainerBuilder, Module, Reflector, async_trait,
+        hooks, injectable, interceptor, module,
     };
 
     // Outside every edge's feature: a headless worker needs `#[input]` too.

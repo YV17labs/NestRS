@@ -78,7 +78,7 @@ posture attribute, and so is the principal's parameter:
 |------|---------|-----|
 | `#[authorize(Create, users::Entity)]` attribute | `#[authorize(Create, users::Entity)]` attribute | Refuse the operation if the ability disallows it **and** mask the response fields |
 | `#[authorize(Read, bind = UsersService)]` attribute, an `Authorized<Read, UserEntity>` parameter | the same attribute and parameter, the `id` argument synthesised | Load the row through the service, refuse it on a denied ability |
-| `Ctx<Claims>` parameter | `Ctx<Claims>` parameter, no argument of the schema | Read the principal the endpoint's guards attached |
+| `Ambient<Claims>` parameter | `Ambient<Claims>` parameter, no argument of the schema | Read the principal the endpoint's guards attached |
 
 The same `#[use_guards(...)]` declaration on the resolver struct — the
 markers are the same, the access graph checks the same thing. It names

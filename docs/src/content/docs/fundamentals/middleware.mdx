@@ -13,7 +13,7 @@ shape of each layer is explicit:
 
 - **Gate-and-context work** lives in **[Guards](/fundamentals/guards/)** —
   pre-handler, can short-circuit with a response, can attach typed
-  context the handler reads back via `Ctx<T>`.
+  context the handler reads back via `Ambient<T>`.
 - **Wrap-the-handler work** lives in **[Interceptors](/fundamentals/interceptors/)** —
   observe both sides, install ambient state, transform the response.
 - **Work around every request, before the access decision** — what a
@@ -143,7 +143,7 @@ impl Guard for AuthnGuard {
 impl GuardFor<HttpView> for AuthnGuard {}
 
 // In the handler:
-async fn me(&self, auth: Ctx<Claims>) -> Json<User> { /* ... */ }
+async fn me(&self, auth: Ambient<Claims>) -> Json<User> { /* ... */ }
 ```
 
 See [Guards / Attach context](/fundamentals/guards/#attach-context-and-route-metadata).

@@ -139,7 +139,7 @@ Two decorators, one per item shape:
   declare. An operation declares the same request layers a route does:
   `#[use_guards(...)]`, `#[authorize(...)]` / `#[public]`,
   `#[use_exception_filters(...)]`, `#[use_interceptors(...)]`, a pipe on its
-  arguments, a `Scoped<T>` parameter and a `Ctx<T>` one — see
+  arguments, a `Scoped<T>` parameter and an `Ambient<T>` one — see
   [Layers around an operation](#layers-around-an-operation). An operation
   answers a `Result`, known by its type: it fails with whatever error it
   holds — an `McpError`, a domain error — answered by that type, an alias
@@ -309,7 +309,7 @@ its unit of work — run on the same pipeline as a route. A tool call, a prompt
 fetch, a resource read and a listing run the layers their host and their
 method bind, then the app's,
 each family once: the guards' `check`, the posture's gate, the exception
-filters, the interceptors, then the pipes, the `Scoped<T>` and `Ctx<T>`
+filters, the interceptors, then the pipes, the `Scoped<T>` and `Ambient<T>`
 parameters, the body and the mask. A layer reads the operation through `McpView`:
 
 ```rust title="crates/features/src/posts/mcp/tool.rs"
@@ -349,7 +349,7 @@ checked at boot like an `#[inject]` field: a provider no imported module
 offers fails the boot rather than the first call. A host writing rmcp's handler
 by hand reads `nest_rs::core::current_request_scope()` instead.
 
-`Ctx<T>` reads what a guard attached — the principal the `/mcp` request's
+`Ambient<T>` reads what a guard attached — the principal the `/mcp` request's
 guards verified, or what a guard bound on the operation derived from it — as a
 route reads it. Neither parameter is an argument of the tool: the input schema
 a client lists names neither, and an absent value answers opaquely, its type

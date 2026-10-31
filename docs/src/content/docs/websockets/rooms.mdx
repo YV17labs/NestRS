@@ -126,7 +126,7 @@ impl ChatGateway {
     #[use_guards(ModerationGuard)]
     async fn on_message(
         &self,
-        caller: Ctx<Claims>,
+        caller: Ambient<Claims>,
         message: SendMessageDto,
     ) -> Result<(), WsError> {
         self.svc.record(caller.into_inner().sub, message).opaque()?;
@@ -144,7 +144,7 @@ impl ChatGateway {
     #[use_guards(ModerationGuard)]
     async fn typing(
         &self,
-        caller: Ctx<Claims>,
+        caller: Ambient<Claims>,
         message: SendMessageDto,
         client: &WsClient,
     ) -> Result<(), WsError> {

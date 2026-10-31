@@ -123,7 +123,7 @@ optional. An actor or a tenant is read as the text its value prints, so a
 `Uuid`, a `String` or an enum with its `Display` all serve, and an `Option`
 answers `None` when it holds none. The derive also implements `AmbientValue`,
 which is what lets `AuthnGuard` attach the claims for the rest of the request —
-every guard after it, and `Ctx<Claims>` in a handler on any edge, a resolver
+every guard after it, and `Ambient<Claims>` in a handler on any edge, a resolver
 below `/graphql` included, read them there. Claims marking no actor, or a role
 the derive does not know, are a compile error naming the three roles it takes;
 a role marked twice is refused at its second mark. A generic principal, or one
@@ -141,15 +141,15 @@ therefore refuses a client id a UUID parses, so no client passes for a user
 a client answers with `None`. `nestrs g auth` writes the enum, its conversions
 and the struct with its derive.
 
-The handler reads them back through `Ctx<Claims>`:
+The handler reads them back through `Ambient<Claims>`:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-async fn caller_org(&self, auth: Ctx<Claims>) -> Json<Uuid> {
+async fn caller_org(&self, auth: Ambient<Claims>) -> Json<Uuid> {
     Json(auth.org_id)
 }
 ```
 
-A create needs no `Ctx<Claims>` to land in the caller's org: the `Create` grant
+A create needs no `Ambient<Claims>` to land in the caller's org: the `Create` grant
 that pins `org_id` also fills it ([CRUD](/database/crud/#the-tenant-comes-from-the-grant)).
 
 ## Signing a token
@@ -196,7 +196,7 @@ refuses a blank resource, and claims carrying an `aud` of their own.
 
 ## Verifying outside the guard
 
-Most code reaches the claims through `Ctx<C>`. A path that needs to
+Most code reaches the claims through `Ambient<C>`. A path that needs to
 verify a token manually — say, the OAuth transaction cookie, or a
 queue job carrying a signed envelope — injects `Arc<JwtService>` and
 calls `verify`:
@@ -313,7 +313,7 @@ export NESTRS_AUTHN__ISSUER='https://auth.example.com'
 export NESTRS_AUTHN__AUDIENCE='https://api.example.com'
 ```
 
-Nothing else changes: `JwtStrategy` verifies, the claims reach `Ctx<C>`,
+Nothing else changes: `JwtStrategy` verifies, the claims reach `Ambient<C>`,
 `iss`, `aud` and `exp` are checked as above. The service holds no signing key,
 so `sign` refuses, and so do `sign_handshake` and `verify_handshake`: an OAuth
 flow's transaction cookie needs a key of this deployment's own. An issuer that stamps no `typ: at+jwt` on its access tokens

@@ -1,5 +1,5 @@
 //! `#[mcp]` + `#[tools]`, through the umbrella alone: the layers a host and
-//! an operation bind, a `Scoped<T>` and a `Ctx<T>` parameter, an error of the
+//! an operation bind, a `Scoped<T>` and an `Ambient<T>` parameter, an error of the
 //! domain's own type, and a resource read through its template beside the
 //! listing.
 //!
@@ -7,7 +7,7 @@
 //! paths resolved at the call site; this file names no `rmcp`, so it stops
 //! compiling if `#[tools]` ever stops carrying that import itself.
 
-use nest_rs::core::{Ctx, Layer, UnitContext, async_trait, input};
+use nest_rs::core::{Ambient, Layer, UnitContext, async_trait, input};
 use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Resource, Role};
 use nest_rs::mcp::{Json, McpError, McpView, Parameters, Scoped, mcp, tools};
@@ -113,7 +113,7 @@ impl HygieneTool {
     #[public]
     async fn operator(
         &self,
-        operator: Ctx<crate::operator::HygieneOperator>,
+        operator: Ambient<crate::operator::HygieneOperator>,
     ) -> Result<String, McpError> {
         Ok(operator.into_inner().0)
     }

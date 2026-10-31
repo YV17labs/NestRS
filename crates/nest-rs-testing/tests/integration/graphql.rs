@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{AmbientValue, Ctx, module};
+use nest_rs_core::{Ambient, AmbientValue, module};
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_testing::TestApp;
@@ -30,7 +30,7 @@ impl CallerResolver {
     /// parameter.
     #[subscription]
     #[public]
-    fn caller(&self, caller: Ctx<Caller>) -> impl Stream<Item = String> {
+    fn caller(&self, caller: Ambient<Caller>) -> impl Stream<Item = String> {
         stream::iter([caller.into_inner().0.to_owned()])
     }
 }

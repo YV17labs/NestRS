@@ -150,3 +150,15 @@ derives its `AmbientValue` with its `PrincipalIdentity`
 strategy answers must be ambient, so declaring the type a principal is the line
 that lets it travel, and the derive writes the empty impl with the default
 carry. Every other ambient value still implements the trait by hand.
+
+**2026-10-31 — the parameter takes the concept's word: `Ambient<T>`.** The
+type a handler reads a guard's value with was `Ctx<T>`, HTTP's name carried
+into core, beside `AmbientValue`, `ambient()`, `cx.ambient()` and
+`MissingAmbientError`: one concept, two words (`naming.md`). With the
+owner's agreement to break the API before 7.0 publishes ("Tout faire",
+2026-10-28), it is `nest_rs::core::Ambient<T>`, read off the vocabulary the
+rest of the concept already used, and each edge's reading lives in its
+`ambient.rs`. Renaming the vocabulary to `ctx` instead was refused: `ambient`
+names what the value is (carried for the code the unit calls), `ctx` only
+where a parameter sits.
+

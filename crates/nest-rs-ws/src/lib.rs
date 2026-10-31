@@ -161,8 +161,8 @@
 /// This crate's span target — the WebSocket edge: upgrades, connections, message dispatch.
 pub const TARGET: &str = "nest_rs::ws";
 
+mod ambient;
 mod config;
-mod ctx;
 mod envelope;
 mod gateway;
 mod guard;
@@ -193,7 +193,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::ctx::ctx_parameter;
+    pub use crate::ambient::ambient_parameter;
     pub use crate::envelope::{
         ErrorReport, ErrorReportChain, ErrorReportFallback, ErrorReportLocal, HandlerFailed,
         ReplyOutcome, ReplyValue, ReplyValueFallback, decode_payload,

@@ -44,7 +44,7 @@ deep on each.
 - **[Guard](/fundamentals/guards/)** — a pre-handler gate; returns
   `Ok(())` to let the request through or a typed `Denial` mapped to
   401/403/429, and may attach context a handler on any edge reads
-  through `Ctx<T>`.
+  through `Ambient<T>`.
 - **[Endpoint guards](/security/authorization/endpoint-guards/)** —
   `EndpointGuards<V, (G1, …)>`, the guards a module adds to the request of
   `/graphql` or `/mcp`, beside the global pool; what they attach is ambient
@@ -141,7 +141,7 @@ deep on each.
   over it.
 - **[Principal](/security/authentication/)** — the typed identity a
   strategy returns (`Claims` for JWT, a session for OAuth); read back
-  in a handler through `Ctx<P>`.
+  in a handler through `Ambient<P>`.
 - **[Ability](/security/authorization/)** — the policy object the authz
   guard installs for the request; answers "may this caller take this
   action on this subject?" against rules, predicates, and field grants.

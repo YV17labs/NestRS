@@ -1,9 +1,9 @@
-//! `src/ctx.rs`: a `Ctx<T>` parameter reads what a guard attached — the
+//! `src/ctx.rs`: an `Ambient<T>` parameter reads what a guard attached — the
 //! upgrade's guards for every message, a message's own for its handler — and
 //! is never the payload; absent, the message answers opaquely and files the
 //! type.
 
-use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, async_trait, injectable, module};
+use nest_rs_core::{Ambient, AmbientValue, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::HttpView;
 use nest_rs_testing::ws::{WsApp, WsSocket};
@@ -73,20 +73,20 @@ struct CtxGateway;
 impl CtxGateway {
     #[subscribe_message("whoami")]
     #[public]
-    async fn whoami(&self, caller: Ctx<Caller>) -> String {
+    async fn whoami(&self, caller: Ambient<Caller>) -> String {
         caller.into_inner().0
     }
 
     #[subscribe_message("sign")]
     #[public]
     #[use_guards(AuthorGuard)]
-    async fn sign(&self, text: String, author: Ctx<Author>) -> String {
+    async fn sign(&self, text: String, author: Ambient<Author>) -> String {
         format!("{text}, {}", author.into_inner().0)
     }
 
     #[subscribe_message("unwired")]
     #[public]
-    async fn unwired(&self, missing: Ctx<Unattached>) -> String {
+    async fn unwired(&self, missing: Ambient<Unattached>) -> String {
         let Unattached = missing.into_inner();
         "attached".to_owned()
     }

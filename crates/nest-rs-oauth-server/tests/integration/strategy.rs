@@ -3,7 +3,7 @@
 //! the client it attaches reads what its request is granted.
 
 use base64::Engine as _;
-use nest_rs_core::{Ctx, module};
+use nest_rs_core::{Ambient, module};
 use nest_rs_http::{HttpModule, StatusCode, controller, routes};
 use nest_rs_oauth_server::{
     AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientAuthenticationGuard,
@@ -28,7 +28,7 @@ impl TokenController {
     #[api(response = AccessTokenResponse)]
     async fn token(
         &self,
-        client: Ctx<AuthenticatedClient<u32>>,
+        client: Ambient<AuthenticatedClient<u32>>,
         request: AccessTokenRequest,
     ) -> nest_rs_http::Result<AccessTokenResponse> {
         let scope = client.scope_for(&request.scope)?;

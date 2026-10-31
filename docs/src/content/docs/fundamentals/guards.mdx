@@ -12,7 +12,7 @@ This page continues **`blog`** from
 [Providers](/fundamentals/providers/) — the composed stage before you
 open the [tutorial](/tutorial/) `posts/` feature. Once `PostsHttpModule` mounts
 `PostsController`, guards decide *who* reaches each handler — and often
-attach the principal the handler reads back via `Ctx<T>`.
+attach the principal the handler reads back via `Ambient<T>`.
 
 ## Install
 
@@ -324,7 +324,7 @@ Guards are pooled by `TypeId` and execute **once per request**, after routing, i
 ## Attach context and route metadata
 
 Guards often do more than gate — they produce values the handler needs.
-Attach on the way in; read with `Ctx<T>`:
+Attach on the way in; read with `Ambient<T>`:
 
 ```rust title="the guard attaches, the handler reads"
 #[derive(Clone)]
@@ -348,25 +348,25 @@ impl Guard for TenantGuard {
 impl GuardFor<HttpView> for TenantGuard {}
 
 #[get("/me")]
-async fn me(&self, tenant: Ctx<Tenant>) -> Json<Post> {
+async fn me(&self, tenant: Ambient<Tenant>) -> Json<Post> {
     Json(self.svc.find_by_tenant(&tenant.0).await?)
 }
 ```
 
 What a guard attaches is ambient for the rest of the unit once every guard of
-its stage passed: a handler reads it with a `Ctx<T>` parameter
-(`nest_rs::core::Ctx`) — a route, a GraphQL operation, a WebSocket message or
+its stage passed: a handler reads it with an `Ambient<T>` parameter
+(`nest_rs::core::Ambient`) — a route, a GraphQL operation, a WebSocket message or
 an MCP tool alike, the request's guards' value in every unit the request
 carries — a guard after it with `cx.ambient::<T>()`, and code the handler
 calls with `nest_rs::core::ambient::<T>()`. Its type implements
 `AmbientValue` — a principal type too, since `AuthnGuard` attaches it, and a
 claims type
 [derives it](/security/authentication/jwt/#claims--your-shape-your-business-rules)
-with its `PrincipalIdentity` — and `Clone` for `Ctx<T>`. The request is
+with its `PrincipalIdentity` — and `Clone` for `Ambient<T>`. The request is
 borrowed through `HttpView::of(cx)` until you let it go, so take what you need
 into an owned value before `cx.attach`, as above.
 
-`Ctx<T>` refuses the unit if the value is absent — a `500` on a route, the
+`Ambient<T>` refuses the unit if the value is absent — a `500` on a route, the
 opaque internal error elsewhere, the type filed at `error` — since a missing
 context means the guard that should have set it never ran. A large value goes in a
 newtype holding an `Arc` (`struct Catalog(Arc<Entries>)`), which clones for

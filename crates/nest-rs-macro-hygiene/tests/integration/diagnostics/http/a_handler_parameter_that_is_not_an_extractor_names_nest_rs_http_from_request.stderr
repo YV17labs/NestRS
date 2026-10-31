@@ -11,9 +11,9 @@ help: the trait `FromRequest<'_>` is not implemented for `Settings`
    | ^^^^^^^^^^^^^^^
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::nest_rs_http::Request
+             Ambient<T>
              Authorize<A, S>
              ClientIp
-             Ctx<T>
              RawBody
              Result<T, HttpError>
              nest_rs::nest_rs_http::Body
@@ -33,9 +33,9 @@ help: the trait `FromRequest<'_>` is not implemented for `Settings`
    | ^^^^^^^^^^^^^^^
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::nest_rs_http::Request
+             Ambient<T>
              Authorize<A, S>
              ClientIp
-             Ctx<T>
              RawBody
              Result<T, HttpError>
              nest_rs::nest_rs_http::Body

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use nest_rs::authz::Update;
-use nest_rs::core::Ctx;
+use nest_rs::core::Ambient;
 use nest_rs::http::{Json, Result, controller, crud};
 use nest_rs::seaorm::Authorized;
 
@@ -42,7 +42,7 @@ impl PostsController {
     async fn publish(
         &self,
         post: Authorized<Update, PostEntity>,
-        actor: Ctx<PostAuthor>,
+        actor: Ambient<PostAuthor>,
     ) -> Result<Json<Post>, PostError> {
         let PostAuthor(actor_id) = *actor;
         Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))

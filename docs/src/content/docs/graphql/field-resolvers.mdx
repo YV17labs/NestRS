@@ -99,7 +99,7 @@ If `avatar_for` does one DB call per parent, you have an N+1 — move
 the lookup behind a `#[dataloader]`. See [Dataloaders](/database/dataloaders/).
 
 A `Scoped<T>` parameter reaches a request-scoped provider here as on a root
-field, and a `Ctx<T>` parameter what the request's guards attached, or its own
+field, and an `Ambient<T>` parameter what the request's guards attached, or its own
 guards. A field resolver is no unit of its own — it runs once per parent row,
 inside the root field that produced its parent — so it runs its resolver's and
 its own `#[use_guards]`, and only the interceptors and exception filters

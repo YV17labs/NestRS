@@ -1,10 +1,10 @@
-//! GraphQL's reading of `nest_rs_core::Ctx<T>`: a `#[query]`, `#[mutation]`,
+//! GraphQL's reading of `nest_rs_core::Ambient<T>`: a `#[query]`, `#[mutation]`,
 //! `#[subscription]`, `#[entity]` or `#[field_resolver]` parameter reading what
 //! a guard attached — the request's guards for every field it carries, the
 //! field's own for its body — and no argument of the schema.
 //!
 //! ```
-//! use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, async_trait, injectable};
+//! use nest_rs_core::{Ambient, AmbientValue, Layer, UnitContext, async_trait, injectable};
 //! use nest_rs_graphql::{operations, resolver};
 //! use nest_rs_guards::{Denial, Guard};
 //! use nest_rs_http::HttpView;
@@ -43,7 +43,7 @@
 //! impl MeResolver {
 //!     #[query]
 //!     #[public]
-//!     async fn me(&self, caller: Ctx<Caller>) -> String {
+//!     async fn me(&self, caller: Ambient<Caller>) -> String {
 //!         caller.into_inner().0
 //!     }
 //! }
@@ -70,14 +70,14 @@
 //! # }
 //! ```
 
-use nest_rs_core::{AmbientValue, Ctx, Failure};
+use nest_rs_core::{Ambient, AmbientValue, Failure};
 
 use crate::error::FieldFailure;
 
-/// The `Ctx<T>` an operation takes, read in its tail once its guards passed; a
+/// The `Ambient<T>` an operation takes, read in its tail once its guards passed; a
 /// miss answers the opaque internal error, the type filed at `error`, never
 /// answered.
-pub fn ctx_parameter<T: AmbientValue + Clone>() -> Result<Ctx<T>, FieldFailure> {
+pub fn ambient_parameter<T: AmbientValue + Clone>() -> Result<Ambient<T>, FieldFailure> {
     nest_rs_core::__private::attached::<T>()
         .map_err(|missing| FieldFailure::unanswered(Failure::from(missing)))
 }
@@ -97,7 +97,7 @@ mod tests {
     fn a_miss_answers_no_type_name_and_files_it() {
         let logs = LogCapture::install();
 
-        let Err(missed) = ctx_parameter::<Hidden>() else {
+        let Err(missed) = ambient_parameter::<Hidden>() else {
             panic!("no guard attached a value here");
         };
         let answered = missed.into_answer();
@@ -108,7 +108,7 @@ mod tests {
         let line = logs.expect_one(crate::TARGET, "graphql operation failed");
         assert!(
             line.field("error")
-                .is_some_and(|error| error.contains("ctx::tests::Hidden")),
+                .is_some_and(|error| error.contains("ambient::tests::Hidden")),
             "{:?}",
             line.fields,
         );

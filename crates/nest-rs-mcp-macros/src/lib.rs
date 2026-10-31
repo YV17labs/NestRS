@@ -56,7 +56,7 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 /// operation the request layers every other edge has:
 /// `#[use_guards]` / `#[force_guards]`, a **mandatory** posture
 /// (`#[authorize(Action, Entity)]` or `#[public]`), `#[use_exception_filters]`,
-/// `#[use_interceptors]`, `Scoped<T>` and `Ctx<T>` parameters, per-argument pipes inside
+/// `#[use_interceptors]`, `Scoped<T>` and `Ambient<T>` parameters, per-argument pipes inside
 /// `Parameters<…>`, and response masking. The advertised capabilities are
 /// **derived** from the roles present, so a host cannot route what it forgot to
 /// declare. `#[meta(EXPR)]` (repeatable) on an operation declares a value for
@@ -82,7 +82,7 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 /// a macro them:
 ///
 /// - a parameter is request-scoped when its type's last segment is `Scoped`,
-///   what a guard attached when it is `Ctx` (`nest_rs_core::Ctx`) — each
+///   what a guard attached when it is `Ambient` (`nest_rs_core::Ambient`) — each
 ///   resolved in the tail through a function returning its own type, so a
 ///   namesake does not compile, and neither an argument of the protocol —
 ///   piped when it is `Parameters<Piped<P>>`, and on a `#[resource]` the
@@ -112,7 +112,7 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `get_info` and, for the resource roles, `list_resources`,
 /// `list_resource_templates` and `read_resource`. Each wrapper dispatches its
 /// site — the guards, the posture's gate, the exception filters, the
-/// interceptors — its tail running the pipes, the `Scoped<T>` and `Ctx<T>` parameters, the
+/// interceptors — its tail running the pipes, the `Scoped<T>` and `Ambient<T>` parameters, the
 /// authored method and the response mask, in that order.
 #[proc_macro_attribute]
 pub fn tools(args: TokenStream, input: TokenStream) -> TokenStream {

@@ -3,7 +3,7 @@
 //! The authored methods are re-emitted untouched; each operation declares its
 //! `static` site — its guards, its posture's class gate, its exception filters
 //! and interceptors — and gets a generated wrapper that dispatches it through
-//! that site, its tail running pipes → `Scoped<T>` and `Ctx<T>` parameters →
+//! that site, its tail running pipes → `Scoped<T>` and `Ambient<T>` parameters →
 //! call → mask.
 //! A tool's or a prompt's wrapper carries `#[tool(name = "…")]` /
 //! `#[prompt(name = "…")]` for rmcp's routers; a resource's is called by the
@@ -208,7 +208,7 @@ struct Operation {
     exception_filters: Vec<Path>,
     posture: Posture,
     pipes: Vec<PipedArg>,
-    /// Its `Scoped<T>` and `Ctx<T>` parameters, resolved in its tail rather
+    /// Its `Scoped<T>` and `Ambient<T>` parameters, resolved in its tail rather
     /// than by rmcp.
     tail: Vec<TailArg>,
     /// The authored method's `#[cfg]` conditions, which its router group, and so
@@ -234,7 +234,7 @@ impl Operation {
 /// An operation's parameter its tail fills, whatever its role.
 struct TailArg {
     ident: syn::Ident,
-    /// `Scoped<T>` or `Ctx<T>`, as written.
+    /// `Scoped<T>` or `Ambient<T>`, as written.
     ty: Type,
     kind: TailParam,
 }
@@ -753,7 +753,7 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
     let name = op.name();
 
     // Each pipe carrier is replaced by the value it wraps, so rmcp derives the
-    // tool's JSON Schema from `T`; a `Scoped<T>` or a `Ctx<T>` is the tail's,
+    // tool's JSON Schema from `T`; a `Scoped<T>` or an `Ambient<T>` is the tail's,
     // never rmcp's.
     let mut wire_sig = sig.clone();
     wire_sig.ident = wrapper.clone();
@@ -810,7 +810,7 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
 }
 
 /// Every wrapper's body: the operation dispatched through its site, its tail
-/// running `prelude`, the `Scoped<T>` and `Ctx<T>` parameters and the authored method,
+/// running `prelude`, the `Scoped<T>` and `Ambient<T>` parameters and the authored method,
 /// whose value `answered` turns into what the wrapper returns.
 fn dispatch(
     self_ty: &Type,
@@ -828,7 +828,9 @@ fn dispatch(
     let name = op.name();
     let tail_prelude = tail.iter().map(|TailArg { ident, ty, kind }| match kind {
         TailParam::Scoped => quote! { let #ident: #ty = ::nest_rs_mcp::__private::scoped()?; },
-        TailParam::Ctx => quote! { let #ident: #ty = ::nest_rs_mcp::__private::ctx_parameter()?; },
+        TailParam::Ambient => {
+            quote! { let #ident: #ty = ::nest_rs_mcp::__private::ambient_parameter()?; }
+        }
     });
     let call_args = forwarded_arg_idents(sig)?;
     let call = await_if_async(sig, quote!(<#self_ty>::#name(self, #(#call_args),*)));
@@ -1250,7 +1252,7 @@ fn take_operation(
     })
 }
 
-/// Every `Scoped<T>` and `Ctx<T>` parameter, read by its last segment: the
+/// Every `Scoped<T>` and `Ambient<T>` parameter, read by its last segment: the
 /// tail resolves it once the guards and the gate admitted the caller, so the
 /// wire signature rmcp extracts from leaves it out.
 fn tail_args(sig: &Signature) -> Vec<TailArg> {

@@ -45,7 +45,7 @@ use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
 ///
 /// ```
 /// use nest_rs_authn::{AuthError, Strategy, basic_credentials};
-/// use nest_rs_core::{Ctx, async_trait, injectable};
+/// use nest_rs_core::{Ambient, async_trait, injectable};
 /// use nest_rs_http::{Request, controller, routes};
 /// use nest_rs_oauth_server::{
 ///     AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientAuthenticationGuard,
@@ -85,7 +85,7 @@ use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
 ///     #[api(response = AccessTokenResponse)]
 ///     async fn token(
 ///         &self,
-///         client: Ctx<AuthenticatedClient<()>>,
+///         client: Ambient<AuthenticatedClient<()>>,
 ///         request: AccessTokenRequest,
 ///     ) -> nest_rs_http::Result<AccessTokenResponse> {
 ///         let scope = client.scope_for(&request.scope)?;

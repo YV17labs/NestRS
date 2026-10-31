@@ -1,6 +1,6 @@
 ---
 title: Authentication
-description: A Strategy turns a request into a principal — bearer tokens, OAuth redirects, basic credentials. AuthnGuard runs it and Ctx<P> reads it back.
+description: A Strategy turns a request into a principal — bearer tokens, OAuth redirects, basic credentials. AuthnGuard runs it and Ambient<P> reads it back.
 sidebar:
   label: Overview
   order: 1
@@ -14,7 +14,7 @@ header, an OAuth provider redirect, a basic-auth `client_id:secret`,
 something app-specific. `AuthnGuard<S>` runs the strategy on every
 request its controller covers, returns a `401` when it fails, and
 attaches the principal to the request so the handler reads it back with
-`Ctx<Principal>`.
+`Ambient<Principal>`.
 
 The framework ships [`JwtStrategy`](/security/authentication/jwt/)
 (JSON Web Tokens), an
@@ -69,20 +69,20 @@ pub struct UsersController { /* ... */ }
 ## Reading the principal back
 
 `AuthnGuard` attaches the principal to the request before the handler
-runs. The handler reads it with `Ctx<P>` — same primitive as any
+runs. The handler reads it with `Ambient<P>` — same primitive as any
 other guard-attached context, and the same parameter on every edge: a GraphQL
 operation, a WebSocket message and an MCP tool read the principal their
 request's guards verified the same way.
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::core::Ctx;
+use nest_rs::core::Ambient;
 
-async fn me(&self, auth: Ctx<Claims>) -> Json<User> {
+async fn me(&self, auth: Ambient<Claims>) -> Json<User> {
     Json(self.svc.lookup(auth.sub).await?)
 }
 ```
 
-`Ctx<Claims>` reads the `Claims` the guard attached, which are ambient
+`Ambient<Claims>` reads the `Claims` the guard attached, which are ambient
 for the rest of the request; a value something else put in the request's
 extensions is never read. Missing the guard means missing the value, and
 the framework returns `500` — the access graph would already have failed

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use nest_rs_authn::{
     AuthError, AuthnConfig, AuthnGuard, AuthnModule, JwtService, PrincipalIdentity,
 };
-use nest_rs_core::{AmbientValue, Ctx, async_trait, injectable, module};
+use nest_rs_core::{Ambient, AmbientValue, async_trait, injectable, module};
 use nest_rs_http::{HttpModule, Json, StatusCode, controller, routes};
 use nest_rs_oauth_client::{
     AuthorizationRedirect, AuthorizationResponse, OAuthClient, OAuthClientConfig, TokenSet,
@@ -129,7 +129,7 @@ struct CallbackController;
 impl CallbackController {
     #[get("/{provider}/callback")]
     #[use_guards(SocialGuard)]
-    async fn callback(&self, member: Ctx<Member>) -> Json<serde_json::Value> {
+    async fn callback(&self, member: Ambient<Member>) -> Json<serde_json::Value> {
         Json(serde_json::json!({
             "subject": member.subject,
             "resource": member.resource,

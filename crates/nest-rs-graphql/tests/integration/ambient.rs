@@ -1,9 +1,9 @@
-//! `src/ctx.rs`: a `Ctx<T>` parameter reads what a guard attached — the
+//! `src/ctx.rs`: an `Ambient<T>` parameter reads what a guard attached — the
 //! request's guards for every field, a field's own for its body — and is no
 //! argument of the schema; absent, the field answers opaquely and files the
 //! type.
 
-use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, async_trait, injectable, module};
+use nest_rs_core::{Ambient, AmbientValue, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::SimpleObject;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
@@ -81,14 +81,14 @@ struct CtxResolver;
 impl CtxResolver {
     #[query]
     #[public]
-    async fn me(&self, caller: Ctx<Caller>) -> String {
+    async fn me(&self, caller: Ambient<Caller>) -> String {
         caller.into_inner().0
     }
 
     #[mutation]
     #[public]
     #[use_guards(AuthorGuard)]
-    async fn sign(&self, author: Ctx<Author>, text: String) -> String {
+    async fn sign(&self, author: Ambient<Author>, text: String) -> String {
         format!("{text}, {}", author.into_inner().0)
     }
 
@@ -99,13 +99,13 @@ impl CtxResolver {
     }
 
     #[field_resolver]
-    async fn greeting(&self, parent: &Card, caller: Ctx<Caller>) -> String {
+    async fn greeting(&self, parent: &Card, caller: Ambient<Caller>) -> String {
         format!("{} {}", parent.title, caller.into_inner().0)
     }
 
     #[query]
     #[public]
-    async fn unwired(&self, missing: Ctx<Unattached>) -> String {
+    async fn unwired(&self, missing: Ambient<Unattached>) -> String {
         let Unattached = missing.into_inner();
         "attached".to_owned()
     }

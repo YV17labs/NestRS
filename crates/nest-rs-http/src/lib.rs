@@ -15,6 +15,7 @@
 mod accept_encoding;
 mod access_log;
 mod allow;
+mod ambient;
 mod body;
 mod canonical_host;
 mod capped;
@@ -25,7 +26,6 @@ mod config;
 mod controller;
 mod cors;
 mod created;
-mod ctx;
 mod deadline;
 mod deprecation;
 mod detached;
@@ -198,6 +198,7 @@ pub use http::response::Parts as ResponseParts;
 /// ```
 pub use http::uri::Scheme;
 
+pub use ambient::RejectedCredential;
 pub use body::Body;
 pub use client_ip::{ClientIp, ClientOrigin};
 pub use config::{
@@ -208,7 +209,6 @@ pub use config::{
 pub use controller::{HttpControllerMeta, HttpRouteMeta, RequestBodyMeta, SchemaFn};
 pub use cors::HttpCors;
 pub use created::Created;
-pub use ctx::RejectedCredential;
 pub use deadline::RequestDeadline;
 pub use deprecation::DeprecationMeta;
 pub use detached::DetachedWork;

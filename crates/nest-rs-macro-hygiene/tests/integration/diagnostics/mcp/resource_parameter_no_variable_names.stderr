@@ -1,4 +1,4 @@
-error: #[resource] reads its arguments off its URI template: `name` names no variable of `note://{id}` — name it after one (`{id}` is read into `id: T`, where `T: FromStr`), or take a request-scoped provider as `Scoped<T>` or what a guard attached as `Ctx<T>`
+error: #[resource] reads its arguments off its URI template: `name` names no variable of `note://{id}` — name it after one (`{id}` is read into `id: T`, where `T: FromStr`), or take a request-scoped provider as `Scoped<T>` or what a guard attached as `Ambient<T>`
   --> tests/integration/diagnostics/mcp/resource_parameter_no_variable_names.rs:15:35
    |
 15 |     async fn note(&self, id: u32, name: String) -> Result<String, McpError> {

@@ -344,7 +344,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 // returning the framework's own type: a namesake does not compile.
                 let resolved = match kind {
                     TailParam::Scoped => quote!(::nest_rs_ws::__private::scoped_parameter()),
-                    TailParam::Ctx => quote!(::nest_rs_ws::__private::ctx_parameter(#event)),
+                    TailParam::Ambient => {
+                        quote!(::nest_rs_ws::__private::ambient_parameter(#event))
+                    }
                 };
                 let ty = pt.ty.as_ref();
                 let ident = format_ident!("__tail_{}", tail.len());
@@ -363,7 +365,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         &pt.ty,
                         "a #[subscribe_message] handler takes at most one payload parameter \
                          (deserialized from the message's `data`) beside its `Scoped<T>` and \
-                         `Ctx<T>` parameters",
+                         `Ambient<T>` parameters",
                     ));
                     break;
                 }

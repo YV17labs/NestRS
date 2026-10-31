@@ -1,9 +1,9 @@
-//! WebSocket's reading of `nest_rs_core::Ctx<T>`: a `#[subscribe_message]`
+//! WebSocket's reading of `nest_rs_core::Ambient<T>`: a `#[subscribe_message]`
 //! parameter reading what a guard attached — the upgrade's guards for every
 //! message of the socket, the message's own for its handler.
 //!
 //! ```
-//! use nest_rs_core::{AmbientValue, Ctx, Layer, UnitContext, async_trait, injectable};
+//! use nest_rs_core::{Ambient, AmbientValue, Layer, UnitContext, async_trait, injectable};
 //! use nest_rs_guards::{Denial, Guard, GuardFor};
 //! use nest_rs_http::HttpView;
 //! use nest_rs_ws::{gateway, messages};
@@ -41,7 +41,7 @@
 //! impl WhoGateway {
 //!     #[subscribe_message("whoami")]
 //!     #[public]
-//!     async fn whoami(&self, caller: Ctx<Caller>) -> String {
+//!     async fn whoami(&self, caller: Ambient<Caller>) -> String {
 //!         caller.into_inner().0
 //!     }
 //! }
@@ -61,13 +61,13 @@
 //! # }
 //! ```
 
-use nest_rs_core::{AmbientValue, Ctx};
+use nest_rs_core::{Ambient, AmbientValue};
 
 use crate::envelope::WsReply;
 
-/// The `Ctx<T>` a message's handler takes, read once its guards passed; a miss
+/// The `Ambient<T>` a message's handler takes, read once its guards passed; a miss
 /// answers `event` the opaque frame, the type filed at `error`, never answered.
-pub fn ctx_parameter<T: AmbientValue + Clone>(event: &str) -> Result<Ctx<T>, WsReply> {
+pub fn ambient_parameter<T: AmbientValue + Clone>(event: &str) -> Result<Ambient<T>, WsReply> {
     nest_rs_core::__private::attached::<T>()
         .map_err(|missing| WsReply::from_handler_error(event, missing))
 }
@@ -87,7 +87,7 @@ mod tests {
     fn a_miss_answers_opaquely_and_files_the_type() {
         let logs = LogCapture::install();
 
-        let Err(WsReply::Error(frame)) = ctx_parameter::<Hidden>("say") else {
+        let Err(WsReply::Error(frame)) = ambient_parameter::<Hidden>("say") else {
             panic!("a miss answers an error frame");
         };
 
@@ -97,7 +97,7 @@ mod tests {
         let line = logs.expect_one(crate::TARGET, "websocket message failed");
         assert!(
             line.field("error")
-                .is_some_and(|error| error.contains("ctx::tests::Hidden")),
+                .is_some_and(|error| error.contains("ambient::tests::Hidden")),
             "{:?}",
             line.fields,
         );

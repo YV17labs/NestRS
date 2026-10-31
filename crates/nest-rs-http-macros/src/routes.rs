@@ -1766,7 +1766,7 @@ fn validate_statement(argument: &TokenStream2) -> TokenStream2 {
     }
 }
 
-/// A `Piped<P, S>` parameter, read off its spelling as `Scoped` and `Ctx` are:
+/// A `Piped<P, S>` parameter, read off its spelling as `Scoped` and `Ambient` are:
 /// its pipe, and the extractor it reads when it names one.
 fn piped_parts(ty: &Type) -> Option<(&Type, Option<&Type>)> {
     let pipe = nth_generic_type(ty, "Piped", 0)?;

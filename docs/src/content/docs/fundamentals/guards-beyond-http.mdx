@@ -72,7 +72,7 @@ not see the request. A gateway binds them on its struct, for its upgrade; on
 `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` — and the transport
 runs them beside the global pool, each guard once. What they attach is ambient
 for every operation the request carries; below it you bind ordinary guards as
-usual, and a handler reads what they attached as a `Ctx<T>` parameter on every
+usual, and a handler reads what they attached as an `Ambient<T>` parameter on every
 edge. That wiring — `AuthzGraphqlModule`, `AuthzMcpModule`, `AuthzModule` on
 a gateway's upgrade,
 and what each one gates — lives on

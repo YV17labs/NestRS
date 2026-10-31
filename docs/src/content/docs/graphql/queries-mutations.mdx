@@ -223,7 +223,7 @@ non-receiver argument, the entry point to typed batch loaders. What the
 request needs beyond the document is a parameter, as on a route, and no
 schema argument:
 
-- **What a guard attached** is `Ctx<T>` — the principal the endpoint's
+- **What a guard attached** is `Ambient<T>` — the principal the endpoint's
   guards verified, or what a guard bound on the field derived from it. Absent,
   the field answers the opaque internal error and the type is filed at
   `error`: the guard that attaches it did not run there.
@@ -246,7 +246,7 @@ async fn visits(&self, counter: Scoped<crate::VisitCounter>) -> u32 {
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
 use nest_rs::authz::Update;
-use nest_rs::core::{Ctx, ambient};
+use nest_rs::core::{Ambient, ambient};
 use nest_rs::graphql::operations;
 use nest_rs::seaorm::Authorized;
 
@@ -263,7 +263,7 @@ impl PostsResolver {
     async fn publish_post(
         &self,
         post: Authorized<Update, PostEntity>,
-        actor: Ctx<PostAuthor>,
+        actor: Ambient<PostAuthor>,
     ) -> Result<Post, PostError> {
         let PostAuthor(actor_id) = *actor;
         self.svc.publish(post.into_inner(), actor_id).await
@@ -287,7 +287,7 @@ claims the endpoint's guards verified (see
 operation the `PostAuthor` is always there. A `#[public]` operation also admits
 anonymous callers, for whom no guard attached any: it reads
 `nest_rs::core::ambient::<Claims>()` and decides, as `greeting` does. A
-`Ctx<Claims>` there would answer every anonymous call with the internal error.
+`Ambient<Claims>` there would answer every anonymous call with the internal error.
 
 ## Returning a `Result`
 

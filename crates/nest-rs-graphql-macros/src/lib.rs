@@ -44,7 +44,7 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// last segment, since no value tells a macro what to leave out of
 /// async-graphql's argument list, and each through a function returning its
 /// own type, so a namesake does not compile: `Scoped<T>`, a provider from the
-/// request's scope, and `Ctx<T>` (`nest_rs_core::Ctx`), what a guard attached
+/// request's scope, and `Ambient<T>` (`nest_rs_core::Ambient`), what a guard attached
 /// — a miss of either answers the opaque internal error, the type filed at
 /// `error`.
 ///

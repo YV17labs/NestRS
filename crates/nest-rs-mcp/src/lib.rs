@@ -17,7 +17,7 @@
 //! `#[use_exception_filters(...)]` and `#[use_interceptors(...)]`. Its tail then
 //! holds each argument it decoded to the rules its type declares, runs a pipe
 //! on its arguments (`Parameters<Piped<P>>`), and reads its `Scoped<T>` and
-//! `Ctx<T>` parameters, in that order. The host's layers and the
+//! `Ambient<T>` parameters, in that order. The host's layers and the
 //! app-wide ones join each family once per site, deduplicated by `TypeId`; the
 //! guard stage runs each guard's `check`, the guards at the endpoint's request
 //! running `check_http` apart from it.
@@ -70,7 +70,6 @@ mod access;
 mod ambient;
 mod composite;
 mod config;
-mod ctx;
 mod endpoint;
 mod error;
 mod guard;
@@ -111,7 +110,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::ctx::ctx_parameter;
+    pub use crate::ambient::ambient_parameter;
     pub use crate::endpoint::{McpMount, endpoint};
     pub use crate::error::{
         ErrorReport, ErrorReportChain, OperationAnswer, OperationFailure, answer_of,

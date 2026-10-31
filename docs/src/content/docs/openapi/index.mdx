@@ -114,7 +114,7 @@ signature cannot say — a summary, a description, the group it sits in:
 async fn publish(
     &self,
     post: Authorized<Update, PostEntity>,
-    actor: Ctx<PostAuthor>,
+    actor: Ambient<PostAuthor>,
 ) -> Result<Json<Post>, PostError> {
     let PostAuthor(actor_id) = *actor;
     Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))

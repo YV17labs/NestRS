@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use nest_rs_authn::{AuthError, AuthnConfig, AuthnModule, Strategy, basic_credentials};
-use nest_rs_core::{Ctx, async_trait, injectable, module};
+use nest_rs_core::{Ambient, async_trait, injectable, module};
 use nest_rs_http::{HttpModule, Request, StatusCode, controller, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule};
 use nest_rs_oauth_server::{
@@ -73,7 +73,7 @@ struct TokenController;
 impl TokenController {
     #[post("/token")]
     #[use_guards(Authenticated)]
-    async fn token(&self, client: Ctx<Client>) -> nest_rs_http::Result<String> {
+    async fn token(&self, client: Ambient<Client>) -> nest_rs_http::Result<String> {
         let actor = nest_rs_core::current_actor_id().unwrap_or_default();
         Ok(format!("{} {} {actor}", client.client_id, client.payload))
     }

@@ -51,7 +51,7 @@ use crate::registry::SocialRegistry;
 #[async_trait]
 pub trait SocialSignIn: Send + Sync + 'static {
     /// The principal a sign-in resolves to — what the callback route's
-    /// handler reads as `Ctx<Principal>`.
+    /// handler reads as `Ambient<Principal>`.
     type Principal: PrincipalIdentity + AmbientValue + Clone;
 
     /// The principal `profile` signs in as, keyed on its

@@ -80,7 +80,7 @@ impl fmt::Display for Subject {
 // `PrincipalIdentity` makes the claims the principal: the authentication guard
 // puts `sub` on the request span as `actor_id`, so every downstream event —
 // denials included — is attributable, and attaches the claims for the rest of
-// the request, where `Ctx<Claims>` in a handler on every edge reads them back.
+// the request, where `Ambient<Claims>` in a handler on every edge reads them back.
 // A tenant claim takes `#[principal(tenant)]`, a `scope` claim
 // `#[principal(scopes)]`.
 #[derive(Debug, Clone, Serialize, Deserialize, PrincipalIdentity)]
@@ -291,7 +291,7 @@ pub use module::AuthzGraphqlModule;
 /// The controllers' own chain (`AuthnGuard`, then `AuthzGuard`) at the GraphQL
 /// request, joining the app's global pool: the claims and the ability it
 /// attaches are ambient for every operation — so one policy answers on both
-/// transports, and a resolver reads the claims as `Ctx<Claims>`.
+/// transports, and a resolver reads the claims as `Ambient<Claims>`.
 pub(crate) const AUTHZ_GRAPHQL_MODULE: &str = r#"use nest_rs::core::module;
 use nest_rs::graphql::GraphqlView;
 use nest_rs::http::EndpointGuards;

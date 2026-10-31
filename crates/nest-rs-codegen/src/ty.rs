@@ -94,9 +94,9 @@ pub enum TailParam {
     /// `Scoped<T>`: a provider from the request's scope, which the access
     /// graph checks.
     Scoped,
-    /// `Ctx<T>`: what a guard attached, resolved through a function returning
-    /// core's own `Ctx`, so a namesake does not compile.
-    Ctx,
+    /// `Ambient<T>`: what a guard attached, resolved through a function returning
+    /// core's own `Ambient`, so a namesake does not compile.
+    Ambient,
 }
 
 impl TailParam {
@@ -104,8 +104,8 @@ impl TailParam {
     pub fn named(ident: &Ident) -> Option<Self> {
         if ident == "Scoped" {
             Some(Self::Scoped)
-        } else if ident == "Ctx" {
-            Some(Self::Ctx)
+        } else if ident == "Ambient" {
+            Some(Self::Ambient)
         } else {
             None
         }
@@ -113,7 +113,7 @@ impl TailParam {
 }
 
 /// What the tail resolves `ty` as: a path whose last segment is `Scoped` or
-/// `Ctx`, whatever its arguments.
+/// `Ambient`, whatever its arguments.
 pub fn tail_param(ty: &Type) -> Option<TailParam> {
     let Type::Path(tp) = ty else { return None };
     TailParam::named(last_segment_ident(&tp.path))
@@ -622,13 +622,13 @@ mod tests {
                 parse_quote!(nest_rs::ws::Scoped<Cart>),
                 Some(TailParam::Scoped),
             ),
-            (parse_quote!(Ctx<Claims>), Some(TailParam::Ctx)),
+            (parse_quote!(Ambient<Claims>), Some(TailParam::Ambient)),
             (
-                parse_quote!(nest_rs::core::Ctx<Claims>),
-                Some(TailParam::Ctx),
+                parse_quote!(nest_rs::core::Ambient<Claims>),
+                Some(TailParam::Ambient),
             ),
-            (parse_quote!(Option<Ctx<Claims>>), None),
-            (parse_quote!(&Ctx<Claims>), None),
+            (parse_quote!(Option<Ambient<Claims>>), None),
+            (parse_quote!(&Ambient<Claims>), None),
             (parse_quote!(Context), None),
         ] {
             let ty: Type = ty;

@@ -3,7 +3,7 @@
 //! `nest_rs::http`'s, and no server library is named.
 
 use nest_rs::authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy, bearer_token};
-use nest_rs::core::{Ctx, async_trait};
+use nest_rs::core::{Ambient, async_trait};
 use nest_rs::http::{Request, controller, routes};
 
 /// The caller a bearer token admits, named by its subject, never by the token.
@@ -38,7 +38,7 @@ pub struct HygieneAuthnController;
 impl HygieneAuthnController {
     /// The caller the guard attached.
     #[get("/me")]
-    async fn me(&self, caller: Ctx<HygieneCaller>) -> String {
+    async fn me(&self, caller: Ambient<HygieneCaller>) -> String {
         caller.into_inner().0
     }
 }

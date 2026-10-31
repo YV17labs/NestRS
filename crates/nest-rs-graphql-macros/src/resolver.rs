@@ -767,8 +767,8 @@ fn tail_bindings(tail: &[(Ident, Type, TailParam)]) -> Vec<TokenStream2> {
             TailParam::Scoped => quote! {
                 let #ident = <#ty as ::nest_rs_graphql::__private::FromScope>::from_scope()?;
             },
-            TailParam::Ctx => quote! {
-                let #ident: #ty = ::nest_rs_graphql::__private::ctx_parameter()?;
+            TailParam::Ambient => quote! {
+                let #ident: #ty = ::nest_rs_graphql::__private::ambient_parameter()?;
             },
         })
         .collect()
@@ -1204,7 +1204,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             }
             let piped = piped_args(&sig);
             // On the wire, the bound subject becomes its `id` string and each pipe its
-            // `T`; a `Scoped<T>` or a `Ctx<T>` is no argument at all.
+            // `T`; a `Scoped<T>` or an `Ambient<T>` is no argument at all.
             let wrapper_sig = {
                 let mut s = sig.clone();
                 s.inputs = s
@@ -1574,7 +1574,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 /// Build a field resolver's `#[ComplexObject]` method, the parent as `&self`,
 /// run through its site. Owned args become GraphQL field arguments,
 /// `&`-reference args are injected, a `Scoped<T>` resolves per request and a
-/// `Ctx<T>` from what a guard attached.
+/// `Ambient<T>` from what a guard attached.
 fn field_method(
     self_ty: &Type,
     deleg_attrs: &[Attribute],

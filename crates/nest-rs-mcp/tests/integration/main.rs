@@ -112,7 +112,6 @@ macro_rules! task_host {
 }
 
 mod ambient;
-mod ctx;
 mod endpoint;
 mod error;
 mod guard;

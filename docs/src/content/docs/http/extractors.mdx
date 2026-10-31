@@ -14,12 +14,12 @@ extractors:
 the typed header reader `Header<T>`, the
 raw-body reader `RawBody`, the spoofable but observation-grade
 `ClientIp`, the request-scoped DI resolver `Scoped<T>`, the
-guard-attached context reader `Ctx<T>`, and the route metadata a guard reads
+guard-attached context reader `Ambient<T>`, and the route metadata a guard reads
 through `cx.reflector()`, declared with `#[meta(...)]`. A handler that needs
 the request itself — its URI, a header no DTO names — takes `req: &Request`.
 
 This page is the reference: one extractor, one example, one rule. The
-[Guards](/fundamentals/guards/) for `Ctx<T>` and
+[Guards](/fundamentals/guards/) for `Ambient<T>` and
 [Providers](/fundamentals/providers/) for `Scoped<T>` — tell the story.
 
 ## `Json<T>` — typed JSON in and out
@@ -269,10 +269,10 @@ See [Providers](/fundamentals/providers/) for the scope rules — a
 request-scoped provider may inject singletons, never the reverse, never
 another request-scoped one.
 
-## `Ctx<T>` — read context a guard attached
+## `Ambient<T>` — read context a guard attached
 
 A guard runs before the handler, can short-circuit with a response, and
-can attach a typed value for the rest of the request. `Ctx<T>` is how the
+can attach a typed value for the rest of the request. `Ambient<T>` is how the
 handler reads that value back:
 
 ```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
@@ -283,7 +283,7 @@ handler reads that value back:
 async fn publish(
     &self,
     post: Authorized<Update, PostEntity>,
-    actor: Ctx<PostAuthor>,
+    actor: Ambient<PostAuthor>,
 ) -> Result<Json<Post>, PostError> {
     let PostAuthor(actor_id) = *actor;
     Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
@@ -293,22 +293,22 @@ async fn publish(
 `actor` is the value the route's own `PostAuthorGuard` attached, after the
 controller's `AuthnGuard` attached the principal it reads.
 
-`Ctx<T>` rejects with `500` if `T` is absent — a missing context means
+`Ambient<T>` rejects with `500` if `T` is absent — a missing context means
 the guard that should have set it never ran on this route (a wiring bug,
 not a client error). `T` implements `AmbientValue` and `Clone`; the value is
 cloned out of the ambient context, so a large one goes in a newtype holding an
 `Arc` (`struct Catalog(Arc<Entries>)`), which implements `AmbientValue` itself.
 
-`Ctx<T>` is core's, `nest_rs::core::Ctx`, and the same parameter on every
+`Ambient<T>` is core's, `nest_rs::core::Ambient`, and the same parameter on every
 edge: a GraphQL operation, a WebSocket message and an MCP tool read what their
 guards attached the same way, and none of them lists it among the arguments
 its protocol describes.
 
 The canonical use is the authenticated principal: `AuthnGuard` runs the
 strategy, then attaches a `Claims` (or whatever the resource server's
-principal is). Every authenticated handler reads it as `auth: Ctx<Claims>`.
+principal is). Every authenticated handler reads it as `auth: Ambient<Claims>`.
 On a `#[public]` route reached with a credential the strategy rejected,
-`Ctx<Claims>` answers the `401` that credential earned rather than a `500`.
+`Ambient<Claims>` answers the `401` that credential earned rather than a `500`.
 
 See [Guards](/fundamentals/guards/) for how to attach a value, and for
 the design rule (guards gate and attach; handlers read).
@@ -393,7 +393,7 @@ anonymous caller it signs in, and rate-limited all the same.
 
 ## Going further
 
-- [Guards](/fundamentals/guards/) — write a guard that attaches `Ctx<T>`.
+- [Guards](/fundamentals/guards/) — write a guard that attaches `Ambient<T>`.
 - [Providers](/fundamentals/providers/) — request-scoped providers and
   the rules `Scoped<T>` reads.
 - [Pipes](/fundamentals/pipes/) — write a pipe and apply it through

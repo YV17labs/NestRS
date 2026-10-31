@@ -404,7 +404,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | a `Denial::Unauthorized(…)`, `Forbidden(…)`, `RateLimited { … }` or other variant built or matched | its constructor — `Denial::forbidden(…)`, `Denial::rate_limited(…)` — and, to tell denials apart, `denial.http_status()` and `denial.bearer_error()`: `Denial`'s fields are private |
    | `impl HttpGuard for X {}`, `GraphqlGuard`, `WsGuard`, `McpGuard` | `impl GuardFor<HttpView> for X {}`, `GuardFor<GraphqlView>`, `GuardFor<WsView>`, `GuardFor<McpView>` |
    | `req.extensions_mut().insert(value)` in a guard, read back with `Ctx<T>` | `cx.attach(value)`, with `impl AmbientValue for T {}` beside the type; a guard after it reads `cx.ambient::<T>()` |
-   | `use nest_rs::http::Ctx;` | `use nest_rs::core::Ctx;` — the same parameter on a route, a resolver, a message handler and a tool; `nest_rs::prelude::*` carries it |
+   | `use nest_rs::http::Ctx;`, a `Ctx<T>` parameter | `use nest_rs::core::Ambient;`, an `Ambient<T>` parameter — named for the ambient context it reads, the same parameter on a route, a resolver, a message handler and a tool; `nest_rs::prelude::*` carries it |
    | a `Strategy::Principal` or an `AbilityFactory::Actor` that is not your own type (`()`, `&'static str`) | a type of your own implementing `AmbientValue` and `Clone` — the guard attaches it; a `Claims` gains `impl AmbientValue for Claims {}`, or derives it with its `PrincipalIdentity` (step 11) |
    | `if Reflector::new(req).is_public() { return Ok(()) }` in an authentication guard | `if matches!(cx.reflector().posture(), Posture::Public \| Posture::InBand) { return Ok(()) }` — `/graphql` is `InBand`, each operation declaring its own posture |
    | `nest_rs::guards::prelude::HttpRequest` | `HttpView`, and `nest_rs::http::Request` for the type it holds |
@@ -426,7 +426,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `req.extensions().get::<Public>()` in a guard | `cx.reflector().is_public()` |
    | a `#[meta(..)]` repeated on every route of a controller | one `#[meta(..)]` under `#[controller]`, a route's own overriding it |
    | `GraphqlOperationContext`, `McpOperationContext` | `GraphqlView`, `McpView` |
-   | a value an interceptor, a middleware or a test put in the request's extensions, read back with `Ctx<T>` | the value made ambient around what reads it — `nest_rs::core::with_ambient(Arc::new(value), next.run(cx))`, or `cx.attach(value)` before `next.run(cx)` — or attached by a guard; `Ctx<T>` no longer reads the extensions |
+   | a value an interceptor, a middleware or a test put in the request's extensions, read back with `Ctx<T>` | the value made ambient around what reads it — `nest_rs::core::with_ambient(Arc::new(value), next.run(cx))`, or `cx.attach(value)` before `next.run(cx)` — or attached by a guard; `Ambient<T>` reads no extension |
    | a value of your own in a `tokio::task_local!` carried by hand | `impl AmbientValue for T {}`, added with `with_ambient` or `cx.attach`, read with `ambient::<T>()` |
    | `RequestContinuation::current()` | `RequestContinuation::capture(Continuation::Task)`, or the continuation the work is |
    | another driver's `after_commit` re-installing the scope and the ability around held work | capture `RequestContinuation::capture(Continuation::Commit)` and read `current_executor_scope()` where the work is registered; run it inside the capture |
@@ -440,8 +440,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | an `impl GraphqlOperationGuard` / `impl McpOperationGuard` of your own | a `Guard` with `check_http` and `impl GuardFor<HttpView>`, listed in `EndpointGuards<…>` |
    | `AllowAllMcpGuard as dyn McpOperationGuard` | `McpModule::for_root(McpAccess::Public)` in the app's root |
    | `GlobalPoolOperationGuard`, `GlobalPoolMcpGuard` | nothing: the transport runs the global pool at the `/graphql` and `/mcp` requests |
-   | `forward_principal!(Claims);` in a module, `ctx.data::<Claims>()?` in a resolver | nothing in the module; a `claims: Ctx<Claims>` parameter on the operation, no argument of the schema |
-   | `nest_rs::core::ambient::<Claims>()` read by hand in a resolver, a message handler or a tool, with an `.ok_or(…)` of its own | a `caller: Ctx<Claims>` parameter — not a compile error: the hand-written read still compiles, and the parameter answers a miss opaquely, its type filed at `error` |
+   | `forward_principal!(Claims);` in a module, `ctx.data::<Claims>()?` in a resolver | nothing in the module; a `claims: Ambient<Claims>` parameter on the operation, no argument of the schema |
+   | `nest_rs::core::ambient::<Claims>()` read by hand in a resolver, a message handler or a tool, with an `.ok_or(…)` of its own | a `caller: Ambient<Claims>` parameter — not a compile error: the hand-written read still compiles, and the parameter answers a miss opaquely, its type filed at `error` |
    | `LoaderScope as dyn GraphqlBatchContext` in a module's `providers`, `use nest_rs::seaorm::graphql::LoaderScope;` | nothing: a DataLoader batch carries the request's ambient values itself |
    | `impl McpToolContext for X` (`capture`, `around`), provided `as dyn McpToolContext` | an `#[interceptor]` or `#[interceptor(stage = unit)]` making the value ambient (`cx.attach`, `with_ambient`), read with `nest_rs::core::ambient::<T>()` |
    | `#[use_guards(G)]` beside an `#[mcp]` host writing rmcp's `ServerHandler` | `EndpointGuards<McpView, G>` declared by a module, or the host's tools under `#[tools]` |
@@ -1352,7 +1352,7 @@ lists what the boot, a log or the wire shows when one is missed.
   refusal at `error` (`guard denied …`, `status=500`), and once per site
   `an HTTP guard entry ran on a unit with no HTTP view`. Keep its decision in
   `check_http` and admit the units in `check` (`Ok(())`).
-- **A `Ctx<T>` no guard attached on a resolver, a message handler or a tool** —
+- **An `Ambient<T>` no guard attached on a resolver, a message handler or a tool** —
   the value an authentication guard attaches, read on an operation the guard
   never reached — answers the edge's opaque internal error, and the type is
   filed once at `error` (`graphql operation failed`, `websocket message failed`,

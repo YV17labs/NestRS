@@ -180,7 +180,7 @@ principal behind it (`unauthenticated`), whatever `define_visitor` granted, and
 only `#[public]` operations read those grants.
 
 What the request's guards attach is ambient for every operation it carries, so
-a resolver reads the verified principal as a parameter, `claims: Ctx<Claims>`,
+a resolver reads the verified principal as a parameter, `claims: Ambient<Claims>`,
 as a route does — nothing copies it anywhere. The gate is the guard that
 attaches it, and that guard runs only through the module that declares it.
 Omit the module and there is nothing to read — the schema is anonymous because

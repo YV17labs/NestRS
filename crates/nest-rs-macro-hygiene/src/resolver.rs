@@ -6,7 +6,7 @@
 //! the call site's manifest, falling back to a bare `::async_graphql`; this
 //! compile fails if the `crate = ` override is ever dropped.
 
-use nest_rs::core::{Ctx, Layer, UnitContext, async_trait};
+use nest_rs::core::{Ambient, Layer, UnitContext, async_trait};
 use nest_rs::graphql::async_graphql::SimpleObject;
 use nest_rs::graphql::async_graphql::futures_util::stream::{self, Stream};
 use nest_rs::graphql::{GraphqlView, Scoped, operations, resolver};
@@ -34,7 +34,7 @@ impl GreetingResolver {
 
     #[query]
     #[public]
-    async fn operator(&self, operator: Ctx<crate::operator::HygieneOperator>) -> String {
+    async fn operator(&self, operator: Ambient<crate::operator::HygieneOperator>) -> String {
         operator.into_inner().0
     }
 

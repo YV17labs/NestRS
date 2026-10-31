@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{AmbientValue, Ctx, Layer, async_trait, injectable, module};
+use nest_rs_core::{Ambient, AmbientValue, Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, guard};
@@ -416,7 +416,7 @@ struct Tenant(String);
 impl AmbientValue for Tenant {}
 
 /// Reads `x-tenant` (defaulting to `anon`) and attaches it as a `Tenant` for
-/// the rest of the request: a route handler reads it through `Ctx<Tenant>`, a
+/// the rest of the request: a route handler reads it through `Ambient<Tenant>`, a
 /// resolver from the ambient context.
 #[injectable]
 #[derive(Default)]
@@ -456,7 +456,7 @@ struct CtxScope;
 #[routes]
 impl CtxScope {
     #[get("/whoami")]
-    async fn whoami(&self, tenant: Ctx<Tenant>) -> String {
+    async fn whoami(&self, tenant: Ambient<Tenant>) -> String {
         tenant.into_inner().0
     }
 }
@@ -530,7 +530,7 @@ struct CtxUnguarded;
 impl CtxUnguarded {
     #[get("/whoami")]
     #[public]
-    async fn bare_whoami(&self, tenant: Ctx<Tenant>) -> String {
+    async fn bare_whoami(&self, tenant: Ambient<Tenant>) -> String {
         tenant.into_inner().0
     }
 }

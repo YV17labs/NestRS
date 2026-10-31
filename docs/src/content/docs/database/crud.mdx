@@ -275,7 +275,7 @@ service — on HTTP, from the route's path:
     async fn publish(
         &self,
         post: Authorized<Update, PostEntity>,
-        actor: Ctx<PostAuthor>,
+        actor: Ambient<PostAuthor>,
     ) -> Result<Json<Post>, PostError> {
         let PostAuthor(actor_id) = *actor;
         Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
@@ -291,7 +291,7 @@ and on GraphQL, from an `id: String!` argument the attribute synthesises:
     async fn publish_post(
         &self,
         post: Authorized<Update, PostEntity>,
-        actor: Ctx<PostAuthor>,
+        actor: Ambient<PostAuthor>,
     ) -> Result<Post, PostError> {
         let PostAuthor(actor_id) = *actor;
         self.svc.publish(post.into_inner(), actor_id).await
@@ -299,7 +299,7 @@ and on GraphQL, from an `id: String!` argument the attribute synthesises:
 ```
 
 `PostAuthorGuard` derives the author from the verified claims and attaches it
-on both edges, so each body reads it as `Ctx<PostAuthor>`; the service's
+on both edges, so each body reads it as `Ambient<PostAuthor>`; the service's
 `PostError` answers its `409` or its `CONFLICT` by its own `ToProblem`.
 
 Two pieces, each with one job:

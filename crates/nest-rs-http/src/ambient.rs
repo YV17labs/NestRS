@@ -1,10 +1,10 @@
-//! HTTP's reading of [`Ctx<T>`]: the value a guard attached to the route's
+//! HTTP's reading of [`Ambient<T>`]: the value a guard attached to the route's
 //! unit, or the `401` an authentication guard deferred on a `#[public]` route.
 
 use std::any::TypeId;
 
 use http::{Extensions, StatusCode};
-use nest_rs_core::{AmbientValue, Ctx};
+use nest_rs_core::{Ambient, AmbientValue};
 
 use crate::problem::ProblemDetails;
 use crate::response::{IntoResponse, Response};
@@ -13,7 +13,7 @@ use crate::response::{IntoResponse, Response};
 /// credential, rejected it, and admitted the request anyway because the route
 /// is `#[public]`.
 ///
-/// A [`Ctx`] of the `principal` type then answers the deferred `401` instead of
+/// A [`Ambient`] of the `principal` type then answers the deferred `401` instead of
 /// a `500`; any other missing context stays a wiring bug.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -64,7 +64,7 @@ impl RejectedCredential {
 }
 
 /// What a guard attached, or why it is absent.
-fn read<T: AmbientValue + Clone>(extensions: &Extensions) -> Result<Ctx<T>, Absent<'_>> {
+fn read<T: AmbientValue + Clone>(extensions: &Extensions) -> Result<Ambient<T>, Absent<'_>> {
     if let Ok(attached) = nest_rs_core::__private::attached::<T>() {
         return Ok(attached);
     }
@@ -95,7 +95,7 @@ fn read<T: AmbientValue + Clone>(extensions: &Extensions) -> Result<Ctx<T>, Abse
 /// ran on this route — but where an authentication guard rejected a presented
 /// credential on a `#[public]` route: the deferred `401`
 /// ([`RejectedCredential`]) answers.
-impl<'a, T: AmbientValue + Clone> crate::FromRequest<'a> for Ctx<T> {
+impl<'a, T: AmbientValue + Clone> crate::FromRequest<'a> for Ambient<T> {
     async fn from_request(
         req: &'a crate::Request,
         _body: &mut crate::RequestBody,
@@ -117,9 +117,9 @@ mod tests {
 
     impl AmbientValue for Principal {}
 
-    async fn extract(req: Request) -> Result<Ctx<Principal>> {
+    async fn extract(req: Request) -> Result<Ambient<Principal>> {
         let (req, mut body) = req.split();
-        Ctx::<Principal>::from_request(&req, &mut body).await
+        Ambient::<Principal>::from_request(&req, &mut body).await
     }
 
     #[tokio::test]

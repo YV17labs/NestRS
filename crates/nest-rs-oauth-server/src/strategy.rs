@@ -19,7 +19,7 @@ use crate::registry::{AuthenticatedClient, authenticate_against_registry};
 /// matches is refused without saying which half failed.
 ///
 /// ```
-/// use nest_rs_core::{Ctx, module};
+/// use nest_rs_core::{Ambient, module};
 /// use nest_rs_http::{controller, routes};
 /// use nest_rs_oauth_server::{
 ///     AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientAuthenticationGuard,
@@ -38,7 +38,7 @@ use crate::registry::{AuthenticatedClient, authenticate_against_registry};
 ///     #[api(response = AccessTokenResponse)]
 ///     async fn token(
 ///         &self,
-///         client: Ctx<AuthenticatedClient<()>>,
+///         client: Ambient<AuthenticatedClient<()>>,
 ///         request: AccessTokenRequest,
 ///     ) -> nest_rs_http::Result<AccessTokenResponse> {
 ///         let scope = client.scope_for(&request.scope)?;

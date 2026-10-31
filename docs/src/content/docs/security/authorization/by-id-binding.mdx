@@ -42,7 +42,7 @@ use nest_rs::seaorm::Authorized;
     async fn publish(
         &self,
         post: Authorized<Update, PostEntity>,
-        actor: Ctx<PostAuthor>,
+        actor: Ambient<PostAuthor>,
     ) -> Result<Json<Post>> {
         let PostAuthor(actor_id) = *actor;
         Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))

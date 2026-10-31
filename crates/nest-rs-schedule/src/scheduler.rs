@@ -1572,7 +1572,8 @@ mod tests {
     }
 
     /// A tick blocking its thread never yields to be dropped, so it is left after
-    /// the settle bound.
+    /// the settle bound. It blocks until the test lets it go, after `stop`
+    /// returned: whatever the machine's load, `stop` left a tick still running.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[expect(
         clippy::let_underscore_must_use,
@@ -1583,9 +1584,13 @@ mod tests {
         let mut tasks = JoinSet::new();
         let mut spawned = HashMap::new();
         let (started, blocked) = std::sync::mpsc::channel();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let (unblocked, let_go) = std::sync::mpsc::channel();
         let handle = tasks.spawn(nest_rs_core::panic::contain(async move {
             let _ = started.send(());
-            std::thread::sleep(Duration::from_secs(1));
+            // Bounded only so a `stop` that waited on the tick fails the test
+            // rather than hang it.
+            let _ = unblocked.send(held.recv_timeout(Duration::from_secs(60)).is_ok());
         }));
         spawned.insert(
             handle.id(),
@@ -1601,12 +1606,16 @@ mod tests {
         let asked = Instant::now();
         stop(tasks, spawned, Duration::from_millis(50)).await;
         let took = asked.elapsed();
+        let _ = release.send(());
 
+        assert_eq!(
+            let_go.recv().ok(),
+            Some(true),
+            "stop returned while the tick still blocked, and the test let it go",
+        );
         assert!(
-            took < Duration::from_millis(50)
-                + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
-                + Duration::from_millis(500),
-            "stop returned within its two bounds: {took:?}",
+            took >= Duration::from_millis(50) + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT,
+            "stop waited out its two bounds before leaving the tick: {took:?}",
         );
         let stopped = logs.expect_one(
             crate::TARGET,

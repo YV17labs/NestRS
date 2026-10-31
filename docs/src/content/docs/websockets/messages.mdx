@@ -291,11 +291,10 @@ branches on is `data.code`, as HTTP's problem document carries `code` beside
 its `errors`. A pipe's rejection with no field map is its sentence and
 `"code": "INVALID_ARGUMENT"` alone.
 
-Each entry is `{ code, message, params }`. `params` carries the rule's own
-bounds — `min`, `max`, the regex name — so a client renders "at least 1
-character" without parsing prose; the rejected **value** is stripped, so a
-too-short password never rides back out. `message` is `null` unless the
-`#[validate]` rule set one.
+Each entry is `{ code }`, with a `message` when the `#[validate]` rule sets
+one. A rule's parameters never ride along — they can hold the rejected
+**value**, so a too-short password never rides back out — and a client keys
+its sentence on `code`.
 
 `errors` is **absent**, not `null`, when the failure had nothing structured to
 say, so a client can branch on its presence. Every refused dispatch files its

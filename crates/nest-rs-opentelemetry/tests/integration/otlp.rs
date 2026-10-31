@@ -3,7 +3,6 @@
 //! issued. Each test initialises OpenTelemetry once, in its own process.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
@@ -37,11 +36,10 @@ const ACCEPTED: &str = "HTTP/1.1 200 OK\r\ncontent-type: application/x-protobuf\
                         content-length: 0\r\nconnection: close\r\n\r\n";
 
 /// An OTLP/HTTP collector over TLS on loopback, on a runtime of its own, every
-/// export it reads counted, and the path each was posted to kept.
+/// export it reads kept by the path it was posted to.
 struct Collector {
     addr: SocketAddr,
-    exports: Arc<AtomicUsize>,
-    paths: Arc<Mutex<Vec<String>>>,
+    exports: Arc<Mutex<Vec<String>>>,
 }
 
 impl Collector {
@@ -56,10 +54,8 @@ impl Collector {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
         listener.set_nonblocking(true).expect("non-blocking");
         let addr = listener.local_addr().expect("its address");
-        let exports = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&exports);
-        let paths = Arc::new(Mutex::new(Vec::new()));
-        let kept = Arc::clone(&paths);
+        let exports = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&exports);
         let acceptor = CERTIFICATE.acceptor(clients);
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -69,12 +65,8 @@ impl Collector {
             runtime.block_on(async move {
                 let listener = tokio::net::TcpListener::from_std(listener).expect("a listener");
                 while let Ok((stream, _)) = listener.accept().await {
-                    let (acceptor, behaviour, counted, kept) = (
-                        acceptor.clone(),
-                        behaviour.clone(),
-                        Arc::clone(&counted),
-                        Arc::clone(&kept),
-                    );
+                    let (acceptor, behaviour, kept) =
+                        (acceptor.clone(), behaviour.clone(), Arc::clone(&kept));
                     tokio::spawn(async move {
                         let Ok(mut tls) = acceptor.accept(stream).await else {
                             return;
@@ -102,14 +94,12 @@ impl Collector {
                                 Ok(n) => read.extend_from_slice(&buf[..n]),
                             }
                         }
-                        if let Some(path) = head
+                        let path = head
                             .lines()
                             .next()
                             .and_then(|line| line.split_whitespace().nth(1))
-                        {
-                            kept.lock().expect("the paths").push(path.to_owned());
-                        }
-                        counted.fetch_add(1, Ordering::SeqCst);
+                            .unwrap_or_default();
+                        kept.lock().expect("the exports").push(path.to_owned());
                         match behaviour {
                             Behaviour::Answer(answer) => {
                                 let _ = tls.write_all(answer.as_bytes()).await;
@@ -121,11 +111,7 @@ impl Collector {
                 }
             });
         });
-        Self {
-            addr,
-            exports,
-            paths,
-        }
+        Self { addr, exports }
     }
 
     fn endpoint(&self) -> String {
@@ -133,13 +119,13 @@ impl Collector {
     }
 
     fn exports(&self) -> usize {
-        self.exports.load(Ordering::SeqCst)
+        self.exports.lock().expect("the exports").len()
     }
 
     /// How many exports were posted to `path`.
     fn exports_to(&self, path: &str) -> usize {
-        let paths = self.paths.lock().expect("the paths");
-        paths.iter().filter(|posted| *posted == path).count()
+        let exports = self.exports.lock().expect("the exports");
+        exports.iter().filter(|posted| *posted == path).count()
     }
 }
 

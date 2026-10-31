@@ -8,7 +8,7 @@ use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
 use nest_rs_opentelemetry::{LogFormat, OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
 
-use crate::init_under;
+use crate::{console_vars, init_under};
 
 const CHILD_TEST: &str = "init::init_child_process";
 
@@ -46,17 +46,17 @@ fn init_child_process() {
     }
 }
 
-/// This test binary, re-run on the child test alone, to its exit.
+/// This test binary, re-run on the child test alone, to its exit, every one of
+/// [`console_vars`] removed.
 fn child() -> Output {
-    Command::new(std::env::current_exe().expect("the test binary"))
+    let mut child = Command::new(std::env::current_exe().expect("the test binary"));
+    child
         .args(["--exact", CHILD_TEST, "--nocapture"])
-        .env(CHILD_ROLE, "inside-the-subscriber")
-        .env_remove(EnvPrefix::var(var::FILTER))
-        .env_remove("RUST_LOG")
-        .env_remove(EnvPrefix::var(var::FORMAT))
-        .env_remove(EnvPrefix::var(var::SOURCE_LOCATION))
-        .output()
-        .expect("the child runs")
+        .env(CHILD_ROLE, "inside-the-subscriber");
+    for name in console_vars() {
+        child.env_remove(name);
+    }
+    child.output().expect("the child runs")
 }
 
 /// The production shape with an exporter's subscriber: OpenTelemetry's is the

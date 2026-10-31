@@ -20,9 +20,19 @@ use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
 use nest_rs_opentelemetry::{OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
 
+/// Every variable the console reads, which a test clears so that it reads what
+/// it pinned and set, whatever the shell running it exports.
+fn console_vars() -> [String; 4] {
+    [
+        EnvPrefix::var(var::FILTER),
+        "RUST_LOG".to_owned(),
+        EnvPrefix::var(var::FORMAT),
+        EnvPrefix::var(var::SOURCE_LOCATION),
+    ]
+}
+
 /// `config` initialised with `vars` set over the process's environment, every
-/// variable the console reads blanked first: a test reads what it pinned and
-/// set, whatever the shell running it exports.
+/// one of [`console_vars`] blanked first.
 #[expect(
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
@@ -33,12 +43,7 @@ fn init_under(
 ) -> Result<OpenTelemetry, OpenTelemetryError> {
     let mut init = None;
     figment::Jail::expect_with(|jail| {
-        for name in [
-            EnvPrefix::var(var::FILTER),
-            "RUST_LOG".to_owned(),
-            EnvPrefix::var(var::FORMAT),
-            EnvPrefix::var(var::SOURCE_LOCATION),
-        ] {
+        for name in console_vars() {
             jail.set_env(name, "");
         }
         for (key, value) in vars {

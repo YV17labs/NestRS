@@ -1432,17 +1432,14 @@ mod tests {
     /// The refusal `build` fails with under `set`, as said.
     fn refused_under(set: &[(&str, &str)]) -> String {
         let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        match build_reading(
+        let Err(refused) = build_reading(
             &pinned_endpoint("http://collector:4318"),
             None,
             reading(set),
-        ) {
-            Ok(exporters) => {
-                shut(exporters);
-                panic!("{set:?} must not build");
-            }
-            Err(refused) => refused.to_string(),
-        }
+        ) else {
+            panic!("{set:?} must not build");
+        };
+        refused.to_string()
     }
 
     /// An exporter this crate does not build — one the specification knows, a
@@ -1550,21 +1547,18 @@ mod tests {
         )
         .expect("otlp with no endpoint is no refusal once the SDK is disabled");
         shut(exporters);
-        let refused = match build_reading(
+        let Err(refused) = build_reading(
             &OpenTelemetryConfig::default(),
             None,
             reading(&[
                 ("OTEL_SDK_DISABLED", "true"),
                 ("OTEL_TRACES_EXPORTER", "zipkin"),
             ]),
-        ) {
-            Ok(exporters) => {
-                shut(exporters);
-                panic!("a selector that does not parse is refused under OTEL_SDK_DISABLED");
-            }
-            Err(refused) => refused.to_string(),
+        ) else {
+            panic!("a selector that does not parse is refused under OTEL_SDK_DISABLED");
         };
-        assert!(refused.contains("OTEL_TRACES_EXPORTER"), "{refused}");
+        let said = refused.to_string();
+        assert!(said.contains("OTEL_TRACES_EXPORTER"), "{said}");
     }
 
     /// Any value but `true` leaves the SDK on, as the specification orders; one

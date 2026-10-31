@@ -1,6 +1,37 @@
-use std::path::PathBuf;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
+
+/// What a command was doing to a file when the system refused it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileAction {
+    /// Reading its contents.
+    Read,
+    /// Writing its contents.
+    Write,
+    /// Creating it as a directory, with its parents.
+    CreateDir,
+    /// Listing a directory's entries.
+    List,
+    /// Removing it.
+    Remove,
+    /// Resolving it to an absolute path.
+    Resolve,
+}
+
+impl fmt::Display for FileAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::CreateDir => "create the directory",
+            Self::List => "list",
+            Self::Remove => "remove",
+            Self::Resolve => "resolve",
+        })
+    }
+}
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -91,11 +122,111 @@ pub enum CliError {
         path: PathBuf,
     },
 
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    /// A file the command reads or writes, named with what it was doing.
+    #[error("cannot {action} `{}`", path.display())]
+    File {
+        action: FileAction,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A program the command starts, which did not start.
+    #[error("cannot run `{program}`")]
+    Spawn {
+        program: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 }
 
+impl CliError {
+    /// The [`CliError::File`] an io error on `path` becomes, for a `map_err`.
+    pub(crate) fn file(action: FileAction, path: &Path) -> impl FnOnce(std::io::Error) -> Self {
+        let path = path.to_path_buf();
+        move |source| Self::File {
+            action,
+            path,
+            source,
+        }
+    }
+
+    /// The [`CliError::Spawn`] an io error starting `program` becomes.
+    pub(crate) fn spawn(program: &'static str) -> impl FnOnce(std::io::Error) -> Self {
+        move |source| Self::Spawn { program, source }
+    }
+}
+
 pub type CliResult<T> = Result<T, CliError>;
+
+/// `error` and every cause below it, joined by `: ` — what `main` prints, so a
+/// failure reads down to the system's own answer.
+pub fn chain(error: &dyn std::error::Error) -> String {
+    let mut line = error.to_string();
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        line.push_str(": ");
+        line.push_str(&next.to_string());
+        cause = next.source();
+    }
+    line
+}
+
+/// `path`'s contents, or `None` when there is no such file; any other
+/// refusal names the file.
+pub(crate) fn read_if_exists(path: &Path) -> CliResult<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(CliError::file(FileAction::Read, path)(e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_error_reads_down_to_the_system_s_answer() {
+        let err = CliError::file(FileAction::Read, Path::new("apps/blog/src/module.rs"))(
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        );
+        let printed = chain(&err);
+        assert!(
+            printed.starts_with("cannot read `apps/blog/src/module.rs`: "),
+            "{printed}"
+        );
+        assert!(printed.contains("ermission denied"), "{printed}");
+    }
+
+    #[test]
+    fn an_anyhow_context_keeps_its_cause() {
+        let cause = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let err = CliError::Anyhow(anyhow::Error::new(cause).context("cannot read `.env.test`"));
+        let printed = chain(&err);
+        assert!(
+            printed.starts_with("cannot read `.env.test`: "),
+            "{printed}"
+        );
+        assert!(printed.contains("ermission denied"), "{printed}");
+    }
+
+    #[test]
+    fn a_missing_file_is_none_and_a_directory_is_named() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        assert!(
+            read_if_exists(&dir.path().join("absent.rs"))
+                .expect("absent")
+                .is_none()
+        );
+        let refused = read_if_exists(dir.path()).expect_err("a directory is no file");
+        assert!(
+            chain(&refused).contains(&dir.path().display().to_string()),
+            "{}",
+            chain(&refused)
+        );
+    }
+}

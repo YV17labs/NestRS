@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item};
 
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, FileAction};
 
 const NESTRS_WORKSPACE_MARKERS: &[&str] = &["crates/*", "apps/*"];
 
@@ -49,7 +49,9 @@ impl Default for Metadata {
 
 impl NestrsWorkspace {
     pub(crate) fn discover(start: &Path) -> CliResult<Option<Self>> {
-        let mut dir = start.canonicalize().map_err(CliError::Io)?;
+        let mut dir = start
+            .canonicalize()
+            .map_err(CliError::file(FileAction::Resolve, start))?;
         loop {
             if let Some(ws) = read_workspace(&dir)? {
                 return Ok(Some(ws));
@@ -141,11 +143,13 @@ fn read_manifest(dir: &Path) -> CliResult<Option<DocumentMut>> {
     if !manifest.is_file() {
         return Ok(None);
     }
-    let source = std::fs::read_to_string(&manifest).map_err(CliError::Io)?;
-    source
-        .parse::<DocumentMut>()
-        .map(Some)
-        .map_err(|e| CliError::Anyhow(e.into()))
+    let source =
+        std::fs::read_to_string(&manifest).map_err(CliError::file(FileAction::Read, &manifest))?;
+    source.parse::<DocumentMut>().map(Some).map_err(|e| {
+        CliError::Anyhow(
+            anyhow::Error::new(e).context(format!("cannot parse `{}`", manifest.display())),
+        )
+    })
 }
 
 fn read_workspace(dir: &Path) -> CliResult<Option<NestrsWorkspace>> {

@@ -132,7 +132,7 @@ pub(crate) fn run_cargo_check(project_dir: &Path) -> CliResult<()> {
         .arg("check")
         .current_dir(project_dir)
         .status()
-        .map_err(CliError::Io)?;
+        .map_err(CliError::spawn("cargo"))?;
     if !status.success() {
         return Err(CliError::Anyhow(anyhow::anyhow!(
             "cargo check failed in {}",

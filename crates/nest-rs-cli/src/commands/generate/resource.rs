@@ -86,7 +86,7 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
     if scaffolded_auth {
         imports.extend(auth::app_imports());
     }
-    let wired_app = wire_into_app(&ctx, &mut s, &imports, Some("SeaOrmDatabaseModule"));
+    let wired_app = wire_into_app(&ctx, &mut s, &imports, Some("SeaOrmDatabaseModule"))?;
 
     finish(
         s,

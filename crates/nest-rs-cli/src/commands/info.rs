@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::context::{
     Context, DEFAULT_ENV_PREFIX, ENV_PREFIX_VAR, EnvPrefixSource, NestrsWorkspace, framework_pin,
 };
-use crate::error::CliResult;
+use crate::error::{CliError, CliResult, FileAction};
 
 pub(crate) struct InfoOptions {
     pub path: Option<PathBuf>,
@@ -42,8 +42,8 @@ fn print_workspace(ws: &NestrsWorkspace, ctx: &Context, here: &Path) -> CliResul
     row("Name", &project_name(&ws.root));
     row("Root", &relative(&ws.root, here));
     row("Framework", &framework_line(&ws.root)?);
-    row("Apps", &list(&dir_names(&ws.apps_root())));
-    row("Features", &list(&dir_names(&ws.features_root())));
+    row("Apps", &list(&dir_names(&ws.apps_root())?));
+    row("Features", &list(&dir_names(&ws.features_root())?));
     // Which app a generator would wire into.
     if let Some(app) = ctx.current_app.as_ref().and_then(|app| app.file_name()) {
         row("Current app", &app.to_string_lossy());
@@ -92,19 +92,24 @@ fn relative(root: &Path, here: &Path) -> String {
     }
 }
 
-/// Sub-directory names, sorted, dot-directories excluded.
-fn dir_names(dir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
+/// Sub-directory names, sorted, dot-directories excluded; none when `dir`
+/// does not exist, and a refusal naming it when it cannot be listed.
+fn dir_names(dir: &Path) -> CliResult<Vec<String>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(CliError::file(FileAction::List, dir)(e)),
     };
     let mut names: Vec<String> = entries
-        .filter_map(Result::ok)
+        .map(|entry| entry.map_err(CliError::file(FileAction::List, dir)))
+        .collect::<CliResult<Vec<_>>>()?
+        .into_iter()
         .filter(|entry| entry.path().is_dir())
         .filter_map(|entry| entry.file_name().into_string().ok())
         .filter(|name| !name.starts_with('.'))
         .collect();
     names.sort();
-    names
+    Ok(names)
 }
 
 fn list(names: &[String]) -> String {

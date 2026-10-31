@@ -343,7 +343,7 @@ fn run_check(names: &Names, output: &std::path::Path) -> CliResult<()> {
             .args(["check", "-p", &names.kebab])
             .current_dir(&ws.root)
             .status()
-            .map_err(crate::error::CliError::Io)?;
+            .map_err(crate::error::CliError::spawn("cargo"))?;
         if !status.success() {
             return Err(crate::error::CliError::Anyhow(anyhow::anyhow!(
                 "cargo check -p {} failed",

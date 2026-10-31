@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::wiring::Transform;
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, FileAction};
 
 enum Action {
     Create {
@@ -139,7 +139,8 @@ impl Scaffold {
                     transform,
                     secret,
                 } => {
-                    let current = fs::read_to_string(&path).map_err(CliError::Io)?;
+                    let current = fs::read_to_string(&path)
+                        .map_err(CliError::file(FileAction::Read, &path))?;
                     match transform(&current) {
                         Some(updated) => {
                             let mut added = added_lines(&current, &updated);
@@ -162,9 +163,11 @@ impl Scaffold {
         if !dry_run {
             for write in planned {
                 if let Some(parent) = write.path.parent() {
-                    fs::create_dir_all(parent).map_err(CliError::Io)?;
+                    fs::create_dir_all(parent)
+                        .map_err(CliError::file(FileAction::CreateDir, parent))?;
                 }
-                fs::write(&write.path, &write.contents).map_err(CliError::Io)?;
+                fs::write(&write.path, &write.contents)
+                    .map_err(CliError::file(FileAction::Write, &write.path))?;
             }
         }
 

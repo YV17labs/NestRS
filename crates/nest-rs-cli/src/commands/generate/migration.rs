@@ -15,7 +15,7 @@ use super::cargo::{Dep, OUTBOX, ensure_workspace_deps, migrations_deps};
 use super::support::finish;
 use crate::commands::resolve_start;
 use crate::context::{Context, NestrsWorkspace};
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, FileAction};
 use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, Transform, ensure_decl};
 use crate::templates::{migration, workspace};
@@ -177,7 +177,8 @@ pub(crate) fn queue_framework_entry(
     if !lib_path.is_file() {
         return Ok(false);
     }
-    let lib = std::fs::read_to_string(&lib_path).map_err(CliError::Io)?;
+    let lib =
+        std::fs::read_to_string(&lib_path).map_err(CliError::file(FileAction::Read, &lib_path))?;
     s.edit(ws.migrations_migrator(), regenerate(lib, Some(framework)));
     deps.push(framework.dep);
     Ok(true)
@@ -204,7 +205,7 @@ fn generate(ws: &NestrsWorkspace, names: &Names, subject: &Names, dry_run: bool)
     let lib = if bootstrapping {
         String::new()
     } else {
-        std::fs::read_to_string(&lib_path).map_err(CliError::Io)?
+        std::fs::read_to_string(&lib_path).map_err(CliError::file(FileAction::Read, &lib_path))?
     };
 
     let date = chrono::Utc::now().format("%Y%m%d").to_string();
@@ -250,7 +251,8 @@ fn register(
 ) -> CliResult<()> {
     let migrator = ws.migrations_migrator();
     if migrator.is_file() {
-        let listed = std::fs::read_to_string(&migrator).map_err(CliError::Io)?;
+        let listed = std::fs::read_to_string(&migrator)
+            .map_err(CliError::file(FileAction::Read, &migrator))?;
         if framework.listed_in(&listed) {
             println!(
                 "`{}` is registered already: `migrator.rs` lists `{}`.",

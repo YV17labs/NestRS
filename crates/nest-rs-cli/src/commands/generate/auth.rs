@@ -43,7 +43,7 @@ pub(crate) fn run(opts: AuthOptions) -> CliResult<()> {
     );
     s.edit(ws.features_cargo(), ensure_features_deps(auth_deps()));
     s.edit(ws.features_lib(), ensure_lines(lib_decls()));
-    let wired_app = wire(&ctx, &mut s);
+    let wired_app = wire(&ctx, &mut s)?;
 
     finish(s, opts.dry_run, &ws.root, "the auth adapter")?;
     print_next_steps(&secrets, wired_app.is_some());
@@ -285,7 +285,7 @@ pub(super) fn app_imports() -> [(&'static str, &'static str); 1] {
     [("features::authn::AuthnHttpModule", "AuthnHttpModule")]
 }
 
-fn wire(ctx: &Context, s: &mut Scaffold) -> Option<PathBuf> {
+fn wire(ctx: &Context, s: &mut Scaffold) -> CliResult<Option<PathBuf>> {
     wire_into_app(ctx, s, &app_imports(), None)
 }
 

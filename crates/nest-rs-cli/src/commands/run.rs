@@ -37,7 +37,7 @@ pub(crate) fn run(opts: RunOptions) -> CliResult<()> {
                 "`just` not found on PATH — run `nestrs run` again to bootstrap it, or install it with `cargo install --locked just`"
             ))
         } else {
-            CliError::Io(err)
+            CliError::spawn("just")(err)
         }
     })?;
 

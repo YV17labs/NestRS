@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, FileAction};
 use crate::lint::scan;
 
 use super::resolve_start;
@@ -18,6 +18,13 @@ pub(crate) fn run(opts: LintOptions) -> CliResult<()> {
 
     println!("nestrs lint");
     println!();
+    if let Some((path, source)) = scan.unreadable.into_iter().next() {
+        return Err(CliError::File {
+            action: FileAction::Read,
+            path,
+            source,
+        });
+    }
     if scan.findings.is_empty() {
         println!(
             "  every one of the {} files checked is named for what it declares",

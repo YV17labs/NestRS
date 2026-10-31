@@ -16,7 +16,7 @@ use super::migration::refuse_reserved;
 use super::support::finish;
 use crate::commands::resolve_start;
 use crate::context::Context;
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, ensure_decl, ensure_lines};
 use crate::templates::entity;
@@ -83,7 +83,7 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
 
     let root = ws.feature_root(&target.feature.snake);
     let placement = placement(&root, &target.feature)?;
-    if placement == Placement::Lone && subject_declares(&root, &target.entity.entity()) {
+    if placement == Placement::Lone && subject_declares(&root, &target.entity.entity())? {
         return Err(CliError::EntityNameTakenBySubject {
             feature: target.feature.snake.clone(),
             name: target.entity.entity(),
@@ -98,7 +98,7 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
     // Read up front: `ensure_lines` compares verbatim, so an existing
     // `pub mod entities;` would gain a duplicate `mod entities;`.
     let mod_rs = root.join("mod.rs");
-    let mod_src = std::fs::read_to_string(&mod_rs).unwrap_or_default();
+    let mod_src = read_if_exists(&mod_rs)?.unwrap_or_default();
     let mut port_lines = Vec::new();
 
     let file = match placement {
@@ -158,7 +158,7 @@ fn placement(root: &Path, feature: &Names) -> CliResult<Placement> {
             feature: feature.snake.clone(),
             // The existing entity's new file name, read from its own `table_name`: the
             // feature's singular is wrong once someone renamed it.
-            stem: existing_stem(&lone).unwrap_or_else(|| feature.table()),
+            stem: existing_stem(&lone)?.unwrap_or_else(|| feature.table()),
         });
     }
     if root.join("entities").is_dir() {
@@ -169,8 +169,15 @@ fn placement(root: &Path, feature: &Names) -> CliResult<Placement> {
 
 /// The bare file name a lone `entity.rs` would take inside `entities/`, read
 /// from the `#[sea_orm(table_name = "…")]` it already declares.
-fn existing_stem(entity_rs: &Path) -> Option<String> {
-    let source = std::fs::read_to_string(entity_rs).ok()?;
+fn existing_stem(entity_rs: &Path) -> CliResult<Option<String>> {
+    let Some(source) = read_if_exists(entity_rs)? else {
+        return Ok(None);
+    };
+    Ok(table_name(&source))
+}
+
+/// The `table_name = "…"` an entity's source declares.
+fn table_name(source: &str) -> Option<String> {
     let (_, rest) = source.split_once("table_name = \"")?;
     let (table, _) = rest.split_once('"')?;
     (!table.is_empty()).then(|| table.to_owned())
@@ -179,15 +186,14 @@ fn existing_stem(entity_rs: &Path) -> Option<String> {
 /// Whether the port's `subject.rs`, written by `g graphql|mcp` over a port with
 /// no entity, declares `name`: a lone entity's glob re-export of its wire type
 /// would then lose to the subject's explicit one, with no error.
-fn subject_declares(root: &Path, name: &str) -> bool {
-    std::fs::read_to_string(root.join("subject.rs"))
-        .ok()
+fn subject_declares(root: &Path, name: &str) -> CliResult<bool> {
+    Ok(read_if_exists(&root.join("subject.rs"))?
         .and_then(|source| syn::parse_file(&source).ok())
         .is_some_and(|file| {
             file.items
                 .iter()
                 .any(|item| matches!(item, syn::Item::Struct(s) if s.ident == name))
-        })
+        }))
 }
 
 /// Whether `mod.rs` already declares `name` as a child module, in any

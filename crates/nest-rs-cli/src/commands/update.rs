@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::context::NestrsWorkspace;
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, FileAction};
 
 const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -26,10 +26,12 @@ pub(crate) fn run(opts: UpdateOptions) -> CliResult<()> {
     if opts.from_path {
         let ws = match opts.path {
             Some(root) => NestrsWorkspace::require(&root)?,
-            None => {
-                NestrsWorkspace::discover(std::env::current_dir().map_err(CliError::Io)?.as_path())?
-                    .ok_or(CliError::NotNestrsWorkspace)?
-            }
+            None => NestrsWorkspace::discover(
+                std::env::current_dir()
+                    .map_err(CliError::file(FileAction::Resolve, Path::new(".")))?
+                    .as_path(),
+            )?
+            .ok_or(CliError::NotNestrsWorkspace)?,
         };
         let crate_path = ws.root.join("crates/nest-rs-cli");
         if !crate_path.join("Cargo.toml").is_file() {
@@ -80,7 +82,7 @@ fn run_crates_io_install(force: bool) -> CliResult<()> {
 
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
-    let status = cmd.status().map_err(CliError::Io)?;
+    let status = cmd.status().map_err(CliError::spawn("cargo"))?;
     if !status.success() {
         return Err(CliError::Anyhow(anyhow::anyhow!(
             "cargo install failed — try manually: cargo install --locked {CRATE_NAME}"
@@ -102,7 +104,7 @@ fn run_path_install(crate_path: &std::path::Path) -> CliResult<()> {
 
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
-    let status = cmd.status().map_err(CliError::Io)?;
+    let status = cmd.status().map_err(CliError::spawn("cargo"))?;
     if !status.success() {
         return Err(CliError::Anyhow(anyhow::anyhow!(
             "cargo install failed — try manually: cargo install --locked --path {}",
@@ -119,7 +121,7 @@ fn latest_crates_io_version() -> CliResult<String> {
     let output = Command::new("cargo")
         .args(["search", CRATE_NAME, "--limit", "1"])
         .output()
-        .map_err(CliError::Io)?;
+        .map_err(CliError::spawn("cargo"))?;
 
     if !output.status.success() {
         // `cargo search` fails for reasons other than the network (a private

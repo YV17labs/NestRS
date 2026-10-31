@@ -1,7 +1,7 @@
 //! The machinery every generator shares: `--dry-run` writes nothing, and says so
-//! without claiming the work happened.
+//! without claiming the work happened; a file it cannot read fails it, named.
 
-use crate::harness::{run_ok, write_fake_workspace};
+use crate::harness::{files_under, run_err, run_ok, write_fake_app, write_fake_workspace};
 use std::fs;
 
 #[test]
@@ -50,4 +50,29 @@ fn generate_dry_run_does_not_claim_the_work_happened() {
         "a dry run must not report a completed action: {stdout}",
     );
     assert!(stdout.contains("Would write feature `orders`"), "{stdout}");
+}
+
+/// An app `module.rs` the generator cannot read fails the run naming it, down
+/// to the system's answer — never a run reporting the app as merely unwired.
+#[test]
+fn an_unreadable_app_module_fails_the_run_naming_it() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let app = write_fake_app(dir.path(), "blog");
+    let module_rs = app.join("src/module.rs");
+    fs::remove_file(&module_rs).unwrap();
+    fs::create_dir(&module_rs).unwrap();
+    let before = files_under(dir.path());
+
+    let stderr = run_err(&app, &["g", "auth"]);
+
+    assert!(
+        stderr.starts_with("error: cannot read `") && stderr.contains("apps/blog/src/module.rs`: "),
+        "the refusal names the file and the system's answer: {stderr}"
+    );
+    assert_eq!(
+        files_under(dir.path()),
+        before,
+        "a refused run writes nothing"
+    );
 }

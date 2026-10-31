@@ -137,7 +137,7 @@ fn install(crates: &[&str]) -> CliResult<()> {
                 "cargo is not on PATH — install Rust from https://rustup.rs"
             ))
         } else {
-            CliError::Io(err)
+            CliError::spawn("cargo")(err)
         }
     })?;
 

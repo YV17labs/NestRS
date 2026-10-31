@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::context::NestrsWorkspace;
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, FileAction};
 use crate::naming::Transport;
 
 const DEFAULT_HTTP_PORT: u16 = 3000;
@@ -36,8 +36,10 @@ fn collect_used_ports(apps_root: &Path) -> CliResult<Vec<u16>> {
         return Ok(ports);
     }
 
-    for entry in fs::read_dir(apps_root).map_err(CliError::Io)? {
-        ports.extend(app_port(&entry.map_err(CliError::Io)?.path())?);
+    let listing = CliError::file(FileAction::List, apps_root);
+    for entry in fs::read_dir(apps_root).map_err(listing)? {
+        let entry = entry.map_err(CliError::file(FileAction::List, apps_root))?;
+        ports.extend(app_port(&entry.path())?);
     }
 
     Ok(ports)
@@ -52,7 +54,9 @@ fn app_port(app: &Path) -> CliResult<Option<u16>> {
         if !path.is_file() {
             return Ok(None);
         }
-        fs::read_to_string(path).map(Some).map_err(CliError::Io)
+        fs::read_to_string(path)
+            .map(Some)
+            .map_err(CliError::file(FileAction::Read, path))
     };
     if let Some(port) = read(&app.join(".env"))?.as_deref().and_then(env_port) {
         return Ok(Some(port));

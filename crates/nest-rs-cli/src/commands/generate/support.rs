@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::context::Context;
-use crate::error::CliResult;
+use crate::error::{CliResult, read_if_exists};
 use crate::scaffold::{Scaffold, ensure_module_imports, rustfmt};
 
 /// Commit a generator's scaffold, format the touched files, and print the
@@ -28,23 +28,23 @@ pub(super) fn finish(s: Scaffold, dry_run: bool, base: &Path, what: &str) -> Cli
 /// `SeaOrmDatabaseModule`, since mounting it into an app without one compiles
 /// yet is refused at boot, naming the binding to import.
 ///
-/// Takes the whole set so `module.rs` gets one `edit`.
+/// Takes the whole set so `module.rs` gets one `edit`. A `module.rs` the
+/// command cannot read fails it, naming the file.
 pub(super) fn wire_into_app(
     ctx: &Context,
     s: &mut Scaffold,
     imports: &[(&str, &str)],
     require_token: Option<&str>,
-) -> Option<PathBuf> {
-    let module_rs = ctx.current_app_module()?;
-    if !module_rs.is_file() {
-        return None;
-    }
-    if let Some(token) = require_token {
-        let source = std::fs::read_to_string(&module_rs).ok()?;
-        if !source.contains(token) {
-            return None;
-        }
+) -> CliResult<Option<PathBuf>> {
+    let Some(module_rs) = ctx.current_app_module() else {
+        return Ok(None);
+    };
+    let Some(source) = read_if_exists(&module_rs)? else {
+        return Ok(None);
+    };
+    if require_token.is_some_and(|token| !source.contains(token)) {
+        return Ok(None);
     }
     s.edit(&module_rs, ensure_module_imports(imports));
-    Some(module_rs)
+    Ok(Some(module_rs))
 }

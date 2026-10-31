@@ -5,7 +5,7 @@
 
 use clap::Parser;
 
-use nest_rs_cli::cli;
+use nest_rs_cli::{cli, error};
 
 fn main() {
     // `--version` / `-V` answered here rather than through clap's flag, so both
@@ -20,7 +20,7 @@ fn main() {
     }
     let cli = cli::Cli::parse();
     if let Err(err) = cli::run(cli) {
-        eprintln!("error: {err}");
+        eprintln!("error: {}", error::chain(&err));
         std::process::exit(1);
     }
 }

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use syn::Item;
 
@@ -37,6 +37,9 @@ pub struct Scan {
     pub checked: usize,
     /// Every file whose stem reached nothing it declares.
     pub findings: Vec<Finding>,
+    /// Every file or directory the walk could not read, with the system's
+    /// answer: a file left unread is a file left unjudged.
+    pub unreadable: Vec<(PathBuf, std::io::Error)>,
 }
 
 /// Walk every `src/` file under `root` and pair each stem against what its file
@@ -51,10 +54,21 @@ pub fn scan(root: &Path) -> Scan {
 /// `in_src` is carried down: only source is judged, and a `tests/` tree names
 /// its files for the `src/` concern they cover.
 fn walk(dir: &Path, root: &Path, in_src: bool, out: &mut Scan) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            out.unreadable.push((dir.to_path_buf(), e));
+            return;
+        }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                out.unreadable.push((dir.to_path_buf(), e));
+                continue;
+            }
+        };
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
@@ -87,8 +101,12 @@ fn inspect(path: &Path, root: &Path, out: &mut Scan) {
         return;
     }
 
-    let Ok(source) = std::fs::read_to_string(path) else {
-        return;
+    let source = match std::fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(e) => {
+            out.unreadable.push((path.to_path_buf(), e));
+            return;
+        }
     };
     // Rust's own parser, not a scan: this crate ships a `pub struct` inside a
     // template string.

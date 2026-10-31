@@ -25,7 +25,7 @@ use super::migration::{OUTBOX_MIGRATION, queue_framework_entry};
 use super::support::{finish, wire_into_app};
 use crate::commands::resolve_start;
 use crate::context::{Context, NestrsWorkspace};
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::{Names, Transport, command_file};
 use crate::scaffold::{
     Renderer, Scaffold, ensure_expose_graphql, ensure_lines, ensure_module_imports,
@@ -62,7 +62,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
 
     let tmodule = names.module_for(transport);
     let is_graphql = transport == Transport::Graphql;
-    let crud_port = is_crud_port(&ws, &names.snake);
+    let crud_port = is_crud_port(&ws, &names.snake)?;
     let (runtime_uses, runtime_imports) = runtime_vars(transport);
     let mut r = Renderer::new(&names)
         .with("handler", names.handler_for(transport))
@@ -223,12 +223,14 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         &mut s,
         &imports,
         needs_unit_of_work.then_some("SeaOrmDatabaseModule"),
-    );
+    )?;
     // Read before the edit lands: the app's own binding of a queue backend.
-    let backend_bound = transport == Transport::Queue
-        && wired_app.as_deref().is_some_and(|module_rs| {
-            std::fs::read_to_string(module_rs).is_ok_and(|src| src.contains("RedisQueueModule"))
-        });
+    let backend_bound = match wired_app.as_deref() {
+        Some(module_rs) if transport == Transport::Queue => {
+            read_if_exists(module_rs)?.is_some_and(|src| src.contains("RedisQueueModule"))
+        }
+        _ => false,
+    };
     // The app crate needs the crate owning the binding its next step names, or
     // that step fails with `E0433`.
     let host_deps = app_host_deps(transport);
@@ -280,9 +282,9 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
 
 /// Whether the port's service implements `CrudService`, read from the source:
 /// the service's API is what decides which methods an adapter may call.
-fn is_crud_port(ws: &NestrsWorkspace, snake: &str) -> bool {
-    std::fs::read_to_string(ws.feature_root(snake).join("service.rs"))
-        .is_ok_and(|src| src.contains("impl CrudService for"))
+fn is_crud_port(ws: &NestrsWorkspace, snake: &str) -> CliResult<bool> {
+    Ok(read_if_exists(&ws.feature_root(snake).join("service.rs"))?
+        .is_some_and(|src| src.contains("impl CrudService for")))
 }
 
 /// The handler skeleton, and the `module.rs` that serves it.

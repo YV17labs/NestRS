@@ -165,7 +165,13 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
 - **A test waiting on a timer pauses tokio's clock** (`start_paused = true`),
   so a loaded machine moves none of its instants; the scheduler reads its wall
   clock through tokio's, which a paused clock advances. The real clock is left
-  to a test that blocks a thread on purpose, and to a live service's clock.
+  to a test that blocks a thread on purpose, and to a live service's clock —
+  and there no margin on elapsed time is the proof, since a stalled runner
+  fails it with the behaviour right: "at once" is the attempts a double
+  accepted, "promptly" an order the test holds (a gate it releases, a lock
+  still held), a cost the thread's CPU clock. Where only real time tells two
+  outcomes apart, the bound is the other outcome's own duration, said beside
+  it; any other real-clock wait only guards against a hang.
 - **nextest is the runner, with no configuration**: `just test` runs every
   test and the doctests.
 - **A doc example is compiled, and run unless it serves forever**: a fragment

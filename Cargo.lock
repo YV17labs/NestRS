@@ -2843,6 +2843,7 @@ dependencies = [
  "figment",
  "futures-util",
  "inventory",
+ "libc",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-database",

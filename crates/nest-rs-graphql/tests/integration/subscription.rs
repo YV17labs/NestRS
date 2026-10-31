@@ -493,6 +493,24 @@ async fn a_frame_that_does_not_decode_closes_the_socket_without_quoting_it() {
     assert!(reason.len() <= 123, "{}", reason.len());
 }
 
+/// Tokio's clock, paused and held still while the test waits on a real
+/// socket: it does not auto-advance while a blocking task runs (`time::pause`,
+/// *Preventing auto-advance*), so no timer fires whatever the machine's load.
+/// Held 60 s at most, so a wait that needed the clock to move meets its timers
+/// then and fails rather than hang; dropped, it lets the clock go.
+struct Frozen {
+    _thaw: std::sync::mpsc::Sender<()>,
+}
+
+impl Frozen {
+    fn clock() -> Self {
+        tokio::time::pause();
+        let (thaw, frozen) = std::sync::mpsc::channel::<()>();
+        tokio::task::spawn_blocking(move || frozen.recv_timeout(Duration::from_secs(60)));
+        Self { _thaw: thaw }
+    }
+}
+
 #[tokio::test]
 async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
     let logs = LogCapture::install();
@@ -501,7 +519,8 @@ async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
     subscribe(&mut socket, "subscription { ticks { seq } }").await;
     running(&state).await;
 
-    let asked = std::time::Instant::now();
+    let frozen = Frozen::clock();
+    let asked = tokio::time::Instant::now();
     let stopping = tokio::spawn(app.shutdown());
     let completed = next_message(&mut socket).await;
     let (code, reason) = socket.expect_close().await;
@@ -521,11 +540,13 @@ async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
         reason.contains("reconnect"),
         "the peer is told what to do: {reason}"
     );
-    assert!(
-        asked.elapsed() < Duration::from_secs(1),
-        "a socket with nothing in flight does not spend the window, took {:?}",
+    assert_eq!(
         asked.elapsed(),
+        Duration::ZERO,
+        "a socket with nothing in flight does not spend the window: the way down ran on a \
+         clock held still",
     );
+    drop(frozen);
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
         nest_rs_graphql::unit::SUBSCRIPTION.name(),

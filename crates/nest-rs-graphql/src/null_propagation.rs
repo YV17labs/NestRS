@@ -979,6 +979,24 @@ mod tests {
         }
     }
 
+    /// The CPU time this thread has run. A thread waiting for a core accrues
+    /// none, so a cost read on it holds however loaded the machine is; the
+    /// current-thread runtime runs every task of an execution on it.
+    #[expect(unsafe_code, reason = "std has no thread CPU clock")]
+    fn thread_cpu_time() -> std::time::Duration {
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: `now` is a valid `timespec` the call only writes.
+        let read = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
+        assert_eq!(read, 0, "the thread's CPU clock reads");
+        std::time::Duration::new(
+            u64::try_from(now.tv_sec).expect("a CPU time is not negative"),
+            u32::try_from(now.tv_nsec).expect("nanoseconds below a second"),
+        )
+    }
+
     /// Placing the nulls costs what async-graphql paid to file the errors, not
     /// their square: a few thousand aliases of a failing field over a list,
     /// within the default complexity, once took seconds.
@@ -991,16 +1009,17 @@ mod tests {
         let repeats = "broken ".repeat(1000);
         for selection in [aliases, repeats] {
             let document = format!("{{ many(count: 20) {{ fine {selection}}} }}");
-            let started = std::time::Instant::now();
+            let started = thread_cpu_time();
             let response = bare.execute(Request::new(document.as_str())).await;
-            let filed = started.elapsed();
-            let started = std::time::Instant::now();
+            let filed = thread_cpu_time() - started;
+            let started = thread_cpu_time();
             let placed = schema.execute(Request::new(document.as_str())).await;
-            let placing = started.elapsed();
+            let placing = thread_cpu_time() - started;
             assert_eq!(placed.errors.len(), response.errors.len());
             assert!(
                 placing < filed * 20,
-                "{} errors filed in {filed:?}, answered with their nulls in {placing:?}",
+                "{} errors filed in {filed:?} of this thread's CPU, answered with their nulls \
+                 in {placing:?}",
                 response.errors.len(),
             );
         }

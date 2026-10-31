@@ -2066,6 +2066,24 @@ async fn each_unit_deadline_past_the_shutdown_window_is_said_at_boot() {
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
+/// Tokio's clock, paused and held still while the test waits on a real
+/// socket: it does not auto-advance while a blocking task runs (`time::pause`,
+/// *Preventing auto-advance*), so no timer fires whatever the machine's load.
+/// Held 60 s at most, so a wait that needed the clock to move meets its timers
+/// then and fails rather than hang; dropped, it lets the clock go.
+struct Frozen {
+    _thaw: std::sync::mpsc::Sender<()>,
+}
+
+impl Frozen {
+    fn clock() -> Self {
+        tokio::time::pause();
+        let (thaw, frozen) = std::sync::mpsc::channel::<()>();
+        tokio::task::spawn_blocking(move || frozen.recv_timeout(Duration::from_secs(60)));
+        Self { _thaw: thaw }
+    }
+}
+
 #[tokio::test]
 async fn an_idle_socket_is_closed_going_away_at_the_signal() {
     let logs = LogCapture::install();
@@ -2074,7 +2092,8 @@ async fn an_idle_socket_is_closed_going_away_at_the_signal() {
     socket.send("echo", serde_json::json!("hi")).await;
     assert_eq!(socket.next_envelope().await["data"], "hi");
 
-    let asked = std::time::Instant::now();
+    let frozen = Frozen::clock();
+    let asked = tokio::time::Instant::now();
     let stopping = tokio::spawn(app.shutdown());
     let (code, reason) = socket.expect_close().await;
     stopping
@@ -2091,11 +2110,12 @@ async fn an_idle_socket_is_closed_going_away_at_the_signal() {
         reason.contains("reconnect"),
         "the peer is told what to do: {reason}"
     );
-    assert!(
-        asked.elapsed() < Duration::from_secs(1),
-        "an idle socket does not spend the window, took {:?}",
+    assert_eq!(
         asked.elapsed(),
+        Duration::ZERO,
+        "an idle socket does not spend the window: the way down ran on a clock held still",
     );
+    drop(frozen);
     let left = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
         nest_rs_ws::unit::DISCONNECT.name(),

@@ -97,11 +97,16 @@ as it was written. SeaORM owns the column types; `#[expose]` decides which
 columns cross the wire and which inputs the HTTP layer accepts. Exposure is
 opt-in — a field surfaces only when it carries `#[expose]`.
 
-```rust title="crates/features/src/posts/entity.rs" {24-27}
+```rust title="crates/features/src/posts/entity.rs" {26-29}
 use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+// `soft_delete` + `timestamps` match the three columns `nestrs g migration`
+// scaffolds for this table, and the `users/` exemplar. `soft_delete` makes
+// DELETE stamp `deleted_at` and hides a stamped row from every read; drop it
+// for a resource that should really erase rows. `timestamps` emits the
+// `ActiveModelBehavior`, so the resource must not also write an empty one.
 #[expose(
     name = "Post",
     service = super::service::PostsService,

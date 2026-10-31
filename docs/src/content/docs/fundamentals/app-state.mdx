@@ -148,6 +148,11 @@ impl Heartbeat {
 }
 ```
 
+`crate::blog::TARGET` is the log target the feature declares at the top of
+`blog/mod.rs` once it logs — `pub const TARGET: &str = "features::blog";` —
+since the `blog` feature `nestrs new` writes emits nothing and starts without
+one.
+
 A shutdown hook that must know why the app stops reads `cause()`.
 
 ## Going further

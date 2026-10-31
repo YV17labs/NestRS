@@ -71,9 +71,17 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   `deprecated = "YYYY-MM-DD"` also stamps the `Deprecation` header (RFC 9745)
 ///   on every answer. Rust's own `#[deprecated]` on a handler is refused.
 ///
-/// The schema of any `Json<T>` request body / response is recorded into the
-/// route's `HttpRouteMeta` (`T: nest_rs_http::schemars::JsonSchema`); raw
-/// `Response`/`String` returns carry no schema.
+/// The schema of a `Json<T>` request body is recorded into the route's
+/// `HttpRouteMeta` (`T: nest_rs_http::schemars::JsonSchema`), and so is the
+/// response's, read off the return type by its type — a `Json<T>`, bare,
+/// inside a `Created` or a `Paginated`, inside a `Result`, an alias included,
+/// or a typed answer naming its own body; raw `Response`/`String` returns
+/// carry no schema unless `#[api(response = T)]` names one. The request's
+/// parameters and body, unlike its answer, are read off the extractor's
+/// spelling — `Json<T>`, `Form<T>`, `Query<T>`, `Header<T>`, `Path<…>`,
+/// `Multipart`, bare or inside `Piped` — so one behind an alias or a renamed
+/// import still extracts but is left out of the document; an extractor
+/// reading a body of its own type documents it by that type.
 ///
 /// # Expands to
 ///

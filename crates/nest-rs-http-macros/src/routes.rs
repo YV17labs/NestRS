@@ -1590,7 +1590,7 @@ struct ApiMeta {
     description: Option<LitStr>,
     tags: Vec<LitStr>,
     /// `#[api(response = T)]` — the payload the document advertises when the
-    /// return type cannot state it.
+    /// return type names none (a built `Response`); it wins over the probe.
     response: Option<Type>,
     /// `#[api(multipart = T)]` — the type describing the parts of a
     /// `multipart/form-data` body.

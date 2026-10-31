@@ -192,9 +192,11 @@ impl HttpRouteMeta {
         self.parts.request_body
     }
 
-    /// Schema builder for the response payload — inferred from a `Json<T>`
-    /// return, or declared with `#[api(response = T)]` when the handler builds
-    /// its own [`Response`](crate::Response).
+    /// Schema builder for the response payload — read off the return type,
+    /// a `Json<T>` bare, inside a [`Created`](crate::Created) or a
+    /// [`Paginated`](crate::Paginated) or inside a `Result`, an alias
+    /// included, or declared with `#[api(response = T)]` when the handler
+    /// builds its own [`Response`](crate::Response).
     pub fn response(&self) -> Option<SchemaFn> {
         self.parts.response
     }

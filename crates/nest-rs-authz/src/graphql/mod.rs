@@ -1,5 +1,5 @@
 //! GraphQL bindings (feature `graphql`) — the resolver analog of
-//! [`crate::http`]: [`masked_value_for`] masks a resolver's return value and
+//! `crate::http`: [`masked_value_for`] masks a resolver's return value and
 //! [`ability`] reads the ability the field's unit carries, which the guards
 //! attached — at the `/graphql` request (the app's global pool, or
 //! `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` a module declares)

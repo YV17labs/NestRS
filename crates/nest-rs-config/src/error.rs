@@ -47,7 +47,7 @@ pub enum ConfigError {
         var: String,
     },
     /// A vocabulary read under a field it does not name its variables by — a
-    /// [`ClientTls`](crate::ClientTls) under a field not named `tls`, whose
+    /// `ClientTls` (the `tls` feature's) under a field not named `tls`, whose
     /// checks would refuse `TLS_CA_CERT` for a variable spelled otherwise — a
     /// defect in the config's declaration.
     #[error(

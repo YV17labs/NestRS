@@ -1,4 +1,4 @@
-//! MCP bindings (feature `mcp`) — the tool-host analog of [`crate::graphql`].
+//! MCP bindings (feature `mcp`) — the tool-host analog of `crate::graphql`.
 //!
 //! The guards at the `/mcp` request — the app's global pool, or
 //! `EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>` a module declares —

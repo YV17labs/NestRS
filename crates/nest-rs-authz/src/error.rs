@@ -28,7 +28,7 @@ pub struct MalformedRuleError {
     pub kind: &'static str,
 }
 
-/// Why [`masked_reply`](crate::masked_reply) could not produce a masked value. Callers must treat
+/// Why `masked_reply` could not produce a masked value. Callers must treat
 /// either case as fail-closed: send an error frame, never the unmasked body.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]

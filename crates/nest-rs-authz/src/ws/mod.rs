@@ -1,4 +1,4 @@
-//! WebSocket bindings (feature `ws`) — the per-message analog of [`crate::mcp`].
+//! WebSocket bindings (feature `ws`) — the per-message analog of `crate::mcp`.
 //!
 //! [`masked_reply_for`] masks a message's reply. A gateway does not call it
 //! directly: `#[authorize(Action, Entity)]` beside a `#[subscribe_message]`

@@ -9,14 +9,14 @@
 //! binding is a feature of its own, named for the port it binds, and sits beside
 //! the connection in the composition root, sharing it on every topology:
 //!
-//! - **queue** — [`RedisQueueModule`] binds the queue port over it, on Redis
+//! - **queue** — `RedisQueueModule` binds the queue port over it, on Redis
 //!   Streams: the portable `dyn JobProducer` a feature injects to
 //!   `.push(AudioQueue, job, None).await?`, and the consumer the port's
 //!   `QueueWorker` runs every `#[process]` method through in an app that also
 //!   imports `QueueModule`.
-//! - **throttler** — [`RedisThrottlerModule`] binds the cross-process
+//! - **throttler** — `RedisThrottlerModule` binds the cross-process
 //!   `dyn ThrottlerStore` the `nest-rs-throttler` guard injects.
-//! - **schedule** — [`RedisScheduleModule`] binds the `dyn OccurrenceLock` a
+//! - **schedule** — `RedisScheduleModule` binds the `dyn OccurrenceLock` a
 //!   scheduled job declared `replicas = "one"` claims each occurrence through,
 //!   so one replica of the deployment fires it.
 //!

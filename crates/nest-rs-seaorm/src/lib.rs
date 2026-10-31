@@ -13,9 +13,9 @@
 //!   runs its unit of work through, on an ambient [`SeaOrmExecutor`]: the pool, or a
 //!   transaction opened on the unit's first data-layer touch.
 //! - Under the `queue` feature, [`SeaOrmDatabaseModule`] also keeps the queue
-//!   port's outbox, [`queue::SeaOrmOutbox`]: a job pushed inside a unit's
+//!   port's outbox, `queue::SeaOrmOutbox`: a job pushed inside a unit's
 //!   transaction is written there and filed after its commit;
-//!   [`queue::OutboxMigration`] creates its table.
+//!   `queue::OutboxMigration` creates its table.
 //!
 //! Services query through [`Repo`]: every call runs on the ambient executor,
 //! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability),
@@ -212,7 +212,7 @@ pub mod __private {
 ///
 /// Add the `graphql` flag, with this crate's `graphql` feature, and the DTO is
 /// also a GraphQL object, its `#[expose]`d relations resolved through
-/// dataloaders ([`graphql::RelatedTo`]); without the flag the entity crate
+/// dataloaders (`graphql::RelatedTo`); without the flag the entity crate
 /// compiles no GraphQL at all:
 ///
 /// ```

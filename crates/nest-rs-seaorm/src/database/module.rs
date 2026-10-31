@@ -14,7 +14,7 @@ use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 /// [`SeaOrmModule`](crate::SeaOrmModule).
 ///
 /// Under the `queue` feature it also keeps the queue port's outbox:
-/// [`SeaOrmOutbox`](crate::queue::SeaOrmOutbox) as `dyn OutboxStore`, written by
+/// `queue::SeaOrmOutbox` as `dyn OutboxStore`, written by
 /// every unit's transaction, and the relay's `OutboxModule`, which files what
 /// a committed unit wrote on whichever queue backend the app binds.
 pub struct SeaOrmDatabaseModule;

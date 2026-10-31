@@ -18,7 +18,7 @@ use crate::setting::FromSetting;
 /// several variables implements it whole, its keys extending the field's with
 /// `_` and each member's name (`TLS_RELOAD_SECS` for the `reload` of a field
 /// `tls`): `__` is the namespace's separator, so a key never holds one. A
-/// [`ClientTls`](crate::ClientTls) alone names its material instead,
+/// `ClientTls` (the `tls` feature's) alone names its material instead,
 /// `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY`, the same in every namespace.
 ///
 /// ```

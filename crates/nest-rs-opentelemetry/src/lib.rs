@@ -7,12 +7,12 @@
 //! with the service named after the binary `#[nest_rs::main]` started. The
 //! returned guard flushes on drop, so it must outlive `main`.
 //!
-//! [`OpenTelemetryModule`] provides [`Metrics`], where an app records its
-//! measurements through instruments named by the OpenTelemetry Metrics API —
-//! [`Counter`], [`UpDownCounter`], [`Histogram`], [`Gauge`] — with no
-//! `opentelemetry` type in its signatures. The remote parent link and
-//! the sampler's verdict are seeded onto the framework's span constructor at
-//! `init`, so they reach **every** edge.
+//! Under the `otlp` feature, [`OpenTelemetryModule`] provides `Metrics`, where
+//! an app records its measurements through instruments named by the
+//! OpenTelemetry Metrics API — `Counter`, `UpDownCounter`, `Histogram`,
+//! `Gauge` — with no `opentelemetry` type in its signatures. The remote parent
+//! link and the sampler's verdict are seeded onto the framework's span
+//! constructor at `init`, so they reach **every** edge.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

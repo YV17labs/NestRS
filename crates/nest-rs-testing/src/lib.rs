@@ -3,8 +3,8 @@
 //! [`HeadlessApp::builder`] boots an app's real DI graph (same four-phase
 //! [`AppBuilder`](nest_rs_core::AppBuilder) build, access-graph enforced) with
 //! no transport, for a worker or a scheduler; it links no HTTP stack. With the
-//! `http` feature, [`TestApp`] boots the same graph and drives its HTTP stack,
-//! the edge included, through a [`TestClient`] without binding a socket.
+//! `http` feature, `TestApp` boots the same graph and drives its HTTP stack,
+//! the edge included, through a `TestClient` without binding a socket.
 //! GraphQL, OpenAPI and MCP self-mount over HTTP, so one client drives every
 //! surface.
 //!

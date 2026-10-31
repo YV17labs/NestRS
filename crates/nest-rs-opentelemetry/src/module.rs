@@ -2,8 +2,8 @@ use nest_rs_core::{Registering, container::ContainerBuilder, module::Module};
 
 use crate::OpenTelemetryError;
 
-/// Provides [`Metrics`](crate::Metrics) over the global meter, under the `otlp`
-/// feature; it mounts no per-request layer.
+/// Provides `Metrics` over the global meter, under the `otlp` feature; it
+/// mounts no per-request layer.
 ///
 /// **Ordering:** [`OpenTelemetry::init()`](crate::OpenTelemetry::init) must run
 /// before this module is registered, or the boot fails with

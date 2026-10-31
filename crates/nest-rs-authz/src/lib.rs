@@ -11,7 +11,8 @@
 //! [`#[subject]`](macro@subject) declares, which a rule grants whole and a posture
 //! gates without masking.
 //!
-//! [`AbilityGuard`] is the one guard, answering all four edges.
+//! `AbilityGuard` is the one guard, answering all four edges; each binding's
+//! feature turns it on.
 //!
 //! Bindings: `http`, `graphql`, `ws`, `mcp`. The data-coupled binding — the
 //! row `#[authorize(A, bind = S)]` loads — lives in `nest-rs-seaorm`.

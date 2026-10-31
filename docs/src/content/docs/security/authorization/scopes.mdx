@@ -253,7 +253,7 @@ pub struct Transcoding;
 ```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
 if actor.is_admin() {
     ab.can(Action::Manage, Transcoding)
-        .requires_scope(AUDIO_TRANSCODE);
+        .requires_scope(constants::AUDIO_TRANSCODE);
 }
 ```
 

@@ -654,7 +654,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | a suite arming the app's outbox by hand (`container.get_dyn::<dyn OutboxStore>()…arm()`) | delete it: `TestApp` and `HeadlessApp` arm the outbox of an app binding a store and a queue backend, as the relay does at boot |
    | a service test installing `SeaOrmExecutor::Pool(pool).into()` with `with_request_executor` or `with_job_executor`, and an ability with `with_ability` | `app.unit(ability, \|\| svc.call())` as a request, `app.system_unit(\|\| svc.call())` as a job, on a `TestApp` booting the binding — `nest-rs`'s `authz` and `database` features beside `testing` |
    | `EphemeralDatabase::create::<M>()` held in a tuple beside the app it seeds | `TestApp::builder()…ephemeral_database::<M>()`, held and dropped by the app; `app.container().get::<DatabaseConnection>()` reaches it |
-   | a test helper signing a bearer with `app.container().get::<JwtService>()` | `app.bearer(\|exp\| claims)`, `nest-rs`'s `authn` feature beside `testing` |
+   | a test helper signing a bearer with `app.container().get::<JwtService>()` | `app.bearer(&claims)`, `nest-rs`'s `authn` feature beside `testing` |
 
    **Lifecycle hooks and the way down**
 
@@ -797,7 +797,14 @@ lists what the boot, a log or the wire shows when one is missed.
     | a token route reading `Form<AccessTokenRequest>`, or code decoding it with serde | `request: AccessTokenRequest`, the handler parameter: the type derives no `Deserialize`, and its refusals are `invalid_request` |
     | `if request.grant_type != "client_credentials" { return Err(TokenError::UnsupportedGrant) }` | nothing: `request.grant_type` is a `GrantType` (`GrantType::ClientCredentials`), and a grant the endpoint does not serve is refused `unsupported_grant_type` before the handler runs |
     | `request.scope` read as an `Option<String>` and narrowed to the client's scopes by hand | `client.scope_for(&request.scope)?`: `scope` is §3.3's `Vec<String>`, and the grant is strict — none asked is the whole registration, an unregistered scope `invalid_scope` |
-    | a client registry in a config of your own, checked by a strategy calling `authenticate_against_registry` | `OAuthServerModule::<P>` in the module's `imports`, `P` your payload, read from `<PREFIX>_OAUTH__SERVER__CLIENTS`; the guard is `ClientAuthenticationGuard<ClientSecretBasicStrategy<P>>`, and `Arc<OAuthServerConfig<P>>` is injectable where you read the registry |
+    | a client registry in a config of your own, checked by a strategy calling `authenticate_against_registry` | `OAuthServerModule::<P>` in the module's `imports`, `P` your payload, read from `<PREFIX>_OAUTH__SERVER__CLIENTS`; the token route binds `#[use_guards(ClientGuard<P>)]`, which the module provides with its strategy, and `Arc<OAuthServerConfig<P>>` is injectable where you read the registry |
+    | `ClientSecretBasicStrategy<P>` and `ClientAuthenticationGuard<ClientSecretBasicStrategy<P>>` in a module's `providers`, behind a guard alias of your own | delete both lines and the alias: `OAuthServerModule::<P>` provides them, and the route binds `nest_rs::oauth::server::ClientGuard<P>` |
+    | `<OAuthServerConfig<P> as Namespaced>::NAMESPACE` | `OAuthServerConfig::<P>::NAMESPACE`, with `Namespaced` in scope |
+    | `exp: jwt.expiry()` in a claims literal, `pub exp: u64` on a claims type the app signs | delete both: the signer stamps `exp`, its `expires_in` after `iat`; a token living another time names it with `exp: jwt.expiry_in(secs)`, as a `sign_handshake`'s claims must |
+    | `.requires_scope("posts:read")` | `pub const POSTS_READ: Scope = Scope::new("posts:read");` (`nest_rs::guards::Scope`) once, then `.requires_scope(POSTS_READ)` |
+    | `<PREFIX>_OAUTH__RESOURCE__SCOPES_SUPPORTED` repeating the scopes your rules gate on | `OAuthResourceModule::for_root([POSTS_READ, …])` (or `([…], config)` beside a pinned config), and delete the variable; a deployment still setting it advertises its list instead |
+    | a social authorize handler building its `302` from `provider.authorize(&jwt, resource)` — `Set-Cookie`, `Location`, a `404` for an unknown provider | `providers.authorize(&provider, &jwt, resource)` returned as is: a `SocialRedirect`, the `302` with the cookie and `Cache-Control: no-store`, or the `404` |
+    | a `nestrs g auth` dev-token handler returning `Json<DevTokenResponseDto>` with two `#[response_header]` lines | `Result<AccessTokenResponse>`, `Ok(AccessTokenResponse::bearer(self.jwt.sign(&claims).opaque()?, self.jwt.ttl_secs()))`, with `oauth-server` among the features crate's `nest-rs` features; delete the DTO — the old one still compiles |
     | `hash_password(p)?` stored or compared as a `String` | a `Secret<String>`: store it as is, and pass `hash.expose_secret()` to `verify_password` |
     | the development-token route's `DevOnlyGuard` and `DevTokenAudit`, written by an earlier `nestrs g auth` | `nest_rs::authn::DevelopmentOnlyGuard`, bound with `#[use_guards]` on the controller and listed in its module's `providers`; delete `authn/http/guard.rs` and `authn/http/audit.rs` |
     | `TokenError::InvalidClient` built or matched | `TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretBasic)` for a client refused over the `Authorization` header, `ClientSecretPost` for credentials in the body, `None` for none; matched as `InvalidClient(_)` |
@@ -812,7 +819,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `AuthnModule` imported at the root beside `OAuthResourceModule` | delete the line: the module imports the verifier it binds. Keep `AuthnModule::for_root(cfg)` only to pin a configuration in code — not a compile error, the bare line is merely redundant |
     | `AuthenticatedClient::actor_id()` read as `None` | it is the client's `client_id` — not a compile error; code keying "a machine caller" on `None` reads the principal's type |
     | `PrincipalIdentity::actor_id` returning `None` for a machine principal | its subject — the client id when it acts for itself (RFC 9068 §2.2) |
-    | a hand-written `Set-Cookie` for `authorization.transaction` on the OAuth redirect | `.header(header::SET_COOKIE, authorization.set_cookie())`, before `Location` takes `authorization.url` |
+    | a hand-written `Set-Cookie` for `authorization.transaction` on the OAuth redirect | `.header(header::SET_COOKIE, authorization.set_cookie())`, before `Location` takes `authorization.url`, with `Cache-Control: no-store`; behind a social provider, the `SocialRedirect` `SocialRegistry::authorize` answers |
     | the callback's own parsing of the transaction cookie | `OAuthClient::transaction_from(req.headers().get_all(header::COOKIE).iter().filter_map(\|field\| field.to_str().ok()))` |
     | a social callback strategy of your own reading `provider`, `code`, `state` and the cookie | `AuthnGuard<SocialStrategy<S>>` on the callback route, `SocialStrategy<S>` and the guard in the module's `providers`, and `impl SocialSignIn for S` saying who a `SocialProfile` is — the rest, §4.1.2.1's `error` included, is the strategy's |
     | `client.authorize(&jwt, provider)`, `provider.authorize(&jwt)` | `client.authorize(&jwt, provider, resource)`, `provider.authorize(&jwt, resource)`: the RFC 8707 resource the sign-in asks for, or `None`, signed into the transaction |
@@ -1829,6 +1836,18 @@ lists what the boot, a log or the wire shows when one is missed.
   `p.all([])`, `Predicate::Always`, a disjunction holding one — refuses the
   same way, at the class gate, where its rows used to decide it. A denial
   meant for some rows alone reads a column in its `.when`.
+- **A module listing `ClientSecretBasicStrategy<P>` or
+  `ClientAuthenticationGuard<ClientSecretBasicStrategy<P>>` beside
+  `OAuthServerModule::<P>`** fails the boot: `duplicate provider:
+  ClientSecretBasicStrategy<P> is registered by … and again by …`. Delete the
+  line; the module provides it.
+- **`JwtService::expiry()`** no longer resolves (`E0599`), nor does a claims
+  literal once its type loses `exp` (`E0560`): the signer stamps it.
+- **`sign_handshake` with claims carrying no `exp`** answers
+  `AuthError::Failed`, naming `expiry_in`, where such a token used to fail at
+  `verify_handshake`: a handshake never inherits the access-token lifetime.
+- **`requires_scope("…")`** no longer compiles (`E0308`, expected `Scope`,
+  found `&str`): declare the scope as a `Scope` constant.
 - **`cannot(..).requires_scope(..)` or `cannot(..).fields(..)`** no longer
   compiles (`E0599`, `no method named requires_scope found for struct
   RuleSpec<'_, E, Cannot>`), nor does a `RuleSpec<'_, E>` written for what

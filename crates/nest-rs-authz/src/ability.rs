@@ -396,8 +396,14 @@ impl Ability {
     /// anything runs for the caller. A grant's or a denial's `when` is left to
     /// the rows: layers ② and ③ enforce it, not this gate.
     pub fn can_class(&self, action: Action, subject: TypeId) -> bool {
-        !self.denied_outright(action, subject)
-            && self.rules_for(action, subject).any(|rule| !rule.inverted)
+        let mut granted = false;
+        for rule in self.rules_for(action, subject) {
+            if rule.inverted && rule.when.is_none() {
+                return false;
+            }
+            granted |= !rule.inverted;
+        }
+        granted
     }
 
     /// Whether a denial no `when` narrows bars `action` on `subject`: it

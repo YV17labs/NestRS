@@ -125,6 +125,7 @@ mod factory_inputs;
 mod handler;
 mod identifier;
 mod injected_factory;
+mod injects;
 mod instance;
 mod interceptor;
 mod job;
@@ -256,6 +257,7 @@ pub mod __private {
         HandlerDeclaration, MetaLevels, MetaValue, declare_handler, meta_value,
     };
     pub use crate::injected_factory::InjectedFactory;
+    pub use crate::injects::Injects;
     pub use crate::instance::{InstanceDeclaration, InstanceSeal};
     pub use crate::interceptor::__private::{
         InterceptorRegistration, InterceptorStage, register_interceptor,
@@ -290,7 +292,7 @@ pub mod __private {
         current_correlation, hex, link_span, pending_ids, set_actor_id, set_sampled,
         set_span_linker, with_pending_ids,
     };
-    pub use crate::type_name::{reaches_host, short_type_name, shorten};
+    pub use crate::type_name::{short_type_name, shorten};
     pub use crate::unit_context::{
         new_unit_context, pending_of, run_layer, running_layer, take_pending,
     };

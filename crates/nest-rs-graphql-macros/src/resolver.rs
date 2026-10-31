@@ -21,13 +21,13 @@ use nest_rs_codegen::__private::{
     at_most_one_authorize, await_if_async, build_injectable_body, camel_case, cfg_attrs,
     concrete_signature, delegated_attrs, exception_filter_specs, force_guard_typeids,
     forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
-    handler_const, handler_ref, host_meta_fn, impl_self_ident, injected_field_types,
-    injected_keys_with_layers, injected_methods_with_layers, injected_names_with_layers,
-    injected_optional_fns, injected_per_request_method, interceptor_specs, key_as_written,
-    layer_deps, normalize_forwarded_args, one_role_per_method, piped_input, posture_contradiction,
-    posture_required, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
-    site_fn_ident, site_ref, tail_param, takes_value, type_label, unit_of_work_required,
-    unknown_argument, validate_argument,
+    handler_const, handler_ref, host_meta_fn, impl_self_ident, injected_keys_with_layers,
+    injected_methods_with_layers, injected_names_with_layers, injected_optional_fns,
+    injected_per_request_method, injects_impls, interceptor_specs, key_as_written, layer_deps,
+    normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
+    posture_contradiction, posture_required, reject_meta_on_operations, scoped_specs,
+    shared_receiver, site_const_ident, site_fn_ident, site_ref, tail_param, takes_value,
+    type_label, unit_of_work_required, unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -117,9 +117,12 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     };
     let host_meta = host_meta_fn(&meta);
 
-    // Read before the body strips `#[inject]`: `#[crud]` reads its service's
-    // type off the field its key names.
-    let injected_fields = injected_field_types(&item);
+    // Read before the body strips `#[inject]`: `#[crud]` reaches its service
+    // through the field of its type.
+    let injected_fields = match injects_impls(&item, "resolver") {
+        Ok(impls) => impls,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let InjectableBody {
         ctor,
         dep_keys,
@@ -1190,11 +1193,28 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 ));
                 unit_requirements.push(unit_of_work_required(&self_ty, &cfgs));
             }
-            if let Some(AuthorizeSpec {
-                entity: Some(entity),
-                bind: Some(service),
-                ..
-            }) = &authorize_spec
+            // Under `bind` with no entity written, the posture reads the `E` of
+            // the `Authorized<Action, E>` parameter, asserted the service's once
+            // rather than projected off the service at every use.
+            let subject_entity: Option<TokenStream2> =
+                authorize_spec
+                    .as_ref()
+                    .and_then(|spec| match (&spec.entity, &spec.bind) {
+                        (Some(entity), _) => Some(quote!(#entity)),
+                        (None, Some(_)) => authorized_param(&sig).and_then(|arg| match arg {
+                            FnArg::Typed(pt) => nth_generic_type(&pt.ty, "Authorized", 1)
+                                .map(|entity| quote!(#entity)),
+                            FnArg::Receiver(_) => None,
+                        }),
+                        (None, None) => None,
+                    });
+            if let (
+                Some(entity),
+                Some(AuthorizeSpec {
+                    bind: Some(service),
+                    ..
+                }),
+            ) = (&subject_entity, &authorize_spec)
             {
                 bound_entities.push(quote_spanned! {entity.span()=>
                     #(#cfgs)*
@@ -1263,8 +1283,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             let route_label_lit = LitStr::new(&route_label, proc_macro2::Span::call_site());
             let (mut gsig, gctx) = ensure_ctx_param(&wrapper_sig);
             gsig.output = wrapper_output(&sig);
-            let authz_entity = |spec: &AuthorizeSpec| match &spec.entity {
-                Some(entity) => quote!(#entity),
+            let authz_entity = |spec: &AuthorizeSpec| match &subject_entity {
+                Some(entity) => entity.clone(),
                 None => {
                     #[expect(
                         clippy::expect_used,

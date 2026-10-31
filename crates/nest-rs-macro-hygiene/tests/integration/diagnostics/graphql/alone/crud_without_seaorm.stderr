@@ -3,7 +3,7 @@ error: `#[crud]` expands into `nest_rs::authz` and `nest_rs::seaorm`, which this
            nest-rs = { version = "7.0", features = ["authz", "seaorm"] }
   --> tests/integration/diagnostics/graphql/alone/crud_without_seaorm.rs:20:1
    |
-20 | #[crud(service = svc, ops = [get])]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+20 | #[crud(service = NotesService, ops = [get])]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: this error originates in the macro `$crate::__requires_end` which comes from the expansion of the attribute macro `crud` (in Nightly builds, run with -Z macro-backtrace for more info)

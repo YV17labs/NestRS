@@ -138,3 +138,43 @@ Refused: sealing the probe in `nest-rs-http`, since the token response is the
 OAuth server's; `ProblemDetails` as a member, an error body documented through
 `error(…)`; `(StatusCode, B)` as a member, whose status is a value, so the
 document would file the body under the default status.
+
+## 2026-10-31 — `service` names the type, reached through `Injects<S>`
+
+Under the owner's agreement to the identity audit's second pass ("Tout faire
+(Recommandé)", 2026-10-31), which covers this break of `#[crud]`'s key.
+
+The per-host trait made every misnamed key or misplaced block lead with an
+expansion name (`cannot find associated type svc in trait
+__NestrsInjectedNotesController`), and one shape had rustc's help tell the
+developer to import that trait into their own source; a block that worked in
+one file stopped working under a `use`.
+
+Decided, by elegance with correctness held: **`#[crud(service = NotesService)]`
+names the service's type**, and `#[controller]` / `#[resolver]` implement a
+hidden `Injects<S>` for each `#[inject] Arc<S>` field, which every generated
+operation reaches the field through, by one hidden function spanned on the
+key. The refusal of E0446 above does not apply: a trait keyed by its type
+parameter puts the service in the impl's header, and rustc makes an impl as
+visible as the least visible type there, so a public host injecting a
+crate-private service compiles and no associated type names it. The per-host
+trait, its consts, the placement check and its sentence are gone, and so is
+the limit of the path: a block naming its host through an alias, an import
+or another module reaches the field as the struct's module does. A host
+injecting no `S` reads one sentence, "`NotesController` injects no
+`NotesService`", with the field to add.
+
+What it costs: a host injects each type once — two impls of one key overlap
+(E0119), so the second field of one type is refused at the struct, which the
+container's one provider per type already made redundant — and a field whose
+type names a host type parameter gets no impl, since two such impls could
+overlap. The check compares spellings, all an expansion reads: two fields
+naming one service two ways (`UsersService` and `users::UsersService`, or an
+alias), or under two `cfg`s that both hold, reach rustc's E0119 at the
+struct's decorator, naming the hidden `Injects<S>` — the one refusal of the
+shape not in the framework's sentence, on a host 6.x compiled. A lowercase
+key, the earlier spelling, is refused naming the type to write.
+
+Refused: **keying by the field's type** (`Injects<Arc<S>>`): the refusal would
+print `std::sync::Arc<…>` in place of the service a developer names, and an
+`Option<Arc<S>>` field would take a key no `#[crud]` reads.

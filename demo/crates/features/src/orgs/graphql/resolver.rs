@@ -12,5 +12,5 @@ pub struct OrgsResolver {
     svc: Arc<OrgsService>,
 }
 
-#[crud(service = svc)]
+#[crud(service = OrgsService)]
 impl OrgsResolver {}

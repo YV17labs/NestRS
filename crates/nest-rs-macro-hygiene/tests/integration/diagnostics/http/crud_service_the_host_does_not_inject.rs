@@ -1,6 +1,6 @@
-//! `service = <field>` names the host's `#[inject]` field, whose type every
-//! generated operation reads its types off: a name the host does not inject is
-//! refused at the key, saying what it names.
+//! `service = <Type>` names the service every generated operation delegates
+//! to, through the host's `#[inject]` field of that type: a service the host
+//! does not inject is refused once, at the key, saying what to add.
 
 use std::sync::Arc;
 
@@ -35,13 +35,21 @@ impl CrudService for NotesService {
     type Entity = note::Entity;
 }
 
+#[injectable]
+#[derive(Default)]
+struct ArchiveService;
+
+impl CrudService for ArchiveService {
+    type Entity = note::Entity;
+}
+
 #[controller(path = "/notes")]
 struct NotesController {
     #[inject]
     notes: Arc<NotesService>,
 }
 
-#[crud(service = svc, ops = [get])]
+#[crud(service = ArchiveService, ops = [get])]
 impl NotesController {}
 
 fn main() {}

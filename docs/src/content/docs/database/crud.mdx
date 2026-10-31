@@ -8,10 +8,11 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 A REST CRUD or a GraphQL CRUD is **one attribute** on the controller or
-resolver impl block. `#[crud(service = svc)]` reads the entity's
-[`CrudService`](/database/) off the field it names, types every operation off
-that service and its entity's `#[expose]`, synthesises every operation the
-developer did not hand-write, and re-emits
+resolver impl block. `#[crud(service = OrgsService)]` names the entity's
+[`CrudService`](/database/), reaches it through the struct's `#[inject]` field
+of that type, types every operation off that service and its entity's
+`#[expose]`, synthesises every operation the developer did not hand-write, and
+re-emits
 the block under `#[routes]` (HTTP) or `#[operations]` (GraphQL). Auth, row-level
 filtering, by-id binding and response masking come from the same data context
 described in [Database](/database/) and [Security](/security/) — `#[crud]`
@@ -46,7 +47,7 @@ pub struct OrgsController {
     svc: Arc<OrgsService>,
 }
 
-#[crud(service = svc)]
+#[crud(service = OrgsService)]
 impl OrgsController {}
 ```
 
@@ -99,7 +100,7 @@ that is the one knob, and it makes the field nullable on the wire too.
 
 ```rust title="crates/features/src/orgs/http/controller.rs"
 #[crud(
-    service = svc,        // the field on the struct holding Arc<…Service>
+    service = OrgsService, // the service the struct injects as Arc<OrgsService>
     paginate = cursor,    // optional — cursor is already the default; `none` opts out
     ops = [list, get, create, update, delete],  // optional — omit for all five
     api(get(summary = "Get an org by id")),     // optional — one operation's OpenAPI text
@@ -107,10 +108,19 @@ that is the one knob, and it makes the field nullable on the wire too.
 impl OrgsController {}
 ```
 
-- `service` is the **field name** on the struct, not the type. Follow the
-  framework convention: a single service is named `svc`, several are
-  `<thing>_svc`. `#[controller]` and `#[resolver]` hand the field's type
-  over, so a name the struct does not `#[inject]` fails the build at the key.
+- `service` is the service's **type**. Every operation reaches it through the
+  struct's `#[inject]` field holding it, whatever that field is called, so the
+  block may name its host through an alias, an import or another module. A
+  service the struct does not inject fails the build once, saying what to add:
+
+  ```text
+  error[E0277]: `OrgsController` injects no `OrgsService`
+    = note: `#[crud(service = …)]` names the type of an `#[inject]` field of its
+            host: add `#[inject] svc: Arc<OrgsService>` to `OrgsController`
+  ```
+
+  A struct injects each type once, since the container holds one: a second
+  field of the same type fails the build at that field.
 - Every type an operation names comes off that service and its entity: the
   answer is the entity's `#[expose]`d wire type (`Org`), never the SeaORM
   `Model`, and the shaper masks it; the create and update bodies are the
@@ -119,7 +129,9 @@ impl OrgsController {}
   `UpdateOrg`, not `…Dto`).
 - `ops` lists the operations a resource has (`ops = [list, get]`); omit it for
   all five. Each write op reads its trait, so one the service does not offer —
-  a `create` with no `Creatable` impl — fails the build, never a silent no-op.
+  a `create` with no `Creatable` impl — fails the build, never a silent no-op:
+  "`OrgsService` offers no create: implement `Creatable` for it, or drop
+  `create` from `#[crud(ops = …)]`".
 - `paginate` defaults to `cursor` — every generated list is keyset-paginated
   (the next page in a `Link: <…>; rel="next"` header on REST, `first`/`after` arguments on
   GraphQL). `paginate = none` opts out into the full collection (backstopped
@@ -147,7 +159,7 @@ create lands in the caller's org without a handler.
 
 ```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)"
 #[crud(
-    service = svc,
+    service = UsersService,
     api(
         get(
             summary = "Get a user in the caller's org by id",
@@ -191,7 +203,7 @@ it. Constants the server owns, such as a new post's status, are the entity's
 the ones that need custom logic — the rest are filled in:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-#[crud(service = svc)]
+#[crud(service = PostsService)]
 impl PostsController {
     #[get("/")]
     #[authorize(Read, PostEntity)]
@@ -225,7 +237,7 @@ pub struct UsersResolver {
     svc: Arc<UsersService>,
 }
 
-#[crud(service = svc)]
+#[crud(service = UsersService)]
 impl UsersResolver {}
 ```
 

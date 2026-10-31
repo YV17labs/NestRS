@@ -696,7 +696,7 @@ fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_endpoint_guards(
         "a resolver binds no guard without a GraphQL check: {resolver}"
     );
     assert!(
-        resolver.contains("#[crud(service = svc)]"),
+        resolver.contains("#[crud(service = PostsService)]"),
         "the resource resolver uses the #[crud] form, typed off its service: {resolver}"
     );
 

@@ -81,7 +81,7 @@ fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
         "a DB-backed controller serves nothing without an ability guard: {controller}"
     );
     assert!(
-        controller.contains("#[crud(service = svc)]"),
+        controller.contains("#[crud(service = PostsService)]"),
         "the resource controller uses the #[crud] form, typed off its service: {controller}"
     );
 

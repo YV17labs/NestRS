@@ -152,7 +152,7 @@ pub struct PostController {
     svc: Arc<PostService>,
 }
 
-#[crud(service = svc)]
+#[crud(service = PostService)]
 impl PostController {}
 "#;
 

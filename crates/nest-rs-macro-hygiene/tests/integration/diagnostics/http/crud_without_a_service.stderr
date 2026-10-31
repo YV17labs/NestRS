@@ -1,4 +1,4 @@
-error: #[crud] requires `service` — write `service = svc` (the injected `CrudService` field to delegate to, whose service every generated operation reads its types off)
+error: #[crud] requires `service` — write `service = UsersService` (the injected `CrudService` every generated operation delegates to and reads its types off)
   --> tests/integration/diagnostics/http/crud_without_a_service.rs:10:1
    |
 10 | #[crud(ops = [list])]

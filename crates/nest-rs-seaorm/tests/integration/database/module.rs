@@ -277,7 +277,7 @@ struct MemosController {
     svc: Arc<MemosService>,
 }
 
-#[nest_rs_http::crud(service = svc)]
+#[nest_rs_http::crud(service = MemosService)]
 impl MemosController {}
 
 #[module(providers = [MemosService])]
@@ -292,7 +292,7 @@ struct MemosResolver {
     svc: Arc<MemosService>,
 }
 
-#[nest_rs_graphql::crud(service = svc)]
+#[nest_rs_graphql::crud(service = MemosService)]
 impl MemosResolver {}
 
 #[module(imports = [MemosModule], providers = [MemosResolver])]

@@ -9,7 +9,7 @@ use nest_rs::http::{controller, crud};
 struct OrgsController;
 
 #[crud(
-    service = svc,
+    service = OrgsService,
     ops = [list, get],
     api(get(summary = "Get an org by id")),
 )]

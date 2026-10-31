@@ -17,7 +17,7 @@ slice: the port at the feature root, one adapter folder per edge.
   its org from the grant. When that breaks, open an issue — never rewrite the
   boilerplate. Each fact is stated once: the entity names its wire type
   (`#[expose]`), the service its entity and inputs (its trait impls), and an
-  adapter only the field it delegates to (`#[crud(service = svc)]`).
+  adapter only the service it delegates to (`#[crud(service = UsersService)]`).
 - **Adding a feature is copying `users/`**, plus the two edits a copy cannot
   carry: `pub mod <feature>;` in `lib.rs` and the `<Feature><Edge>Module`
   entry in the serving app's `module.rs`. `nestrs g feature/resource/<edge>`

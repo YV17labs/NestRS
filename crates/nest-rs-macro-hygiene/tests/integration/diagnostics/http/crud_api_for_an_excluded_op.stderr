@@ -1,5 +1,5 @@
 error: #[crud] `api` configures the `get` op, which `ops` leaves out — list `get` in `ops` to generate it, or drop `get(…)`
-  --> tests/integration/diagnostics/http/crud_api_for_an_excluded_op.rs:10:41
+  --> tests/integration/diagnostics/http/crud_api_for_an_excluded_op.rs:10:49
    |
-10 | #[crud(service = svc, ops = [list], api(get(summary = "Get an org by id")))]
-   |                                         ^^^
+10 | #[crud(service = OrgsService, ops = [list], api(get(summary = "Get an org by id")))]
+   |                                                 ^^^

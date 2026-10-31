@@ -34,7 +34,7 @@ pub struct OrgsController {
     svc: Arc<OrgsService>,
 }
 
-#[crud(service = svc)]
+#[crud(service = OrgsService)]
 impl OrgsController {}
 ```
 

@@ -14,19 +14,19 @@ impl AController {}
 #[controller(path = "/b")]
 struct BController;
 
-#[crud(service = svc, ops = list)]
+#[crud(service = BService, ops = list)]
 impl BController {}
 
 #[controller(path = "/c")]
 struct CController;
 
-#[crud(service = svc, ops = ["list"])]
+#[crud(service = CService, ops = ["list"])]
 impl CController {}
 
 #[controller(path = "/d")]
 struct DController;
 
-#[crud(service = svc, paginate = "cursor")]
+#[crud(service = DService, paginate = "cursor")]
 impl DController {}
 
 fn main() {}

@@ -361,11 +361,15 @@ mod tests {
         }
 
         for (args, key) in [
-            (quote!(service = svc, ops = []), "ops = []"),
-            (quote!(service = "svc"), "service"),
-            (quote!(service = svc, ops = list), "ops"),
-            (quote!(service = svc, ops = ["list"]), "ops"),
-            (quote!(service = svc, paginate = "cursor"), "paginate"),
+            (quote!(service = UsersService, ops = []), "ops = []"),
+            (quote!(service = "UsersService"), "service"),
+            (quote!(service = svc), "service"),
+            (quote!(service = UsersService, ops = list), "ops"),
+            (quote!(service = UsersService, ops = ["list"]), "ops"),
+            (
+                quote!(service = UsersService, paginate = "cursor"),
+                "paginate",
+            ),
         ] {
             let refusal = crate::crud::parse_crud_args(args)
                 .and_then(|declaration| {

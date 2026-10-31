@@ -136,7 +136,7 @@ pub struct UsersController {
 }
 
 #[crud(
-    service = svc,
+    service = UsersService,
     // … api(get(…), create(…))
 )]
 impl UsersController {}

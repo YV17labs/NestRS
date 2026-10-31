@@ -148,7 +148,7 @@ pub struct {{resolver}} {
 // authenticated, ability-filtered, transactional and field-masked — generated
 // by #[crud], the same way the HTTP controller is. Each answers FORBIDDEN until
 // AuthzAbility grants its action on `crate::{{snake}}::Entity`.
-#[crud(service = svc)]
+#[crud(service = {{service}})]
 impl {{resolver}} {}
 "#;
 

@@ -231,13 +231,25 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let wrapper_name = format_ident!("__nestrs_route_{}_{}", ctrl_name, method_name);
         let site_name = site_ident(&ctrl_name, &method_name);
 
+        // `#[crud]`'s own parameters declare neither a gate nor a shaper, so
+        // no probe asks their types again.
+        let mut unprobed: Vec<usize> = Vec::new();
+        for (index, arg) in method.sig.inputs.iter_mut().skip(1).enumerate() {
+            if let FnArg::Typed(pt) = arg {
+                let written = pt.attrs.len();
+                pt.attrs.retain(|attr| !attr.path().is_ident(UNPROBED));
+                if pt.attrs.len() != written {
+                    unprobed.push(index);
+                }
+            }
+        }
         let mut inputs: Vec<FnArg> = method.sig.inputs.iter().skip(1).cloned().collect();
         let arg_idents = match normalize_forwarded_args(&mut inputs) {
             Ok(idents) => idents,
             Err(err) => return err.to_compile_error().into(),
         };
         let authorize = match take_authorize(&mut method.attrs) {
-            Ok(spec) => spec,
+            Ok(spec) => spec.map(|spec| spec.reading_the_subject_of(&inputs)),
             Err(err) => return err.to_compile_error().into(),
         };
         // A hand-written `Authorize<A, E>` arms the shaper too, and the mask
@@ -361,7 +373,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         if let Some(AuthorizeSpec {
             entity,
             bind: Some(service),
-            entity_written: true,
             ..
         }) = &authorize
         {
@@ -595,7 +606,17 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // The compiler selects the arming type, so this crate needs no authz
         // dependency and a renamed import still arms.
         let mut param_types = param_types(&inputs);
-        let probe_types: Vec<Type> = authorize_ty.iter().chain(&param_types).cloned().collect();
+        let probe_types: Vec<Type> = authorize_ty
+            .iter()
+            .chain(
+                param_types
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| !unprobed.contains(index))
+                    .map(|(_, ty)| ty),
+            )
+            .cloned()
+            .collect();
         let shaper_selection = shaper_selection(&probe_types);
         let typed_body = documented_body(&param_types);
 
@@ -1049,17 +1070,44 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
+/// What `#[crud]` marks the parameters it generates with: a type that
+/// declares neither a gate nor a shaper, so `#[routes]` probes it for neither.
+pub(crate) const UNPROBED: &str = "__nestrs_unprobed";
+
 /// A route's `#[authorize(Action, Entity)]` posture.
 struct AuthorizeSpec {
     action: Path,
-    /// The entity written, or under `bind = Service` alone the service's.
+    /// The entity written, or under `bind = Service` alone the one its
+    /// `Authorized<Action, E>` parameter names.
     entity: Type,
-    /// Whether the entity was written, which beside `bind` must be the
-    /// service's own.
+    /// Whether the entity was written, or is still to be read off the
+    /// parameter `bind` fills.
     entity_written: bool,
     /// `bind = Service`: the service that loads the subject into the route's
     /// `Authorized<Action, E>` parameter.
     bind: Option<Path>,
+}
+
+impl AuthorizeSpec {
+    /// Under `bind = Service` with no entity written, the posture's entity is
+    /// the `E` of the route's `Authorized<Action, E>` parameter, which the
+    /// service's own is asserted to be once (`bound_entity`) rather than
+    /// projected in every probe. With none, `bound_subject` refuses the route.
+    fn reading_the_subject_of(mut self, inputs: &[FnArg]) -> Self {
+        if self.entity_written || self.bind.is_none() {
+            return self;
+        }
+        let subject = inputs.iter().find_map(|arg| match arg {
+            FnArg::Typed(pt) if spelled(arg, "Authorized") => {
+                nth_generic_type(&pt.ty, "Authorized", 1).cloned()
+            }
+            _ => None,
+        });
+        if let Some(entity) = subject {
+            self.entity = entity;
+        }
+        self
+    }
 }
 
 /// The parameter `#[authorize(Action, bind = Service)]` fills: where the

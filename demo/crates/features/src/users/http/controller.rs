@@ -14,7 +14,7 @@ pub struct UsersController {
 }
 
 #[crud(
-    service = svc,
+    service = UsersService,
     api(
         get(
             summary = "Get a user in the caller's org by id",

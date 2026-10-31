@@ -1,14 +1,14 @@
 //! `bind =` names the service that loads the subject; an action marker there —
 //! the action and the service swapped — is refused with the note saying so.
 
-use nest_rs::authz::Read;
+use nest_rs::authz::{Read, WireModelDefaults};
 use nest_rs::http::{controller, routes};
 use nest_rs::seaorm::{Authorized, CrudService};
 
 mod widget {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
     #[sea_orm(table_name = "swapped_bind_widgets")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -20,6 +20,8 @@ mod widget {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
+
+impl WireModelDefaults for widget::Entity {}
 
 struct WidgetsService;
 

@@ -98,7 +98,7 @@ struct GizmosResolver {
     svc: Arc<GizmosService>,
 }
 
-#[crud(service = svc, ops = [get, create])]
+#[crud(service = GizmosService, ops = [get, create])]
 impl GizmosResolver {}
 
 #[module(

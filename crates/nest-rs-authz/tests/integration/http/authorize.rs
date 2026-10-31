@@ -222,7 +222,7 @@ mod gate_order {
         svc: Arc<SecretsService>,
     }
 
-    #[crud(service = svc, ops = [list, get])]
+    #[crud(service = SecretsService, ops = [list, get])]
     impl SecretsCrudController {}
 
     #[module(

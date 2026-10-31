@@ -42,8 +42,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     let ops = cfg.generated_ops(&existing, |op| op.name().to_owned())?;
     let prefix_check = by_id_path_check(&self_ty, ops);
 
-    let service = &cfg.service;
     let CrudTypes {
+        service,
         entity,
         output,
         create,
@@ -72,6 +72,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         ),
     };
 
+    // The parameters generated here declare neither a gate nor a shaper.
+    let unprobed = proc_macro2::Ident::new(crate::routes::UNPROBED, proc_macro2::Span::call_site());
+
     let mut generated: Vec<ImplItem> = Vec::new();
 
     if ops.list {
@@ -84,7 +87,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 async fn list(
                     &self,
                 ) -> ::nest_rs_http::Result<::nest_rs_http::Json<::std::vec::Vec<#output>>> {
-                    let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
+                    let __rows = ::nest_rs_seaorm::CrudService::list(#service(self))
                         .await
                         .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                     ::core::result::Result::Ok(::nest_rs_http::Json(
@@ -98,7 +101,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 #[authorize(::nest_rs_authz::Read, #entity)]
                 async fn list(
                     &self,
-                    __page: ::nest_rs_http::Query<::nest_rs_seaorm::PageParams>,
+                    #[#unprobed] __page: ::nest_rs_http::Query<::nest_rs_seaorm::PageParams>,
                 ) -> ::nest_rs_http::Result<
                     ::nest_rs_http::Paginated<::nest_rs_http::Json<::std::vec::Vec<#output>>>,
                 > {
@@ -108,7 +111,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                         .cursor()
                         .map_err(|__e| ::nest_rs_http::pipe_error(&__e))?;
                     let __p = ::nest_rs_seaorm::CrudService::page(
-                        &*self.#service,
+                        #service(self),
                         __first,
                         __after,
                     )
@@ -135,11 +138,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[authorize(::nest_rs_authz::Read, #entity)]
             async fn get(
                 &self,
-                __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+                #[#unprobed] __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
             ) -> ::nest_rs_http::Result<::nest_rs_http::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Read,
                     __id.0,
                 )
@@ -164,10 +167,10 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[authorize(::nest_rs_authz::Create, #entity)]
             async fn create(
                 &self,
-                __body: ::nest_rs_http::Json<#create>,
+                #[#unprobed] __body: ::nest_rs_http::Json<#create>,
             ) -> ::nest_rs_http::Result<::nest_rs_http::Created<::nest_rs_http::Json<#output>>> {
                 let __row = ::nest_rs_seaorm::Creatable::create(
-                    &*self.#service,
+                    #service(self),
                     __body.into_inner(),
                 )
                 .await
@@ -191,12 +194,12 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[authorize(::nest_rs_authz::Update, #entity)]
             async fn update(
                 &self,
-                __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
-                __body: ::nest_rs_http::Json<#update>,
+                #[#unprobed] __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+                #[#unprobed] __body: ::nest_rs_http::Json<#update>,
             ) -> ::nest_rs_http::Result<::nest_rs_http::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Update,
                     __id.0,
                 )
@@ -205,7 +208,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         let __row = ::nest_rs_seaorm::Updatable::update(
-                            &*self.#service,
+                            #service(self),
                             __m,
                             __body.into_inner(),
                         )
@@ -230,11 +233,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[authorize(::nest_rs_authz::Delete, #entity)]
             async fn delete(
                 &self,
-                __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+                #[#unprobed] __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
             ) -> ::nest_rs_http::Result<()> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Delete,
                     __id.0,
                 )
@@ -242,7 +245,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 .map_err(::nest_rs_seaorm::__private::http_crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
-                        ::nest_rs_seaorm::Deletable::delete(&*self.#service, __m)
+                        ::nest_rs_seaorm::Deletable::delete(#service(self), __m)
                             .await
                             .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                         ::core::result::Result::Ok(())
@@ -329,7 +332,7 @@ mod tests {
     #[test]
     fn partial_ops_generate_only_the_listed_routes() {
         let out = generated_methods(quote! {
-            service = svc, ops = [list, get, delete]
+            service = ThingsService, ops = [list, get, delete]
         });
         assert!(out.contains("fn list"), "list expected: {out}");
         assert!(out.contains("fn get"), "get expected: {out}");
@@ -341,7 +344,7 @@ mod tests {
     #[test]
     fn the_create_answers_a_created_and_the_cursor_list_a_paginated_answer() {
         let out = generated_methods(quote! {
-            service = svc
+            service = ThingsService
         });
         assert!(out.contains(":: nest_rs_http :: Created <"), "{out}");
         assert!(out.contains(":: nest_rs_http :: Paginated <"), "{out}");
@@ -350,7 +353,7 @@ mod tests {
             "the answer says its status: {out}"
         );
         let whole = generated_methods(quote! {
-            service = svc, ops = [list], paginate = none
+            service = ThingsService, ops = [list], paginate = none
         });
         assert!(
             !whole.contains("Paginated"),
@@ -363,7 +366,7 @@ mod tests {
     #[test]
     fn every_op_declares_its_posture_with_authorize() {
         let out = generated_methods(quote! {
-            service = svc
+            service = ThingsService
         });
         for action in ["Read", "Create", "Update", "Delete"] {
             assert!(
@@ -381,7 +384,7 @@ mod tests {
     #[test]
     fn the_update_op_replaces_the_row_through_put() {
         let out = generated_methods(quote! {
-            service = svc, ops = [update]
+            service = ThingsService, ops = [update]
         });
         assert!(out.contains("# [put (\"/{id}\")]"), "{out}");
         assert!(!out.contains("patch"), "{out}");
@@ -390,7 +393,7 @@ mod tests {
     #[test]
     fn api_documents_the_operation_it_names_and_leaves_the_others_their_default() {
         let out = generated_methods(quote! {
-            service = svc, ops = [list, get],
+            service = ThingsService, ops = [list, get],
             api(get(summary = "Get a thing in the caller's org", description = "Absent: 404.")),
         });
         assert!(
@@ -406,7 +409,7 @@ mod tests {
     fn api_naming_an_op_ops_leaves_out_fails_to_expand() {
         let item: ItemImpl = parse_quote! { impl Things {} };
         let err = crud(
-            quote! { service = svc, ops = [list], api(get(summary = "x")) },
+            quote! { service = ThingsService, ops = [list], api(get(summary = "x")) },
             item,
         )
         .expect_err("docs for an op that is not generated must fail");
@@ -422,14 +425,14 @@ mod tests {
         for (args, refusal) in [
             (
                 quote! {
-                    service = svc, ops = [list, get],
+                    service = ThingsService, ops = [list, get],
                     api(get(summary = "Get a thing")),
                 },
                 "#[crud] `api` configures the `get` op, which this block writes by hand as \
                  `fn get` — drop `get(…)`: give that method its own `#[api]`",
             ),
             (
-                quote! { service = svc, paginate = none },
+                quote! { service = ThingsService, paginate = none },
                 "#[crud] `paginate` configures the `list` op, which this block writes by hand \
                  as `fn list` — drop `paginate = …`: the method bounds its own list",
             ),
@@ -447,12 +450,12 @@ mod tests {
 
     #[test]
     fn the_service_alone_generates_every_route_typed_off_the_service() {
-        let out = generated_methods(quote! { service = svc });
+        let out = generated_methods(quote! { service = ThingsService });
         for method in ["fn list", "fn get", "fn create", "fn update", "fn delete"] {
             assert!(out.contains(method), "{method}: {out}");
         }
         for alias in [
-            "type __NestrsCrudThingsService",
+            "fn __nestrs_crud_things_service",
             "type __NestrsCrudThingsEntity",
             "type __NestrsCrudThingsOutput",
             "type __NestrsCrudThingsCreate",

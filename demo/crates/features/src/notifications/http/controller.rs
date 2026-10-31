@@ -13,5 +13,5 @@ pub struct NotificationsController {
     svc: Arc<NotificationsService>,
 }
 
-#[crud(service = svc, ops = [list, get])]
+#[crud(service = NotificationsService, ops = [list, get])]
 impl NotificationsController {}

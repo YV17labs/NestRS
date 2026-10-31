@@ -9,6 +9,7 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
+use syn::spanned::Spanned as _;
 use syn::{Ident, LitStr, Token, Type};
 
 use crate::grammar::Grammar;
@@ -30,7 +31,7 @@ pub enum Paginate {
 /// One CRUD operation a `#[crud]` block may generate. The write ops
 /// (`Create`/`Update`/`Delete`) each require the service to implement the
 /// matching opt-in trait (`Creatable`/`Updatable`/`Deletable`), whose input
-/// type the op reads: a missing impl fails to resolve.
+/// type the op reads: a missing impl is refused naming the trait and the op.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[non_exhaustive]
 pub enum CrudOp {
@@ -130,8 +131,12 @@ impl GeneratedOps {
 /// The types a `#[crud]` block's generated operations name, each a hidden
 /// alias [`CrudDeclaration::types`] declares beside the block: read off the
 /// service's `CrudService`, `Creatable` and `Updatable` impls and the entity's
-/// `Exposed` one.
+/// `Exposed` one, and the function every generated operation reaches the
+/// service through.
 pub struct CrudTypes {
+    /// The hidden function taking the host and answering the service its
+    /// `#[inject]` field holds.
+    pub service: Ident,
     /// The service's `CrudService::Entity`.
     pub entity: Ident,
     /// The entity's `Exposed::Wire`.
@@ -140,15 +145,16 @@ pub struct CrudTypes {
     pub create: Ident,
     /// The service's `Updatable::Update`.
     pub update: Ident,
-    /// The aliases, declared beside the block.
+    /// The aliases and the function, declared beside the block.
     pub aliases: TokenStream2,
 }
 
 /// The parsed `#[crud(...)]` declaration both surface generators consume.
 pub struct CrudDeclaration {
-    /// Field holding the entity's `CrudService`, which every generated op
-    /// delegates to and whose type every generated op reads its types off.
-    pub service: Ident,
+    /// The entity's `CrudService`, which every generated op delegates to,
+    /// through the host's `#[inject]` field of that type, and reads its types
+    /// off.
+    pub service: Type,
     /// Which operations to generate.
     pub ops: OpsSelection,
     /// How the generated list op bounds its result set. Defaults to
@@ -259,43 +265,32 @@ impl CrudDeclaration {
     }
 
     /// The types `ops` name on the block `#[crud]` decorates, `self_ty` its
-    /// host named `host`: aliases of the projections off the type of the
-    /// field `service` names, which the host's struct half declares beside it
-    /// ([`injected_field_types`](crate::__private::injected_field_types)) and
-    /// this block reaches through `self_ty`'s path. Only what a generated op
-    /// reads is declared, so none is left unused.
+    /// host named `host`: aliases of the projections off the service, and the
+    /// one function reaching the service through the host's `#[inject]` field
+    /// of its type, spanned on the key, so a host injecting none is refused
+    /// there once. Only what a generated op reads is declared, so none is left
+    /// unused.
     pub fn types(&self, host: &Ident, self_ty: &Type, ops: GeneratedOps) -> CrudTypes {
+        let host = host.unraw();
         let alias = |what: &str| format_ident!("__NestrsCrud{}{}", host, what);
-        // The trait is reached by the name written here, from this module:
-        // anything else is said in the struct's words before rustc's own.
-        let written = host.unraw().to_string();
-        let reach = ops.any().then(|| {
-            quote_spanned! {host.span()=>
-                const _: () = if !::nest_rs_core::__private::reaches_host(
-                    <#self_ty>::__NESTRS_HOST,
-                    #written,
-                    <#self_ty>::__NESTRS_HOST_MODULE,
-                    ::core::module_path!(),
-                ) {
-                    ::core::panic!("{}", <#self_ty>::__NESTRS_CRUD_REFUSAL)
-                };
-            }
-        });
-        let service = alias("Service");
+        let service = &self.service;
+        let accessor = format_ident!(
+            "__nestrs_crud_{}_service",
+            crate::casing::snake_case(&host.to_string())
+        );
         let entity = alias("Entity");
         let output = alias("Output");
         let create = alias("Create");
         let update = alias("Update");
-        let entity_alias = ops.any().then(|| {
-            let field = injected_field_type(self_ty, host, &self.service);
-            // The one alias naming the field, spanned on the key's value: a
-            // name the host does not inject is refused there, once.
-            let service_alias = quote_spanned! {self.service.span()=>
-                #[doc(hidden)]
-                type #service = <#field as ::core::ops::Deref>::Target;
+        let reached = ops.any().then(|| {
+            let reach = quote_spanned! {service.span()=>
+                <#self_ty as ::nest_rs_core::__private::Injects<#service>>::injected(host)
             };
             quote! {
-                #service_alias
+                #[doc(hidden)]
+                fn #accessor(host: &#self_ty) -> &#service {
+                    #reach
+                }
                 #[doc(hidden)]
                 type #entity = <#service as ::nest_rs_seaorm::CrudService>::Entity;
             }
@@ -319,29 +314,14 @@ impl CrudDeclaration {
             }
         });
         CrudTypes {
+            service: accessor,
             entity,
             output,
             create,
             update,
-            aliases: quote! { #reach #entity_alias #output_alias #create_alias #update_alias },
+            aliases: quote! { #reached #output_alias #create_alias #update_alias },
         }
     }
-}
-
-/// The type `field` holds, read off the trait the struct half declares beside
-/// the host, reached through `self_ty`'s own path with its last segment
-/// swapped: a block written `impl super::UsersController` reads
-/// `<super::UsersController as super::__NestrsInjectedUsersController>::svc`.
-fn injected_field_type(self_ty: &Type, host: &Ident, field: &Ident) -> TokenStream2 {
-    let types = crate::inject::injected_field_types_trait(host);
-    let mut path = match self_ty {
-        Type::Path(written) if written.qself.is_none() => written.path.clone(),
-        _ => syn::Path::from(types.clone()),
-    };
-    if let Some(last) = path.segments.last_mut() {
-        *last = syn::PathSegment::from(types);
-    }
-    quote! { <#self_ty as #path>::#field }
 }
 
 /// The refusal of a key that configures one op, declared beside an `ops` that
@@ -444,6 +424,34 @@ fn parse_api(arg: &crate::grammar::Arg<'_>) -> syn::Result<Vec<(CrudOp, CrudOpAp
 
 const PAGINATE: [&str; 2] = ["cursor", "none"];
 
+const SERVICE: &str = "the type of the injected `CrudService`, e.g. `service = UsersService`";
+
+/// `service`'s value: the service's type. A lone lowercase name reads as the
+/// field holding it, the key's earlier spelling, and is refused naming what
+/// to write.
+fn service_type(input: ParseStream) -> syn::Result<Type> {
+    let written: Type = value_of(input, "service", SERVICE)?;
+    if let Type::Path(path) = &written
+        && path.qself.is_none()
+        && let Some(field) = path.path.get_ident()
+        && field
+            .unraw()
+            .to_string()
+            .starts_with(|first: char| first.is_ascii_lowercase() || first == '_')
+    {
+        return Err(syn::Error::new_spanned(
+            field,
+            format!(
+                "{} names the service's type, not the field holding it — write the type of \
+                 `{field}`, e.g. `service = UsersService`: every generated operation reaches \
+                 the service through the host's `#[inject]` field of that type",
+                crate::args::site("crud", Some("service")),
+            ),
+        ));
+    }
+    Ok(written)
+}
+
 const OPS_LIST: &str = "a list of operations, e.g. `ops = [list, get]`";
 
 /// Parse a key's value, refusing one of the wrong kind with the shared value
@@ -468,13 +476,7 @@ impl Parse for CrudDeclaration {
 
         CRUD.parse(input, |arg| {
             match arg.key() {
-                "service" => {
-                    service = Some(value_of(
-                        arg.value()?,
-                        "service",
-                        "the name of the injected `CrudService` field, e.g. `service = svc`",
-                    )?);
-                }
+                "service" => service = Some(service_type(arg.value()?)?),
                 "ops" => {
                     let ops_span = arg.ident().span();
                     let input = arg.value()?;
@@ -550,9 +552,9 @@ impl Parse for CrudDeclaration {
             syn::Error::new(
                 Span::call_site(),
                 format!(
-                    "{} (the injected `CrudService` field to delegate to, whose service \
-                     every generated operation reads its types off)",
-                    crate::args::missing_argument("crud", "service", "svc"),
+                    "{} (the injected `CrudService` every generated operation delegates to \
+                     and reads its types off)",
+                    crate::args::missing_argument("crud", "service", "UsersService"),
                 ),
             )
         })?;
@@ -625,7 +627,7 @@ mod tests {
 
     #[test]
     fn the_service_alone_generates_all_five_ops() {
-        let cfg = parse(quote! { service = svc }).expect("the service alone parses");
+        let cfg = parse(quote! { service = UsersService }).expect("the service alone parses");
         assert_eq!(resolve(&cfg).expect("resolves"), ALL);
     }
 
@@ -633,7 +635,7 @@ mod tests {
     fn the_keys_restating_the_services_types_are_refused() {
         for key in ["entity", "output", "create", "update"] {
             let ident = Ident::new(key, Span::call_site());
-            let Err(refusal) = parse(quote! { service = svc, #ident = T }) else {
+            let Err(refusal) = parse(quote! { service = UsersService, #ident = T }) else {
                 panic!("`{key}` is no `#[crud]` key");
             };
             assert_eq!(
@@ -655,24 +657,25 @@ mod tests {
     }
 
     #[test]
-    fn the_types_are_read_off_the_field_the_service_key_names() {
-        let cfg = parse(quote! { service = svc }).expect("parses");
+    fn the_types_are_read_off_the_service_the_key_names() {
+        let cfg = parse(quote! { service = UsersService }).expect("parses");
         let host: Ident = parse_quote!(UsersController);
         let self_ty: Type = parse_quote!(UsersController);
         let types = cfg.types(&host, &self_ty, ALL);
         let aliases = types.aliases.to_string();
         assert!(
             aliases.contains(
-                "type __NestrsCrudUsersControllerService = < < UsersController as \
-                 __NestrsInjectedUsersController > :: svc as :: core :: ops :: Deref > :: Target"
+                "fn __nestrs_crud_users_controller_service (host : & UsersController) -> & \
+                 UsersService { < UsersController as :: nest_rs_core :: __private :: Injects < \
+                 UsersService >> :: injected (host) }"
             ),
             "{aliases}",
         );
         for read in [
-            "< __NestrsCrudUsersControllerService as :: nest_rs_seaorm :: CrudService > :: Entity",
+            "< UsersService as :: nest_rs_seaorm :: CrudService > :: Entity",
             "< __NestrsCrudUsersControllerEntity as :: nest_rs_seaorm :: Exposed > :: Wire",
-            "< __NestrsCrudUsersControllerService as :: nest_rs_seaorm :: Creatable > :: Create",
-            "< __NestrsCrudUsersControllerService as :: nest_rs_seaorm :: Updatable > :: Update",
+            "< UsersService as :: nest_rs_seaorm :: Creatable > :: Create",
+            "< UsersService as :: nest_rs_seaorm :: Updatable > :: Update",
         ] {
             assert!(aliases.contains(read), "{read}: {aliases}");
         }
@@ -680,26 +683,46 @@ mod tests {
             types.entity.to_string(),
             "__NestrsCrudUsersControllerEntity"
         );
+        assert_eq!(
+            types.service.to_string(),
+            "__nestrs_crud_users_controller_service"
+        );
     }
 
     #[test]
-    fn a_block_naming_its_host_by_path_reaches_the_field_alias_by_that_path() {
-        let cfg = parse(quote! { service = svc_users }).expect("parses");
+    fn a_block_naming_its_host_by_path_reaches_its_service_by_type() {
+        let cfg = parse(quote! { service = crate::users::UsersService }).expect("parses");
         let host: Ident = parse_quote!(UsersController);
         let self_ty: Type = parse_quote!(super::http::UsersController);
         let aliases = cfg.types(&host, &self_ty, ALL).aliases.to_string();
         assert!(
             aliases.contains(
-                "< < super :: http :: UsersController as super :: http :: \
-                 __NestrsInjectedUsersController > :: svc_users as"
+                "< super :: http :: UsersController as :: nest_rs_core :: __private :: Injects < \
+                 crate :: users :: UsersService >> :: injected (host)"
             ),
             "{aliases}",
         );
     }
 
     #[test]
+    fn a_field_written_for_the_service_is_refused_naming_the_type_to_write() {
+        for field in [quote!(svc), quote!(svc_users), quote!(r#notes)] {
+            let Err(refusal) = parse(quote! { service = #field }) else {
+                panic!("`{field}` reads as a field");
+            };
+            assert!(
+                refusal.to_string().starts_with(
+                    "#[crud] `service` names the service's type, not the field holding it"
+                ),
+                "{refusal}",
+            );
+        }
+        assert!(parse(quote! { service = users::UsersService }).is_ok());
+    }
+
+    #[test]
     fn only_the_types_a_generated_op_reads_are_declared() {
-        let cfg = parse(quote! { service = svc }).expect("parses");
+        let cfg = parse(quote! { service = UsersService }).expect("parses");
         let host: Ident = parse_quote!(NotesController);
         let self_ty: Type = parse_quote!(NotesController);
         let read_only = GeneratedOps {
@@ -768,7 +791,7 @@ mod tests {
     fn a_key_beside_the_op_written_by_hand_is_refused_naming_the_method() {
         let written: HashSet<String> = ["users".to_owned(), "user".to_owned()].into();
         let resolver = |op: CrudOp| op.resolver_method("user");
-        let paginated = parse(quote! { service = svc, paginate = none }).expect("parses");
+        let paginated = parse(quote! { service = UsersService, paginate = none }).expect("parses");
         let Err(refusal) = paginated.generated_ops(&written, resolver) else {
             panic!("a `paginate` beside the hand-written list is refused");
         };
@@ -777,8 +800,8 @@ mod tests {
             "#[crud] `paginate` configures the `list` op, which this block writes by hand as \
              `fn users` — drop `paginate = …`: the method bounds its own list",
         );
-        let documented =
-            parse(quote! { service = svc, api(get(summary = "Get a user")) }).expect("parses");
+        let documented = parse(quote! { service = UsersService, api(get(summary = "Get a user")) })
+            .expect("parses");
         let Err(refusal) = documented.generated_ops(&written, resolver) else {
             panic!("an `api` for the hand-written op is refused");
         };
@@ -794,7 +817,7 @@ mod tests {
     #[test]
     fn an_op_written_by_hand_is_not_generated() {
         let written: HashSet<String> = ["create".to_owned(), "delete".to_owned()].into();
-        let cfg = parse(quote! { service = svc }).expect("parses");
+        let cfg = parse(quote! { service = UsersService }).expect("parses");
         let ops = cfg
             .generated_ops(&written, |op| op.name().to_owned())
             .expect("the block's own methods resolve");
@@ -833,7 +856,7 @@ mod tests {
     #[test]
     fn a_paginate_for_an_excluded_list_is_refused() {
         for mode in [quote!(none), quote!(cursor)] {
-            let cfg = parse(quote! { service = svc, ops = [get], paginate = #mode })
+            let cfg = parse(quote! { service = UsersService, ops = [get], paginate = #mode })
                 .expect("the arguments parse");
             let Err(refusal) = resolve(&cfg) else {
                 panic!("a `paginate` for an excluded `list` is refused");
@@ -844,23 +867,25 @@ mod tests {
                  `list` in `ops` to generate it, or drop `paginate = …`",
             );
         }
-        let reversed = parse(quote! { service = svc, paginate = none, ops = [get, delete] })
-            .expect("the arguments parse");
+        let reversed =
+            parse(quote! { service = UsersService, paginate = none, ops = [get, delete] })
+                .expect("the arguments parse");
         assert!(resolve(&reversed).is_err());
-        let unwritten = parse(quote! { service = svc, ops = [get] }).expect("parses");
+        let unwritten = parse(quote! { service = UsersService, ops = [get] }).expect("parses");
         assert!(resolve(&unwritten).is_ok());
-        let listed =
-            parse(quote! { service = svc, ops = [list], paginate = none }).expect("parses");
+        let listed = parse(quote! { service = UsersService, ops = [list], paginate = none })
+            .expect("parses");
         assert!(resolve(&listed).is_ok_and(|ops| ops.list));
     }
 
     #[test]
     fn explicit_partial_selection_generates_only_listed_ops() {
-        let cfg = parse(quote! { service = svc, ops = [list, get, delete] }).expect("parses");
+        let cfg =
+            parse(quote! { service = UsersService, ops = [list, get, delete] }).expect("parses");
         let ops = resolve(&cfg).expect("resolves");
         assert!(ops.list && ops.get && ops.delete);
         assert!(!ops.create && !ops.update);
-        let cfg = parse(quote! { service = svc, ops = [get, create] }).expect("parses");
+        let cfg = parse(quote! { service = UsersService, ops = [get, create] }).expect("parses");
         let ops = resolve(&cfg).expect("resolves");
         assert!(ops.get && ops.create);
         assert!(!ops.list && !ops.update && !ops.delete);
@@ -868,7 +893,7 @@ mod tests {
 
     #[test]
     fn unknown_op_name_is_rejected() {
-        let err = match parse(quote! { service = svc, ops = [list, frobnicate] }) {
+        let err = match parse(quote! { service = UsersService, ops = [list, frobnicate] }) {
             Ok(_) => panic!("unknown op must fail to parse"),
             Err(e) => e,
         };

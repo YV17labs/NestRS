@@ -105,7 +105,7 @@ struct AlbumsController {
     svc: Arc<AlbumsService>,
 }
 
-#[nest_rs_http::crud(service = svc, ops = [list])]
+#[nest_rs_http::crud(service = AlbumsService, ops = [list])]
 impl AlbumsController {}
 
 #[resolver]
@@ -114,7 +114,7 @@ struct AlbumsResolver {
     svc: Arc<AlbumsService>,
 }
 
-#[nest_rs_graphql::crud(service = svc, ops = [list])]
+#[nest_rs_graphql::crud(service = AlbumsService, ops = [list])]
 impl AlbumsResolver {}
 
 /// A parent built in memory, so its relation is reached with no row read.

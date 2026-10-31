@@ -11,10 +11,9 @@ use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
     InjectableBody, MountPath, RoutePath, build_injectable_body, exception_filter_specs,
-    from_container_method, guard_capability_bounds, host_meta_fn, injected_field_types,
-    injected_keys_with_layers, injected_names_with_layers, injected_optional_fns,
-    interceptor_specs, layer_deps, missing_argument, refuse_rust_deprecated, reject_path,
-    scoped_specs,
+    from_container_method, guard_capability_bounds, host_meta_fn, injected_keys_with_layers,
+    injected_names_with_layers, injected_optional_fns, injects_impls, interceptor_specs,
+    layer_deps, missing_argument, refuse_rust_deprecated, reject_path, scoped_specs,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -45,9 +44,12 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     let host_meta = host_meta_fn(&meta);
 
-    // Read before the body strips `#[inject]`: `#[crud]` reads its service's
-    // type off the field its key names.
-    let injected_fields = injected_field_types(&item);
+    // Read before the body strips `#[inject]`: `#[crud]` reaches its service
+    // through the field of its type.
+    let injected_fields = match injects_impls(&item, "controller") {
+        Ok(impls) => impls,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let InjectableBody {
         ctor,
         dep_keys,

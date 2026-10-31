@@ -102,16 +102,18 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Grammar: `#[crud(service = svc, ops = [list, get, ...], paginate = cursor|none,
-/// api(get(summary = "…", description = "…"), ...))]`, where `service` names
-/// the controller's `#[inject]` field holding the entity's `CrudService`.
+/// Grammar: `#[crud(service = UsersService, ops = [list, get, ...], paginate =
+/// cursor|none, api(get(summary = "…", description = "…"), ...))]`, where
+/// `service` names the entity's `CrudService`, which the controller injects.
 ///
 /// Every type a generated route names is read off that service: the entity
 /// off `CrudService::Entity`, the create and update bodies off
 /// `Creatable::Create` and `Updatable::Update`, and the answer off the
-/// entity's `#[expose]`d wire type (`Exposed::Wire`). `#[controller]` hands
-/// the field's type over, so a name the controller does not inject is refused
-/// at the key.
+/// entity's `#[expose]`d wire type (`Exposed::Wire`). Each route reaches the
+/// service through the controller's `#[inject]` field of its type, which
+/// `#[controller]` declares by type, so the block may name its host through an
+/// alias, an import or another module, and a service the controller does not
+/// inject is refused at the key.
 ///
 /// `api` gives a generated route the OpenAPI text a hand-written one carries in
 /// `#[api]`; an operation it does not name keeps its default summary, worded
@@ -119,8 +121,8 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// `ops` selects which operations to generate; omit it for all five. A write
 /// op reads the service's trait — `create` `Creatable`, `update`
-/// `Updatable`, `delete` `Deletable` — so one the service does not offer
-/// fails to resolve: list only what it offers.
+/// `Updatable`, `delete` `Deletable` — so one the service does not offer is
+/// refused naming the trait to implement or the op to drop.
 ///
 /// The generated list is **keyset-paginated by default** (`?first=&after=`,
 /// the next page linked by `Link: <…>; rel="next"`, body a plain maskable array);
@@ -137,7 +139,8 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// # Expands to
 ///
-/// A hidden alias per type the generated methods name, read off the service;
+/// A hidden alias per type the generated methods name, read off the service,
+/// and a hidden function reaching it through the controller's field;
 /// the missing CRUD methods synthesized onto the impl block (each delegating
 /// to `CrudService` behind `#[authorize(Action, Entity)]`, with its own verb
 /// and `#[api]` attrs — the create answering `Created<Json<T>>`, the cursor

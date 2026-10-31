@@ -99,7 +99,7 @@ struct NotesController {
     svc: Arc<NotesService>,
 }
 
-#[crud(service = svc)]
+#[crud(service = NotesService)]
 impl NotesController {}
 
 #[module(

@@ -1,7 +1,7 @@
 //! `#[crud]` generates all five operations unless `ops` narrows them, each
 //! typed off its service's trait: one the service does not offer — here a
-//! create on a read-only service, no `Creatable` impl — fails to resolve,
-//! never a no-op mutation on the wire.
+//! create on a read-only service, no `Creatable` impl — is refused naming the
+//! trait and the op, never a no-op mutation on the wire.
 
 use std::sync::Arc;
 
@@ -42,7 +42,7 @@ struct NotesController {
     svc: Arc<NotesService>,
 }
 
-#[crud(service = svc, ops = [get, create])]
+#[crud(service = NotesService, ops = [get, create])]
 impl NotesController {}
 
 fn main() {}

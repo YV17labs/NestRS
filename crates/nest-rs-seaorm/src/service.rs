@@ -138,7 +138,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 ///     svc: Arc<UsersService>,
 /// }
 ///
-/// #[crud(service = svc)]
+/// #[crud(service = UsersService)]
 /// impl UsersController {}
 /// # #[module(
 /// #     imports = [nest_rs_seaorm::SeaOrmDatabaseModule],
@@ -222,7 +222,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 ///     svc: Arc<UsersService>,
 /// }
 ///
-/// #[crud(service = svc)]
+/// #[crud(service = UsersService)]
 /// impl UsersResolver {}
 /// # #[module(
 /// #     imports = [
@@ -259,7 +259,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a resource service",
     label = "expected a service implementing `CrudService`",
-    note = "`#[authorize(Action, bind = Service)]` names the service after `bind =`, and the action first. If this type is an action marker, the two are swapped."
+    note = "`#[crud(service = Service)]` and `#[authorize(Action, bind = Service)]` name a type implementing `CrudService`; beside `bind =`, the action comes first, so an action marker there is the two swapped"
 )]
 #[async_trait]
 pub trait CrudService: Send + Sync
@@ -343,13 +343,13 @@ where
     }
 }
 
-/// The entity a bound service loads, held by its one impl to the one
-/// `#[authorize(A, E, bind = S)]` writes, which the class gate and the mask
-/// read.
+/// The entity a bound service loads, held by its one impl to the one the
+/// route names — written in `#[authorize(A, E, bind = S)]`, or read off its
+/// `Authorized<A, E>` parameter — which the class gate and the mask read.
 #[diagnostic::on_unimplemented(
-    message = "`#[authorize]` names `{E}` beside `bind`, and the service loads `{Self}`",
+    message = "the route names `{E}`, and the service `bind` names loads `{Self}`",
     label = "the service loads another entity",
-    note = "the class gate and the response mask read the entity written, the load reads the service's: write `{Self}`, or drop it — `bind = Service` derives it"
+    note = "the class gate, the response mask and the `Authorized<Action, E>` parameter read the entity the route names, the load reads the service's: name `{Self}` in both, or bind the service loading `{E}`"
 )]
 pub trait SameEntity<E> {}
 
@@ -364,6 +364,11 @@ where
 }
 
 /// Opt-in write capability: the resource accepts **inserts**.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` offers no create: implement `Creatable` for it, or drop `create` from `#[crud(ops = …)]`",
+    label = "`#[crud]` generates a create for this service",
+    note = "`#[crud]` generates every op `ops` lists, all five by default, each typed off the service's trait: `impl Creatable for {Self}` declares the input it inserts"
+)]
 #[async_trait]
 pub trait Creatable: CrudService {
     /// The create-input DTO this resource accepts, lowered to an `ActiveModel`
@@ -484,6 +489,11 @@ where
 }
 
 /// Opt-in write capability: the resource accepts **updates**.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` offers no update: implement `Updatable` for it, or drop `update` from `#[crud(ops = …)]`",
+    label = "`#[crud]` generates a update for this service",
+    note = "`#[crud]` generates every op `ops` lists, all five by default, each typed off the service's trait: `impl Updatable for {Self}` declares the input it applies"
+)]
 #[async_trait]
 pub trait Updatable: CrudService {
     /// The update-input DTO this resource accepts, applied to a loaded row via
@@ -523,6 +533,11 @@ pub trait Updatable: CrudService {
 
 /// Opt-in write capability: the resource accepts **deletes**: a soft delete
 /// when the entity is declared `#[expose(..., soft_delete)]`, else a hard one.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` offers no delete: implement `Deletable` for it, or drop `delete` from `#[crud(ops = …)]`",
+    label = "`#[crud]` generates a delete for this service",
+    note = "`#[crud]` generates every op `ops` lists, all five by default, each typed off the service's trait: `impl Deletable for {Self}` opens its deletes"
+)]
 #[async_trait]
 pub trait Deletable: CrudService {
     /// Delete a loaded row, in the request transaction. Ability-scoped by

@@ -75,7 +75,7 @@ struct WidgetsResolver {
     svc: Arc<WidgetsService>,
 }
 
-#[crud(service = svc, ops = [list, create])]
+#[crud(service = WidgetsService, ops = [list, create])]
 impl WidgetsResolver {}
 
 /// A service method whose database failure carries a value, answered through

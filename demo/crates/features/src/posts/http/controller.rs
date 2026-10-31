@@ -21,7 +21,7 @@ pub struct PostsController {
 }
 
 #[crud(
-    service = svc,
+    service = PostsService,
     api(create(
         summary = "Create a post in the caller's org",
         description = "Requires a bearer JWT naming a user. The org and author are taken from \

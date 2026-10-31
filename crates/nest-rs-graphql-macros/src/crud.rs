@@ -48,10 +48,10 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         .collect();
 
     let host = impl_self_ident(&item.self_ty, "#[crud]")?;
-    let service = &cfg.service;
     let singular = resolver_singular(&host);
     let ops = cfg.generated_ops(&existing, |op| op.resolver_method(&singular))?;
     let CrudTypes {
+        service,
         entity,
         output,
         create,
@@ -91,7 +91,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         ::core::option::Option::as_deref(&after),
                     )?;
                     let __page = ::nest_rs_seaorm::CrudService::page(
-                        &*self.#service,
+                        #service(self),
                         ::core::option::Option::unwrap_or(
                             first,
                             ::nest_rs_seaorm::DEFAULT_PAGE_SIZE,
@@ -111,7 +111,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 async fn #list_op(
                     &self,
                 ) -> ::nest_rs_graphql::async_graphql::Result<::std::vec::Vec<#output>> {
-                    let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
+                    let __rows = ::nest_rs_seaorm::CrudService::list(#service(self))
                         .await
                         .map_err(#crud_error)?;
                     ::core::result::Result::Ok(__rows.iter().map(<#output>::from).collect())
@@ -131,7 +131,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ) -> ::nest_rs_graphql::async_graphql::Result<::core::option::Option<#output>> {
                 #parse_id
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Read,
                     __id,
                 )
@@ -158,7 +158,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 &self,
                 input: #create,
             ) -> ::nest_rs_graphql::async_graphql::Result<#output> {
-                let __row = ::nest_rs_seaorm::Creatable::create(&*self.#service, input)
+                let __row = ::nest_rs_seaorm::Creatable::create(#service(self), input)
                     .await
                     .map_err(#crud_error)?;
                 ::core::result::Result::Ok(<#output>::from(&__row))
@@ -177,7 +177,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ) -> ::nest_rs_graphql::async_graphql::Result<::core::option::Option<#output>> {
                 #parse_id
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Update,
                     __id,
                 )
@@ -186,7 +186,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         let __row = ::nest_rs_seaorm::Updatable::update(
-                            &*self.#service,
+                            #service(self),
                             __m,
                             input,
                         )
@@ -215,7 +215,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ) -> ::nest_rs_graphql::async_graphql::Result<bool> {
                 #parse_id
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Delete,
                     __id,
                 )
@@ -223,7 +223,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 .map_err(#crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
-                        ::nest_rs_seaorm::Deletable::delete(&*self.#service, __m)
+                        ::nest_rs_seaorm::Deletable::delete(#service(self), __m)
                             .await
                             .map_err(#crud_error)?;
                         ::core::result::Result::Ok(true)
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn the_service_alone_names_every_operation_off_the_resolvers_resource() {
         let item: ItemImpl = parse_quote! { impl ThingsResolver {} };
-        let out = generated(quote! { service = svc }, item).expect("expands");
+        let out = generated(quote! { service = ThingsService }, item).expect("expands");
         for op in [
             "fn things",
             "fn thing",
@@ -287,7 +287,8 @@ mod tests {
     #[test]
     fn a_host_named_in_the_singular_still_lists_in_the_plural() {
         let item: ItemImpl = parse_quote! { impl ThingResolver {} };
-        let out = generated(quote! { service = svc, ops = [list, get] }, item).expect("expands");
+        let out = generated(quote! { service = ThingsService, ops = [list, get] }, item)
+            .expect("expands");
         assert!(
             out.contains("fn things") && out.contains("fn thing ("),
             "{out}"
@@ -297,8 +298,11 @@ mod tests {
     #[test]
     fn a_paginate_for_an_excluded_list_fails_to_expand() {
         let item: ItemImpl = parse_quote! { impl ThingsResolver {} };
-        let err = generated(quote! { service = svc, ops = [get], paginate = none }, item)
-            .expect_err("a `paginate` for an excluded `list` must fail to expand");
+        let err = generated(
+            quote! { service = ThingsService, ops = [get], paginate = none },
+            item,
+        )
+        .expect_err("a `paginate` for an excluded `list` must fail to expand");
         assert!(
             err.to_string()
                 .contains("`paginate` configures the `list` op"),
@@ -313,7 +317,7 @@ mod tests {
                 async fn things(&self) -> Vec<Thing> { Vec::new() }
             }
         };
-        let err = generated(quote! { service = svc, paginate = none }, item)
+        let err = generated(quote! { service = ThingsService, paginate = none }, item)
             .expect_err("a `paginate` beside a hand-written list must fail to expand");
         assert_eq!(
             err.to_string(),
@@ -329,7 +333,7 @@ mod tests {
                 async fn create_thing(&self) -> bool { true }
             }
         };
-        let out = generated(quote! { service = svc }, item).expect("expands");
+        let out = generated(quote! { service = ThingsService }, item).expect("expands");
         assert!(
             !out.contains("type __NestrsCrudThingsResolverCreate"),
             "{out}"

@@ -114,19 +114,21 @@ pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
 /// resolver's resource, its name without `Resolver`, made singular
 /// (`UsersResolver` → `users`/`user`/`create_user`/…).
 ///
-/// `#[crud(service = svc, ops = [list, get, ...], paginate = cursor|none)]`,
-/// where `service` names the resolver's `#[inject]` field holding the entity's
-/// `CrudService`. Every type an operation names is read off that service — the
-/// entity, the create and update inputs (`Creatable::Create`,
+/// `#[crud(service = UsersService, ops = [list, get, ...], paginate =
+/// cursor|none)]`, where `service` names the entity's `CrudService`, which the
+/// resolver injects. Every type an operation names is read off that service —
+/// the entity, the create and update inputs (`Creatable::Create`,
 /// `Updatable::Update`) — and the entity's `#[expose]`d wire type
-/// (`Exposed::Wire`); `#[resolver]` hands the field's type over, so a name the
-/// resolver does not inject is refused at the key. Write a matching operation
+/// (`Exposed::Wire`); each operation reaches the service through the
+/// resolver's `#[inject]` field of its type, so a service the resolver does
+/// not inject is refused at the key. Write a matching operation
 /// method to override it — the macro keeps yours and skips its own, and
 /// refuses a `paginate` beside your list, which nothing generated reads.
 ///
 /// `ops` selects which operations to generate (omit for all five). A write op
 /// reads the service's trait — `create` `Creatable`, `update` `Updatable`,
-/// `delete` `Deletable` — so one the service does not offer fails to resolve.
+/// `delete` `Deletable` — so one the service does not offer is refused naming
+/// the trait to implement or the op to drop.
 ///
 /// The generated list query is **keyset-paginated by default**
 /// (`first: Int, after: ID` — `after` is the previous page's last `id`,
@@ -138,7 +140,8 @@ pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// # Expands to
 ///
-/// A hidden alias per type the operations name, read off the service; the
+/// A hidden alias per type the operations name, read off the service, and a
+/// hidden function reaching it through the resolver's field; the
 /// missing operation methods — each delegating to the entity's `CrudService`
 /// and declaring `#[authorize(Action, Entity)]` — prepended to the impl block,
 /// then the whole block re-emitted under `#[operations]`.

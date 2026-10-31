@@ -188,6 +188,14 @@ all it denies every request. A unit it carries is authorized by
 your decorator emits after the unit's guards as every `#[authorize]` does —
 never by a check of your own.
 
+**Its entries read their own requests.** An entry is an endpoint, not a
+`#[routes]` handler: nothing decodes or validates in front of it, so it does
+both itself. `req.split()` hands it the head and the body,
+`Json::<T>::from_request(&head, &mut body)` answers the edge's `415`, `413` or
+`400`, and the value's `validate()` holds it to its rules. The OpenAPI
+document, composed from the controllers' routes, lists none of it. What it answers goes out as a route's would: a `Created` gets its
+`Location` and a `Paginated` its `Link`, on the path the caller addressed.
+
 **It registers its own path and what lies under it.** The mount closure
 registers on `&mut HttpRoutes`, in the route grammar (`/status/{name}`,
 `/status/{*rest}`); a path outside its own is declared with `also_mounts`, and

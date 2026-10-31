@@ -14,16 +14,22 @@ use crate::response::Response;
 #[derive(Clone)]
 pub(crate) struct CallerUri(pub(crate) Uri);
 
-/// The path the caller addressed — the collection a create posted to.
+/// The URI the caller addressed.
 ///
 /// Read from the edge's capture: a header or media-type version selector
-/// rewrites `uri()` before the handler runs.
-pub(crate) fn caller_path(req: &Request) -> &str {
+/// rewrites `uri()` before the handler runs, and the router strips a global
+/// prefix off it.
+pub(crate) fn caller_uri(req: &Request) -> &Uri {
     match req.extensions().get::<CallerUri>() {
-        Some(CallerUri(uri)) => uri.path(),
+        Some(CallerUri(uri)) => uri,
         // No edge: a unit test calling the endpoint bare, with no selector in front.
-        None => req.uri().path(),
+        None => req.uri(),
     }
+}
+
+/// The path the caller addressed — the collection a create posted to.
+pub(crate) fn caller_path(req: &Request) -> &str {
+    caller_uri(req).path()
 }
 
 /// Stamp `Location: <collection_path>/<id>` onto a create response, the id

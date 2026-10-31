@@ -32,6 +32,7 @@ mod deprecation;
 mod detached;
 mod documented_answer;
 mod documented_body;
+mod documented_payload;
 mod drain;
 mod edge;
 mod endpoint;
@@ -259,6 +260,9 @@ pub mod __private {
         AnswerDoc, AnswerProbe, DocumentedAnswer, PlainAnswerProbe,
     };
     pub use crate::documented_body::{BodyProbe, DocumentedBody, UndocumentedProbe};
+    pub use crate::documented_payload::{
+        DocumentedPayload, PayloadProbe, UndocumentedPayloadProbe,
+    };
     pub use crate::endpoint::{OriginCheck, checks_origin, guarded_by};
     pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};
     pub use crate::error::{OriginRefused, OriginRefusedReason};

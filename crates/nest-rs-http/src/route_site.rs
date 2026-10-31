@@ -25,11 +25,12 @@ use crate::deprecation::deprecated_route;
 use crate::endpoint::BoxEndpoint;
 use crate::error::{Result, RouteError};
 use crate::guard_stage::{HttpGuardStage, StageKind};
+use crate::location::caller_path;
 use crate::request::Request;
 use crate::response::Response;
 use crate::routes::HttpRoutes;
 use crate::shaper::GateFn;
-use crate::site::{SiteEndpoint, SiteTail, UnitPolicy};
+use crate::site::{SiteEndpoint, SiteTail, UnitPolicy, stamp_answer};
 
 /// What `#[routes]` makes of a handler method: its parameters read off the
 /// request it borrows — the body taken, the head left to the layers that read
@@ -55,8 +56,7 @@ impl<W: RouteWrapper> SiteTail for RouteTail<W> {
             Box::pin(self.pipes.apply(self.handler, req)).await?;
         }
         let mut response = self.wrapper.call(req).await?;
-        crate::created::stamp_location(req, &mut response);
-        crate::paginated::stamp_next_link(req, &mut response);
+        stamp_answer(caller_path(req), &mut response);
         Ok(response)
     }
 }

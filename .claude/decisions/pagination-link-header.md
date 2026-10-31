@@ -51,3 +51,11 @@ the route's tail writes the `Link` on the path the caller addressed, as
 document declares the `Link` off the return type, where it declared one only
 for `#[crud]`'s internal marker. `set_next_link` and `caller_path` left the
 public API (`crud-reads-the-service.md`).
+
+## 2026-10-31 — written whoever answers
+
+The `Link` is written by every tail that runs a developer's code — a route's,
+a self-mount entry's, a route registered by hand — not by the `#[routes]` tail
+alone, and the document reads the body inside `Paginated` by its type, an
+alias included (`crud-reads-the-service.md`, its entry of this date, under the
+owner's agreement to the identity audit's second pass, 2026-10-31).

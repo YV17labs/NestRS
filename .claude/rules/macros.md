@@ -171,8 +171,14 @@ spells, which `#[subscribe_message]` parameter is the payload (`&WsClient` by it
 `Ambient<T>` by their names — each resolved through a function of the edge crate's
 `__private` returning its own type, so a namesake does not compile), the
 `Scoped<T>` and `Ambient<T>` parameters `#[operations]` and `#[tools]` leave out of
-the protocol's arguments, read the same way, and what an
-OpenAPI document infers (`#[api(response = T)]` states what spelling hides).
+the protocol's arguments, read the same way, and the request parameters an
+OpenAPI document lists off the extractor spelling them (`Json<T>`, `Form<T>`,
+`Query<T>`, `Header<T>`, `Path<…>`, `Multipart`; an extractor that is the body
+says so by type, `nest_rs_http::__private::DocumentedBody`). What a route
+answers is no such reading: `#[routes]` documents its status, its headers and
+its body through `nest_rs_http::__private::{AnswerProbe, PayloadProbe}`, an
+alias included, and `#[api(response = T)]` names only the body of a handler
+building its own `Response`, whose type names none.
 
 ## Keys — one grammar, one refusal sentence
 

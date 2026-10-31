@@ -334,8 +334,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | `PATCH /<resource>/{id}` on a `#[crud]` controller | `PUT /<resource>/{id}` — a wire change, no compile error |
    | `impl RouteResponseShaper` / `ResponseShaping` on `poem::Request`, `poem::Response`, `poem::Result` | the same impl on `nest_rs::http::{Request, Response, Result}` |
    | `challenge::stamp_bearer_error` on a `poem::Response` | the same call on `nest_rs::http::Response` |
-   | `set_created_location(&mut res, caller_path(req), id)` beside `#[http_code(201)]` and `#[api(response = T)]` | return `Created<Json<T>>`: `Ok(Created::at(id, Json(dto)))` — the route writes the `Location` on the path the caller addressed, and the document reads the `201`, the `Location` and `T` off the return type |
-   | `set_next_link(&mut res, caller_path(req), first, cursor)` | return `Paginated<Json<Vec<T>>>`: `Ok(Paginated::new(Json(items), first, page.next_cursor))` — the route writes the `Link`, and the document declares it |
+   | `set_created_location(&mut res, caller_path(req), id)` beside `#[http_code(201)]` and `#[api(response = T)]` | return `Created<Json<T>>`: `Ok(Created::at(id, Json(dto)))` — the `Location` is written on the path the caller addressed, and the document reads the `201`, the `Location` and `T` off the return type, an alias included |
+   | `set_next_link(&mut res, caller_path(req), first, cursor)` | return `Paginated<Json<Vec<T>>>`: `Ok(Paginated::new(Json(items), first, page.next_cursor))` — the `Link` is written on the path the caller addressed, and the document declares it and `T` |
    | `ClientOrigin::of(&poem::Request)` | `ClientOrigin::of(&nest_rs::http::Request)` |
    | Rust's `#[deprecated]` on a `#[routes]` handler or a `#[controller]` struct | `#[api(deprecated = "YYYY-MM-DD")]` on each route's handler, the date its `Deprecation` header states — see [OpenAPI operations](/openapi/operations/#deprecate-a-route) |
 
@@ -785,7 +785,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `meter.u64_counter("x").build().add(1, &[KeyValue::new("k", "v")])` | `metrics.counter("x").add(1, &[Attribute::new("k", "v")])` |
     | `meter.f64_histogram("x").with_unit("ms").with_boundaries(b).build()` | `metrics.histogram_with("x", Describe::default().with_unit("ms"), &B)`, `B` a `&'static [f64]` |
     | `AccessTokenResponse { access_token, token_type: "Bearer".into(), expires_in }` | `AccessTokenResponse::bearer(access_token, expires_in)`, plus `.with_scope(granted)` when the issuer grants another scope than the one requested |
-    | a token handler returning `Result<Json<AccessTokenResponse>>`, `Ok(Json(…))` | `Result<AccessTokenResponse>`, `Ok(…)`, with `#[api(response = AccessTokenResponse)]` on the route: it answers `Cache-Control: no-store` |
+    | a token handler returning `Result<Json<AccessTokenResponse>>`, `Ok(Json(…))` | `Result<AccessTokenResponse>`, `Ok(…)`: it answers `Cache-Control: no-store`, and the document reads the body off the return type |
     | a token endpoint authenticating its clients through `AuthnGuard<S>` | `ClientAuthenticationGuard<S>` over the same strategy: §5.2's `invalid_client`, `401` with the `Basic` challenge over the `Authorization` header, `400` without |
     | a token route reading `Form<AccessTokenRequest>`, or code decoding it with serde | `request: AccessTokenRequest`, the handler parameter: the type derives no `Deserialize`, and its refusals are `invalid_request` |
     | `if request.grant_type != "client_credentials" { return Err(TokenError::UnsupportedGrant) }` | nothing: `request.grant_type` is a `GrantType` (`GrantType::ClientCredentials`), and a grant the endpoint does not serve is refused `unsupported_grant_type` before the handler runs |

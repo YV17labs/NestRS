@@ -95,9 +95,9 @@ recipe uses [Hey API](https://heyapi.dev) and its
 ## What fails if you get it wrong
 
 **A response typed `unknown`.** The document reads a handler's payload off
-its return type, `Json<T>` or `Result<Json<T>, E>`. A handler building its own
-`Response`, or returning a `Result` renamed on import, states none: declare it
-with `#[api(response = T)]` ([OpenAPI operations](/openapi/operations/#the-payload-a-handler-builds-itself)).
+its return type — `Json<T>`, a `Created` or `Paginated` of one, a `Result` of
+either, an alias included. A handler building its own `Response` states none:
+declare it with `#[api(response = T)]` ([OpenAPI operations](/openapi/operations/#the-payload-a-handler-builds-itself)).
 
 **Two operations under one name.** An `operationId` is
 `<controller>_<handler>` and must be unique; when two operations map to one,

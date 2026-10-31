@@ -749,16 +749,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 None => typed_body,
             },
         };
+        // Read by its type, so an alias documents it too; a type no expression
+        // can name, or an `#[sse]` stream, answers nothing beside its body.
+        let answered = answer_type(&method.sig.output).filter(|_| !is_sse);
         // Kept under a shaper: masking returns a subset of this shape, recorded as `masked`.
-        let response = match api
-            .response
-            .clone()
-            .or_else(|| response_payload(&method.sig.output))
-        {
-            Some(ty) => quote! {
+        let response = match (&api.response, answered) {
+            (Some(ty), _) => quote! {
                 ::core::option::Option::Some(::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::SchemaFn)
             },
-            None => quote! { ::core::option::Option::None },
+            (None, Some(ty)) => quote! { ::nest_rs_http::__payload_of!(#ty) },
+            (None, None) => quote! { ::core::option::Option::None },
         };
         if is_sse && let Some(lit) = &api.response_content_type {
             return syn::Error::new_spanned(
@@ -832,11 +832,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             });
         }
 
-        // What the return type answers beside its body, read by its type so an
-        // alias documents it too; a type no expression can name answers nothing.
-        let answer = match answer_type(&method.sig.output) {
-            Some(ty) if !is_sse => quote! { ::nest_rs_http::__answer_of!(#ty) },
-            _ => quote! { ::core::option::Option::None },
+        let answer = match answered {
+            Some(ty) => quote! { ::nest_rs_http::__answer_of!(#ty) },
+            None => quote! { ::core::option::Option::None },
         };
         let success_status = if shaped_status {
             quote! { #success_status }
@@ -1846,40 +1844,32 @@ fn check_media_type(lit: &LitStr) -> syn::Result<()> {
     Ok(())
 }
 
-/// `Some(T)` when `ty` is spelled `Result<T, _>`. A reading of the spelling,
-/// which an alias defeats: it decides only what the document infers, never what
-/// the route does (that goes through `nest_rs_core::__private::Answer`).
-pub(crate) fn result_inner(ty: &Type) -> Option<&Type> {
-    nth_generic_type(ty, "Result", 0)
-}
-
-/// The JSON payload type of a handler's return, under one optional `Result`
-/// and one optional `Created` or `Paginated` answer.
-fn response_payload(output: &ReturnType) -> Option<Type> {
-    let ReturnType::Type(_, ty) = output else {
-        return None;
-    };
-    let inner = result_inner(ty).unwrap_or(ty);
-    let inner = nth_generic_type(inner, "Created", 0)
-        .or_else(|| nth_generic_type(inner, "Paginated", 0))
-        .unwrap_or(inner);
-    nth_generic_type(inner, "Json", 0).cloned()
-}
-
 /// The return type an expression in the controller's `register` can name, for
-/// the answer probe: none borrowing a lifetime, hiding behind `impl`, or
-/// leaving a part to inference.
+/// the answer and payload probes: none naming a lifetime but `'static` or `'_`
+/// (which the expression infers, as it does an elided one), hiding behind
+/// `impl`, or leaving a part to inference.
 fn answer_type(output: &ReturnType) -> Option<&Type> {
     let ReturnType::Type(_, ty) = output else {
         return None;
     };
     fn nameable(tokens: TokenStream2) -> bool {
-        tokens.into_iter().all(|token| match token {
-            proc_macro2::TokenTree::Group(group) => nameable(group.stream()),
-            proc_macro2::TokenTree::Ident(ident) => ident != "impl" && ident != "_",
-            proc_macro2::TokenTree::Punct(punct) => punct.as_char() != '\'',
-            proc_macro2::TokenTree::Literal(_) => true,
-        })
+        let mut tokens = tokens.into_iter();
+        while let Some(token) = tokens.next() {
+            let named = match token {
+                proc_macro2::TokenTree::Group(group) => nameable(group.stream()),
+                proc_macro2::TokenTree::Ident(ident) => ident != "impl" && ident != "_",
+                proc_macro2::TokenTree::Punct(punct) if punct.as_char() == '\'' => matches!(
+                    tokens.next(),
+                    Some(proc_macro2::TokenTree::Ident(lifetime))
+                        if lifetime == "static" || lifetime == "_"
+                ),
+                proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => true,
+            };
+            if !named {
+                return false;
+            }
+        }
+        true
     }
     nameable(quote!(#ty)).then_some(&**ty)
 }
@@ -2030,6 +2020,22 @@ mod tests {
             }
             assert!(extractor_payload(&parse_quote!(Other<PageParams>), name).is_none());
         }
+    }
+
+    #[test]
+    fn a_return_type_is_probed_when_an_expression_can_name_it() {
+        let probed = |output: ReturnType| answer_type(&output).is_some();
+        assert!(probed(parse_quote!(-> Result<Created<Json<Post>>>)));
+        assert!(probed(parse_quote!(-> Json<&'static str>)));
+        assert!(probed(parse_quote!(-> Json<Cow<'_, str>>)));
+        assert!(probed(parse_quote!(-> Json<&str>)));
+        assert!(probed(
+            parse_quote!(-> Result<Json<u8>, Box<dyn Error + 'static>>)
+        ));
+        assert!(!probed(parse_quote!(-> Json<Cow<'a, str>>)));
+        assert!(!probed(parse_quote!(-> impl IntoResponse)));
+        assert!(!probed(parse_quote!(-> Json<Vec<_>>)));
+        assert!(!probed(ReturnType::Default));
     }
 
     #[test]

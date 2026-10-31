@@ -48,7 +48,11 @@ async fn several_granted_scopes_are_written_space_delimited() {
     assert_eq!(body["scope"], "posts:read posts:write");
 }
 
-/// `#[api(response = …)]` documents the body a bare return no longer spells.
+/// What a token route returns, behind an alias: still documented by its type.
+type Issued = nest_rs_http::Result<AccessTokenResponse>;
+
+/// The route documents the body its return type answers, with no
+/// `#[api(response = …)]` restating it.
 #[controller(path = "/")]
 struct IssuerController;
 
@@ -56,9 +60,14 @@ struct IssuerController;
 impl IssuerController {
     #[post("/token")]
     #[public]
-    #[api(response = AccessTokenResponse)]
     async fn token(&self) -> nest_rs_http::Result<AccessTokenResponse> {
         Ok(AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read"]))
+    }
+
+    #[post("/token/aliased")]
+    #[public]
+    async fn aliased(&self) -> Issued {
+        Ok(AccessTokenResponse::bearer("t", 3600))
     }
 }
 
@@ -93,34 +102,38 @@ async fn the_route_documents_the_access_token_response_it_returns() {
         .expect("the issuer app boots");
 
     let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
-    let route = controllers
-        .iter()
-        .flat_map(|controller| controller.meta.routes().iter())
-        .find(|route| route.handler() == "token")
-        .expect("the token route is discovered");
-    let schema_of = route.response().expect("a documented response");
+    for handler in ["token", "aliased"] {
+        let route = controllers
+            .iter()
+            .flat_map(|controller| controller.meta.routes().iter())
+            .find(|route| route.handler() == handler)
+            .expect("the token route is discovered");
+        let schema_of = route.response().expect("a documented response");
 
-    let mut generator = schemars::SchemaGenerator::default();
-    let documented = schema_of(&mut generator);
-    assert_eq!(
-        documented.get("$ref").and_then(serde_json::Value::as_str),
-        Some("#/$defs/AccessTokenResponse"),
-    );
-    let definition = generator
-        .definitions()
-        .get("AccessTokenResponse")
-        .expect("the response's schema is a named component");
-    let mut members: Vec<&str> = definition["properties"]
-        .as_object()
-        .expect("an object schema")
-        .keys()
-        .map(String::as_str)
-        .collect();
-    members.sort_unstable();
-    assert_eq!(
-        members,
-        ["access_token", "expires_in", "scope", "token_type"]
-    );
+        let mut generator = schemars::SchemaGenerator::default();
+        let documented = schema_of(&mut generator);
+        assert_eq!(
+            documented.get("$ref").and_then(serde_json::Value::as_str),
+            Some("#/$defs/AccessTokenResponse"),
+            "{handler}",
+        );
+        let definition = generator
+            .definitions()
+            .get("AccessTokenResponse")
+            .expect("the response's schema is a named component");
+        let mut members: Vec<&str> = definition["properties"]
+            .as_object()
+            .expect("an object schema")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        members.sort_unstable();
+        assert_eq!(
+            members,
+            ["access_token", "expires_in", "scope", "token_type"],
+            "{handler}",
+        );
+    }
 }
 
 /// The token request as an endpoint reads it: §4.4.2's parameters, in the

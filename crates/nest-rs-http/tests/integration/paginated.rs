@@ -1,10 +1,11 @@
 //! Covers `src/paginated.rs`: a `Paginated` answer links the next page on the
-//! path the caller addressed, the last page links none, and its route
-//! documents the `Link` off the return type.
+//! path the caller addressed, whoever returns it, the last page links none,
+//! and its route documents the `Link` and the body off the return type.
 
-use nest_rs_core::{Discovery, module};
+use nest_rs_core::{ContainerBuilder, Discoverable, Discovery, module};
 use nest_rs_http::{
-    HttpConfig, HttpControllerMeta, Json, Paginated, Query, Result, controller, header, routes,
+    HttpConfig, HttpControllerMeta, HttpEndpointMeta, IntoResponse, Json, Method, Paginated, Query,
+    Result, controller, endpoint_fn, header, routes,
 };
 use nest_rs_testing::TestApp;
 
@@ -62,4 +63,41 @@ async fn the_document_reads_the_link_and_the_body_off_the_return_type() {
         route.response().is_some(),
         "the body spelled inside `Paginated`"
     );
+}
+
+/// A self-mount paging what it lists, as a package's audit feed does.
+struct FeedMount;
+
+impl Discoverable for FeedMount {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<FeedMount, HttpEndpointMeta>(
+            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/feed", "feed", |_, routes| {
+                routes.route(
+                    Method::GET,
+                    "/feed",
+                    endpoint_fn(|_| async {
+                        Ok(Paginated::new(Json(vec![1, 2]), 2, Some(2)).into_response())
+                    }),
+                );
+            })
+            .owned_by("FeedMount"),
+        )
+    }
+}
+
+#[module(providers = [FeedMount])]
+struct FeedModule;
+
+#[tokio::test]
+async fn a_self_mounts_page_links_the_next_on_the_path_the_caller_addressed() {
+    let client = crate::boot_on::<FeedModule>(HttpConfig {
+        global_prefix: Some("/api".into()),
+        ..HttpConfig::default()
+    })
+    .await;
+
+    let first = client.get("/api/feed").send().await;
+
+    first.assert_status_is_ok();
+    first.assert_header(header::LINK, "</api/feed?first=2&after=2>; rel=\"next\"");
 }

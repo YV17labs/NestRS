@@ -23,6 +23,7 @@ use crate::deadline::RequestDeadline;
 use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::{HttpError, Result, file};
 use crate::guard_stage::denial_response;
+use crate::location::caller_uri;
 use crate::pipe::pipe_error;
 use crate::problem::{ProblemDetails, problem_response};
 use crate::request::Request;
@@ -57,13 +58,28 @@ impl EndpointTail {
 }
 
 impl SiteTail for EndpointTail {
-    fn answer(&self, req: &mut Request) -> impl Future<Output = Result<Response>> + Send {
+    async fn answer(&self, req: &mut Request) -> Result<Response> {
         let left = match self.keeps_head {
             true => req.head_copy(),
             false => Request::builder().finish(),
         };
-        self.endpoint.call(std::mem::replace(req, left))
+        let taken = std::mem::replace(req, left);
+        // The endpoint takes the request whole, and what is left of it may
+        // hold no head: the address its answer is stamped on is kept first.
+        let caller = caller_uri(&taken).clone();
+        let mut response = self.endpoint.call(taken).await?;
+        stamp_answer(caller.path(), &mut response);
+        Ok(response)
     }
+}
+
+/// Write the headers a typed answer carries until the path the caller
+/// addressed is at hand — a [`Created`](crate::Created)'s `Location`, a
+/// [`Paginated`](crate::Paginated)'s `Link` — whoever answered it: every tail
+/// running a developer's code calls it on its answer.
+pub(crate) fn stamp_answer(caller_path: &str, response: &mut Response) {
+    crate::created::stamp_location(caller_path, response);
+    crate::paginated::stamp_next_link(caller_path, response);
 }
 
 /// How the unit of work a request runs is settled.

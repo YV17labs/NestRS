@@ -35,7 +35,6 @@ use crate::registry::{AuthenticatedClient, authenticate_against_registry};
 /// impl TokenController {
 ///     #[post("/token")]
 ///     #[use_guards(ClientGuard)]
-///     #[api(response = AccessTokenResponse)]
 ///     async fn token(
 ///         &self,
 ///         client: Ambient<AuthenticatedClient<()>>,

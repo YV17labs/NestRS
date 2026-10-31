@@ -4,8 +4,7 @@ use std::fmt::Display;
 
 use http::StatusCode;
 
-use crate::location::{caller_path, set_created_location};
-use crate::request::Request;
+use crate::location::set_created_location;
 use crate::response::{IntoResponse, Response};
 
 /// A `201 Created` answer: `body`, and the `Location` of what the request
@@ -14,9 +13,10 @@ use crate::response::{IntoResponse, Response};
 /// The location is `<the path the caller addressed>/<id>`, an absolute-path
 /// reference, so a global prefix and a version survive and the
 /// client-controlled `Host` is never named; the id is percent-encoded as one
-/// path segment, and one that is empty, `.` or `..` writes no `Location`. The
-/// route answering it writes the header, and `#[routes]` documents the status,
-/// the `Location` and the body off the return type.
+/// path segment, and one that is empty, `.` or `..` writes no `Location`.
+/// Whoever answers it — a route, a self-mount's entry, a route registered by
+/// hand — has the header written, and `#[routes]` documents the status, the
+/// `Location` and the body off the return type, an alias included.
 ///
 /// ```
 /// # use nest_rs_core::module;
@@ -76,29 +76,26 @@ impl<T: IntoResponse> IntoResponse for Created<T> {
     }
 }
 
-/// Write the `Location` a [`Created`] answer carries, on the path `req`
-/// addressed.
-pub(crate) fn stamp_location(req: &Request, response: &mut Response) {
+/// Write the `Location` a [`Created`] answer carries, under `caller_path`.
+pub(crate) fn stamp_location(caller_path: &str, response: &mut Response) {
     if let Some(CreatedAt(id)) = response.extensions_mut().remove::<CreatedAt>() {
-        set_created_location(response, caller_path(req), &id);
+        set_created_location(response, caller_path, &id);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use http::Uri;
     use http::header::LOCATION;
 
     use super::*;
 
     #[test]
-    fn a_created_answer_is_a_201_whose_location_its_route_writes_on_the_callers_path() {
-        let req = Request::builder().uri(Uri::from_static("/orgs")).finish();
+    fn a_created_answer_is_a_201_whose_location_its_site_writes_on_the_callers_path() {
         let mut response = Created::at(7, "acme").into_response();
         assert_eq!(response.status(), StatusCode::CREATED);
         assert!(response.headers().get(LOCATION).is_none());
 
-        stamp_location(&req, &mut response);
+        stamp_location("/orgs", &mut response);
 
         assert_eq!(
             response
@@ -112,10 +109,9 @@ mod tests {
 
     #[test]
     fn a_response_no_created_answer_built_keeps_its_headers() {
-        let req = Request::builder().uri(Uri::from_static("/orgs")).finish();
         let mut response = "plain".into_response();
 
-        stamp_location(&req, &mut response);
+        stamp_location("/orgs", &mut response);
 
         assert!(response.headers().get(LOCATION).is_none());
     }

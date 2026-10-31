@@ -82,7 +82,6 @@ impl OAuthController {
     // would fail on the missing principal instead.
     #[get("/callback")]
     #[use_guards(OAuthGuard)]
-    #[api(response = AccessTokenResponse)]
     async fn callback(&self, caller: Ambient<Caller>) -> Result<AccessTokenResponse> {
         Ok(self
             .issuer
@@ -102,8 +101,8 @@ alert, WAF rule or rate limit keyed on `401`.
 `/callback` returns `AccessTokenResponse` bare. The type renders its own JSON
 with the `Cache-Control: no-store` and `Pragma: no-cache` RFC 6749 §5.1 requires
 on a token, so the browser that followed the redirect keeps no copy of it in a
-back-forward cache; `#[api(response = AccessTokenResponse)]` names the body for
-the OpenAPI document, which reads it off a `Json<T>` return otherwise.
+back-forward cache, and the OpenAPI document reads the body off the return
+type all the same.
 
 ## Configuration
 

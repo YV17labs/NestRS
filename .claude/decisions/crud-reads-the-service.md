@@ -104,3 +104,37 @@ Not done: `#[expose(service = …, writes = [create, update, delete])]` emitting
 the service's trait impls, the audit's optional second step. It would move the
 service's capabilities out of its own file, which a reader of the service no
 longer sees; reopened when a feature's glue breaks the bar `features.md` sets.
+
+**2026-10-31 — an answer is documented and stamped by its type, whoever
+returns it.** Under the owner's agreement to the identity audit's second pass
+("Tout faire (Recommandé)", 2026-10-31), the fourth bullet above changes in
+two halves:
+
+- **The body is read by its type.** `#[routes]` read the status and the
+  header through a type probe but the body by its spelling (`Json<T>` under
+  one `Result` and one `Created` or `Paginated`), so an alias documented `201`
+  and its `Location` with no body, a renamed `Result` dropped the body, and a
+  typed answer rendering its own JSON — the token response — was restated in
+  `#[api(response = T)]` at every route returning it. A second probe,
+  `DocumentedPayload`, names the type the body's schema is read off. It is
+  implemented for `Json<T>`, `Created<B>`, `Paginated<B>` and `Result<R, E>`,
+  and is not sealed, so `nest-rs-oauth-server` implements it for
+  `AccessTokenResponse`. Its schema bound sits on the probe's method, which
+  the selection never reads, so a `Json<T>` whose `T` has no schema stays a
+  compile error rather than a body the document drops. `#[api(response = T)]`
+  stays, for a handler building its own `Response`, and wins where both
+  speak: refusing it beside a probed body would be a break, keeping it is not.
+- **The headers are written whoever answers.** Only the `#[routes]` tail
+  wrote a `Created`'s `Location` and a `Paginated`'s `Link`, so a self-mount's
+  entry or a route registered by hand answered `201` with no `Location`.
+  Both tails that run a developer's code now write them through one function
+  (`site::stamp_answer`); the endpoint's tail, which hands the request over
+  whole, keeps the caller's URI first — a reference-counted clone per such
+  request, nothing more on a `#[routes]` route. The refusal above of writing
+  at the edge still holds: the edge would pay on every request, where the
+  tails pay only where a typed answer can come from.
+
+Refused: sealing the probe in `nest-rs-http`, since the token response is the
+OAuth server's; `ProblemDetails` as a member, an error body documented through
+`error(…)`; `(StatusCode, B)` as a member, whose status is a value, so the
+document would file the body under the default status.

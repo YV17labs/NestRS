@@ -21,15 +21,19 @@ async fn archive(&self) -> Result<Response> { /* ... */ }
 
 ## The payload a handler builds itself
 
-`response = Type` is for a handler that builds its own `Response` and so states
-no payload in its return type — or that returns its `Json<T>` inside a `Result`
-spelled another way. The payload is read off the spelling `Json<T>` /
-`Result<Json<T>, E>`, inside a `Created<…>` or a `Paginated<…>` too, since a
-macro resolves no name: `use nest_rs::http::Result as Answer` hides it from the
-document, never from the route. What a typed answer sends beside its body is
-read off its type instead, an alias included: a `Created<T>` documents its
-`201` and its `Location`, a `Paginated<T>` its `Link` — which is why neither
-the generated `#[crud]` create nor its list needs an `#[api(response = …)]`.
+The payload is read off the return type, by its type: a `Json<T>` documents
+`T`, bare, inside a `Created<…>` or a `Paginated<…>`, inside a `Result` — a
+`use nest_rs::http::Result as Answer` or a `type Made = Created<Json<Hook>>`
+documents the same body. So does a typed answer that renders its own JSON: a
+route returning `Result<AccessTokenResponse>` documents the token response.
+What a typed answer sends beside its body is read the same way: a `Created<T>`
+documents its `201` and its `Location`, a `Paginated<T>` its `Link` — which is
+why neither the generated `#[crud]` create nor its list needs an
+`#[api(response = …)]`.
+
+`response = Type` is for a handler that builds its own `Response`, whose type
+names no body. It wins over what the return type says, so it never needs to
+restate a typed answer.
 
 ## Bodies that are not JSON
 
@@ -129,11 +133,7 @@ a `#[crud]` controller and the routes written beside it share one group.
 ```rust title="crates/features/src/sign_in/http/controller.rs (from the demo, abridged)"
 #[post("/login")]
 // …
-#[api(
-    summary = "Sign in with email and password",
-    tags("Auth"),
-    response = AccessTokenResponse
-)]
+#[api(summary = "Sign in with email and password", tags("Auth"))]
 async fn login(&self, Json(input): Json<LoginDto>) -> Result<AccessTokenResponse> {
     // …
 }

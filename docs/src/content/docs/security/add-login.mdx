@@ -58,11 +58,7 @@ service and returns the token:
 #[public]
 #[use_guards(ThrottlerGuard)]
 #[meta(Throttle::per_minute(10))]
-#[api(
-    summary = "Sign in with email and password",
-    tags("Auth"),
-    response = AccessTokenResponse
-)]
+#[api(summary = "Sign in with email and password", tags("Auth"))]
 async fn login(&self, Json(input): Json<LoginDto>) -> Result<AccessTokenResponse> {
     Ok(self
         .svc
@@ -76,8 +72,8 @@ own JSON with the `Cache-Control: no-store` and `Pragma: no-cache` RFC 6749
 §5.1 requires on anything carrying a token, so no shared or back-forward
 cache keeps it. `Json<AccessTokenResponse>` does not compile: the response
 has no `Serialize`, so the token never leaves without both headers. The
-OpenAPI document reads a body's type off a `Json<T>` return, which is why
-`#[api(response = AccessTokenResponse)]` names it here.
+OpenAPI document reads the body off the return type all the same, so the route
+restates nothing.
 
 `grant_password` authenticates the email/password pair and signs the
 claims, the user's id as their `sub` — invalid credentials come back as one

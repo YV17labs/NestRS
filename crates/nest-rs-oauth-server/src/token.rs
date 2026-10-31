@@ -4,7 +4,7 @@
 use std::fmt;
 
 use nest_rs_core::Secret;
-use nest_rs_http::__private::{DocumentedBody, schema_of};
+use nest_rs_http::__private::{DocumentedBody, DocumentedPayload, schema_of};
 use nest_rs_http::{
     Form, FromRequest, HeaderValue, HttpError, IntoResponse, Json, Request, RequestBody,
     RequestBodyMeta, Response, StatusCode, header,
@@ -277,8 +277,8 @@ impl DocumentedBody for AccessTokenRequest {
 /// A handler returns it bare: it renders as its JSON with §5.1's
 /// `Cache-Control: no-store` and `Pragma: no-cache`. It is no `Serialize`, so
 /// no other spelling of the response — a `Json<Self>`, a hand-built body — can
-/// drop the two. `#[api(response = …)]` names it for the OpenAPI document,
-/// which reads a body's type off a `Json<T>` return. `Debug` redacts the token.
+/// drop the two. A route returning it documents this body by its type, bare
+/// or inside a `Result`, an alias included. `Debug` redacts the token.
 ///
 /// An issuer that grants another scope than the one requested — a narrower
 /// set, or its default when the request named none — states it with
@@ -297,7 +297,6 @@ impl DocumentedBody for AccessTokenRequest {
 /// impl LoginController {
 ///     #[post("/login")]
 ///     #[public]
-///     #[api(response = AccessTokenResponse)]
 ///     async fn login(&self) -> nest_rs_http::Result<AccessTokenResponse> {
 ///         Ok(sign_in())
 ///     }
@@ -362,6 +361,10 @@ impl AccessTokenResponse {
         self.scope = granted.into_iter().map(Into::into).collect();
         self
     }
+}
+
+impl DocumentedPayload for AccessTokenResponse {
+    type Payload = Self;
 }
 
 impl IntoResponse for AccessTokenResponse {

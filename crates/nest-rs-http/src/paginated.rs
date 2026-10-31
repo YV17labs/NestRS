@@ -3,8 +3,6 @@
 use std::fmt::Display;
 
 use crate::link::set_next_link;
-use crate::location::caller_path;
-use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 
 /// A page of a collection: `body`, and when another page follows, the `Link`
@@ -12,9 +10,10 @@ use crate::response::{IntoResponse, Response};
 ///
 /// The target is `<the path the caller addressed>?first=N&after=CURSOR`, a
 /// relative reference, so a global prefix and a version survive and the
-/// client-controlled `Host` is never named; the last page carries none. The
-/// route answering it writes the header, and `#[routes]` documents the `Link`
-/// off the return type.
+/// client-controlled `Host` is never named; the last page carries none.
+/// Whoever answers it — a route, a self-mount's entry, a route registered by
+/// hand — has the header written, and `#[routes]` documents the `Link` and the
+/// body off the return type, an alias included.
 ///
 /// ```
 /// # use nest_rs_core::module;
@@ -81,25 +80,22 @@ impl<T: IntoResponse> IntoResponse for Paginated<T> {
     }
 }
 
-/// Write the `Link` a [`Paginated`] answer carries, on the path `req`
-/// addressed.
-pub(crate) fn stamp_next_link(req: &Request, response: &mut Response) {
+/// Write the `Link` a [`Paginated`] answer carries, under `caller_path`.
+pub(crate) fn stamp_next_link(caller_path: &str, response: &mut Response) {
     if let Some(NextPage { first, after }) = response.extensions_mut().remove::<NextPage>() {
-        set_next_link(response, caller_path(req), first, &after);
+        set_next_link(response, caller_path, first, &after);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use http::Uri;
     use http::header::LINK;
 
     use super::*;
 
     fn stamped(page: Paginated<&'static str>) -> Option<String> {
-        let req = Request::builder().uri(Uri::from_static("/tracks")).finish();
         let mut response = page.into_response();
-        stamp_next_link(&req, &mut response);
+        stamp_next_link("/tracks", &mut response);
         response
             .headers()
             .get(LINK)

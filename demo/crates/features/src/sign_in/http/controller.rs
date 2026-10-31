@@ -23,11 +23,7 @@ impl SignInController {
     #[post("/token")]
     #[use_guards(ThrottlerGuard, ClientGuard)]
     #[meta(Throttle::per_minute(10))]
-    #[api(
-        summary = "OAuth2 token endpoint (client_credentials)",
-        tags("OAuth2"),
-        response = AccessTokenResponse
-    )]
+    #[api(summary = "OAuth2 token endpoint (client_credentials)", tags("OAuth2"))]
     async fn token(
         &self,
         client: Ambient<AuthenticatedClient>,
@@ -67,8 +63,7 @@ impl SignInController {
     #[meta(Throttle::per_minute(10))]
     #[api(
         summary = "Social login redirect URI — issues this app's token",
-        tags("OAuth2"),
-        response = AccessTokenResponse
+        tags("OAuth2")
     )]
     async fn social_callback(&self, caller: Ambient<Caller>) -> Result<AccessTokenResponse> {
         Ok(self.svc.issue(
@@ -83,11 +78,7 @@ impl SignInController {
     #[public]
     #[use_guards(ThrottlerGuard)]
     #[meta(Throttle::per_minute(10))]
-    #[api(
-        summary = "Sign in with email and password",
-        tags("Auth"),
-        response = AccessTokenResponse
-    )]
+    #[api(summary = "Sign in with email and password", tags("Auth"))]
     async fn login(&self, Json(input): Json<LoginDto>) -> Result<AccessTokenResponse> {
         Ok(self
             .svc

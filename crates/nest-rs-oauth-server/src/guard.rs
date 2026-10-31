@@ -82,7 +82,6 @@ use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
 /// impl TokenController {
 ///     #[post("/token")]
 ///     #[use_guards(ClientGuard)]
-///     #[api(response = AccessTokenResponse)]
 ///     async fn token(
 ///         &self,
 ///         client: Ambient<AuthenticatedClient<()>>,

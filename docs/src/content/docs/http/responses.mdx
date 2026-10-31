@@ -69,10 +69,12 @@ async fn create(&self, Json(input): Json<CreatePost>) -> Result<Created<Json<Pos
 `Created::at(id, body)` answers `201` with `Location: <collection>/<id>`, the
 collection being the path the caller addressed — global prefix and version
 included, the client-controlled `Host` never named — and the id one
-percent-encoded path segment, whatever it holds. The route writes the
-header, and the [OpenAPI document](/openapi/) reads the status, the `Location`
-and the body off the return type, alias included: no `#[http_code(201)]`, no
-`#[api(response = …)]`, no `&Request` taken for its path. The
+percent-encoded path segment, whatever it holds. The header is written
+whoever answers it — a route, a [self-mount](/extending/transport/#serving-http-from-a-package)'s
+entry, a route registered by hand — and the [OpenAPI document](/openapi/) reads
+the status, the `Location` and the body off the return type, alias included:
+no `#[http_code(201)]`, no `#[api(response = …)]`, no `&Request` taken for its
+path. The
 [`#[crud]` create](/database/crud/) answers the same type. A list that pages
 answers `Paginated<T>` alike, its `Link` to the next page
 ([Pagination](/database/pagination/)).

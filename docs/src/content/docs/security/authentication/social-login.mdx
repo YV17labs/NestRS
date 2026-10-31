@@ -187,7 +187,7 @@ impl SignInController {
 
     #[get("/social/{provider}/callback")]
     #[use_guards(ThrottlerGuard, SocialGuard)]
-    // … #[meta(…)], #[api(…, response = AccessTokenResponse)]
+    // … #[meta(…)], #[api(…)]
     async fn social_callback(&self, caller: Ambient<Caller>) -> Result<AccessTokenResponse> {
         Ok(self.svc.issue(
             caller.resource.as_deref(),

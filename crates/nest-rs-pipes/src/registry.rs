@@ -15,8 +15,8 @@ use crate::GlobalPipe;
 /// mounts.
 pub type PipeSpec = LayerSpec<dyn GlobalPipe>;
 
-/// Construct a [`PipeSpec`] for the given pipe type — what `#[use_pipes]`
-/// emits for each pipe it names.
+/// Construct a [`PipeSpec`] for the given pipe type — what [`GlobalPipes`]
+/// declares for each pipe it lists.
 pub fn pipe<P: GlobalPipe + 'static>() -> PipeSpec {
     LayerSpec::new(TypeId::of::<P>(), std::any::type_name::<P>(), |c| {
         c.get::<P>().map(|arc| arc as Arc<dyn GlobalPipe>)

@@ -185,16 +185,13 @@ pub use error::{
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
 pub use exception_filter::{
-    Catch, Caught, ExceptionFilter, ExceptionFilterSpec, GlobalExceptionFilterList,
-    GlobalExceptionFilters, exception_filter,
+    Catch, Caught, ExceptionFilter, GlobalExceptionFilterList, GlobalExceptionFilters,
 };
 pub use factory_inputs::FactoryInputs;
 pub use handler::{Handler, Posture, Reflector};
 pub use identifier::UUID_V7_REQUIRED;
 pub use instance::{Instance, Instanced, Unnamed};
-pub use interceptor::{
-    GlobalInterceptorList, GlobalInterceptors, Interceptor, InterceptorSpec, Next, interceptor,
-};
+pub use interceptor::{GlobalInterceptorList, GlobalInterceptors, Interceptor, Next};
 pub use job::{JOB_TIMEOUT, JobTimedOut};
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
@@ -251,6 +248,7 @@ pub mod __private {
     };
     pub use crate::error_message::__private::find_in_chain;
     pub use crate::exception_filter::__private::ErasedExceptionFilter;
+    pub use crate::exception_filter::{ExceptionFilterSpec, exception_filter};
     pub use crate::handler::{
         HandlerDeclaration, MetaLevels, MetaValue, declare_handler, meta_value,
     };
@@ -259,6 +257,7 @@ pub mod __private {
     pub use crate::interceptor::__private::{
         InterceptorRegistration, InterceptorStage, register_interceptor,
     };
+    pub use crate::interceptor::{InterceptorSpec, interceptor};
     pub use crate::layer_chain::__private::{
         GlobalLayer, ResolvedLayer, SiteChains, compose_chain, declare_global, dedup_bucket,
         global_pool_declared, log_effective_chain, refuse_unresolved, report_unresolved,

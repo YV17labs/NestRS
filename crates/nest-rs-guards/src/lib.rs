@@ -107,7 +107,7 @@ mod validate;
 
 pub use denial::Denial;
 pub use guard::{Guard, GuardFor, GuardPhase, PrincipalClaim};
-pub use registry::{GlobalGuardList, GlobalGuards, GuardSpec, guard};
+pub use registry::{GlobalGuardList, GlobalGuards};
 pub use scope::{GrantedScopes, RequiredScopes};
 
 #[doc(hidden)]
@@ -118,7 +118,9 @@ pub mod __private {
     pub use crate::chain::{GlobalBucket, SiteChainSources, compose_site_chain, split_at_covered};
     pub use crate::denial::denial_of;
     pub use crate::reason::{client_message, denial_code, denial_reason};
-    pub use crate::registry::{global_guards_active, resolve_global_chain, resolve_global_guards};
+    pub use crate::registry::{
+        GuardSpec, global_guards_active, guard, resolve_global_chain, resolve_global_guards,
+    };
     pub use crate::stage::{RefusalMark, Refused, check_guards};
     pub use crate::validate::{boot_validate_guards, validate_guard_chain, validate_route_chain};
 

@@ -105,10 +105,10 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     let injected_optional_names = injected_optional_names_method(&opt_names);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
     let interceptor_specs = quote! {
-        ::std::vec![#(::nest_rs_core::interceptor::<#interceptors>()),*]
+        ::std::vec![#(::nest_rs_core::__private::interceptor::<#interceptors>()),*]
     };
     let exception_filter_specs = quote! {
-        ::std::vec![#(::nest_rs_core::exception_filter::<#exception_filters>()),*]
+        ::std::vec![#(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*]
     };
 
     // Empty means "none declared": `nest-rs-mcp` owns the default path.
@@ -136,7 +136,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
             /// composes an operation's guard stage.
             #[doc(hidden)]
             pub fn __nestrs_mcp_host_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::__private::GuardSpec>
             {
                 #guard_specs
             }
@@ -145,7 +145,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
             /// it declares an operation's site.
             #[doc(hidden)]
             pub fn __nestrs_mcp_host_interceptor_specs()
-                -> ::std::vec::Vec<::nest_rs_core::InterceptorSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::InterceptorSpec>
             {
                 #interceptor_specs
             }
@@ -154,7 +154,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
             /// when it declares an operation's site.
             #[doc(hidden)]
             pub fn __nestrs_mcp_host_exception_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_core::ExceptionFilterSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::ExceptionFilterSpec>
             {
                 #exception_filter_specs
             }
@@ -281,21 +281,21 @@ fn refused_beside(err: syn::Error, mut item: ItemStruct) -> TokenStream {
         impl #impl_generics #name #ty_generics #where_clause {
             #[doc(hidden)]
             pub fn __nestrs_mcp_host_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::__private::GuardSpec>
             {
                 ::std::vec::Vec::new()
             }
 
             #[doc(hidden)]
             pub fn __nestrs_mcp_host_interceptor_specs()
-                -> ::std::vec::Vec<::nest_rs_core::InterceptorSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::InterceptorSpec>
             {
                 ::std::vec::Vec::new()
             }
 
             #[doc(hidden)]
             pub fn __nestrs_mcp_host_exception_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_core::ExceptionFilterSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::ExceptionFilterSpec>
             {
                 ::std::vec::Vec::new()
             }

@@ -19,8 +19,9 @@ use nest_rs_core::{
     Container, Deadline, Failure, Handler, Outcome, Posture, UnitContext, UnresolvedLayerError,
     anyhow,
 };
+use nest_rs_guards::__private::GuardSpec;
 use nest_rs_guards::__private::{RefusalMark, check_guards, resolve_global_guards};
-use nest_rs_guards::{Denial, Guard, GuardSpec};
+use nest_rs_guards::{Denial, Guard};
 use rmcp::model::{
     CallToolRequestMethod, ConstString, GetPromptRequestMethod, ListResourcesRequestMethod,
     ReadResourceRequestMethod,

@@ -71,9 +71,10 @@ use crate::unit_context::{UnitContext, take_pending};
 /// # use std::any::TypeId;
 /// # use nest_rs_core::__private::{
 /// #     GlobalLayers, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers, Tail,
-/// #     declare_handler, declare_site, declare_unit, dispatch, new_unit_context,
+/// #     declare_handler, declare_site, declare_unit, dispatch, exception_filter, interceptor,
+/// #     new_unit_context,
 /// # };
-/// # use nest_rs_core::{Handler, Posture, UnitView, exception_filter, interceptor, operation_log::Kind};
+/// # use nest_rs_core::{Handler, Posture, UnitView, operation_log::Kind};
 /// # struct Chat;
 /// # struct ChatView;
 /// # impl UnitView for ChatView {}

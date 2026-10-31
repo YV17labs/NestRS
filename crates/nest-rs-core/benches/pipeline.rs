@@ -23,12 +23,13 @@ use nest_rs_core::__private::{
     ResolvedLayer, Site, SiteDeclaration, SiteLayers, Tail, UnitChains, compose_chain,
     declare_handler, declare_site, declare_unit, dispatch, new_unit_context, settled,
 };
+use nest_rs_core::__private::{exception_filter, interceptor};
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::operation_log::Kind;
 use nest_rs_core::{
     AmbientValue, Caught, Container, Continuation, Correlation, ExceptionFilter, Failure, Handler,
     Interceptor, Layer, Next, Outcome, Posture, RequestContinuation, TaskContext, UnitContext,
-    UnitView, ambient, async_trait, exception_filter, interceptor, with_ambient,
+    UnitView, ambient, async_trait, with_ambient,
 };
 
 struct Bench;

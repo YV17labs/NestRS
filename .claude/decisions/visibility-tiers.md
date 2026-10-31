@@ -93,3 +93,17 @@ what they expand to — core's `GlobalLayer`, `declare_global` and
 and the macro writing each family's tuple lists (`__global_layer_pool!`) are
 what Rust cannot place in a module, so they keep a `__` prefix and stay
 hidden. `layer_chain` stays public for `LayerSpec`.
+
+**2026-10-31 — the layer specs a decorator builds are tier 2.** Once the
+app-wide pools became declarations, no app wrote `guard::<G>()`, `pipe::<P>()`,
+`interceptor::<I>()` or `exception_filter::<F>()`, nor named `GuardSpec`,
+`PipeSpec`, `InterceptorSpec` or `ExceptionFilterSpec`: the `#[use_*]`
+expansions, the four declarations and the edges' site composition do. Each
+moved to its crate's `__private`, the paths the decorators emit with them,
+as the pools' holders did above. `LayerSpec` stays tier 1 — `layer_chain` is
+public for it, and a guard or pipe spec is one — and the attribute
+`#[interceptor]` keeps `nest_rs::core::interceptor`, which named the function
+too. The one compile-fail fixture calling `exception_filter` by hand now lists
+the type in `GlobalExceptionFilters<(…)>`, where a developer meets the
+refusal.
+

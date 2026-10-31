@@ -458,7 +458,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `fn transform_ws_data(&self, event: &str, v: &mut Value)` | the same `transform`, on `ArgumentKind::Data`; the event is `cx.handler().address()`, or `cx.switch_to::<WsView>()`'s `event()` |
    | `App::builder().use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])` in `main`, and `use nest_rs::guards::{AppBuilderGuardsExt, guard};` | `GlobalGuards<(AuthnGuard, AuthzGuard)>` in the providers of the module `main` boots, `use nest_rs::guards::GlobalGuards;`, and `main` keeps `App::builder().module::<AppModule>()`: a suite booting that module runs the pool, so delete the copy it made (`.use_guards_global(…)` on `TestApp::builder()`) |
    | `App::builder().use_pipes_global([pipe::<P>()])`, through `nest_rs::guards::AppBuilderPipesExt` or `nest_rs::pipes::AppBuilderPipesExt` | `GlobalPipes<(P,)>` in the providers of the module `main` boots |
-   | `nest_rs::guards::{PipeSpec, PipeSpecs}`, `nest_rs::guards::GuardSpecs`, `nest_rs::pipes::PipeSpecs`, `nest_rs::core::layer_chain::GlobalSpecs` | `nest_rs::pipes::PipeSpec`; the pools are the declarations above, and the registries no API |
+   | `nest_rs::guards::{PipeSpec, PipeSpecs}`, `nest_rs::guards::{GuardSpec, GuardSpecs, guard}`, `nest_rs::pipes::{PipeSpec, PipeSpecs, pipe}`, `nest_rs::core::{InterceptorSpec, ExceptionFilterSpec, interceptor(), exception_filter()}`, `nest_rs::core::layer_chain::GlobalSpecs` | nothing: the pools are the declarations above, a decorator builds its own layer list, and the registries are no API |
    | `GlobalGuards<…>` or another pool listed in a feature's module | the module the app boots lists it: one an imported module lists fails the boot |
 
    **Interceptors and exception filters**

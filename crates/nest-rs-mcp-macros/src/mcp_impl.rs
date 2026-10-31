@@ -1309,12 +1309,12 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
                 ::nest_rs_core::__private::SiteLayers {
                     host_interceptors: <#self_ty>::__nestrs_mcp_host_interceptor_specs(),
                     method_interceptors: ::std::vec![
-                        #(::nest_rs_core::interceptor::<#interceptors>()),*
+                        #(::nest_rs_core::__private::interceptor::<#interceptors>()),*
                     ],
                     host_exception_filters:
                         <#self_ty>::__nestrs_mcp_host_exception_filter_specs(),
                     method_exception_filters: ::std::vec![
-                        #(::nest_rs_core::exception_filter::<#exception_filters>()),*
+                        #(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*
                     ],
                 }
             }

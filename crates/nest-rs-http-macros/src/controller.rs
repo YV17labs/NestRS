@@ -73,7 +73,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
 
     let interceptor_specs = quote! {
-        ::std::vec![#(::nest_rs_core::interceptor::<#interceptors>()),*]
+        ::std::vec![#(::nest_rs_core::__private::interceptor::<#interceptors>()),*]
     };
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
     let capability_bounds = guard_capability_bounds(
@@ -82,7 +82,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     );
     let pipe_specs = scoped_specs(&pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
     let exception_filter_specs = quote! {
-        ::std::vec![#(::nest_rs_core::exception_filter::<#exception_filters>()),*]
+        ::std::vec![#(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*]
     };
 
     let residency = pair::HTTP.host_residency(&name, &item.generics);
@@ -129,7 +129,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// Controller-level `#[use_interceptors(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_interceptor_specs()
-                -> ::std::vec::Vec<::nest_rs_core::InterceptorSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::InterceptorSpec>
             {
                 #interceptor_specs
             }
@@ -137,7 +137,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// Controller-level `#[use_guards(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::__private::GuardSpec>
             {
                 #guard_specs
             }
@@ -153,7 +153,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// Controller-level `#[use_exception_filters(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_exception_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_core::ExceptionFilterSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::ExceptionFilterSpec>
             {
                 #exception_filter_specs
             }

@@ -12,11 +12,12 @@ use nest_rs_core::__private::{
     ClassGate, GuardStage, ResolvedLayer, new_unit_context, report_unresolved,
 };
 use nest_rs_core::{Container, Failure, Handler, Peer, UnitContext};
+use nest_rs_guards::__private::GuardSpec;
 use nest_rs_guards::__private::{
     GlobalBucket, Refused, SiteChainSources, boot_validate_guards, check_guards, client_message,
     compose_site_chain, denial_code, denial_of, denial_reason,
 };
-use nest_rs_guards::{Denial, Guard, GuardSpec};
+use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::OriginRefused;
 
 use crate::envelope::{WsError, WsReply};

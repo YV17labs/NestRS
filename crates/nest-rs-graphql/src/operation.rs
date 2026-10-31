@@ -21,10 +21,11 @@ use nest_rs_core::problem::code;
 use nest_rs_core::{
     Container, Failure, Handler, Outcome, Problem, UnitContext, UnresolvedLayerError,
 };
+use nest_rs_guards::__private::GuardSpec;
 use nest_rs_guards::__private::{
     GlobalBucket, RefusalMark, SiteChainSources, check_guards, compose_site_chain,
 };
-use nest_rs_guards::{Denial, Guard, GuardSpec};
+use nest_rs_guards::{Denial, Guard};
 use tracing::Instrument;
 
 use crate::error::{FieldFailure, Reply, answer, rendered};

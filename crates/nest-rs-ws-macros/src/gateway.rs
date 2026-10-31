@@ -144,7 +144,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             /// The upgrade-scope guards, as the specs the boot check reads.
             #[doc(hidden)]
             pub fn __nestrs_edge_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::__private::GuardSpec>
             {
                 #edge_guard_specs
             }
@@ -152,18 +152,18 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             /// The gateway's `#[use_interceptors(...)]`, around each of its messages.
             #[doc(hidden)]
             pub fn __nestrs_gateway_interceptor_specs()
-                -> ::std::vec::Vec<::nest_rs_core::InterceptorSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::InterceptorSpec>
             {
-                ::std::vec![#(::nest_rs_core::interceptor::<#interceptors>()),*]
+                ::std::vec![#(::nest_rs_core::__private::interceptor::<#interceptors>()),*]
             }
 
             /// The gateway's `#[use_exception_filters(...)]`, around each of its
             /// messages.
             #[doc(hidden)]
             pub fn __nestrs_gateway_exception_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_core::ExceptionFilterSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::ExceptionFilterSpec>
             {
-                ::std::vec![#(::nest_rs_core::exception_filter::<#exception_filters>()),*]
+                ::std::vec![#(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*]
             }
 
             /// The gateway's `#[use_pipes(...)]`, over each of its messages' `data`.

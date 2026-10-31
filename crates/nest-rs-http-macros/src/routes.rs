@@ -1474,11 +1474,11 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
             ::nest_rs_core::__private::SiteLayers {
                 host_interceptors: <#self_ty>::__nestrs_controller_interceptor_specs(),
                 method_interceptors: ::std::vec![
-                    #(::nest_rs_core::interceptor::<#interceptors>()),*
+                    #(::nest_rs_core::__private::interceptor::<#interceptors>()),*
                 ],
                 host_exception_filters: <#self_ty>::__nestrs_controller_exception_filter_specs(),
                 method_exception_filters: ::std::vec![
-                    #(::nest_rs_core::exception_filter::<#method_exception_filters>()),*
+                    #(::nest_rs_core::__private::exception_filter::<#method_exception_filters>()),*
                 ],
             }
         }

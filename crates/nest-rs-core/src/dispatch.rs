@@ -244,6 +244,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::__private::{exception_filter, interceptor};
     use crate::ambient::Pending;
     use crate::container::ContainerBuilder;
     use crate::discoverable::Discoverable;
@@ -259,10 +260,7 @@ mod tests {
         recording_gate, run_counting,
     };
     use crate::unit_context::new_unit_context;
-    use crate::{
-        AmbientValue, Caught, ExceptionFilter, Interceptor, Layer, Next, async_trait,
-        exception_filter, interceptor,
-    };
+    use crate::{AmbientValue, Caught, ExceptionFilter, Interceptor, Layer, Next, async_trait};
 
     struct UnitStage;
     struct AppListed;

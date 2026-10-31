@@ -190,23 +190,23 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
 
             #[doc(hidden)]
             pub fn __nestrs_resolver_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::GuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::__private::GuardSpec>
             {
                 #guard_specs
             }
 
             #[doc(hidden)]
             pub fn __nestrs_resolver_interceptor_specs()
-                -> ::std::vec::Vec<::nest_rs_core::InterceptorSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::InterceptorSpec>
             {
-                ::std::vec![#(::nest_rs_core::interceptor::<#interceptors>()),*]
+                ::std::vec![#(::nest_rs_core::__private::interceptor::<#interceptors>()),*]
             }
 
             #[doc(hidden)]
             pub fn __nestrs_resolver_exception_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_core::ExceptionFilterSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::ExceptionFilterSpec>
             {
-                ::std::vec![#(::nest_rs_core::exception_filter::<#exception_filters>()),*]
+                ::std::vec![#(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*]
             }
         }
 
@@ -637,11 +637,11 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
             ::nest_rs_core::__private::SiteLayers {
                 host_interceptors: #host_interceptors,
                 method_interceptors: ::std::vec![
-                    #(::nest_rs_core::interceptor::<#interceptors>()),*
+                    #(::nest_rs_core::__private::interceptor::<#interceptors>()),*
                 ],
                 host_exception_filters: #host_exception_filters,
                 method_exception_filters: ::std::vec![
-                    #(::nest_rs_core::exception_filter::<#exception_filters>()),*
+                    #(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*
                 ],
             }
         }

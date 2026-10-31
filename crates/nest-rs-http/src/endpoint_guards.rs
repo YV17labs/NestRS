@@ -10,8 +10,10 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, ContainerBuilder, Discoverable, Discovery, Posture, UnitView};
-use nest_rs_guards::__private::{resolve_global_guards, split_at_covered, validate_guard_chain};
-use nest_rs_guards::{Guard, GuardFor, GuardSpec, guard};
+use nest_rs_guards::__private::{
+    GuardSpec, guard, resolve_global_guards, split_at_covered, validate_guard_chain,
+};
+use nest_rs_guards::{Guard, GuardFor};
 
 use crate::endpoint::{Carried, HttpEndpointMeta};
 use crate::view::HttpView;

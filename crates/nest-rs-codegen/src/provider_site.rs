@@ -57,16 +57,16 @@ pub fn site_const(site: &ProviderSite<'_>) -> TokenStream {
         fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
             ::nest_rs_core::__private::SiteLayers {
                 host_interceptors: ::std::vec![
-                    #(::nest_rs_core::interceptor::<#host_interceptors>()),*
+                    #(::nest_rs_core::__private::interceptor::<#host_interceptors>()),*
                 ],
                 method_interceptors: ::std::vec![
-                    #(::nest_rs_core::interceptor::<#method_interceptors>()),*
+                    #(::nest_rs_core::__private::interceptor::<#method_interceptors>()),*
                 ],
                 host_exception_filters: ::std::vec![
-                    #(::nest_rs_core::exception_filter::<#host_exception_filters>()),*
+                    #(::nest_rs_core::__private::exception_filter::<#host_exception_filters>()),*
                 ],
                 method_exception_filters: ::std::vec![
-                    #(::nest_rs_core::exception_filter::<#method_exception_filters>()),*
+                    #(::nest_rs_core::__private::exception_filter::<#method_exception_filters>()),*
                 ],
             }
         }
@@ -162,10 +162,10 @@ mod tests {
         })
         .to_string();
         for part in [
-            "host_interceptors : :: std :: vec ! [:: nest_rs_core :: interceptor :: < Audit > ()]",
-            "method_interceptors : :: std :: vec ! [:: nest_rs_core :: interceptor :: < Timing > ()]",
+            "host_interceptors : :: std :: vec ! [:: nest_rs_core :: __private :: interceptor :: < Audit > ()]",
+            "method_interceptors : :: std :: vec ! [:: nest_rs_core :: __private :: interceptor :: < Timing > ()]",
             "host_exception_filters : :: std :: vec ! []",
-            "method_exception_filters : :: std :: vec ! [:: nest_rs_core :: exception_filter :: < Rejected > ()]",
+            "method_exception_filters : :: std :: vec ! [:: nest_rs_core :: __private :: exception_filter :: < Rejected > ()]",
             "GlobalLayers :: ALL",
             "< AudioProcessor > :: __NESTRS_HANDLER_TRANSCODE",
         ] {

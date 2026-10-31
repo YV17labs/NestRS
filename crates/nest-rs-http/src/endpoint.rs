@@ -10,7 +10,7 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{Container, Handler, Posture};
-use nest_rs_guards::GuardSpec;
+use nest_rs_guards::__private::GuardSpec;
 
 use crate::detached::DetachedWork;
 use crate::endpoint_guards::CarriedView;

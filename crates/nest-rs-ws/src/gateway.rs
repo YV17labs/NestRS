@@ -12,12 +12,12 @@ use nest_rs_core::{
     Container, Continuation, Correlation, Handler, RequestContinuation, operation_log,
 };
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
-use nest_rs_guards::GuardSpec;
+use nest_rs_guards::__private::GuardSpec;
 use nest_rs_http::__private::websocket::{
     self, CloseCode, Message, WebSocketLimits, WebSocketUpgrade,
 };
 use nest_rs_http::{BoxEndpoint, DetachedWork, Endpoint, Request, Response};
-use nest_rs_pipes::PipeSpec;
+use nest_rs_pipes::__private::PipeSpec;
 use tracing::Instrument;
 
 use crate::WsReply;
@@ -1190,7 +1190,7 @@ mod tests {
             container,
             handler,
             crate::guard::MessageGuards {
-                method: vec![nest_rs_guards::guard::<DenyAll>()],
+                method: vec![nest_rs_guards::__private::guard::<DenyAll>()],
                 force: Vec::new(),
                 gate: None,
             },

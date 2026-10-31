@@ -18,8 +18,8 @@ use crate::Guard;
 /// composed.
 pub type GuardSpec = LayerSpec<dyn Guard>;
 
-/// Construct a [`GuardSpec`] for the given guard type — what `#[use_guards]`
-/// emits for each guard it names.
+/// Construct a [`GuardSpec`] for the given guard type — what a guard list
+/// (`GlobalGuards`, `EndpointGuards`) declares for each guard it names.
 pub fn guard<G: Guard + 'static>() -> GuardSpec {
     LayerSpec::new(TypeId::of::<G>(), std::any::type_name::<G>(), |c| {
         c.get::<G>().map(|arc| arc as Arc<dyn Guard>)

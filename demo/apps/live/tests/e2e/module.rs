@@ -1,7 +1,5 @@
-use features::authn::AuthnGuard;
 use features::testing::{ASSISTANT, client, token_for};
 use live::LiveModule;
-use nest_rs::guards::guard;
 use nest_rs::http::StatusCode;
 use nest_rs::testing::{EphemeralDatabase, TestApp};
 use nest_rs::ws::CloseCode;
@@ -14,7 +12,6 @@ async fn the_live_app_requires_its_own_audience_read_from_its_own_file() {
         .await
         .expect("create + migrate a throwaway database");
     let app = TestApp::builder()
-        .use_guards_global([guard::<AuthnGuard>()])
         .module::<LiveModule>()
         .with_test_telemetry()
         .provide_arc(db.connection())

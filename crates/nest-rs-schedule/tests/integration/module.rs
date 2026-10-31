@@ -104,7 +104,10 @@ struct PurgeScheduleModule;
 async fn a_scheduled_host_the_app_reaches_without_the_scheduler_is_named_once_at_run() {
     let logs = LogCapture::install();
 
-    App::new::<PurgeScheduleModule>()
+    App::builder()
+        .module::<PurgeScheduleModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await

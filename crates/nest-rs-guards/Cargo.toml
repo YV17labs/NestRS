@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "One guard contract for NestRS — a guard checks an HTTP request or any edge's unit, declared once with App::builder().use_guards_global(...)."
+description = "One guard contract for NestRS — a guard checks an HTTP request or any edge's unit, declared once by the app's root module with GlobalGuards<(…)>."
 keywords = ["framework", "nestrs", "guards", "authorization", "middleware"]
 categories = ["web-programming", "authentication"]
 

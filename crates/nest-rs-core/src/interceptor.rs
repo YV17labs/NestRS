@@ -1,10 +1,11 @@
 //! [`Interceptor`], the layer around one unit on any edge, [`Next`], the rest
-//! of the unit it runs around, and the [`InterceptorSpec`] an app lists one
-//! with.
+//! of the unit it runs around, the [`InterceptorSpec`] a site binds one with,
+//! and [`GlobalInterceptors`], the app-wide pool a root module declares.
 
 use std::any::{TypeId, type_name};
 use std::fmt;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -15,7 +16,7 @@ use crate::ambient::install_pending;
 use crate::container::Container;
 use crate::dispatch::{ErasedTail, after_unit_stage};
 use crate::layer::Layer;
-use crate::layer_chain::__private::{GlobalSpecs, ResolvedLayer};
+use crate::layer_chain::__private::{GlobalLayer, ResolvedLayer};
 use crate::layer_chain::LayerSpec;
 use crate::outcome::Outcome;
 use crate::site::UnitChains;
@@ -262,7 +263,7 @@ async fn call_link(
     }
 }
 
-/// One interceptor an app lists, resolved against the container when a site
+/// One interceptor a site binds, resolved against the container when the site
 /// composes its chains.
 pub struct InterceptorSpec(pub(crate) LayerSpec<dyn Interceptor>);
 
@@ -287,15 +288,68 @@ fn layer_spec<I: Interceptor>() -> LayerSpec<dyn Interceptor> {
     })
 }
 
-/// The interceptors an app lists for every unit, at the handler stage.
-pub(crate) struct GlobalInterceptors(pub(crate) Vec<LayerSpec<dyn Interceptor>>);
+/// The interceptors every unit runs at the handler stage, after its guards and
+/// its posture's class gate, first listed outermost and before any a module
+/// brings — declared once, in the providers of the module the app boots, so
+/// the binary and its test suites run the same pool. A module the app imports
+/// listing it fails the boot, as does a second declaration; an interceptor the
+/// declaring module does not reach fails the access graph.
+///
+/// An interceptor that must run around the guards — a timing, a challenge
+/// stamped on a refusal — is declared `#[interceptor(stage = unit)]` by its
+/// module instead.
+///
+/// ```
+/// use nest_rs_core::{
+///     App, GlobalInterceptors, Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
+///     injectable, module,
+/// };
+///
+/// #[injectable]
+/// #[derive(Layer)]
+/// struct Audit;
+///
+/// #[async_trait]
+/// impl Interceptor for Audit {
+///     async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+///         next.run(cx).await
+///     }
+/// }
+///
+/// #[module(providers = [Audit, GlobalInterceptors<(Audit,)>])]
+/// struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+///
+/// let app = App::builder().module::<AppModule>().build().await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct GlobalInterceptors<I: GlobalInterceptorList>(PhantomData<fn() -> I>);
 
-impl GlobalSpecs for GlobalInterceptors {
-    type Layer = dyn Interceptor;
+/// A tuple of interceptors — `(Audit,)` to eight of them — run in the order
+/// written. Sealed: only tuples are lists.
+pub trait GlobalInterceptorList: listed::Listed + 'static {
+    /// Each interceptor's spec, in order.
+    #[doc(hidden)]
+    fn __specs() -> Vec<LayerSpec<dyn Interceptor>>;
+}
 
-    fn specs(&self) -> &[LayerSpec<dyn Interceptor>] {
-        &self.0
-    }
+mod listed {
+    pub trait Listed {}
+}
+
+crate::__global_layer_pool! {
+    pool: GlobalInterceptors,
+    list: GlobalInterceptorList,
+    sealed: listed::Listed,
+    layer: dyn Interceptor,
+    each: Interceptor => layer_spec,
+}
+
+impl GlobalLayer for dyn Interceptor {
+    const KIND: &'static str = "interceptor";
+    const POOL: &'static str = "nest_rs::layers::interceptors";
 }
 
 /// `interceptor` is private: its tier-2 items live here, reached only through

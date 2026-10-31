@@ -310,7 +310,7 @@ pub struct {{event}} {
 pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!
 //! Security: the MCP endpoint gates at its request, through the global guard
-//! pool (`use_guards_global`) and the `EndpointGuards<McpView, _>` a module
+//! pool (`GlobalGuards`) and the `EndpointGuards<McpView, _>` a module
 //! declares, either alone, else deny-all. Import `AuthzMcpModule`
 //! (`features::authz::mcp`) so callers are authenticated and the ambient
 //! `Ability` is attached.

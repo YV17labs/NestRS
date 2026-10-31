@@ -94,9 +94,12 @@ pub trait Module: 'static {
 /// ])]
 /// pub struct AppModule;
 ///
-/// let app = App::new::<AppModule>()?;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// let app = App::builder().module::<AppModule>().build().await?;
 /// assert_eq!(app.container().get::<Greeting>().map(|g| g.0), Some("hello"));
-/// # Ok::<(), anyhow::Error>(())
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// Dynamic modules are **not** deduplicated — each carries its own config —
@@ -148,9 +151,12 @@ pub trait Module: 'static {
 /// #[module(imports = [ClientModule::for_root()], providers = [Uploads])]
 /// pub struct UploadsModule;
 ///
-/// let app = App::new::<UploadsModule>()?;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// let app = App::builder().module::<UploadsModule>().build().await?;
 /// assert!(app.container().get::<Uploads>().is_some());
-/// # Ok::<(), anyhow::Error>(())
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// A setup that wires the module it declares imports it in **both** phases

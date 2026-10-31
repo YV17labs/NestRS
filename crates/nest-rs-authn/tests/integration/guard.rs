@@ -767,7 +767,7 @@ mod graphql {
     use nest_rs_core::{injectable, module};
     use nest_rs_graphql::async_graphql::Result as GraphqlResult;
     use nest_rs_graphql::{GraphqlModule, operations, resolver};
-    use nest_rs_guards::guard;
+
     use nest_rs_http::HttpModule;
     use nest_rs_http::Request;
     use nest_rs_http::{StatusCode, header};
@@ -796,6 +796,12 @@ mod graphql {
     )]
     struct StalledGraphqlModule;
 
+    #[module(
+        imports = [StalledGraphqlModule],
+        providers = [nest_rs_guards::GlobalGuards<(StalledAuthn,)>],
+    )]
+    struct TheGraphqlPostIsRefusedAtTheBoundApp;
+
     /// The GraphQL POST is authenticated by the global pool, in band: an
     /// anonymous caller reaches the resolvers' own gates. A strategy that never
     /// answered is not that caller, and the POST is refused at the bound rather
@@ -804,8 +810,7 @@ mod graphql {
     async fn the_graphql_post_is_refused_at_the_bound() {
         let logs = LogCapture::install();
         let app = TestApp::builder()
-            .module::<StalledGraphqlModule>()
-            .use_guards_global([guard::<StalledAuthn>()])
+            .module::<TheGraphqlPostIsRefusedAtTheBoundApp>()
             .build()
             .await
             .expect("a resolver under a pooled AuthnGuard boots");
@@ -852,14 +857,19 @@ mod graphql {
     )]
     struct BearerGraphqlModule;
 
+    #[module(
+        imports = [BearerGraphqlModule],
+        providers = [nest_rs_guards::GlobalGuards<(BearerAuthn,)>],
+    )]
+    struct TheGraphqlPostAdmitsAnAnonymousCallerAndRefusesABadBearerApp;
+
     /// `/graphql` is in band: an anonymous caller reaches a `#[public]` query,
     /// while a bearer the caller presented is still verified, and a bad one is
     /// refused before any operation runs.
     #[tokio::test]
     async fn the_graphql_post_admits_an_anonymous_caller_and_refuses_a_bad_bearer() {
         let app = TestApp::builder()
-            .module::<BearerGraphqlModule>()
-            .use_guards_global([guard::<BearerAuthn>()])
+            .module::<TheGraphqlPostAdmitsAnAnonymousCallerAndRefusesABadBearerApp>()
             .build()
             .await
             .expect("a resolver under a pooled AuthnGuard boots");
@@ -896,7 +906,7 @@ mod graphql {
 
 mod mcp {
     use nest_rs_core::module;
-    use nest_rs_guards::guard;
+
     use nest_rs_http::HttpModule;
     use nest_rs_http::StatusCode;
     use nest_rs_mcp::{McpError, mcp, tools};
@@ -928,6 +938,12 @@ mod mcp {
     )]
     struct StalledMcpModule;
 
+    #[module(
+        imports = [StalledMcpModule],
+        providers = [nest_rs_guards::GlobalGuards<(StalledAuthn,)>],
+    )]
+    struct TheMcpPostIsRefusedAtTheBoundApp;
+
     /// The MCP POST is authenticated in the endpoint's `before`, by the global
     /// pool run in band, ahead of any operation — so the bound refuses the
     /// request before rmcp has opened a stream.
@@ -935,8 +951,7 @@ mod mcp {
     async fn the_mcp_post_is_refused_at_the_bound() {
         let logs = LogCapture::install();
         let app = TestApp::builder()
-            .module::<StalledMcpModule>()
-            .use_guards_global([guard::<StalledAuthn>()])
+            .module::<TheMcpPostIsRefusedAtTheBoundApp>()
             .build()
             .await
             .expect("an #[mcp] host under a pooled AuthnGuard boots");
@@ -1030,6 +1045,7 @@ mod nets {
 
     use async_trait::async_trait;
     use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, Strategy};
+    use nest_rs_core::__private::provide_meta;
     use nest_rs_core::{App, Budget, BudgetPastNetError, injectable, module};
     use nest_rs_http::Request;
 
@@ -1086,12 +1102,13 @@ mod nets {
 
     #[tokio::test]
     async fn a_budget_the_strategy_reaches_at_the_guards_net_fails_the_boot() {
-        let Err(refused) = App::builder()
-            .provide(IdentityStore(AUTHENTICATE_TIMEOUT))
-            .provide_meta(store_budget())
-            .module::<StoreBackedModule>()
-            .build()
-            .await
+        let Err(refused) = provide_meta(
+            App::builder().provide(IdentityStore(AUTHENTICATE_TIMEOUT)),
+            store_budget(),
+        )
+        .module::<StoreBackedModule>()
+        .build()
+        .await
         else {
             panic!("a store the strategy waits on at the guard's net must not boot");
         };
@@ -1110,12 +1127,13 @@ mod nets {
 
     #[tokio::test]
     async fn a_budget_the_strategy_cannot_reach_is_left_alone() {
-        App::builder()
-            .provide(IdentityStore(AUTHENTICATE_TIMEOUT * 2))
-            .provide_meta(store_budget())
-            .module::<LocalModule>()
-            .build()
-            .await
-            .expect("a strategy reaching no store boots beside a slow one");
+        provide_meta(
+            App::builder().provide(IdentityStore(AUTHENTICATE_TIMEOUT * 2)),
+            store_budget(),
+        )
+        .module::<LocalModule>()
+        .build()
+        .await
+        .expect("a strategy reaching no store boots beside a slow one");
     }
 }

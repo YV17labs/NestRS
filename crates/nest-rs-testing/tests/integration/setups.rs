@@ -8,7 +8,7 @@ use std::time::Duration;
 use nest_rs_authn::{AuthnConfig, AuthnModule};
 use nest_rs_core::{
     App, CloseContribution, Container, ContestedDeclarationError, Discovery, Module,
-    TransportContribution, UnresolvedFactoryError, WiringContribution, instance, module,
+    TransportContribution, WiringContribution, instance, module,
 };
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule};
 use nest_rs_health::{HealthConfig, HealthModule};
@@ -409,13 +409,12 @@ mod mounts_on_http {
     );
 }
 
-/// A Redis connection opens only against a server, so the Redis rows stop
-/// where the boot stops without one: after the declarations, before any
-/// factory runs — the synchronous boot, which drains none.
-fn declarations_of<M: Module>() -> anyhow::Error {
-    let Err(refused) = App::new::<M>() else {
+/// The boot of `M`, refused by its declarations before any factory opens a
+/// Redis connection.
+async fn declarations_of<M: Module>() -> anyhow::Error {
+    let Err(refused) = App::builder().module::<M>().build().await else {
         panic!(
-            "{} queues a connection no synchronous boot opens",
+            "{} declares twice, which refuses before any connection opens",
             std::any::type_name::<M>()
         );
     };
@@ -460,28 +459,40 @@ struct RedisQueueTwicePinned;
 /// One instance pinned twice is contested, the default's as a named one's;
 /// two instances each pinned once never contest, nor does either's bare
 /// import beside its pin.
-#[test]
-fn a_redis_instance_pinned_twice_names_both_imports_and_two_instances_never_contest() {
+#[tokio::test]
+async fn a_redis_instance_pinned_twice_names_both_imports_and_two_instances_never_contest() {
     for (refused, root) in [
-        (declarations_of::<RedisTwicePinned>(), "RedisTwicePinned"),
         (
-            declarations_of::<RedisInstanceTwicePinned>(),
+            declarations_of::<RedisTwicePinned>().await,
+            "RedisTwicePinned",
+        ),
+        (
+            declarations_of::<RedisInstanceTwicePinned>().await,
             "RedisInstanceTwicePinned",
         ),
     ] {
         names_both_imports(&refused, root, [0, 1]);
     }
-    let refused = declarations_of::<RedisEachInstancePinnedOnce>();
-    assert!(
-        refused.downcast_ref::<UnresolvedFactoryError>().is_some(),
-        "past the declarations, refused only for the connection it cannot open: {refused:#}"
-    );
+    // Booted or refused for the connection its server answers or not, never
+    // for its declarations.
+    if let Err(refused) = App::builder()
+        .module::<RedisEachInstancePinnedOnce>()
+        .build()
+        .await
+    {
+        assert!(
+            refused
+                .downcast_ref::<ContestedDeclarationError>()
+                .is_none(),
+            "two instances each pinned once never contest: {refused:#}"
+        );
+    }
 }
 
-#[test]
-fn a_redis_binding_pinned_twice_names_both_imports() {
+#[tokio::test]
+async fn a_redis_binding_pinned_twice_names_both_imports() {
     names_both_imports(
-        &declarations_of::<RedisQueueTwicePinned>(),
+        &declarations_of::<RedisQueueTwicePinned>().await,
         "RedisQueueTwicePinned",
         [1, 2],
     );

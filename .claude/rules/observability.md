@@ -207,12 +207,14 @@ framework edge's is `<edge>.<unit>`: the crate that owns the edge declares it
 with `unit!` in its `src/unit.rs`, from the closed edge vocabulary (`Edge`), and
 the unit keeps the edge it was declared under (`Unit::edge()`), so code that
 branches on the edge asks the unit, never parses its name. The kernel's are
-`lifecycle.<unit>` on `nest_rs::lifecycle`, declared by `nest-rs-core` alone.
+`lifecycle.<unit>` on `nest_rs::lifecycle`, declared by `nest-rs-core` alone,
+and the test harness's `testing.<unit>` on `nest_rs::testing`, declared by
+`nest-rs-testing` alone (`testing.unit`, the unit a suite runs a service in).
 Any other crate declares `<its library name>.<unit>` on its own target —
 `nestrs_kafka.message` on `nestrs_kafka` or `nestrs_kafka::consumer` — and its
-units have no edge; the edge words and `lifecycle` are the framework's, and
-`unit!` refuses a unit named after another crate, and a package taking the
-`nest-rs-` prefix (`decisions/community-naming.md`). The span
+units have no edge; the edge words, `lifecycle` and `testing` are the
+framework's, and `unit!` refuses a unit named after another crate, and a
+package taking the `nest-rs-` prefix (`decisions/community-naming.md`). The span
 (`operation_span!`), the line's `name:` (exported as `event.name` by an OTLP log
 bridge) and its message all read that one constant through `operation_line!`,
 which files the line and records the outcome; a literal does not compile.

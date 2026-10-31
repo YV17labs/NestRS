@@ -4,7 +4,7 @@
 //! for the handler, handed it with the [`ArgumentKind`] that says which input it
 //! is: an HTTP request's JSON body, a `/graphql` operation's variables (on a
 //! POST and on the graphql-ws socket alike), a WebSocket message's `data`.
-//! Registered once with `App::builder().use_pipes_global(...)`, it applies to
+//! Declared once by the module the app boots ([`GlobalPipes`](crate::GlobalPipes)), it applies to
 //! each of those inputs in the app — no per-route opt-in. The framework gives
 //! pipes the [`LayerKind::Pipe`](nest_rs_core::LayerKind) execution slot: they
 //! run after Guards and before the handler. An HTTP route opts out with
@@ -39,9 +39,8 @@
 //!
 //! ## Registering globally
 //!
-//! `App::builder().use_pipes_global([pipe::<StripUnknownFields>()])`, through
-//! [`AppBuilderPipesExt`](crate::AppBuilderPipesExt); the example on
-//! [`pipe`](fn@crate::pipe) runs it.
+//! List [`GlobalPipes`](crate::GlobalPipes) in the providers of the module the
+//! app boots; its example runs it.
 
 use std::sync::Arc;
 

@@ -7,7 +7,7 @@ use nest_rs_core::{injectable, module};
 use nest_rs_graphql::GraphqlView;
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_guards::guard;
+use nest_rs_guards::GlobalGuards;
 use nest_rs_http::EndpointGuards;
 use nest_rs_seaorm::{
     Access, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError,
@@ -152,6 +152,12 @@ const REFERENCE: &str = r#"
     }
 "#;
 
+#[module(
+    imports = [FederatedModule],
+    providers = [GlobalGuards<(AlwaysAuthenticated, PostsAbilityGuard)>],
+)]
+struct BootApp;
+
 async fn boot() -> TestApp {
     crate::harness::setup_shared_table(
         &crate::harness::connect().await,
@@ -169,8 +175,7 @@ async fn boot() -> TestApp {
     )
     .await;
     TestApp::builder()
-        .module::<FederatedModule>()
-        .use_guards_global([guard::<AlwaysAuthenticated>(), guard::<PostsAbilityGuard>()])
+        .module::<BootApp>()
         .build()
         .await
         .expect("the subgraph boots against live Postgres")

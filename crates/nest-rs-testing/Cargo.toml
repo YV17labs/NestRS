@@ -19,20 +19,27 @@ all-features = true
 
 [features]
 # The HTTP half: `TestApp`, which mounts the app's HTTP transport and drives it
-# through the kit's `TestClient`, the guard and pipe `use_*_global` seams and
-# the MCP helpers. A headless suite — a worker, a queue driver's kit — leaves it off
-# and links no HTTP stack; it boots through `HeadlessApp::builder()`.
+# through the kit's `TestClient`, and the MCP helpers. A headless suite — a
+# worker, a queue driver's kit — leaves it off and links no HTTP stack; it boots
+# through `HeadlessApp::builder()`.
 http = [
     "dep:nest-rs-http",
-    "dep:nest-rs-guards",
-    "dep:nest-rs-pipes",
     "dep:serde",
     "dep:url",
 ]
+# A bearer token the app's own `JwtService` signs (`TestApp::bearer`).
+authn = ["http", "dep:nest-rs-authn", "dep:serde"]
+# A unit of work run through the app's bound `UnitOfWork` as system work
+# (`TestApp::system_unit`, `HeadlessApp::system_unit`).
+database = ["dep:nest-rs-database"]
+# The same unit as a request granted an ability (`TestApp::unit`,
+# `HeadlessApp::unit`).
+authz = ["database", "dep:nest-rs-authz"]
 # Satisfy the OpenTelemetryModule boot guard in tests (`with_test_telemetry`).
 opentelemetry = ["dep:nest-rs-opentelemetry"]
 # An ephemeral, migrated Postgres database fixture for e2e (`EphemeralDatabase`),
-# opening its connections through the app pool's own options.
+# opening its connections through the app pool's own options, and the one a
+# test app boots on (`TestAppBuilder::ephemeral_database`).
 orm = ["dep:nest-rs-seaorm", "dep:sea-orm", "dep:sea-orm-migration"]
 # The graphql-ws subscription driver (`TestApp::graphql_socket`). Gated because a
 # headless app's suite should not link a GraphQL schema to assert on a queue.
@@ -44,7 +51,8 @@ ws = ["http", "dep:tokio-tungstenite", "dep:futures-util", "dep:nest-rs-ws"]
 # The queue backend kit (`queue_kit!`): the behaviour a queue backend owes the
 # port's worker, as tests a driver runs against its own implementation. tokio's
 # `test-util` (not part of `full`) is what pauses time under a backend running
-# in process.
+# in process. With it, a test app's boot arms the outbox of an app binding a
+# store and a queue backend, as the binary's relay does.
 queue = ["dep:nest-rs-queue", "dep:serde", "tokio/test-util"]
 # A test certificate authority (`TestAuthority`): the certificates a TLS test
 # presents or trusts, issued in process rather than committed, and the
@@ -55,11 +63,8 @@ tls = ["dep:rcgen", "dep:rustls", "dep:tokio-rustls", "nest-rs-config/tls"]
 [dependencies]
 nest-rs-core.workspace = true
 anyhow.workspace = true
-# Behind `http`: the transport `TestApp` mounts, and the guard and pipe
-# registries its `use_*_global` seams fill.
+# Behind `http`: the transport `TestApp` mounts.
 nest-rs-http = { workspace = true, optional = true }
-nest-rs-guards = { workspace = true, optional = true }
-nest-rs-pipes = { workspace = true, optional = true }
 # Behind `http`: the client's query and form bodies are form-encoded through
 # rust-url's `form_urlencoded`, the WHATWG encoder `nest-rs-config` already
 # links, so it adds no crate to the graph.
@@ -107,6 +112,12 @@ nest-rs-ws = { workspace = true, optional = true }
 # `assert_json`.
 nest-rs-queue = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
+# Behind `authn`: the `JwtService` `TestApp::bearer` signs with.
+nest-rs-authn = { workspace = true, optional = true }
+# Behind `database` and `authz`: the unit of work a test runs, and the ability
+# it runs under.
+nest-rs-database = { workspace = true, optional = true }
+nest-rs-authz = { workspace = true, optional = true }
 # Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
 nest-rs-opentelemetry = { workspace = true, optional = true }
 # Behind `orm`: `SeaOrmConfig::connect_options`, the one constructor of a
@@ -124,7 +135,7 @@ sea-orm-migration = { workspace = true, optional = true }
 # `TestAuthority` on whatever features a caller builds with, `guard_markers`
 # opens a real socket (`build_ws`), and `graphql` drives a subscription
 # (`graphql_socket`).
-nest-rs-testing = { path = ".", features = ["graphql", "http", "orm", "tls", "ws"] }
+nest-rs-testing = { path = ".", features = ["authn", "authz", "graphql", "http", "orm", "tls", "ws"] }
 # `transport_parity` boots one module serving both in-band endpoints to pin
 # that they answer one app wiring identically. That is cross-crate wiring (the
 # global pool × graphql × mcp), so it lives here rather than in any single
@@ -148,6 +159,10 @@ validator.workspace = true
 # trait + a typed error to throw and catch.
 thiserror.workspace = true
 async-trait.workspace = true
+# The suite declares guards, global pools and per-argument pipes as an app
+# does, so it names their contracts. Path-only, so publishing drags none.
+nest-rs-guards = { path = "../nest-rs-guards" }
+nest-rs-pipes = { path = "../nest-rs-pipes" }
 # `tests/integration/ws_gateway_guards.rs` and `guard_markers.rs` declare a
 # `#[gateway]` + `#[messages]` impl, so the suite names the macros and
 # `WsModule` itself rather than through the `ws` feature.
@@ -174,6 +189,10 @@ nest-rs-schedule = { path = "../nest-rs-schedule" }
 # `setups.rs` imports every first-party `for_root` twice, so it reaches every
 # crate shipping one. Path-only, so publishing drags none of them.
 nest-rs-authn = { path = "../nest-rs-authn" }
+# `units.rs` runs bodies in a unit of a binding written as a driver writes
+# one, granted an ability.
+nest-rs-authz = { path = "../nest-rs-authz" }
+nest-rs-database = { path = "../nest-rs-database" }
 nest-rs-health = { path = "../nest-rs-health" }
 nest-rs-oauth-client = { path = "../nest-rs-oauth-client" }
 nest-rs-oauth-resource = { path = "../nest-rs-oauth-resource" }

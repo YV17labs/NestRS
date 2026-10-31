@@ -13,7 +13,7 @@ use nest_rs_core::{
     UnbuiltCause, UnbuiltProviderError, injectable, instance, module,
 };
 
-use crate::refused_on_both_paths;
+use crate::refused_boot;
 
 static BUILDS: AtomicUsize = AtomicUsize::new(0);
 
@@ -49,7 +49,7 @@ impl DynamicModule for CountingSetup {
 struct CountingModule;
 
 #[tokio::test]
-async fn a_dynamic_import_is_evaluated_once_on_the_async_path() {
+async fn a_dynamic_import_is_evaluated_once_for_both_phases() {
     BUILDS.store(0, Ordering::SeqCst);
 
     let app = App::builder()
@@ -68,9 +68,9 @@ async fn a_dynamic_import_is_evaluated_once_on_the_async_path() {
     assert_eq!(collected.0, installed.0);
 }
 
-struct SyncSetup;
+struct RegisterOnlySetup;
 
-impl DynamicModule for SyncSetup {
+impl DynamicModule for RegisterOnlySetup {
     fn module() -> TypeId {
         TypeId::of::<Self>()
     }
@@ -80,23 +80,27 @@ impl DynamicModule for SyncSetup {
     }
 }
 
-fn sync_for_root() -> SyncSetup {
+fn register_only_for_root() -> RegisterOnlySetup {
     BUILDS.fetch_add(1, Ordering::SeqCst);
-    SyncSetup
+    RegisterOnlySetup
 }
 
-#[module(imports = [sync_for_root()])]
-struct SyncModule;
+#[module(imports = [register_only_for_root()])]
+struct RegisterOnlyModule;
 
-#[test]
-fn a_dynamic_import_is_evaluated_once_on_the_sync_path() {
+#[tokio::test]
+async fn a_dynamic_import_with_no_collect_is_evaluated_once() {
     BUILDS.store(0, Ordering::SeqCst);
 
-    let app = App::new::<SyncModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<RegisterOnlyModule>()
+        .build()
+        .await
+        .expect("the module boots");
 
     assert!(
         app.container().get::<Installed>().is_some(),
-        "the synchronous path registers the dynamic module",
+        "the boot registers the dynamic module",
     );
     assert_eq!(
         BUILDS.load(Ordering::SeqCst),
@@ -259,27 +263,26 @@ struct CrossingBModule;
 
 #[tokio::test]
 async fn a_provider_crossing_an_import_cycle_fails_the_boot_naming_the_cycle() {
-    for refused in refused_on_both_paths::<CrossingAModule>().await {
-        let unbuilt = refused
-            .downcast_ref::<UnbuiltProviderError>()
-            .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
-        assert_eq!(unbuilt.module, "CrossingBModule");
-        assert_eq!(unbuilt.provider, "CrossingBService");
-        assert_eq!(unbuilt.missing, ["CrossingAService"]);
-        let UnbuiltCause::ImportCycle(modules) = &unbuilt.cause else {
-            panic!("not an import cycle: {unbuilt}");
-        };
-        assert_eq!(modules.len(), 2, "{unbuilt}");
-        for module in ["CrossingAModule", "CrossingBModule"] {
-            assert!(modules.contains(&module), "{unbuilt}");
-        }
-        assert!(
-            unbuilt
-                .to_string()
-                .contains("move what both need into a module both import"),
-            "{unbuilt}"
-        );
+    let refused = refused_boot::<CrossingAModule>().await;
+    let unbuilt = refused
+        .downcast_ref::<UnbuiltProviderError>()
+        .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+    assert_eq!(unbuilt.module, "CrossingBModule");
+    assert_eq!(unbuilt.provider, "CrossingBService");
+    assert_eq!(unbuilt.missing, ["CrossingAService"]);
+    let UnbuiltCause::ImportCycle(modules) = &unbuilt.cause else {
+        panic!("not an import cycle: {unbuilt}");
+    };
+    assert_eq!(modules.len(), 2, "{unbuilt}");
+    for module in ["CrossingAModule", "CrossingBModule"] {
+        assert!(modules.contains(&module), "{unbuilt}");
     }
+    assert!(
+        unbuilt
+            .to_string()
+            .contains("move what both need into a module both import"),
+        "{unbuilt}"
+    );
 }
 
 #[injectable]
@@ -307,16 +310,15 @@ struct AtlasModule;
 
 #[tokio::test]
 async fn an_import_cycle_through_a_module_reached_from_both_sides_names_each_module_once() {
-    for refused in refused_on_both_paths::<AtlasModule>().await {
-        let unbuilt = refused
-            .downcast_ref::<UnbuiltProviderError>()
-            .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
-        assert_eq!(
-            unbuilt.cause,
-            UnbuiltCause::ImportCycle(vec!["SurveyModule", "HubModule", "AtlasModule"]),
-            "{unbuilt}"
-        );
-    }
+    let refused = refused_boot::<AtlasModule>().await;
+    let unbuilt = refused
+        .downcast_ref::<UnbuiltProviderError>()
+        .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+    assert_eq!(
+        unbuilt.cause,
+        UnbuiltCause::ImportCycle(vec!["SurveyModule", "HubModule", "AtlasModule"]),
+        "{unbuilt}"
+    );
 }
 
 #[injectable]
@@ -335,7 +337,11 @@ struct QuietBModule;
 
 #[tokio::test]
 async fn an_import_cycle_no_provider_crosses_boots() {
-    let app = App::new::<QuietAModule>().expect("no provider crosses the cycle");
+    let app = App::builder()
+        .module::<QuietAModule>()
+        .build()
+        .await
+        .expect("no provider crosses the cycle");
     assert!(app.container().get::<QuietBService>().is_some());
     let app = App::builder()
         .module::<QuietAModule>()
@@ -374,21 +380,20 @@ struct LedgerAfterRoot;
 
 #[tokio::test]
 async fn a_provider_injecting_what_a_hand_written_module_registers_later_fails_the_boot() {
-    for refused in refused_on_both_paths::<LedgerAfterRoot>().await {
-        let unbuilt = refused
-            .downcast_ref::<UnbuiltProviderError>()
-            .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
-        assert_eq!(unbuilt.module, "BookkeepingModule");
-        assert_eq!(unbuilt.provider, "Bookkeeper");
-        assert_eq!(unbuilt.missing, ["Ledger"]);
-        assert_eq!(unbuilt.cause, UnbuiltCause::RegisteredLater, "{unbuilt}");
-        assert!(
-            unbuilt
-                .to_string()
-                .contains("import that module in `BookkeepingModule`'s `imports`"),
-            "{unbuilt}"
-        );
-    }
+    let refused = refused_boot::<LedgerAfterRoot>().await;
+    let unbuilt = refused
+        .downcast_ref::<UnbuiltProviderError>()
+        .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+    assert_eq!(unbuilt.module, "BookkeepingModule");
+    assert_eq!(unbuilt.provider, "Bookkeeper");
+    assert_eq!(unbuilt.missing, ["Ledger"]);
+    assert_eq!(unbuilt.cause, UnbuiltCause::RegisteredLater, "{unbuilt}");
+    assert!(
+        unbuilt
+            .to_string()
+            .contains("import that module in `BookkeepingModule`'s `imports`"),
+        "{unbuilt}"
+    );
 }
 
 #[module(imports = [LedgerModule], providers = [Bookkeeper])]
@@ -399,7 +404,11 @@ struct LedgerImportedRoot;
 
 #[tokio::test]
 async fn a_module_importing_the_hand_written_one_builds_its_provider() {
-    let app = App::new::<LedgerImportedRoot>().expect("the import registers it first");
+    let app = App::builder()
+        .module::<LedgerImportedRoot>()
+        .build()
+        .await
+        .expect("the import registers it first");
     assert!(app.container().get::<Bookkeeper>().is_some());
 }
 
@@ -408,7 +417,11 @@ struct LedgerFirstRoot;
 
 #[tokio::test]
 async fn what_a_hand_written_module_registers_is_outside_the_access_graph() {
-    let app = App::new::<LedgerFirstRoot>().expect("registered first, the ledger is reached");
+    let app = App::builder()
+        .module::<LedgerFirstRoot>()
+        .build()
+        .await
+        .expect("registered first, the ledger is reached");
     assert!(app.container().get::<Bookkeeper>().is_some());
     let app = App::builder()
         .module::<LedgerFirstRoot>()
@@ -443,13 +456,12 @@ struct StallAndLeakRoot;
 
 #[tokio::test]
 async fn an_access_violation_is_refused_before_a_provider_never_built() {
-    for refused in refused_on_both_paths::<StallAndLeakRoot>().await {
-        let leak = refused
-            .downcast_ref::<AccessGraphError>()
-            .unwrap_or_else(|| panic!("not the access violation: {refused:#}"));
-        assert_eq!(leak.consumer, "Archivist");
-        assert_eq!(leak.owner, "ArchiveModule");
-    }
+    let refused = refused_boot::<StallAndLeakRoot>().await;
+    let leak = refused
+        .downcast_ref::<AccessGraphError>()
+        .unwrap_or_else(|| panic!("not the access violation: {refused:#}"));
+    assert_eq!(leak.consumer, "Archivist");
+    assert_eq!(leak.owner, "ArchiveModule");
 }
 
 #[tokio::test]
@@ -493,13 +505,12 @@ struct CycleBesideAStallRoot;
 
 #[tokio::test]
 async fn a_provider_cycle_is_refused_beside_a_provider_waiting_outside_its_module() {
-    for refused in refused_on_both_paths::<CycleBesideAStallRoot>().await {
-        let cycle = refused
-            .downcast_ref::<ProviderCycleError>()
-            .unwrap_or_else(|| panic!("not the cycle refusal: {refused:#}"));
-        assert_eq!(cycle.module, "CycleBesideAStallModule");
-        assert_eq!(cycle.chain, ["Drafts", "Reviews", "Drafts"]);
-    }
+    let refused = refused_boot::<CycleBesideAStallRoot>().await;
+    let cycle = refused
+        .downcast_ref::<ProviderCycleError>()
+        .unwrap_or_else(|| panic!("not the cycle refusal: {refused:#}"));
+    assert_eq!(cycle.module, "CycleBesideAStallModule");
+    assert_eq!(cycle.chain, ["Drafts", "Reviews", "Drafts"]);
 }
 
 /// A type only a hand-written module registers, which a provider reads when
@@ -532,15 +543,14 @@ struct ClockAfterRoot;
 
 #[tokio::test]
 async fn a_provider_built_before_its_optional_dependency_registers_fails_the_boot() {
-    for refused in refused_on_both_paths::<ClockAfterRoot>().await {
-        let late = refused
-            .downcast_ref::<LateOptionalDependencyError>()
-            .unwrap_or_else(|| panic!("not the late optional refusal: {refused:#}"));
-        assert_eq!(late.module, "SchedulerModule");
-        assert_eq!(late.provider, "Scheduler");
-        assert_eq!(late.dependency, "Clock");
-        assert_eq!(late.cause, UnbuiltCause::RegisteredLater, "{late}");
-    }
+    let refused = refused_boot::<ClockAfterRoot>().await;
+    let late = refused
+        .downcast_ref::<LateOptionalDependencyError>()
+        .unwrap_or_else(|| panic!("not the late optional refusal: {refused:#}"));
+    assert_eq!(late.module, "SchedulerModule");
+    assert_eq!(late.provider, "Scheduler");
+    assert_eq!(late.dependency, "Clock");
+    assert_eq!(late.cause, UnbuiltCause::RegisteredLater, "{late}");
 }
 
 #[injectable]
@@ -565,18 +575,17 @@ struct SpellCheckModule;
 
 #[tokio::test]
 async fn a_provider_built_across_an_import_cycle_without_its_optional_fails_the_boot() {
-    for refused in refused_on_both_paths::<GlossaryModule>().await {
-        let late = refused
-            .downcast_ref::<LateOptionalDependencyError>()
-            .unwrap_or_else(|| panic!("not the late optional refusal: {refused:#}"));
-        assert_eq!(late.provider, "SpellChecker");
-        assert_eq!(late.dependency, "Glossary");
-        let UnbuiltCause::ImportCycle(modules) = &late.cause else {
-            panic!("not an import cycle: {late}");
-        };
-        for module in ["GlossaryModule", "SpellCheckModule"] {
-            assert!(modules.contains(&module), "{late}");
-        }
+    let refused = refused_boot::<GlossaryModule>().await;
+    let late = refused
+        .downcast_ref::<LateOptionalDependencyError>()
+        .unwrap_or_else(|| panic!("not the late optional refusal: {refused:#}"));
+    assert_eq!(late.provider, "SpellChecker");
+    assert_eq!(late.dependency, "Glossary");
+    let UnbuiltCause::ImportCycle(modules) = &late.cause else {
+        panic!("not an import cycle: {late}");
+    };
+    for module in ["GlossaryModule", "SpellCheckModule"] {
+        assert!(modules.contains(&module), "{late}");
     }
 }
 
@@ -605,8 +614,16 @@ struct OutboxFirstRoot;
 #[tokio::test]
 async fn an_optional_dependency_its_module_imports_is_held_whatever_the_roots_order() {
     for app in [
-        App::new::<DispatcherFirstRoot>().expect("the import registers it first"),
-        App::new::<OutboxFirstRoot>().expect("the import registers it first"),
+        App::builder()
+            .module::<DispatcherFirstRoot>()
+            .build()
+            .await
+            .expect("the import registers it first"),
+        App::builder()
+            .module::<OutboxFirstRoot>()
+            .build()
+            .await
+            .expect("the import registers it first"),
         App::builder()
             .module::<DispatcherFirstRoot>()
             .build()

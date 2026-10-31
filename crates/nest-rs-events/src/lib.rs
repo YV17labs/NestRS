@@ -91,7 +91,7 @@ pub mod __private {
 /// # struct AppModule;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> anyhow::Result<()> {
-/// # let app = App::new::<AppModule>()?;
+/// # let app = App::builder().module::<AppModule>().build().await?;
 /// # let bus = app.container().get::<EventBus>().context("EventsModule provides the bus")?;
 /// # let ledger = app.container().get::<Ledger>().context("Ledger is provided")?;
 ///

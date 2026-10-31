@@ -116,7 +116,11 @@ async fn a_listener_answering_ok_commits_both_rows_and_one_answering_err_leaves_
     let conn = one_connection().await;
     let table = "listener_unit_two_rows";
     crate::harness::fresh_table(&conn, table).await;
-    let app = App::new::<WritingModule>().expect("boots");
+    let app = App::builder()
+        .module::<WritingModule>()
+        .build()
+        .await
+        .expect("boots");
 
     emitted_in_a_unit(&conn, &bus(&app), TwoRowsAsked { table, fails: true }).await;
     assert_eq!(
@@ -146,7 +150,11 @@ async fn a_pool_listeners_first_write_stands_after_its_err() {
     let conn = one_connection().await;
     let table = "listener_unit_on_the_pool";
     crate::harness::fresh_table(&conn, table).await;
-    let app = App::new::<WritingModule>().expect("boots");
+    let app = App::builder()
+        .module::<WritingModule>()
+        .build()
+        .await
+        .expect("boots");
 
     emitted_in_a_unit(&conn, &bus(&app), OnThePoolAsked { table }).await;
 
@@ -223,7 +231,11 @@ async fn an_event_a_listener_emits_dispatches_after_its_commit_and_never_on_its_
     let conn = one_connection().await;
     let table = "listener_unit_chain";
     crate::harness::fresh_table(&conn, table).await;
-    let app = App::new::<ChainModule>().expect("boots");
+    let app = App::builder()
+        .module::<ChainModule>()
+        .build()
+        .await
+        .expect("boots");
     let probe = app
         .container()
         .get::<ChainProbe>()
@@ -279,7 +291,11 @@ async fn a_listener_cut_at_its_timeout_leaves_no_row_and_gives_its_connection_ba
     let conn = one_connection().await;
     let table = "listener_unit_cut";
     crate::harness::fresh_table(&conn, table).await;
-    let app = App::new::<StallingModule>().expect("boots");
+    let app = App::builder()
+        .module::<StallingModule>()
+        .build()
+        .await
+        .expect("boots");
 
     let emitted = std::time::Instant::now();
     emitted_in_a_unit(&conn, &bus(&app), StallAsked { table }).await;

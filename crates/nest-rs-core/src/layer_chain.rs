@@ -12,9 +12,9 @@ use std::sync::Arc;
 use crate::container::Container;
 pub use crate::layer::LayerSite;
 
-/// A global-layer registration: the `TypeId` a chain dedups on, the type's
-/// name for diagnostics, and a `resolve` fn that recovers the `Arc<L>` from the
-/// live container.
+/// One layer a site or the app-wide pool declares: the `TypeId` a chain dedups
+/// on, the type's name for diagnostics, and a `resolve` fn that recovers the
+/// `Arc<L>` from the live container.
 pub struct LayerSpec<L: ?Sized> {
     /// `TypeId` of the layer type — the dedup key across scopes.
     pub type_id: TypeId,
@@ -44,6 +44,49 @@ impl<L: ?Sized> LayerSpec<L> {
     }
 }
 
+/// Implement one family's app-wide pool declaration: its sealed list trait on
+/// every tuple of one to eight layers, each spec built by `$spec`, and the
+/// declaration's `Discoverable`, whose `register` attaches the pool — and the
+/// layers the access graph holds the declaring module to, as it holds a site's
+/// host to the layers the site binds — so the four families cannot drift
+/// apart.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __global_layer_pool {
+    (
+        pool: $pool:ident,
+        list: $list:ident,
+        sealed: $sealed:path,
+        layer: $layer:ty,
+        each: $bound:path => $spec:ident $(,)?
+    ) => {
+        $crate::__global_layer_pool!(
+            @lists $list, $sealed, $layer, $bound, $spec; A, B, C, D, E, F, G, H
+        );
+
+        impl<L: $list> $crate::Discoverable for $pool<L> {
+            fn register(builder: $crate::ContainerBuilder) -> $crate::ContainerBuilder {
+                $crate::__private::declare_global::<$layer, Self>(builder, L::__specs())
+            }
+        }
+    };
+    (@lists $list:ident, $sealed:path, $layer:ty, $bound:path, $spec:ident;) => {};
+    (
+        @lists $list:ident, $sealed:path, $layer:ty, $bound:path, $spec:ident;
+        $head:ident $(, $tail:ident)*
+    ) => {
+        impl<$head: $bound $(, $tail: $bound)*> $sealed for ($head, $($tail,)*) {}
+
+        impl<$head: $bound $(, $tail: $bound)*> $list for ($head, $($tail,)*) {
+            fn __specs() -> ::std::vec::Vec<$crate::LayerSpec<$layer>> {
+                ::std::vec![$spec::<$head>() $(, $spec::<$tail>())*]
+            }
+        }
+
+        $crate::__global_layer_pool!(@lists $list, $sealed, $layer, $bound, $spec; $($tail),*);
+    };
+}
+
 /// `layer_chain` is public: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
@@ -51,35 +94,89 @@ pub(crate) mod __private {
     use std::sync::{Arc, Mutex, PoisonError};
 
     use super::LayerSpec;
-    use crate::container::Container;
+    use crate::access::{Composition, ModuleDescriptor};
+    use crate::container::{Container, ContainerBuilder};
+    use crate::discovery::Discovery;
     use crate::error::UnresolvedLayerError;
     use crate::layer::{Layer, LayerSite};
 
-    /// The container-registered global registry of one Layer-System family
-    /// (the guards', the pipes', the interceptors', the exception filters'),
-    /// read when a chain is composed.
-    pub trait GlobalSpecs: Any + Send + Sync {
-        /// The erased layer trait this family's specs resolve to.
-        type Layer: ?Sized;
+    /// What one layer family says of the app-wide pool its root module
+    /// declares — implemented on the family's trait object (`dyn Guard`,
+    /// `dyn GlobalPipe`, `dyn Interceptor`, the erased exception filter).
+    pub trait GlobalLayer: 'static {
+        /// The family's layer as a boot error names it: `"guard"`.
+        const KIND: &'static str;
+        /// The pool as the wiring step names it: `"nest_rs::guards::global"`.
+        const POOL: &'static str;
 
-        /// The registered specs, in declaration order.
-        fn specs(&self) -> &[LayerSpec<Self::Layer>];
+        /// The family's own check of the pool the app declared, once the
+        /// container is sealed: a guard pool's phase order.
+        fn check(container: &Container) -> Result<(), String> {
+            let _ = container;
+            Ok(())
+        }
     }
 
-    /// Resolve a family's global registry into [`LayerSite::Global`] entries.
-    ///
-    /// A spec whose provider is not registered is skipped —
-    /// [`check_specs_resolvable`] fails the boot on it; an unregistered family
-    /// yields an empty chain.
-    pub fn resolve_global_layers<S: GlobalSpecs>(
-        container: &Container,
-    ) -> Vec<ResolvedLayer<S::Layer>> {
-        let Some(registry) = container.get::<S>() else {
-            return Vec::new();
+    /// One app-wide pool, as the declaration listing it attached it.
+    pub(crate) struct GlobalPool<L: ?Sized> {
+        declared_by: &'static str,
+        /// The module whose providers registered the declaration.
+        listed_by: Option<&'static str>,
+        specs: Vec<LayerSpec<L>>,
+    }
+
+    /// The layers one declaration lists, which the access graph reads as the
+    /// layers a site binds: reached by the declaring module, and singletons,
+    /// since the pool resolves them once, at mount.
+    pub(crate) struct PooledLayers {
+        pub(crate) declaration: TypeId,
+        pub(crate) layers: Vec<(TypeId, &'static str)>,
+    }
+
+    /// The kernel's check of one family's pool, run at the wiring step before
+    /// every module's wiring.
+    pub(crate) struct GlobalPoolCheck {
+        pub(crate) pool: &'static str,
+        pub(crate) check: fn(&Container) -> anyhow::Result<()>,
+    }
+
+    /// Attach the app-wide pool of `L` that the declaration `D` lists — what a
+    /// `Global*` provider's `register` does — and its check at the wiring step.
+    pub fn declare_global<L: GlobalLayer + ?Sized, D: 'static>(
+        builder: ContainerBuilder,
+        specs: Vec<LayerSpec<L>>,
+    ) -> ContainerBuilder {
+        let pooled = PooledLayers {
+            declaration: TypeId::of::<D>(),
+            layers: specs.iter().map(|spec| (spec.type_id, spec.name)).collect(),
         };
-        registry
-            .specs()
+        let listed_by = builder.registering_module();
+        builder
+            .attach_meta::<D, GlobalPool<L>>(GlobalPool {
+                declared_by: std::any::type_name::<D>(),
+                listed_by,
+                specs,
+            })
+            .provide_meta(pooled)
+            .provide_meta(GlobalPoolCheck {
+                pool: L::POOL,
+                check: check_pool::<L>,
+            })
+    }
+
+    /// The app-wide pool of `L` resolved into [`LayerSite::Global`] entries, in
+    /// declaration order; empty when the app declares none.
+    ///
+    /// The access graph refuses a declaration whose module does not reach each
+    /// of its layers' providers, or listing one that is not a singleton, so
+    /// every spec resolves on a booted container.
+    pub fn resolve_global_layers<L: GlobalLayer + ?Sized>(
+        container: &Container,
+    ) -> Vec<ResolvedLayer<L>> {
+        Discovery::new(container)
+            .meta::<GlobalPool<L>>()
             .iter()
+            .flat_map(|found| found.meta.specs.iter())
             .filter_map(|spec| {
                 spec.resolve(container).map(|layer| ResolvedLayer {
                     type_id: spec.type_id,
@@ -91,32 +188,95 @@ pub(crate) mod __private {
             .collect()
     }
 
-    /// Fail-secure boot check: name the specs of a family's global registry
-    /// whose provider is not resolvable from `container`; an unregistered family
-    /// passes. `kind` is the family noun (`"guard"`, `"filter"`, …) and
-    /// `consequence` the tail saying what a silent drop would cost.
-    pub fn check_specs_resolvable<S: GlobalSpecs>(
-        container: &Container,
-        kind: &str,
-        consequence: &str,
-    ) -> Result<(), String> {
-        let Some(registry) = container.get::<S>() else {
-            return Ok(());
-        };
-        let missing: Vec<&str> = registry
-            .specs()
+    /// Whether the app declares an app-wide pool of `L` listing any layer.
+    pub fn global_pool_declared<L: GlobalLayer + ?Sized>(container: &Container) -> bool {
+        Discovery::new(container)
+            .meta::<GlobalPool<L>>()
             .iter()
-            .filter(|s| s.resolve(container).is_none())
-            .map(|s| s.name)
-            .collect();
-        if missing.is_empty() {
-            Ok(())
+            .any(|found| !found.meta.specs.is_empty())
+    }
+
+    /// The wiring step's check of `L`'s pool: each declaration listed by a
+    /// module the app boots, then declared once, then the family's own check.
+    fn check_pool<L: GlobalLayer + ?Sized>(container: &Container) -> anyhow::Result<()> {
+        let declared = Discovery::new(container).meta::<GlobalPool<L>>();
+        if let Some(composition) = container.get::<Composition>() {
+            for found in &declared {
+                let Some(provider) = found.provider_type_id else {
+                    continue;
+                };
+                let declaration = crate::type_name::shorten(found.meta.declared_by);
+                match listing(&composition, provider) {
+                    Listing::ByARoot => {}
+                    Listing::BelowTheRoot(module) => anyhow::bail!(
+                        "`{declaration}` is listed by `{module}`, a module the app imports: the \
+                         app-wide {kind} pool is declared by the module the app boots — list it \
+                         in that module's providers",
+                        module = crate::type_name::shorten(module),
+                        kind = L::KIND,
+                    ),
+                    Listing::Unlisted => anyhow::bail!(
+                        "`{declaration}` is registered by no module's providers: the app-wide \
+                         {kind} pool is declared by the module the app boots — list it in that \
+                         module's providers",
+                        kind = L::KIND,
+                    ),
+                }
+            }
+        }
+        if let [first, second, ..] = declared.as_slice() {
+            anyhow::bail!(
+                "the app-wide {kind} pool is declared twice, by `{first}` in {first_module} and \
+                 `{second}` in {second_module}: an app declares it once, in the module it boots",
+                kind = L::KIND,
+                first = crate::type_name::shorten(first.meta.declared_by),
+                first_module = listed_by(&first.meta),
+                second = crate::type_name::shorten(second.meta.declared_by),
+                second_module = listed_by(&second.meta),
+            );
+        }
+        L::check(container).map_err(anyhow::Error::msg)
+    }
+
+    /// The module that registered `pool`, as a refusal names it.
+    fn listed_by<L: ?Sized>(pool: &GlobalPool<L>) -> String {
+        pool.listed_by.map_or_else(
+            || "no module".to_owned(),
+            |module| format!("`{}`", crate::type_name::shorten(module)),
+        )
+    }
+
+    /// Which modules of the app list a provider.
+    enum Listing {
+        /// A module the app boots, and no other.
+        ByARoot,
+        /// This module, which the app imports without booting it.
+        BelowTheRoot(&'static str),
+        /// No module the app reaches: a `register` written by hand installed it.
+        Unlisted,
+    }
+
+    /// Which modules the app reaches list the provider `declaration`.
+    fn listing(composition: &Composition, declaration: TypeId) -> Listing {
+        let mut by_a_root = false;
+        for descriptor in inventory::iter::<ModuleDescriptor>() {
+            let module = (descriptor.module)();
+            let lists = descriptor
+                .providers
+                .iter()
+                .any(|provider| (provider.provider)() == declaration);
+            if !lists || !composition.reaches(module) {
+                continue;
+            }
+            if !composition.is_root(module) {
+                return Listing::BelowTheRoot(descriptor.name);
+            }
+            by_a_root = true;
+        }
+        if by_a_root {
+            Listing::ByARoot
         } else {
-            Err(format!(
-                "global {kind}(s) not resolvable from the container: {} — import the \
-                 module that provides them; {consequence}",
-                missing.join(", "),
-            ))
+            Listing::Unlisted
         }
     }
 

@@ -5,7 +5,7 @@
 use nest_rs_core::{AmbientValue, Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Context;
 use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, SeedLifetime, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_testing::TestApp;
 
 #[derive(Clone)]
@@ -61,11 +61,13 @@ impl TagResolver {
 #[module(imports = [GraphqlModule], providers = [TagGuard, TagResolver])]
 struct GraphqlTestModule;
 
+#[module(imports = [GraphqlTestModule], providers = [GlobalGuards<(TagGuard,)>])]
+struct ResolverReadsAPerRequestValueAGuardAttachedApp;
+
 #[tokio::test]
 async fn resolver_reads_a_per_request_value_a_guard_attached() {
     let app = TestApp::builder()
-        .module::<GraphqlTestModule>()
-        .use_guards_global([guard::<TagGuard>()])
+        .module::<ResolverReadsAPerRequestValueAGuardAttachedApp>()
         .build()
         .await
         .expect("the schema boots and mounts at /graphql");
@@ -120,21 +122,6 @@ mod an_unguarded_schema_announces_itself {
             .expect("an unguarded schema boots — that is the point");
 
         assert_unguarded(&app, &logs).await;
-    }
-
-    /// An empty pool gates nothing, so it is announced as no pool at all.
-    #[tokio::test]
-    async fn with_an_empty_global_pool_too() {
-        let logs = LogCapture::install();
-        let app = TestApp::builder()
-            .module::<OpenModule>()
-            .use_guards_global([])
-            .build()
-            .await
-            .expect("an unguarded schema boots under an empty pool");
-
-        assert_unguarded(&app, &logs).await;
-        logs.expect_none("nest_rs::graphql", "graphql operations gated");
     }
 
     async fn assert_unguarded(app: &TestApp, logs: &LogCapture) {
@@ -349,14 +336,19 @@ async fn a_multipart_part_that_does_not_decode_is_answered_without_its_value() {
 )]
 struct RequestStoreDownModule;
 
+#[module(
+    imports = [RequestStoreDownModule],
+    providers = [GlobalGuards<(crate::RequestStoreDown,)>],
+)]
+struct ARequestDenialKeepingItsCauseFilesTheChainApp;
+
 /// A pooled guard that cannot evaluate the `/graphql` request files what failed
 /// on the request's denial line, and the client reads the condition alone.
 #[tokio::test]
 async fn a_request_denial_keeping_its_cause_files_the_chain() {
     let logs = nest_rs_testing::LogCapture::install();
     let app = TestApp::builder()
-        .module::<RequestStoreDownModule>()
-        .use_guards_global([guard::<crate::RequestStoreDown>()])
+        .module::<ARequestDenialKeepingItsCauseFilesTheChainApp>()
         .build()
         .await
         .expect("boots");

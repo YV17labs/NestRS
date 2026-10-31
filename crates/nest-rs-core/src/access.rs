@@ -160,10 +160,11 @@ inventory::collect!(DependencyRemedy);
 pub(crate) type HostDependencies = HashMap<TypeId, Vec<(TypeId, &'static str)>>;
 
 /// What the binary's link-time registries add to the access graph, read once
-/// per boot.
+/// per boot, with the layers each app-wide pool's declaration lists.
 #[derive(Default)]
 pub(crate) struct LinkedDeclarations {
-    /// Every [`HostLayers`] entry, by host — checked for scope too.
+    /// Every [`HostLayers`] entry, by host, and each pool's layers, by its
+    /// declaration — checked for scope too.
     pub(crate) layers: HostDependencies,
     /// Every [`HostRequires`] entry, by host.
     pub(crate) required: HostDependencies,
@@ -197,6 +198,15 @@ impl LinkedDeclarations {
             required,
             remedies,
         }
+    }
+
+    /// Hold `declaration` to the `layers` its pool lists, as a site's host is
+    /// held to the layers it binds: the pool resolves them once, at mount.
+    pub(crate) fn pool(&mut self, declaration: TypeId, layers: &[(TypeId, &'static str)]) {
+        self.layers
+            .entry(declaration)
+            .or_default()
+            .extend_from_slice(layers);
     }
 }
 
@@ -244,6 +254,7 @@ impl ReachableProviders {
 /// ([`inert_host`](crate::inert_host)).
 pub struct Composition {
     root_crates: Vec<&'static str>,
+    roots: Vec<TypeId>,
     modules: HashSet<TypeId>,
     overridden: HashSet<TypeId>,
 }
@@ -267,6 +278,7 @@ impl Composition {
         Self {
             root_crates,
             modules: reachable(&ids, &by_id),
+            roots: ids,
             overridden,
         }
     }
@@ -280,6 +292,11 @@ impl Composition {
     /// Whether the app reaches the module `module`.
     pub fn reaches(&self, module: TypeId) -> bool {
         self.modules.contains(&module)
+    }
+
+    /// Whether the app boots the module `module`: one of its roots.
+    pub(crate) fn is_root(&self, module: TypeId) -> bool {
+        self.roots.contains(&module)
     }
 
     /// Whether a test's override stands in for the provider `provider`, which
@@ -395,9 +412,9 @@ pub(crate) fn validate_access_graph(
             }
             let host = (p.provider)();
             let bound_layers = linked.layers.get(&host).into_iter().flatten().copied();
-            // A site resolves its layers once, when it composes: a request-scoped one
-            // would refuse there naming a missing import, a transient one be shared by
-            // every run.
+            // A site, or an app-wide pool, resolves its layers once, at boot: a
+            // request-scoped one would refuse there naming a missing import, a
+            // transient one be shared by every run.
             if let Some((_, layer)) = bound_layers
                 .clone()
                 .find(|(layer, _)| scoped_or_transient.contains(layer))

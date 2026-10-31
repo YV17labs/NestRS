@@ -53,10 +53,13 @@ struct SecondRequestModule;
 #[module(imports = [FirstRequestModule, SecondRequestModule])]
 struct TwoRequestScopedRoot;
 
-#[test]
-fn a_request_scoped_provider_registered_twice_fails_the_boot_naming_both() {
+#[tokio::test]
+async fn a_request_scoped_provider_registered_twice_fails_the_boot_naming_both() {
     let duplicate = names_both(
-        App::new::<TwoRequestScopedRoot>(),
+        App::builder()
+            .module::<TwoRequestScopedRoot>()
+            .build()
+            .await,
         "PerRequest",
         "`FirstRequestModule` at `imports[0]` of `TwoRequestScopedRoot`",
         "`SecondRequestModule` at `imports[1]` of `TwoRequestScopedRoot`",
@@ -80,10 +83,10 @@ struct SecondTransientModule;
 #[module(imports = [FirstTransientModule, SecondTransientModule])]
 struct TwoTransientRoot;
 
-#[test]
-fn a_transient_provider_registered_twice_fails_the_boot_naming_both() {
+#[tokio::test]
+async fn a_transient_provider_registered_twice_fails_the_boot_naming_both() {
     let duplicate = names_both(
-        App::new::<TwoTransientRoot>(),
+        App::builder().module::<TwoTransientRoot>().build().await,
         "Rebuilt",
         "`FirstTransientModule` at `imports[0]` of `TwoTransientRoot`",
         "`SecondTransientModule` at `imports[1]` of `TwoTransientRoot`",
@@ -124,10 +127,13 @@ struct TransientThenSingletonRoot;
 #[module(imports = [SingletonShelfModule, RequestShelfModule])]
 struct SingletonThenRequestRoot;
 
-#[test]
-fn a_singleton_then_a_transient_of_one_type_fail_the_boot_naming_both_scopes() {
+#[tokio::test]
+async fn a_singleton_then_a_transient_of_one_type_fail_the_boot_naming_both_scopes() {
     let duplicate = names_both(
-        App::new::<SingletonThenTransientRoot>(),
+        App::builder()
+            .module::<SingletonThenTransientRoot>()
+            .build()
+            .await,
         "Shelf",
         "`SingletonShelfModule` at `imports[0]` of `SingletonThenTransientRoot`",
         "`TransientShelfModule` at `imports[1]` of `SingletonThenTransientRoot`",
@@ -144,10 +150,13 @@ fn a_singleton_then_a_transient_of_one_type_fail_the_boot_naming_both_scopes() {
     );
 }
 
-#[test]
-fn a_transient_then_a_singleton_of_one_type_fail_the_boot_naming_both_scopes() {
+#[tokio::test]
+async fn a_transient_then_a_singleton_of_one_type_fail_the_boot_naming_both_scopes() {
     let duplicate = names_both(
-        App::new::<TransientThenSingletonRoot>(),
+        App::builder()
+            .module::<TransientThenSingletonRoot>()
+            .build()
+            .await,
         "Shelf",
         "`TransientShelfModule` at `imports[0]` of `TransientThenSingletonRoot`",
         "`SingletonShelfModule` at `imports[1]` of `TransientThenSingletonRoot`",
@@ -164,10 +173,13 @@ fn a_transient_then_a_singleton_of_one_type_fail_the_boot_naming_both_scopes() {
     );
 }
 
-#[test]
-fn a_singleton_then_a_request_scoped_provider_of_one_type_fail_the_boot_naming_both_scopes() {
+#[tokio::test]
+async fn a_singleton_then_a_request_scoped_provider_of_one_type_fail_the_boot_naming_both_scopes() {
     let duplicate = names_both(
-        App::new::<SingletonThenRequestRoot>(),
+        App::builder()
+            .module::<SingletonThenRequestRoot>()
+            .build()
+            .await,
         "Shelf",
         "`SingletonShelfModule` at `imports[0]` of `SingletonThenRequestRoot`",
         "`RequestShelfModule` at `imports[1]` of `SingletonThenRequestRoot`",
@@ -244,10 +256,10 @@ struct BonjourModule;
 #[module(imports = [HelloModule, BonjourModule])]
 struct BothGreetingsModule;
 
-#[test]
-fn two_modules_binding_one_trait_object_fail_the_boot_naming_it() {
+#[tokio::test]
+async fn two_modules_binding_one_trait_object_fail_the_boot_naming_it() {
     names_both(
-        App::new::<BothGreetingsModule>(),
+        App::builder().module::<BothGreetingsModule>().build().await,
         std::any::type_name::<Arc<dyn Greeting>>(),
         "`HelloModule` at `imports[0]` of `BothGreetingsModule`",
         "`BonjourModule` at `imports[1]` of `BothGreetingsModule`",
@@ -333,9 +345,13 @@ fn address<T: ?Sized>(arc: &Arc<T>) -> *const () {
     Arc::as_ptr(arc).cast::<()>()
 }
 
-#[test]
-fn a_provider_bound_as_two_traits_is_one_instance_under_its_own_type_and_each_trait() {
-    let app = App::new::<BoundModule>().expect("the module boots");
+#[tokio::test]
+async fn a_provider_bound_as_two_traits_is_one_instance_under_its_own_type_and_each_trait() {
+    let app = App::builder()
+        .module::<BoundModule>()
+        .build()
+        .await
+        .expect("the module boots");
     let container = app.container();
     let own = container.get::<Bound>().expect("held under its own type");
     let left = container.get_dyn::<dyn Left>().expect("held as `dyn Left`");
@@ -367,10 +383,10 @@ struct ConcreteHelloModule;
 #[module(imports = [ConcreteHelloModule, HelloModule])]
 struct HelloBothWaysRoot;
 
-#[test]
-fn a_provider_in_one_module_and_bound_as_dyn_in_another_is_a_duplicate_of_its_type() {
+#[tokio::test]
+async fn a_provider_in_one_module_and_bound_as_dyn_in_another_is_a_duplicate_of_its_type() {
     let duplicate = names_both(
-        App::new::<HelloBothWaysRoot>(),
+        App::builder().module::<HelloBothWaysRoot>().build().await,
         std::any::type_name::<Hello>(),
         "`ConcreteHelloModule` at `imports[0]` of `HelloBothWaysRoot`",
         "`HelloModule` at `imports[1]` of `HelloBothWaysRoot`",
@@ -381,9 +397,9 @@ fn a_provider_in_one_module_and_bound_as_dyn_in_another_is_a_duplicate_of_its_ty
 #[module(providers = [Hello, crate::container::Hello as dyn Greeting])]
 struct TwoSpellingsModule;
 
-#[test]
-fn two_spellings_of_one_provider_in_one_list_are_a_duplicate_of_its_type() {
-    let duplicate = duplicate(App::new::<TwoSpellingsModule>());
+#[tokio::test]
+async fn two_spellings_of_one_provider_in_one_list_are_a_duplicate_of_its_type() {
+    let duplicate = duplicate(App::builder().module::<TwoSpellingsModule>().build().await);
     assert_eq!(duplicate.type_name, std::any::type_name::<Hello>());
 }
 
@@ -580,8 +596,8 @@ struct HandReview {
 #[module(providers = [HandDraft, HandReview])]
 struct HandRequestCycleModule;
 
-#[test]
-fn a_container_built_by_hand_refuses_request_scoped_providers_waiting_on_each_other() {
+#[tokio::test]
+async fn a_container_built_by_hand_refuses_request_scoped_providers_waiting_on_each_other() {
     let Err(ContainerError::ProviderCycle(cycle)) = Container::builder()
         .import::<HandRequestCycleModule>()
         .build()
@@ -590,7 +606,11 @@ fn a_container_built_by_hand_refuses_request_scoped_providers_waiting_on_each_ot
     };
     assert_eq!(cycle.scope, ProviderScope::Request);
     assert_eq!(cycle.chain, ["HandDraft", "HandReview", "HandDraft"]);
-    let Err(booted) = App::new::<HandRequestCycleModule>() else {
+    let Err(booted) = App::builder()
+        .module::<HandRequestCycleModule>()
+        .build()
+        .await
+    else {
         panic!("the boot refuses the cycle");
     };
     assert_eq!(cycle.to_string(), booted.to_string(), "the boot's refusal");

@@ -87,9 +87,12 @@
 //! struct AppModule;
 //!
 //! // Boot fails here with a named error if the graph is misconfigured.
-//! let app = App::new::<AppModule>()?;
+//! # #[nest_rs_core::main]
+//! # async fn main() -> anyhow::Result<()> {
+//! let app = App::builder().module::<AppModule>().build().await?;
 //! assert!(app.container().get::<GreetingService>().is_some());
-//! # Ok::<(), anyhow::Error>(())
+//! # Ok(())
+//! # }
 //! ```
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
@@ -178,16 +181,20 @@ pub use error::{
     LateOptionalDependencyError, MissingAmbientError, MissingDependencyError,
     OverriddenDependencyError, ProviderCycleError, ScopeViolationError, ScopedLayerError,
     UnboundedTransportError, UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError,
-    UngatedDiscoveryError, UnregisteredModuleError, UnresolvedFactoryError, UnresolvedLayerError,
-    WiringFailedError,
+    UngatedDiscoveryError, UnregisteredModuleError, UnresolvedLayerError, WiringFailedError,
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
-pub use exception_filter::{Catch, Caught, ExceptionFilter, ExceptionFilterSpec, exception_filter};
+pub use exception_filter::{
+    Catch, Caught, ExceptionFilter, ExceptionFilterSpec, GlobalExceptionFilterList,
+    GlobalExceptionFilters, exception_filter,
+};
 pub use factory_inputs::FactoryInputs;
 pub use handler::{Handler, Posture, Reflector};
 pub use identifier::UUID_V7_REQUIRED;
 pub use instance::{Instance, Instanced, Unnamed};
-pub use interceptor::{Interceptor, InterceptorSpec, Next, interceptor};
+pub use interceptor::{
+    GlobalInterceptorList, GlobalInterceptors, Interceptor, InterceptorSpec, Next, interceptor,
+};
 pub use job::{JOB_TIMEOUT, JobTimedOut};
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
@@ -226,7 +233,9 @@ pub mod __private {
         Pending, UnmaskedReply, attached, carries_ambient, install_pending, with_ambient_from,
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
-    pub use crate::app::__private::{check_stop_bound, close_after, init_tearing_down_after};
+    pub use crate::app::__private::{
+        check_stop_bound, close_after, init_tearing_down_after, provide_meta,
+    };
     pub use crate::app_dir::{app_dir, in_app_dir};
     pub use crate::app_identity::{capture_app_identity, package_identity};
     pub use crate::container::__private::{
@@ -248,8 +257,8 @@ pub mod __private {
         InterceptorRegistration, InterceptorStage, register_interceptor,
     };
     pub use crate::layer_chain::__private::{
-        GlobalSpecs, ResolvedLayer, SiteChains, check_specs_resolvable, compose_chain,
-        dedup_bucket, log_effective_chain, refuse_unresolved, report_unresolved,
+        GlobalLayer, ResolvedLayer, SiteChains, compose_chain, declare_global, dedup_bucket,
+        global_pool_declared, log_effective_chain, refuse_unresolved, report_unresolved,
         resolve_global_layers, resolve_scoped,
     };
     pub use crate::lifecycle::__private::{HookFuture, LifecycleHook, LifecycleUnitOfWork};
@@ -399,14 +408,17 @@ pub use nest_rs_core_macros::main;
 /// #[module(imports = [GreetingModule])]
 /// struct AppModule;
 ///
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
 /// fn implements<T: Module>() {}
 /// implements::<AppModule>();
 ///
-/// let app = App::new::<AppModule>()?;
+/// let app = App::builder().module::<AppModule>().build().await?;
 /// let greeter = app.container().get_dyn::<dyn Greeter>();
 /// assert_eq!(greeter.map(|g| g.greet()), Some("hello"));
 /// assert!(app.container().get::<English>().is_some());
-/// # Ok::<(), anyhow::Error>(())
+/// # Ok(())
+/// # }
 /// ```
 pub use nest_rs_core_macros::module;
 
@@ -431,14 +443,17 @@ pub use nest_rs_core_macros::module;
 /// #[module(providers = [Clock, Greeter, Draft])]
 /// struct AppModule;
 ///
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
 /// fn implements<T: Discoverable>() {}
 /// implements::<Greeter>();
 /// assert!(<Greeter as ProviderResidency>::SINGLETON);
 /// assert!(!<Draft as ProviderResidency>::SINGLETON);
 ///
-/// let app = App::new::<AppModule>()?;
+/// let app = App::builder().module::<AppModule>().build().await?;
 /// assert!(app.container().get::<Greeter>().is_some());
-/// # Ok::<(), anyhow::Error>(())
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// Every `#[inject]` field must be an `Arc<T>` or `Arc<dyn Trait>`; anything

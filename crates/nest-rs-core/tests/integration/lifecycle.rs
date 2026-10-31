@@ -56,7 +56,11 @@ struct DynOnlyModule;
 
 #[tokio::test]
 async fn a_host_bound_as_dyn_fires_its_hooks_once() {
-    let app = App::new::<DynOnlyModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<DynOnlyModule>()
+        .build()
+        .await
+        .expect("the module boots");
     app.init().await.expect("the init phases drain");
 
     assert_eq!(
@@ -85,7 +89,10 @@ struct BrokenOnDestroyModule;
 async fn a_failing_shutdown_hook_is_named_at_error_and_does_not_abort_the_rest() {
     let logs = LogCapture::install();
     // No transports: `run` goes straight to the shutdown phases.
-    App::new::<BrokenOnDestroyModule>()
+    App::builder()
+        .module::<BrokenOnDestroyModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await
@@ -174,7 +181,11 @@ async fn a_compiled_out_hook_is_skipped_and_the_spelled_out_shapes_run() {
         .count();
     assert_eq!(raw_hosts, 1, "a raw host is labelled by its name");
 
-    let app = App::new::<ShapedModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<ShapedModule>()
+        .build()
+        .await
+        .expect("the module boots");
     app.init().await.expect("the init phases drain");
     assert_eq!(SHAPED_INITS.load(Ordering::SeqCst), 3);
 }
@@ -213,7 +224,11 @@ struct WarmModule;
 /// Method-call syntax on the `Arc<Host>` finds a trait method on `Arc<T>` first.
 #[tokio::test]
 async fn a_hook_runs_where_a_trait_on_arc_shares_its_name() {
-    let app = App::new::<WarmModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<WarmModule>()
+        .build()
+        .await
+        .expect("the module boots");
     app.init().await.expect("the init phases drain");
     assert_eq!(WARMED.load(Ordering::SeqCst), 1);
 }
@@ -269,7 +284,10 @@ struct StuckOnDestroyModule;
 async fn a_shutdown_hook_that_never_returns_is_abandoned_at_the_budget_and_the_rest_still_run() {
     let logs = LogCapture::install();
     let started = tokio::time::Instant::now();
-    App::new::<StuckOnDestroyModule>()
+    App::builder()
+        .module::<StuckOnDestroyModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await
@@ -364,7 +382,10 @@ struct StuckEverywhereModule;
 async fn four_stuck_shutdown_hooks_share_one_budget_and_each_is_named() {
     let logs = LogCapture::install();
     let started = tokio::time::Instant::now();
-    App::new::<StuckEverywhereModule>()
+    App::builder()
+        .module::<StuckEverywhereModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await
@@ -445,7 +466,10 @@ struct PanicOnDestroyModule;
 async fn a_panicking_shutdown_hook_is_named_at_error_and_the_rest_still_run() {
     let logs = LogCapture::install();
     let outcome = tokio::spawn(async {
-        App::new::<PanicOnDestroyModule>()
+        App::builder()
+            .module::<PanicOnDestroyModule>()
+            .build()
+            .await
             .expect("the module boots")
             .run()
             .await
@@ -500,7 +524,10 @@ struct PanicOnInitModule;
 async fn a_panicking_init_hook_aborts_the_boot_with_an_error_naming_it() {
     let logs = LogCapture::install();
     let outcome = tokio::spawn(async {
-        App::new::<PanicOnInitModule>()
+        App::builder()
+            .module::<PanicOnInitModule>()
+            .build()
+            .await
             .expect("the module boots")
             .run()
             .await
@@ -544,7 +571,11 @@ struct CountsInitModule;
 
 #[tokio::test]
 async fn an_app_runs_its_init_hooks_once_however_often_it_is_initialised() {
-    let app = App::new::<CountsInitModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<CountsInitModule>()
+        .build()
+        .await
+        .expect("the module boots");
     app.init().await.expect("the init phases drain");
     app.init().await.expect("a second init is a no-op");
     app.run().await.expect("the run serves nothing and stops");
@@ -574,7 +605,11 @@ struct FailsInitModule;
 
 #[tokio::test]
 async fn an_init_that_failed_is_refused_again_without_a_hook_running() {
-    let app = App::new::<FailsInitModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<FailsInitModule>()
+        .build()
+        .await
+        .expect("the module boots");
     let first = app.init().await.expect_err("the hook fails the init");
     assert!(
         format!("{first:#}").contains("discovery backend"),
@@ -628,7 +663,11 @@ struct WarmsThenWaitsModule;
 #[tokio::test(start_paused = true)]
 async fn an_init_dropped_while_a_hook_waits_is_refused_again_without_a_hook_running() {
     let logs = LogCapture::install();
-    let app = App::new::<WarmsThenWaitsModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<WarmsThenWaitsModule>()
+        .build()
+        .await
+        .expect("the module boots");
     tokio::time::timeout(Duration::from_secs(1), app.init())
         .await
         .expect_err("the init waits on its second hook until the caller drops it");
@@ -716,7 +755,10 @@ async fn caches_warmed<M: nest_rs_core::Module + 'static>() -> Vec<&'static str>
     let mut builds = Vec::new();
     for _ in 0..2 {
         CACHES.lock().expect("log mutex is not poisoned").clear();
-        App::new::<M>()
+        App::builder()
+            .module::<M>()
+            .build()
+            .await
             .expect("the module boots")
             .init()
             .await
@@ -770,7 +812,10 @@ struct RegistersThenHangsModule;
 async fn a_failed_boot_tears_down_within_the_budget_and_returns_the_init_error() {
     let logs = LogCapture::install();
     let started = tokio::time::Instant::now();
-    let error = App::new::<RegistersThenHangsModule>()
+    let error = App::builder()
+        .module::<RegistersThenHangsModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await
@@ -892,7 +937,10 @@ struct TearsDownAfterServingModule;
 /// still serving uses.
 #[tokio::test(start_paused = true)]
 async fn no_shutdown_hook_starts_before_every_transport_has_returned_from_serve() {
-    App::new::<TearsDownAfterServingModule>()
+    App::builder()
+        .module::<TearsDownAfterServingModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await
@@ -989,7 +1037,11 @@ struct TearsDownPastTheBoundModule;
 /// and the three shutdown phases start then, never before it.
 #[tokio::test(start_paused = true)]
 async fn the_shutdown_phases_start_once_a_transport_ignoring_its_stop_is_abandoned() {
-    let app = App::new::<TearsDownPastTheBoundModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<TearsDownPastTheBoundModule>()
+        .build()
+        .await
+        .expect("the module boots");
     let stopped = tokio::time::Instant::now();
 
     tokio::time::timeout(Duration::from_secs(60), app.run())
@@ -1045,7 +1097,11 @@ struct PayoutsModule;
 #[tokio::test]
 async fn each_shutdown_hook_files_its_unit_line_in_reverse_host_order() {
     let logs = LogCapture::install();
-    let app = App::new::<PayoutsModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<PayoutsModule>()
+        .build()
+        .await
+        .expect("the module boots");
     app.init().await.expect("the init phases drain");
 
     app.close().await;
@@ -1101,7 +1157,11 @@ struct AuditedModule;
 #[tokio::test]
 async fn each_hook_files_one_unit_line_naming_it_and_how_it_ended() {
     let logs = LogCapture::install();
-    let app = App::new::<AuditedModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<AuditedModule>()
+        .build()
+        .await
+        .expect("the module boots");
     app.init().await.expect("the init phases drain");
     app.close().await;
 
@@ -1304,7 +1364,11 @@ struct BareWitnessModule;
 #[tokio::test]
 async fn with_no_unit_of_work_bound_a_hook_runs_bare() {
     let logs = LogCapture::install();
-    let app = App::new::<BareWitnessModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<BareWitnessModule>()
+        .build()
+        .await
+        .expect("the module boots");
     app.init().await.expect("the hook runs bare");
     assert_eq!(
         hook_line(&logs, "init").field("outcome").as_deref(),

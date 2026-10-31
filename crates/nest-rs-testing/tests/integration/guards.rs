@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use nest_rs_core::{Ambient, AmbientValue, Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_testing::{HeadlessApp, TestApp};
@@ -151,11 +151,13 @@ impl PublicEverywhere {
 #[module(providers = [DenyGuard, PublicEverywhere])]
 struct PublicModule;
 
+#[module(imports = [PublicModule], providers = [GlobalGuards<(DenyGuard,)>])]
+struct AGlobalGuardProtectsEveryRouteWithoutUseGuardsApp;
+
 #[tokio::test]
 async fn a_global_guard_protects_every_route_without_use_guards() {
     let app = TestApp::builder()
-        .module::<PublicModule>()
-        .use_guards_global([guard::<DenyGuard>()])
+        .module::<AGlobalGuardProtectsEveryRouteWithoutUseGuardsApp>()
         .build()
         .await
         .expect("boots with a global guard");
@@ -282,14 +284,16 @@ impl GlobalDedupController {
 #[module(providers = [CountingGuard, GlobalDedupController])]
 struct GlobalDedupModule;
 
+#[module(imports = [GlobalDedupModule], providers = [GlobalGuards<(CountingGuard,)>])]
+struct GlobalGuardRedeclaredPerMethodIsDedupedToOneExecutionApp;
+
 #[tokio::test]
 async fn global_guard_redeclared_per_method_is_deduped_to_one_execution() {
     let _gate = GATE.lock().await;
     COUNTER.store(0, Ordering::SeqCst);
 
     let app = TestApp::builder()
-        .module::<GlobalDedupModule>()
-        .use_guards_global([guard::<CountingGuard>()])
+        .module::<GlobalGuardRedeclaredPerMethodIsDedupedToOneExecutionApp>()
         .build()
         .await
         .expect("boots with a global guard");
@@ -388,11 +392,13 @@ impl PublicScope {
 #[module(providers = [PublicAwareGuard, PublicScope])]
 struct PublicBypassModule;
 
+#[module(imports = [PublicBypassModule], providers = [GlobalGuards<(PublicAwareGuard,)>])]
+struct APublicRouteBypassesAnActiveGlobalGuardApp;
+
 #[tokio::test]
 async fn a_public_route_bypasses_an_active_global_guard() {
     let app = TestApp::builder()
-        .module::<PublicBypassModule>()
-        .use_guards_global([guard::<PublicAwareGuard>()])
+        .module::<APublicRouteBypassesAnActiveGlobalGuardApp>()
         .build()
         .await
         .expect("boots with a global guard");
@@ -500,13 +506,15 @@ impl TenantResolver {
 )]
 struct TenantGraphqlModule;
 
+#[module(imports = [TenantGraphqlModule], providers = [GlobalGuards<(TenantGuard,)>])]
+struct AGuardAttachedContextOnTheGraphqlRequestIsReadByAResolverApp;
+
 /// The `/graphql` request runs the pool once, in band; what it attached is
 /// ambient for every field the request resolves.
 #[tokio::test]
 async fn a_guard_attached_context_on_the_graphql_request_is_read_by_a_resolver() {
     let app = TestApp::builder()
-        .module::<TenantGraphqlModule>()
-        .use_guards_global([guard::<TenantGuard>()])
+        .module::<AGuardAttachedContextOnTheGraphqlRequestIsReadByAResolverApp>()
         .build()
         .await
         .expect("a resolver under a pooled guard boots");
@@ -647,11 +655,13 @@ async fn a_route_whose_method_scope_lists_authorization_first_fails_the_boot_nam
 #[module(providers = [SessionGuard, PolicyGuard])]
 struct PhasedGuardsModule;
 
+#[module(imports = [PhasedGuardsModule], providers = [GlobalGuards<(PolicyGuard, SessionGuard)>])]
+struct AGlobalPoolListingAuthorizationFirstFailsTheBootOfAnAppServingNoHttpApp;
+
 #[tokio::test]
 async fn a_global_pool_listing_authorization_first_fails_the_boot_of_an_app_serving_no_http() {
     let result = HeadlessApp::builder()
-        .module::<PhasedGuardsModule>()
-        .use_guards_global([guard::<PolicyGuard>(), guard::<SessionGuard>()])
+        .module::<AGlobalPoolListingAuthorizationFirstFailsTheBootOfAnAppServingNoHttpApp>()
         .build_headless()
         .await;
     let (registry, chain) = refused_wiring(
@@ -713,11 +723,13 @@ impl ReplayedScope {
 #[module(providers = [FreshSessionGuard, PolicyGuard, ReplayedScope])]
 struct ReplayedModule;
 
+#[module(imports = [ReplayedModule], providers = [GlobalGuards<(FreshSessionGuard, PolicyGuard)>])]
+struct AForcedAuthenticationReplayAfterTheGlobalPoolBootsAndRunsAgainApp;
+
 #[tokio::test]
 async fn a_forced_authentication_replay_after_the_global_pool_boots_and_runs_again() {
     let app = TestApp::builder()
-        .module::<ReplayedModule>()
-        .use_guards_global([guard::<FreshSessionGuard>(), guard::<PolicyGuard>()])
+        .module::<AForcedAuthenticationReplayAfterTheGlobalPoolBootsAndRunsAgainApp>()
         .build()
         .await
         .unwrap_or_else(|err| panic!("a replay is no misorder: {err:#}"));

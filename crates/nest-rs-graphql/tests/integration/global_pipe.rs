@@ -5,7 +5,7 @@
 use nest_rs_core::{Edge, Layer, UnitContext, injectable, module};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::HttpView;
-use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError, pipe};
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, GlobalPipes, PipeError};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::ws::{WsApp, WsFrame, WsSocket};
 use serde_json::Value;
@@ -120,10 +120,12 @@ struct EchoFeatureModule;
 #[module(imports = [GraphqlModule, EchoFeatureModule])]
 struct AppWithVarPipe;
 
+#[module(imports = [AppWithVarPipe], providers = [GlobalPipes<(VarPipe,)>])]
+struct VarPipeApp;
+
 async fn boot() -> TestApp {
     TestApp::builder()
-        .module::<AppWithVarPipe>()
-        .use_pipes_global([pipe::<VarPipe>()])
+        .module::<VarPipeApp>()
         .build()
         .await
         .expect("the schema boots and mounts at /graphql")
@@ -212,11 +214,13 @@ async fn variables_a_pipe_left_unusable_are_reported_without_their_value() {
     );
 }
 
+#[module(imports = [AppWithVarPipe], providers = [GlobalPipes<(BangPipe, BangPipe)>])]
+struct APipeListedTwiceRunsOnceApp;
+
 #[tokio::test]
 async fn a_pipe_listed_twice_runs_once() {
     let app = TestApp::builder()
-        .module::<AppWithVarPipe>()
-        .use_pipes_global([pipe::<BangPipe>(), pipe::<BangPipe>()])
+        .module::<APipeListedTwiceRunsOnceApp>()
         .build()
         .await
         .expect("the schema boots and mounts at /graphql");
@@ -234,11 +238,13 @@ async fn a_pipe_listed_twice_runs_once() {
         .await;
 }
 
+#[module(imports = [AppWithVarPipe], providers = [GlobalPipes<(RecordingPipe,)>])]
+struct RecordingPipeApp;
+
 #[tokio::test]
 async fn a_pipe_is_handed_a_posts_variables_as_the_graphql_requests_unit() {
     let app = TestApp::builder()
-        .module::<AppWithVarPipe>()
-        .use_pipes_global([pipe::<RecordingPipe>()])
+        .module::<RecordingPipeApp>()
         .build()
         .await
         .expect("the schema boots and mounts at /graphql");
@@ -271,8 +277,7 @@ async fn a_pipe_is_handed_a_posts_variables_as_the_graphql_requests_unit() {
 
 async fn socket_app() -> WsApp {
     TestApp::builder()
-        .module::<AppWithVarPipe>()
-        .use_pipes_global([pipe::<VarPipe>()])
+        .module::<VarPipeApp>()
         .build_ws()
         .await
         .expect("the schema boots on a real port")
@@ -354,8 +359,7 @@ async fn a_pipe_refusing_an_operation_on_the_socket_answers_its_error_and_the_so
 #[tokio::test]
 async fn a_pipe_is_handed_a_socket_operations_variables_with_the_upgrade_request() {
     let app = TestApp::builder()
-        .module::<AppWithVarPipe>()
-        .use_pipes_global([pipe::<RecordingPipe>()])
+        .module::<RecordingPipeApp>()
         .build_ws()
         .await
         .expect("the schema boots on a real port");

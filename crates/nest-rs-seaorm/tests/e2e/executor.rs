@@ -8,7 +8,7 @@ use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
 use nest_rs_core::module;
-use nest_rs_guards::guard;
+use nest_rs_guards::GlobalGuards;
 use nest_rs_http::futures_util::stream;
 use nest_rs_http::{Body, HeaderValue, Response, SseEvent, SseStream};
 use nest_rs_http::{controller, routes};
@@ -154,6 +154,9 @@ impl ItemsController {
 )]
 struct AppModule;
 
+#[module(imports = [AppModule], providers = [GlobalGuards<(ItemsGuard,)>])]
+struct GuardedApp;
+
 #[tokio::test]
 async fn a_streaming_body_reads_on_the_pool_after_the_commit_under_the_callers_ability() {
     let conn = crate::harness::connect().await;
@@ -167,8 +170,7 @@ async fn a_streaming_body_reads_on_the_pool_after_the_commit_under_the_callers_a
             .unwrap_or_else(|err| panic!("set up `{TABLE}`: {err}"));
     }
     let app = TestApp::builder()
-        .module::<AppModule>()
-        .use_guards_global([guard::<ItemsGuard>()])
+        .module::<GuardedApp>()
         .build()
         .await
         .expect("the app boots against live Postgres");
@@ -200,8 +202,7 @@ async fn an_sse_streams_repo_read_fails_closed() {
     )
     .await;
     let app = TestApp::builder()
-        .module::<AppModule>()
-        .use_guards_global([guard::<ItemsGuard>()])
+        .module::<GuardedApp>()
         .build()
         .await
         .expect("the app boots against live Postgres");
@@ -278,7 +279,11 @@ async fn a_listener_run_at_once_under_a_callers_own_transaction_runs_in_a_unit_o
     use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
     use sea_orm::TransactionTrait;
 
-    let app = nest_rs_core::App::new::<TxnEventsModule>().expect("boots");
+    let app = nest_rs_core::App::builder()
+        .module::<TxnEventsModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app
         .container()
         .get::<nest_rs_events::EventBus>()

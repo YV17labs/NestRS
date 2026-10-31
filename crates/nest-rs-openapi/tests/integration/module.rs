@@ -2,7 +2,7 @@
 
 use nest_rs_config::Config;
 use nest_rs_core::{Layer, async_trait, injectable, input, module};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::Multipart;
 use nest_rs_http::StatusCode;
 use nest_rs_http::{
@@ -491,11 +491,13 @@ impl GuardFor<nest_rs_http::HttpView> for DenyEveryone {}
 #[module(imports = [openapi(true)], providers = [WidgetsController, DenyEveryone])]
 struct GuardedApp;
 
+#[module(imports = [GuardedApp], providers = [GlobalGuards<(DenyEveryone,)>])]
+struct TheDocumentationEndpointsIgnoreTheGlobalGuardChainApp;
+
 #[tokio::test]
 async fn the_documentation_endpoints_ignore_the_global_guard_chain() {
     let app = TestApp::builder()
-        .module::<GuardedApp>()
-        .use_guards_global([guard::<DenyEveryone>()])
+        .module::<TheDocumentationEndpointsIgnoreTheGlobalGuardChainApp>()
         .build()
         .await
         .expect("boots");

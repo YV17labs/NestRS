@@ -58,7 +58,10 @@ impl Module for PanickingModule {
 #[tokio::test]
 async fn a_transport_that_returns_an_error_is_named_before_the_shutdown() {
     let logs = LogCapture::install();
-    let err = App::new::<FailingModule>()
+    let err = App::builder()
+        .module::<FailingModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await
@@ -108,7 +111,10 @@ impl Module for FailsTwiceModule {
 #[tokio::test]
 async fn each_transport_that_fails_is_named_and_the_first_failure_is_the_app_s_error() {
     let logs = LogCapture::install();
-    let err = App::new::<FailsTwiceModule>()
+    let err = App::builder()
+        .module::<FailsTwiceModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await
@@ -145,7 +151,12 @@ async fn each_transport_that_fails_is_named_and_the_first_failure_is_the_app_s_e
 
 #[nest_rs_core::main]
 async fn serve_a_transport_that_panics() -> anyhow::Result<()> {
-    App::new::<PanickingModule>()?.run().await
+    App::builder()
+        .module::<PanickingModule>()
+        .build()
+        .await?
+        .run()
+        .await
 }
 
 /// Under the process hook, so a second record of the panic would show.
@@ -223,7 +234,10 @@ impl Module for TwoBoundsModule {
 #[tokio::test]
 async fn the_boot_line_files_the_longest_stop_bound_beside_the_hooks_budget() {
     let logs = LogCapture::install();
-    App::new::<TwoBoundsModule>()
+    App::builder()
+        .module::<TwoBoundsModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await
@@ -1028,7 +1042,11 @@ impl Module for ListensThenRefusesModule {
 #[tokio::test]
 async fn a_transport_that_fails_to_listen_fails_the_boot_before_any_transport_serves() {
     let logs = LogCapture::install();
-    let app = App::new::<ListenFailsModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<ListenFailsModule>()
+        .build()
+        .await
+        .expect("the module boots");
     let lifecycle = std::sync::Arc::clone(app.lifecycle());
 
     let refused = tokio::time::timeout(Duration::from_secs(5), app.run())
@@ -1096,7 +1114,11 @@ struct ListenPanicsModule;
 #[tokio::test]
 async fn a_transport_that_panics_as_it_listens_fails_the_boot_and_its_hooks_are_torn_down() {
     let logs = LogCapture::install();
-    let app = App::new::<ListenPanicsModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<ListenPanicsModule>()
+        .build()
+        .await
+        .expect("the module boots");
     let lifecycle = std::sync::Arc::clone(app.lifecycle());
 
     let refused = tokio::time::timeout(Duration::from_secs(5), app.run())
@@ -1216,7 +1238,11 @@ impl Module for BuildPanicsModule {
 /// Run `M`'s app to its boot failure, returning the error and the panic's line.
 async fn boot_panicking<M: Module>() -> (anyhow::Error, nest_rs_testing::CapturedEvent) {
     let logs = LogCapture::install();
-    let app = App::new::<M>().expect("the module boots");
+    let app = App::builder()
+        .module::<M>()
+        .build()
+        .await
+        .expect("the module boots");
     let lifecycle = std::sync::Arc::clone(app.lifecycle());
 
     let refused = tokio::time::timeout(Duration::from_secs(5), app.run())
@@ -1315,7 +1341,10 @@ impl Module for ConfigureFailsModule {
 async fn a_transport_that_fails_to_configure_fails_the_boot_naming_the_step() {
     let refused = tokio::time::timeout(
         Duration::from_secs(5),
-        App::new::<ConfigureFailsModule>()
+        App::builder()
+            .module::<ConfigureFailsModule>()
+            .build()
+            .await
             .expect("the module boots")
             .run(),
     )
@@ -1361,24 +1390,23 @@ struct OneTransportTwiceRoot;
 /// same type fails the boot naming both imports.
 #[tokio::test]
 async fn two_modules_attaching_one_transport_type_fail_the_boot_naming_both() {
-    for refused in crate::refused_on_both_paths::<OneTransportTwiceRoot>().await {
-        let contested = refused
-            .downcast_ref::<nest_rs_core::ContestedDeclarationError>()
-            .unwrap_or_else(|| panic!("not the contest: {refused:#}"));
-        assert_eq!(contested.type_name, std::any::type_name::<Failing>());
-        assert_eq!(
-            contested.first,
-            "`FirstServesFailing` at `imports[0]` of `OneTransportTwiceRoot`"
-        );
-        assert_eq!(
-            contested.second,
-            "`SecondServesFailing` at `imports[1]` of `OneTransportTwiceRoot`"
-        );
-        assert!(
-            contested.remedy.contains("one transport of each type"),
-            "{refused}"
-        );
-    }
+    let refused = crate::refused_boot::<OneTransportTwiceRoot>().await;
+    let contested = refused
+        .downcast_ref::<nest_rs_core::ContestedDeclarationError>()
+        .unwrap_or_else(|| panic!("not the contest: {refused:#}"));
+    assert_eq!(contested.type_name, std::any::type_name::<Failing>());
+    assert_eq!(
+        contested.first,
+        "`FirstServesFailing` at `imports[0]` of `OneTransportTwiceRoot`"
+    );
+    assert_eq!(
+        contested.second,
+        "`SecondServesFailing` at `imports[1]` of `OneTransportTwiceRoot`"
+    );
+    assert!(
+        contested.remedy.contains("one transport of each type"),
+        "{refused}"
+    );
 }
 
 /// Serves the queue `Q` names until it is stopped: one type per queue.
@@ -1424,9 +1452,13 @@ struct TwoQueuesRoot;
 
 /// A transport generic over a marker is one type per marker, so two markers
 /// are two transports, each named with its marker.
-#[test]
-fn a_transport_generic_over_a_marker_is_one_type_per_marker() {
-    let app = App::new::<TwoQueuesRoot>().expect("two markers boot");
+#[tokio::test]
+async fn a_transport_generic_over_a_marker_is_one_type_per_marker() {
+    let app = App::builder()
+        .module::<TwoQueuesRoot>()
+        .build()
+        .await
+        .expect("two markers boot");
     let attached =
         nest_rs_core::Discovery::new(app.container()).meta::<nest_rs_core::TransportContribution>();
     let names: Vec<&str> = attached
@@ -1489,7 +1521,11 @@ const ENDED_EARLY: &str = "transport stopped serving before the app was asked to
 #[tokio::test]
 async fn a_transport_that_stops_serving_on_its_own_stops_the_app_with_an_error() {
     let logs = LogCapture::install();
-    let app = App::new::<EndsBesideServingModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<EndsBesideServingModule>()
+        .build()
+        .await
+        .expect("the module boots");
     let lifecycle = std::sync::Arc::clone(app.lifecycle());
 
     let ended = tokio::time::timeout(Duration::from_secs(5), app.run())
@@ -1548,7 +1584,11 @@ const ABANDONED: &str = "transport did not stop within its declared bound: aband
 #[tokio::test(start_paused = true)]
 async fn a_transport_that_ignores_its_stop_is_abandoned_at_its_bound_then_the_settle() {
     let logs = LogCapture::install();
-    let app = App::new::<IgnoresItsStopModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<IgnoresItsStopModule>()
+        .build()
+        .await
+        .expect("the module boots");
     let started = tokio::time::Instant::now();
 
     let failed = tokio::time::timeout(Duration::from_secs(60), app.run())
@@ -1607,7 +1647,10 @@ async fn run_declaring(bound: Duration) -> anyhow::Error {
     *BOUND
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = bound;
-    App::new::<DeclaresModule>()
+    App::builder()
+        .module::<DeclaresModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await

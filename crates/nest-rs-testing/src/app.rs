@@ -6,7 +6,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_rs_core::{App, AppBuilder, Container, ExceptionFilterSpec, InterceptorSpec, Module};
+use nest_rs_core::{App, AppBuilder, Container, Module};
 
 use crate::headless::HeadlessApp;
 
@@ -19,8 +19,28 @@ pub use http::TestApp;
 /// cascade, and publishes the tested package's name, version and description as
 /// the process's [`AppIdentity`](nest_rs_core::AppIdentity), as
 /// `#[nest_rs::main]` publishes the binary's.
+///
+/// The boot arms the outbox of an app binding a store and a queue backend
+/// (feature `queue`), as the binary's relay does when served, without running
+/// the relay: a push inside a unit waits in the store, and a test needing its
+/// job run spawns `OutboxRelay` beside its worker.
 pub struct TestAppBuilder {
     inner: AppBuilder,
+    /// The database [`ephemeral_database`](Self::ephemeral_database) creates
+    /// at the boot.
+    #[cfg(feature = "orm")]
+    pub(crate) database: Option<crate::database::DatabaseFixture>,
+}
+
+/// What a booted test app keeps alive beside its container, dropped after it.
+#[derive(Default)]
+pub(crate) struct Kept {
+    #[cfg(feature = "orm")]
+    #[expect(
+        dead_code,
+        reason = "held for its drop, which drops the database once the app is gone"
+    )]
+    pub(crate) database: Option<crate::EphemeralDatabase>,
 }
 
 impl TestAppBuilder {
@@ -29,7 +49,26 @@ impl TestAppBuilder {
         crate::package::publish_package_identity();
         Self {
             inner: App::builder(),
+            #[cfg(feature = "orm")]
+            database: None,
         }
+    }
+
+    /// Build the app: its database first, the connection seeded, then the
+    /// four phases, then its outbox armed. A boot failing past the build is
+    /// closed before the error returns.
+    pub(crate) async fn boot(self) -> Result<(App, Kept)> {
+        #[cfg(feature = "orm")]
+        let (inner, kept) = crate::database::seeded(self.inner, self.database).await?;
+        #[cfg(not(feature = "orm"))]
+        let (inner, kept) = (self.inner, Kept::default());
+        let app = inner.build().await?;
+        #[cfg(feature = "queue")]
+        if let Err(refused) = nest_rs_queue::__private::arm_outbox(app.container()).await {
+            app.close().await;
+            return Err(refused);
+        }
+        Ok((app, kept))
     }
 
     /// Register a root module, exactly as [`AppBuilder::module`].
@@ -95,29 +134,11 @@ impl TestAppBuilder {
         self
     }
 
-    /// Forwards to [`AppBuilder::use_interceptors_global`].
-    pub fn use_interceptors_global(
-        mut self,
-        specs: impl IntoIterator<Item = InterceptorSpec>,
-    ) -> Self {
-        self.inner = self.inner.use_interceptors_global(specs);
-        self
-    }
-
-    /// Forwards to [`AppBuilder::use_exception_filters_global`].
-    pub fn use_exception_filters_global(
-        mut self,
-        specs: impl IntoIterator<Item = ExceptionFilterSpec>,
-    ) -> Self {
-        self.inner = self.inner.use_exception_filters_global(specs);
-        self
-    }
-
     /// Boot without an HTTP surface, for queue workers and schedulers; drive
     /// their transports through [`HeadlessApp::spawn_transport`].
     pub async fn build_headless(self) -> Result<HeadlessApp> {
-        let app = self.inner.build().await?;
-        Ok(HeadlessApp::new(app))
+        let (app, kept) = self.boot().await?;
+        Ok(HeadlessApp::new(app, kept))
     }
 }
 
@@ -139,11 +160,9 @@ mod http {
 
     use anyhow::Result;
     use nest_rs_core::{App, AppLifecycle, Container, Module, Transport};
-    use nest_rs_guards::{AppBuilderGuardsExt, GuardSpec};
     use nest_rs_http::{HttpConfig, HttpTransport};
-    use nest_rs_pipes::{AppBuilderPipesExt, PipeSpec};
 
-    use super::TestAppBuilder;
+    use super::{Kept, TestAppBuilder};
     use crate::TestClient;
 
     /// The config the app's own `HttpModule::for_root(cfg)` resolved, or the one a
@@ -161,6 +180,8 @@ mod http {
     pub struct TestApp {
         app: App,
         client: TestClient,
+        /// Dropped after the app, which may still hold its connection.
+        kept: Kept,
     }
 
     impl TestApp {
@@ -205,39 +226,136 @@ mod http {
         /// resources its modules opened closed, its container dropped — within the
         /// shutdown hooks' budget.
         pub async fn close(self) {
-            let TestApp { app, client } = self;
+            // The database the app ran on is dropped last, at the end of scope.
+            let TestApp {
+                app,
+                client,
+                kept: _kept,
+            } = self;
             // The mounted endpoint holds the container too.
             drop(client);
             app.close().await;
         }
     }
 
+    #[cfg(feature = "authn")]
+    impl TestApp {
+        /// The `Authorization` value of a bearer token the app's own
+        /// `JwtService` signs over the claims `claims` builds from the expiry
+        /// the service stamps: a token the app's authentication guard admits,
+        /// signed with the key it verifies with. Panics when the app provides
+        /// no `JwtService` or one holding no signing key.
+        ///
+        /// ```
+        /// # use nest_rs_authn::{AuthnConfig, AuthnModule, JwtService};
+        /// # use nest_rs_core::{Secret, module};
+        /// # use nest_rs_testing::TestApp;
+        /// # use serde::Serialize;
+        /// #[derive(Serialize)]
+        /// struct Claims {
+        ///     sub: String,
+        ///     exp: u64,
+        /// }
+        ///
+        /// #[module(imports = [AuthnModule])]
+        /// struct BlogModule;
+        /// # #[nest_rs_core::main]
+        /// # async fn main() -> anyhow::Result<()> {
+        ///
+        /// let app = TestApp::builder()
+        ///     .module::<BlogModule>()
+        /// #   .provide(AuthnConfig {
+        /// #       secret: Some(Secret::new("a-test-secret-of-thirty-two-bytes!".into())),
+        /// #       ..AuthnConfig::default()
+        /// #   })
+        ///     .build()
+        ///     .await?;
+        /// let authorization = app.bearer(|exp| Claims { sub: "ada".into(), exp });
+        /// # let jwt = app.container().get::<JwtService>().expect("provided");
+        /// # let token = authorization.strip_prefix("Bearer ").expect("a bearer value");
+        /// # let read: serde_json::Value = jwt.verify(token).await?;
+        /// # assert_eq!(read["sub"], "ada");
+        /// # Ok(())
+        /// # }
+        /// ```
+        pub fn bearer<C: serde::Serialize>(&self, claims: impl FnOnce(u64) -> C) -> String {
+            let jwt = self
+                .container()
+                .get::<nest_rs_authn::JwtService>()
+                .expect("the app provides no JwtService: import the module authenticating it");
+            let token = jwt
+                .sign(&claims(jwt.expiry()))
+                .unwrap_or_else(|refused| panic!("the app's JwtService signs no token: {refused}"));
+            format!("Bearer {token}")
+        }
+    }
+
+    #[cfg(feature = "authz")]
+    impl TestApp {
+        /// Run `body` in one unit of work of the app's bound `UnitOfWork`, as a
+        /// request granted `ability`: the service it calls reads the ambient
+        /// executor and ability an edge installs, and the unit commits on `Ok`
+        /// and rolls back on `Err`.
+        ///
+        /// # Panics
+        ///
+        /// When the app binds no unit of work, and when the binding cannot
+        /// honour the unit — it refuses to open it, its commit fails, or the
+        /// unit's outcome is in doubt.
+        pub async fn unit<T, E, F, Fut>(
+            &self,
+            ability: std::sync::Arc<nest_rs_authz::Ability>,
+            body: F,
+        ) -> Result<T, E>
+        where
+            T: Send,
+            E: Send,
+            F: FnOnce() -> Fut,
+            Fut: std::future::Future<Output = Result<T, E>> + Send,
+        {
+            crate::unit::run(
+                self.container(),
+                nest_rs_database::ExecutorScope::Request,
+                nest_rs_authz::with_ability(ability, body()),
+            )
+            .await
+        }
+    }
+
+    #[cfg(feature = "database")]
+    impl TestApp {
+        /// Run `body` in one unit of work of the app's bound `UnitOfWork`, as
+        /// system work — a job, a tick — which no ability scopes: it commits on
+        /// `Ok` and rolls back on `Err`.
+        ///
+        /// # Panics
+        ///
+        /// As [`unit`](Self::unit) does: when the app binds no unit of work, and
+        /// when the binding cannot honour the unit.
+        pub async fn system_unit<T, E, F, Fut>(&self, body: F) -> Result<T, E>
+        where
+            T: Send,
+            E: Send,
+            F: FnOnce() -> Fut,
+            Fut: std::future::Future<Output = Result<T, E>> + Send,
+        {
+            crate::unit::run(
+                self.container(),
+                nest_rs_database::ExecutorScope::Job,
+                body(),
+            )
+            .await
+        }
+    }
+
     impl TestAppBuilder {
-        /// Forwards to [`AppBuilderGuardsExt::use_guards_global`].
-        pub fn use_guards_global<I>(mut self, specs: I) -> Self
-        where
-            I: IntoIterator<Item = GuardSpec>,
-        {
-            self.inner = self.inner.use_guards_global(specs);
-            self
-        }
-
-        /// Forwards to [`AppBuilderPipesExt::use_pipes_global`].
-        pub fn use_pipes_global<I>(mut self, specs: I) -> Self
-        where
-            I: IntoIterator<Item = PipeSpec>,
-        {
-            self.inner = self.inner.use_pipes_global(specs);
-            self
-        }
-
         /// Build the app, configure the HTTP transport and run the init phases —
         /// once: they do not run again for this app. A boot that fails past the
         /// build is closed as [`App::run`] closes it before the error returns.
         pub async fn build(self) -> Result<TestApp> {
-            let app = self.inner.build().await?;
+            let (app, kept) = self.boot().await?;
             match mount(&app).await {
-                Ok(client) => Ok(TestApp { app, client }),
+                Ok(client) => Ok(TestApp { app, client, kept }),
                 Err(error) => {
                     app.close().await;
                     Err(error)
@@ -249,9 +367,9 @@ mod http {
         /// for the WS upgrade `TestClient` cannot reach.
         #[cfg(feature = "ws")]
         pub async fn build_ws(self) -> Result<crate::ws::WsApp> {
-            let app = self.inner.build().await?;
+            let (app, kept) = self.boot().await?;
             let config = http_config(app.container());
-            crate::ws::serve(crate::HeadlessApp::new(app), &config).await
+            crate::ws::serve(crate::HeadlessApp::new(app, kept), &config).await
         }
     }
 

@@ -4,13 +4,16 @@
 //!
 //! A module attaches its wiring with
 //! [`ContainerBuilder::provide_wiring`](crate::ContainerBuilder::provide_wiring);
-//! both boot paths drain every one, in registration order, as their last step.
-//! A registry the app's code reads is filled here, never by a lifecycle hook:
-//! a hook that ran first would read it empty.
+//! the boot drains every one, in registration order, as its last step, after
+//! checking each app-wide layer pool the root module declares, so a pool every
+//! site composes from is refused before a site reads it. A registry the app's
+//! code reads is filled here, never by a lifecycle hook: a hook that ran first
+//! would read it empty.
 
 use crate::container::Container;
 use crate::discovery::Discovery;
 use crate::error::WiringFailedError;
+use crate::layer_chain::__private::GlobalPoolCheck;
 
 /// The function a wiring runs: synchronous, so no I/O slows the boot from here.
 pub(crate) type Wire = fn(&Container) -> anyhow::Result<()>;
@@ -35,9 +38,16 @@ impl WiringContribution {
     }
 }
 
-/// Run every attached wiring against the sealed `container`, in registration
-/// order; the first that fails ends the boot naming its registry.
+/// Check every app-wide layer pool, then run every attached wiring against the
+/// sealed `container`, in registration order; the first that fails ends the
+/// boot naming its registry.
 pub(crate) fn wire(container: &Container) -> Result<(), WiringFailedError> {
+    for pool in Discovery::new(container).meta::<GlobalPoolCheck>() {
+        (pool.meta.check)(container).map_err(|source| WiringFailedError {
+            registry: pool.meta.pool,
+            source,
+        })?;
+    }
     for contribution in Discovery::new(container).meta::<WiringContribution>() {
         let registry = contribution.meta.name;
         (contribution.meta.wire)(container)

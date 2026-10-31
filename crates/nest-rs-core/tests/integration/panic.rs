@@ -30,7 +30,7 @@ fn unwrap_a_secret() -> u64 {
 async fn run_child(role: String) -> anyhow::Result<()> {
     match role.as_str() {
         "subscribed" => {
-            let _app = App::new::<Bare>()?;
+            let _app = App::builder().module::<Bare>().build().await?;
             unwrap_a_secret();
             Ok(())
         }
@@ -39,7 +39,7 @@ async fn run_child(role: String) -> anyhow::Result<()> {
             Ok(())
         }
         "inside_the_subscriber" => {
-            let _app = App::new::<Bare>()?;
+            let _app = App::builder().module::<Bare>().build().await?;
             tracing::info!(target: TARGET, value = %Unwritable, "never written");
             Ok(())
         }

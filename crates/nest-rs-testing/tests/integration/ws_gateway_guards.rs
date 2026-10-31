@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, async_trait, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::StatusCode;
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{WsModule, gateway, messages};
@@ -76,14 +76,16 @@ impl DupGateway {
 #[module(imports = [WsModule], providers = [CountingDenyGuard, BareGateway, DupGateway])]
 struct GatewayDedupModule;
 
+#[module(imports = [GatewayDedupModule], providers = [GlobalGuards<(CountingDenyGuard,)>])]
+struct GatewayDedupApp;
+
 #[tokio::test]
 async fn gateway_scope_guard_redeclared_against_global_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<GatewayDedupModule>()
-        .use_guards_global([guard::<CountingDenyGuard>()])
+        .module::<GatewayDedupApp>()
         .build()
         .await
         .expect("boots");
@@ -105,8 +107,7 @@ async fn bare_gateway_runs_global_guard_once() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<GatewayDedupModule>()
-        .use_guards_global([guard::<CountingDenyGuard>()])
+        .module::<GatewayDedupApp>()
         .build()
         .await
         .expect("boots");

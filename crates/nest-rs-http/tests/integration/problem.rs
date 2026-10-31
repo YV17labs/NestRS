@@ -4,8 +4,8 @@
 //! on every path an `Err` is rendered by.
 
 use nest_rs_core::{
-    App, Interceptor, Layer, Module, Next, Outcome, Problem, ToProblem, Transport, UnitContext,
-    injectable, interceptor, module,
+    App, GlobalInterceptors, Interceptor, Layer, Module, Next, Outcome, Problem, ToProblem,
+    Transport, UnitContext, injectable, module,
 };
 use nest_rs_core::{async_trait, input, problem::code};
 use nest_rs_http::StatusCode;
@@ -486,11 +486,19 @@ impl Interceptor for Forwarding {
     }
 }
 
-/// The app every real deployment is: one with a layer listed.
-async fn wrapped<M: Module + 'static>() -> Client {
+#[module(imports = [DecodeModule], providers = [GlobalInterceptors<(Forwarding,)>])]
+struct WrappedDecodeModule;
+
+#[module(imports = [FailureModule], providers = [GlobalInterceptors<(Forwarding,)>])]
+struct WrappedFailureModule;
+
+#[module(imports = [DomainModule], providers = [GlobalInterceptors<(Forwarding,)>])]
+struct WrappedDomainModule;
+
+/// The app every real deployment is: `W`, `M` with a layer listed.
+async fn wrapped<W: Module + 'static>() -> Client {
     let app = App::builder()
-        .use_interceptors_global([interceptor::<Forwarding>()])
-        .module::<M>()
+        .module::<W>()
         .build()
         .await
         .expect("module boots");
@@ -507,8 +515,8 @@ async fn wrapped<M: Module + 'static>() -> Client {
 }
 
 /// Every place an `Err` is rendered: the fused edge, the outer wrap compression
-/// mounts, and the tail of a layered route.
-async fn clients<M: Module + 'static>() -> [Client; 3] {
+/// mounts, and the tail of a layered route, `W`.
+async fn clients<M: Module + 'static, W: Module + 'static>() -> [Client; 3] {
     [
         crate::boot::<M>().await,
         crate::boot_on::<M>(HttpConfig {
@@ -516,7 +524,7 @@ async fn clients<M: Module + 'static>() -> [Client; 3] {
             ..HttpConfig::default()
         })
         .await,
-        wrapped::<M>().await,
+        wrapped::<W>().await,
     ]
 }
 
@@ -542,7 +550,7 @@ fn quoting(logs: &nest_rs_testing::LogCapture, needle: &str) -> Vec<String> {
 #[tokio::test]
 async fn a_body_that_does_not_decode_is_refused_without_its_value() {
     let logs = nest_rs_testing::LogCapture::install();
-    for client in clients::<DecodeModule>().await {
+    for client in clients::<DecodeModule, WrappedDecodeModule>().await {
         let resp = client
             .post("/decode/json")
             .content_type("application/json")
@@ -583,7 +591,7 @@ async fn a_body_that_does_not_decode_is_refused_without_its_value() {
 
 #[tokio::test]
 async fn a_query_or_a_form_that_does_not_decode_is_refused_without_its_value() {
-    for client in clients::<DecodeModule>().await {
+    for client in clients::<DecodeModule, WrappedDecodeModule>().await {
         let resp = client
             .get("/decode/query")
             .query("card", &SECRET)
@@ -609,7 +617,7 @@ async fn a_query_or_a_form_that_does_not_decode_is_refused_without_its_value() {
 #[tokio::test]
 async fn a_handler_s_own_decode_failure_is_refused_without_its_value() {
     let body = format!(r#""{SECRET}""#);
-    for client in clients::<DecodeModule>().await {
+    for client in clients::<DecodeModule, WrappedDecodeModule>().await {
         for path in ["/decode/own", "/decode/bad-request", "/decode/problem"] {
             let resp = client.post(path).body(body.clone()).send().await;
             assert_eq!(
@@ -775,7 +783,7 @@ fn filed(logs: &nest_rs_testing::LogCapture) -> Vec<(String, String, Option<Stri
 /// withhold nothing and file nothing.
 #[tokio::test]
 async fn a_typed_server_error_files_its_chain_once_by_the_status_sent() {
-    for client in clients::<FailureModule>().await {
+    for client in clients::<FailureModule, WrappedFailureModule>().await {
         let logs = nest_rs_testing::LogCapture::install();
         client
             .get("/failure/typed")
@@ -849,7 +857,7 @@ async fn a_typed_server_error_files_its_chain_once_by_the_status_sent() {
 /// on every path an `Err` is rendered by; a client answer files nothing.
 #[tokio::test]
 async fn a_to_problem_error_answers_its_problem_from_a_route() {
-    for client in clients::<DomainModule>().await {
+    for client in clients::<DomainModule, WrappedDomainModule>().await {
         let logs = nest_rs_testing::LogCapture::install();
         for path in ["/domain/overdrawn", "/domain/converted"] {
             let resp = client.get(path).send().await;
@@ -889,7 +897,7 @@ async fn a_to_problem_error_answers_its_problem_from_a_route() {
 /// none of the success's status or headers on it, and a success is shaped.
 #[tokio::test]
 async fn a_to_problem_error_answers_its_problem_from_a_shaped_route_and_an_sse_open() {
-    for client in clients::<DomainModule>().await {
+    for client in clients::<DomainModule, WrappedDomainModule>().await {
         for failed in [
             client.post("/domain/transfer?amount=500").send().await,
             client.get("/domain/statement?amount=500").send().await,
@@ -934,7 +942,7 @@ async fn a_to_problem_error_answers_its_problem_from_a_shaped_route_and_an_sse_o
 /// at `error` behind the one opaque document.
 #[tokio::test]
 async fn a_to_problem_server_error_files_the_chain_it_withholds() {
-    for client in clients::<DomainModule>().await {
+    for client in clients::<DomainModule, WrappedDomainModule>().await {
         let logs = nest_rs_testing::LogCapture::install();
         let busy = client.get("/domain/busy").send().await;
         busy.assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -1000,7 +1008,7 @@ fn internal_document() -> serde_json::Value {
 /// path an `Err` is rendered by, and none of it quotes the cause.
 #[tokio::test]
 async fn every_opaque_500_is_one_document_whoever_answered_it() {
-    for client in clients::<FailureModule>().await {
+    for client in clients::<FailureModule, WrappedFailureModule>().await {
         for path in [
             "/failure/leaky",
             "/failure/wrapped",
@@ -1028,7 +1036,7 @@ async fn every_opaque_500_is_one_document_whoever_answered_it() {
 /// router for an address nothing serves — on every path an `Err` is rendered by.
 #[tokio::test]
 async fn every_bare_404_is_its_class_s_document_whoever_answered_it() {
-    for client in clients::<FailureModule>().await {
+    for client in clients::<FailureModule, WrappedFailureModule>().await {
         for path in [
             "/failure/missing",
             "/failure/raw-missing",
@@ -1056,7 +1064,7 @@ async fn every_bare_404_is_its_class_s_document_whoever_answered_it() {
 /// document: `UNAVAILABLE`, and no `detail`.
 #[tokio::test]
 async fn an_opaque_503_is_its_class_s_document() {
-    for client in clients::<FailureModule>().await {
+    for client in clients::<FailureModule, WrappedFailureModule>().await {
         let resp = client.get("/failure/busy").send().await;
         resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(

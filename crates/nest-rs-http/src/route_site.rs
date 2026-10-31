@@ -20,10 +20,10 @@ use nest_rs_guards::__private::{
 use nest_rs_guards::{Guard, GuardSpec};
 use nest_rs_pipes::PipeSpec;
 
+use crate::body_pipes::BodyPipes;
 use crate::deprecation::deprecated_route;
 use crate::endpoint::BoxEndpoint;
 use crate::error::{Result, RouteError};
-use crate::global_pipes::GlobalPipes;
 use crate::guard_stage::{HttpGuardStage, StageKind};
 use crate::request::Request;
 use crate::response::Response;
@@ -43,7 +43,7 @@ pub trait RouteWrapper: Send + Sync + 'static {
 /// and its response shaper.
 struct RouteTail<W> {
     handler: &'static Handler,
-    pipes: GlobalPipes,
+    pipes: BodyPipes,
     wrapper: W,
 }
 
@@ -231,9 +231,9 @@ pub fn mount_route<W: RouteWrapper>(
     let handler = site.handler();
     let composed = site.chains(container).and_then(|chains| {
         let pipes = match pipes.none {
-            true => GlobalPipes::none(),
+            true => BodyPipes::none(),
             false => {
-                GlobalPipes::resolve(container, &route_label(handler), &pipes.host, &pipes.method)?
+                BodyPipes::resolve(container, &route_label(handler), &pipes.host, &pipes.method)?
             }
         };
         Ok((chains, pipes))
@@ -308,7 +308,7 @@ mod tests {
         .expect("the site composes");
         let tail = RouteTail {
             handler: &ROUTE,
-            pipes: GlobalPipes::none(),
+            pipes: BodyPipes::none(),
             wrapper: shaped(Holding::<N>, None, Some("POST /x")),
         };
         let route = deprecated_route(SiteEndpoint::new(&ROUTE, chains, None, tail), "true");

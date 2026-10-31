@@ -6,7 +6,7 @@
 use nest_rs_core::{Ambient, AmbientValue, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::SimpleObject;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::HttpView;
 use nest_rs_testing::{LogCapture, TestApp};
 use serde_json::{Value, json};
@@ -117,10 +117,12 @@ impl CtxResolver {
 )]
 struct CtxModule;
 
+#[module(imports = [CtxModule], providers = [GlobalGuards<(CallerGuard,)>])]
+struct BootApp;
+
 async fn boot() -> TestApp {
     TestApp::builder()
-        .module::<CtxModule>()
-        .use_guards_global([guard::<CallerGuard>()])
+        .module::<BootApp>()
         .build()
         .await
         .expect("boots")

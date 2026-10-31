@@ -9,10 +9,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
-    AmbientValue, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable,
-    interceptor, module,
+    AmbientValue, GlobalInterceptors, Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
+    injectable, interceptor, module,
 };
-use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{HeaderName, HeaderValue, HttpView, StatusCode, controller, routes};
 use nest_rs_testing::TestApp;
 use tokio::sync::Mutex;
@@ -222,14 +222,16 @@ impl DupCtrlMethod {
 ])]
 struct DedupModule;
 
+#[module(imports = [DedupModule], providers = [GlobalInterceptors<(CounterInterceptor,)>])]
+struct DedupApp;
+
 #[tokio::test]
 async fn same_interceptor_global_and_controller_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<DedupModule>()
-        .use_interceptors_global([interceptor::<CounterInterceptor>()])
+        .module::<DedupApp>()
         .build()
         .await
         .expect("boots");
@@ -249,8 +251,7 @@ async fn same_interceptor_global_and_method_runs_once() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<DedupModule>()
-        .use_interceptors_global([interceptor::<CounterInterceptor>()])
+        .module::<DedupApp>()
         .build()
         .await
         .expect("boots");
@@ -286,8 +287,7 @@ async fn same_interceptor_at_all_three_scopes_runs_once() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<DedupModule>()
-        .use_interceptors_global([interceptor::<CounterInterceptor>()])
+        .module::<DedupApp>()
         .build()
         .await
         .expect("boots");
@@ -359,11 +359,13 @@ async fn a_modules_interceptor_is_the_containers_provider_whatever_order_it_is_l
     );
 }
 
+#[module(imports = [CountingModule], providers = [GlobalInterceptors<(CountUnits,)>])]
+struct AModulesInterceptorTheAppAlsoListsRunsOnceApp;
+
 #[tokio::test]
 async fn a_modules_interceptor_the_app_also_lists_runs_once() {
     let app = TestApp::builder()
-        .module::<CountingModule>()
-        .use_interceptors_global([interceptor::<CountUnits>()])
+        .module::<AModulesInterceptorTheAppAlsoListsRunsOnceApp>()
         .build()
         .await
         .expect("boots");
@@ -449,11 +451,13 @@ async fn a_unit_stage_interceptor_sees_matched_routes_denials_404s_and_405s() {
     wrong_method.assert_header("x-edge", "hit");
 }
 
+#[module(imports = [EdgeBandModule], providers = [GlobalInterceptors<(Tracer,)>])]
+struct AGlobalInterceptorRunsAfterTheGuardsAndSeesNo404App;
+
 #[tokio::test]
 async fn a_global_interceptor_runs_after_the_guards_and_sees_no_404() {
     let app = TestApp::builder()
-        .module::<EdgeBandModule>()
-        .use_interceptors_global([interceptor::<Tracer>()])
+        .module::<AGlobalInterceptorRunsAfterTheGuardsAndSeesNo404App>()
         .build()
         .await
         .expect("boots");
@@ -553,12 +557,15 @@ impl ReadController {
 #[module(providers = [AttachPrincipal, Reader, ReadController])]
 struct ReadModule;
 
+#[module(imports = [ReadModule], providers = [GlobalInterceptors<(Reader,)>])]
+struct AGlobalInterceptorReadsTheRoutesDeclarationWhatItsGuardsAttachedAndTheRequestApp;
+
 #[tokio::test]
 async fn a_global_interceptor_reads_the_routes_declaration_what_its_guards_attached_and_the_request()
  {
     let app = TestApp::builder()
-        .module::<ReadModule>()
-        .use_interceptors_global([interceptor::<Reader>()])
+        .module::<AGlobalInterceptorReadsTheRoutesDeclarationWhatItsGuardsAttachedAndTheRequestApp>(
+        )
         .build()
         .await
         .expect("boots");
@@ -604,11 +611,16 @@ impl nest_rs_core::Discoverable for HandBuilt {
 #[module(providers = [EdgeStamp, Tracer, DenyGuard, HandBuilt])]
 struct HandBuiltModule;
 
+#[module(imports = [HandBuiltModule], providers = [GlobalGuards<(DenyGuard,)>])]
+struct HandBuiltPooledApp;
+
+#[module(imports = [HandBuiltModule], providers = [GlobalInterceptors<(Tracer,)>])]
+struct HandBuiltTracedApp;
+
 #[tokio::test]
 async fn a_route_a_controller_registers_by_hand_runs_every_stage_of_a_route() {
     let app = TestApp::builder()
-        .module::<HandBuiltModule>()
-        .use_interceptors_global([interceptor::<Tracer>()])
+        .module::<HandBuiltTracedApp>()
         .build()
         .await
         .expect("boots");
@@ -618,8 +630,7 @@ async fn a_route_a_controller_registers_by_hand_runs_every_stage_of_a_route() {
     resp.assert_header("x-trace", "hit");
 
     let pooled = TestApp::builder()
-        .module::<HandBuiltModule>()
-        .use_guards_global([nest_rs_guards::guard::<DenyGuard>()])
+        .module::<HandBuiltPooledApp>()
         .build()
         .await
         .expect("boots");
@@ -634,6 +645,9 @@ const HALF_A_WORKER_STACK: usize = 1024 * 1024;
 #[module(providers = [EdgeStamp, AttachPrincipal, Reader, ReadController])]
 struct EveryStageModule;
 
+#[module(imports = [EveryStageModule], providers = [GlobalInterceptors<(Reader,)>])]
+struct ARouteRunningEveryStageAnswersWithinHalfAWorkerThreadsStackApp;
+
 /// The pipeline's stages poll as `async fn` frames on the thread's stack: a
 /// route running each of them, boot included, stays well inside a worker's.
 #[test]
@@ -647,8 +661,7 @@ fn a_route_running_every_stage_answers_within_half_a_worker_threads_stack() {
                 .expect("a runtime")
                 .block_on(async {
                     let app = TestApp::builder()
-                        .module::<EveryStageModule>()
-                        .use_interceptors_global([interceptor::<Reader>()])
+                        .module::<ARouteRunningEveryStageAnswersWithinHalfAWorkerThreadsStackApp>()
                         .build()
                         .await
                         .expect("boots");

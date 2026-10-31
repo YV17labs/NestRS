@@ -3,8 +3,10 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, async_trait, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_core::{
+    GlobalExceptionFilters, GlobalInterceptors, Layer, async_trait, injectable, module,
+};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_mcp::rmcp::serde_json::json;
 use nest_rs_mcp::{McpError, McpOperationKind, mcp, tools};
 use nest_rs_testing::TestApp;
@@ -287,11 +289,13 @@ impl PooledTool {
 #[module(providers = [PooledTool, Pooled])]
 struct PooledModule;
 
+#[module(imports = [PooledModule], providers = [GlobalGuards<(Pooled,)>])]
+struct APooledGuardChecksTheRequestOnceAndTheOperationOnceApp;
+
 #[tokio::test]
 async fn a_pooled_guard_checks_the_request_once_and_the_operation_once() {
     let app = TestApp::builder()
-        .use_guards_global([nest_rs_guards::guard::<Pooled>()])
-        .module::<PooledModule>()
+        .module::<APooledGuardChecksTheRequestOnceAndTheOperationOnceApp>()
         .build()
         .await
         .expect("a pooled guard also declared on the host boots");
@@ -365,11 +369,13 @@ impl PoolOnlyTool {
 #[module(providers = [PoolOnlyTool, PoolOnlyMcp])]
 struct PoolOnlyModule;
 
+#[module(imports = [PoolOnlyModule], providers = [GlobalGuards<(PoolOnlyMcp,)>])]
+struct AGlobalGuardThatOnlyChecksMcpStillRefusesTheOperationApp;
+
 #[tokio::test]
 async fn a_global_guard_that_only_checks_mcp_still_refuses_the_operation() {
     let app = TestApp::builder()
-        .use_guards_global([nest_rs_guards::guard::<PoolOnlyMcp>()])
-        .module::<PoolOnlyModule>()
+        .module::<AGlobalGuardThatOnlyChecksMcpStillRefusesTheOperationApp>()
         .build()
         .await
         .expect("a global MCP-only guard and no endpoint guards boots");
@@ -466,11 +472,13 @@ impl DeclaredTool {
 ])]
 struct DeclaredModule;
 
+#[module(imports = [DeclaredModule], providers = [GlobalGuards<(DeclaredEverywhere,)>])]
+struct AGuardTheEdgeDidNotRunStillRunsPerOperationApp;
+
 #[tokio::test]
 async fn a_guard_the_edge_did_not_run_still_runs_per_operation() {
     let app = TestApp::builder()
-        .use_guards_global([nest_rs_guards::guard::<DeclaredEverywhere>()])
-        .module::<DeclaredModule>()
+        .module::<AGuardTheEdgeDidNotRunStillRunsPerOperationApp>()
         .build()
         .await
         .expect("endpoint guards plus a guard declared both globally and on the tool boot");
@@ -747,16 +755,21 @@ async fn a_hosts_interceptor_wraps_a_tool_call_once_and_no_listing() {
     assert_eq!(log.take(), ["prompts/get greet"], "a prompt is wrapped too");
 }
 
-#[module(imports = [crate::open_mcp()], providers = [LayeredTool, Recorder, Closed, crate::StoreDown, Around, AroundLog])]
+#[module(
+    imports = [crate::open_mcp()],
+    providers = [LayeredTool, Recorder, Closed, crate::StoreDown, Around, AroundLog],
+)]
 struct GloballyInterceptedModule;
+
+#[module(imports = [GloballyInterceptedModule], providers = [GlobalInterceptors<(Around,)>])]
+struct TheAppsInterceptorsRunAroundEachOperationItsGuardsAdmitApp;
 
 /// The app's own interceptors reach each tool call and prompt fetch, at the
 /// handler stage, after the operation's guards admitted it.
 #[tokio::test]
 async fn the_apps_interceptors_run_around_each_operation_its_guards_admit() {
     let app = TestApp::builder()
-        .use_interceptors_global([nest_rs_core::interceptor::<Around>()])
-        .module::<GloballyInterceptedModule>()
+        .module::<TheAppsInterceptorsRunAroundEachOperationItsGuardsAdmitApp>()
         .build()
         .await
         .expect("an app-wide interceptor beside an MCP host boots");
@@ -1160,12 +1173,16 @@ async fn sealed_code(app: &TestApp, path: &str, tool: &str) -> serde_json::Value
     nest_rs_testing::mcp::result(&body)["error"]["data"]["code"].clone()
 }
 
+#[module(
+    imports = [VaultModule],
+    providers = [GlobalExceptionFilters<(SealedAtApp,)>, GlobalInterceptors<(AroundApp,)>],
+)]
+struct EachScopesFilterAndInterceptorReachAToolInScopeOrderApp;
+
 #[tokio::test]
 async fn each_scopes_filter_and_interceptor_reach_a_tool_in_scope_order() {
     let app = TestApp::builder()
-        .use_exception_filters_global([nest_rs_core::exception_filter::<SealedAtApp>()])
-        .use_interceptors_global([nest_rs_core::interceptor::<AroundApp>()])
-        .module::<VaultModule>()
+        .module::<EachScopesFilterAndInterceptorReachAToolInScopeOrderApp>()
         .build()
         .await
         .expect("a filter and an interceptor at every scope boot");

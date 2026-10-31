@@ -34,7 +34,7 @@ mod reason {
 /// resulting principal — its granted scopes and the tenant it acts within
 /// beside it — for the rest of the request, and records `actor_id` on the
 /// span. Generic over the
-/// strategy `S`. Bind it via `#[use_guards]` / `use_guards_global`; on a
+/// strategy `S`. Bind it via `#[use_guards]` / `GlobalGuards`; on a
 /// `#[public]` route it authenticates opportunistically but never rejects, and
 /// on an in-band endpoint (`/graphql`) it admits an anonymous request while
 /// still refusing a credential that does not verify.
@@ -110,7 +110,7 @@ impl<S: Strategy> AuthnGuard<S> {
     }
 }
 
-/// Layer-System impl — registers globally via `use_guards_global`.
+/// Layer-System impl — the app's pool lists it in `GlobalGuards`.
 ///
 /// On a `#[public]` route the guard authenticates opportunistically: it attaches
 /// the principal when a token verifies and otherwise continues anonymously (a

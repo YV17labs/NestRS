@@ -3,9 +3,10 @@
 
 use nest_rs_core::{__private::InterceptorRegistration, async_trait};
 use nest_rs_core::{
-    Discovery, Interceptor, Layer, Next, Outcome, UnitContext, injectable, interceptor, module,
+    Discovery, GlobalInterceptors, Interceptor, Layer, Next, Outcome, UnitContext, injectable,
+    module,
 };
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{controller, routes};
 use nest_rs_server_timing::ServerTimingModule;
@@ -156,11 +157,13 @@ async fn private_timing(app: &TestApp, admitted: bool) -> Option<String> {
     server_timing(&resp)
 }
 
+#[module(imports = [GuardedModule], providers = [GlobalGuards<(AdmitGuard,)>])]
+struct AGuardDenialCarriesNoTimingApp;
+
 #[tokio::test]
 async fn a_guard_denial_carries_no_timing() {
     let app = TestApp::builder()
-        .module::<GuardedModule>()
-        .use_guards_global([guard::<AdmitGuard>()])
+        .module::<AGuardDenialCarriesNoTimingApp>()
         .build()
         .await
         .expect("boots");
@@ -201,11 +204,13 @@ impl Interceptor for AdmitInterceptor {
 #[module(imports = [ServerTimingModule], providers = [PrivateController, AdmitInterceptor])]
 struct GatedModule;
 
+#[module(imports = [GatedModule], providers = [GlobalInterceptors<(AdmitInterceptor,)>])]
+struct APoolInterceptorRefusalCarriesNoTimingApp;
+
 #[tokio::test]
 async fn a_pool_interceptor_refusal_carries_no_timing() {
     let app = TestApp::builder()
-        .module::<GatedModule>()
-        .use_interceptors_global([interceptor::<AdmitInterceptor>()])
+        .module::<APoolInterceptorRefusalCarriesNoTimingApp>()
         .build()
         .await
         .expect("boots");
@@ -288,13 +293,15 @@ impl LimitedResolver {
 )]
 struct LimitedGraphqlModule;
 
+#[module(imports = [LimitedGraphqlModule], providers = [GlobalGuards<(OperationLimit,)>])]
+struct AGraphqlFieldItsGuardsRefusedLeavesItsRequestUntimedApp;
+
 /// A refusal answered inside a `200` — a GraphQL field its guards rate
 /// limited — is no oracle either: the request it ran in goes untimed.
 #[tokio::test]
 async fn a_graphql_field_its_guards_refused_leaves_its_request_untimed() {
     let app = TestApp::builder()
-        .module::<LimitedGraphqlModule>()
-        .use_guards_global([guard::<OperationLimit>()])
+        .module::<AGraphqlFieldItsGuardsRefusedLeavesItsRequestUntimedApp>()
         .build()
         .await
         .expect("boots");
@@ -335,6 +342,9 @@ impl LimitedTools {
 )]
 struct LimitedMcpModule;
 
+#[module(imports = [LimitedMcpModule], providers = [GlobalGuards<(OperationLimit,)>])]
+struct AnMcpOperationItsGuardsRefusedLeavesItsRequestUntimedApp;
+
 /// The same for an MCP operation its guards refused: a JSON-RPC error inside
 /// a `200`.
 #[tokio::test]
@@ -342,8 +352,7 @@ async fn an_mcp_operation_its_guards_refused_leaves_its_request_untimed() {
     use nest_rs_testing::mcp::{open_session, post_message, result};
 
     let app = TestApp::builder()
-        .module::<LimitedMcpModule>()
-        .use_guards_global([guard::<OperationLimit>()])
+        .module::<AnMcpOperationItsGuardsRefusedLeavesItsRequestUntimedApp>()
         .build()
         .await
         .expect("boots");

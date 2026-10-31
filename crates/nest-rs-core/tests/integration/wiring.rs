@@ -51,25 +51,20 @@ fn the_wiring_refusal(refused: &anyhow::Error) -> &WiringFailedError {
 
 #[tokio::test]
 async fn a_wiring_that_fails_fails_the_boot_naming_its_registry() {
-    let Err(built) = App::builder().module::<LedgerModule>().build().await else {
+    let Err(refused) = App::builder().module::<LedgerModule>().build().await else {
         panic!("a registry the app reads would be left empty");
     };
-    let Err(synchronous) = App::new::<LedgerModule>() else {
-        panic!("a registry the app reads would be left empty");
-    };
-    for refused in [built, synchronous] {
-        let wiring = the_wiring_refusal(&refused);
-        assert_eq!(wiring.registry, LEDGER);
-        let chain = format!("{refused:#}");
-        assert!(
-            chain.contains(LEDGER),
-            "the refusal names the registry: {chain}"
-        );
-        assert!(
-            chain.contains("the ledger table is missing"),
-            "…and carries the wiring's own error as its cause: {chain}",
-        );
-    }
+    let wiring = the_wiring_refusal(&refused);
+    assert_eq!(wiring.registry, LEDGER);
+    let chain = format!("{refused:#}");
+    assert!(
+        chain.contains(LEDGER),
+        "the refusal names the registry: {chain}"
+    );
+    assert!(
+        chain.contains("the ledger table is missing"),
+        "…and carries the wiring's own error as its cause: {chain}",
+    );
     assert!(
         !LEDGER_HOOK_RAN.load(Ordering::SeqCst),
         "no hook runs on a boot whose wiring failed",

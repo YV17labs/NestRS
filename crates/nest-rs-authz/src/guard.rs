@@ -31,8 +31,8 @@ pub struct AbilityGuard<F: AbilityFactory> {
     factory: Arc<F>,
 }
 
-/// Layer-System impl — global registration via
-/// `use_guards_global([..., guard::<AuthzGuard>()])` is the canonical path.
+/// Layer-System impl — listed after the authentication guard in the app's
+/// `GlobalGuards<(AuthnGuard, AuthzGuard)>` is the canonical path.
 #[async_trait]
 impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {

@@ -43,7 +43,10 @@ struct ReindexQueueModule;
 async fn a_process_host_the_app_reaches_without_the_worker_is_named_at_run() {
     let logs = LogCapture::install();
 
-    App::new::<ReindexQueueModule>()
+    App::builder()
+        .module::<ReindexQueueModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await

@@ -4,7 +4,7 @@
 use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
 use nest_rs_core::{Layer, async_trait, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::Json;
 use nest_rs_http::{controller, routes};
 use nest_rs_testing::TestApp;
@@ -239,10 +239,12 @@ fn raw_widget_response(content_type: Option<&'static str>) -> nest_rs_http::Resp
 #[module(providers = [AbilityInjector, ListAbilityInjector, WidgetController])]
 struct ShapeModule;
 
+#[module(imports = [ShapeModule], providers = [GlobalGuards<(AbilityInjector,)>])]
+struct BootApp;
+
 async fn boot() -> TestApp {
     TestApp::builder()
-        .module::<ShapeModule>()
-        .use_guards_global([guard::<AbilityInjector>()])
+        .module::<BootApp>()
         .build()
         .await
         .expect("shape harness boots")
@@ -372,11 +374,13 @@ async fn a_dropped_row_does_not_leak_unexposed_columns() {
     );
 }
 
+#[module(imports = [ShapeModule], providers = [GlobalGuards<(ListAbilityInjector,)>])]
+struct AListMasksEachRowAndRetainsWireKeysApp;
+
 #[tokio::test]
 async fn a_list_masks_each_row_and_retains_wire_keys() {
     let app = TestApp::builder()
-        .module::<ShapeModule>()
-        .use_guards_global([guard::<ListAbilityInjector>()])
+        .module::<AListMasksEachRowAndRetainsWireKeysApp>()
         .build()
         .await
         .expect("list harness boots");
@@ -455,10 +459,12 @@ impl PostController {
 #[module(providers = [PostAbilityInjector, PostController])]
 struct PostModule;
 
+#[module(imports = [PostModule], providers = [GlobalGuards<(PostAbilityInjector,)>])]
+struct PostsApp;
+
 async fn posts(role: &str) -> serde_json::Value {
     let app = TestApp::builder()
-        .module::<PostModule>()
-        .use_guards_global([guard::<PostAbilityInjector>()])
+        .module::<PostsApp>()
         .build()
         .await
         .expect("post harness boots");
@@ -513,9 +519,11 @@ async fn a_non_json_response_passes_through() {
     #[module(providers = [AbilityInjector, PlainController])]
     struct PlainModule;
 
+    #[module(imports = [PlainModule], providers = [GlobalGuards<(AbilityInjector,)>])]
+    struct PlainApp;
+
     let app = TestApp::builder()
-        .module::<PlainModule>()
-        .use_guards_global([guard::<AbilityInjector>()])
+        .module::<PlainApp>()
         .build()
         .await
         .expect("plain harness boots");

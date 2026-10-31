@@ -78,28 +78,15 @@ impl Transport for OutboxRelay {
         if let Some(config) = container.get::<OutboxConfig>() {
             self.config = (*config).clone();
         }
-        let (Some(store), Some(jobs)) = (
-            container.get_dyn::<dyn OutboxStore>(),
-            container.get::<Jobs>(),
-        ) else {
-            return Ok(());
-        };
-        // The store's statements are its database's, bounded as every unit's.
-        let net = container
-            .get_dyn::<dyn UnitOfWork>()
-            .map_or(BACKEND_TIMEOUT, |unit_of_work| unit_of_work.settle_net());
-        arm(store.as_ref(), net).await?;
-        tracing::debug!(
-            target: TARGET,
-            batch_size = self.config.batch_size,
-            sweep_interval_ms = millis(self.config.sweep_interval),
-            "outbox armed",
-        );
-        self.ready = Some(Ready {
-            store,
-            producer: Arc::clone(producer_of(&jobs)),
-            net,
-        });
+        self.ready = armed(container).await?;
+        if self.ready.is_some() {
+            tracing::debug!(
+                target: TARGET,
+                batch_size = self.config.batch_size,
+                sweep_interval_ms = millis(self.config.sweep_interval),
+                "outbox armed",
+            );
+        }
         Ok(())
     }
 
@@ -131,6 +118,34 @@ impl Transport for OutboxRelay {
     fn stop_bound(&self) -> Duration {
         BACKEND_TIMEOUT + SHUTDOWN_SETTLE_TIMEOUT
     }
+}
+
+/// The store and backend `container` binds, the store armed through the
+/// boot's proof; `None` when it binds no outbox store or no queue backend.
+async fn armed(container: &Container) -> anyhow::Result<Option<Ready>> {
+    let (Some(store), Some(jobs)) = (
+        container.get_dyn::<dyn OutboxStore>(),
+        container.get::<Jobs>(),
+    ) else {
+        return Ok(None);
+    };
+    // The store's statements are its database's, bounded as every unit's.
+    let net = container
+        .get_dyn::<dyn UnitOfWork>()
+        .map_or(BACKEND_TIMEOUT, |unit_of_work| unit_of_work.settle_net());
+    arm(store.as_ref(), net).await?;
+    Ok(Some(Ready {
+        store,
+        producer: Arc::clone(producer_of(&jobs)),
+        net,
+    }))
+}
+
+/// Arm the outbox `container` binds as its relay does at boot, filing
+/// nothing: a push inside a unit then waits for the relay — what a test
+/// harness does for an app it serves without running the relay.
+pub async fn arm_outbox(container: &Container) -> anyhow::Result<()> {
+    armed(container).await.map(drop)
 }
 
 /// A serving relay: its store and backend, its settings, and whether it has

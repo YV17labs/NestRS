@@ -590,7 +590,10 @@ mod tests {
     #[tokio::test]
     async fn an_app_run_records_where_its_hooks_budget_ends() {
         let ran = Instant::now();
-        App::new::<NothingToTearDown>()
+        App::builder()
+            .module::<NothingToTearDown>()
+            .build()
+            .await
             .expect("boots")
             .run()
             .await
@@ -607,7 +610,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_paused_clock_moved_on_records_no_deadline_past_the_budget() {
         tokio::time::advance(Duration::from_secs(60 * 60)).await;
-        App::new::<NothingToTearDown>()
+        App::builder()
+            .module::<NothingToTearDown>()
+            .build()
+            .await
             .expect("boots")
             .run()
             .await

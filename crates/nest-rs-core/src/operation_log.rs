@@ -1,10 +1,11 @@
 //! One line per unit of work, and the vocabulary every edge files it with.
 //!
 //! A unit's canonical name is `<edge>.<unit>` for a framework edge's,
-//! `lifecycle.<unit>` for the kernel's and `<crate>.<unit>` for any other
-//! crate's, declared once as a [`Unit`] through [`unit!`](macro@crate::unit) by the
-//! crate it belongs to, and read by [`operation_span!`](crate::operation_span)
-//! and [`operation_line!`](crate::operation_line).
+//! `lifecycle.<unit>` for the kernel's, `testing.<unit>` for the test
+//! harness's and `<crate>.<unit>` for any other crate's, declared once as a
+//! [`Unit`] through [`unit!`](macro@crate::unit) by the crate it belongs to,
+//! and read by [`operation_span!`](crate::operation_span) and
+//! [`operation_line!`](crate::operation_line).
 //!
 //! Field names on a line are flat, never dotted: `tracing`'s grammar is
 //! ambiguous on a dotted name beside a path target such as [`TARGET`], so
@@ -107,15 +108,16 @@ pub struct Unit {
 }
 
 impl Unit {
-    /// The canonical `<edge>.<unit>`, `lifecycle.<unit>` or `<crate>.<unit>`
-    /// name: the span's name, the line's `name:` and its `message`.
+    /// The canonical `<edge>.<unit>`, `lifecycle.<unit>`, `testing.<unit>` or
+    /// `<crate>.<unit>` name: the span's name, the line's `name:` and its
+    /// `message`.
     pub const fn name(&self) -> &'static str {
         self.name
     }
 
     /// The span target: `nest_rs::<edge>` for an edge's unit,
-    /// `nest_rs::lifecycle` for the kernel's, the declaring crate's own for any
-    /// other.
+    /// `nest_rs::lifecycle` for the kernel's, `nest_rs::testing` for the test
+    /// harness's, the declaring crate's own for any other.
     pub const fn target(&self) -> &'static str {
         self.target
     }
@@ -139,11 +141,19 @@ const KERNEL: &str = "nest-rs-core";
 /// The first segment of every kernel unit, and the tail of its target.
 const KERNEL_WORD: &str = "lifecycle";
 
+/// The crate that declares the test harness's units: the unit of work a test
+/// runs a service in, which no edge dispatches.
+const HARNESS: &str = "nest-rs-testing";
+
+/// The first segment of every harness unit, and the tail of its target.
+const HARNESS_WORD: &str = "testing";
+
 /// `operation_log` is public: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use super::{
-        Edge, KERNEL, KERNEL_WORD, Kind, Unit, eq_bytes, is_crate_root, is_edge_root, is_lib_name,
+        Edge, HARNESS, HARNESS_WORD, KERNEL, KERNEL_WORD, Kind, Unit, eq_bytes, is_crate_root,
+        is_edge_root, is_lib_name,
     };
 
     /// Evaluated in a `const` by [`unit!`](macro@crate::unit), which passes the
@@ -195,6 +205,21 @@ pub(crate) mod __private {
             }
             if !is_edge_root(target, "nest_rs::", name) {
                 panic!("a kernel unit is emitted on `nest_rs::lifecycle`");
+            }
+            return Unit {
+                name,
+                target,
+                kind,
+                edge: None,
+            };
+        }
+
+        if is_edge_root(HARNESS_WORD, "", name) {
+            if !is_lib_name(owner, HARNESS, HARNESS.len()) {
+                panic!("the `testing` units are the test harness's, declared by `nest-rs-testing`");
+            }
+            if !is_edge_root(target, "nest_rs::", name) {
+                panic!("a harness unit is emitted on `nest_rs::testing`");
             }
             return Unit {
                 name,
@@ -272,6 +297,9 @@ pub(crate) mod __private {
         }
         if is_edge_root(KERNEL_WORD, "", unit.name) {
             return is_lib_name(krate, KERNEL, KERNEL.len());
+        }
+        if is_edge_root(HARNESS_WORD, "", unit.name) {
+            return is_lib_name(krate, HARNESS, HARNESS.len());
         }
         let mut dot = 0;
         while unit.name.as_bytes()[dot] != b'.' {
@@ -426,15 +454,18 @@ pub fn duration_ms(start: Instant) -> f64 {
 ///   `nest_rs::<edge>`, with `<edge>` in [`Edge::ALL`];
 /// - **the kernel**, `nest-rs-core`, declares `lifecycle.<unit>` on
 ///   `nest_rs::lifecycle`;
+/// - **the test harness**, `nest-rs-testing`, declares `testing.<unit>` on
+///   `nest_rs::testing`;
 /// - **any other crate** declares `<its library name>.<unit>` on its own
 ///   target, the library name or a path under it: `nestrs-kafka` declares
 ///   `nestrs_kafka.message` on `nestrs_kafka` or `nestrs_kafka::consumer`.
 ///
 /// Refused at compile time, each with its own sentence: a name off the grammar
 /// (lowercase words, one dot, digits only in the crate's segment), a target
-/// outside the tier's, an edge word or `lifecycle` from a crate that does not
-/// own it, a unit named after another crate, and a package taking the
-/// framework's `nest-rs-` prefix, in either spelling, or its `nest-rs` name.
+/// outside the tier's, an edge word, `lifecycle` or `testing` from a crate
+/// that does not own it, a unit named after another crate, and a package
+/// taking the framework's `nest-rs-` prefix, in either spelling, or its
+/// `nest-rs` name.
 #[macro_export]
 macro_rules! unit {
     ($name:literal, target: $target:expr, kind: $kind:ident $(,)?) => {{
@@ -588,6 +619,16 @@ mod tests {
     }
 
     #[test]
+    fn the_harness_declares_the_testing_units_on_its_own_target() {
+        let unit = declare("nest-rs-testing", "nest_rs::testing", "testing.unit")
+            .expect("the harness's unit");
+        assert_eq!(unit.target(), "nest_rs::testing");
+        assert_eq!(unit.edge(), None, "no edge dispatches a test's unit");
+        assert!(__private::unit_opened_by(&unit, "nest-rs-testing"));
+        assert!(!__private::unit_opened_by(&unit, "nest-rs-core"));
+    }
+
+    #[test]
     fn a_package_unit_is_opened_by_its_crate_alone() {
         let unit = declare("nestrs-kafka", "nestrs_kafka", "nestrs_kafka.message").expect("a unit");
         assert!(__private::unit_opened_by(&unit, "nestrs-kafka"));
@@ -654,6 +695,18 @@ mod tests {
                 "nest_rs::core",
                 "lifecycle.hook",
                 "`nest_rs::lifecycle`",
+            ),
+            (
+                "nestrs-kafka",
+                "nestrs_kafka",
+                "testing.unit",
+                "the `testing` units are the test harness's",
+            ),
+            (
+                "nest-rs-testing",
+                "nest_rs::harness",
+                "testing.unit",
+                "`nest_rs::testing`",
             ),
             (
                 "nest_rs_grpc",

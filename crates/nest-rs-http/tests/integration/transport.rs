@@ -953,7 +953,10 @@ async fn listening_on_a_taken_port_fails_the_boot_before_any_transport_serves() 
 
     let refused = tokio::time::timeout(
         PATIENCE,
-        App::new::<OnTakenPortModule>()
+        App::builder()
+            .module::<OnTakenPortModule>()
+            .build()
+            .await
             .expect("the module boots")
             .run(),
     )
@@ -1024,7 +1027,10 @@ async fn bound_on_port_zero_the_ready_line_carries_the_real_port() {
 
     let stopped = tokio::time::timeout(
         PATIENCE,
-        App::new::<OnPortZeroModule>()
+        App::builder()
+            .module::<OnPortZeroModule>()
+            .build()
+            .await
             .expect("the module boots")
             .run(),
     )
@@ -1381,7 +1387,10 @@ struct ReportsHttpModule;
 async fn a_controller_the_app_reaches_without_the_transport_is_named_at_run() {
     let logs = LogCapture::install();
 
-    App::new::<ReportsHttpModule>()
+    App::builder()
+        .module::<ReportsHttpModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await

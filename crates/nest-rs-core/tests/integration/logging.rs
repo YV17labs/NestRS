@@ -81,7 +81,7 @@ fn logging_child_process() {
 
 #[nest_rs_core::main]
 async fn console_child(role: String) -> anyhow::Result<()> {
-    let app = App::new::<Bare>()?;
+    let app = App::builder().module::<Bare>().build().await?;
     match role.as_str() {
         "queued-exit" => file_lines_the_exit_writes(),
         "queued-signal" => {
@@ -204,7 +204,12 @@ async fn wait_for_release() {
     reason = "the child's stdout is the protocol its parent test reads"
 )]
 fn boot() {
-    match App::new::<Bare>() {
+    let booted = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime the boot runs on")
+        .block_on(App::builder().module::<Bare>().build());
+    match booted {
         Ok(_) => println!("{BOOTED}"),
         Err(error) => println!("{REFUSED}: {error:#}"),
     }

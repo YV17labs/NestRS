@@ -7,8 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_graphql::{Result, SimpleObject};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_guards::__private::GuardSpecs;
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::StatusCode;
 use nest_rs_testing::TestApp;
 
@@ -259,8 +258,7 @@ async fn a_resolver_scope_guard_runs_on_a_reference_the_same_as_on_a_query() {
 async fn a_pooled_guard_refuses_a_reference_before_any_member_answers() {
     let logs = nest_rs_testing::LogCapture::install();
     let app = TestApp::builder()
-        .module::<PooledModule>()
-        .use_guards_global([guard::<Closed>()])
+        .module::<ClosedPoolModule>()
         .build()
         .await
         .expect("a federated schema under a global pool boots");
@@ -295,8 +293,7 @@ async fn a_pooled_guard_refuses_a_reference_before_any_member_answers() {
 #[tokio::test]
 async fn a_pooled_guard_refuses_the_subgraph_sdl() {
     let app = TestApp::builder()
-        .module::<PooledModule>()
-        .use_guards_global([guard::<Closed>()])
+        .module::<ClosedPoolModule>()
         .build()
         .await
         .expect("a federated schema under a global pool boots");
@@ -324,13 +321,15 @@ async fn a_pooled_guard_refuses_the_subgraph_sdl() {
     );
 }
 
+#[module(imports = [CountedModule], providers = [GlobalGuards<(Counting,)>])]
+struct APooledGuardChecksAnEntitiesOperationExactlyOnceApp;
+
 /// A pooled guard runs **once per operation**, however many references
 /// `_entities` carries.
 #[tokio::test]
 async fn a_pooled_guard_checks_an_entities_operation_exactly_once() {
     let app = TestApp::builder()
-        .module::<CountedModule>()
-        .use_guards_global([guard::<Counting>()])
+        .module::<APooledGuardChecksAnEntitiesOperationExactlyOnceApp>()
         .build()
         .await
         .expect("a federated schema under a counting pool boots");
@@ -392,8 +391,14 @@ impl PooledResolver {
 #[module(imports = [subgraph()], providers = [PooledResolver, Closed])]
 struct PooledModule;
 
+#[module(imports = [PooledModule], providers = [GlobalGuards<(Closed,)>])]
+struct ClosedPoolModule;
+
 #[module(imports = [subgraph()], providers = [PooledResolver, crate::FieldStoreDown])]
 struct StoreDownPooledModule;
+
+#[module(imports = [StoreDownPooledModule], providers = [GlobalGuards<(crate::FieldStoreDown,)>])]
+struct AFederationDenialKeepingItsCauseFilesTheChainApp;
 
 /// A pooled guard that cannot evaluate `_service` files what failed on the
 /// federation field's denial line, and the client reads the condition alone.
@@ -401,8 +406,7 @@ struct StoreDownPooledModule;
 async fn a_federation_denial_keeping_its_cause_files_the_chain() {
     let logs = nest_rs_testing::LogCapture::install();
     let app = TestApp::builder()
-        .module::<StoreDownPooledModule>()
-        .use_guards_global([guard::<crate::FieldStoreDown>()])
+        .module::<AFederationDenialKeepingItsCauseFilesTheChainApp>()
         .build()
         .await
         .expect("a federated schema under a global pool boots");
@@ -1221,16 +1225,15 @@ impl MissingEntityResolver {
 #[module(imports = [subgraph()], providers = [MissingEntityResolver])]
 struct MissingEntityModule;
 
-/// **The gate and the entity site's subtraction must agree**: both read
-/// `GuardSpecs`, which an app can seed without `use_guards_global`.
+/// **The gate and the entity site's subtraction must agree**: both read the
+/// pool the app's root declares.
 #[tokio::test]
-async fn a_pool_seeded_without_the_gate_still_reaches_an_entity() {
+async fn the_declared_pool_reaches_an_entity_as_it_reaches_an_ordinary_operation() {
     let app = TestApp::builder()
-        .module::<PooledModule>()
-        .provide(GuardSpecs(vec![guard::<Closed>()]))
+        .module::<ClosedPoolModule>()
         .build()
         .await
-        .expect("a pool seeded directly boots");
+        .expect("a pooled subgraph boots");
 
     let ordinary = app
         .http()
@@ -1258,13 +1261,15 @@ async fn a_pool_seeded_without_the_gate_still_reaches_an_entity() {
     );
 }
 
+#[module(imports = [DoublyDeclaredModule], providers = [GlobalGuards<(Counting,)>])]
+struct AGuardDeclaredAtBothScopesChecksAnEntitiesOperationOnceApp;
+
 /// **A guard declared at both scopes runs once, not once per representation**
 /// — `demo`'s own shape: a global pool plus `#[use_guards]` on the resolver.
 #[tokio::test]
 async fn a_guard_declared_at_both_scopes_checks_an_entities_operation_once() {
     let app = TestApp::builder()
-        .module::<DoublyDeclaredModule>()
-        .use_guards_global([guard::<Counting>()])
+        .module::<AGuardDeclaredAtBothScopesChecksAnEntitiesOperationOnceApp>()
         .build()
         .await
         .expect("a resolver re-declaring a pooled guard boots");
@@ -1387,10 +1392,9 @@ mod keyed_outside_a_subgraph {
     use std::any::TypeId;
 
     use async_graphql::{Executor, Object, Request};
-    use nest_rs_core::{Container, module};
+    use nest_rs_core::{Container, Discoverable, module};
     use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-    use nest_rs_guards::__private::GuardSpecs;
-    use nest_rs_guards::guard;
+    use nest_rs_guards::GlobalGuards;
     use nest_rs_testing::TestApp;
 
     use super::{Closed, Widget};
@@ -1450,12 +1454,10 @@ mod keyed_outside_a_subgraph {
     /// Built by hand, so no wiring step refuses the keyed schema first.
     #[tokio::test]
     async fn a_pool_refuses_the_sdl_of_a_schema_keyed_outside_a_subgraph() {
-        let container = Container::builder()
-            .import::<CatalogProviders>()
-            .provide(nest_rs_core::__private::reachable_providers([
-                TypeId::of::<CatalogResolver>(),
-            ]))
-            .provide(GuardSpecs(vec![guard::<Closed>()]))
+        let builder = Container::builder().import::<CatalogProviders>().provide(
+            nest_rs_core::__private::reachable_providers([TypeId::of::<CatalogResolver>()]),
+        );
+        let container = GlobalGuards::<(Closed,)>::register(builder)
             .build()
             .expect("the container builds");
         let schema =
@@ -1485,7 +1487,7 @@ mod around_the_federation_fields {
     use nest_rs_core::problem::code;
     use nest_rs_core::{
         Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext,
-        exception_filter, injectable, interceptor, module,
+        injectable, module,
     };
     use nest_rs_graphql::{FieldRole, GraphqlView};
     use nest_rs_testing::TestApp;
@@ -1533,12 +1535,17 @@ mod around_the_federation_fields {
     #[module(imports = [FederatedModule], providers = [Recorder, EveryFailure])]
     struct LayeredModule;
 
+    #[module(
+        imports = [LayeredModule],
+        providers = [nest_rs_core::GlobalInterceptors<(Recorder,)>],
+    )]
+    struct TheAppsInterceptorRunsAroundTheSdlFieldAsAFederationUnitApp;
+
     #[tokio::test]
     async fn the_apps_interceptor_runs_around_the_sdl_field_as_a_federation_unit() {
         SEEN.lock().unwrap().clear();
         let app = TestApp::builder()
-            .module::<LayeredModule>()
-            .use_interceptors_global([interceptor::<Recorder>()])
+            .module::<TheAppsInterceptorRunsAroundTheSdlFieldAsAFederationUnitApp>()
             .build()
             .await
             .expect("boots");
@@ -1552,13 +1559,18 @@ mod around_the_federation_fields {
         );
     }
 
+    #[module(
+        imports = [LayeredModule],
+        providers = [nest_rs_core::GlobalExceptionFilters<(EveryFailure,)>],
+    )]
+    struct TheAppsExceptionFilterAnswersAFailedEntitiesFieldApp;
+
     /// `Entity not found.` is async-graphql's own answer, met before any
     /// entity body: only the federation field's site can see it fail.
     #[tokio::test]
     async fn the_apps_exception_filter_answers_a_failed_entities_field() {
         let app = TestApp::builder()
-            .module::<LayeredModule>()
-            .use_exception_filters_global([exception_filter::<EveryFailure>()])
+            .module::<TheAppsExceptionFilterAnswersAFailedEntitiesFieldApp>()
             .build()
             .await
             .expect("boots");

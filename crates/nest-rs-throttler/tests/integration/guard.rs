@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, async_trait, module};
-use nest_rs_guards::guard;
+use nest_rs_guards::GlobalGuards;
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_testing::{CapturedEvent, LogCapture, TestApp};
@@ -85,12 +85,14 @@ struct RatedModule;
 /// never a secret.
 const PSEUDONYM_KEY: &str = "nest-rs-throttler integration pseudonym key";
 
+#[module(imports = [RatedModule], providers = [GlobalGuards<(ThrottlerGuard,)>])]
+struct ThrottledApp;
+
 /// The documented global wiring: the throttler in the app's imports, the guard
-/// in `use_guards_global`, nothing on the controller.
+/// in the root's `GlobalGuards`, nothing on the controller.
 async fn app() -> TestApp {
     TestApp::builder()
-        .module::<RatedModule>()
-        .use_guards_global([guard::<ThrottlerGuard>()])
+        .module::<ThrottledApp>()
         .build()
         .await
         .expect("importing ThrottlerModule provides the guard the pool names")
@@ -1006,7 +1008,7 @@ mod ws {
 mod self_mount {
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
     use nest_rs_core::{ContainerBuilder, Discoverable, Handler, Posture, module};
-    use nest_rs_guards::guard;
+
     use nest_rs_http::StatusCode;
     use nest_rs_http::{HttpEndpointMeta, Method, Response, endpoint_fn};
     use nest_rs_testing::{LogCapture, TestApp};
@@ -1051,12 +1053,17 @@ mod self_mount {
     )]
     struct FilesModule;
 
+    #[module(
+        imports = [FilesModule],
+        providers = [nest_rs_guards::GlobalGuards<(ThrottlerGuard,)>],
+    )]
+    struct TheThrottlerBucketsASelfMountByItsTemplateApp;
+
     #[tokio::test]
     async fn the_throttler_buckets_a_self_mount_by_its_template() {
         let logs = LogCapture::install();
         let app = TestApp::builder()
-            .module::<FilesModule>()
-            .use_guards_global([guard::<ThrottlerGuard>()])
+            .module::<TheThrottlerBucketsASelfMountByItsTemplateApp>()
             .build()
             .await
             .expect("boots");

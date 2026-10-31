@@ -482,7 +482,11 @@ struct HeardModule;
 #[tokio::test]
 async fn an_event_emitted_in_a_block_waits_for_the_outer_commit_and_dies_with_a_rollback() {
     let conn = db().await;
-    let app = nest_rs_core::App::new::<HeardModule>().expect("boots");
+    let app = nest_rs_core::App::builder()
+        .module::<HeardModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app
         .container()
         .get::<nest_rs_events::EventBus>()

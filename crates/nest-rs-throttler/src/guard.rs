@@ -200,8 +200,8 @@ impl Guard for ThrottlerGuard {
     /// field, the event, the MCP operation) and the caller: the connection on
     /// an edge that holds one (WS), else the actor
     /// ([`current_actor_id`](nest_rs_core::current_actor_id)), else one shared
-    /// anonymous bucket, reported once per process. The same guard in
-    /// `use_guards_global` meters the request that carried the unit per client
+    /// anonymous bucket, reported once per process. The same guard in the
+    /// app's `GlobalGuards` meters the request that carried the unit per client
     /// address.
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let limit = cx
@@ -324,15 +324,15 @@ fn caller_bucket(edge: Option<Edge>) -> Cow<'static, str> {
             &GRAPHQL,
             "graphql_anonymous_operation_shares_a_bucket",
             "an anonymous GraphQL operation has no actor to key on, so every anonymous caller \
-             shares one bucket per field; bind ThrottlerGuard in use_guards_global as well, so \
-             the /graphql request itself is metered per client address",
+             shares one bucket per field; list ThrottlerGuard in the app's GlobalGuards as well, \
+             so the /graphql request itself is metered per client address",
         ),
         Some(Edge::Mcp) => warn_shared_bucket(
             &MCP,
             "mcp_anonymous_operation_shares_a_bucket",
             "an anonymous MCP operation has no actor to key on, so every anonymous caller shares \
-             one bucket per operation; bind ThrottlerGuard in use_guards_global as well, so the \
-             /mcp request itself is metered per client address",
+             one bucket per operation; list ThrottlerGuard in the app's GlobalGuards as well, so \
+             the /mcp request itself is metered per client address",
         ),
         _ => warn_shared_bucket(
             &OTHER,

@@ -9,6 +9,7 @@
 )]
 
 mod access_contract;
+mod bearer;
 mod client;
 mod config;
 mod cors;
@@ -37,6 +38,7 @@ mod setups;
 mod shutdown;
 mod transient_scope;
 mod transport_parity;
+mod units;
 mod versioning_filters;
 mod ws;
 mod ws_gateway_guards;

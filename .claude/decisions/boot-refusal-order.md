@@ -153,3 +153,29 @@ as a transient layer on a controller, a gateway or a resolver already did
 
 **Refused:** naming the site's method: the `HostLayers` entry carries its
 host, which a macro ABI change would have to widen for every decorator.
+
+## 2026-10-31 — one boot path
+
+`App::new` and its `UnresolvedFactoryError` are gone (the identity audit,
+agreed under the owner's "Tout faire" of 2026-10-28): every framework module
+owning a config queues a factory, so the synchronous boot refused every real
+app, and `App::builder()` was the remedy it named. The first section's
+ordering argument stands for the one boot left: a contested declaration is
+still read ahead of the factories.
+
+## 2026-10-31 — a scoped layer in an app-wide pool
+
+A pool's declaration (`GlobalGuards<(…)>` and its siblings) holds its layers
+as a site's host does, not as injections: what it attaches at register joins
+the `HostLayers` entries the seal reads, so a request-scoped or transient
+layer in a pool fails with `ScopedLayerError`, naming the layer and the
+declaration, and the reach of each layer is checked as before. Read as
+injections, a declaration — a singleton — was refused with
+`ScopeViolationError`, whose two remedies (`Scoped<T>`, a request-scoped
+declaration) do not exist for a pool; its one remedy is the site's, a
+singleton layer. A transient global layer had booted until then, built once
+at mount and shared by every request.
+
+**Refused:** a field on `ProviderDescriptor` filled by `#[module]` from a new
+`Discoverable` method — a macro ABI change and every hand-built descriptor —
+when the seal already runs after the register phase that records the pool.

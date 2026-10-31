@@ -8,7 +8,8 @@ use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
-    Caught, ExceptionFilter, Layer, UnitContext, async_trait, exception_filter, injectable, module,
+    Caught, ExceptionFilter, GlobalExceptionFilters, Layer, UnitContext, async_trait, injectable,
+    module,
 };
 use nest_rs_http::{HttpView, IntoResponse, ProblemDetails, StatusCode, controller, routes};
 use nest_rs_testing::TestApp;
@@ -210,14 +211,16 @@ impl DupCtrlMethod {
 ])]
 struct DedupFilterModule;
 
+#[module(imports = [DedupFilterModule], providers = [GlobalExceptionFilters<(CountingFilter,)>])]
+struct DedupFilterApp;
+
 #[tokio::test]
 async fn same_filter_global_and_controller_runs_once() {
     let _gate = GATE.lock().await;
     reset_filter_counter();
 
     let app = TestApp::builder()
-        .module::<DedupFilterModule>()
-        .use_exception_filters_global([exception_filter::<CountingFilter>()])
+        .module::<DedupFilterApp>()
         .build()
         .await
         .expect("boots");
@@ -237,8 +240,7 @@ async fn same_filter_global_and_method_runs_once() {
     reset_filter_counter();
 
     let app = TestApp::builder()
-        .module::<DedupFilterModule>()
-        .use_exception_filters_global([exception_filter::<CountingFilter>()])
+        .module::<DedupFilterApp>()
         .build()
         .await
         .expect("boots");
@@ -276,8 +278,7 @@ async fn same_filter_at_all_three_scopes_runs_once() {
     reset_filter_counter();
 
     let app = TestApp::builder()
-        .module::<DedupFilterModule>()
-        .use_exception_filters_global([exception_filter::<CountingFilter>()])
+        .module::<DedupFilterApp>()
         .build()
         .await
         .expect("boots");
@@ -323,7 +324,14 @@ mod refused_versions {
         }
     }
 
-    #[module(providers = [TeapotFilter, Seen, WidgetController])]
+    #[module(
+        providers = [
+            TeapotFilter,
+            Seen,
+            WidgetController,
+            nest_rs_core::GlobalExceptionFilters<(TeapotFilter,)>,
+        ],
+    )]
     struct RefusalsModule;
 
     async fn app(versioning: ApiVersioning) -> TestApp {
@@ -333,7 +341,6 @@ mod refused_versions {
                 versioning,
                 ..HttpConfig::default()
             })
-            .use_exception_filters_global([exception_filter::<TeapotFilter>()])
             .build()
             .await
             .expect("boots")

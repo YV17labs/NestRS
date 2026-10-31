@@ -29,7 +29,12 @@ impl Recorded {
             .with_reader(PeriodicReader::builder(exporter.clone()).build())
             .build();
         opentelemetry::global::set_meter_provider(provider.clone());
-        let app = App::new::<OpenTelemetryModule>().expect("the module boots after init");
+        let app = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime the boot runs on")
+            .block_on(App::builder().module::<OpenTelemetryModule>().build())
+            .expect("the module boots after init");
         let metrics = app
             .container()
             .get::<Metrics>()

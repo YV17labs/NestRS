@@ -296,16 +296,6 @@ async fn database() -> EphemeralDatabase {
         .expect("a database of its own, with the outbox's table")
 }
 
-/// Arm the app's store as its relay does at boot, without filing anything.
-async fn arm(app: &TestApp) {
-    app.container()
-        .get_dyn::<dyn OutboxStore>()
-        .expect("the binding keeps an outbox")
-        .arm()
-        .await
-        .expect("the table is there");
-}
-
 /// The jobs the store keeps, oldest first.
 async fn kept(db: &DatabaseConnection) -> Vec<String> {
     db.query_all_raw(Statement::from_string(
@@ -392,7 +382,6 @@ async fn a_push_inside_a_request_answering_4xx_keeps_nothing_and_one_answering_2
         Pushing::then_answer(&filing, &refused, 1, StatusCode::BAD_REQUEST),
     )
     .await;
-    arm(&app).await;
     let answer = app.http().post("/outbox").send().await;
     assert_eq!(answer.0.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
@@ -413,7 +402,6 @@ async fn a_push_inside_a_request_answering_4xx_keeps_nothing_and_one_answering_2
         Pushing::then_answer(&filing, &created, 1, StatusCode::CREATED),
     )
     .await;
-    arm(&creating).await;
     let answer = creating.http().post("/outbox").send().await;
     assert_eq!(answer.0.status(), StatusCode::CREATED);
     assert_eq!(
@@ -456,7 +444,6 @@ async fn a_push_of_many_inside_a_request_that_rolls_back_keeps_none() {
         Pushing::then_answer(&filing, &receipts, 3, StatusCode::INTERNAL_SERVER_ERROR),
     )
     .await;
-    arm(&app).await;
     app.http().post("/outbox").send().await;
     assert_eq!(
         receipts.lock().expect("lock").len(),
@@ -479,7 +466,6 @@ async fn a_push_on_a_safe_request_is_filed_at_once() {
         Pushing::then_answer(&filing, &receipts, 1, StatusCode::OK),
     )
     .await;
-    arm(&app).await;
     app.http().get("/outbox").send().await;
     assert!(
         kept(&db.connection()).await.is_empty(),
@@ -506,7 +492,6 @@ async fn a_push_from_a_listeners_unit_is_kept_by_its_transaction() {
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
     .await;
-    arm(&app).await;
     let bus = app.container().get::<EventBus>().expect("the bus");
     in_a_unit(&app, async {
         bus.emit(NoteAsked).await;
@@ -542,7 +527,6 @@ async fn a_push_inside_an_atomic_block_that_rolls_back_is_dropped_while_its_unit
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
     .await;
-    arm(&app).await;
     let kept_id = Arc::new(Mutex::new(None));
     in_a_unit(&app, {
         let (filing, kept_id) = (Arc::clone(&filing), Arc::clone(&kept_id));
@@ -584,7 +568,6 @@ async fn a_cancel_inside_a_unit_deletes_the_record_no_relay_filed() {
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
     .await;
-    arm(&app).await;
     let receipt = Arc::new(Mutex::new(None));
     in_a_unit(&app, {
         let (filing, receipt) = (Arc::clone(&filing), Arc::clone(&receipt));
@@ -684,7 +667,6 @@ async fn a_cancel_meeting_a_record_a_relay_holds_waits_for_its_settle_and_never_
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
     .await;
-    arm(&app).await;
     let store = app
         .container()
         .get_dyn::<dyn OutboxStore>()
@@ -739,7 +721,6 @@ async fn a_cancel_by_key_inside_a_unit_deletes_only_the_record_carrying_it() {
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
     .await;
-    arm(&app).await;
     committed_note(&app, &filing, Some("song")).await;
     let other = committed_note(&app, &filing, Some("other")).await;
 
@@ -782,7 +763,6 @@ async fn a_cancel_on_a_safe_request_deletes_the_committed_record_on_the_pool() {
         }
     });
     let app = app_over(&db, &filing, pushing).await;
-    arm(&app).await;
     *receipt.lock().expect("lock") = Some(committed_note(&app, &filing, None).await);
 
     let answered = app.http().get("/outbox").send().await;
@@ -827,7 +807,6 @@ async fn an_atomic_block_on_a_safe_request_keeps_its_push_until_it_commits_and_d
         }
     });
     let app = app_over(&db, &filing, pushing).await;
-    arm(&app).await;
 
     let answered = app.http().get("/outbox").send().await;
     assert_eq!(answered.0.status(), StatusCode::OK);
@@ -880,7 +859,6 @@ async fn a_relay_restarted_mid_pass(key: Option<&str>) {
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
     .await;
-    arm(&app).await;
     let receipt = committed_note(&app, &filing, key).await;
     filing.silent_after_filing.store(true, Ordering::SeqCst);
     let filed = filing.filed.notified();
@@ -932,7 +910,6 @@ async fn a_record_whose_key_another_job_holds_is_superseded_in_one_info_line() {
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
     .await;
-    arm(&app).await;
     let holder = committed_note(&app, &filing, Some("song")).await;
     let superseded = committed_note(&app, &filing, Some("song")).await;
     let relay = Relay::of(&app).await;
@@ -965,7 +942,6 @@ async fn a_backend_refusing_every_call_keeps_the_records_and_says_so_at_warn_the
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
     .await;
-    arm(&app).await;
     committed_note(&app, &filing, None).await;
     let relay = Relay::of(&app).await;
 
@@ -1035,7 +1011,6 @@ async fn two_relays_on_one_table_never_file_one_record_twice() {
             .await
             .expect("the second replica boots"),
     ];
-    arm(&replicas[0]).await;
     in_a_unit(&replicas[0], {
         let filing = Arc::clone(&filing);
         async move {
@@ -1071,26 +1046,31 @@ async fn two_relays_on_one_table_never_file_one_record_twice() {
     }
 }
 
+/// The test harness arms the outbox as the relay does at boot, through the
+/// one arming they share: a store without its table refuses the boot.
 #[tokio::test]
 async fn the_boot_refuses_naming_the_remedy_when_the_table_is_missing() {
     let db = EphemeralDatabase::create::<NoMigrations>()
         .await
         .expect("a database of its own, never migrated");
     let filing = Arc::new(Filing::default());
-    let app = app_over(
-        &db,
-        &filing,
-        Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
-    )
-    .await;
-    let refused = OutboxRelay::new()
-        .configure(app.container())
+    let refused = TestApp::builder()
+        .provide_arc(db.connection())
+        .provide(jobs_on(&filing))
+        .provide(Pushing::then_answer(
+            &filing,
+            &Arc::default(),
+            1,
+            StatusCode::OK,
+        ))
+        .module::<OutboxAppModule>()
+        .build()
         .await
-        .expect_err("the relay cannot arm a store without its table");
+        .err()
+        .expect("an outbox store without its table refuses the boot");
     assert_eq!(
         format!("{refused:#}"),
         "the outbox table `nestrs_outbox` is missing: run `nestrs g migration nestrs_outbox`, \
          then `nestrs run db up`",
     );
-    app.close().await;
 }

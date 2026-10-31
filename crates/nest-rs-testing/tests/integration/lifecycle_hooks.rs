@@ -52,7 +52,11 @@ struct HooksModule;
 
 #[tokio::test]
 async fn unrelated_hosts_run_per_phase_in_the_order_their_module_lists_them() {
-    let app = App::new::<HooksModule>().expect("boots");
+    let app = App::builder()
+        .module::<HooksModule>()
+        .build()
+        .await
+        .expect("boots");
     app.init().await.expect("init phases succeed");
 
     let log = LOG.lock().expect("log mutex is not poisoned").clone();
@@ -78,7 +82,11 @@ struct FailingInitModule;
 
 #[tokio::test]
 async fn a_failing_init_hook_aborts_boot() {
-    let app = App::new::<FailingInitModule>().expect("the container builds");
+    let app = App::builder()
+        .module::<FailingInitModule>()
+        .build()
+        .await
+        .expect("the container builds");
 
     let err = app
         .init()
@@ -340,7 +348,10 @@ mod an_init_hook_fails {
 
 #[tokio::test]
 async fn a_failed_init_hook_runs_every_hosts_destroy_hook_in_reverse_and_run_returns_its_error() {
-    let error = App::new::<an_init_hook_fails::BootModule>()
+    let error = App::builder()
+        .module::<an_init_hook_fails::BootModule>()
+        .build()
+        .await
         .expect("boots")
         .run()
         .await
@@ -373,7 +384,10 @@ mod a_bootstrap_hook_fails {
 
 #[tokio::test]
 async fn a_failed_bootstrap_hook_runs_every_hosts_destroy_hook_in_reverse() {
-    let error = App::new::<a_bootstrap_hook_fails::BootModule>()
+    let error = App::builder()
+        .module::<a_bootstrap_hook_fails::BootModule>()
+        .build()
+        .await
         .expect("boots")
         .run()
         .await

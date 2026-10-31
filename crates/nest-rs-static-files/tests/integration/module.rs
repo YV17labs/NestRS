@@ -3,7 +3,7 @@
 //! the self-mounts: last, outside the prefix, and public.
 
 use nest_rs_core::{Layer, async_trait, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
@@ -287,14 +287,16 @@ impl Guard for DenyEveryone {
 
 impl GuardFor<nest_rs_http::HttpView> for DenyEveryone {}
 
-#[module(imports = [StaticFilesModule], providers = [PostsController, DenyEveryone])]
+#[module(
+    imports = [StaticFilesModule],
+    providers = [PostsController, DenyEveryone, GlobalGuards<(DenyEveryone,)>],
+)]
 struct GuardedApp;
 
 #[tokio::test]
 async fn the_files_are_public_whatever_the_global_guards() {
     let dir = site();
     let app = files_in::<GuardedApp>(dir.path(), StaticFilesConfig::default())
-        .use_guards_global([guard::<DenyEveryone>()])
         .build()
         .await
         .unwrap();

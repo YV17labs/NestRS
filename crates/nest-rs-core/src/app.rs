@@ -24,11 +24,9 @@ use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
     AccessError, ContainerError, FactoryCycleError, FactoryFailedError, InitFailedError,
-    OverriddenDependencyError, UnclaimedOverrideError, UnresolvedFactoryError,
+    OverriddenDependencyError, UnclaimedOverrideError,
 };
-use crate::exception_filter::{ExceptionFilterSpec, GlobalExceptionFilters};
-use crate::interceptor::{GlobalInterceptors, InterceptorSpec};
-use crate::layer_chain::__private::check_specs_resolvable;
+use crate::layer_chain::__private::PooledLayers;
 use crate::lifecycle::{HookFailure, HookOrder, LifecyclePhase, run_phase, run_phase_lenient};
 use crate::millis::millis;
 use crate::module::Module;
@@ -122,16 +120,7 @@ fn check_contested_declarations(builder: &ContainerBuilder) -> Result<()> {
     }
 }
 
-/// Fail the synchronous boot when a module queued an async factory: `App::new`
-/// has no factory phase, so the value would never be built.
-fn check_no_queued_factories(builder: &ContainerBuilder) -> Result<()> {
-    if let Some(type_name) = builder.queued_factory_names().first() {
-        return Err(UnresolvedFactoryError { type_name }.into());
-    }
-    Ok(())
-}
-
-/// What the register phase leaves the boot to refuse, on either path
+/// What the register phase leaves the boot to refuse
 /// ([`ContainerBuilder::register_refusal`]).
 fn check_register_phase(builder: &mut ContainerBuilder) -> Result<()> {
     builder
@@ -207,74 +196,6 @@ fn check_overridden_dependencies(
 }
 
 impl App {
-    /// Build the container from the root module synchronously.
-    ///
-    /// # Errors
-    ///
-    /// Every wiring failure: [`AccessGraphError`](crate::AccessGraphError),
-    /// [`MissingDependencyError`](crate::MissingDependencyError),
-    /// [`DuplicateProviderError`](crate::DuplicateProviderError),
-    /// [`ProviderCycleError`](crate::ProviderCycleError),
-    /// [`UnbuiltProviderError`](crate::UnbuiltProviderError) for a provider the
-    /// register phase never built,
-    /// [`LateOptionalDependencyError`](crate::LateOptionalDependencyError) for
-    /// one built before an optional
-    /// dependency the boot registered afterwards,
-    /// [`UnresolvedFactoryError`] for a module that queued an async factory, a
-    /// module's own refusal ([`ContainerBuilder::refuse`]), and
-    /// [`WiringFailedError`](crate::WiringFailedError) for a module's wiring that
-    /// failed ([`ContainerBuilder::provide_wiring`]).
-    pub fn new<M: Module + 'static>() -> Result<Self> {
-        #[cfg(feature = "logging")]
-        crate::logging::init_fallback()?;
-        // After the fallback, which reads whether a subscriber was set.
-        crate::panic::hold_dispatch_reentrance();
-        let lifecycle = booting();
-        // `collect` runs first so a module queuing a factory is refused below.
-        let root = std::any::type_name::<M>();
-        let builder = ContainerBuilder::booting()
-            .provide_arc(Arc::clone(&lifecycle))
-            .enter_phase(Phase::Collect)
-            .enter_root(root)
-            .import::<M>()
-            .leave_import();
-        let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-        // So a config a provider injects is refused for the factory it needs,
-        // the remedy below, rather than as a provider nothing registers.
-        let builder = crate::injected_factory::queue_injected(
-            builder,
-            &reachable_descriptors(&descriptors, &[TypeId::of::<M>()]),
-        );
-        // Before the queue check: a contested declaration survives the remedy
-        // `UnresolvedFactoryError` prescribes (`.claude/decisions/boot-refusal-order.md`).
-        check_contested_declarations(&builder)?;
-        check_no_queued_factories(&builder)?;
-        let mut builder = builder
-            .enter_phase(Phase::Register)
-            .enter_root(root)
-            .import::<M>()
-            .leave_import();
-        check_register_phase(&mut builder)?;
-        // Global infrastructure for the access graph: the lifecycle seeded
-        // before collect, the rest after register.
-        let global: HashSet<TypeId> = HashSet::from([
-            TypeId::of::<AppLifecycle>(),
-            TypeId::of::<ReachableProviders>(),
-            TypeId::of::<ProviderOrder>(),
-            TypeId::of::<Composition>(),
-        ]);
-        let sealed = seal(
-            &builder,
-            &descriptors,
-            &[(TypeId::of::<M>(), root)],
-            &global,
-        )?;
-        let installed = builder.install_record();
-        let container = sealed.provide(builder).freeze();
-        crate::wiring::wire(&container)?;
-        Ok(Self::assembled(container, lifecycle, installed))
-    }
-
     fn assembled(
         container: Container,
         lifecycle: Arc<AppLifecycle>,
@@ -819,135 +740,6 @@ impl AppBuilder {
         self
     }
 
-    /// Seed module-less metadata of type `M` ([`ContainerBuilder::provide_meta`]
-    /// at the app root), for global builder extensions such as `use_guards_global`.
-    pub fn provide_meta<M: Any + Send + Sync>(mut self, meta: M) -> Self {
-        self.builder = self.builder.provide_meta(meta);
-        self
-    }
-
-    /// Attach a wiring at the app root ([`ContainerBuilder::provide_wiring`]),
-    /// for a global builder extension whose registry or check reads the
-    /// assembled container; it runs before every module's.
-    pub fn provide_wiring(
-        mut self,
-        name: &'static str,
-        wire: fn(&Container) -> Result<()>,
-    ) -> Self {
-        self.builder = self.builder.provide_wiring(name, wire);
-        self
-    }
-
-    /// List `specs` as the interceptors every unit runs at the handler stage,
-    /// after its guards and its posture's class gate, first listed outermost
-    /// and before any a module brings; one no imported module provides fails
-    /// the boot at the wiring step, in every app.
-    ///
-    /// An interceptor that must run around the guards — a timing, a challenge
-    /// stamped on a refusal — is declared `#[interceptor(stage = unit)]` by
-    /// its module instead.
-    ///
-    /// ```
-    /// use nest_rs_core::{
-    ///     App, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable,
-    ///     interceptor, module,
-    /// };
-    ///
-    /// #[injectable]
-    /// #[derive(Layer)]
-    /// struct Audit;
-    ///
-    /// #[async_trait]
-    /// impl Interceptor for Audit {
-    ///     async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
-    ///         next.run(cx).await
-    ///     }
-    /// }
-    ///
-    /// #[module(providers = [Audit])]
-    /// struct AppModule;
-    /// # #[nest_rs_core::main]
-    /// # async fn main() -> anyhow::Result<()> {
-    ///
-    /// let app = App::builder()
-    ///     .use_interceptors_global([interceptor::<Audit>()])
-    ///     .module::<AppModule>()
-    ///     .build()
-    ///     .await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn use_interceptors_global(self, specs: impl IntoIterator<Item = InterceptorSpec>) -> Self {
-        let specs = specs.into_iter().map(|spec| spec.0).collect();
-        self.provide(GlobalInterceptors(specs)).provide_wiring(
-            "nest_rs::layers::interceptors",
-            |container| {
-                check_specs_resolvable::<GlobalInterceptors>(
-                    container,
-                    "interceptor",
-                    "an unresolvable global interceptor would silently drop",
-                )
-                .map_err(anyhow::Error::msg)
-            },
-        )
-    }
-
-    /// List `specs` as the exception filters every unit tries after its
-    /// method's and its host's, first listed first; one no imported module
-    /// provides fails the boot at the wiring step, in every app.
-    ///
-    /// ```
-    /// use std::error::Error;
-    ///
-    /// use nest_rs_core::{
-    ///     App, Caught, ExceptionFilter, Layer, UnitContext, async_trait, exception_filter,
-    ///     injectable, module,
-    /// };
-    ///
-    /// #[injectable]
-    /// #[derive(Layer)]
-    /// struct Logged;
-    ///
-    /// #[async_trait]
-    /// impl ExceptionFilter for Logged {
-    ///     type Exception = dyn Error + Send + Sync;
-    ///
-    ///     async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
-    ///         Caught::Declined
-    ///     }
-    /// }
-    ///
-    /// #[module(providers = [Logged])]
-    /// struct AppModule;
-    /// # #[nest_rs_core::main]
-    /// # async fn main() -> anyhow::Result<()> {
-    ///
-    /// let app = App::builder()
-    ///     .use_exception_filters_global([exception_filter::<Logged>()])
-    ///     .module::<AppModule>()
-    ///     .build()
-    ///     .await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn use_exception_filters_global(
-        self,
-        specs: impl IntoIterator<Item = ExceptionFilterSpec>,
-    ) -> Self {
-        let specs = specs.into_iter().map(|spec| spec.0).collect();
-        self.provide(GlobalExceptionFilters(specs)).provide_wiring(
-            "nest_rs::layers::exception_filters",
-            |container| {
-                check_specs_resolvable::<GlobalExceptionFilters>(
-                    container,
-                    "exception filter",
-                    "an unresolvable global exception filter would silently drop",
-                )
-                .map_err(anyhow::Error::msg)
-            },
-        )
-    }
-
     /// Register an async factory at the composition root, for a resource no
     /// module owns. A seed of the same type wins (the factory is skipped).
     ///
@@ -1265,6 +1057,10 @@ fn seal(
         .iter()
         .map(|o| o.provider.0)
         .collect();
+    let mut linked = LinkedDeclarations::linked();
+    for pooled in builder.attached_meta::<PooledLayers>() {
+        linked.pool(pooled.declaration, &pooled.layers);
+    }
     validate_access_graph(
         descriptors,
         &ids,
@@ -1272,7 +1068,7 @@ fn seal(
         &builder.registered_ids(),
         &builder.scoped_or_transient_ids(),
         &overridden,
-        &LinkedDeclarations::linked(),
+        &linked,
     )
     .map_err(AccessError::into_anyhow)?;
     let scopes = builder.dynamic_scopes();
@@ -1310,10 +1106,22 @@ fn still_serving(serving: &Serving) -> Vec<Arc<str>> {
 /// `app` is public: its tier-2 items live here, reached only through the
 /// crate's `__private`.
 pub(crate) mod __private {
+    use std::any::Any;
     use std::future::Future;
 
-    use super::App;
+    use super::{App, AppBuilder};
     use crate::app_lifecycle::StopCause;
+
+    /// Attach `meta` at the app root, held by no provider
+    /// ([`ContainerBuilder::provide_meta`](crate::ContainerBuilder::provide_meta)):
+    /// what a suite seeds beside the modules it boots, as a binding's
+    /// `register` would.
+    pub fn provide_meta<M: Any + Send + Sync>(app: AppBuilder, meta: M) -> AppBuilder {
+        AppBuilder {
+            builder: app.builder.provide_meta(meta),
+            ..app
+        }
+    }
 
     /// Refuse a transport whose stop the kernel cannot hold: past
     /// [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND), `Duration::MAX` among them — the
@@ -1752,9 +1560,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_synchronous_boot_names_a_contested_binding_ahead_of_the_queue() {
-        let Err(refused) = App::new::<BindsPortBothWaysModule>() else {
+    #[tokio::test]
+    async fn a_contested_binding_is_named_ahead_of_its_factories() {
+        let Err(refused) = App::builder()
+            .module::<BindsPortBothWaysModule>()
+            .build()
+            .await
+        else {
             panic!("one binding would be dropped for the other");
         };
         assert!(
@@ -1961,42 +1773,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_synchronous_boot_refuses_a_static_modules_queued_factory() {
-        let err = match App::new::<BindsPortModule>() {
-            Ok(_) => panic!("a queued factory cannot be drained synchronously"),
-            Err(e) => e,
-        };
-        assert!(
-            err.downcast_ref::<UnresolvedFactoryError>().is_some(),
-            "{err}"
-        );
-    }
-
-    // A static module whose `register` reads what its own `collect` queued —
-    // a binding building its interceptor over the pool its factory checked.
-    struct ReadsItsFactoryModule;
-    impl Module for ReadsItsFactoryModule {
-        fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-            builder.import::<ConfigModule>()
-        }
-        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-            builder.import::<DoublerModule>()
-        }
-    }
-
-    #[test]
-    fn the_synchronous_boot_refuses_a_queued_factory_before_a_register_reads_its_output() {
-        let err = match App::new::<ReadsItsFactoryModule>() {
-            Ok(_) => panic!("a queued factory cannot be drained synchronously"),
-            Err(e) => e,
-        };
-        let unresolved = err
-            .downcast_ref::<UnresolvedFactoryError>()
-            .unwrap_or_else(|| panic!("not the queue refusal: {err:#}"));
-        assert!(unresolved.type_name.ends_with("Config"), "{unresolved:?}");
-    }
-
     // Every `for_root` queues its config, then a factory reading it, in one
     // `collect`; a bare import and a pinned one of the same module both do.
     struct Connection(u32);
@@ -2168,23 +1944,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_factory_queued_in_register_fails_either_boot_naming_its_type() {
-        let Err(built) = App::builder()
+    async fn a_factory_queued_in_register_fails_the_boot_naming_its_type() {
+        let Err(refused) = App::builder()
             .module::<QueuesInRegisterModule>()
             .build()
             .await
         else {
             panic!("nothing drains a factory queued after the factory phase");
         };
-        let Err(synchronous) = App::new::<QueuesInRegisterModule>() else {
-            panic!("nothing drains a factory on the synchronous path");
-        };
-        for refused in [built, synchronous] {
-            let late = refused
-                .downcast_ref::<LateFactoryError>()
-                .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
-            assert!(late.type_name.ends_with("Late"), "{late:?}");
-        }
+        let late = refused
+            .downcast_ref::<LateFactoryError>()
+            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        assert!(late.type_name.ends_with("Late"), "{late:?}");
     }
 
     struct SeedsLateModule;
@@ -2230,22 +2001,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_module_first_imported_in_a_register_is_refused_before_it_registers() {
-        let Err(built) = App::builder()
+        let Err(refused) = App::builder()
             .module::<ImportsReadsLateInRegister>()
             .build()
             .await
         else {
             panic!("nothing drains the factory its register reads");
         };
-        let Err(synchronous) = App::new::<ImportsReadsLateInRegister>() else {
-            panic!("nothing drains a factory on the synchronous path");
-        };
-        for refused in [built, synchronous] {
-            let late = refused
-                .downcast_ref::<LateFactoryError>()
-                .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
-            assert_eq!(late.type_name, std::any::type_name::<Late>());
-        }
+        let late = refused
+            .downcast_ref::<LateFactoryError>()
+            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        assert_eq!(late.type_name, std::any::type_name::<Late>());
     }
 
     struct ProvidesLateModule;
@@ -2426,26 +2192,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_module_imported_in_a_collect_alone_fails_either_boot_naming_it() {
-        let Err(built) = App::builder()
+    async fn a_module_imported_in_a_collect_alone_fails_the_boot_naming_it() {
+        let Err(refused) = App::builder()
             .module::<ImportsInCollectAloneModule>()
             .build()
             .await
         else {
             panic!("its providers would never register");
         };
-        let Err(synchronous) = App::new::<ImportsInCollectAloneModule>() else {
-            panic!("its providers would never register");
-        };
-        for refused in [built, synchronous] {
-            let unregistered = refused
-                .downcast_ref::<UnregisteredModuleError>()
-                .unwrap_or_else(|| panic!("not the unregistered-module refusal: {refused:#}"));
-            assert!(
-                unregistered.module.ends_with("RegistersFirstModule"),
-                "{unregistered:?}"
-            );
-        }
+        let unregistered = refused
+            .downcast_ref::<UnregisteredModuleError>()
+            .unwrap_or_else(|| panic!("not the unregistered-module refusal: {refused:#}"));
+        assert!(
+            unregistered.module.ends_with("RegistersFirstModule"),
+            "{unregistered:?}"
+        );
     }
 
     struct Refused;
@@ -2461,19 +2222,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_register_refusing_fails_either_boot_with_its_first_error() {
-        let Err(built) = App::builder().module::<RefusingModule>().build().await else {
+    async fn a_register_refusing_fails_the_boot_with_its_first_error() {
+        let Err(refused) = App::builder().module::<RefusingModule>().build().await else {
             panic!("a refusal fails the boot");
         };
-        let Err(synchronous) = App::new::<RefusingModule>() else {
-            panic!("a refusal fails the synchronous boot");
-        };
-        for refused in [built, synchronous] {
-            assert_eq!(
-                format!("{refused:#}"),
-                "RefusingModule: the first refusal",
-                "the module's own error, ahead of the duplicate it also left"
-            );
-        }
+        assert_eq!(
+            format!("{refused:#}"),
+            "RefusingModule: the first refusal",
+            "the module's own error, ahead of the duplicate it also left"
+        );
     }
 }

@@ -9,9 +9,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use nest_rs_core::{
-    Caught, ExceptionFilter, Layer, UnitContext, async_trait, exception_filter, injectable, module,
+    Caught, ExceptionFilter, GlobalExceptionFilters, Layer, UnitContext, async_trait, injectable,
+    module,
 };
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{HttpConfig, HttpError, HttpModule, HttpView, StatusCode};
 use nest_rs_seaorm::__private::current_executor;
 use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmExecutor, SeaOrmModule};
@@ -116,6 +117,9 @@ impl ExceptionFilter for AnswersOk {
 #[module(imports = [ProbeModule], providers = [AnswersOk])]
 struct FilteredProbeModule;
 
+#[module(imports = [FilteredProbeModule], providers = [GlobalExceptionFilters<(AnswersOk,)>])]
+struct AHandlerErrorAFilterAnsweredRollsTheHandlersWritesBackApp;
+
 #[tokio::test]
 async fn a_handler_error_a_filter_answered_rolls_the_handlers_writes_back() {
     const TABLE: &str = "filtered_rollback_probe";
@@ -129,8 +133,7 @@ async fn a_handler_error_a_filter_answered_rolls_the_handlers_writes_back() {
                 StatusCode::INTERNAL_SERVER_ERROR,
             ))
         }))
-        .module::<FilteredProbeModule>()
-        .use_exception_filters_global([exception_filter::<AnswersOk>()])
+        .module::<AHandlerErrorAFilterAnsweredRollsTheHandlersWritesBackApp>()
         .build()
         .await
         .expect("the probe app boots against live Postgres");
@@ -196,14 +199,16 @@ impl GuardFor<HttpView> for Refusing {}
 #[module(imports = [ProbeModule], providers = [Refusing])]
 struct RefusingProbeModule;
 
+#[module(imports = [RefusingProbeModule], providers = [GlobalGuards<(Refusing,)>])]
+struct ADeniedMutatingRequestOpensNoTransactionApp;
+
 #[tokio::test]
 async fn a_denied_mutating_request_opens_no_transaction() {
     let app = TestApp::builder()
         .provide(ProbeHandler::answering(StatusCode::CREATED, || async {
             HANDLER_RAN.store(true, Ordering::SeqCst);
         }))
-        .module::<RefusingProbeModule>()
-        .use_guards_global([guard::<Refusing>()])
+        .module::<ADeniedMutatingRequestOpensNoTransactionApp>()
         .build()
         .await
         .expect("the probe app boots against live Postgres");

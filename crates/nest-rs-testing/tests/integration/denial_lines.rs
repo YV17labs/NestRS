@@ -4,10 +4,10 @@
 //! writes no line of its own. A guard writing its decision once in `check`
 //! refuses an HTTP request with it too.
 
-use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
+use nest_rs_core::{Layer, Module, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_mcp::{McpError, McpView, mcp, tools};
@@ -216,21 +216,33 @@ fn assert_one_line(logs: &LogCapture, seen: usize, edge: &str, declared: bool, n
     }
 }
 
-async fn booted(pool: nest_rs_guards::GuardSpec) -> TestApp {
+#[module(imports = [EveryEdgeModule], providers = [GlobalGuards<(DeclaredDoor,)>])]
+struct DeclaredDoorPoolModule;
+
+#[module(imports = [EveryEdgeModule], providers = [GlobalGuards<(SilentDoor,)>])]
+struct SilentDoorPoolModule;
+
+#[module(imports = [EveryEdgeModule], providers = [GlobalGuards<(DeclaredField,)>])]
+struct DeclaredFieldPoolModule;
+
+#[module(imports = [EveryEdgeModule], providers = [GlobalGuards<(SilentField,)>])]
+struct SilentFieldPoolModule;
+
+/// `M`, every edge behind the pool it declares.
+async fn booted<M: Module + 'static>() -> TestApp {
     TestApp::builder()
-        .module::<EveryEdgeModule>()
-        .use_guards_global([pool])
+        .module::<M>()
         .build()
         .await
         .expect("every edge boots")
 }
 
-/// Every edge's request, refused by `G` in the pool, writing its one decision
-/// in `check`.
-async fn requests_refused<G: Guard + 'static>(declared: bool) {
+/// Every edge's request, refused by `G`, the pool `M` declares, writing its
+/// one decision in `check`.
+async fn requests_refused<M: Module + 'static, G: Guard + 'static>(declared: bool) {
     let named = std::any::type_name::<G>();
     let logs = LogCapture::install();
-    let app = booted(guard::<G>()).await;
+    let app = booted::<M>().await;
 
     let seen = filed(&logs);
     app.http()
@@ -270,21 +282,20 @@ async fn requests_refused<G: Guard + 'static>(declared: bool) {
 
 #[tokio::test]
 async fn a_request_a_declaring_guard_refuses_files_one_line_on_its_target() {
-    requests_refused::<DeclaredDoor>(true).await;
+    requests_refused::<DeclaredDoorPoolModule, DeclaredDoor>(true).await;
 }
 
 #[tokio::test]
 async fn a_request_a_silent_guard_refuses_files_one_line_on_the_layers_target() {
-    requests_refused::<SilentDoor>(false).await;
+    requests_refused::<SilentDoorPoolModule, SilentDoor>(false).await;
 }
 
-/// Every in-band edge's unit, refused by `G` in the pool.
-async fn units_refused<G: Guard + 'static>(declared: bool) {
+/// Every in-band edge's unit, refused by `G`, the pool `M` declares.
+async fn units_refused<M: Module + 'static, G: Guard + 'static>(declared: bool) {
     let named = std::any::type_name::<G>();
     let logs = LogCapture::install();
     let app = TestApp::builder()
-        .module::<EveryEdgeModule>()
-        .use_guards_global([guard::<G>()])
+        .module::<M>()
         .build_ws()
         .await
         .expect("every edge serves");
@@ -301,7 +312,7 @@ async fn units_refused<G: Guard + 'static>(declared: bool) {
     drop(socket);
     app.close().await;
 
-    let app = booted(guard::<G>()).await;
+    let app = booted::<M>().await;
 
     let seen = filed(&logs);
     let graphql = app
@@ -324,10 +335,10 @@ async fn units_refused<G: Guard + 'static>(declared: bool) {
 
 #[tokio::test]
 async fn a_unit_a_declaring_guard_refuses_files_one_line_on_its_target() {
-    units_refused::<DeclaredField>(true).await;
+    units_refused::<DeclaredFieldPoolModule, DeclaredField>(true).await;
 }
 
 #[tokio::test]
 async fn a_unit_a_silent_guard_refuses_files_one_line_on_the_layers_target() {
-    units_refused::<SilentField>(false).await;
+    units_refused::<SilentFieldPoolModule, SilentField>(false).await;
 }

@@ -2,16 +2,28 @@
 //! reaches it, and only those; and a panic [`within`] contains is the port's to
 //! file, once.
 
+use std::any::Any;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
 use nest_rs_core::panic::{FIELD, LOCATION_FIELD};
 use nest_rs_core::{
-    App, Budget, BudgetPastNetError, Collecting, ContainerBuilder, Module, Net, Registering,
-    Unanswered, contained_panic, injectable, module, within,
+    App, AppBuilder, Budget, BudgetPastNetError, Collecting, ContainerBuilder, Module, Net,
+    Registering, Unanswered, contained_panic, injectable, module, within,
 };
 use nest_rs_testing::LogCapture;
+
+/// What the suite seeds at the app root, as a binding's `register` would.
+trait SeedsMeta {
+    fn provide_meta<M: Any + Send + Sync>(self, meta: M) -> Self;
+}
+
+impl SeedsMeta for AppBuilder {
+    fn provide_meta<M: Any + Send + Sync>(self, meta: M) -> Self {
+        nest_rs_core::__private::provide_meta(self, meta)
+    }
+}
 
 /// A resource that waits what it holds for an answer.
 struct Pool(Duration);
@@ -189,10 +201,10 @@ impl Module for DeclaringModule {
     }
 }
 
-#[test]
-fn the_synchronous_boot_refuses_it_too() {
-    let Err(error) = App::new::<DeclaringModule>() else {
-        panic!("App::new must refuse a budget at a net reaching it");
+#[tokio::test]
+async fn a_budget_a_register_declares_is_refused_too() {
+    let Err(error) = App::builder().module::<DeclaringModule>().build().await else {
+        panic!("the boot must refuse a budget at a net reaching it");
     };
     assert!(
         error.downcast_ref::<BudgetPastNetError>().is_some(),

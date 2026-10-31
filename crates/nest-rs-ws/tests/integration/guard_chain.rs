@@ -3,7 +3,7 @@
 //! this check reads does not hold.
 
 use nest_rs_core::{AmbientValue, Layer, async_trait, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, GuardPhase, PrincipalClaim};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{WsClient, WsConfig, WsModule, gateway, messages};
 
@@ -297,11 +297,13 @@ impl ReplayedGateway {
 #[module(imports = [WsModule], providers = [ReplayedGateway, CountingGuard])]
 struct ReplayedModule;
 
+#[module(imports = [ReplayedModule], providers = [GlobalGuards<(CountingGuard,)>])]
+struct AGuardForcedAloneOnAMessageRunsAgainAfterTheGlobalPoolApp;
+
 #[tokio::test]
 async fn a_guard_forced_alone_on_a_message_runs_again_after_the_global_pool() {
     let app = TestApp::builder()
-        .module::<ReplayedModule>()
-        .use_guards_global([nest_rs_guards::guard::<CountingGuard>()])
+        .module::<AGuardForcedAloneOnAMessageRunsAgainAfterTheGlobalPoolApp>()
         .build_ws()
         .await
         .expect("a gateway boots on a real port");

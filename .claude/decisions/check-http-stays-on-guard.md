@@ -102,3 +102,7 @@ What it costs: an admitting `check` written as an `#[async_trait]` future
 allocates once per in-band unit the pool runs it on, where the default
 allocated nothing. The framework's two return a zero-sized future instead, so
 they still allocate nothing; on HTTP, `check_http` still runs one future.
+
+**2026-10-31 — the pool's spelling.** `use_guards_global` is now
+`GlobalGuards<(…)>`, declared by the module the app boots; like the builder
+call, it takes no `GuardFor` bound, for the reasons above.

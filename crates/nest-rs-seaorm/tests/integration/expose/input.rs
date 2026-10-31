@@ -9,7 +9,7 @@ use std::sync::Arc;
 use nest_rs_authz::{AbilityBuilder, Create};
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{Json, StatusCode, controller, routes};
 use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable, expose};
 use nest_rs_testing::TestApp;
@@ -183,10 +183,12 @@ impl TicketsResolver {
 )]
 struct TicketsModule;
 
+#[module(imports = [TicketsModule], providers = [GlobalGuards<(GrantsCreate,)>])]
+struct TicketsApp;
+
 async fn tickets() -> TestApp {
     crate::over_an_unconnected_pool()
-        .module::<TicketsModule>()
-        .use_guards_global([guard::<GrantsCreate>()])
+        .module::<TicketsApp>()
         .build()
         .await
         .expect("a hand-written create on each edge boots")

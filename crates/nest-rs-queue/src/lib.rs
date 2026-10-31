@@ -158,6 +158,7 @@ pub mod __private {
         HandlerContext, JobHandler, decode, process_method, required_capabilities,
     };
     pub use crate::jobs::__private::producer_of;
+    pub use crate::outbox::arm_outbox;
     pub use crate::queue_name::is_valid_queue_name;
 
     pub use nest_rs_database;

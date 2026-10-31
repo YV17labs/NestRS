@@ -1,8 +1,8 @@
 //! Covers `src/interceptor.rs` through `#[interceptor]`: what a module brings
 //! is the container's own provider, runs only where its module is imported,
-//! after what the app lists and in import order — a `#[derive(Layer)]`
-//! priority ahead of both — once whatever else lists it, and the app's own list
-//! fails the boot on a type no module provides.
+//! after what the app's root declares and in import order — a
+//! `#[derive(Layer)]` priority ahead of both — once whatever else lists it, and
+//! the root's declaration fails the boot on a type it does not reach.
 
 use std::any::TypeId;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,8 +14,8 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::operation_log::Kind;
 use nest_rs_core::{
-    App, AppBuilder, Handler, Interceptor, Layer, Next, Outcome, Posture, UnitContext, UnitView,
-    WiringFailedError, async_trait, injectable, interceptor, module,
+    AccessGraphError, App, AppBuilder, GlobalInterceptors, Handler, Interceptor, Layer, Next,
+    Outcome, Posture, UnitContext, UnitView, async_trait, injectable, interceptor, module,
 };
 use nest_rs_testing::LogCapture;
 
@@ -131,26 +131,28 @@ async fn boot(builder: AppBuilder) -> App {
         .unwrap_or_else(|refused| panic!("the app boots: {refused:#}"))
 }
 
-#[module(imports = [AppListedModule, MetricsModule, TracingModule])]
+#[module(
+    imports = [AppListedModule, MetricsModule, TracingModule],
+    providers = [GlobalInterceptors<(AppListed,)>],
+)]
 struct ImportsMetricsFirst;
 
-#[module(imports = [AppListedModule, TracingModule, MetricsModule])]
+#[module(
+    imports = [AppListedModule, TracingModule, MetricsModule],
+    providers = [GlobalInterceptors<(AppListed,)>],
+)]
 struct ImportsTracingFirst;
 
 #[tokio::test]
 async fn a_module_interceptor_runs_after_the_apps_own_in_import_order() {
-    let metrics_first = App::builder()
-        .module::<ImportsMetricsFirst>()
-        .use_interceptors_global([nest_rs_core::interceptor::<AppListed>()]);
+    let metrics_first = App::builder().module::<ImportsMetricsFirst>();
     assert_eq!(
         one_unit(&boot(metrics_first).await).await,
         ["app", "metrics", "tracing"],
         "the app's list first, then each module's in the order the root imports them",
     );
 
-    let tracing_first = App::builder()
-        .module::<ImportsTracingFirst>()
-        .use_interceptors_global([nest_rs_core::interceptor::<AppListed>()]);
+    let tracing_first = App::builder().module::<ImportsTracingFirst>();
     assert_eq!(
         one_unit(&boot(tracing_first).await).await,
         ["app", "tracing", "metrics"]
@@ -178,14 +180,15 @@ impl Interceptor for Prioritized {
 #[module(imports = [TrailModule], providers = [Prioritized])]
 struct PrioritizedModule;
 
-#[module(imports = [AppListedModule, TracingModule, PrioritizedModule])]
+#[module(
+    imports = [AppListedModule, TracingModule, PrioritizedModule],
+    providers = [GlobalInterceptors<(AppListed,)>],
+)]
 struct ImportsPrioritizedLast;
 
 #[tokio::test]
 async fn a_derived_priority_orders_an_interceptor_ahead_of_its_stage() {
-    let builder = App::builder()
-        .module::<ImportsPrioritizedLast>()
-        .use_interceptors_global([nest_rs_core::interceptor::<AppListed>()]);
+    let builder = App::builder().module::<ImportsPrioritizedLast>();
     assert_eq!(
         one_unit(&boot(builder).await).await,
         ["prioritized", "app", "tracing"],
@@ -193,14 +196,12 @@ async fn a_derived_priority_orders_an_interceptor_ahead_of_its_stage() {
     );
 }
 
-#[module(imports = [TimingModule])]
+#[module(imports = [TimingModule], providers = [GlobalInterceptors<(Timing,)>])]
 struct ImportsTiming;
 
 #[tokio::test]
 async fn an_interceptor_at_the_unit_stage_the_app_also_lists_runs_once() {
-    let builder = App::builder()
-        .module::<ImportsTiming>()
-        .use_interceptors_global([nest_rs_core::interceptor::<Timing>()]);
+    let builder = App::builder().module::<ImportsTiming>();
     let app = boot(builder).await;
     assert_eq!(one_unit(&app).await, ["timing"]);
 }
@@ -224,14 +225,12 @@ impl Interceptor for Counting {
     }
 }
 
-#[module(providers = [Counting, Trail])]
+#[module(providers = [Counting, Trail, GlobalInterceptors<(Counting,)>])]
 struct CountingBeforeItsDependency;
 
 #[tokio::test]
 async fn the_interceptor_a_unit_runs_is_the_containers_own_provider() {
-    let builder = App::builder()
-        .module::<CountingBeforeItsDependency>()
-        .use_interceptors_global([nest_rs_core::interceptor::<Counting>()]);
+    let builder = App::builder().module::<CountingBeforeItsDependency>();
     let app = boot(builder).await;
     assert_eq!(one_unit(&app).await, ["counting"], "listed twice, run once");
     let counting = app.container().get::<Counting>().expect("provided");
@@ -254,22 +253,23 @@ async fn a_module_the_app_does_not_import_brings_no_interceptor() {
     );
 }
 
+#[module(imports = [TrailModule], providers = [GlobalInterceptors<(Metrics,)>])]
+struct DeclaresAnUnreachedInterceptor;
+
 #[tokio::test]
-async fn an_interceptor_the_app_lists_and_no_module_provides_fails_the_boot_naming_it() {
+async fn an_interceptor_the_root_declares_and_does_not_reach_fails_the_boot_naming_it() {
     let built = App::builder()
-        .module::<ImportsNoInterceptor>()
-        .use_interceptors_global([nest_rs_core::interceptor::<Metrics>()])
+        .module::<DeclaresAnUnreachedInterceptor>()
         .build()
         .await;
     let Err(refused) = built else {
         panic!("a global interceptor would silently drop");
     };
     assert!(
-        refused.downcast_ref::<WiringFailedError>().is_some(),
-        "not the wiring refusal: {refused:#}"
+        refused.downcast_ref::<AccessGraphError>().is_some(),
+        "not the access graph's refusal: {refused:#}"
     );
     let said = format!("{refused:#}");
-    assert!(said.contains("nest_rs::layers::interceptors"), "{said}");
     assert!(said.contains("Metrics"), "{said}");
 }
 

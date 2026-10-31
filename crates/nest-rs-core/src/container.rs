@@ -566,8 +566,7 @@ impl DuplicateProvider {
 }
 
 impl ContainerBuilder {
-    /// A builder a boot drains and reads — [`App::new`](crate::App::new)'s and
-    /// [`AppBuilder`](crate::AppBuilder)'s.
+    /// A builder a boot drains and reads — [`AppBuilder`](crate::AppBuilder)'s.
     pub(crate) fn booting() -> Self {
         Self {
             booting: true,
@@ -847,10 +846,13 @@ impl ContainerBuilder {
     ///     }
     /// }
     ///
-    /// let app = App::new::<MetricsModule>()?;
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// let app = App::builder().module::<MetricsModule>().build().await?;
     /// let attached = Discovery::new(app.container()).meta::<TransportContribution>();
     /// assert_eq!(attached[0].meta.name(), "MetricsPort");
-    /// # Ok::<(), anyhow::Error>(())
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// A closure capturing a value is refused at compile time:
@@ -911,7 +913,11 @@ impl ContainerBuilder {
     ///     }
     /// }
     ///
-    /// assert!(App::new::<RecipesModule>().is_ok());
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// App::builder().module::<RecipesModule>().build().await?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn provide_wiring(
         self,
@@ -960,7 +966,7 @@ impl ContainerBuilder {
     /// }
     /// # #[nest_rs_core::main]
     /// # async fn main() -> anyhow::Result<()> {
-    /// App::new::<PoolModule>()?.close().await;
+    /// App::builder().module::<PoolModule>().build().await?.close().await;
     /// # Ok(())
     /// # }
     /// ```
@@ -1326,6 +1332,12 @@ impl ContainerBuilder {
         }
     }
 
+    /// The module whose phase is running, as its import is written; `None`
+    /// outside any import a `#[module]` entered.
+    pub(crate) fn registering_module(&self) -> Option<&'static str> {
+        self.import_sites.last().map(|site| site.import)
+    }
+
     /// Enter the phase of the root module `root` the app is built from.
     pub(crate) fn enter_root(mut self, root: &'static str) -> Self {
         self.import_sites.push(ImportSite {
@@ -1390,11 +1402,6 @@ impl ContainerBuilder {
 
     pub(crate) fn take_factories(&mut self) -> Vec<QueuedFactory> {
         std::mem::take(&mut self.factories)
-    }
-
-    /// Types a module queued an async factory for.
-    pub(crate) fn queued_factory_names(&self) -> Vec<&'static str> {
-        self.factories.iter().map(|queued| queued.name).collect()
     }
 
     /// The refusal of the first factory still queued that would provide a type

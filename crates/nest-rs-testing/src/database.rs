@@ -1,17 +1,77 @@
-//! A throwaway Postgres database fixture for e2e tests (the `orm` feature).
+//! A throwaway Postgres database fixture for e2e tests (the `orm` feature),
+//! on its own or as the database a test app boots on.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
+use nest_rs_core::AppBuilder;
 use nest_rs_seaorm::SeaOrmConfig;
 use sea_orm::{
     ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement,
 };
 use sea_orm_migration::MigratorTrait;
 
+use crate::TestAppBuilder;
+use crate::app::Kept;
 use crate::env::load_project_env;
+
+/// The database a test app creates at its boot.
+pub(crate) type DatabaseFixture =
+    fn() -> Pin<Box<dyn Future<Output = Result<EphemeralDatabase>> + Send>>;
+
+impl TestAppBuilder {
+    /// Boot on a database of the test's own: created on the server
+    /// `<PREFIX>_SEAORM__URL` names, migrated by `M`, its connection seeded as
+    /// the app's pool — so `SeaOrmModule` opens none — and dropped once the app
+    /// is, closed or dropped. What [`EphemeralDatabase`] does, held by the app.
+    ///
+    /// ```no_run
+    /// # use nest_rs_core::module;
+    /// # use nest_rs_testing::TestApp;
+    /// # use sea_orm_migration::{MigrationTrait, MigratorTrait};
+    /// # struct Migrator;
+    /// # impl MigratorTrait for Migrator {
+    /// #     fn migrations() -> Vec<Box<dyn MigrationTrait>> { Vec::new() }
+    /// # }
+    /// # #[module]
+    /// # struct BlogModule;
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// let app = TestApp::builder()
+    ///     .module::<BlogModule>()
+    ///     .ephemeral_database::<Migrator>()
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn ephemeral_database<M: MigratorTrait + 'static>(mut self) -> Self {
+        self.database = Some(|| Box::pin(EphemeralDatabase::create::<M>()));
+        self
+    }
+}
+
+/// `inner` with the database `fixture` creates seeded as its pool, and that
+/// database, for the app to keep.
+pub(crate) async fn seeded(
+    inner: AppBuilder,
+    fixture: Option<DatabaseFixture>,
+) -> Result<(AppBuilder, Kept)> {
+    let Some(create) = fixture else {
+        return Ok((inner, Kept::default()));
+    };
+    let database = create().await?;
+    Ok((
+        inner.provide_arc(database.connection()),
+        Kept {
+            database: Some(database),
+        },
+    ))
+}
 
 /// Fresh Postgres database created for one e2e run, migrated, then **dropped
 /// when this guard drops**. Seed `db.connection()` into a test app and the

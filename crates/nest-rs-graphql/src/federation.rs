@@ -29,7 +29,7 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::anyhow;
 use nest_rs_core::{Container, Handler, Posture};
-use nest_rs_guards::__private::{GuardSpecs, resolve_global_chain};
+use nest_rs_guards::__private::{global_guards_active, resolve_global_chain};
 
 use crate::config::GraphqlConfig;
 use crate::error::{FieldFailure, Unserved, opaque_error};
@@ -46,9 +46,9 @@ pub(crate) const ENTITIES_FIELD: &str = "_entities";
 const REPRESENTATIONS_ARG: &str = "representations";
 
 /// Whether the federation root fields run the app-wide guard pool: whenever
-/// the app lists one, an empty list included.
+/// the app declares one.
 pub(crate) fn gate_runs(container: &Container) -> bool {
-    container.get::<GuardSpecs>().is_some()
+    global_guards_active(container)
 }
 
 /// The handler `_service` runs as.

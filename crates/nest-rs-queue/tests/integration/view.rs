@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use nest_rs_core::problem::code;
 use nest_rs_core::{
-    App, Caught, Container, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, Transport,
-    UnitContext, async_trait, injectable, interceptor, module,
+    App, Caught, Container, ExceptionFilter, GlobalInterceptors, Interceptor, Layer, Next, Outcome,
+    Problem, Transport, UnitContext, async_trait, injectable, module,
 };
 use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
 use nest_rs_queue::{
@@ -416,11 +416,13 @@ impl Interceptor for AppReading {
 #[module(providers = [HostedProcessor, Reading, AppReading])]
 struct ViewedModule;
 
+#[module(imports = [ViewedModule], providers = [GlobalInterceptors<(AppReading,)>])]
+struct TheAppsInterceptorsRunAroundEveryJobOutermostApp;
+
 #[tokio::test]
 async fn the_apps_interceptors_run_around_every_job_outermost() {
     let app = App::builder()
-        .module::<ViewedModule>()
-        .use_interceptors_global([interceptor::<AppReading>()])
+        .module::<TheAppsInterceptorsRunAroundEveryJobOutermostApp>()
         .build()
         .await
         .expect("the app boots");

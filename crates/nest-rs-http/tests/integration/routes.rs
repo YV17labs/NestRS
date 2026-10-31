@@ -2,6 +2,7 @@
 //! registrant, and the router it compiles into (`src/router.rs`). Black-box
 //! over the public seams, so whatever matches the path passes it unchanged.
 
+use nest_rs_core::__private::provide_meta;
 use nest_rs_core::{App, Transport, module};
 use nest_rs_http::{
     BoxEndpoint, HttpConfig, HttpEndpointMeta, HttpRoutes, Method, Request, Response, controller,
@@ -34,16 +35,16 @@ pub(crate) async fn table_on(
     config: HttpConfig,
     mount: impl Fn(&mut HttpRoutes) + Send + Sync + 'static,
 ) -> Result<Client, String> {
-    let app = App::builder()
-        .provide_meta(
-            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/", "probe", move |_c, routes| {
-                mount(routes)
-            })
-            .owned_by("Conformance"),
-        )
-        .build()
-        .await
-        .expect("the app builds — the table is the transport's");
+    let app = provide_meta(
+        App::builder(),
+        HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/", "probe", move |_c, routes| {
+            mount(routes)
+        })
+        .owned_by("Conformance"),
+    )
+    .build()
+    .await
+    .expect("the app builds — the table is the transport's");
     let mut transport = crate::built(&config);
     transport
         .configure(app.container())
@@ -343,18 +344,18 @@ async fn head_on_a_get_route_answers_headers_and_no_body() {
 
 #[tokio::test]
 async fn a_self_mount_registering_an_undeclared_path_fails_the_boot_naming_both() {
-    let app = App::builder()
-        .provide_meta(
-            HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/tools", "mcp", |_c, routes| {
-                routes
-                    .route(Method::POST, "/tools", crate::answering("tools"))
-                    .route(Method::GET, "/admin", crate::answering("admin"));
-            })
-            .owned_by("WanderingTools"),
-        )
-        .build()
-        .await
-        .expect("the app builds — the refusal is the transport's");
+    let app = provide_meta(
+        App::builder(),
+        HttpEndpointMeta::new(&crate::PUBLIC_MOUNT, "/tools", "mcp", |_c, routes| {
+            routes
+                .route(Method::POST, "/tools", crate::answering("tools"))
+                .route(Method::GET, "/admin", crate::answering("admin"));
+        })
+        .owned_by("WanderingTools"),
+    )
+    .build()
+    .await
+    .expect("the app builds — the refusal is the transport's");
     let msg = crate::built(&HttpConfig::default())
         .configure(app.container())
         .await

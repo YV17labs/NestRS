@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use nest_rs_core::{Layer, Posture, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{EndpointGuards, HttpView, StatusCode};
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::{McpView, ServerHandler, mcp, tool_handler, tool_router};
@@ -206,13 +206,15 @@ async fn upgrade(app: &TestApp, path: &str, protocol: Option<&str>) -> StatusCod
     request.send().await.0.status()
 }
 
+#[module(imports = [EveryUpgradeModule], providers = [GlobalGuards<(Bearer,)>])]
+struct ARefusedOriginPaysForNoGuardApp;
+
 /// The origin check runs ahead of the request's guards on every surface that
 /// owes one — a gateway's upgrade, a graphql-ws upgrade, every `/mcp` request.
 #[tokio::test]
 async fn a_refused_origin_pays_for_no_guard() {
     let app = TestApp::builder()
-        .module::<EveryUpgradeModule>()
-        .use_guards_global([guard::<Bearer>()])
+        .module::<ARefusedOriginPaysForNoGuardApp>()
         .build()
         .await
         .expect("boots");

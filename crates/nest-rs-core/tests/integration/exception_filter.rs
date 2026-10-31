@@ -1,6 +1,7 @@
-//! Covers `src/exception_filter.rs` through a booted app: a filter the app
-//! lists is the container's own provider and answers a failed unit at any
-//! site, and the app's list fails the boot on a type no module provides.
+//! Covers `src/exception_filter.rs` through a booted app: a filter the app's
+//! root declares is the container's own provider and answers a failed unit at
+//! any site, and the declaration fails the boot on a type the root does not
+//! reach.
 
 use std::any::TypeId;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,8 +12,8 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::operation_log::Kind;
 use nest_rs_core::{
-    App, Caught, ExceptionFilter, Handler, Layer, Outcome, Posture, UnitContext, UnitView,
-    WiringFailedError, async_trait, exception_filter, injectable, module,
+    AccessGraphError, App, Caught, ExceptionFilter, GlobalExceptionFilters, Handler, Layer,
+    Outcome, Posture, UnitContext, UnitView, async_trait, injectable, module,
 };
 
 /// Answers every failure, counting the ones it answered.
@@ -34,11 +35,11 @@ impl ExceptionFilter for CatchAll {
     }
 }
 
-#[module(providers = [CatchAll])]
+#[module(providers = [CatchAll, GlobalExceptionFilters<(CatchAll,)>])]
 struct CatchAllModule;
 
-#[module]
-struct ImportsNoFilter;
+#[module(providers = [GlobalExceptionFilters<(CatchAll,)>])]
+struct ReachesNoFilter;
 
 struct Jobs;
 struct JobView;
@@ -78,10 +79,9 @@ impl Tail for Failing {
 }
 
 #[tokio::test]
-async fn a_filter_the_app_lists_answers_a_failed_unit_with_the_containers_own_provider() {
+async fn a_filter_the_root_declares_answers_a_failed_unit_with_the_containers_own_provider() {
     let app = App::builder()
         .module::<CatchAllModule>()
-        .use_exception_filters_global([exception_filter::<CatchAll>()])
         .build()
         .await
         .unwrap_or_else(|refused| panic!("the app boots: {refused:#}"));
@@ -104,23 +104,15 @@ async fn a_filter_the_app_lists_answers_a_failed_unit_with_the_containers_own_pr
 }
 
 #[tokio::test]
-async fn a_filter_the_app_lists_and_no_module_provides_fails_the_boot_naming_it() {
-    let built = App::builder()
-        .module::<ImportsNoFilter>()
-        .use_exception_filters_global([exception_filter::<CatchAll>()])
-        .build()
-        .await;
+async fn a_filter_the_root_declares_and_does_not_reach_fails_the_boot_naming_it() {
+    let built = App::builder().module::<ReachesNoFilter>().build().await;
     let Err(refused) = built else {
         panic!("a global exception filter would silently drop");
     };
     assert!(
-        refused.downcast_ref::<WiringFailedError>().is_some(),
-        "not the wiring refusal: {refused:#}"
+        refused.downcast_ref::<AccessGraphError>().is_some(),
+        "not the access graph's refusal: {refused:#}"
     );
     let said = format!("{refused:#}");
-    assert!(
-        said.contains("nest_rs::layers::exception_filters"),
-        "{said}"
-    );
     assert!(said.contains("CatchAll"), "{said}");
 }

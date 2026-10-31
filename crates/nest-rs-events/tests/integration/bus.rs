@@ -67,7 +67,11 @@ struct EventsTestModule;
 
 #[tokio::test]
 async fn a_producer_emits_and_the_discovered_listener_runs() {
-    let app = App::new::<EventsTestModule>().expect("boots");
+    let app = App::builder()
+        .module::<EventsTestModule>()
+        .build()
+        .await
+        .expect("boots");
 
     let awarder = app
         .container()
@@ -83,7 +87,11 @@ async fn a_producer_emits_and_the_discovered_listener_runs() {
 
 #[tokio::test]
 async fn several_on_event_methods_share_the_providers_deps() {
-    let app = App::new::<EventsTestModule>().expect("boots");
+    let app = App::builder()
+        .module::<EventsTestModule>()
+        .build()
+        .await
+        .expect("boots");
 
     let awarder = app
         .container()
@@ -103,7 +111,11 @@ async fn emitting_an_event_with_no_listener_is_a_noop() {
     #[derive(Clone)]
     struct Unobserved;
 
-    let app = App::new::<EventsTestModule>().expect("boots");
+    let app = App::builder()
+        .module::<EventsTestModule>()
+        .build()
+        .await
+        .expect("boots");
 
     let bus = app
         .container()
@@ -173,7 +185,11 @@ impl OpenTransaction {
 }
 
 async fn booted() -> (App, Arc<Awarder>, Arc<Ledger>) {
-    let app = App::new::<EventsTestModule>().expect("boots");
+    let app = App::builder()
+        .module::<EventsTestModule>()
+        .build()
+        .await
+        .expect("boots");
     let awarder = app
         .container()
         .get::<Awarder>()
@@ -234,7 +250,11 @@ struct BuslessModule;
 async fn listeners_with_no_event_bus_are_reported_at_boot() {
     let logs = nest_rs_testing::LogCapture::install();
 
-    let app = App::new::<BuslessModule>().expect("boots without EventsModule");
+    let app = App::builder()
+        .module::<BuslessModule>()
+        .build()
+        .await
+        .expect("boots without EventsModule");
     app.init()
         .await
         .expect("a missing bus is never a boot failure");
@@ -321,7 +341,11 @@ struct ShapedModule;
 /// event that do not exist.
 #[tokio::test]
 async fn a_compiled_out_listener_is_skipped_and_the_spelled_out_shapes_are_served() {
-    let app = App::new::<ShapedModule>().expect("boots");
+    let app = App::builder()
+        .module::<ShapedModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app
         .container()
         .get::<EventBus>()
@@ -383,7 +407,11 @@ impl TenantListeners {
 struct TenantEventsModule;
 
 async fn tenant_booted() -> (App, Arc<EventBus>, Arc<TenantProbe>) {
-    let app = App::new::<TenantEventsModule>().expect("boots");
+    let app = App::builder()
+        .module::<TenantEventsModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app
         .container()
         .get::<EventBus>()
@@ -478,7 +506,11 @@ impl ExecutorListeners {
 struct ExecutorEventsModule;
 
 async fn executor_booted() -> (App, Arc<EventBus>, Arc<ExecutorProbe>) {
-    let app = App::new::<ExecutorEventsModule>().expect("boots");
+    let app = App::builder()
+        .module::<ExecutorEventsModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app
         .container()
         .get::<EventBus>()
@@ -604,7 +636,11 @@ struct FallibleEventsModule;
 
 #[tokio::test]
 async fn a_listener_answering_an_error_is_filed_with_its_chain_and_the_next_one_runs() {
-    let app = App::new::<FallibleEventsModule>().expect("boots");
+    let app = App::builder()
+        .module::<FallibleEventsModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app.container().get::<EventBus>().expect("the bus");
     let ran = app.container().get::<Ran>().expect("the probe");
     let logs = nest_rs_testing::LogCapture::install();
@@ -667,7 +703,11 @@ struct StallingEventsModule;
 
 #[tokio::test(start_paused = true)]
 async fn a_listener_running_past_its_timeout_is_cut_there_and_the_next_one_runs() {
-    let app = App::new::<StallingEventsModule>().expect("boots");
+    let app = App::builder()
+        .module::<StallingEventsModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app.container().get::<EventBus>().expect("the bus");
     let ran = app.container().get::<Ran>().expect("the probe");
     let logs = nest_rs_testing::LogCapture::install();
@@ -910,7 +950,11 @@ struct SettlingEventsModule;
 
 #[tokio::test]
 async fn each_listener_held_for_its_emitters_commit_settles_a_unit_of_its_own_on_its_answer() {
-    let app = App::new::<SettlingEventsModule>().expect("boots");
+    let app = App::builder()
+        .module::<SettlingEventsModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app.container().get::<EventBus>().expect("the bus");
     let ran = app.container().get::<Ran>().expect("the probe");
     let (binding, opened) = RecordingUnitOfWork::bound(false);
@@ -968,7 +1012,11 @@ struct CutInAUnitEventsModule;
 /// around it, which would drop it unsettled.
 #[tokio::test(start_paused = true)]
 async fn a_listener_cut_at_its_timeout_settles_its_unit_as_a_failure() {
-    let app = App::new::<CutInAUnitEventsModule>().expect("boots");
+    let app = App::builder()
+        .module::<CutInAUnitEventsModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app.container().get::<EventBus>().expect("the bus");
     let ran = app.container().get::<Ran>().expect("the probe");
     let (binding, opened) = RecordingUnitOfWork::bound(false);
@@ -1050,7 +1098,11 @@ fn assert_both_ended(ran: &Ran, logs: &nest_rs_testing::LogCapture) {
 
 #[tokio::test(start_paused = true)]
 async fn a_listener_queued_behind_a_slow_sibling_is_not_charged_for_it() {
-    let app = App::new::<QueuedEventsModule>().expect("boots");
+    let app = App::builder()
+        .module::<QueuedEventsModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app.container().get::<EventBus>().expect("the bus");
     let ran = app.container().get::<Ran>().expect("the probe");
     let logs = nest_rs_testing::LogCapture::install();
@@ -1062,7 +1114,11 @@ async fn a_listener_queued_behind_a_slow_sibling_is_not_charged_for_it() {
 
 #[tokio::test(start_paused = true)]
 async fn a_listener_unit_queued_behind_a_slow_sibling_is_not_charged_for_it() {
-    let app = App::new::<QueuedEventsModule>().expect("boots");
+    let app = App::builder()
+        .module::<QueuedEventsModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app.container().get::<EventBus>().expect("the bus");
     let ran = app.container().get::<Ran>().expect("the probe");
     let (binding, opened) = RecordingUnitOfWork::bound(false);
@@ -1107,7 +1163,11 @@ struct HangingCommitEventsModule;
 
 #[tokio::test(start_paused = true)]
 async fn a_listener_whose_commit_never_answers_is_in_doubt_past_its_settle_net() {
-    let app = App::new::<HangingCommitEventsModule>().expect("boots");
+    let app = App::builder()
+        .module::<HangingCommitEventsModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app.container().get::<EventBus>().expect("the bus");
     let (binding, opened) = RecordingUnitOfWork::bound(true);
     let logs = nest_rs_testing::LogCapture::install();

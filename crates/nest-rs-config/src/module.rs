@@ -440,21 +440,6 @@ mod tests {
             );
         }
 
-        /// `App::new` runs `register` but never `collect`, so a queued factory would
-        /// never be built.
-        #[test]
-        fn the_synchronous_boot_refuses_a_config_it_could_never_resolve() {
-            let err = match App::new::<PinFirst>() {
-                Ok(_) => panic!("App::new must not boot a container whose config never resolves"),
-                Err(err) => err.to_string(),
-            };
-            assert!(err.contains("SeamConfig"), "{err}");
-            assert!(
-                err.contains("App::builder"),
-                "the failure names the boot path that works: {err}"
-            );
-        }
-
         /// What a pinned module's own imports open beside its config.
         struct Opened;
 

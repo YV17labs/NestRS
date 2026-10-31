@@ -80,3 +80,16 @@ gone. What the docs, the CLI or a package hand out stays tier 1 whoever else
 calls it, as `SchemaFn` did: the test is a developer's line, not the caller
 count. A foreign library re-exported whole (`rmcp`, `sea_orm`,
 `async_graphql`) keeps the paths `public-dependencies.md` gives it.
+
+**2026-10-31 — the global pools' holders are gone, not kept as tier 2.** The
+app-wide pools became declarations the root module lists
+(`layer-contracts-below-the-edges.md`, 2026-10-31), so `GuardSpecs`,
+`PipeSpecs` and `layer_chain::GlobalSpecs`, which the entry above moved to
+`__private`, are deleted with the `use_*_global` seams that seeded them. The
+tiers apply unchanged: `GlobalGuards`, `GlobalPipes`, `GlobalInterceptors`,
+`GlobalExceptionFilters` and their list traits are a developer's line, tier 1;
+what they expand to — core's `GlobalLayer`, `declare_global` and
+`global_pool_declared` — is core's `__private`; the list traits' `__specs`
+and the macro writing each family's tuple lists (`__global_layer_pool!`) are
+what Rust cannot place in a module, so they keep a `__` prefix and stay
+hidden. `layer_chain` stays public for `LayerSpec`.

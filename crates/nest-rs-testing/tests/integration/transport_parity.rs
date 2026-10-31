@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use nest_rs_core::{Layer, Posture, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{EndpointGuards, HttpView};
 use nest_rs_mcp::{McpView, ServerHandler, mcp, tool_handler, tool_router};
 // The name rmcp's `#[tool_router]` / `#[tool_handler]` expansions resolve.
@@ -331,10 +331,12 @@ async fn graphql_upgrade(app: &TestApp, headers: &[(&str, &str)]) -> TestRespons
 /// request with no connection under it to switch, the step after the guards.
 const ADMITTED_UPGRADE: StatusCode = StatusCode::UPGRADE_REQUIRED;
 
+#[module(imports = [BothTransportsModule], providers = [GlobalGuards<(BearerGuard,)>])]
+struct PooledApp;
+
 async fn pooled() -> TestApp {
     TestApp::builder()
-        .module::<BothTransportsModule>()
-        .use_guards_global([guard::<BearerGuard>()])
+        .module::<PooledApp>()
         .build()
         .await
         .expect("both transports boot under one global pool")
@@ -365,11 +367,13 @@ async fn the_pooled_guards_policy_decides_on_mcp_too() {
 }
 
 // Flipping either half is a security change.
+#[module(imports = [BothTransportsModule], providers = [GlobalGuards<(PostureProbe, BearerGuard)>])]
+struct OnlyGraphqlCarriesTheInBandPostureApp;
+
 #[tokio::test]
 async fn only_graphql_carries_the_in_band_posture() {
     let app = TestApp::builder()
-        .module::<BothTransportsModule>()
-        .use_guards_global([guard::<PostureProbe>(), guard::<BearerGuard>()])
+        .module::<OnlyGraphqlCarriesTheInBandPostureApp>()
         .build()
         .await
         .expect("boots");
@@ -394,14 +398,16 @@ async fn only_graphql_carries_the_in_band_posture() {
     assert_eq!(postures.take(), [Posture::Gated], "/mcp");
 }
 
+#[module(imports = [BothTransportsModule], providers = [GlobalGuards<(PublicOnlyGuard,)>])]
+struct APublicIdiomGuardChecksGraphqlApp;
+
 /// A guard admitting on `is_public()` alone no longer reads `/graphql` as
 /// public: the endpoint carries `Posture::InBand`, its operations each declare
 /// a posture.
 #[tokio::test]
 async fn a_public_idiom_guard_checks_graphql() {
     let app = TestApp::builder()
-        .module::<BothTransportsModule>()
-        .use_guards_global([guard::<PublicOnlyGuard>()])
+        .module::<APublicIdiomGuardChecksGraphqlApp>()
         .build()
         .await
         .expect("boots");
@@ -414,11 +420,13 @@ async fn a_public_idiom_guard_checks_graphql() {
         .assert_status(StatusCode::UNAUTHORIZED);
 }
 
+#[module(imports = [DeclaredMcpModule], providers = [GlobalGuards<(BearerGuard,)>])]
+struct EndpointGuardsAddToThePoolApp;
+
 #[tokio::test]
 async fn endpoint_guards_add_to_the_pool() {
     let app = TestApp::builder()
-        .module::<DeclaredMcpModule>()
-        .use_guards_global([guard::<BearerGuard>()])
+        .module::<EndpointGuardsAddToThePoolApp>()
         .build()
         .await
         .expect("boots");
@@ -433,13 +441,15 @@ async fn endpoint_guards_add_to_the_pool() {
     graphql_ping(&app, &[]).await.assert_status(StatusCode::OK);
 }
 
+#[module(imports = [BearerDeclaredModule], providers = [GlobalGuards<(ApiKeyGuard,)>])]
+struct ApiKeyPooledApp;
+
 /// The pool's refusal is answered as the pool's guard raised it, whatever the
 /// endpoint's guards decided: here they authenticated the caller.
 #[tokio::test]
 async fn a_global_http_guard_refuses_graphql_beside_endpoint_guards() {
     let app = TestApp::builder()
-        .module::<BearerDeclaredModule>()
-        .use_guards_global([guard::<ApiKeyGuard>()])
+        .module::<ApiKeyPooledApp>()
         .build()
         .await
         .expect("boots");
@@ -452,13 +462,15 @@ async fn a_global_http_guard_refuses_graphql_beside_endpoint_guards() {
         .assert_status(StatusCode::OK);
 }
 
+#[module(imports = [BearerDeclaredModule], providers = [GlobalGuards<(ApiKeyGuard, PostureProbe)>])]
+struct AGlobalHttpGuardRefusesTheGraphqlWsUpgradeBesideEndpointGuardsApp;
+
 /// The graphql-ws upgrade runs the same pool and endpoint guards as the POST,
 /// under the same posture: a refusal there opens no socket.
 #[tokio::test]
 async fn a_global_http_guard_refuses_the_graphql_ws_upgrade_beside_endpoint_guards() {
     let app = TestApp::builder()
-        .module::<BearerDeclaredModule>()
-        .use_guards_global([guard::<ApiKeyGuard>(), guard::<PostureProbe>()])
+        .module::<AGlobalHttpGuardRefusesTheGraphqlWsUpgradeBesideEndpointGuardsApp>()
         .build()
         .await
         .expect("boots");
@@ -481,8 +493,7 @@ async fn a_global_http_guard_refuses_the_graphql_ws_upgrade_beside_endpoint_guar
 #[tokio::test]
 async fn a_global_http_guard_refuses_mcp_beside_endpoint_guards() {
     let app = TestApp::builder()
-        .module::<BearerDeclaredModule>()
-        .use_guards_global([guard::<ApiKeyGuard>()])
+        .module::<ApiKeyPooledApp>()
         .build()
         .await
         .expect("boots");
@@ -502,11 +513,13 @@ async fn a_global_http_guard_refuses_mcp_beside_endpoint_guards() {
     .assert_status(StatusCode::OK);
 }
 
+#[module(imports = [RecordingDeclaredModule], providers = [GlobalGuards<(CoveredGuard,)>])]
+struct AGuardInBothPoolAndEndpointGuardsRunsOnceApp;
+
 #[tokio::test]
 async fn a_guard_in_both_pool_and_endpoint_guards_runs_once() {
     let app = TestApp::builder()
-        .module::<RecordingDeclaredModule>()
-        .use_guards_global([guard::<CoveredGuard>()])
+        .module::<AGuardInBothPoolAndEndpointGuardsRunsOnceApp>()
         .build()
         .await
         .expect("boots");
@@ -521,18 +534,19 @@ async fn a_guard_in_both_pool_and_endpoint_guards_runs_once() {
     assert_eq!(trail.take(), ["covered", "second"], "/mcp");
 }
 
+#[module(
+    imports = [RecordingDeclaredModule],
+    providers = [GlobalGuards<(FirstGuard, CoveredGuard, LastGuard)>],
+)]
+struct EndpointGuardsRunWhereThePoolListsTheFirstGuardTheyNameApp;
+
 /// The endpoint's guards run where the pool lists the first one they name, so
 /// a pooled guard reading the principal still runs after the authentication
 /// they carry.
 #[tokio::test]
 async fn endpoint_guards_run_where_the_pool_lists_the_first_guard_they_name() {
     let app = TestApp::builder()
-        .module::<RecordingDeclaredModule>()
-        .use_guards_global([
-            guard::<FirstGuard>(),
-            guard::<CoveredGuard>(),
-            guard::<LastGuard>(),
-        ])
+        .module::<EndpointGuardsRunWhereThePoolListsTheFirstGuardTheyNameApp>()
         .build()
         .await
         .expect("boots");

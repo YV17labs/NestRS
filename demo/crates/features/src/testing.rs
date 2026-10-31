@@ -1,7 +1,6 @@
 use nest_rs::authn::{JwtOptions, JwtService};
 use nest_rs::config::Config;
 use nest_rs::core::Container;
-use nest_rs::database::OutboxStore;
 use nest_rs::redis::{RedisConfig, RedisConnection};
 use nest_rs::storage::Storage;
 use nest_rs::testing::url_on;
@@ -139,15 +138,6 @@ const _: () = assert!(
     RedisDatabase::SUITES < *RedisDatabase::OWN.start()
         && *RedisDatabase::OWN.end() < RedisDatabase::TRANSCODES
 );
-
-pub async fn arm_outbox(container: &Container) {
-    container
-        .get_dyn::<dyn OutboxStore>()
-        .expect("SeaOrmDatabaseModule keeps the app's outbox")
-        .arm()
-        .await
-        .expect("the outbox arms over the migrated database");
-}
 
 pub async fn delete_transcode(container: &Container, file: Uuid) {
     let storage = container

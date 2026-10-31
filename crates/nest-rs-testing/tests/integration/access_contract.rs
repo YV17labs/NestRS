@@ -90,8 +90,8 @@ impl TightController {
 struct TightModule;
 
 /// `App` is not `Debug`, so `expect_err` is unavailable.
-fn boot_error<M: nest_rs_core::Module + 'static>(scenario: &str) -> AccessGraphError {
-    match App::new::<M>() {
+async fn boot_error<M: nest_rs_core::Module + 'static>(scenario: &str) -> AccessGraphError {
+    match App::builder().module::<M>().build().await {
         Ok(_) => panic!("{scenario}: expected the boot to fail with an access violation"),
         Err(err) => err
             .downcast::<AccessGraphError>()
@@ -99,25 +99,28 @@ fn boot_error<M: nest_rs_core::Module + 'static>(scenario: &str) -> AccessGraphE
     }
 }
 
-#[test]
-fn a_per_route_guard_in_an_unimported_module_fails_the_boot() {
-    let access = boot_error::<LooseModule>("per-route guard across an unimported boundary");
+#[tokio::test]
+async fn a_per_route_guard_in_an_unimported_module_fails_the_boot() {
+    let access = boot_error::<LooseModule>("per-route guard across an unimported boundary").await;
     assert_eq!(access.consumer, "LooseController");
     assert_eq!(access.dependency, "AuthzGuard");
     assert_eq!(access.owner, "GuardModule");
 }
 
-#[test]
-fn a_controller_level_guard_in_an_unimported_module_fails_the_boot() {
+#[tokio::test]
+async fn a_controller_level_guard_in_an_unimported_module_fails_the_boot() {
     let access =
-        boot_error::<LooseCtrlModule>("controller-level guard across an unimported boundary");
+        boot_error::<LooseCtrlModule>("controller-level guard across an unimported boundary").await;
     assert_eq!(access.consumer, "LooseCtrlController");
     assert_eq!(access.dependency, "AuthzGuard");
 }
 
-#[test]
-fn a_guard_whose_module_is_imported_boots_cleanly() {
-    App::new::<TightModule>()
+#[tokio::test]
+async fn a_guard_whose_module_is_imported_boots_cleanly() {
+    App::builder()
+        .module::<TightModule>()
+        .build()
+        .await
         .expect("a controller that imports the guard's module satisfies the contract");
 }
 
@@ -147,9 +150,9 @@ struct EagerConsumer {
 #[module(providers = [EagerConsumer])]
 struct EagerMissingModule;
 
-#[test]
-fn an_eager_provider_with_a_missing_dependency_is_a_named_boot_error_not_a_panic() {
-    match App::new::<EagerMissingModule>() {
+#[tokio::test]
+async fn an_eager_provider_with_a_missing_dependency_is_a_named_boot_error_not_a_panic() {
+    match App::builder().module::<EagerMissingModule>().build().await {
         Ok(_) => panic!("an unprovided eager dependency must fail the boot"),
         Err(err) => {
             let missing = err
@@ -165,9 +168,9 @@ fn an_eager_provider_with_a_missing_dependency_is_a_named_boot_error_not_a_panic
     }
 }
 
-#[test]
-fn two_modules_providing_the_same_concrete_type_fail_the_boot() {
-    match App::new::<DuplicateRoot>() {
+#[tokio::test]
+async fn two_modules_providing_the_same_concrete_type_fail_the_boot() {
+    match App::builder().module::<DuplicateRoot>().build().await {
         Ok(_) => panic!("a duplicate concrete provider must fail the boot"),
         Err(err) => {
             let dup = err

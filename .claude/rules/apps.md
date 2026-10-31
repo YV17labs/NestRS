@@ -12,14 +12,15 @@ paths:
 **An app's `src/` is `main.rs`, `module.rs` and `lib.rs`.**
 
 - **`module.rs`** is the canonical composition: one `<App>Module` listing the
-  edges the app serves.
+  edges the app serves and, in its `providers`, the app-wide layer pools
+  (`GlobalGuards<(AuthnGuard, AuthzGuard)>`, `edges.md`, *Request layers*).
+  Declaring the transport-wide pool is composition, not business logic.
 - **`lib.rs`** declares `mod module;` and re-exports `<App>Module` — and the
   types its e2e suite configures it with — so the suite boots the composition
-  the binary runs. No logic.
-- **`main.rs`** builds the app — `App::builder().module::<AppModule>()` — plus
-  the imperative global seams (`use_*_global`, `edges.md`, *Request layers*)
-  and `OpenTelemetry::init()` (`container.md`, the one `for_root` exception).
-  Declaring the transport-wide pool is composition, not business logic.
+  the binary runs, its pools included. No logic.
+- **`main.rs`** builds the app — `App::builder().module::<AppModule>()` — and
+  holds `OpenTelemetry::init()` (`container.md`, the one `for_root`
+  exception), nothing else: the same lines in every app.
 
 No `services/`, no `examples/`, and never an edge folder under the app's
 `src/`: an adapter there could only be named for the app, and the app's name

@@ -31,7 +31,10 @@ struct ReportsMcpModule;
 async fn an_mcp_host_the_app_reaches_without_the_transport_is_named_at_run() {
     let logs = LogCapture::install();
 
-    App::new::<ReportsMcpModule>()
+    App::builder()
+        .module::<ReportsMcpModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await

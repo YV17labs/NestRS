@@ -246,9 +246,12 @@ mod tests {
     use super::*;
     use crate::ambient::Pending;
     use crate::container::ContainerBuilder;
+    use crate::discoverable::Discoverable;
+    use crate::exception_filter::__private::ErasedExceptionFilter;
     use crate::exception_filter::{ExceptionFilterSpec, GlobalExceptionFilters};
     use crate::interceptor::__private::{InterceptorStage, register_interceptor};
     use crate::interceptor::GlobalInterceptors;
+    use crate::layer_chain::__private::declare_global;
     use crate::outcome::__private::settled;
     use crate::site::{GlobalLayers, SiteDeclaration, SiteLayers};
     use crate::testing::{
@@ -298,10 +301,8 @@ mod tests {
             .provide(Recording::<ModuleBrought>::new("module"))
             .provide(Recording::<OnTheHost>::new("host"))
             .provide(Recording::<OnTheMethod>::new("method"))
-            .provide(Declining)
-            .provide(GlobalInterceptors(vec![
-                interceptor::<Recording<AppListed>>().0,
-            ]));
+            .provide(Declining);
+        let builder = GlobalInterceptors::<(Recording<AppListed>,)>::register(builder);
         let builder = register_interceptor::<Recording<UnitStage>>(builder, InterceptorStage::Unit);
         register_interceptor::<Recording<ModuleBrought>>(builder, InterceptorStage::Handler)
             .build()
@@ -889,13 +890,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_layered_dispatch_reaches_as_deep_whatever_its_tail_holds() {
-        let container = ContainerBuilder::default()
-            .provide(Declining)
-            .provide(GlobalExceptionFilters(vec![
-                exception_filter::<Declining>().0,
-            ]))
-            .build()
-            .expect("the container builds");
+        let container = GlobalExceptionFilters::<(Declining,)>::register(
+            ContainerBuilder::default().provide(Declining),
+        )
+        .build()
+        .expect("the container builds");
         let chains = composed(
             &container,
             &SiteDeclaration {
@@ -981,10 +980,11 @@ mod tests {
     fn reading_at_the_unit_stage(filters: Vec<ExceptionFilterSpec>) -> UnitChains {
         let builder = ContainerBuilder::default()
             .provide(ReadsTheAnswer)
-            .provide(Declining)
-            .provide(GlobalExceptionFilters(
-                filters.into_iter().map(|spec| spec.0).collect(),
-            ));
+            .provide(Declining);
+        let builder = declare_global::<dyn ErasedExceptionFilter, ExceptionFilterSpec>(
+            builder,
+            filters.into_iter().map(|spec| spec.0).collect(),
+        );
         let container = register_interceptor::<ReadsTheAnswer>(builder, InterceptorStage::Unit)
             .build()
             .expect("the container builds");
@@ -1033,10 +1033,8 @@ mod tests {
 
         let builder = ContainerBuilder::default()
             .provide(ReadsTheAnswer)
-            .provide(Answering)
-            .provide(GlobalExceptionFilters(vec![
-                exception_filter::<Answering>().0,
-            ]));
+            .provide(Answering);
+        let builder = GlobalExceptionFilters::<(Answering,)>::register(builder);
         let container = register_interceptor::<ReadsTheAnswer>(builder, InterceptorStage::Unit)
             .build()
             .expect("the container builds");
@@ -1069,14 +1067,13 @@ mod tests {
             }
         }
 
-        let container = ContainerBuilder::default()
-            .provide(Declining)
-            .provide(Answering)
-            .provide(GlobalExceptionFilters(vec![
-                exception_filter::<Answering>().0,
-            ]))
-            .build()
-            .expect("the container builds");
+        let container = GlobalExceptionFilters::<(Answering,)>::register(
+            ContainerBuilder::default()
+                .provide(Declining)
+                .provide(Answering),
+        )
+        .build()
+        .expect("the container builds");
         let chains = composed(
             &container,
             &SiteDeclaration {

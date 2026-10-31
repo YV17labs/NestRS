@@ -63,3 +63,13 @@ posture stays optional: a route gated on a capability rather than an entity no
 longer needs a hand-written guard to say so. It declares
 `#[authorize(Action, Subject)]` on a `#[subject]` (`subject-no-table-holds.md`),
 the class gate every edge runs, so `#[public]` stays an honest opening.
+
+## 2026-10-31 — the pool is the root module's
+
+The open question above is answered by the owner's "Tout faire" of
+2026-10-28: the app-wide guard pool is `GlobalGuards<(…)>` in the providers
+of the module the app boots, replacing `use_guards_global` in `main.rs`, so
+an e2e suite boots the pool it covers routes with. A route the pool covers
+still needs no posture of its own; a pool declared by a module the app
+imports, where it would cover every route without a line of the app's,
+fails the boot.

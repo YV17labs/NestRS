@@ -10,7 +10,7 @@ use nest_rs_core::{
 };
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::EndpointGuards;
 use nest_rs_testing::TestApp;
 use tokio::sync::Mutex;
@@ -114,14 +114,16 @@ async fn post_ping(app: &TestApp) {
     );
 }
 
+#[module(imports = [FallbackModule], providers = [GlobalGuards<(CountingPassGuard,)>])]
+struct GlobalGuardRunsExactlyOncePerGraphqlRequestApp;
+
 #[tokio::test]
 async fn global_guard_runs_exactly_once_per_graphql_request() {
     let _gate = GATE.lock().await;
     reset_counters();
 
     let app = TestApp::builder()
-        .module::<FallbackModule>()
-        .use_guards_global([guard::<CountingPassGuard>()])
+        .module::<GlobalGuardRunsExactlyOncePerGraphqlRequestApp>()
         .build()
         .await
         .expect("boots");
@@ -135,14 +137,16 @@ async fn global_guard_runs_exactly_once_per_graphql_request() {
     );
 }
 
+#[module(imports = [DeclaredModule], providers = [GlobalGuards<(CountingPassGuard,)>])]
+struct AGuardBothPooledAndDeclaredForTheEndpointRunsOnceApp;
+
 #[tokio::test]
 async fn a_guard_both_pooled_and_declared_for_the_endpoint_runs_once() {
     let _gate = GATE.lock().await;
     reset_counters();
 
     let app = TestApp::builder()
-        .module::<DeclaredModule>()
-        .use_guards_global([guard::<CountingPassGuard>()])
+        .module::<AGuardBothPooledAndDeclaredForTheEndpointRunsOnceApp>()
         .build()
         .await
         .expect("boots");
@@ -196,7 +200,7 @@ mod pipeline {
     use nest_rs_core::problem::code;
     use nest_rs_core::{
         Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext,
-        exception_filter, injectable, interceptor, module,
+        injectable, interceptor, module,
     };
     use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
     use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
@@ -385,13 +389,15 @@ mod pipeline {
         );
     }
 
+    #[module(imports = [ShelfModule], providers = [nest_rs_core::GlobalInterceptors<(Recorder,)>])]
+    struct TheAppsInterceptorRunsAroundEachRootFieldAsAGraphqlFieldUnitApp;
+
     #[tokio::test]
     async fn the_apps_interceptor_runs_around_each_root_field_as_a_graphql_field_unit() {
         let _serial = SERIAL.lock().await;
         SEEN.lock().unwrap().clear();
         let app = TestApp::builder()
-            .module::<ShelfModule>()
-            .use_interceptors_global([interceptor::<Recorder>()])
+            .module::<TheAppsInterceptorRunsAroundEachRootFieldAsAGraphqlFieldUnitApp>()
             .build()
             .await
             .expect("boots");
@@ -606,12 +612,17 @@ mod pipeline {
     )]
     struct BareLedgerModule;
 
+    #[module(
+        imports = [BareLedgerModule],
+        providers = [nest_rs_core::GlobalExceptionFilters<(LedgerConflict,)>],
+    )]
+    struct TheAppsExceptionFilterAnswersARootFieldApp;
+
     #[tokio::test]
     async fn the_apps_exception_filter_answers_a_root_field() {
         let _serial = SERIAL.lock().await;
         let app = TestApp::builder()
-            .module::<BareLedgerModule>()
-            .use_exception_filters_global([exception_filter::<LedgerConflict>()])
+            .module::<TheAppsExceptionFilterAnswersARootFieldApp>()
             .build()
             .await
             .expect("boots");

@@ -154,7 +154,7 @@ namespace, one type; `Config` names a `#[config]` only (a nested struct is
 vocabulary, `HttpTls`); seeding (`App::builder().provide`) is for hermetic
 tests, and pins the value, never the checks a read one passes. A pinned base
 supersedes a bare import; two fail the boot
-(`ContestedDeclarationError`), as does a config `App::new` cannot resolve.
+(`ContestedDeclarationError`).
 
 **A named instance inserts its name after the vendor** —
 `<PREFIX>_<VENDOR>__<INSTANCE>__<PORT>__*`, `<PREFIX>_REDIS__CACHE__URL` for

@@ -7,8 +7,8 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use nest_rs_core::{
-    Caught, DuplicateMetaError, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem,
-    UnitContext, WiringFailedError, injectable, module,
+    Caught, DuplicateMetaError, ExceptionFilter, GlobalInterceptors, Interceptor, Layer, Next,
+    Outcome, Problem, UnitContext, WiringFailedError, injectable, module,
 };
 use nest_rs_core::{async_trait, problem::code};
 use nest_rs_guards::{Denial, Guard, GuardFor};
@@ -112,11 +112,13 @@ impl PlainGateway {
 #[module(imports = [WsModule], providers = [Listed, PlainGateway])]
 struct ListedModule;
 
+#[module(imports = [ListedModule], providers = [GlobalInterceptors<(Listed,)>])]
+struct TheAppsInterceptorsRunAroundEveryMessageApp;
+
 #[tokio::test]
 async fn the_apps_interceptors_run_around_every_message() {
     let app = TestApp::builder()
-        .module::<ListedModule>()
-        .use_interceptors_global([nest_rs_core::interceptor::<Listed>()])
+        .module::<TheAppsInterceptorsRunAroundEveryMessageApp>()
         .build_ws()
         .await
         .expect("an app listing an interceptor boots");

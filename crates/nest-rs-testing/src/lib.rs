@@ -8,8 +8,17 @@
 //! GraphQL, OpenAPI and MCP self-mount over HTTP, so one client drives every
 //! surface.
 //!
+//! Both boot the module the app's `main` boots, so its app-wide layer pools
+//! run in the suite as they do in the binary, and both arm the outbox of an
+//! app binding a store and a queue backend (feature `queue`), as its relay
+//! does at boot.
+//!
 //! Override providers with [`override_dyn`](TestAppBuilder::override_dyn) /
-//! [`override_value`](TestAppBuilder::override_value).
+//! [`override_value`](TestAppBuilder::override_value). Boot on a throwaway
+//! database with `ephemeral_database` (feature `orm`), run a service in a unit
+//! of the app's binding with `unit` and `system_unit` (features `authz`,
+//! `database`), and sign a bearer with the app's own `JwtService` with
+//! `TestApp::bearer` (feature `authn`).
 //!
 //! [`LogCapture`] covers the other half of a transport's contract: the events
 //! it emits. A denial that fails closed but logs nothing passes every response
@@ -45,6 +54,8 @@ pub mod mcp;
 mod package;
 #[cfg(feature = "http")]
 mod response;
+#[cfg(feature = "database")]
+mod unit;
 mod url;
 #[cfg(feature = "http")]
 mod urlencoded;

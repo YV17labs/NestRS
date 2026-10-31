@@ -61,7 +61,10 @@ struct ClosesModule;
 
 #[tokio::test]
 async fn resources_close_after_every_shutdown_hook_last_opened_first() {
-    App::new::<ClosesModule>()
+    App::builder()
+        .module::<ClosesModule>()
+        .build()
+        .await
         .expect("boots")
         .run()
         .await
@@ -124,7 +127,11 @@ struct NeverInitModule;
 
 #[tokio::test]
 async fn closing_an_app_whose_init_never_ran_runs_no_hook_but_closes_what_it_opened() {
-    let app = App::new::<NeverInitModule>().expect("boots");
+    let app = App::builder()
+        .module::<NeverInitModule>()
+        .build()
+        .await
+        .expect("boots");
     let lifecycle = Arc::clone(app.lifecycle());
 
     app.close().await;
@@ -154,7 +161,13 @@ async fn a_close_that_never_returns_is_abandoned_at_the_budget_naming_it() {
     let logs = LogCapture::install();
     let started = tokio::time::Instant::now();
 
-    App::new::<HangsModule>().expect("boots").close().await;
+    App::builder()
+        .module::<HangsModule>()
+        .build()
+        .await
+        .expect("boots")
+        .close()
+        .await;
 
     let took = started.elapsed();
     assert!(

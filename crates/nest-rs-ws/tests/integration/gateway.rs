@@ -2,9 +2,11 @@
 //! the address the generated `Discoverable` mounts it at.
 
 use nest_rs_core::{Layer, async_trait, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{StatusCode, header};
-use nest_rs_pipes::{ArgumentKind, GlobalPipe, ParseArray, Pipe, PipeError, Piped, Trim, pipe};
+use nest_rs_pipes::{
+    ArgumentKind, GlobalPipe, GlobalPipes, ParseArray, Pipe, PipeError, Piped, Trim,
+};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, WsView, gateway, messages};
 use serde::{Deserialize, Serialize};
@@ -1754,11 +1756,13 @@ impl PipedGateway {
 #[module(imports = [WsModule], providers = [ShoutPipe, PipedGateway])]
 struct PipedModule;
 
+#[module(imports = [PipedModule], providers = [GlobalPipes<(ShoutPipe,)>])]
+struct AGlobalPipeFoldsOverEachMessagesDataAndItsRefusalIsAFrameApp;
+
 #[tokio::test]
 async fn a_global_pipe_folds_over_each_messages_data_and_its_refusal_is_a_frame() {
     let app = nest_rs_testing::TestApp::builder()
-        .module::<PipedModule>()
-        .use_pipes_global([pipe::<ShoutPipe>()])
+        .module::<AGlobalPipeFoldsOverEachMessagesDataAndItsRefusalIsAFrameApp>()
         .build_ws()
         .await
         .expect("a gateway boots on a real port");
@@ -2453,12 +2457,14 @@ impl Guard for UnmarkedWsGuard {
 #[module(imports = [WsModule], providers = [SocketGateway, UnmarkedWsGuard])]
 struct UnmarkedPoolModule;
 
+#[module(imports = [UnmarkedPoolModule], providers = [GlobalGuards<(UnmarkedWsGuard,)>])]
+struct APooledGuardDeclaringNoWsViewStillChecksEveryMessageApp;
+
 /// The other edges are held in `nest-rs-testing`'s `guard_markers`.
 #[tokio::test]
 async fn a_pooled_guard_declaring_no_ws_view_still_checks_every_message() {
     let app = nest_rs_testing::TestApp::builder()
-        .module::<UnmarkedPoolModule>()
-        .use_guards_global([nest_rs_guards::guard::<UnmarkedWsGuard>()])
+        .module::<APooledGuardDeclaringNoWsViewStillChecksEveryMessageApp>()
         .build_ws()
         .await
         .expect("an unmarked global guard boots");
@@ -3017,11 +3023,13 @@ async fn every_message_reads_what_the_gateways_upgrade_guards_attached() {
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
+#[module(imports = [AdmittedModule], providers = [GlobalGuards<(AdmittingGuard,)>])]
+struct EveryMessageReadsWhatTheAppWidePoolAttachedAtTheUpgradeApp;
+
 #[tokio::test]
 async fn every_message_reads_what_the_app_wide_pool_attached_at_the_upgrade() {
     let app = TestApp::builder()
-        .module::<AdmittedModule>()
-        .use_guards_global([nest_rs_guards::guard::<AdmittingGuard>()])
+        .module::<EveryMessageReadsWhatTheAppWidePoolAttachedAtTheUpgradeApp>()
         .build_ws()
         .await
         .expect("the gateways boot");

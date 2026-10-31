@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::{Discovery, module};
+use nest_rs_guards::GlobalGuards;
 use nest_rs_http::HttpEndpointMeta;
 use nest_rs_mcp::__private::hosts_on;
 use nest_rs_mcp::model::{
@@ -1532,12 +1533,14 @@ impl nest_rs_guards::GuardFor<nest_rs_http::HttpView> for AddressWitness {}
 #[module(providers = [AlphaTool, BetaTool, OtherTool, AddressWitness])]
 struct WitnessedTwoPathApp;
 
+#[module(imports = [WitnessedTwoPathApp], providers = [GlobalGuards<(AddressWitness,)>])]
+struct EachEndpointRunsItsRequestsAsItsOwnPathApp;
+
 /// A guard keying on the site's address tells two endpoints apart.
 #[tokio::test]
 async fn each_endpoint_runs_its_requests_as_its_own_path() {
     let app = TestApp::builder()
-        .module::<WitnessedTwoPathApp>()
-        .use_guards_global([nest_rs_guards::guard::<AddressWitness>()])
+        .module::<EachEndpointRunsItsRequestsAsItsOwnPathApp>()
         .build()
         .await
         .expect("two paths boot under a global pool");

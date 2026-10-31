@@ -688,8 +688,8 @@ pub(crate) enum RouteError {
     #[error(
         "routes no guard covers and none marks `#[public]`: {routes} — a route runs a guard or \
          is open on purpose; bind a guard with `#[use_guards(...)]` on the controller or the \
-         route, or list the app's global pool (`App::builder().use_guards_global([...])`), or \
-         mark a route open on purpose with `#[public]`"
+         route, or declare the app's global pool (`GlobalGuards<(...)>` in the providers of the \
+         module the app boots), or mark a route open on purpose with `#[public]`"
     )]
     Unguarded { routes: String },
     /// Two spellings of one address.

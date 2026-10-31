@@ -175,23 +175,25 @@ pub struct ScopeViolationError {
     pub dependency: &'static str,
 }
 
-/// A layer a provider-hosted site binds — a `#[process]` method's, a
-/// trigger's, an `#[on_event]` method's — is request-scoped or transient,
-/// while a site resolves its layers once, when it composes at boot: a
-/// request-scoped layer is never built there, and a transient one would be
-/// built once and shared by every run, which is not transient.
+/// A layer bound where it is resolved once, at boot — on a provider-hosted
+/// site (a `#[process]` method's, a trigger's, an `#[on_event]` method's) or in
+/// an app-wide pool (`GlobalGuards<(…)>` and its siblings) — is
+/// request-scoped or transient: a request-scoped layer is never built there,
+/// and a transient one would be built once and shared by every run, which is
+/// not transient.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 #[error(
-    "scope violation: `{layer}` is bound on a site `{host}` (in module `{module}`) hosts, and is \
-     request-scoped or transient — a site resolves its layers once, when it composes at boot, \
-     so a request-scoped `{layer}` would never be built for it, and a transient one would be \
-     built once and shared by every run. Make `{layer}` a singleton."
+    "scope violation: `{layer}` is bound by `{host}` (in module `{module}`), which resolves its \
+     layers once, at boot, and is request-scoped or transient — a request-scoped `{layer}` \
+     would never be built there, and a transient one would be built once and shared by every \
+     run. Make `{layer}` a singleton."
 )]
 pub struct ScopedLayerError {
     /// Module that lists the host.
     pub module: &'static str,
-    /// The provider hosting the site that binds the layer.
+    /// What binds the layer: the provider hosting the site, or the app-wide
+    /// pool's declaration.
     pub host: &'static str,
     /// The request-scoped or transient layer.
     pub layer: &'static str,
@@ -203,7 +205,7 @@ pub struct ScopedLayerError {
 #[non_exhaustive]
 #[error(
     "{reader}s are discovered from a container that carries no reachability set; build it \
-     through App::new or App::builder, whose boot seals the set its modules reach"
+     through App::builder, whose boot seals the set its modules reach"
 )]
 pub struct UngatedDiscoveryError {
     /// What the reader discovers, as its inert-host report names it.
@@ -361,9 +363,9 @@ fn scopes_clause(scopes: Option<(ProviderScope, ProviderScope)>) -> String {
 /// import stays legal. Both are named by their import site; `remedy` comes from
 /// the declaring seam.
 ///
-/// Raised on either boot path, `App::new` included: before any factory runs
-/// for what the imports' `collect` declared, and once the register phase ends
-/// for what a `register` declared or attached.
+/// Raised before any factory runs for what the imports' `collect` declared,
+/// and once the register phase ends for what a `register` declared or
+/// attached.
 #[derive(Debug, Error)]
 #[error(
     "contested declaration: `{type_name}` is declared twice — by {first}, and by {second}. {remedy}"
@@ -378,22 +380,6 @@ pub struct ContestedDeclarationError {
     pub second: String,
     /// What the reader should do instead, supplied by the declaring seam.
     pub remedy: &'static str,
-}
-
-/// A module queued an async factory, but the boot went through the synchronous
-/// [`App::new`](crate::App::new), which has no factory phase to drain it.
-///
-/// The value would never exist, and `Container::get` would return `None` for it.
-#[derive(Debug, Error)]
-#[error(
-    "`{type_name}` is provided by an async factory, which the synchronous `App::new` never runs. \
-     A module's `for_root(..)` and a config a provider injects both queue one. Boot with \
-     `App::builder().module::<M>().build().await` instead."
-)]
-#[non_exhaustive]
-pub struct UnresolvedFactoryError {
-    /// The type whose factory nothing would drain.
-    pub type_name: &'static str,
 }
 
 /// Every factory left in the queue waits on a factory output still in it — one

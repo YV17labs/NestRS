@@ -3,9 +3,9 @@
 use nest_rs_core::App;
 use nest_rs_opentelemetry::{OpenTelemetryError, OpenTelemetryModule};
 
-#[test]
-fn importing_the_module_without_init_fails_the_boot_naming_init() {
-    let Err(refused) = App::new::<OpenTelemetryModule>() else {
+#[tokio::test]
+async fn importing_the_module_without_init_fails_the_boot_naming_init() {
+    let Err(refused) = App::builder().module::<OpenTelemetryModule>().build().await else {
         panic!("a module whose signals would all be dropped boots");
     };
     assert!(

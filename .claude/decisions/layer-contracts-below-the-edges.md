@@ -96,3 +96,18 @@ three layer crates are gone (2026-10-22, `one-execution-pipeline.md`), and poem
 is in no manifest or lockfile since 2026-10-23 (`http-server.md`): the HTTP
 transport is nestrs's own, on hyper. The *Refused* list's "typed over poem"
 reads as 6.x's contracts.
+
+**2026-10-31 — the app-wide pools are declarations the root module lists.**
+`use_guards_global` (guards' `AppBuilderGuardsExt`), `use_pipes_global`
+(pipes' `AppBuilderPipesExt`) and core's `use_interceptors_global` and
+`use_exception_filters_global` are gone: each family declares its pool as a
+provider of the module the app boots — `nest_rs_guards::GlobalGuards`,
+`nest_rs_pipes::GlobalPipes`, `nest_rs_core::{GlobalInterceptors,
+GlobalExceptionFilters}` — so `main` and every suite boot the same pool (the
+owner's "Tout faire" of 2026-10-28, the identity audit's one global-layer
+seam). The direction holds: core owns the plumbing in its `__private`
+(`GlobalLayer`, `declare_global`, the check run before every module's wiring),
+each family implements it for its own trait object and keeps its own list
+type, and no edge names a family above it. A declaration listed below the
+root, or twice, fails the boot; a layer its module does not reach fails the
+access graph. No departure from the record.

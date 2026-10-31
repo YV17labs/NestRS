@@ -94,7 +94,10 @@ struct PingGraphqlModule;
 async fn a_resolver_the_app_reaches_without_the_endpoint_is_named_at_run() {
     let logs = LogCapture::install();
 
-    App::new::<PingGraphqlModule>()
+    App::builder()
+        .module::<PingGraphqlModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await

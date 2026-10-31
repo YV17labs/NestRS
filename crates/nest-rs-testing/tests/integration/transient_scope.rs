@@ -23,7 +23,11 @@ struct TransientModule;
 
 #[tokio::test]
 async fn transient_rebuilds_on_every_resolution_but_shares_its_singleton_dep() {
-    let app = App::new::<TransientModule>().expect("boots");
+    let app = App::builder()
+        .module::<TransientModule>()
+        .build()
+        .await
+        .expect("boots");
     let container = app.container();
 
     let first: Arc<Ticket> = container.get().expect("ticket resolves");
@@ -56,7 +60,10 @@ struct MixedScopeModule;
 
 #[tokio::test]
 async fn a_transient_injecting_a_request_scoped_provider_resolves_through_the_scope() {
-    let app = App::new::<MixedScopeModule>()
+    let app = App::builder()
+        .module::<MixedScopeModule>()
+        .build()
+        .await
         .expect("boots — a transient injecting a request-scoped dep is legal");
     let scope = RequestScope::new(app.container().clone());
 
@@ -84,9 +91,9 @@ struct Cyclic {
 #[module(providers = [Cyclic])]
 struct CyclicModule;
 
-#[test]
-fn a_self_referential_transient_fails_the_boot() {
-    let Err(refused) = App::new::<CyclicModule>() else {
+#[tokio::test]
+async fn a_self_referential_transient_fails_the_boot() {
+    let Err(refused) = App::builder().module::<CyclicModule>().build().await else {
         panic!("a transient building itself would panic at its first resolution");
     };
     let cycle = refused

@@ -8,7 +8,7 @@ use async_graphql::parser::types::OperationType;
 use async_graphql::{Result, SimpleObject};
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::{FieldRole, GraphqlConfig, GraphqlModule, GraphqlView, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_testing::TestApp;
 
 /// One field as a guard saw it.
@@ -131,12 +131,14 @@ async fn a_resolvers_guard_reads_each_field_it_checks_and_its_role() {
     );
 }
 
+#[module(imports = [GadgetsModule], providers = [GlobalGuards<(Witness,)>])]
+struct ThePoolReadsAFederationFieldAsItsOwnRoleApp;
+
 /// The app-wide pool at the two federation fields, which no resolver declares.
 #[tokio::test]
 async fn the_pool_reads_a_federation_field_as_its_own_role() {
     let app = TestApp::builder()
-        .module::<GadgetsModule>()
-        .use_guards_global([guard::<Witness>()])
+        .module::<ThePoolReadsAFederationFieldAsItsOwnRoleApp>()
         .build()
         .await
         .expect("a federated schema under a global pool boots");

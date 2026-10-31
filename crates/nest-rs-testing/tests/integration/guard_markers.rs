@@ -11,12 +11,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_mcp::{McpError, mcp, tools};
+use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{call_tool_as, call_tool_statelessly, initialize_request};
-use nest_rs_testing::{TestApp, TestAppBuilder};
 use nest_rs_ws::{WsModule, gateway, messages};
 
 /// What every site below answers, so an answer carrying it is a unit the pool
@@ -148,11 +148,14 @@ impl Guard for ChecksRequestsOnly {
 )]
 struct EveryEdgeModule;
 
-fn pooling<G: Guard + 'static>() -> TestAppBuilder {
-    TestApp::builder()
-        .module::<EveryEdgeModule>()
-        .use_guards_global([guard::<G>()])
-}
+#[module(imports = [EveryEdgeModule], providers = [GlobalGuards<(DecidesOnce,)>])]
+struct DecidesOncePoolModule;
+
+#[module(imports = [EveryEdgeModule], providers = [GlobalGuards<(ChecksUnitsOnly,)>])]
+struct ChecksUnitsOnlyPoolModule;
+
+#[module(imports = [EveryEdgeModule], providers = [GlobalGuards<(ChecksRequestsOnly,)>])]
+struct ChecksRequestsOnlyPoolModule;
 
 /// `{ ping pong }` on `/graphql`, with `headers`.
 async fn ping_and_pong(
@@ -174,7 +177,8 @@ async fn ping_and_pong(
 
 #[tokio::test]
 async fn a_pooled_guard_writing_one_decision_gates_every_request() {
-    let app = pooling::<DecidesOnce>()
+    let app = TestApp::builder()
+        .module::<DecidesOncePoolModule>()
         .build()
         .await
         .expect("a pooled guard declaring no edge boots");
@@ -196,7 +200,8 @@ async fn a_pooled_guard_writing_one_decision_gates_every_request() {
 
 #[tokio::test]
 async fn a_pooled_guard_writing_one_decision_gates_the_ws_upgrade() {
-    let app = pooling::<DecidesOnce>()
+    let app = TestApp::builder()
+        .module::<DecidesOncePoolModule>()
         .build_ws()
         .await
         .expect("a pooled guard declaring no edge boots on a real port");
@@ -209,7 +214,8 @@ async fn a_pooled_guard_writing_one_decision_gates_the_ws_upgrade() {
 
 #[tokio::test]
 async fn a_pooled_unit_check_gates_every_in_band_unit_and_no_route() {
-    let app = pooling::<ChecksUnitsOnly>()
+    let app = TestApp::builder()
+        .module::<ChecksUnitsOnlyPoolModule>()
         .build()
         .await
         .expect("a pooled guard declaring no edge boots");
@@ -248,7 +254,8 @@ async fn a_pooled_unit_check_gates_every_in_band_unit_and_no_route() {
 
 #[tokio::test]
 async fn a_pooled_unit_check_gates_every_ws_message() {
-    let app = pooling::<ChecksUnitsOnly>()
+    let app = TestApp::builder()
+        .module::<ChecksUnitsOnlyPoolModule>()
         .build_ws()
         .await
         .expect("a pooled guard declaring no edge boots on a real port");
@@ -266,7 +273,8 @@ async fn a_pooled_unit_check_gates_every_ws_message() {
 
 #[tokio::test]
 async fn a_pooled_request_check_gates_every_request_and_no_unit_it_carries() {
-    let app = pooling::<ChecksRequestsOnly>()
+    let app = TestApp::builder()
+        .module::<ChecksRequestsOnlyPoolModule>()
         .build()
         .await
         .expect("a pooled guard declaring no edge boots");
@@ -312,7 +320,8 @@ async fn a_pooled_request_check_gates_every_request_and_no_unit_it_carries() {
 
 #[tokio::test]
 async fn a_pooled_request_check_gates_the_ws_upgrade_and_no_message() {
-    let app = pooling::<ChecksRequestsOnly>()
+    let app = TestApp::builder()
+        .module::<ChecksRequestsOnlyPoolModule>()
         .build_ws()
         .await
         .expect("a pooled guard declaring no edge boots on a real port");

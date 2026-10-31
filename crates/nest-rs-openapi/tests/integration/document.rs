@@ -382,7 +382,7 @@ mod guards {
     use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy};
     use nest_rs_core::async_trait;
     use nest_rs_core::{AmbientValue, Layer, UnitContext, injectable, module};
-    use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+    use nest_rs_guards::{Denial, Guard, GuardFor};
     use nest_rs_http::{HttpView, Request, controller, routes};
     use nest_rs_testing::TestApp;
     use nest_rs_throttler::ThrottlerGuard as Limit;
@@ -446,11 +446,13 @@ mod guards {
     )]
     struct RatedApp;
 
+    #[module(imports = [RatedApp], providers = [nest_rs_guards::GlobalGuards<(ThrottlerGuard,)>])]
+    struct ThrottledGloballyApp;
+
     /// The throttler as the rate-limiting page binds it: in the pool alone.
     async fn throttled_globally() -> Value {
         let app = TestApp::builder()
-            .module::<RatedApp>()
-            .use_guards_global([guard::<ThrottlerGuard>()])
+            .module::<ThrottledGloballyApp>()
             .build()
             .await
             .expect("importing ThrottlerModule provides the guard the pool names");

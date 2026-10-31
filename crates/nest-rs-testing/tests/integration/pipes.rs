@@ -8,7 +8,7 @@ use nest_rs_core::{Edge, Layer, UnitContext, injectable, module};
 use nest_rs_http::Json;
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, controller, routes};
-use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError, pipe};
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, GlobalPipes, PipeError};
 use nest_rs_testing::TestApp;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -193,14 +193,16 @@ async fn post_payload(app: &TestApp, path: &str) -> Value {
     resp.json().await.value().deserialize::<Value>()
 }
 
+#[module(imports = [PipesModule], providers = [GlobalPipes<(StripPassword,)>])]
+struct PipesApp;
+
 #[tokio::test]
 async fn pipe_at_global_scope_strips_field() {
     let _gate = GATE.lock().await;
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<PipesModule>()
-        .use_pipes_global([pipe::<StripPassword>()])
+        .module::<PipesApp>()
         .build()
         .await
         .expect("boots");
@@ -252,8 +254,7 @@ async fn no_pipes_skips_all_pipes() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<PipesModule>()
-        .use_pipes_global([pipe::<StripPassword>()])
+        .module::<PipesApp>()
         .build()
         .await
         .expect("boots");
@@ -273,8 +274,7 @@ async fn same_pipe_global_and_method_runs_once() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<PipesModule>()
-        .use_pipes_global([pipe::<StripPassword>()])
+        .module::<PipesApp>()
         .build()
         .await
         .expect("boots");
@@ -310,8 +310,7 @@ async fn same_pipe_at_all_three_scopes_runs_once() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<PipesModule>()
-        .use_pipes_global([pipe::<StripPassword>()])
+        .module::<PipesApp>()
         .build()
         .await
         .expect("boots");

@@ -187,7 +187,11 @@ impl Module for FailingBesideServingModule {
 #[tokio::test]
 async fn a_transport_that_fails_stops_the_app_for_that_cause_and_says_so_once() {
     let logs = LogCapture::install();
-    let app = App::new::<FailingBesideServingModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<FailingBesideServingModule>()
+        .build()
+        .await
+        .expect("the module boots");
     let stopping = app.lifecycle().stopping();
     let lifecycle = Arc::clone(app.lifecycle());
     assert_eq!(lifecycle.cause(), None);
@@ -217,7 +221,11 @@ struct ServesNothingModule;
 #[tokio::test]
 async fn a_run_with_no_transport_says_so_once_and_stops_for_that_cause_after_its_init_hooks() {
     let logs = LogCapture::install();
-    let app = App::new::<ServesNothingModule>().expect("the module boots");
+    let app = App::builder()
+        .module::<ServesNothingModule>()
+        .build()
+        .await
+        .expect("the module boots");
     let lifecycle = Arc::clone(app.lifecycle());
 
     app.run()
@@ -299,7 +307,10 @@ struct JoinsOnDestroyModule;
 async fn an_init_hook_that_fails_stops_the_app_for_that_cause_before_the_shutdown_hooks_run() {
     let started = tokio::time::Instant::now();
 
-    let error = App::new::<JoinsOnDestroyModule>()
+    let error = App::builder()
+        .module::<JoinsOnDestroyModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await
@@ -361,7 +372,10 @@ impl Module for ConfigureFailsModule {
 async fn a_transport_that_fails_to_configure_stops_the_app_for_that_cause_before_the_closes_run() {
     let started = tokio::time::Instant::now();
 
-    let error = App::new::<ConfigureFailsModule>()
+    let error = App::builder()
+        .module::<ConfigureFailsModule>()
+        .build()
+        .await
         .expect("the module boots")
         .run()
         .await
@@ -494,7 +508,12 @@ struct ReportsCauseModule;
 
 #[nest_rs_core::main]
 async fn run_child() -> anyhow::Result<()> {
-    App::new::<ReportsCauseModule>()?.run().await
+    App::builder()
+        .module::<ReportsCauseModule>()
+        .build()
+        .await?
+        .run()
+        .await
 }
 
 #[test]

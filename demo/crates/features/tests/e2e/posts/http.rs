@@ -13,7 +13,7 @@ use features::authn::{Role, Subject};
 use features::authz::{AuthzModule, constants};
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::{PostsHttpModule, publication};
-use features::testing::{API, DEV_PUBLIC_KEY, arm_outbox, client, token, token_with_scopes, user};
+use features::testing::{API, DEV_PUBLIC_KEY, client, token, token_with_scopes, user};
 use features::users::{ActiveModel as UserActive, UserRole};
 use nest_rs::authn::AuthnConfig;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
@@ -72,7 +72,6 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
         .build()
         .await
         .expect("PostsHttpTestModule boots against the throwaway database");
-    arm_outbox(app.container()).await;
     (db, app, bearer, org_id)
 }
 

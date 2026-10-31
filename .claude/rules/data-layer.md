@@ -57,9 +57,10 @@ callers must clear; the method's doc is the authority, not this list.
   caller's, a job narrowing its system work to a principal's, a test.
   `nest_rs::database::with_job_executor` never widens the unit it runs in (a
   request stays a request, held by the port's tests), but outside every unit
-  — a test, a task spawned off one — it grants the job scope to the handle
-  it is given. Review holds both while a service test installs them by hand,
-  until the testing harness opens its unit under an ability.
+  — a task spawned off one — it grants the job scope to the handle it is
+  given. A service test runs its body in a unit of the app's binding instead
+  (`TestApp::unit` under an ability, `system_unit` as system work), so no
+  test installs an executor by hand.
 
 No webhook ingress exists; `Repo::unscoped`'s rustdoc states the bar a
 signature-authenticated one must clear before it ships. Auditing the escapes

@@ -348,3 +348,9 @@ transforms stay pipes, one carrier `Piped<P, S>` on every edge. Refused: a
 blanket check in each edge's runtime (a `serde_json::Value` handed around, or
 a `Validate` bound every argument would have to meet), which would type no
 argument the handler did not already decode.
+
+**2026-10-31 — the app's lists are declarations.** `use_interceptors_global`
+and `use_exception_filters_global` left `AppBuilder`: the module the app boots
+lists `GlobalInterceptors<(…)>` and `GlobalExceptionFilters<(…)>`, so its
+suites run the layers `main` does. The two ways to be app-wide stay two, the
+app's declaration and a module's `#[interceptor]`, in that order.

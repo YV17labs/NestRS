@@ -5,7 +5,7 @@ use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
 use nest_rs_core::module;
-use nest_rs_guards::guard;
+use nest_rs_guards::GlobalGuards;
 use nest_rs_http::Json;
 use nest_rs_http::{controller, routes};
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError};
@@ -149,14 +149,13 @@ macro_rules! visitor_app {
                     }),
                     SeaOrmDatabaseModule,
                     ],
-                providers = [$factory, VisitorGuard, PostsController],
+                providers = [$factory, VisitorGuard, PostsController, GlobalGuards<(VisitorGuard,)>],
             )]
             pub(super) struct AppModule;
 
             pub(super) async fn boot() -> TestApp {
                 TestApp::builder()
                     .module::<AppModule>()
-                    .use_guards_global([guard::<VisitorGuard>()])
                     .build()
                     .await
                     .expect("the visitor app boots against live Postgres")

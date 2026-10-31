@@ -7,10 +7,10 @@ use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
-    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
-    injectable, interceptor, module,
+    Caught, ExceptionFilter, GlobalInterceptors, Interceptor, Layer, Next, Outcome, UnitContext,
+    async_trait, injectable, module,
 };
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{HeaderName, HeaderValue, HttpView, Response, StatusCode, controller, routes};
 use nest_rs_testing::TestApp;
 use tokio::sync::Mutex;
@@ -106,13 +106,15 @@ async fn guard_runs_once_per_request_at_each_local_scope() {
     }
 }
 
+#[module(imports = [PoolModule], providers = [GlobalGuards<(CountingGuard,)>])]
+struct GuardRunsOncePerRequestWithGlobalSeedingApp;
+
 /// global alone, global+controller, global+method, global+controller+method.
 #[tokio::test]
 async fn guard_runs_once_per_request_with_global_seeding() {
     let _gate = GATE.lock().await;
     let app = TestApp::builder()
-        .module::<PoolModule>()
-        .use_guards_global([guard::<CountingGuard>()])
+        .module::<GuardRunsOncePerRequestWithGlobalSeedingApp>()
         .build()
         .await
         .expect("boots with a global guard");
@@ -245,14 +247,16 @@ impl EdgeController {
 #[module(providers = [EdgeObserver, MapToOk, UnitOutcome, DenyAll, EdgeController])]
 struct EdgeModule;
 
+#[module(imports = [EdgeModule], providers = [GlobalInterceptors<(EdgeObserver,)>])]
+struct AGlobalInterceptorNeverSeesAGuardDenialApp;
+
 #[tokio::test]
 async fn a_global_interceptor_never_sees_a_guard_denial() {
     let _gate = GATE.lock().await;
     reset_edge_counter();
 
     let app = TestApp::builder()
-        .module::<EdgeModule>()
-        .use_interceptors_global([interceptor::<EdgeObserver>()])
+        .module::<AGlobalInterceptorNeverSeesAGuardDenialApp>()
         .build()
         .await
         .expect("boots");

@@ -132,20 +132,6 @@ async fn a_config_no_reached_provider_injects_is_never_loaded() {
     assert!(app.container().get::<UnreachedConfig>().is_none());
 }
 
-/// The synchronous boot runs no factory, so the config a provider injects is
-/// refused for the factory it needs, naming the remedy, rather than as a
-/// provider nothing registers.
-#[test]
-fn the_synchronous_boot_refuses_an_injected_config_for_its_factory() {
-    let refused = nest_rs_core::App::new::<DemoModule>()
-        .err()
-        .expect("App::new runs no factory");
-    let unresolved = refused
-        .downcast_ref::<nest_rs_core::UnresolvedFactoryError>()
-        .unwrap_or_else(|| panic!("not the factory refusal: {refused:#}"));
-    assert_eq!(unresolved.type_name, std::any::type_name::<DemoConfig>());
-}
-
 /// What every configurable module's `for_root(cfg)` does: hand the pinned struct
 /// to `ConfigModule::provide_root`.
 struct DemoPinnedSetup(DemoConfig);

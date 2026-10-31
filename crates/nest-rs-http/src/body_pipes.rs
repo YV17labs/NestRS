@@ -1,6 +1,6 @@
-//! The global pipes over an HTTP request's body: the chain a route composes
-//! at mount from the app's pool and its own `#[use_pipes]`, run after its
-//! guards, before its handler reads the body.
+//! The pipes over an HTTP request's body: the chain a route composes at mount
+//! from the app's pool and its own `#[use_pipes]`, run after its guards,
+//! before its handler reads the body.
 
 use nest_rs_core::__private::{
     ResolvedLayer, compose_chain, dedup_bucket, log_effective_chain, report_unresolved,
@@ -9,7 +9,6 @@ use nest_rs_core::__private::{
 use nest_rs_core::Container;
 use nest_rs_core::Handler;
 use nest_rs_core::layer_chain::LayerSite;
-use nest_rs_pipes::__private::PipeSpecs;
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeSpec};
 use serde_json::Value;
 
@@ -21,9 +20,9 @@ use crate::view::with_view;
 
 /// The global pipes one route runs over its request's body, composed once at
 /// mount: the app's pool, then the host's, then the method's, each once.
-pub(crate) struct GlobalPipes(Vec<ResolvedLayer<dyn GlobalPipe>>);
+pub(crate) struct BodyPipes(Vec<ResolvedLayer<dyn GlobalPipe>>);
 
-impl GlobalPipes {
+impl BodyPipes {
     /// No pipe: `#[no_pipes]`, or nothing declared anywhere.
     pub(crate) fn none() -> Self {
         Self(Vec::new())
@@ -37,7 +36,7 @@ impl GlobalPipes {
         host: &[PipeSpec],
         method: &[PipeSpec],
     ) -> anyhow::Result<Self> {
-        let global = resolve_global_layers::<PipeSpecs>(container);
+        let global = resolve_global_layers::<dyn GlobalPipe>(container);
         let host = resolve_scoped(container, host, LayerSite::Host, route_label)
             .inspect_err(report_unresolved)?;
         let method = resolve_scoped(container, method, LayerSite::Method, route_label)

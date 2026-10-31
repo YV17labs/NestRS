@@ -121,3 +121,28 @@ left to clean.
   stay until the next.
 - **A rule bounding how long a push may stay**: it names the leak instead of
   closing it.
+
+## 2026-10-31 — the test harness arms the outbox at boot
+
+Every app suite armed its app's outbox by hand after the boot (a demo helper
+reaching the framework's `dyn OutboxStore`), so a suite that forgot it filed
+its pushes on the shared Redis database, and the "test harness files every
+job at once" sentence above held only for those. `TestApp` and `HeadlessApp`
+now arm the outbox of an app binding a store and a queue backend as their
+boot's last step (the `queue` feature of `nest-rs-testing`), through the very
+function the relay's `configure` runs (`nest_rs_queue::__private::arm_outbox`):
+a store without its table refuses the boot naming the remedy, as the
+binary's does. A push inside a unit then waits in the throwaway database, and
+a test needing its job run spawns `OutboxRelay` beside its worker. This
+amends the first section's "an app running no relay (a test harness, an app
+with no queue backend) files every job at once": a harness now runs the path
+the binary runs, and an app with no queue backend still files at once.
+Correctness decided — the suite boots what the binary boots — under the
+owner's "Tout faire" of 2026-10-28.
+
+**Refused:**
+
+- **The harness running the relay unasked** stays refused (2026-10-21): it
+  arms, and runs no transport a test did not spawn.
+- **Arming behind an opt-in builder step**: a suite forgetting it would file
+  jobs nothing drains, the leak the 2026-10-23 entry closed for one suite.

@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use nest_rs_core::{AmbientValue, Layer, UnitContext, async_trait, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, GuardPhase};
 use nest_rs_http::{EndpointGuards, HttpView, StatusCode};
 use nest_rs_mcp::{
     CallToolResult, ContentBlock, McpAccess, McpError, McpModule, McpView, ServerHandler, mcp,
@@ -38,11 +38,13 @@ fn one_per_minute() -> ThrottlerConfig {
     }
 }
 
+#[module(imports = [PoolModule], providers = [GlobalGuards<(ThrottlerGuard,)>])]
+struct AGlobalThrottlerGuardRateLimitsMcpApp;
+
 #[tokio::test]
 async fn a_global_throttler_guard_rate_limits_mcp() {
     let app = TestApp::builder()
-        .module::<PoolModule>()
-        .use_guards_global([guard::<ThrottlerGuard>()])
+        .module::<AGlobalThrottlerGuardRateLimitsMcpApp>()
         .build()
         .await
         .expect("boots with a global throttler and no endpoint guards");
@@ -93,21 +95,6 @@ async fn an_empty_pool_and_no_endpoint_guards_deny_initialize() {
         "request denied: the endpoint runs no guard at its request",
     );
     assert_eq!(denied.field("path").as_deref(), Some("/mcp"));
-}
-
-#[tokio::test]
-async fn an_empty_global_pool_leaves_mcp_deny_all() {
-    let app = TestApp::builder()
-        .module::<NoPoolModule>()
-        .use_guards_global([])
-        .build()
-        .await
-        .expect("boots");
-    app.http()
-        .post("/mcp")
-        .send()
-        .await
-        .assert_status(StatusCode::UNAUTHORIZED);
 }
 
 /// The `check_http` calls of the recording guards below, in the order they ran.
@@ -165,13 +152,15 @@ recording_guard!(Declared, "declared");
 ])]
 struct DeclaredModule;
 
+#[module(imports = [DeclaredModule], providers = [GlobalGuards<(Pooled,)>])]
+struct EndpointGuardsComposeWithThePoolApp;
+
 /// The pool and the endpoint guards both run at the request, each once: a guard
 /// in both runs where the pool lists it.
 #[tokio::test]
 async fn endpoint_guards_compose_with_the_pool() {
     let app = TestApp::builder()
-        .module::<DeclaredModule>()
-        .use_guards_global([guard::<Pooled>()])
+        .module::<EndpointGuardsComposeWithThePoolApp>()
         .build()
         .await
         .expect("boots");
@@ -209,13 +198,15 @@ impl Guard for DenyEverything {
 
 impl GuardFor<HttpView> for DenyEverything {}
 
+#[module(imports = [OpenedModule], providers = [GlobalGuards<(DenyEverything,)>])]
+struct McpAccessPublicOpensTheEndpointApp;
+
 /// The app opens `/mcp` in code: no guard runs at its request, the global
 /// pool's included.
 #[tokio::test]
 async fn mcp_access_public_opens_the_endpoint() {
     let app = TestApp::builder()
-        .module::<OpenedModule>()
-        .use_guards_global([guard::<DenyEverything>()])
+        .module::<McpAccessPublicOpensTheEndpointApp>()
         .build()
         .await
         .expect("boots");
@@ -409,14 +400,16 @@ async fn what_the_endpoint_guards_attach_reaches_each_operation() {
 #[module(providers = [PoolTool, crate::StoreDown])]
 struct StoreDownPoolModule;
 
+#[module(imports = [StoreDownPoolModule], providers = [GlobalGuards<(crate::StoreDown,)>])]
+struct ARequestDenialKeepingItsCauseFilesTheChainApp;
+
 /// A pooled guard that cannot evaluate the `/mcp` request files what failed on
 /// the request's denial line, and the client reads the condition alone.
 #[tokio::test]
 async fn a_request_denial_keeping_its_cause_files_the_chain() {
     let logs = LogCapture::install();
     let app = TestApp::builder()
-        .module::<StoreDownPoolModule>()
-        .use_guards_global([guard::<crate::StoreDown>()])
+        .module::<ARequestDenialKeepingItsCauseFilesTheChainApp>()
         .build()
         .await
         .expect("boots");

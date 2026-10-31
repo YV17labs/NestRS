@@ -9,7 +9,7 @@
 use nest_rs_authz::http::Authorize as Az;
 use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults, current_ability};
 use nest_rs_core::{Layer, async_trait, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::Json;
 use nest_rs_http::{controller, routes};
 use nest_rs_testing::TestApp;
@@ -130,10 +130,12 @@ impl GadgetController {
 #[module(providers = [GrantInjector, GadgetController])]
 struct AliasModule;
 
+#[module(imports = [AliasModule], providers = [GlobalGuards<(GrantInjector,)>])]
+struct BootApp;
+
 async fn boot() -> TestApp {
     TestApp::builder()
-        .module::<AliasModule>()
-        .use_guards_global([guard::<GrantInjector>()])
+        .module::<BootApp>()
         .build()
         .await
         .expect("alias harness boots")
@@ -213,11 +215,13 @@ impl UndeclaredController {
 #[module(providers = [GrantInjector, UndeclaredController])]
 struct UndeclaredModule;
 
+#[module(imports = [UndeclaredModule], providers = [GlobalGuards<(GrantInjector,)>])]
+struct AnAliasedGateOnARouteDeclaringNoPostureRefusesTheBootApp;
+
 #[tokio::test]
 async fn an_aliased_gate_on_a_route_declaring_no_posture_refuses_the_boot() {
     let Err(refused) = TestApp::builder()
-        .module::<UndeclaredModule>()
-        .use_guards_global([guard::<GrantInjector>()])
+        .module::<AnAliasedGateOnARouteDeclaringNoPostureRefusesTheBootApp>()
         .build()
         .await
     else {

@@ -5,8 +5,8 @@
 //! GraphQL field, a WebSocket message, an MCP operation — and on an HTTP
 //! request too — a route, a WebSocket upgrade, the request of an in-band
 //! endpoint — through [`check_http`](Guard::check_http), which a guard
-//! overrides only where the request differs from the unit. Declared once with
-//! `App::builder().use_guards_global(...)`, the pool runs at every site of
+//! overrides only where the request differs from the unit. Declared once, by
+//! the module the app boots ([`GlobalGuards`]), the pool runs at every site of
 //! every edge, and the edge files every denial once, on the guard's
 //! [`target`](Guard::target), with the [`reason`](Denial::reason) it names.
 //!
@@ -69,8 +69,9 @@
 //!
 //! ## Registering globally
 //!
-//! Register with `App::builder().use_guards_global([...])`
-//! ([`AppBuilderGuardsExt`]); the example on [`guard`](fn@guard) runs it.
+//! List [`GlobalGuards`] in the providers of the module the app boots — the
+//! binary's `main` and its test suites boot the same module, so they run the
+//! same pool; its example runs it.
 //!
 //! Declaration order is the runtime order. List `AuthzGuard` before
 //! `AuthnGuard` — globally, on a controller or gateway, or beside one route —
@@ -94,7 +95,6 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-mod builder;
 mod chain;
 mod denial;
 mod guard;
@@ -105,10 +105,9 @@ mod scope;
 mod stage;
 mod validate;
 
-pub use builder::AppBuilderGuardsExt;
 pub use denial::Denial;
 pub use guard::{Guard, GuardFor, GuardPhase, PrincipalClaim};
-pub use registry::{GuardSpec, guard};
+pub use registry::{GlobalGuardList, GlobalGuards, GuardSpec, guard};
 pub use scope::{GrantedScopes, RequiredScopes};
 
 #[doc(hidden)]
@@ -119,9 +118,7 @@ pub mod __private {
     pub use crate::chain::{GlobalBucket, SiteChainSources, compose_site_chain, split_at_covered};
     pub use crate::denial::denial_of;
     pub use crate::reason::{client_message, denial_code, denial_reason};
-    pub use crate::registry::{
-        GuardSpecs, global_guards_active, resolve_global_chain, resolve_global_guards,
-    };
+    pub use crate::registry::{global_guards_active, resolve_global_chain, resolve_global_guards};
     pub use crate::stage::{RefusalMark, Refused, check_guards};
     pub use crate::validate::{boot_validate_guards, validate_guard_chain, validate_route_chain};
 

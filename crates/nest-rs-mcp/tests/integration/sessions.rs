@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy, bearer_token};
 use nest_rs_core::problem::code;
 use nest_rs_core::{AmbientValue, injectable, module};
-use nest_rs_guards::guard;
+use nest_rs_guards::GlobalGuards;
 use nest_rs_http::{Request, StatusCode};
 use nest_rs_mcp::rmcp::transport::streamable_http_server::session::store::{
     SessionState, SessionStore, SessionStoreError,
@@ -92,13 +92,18 @@ impl OwnedTools {
     }
 }
 
-#[module(providers = [ByName, ByNameAuthn, OwnedTools, OwnedTasks])]
+#[module(
+    providers = [ByName, ByNameAuthn, OwnedTools, OwnedTasks, GlobalGuards<(ByNameAuthn,)>],
+)]
 struct GatedModule;
 
-#[module(imports = [crate::open_mcp()], providers = [ByName, ByNameAuthn, OwnedTools])]
+#[module(
+    imports = [crate::open_mcp()],
+    providers = [ByName, ByNameAuthn, OwnedTools, GlobalGuards<(ByNameAuthn,)>],
+)]
 struct PublicModule;
 
-/// `M` behind a pooled [`ByNameAuthn`], restoring its sessions from `store`
+/// `M`, whose pool is a [`ByNameAuthn`], restoring its sessions from `store`
 /// when it has one.
 async fn serving<M: nest_rs_core::Module + 'static>(store: Option<&Arc<MemoryStore>>) -> TestApp {
     let mut builder = TestApp::builder().module::<M>();
@@ -107,7 +112,6 @@ async fn serving<M: nest_rs_core::Module + 'static>(store: Option<&Arc<MemorySto
             builder.provide_dyn::<dyn SessionStore>(Arc::clone(store) as Arc<dyn SessionStore>);
     }
     builder
-        .use_guards_global([guard::<ByNameAuthn>()])
         .build()
         .await
         .expect("an #[mcp] host under a pooled AuthnGuard boots")
@@ -391,7 +395,7 @@ async fn a_principal_naming_no_subject_is_refused_a_session() {
         max_concurrent_sessions: 1,
         ..McpConfig::default()
     })],
-    providers = [ByName, ByNameAuthn, OwnedTools],
+    providers = [ByName, ByNameAuthn, OwnedTools, GlobalGuards<(ByNameAuthn,)>],
 )]
 struct OnePlaceModule;
 
@@ -609,7 +613,6 @@ async fn the_owner_is_served_while_another_principals_request_is_held_on_the_sto
         TestApp::builder()
             .module::<GatedModule>()
             .provide_dyn::<dyn SessionStore>(Arc::clone(&store) as Arc<dyn SessionStore>)
-            .use_guards_global([guard::<ByNameAuthn>()])
             .build()
     };
     let opened_here = with_store().await.expect("boots");

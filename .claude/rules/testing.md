@@ -51,12 +51,13 @@ nextest prints each test's time: compare before and after.
 
 - **`TestApp` / `TestAppBuilder`** — boots the real DI graph and drives HTTP,
   GraphQL, OpenAPI and MCP through nestrs's `TestClient`, the stack the server
-  runs, no socket; `TestApp` and the builder's HTTP half (`build`, `build_ws`,
-  `use_guards_global`, `use_pipes_global`) are the `http` feature, the
-  builder itself is not, nor `use_interceptors_global` and
-  `use_exception_filters_global`, core's. The
+  runs, no socket; `TestApp` and the builder's HTTP half (`build`,
+  `build_ws`) are the `http` feature, the builder itself is not. The
   default entry point, and the composition witness `manifests-ci.md` asks of
-  every `for_root` seam. It boots the transport the app's own
+  every `for_root` seam. **A suite boots the module `main` boots**, its
+  app-wide layer pools included (`container.md`): an app's suite never
+  re-types them, and a framework test declares the pool it runs on a root
+  module of its own. It boots the transport the app's own
   `HttpModule::for_root(cfg)` describes, through the call the module itself
   makes: pin an `HttpConfig` on the module to test a prefix, a versioning
   strategy, a body cap or a timeout, or seed the whole config (`provide`) for
@@ -86,7 +87,14 @@ nextest prints each test's time: compare before and after.
   system's trust to the service — so what it reads or holds back is the
   protocol, never a record; the client under test trusts both authorities.
 - **`EphemeralDatabase`** (`orm` feature) — a per-test database, dropped with
-  the value.
+  the value; `TestAppBuilder::ephemeral_database::<Migrator>()` boots the app
+  on one it holds, dropped after the app.
+- **`TestApp::unit(ability, || …)` / `system_unit(|| …)`** (`authz`,
+  `database`) — a service's body run in one unit of the app's bound
+  `UnitOfWork`, as a request granted the ability or as system work,
+  committed on `Ok`: never an executor or an ability installed by hand.
+- **`TestApp::bearer(|exp| claims)`** (`authn`) — the `Authorization` value
+  of a token the app's own `JwtService` signs.
 - **`load_project_env`** — the `.env` cascade, so a test reaches the
   devcontainer's `postgres`, `valkey-standalone` and `rustfs`.
 
@@ -114,9 +122,11 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
   queue — `audio` and `notifications` are the product's `#[queue]`s — so its
   own Redis database is the isolation, seeded into every app of the test that
   must meet: the producer and the worker alike. A test that only pushes
-  leaves no job on Redis: an app over SeaORM arms its outbox, as its relay
-  does when served, so the job waits in the throwaway database; a push with
-  no database cancels its job by its receipt.
+  leaves no job on Redis: the harness arms the outbox of an app binding a
+  store and a queue backend at its boot, as its relay does when served, so
+  the job waits in the throwaway database, and a test needing its job run
+  spawns `OutboxRelay` beside its worker; a push with no database cancels its
+  job by its receipt.
 - **The demo's suites file into a bucket of their own**, which its test
   profile names and the dev container creates beside development's, so what a
   test uploads never sits among the objects a running app lists; the

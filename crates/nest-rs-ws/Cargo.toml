@@ -28,7 +28,7 @@ nest-rs-database.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 # Global pipes over a message's `data` (`ArgumentKind::Data`): the gateway
-# resolves the `use_pipes_global` pool once, at mount.
+# resolves the app's `GlobalPipes` pool once, at mount.
 nest-rs-pipes.workspace = true
 # The edge runs its guards itself: the upgrade's, each message's chain; it
 # renders a denial as its error frame.

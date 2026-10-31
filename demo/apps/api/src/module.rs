@@ -1,4 +1,5 @@
 use nest_rs::core::module;
+use nest_rs::guards::GlobalGuards;
 use nest_rs::health::HealthModule;
 use nest_rs::openapi::OpenApiModule;
 use nest_rs::opentelemetry::OpenTelemetryModule;
@@ -9,6 +10,8 @@ use nest_rs::throttler::ThrottlerModule;
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 use features::audit::AuditHttpModule;
+use features::authn::AuthnGuard;
+use features::authz::AuthzGuard;
 use features::notifications::NotificationsHttpModule;
 use features::orgs::{OrgsGraphqlModule, OrgsHttpModule};
 use features::posts::{PostsGraphqlModule, PostsHttpModule};
@@ -37,5 +40,6 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         AudioHttpModule,
         AudioScheduleModule,
     ],
+    providers = [GlobalGuards<(AuthnGuard, AuthzGuard)>],
 )]
 pub struct ApiModule;

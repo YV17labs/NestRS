@@ -247,3 +247,6 @@ An instance-capable module's bare import calls
 `ConfigModule::provide_feature::<I, C>`, which replaces
 `ForInstance::default()` as the one way to read an instance unpinned; a pin
 goes through `ConfigModule::provide_root`.
+
+**2026-10-31 — `App::new` is gone.** The keyed-set argument above reads
+against `App::builder()`, the one boot left.

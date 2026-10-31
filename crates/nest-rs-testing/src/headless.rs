@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::TestAppBuilder;
+use crate::app::Kept;
 
 /// Runs non-HTTP [`Transport`]s on a cancellable background task so a test
 /// can enqueue, observe, then shut the transport down.
@@ -22,6 +23,8 @@ pub struct HeadlessApp {
     transports: TaskTracker,
     /// Each of them still serving, with its [`Transport::stop_bound`].
     serving: Serving,
+    /// Dropped after the app, which may still hold its connection.
+    kept: Kept,
 }
 
 /// The transports still serving, in the order they were spawned.
@@ -62,11 +65,12 @@ impl HeadlessApp {
         TestAppBuilder::new()
     }
 
-    pub(crate) fn new(app: App) -> Self {
+    pub(crate) fn new(app: App, kept: Kept) -> Self {
         Self {
             app,
             transports: TaskTracker::new(),
             serving: Serving::default(),
+            kept,
         }
     }
 
@@ -174,12 +178,69 @@ impl HeadlessApp {
     /// abandons it — then the shutdown phases run in reverse, the resources
     /// close, and the container drops.
     pub async fn close(self) {
+        // The database the app ran on is dropped last, at the end of scope.
         let HeadlessApp {
             app,
             transports,
             serving,
+            kept: _kept,
         } = self;
         nest_rs_core::__private::close_after(app, stop_within(&transports, &serving)).await;
+    }
+}
+
+#[cfg(feature = "authz")]
+impl HeadlessApp {
+    /// Run `body` in one unit of work of the app's bound `UnitOfWork`, as a
+    /// request granted `ability`, as `TestApp::unit` does.
+    ///
+    /// # Panics
+    ///
+    /// When the app binds no unit of work, and when the binding cannot honour
+    /// the unit — it refuses to open it, its commit fails, or the unit's
+    /// outcome is in doubt.
+    pub async fn unit<T, E, F, Fut>(
+        &self,
+        ability: Arc<nest_rs_authz::Ability>,
+        body: F,
+    ) -> Result<T, E>
+    where
+        T: Send,
+        E: Send,
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T, E>> + Send,
+    {
+        crate::unit::run(
+            self.container(),
+            nest_rs_database::ExecutorScope::Request,
+            nest_rs_authz::with_ability(ability, body()),
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "database")]
+impl HeadlessApp {
+    /// Run `body` in one unit of work of the app's bound `UnitOfWork`, as
+    /// system work, as `TestApp::system_unit` does.
+    ///
+    /// # Panics
+    ///
+    /// As [`unit`](Self::unit) does: when the app binds no unit of work, and
+    /// when the binding cannot honour the unit.
+    pub async fn system_unit<T, E, F, Fut>(&self, body: F) -> Result<T, E>
+    where
+        T: Send,
+        E: Send,
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T, E>> + Send,
+    {
+        crate::unit::run(
+            self.container(),
+            nest_rs_database::ExecutorScope::Job,
+            body(),
+        )
+        .await
     }
 }
 

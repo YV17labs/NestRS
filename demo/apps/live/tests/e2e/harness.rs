@@ -1,8 +1,6 @@
-use features::authn::AuthnGuard;
 use features::{Role, Subject};
 use live::LiveModule;
 use nest_rs::authn::AuthnConfig;
-use nest_rs::guards::guard;
 use nest_rs::testing::ws::{WsApp, WsSocket};
 use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
 use serde_json::Value;
@@ -27,7 +25,6 @@ pub(crate) async fn boot_builder() -> (EphemeralDatabase, TestAppBuilder) {
         .await
         .expect("create + migrate a throwaway database");
     let builder = TestApp::builder()
-        .use_guards_global([guard::<AuthnGuard>()])
         .module::<LiveModule>()
         .with_test_telemetry()
         .provide_arc(db.connection())

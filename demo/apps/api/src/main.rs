@@ -1,8 +1,5 @@
 use anyhow::Result;
-use features::authn::AuthnGuard;
-use features::authz::AuthzGuard;
 use nest_rs::core::App;
-use nest_rs::guards::{AppBuilderGuardsExt, guard};
 use nest_rs::opentelemetry::OpenTelemetry;
 
 use api::ApiModule;
@@ -12,7 +9,6 @@ async fn main() -> Result<()> {
     let _otel = OpenTelemetry::init()?;
 
     App::builder()
-        .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
         .module::<ApiModule>()
         .build()
         .await?

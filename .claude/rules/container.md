@@ -19,9 +19,21 @@ framework half.
 - **`App::builder().build().await` runs four phases whatever the call order**:
   seeds (runtime values from `main`), collect (modules queue async factories),
   factories (awaited; a seed wins over a factory of its type), register
-  (providers built from seeds and factory outputs). `main` holds only
-  `App::builder().module::<AppModule>()` and its transports; a synchronous app
-  keeps `App::new`.
+  (providers built from seeds and factory outputs). `App::builder()` is the
+  one boot: `main` holds only `App::builder().module::<AppModule>()`, and a
+  suite boots the same module, so what the app declares — its transports,
+  its app-wide layer pools — runs in both.
+- **The app-wide layer pools are declared by the module the app boots**:
+  `GlobalGuards`, `GlobalPipes`, `GlobalInterceptors` and
+  `GlobalExceptionFilters`, each a provider of its root's `providers`, never
+  a builder call `main` alone runs. A declaration listed by a module the app
+  imports, or registered by no module's providers, fails the boot at the
+  wiring step naming it — a feature never chooses what covers every route —
+  as does a second declaration of one family, naming the module listing
+  each; a layer the declaring module does not reach fails the access graph,
+  and so does one that is not a singleton, as a site's layer does
+  (`ScopedLayerError`): a pool resolves its layers once, at mount. The pools
+  are checked before every module's wiring.
 - **A factory comes in three kinds** — a default, a declaration, a dyn binding
   — each with or without the factory outputs it reads, written as one tuple
   (`FactoryInputs`, sealed): a new arity is an impl, never a new form.
@@ -79,7 +91,8 @@ framework half.
   governs `#[inject]`, optional or not — an optional dependency no module the
   app reaches provides is absent, never a leak — the `#[use_*]` layer lists (a
   provider-hosted site's through the `HostLayers` entry its decorator
-  submits, since the host's struct is `#[injectable]`'s; a site resolves its
+  submits, since the host's struct is `#[injectable]`'s, and an app-wide
+  pool's through what its declaration attaches at register; a site resolves its
   layers once, at boot, where a request-scoped one is never built and a
   transient one would be shared by every run, so either fails the boot naming
   its scope, `ScopedLayerError`), what a decorator's generated code resolves
@@ -125,7 +138,9 @@ from, and `provide_feature`, `provide_root` and `resolved`, the reads a
 drivers. The first config a boot loads, through either, registers the active
 `Environment` and files the undeclared-environment line
 (`.claude/decisions/undeclared-environment-is-production.md`), so no app
-imports anything for it. A seam one framework crate needs from another lives
+imports anything for it; a provider injecting it in an app that loads no
+config is refused at boot with the remedy `nest-rs-config` submits for it, in
+the binary and its suites alike — the harness seeds none. A seam one framework crate needs from another lives
 in its crate's `__private` (`macros.md`); one only its own crate needs stays
 private.
 
@@ -176,8 +191,7 @@ pinned, and both together.
   and so is the trait object a `provide_factory_dyn` binds.
   The boot outcomes `architecture.md` lists — supersede,
   `ContestedDeclarationError` naming both imports and their positions before
-  any factory runs, `UnresolvedFactoryError` — each have a behaviour test in
-  `nest-rs-config`. We
+  any factory runs — each have a behaviour test in `nest-rs-config`. We
   exceed NestJS here on purpose: a silently dropped declaration is a swallowed
   error.
 - **One exception: `OpenTelemetry::init()` / `init_with(config)`** belongs to

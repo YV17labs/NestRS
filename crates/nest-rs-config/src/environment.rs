@@ -120,6 +120,15 @@ nest_rs_core::inventory::submit! {
     nest_rs_core::__private::ProfileSource { deployed }
 }
 
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<Environment>,
+        "`Environment` is registered by the first config the boot loads: import a module \
+         owning a config (`nest_rs::http::HttpModule`, …) or inject a `#[config]` of the app's \
+         own, or read `Environment::from_env()` where the app loads none.",
+    )
+}
+
 /// Classify a raw `<PREFIX>_ENV` value into an [`Environment`], with `true`
 /// in the second slot when the value was **set but unrecognized** (so the
 /// caller can surface it) — never for unset or empty, which are production

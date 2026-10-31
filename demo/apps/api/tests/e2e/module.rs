@@ -7,7 +7,7 @@ use nest_rs::http::{StatusCode, header};
 use nest_rs::schedule::Scheduler;
 use nest_rs::testing::{EphemeralDatabase, HeadlessApp, TestApp, TestResponse};
 
-use crate::{API, DEV_PUBLIC_KEY, ORG_ID, global_guards};
+use crate::{API, DEV_PUBLIC_KEY, ORG_ID};
 
 #[tokio::test]
 async fn the_api_requires_its_own_audience_read_from_its_own_file() {
@@ -15,7 +15,6 @@ async fn the_api_requires_its_own_audience_read_from_its_own_file() {
         .await
         .expect("create + migrate a throwaway database");
     let app = TestApp::builder()
-        .use_guards_global(global_guards())
         .module::<ApiModule>()
         .with_test_telemetry()
         .provide_arc(db.connection())

@@ -74,7 +74,9 @@ http = [
     "nest-rs-testing?/http",
 ]
 config = ["dep:nest-rs-config"]
-database = ["dep:nest-rs-database"]
+# Beside `testing`, the harness runs a unit of work through the app's binding
+# (`system_unit`).
+database = ["dep:nest-rs-database", "nest-rs-testing?/database"]
 # `#[expose]` and `#[wire_enum]` are seaorm's own decorators.
 # `nest-rs-testing?/orm` carries `EphemeralDatabase`: a suite that tests against
 # a real schema needs it, and "which extra feature turns the fixture on" is not
@@ -170,7 +172,8 @@ events = ["dep:nest-rs-events"]
 # `guards`) the way every other capability row does. Without it the extension
 # point the docs teach cannot be spelled, and the error is an unresolved import
 # at their `use`.
-authn = ["dep:nest-rs-authn", "http"]
+# Beside `testing`, the harness signs a bearer with the app's own `JwtService`.
+authn = ["dep:nest-rs-authn", "http", "nest-rs-testing?/authn"]
 # The OAuth 2.0 *client* role: obtaining a token from somebody else's
 # authorization server. Its transaction cookie is `JwtService`-signed, hence
 # `authn`.
@@ -186,7 +189,8 @@ oauth-server = ["dep:nest-rs-oauth-server", "authn"]
 oauth-resource = ["dep:nest-rs-oauth-resource", "authn", "http"]
 # The `#[authorize]` half: the developer writes the attribute, so they enable
 # the feature named after it. Transport bindings ride the transport features.
-authz = ["dep:nest-rs-authz"]
+# Beside `testing`, the harness runs a unit of work under an ability (`unit`).
+authz = ["dep:nest-rs-authz", "nest-rs-testing?/authz"]
 social = ["dep:nest-rs-social", "authn", "oauth-client"]
 # Same shape: the `with_test_telemetry` boot guard lives behind testing's
 # `opentelemetry` feature.

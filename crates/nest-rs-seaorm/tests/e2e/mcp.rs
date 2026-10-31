@@ -6,7 +6,7 @@
 use nest_rs_authz::{AbilityBuilder, current_ability};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_database::{ExecutorScope, current_executor_scope};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_mcp::{CallToolResult, ContentBlock, McpError, mcp, tools};
 use nest_rs_seaorm::__private::current_executor;
 use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmExecutor, SeaOrmModule};
@@ -97,10 +97,12 @@ impl UnitTools {
 )]
 struct UnitModule;
 
+#[module(imports = [UnitModule], providers = [GlobalGuards<(Granting,)>])]
+struct BootApp;
+
 async fn boot() -> TestApp {
     TestApp::builder()
-        .module::<UnitModule>()
-        .use_guards_global([guard::<Granting>()])
+        .module::<BootApp>()
         .build()
         .await
         .expect("the tool host boots over live Postgres")
@@ -193,6 +195,9 @@ impl BlockedTools {
 )]
 struct BlockedModule;
 
+#[module(imports = [BlockedModule], providers = [GlobalGuards<(Granting,)>])]
+struct AnOperationWhoseStatementIsBlockedIsAnsweredAtItsDeadlineApp;
+
 /// An operation whose statement Postgres holds behind a lock is answered at
 /// its deadline, not when the lock goes: the rollback waits for the statement
 /// on the driver's task, and nothing it wrote lands.
@@ -208,8 +213,7 @@ async fn an_operation_whose_statement_is_blocked_is_answered_at_its_deadline() {
         .await
         .expect("the table is locked");
     let app = TestApp::builder()
-        .module::<BlockedModule>()
-        .use_guards_global([guard::<Granting>()])
+        .module::<AnOperationWhoseStatementIsBlockedIsAnsweredAtItsDeadlineApp>()
         .build()
         .await
         .expect("the tool host boots over live Postgres");

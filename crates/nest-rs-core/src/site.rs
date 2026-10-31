@@ -9,10 +9,10 @@ use crate::container::__private::site_chains;
 use crate::container::{Container, ContainerId};
 use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory};
 use crate::exception_filter::__private::ErasedExceptionFilter;
-use crate::exception_filter::{ExceptionFilterSpec, GlobalExceptionFilters};
+use crate::exception_filter::ExceptionFilterSpec;
 use crate::handler::Handler;
 use crate::interceptor::__private::InterceptorStage;
-use crate::interceptor::{GlobalInterceptors, Interceptor, InterceptorSpec, module_interceptors};
+use crate::interceptor::{Interceptor, InterceptorSpec, module_interceptors};
 use crate::layer::{Layer, LayerSite};
 use crate::layer_chain::__private::{
     ResolvedLayer, compose_chain, resolve_global_layers, resolve_scoped,
@@ -290,7 +290,7 @@ impl UnitChains {
 
         let mut global_interceptors = Vec::new();
         if global.handler_stage {
-            global_interceptors.extend(resolve_global_layers::<GlobalInterceptors>(container));
+            global_interceptors.extend(resolve_global_layers::<dyn Interceptor>(container));
             global_interceptors.extend(resolve_scoped(
                 container,
                 module_interceptors(container, InterceptorStage::Handler),
@@ -326,7 +326,9 @@ impl UnitChains {
 
         let mut global_filters = Vec::new();
         if global.exception_filters {
-            global_filters.extend(resolve_global_layers::<GlobalExceptionFilters>(container));
+            global_filters.extend(resolve_global_layers::<dyn ErasedExceptionFilter>(
+                container,
+            ));
             global_filters.retain(|entry| entry.layer.serves(unit));
         }
         let mut exception_filters = compose_chain(
@@ -437,10 +439,12 @@ fn report_unit_stage_duplicate<L: Layer + ?Sized>(entry: &ResolvedLayer<L>) {
 mod tests {
     use super::*;
     use crate::container::ContainerBuilder;
-    use crate::exception_filter::exception_filter;
+    use crate::discoverable::Discoverable;
+    use crate::exception_filter::{GlobalExceptionFilters, exception_filter};
     use crate::handler::{HandlerDeclaration, MetaLevels, declare_handler, meta_value};
     use crate::interceptor::__private::register_interceptor;
     use crate::interceptor::interceptor;
+    use crate::layer_chain::__private::declare_global;
     use crate::testing::{JOB, RUN, Recording, SEND};
     use crate::{Caught, ExceptionFilter, UnitContext, async_trait};
 
@@ -475,9 +479,10 @@ mod tests {
     }
 
     fn app_lists(builder: ContainerBuilder, specs: Vec<InterceptorSpec>) -> ContainerBuilder {
-        builder.provide(GlobalInterceptors(
+        declare_global::<dyn Interceptor, InterceptorSpec>(
+            builder,
             specs.into_iter().map(|spec| spec.0).collect(),
-        ))
+        )
     }
 
     #[test]
@@ -684,13 +689,11 @@ mod tests {
 
     #[test]
     fn exception_filters_run_the_methods_first_then_the_hosts_then_the_apps() {
-        let container = ContainerBuilder::default()
+        let builder = ContainerBuilder::default()
             .provide(declines::<First>())
             .provide(declines::<Second>())
-            .provide(declines::<Third>())
-            .provide(GlobalExceptionFilters(vec![
-                exception_filter::<Declines<First>>().0,
-            ]))
+            .provide(declines::<Third>());
+        let container = GlobalExceptionFilters::<(Declines<First>,)>::register(builder)
             .build()
             .expect("the container builds");
         let chains = composed(
@@ -717,10 +720,8 @@ mod tests {
             .provide(Recording::<Second>::new("app"))
             .provide(declines::<Third>());
         let builder = register_interceptor::<Recording<First>>(builder, InterceptorStage::Unit);
-        app_lists(builder, vec![interceptor::<Recording<Second>>()])
-            .provide(GlobalExceptionFilters(vec![
-                exception_filter::<Declines<Third>>().0,
-            ]))
+        let builder = app_lists(builder, vec![interceptor::<Recording<Second>>()]);
+        GlobalExceptionFilters::<(Declines<Third>,)>::register(builder)
             .build()
             .expect("the container builds")
     }

@@ -10,7 +10,7 @@
 //! use nest_rs_http::HttpView;
 //! # use nest_rs_core::module;
 //! # use nest_rs_graphql::GraphqlModule;
-//! # use nest_rs_guards::guard;
+//! # use nest_rs_guards::GlobalGuards;
 //!
 //! #[derive(Clone)]
 //! struct Caller(String);
@@ -47,14 +47,16 @@
 //!         caller.into_inner().0
 //!     }
 //! }
-//! # #[module(imports = [GraphqlModule], providers = [NameGuard, MeResolver])]
+//! # #[module(
+//! #     imports = [GraphqlModule],
+//! #     providers = [NameGuard, MeResolver, GlobalGuards<(NameGuard,)>],
+//! # )]
 //! # struct AppModule;
 //! #
 //! # #[nest_rs_core::main]
 //! # async fn main() -> nest_rs_core::anyhow::Result<()> {
 //! # let app = nest_rs_testing::TestApp::builder()
 //! #     .module::<AppModule>()
-//! #     .use_guards_global([guard::<NameGuard>()])
 //! #     .build()
 //! #     .await?;
 //!

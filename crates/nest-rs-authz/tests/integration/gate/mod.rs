@@ -13,7 +13,7 @@ use nest_rs_authz::{Ability, AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_mcp::{McpError, mcp, tools};
@@ -129,11 +129,16 @@ impl WidgetsGateway {
 )]
 struct EveryEdgeModule;
 
+#[module(imports = [WsEdgeModule], providers = [GlobalGuards<(NarrowToken,)>])]
+struct NarrowTokenWsApp;
+
+#[module(imports = [EveryEdgeModule], providers = [GlobalGuards<(NarrowToken,)>])]
+struct NarrowTokenEveryEdgeApp;
+
 #[tokio::test]
 async fn a_token_too_narrow_reads_one_sentence_one_code_and_one_scope_list_on_every_edge() {
     let app = TestApp::builder()
-        .module::<EveryEdgeModule>()
-        .use_guards_global([guard::<NarrowToken>()])
+        .module::<NarrowTokenEveryEdgeApp>()
         .build()
         .await
         .expect("every edge boots");
@@ -196,8 +201,7 @@ async fn a_token_too_narrow_reads_one_sentence_one_code_and_one_scope_list_on_ev
     );
 
     let ws = TestApp::builder()
-        .module::<WsEdgeModule>()
-        .use_guards_global([guard::<NarrowToken>()])
+        .module::<NarrowTokenWsApp>()
         .build_ws()
         .await
         .expect("the gateway boots");

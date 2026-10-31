@@ -15,7 +15,6 @@ use nest_rs_core::__private::{
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, Failure, Handler, Outcome, Peer, Settled, UnitContext};
 use nest_rs_guards::Denial;
-use nest_rs_pipes::__private::PipeSpecs;
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeSpec};
 
 use crate::envelope::{Rendered, WsError, WsReply, chain_rendered, problem_rendered};
@@ -42,7 +41,7 @@ impl MessagePipes {
         method: &[PipeSpec],
     ) -> nest_rs_core::anyhow::Result<Self> {
         let site = message_site(handler);
-        let global = resolve_global_layers::<PipeSpecs>(container);
+        let global = resolve_global_layers::<dyn GlobalPipe>(container);
         let host = resolve_scoped(container, host, LayerSite::Host, &site)
             .inspect_err(report_unresolved)?;
         let method = resolve_scoped(container, method, LayerSite::Method, &site)

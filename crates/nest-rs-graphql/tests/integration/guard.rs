@@ -4,7 +4,7 @@
 use nest_rs_core::{AmbientValue, Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result, Result as GqlResult};
 use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, SeedLifetime, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::StatusCode;
 use nest_rs_testing::TestApp;
 
@@ -100,10 +100,12 @@ impl GuardedResolver {
 #[module(imports = [GraphqlModule], providers = [RequireAdmin, RoleHeaderGuard, GuardedResolver])]
 struct GuardedModule;
 
+#[module(imports = [GuardedModule], providers = [GlobalGuards<(RoleHeaderGuard,)>])]
+struct BootApp;
+
 async fn boot() -> TestApp {
     TestApp::builder()
-        .module::<GuardedModule>()
-        .use_guards_global([guard::<RoleHeaderGuard>()])
+        .module::<BootApp>()
         .build()
         .await
         .expect("the schema boots and mounts at /graphql")
@@ -371,15 +373,18 @@ impl SealedResolver {
 )]
 struct ChainModule;
 
-async fn chain_app(global: Option<nest_rs_guards::GuardSpec>) -> TestApp {
-    let builder = TestApp::builder().module::<ChainModule>();
-    match global {
-        Some(spec) => builder.use_guards_global([spec]),
-        None => builder,
-    }
-    .build()
-    .await
-    .expect("the schema boots and mounts at /graphql")
+#[module(imports = [ChainModule], providers = [GlobalGuards<(DenyAll,)>])]
+struct DenyAllPoolModule;
+
+#[module(imports = [ChainModule], providers = [GlobalGuards<(CountingGuard,)>])]
+struct CountingPoolModule;
+
+async fn chain_app<M: nest_rs_core::Module + 'static>() -> TestApp {
+    TestApp::builder()
+        .module::<M>()
+        .build()
+        .await
+        .expect("the schema boots and mounts at /graphql")
 }
 
 async fn query(app: &TestApp, document: &str) -> serde_json::Value {
@@ -418,7 +423,7 @@ fn assert_denied(body: &serde_json::Value, field: &str) {
 
 #[tokio::test]
 async fn a_resolver_guard_runs_on_every_operation_whatever_it_returns() {
-    let app = chain_app(None).await;
+    let app = chain_app::<ChainModule>().await;
     for field in [
         "sealedCount",
         "sealedSecrets",
@@ -437,7 +442,7 @@ async fn a_resolver_guard_runs_on_every_operation_whatever_it_returns() {
 
 #[tokio::test]
 async fn a_resolver_guard_runs_on_a_bare_stream_subscription() {
-    let app = chain_app(None).await;
+    let app = chain_app::<ChainModule>().await;
     let mut socket = app.graphql_socket().open();
     socket.connect().await;
     socket.subscribe("sealed", "subscription { sealedTicks }");
@@ -454,7 +459,7 @@ async fn a_resolver_guard_runs_on_a_bare_stream_subscription() {
 
 #[tokio::test]
 async fn an_app_wide_guard_runs_on_a_bare_return_operation() {
-    let app = chain_app(Some(guard::<DenyAll>())).await;
+    let app = chain_app::<DenyAllPoolModule>().await;
     let body = query(&app, "{ openCount }").await;
     let rendered = body.to_string();
     assert!(
@@ -465,7 +470,7 @@ async fn an_app_wide_guard_runs_on_a_bare_return_operation() {
 
 #[tokio::test]
 async fn the_app_wide_pool_runs_once_per_root_field_not_per_parent() {
-    let app = chain_app(Some(guard::<CountingGuard>())).await;
+    let app = chain_app::<CountingPoolModule>().await;
     let body = query(&app, "{ shelves { id label } }").await;
     assert_eq!(
         body["data"]["shelves"][2]["label"], "shelf-3",
@@ -685,7 +690,7 @@ mod request_decided {
     use nest_rs_core::async_trait;
     use nest_rs_core::{Layer, UnitContext, injectable, module};
     use nest_rs_graphql::{GraphqlModule, operations, resolver};
-    use nest_rs_guards::{Denial, Guard, GuardSpec, guard};
+    use nest_rs_guards::{Denial, GlobalGuards, Guard};
     use nest_rs_http::{HttpView, StatusCode};
     use nest_rs_testing::{LogCapture, TestApp, TestResponse};
     use serde_json::{Value, json};
@@ -741,10 +746,15 @@ mod request_decided {
     )]
     struct KeyModule;
 
-    async fn boot(pool: GuardSpec) -> TestApp {
+    #[module(imports = [KeyModule], providers = [GlobalGuards<(KeyAtTheRequest,)>])]
+    struct RequestKeyPoolModule;
+
+    #[module(imports = [KeyModule], providers = [GlobalGuards<(KeyAtTheUnit,)>])]
+    struct UnitKeyPoolModule;
+
+    async fn boot<M: nest_rs_core::Module + 'static>() -> TestApp {
         TestApp::builder()
-            .module::<KeyModule>()
-            .use_guards_global([pool])
+            .module::<M>()
             .build()
             .await
             .expect("boots")
@@ -764,7 +774,7 @@ mod request_decided {
 
     #[tokio::test]
     async fn a_pooled_guard_deciding_in_check_http_gates_the_request_and_admits_its_fields() {
-        let app = boot(guard::<KeyAtTheRequest>()).await;
+        let app = boot::<RequestKeyPoolModule>().await;
 
         let admitted = ping(&app, Some("k")).await;
         admitted.assert_status(StatusCode::OK);
@@ -779,7 +789,7 @@ mod request_decided {
     #[tokio::test]
     async fn a_pooled_guard_reading_the_request_in_check_refuses_each_field_opaquely() {
         let logs = LogCapture::install();
-        let app = boot(guard::<KeyAtTheUnit>()).await;
+        let app = boot::<UnitKeyPoolModule>().await;
 
         for _ in 0..2 {
             let refused = ping(&app, Some("k")).await;

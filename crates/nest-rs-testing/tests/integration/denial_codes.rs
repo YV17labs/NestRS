@@ -7,7 +7,7 @@ use nest_rs_core::{Code, Layer, UnitContext, injectable, module};
 use nest_rs_core::{async_trait, problem::code};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_mcp::{McpError, McpView, mcp, tools};
 use nest_rs_testing::TestApp;
@@ -304,17 +304,18 @@ impl RefusedGateway {
 )]
 struct EveryEdgeModule;
 
+#[module(imports = [EveryEdgeModule], providers = [GlobalGuards<(Refusing,)>])]
+struct EveryEdgeApp;
+
 #[tokio::test]
 async fn every_denial_names_one_code_on_every_edge() {
     let app = TestApp::builder()
-        .module::<EveryEdgeModule>()
-        .use_guards_global([guard::<Refusing>()])
+        .module::<EveryEdgeApp>()
         .build()
         .await
         .expect("every edge boots");
     let ws = TestApp::builder()
-        .module::<EveryEdgeModule>()
-        .use_guards_global([guard::<Refusing>()])
+        .module::<EveryEdgeApp>()
         .build_ws()
         .await
         .expect("every edge serves");

@@ -11,7 +11,7 @@ use nest_rs_core::{
     ScopeViolationError, injectable, module,
 };
 
-use crate::refused_on_both_paths;
+use crate::refused_boot;
 
 struct AbsentDep;
 
@@ -412,9 +412,9 @@ struct CycleRight {
 #[module(providers = [CycleLeft, CycleRight])]
 struct CycleModule;
 
-#[test]
-fn providers_waiting_on_each_other_fail_the_boot_naming_the_cycle() {
-    let Err(refused) = App::new::<CycleModule>() else {
+#[tokio::test]
+async fn providers_waiting_on_each_other_fail_the_boot_naming_the_cycle() {
+    let Err(refused) = App::builder().module::<CycleModule>().build().await else {
         panic!("two providers waiting on each other cannot both be built");
     };
     let cycle = refused
@@ -436,9 +436,13 @@ impl Ledger for BoundLedger {}
 #[module(providers = [BoundLedger as dyn Ledger])]
 struct BoundLedgerModule;
 
-#[test]
-fn a_provider_bound_as_dyn_is_reachable_under_its_own_type() {
-    let app = App::new::<BoundLedgerModule>().expect("the module boots");
+#[tokio::test]
+async fn a_provider_bound_as_dyn_is_reachable_under_its_own_type() {
+    let app = App::builder()
+        .module::<BoundLedgerModule>()
+        .build()
+        .await
+        .expect("the module boots");
     let reachable = app
         .container()
         .get::<ReachableProviders>()
@@ -465,9 +469,9 @@ struct StrayLedgerReaderModule;
 #[module(imports = [BoundLedgerModule, StrayLedgerReaderModule])]
 struct StrayLedgerRoot;
 
-#[test]
-fn a_consumer_of_a_dyn_bound_provider_under_its_own_type_imports_its_module() {
-    let Err(refused) = App::new::<StrayLedgerRoot>() else {
+#[tokio::test]
+async fn a_consumer_of_a_dyn_bound_provider_under_its_own_type_imports_its_module() {
+    let Err(refused) = App::builder().module::<StrayLedgerRoot>().build().await else {
         panic!("a consumer reaching a provider its module does not import must fail the boot");
     };
     let refused = refused
@@ -494,9 +498,13 @@ struct SingletonMaybeAuditing {
 #[module(providers = [PerRequestAudit, SingletonMaybeAuditing])]
 struct OptionalScopeViolationModule;
 
-#[test]
-fn a_singleton_holding_a_request_scoped_provider_optionally_fails_the_boot_by_name() {
-    let Err(refused) = App::new::<OptionalScopeViolationModule>() else {
+#[tokio::test]
+async fn a_singleton_holding_a_request_scoped_provider_optionally_fails_the_boot_by_name() {
+    let Err(refused) = App::builder()
+        .module::<OptionalScopeViolationModule>()
+        .build()
+        .await
+    else {
         panic!("a singleton's optional request-scoped dependency would be `None` forever");
     };
     let violation = refused
@@ -525,9 +533,9 @@ struct NotifierModule;
 #[module(imports = [MailerModule, NotifierModule])]
 struct OptionalLeakRoot;
 
-#[test]
-fn an_optional_dependency_another_reached_module_provides_needs_its_import() {
-    let Err(refused) = App::new::<OptionalLeakRoot>() else {
+#[tokio::test]
+async fn an_optional_dependency_another_reached_module_provides_needs_its_import() {
+    let Err(refused) = App::builder().module::<OptionalLeakRoot>().build().await else {
         panic!("the app reaches `Mailer`, so `Notifier` would hold it or not by import order");
     };
     let leak = refused
@@ -540,9 +548,12 @@ fn an_optional_dependency_another_reached_module_provides_needs_its_import() {
 #[module(imports = [NotifierModule])]
 struct NoMailerRoot;
 
-#[test]
-fn an_optional_dependency_no_reached_module_provides_is_absent() {
-    let app = App::new::<NoMailerRoot>()
+#[tokio::test]
+async fn an_optional_dependency_no_reached_module_provides_is_absent() {
+    let app = App::builder()
+        .module::<NoMailerRoot>()
+        .build()
+        .await
         .expect("`MailerModule` is linked but another app's: the capability is absent here");
     let notifier = app.container().get::<Notifier>().expect("built without it");
     assert!(notifier.mailer.is_none());
@@ -620,15 +631,12 @@ struct MixedScopeCycleModule;
 #[module(imports = [MixedScopeCycleModule])]
 struct MixedScopeCycleRoot;
 
-/// The cycle booting `M` fails with, on both paths, each the same.
+/// The cycle booting `M` fails with.
 async fn cycle_of<M: nest_rs_core::Module>() -> ProviderCycleError {
-    let [sync, built] = refused_on_both_paths::<M>().await.map(|refused| {
-        refused
-            .downcast::<ProviderCycleError>()
-            .unwrap_or_else(|refused| panic!("not the cycle refusal: {refused:#}"))
-    });
-    assert_eq!(sync.to_string(), built.to_string());
-    sync
+    refused_boot::<M>()
+        .await
+        .downcast::<ProviderCycleError>()
+        .unwrap_or_else(|refused| panic!("not the cycle refusal: {refused:#}"))
 }
 
 #[tokio::test]
@@ -867,14 +875,13 @@ struct StrayAuditRoot;
 
 #[tokio::test]
 async fn a_handler_resolving_a_provider_its_module_does_not_import_fails_the_boot() {
-    for refused in refused_on_both_paths::<StrayAuditRoot>().await {
-        let leak = refused
-            .downcast::<AccessGraphError>()
-            .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
-        assert_eq!(leak.consumer, "StrayAuditHost");
-        assert_eq!(leak.module, "StrayAuditHostModule");
-        assert_eq!(leak.owner, "AuditTrailModule");
-    }
+    let refused = refused_boot::<StrayAuditRoot>().await;
+    let leak = refused
+        .downcast::<AccessGraphError>()
+        .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
+    assert_eq!(leak.consumer, "StrayAuditHost");
+    assert_eq!(leak.module, "StrayAuditHostModule");
+    assert_eq!(leak.owner, "AuditTrailModule");
 }
 
 struct Unprovided;
@@ -886,23 +893,22 @@ struct UnprovidedHostModule;
 
 #[tokio::test]
 async fn a_handler_resolving_a_provider_no_module_offers_fails_the_boot_naming_it() {
-    for refused in refused_on_both_paths::<UnprovidedHostModule>().await {
-        let missing = refused
-            .downcast::<MissingDependencyError>()
-            .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
-        assert_eq!(missing.consumer, "UnprovidedHost");
-        assert!(
-            missing.dependency.ends_with("::Unprovided"),
-            "{}",
-            missing.dependency
-        );
-        assert_eq!(missing.remedy, None, "no crate names one for it");
-        assert!(
-            missing
-                .to_string()
-                .contains("or seed it at `App::builder()`")
-        );
-    }
+    let refused = refused_boot::<UnprovidedHostModule>().await;
+    let missing = refused
+        .downcast::<MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(missing.consumer, "UnprovidedHost");
+    assert!(
+        missing.dependency.ends_with("::Unprovided"),
+        "{}",
+        missing.dependency
+    );
+    assert_eq!(missing.remedy, None, "no crate names one for it");
+    assert!(
+        missing
+            .to_string()
+            .contains("or seed it at `App::builder()`")
+    );
 }
 
 /// A key whose owning crate names the line to add, as a port names its
@@ -930,21 +936,20 @@ struct RemediedConsumerModule;
 
 #[tokio::test]
 async fn a_missing_dependency_whose_crate_names_a_remedy_is_refused_with_that_line() {
-    for refused in refused_on_both_paths::<RemediedConsumerModule>().await {
-        let missing = refused
-            .downcast::<MissingDependencyError>()
-            .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
-        assert_eq!(missing.consumer, "RemediedConsumer");
-        assert_eq!(missing.remedy, Some(REMEDIED_REMEDY));
-        let said = missing.to_string();
-        assert!(
-            said.ends_with(&format!(
-                "which no module this app imports provides. {REMEDIED_REMEDY}"
-            )),
-            "{said}"
-        );
-        assert!(!said.contains("seed it"), "one remedy, the crate's: {said}");
-    }
+    let refused = refused_boot::<RemediedConsumerModule>().await;
+    let missing = refused
+        .downcast::<MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(missing.consumer, "RemediedConsumer");
+    assert_eq!(missing.remedy, Some(REMEDIED_REMEDY));
+    let said = missing.to_string();
+    assert!(
+        said.ends_with(&format!(
+            "which no module this app imports provides. {REMEDIED_REMEDY}"
+        )),
+        "{said}"
+    );
+    assert!(!said.contains("seed it"), "one remedy, the crate's: {said}");
 }
 
 /// What a decorator's generated code requires of its host, and nothing else
@@ -971,15 +976,14 @@ struct RequiringHostModule;
 
 #[tokio::test]
 async fn a_key_a_decorator_requires_of_its_host_is_checked_like_an_injected_one() {
-    for refused in refused_on_both_paths::<RequiringHostModule>().await {
-        let missing = refused
-            .downcast::<MissingDependencyError>()
-            .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
-        assert_eq!(
-            (missing.module, missing.consumer, missing.dependency),
-            ("RequiringHostModule", "RequiringHost", "Required"),
-        );
-    }
+    let refused = refused_boot::<RequiringHostModule>().await;
+    let missing = refused
+        .downcast::<MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(
+        (missing.module, missing.consumer, missing.dependency),
+        ("RequiringHostModule", "RequiringHost", "Required"),
+    );
     App::builder()
         .provide(Required)
         .module::<RequiringHostModule>()

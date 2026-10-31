@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::problem::code;
 use nest_rs_core::{
-    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext, async_trait,
-    exception_filter, injectable, interceptor, module,
+    Caught, ExceptionFilter, GlobalExceptionFilters, Interceptor, Layer, Next, Outcome, Problem,
+    UnitContext, async_trait, injectable, interceptor, module,
 };
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::{
@@ -247,14 +247,19 @@ impl ClosestScope {
 ])]
 struct ExceptionFiltersModule;
 
+#[module(
+    imports = [ExceptionFiltersModule],
+    providers = [GlobalExceptionFilters<(DomainErrorFilter,)>],
+)]
+struct ExceptionFiltersApp;
+
 #[tokio::test]
 async fn exception_filter_at_global_scope_catches_typed_error() {
     let _gate = GATE.lock().await;
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<ExceptionFiltersModule>()
-        .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
+        .module::<ExceptionFiltersApp>()
         .build()
         .await
         .expect("boots");
@@ -317,8 +322,7 @@ async fn unmatched_error_falls_through_to_default_handler() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<ExceptionFiltersModule>()
-        .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
+        .module::<ExceptionFiltersApp>()
         .build()
         .await
         .expect("boots");
@@ -334,8 +338,7 @@ async fn same_filter_global_and_method_runs_once() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<ExceptionFiltersModule>()
-        .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
+        .module::<ExceptionFiltersApp>()
         .build()
         .await
         .expect("boots");
@@ -355,8 +358,7 @@ async fn same_filter_at_all_three_scopes_catches_once() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<ExceptionFiltersModule>()
-        .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
+        .module::<ExceptionFiltersApp>()
         .build()
         .await
         .expect("boots");
@@ -414,11 +416,13 @@ impl Interceptor for Observed {
 #[module(providers = [CatchAll, Observed])]
 struct ObservedModule;
 
+#[module(imports = [ObservedModule], providers = [GlobalExceptionFilters<(CatchAll,)>])]
+struct A404IsShapedByAGlobalCatchAllAndObservedAtTheUnitStageApp;
+
 #[tokio::test]
 async fn a_404_is_shaped_by_a_global_catch_all_and_observed_at_the_unit_stage() {
     let app = TestApp::builder()
-        .module::<ObservedModule>()
-        .use_exception_filters_global([exception_filter::<CatchAll>()])
+        .module::<A404IsShapedByAGlobalCatchAllAndObservedAtTheUnitStageApp>()
         .build()
         .await
         .expect("boots");
@@ -450,11 +454,13 @@ impl PingResolver {
 )]
 struct GraphqlBatchModule;
 
+#[module(imports = [GraphqlBatchModule], providers = [GlobalExceptionFilters<(CatchAll,)>])]
+struct AGlobalCatchAllShapesASelfMountsOwnHttpErrorApp;
+
 #[tokio::test]
 async fn a_global_catch_all_shapes_a_self_mounts_own_http_error() {
     let app = TestApp::builder()
-        .module::<GraphqlBatchModule>()
-        .use_exception_filters_global([exception_filter::<CatchAll>()])
+        .module::<AGlobalCatchAllShapesASelfMountsOwnHttpErrorApp>()
         .build()
         .await
         .expect("boots");
@@ -512,11 +518,13 @@ impl HeadController {
 #[module(providers = [EchoesAccept, HeadController])]
 struct HeadModule;
 
+#[module(imports = [HeadModule], providers = [GlobalExceptionFilters<(EchoesAccept,)>])]
+struct AFilterReadsTheRequestsHeadOnARouteAndOnWhatTheRouterAnswersApp;
+
 #[tokio::test]
 async fn a_filter_reads_the_requests_head_on_a_route_and_on_what_the_router_answers() {
     let app = TestApp::builder()
-        .module::<HeadModule>()
-        .use_exception_filters_global([exception_filter::<EchoesAccept>()])
+        .module::<AFilterReadsTheRequestsHeadOnARouteAndOnWhatTheRouterAnswersApp>()
         .build()
         .await
         .expect("boots");
@@ -537,11 +545,13 @@ async fn a_filter_reads_the_requests_head_on_a_route_and_on_what_the_router_answ
     }
 }
 
+#[module(imports = [GraphqlBatchModule], providers = [GlobalExceptionFilters<(EchoesAccept,)>])]
+struct AGlobalFilterReadsTheHeadOfARequestASelfMountAnsweredApp;
+
 #[tokio::test]
 async fn a_global_filter_reads_the_head_of_a_request_a_self_mount_answered() {
     let app = TestApp::builder()
-        .module::<GraphqlBatchModule>()
-        .use_exception_filters_global([exception_filter::<EchoesAccept>()])
+        .module::<AGlobalFilterReadsTheHeadOfARequestASelfMountAnsweredApp>()
         .build()
         .await
         .expect("boots");

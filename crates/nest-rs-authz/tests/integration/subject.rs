@@ -10,7 +10,7 @@ use nest_rs_authz::{Ability, AbilityBuilder, Action, Manage, Read, current_abili
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::futures_util::stream;
 use nest_rs_http::{HttpView, Json, SseEvent, SseStream, StatusCode, controller, header, routes};
 use nest_rs_mcp::{McpError, mcp, tools};
@@ -170,10 +170,12 @@ struct ExportsModule;
 #[module(imports = [WsModule], providers = [Grants, ExportsGateway])]
 struct ExportsWsModule;
 
+#[module(imports = [ExportsModule], providers = [GlobalGuards<(Grants,)>])]
+struct ExportsApp;
+
 async fn app() -> TestApp {
     TestApp::builder()
-        .module::<ExportsModule>()
-        .use_guards_global([guard::<Grants>()])
+        .module::<ExportsApp>()
         .build()
         .await
         .expect("every edge boots")
@@ -188,6 +190,9 @@ struct Answers {
     mcp: String,
     ws: serde_json::Value,
 }
+
+#[module(imports = [ExportsWsModule], providers = [GlobalGuards<(Grants,)>])]
+struct AnswersApp;
 
 async fn answers(grant: &str) -> Answers {
     let app = app().await;
@@ -227,8 +232,7 @@ async fn answers(grant: &str) -> Answers {
     .await;
 
     let ws = TestApp::builder()
-        .module::<ExportsWsModule>()
-        .use_guards_global([guard::<Grants>()])
+        .module::<AnswersApp>()
         .build_ws()
         .await
         .expect("the gateway boots");

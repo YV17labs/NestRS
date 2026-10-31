@@ -1,17 +1,19 @@
 //! [`ExceptionFilter`], the layer that answers a failed unit on any edge,
-//! [`Caught`], its answer, [`Catch`], what it can catch, and the
-//! [`ExceptionFilterSpec`] an app lists one with.
+//! [`Caught`], its answer, [`Catch`], what it can catch, the
+//! [`ExceptionFilterSpec`] a site binds one with, and
+//! [`GlobalExceptionFilters`], the app-wide pool a root module declares.
 
 use std::any::{TypeId, type_name};
 use std::error::Error;
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::dispatch::BoxFuture;
 use crate::layer::Layer;
-use crate::layer_chain::__private::{GlobalSpecs, ResolvedLayer};
+use crate::layer_chain::__private::{GlobalLayer, ResolvedLayer};
 use crate::layer_chain::LayerSpec;
 use crate::outcome::{Failure, Outcome, Settled};
 use crate::problem::Problem;
@@ -103,7 +105,7 @@ mod sealed {
     impl Sealed for dyn Error + Send + Sync + 'static {}
 }
 
-/// One exception filter an app lists, resolved against the container when a
+/// One exception filter a site binds, resolved against the container when the
 /// site composes its chains.
 pub struct ExceptionFilterSpec(pub(crate) LayerSpec<dyn __private::ErasedExceptionFilter>);
 
@@ -118,28 +120,78 @@ impl fmt::Debug for ExceptionFilterSpec {
 /// The [`ExceptionFilterSpec`] of `F`, the provider of that type a module
 /// imports.
 pub fn exception_filter<F: ExceptionFilter>() -> ExceptionFilterSpec {
-    ExceptionFilterSpec(LayerSpec::new(
-        TypeId::of::<F>(),
-        type_name::<F>(),
-        |container| {
-            container
-                .get::<F>()
-                .map(|filter| filter as Arc<dyn __private::ErasedExceptionFilter>)
-        },
-    ))
+    ExceptionFilterSpec(layer_spec::<F>())
 }
 
-/// The exception filters an app lists for every unit.
-pub(crate) struct GlobalExceptionFilters(
-    pub(crate) Vec<LayerSpec<dyn __private::ErasedExceptionFilter>>,
-);
+fn layer_spec<F: ExceptionFilter>() -> LayerSpec<dyn __private::ErasedExceptionFilter> {
+    LayerSpec::new(TypeId::of::<F>(), type_name::<F>(), |container| {
+        container
+            .get::<F>()
+            .map(|filter| filter as Arc<dyn __private::ErasedExceptionFilter>)
+    })
+}
 
-impl GlobalSpecs for GlobalExceptionFilters {
-    type Layer = dyn __private::ErasedExceptionFilter;
+/// The exception filters every unit tries after its method's and its host's,
+/// first listed first — declared once, in the providers of the module the app
+/// boots, so the binary and its test suites run the same pool. A module the
+/// app imports listing it fails the boot, as does a second declaration; a
+/// filter the declaring module does not reach fails the access graph.
+///
+/// ```
+/// use std::error::Error;
+///
+/// use nest_rs_core::{
+///     App, Caught, ExceptionFilter, GlobalExceptionFilters, Layer, UnitContext, async_trait,
+///     injectable, module,
+/// };
+///
+/// #[injectable]
+/// #[derive(Layer)]
+/// struct Logged;
+///
+/// #[async_trait]
+/// impl ExceptionFilter for Logged {
+///     type Exception = dyn Error + Send + Sync;
+///
+///     async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+///         Caught::Declined
+///     }
+/// }
+///
+/// #[module(providers = [Logged, GlobalExceptionFilters<(Logged,)>])]
+/// struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+///
+/// let app = App::builder().module::<AppModule>().build().await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct GlobalExceptionFilters<F: GlobalExceptionFilterList>(PhantomData<fn() -> F>);
 
-    fn specs(&self) -> &[LayerSpec<dyn __private::ErasedExceptionFilter>] {
-        &self.0
-    }
+/// A tuple of exception filters — `(Logged,)` to eight of them — tried in the
+/// order written. Sealed: only tuples are lists.
+pub trait GlobalExceptionFilterList: listed::Listed + 'static {
+    /// Each filter's spec, in order.
+    #[doc(hidden)]
+    fn __specs() -> Vec<LayerSpec<dyn __private::ErasedExceptionFilter>>;
+}
+
+mod listed {
+    pub trait Listed {}
+}
+
+crate::__global_layer_pool! {
+    pool: GlobalExceptionFilters,
+    list: GlobalExceptionFilterList,
+    sealed: listed::Listed,
+    layer: dyn __private::ErasedExceptionFilter,
+    each: ExceptionFilter => layer_spec,
+}
+
+impl GlobalLayer for dyn __private::ErasedExceptionFilter {
+    const KIND: &'static str = "exception filter";
+    const POOL: &'static str = "nest_rs::layers::exception_filters";
 }
 
 /// Try `filters` in order on `failure`; the first that answers wins, and the

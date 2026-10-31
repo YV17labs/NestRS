@@ -7,7 +7,7 @@
 use crate::AlwaysUnauthorized;
 use nest_rs_authn::{AuthnConfig, AuthnModule};
 use nest_rs_core::{Layer, async_trait, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::challenge::{BEARER, NoBearerChallenge};
 use nest_rs_http::{StatusCode, header};
 use nest_rs_http::{controller, routes};
@@ -216,12 +216,14 @@ async fn an_ordinary_forbidden_carries_no_challenge_at_all() {
 )]
 struct McpStepUpServer;
 
+#[module(imports = [McpStepUpServer], providers = [GlobalGuards<(TokenTooNarrow,)>])]
+struct AnMcpScopeDenialCarriesTheSameChallengeApp;
+
 #[tokio::test]
 async fn an_mcp_scope_denial_carries_the_same_challenge() {
     // `/mcp` is a self-mount: the transport's request stage runs the global pool.
     let app = TestApp::builder()
-        .module::<McpStepUpServer>()
-        .use_guards_global([guard::<TokenTooNarrow>()])
+        .module::<AnMcpScopeDenialCarriesTheSameChallengeApp>()
         .build()
         .await
         .expect("boots");

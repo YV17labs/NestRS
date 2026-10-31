@@ -1,17 +1,17 @@
-//! Boot-time fail-secure contract of the layer pool: a global layer spec whose
-//! provider was never registered, a controller guard no module provides, or two
-//! controllers on one prefix, fail the boot.
+//! Boot-time fail-secure contract of the layer pool: a global layer its
+//! declaring module does not reach or that is not a singleton, a pool declared
+//! below the module the app boots or twice, a controller guard no module
+//! provides, or two controllers on one prefix, fail the boot.
 
 use nest_rs_core::{
-    Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
-    exception_filter, injectable, interceptor, module,
+    Caught, ContainerBuilder, Discoverable, ExceptionFilter, GlobalExceptionFilters,
+    GlobalInterceptors, Interceptor, Layer, MissingDependencyError, Module, Next, Outcome,
+    Registering, ScopedLayerError, UnitContext, async_trait, injectable, module,
 };
-use nest_rs_guards::{Denial, Guard, GuardFor, guard};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{controller, routes};
-use nest_rs_pipes::{GlobalPipe, pipe};
+use nest_rs_pipes::{GlobalPipe, GlobalPipes};
 use nest_rs_testing::{HeadlessApp, TestApp};
-
-use crate::refused_wiring;
 
 /// Registered as a provider: the resolvable control case.
 #[injectable]
@@ -115,15 +115,30 @@ fn boot_error(result: anyhow::Result<TestApp>, expectation: &str) -> anyhow::Err
     }
 }
 
+/// The access graph's refusal of a global pool listing `layer`, which no
+/// module provides.
+#[track_caller]
+fn refused_unreached(result: anyhow::Result<HeadlessApp>, layer: &str) {
+    let Err(err) = result else {
+        panic!("a pool listing {layer}, which nothing provides, would boot without it");
+    };
+    let chain = format!("{err:#}");
+    let unmet = err
+        .downcast_ref::<MissingDependencyError>()
+        .unwrap_or_else(|| panic!("the access graph refuses it: {chain}"));
+    assert!(
+        unmet.dependency.ends_with(layer) && unmet.consumer.contains(layer),
+        "the refusal names the declaration and {layer}: {chain}"
+    );
+}
+
+#[module(providers = [WiredGuard, GlobalGuards<(GhostGuard,)>])]
+struct GhostGuardPoolModule;
+
 #[tokio::test]
-async fn an_unresolvable_global_guard_fails_boot() {
-    let result = TestApp::builder()
-        .module::<GuardOnlyModule>()
-        .use_guards_global([guard::<GhostGuard>()])
-        .build()
-        .await;
+async fn a_global_guard_its_module_does_not_reach_fails_the_boot() {
     let err = boot_error(
-        result,
+        TestApp::for_module::<GhostGuardPoolModule>().await,
         "a global guard with no provider must fail boot, not silently drop",
     );
     assert!(
@@ -133,89 +148,273 @@ async fn an_unresolvable_global_guard_fails_boot() {
 }
 
 #[tokio::test]
-async fn an_unresolvable_global_interceptor_fails_boot() {
-    let result = TestApp::builder()
-        .module::<GuardOnlyModule>()
-        .use_interceptors_global([interceptor::<GhostInterceptor>()])
-        .build()
-        .await;
-    let err = boot_error(
-        result,
-        "a global interceptor with no provider must fail boot",
-    );
-    assert!(
-        format!("{err:#}").contains("GhostInterceptor"),
-        "the error names the unresolvable interceptor: {err:#}",
+async fn an_app_serving_no_http_still_fails_on_an_unreached_global_guard() {
+    refused_unreached(
+        HeadlessApp::builder()
+            .module::<GhostGuardPoolModule>()
+            .build_headless()
+            .await,
+        "GhostGuard",
     );
 }
 
+#[module(providers = [WiredGuard, GlobalInterceptors<(GhostInterceptor,)>])]
+struct GhostInterceptorPoolModule;
+
 #[tokio::test]
-async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_interceptor() {
-    let result = HeadlessApp::builder()
-        .module::<GuardOnlyModule>()
-        .use_interceptors_global([interceptor::<GhostInterceptor>()])
-        .build_headless()
-        .await;
-    let Err(err) = result else {
-        panic!("a worker would boot with a global interceptor silently dropped");
-    };
-    assert!(
-        format!("{err:#}").contains("GhostInterceptor"),
-        "the error names the unresolvable interceptor: {err:#}",
+async fn an_app_serving_no_http_still_fails_on_an_unreached_global_interceptor() {
+    refused_unreached(
+        HeadlessApp::builder()
+            .module::<GhostInterceptorPoolModule>()
+            .build_headless()
+            .await,
+        "GhostInterceptor",
     );
 }
 
+#[module(providers = [WiredGuard, GlobalPipes<(GhostPipe,)>])]
+struct GhostPipePoolModule;
+
 #[tokio::test]
-async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_guard() {
-    let result = HeadlessApp::builder()
-        .module::<GuardOnlyModule>()
-        .use_guards_global([guard::<GhostGuard>()])
-        .build_headless()
-        .await;
-    let (registry, chain) = refused_wiring(
-        result,
-        "a worker would boot with a global guard silently dropped",
+async fn an_app_serving_no_http_still_fails_on_an_unreached_global_pipe() {
+    refused_unreached(
+        HeadlessApp::builder()
+            .module::<GhostPipePoolModule>()
+            .build_headless()
+            .await,
+        "GhostPipe",
+    );
+}
+
+#[module(providers = [WiredGuard, GlobalExceptionFilters<(GhostExceptionFilter,)>])]
+struct GhostExceptionFilterPoolModule;
+
+#[tokio::test]
+async fn an_app_serving_no_http_still_fails_on_an_unreached_global_exception_filter() {
+    refused_unreached(
+        HeadlessApp::builder()
+            .module::<GhostExceptionFilterPoolModule>()
+            .build_headless()
+            .await,
+        "GhostExceptionFilter",
+    );
+}
+
+/// A feature declaring the app's pool: an opening no line of the app wrote.
+#[module(imports = [GuardOnlyModule], providers = [GlobalGuards<(WiredGuard,)>])]
+struct FeatureDeclaringThePoolModule;
+
+#[module(imports = [FeatureDeclaringThePoolModule])]
+struct AppOverAFeaturesPoolModule;
+
+#[tokio::test]
+async fn a_global_pool_a_module_the_app_imports_declares_fails_the_boot_naming_it() {
+    let (registry, chain) = crate::refused_wiring(
+        HeadlessApp::builder()
+            .module::<AppOverAFeaturesPoolModule>()
+            .build_headless()
+            .await,
+        "a feature would choose the guards every route of the app runs",
     );
     assert_eq!(registry, "nest_rs::guards::global", "{chain}");
     assert!(
-        chain.contains("GhostGuard"),
-        "the error names the unresolvable guard: {chain}",
+        chain.contains("GlobalGuards<(WiredGuard,)>")
+            && chain.contains("FeatureDeclaringThePoolModule")
+            && chain.contains("the module the app boots"),
+        "the refusal names the declaration, the module listing it and the remedy: {chain}",
     );
 }
 
+/// A binding installing the app's pool from a `register` written by hand: an
+/// opening no module's providers show.
+struct InstallsThePoolModule;
+
+impl Module for InstallsThePoolModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        GlobalGuards::<(WiredGuard,)>::register(builder.import::<GuardOnlyModule>())
+    }
+}
+
+#[module(imports = [InstallsThePoolModule])]
+struct AppOverAHandWrittenPoolModule;
+
 #[tokio::test]
-async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_pipe() {
-    let result = HeadlessApp::builder()
-        .module::<GuardOnlyModule>()
-        .use_pipes_global([pipe::<GhostPipe>()])
-        .build_headless()
-        .await;
-    let (registry, chain) = refused_wiring(
-        result,
-        "a worker would boot with a global pipe silently dropped",
+async fn a_global_pool_no_modules_providers_list_fails_the_boot_naming_it() {
+    let (registry, chain) = crate::refused_wiring(
+        HeadlessApp::builder()
+            .module::<AppOverAHandWrittenPoolModule>()
+            .build_headless()
+            .await,
+        "a binding would choose the guards every route of the app runs",
     );
-    assert_eq!(registry, "nest_rs::pipes::global", "{chain}");
+    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
     assert!(
-        chain.contains("GhostPipe"),
-        "the error names the unresolvable pipe: {chain}",
+        chain.contains("GlobalGuards<(WiredGuard,)>")
+            && chain.contains("registered by no module's providers"),
+        "the refusal names the declaration and why: {chain}",
     );
 }
 
+#[module(imports = [GuardOnlyModule], providers = [GlobalGuards<(WiredGuard,)>])]
+struct FirstPoolModule;
+
+#[module(imports = [GuardOnlyModule], providers = [GlobalGuards<(WiredGuard, WiredGuard)>])]
+struct SecondPoolModule;
+
 #[tokio::test]
-async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_exception_filter() {
-    let result = HeadlessApp::builder()
-        .module::<GuardOnlyModule>()
-        .use_exception_filters_global([exception_filter::<GhostExceptionFilter>()])
-        .build_headless()
-        .await;
+async fn a_global_pool_declared_twice_fails_the_boot_naming_both() {
+    let (registry, chain) = crate::refused_wiring(
+        HeadlessApp::builder()
+            .module::<FirstPoolModule>()
+            .module::<SecondPoolModule>()
+            .build_headless()
+            .await,
+        "one of two pools would run without the other",
+    );
+    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
+    assert!(
+        chain.contains("declared twice")
+            && chain.contains("`GlobalGuards<(WiredGuard,)>` in `FirstPoolModule`")
+            && chain.contains("`GlobalGuards<(WiredGuard, WiredGuard)>` in `SecondPoolModule`"),
+        "the refusal names both declarations and the module listing each: {chain}",
+    );
+}
+
+#[module(imports = [GuardOnlyModule], providers = [GlobalGuards<(WiredGuard,)>])]
+struct FirstPoolModuleTwin;
+
+#[tokio::test]
+async fn one_pool_two_roots_list_fails_the_boot_naming_both_roots() {
+    let (registry, chain) = crate::refused_wiring(
+        HeadlessApp::builder()
+            .module::<FirstPoolModule>()
+            .module::<FirstPoolModuleTwin>()
+            .build_headless()
+            .await,
+        "one listing would hide the other",
+    );
+    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
+    assert!(
+        chain.contains("declared twice")
+            && chain.contains("`GlobalGuards<(WiredGuard,)>` in `FirstPoolModule`")
+            && chain.contains("`GlobalGuards<(WiredGuard,)>` in `FirstPoolModuleTwin`"),
+        "the refusal tells the two listings apart by their modules: {chain}",
+    );
+}
+
+#[module(
+    imports = [FeatureDeclaringThePoolModule],
+    providers = [GlobalGuards<(WiredGuard,)>]
+)]
+struct RootRelistingAFeaturesPoolModule;
+
+#[tokio::test]
+async fn one_pool_the_root_and_a_module_it_imports_list_fails_the_boot_naming_that_module() {
+    let (registry, chain) = crate::refused_wiring(
+        HeadlessApp::builder()
+            .module::<RootRelistingAFeaturesPoolModule>()
+            .build_headless()
+            .await,
+        "a feature would choose the guards every route of the app runs",
+    );
+    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
+    assert!(
+        chain
+            .contains("`GlobalGuards<(WiredGuard,)>` is listed by `FeatureDeclaringThePoolModule`")
+            && chain.contains("the module the app boots"),
+        "the refusal names the imported module listing the pool: {chain}",
+    );
+}
+
+/// Rebuilt on every resolution: a pool, resolved once at mount, would share
+/// one instance with every request.
+#[injectable(scope = transient)]
+#[derive(Default)]
+struct TransientGuard;
+
+impl Layer for TransientGuard {}
+
+#[async_trait]
+impl Guard for TransientGuard {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for TransientGuard {}
+
+#[module(providers = [TransientGuard, GlobalGuards<(TransientGuard,)>])]
+struct TransientGuardPoolModule;
+
+/// Built per request: a pool, resolved once at mount, would never build it.
+#[injectable(scope = request)]
+#[derive(Default)]
+struct PerRequestInterceptor;
+
+impl Layer for PerRequestInterceptor {}
+
+#[async_trait]
+impl Interceptor for PerRequestInterceptor {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        next.run(cx).await
+    }
+}
+
+#[module(providers = [PerRequestInterceptor, GlobalInterceptors<(PerRequestInterceptor,)>])]
+struct PerRequestInterceptorPoolModule;
+
+/// The access graph's refusal of `pool` listing `layer`, which is not a
+/// singleton.
+#[track_caller]
+fn refused_scoped(result: anyhow::Result<HeadlessApp>, pool: &str, layer: &str) {
     let Err(err) = result else {
-        panic!("a worker would boot with a global exception filter silently dropped");
+        panic!("{pool} would run {layer} as one instance shared by every request");
     };
     let chain = format!("{err:#}");
+    let scoped = err
+        .downcast_ref::<ScopedLayerError>()
+        .unwrap_or_else(|| panic!("refused as a layer, not as an injection: {chain}"));
     assert!(
-        chain.contains("GhostExceptionFilter")
-            && chain.contains("nest_rs::layers::exception_filters"),
-        "the error names the unresolvable exception filter and the wiring refusing it: {chain}",
+        scoped.host == pool && scoped.layer.ends_with(layer),
+        "the refusal names the pool and the layer: {chain}",
+    );
+    assert!(
+        chain.contains(&format!("Make `{}` a singleton", scoped.layer)),
+        "…and the one remedy a pool's layer has: {chain}",
+    );
+}
+
+#[tokio::test]
+async fn a_transient_layer_in_a_global_pool_fails_the_boot_naming_it_and_the_pool() {
+    refused_scoped(
+        HeadlessApp::builder()
+            .module::<TransientGuardPoolModule>()
+            .build_headless()
+            .await,
+        "GlobalGuards<(TransientGuard,)>",
+        "TransientGuard",
+    );
+}
+
+#[tokio::test]
+async fn a_request_scoped_layer_in_a_global_pool_fails_the_boot_naming_it_and_the_pool() {
+    refused_scoped(
+        HeadlessApp::builder()
+            .module::<PerRequestInterceptorPoolModule>()
+            .build_headless()
+            .await,
+        "GlobalInterceptors<(PerRequestInterceptor,)>",
+        "PerRequestInterceptor",
     );
 }
 
@@ -302,7 +501,7 @@ async fn a_route_with_no_guard_and_no_public_refuses_the_boot_naming_every_such_
         "a route marked #[public] is open on purpose: {chain}",
     );
     assert!(
-        chain.contains("#[use_guards(") && chain.contains("use_guards_global"),
+        chain.contains("#[use_guards(") && chain.contains("GlobalGuards<(...)>"),
         "the remedy names both ways to bind a guard: {chain}",
     );
     assert!(
@@ -311,13 +510,12 @@ async fn a_route_with_no_guard_and_no_public_refuses_the_boot_naming_every_such_
     );
 }
 
+#[module(imports = [OpenModule, GuardOnlyModule], providers = [GlobalGuards<(WiredGuard,)>])]
+struct GuardedOpenModule;
+
 #[tokio::test]
 async fn the_global_guard_pool_covers_a_route_declaring_no_posture() {
-    let app = TestApp::builder()
-        .module::<OpenModule>()
-        .module::<GuardOnlyModule>()
-        .use_guards_global([guard::<WiredGuard>()])
-        .build()
+    let app = TestApp::for_module::<GuardedOpenModule>()
         .await
         .expect("a route the app's pool guards declares its posture there");
     app.http().post("/thing").send().await.assert_status_is_ok();

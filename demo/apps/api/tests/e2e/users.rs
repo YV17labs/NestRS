@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use nest_rs::authz::{AbilityBuilder, Action, with_ability};
-use nest_rs::database::with_request_executor;
+use nest_rs::authz::{AbilityBuilder, Action};
 use nest_rs::http::{StatusCode, header};
-use nest_rs::seaorm::{Repo, SeaOrmExecutor};
+use nest_rs::seaorm::Repo;
 use sea_orm::{EntityTrait, IntoActiveModel, Set};
 use serde_json::json;
 use uuid::Uuid;
@@ -162,9 +161,8 @@ async fn writes_are_scoped_to_the_callers_ability() {
             .when(move |p| p.eq(user_row::Column::OrgId, org_b_id));
         b.build().expect("valid test ability")
     });
-    let (update, delete) = with_request_executor(
-        SeaOrmExecutor::Pool((*conn).clone()).into(),
-        with_ability(blocked, async move {
+    let (update, delete) = app
+        .unit(blocked, move || async move {
             let model = user_row::Entity::find_by_id(user_a_id)
                 .one(&*conn)
                 .await
@@ -174,10 +172,10 @@ async fn writes_are_scoped_to_the_callers_ability() {
             active.name = Set("Hacked".to_owned());
             let update = Repo::<user_row::Entity>::update(active).await;
             let delete = Repo::<user_row::Entity>::delete(model).await;
-            (update, delete)
-        }),
-    )
-    .await;
+            Ok::<_, sea_orm::DbErr>((update, delete))
+        })
+        .await
+        .expect("the unit runs both writes");
     assert!(
         matches!(update, Err(sea_orm::DbErr::RecordNotUpdated)),
         "an out-of-scope update touches no row: {update:?}",

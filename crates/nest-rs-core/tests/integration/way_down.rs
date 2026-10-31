@@ -336,8 +336,22 @@ async fn run_child(role: String) -> anyhow::Result<()> {
                 .await
                 .map(drop),
         ),
-        "configure" => said(App::new::<ConfiguresSlowlyModule>()?.run().await),
-        "listen" => said(App::new::<ListensSlowlyModule>()?.run().await),
+        "configure" => said(
+            App::builder()
+                .module::<ConfiguresSlowlyModule>()
+                .build()
+                .await?
+                .run()
+                .await,
+        ),
+        "listen" => said(
+            App::builder()
+                .module::<ListensSlowlyModule>()
+                .build()
+                .await?
+                .run()
+                .await,
+        ),
         "init" => said(
             App::builder()
                 .module::<WarmsSlowlyModule>()
@@ -346,7 +360,14 @@ async fn run_child(role: String) -> anyhow::Result<()> {
                 .run()
                 .await,
         ),
-        "blocking-init" => said(App::new::<BlocksOnInitModule>()?.run().await),
+        "blocking-init" => said(
+            App::builder()
+                .module::<BlocksOnInitModule>()
+                .build()
+                .await?
+                .run()
+                .await,
+        ),
         "hook" => {
             App::builder()
                 .module::<ServesUntilStoppedModule>()
@@ -357,7 +378,14 @@ async fn run_child(role: String) -> anyhow::Result<()> {
                 .run()
                 .await
         }
-        "transport" => App::new::<NeverStopsModule>()?.run().await,
+        "transport" => {
+            App::builder()
+                .module::<NeverStopsModule>()
+                .build()
+                .await?
+                .run()
+                .await
+        }
         other => anyhow::bail!("no child role `{other}`"),
     }
 }
@@ -381,7 +409,14 @@ fn run_on_a_runtime_of_its_own() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(async { App::new::<ServesUntilStoppedModule>()?.run().await })
+        .block_on(async {
+            App::builder()
+                .module::<ServesUntilStoppedModule>()
+                .build()
+                .await?
+                .run()
+                .await
+        })
 }
 
 const EXITING: &str =

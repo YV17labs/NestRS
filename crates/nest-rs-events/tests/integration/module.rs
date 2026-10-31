@@ -72,7 +72,11 @@ async fn an_event_emitted_by_an_init_hook_reaches_its_listener() {
 
 #[tokio::test]
 async fn the_synchronous_boot_wires_the_listeners_too() {
-    let app = App::new::<SeedingModule>().expect("boots");
+    let app = App::builder()
+        .module::<SeedingModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app
         .container()
         .get::<EventBus>()

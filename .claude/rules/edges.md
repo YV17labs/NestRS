@@ -254,8 +254,9 @@ transaction. Inline conversion, permission checks or transaction management in a
 handler is drift.
 
 **A layer executes exactly once per unit.** Declaring a guard, pipe,
-interceptor or exception filter at any scope — global (`use_*_global`),
-controller, handler — contributes to one pool per family, deduplicated by
+interceptor or exception filter at any scope — global (the root module's
+`Global*` declaration), controller, handler — contributes to one pool per
+family, deduplicated by
 `TypeId` in `compose_chain`, the single dedup for all four. The broadest scope
 wins and `#[force_guards]` is the re-run opt-in. Scope never multiplies
 executions; it chooses the **site**, by the family's nature. Every family at
@@ -282,8 +283,8 @@ site for every such route: the app's guard pool, filters and interceptors,
 inside a unit of work. The view holds the request for the whole unit, so a
 layer reading it after the tail reads its head whole.
 `Layer::priority` orders within a stage's bucket, never across. **Two ways to
-be app-wide, both at the handler stage**: `use_interceptors_global` (the app)
-and `#[interceptor]` (a module); only `#[interceptor(stage = unit)]` runs
+be app-wide, both at the handler stage**: `GlobalInterceptors` (the module
+the app boots) and `#[interceptor]` (a module it imports); only `#[interceptor(stage = unit)]` runs
 around the guards — `Server-Timing`, the RFC 9728 challenge — and writing it is
 the visible opening.
 
@@ -298,9 +299,10 @@ the visible opening.
   `#[meta(EXPR)]`, declared on any host or handler into the site's one
   `Handler` — the method's value over its host's — and read through
   `Reflector`, never copied into the request a layer can write.
-- **Boot is fail-secure.** An unresolvable global spec fails the boot naming the
-  type, at the kernel's wiring step (`provide_wiring`), in every app whatever it
-  serves; so does a global guard pool listed out of phase order.
+- **Boot is fail-secure.** A global layer its declaring module does not
+  reach fails the access graph, and a pool declared below the module the app
+  boots, twice, or (for guards) out of phase order fails the kernel's wiring
+  step naming it, in every app whatever it serves.
   **No site runs without a layer it declares**: one composed at boot (a route, a
   gateway's upgrade and messages, a GraphQL field or an MCP operation `#[tools]` declares at
   the wiring step) fails the boot naming the layer and the site, one composed

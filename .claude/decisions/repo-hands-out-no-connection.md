@@ -80,3 +80,12 @@ its `__private`, the in-unit swap the driver's carry path calls.
 Implementing sea-orm's builder traits is not the wrapper
 `public-dependencies.md` refuses: the builder methods are sea-orm's own, with
 their documentation; only where the statement runs is the framework's.
+
+## 2026-10-31 — a service test runs in a unit of the harness
+
+`TestApp::unit(ability, || svc.list())` and `system_unit(|| …)` (and
+`HeadlessApp`'s) run a body in one unit the app's bound `UnitOfWork` opens,
+under the ability given or as system work, committed on `Ok`: the demo's
+service tests stopped installing `SeaOrmExecutor::Pool(..)` and an ability by
+hand. The ambient installers' residual named above loses its last test
+caller in the demo; taking them out of the public API is the next branch's.

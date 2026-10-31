@@ -72,7 +72,11 @@ impl SecondProvider {
 struct OrderTestModule;
 
 async fn dispatch_order() -> Vec<&'static str> {
-    let app = App::new::<OrderTestModule>().expect("boots");
+    let app = App::builder()
+        .module::<OrderTestModule>()
+        .build()
+        .await
+        .expect("boots");
     let bus = app.container().get::<EventBus>().expect("bus");
     bus.emit(Ping).await;
     app.container().get::<Trace>().expect("trace").seen()

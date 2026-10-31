@@ -199,9 +199,11 @@ fn generate_auth_leaves_a_file_that_already_names_authn_untouched() {
     );
 }
 
-/// RFC 6749 §5.1: the development token is never cached either.
+/// RFC 6749 §5.1: the development token answers the framework's token
+/// response — the token a `Secret`, never cached — rather than a body and
+/// headers of the app's own.
 #[test]
-fn generate_auth_dev_token_route_answers_no_store() {
+fn generate_auth_dev_token_route_answers_the_framework_s_token_response() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     run_ok(dir.path(), &["g", "auth"]);
@@ -212,9 +214,23 @@ fn generate_auth_dev_token_route_answers_no_store() {
     )
     .unwrap();
     assert!(
-        controller.contains(r#"#[response_header("cache-control", "no-store")]"#)
-            && controller.contains(r#"#[response_header("pragma", "no-cache")]"#),
-        "the dev-token route carries both directives:\n{controller}",
+        controller.contains("use nest_rs::oauth::server::AccessTokenResponse;")
+            && controller.contains("-> Result<AccessTokenResponse> {")
+            && controller.contains("AccessTokenResponse::bearer(")
+            && controller.contains("self.jwt.sign(&claims).opaque()?,")
+            && controller.contains("self.jwt.ttl_secs(),"),
+        "the dev-token route returns the framework's response:\n{controller}",
+    );
+    for hand_built in ["DevTokenResponseDto", "\"Bearer\"", "#[response_header("] {
+        assert!(
+            !controller.contains(hand_built),
+            "`{hand_built}` is the framework's to write:\n{controller}",
+        );
+    }
+    let features = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
+    assert!(
+        features.contains("\"oauth-server\""),
+        "the features crate enables the response's capability: {features}",
     );
 }
 

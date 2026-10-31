@@ -42,7 +42,7 @@ fn generate_resource_creates_crud_slice_and_deps() {
 
     // The feature *set* `/tutorial/entity/` prints; `authn` comes with the auth
     // adapter `g resource` bootstraps.
-    for feature in ["seaorm", "http", "authz", "authn"] {
+    for feature in ["seaorm", "http", "authz", "authn", "oauth-server"] {
         let quoted = format!("\"{feature}\"");
         assert!(
             features_cargo.contains(&quoted),
@@ -56,7 +56,7 @@ fn generate_resource_creates_crud_slice_and_deps() {
 
     // The order `/tutorial/entity/` prints: the generator's own, never re-sorted.
     assert!(
-        features_cargo.contains(r#"["seaorm", "authz", "http", "authn"]"#),
+        features_cargo.contains(r#"["seaorm", "authz", "http", "authn", "oauth-server"]"#),
         "the features crate lists its features as the tutorial prints them: {features_cargo}",
     );
 

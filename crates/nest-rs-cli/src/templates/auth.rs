@@ -29,9 +29,11 @@ pub enum Role {
 /// every access token — a user, or a client acting on its own behalf (the
 /// `client_credentials` grant), named by its client id.
 ///
-/// One string on the wire, read back by its shape: a UUID is a user. Whatever
-/// registers your clients refuses a client id a UUID parses, so no client can
-/// pass for a user (RFC 9068 §5).
+/// One string on the wire, read back by its shape: a UUID is a user. So the
+/// registry of your clients must refuse a client id a UUID parses, or a client
+/// could pass for a user (RFC 9068 §5): with `nest_rs::oauth::server`, check
+/// `OAuthServerConfig`'s clients in an `#[on_module_init]` hook of yours and
+/// refuse with `ConfigError::validation`, since this scheme is yours.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum Subject {
@@ -144,12 +146,14 @@ pub use module::AuthnHttpModule;
 
 /// The route the tutorial `curl`s. `#[public]`: the environment check stands in
 /// for the credential this route deliberately does not have. Only the handler
-/// is the app's: it builds the app's own `Claims`.
+/// is the app's: it builds the app's own `Claims`, and answers RFC 6749 §5.1's
+/// response, which the framework renders.
 pub(crate) const AUTHN_HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::authn::{DevelopmentOnlyGuard, JwtService};
-use nest_rs::core::{input, output};
+use nest_rs::core::input;
 use nest_rs::http::{Json, Opaque, Result, controller, routes};
+use nest_rs::oauth::server::AccessTokenResponse;
 use uuid::Uuid;
 
 use crate::authn::{Claims, Role, Subject};
@@ -160,13 +164,6 @@ use crate::authn::{Claims, Role, Subject};
 pub struct DevTokenDto {
     pub sub: Option<Uuid>,
     pub roles: Vec<Role>,
-}
-
-#[output]
-pub struct DevTokenResponseDto {
-    pub access_token: String,
-    pub token_type: String,
-    pub expires_in: u64,
 }
 
 #[controller(path = "/auth")]
@@ -180,21 +177,14 @@ pub struct DevTokenController {
 impl DevTokenController {
     #[post("/dev-token")]
     #[public]
-    #[response_header("cache-control", "no-store")]
-    #[response_header("pragma", "no-cache")]
     #[api(summary = "Mint a development-only bearer token")]
-    async fn dev_token(&self, body: Json<DevTokenDto>) -> Result<Json<DevTokenResponseDto>> {
+    async fn dev_token(&self, body: Json<DevTokenDto>) -> Result<AccessTokenResponse> {
         let DevTokenDto { sub, roles } = body.0;
         let claims = Claims {
             sub: Subject::User(sub.unwrap_or_else(Uuid::now_v7)),
             roles: if roles.is_empty() { vec![Role::User] } else { roles },
         };
-        let access_token = self.jwt.sign(&claims).opaque()?;
-        Ok(Json(DevTokenResponseDto {
-            access_token,
-            token_type: "Bearer".into(),
-            expires_in: self.jwt.ttl_secs(),
-        }))
+        Ok(AccessTokenResponse::bearer(self.jwt.sign(&claims).opaque()?, self.jwt.ttl_secs()))
     }
 }
 "#;

@@ -57,6 +57,9 @@ pub(super) const REDIS_QUEUE: Dep = nest_rs(&["redis-queue"]);
 pub(super) const OUTBOX: Dep = nest_rs(&["seaorm", "queue"]);
 pub(super) const MCP: Dep = nest_rs(&["mcp"]);
 pub(super) const AUTHN: Dep = nest_rs(&["authn"]);
+// The development token route answers `nest_rs::oauth::server`'s RFC 6749
+// §5.1 response.
+const OAUTH_SERVER: Dep = nest_rs(&["oauth-server"]);
 pub(super) const AUTHZ: Dep = nest_rs(&["authz", "http"]);
 // Mirrors the feature set `nest-rs-seaorm` itself resolves.
 const SEA_ORM: Dep = Dep {
@@ -128,7 +131,7 @@ pub(super) fn entity_deps() -> Vec<&'static Dep> {
 /// The crates the authn/authz adapter (`g auth`) needs.
 pub(super) fn auth_deps() -> Vec<&'static Dep> {
     // `SEAORM` for `#[wire_enum]` on `Role`.
-    vec![&AUTHN, &AUTHZ, &SEAORM, &SERDE, &UUID]
+    vec![&AUTHN, &OAUTH_SERVER, &AUTHZ, &SEAORM, &SERDE, &UUID]
 }
 
 /// The crates the `migrations` + `seed` bootstrap crates need — the union of

@@ -82,3 +82,18 @@ which covers this public API break:
 Refused: **an `exp` the claims type must still declare** (a field the
 signer then overwrites): a value written twice, once ignored, is the drift
 this entry removes.
+
+## 2026-10-31 — the RFC 9068 §5 check stays the product's, in its words
+
+The registry moved into the framework (`OAuthServerConfig<P>`,
+`token-endpoint-client-refusal.md`), so "the OAuth configuration refuses a
+registered `client_id` a UUID parses" now names the framework's config,
+while the scheme deciding that a UUID is a user is the product's `Subject`.
+The audit's proposal of a per-client validation seam in the registry is
+refused, as `token-endpoint-client-refusal.md` refused a policy hook there: the
+product's check runs in its own module-init hook over the registry and names
+it in the config's words (`OAuthServerConfig::<P>::NAMESPACE`), and `nestrs g
+auth`'s `Subject` says where such a check goes rather than pointing at a
+registry that does not run it. A framework-owned `Subject<U>` would put the
+product's claims scheme in the framework (`architecture.md`, *The product's
+own*).

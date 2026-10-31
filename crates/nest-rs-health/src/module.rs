@@ -2,12 +2,16 @@
 //! fills the indicator registry at the kernel's wiring step, and hands the
 //! service's container back at its close step.
 
+use std::borrow::Cow;
+
 use nest_rs_config::{ConfigModule, ConfigSetup};
+use nest_rs_core::__private::{EdgeHosts, ModuleDescriptor, ProbeRuntime};
 use nest_rs_core::{Container, ContainerBuilder, Module, ReachableProviders, Registering, module};
 use nest_rs_http::HttpModule;
 
 use crate::config::HealthConfig;
 use crate::controller::HealthController;
+use crate::indicator::HealthIndicator;
 use crate::service::HealthService;
 
 #[module(
@@ -35,6 +39,33 @@ impl HealthModule {
 /// [`DynamicModule`](nest_rs_core::DynamicModule) returned by
 /// [`HealthModule::for_root`].
 pub type HealthSetup = ConfigSetup<HealthModule, HealthConfig>;
+
+nest_rs_core::inventory::submit! {
+    ProbeRuntime {
+        import: "nest_rs::health::HealthModule",
+        attached: serves_probes,
+        hosts: indicator_hosts,
+    }
+}
+
+/// Whether the app mounts the probes: `HealthModule` registers their service.
+fn serves_probes(container: &Container) -> bool {
+    container.get::<HealthService>().is_some()
+}
+
+/// Every `#[indicators]` host this binary links, named as the module listing
+/// it names it.
+fn indicator_hosts(_: &Container) -> EdgeHosts {
+    nest_rs_core::inventory::iter::<HealthIndicator>()
+        .filter_map(|indicator| {
+            let host = indicator.provider_type_id();
+            let listed = nest_rs_core::inventory::iter::<ModuleDescriptor>()
+                .flat_map(|module| module.providers)
+                .find(|provider| (provider.provider)() == host)?;
+            Some((host, Cow::Borrowed(listed.name)))
+        })
+        .collect()
+}
 
 /// Attaches the indicator wiring and the close that undoes it: `#[module]`
 /// takes only imports and providers, so this hand-written module carries the

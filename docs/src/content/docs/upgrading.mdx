@@ -1137,7 +1137,11 @@ lists what the boot, a log or the wire shows when one is missed.
     naming `<PREFIX>_STORAGE__URL`, and credentials the store refuses leave one
     `warn`. A host the app reaches whose edge's transport no module attaches is
     a `warn` too — `host not served: its edge's transport is not attached`, with
-    the host, its module and the import that serves it. A host the app links but never reaches — a scheduled method, a
+    the host, its module and the import that serves it; so is a provider
+    declaring a `#[liveness]`, `#[readiness]` or `#[startup]` indicator in an
+    app that does not import `HealthModule` — `host not served: the health
+    probes are not mounted`, with the same fields but `edge`, since health is
+    no edge. A host the app links but never reaches — a scheduled method, a
     `#[process]` method, a listener, a lifecycle hook, a health indicator — is a
     `warn` naming its `cause` and the remedy when it is this app's own code, and
     a `debug` line when it belongs to a dependency (`cause="dependency"`). A

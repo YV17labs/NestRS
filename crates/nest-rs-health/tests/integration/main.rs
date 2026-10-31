@@ -11,3 +11,4 @@ mod controller;
 mod indicator;
 mod module;
 mod service;
+mod unserved;

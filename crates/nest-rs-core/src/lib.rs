@@ -246,7 +246,9 @@ pub mod __private {
     };
     pub use crate::discoverable::__private::Residency;
     pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};
-    pub use crate::edge_runtime::{EdgeHosts, EdgeRuntime, attaches_transport, registered_hosts};
+    pub use crate::edge_runtime::{
+        EdgeHosts, EdgeRuntime, ProbeRuntime, attaches_transport, registered_hosts,
+    };
     pub use crate::error_message::__private::find_in_chain;
     pub use crate::exception_filter::__private::ErasedExceptionFilter;
     pub use crate::handler::{

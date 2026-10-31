@@ -342,8 +342,9 @@ of who wrote a crate. **A host the app reaches whose edge's transport no
 module attaches is a cause too**, named at `warn` with its module and the
 import serving it, by `App::run` once its transports are attached, never at
 the seal, which `TestApp` and `HeadlessApp` serve with transports they build;
-each edge's crate declares what its hosts run on (`EdgeRuntime`), held by a
-test per edge. A run with no transport at all says so at `warn` and stops for
+each edge's crate declares what its hosts run on (`EdgeRuntime`), and
+`nest-rs-health` what its indicators run under (`HealthModule`'s probes),
+held by a test per edge and one for health. A run with no transport at all says so at `warn` and stops for
 `StopCause::NoTransport`.
 Neither refuses: a shape a harness serves is no defect, and a refusal would be
 a break (`.claude/decisions/adapter-imports-its-transport.md`). Three

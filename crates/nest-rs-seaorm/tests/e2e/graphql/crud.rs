@@ -2,6 +2,8 @@
 //! refuses, over `POST /graphql`: a unique violation is the client's `CONFLICT`
 //! and no incident, any other refusal the opaque `INTERNAL` filed once — and
 //! neither answer nor line carries the server's sentence or the input it quotes.
+//! A caller a denial no `when` narrows bars meets none of it: the class gate
+//! refuses before Postgres sees a statement.
 
 use nest_rs_graphql::GraphqlView;
 use nest_rs_http::EndpointGuards;
@@ -75,6 +77,21 @@ impl AbilityFactory for EveryGizmo {
     }
 }
 
+/// Manages every gizmo but may create and read none: CASL's grant clawed back.
+#[injectable]
+#[derive(Default)]
+struct BarredGizmo;
+
+impl AbilityFactory for BarredGizmo {
+    type Actor = crate::Anyone;
+
+    fn define(&self, _actor: &crate::Anyone, ab: &mut AbilityBuilder) {
+        ab.can(Action::Manage, gizmo::Entity);
+        ab.cannot(Action::Create, gizmo::Entity);
+        ab.cannot(Action::Read, gizmo::Entity);
+    }
+}
+
 #[resolver]
 struct GizmosResolver {
     #[inject]
@@ -104,8 +121,30 @@ impl GizmosResolver {}
 )]
 struct GizmosModule;
 
+#[module(
+    imports = [
+        SeaOrmModule::for_root(SeaOrmConfig {
+            url: crate::harness::url().into(),
+            ..Default::default()
+        }),
+        SeaOrmDatabaseModule,
+        GraphqlModule::for_root(GraphqlConfig::default()),
+    ],
+    providers = [
+        GizmosService,
+        BarredGizmo,
+        AbilityGuard<BarredGizmo>,
+        AlwaysAuthenticated,
+        EndpointGuards<GraphqlView, (AlwaysAuthenticated, AbilityGuard<BarredGizmo>)>,
+        GizmosResolver,
+    ],
+)]
+struct BarredGizmosModule;
+
 const CREATE: &str =
     "mutation($input: CreateGizmo!) { createGizmo(input: $input) { id email note } }";
+
+const GET: &str = "query($id: String!) { gizmo(id: $id) { id } }";
 
 async fn db() -> DatabaseConnection {
     let conn = crate::harness::connect().await;
@@ -132,10 +171,15 @@ async fn boot() -> TestApp {
 
 /// The mutation's status and its body, read whole so an assertion can search it.
 async fn create(app: &TestApp, input: Value) -> (StatusCode, String) {
+    operation(app, CREATE, json!({ "input": input })).await
+}
+
+/// An operation's status and its body, read whole.
+async fn operation(app: &TestApp, query: &str, variables: Value) -> (StatusCode, String) {
     let response = app
         .http()
         .post("/graphql")
-        .body_json(&json!({ "query": CREATE, "variables": { "input": input } }))
+        .body_json(&json!({ "query": query, "variables": variables }))
         .send()
         .await
         .0;
@@ -257,4 +301,66 @@ async fn a_create_the_database_refuses_otherwise_answers_opaquely_and_files_it_o
     );
 
     assert_eq!(rows_with(&conn, &email).await, 0, "nothing was written");
+}
+
+/// A taken address and a missing note are what Postgres would refuse, and a
+/// row's presence what a load would tell: under a denial no `when` narrows,
+/// each answers the gate's `FORBIDDEN` before any of them is asked.
+#[tokio::test]
+async fn a_caller_a_denial_bars_outright_reaches_no_statement() {
+    let conn = db().await;
+    let logs = LogCapture::install();
+    let granted = boot().await;
+    let barred = TestApp::for_module::<BarredGizmosModule>()
+        .await
+        .expect("the subgraph boots");
+    let email = format!("taken-{}@example.com", Uuid::now_v7());
+    let (_, body) = create(&granted, json!({ "email": email, "note": "first" })).await;
+    let landed: Value = serde_json::from_str(&body).expect("a GraphQL body");
+    let id = landed["data"]["createGizmo"]["id"]
+        .as_str()
+        .expect("the first create lands")
+        .to_owned();
+
+    let fresh = format!("fresh-{}@example.com", Uuid::now_v7());
+    for (input, would_be) in [
+        (json!({ "email": email, "note": "second" }), "CONFLICT"),
+        (json!({ "email": fresh }), "INTERNAL"),
+    ] {
+        let (status, body) = create(&barred, input).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let answer: Value = serde_json::from_str(&body).expect("a GraphQL body");
+        assert_eq!(
+            answer["errors"][0]["extensions"]["code"],
+            code::FORBIDDEN.as_str(),
+            "refused at the gate, not the database's {would_be}: {body}",
+        );
+    }
+    for id in [id.clone(), Uuid::now_v7().to_string()] {
+        let (_, body) = operation(&barred, GET, json!({ "id": id })).await;
+        let answer: Value = serde_json::from_str(&body).expect("a GraphQL body");
+        assert_eq!(
+            answer["errors"][0]["extensions"]["code"],
+            code::FORBIDDEN.as_str(),
+            "the same answer whether the row exists or not: {body}",
+        );
+    }
+    assert_eq!(
+        errors_filed(&logs),
+        Vec::<String>::new(),
+        "a denial is no incident"
+    );
+    assert_eq!(rows_with(&conn, &fresh).await, 0);
+    assert_eq!(
+        rows_with(&conn, &email).await,
+        1,
+        "the granted create alone"
+    );
+    conn.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        format!("DELETE FROM {TABLE} WHERE email = $1"),
+        [email.into()],
+    ))
+    .await
+    .expect("the probe row is removed");
 }

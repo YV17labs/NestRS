@@ -808,6 +808,9 @@ lists what the boot, a log or the wire shows when one is missed.
     | `with_ability(ability, fut)` in a request, running the body under an ability the service built | the caller's rules in the `AbilityFactory`: `with_ability` only narrows — what both allow inside a unit holding an ability, nothing installed in a request no ability guard authorized |
     | `with_ability(ability, fut)` in a job, to act for a principal | unchanged: in a job, which holds none, the body runs under `ability` |
     | an `Ability` attached by a guard of your own (`cx.attach(ability)`), or installed with `with_ambient(Arc::new(ability), fut)` | `AbilityGuard<F>` over an `AbilityFactory`, after the authentication guard: the ability guard is the one place an ability comes from |
+    | `ab.cannot(action, E).requires_scope(scope)` | `ab.cannot(action, E)`: a denial holds whatever the token carries. To let a narrower token through, gate the grant with `requires_scope` instead |
+    | `ab.cannot(action, E).fields([...])` | drop `.fields`: a denial hides rows, never columns. Narrow what a grant exposes with the grant's own `.fields` |
+    | `RuleSpec<'_, E>` naming what `cannot` returns, a helper's return type or a binding's | `RuleSpec<'_, E, Cannot>`, `Cannot` from `nest_rs::authz`; a grant's stays `RuleSpec<'_, E>` |
     | `masked_item_for::<A, E, _>(ctx, item)` | `masked_item_for::<A, E, _>(ctx, &nest_rs::authz::graphql::ability()?, item)` |
     | a hand-written `impl WireModelDefaults` | it lives at `nest_rs::authz::WireModelDefaults`, and adds `fn is_placeholdered(column)` for each column `fill_wire_defaults` fills and `fn wire_key(column)` for a key other than the column's name |
     | a subscription or a `masked_reply` push whose grant is a relation, or reads a column the pushed type leaves out | refused: expose the column the rule reads, read-only, and send it |
@@ -1744,6 +1747,19 @@ lists what the boot, a log or the wire shows when one is missed.
   Inside a unit holding an ability it runs the body under what both allow, so
   a read the caller's rules refuse stays refused. Put the rule in the
   `AbilityFactory`; a job acting for a principal keeps its `with_ability`.
+- **A `cannot` no `when` narrows, beside a broader grant** — CASL's
+  `can(Manage, E)` plus `cannot(Create, E)` — refuses its action at the class
+  gate on every edge: `403`, `forbidden`, with no `insufficient_scope`
+  challenge, and `nest_rs::authz` files `authorization denied` at `warn` with
+  `reason=class_denied`. A list that answered `200 []`, a create that drew the
+  database's `409` or `500`, and a hand-written handler body now answer that
+  `403` before anything runs. A denial meant for some rows alone takes a
+  `.when`.
+- **`cannot(..).requires_scope(..)` or `cannot(..).fields(..)`** no longer
+  compiles (`E0599`, `no method named requires_scope found for struct
+  RuleSpec<'_, E, Cannot>`), nor does a `RuleSpec<'_, E>` written for what
+  `cannot` returns (`E0308`, `mismatched types`, expected `RuleSpec<'_, E>`,
+  found `RuleSpec<'_, E, Cannot>`).
 - **`nest_rs::database::with_request_executor` or `with_job_executor`** no
   longer resolves (`E0425`), nor does an `Ability` passed to `with_ambient` or
   `cx.attach` (`the trait bound Ability: AmbientValue is not satisfied`). Run a

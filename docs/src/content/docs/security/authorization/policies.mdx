@@ -141,10 +141,14 @@ ab.can(Action::Read, user::Entity)
 | `.can(action, subject)` | Begin a grant |
 | `.cannot(action, subject)` | Begin a denial — a matching denial overrides a matching grant |
 | `.when(\|p\| ...)` | Constrain the rule to rows matching the predicate |
-| `.fields([col, ...])` | Restrict the response mask to these columns |
+| `.fields([col, ...])` | Restrict a grant's response mask to these columns |
+| `.requires_scope(scope)` | Withhold a grant from a token without the scope ([Scopes](/security/authorization/scopes/)) |
 
 Skip `.when` and the rule is unconditional. Skip `.fields` and every
-field is permitted.
+field is permitted. A denial takes `.when` alone: it hides rows, never
+columns, and holds whatever the token carries, so
+`cannot(..).fields(..)` and `cannot(..).requires_scope(..)` do not
+compile.
 
 The closure handed to `when` receives a `PredicateBuilder<E>` typed
 to the rule's entity, so column references are type-checked at compile
@@ -316,6 +320,19 @@ ab.cannot(Action::Read, user::Entity)
 The SQL pre-filter for `Read` becomes
 `(OR of grant conditions) AND NOT (OR of deny conditions)`. The
 in-memory check refuses if any denial matches even when grants do.
+
+A denial with no `.when` matches every row, so the class gate refuses
+the action outright, on every edge, before a handler or a query runs:
+
+```rust title="crates/features/src/authz/ability.rs"
+ab.can(Action::Manage, user::Entity)
+    .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+ab.cannot(Action::Create, user::Entity);
+```
+
+This caller reads, updates and deletes the users of their org, and a
+`POST /users` answers a plain `403` — the same answer whatever the
+token's scopes, since no scope lifts a denial.
 
 <Aside type="note">
 The framework's authz engine is **ability-based**, but a rule's evaluation

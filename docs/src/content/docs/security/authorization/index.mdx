@@ -126,8 +126,14 @@ Entity>`, run on the unit right after its guards:
   [public reads](/security/authorization/public-reads/) never satisfies an
   `#[authorize]`;
 - no grant on the class: `403`, `forbidden`;
+- a denial no `when` narrows — `cannot(Create, E)` beside `can(Manage, E)` —
+  matches every row, so the action is refused here: `403`, `forbidden`, the
+  same answer whatever the token carries, since no scope lifts a denial;
 - a grant the token's scopes withhold: `403` naming the scopes to ask for
   ([Scopes](/security/authorization/scopes/)).
+
+A grant or a denial a `when` narrows passes the gate: the rows decide it, in
+the query pre-filter and on the loaded row.
 
 Each refusal files one `warn`, `authorization denied`, with its `reason`, and
 reads the same on every edge, each answering in its own form. The gate is no

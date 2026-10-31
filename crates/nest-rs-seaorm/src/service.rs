@@ -1,3 +1,4 @@
+use std::any::TypeId;
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
@@ -378,7 +379,9 @@ pub trait Creatable: CrudService {
     /// fresh row is then re-checked in SQL against `condition_for(Create)`, and
     /// one outside the caller's scope is [`DbErr::RecordNotInserted`] and never
     /// persists — so a value the grants leave undecided is refused, never
-    /// guessed.
+    /// guessed. A caller no row could pass for — no `Create` grant, or a denial
+    /// no `when` narrows ([`Ability::can_class`]) — is refused the same way
+    /// before the insert is sent.
     async fn create(
         &self,
         input: Self::Create,
@@ -396,6 +399,17 @@ pub trait Creatable: CrudService {
         let entity = Self::entity_name();
         Repo::<Self::Entity>::conn()?;
         let active = match current_ability() {
+            // No row can pass the re-check, so the insert is never sent: what
+            // the database would refuse first would answer in its place.
+            Some(ability) if !ability.can_class(Action::Create, TypeId::of::<Self::Entity>()) => {
+                tracing::warn!(
+                    target: crate::target::ORM,
+                    entity,
+                    action = ?Action::Create,
+                    "access denied — no row of the entity is in the caller's scope",
+                );
+                return Err(DbErr::RecordNotInserted);
+            }
             Some(ability) => fill_pinned::<Self::Entity>(active, &ability, entity),
             None => active,
         };
@@ -666,5 +680,62 @@ mod tests {
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("column").as_deref(), Some("org_id"));
         assert!(!event.quotes("not-a-uuid"), "{event:?}");
+    }
+
+    struct NotesService;
+
+    impl CrudService for NotesService {
+        type Entity = note::Entity;
+    }
+
+    struct CreateNote;
+
+    impl CreateModel<note::Entity> for CreateNote {
+        fn into_active_model(self) -> note::ActiveModel {
+            note::ActiveModel {
+                id: Set(Uuid::now_v7()),
+                body: Set("hello".into()),
+                ..Default::default()
+            }
+        }
+    }
+
+    impl Creatable for NotesService {
+        type Create = CreateNote;
+    }
+
+    /// On a pool no statement can reach, so a create that tried one would
+    /// answer its connection error.
+    #[tokio::test]
+    async fn a_create_a_denial_bars_outright_runs_no_statement() {
+        use std::sync::Arc;
+
+        use nest_rs_authz::__private::install_ability;
+        use nest_rs_database::__private::with_request_executor;
+        use sea_orm::DatabaseConnection;
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Manage, note::Entity)
+            .when(|p| p.eq(note::Column::OrgId, Uuid::now_v7()));
+        b.cannot(Action::Create, note::Entity);
+        let ability = Arc::new(b.build().expect("a valid ability"));
+
+        let created = with_request_executor(
+            crate::SeaOrmExecutor::Pool(DatabaseConnection::default()).into(),
+            install_ability(ability, NotesService.create(CreateNote)),
+        )
+        .await;
+
+        assert!(
+            matches!(created, Err(DbErr::RecordNotInserted)),
+            "the scope refusal, never the database's: {created:?}",
+        );
+        let event = logs.expect_one(
+            crate::target::ORM,
+            "access denied — no row of the entity is in the caller's scope",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("entity").as_deref(), Some("notes"));
     }
 }

@@ -37,9 +37,9 @@ impl AbilityFactory for AuthzAbility {
 }
 ```
 
-That is the whole declaration. When the caller's token does not carry the scope, the rule is **withheld** —
+That is the whole declaration. When the caller's token does not carry the scope, the grant is **withheld** —
 not added at all. Every layer then refuses together, exactly as it would for
-a rule you never wrote: the class gate says no, the [query
+a grant you never wrote: the class gate says no, the [query
 pre-filter](/security/authorization/row-level-filtering/) matches nothing,
 and the [response mask](/security/authorization/response-masking/) has
 nothing to expose.
@@ -50,8 +50,10 @@ you may mint, never a pattern the framework expands.
 
 <Aside type="caution" title="It narrows, it never widens">
 A scope cannot grant what the role denies. `requires_scope` adds a
-condition to an existing rule; it never creates one. If a member may not
-manage users, no scope makes them able to.
+condition to an existing grant; it never creates one. If a member may not
+manage users, no scope makes them able to. A denial takes no scope at
+all — `cannot(..).requires_scope(..)` does not compile — so a token
+asking for fewer scopes never escapes one.
 </Aside>
 
 ## Tell the framework what the token carries
@@ -160,8 +162,9 @@ WWW-Authenticate: Bearer error="insufficient_scope",
 
 The client now knows the exact scope to request and the document to
 request it from. An **ordinary** `403` — the caller may not do this at
-all — deliberately carries no challenge: advertising a recovery that
-cannot succeed is worse than a plain refusal.
+all, no grant or a `cannot` with no `when` — deliberately carries no
+challenge, even beside a grant the token's scopes withhold: advertising
+a recovery that cannot succeed is worse than a plain refusal.
 
 A scope your rule names outside RFC 6749 §3.3's grammar — a space, a
 quote — cannot ride the quoted attribute: the challenge goes out without

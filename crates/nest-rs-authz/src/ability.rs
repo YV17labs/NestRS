@@ -271,8 +271,8 @@ impl Ability {
         self.rules.entry((action, subject)).or_default().push(rule);
     }
 
-    /// Record that a rule was withheld for lack of `scopes`. The rule itself is
-    /// never added — a withheld grant must not widen anything.
+    /// Record that a grant was withheld for lack of `scopes`. The grant itself
+    /// is never added — a withheld grant must not widen anything.
     pub(crate) fn withhold(&mut self, action: Action, subject: TypeId, scopes: Vec<String>) {
         self.withheld
             .entry((action, subject))
@@ -290,8 +290,12 @@ impl Ability {
     /// for more than it needs.
     ///
     /// Read it only after [`can_class`](Self::can_class) said no: a withheld rule
-    /// and a granted one can coexist. Empty means the refusal was not about scope.
+    /// and a granted one can coexist. Empty means the refusal was not about scope
+    /// — a denial no `when` narrows among them, which no scope lifts.
     pub fn missing_scopes(&self, action: Action, subject: TypeId) -> Vec<String> {
+        if self.denied_outright(action, subject) {
+            return Vec::new();
+        }
         keys_for(action, subject)
             .filter_map(|key| self.withheld.get(&key))
             .flatten()
@@ -384,11 +388,23 @@ impl Ability {
             .flatten()
     }
 
-    /// Layer ① — the coarse, class-level gate the access guard/extractor uses:
-    /// is there *any* grant for this action on this subject? Optimistic —
-    /// instance conditions are enforced by layers ② and ③, not here.
+    /// Layer ① — the coarse, class-level gate every edge's posture runs: is
+    /// there any grant for this action on this subject, and no denial that
+    /// holds for every row?
+    ///
+    /// A denial no `when` narrows matches every row, so it refuses here, before
+    /// anything runs for the caller. A grant's or a denial's `when` is left to
+    /// the rows: layers ② and ③ enforce it, not this gate.
     pub fn can_class(&self, action: Action, subject: TypeId) -> bool {
-        self.rules_for(action, subject).any(|rule| !rule.inverted)
+        !self.denied_outright(action, subject)
+            && self.rules_for(action, subject).any(|rule| !rule.inverted)
+    }
+
+    /// Whether a denial no `when` narrows bars `action` on `subject`: it
+    /// matches every row, so no grant and no scope lifts it.
+    pub(crate) fn denied_outright(&self, action: Action, subject: TypeId) -> bool {
+        self.rules_for(action, subject)
+            .any(|rule| rule.inverted && rule.when.is_none())
     }
 
     /// Layer ② — the query pre-filter: `(OR of grant conditions) AND NOT (OR of
@@ -1513,6 +1529,101 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// CASL's canonical shape: an org-wide `Manage`, its `Create` clawed back.
+    fn managing_but_creating() -> crate::AbilityBuilder {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.cannot(Action::Create, post::Entity);
+        b
+    }
+
+    #[test]
+    fn a_denial_no_when_narrows_refuses_its_action_at_the_class_gate() {
+        let ability = managing_but_creating().build().unwrap();
+
+        assert!(!ability.can_class(Action::Create, posts()));
+        assert!(
+            ability.can_class(Action::Read, posts()),
+            "a denial of one action leaves the wildcard's others",
+        );
+        assert!(ability.can_class(Action::Update, posts()));
+    }
+
+    #[test]
+    fn a_denial_of_the_wildcard_refuses_every_action() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity);
+        b.can(Action::Read, post::Entity);
+        b.cannot(Action::Manage, post::Entity);
+        let ability = b.build().unwrap();
+
+        for action in [
+            Action::Read,
+            Action::Create,
+            Action::Update,
+            Action::Delete,
+            Action::Manage,
+        ] {
+            assert!(!ability.can_class(action, posts()), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn a_denial_a_when_narrows_leaves_the_class_gate_optimistic() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity);
+        b.cannot(Action::Create, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 9));
+        let ability = b.build().unwrap();
+
+        assert!(
+            ability.can_class(Action::Create, posts()),
+            "the rows decide a conditional denial, in SQL and on the model",
+        );
+    }
+
+    #[test]
+    fn a_denial_on_another_subject_refuses_nothing_here() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity);
+        b.cannot(Action::Read, widget::Entity);
+        let ability = b.build().unwrap();
+
+        assert!(ability.can_class(Action::Read, posts()));
+    }
+
+    #[test]
+    fn no_scope_lifts_a_denial_so_none_is_named() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        b.can(Action::Create, post::Entity)
+            .requires_scope("posts:write");
+        b.cannot(Action::Create, post::Entity);
+        let ability = b.build().unwrap();
+
+        assert!(!ability.can_class(Action::Create, posts()));
+        assert!(
+            ability.missing_scopes(Action::Create, posts()).is_empty(),
+            "a wider token would be refused all the same",
+        );
+    }
+
+    #[test]
+    fn an_intersection_keeps_a_denial_no_when_narrows_whole() {
+        let mut reading = crate::AbilityBuilder::new();
+        reading.can(Action::Manage, post::Entity);
+        let (reading, barred) = (
+            reading.build().unwrap(),
+            managing_but_creating().build().unwrap(),
+        );
+
+        for both in [reading.intersection(&barred), barred.intersection(&reading)] {
+            assert!(!both.can_class(Action::Create, posts()));
+            assert!(both.can_class(Action::Update, posts()));
         }
     }
 }

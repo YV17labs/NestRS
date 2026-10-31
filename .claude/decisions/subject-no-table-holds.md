@@ -46,3 +46,10 @@ The decorator ships in its own `nest-rs-authz-macros`, re-exported by
 - **A `Subject` associated type written by hand**: adding a required item to
   the public trait breaks a manual impl, and the decorator is the one way to
   declare a capability.
+
+## 2026-10-31 — the class gate reads a denial that holds for every row
+
+The class gate now refuses an entity's `cannot` no `when` narrows
+(`denial-holds-whatever-the-token.md`), so a denial on a capability would no
+longer be fail-open. `cannot` stays an entity's alone all the same: on a
+subject with no rows, a grant not written is the denial, one way to say it.

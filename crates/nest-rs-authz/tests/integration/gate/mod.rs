@@ -1,15 +1,18 @@
 //! Covers `src/gate.rs` — one class gate on every edge, through each edge's
 //! real decorator: the refusal a wider token would fix reads the same sentence,
 //! code and scope list on HTTP, GraphQL, WS and MCP, each edge carrying them
-//! where it carries a client's.
+//! where it carries a client's; a denial no `when` narrows is refused there
+//! plainly, before any body runs.
 
+mod crud;
 mod graphql;
 mod mcp;
 mod ws;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_authz::{Ability, AbilityBuilder, Action, Read};
+use nest_rs_authz::{Ability, AbilityBuilder, Action, Create, Read};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
@@ -43,6 +46,29 @@ fn too_narrow() -> Ability {
 /// The one list every edge names: what the narrowest grant lacks.
 const NEEDED: [&str; 1] = ["widgets:read"];
 
+/// CASL's canonical policy, on a credential that delegated no scope: an
+/// org-wide `Manage` with its `Create` clawed back, beside a `Create` grant the
+/// token's scope would have unlocked, which no scope lifts past the denial.
+fn denied_outright() -> Ability {
+    let mut builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
+    builder
+        .can(Action::Manage, widget::Entity)
+        .when(|p| p.eq(widget::Column::Id, 1));
+    builder
+        .can(Action::Create, widget::Entity)
+        .requires_scope("widgets:write");
+    builder.cannot(Action::Create, widget::Entity);
+    builder.build().expect("valid test ability")
+}
+
+/// The bodies a create reached, on any edge: a refused caller reaches none.
+static CREATED: AtomicUsize = AtomicUsize::new(0);
+
+fn create_widget() -> i32 {
+    CREATED.fetch_add(1, Ordering::SeqCst);
+    1
+}
+
 /// Attaches [`too_narrow`] to every request it checks, naming its caller as
 /// the authentication guard does.
 #[injectable]
@@ -66,6 +92,30 @@ impl Guard for NarrowToken {
 
 impl GuardFor<HttpView> for NarrowToken {}
 
+/// Attaches [`denied_outright`] to every request it checks.
+#[injectable]
+#[derive(Default)]
+struct DeniedToken;
+
+impl Layer for DeniedToken {}
+
+#[async_trait]
+impl Guard for DeniedToken {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        nest_rs_core::__private::set_actor_id("denied");
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+            denied_outright(),
+        ));
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for DeniedToken {}
+
 #[controller(path = "/widgets")]
 #[derive(Default)]
 struct WidgetsController;
@@ -76,6 +126,12 @@ impl WidgetsController {
     #[authorize(Read, widget::Entity)]
     async fn list(&self) -> String {
         "widgets".to_owned()
+    }
+
+    #[post("/")]
+    #[authorize(Create, widget::Entity)]
+    async fn create(&self) -> String {
+        create_widget().to_string()
     }
 }
 
@@ -94,6 +150,12 @@ impl WidgetsResolver {
     async fn widgets(&self) -> GqlResult<Vec<WidgetRow>> {
         Ok(Vec::new())
     }
+
+    #[mutation]
+    #[authorize(Create, widget::Entity)]
+    async fn create_widget(&self) -> GqlResult<i32> {
+        Ok(create_widget())
+    }
 }
 
 #[mcp(path = "/mcp")]
@@ -108,6 +170,13 @@ impl WidgetsTool {
     async fn read_widgets(&self) -> Result<String, McpError> {
         Ok("widgets".to_owned())
     }
+
+    /// Create a widget.
+    #[tool]
+    #[authorize(Create, widget::Entity)]
+    async fn create_widget(&self) -> Result<String, McpError> {
+        Ok(create_widget().to_string())
+    }
 }
 
 #[gateway(path = "/ws/widgets")]
@@ -120,6 +189,12 @@ impl WidgetsGateway {
     #[authorize(Read, widget::Entity)]
     async fn read(&self) -> Result<String, WsError> {
         Ok("widgets".to_owned())
+    }
+
+    #[subscribe_message("create")]
+    #[authorize(Create, widget::Entity)]
+    async fn create(&self) -> Result<String, WsError> {
+        Ok(create_widget().to_string())
     }
 }
 
@@ -134,6 +209,18 @@ struct NarrowTokenWsApp;
 
 #[module(imports = [EveryEdgeModule], providers = [GlobalGuards<(NarrowToken,)>])]
 struct NarrowTokenEveryEdgeApp;
+
+#[module(
+    imports = [EveryEdgeModule],
+    providers = [DeniedToken, GlobalGuards<(DeniedToken,)>],
+)]
+struct DeniedTokenEveryEdgeApp;
+
+#[module(
+    imports = [WsEdgeModule],
+    providers = [DeniedToken, GlobalGuards<(DeniedToken,)>],
+)]
+struct DeniedTokenWsApp;
 
 #[tokio::test]
 async fn a_token_too_narrow_reads_one_sentence_one_code_and_one_scope_list_on_every_edge() {
@@ -221,3 +308,74 @@ async fn a_token_too_narrow_reads_one_sentence_one_code_and_one_scope_list_on_ev
 /// the upgrade, and the message's gate reads it.
 #[module(imports = [nest_rs_ws::WsModule], providers = [NarrowToken, WidgetsGateway])]
 struct WsEdgeModule;
+
+#[tokio::test]
+async fn a_denial_no_when_narrows_is_refused_plainly_on_every_edge_and_runs_no_body() {
+    let app = TestApp::builder()
+        .module::<DeniedTokenEveryEdgeApp>()
+        .build()
+        .await
+        .expect("every edge boots");
+
+    let http = app.http().post("/widgets").send().await;
+    http.assert_status(StatusCode::FORBIDDEN);
+    assert!(
+        http.0
+            .headers()
+            .get(nest_rs_http::header::WWW_AUTHENTICATE)
+            .is_none(),
+        "HTTP: no challenge sends the client after a token refused all the same",
+    );
+    let problem: serde_json::Value =
+        serde_json::from_str(&http.0.into_body().into_string().await.expect("a body"))
+            .expect("a problem document");
+    assert_eq!(problem["code"], "FORBIDDEN", "HTTP: {problem}");
+
+    let graphql: serde_json::Value = serde_json::to_value(
+        app.http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "mutation { createWidget }" }))
+            .send()
+            .await
+            .json()
+            .await,
+    )
+    .expect("a GraphQL response");
+    let refused = &graphql["errors"][0];
+    assert_eq!(
+        refused["extensions"]["code"], "FORBIDDEN",
+        "GraphQL: {graphql}"
+    );
+    assert!(
+        refused["extensions"].get("requiredScopes").is_none(),
+        "GraphQL: {graphql}"
+    );
+
+    let mcp = call_tool_as(
+        app.http(),
+        "/mcp",
+        "create_widget",
+        None,
+        &[],
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(mcp.contains("\"code\":\"FORBIDDEN\""), "MCP: {mcp}");
+    assert!(!mcp.contains("requiredScopes"), "MCP: {mcp}");
+
+    let ws = TestApp::builder()
+        .module::<DeniedTokenWsApp>()
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+    let frame = crate::ws::message_as(&ws, "/ws/widgets", None, "create").await;
+    ws.shutdown().await.expect("the transport stops cleanly");
+    assert_eq!(frame["data"]["code"], "FORBIDDEN", "WS: {frame}");
+    assert!(frame["data"].get("requiredScopes").is_none(), "WS: {frame}");
+
+    assert_eq!(
+        CREATED.load(Ordering::SeqCst),
+        0,
+        "a create body ran for a caller its policy denies outright",
+    );
+}

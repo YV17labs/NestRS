@@ -1,7 +1,7 @@
 //! The class gate `#[authorize(Action, Entity)]` declares, written once for
-//! every edge — authentication first, then the class grant, then the refusal a
-//! wider token would have fixed — and the one `warn` every authorization
-//! refusal files.
+//! every edge — authentication first, then the class grant and the denial that
+//! holds for every row, then the refusal a wider token would have fixed — and
+//! the one `warn` every authorization refusal files.
 
 use std::any::TypeId;
 
@@ -13,7 +13,8 @@ use crate::{Ability, Action, ActionMarker, Subject};
 /// What a refused caller is told when no principal backs the unit.
 const UNAUTHENTICATED: &str = "unauthenticated";
 
-/// What a refused caller is told when its principal holds no grant on the class.
+/// What a refused caller is told when its principal holds no grant on the
+/// class, or a denial no `when` narrows bars it.
 const FORBIDDEN: &str = "forbidden";
 
 /// What a refused caller is told when its token is too narrow: RFC 6750 §3.1's
@@ -31,6 +32,9 @@ pub(crate) mod reason {
     pub(crate) const ANONYMOUS_CALLER: &str = "anonymous_caller";
     /// A principal with no grant on the subject class.
     pub(crate) const NO_CLASS_GRANT: &str = "no_class_grant";
+    /// A principal a denial no `when` narrows bars from the subject class,
+    /// whatever it grants.
+    pub(crate) const CLASS_DENIED: &str = "class_denied";
     /// A principal whose token is too narrow — RFC 6750 §3.1.
     pub(crate) const INSUFFICIENT_SCOPE: &str = "insufficient_scope";
     /// Nothing installed an ability: a wiring failure, reported by every
@@ -171,9 +175,11 @@ pub(crate) fn error_unreached(refusal: Refusal<'_>) {
 /// It reads the ability the site's guards attached, whether or not their stage
 /// has made it ambient yet. A site that is not `#[public]` refuses a caller no
 /// principal backs, whatever the visitor's rules grant: a grant written for
-/// public reads never satisfies an `#[authorize]`. A refusal files one `warn`
-/// and comes back as the [`Denial`] the edge renders — `401`, `403`, or `403`
-/// naming the scopes a wider token would carry (RFC 6750 §3.1). A unit no
+/// public reads never satisfies an `#[authorize]`. A denial no `when` narrows
+/// matches every row, so it refuses here, whatever else the ability grants. A
+/// refusal files one `warn` and comes back as the [`Denial`] the edge renders —
+/// `401`, `403`, or `403` naming the scopes a wider token would carry
+/// (RFC 6750 §3.1), never for a denial, which no scope lifts. A unit no
 /// ability reached is a wiring defect: refused opaquely, filed at `error`.
 ///
 /// It coerces to the pipeline's class gate, so a package's decorator emits it
@@ -257,6 +263,9 @@ pub(crate) fn decide(
     }
     if ability.can_class(action, subject) {
         return Ok(());
+    }
+    if ability.denied_outright(action, subject) {
+        return Err((reason::CLASS_DENIED, Denial::forbidden(FORBIDDEN)));
     }
     let missing = ability.missing_scopes(action, subject);
     if missing.is_empty() {
@@ -396,6 +405,31 @@ mod tests {
             line.field("subject").as_deref(),
             Some(std::any::type_name::<Post>())
         );
+    }
+
+    /// A grant the token would unlock beside a denial no `when` narrows: the
+    /// denial decides, and no scope is advertised that would not change it.
+    #[test]
+    fn a_denial_no_when_narrows_is_forbidden_plainly_whatever_the_token_lacks() {
+        let logs = LogCapture::install();
+        let mut rules = AbilityBuilder::new().with_granted_scopes(Some(Vec::new().into()));
+        rules.can(Action::Read, Post).requires_scope("posts:read");
+        rules
+            .can(Action::Manage, Post)
+            .when(|p| p.eq(post::Column::Id, 1));
+        rules.cannot(Action::Read, Post);
+        let refused = gated(&GATED, Some(rules.build().expect("the rules build")))
+            .expect_err("the denial holds for every row");
+
+        assert_eq!(denial(&refused).http_status(), 403);
+        assert_eq!(denial(&refused).message(), FORBIDDEN);
+        assert_eq!(denial(&refused).bearer_error(), None);
+        assert!(
+            denial(&refused).required_scopes().is_empty(),
+            "no challenge names a scope that would be refused all the same",
+        );
+        let line = logs.expect_one(crate::TARGET, "authorization denied");
+        assert_eq!(line.field("reason").as_deref(), Some(reason::CLASS_DENIED));
     }
 
     #[test]

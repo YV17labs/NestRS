@@ -90,3 +90,15 @@ under `timestamps`, as before; `CreateModel` still seeds the key, so an
   own defaults.
 - A `timestamps` entity keeps no `ActiveModelBehavior` of its own, as before
   this decision: its `before_save` is the decorator's.
+
+## 2026-10-31 — the class gate refuses a denial that holds for every row
+
+Agreed by the owner on 2026-10-31 ("Tout faire (Recommandé)", the identity
+audit's second pass, car-1). The Limits line "the class gate stays
+optimistic" is narrowed to conditional rules: a denial no `when` narrows
+refuses at the class gate on every edge, and `Creatable` sends no insert for a
+caller whose ability refuses `Create` on the class, so CASL's `can(Manage)`
+plus `cannot(Create)` answers `403` before any statement, never the NOT NULL
+`500` or the `409` an insert would have drawn
+(`denial-holds-whatever-the-token.md`). A grant the fill cannot complete still
+answers the `500`: the gate stays optimistic about conditions.

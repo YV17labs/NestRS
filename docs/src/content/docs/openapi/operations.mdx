@@ -60,7 +60,7 @@ The form's parts are a type like any other payload — a `String` field carrying
 `#[schemars(extend("format" = "binary"))]` is the file part Swagger UI renders a
 file picker for. That type documents the form, and nothing reads a request
 with it: the extractor taking the parts (`UploadedAudio` here) is written
-apart, so a part renamed in one is renamed in the other. A handler that takes
+apart, so a part renamed in one must be renamed in the other. A handler that takes
 `nest_rs::http::Multipart` directly and declares nothing still documents
 `multipart/form-data` with a free-form object: the media type it accepts is
 knowledge a client needs, even when no type states the parts.

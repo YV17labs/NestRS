@@ -193,8 +193,9 @@ never by a check of your own.
 both itself. `req.split()` hands it the head and the body,
 `Json::<T>::from_request(&head, &mut body)` answers the edge's `415`, `413` or
 `400`, and the value's `validate()` holds it to its rules. The OpenAPI
-document, composed from the controllers' routes, lists none of it. What it answers goes out as a route's would: a `Created` gets its
-`Location` and a `Paginated` its `Link`, on the path the caller addressed.
+document, composed from the controllers' routes, lists none of it. What it
+answers goes out as a route's would: a `Created` gets its `Location` and a
+`Paginated` its `Link`, on the path the caller addressed.
 
 **It registers its own path and what lies under it.** The mount closure
 registers on `&mut HttpRoutes`, in the route grammar (`/status/{name}`,

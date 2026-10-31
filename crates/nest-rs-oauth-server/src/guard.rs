@@ -17,6 +17,7 @@ use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
 use nest_rs_http::{HeaderMap, HeaderValue, HttpView, Response, ResponseError, header};
 
 use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
+use crate::strategy::ClientSecretBasicStrategy;
 
 /// The client-authentication guard of a token endpoint (RFC 6749 §2.3): runs
 /// a [`Strategy`] on the request, as [`AuthnGuard`](nest_rs_authn::AuthnGuard)
@@ -39,9 +40,9 @@ use crate::error::{ClientRefusedError, TokenEndpointAuthMethod, TokenError};
 /// reason the strategy's and its cause naming the method attempted, never the
 /// client.
 ///
-/// [`ClientSecretBasicStrategy`](crate::ClientSecretBasicStrategy) is the
-/// strategy for the clients [`OAuthServerConfig`](crate::OAuthServerConfig)
-/// registers; a registry held elsewhere is a strategy of the app's own:
+/// [`ClientSecretBasicStrategy`] is the strategy for the clients
+/// [`OAuthServerConfig`](crate::OAuthServerConfig) registers, behind
+/// [`ClientGuard`]; a registry held elsewhere is a strategy of the app's own:
 ///
 /// ```
 /// use nest_rs_authn::{AuthError, Strategy, basic_credentials};
@@ -222,6 +223,13 @@ impl<S: Strategy> Guard for ClientAuthenticationGuard<S> {
         crate::TARGET
     }
 }
+
+/// The guard of a token endpoint whose clients
+/// [`OAuthServerConfig<P>`](crate::OAuthServerConfig) registers: RFC 6749
+/// §2.3.1's HTTP Basic pair checked against the registry, provided by
+/// [`OAuthServerModule::<P>`](crate::OAuthServerModule) and bound with
+/// `#[use_guards(ClientGuard<P>)]`.
+pub type ClientGuard<P> = ClientAuthenticationGuard<ClientSecretBasicStrategy<P>>;
 
 /// HTTP is the only edge a token endpoint answers on; the declaration lets a
 /// `#[controller]` or a `#[routes]` verb bind it.

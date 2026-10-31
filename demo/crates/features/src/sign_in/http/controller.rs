@@ -5,12 +5,14 @@ use nest_rs::http::{
     HeaderValue, HttpError, Json, Opaque, Path, Query, Response, Result, StatusCode, controller,
     header, routes,
 };
-use nest_rs::oauth::server::{AccessTokenRequest, AccessTokenResponse};
+use nest_rs::oauth::server::{AccessTokenRequest, AccessTokenResponse, ClientGuard};
 use nest_rs::pipes::{Lowercase, Piped};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
-use super::guard::{ClientGuard, SocialGuard};
-use crate::sign_in::{AuthenticatedClient, AuthorizeDto, Caller, LoginDto, SignInService};
+use super::guard::SocialGuard;
+use crate::sign_in::{
+    AuthenticatedClient, AuthorizeDto, Caller, ClientPayload, LoginDto, SignInService,
+};
 
 #[controller(path = "/")]
 pub struct SignInController {
@@ -21,7 +23,7 @@ pub struct SignInController {
 #[routes]
 impl SignInController {
     #[post("/token")]
-    #[use_guards(ThrottlerGuard, ClientGuard)]
+    #[use_guards(ThrottlerGuard, ClientGuard<ClientPayload>)]
     #[meta(Throttle::per_minute(10))]
     #[api(summary = "OAuth2 token endpoint (client_credentials)", tags("OAuth2"))]
     async fn token(

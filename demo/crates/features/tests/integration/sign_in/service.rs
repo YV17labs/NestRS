@@ -117,10 +117,7 @@ fn sign_in_app(clients: Vec<RegisteredClient<ClientPayload>>) -> TestAppBuilder 
 #[tokio::test]
 async fn a_client_registered_outside_the_policy_refuses_the_boot_naming_it() {
     let user_shaped = Uuid::now_v7().to_string();
-    let clients = var_name(
-        <OAuthServerConfig<ClientPayload> as Namespaced>::NAMESPACE,
-        "CLIENTS",
-    );
+    let clients = var_name(OAuthServerConfig::<ClientPayload>::NAMESPACE, "CLIENTS");
 
     for (client, said) in [
         (

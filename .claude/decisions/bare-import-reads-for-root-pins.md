@@ -78,3 +78,25 @@ visible line that opens it.
 Held by `nest-rs-testing`'s setups table (every module bare, pinned, both in
 either order), `nest-rs-config`'s environment tests (two readers of two
 configs, no import, one line), and the types: no `for_root` takes an `Option`.
+
+## 2026-10-31 — `OAuthServerModule::<P>` provides the client authentication it reads
+
+`OAuthServerModule::<P>` stays generic, and its bare form stays
+`OAuthServerModule::<ClientPayload>`; what the import provides grows. It
+registered only its config, so every app issuing tokens assembled the one
+§2.3.1 strategy the crate ships and its guard from three generic parts —
+`ClientSecretBasicStrategy<P>`, `ClientAuthenticationGuard<S>`, and an alias
+of its own naming both — and listed them. Decided on the owner's agreement to
+the identity audit's second pass ("Tout faire (Recommandé)", 2026-10-31, its
+item 11), which covers this public API break: the module registers
+`ClientSecretBasicStrategy<P>` and its guard, named once by the framework as
+`nest_rs::oauth::server::ClientGuard<P>`, in its own `register` — a `#[module]`
+is not generic — so a token endpoint binds `#[use_guards(ClientGuard<P>)]` and
+its app lists neither. An app still listing either registers it twice, which
+fails the boot naming both registrations (`DuplicateProviderError`).
+
+`SocialModule` does not do the same for `SocialStrategy<S>`: it is not
+generic, and taking the product's `SocialSignIn` type would make every import
+of it — each provider's module imports it — a turbofish. JWT's guard alias
+stays the product's for the same reason: `AuthnModule` also provides the
+`JwtService` that modules import it for.

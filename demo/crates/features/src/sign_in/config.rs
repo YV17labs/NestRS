@@ -99,11 +99,9 @@ mod tests {
     fn refused(clients: Vec<RegisteredClient<ClientPayload>>) -> (Vec<String>, String) {
         let errors = registered_within_policy(&OAuthServerConfig { clients }).expect_err("refused");
         let keys = errors.errors().keys().map(ToString::to_string).collect();
-        let rendered = ConfigError::validation(
-            <OAuthServerConfig<ClientPayload> as Namespaced>::NAMESPACE,
-            errors,
-        )
-        .to_string();
+        let rendered =
+            ConfigError::validation(OAuthServerConfig::<ClientPayload>::NAMESPACE, errors)
+                .to_string();
         (keys, rendered)
     }
 
@@ -126,10 +124,7 @@ mod tests {
         assert!(
             rendered.contains(&format!(
                 "clients[legacy-runner].scopes ({}): unknown_scope",
-                var_name(
-                    <OAuthServerConfig<ClientPayload> as Namespaced>::NAMESPACE,
-                    "CLIENTS"
-                )
+                var_name(OAuthServerConfig::<ClientPayload>::NAMESPACE, "CLIENTS")
             )),
             "{rendered}"
         );
@@ -178,7 +173,7 @@ mod tests {
 
     #[test]
     fn the_namespace_is_the_feature_s_own_word() {
-        assert_eq!(<SignInConfig as Namespaced>::NAMESPACE, "sign_in");
+        assert_eq!(SignInConfig::NAMESPACE, "sign_in");
     }
 
     #[test]

@@ -1,12 +1,13 @@
 //! Covers `src/strategy.rs` and `src/module.rs` — the registry
-//! `OAuthServerModule` registers authenticates a client over HTTP Basic, and
-//! the client it attaches reads what its request is granted.
+//! `OAuthServerModule` registers authenticates a client over HTTP Basic,
+//! through the strategy and the guard the module provides, and the client it
+//! attaches reads what its request is granted.
 
 use base64::Engine as _;
-use nest_rs_core::{Ambient, module};
+use nest_rs_core::{Ambient, DuplicateProviderError, module};
 use nest_rs_http::{HttpModule, StatusCode, controller, routes};
 use nest_rs_oauth_server::{
-    AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientAuthenticationGuard,
+    AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientGuard,
     ClientSecretBasicStrategy, OAuthServerConfig, OAuthServerModule, RegisteredClient,
 };
 use nest_rs_testing::{LogCapture, TestApp, TestResponse};
@@ -16,15 +17,13 @@ const SECRET: &str = "s3cret-never-logged";
 const API: &str = "https://api.example.com";
 const MCP: &str = "https://mcp.example.com/mcp";
 
-type ClientGuard = ClientAuthenticationGuard<ClientSecretBasicStrategy<u32>>;
-
 #[controller(path = "/")]
 struct TokenController;
 
 #[routes]
 impl TokenController {
     #[post("/token")]
-    #[use_guards(ClientGuard)]
+    #[use_guards(ClientGuard<u32>)]
     async fn token(
         &self,
         client: Ambient<AuthenticatedClient<u32>>,
@@ -36,22 +35,43 @@ impl TokenController {
     }
 }
 
+fn registry_of<P>(payload: P) -> OAuthServerConfig<P> {
+    OAuthServerConfig {
+        clients: vec![RegisteredClient::new(
+            CLIENT_ID,
+            SECRET,
+            ["posts:read", "posts:write"],
+            [API, MCP],
+            payload,
+        )],
+    }
+}
+
+fn registry() -> OAuthServerConfig<u32> {
+    registry_of(7)
+}
+
 #[module(
-    imports = [
-        HttpModule,
-        OAuthServerModule::for_root(OAuthServerConfig {
-            clients: vec![RegisteredClient::new(
-                CLIENT_ID,
-                SECRET,
-                ["posts:read", "posts:write"],
-                [API, MCP],
-                7_u32,
-            )],
-        }),
-    ],
-    providers = [ClientSecretBasicStrategy<u32>, ClientGuard, TokenController],
+    imports = [HttpModule, OAuthServerModule::for_root(registry())],
+    providers = [TokenController],
 )]
 struct IssuerApp;
+
+/// A 6.x composition, listing what the import now provides.
+#[module(
+    imports = [HttpModule, OAuthServerModule::for_root(registry())],
+    providers = [ClientSecretBasicStrategy<u32>, TokenController],
+)]
+struct ListingIssuerApp;
+
+/// The same, listing the guard the import provides. A payload of its own: a
+/// linked `#[module]` answers for what it lists to every app booted beside it,
+/// and `IssuerApp` reads `ClientGuard<u32>` from its import.
+#[module(
+    imports = [HttpModule, OAuthServerModule::for_root(registry_of(7_u64))],
+    providers = [ClientGuard<u64>],
+)]
+struct ListingGuardIssuerApp;
 
 fn basic(secret: &str) -> String {
     let pair = format!("{CLIENT_ID}:{secret}");
@@ -143,4 +163,36 @@ async fn an_authenticated_clients_refused_request_is_filed_by_its_reason() {
         assert!(!filed.contains("never-logged"), "{filed}");
         assert!(!filed.contains(SECRET), "{filed}");
     }
+}
+
+/// The import registers the strategy, so an app listing it too registers it
+/// twice, and the boot names both registrations.
+#[tokio::test]
+async fn a_strategy_listed_beside_the_import_providing_it_fails_the_boot() {
+    let Err(refused) = TestApp::for_module::<ListingIssuerApp>().await else {
+        panic!("the strategy would be registered twice");
+    };
+    let duplicate = refused
+        .downcast_ref::<DuplicateProviderError>()
+        .unwrap_or_else(|| panic!("not the duplicate: {refused:#}"));
+    assert!(
+        duplicate.type_name.contains("ClientSecretBasicStrategy"),
+        "{duplicate}"
+    );
+}
+
+/// The guard too: it registers through a hand-written discovery of its own,
+/// and listed beside the import it is refused the same way, naming it.
+#[tokio::test]
+async fn a_guard_listed_beside_the_import_providing_it_fails_the_boot() {
+    let Err(refused) = TestApp::for_module::<ListingGuardIssuerApp>().await else {
+        panic!("the guard would be registered twice");
+    };
+    let duplicate = refused
+        .downcast_ref::<DuplicateProviderError>()
+        .unwrap_or_else(|| panic!("not the duplicate: {refused:#}"));
+    assert!(
+        duplicate.type_name.contains("ClientAuthenticationGuard"),
+        "{duplicate}"
+    );
 }

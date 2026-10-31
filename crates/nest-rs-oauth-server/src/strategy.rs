@@ -11,22 +11,23 @@ use crate::config::OAuthServerConfig;
 use crate::registry::{AuthenticatedClient, authenticate_against_registry};
 
 /// The [`Strategy`] a token endpoint's
-/// [`ClientAuthenticationGuard`](crate::ClientAuthenticationGuard) runs for RFC
-/// 7591's `client_secret_basic`: reads the client's id and secret off the
+/// [`ClientGuard<P>`](crate::ClientGuard) runs for RFC 7591's
+/// `client_secret_basic`: reads the client's id and secret off the
 /// `Authorization: Basic` header (§2.3.1) and authenticates them, in constant
 /// time, against the clients [`OAuthServerConfig<P>`] registers. A request
 /// without the header is [`AuthError::MissingCredentials`]; a pair no client
 /// matches is refused without saying which half failed.
 ///
+/// [`OAuthServerModule::<P>`](crate::OAuthServerModule) provides it and its
+/// guard, so an app lists neither:
+///
 /// ```
 /// use nest_rs_core::{Ambient, module};
 /// use nest_rs_http::{controller, routes};
 /// use nest_rs_oauth_server::{
-///     AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientAuthenticationGuard,
-///     ClientSecretBasicStrategy, OAuthServerModule,
+///     AccessTokenRequest, AccessTokenResponse, AuthenticatedClient, ClientGuard,
+///     OAuthServerModule,
 /// };
-///
-/// type ClientGuard = ClientAuthenticationGuard<ClientSecretBasicStrategy<()>>;
 ///
 /// #[controller(path = "/")]
 /// struct TokenController;
@@ -34,7 +35,7 @@ use crate::registry::{AuthenticatedClient, authenticate_against_registry};
 /// #[routes]
 /// impl TokenController {
 ///     #[post("/token")]
-///     #[use_guards(ClientGuard)]
+///     #[use_guards(ClientGuard<()>)]
 ///     async fn token(
 ///         &self,
 ///         client: Ambient<AuthenticatedClient<()>>,
@@ -48,7 +49,7 @@ use crate::registry::{AuthenticatedClient, authenticate_against_registry};
 ///
 /// #[module(
 ///     imports = [OAuthServerModule::<()>],
-///     providers = [ClientSecretBasicStrategy<()>, ClientGuard, TokenController],
+///     providers = [TokenController],
 /// )]
 /// struct IssuerModule;
 /// ```

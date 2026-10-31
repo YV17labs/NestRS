@@ -7,7 +7,8 @@
 //!   client attempted.
 //! - [`OAuthServerModule`] and [`OAuthServerConfig`] — the clients this server
 //!   registers (§2), under `<PREFIX>_OAUTH__SERVER__*`, which
-//!   [`ClientSecretBasicStrategy`] authenticates against, in constant time.
+//!   [`ClientSecretBasicStrategy`] authenticates against, in constant time,
+//!   behind [`ClientGuard`]: the module provides both.
 //! - [`AccessTokenRequest`] — §4.4.2's request, RFC 8707's `resource` with it,
 //!   read off its form as a handler parameter; one that does not parse is
 //!   §5.2's `invalid_request`, saying where, and one naming a grant the
@@ -46,7 +47,7 @@ mod token;
 
 pub use config::OAuthServerConfig;
 pub use error::{TokenEndpointAuthMethod, TokenError};
-pub use guard::ClientAuthenticationGuard;
+pub use guard::{ClientAuthenticationGuard, ClientGuard};
 pub use module::{OAuthServerModule, OAuthServerSetup};
 pub use registry::{AuthenticatedClient, RegisteredClient, authenticate_against_registry};
 pub use strategy::ClientSecretBasicStrategy;

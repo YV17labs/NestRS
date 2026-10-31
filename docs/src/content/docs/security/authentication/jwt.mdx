@@ -138,8 +138,9 @@ back by its shape, a UUID being a user. The registry of your clients therefore
 refuses a client id a UUID parses, so no client passes for a user (RFC 9068
 §5): with `nest_rs::oauth::server`, a module-init hook of yours over
 `OAuthServerConfig`, since the scheme reading a subject is yours
-([OAuth 2.0](/security/authentication/oauth2/#the-registry-is-the-frameworks-the-policy-yours)). A route writing a user's row reads `claims.sub.user_id()`, which
-a client answers with `None`. `nestrs g auth` writes the enum, its conversions
+([OAuth 2.0](/security/authentication/oauth2/#the-registry-is-the-frameworks-the-policy-yours)).
+A route writing a user's row reads `claims.sub.user_id()`, which a client
+answers with `None`. `nestrs g auth` writes the enum, its conversions
 and the struct with its derive.
 
 The handler reads them back through `Ambient<Claims>`:

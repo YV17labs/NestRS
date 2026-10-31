@@ -345,23 +345,34 @@ array, or its `_FILE` — generic over the payload `P` each client carries,
 your own type: `OAuthServerModule::<P>` registers it, and the
 boot refuses a registry that could serve no token or the wrong one (none, a
 client with no resource, a duplicate or empty id, an empty secret), naming
-each client by its id. The demo's endpoint is the whole protocol bound:
+each client by its id. The import also provides what authenticates a client
+against that registry, `ClientGuard<P>`, so the demo's endpoint is the whole
+protocol bound, with no guard of its own declared:
 
-```rust title="crates/features/src/sign_in/http/guard.rs (from the demo)"
-use nest_rs::authn::AuthnGuard;
-use nest_rs::oauth::server::{ClientAuthenticationGuard, ClientSecretBasicStrategy};
-use nest_rs::social::SocialStrategy;
+```rust title="crates/features/src/sign_in/module.rs (from the demo)"
+use nest_rs::core::module;
+use nest_rs::oauth::server::OAuthServerModule;
+use nest_rs::social::SocialModule;
 
-use crate::sign_in::{ClientPayload, SignInService};
+use super::config::ClientPayload;
+use super::service::SignInService;
+use crate::users::UsersModule;
 
-pub type ClientGuard = ClientAuthenticationGuard<ClientSecretBasicStrategy<ClientPayload>>;
-
-pub type SocialGuard = AuthnGuard<SocialStrategy<SignInService>>;
+#[module(
+    imports = [
+        nest_rs::authn::AuthnModule,
+        OAuthServerModule::<ClientPayload>,
+        UsersModule,
+        SocialModule,
+    ],
+    providers = [SignInService],
+)]
+pub struct SignInModule;
 ```
 
 ```rust title="crates/features/src/sign_in/http/controller.rs (from the demo, abridged)"
 #[post("/token")]
-#[use_guards(ThrottlerGuard, ClientGuard)]
+#[use_guards(ThrottlerGuard, ClientGuard<ClientPayload>)]
 #[meta(Throttle::per_minute(10))]
 // …
 async fn token(
@@ -373,8 +384,37 @@ async fn token(
 }
 ```
 
+A module listing `ClientSecretBasicStrategy<P>` or `ClientGuard<P>` beside the
+import registers it twice, and the boot names both registrations.
+
+### The registry is the framework's, the policy yours
+
+What the registry refuses at boot is what makes it serve no token or the
+wrong one, whatever the product. What only your product can judge — a scope
+none of your rules gates on, a `client_id` your subject scheme would read as
+a user's (RFC 9068 §5) — is a check of yours over the same registry, run in a
+module-init hook and refused in the registry's own words, so the boot names
+the variable it was read from:
+
+```rust title="crates/features/src/sign_in/service.rs (from the demo, abridged)"
+#[hooks]
+impl SignInService {
+    #[on_module_init]
+    async fn refuse_clients_outside_the_policy(&self) -> nest_rs::core::anyhow::Result<()> {
+        registered_within_policy(&self.clients).map_err(|errors| {
+            ConfigError::validation(OAuthServerConfig::<ClientPayload>::NAMESPACE, errors).into()
+        })
+    }
+}
+```
+
+`registered_within_policy` is the demo's own function: it refuses each
+client by its id, `clients[<id>].scopes` or `clients[<id>].client_id`, never
+its secret.
+
 ### The client
 
+`ClientGuard<P>` is `ClientAuthenticationGuard<ClientSecretBasicStrategy<P>>`.
 `ClientAuthenticationGuard<S>` runs a `Strategy` —
 `ClientSecretBasicStrategy<P>` reads HTTP Basic and checks it, in constant
 time, against the registry — the way

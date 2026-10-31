@@ -45,11 +45,7 @@ impl SignInService {
     #[on_module_init]
     async fn refuse_clients_outside_the_policy(&self) -> nest_rs::core::anyhow::Result<()> {
         registered_within_policy(&self.clients).map_err(|errors| {
-            ConfigError::validation(
-                <OAuthServerConfig<ClientPayload> as Namespaced>::NAMESPACE,
-                errors,
-            )
-            .into()
+            ConfigError::validation(OAuthServerConfig::<ClientPayload>::NAMESPACE, errors).into()
         })
     }
 }

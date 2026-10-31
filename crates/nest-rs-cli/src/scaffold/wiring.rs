@@ -125,7 +125,17 @@ pub(crate) fn ensure_expose_graphql() -> Transform {
         }) {
             return None;
         }
-        lines[at] = lines[at].replacen("#[expose(", "#[expose(graphql, ", 1);
+        if lines[at].trim_end() == "#[expose(" {
+            // rustfmt leaves this attribute as written and refuses a trailing
+            // space, so the flag takes a line of its own.
+            let indent: String = lines[at + 1]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
+            lines.insert(at + 1, format!("{indent}graphql,"));
+        } else {
+            lines[at] = lines[at].replacen("#[expose(", "#[expose(graphql, ", 1);
+        }
         Some(rejoin(&lines, content))
     })
 }
@@ -292,6 +302,21 @@ mod tests {
         assert!(
             out.contains("    #[expose(input(create, update))]"),
             "a field attribute is left alone: {out}"
+        );
+        assert!(ensure_expose_graphql()(&out).is_none(), "idempotent");
+    }
+
+    #[test]
+    fn ensure_expose_graphql_flags_the_resource_entity_on_a_line_of_its_own() {
+        let src = crate::templates::resource::ENTITY;
+        let out = ensure_expose_graphql()(src).expect("flags the entity");
+        assert!(
+            out.contains("#[expose(\n    graphql,\n    name = \"{{entity}}\","),
+            "the flag opens the attribute's argument lines: {out}"
+        );
+        assert!(
+            out.lines().all(|line| line == line.trim_end()),
+            "no line ends in a space rustfmt refuses: {out}"
         );
         assert!(ensure_expose_graphql()(&out).is_none(), "idempotent");
     }

@@ -702,7 +702,11 @@ fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_endpoint_guards(
 
     // The entity has to *be* a GraphQL object for the resolver to return it.
     let entity = fs::read_to_string(src.join("posts/entity.rs")).unwrap();
-    assert!(entity.contains("#[expose(graphql"), "{entity}");
+    assert!(entity.contains("#[expose(\n    graphql,\n"), "{entity}");
+    assert!(
+        entity.lines().all(|line| line == line.trim_end()),
+        "no trailing space for `cargo fmt --check` to refuse: {entity}"
+    );
 
     // The guards `/graphql`'s request runs, and the module that serves it.
     let module = fs::read_to_string(src.join("posts/graphql/module.rs")).unwrap();

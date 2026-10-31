@@ -1,11 +1,12 @@
 //! Transactional file scaffolding.
 //!
-//! A [`Scaffold`] collects every file a command wants to create and every
-//! idempotent edit it wants to apply, then commits them **all-or-nothing**:
-//! validation runs first (no `create` may clobber an existing file, every
-//! `edit` target must exist), so a failure can never leave a half-written
-//! tree. `--dry-run` runs the exact same pipeline but writes nothing and
-//! returns the [`Report`] of what *would* change.
+//! A [`Scaffold`] collects every file a command wants to create, move or
+//! edit, then commits them **all-or-nothing**: validation runs first (no
+//! `create` or move may clobber an existing file, every `edit` target and
+//! move source must exist), and a write the system refuses mid-commit rolls
+//! back every one before it, so a failure never leaves a half-written tree.
+//! `--dry-run` runs the exact same pipeline but writes nothing and returns
+//! the [`Report`] of what *would* change.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,11 +32,19 @@ enum Action {
         /// name, never its value.
         secret: bool,
     },
+    /// `from` becomes `to`, its contents passed through `transform` (`None`:
+    /// unchanged); `to` may not exist.
+    Move {
+        from: PathBuf,
+        to: PathBuf,
+        transform: Transform,
+    },
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct Report {
     pub created: Vec<PathBuf>,
+    pub moved: Vec<(PathBuf, PathBuf)>,
     pub modified: Vec<(PathBuf, Vec<String>)>,
     pub unchanged: Vec<PathBuf>,
     pub dry_run: bool,
@@ -102,14 +111,34 @@ impl Scaffold {
         self
     }
 
+    /// Queue a move of `from` to `to`, rewritten by `transform` on the way.
+    /// Fails at `apply` time if `to` exists.
+    pub(crate) fn move_to(
+        &mut self,
+        from: impl Into<PathBuf>,
+        to: impl Into<PathBuf>,
+        transform: Transform,
+    ) -> &mut Self {
+        self.actions.push(Action::Move {
+            from: from.into(),
+            to: to.into(),
+            transform,
+        });
+        self
+    }
+
     /// Validate everything, then commit (unless `dry_run`).
     pub(crate) fn apply(self, dry_run: bool) -> CliResult<Report> {
-        // Phase 1 — validate creates up front so we fail before any write.
+        // Phase 1 — validate creates and moves up front so we fail before any
+        // write.
         for action in &self.actions {
-            if let Action::Create { path, .. } = action
-                && path.exists()
-            {
-                return Err(CliError::AlreadyExists(path.clone()));
+            let target = match action {
+                Action::Create { path, .. } => path,
+                Action::Move { to, .. } => to,
+                Action::CreateIfMissing { .. } | Action::Edit { .. } => continue,
+            };
+            if target.exists() {
+                return Err(CliError::AlreadyExists(target.clone()));
             }
         }
 
@@ -124,15 +153,27 @@ impl Scaffold {
             match action {
                 Action::Create { path, contents } => {
                     report.created.push(path.clone());
-                    planned.push(PlannedWrite { path, contents });
+                    planned.push(PlannedWrite::Write { path, contents });
                 }
                 Action::CreateIfMissing { path, contents } => {
                     if path.exists() {
                         report.unchanged.push(path);
                     } else {
                         report.created.push(path.clone());
-                        planned.push(PlannedWrite { path, contents });
+                        planned.push(PlannedWrite::Write { path, contents });
                     }
+                }
+                Action::Move {
+                    from,
+                    to,
+                    transform,
+                } => {
+                    let current = fs::read_to_string(&from)
+                        .map_err(CliError::file(FileAction::Read, &from))?;
+                    let contents = transform(&current).unwrap_or(current);
+                    report.moved.push((from.clone(), to.clone()));
+                    planned.push(PlannedWrite::Write { path: to, contents });
+                    planned.push(PlannedWrite::Remove { path: from });
                 }
                 Action::Edit {
                     path,
@@ -148,7 +189,7 @@ impl Scaffold {
                                 added = added.into_iter().map(redact_assignment).collect();
                             }
                             report.modified.push((path.clone(), added));
-                            planned.push(PlannedWrite {
+                            planned.push(PlannedWrite::Write {
                                 path,
                                 contents: updated,
                             });
@@ -159,15 +200,13 @@ impl Scaffold {
             }
         }
 
-        // Phase 3 — commit.
+        // Phase 3 — commit, undoing every step taken when one is refused.
         if !dry_run {
+            let mut undo = Vec::new();
             for write in planned {
-                if let Some(parent) = write.path.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(CliError::file(FileAction::CreateDir, parent))?;
+                if let Err(refused) = write.commit(&mut undo) {
+                    return Err(roll_back(undo, refused));
                 }
-                fs::write(&write.path, &write.contents)
-                    .map_err(CliError::file(FileAction::Write, &write.path))?;
             }
         }
 
@@ -175,9 +214,86 @@ impl Scaffold {
     }
 }
 
-struct PlannedWrite {
-    path: PathBuf,
-    contents: String,
+enum PlannedWrite {
+    Write { path: PathBuf, contents: String },
+    Remove { path: PathBuf },
+}
+
+/// What restores the tree to before one committed step.
+enum Undo {
+    /// Delete a file the commit created.
+    Delete(PathBuf),
+    /// Put back the bytes a file held.
+    Restore(PathBuf, Vec<u8>),
+    /// Remove a directory the commit created.
+    RemoveDir(PathBuf),
+}
+
+impl PlannedWrite {
+    /// Commit this step, pushing onto `undo` what reverses each part done.
+    fn commit(self, undo: &mut Vec<Undo>) -> CliResult<()> {
+        match self {
+            Self::Write { path, contents } => {
+                if let Some(parent) = path.parent() {
+                    let created: Vec<PathBuf> = parent
+                        .ancestors()
+                        .take_while(|dir| !dir.as_os_str().is_empty() && !dir.exists())
+                        .map(Path::to_path_buf)
+                        .collect();
+                    fs::create_dir_all(parent)
+                        .map_err(CliError::file(FileAction::CreateDir, parent))?;
+                    undo.extend(created.into_iter().rev().map(Undo::RemoveDir));
+                }
+                match fs::read(&path) {
+                    Ok(before) => undo.push(Undo::Restore(path.clone(), before)),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        undo.push(Undo::Delete(path.clone()));
+                    }
+                    Err(e) => return Err(CliError::file(FileAction::Read, &path)(e)),
+                }
+                fs::write(&path, contents).map_err(CliError::file(FileAction::Write, &path))
+            }
+            Self::Remove { path } => {
+                let before = fs::read(&path).map_err(CliError::file(FileAction::Read, &path))?;
+                fs::remove_file(&path).map_err(CliError::file(FileAction::Remove, &path))?;
+                undo.push(Undo::Restore(path, before));
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Reverse every committed step, last first, and hand back `refused`; a step
+/// that will not reverse is named beside it rather than dropped.
+fn roll_back(undo: Vec<Undo>, refused: CliError) -> CliError {
+    let mut left = Vec::new();
+    for step in undo.into_iter().rev() {
+        let (path, outcome) = match step {
+            Undo::Delete(path) => {
+                let outcome = fs::remove_file(&path);
+                (path, outcome)
+            }
+            Undo::Restore(path, bytes) => {
+                let outcome = fs::write(&path, bytes);
+                (path, outcome)
+            }
+            Undo::RemoveDir(path) => {
+                let outcome = fs::remove_dir(&path);
+                (path, outcome)
+            }
+        };
+        if let Err(e) = outcome {
+            left.push(format!("`{}` ({e})", path.display()));
+        }
+    }
+    if left.is_empty() {
+        refused
+    } else {
+        CliError::RollbackIncomplete {
+            left: left.join(", "),
+            source: Box::new(refused),
+        }
+    }
 }
 
 /// A `.env` assignment with its value withheld; a comment or any other line as is.
@@ -214,6 +330,9 @@ impl Report {
         for path in &self.created {
             println!("  + {}", rel(path, base));
         }
+        for (from, to) in &self.moved {
+            println!("  > {} → {}", rel(from, base), rel(to, base));
+        }
         for (path, added) in &self.modified {
             println!("  ~ {}", rel(path, base));
             for line in added {
@@ -226,6 +345,7 @@ impl Report {
     pub(crate) fn rust_files(&self) -> Vec<PathBuf> {
         self.created
             .iter()
+            .chain(self.moved.iter().map(|(_, to)| to))
             .chain(self.modified.iter().map(|(p, _)| p))
             .filter(|p| p.extension().is_some_and(|e| e == "rs"))
             .cloned()
@@ -308,6 +428,83 @@ mod tests {
 
         let (_, added) = &report.modified[0];
         assert_eq!(added, &["# a key", "APP_KEY=<redacted>"]);
+    }
+
+    #[test]
+    fn a_move_rewrites_the_file_on_its_way_and_a_dry_run_moves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("entity.rs");
+        let to = dir.path().join("entities/post.rs");
+        fs::write(&from, "use super::service::PostsService;\n").unwrap();
+        let deepen =
+            || -> Transform { Box::new(|c: &str| Some(c.replace("super::", "super::super::"))) };
+
+        let mut s = Scaffold::new();
+        s.move_to(&from, &to, deepen());
+        let report = s.apply(true).unwrap();
+        assert_eq!(report.moved, vec![(from.clone(), to.clone())]);
+        assert!(from.is_file() && !to.exists(), "a dry run moves nothing");
+
+        let mut s = Scaffold::new();
+        s.move_to(&from, &to, deepen());
+        s.apply(false).unwrap();
+        assert!(!from.exists());
+        assert_eq!(
+            fs::read_to_string(&to).unwrap(),
+            "use super::super::service::PostsService;\n"
+        );
+    }
+
+    #[test]
+    fn a_refused_write_rolls_back_every_step_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("entity.rs");
+        let edited = dir.path().join("mod.rs");
+        fs::write(&from, "pub struct Model;\n").unwrap();
+        fs::write(&edited, "mod entity;\n").unwrap();
+        // A file where the last write needs a directory: the commit is refused there.
+        fs::write(dir.path().join("blocked"), "").unwrap();
+
+        let mut s = Scaffold::new();
+        s.move_to(
+            &from,
+            dir.path().join("entities/post.rs"),
+            Box::new(|_| None),
+        );
+        s.edit(&edited, ensure_decl("mod entities;"));
+        s.create(dir.path().join("fresh/new.rs"), "x");
+        s.create(dir.path().join("blocked/late.rs"), "x");
+        let refused = s.apply(false).unwrap_err();
+
+        assert!(
+            crate::error::chain(&refused).contains("blocked"),
+            "{}",
+            crate::error::chain(&refused)
+        );
+        assert_eq!(fs::read_to_string(&from).unwrap(), "pub struct Model;\n");
+        assert_eq!(fs::read_to_string(&edited).unwrap(), "mod entity;\n");
+        for gone in ["entities", "fresh"] {
+            assert!(!dir.path().join(gone).exists(), "{gone} is rolled back");
+        }
+    }
+
+    #[test]
+    fn a_move_onto_an_existing_file_is_refused_before_any_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("entity.rs");
+        let to = dir.path().join("post.rs");
+        fs::write(&from, "a").unwrap();
+        fs::write(&to, "b").unwrap();
+
+        let mut s = Scaffold::new();
+        s.create(dir.path().join("new.rs"), "x");
+        s.move_to(&from, &to, Box::new(|_| None));
+        assert!(matches!(
+            s.apply(false).unwrap_err(),
+            CliError::AlreadyExists(_)
+        ));
+        assert!(!dir.path().join("new.rs").exists());
+        assert_eq!(fs::read_to_string(&to).unwrap(), "b");
     }
 
     #[test]

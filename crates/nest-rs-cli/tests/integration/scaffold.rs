@@ -169,15 +169,18 @@ const EMPTY_DEFINE: &str = "fn define(&self, _actor: &Claims, _ab: &mut AbilityB
 #[test]
 fn a_generated_resource_and_entity_compile_with_the_grants_they_print() {
     // `#[crud]` and `#[expose]` need a real entity and service, so their contract
-    // is proved here, not in `nest-rs-macro-hygiene`. The entity sits on a plain
-    // `g feature` port, whose service is no `CrudService`; the grants each
-    // generator prints are pasted into `define`, as the developer would.
+    // is proved here, not in `nest-rs-macro-hygiene`. One entity sits on a plain
+    // `g feature` port, whose service is no `CrudService`; a second on the
+    // resource's port moves its first into `entities/`, every path rewritten.
+    // The grants each generator prints are pasted into `define`, as the
+    // developer would.
     scaffold_write_and_check_in(
         &["new", "acme"],
         &[
             &["g", "resource", "post"],
             &["g", "feature", "blog"],
             &["g", "entity", "blog/article"],
+            &["g", "entity", "post/comment"],
         ],
         &[],
         &[],
@@ -190,7 +193,7 @@ fn a_generated_resource_and_entity_compile_with_the_grants_they_print() {
                 .collect();
             assert_eq!(
                 grants.len(),
-                2,
+                3,
                 "each generator prints its grant:\n{printed:?}"
             );
 

@@ -57,23 +57,21 @@ pub enum CliError {
     #[error("feature `{name}` not found — create it first with `nestrs g feature {name}`")]
     FeatureNotFound { name: String },
 
-    /// `g entity` on a feature whose entity still lives in `entity.rs`.
-    ///
-    /// A module keeps either the lone `entity.rs` or an `entities/` directory; the
-    /// move is left to the developer (`commands::generate::entity`).
+    /// `g entity` adding a second entity to a feature whose lone `entity.rs`
+    /// cannot move to `entities/` with certainty: a reference the move would
+    /// break, by file and line.
     #[error(
-        "feature `{feature}` keeps its entity in `entity.rs`, and a module holds either one \
-         `entity.rs` or an `entities/` folder — never both. Move the existing one first, then \
-         re-run:\n  \
-         1. mkdir crates/features/src/{feature}/entities && git mv \
-         crates/features/src/{feature}/entity.rs crates/features/src/{feature}/entities/{stem}.rs\n  \
-         2. write `entities/mod.rs` with `pub mod {stem};`\n  \
-         3. in `{feature}/mod.rs`, replace `mod entity;` / `pub use entity::*;` with \
-         `mod entities;` / `pub use entities::{stem}::*;`\n  \
-         4. deepen by one level every `super::` path the moved file carries, and every \
-         `super::entity::` path elsewhere in the feature that names it"
+        "feature `{feature}` keeps its entity in `entity.rs`, and a second one moves it to \
+         `entities/{stem}.rs` — but `{at}` holds {what}, which the move cannot rewrite with \
+         certainty. Point it at `entities::{stem}` yourself (a `super::` path in the moved \
+         file gains one level), then re-run"
     )]
-    EntitiesFolderRequired { feature: String, stem: String },
+    EntityMoveUncertain {
+        feature: String,
+        stem: String,
+        at: String,
+        what: &'static str,
+    },
 
     /// `g entity` on a port whose `subject.rs` declares the entity's name.
     ///
@@ -141,6 +139,14 @@ pub enum CliError {
         program: &'static str,
         #[source]
         source: std::io::Error,
+    },
+
+    /// A commit refused midway, whose rollback could not reverse every step.
+    #[error("the scaffold stopped midway, and its rollback left these as written: {left}")]
+    RollbackIncomplete {
+        left: String,
+        #[source]
+        source: Box<CliError>,
     },
 
     #[error(transparent)]

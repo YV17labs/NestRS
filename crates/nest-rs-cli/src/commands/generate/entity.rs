@@ -5,14 +5,15 @@
 //! The positional is the feature; the optional `/<name>` tail names the entity
 //! when the feature's singular is not it (`g entity posts/comment` ⇒ `Comment`).
 //! No entity yet ⇒ the lone `entity.rs`; an `entities/` folder ⇒ one more file in
-//! it. A lone `entity.rs` becoming the first of several is **refused**
-//! ([`CliError::EntitiesFolderRequired`]): moving it means rewriting `super::`
-//! paths SeaORM spells inside string literals, so the refusal names the steps.
+//! it. A lone `entity.rs` becoming the first of several moves into `entities/`
+//! in the same transaction ([`Promotion`]), its paths rewritten — or the run is
+//! refused naming the reference it cannot rewrite with certainty.
 
 use std::path::{Path, PathBuf};
 
 use super::cargo::{ensure_features_deps, ensure_workspace_deps, entity_deps};
 use super::migration::refuse_reserved;
+use super::promotion::Promotion;
 use super::support::finish;
 use crate::commands::resolve_start;
 use crate::context::Context;
@@ -29,12 +30,15 @@ pub(crate) struct EntityOptions {
 }
 
 /// Where the entity file goes — decided by the feature, never by a flag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Placement {
     /// `<feature>/entity.rs`: the feature owns no entity yet.
     Lone,
     /// `<feature>/entities/<stem>.rs`: the feature already owns several.
     Folder,
+    /// `<feature>/entities/<stem>.rs`, the lone `entity.rs` moved beside it as
+    /// `entities/<moved>.rs`: the feature owned one.
+    Promote { moved: String },
 }
 
 /// The two names a target carries: the feature it joins, and the entity itself.
@@ -83,6 +87,11 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
 
     let root = ws.feature_root(&target.feature.snake);
     let placement = placement(&root, &target.feature)?;
+    if let Placement::Promote { moved } = &placement
+        && *moved == target.stem()
+    {
+        return Err(CliError::AlreadyExists(root.join("entity.rs")));
+    }
     if placement == Placement::Lone && subject_declares(&root, &target.entity.entity())? {
         return Err(CliError::EntityNameTakenBySubject {
             feature: target.feature.snake.clone(),
@@ -101,13 +110,24 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
     let mod_src = read_if_exists(&mod_rs)?.unwrap_or_default();
     let mut port_lines = Vec::new();
 
-    let file = match placement {
+    let file = match &placement {
         Placement::Lone => {
             if !declares_mod(&mod_src, "entity") {
                 port_lines.push("mod entity;".to_owned());
             }
             port_lines.push("pub use entity::*;".to_owned());
             root.join("entity.rs")
+        }
+        Placement::Promote { moved } => {
+            let index = format!("pub mod {moved};\npub mod {stem};\n");
+            s.create(root.join("entities/mod.rs"), index);
+            s.create(
+                root.join(format!("entities/{stem}.rs")),
+                r.render(entity::ENTITY),
+            );
+            Promotion::new(&root, &target.feature.snake, moved)
+                .queue(&mut s, vec![format!("pub use entities::{stem};")])?;
+            root.join(format!("entities/{stem}.rs"))
         }
         Placement::Folder => {
             let index = root.join("entities/mod.rs");
@@ -125,8 +145,10 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
             root.join(format!("entities/{stem}.rs"))
         }
     };
-    s.create(file, r.render(entity::ENTITY));
-    s.edit(mod_rs, ensure_lines(port_lines));
+    if !matches!(placement, Placement::Promote { .. }) {
+        s.create(file, r.render(entity::ENTITY));
+        s.edit(mod_rs, ensure_lines(port_lines));
+    }
 
     let deps = entity_deps();
     s.edit(
@@ -145,20 +167,19 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
             target.feature.snake
         ),
     )?;
-    print_next_steps(&target, placement, &stem);
+    print_next_steps(&target, &placement, &stem);
     Ok(())
 }
 
-/// Which of the two legal layouts this feature is in — or the refusal, when it
-/// is in the one that has no room for a second entity.
+/// Which of the two legal layouts this feature is in, and whether its lone
+/// entity moves to make room for a second.
 fn placement(root: &Path, feature: &Names) -> CliResult<Placement> {
     let lone = root.join("entity.rs");
     if lone.is_file() {
-        return Err(CliError::EntitiesFolderRequired {
-            feature: feature.snake.clone(),
+        return Ok(Placement::Promote {
             // The existing entity's new file name, read from its own `table_name`: the
             // feature's singular is wrong once someone renamed it.
-            stem: existing_stem(&lone)?.unwrap_or_else(|| feature.table()),
+            moved: existing_stem(&lone)?.unwrap_or_else(|| feature.table()),
         });
     }
     if root.join("entities").is_dir() {
@@ -206,20 +227,27 @@ fn declares_mod(source: &str, name: &str) -> bool {
         .any(|line| line == decl || line.ends_with(&format!(" {decl}")))
 }
 
-fn print_next_steps(target: &Target, placement: Placement, stem: &str) {
+fn print_next_steps(target: &Target, placement: &Placement, stem: &str) {
     let feature = &target.feature.snake;
     let (file, type_path) = match placement {
         Placement::Lone => (
             format!("crates/features/src/{feature}/entity.rs"),
             format!("crate::{feature}::Entity"),
         ),
-        Placement::Folder => (
+        Placement::Folder | Placement::Promote { .. } => (
             format!("crates/features/src/{feature}/entities/{stem}.rs"),
             format!("crate::{feature}::{stem}::Entity"),
         ),
     };
 
     println!();
+    if let Placement::Promote { moved } = placement {
+        println!(
+            "`{feature}`'s first entity moved to `entities/{moved}.rs`, its paths rewritten: \
+             `crate::{feature}::Entity` still names it."
+        );
+        println!();
+    }
     println!("Next steps:");
     println!(
         "  1. Fill in `{file}` columns, then:  nestrs g migration create_{}",
@@ -239,7 +267,7 @@ fn print_next_steps(target: &Target, placement: Placement, stem: &str) {
                 target.feature.service()
             );
         }
-        Placement::Folder => {
+        Placement::Folder | Placement::Promote { .. } => {
             println!("     owns exactly one entity and this feature's already owns another. Add");
             println!("     `service = …` above once this entity has a service of its own.");
         }

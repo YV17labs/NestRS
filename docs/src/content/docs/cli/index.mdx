@@ -346,11 +346,15 @@ the lone `posts/entity.rs`. A feature already keeping several in
 `posts/entities/` gets one more file there, named for the singular —
 `comment.rs` beside `post.rs`.
 
-Growing from the first shape into the second is the one thing it refuses. Moving
-`entity.rs` into `entities/` deepens every `super::` path the file carries — and
-SeaORM's relation form spells those inside string literals, where a rewrite would
-either miss them or damage them silently. So the generator prints the four
-mechanical steps and leaves the move to you; re-run it afterwards.
+Growing from the first shape into the second, it moves `entity.rs` to
+`entities/post.rs` (named for its table) in the same run: the moved file's
+`super::` paths gain the level it gains — those SeaORM spells inside string
+literals included — `mod.rs` declares `entities` and keeps re-exporting the
+first entity flat, so `crate::posts::Entity` still names it, and every path in
+the feature that named `entity` names `entities::post`. A reference it cannot
+rewrite with certainty — the module imported by name, a `super::` count that
+does not reach the feature, an inline module in the moved file — refuses the
+run before anything is written, naming its file and line.
 
 The entity it writes names **no service**. `#[expose(service = …)]` points at the
 one [`CrudService`](/database/crud/) whose `Entity` is this entity, `g entity`

@@ -154,34 +154,79 @@ fn generate_entity_joins_a_feature_that_already_keeps_entities_in_a_folder() {
     );
 }
 
-/// A module holds either one `entity.rs` or an `entities/` folder, so the
-/// generator refuses the second entity, naming the move.
+/// A module holds either one `entity.rs` or an `entities/` folder, so a second
+/// entity moves the first into `entities/`, in the same run: its `super::`
+/// paths gain the level it gains, and every path naming it follows.
 #[test]
-fn generate_entity_refuses_to_leave_a_feature_with_two_entity_homes() {
+fn generate_entity_moves_the_lone_entity_beside_the_second() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+
+    let printed = run_ok(dir.path(), &["g", "entity", "posts/comments", "-p", path]);
+
+    let feature = dir.path().join("crates/features/src/posts");
+    let read = |file: &str| fs::read_to_string(feature.join(file)).unwrap();
+    assert!(!feature.join("entity.rs").exists());
+    let moved = read("entities/post.rs");
+    assert!(
+        moved.contains("service = super::super::service::PostsService"),
+        "the moved entity reaches its service one level up: {moved}"
+    );
+    let entities = read("entities/mod.rs");
+    for line in ["pub mod post;", "pub mod comment;"] {
+        assert!(entities.contains(line), "{line}: {entities}");
+    }
+    assert!(read("entities/comment.rs").contains("name = \"Comment\""));
+    let index = read("mod.rs");
+    for line in [
+        "mod entities;",
+        "pub use entities::post::*;",
+        "pub use entities::comment;",
+    ] {
+        assert!(index.contains(line), "{line}: {index}");
+    }
+    assert!(!index.contains("mod entity;"), "{index}");
+    assert!(
+        read("service.rs").contains("use super::entities::post::{"),
+        "{}",
+        read("service.rs")
+    );
+    assert!(
+        printed.contains(
+            "> crates/features/src/posts/entity.rs → crates/features/src/posts/entities/post.rs"
+        ),
+        "the run reports the move: {printed}"
+    );
+}
+
+/// A reference the move cannot rewrite with certainty — the module imported
+/// by name — refuses the run, naming its file and line, and writes nothing.
+#[test]
+fn generate_entity_refuses_a_move_it_cannot_rewrite_with_certainty() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let path = dir.path().to_str().unwrap();
     run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
     run_ok(dir.path(), &["g", "entity", "posts/articles", "-p", path]);
-
-    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
-        .args(["g", "entity", "posts/comments", "-p", path])
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("entities"), "{stderr}");
-    // The remedy names the existing entity's file, read from its `table_name`.
-    assert!(
-        stderr.contains("entities/article.rs"),
-        "the remedy names the file the existing entity moves to: {stderr}",
+    let service = dir.path().join("crates/features/src/posts/service.rs");
+    let imported = format!(
+        "use super::entity;\n{}",
+        fs::read_to_string(&service).unwrap()
     );
+    fs::write(&service, imported).unwrap();
+    let before = files_under(dir.path());
+
+    let refused = run_err(dir.path(), &["g", "entity", "posts/comments", "-p", path]);
+
     assert!(
-        !dir.path()
-            .join("crates/features/src/posts/entities")
-            .exists()
+        refused.contains("crates/features/src/posts/service.rs:1")
+            && refused.contains("an import of the `entity` module itself")
+            && refused.contains("entities/article.rs"),
+        "the refusal names the reference and where the entity was going: {refused}"
     );
+    assert_eq!(files_under(dir.path()), before, "a refusal writes nothing");
 }
 
 /// `g graphql|mcp` over a port with no entity wrote its `#[subject]` under the

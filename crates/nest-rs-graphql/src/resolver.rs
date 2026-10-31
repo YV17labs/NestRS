@@ -240,6 +240,18 @@ fn build_subscription_members(container: &Container) -> Vec<Box<dyn GraphqlSubsc
         .collect()
 }
 
+/// The Rust method `reg`'s resolver dispatches `field` to, as its site
+/// declares it.
+fn method_of(reg: &GraphqlResolverRegistration, field: &str) -> Option<&'static str> {
+    let resolver = (reg.resolver_type_id)();
+    inventory::iter::<GraphqlSiteRegistration>()
+        .filter(|sites| (sites.resolver)() == resolver)
+        .flat_map(|sites| (sites.sites)())
+        .map(Site::handler)
+        .find(|handler| handler.address() == field)
+        .map(nest_rs_core::Handler::method)
+}
+
 /// The merged field map for one root, logging each mounted operation.
 fn merge_fields(
     registry: &mut Registry,
@@ -258,10 +270,11 @@ fn merge_fields(
             for field_name in member_fields.keys() {
                 tracing::info!(
                     target: nest_rs_http::target::ROUTES,
-                    resolver = reg.resolver_name,
+                    host = reg.resolver_name,
+                    method = method_of(reg, field_name),
                     kind = kind.as_str(),
                     field = field_name.as_str(),
-                    "mounted operation",
+                    "mounted",
                 );
             }
             fields.extend(member_fields);

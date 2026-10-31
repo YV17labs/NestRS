@@ -215,14 +215,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(event) => event,
             Err(err) => return err.to_compile_error().into(),
         };
+        let method_label = method.sig.ident.unraw().to_string();
         mounted_logs.push(quote! {
             #(#cfgs)*
             ::nest_rs_ws::tracing::info!(
                 target: ::nest_rs_ws::__private::target::ROUTES,
-                gateway = #gateway_name,
+                host = #gateway_name,
+                method = #method_label,
                 path = __path.as_str(),
                 event = #event,
-                "mounted message",
+                "mounted",
             );
         });
 

@@ -172,7 +172,7 @@ pub struct SignInConfig {
 ```bash frame="terminal"
 $ NESTRS_OAUTH__SERVER__CLIENTS='[{"client_id":"web","client_secret":"...","payload":{"org_id":"00000000-0000-0000-0000-000000000000","roles":["user"]},"scopes":["posts:read"],"resources":["http://localhost:3003"]}]' \
   nestrs run dev auth
-2026-06-03T10:42:11Z INFO nest_rs::routes: mounted route controller="SignInController" method="POST" path="/token" handler="token"
+2026-06-03T10:42:11Z INFO nest_rs::routes: mounted host="SignInController" method="token" verb="POST" path="/token"
 ```
 
 A bad value fails the boot before any port opens, naming the variable:

@@ -154,14 +154,15 @@ pub(crate) fn check(
         let throttle = options.throttle();
         tracing::info!(
             target: TARGET,
-            processor = method.name(),
+            host = method.site().handler().host_name(),
+            method = method.site().handler().method(),
             queue = method.queue(),
             retries = options.retries(),
             concurrency = options.concurrency().get(),
             throttle_limit = throttle.map(|throttle| throttle.limit().get()),
             throttle_window_ms = throttle.map(|throttle| millis(throttle.window())),
             checkpoint = options.checkpoint().then_some(true),
-            "registered queue processor",
+            "mounted",
         );
     }
     Ok(checked)

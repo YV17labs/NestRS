@@ -440,6 +440,50 @@ fn resolve(container: &Container, path: &str) -> Vec<ResolvedHost> {
         .collect()
 }
 
+/// One `mounted` line per operation `host` serves at `path`: each tool,
+/// prompt and resource template, with the Rust method its site dispatches to
+/// — none for a host writing its own handler.
+fn log_mounted(host: &McpHostMeta, declared: &DeclaredRoutes, path: &str) {
+    let sites = host.operation_sites();
+    let method_of = |address: &str| {
+        sites
+            .iter()
+            .map(|site| site.handler())
+            .find(|handler| handler.address() == address)
+            .map(nest_rs_core::Handler::method)
+    };
+    for tool in declared.tool_names() {
+        tracing::info!(
+            target: nest_rs_http::target::ROUTES,
+            host = host.host(),
+            method = method_of(&tool),
+            path,
+            tool = tool.as_str(),
+            "mounted",
+        );
+    }
+    for prompt in declared.prompt_names() {
+        tracing::info!(
+            target: nest_rs_http::target::ROUTES,
+            host = host.host(),
+            method = method_of(&prompt),
+            path,
+            prompt = prompt.as_str(),
+            "mounted",
+        );
+    }
+    for template in declared.template_uris() {
+        tracing::info!(
+            target: nest_rs_http::target::ROUTES,
+            host = host.host(),
+            method = method_of(&template),
+            path,
+            resource = template.as_str(),
+            "mounted",
+        );
+    }
+}
+
 fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &DetachedWork) {
     let hosts = hosts_on(container, path);
 
@@ -447,15 +491,8 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
     for (position, host) in hosts.iter().enumerate() {
         index.hosts.push(host.type_name);
         let declared = host.declared_routes();
+        log_mounted(host, &declared, path);
         let names: Vec<String> = declared.tool_names().collect();
-        tracing::info!(
-            target: nest_rs_http::target::ROUTES,
-            kind = MCP_LABEL,
-            path,
-            host = host.host(),
-            tools = names.join(", ").as_str(),
-            "mounted mcp host",
-        );
         index.tools.read(position, names, declared.complete);
         index
             .prompts

@@ -303,16 +303,18 @@ app runs:
 $ nestrs run dev api
 …
  INFO nest_rs::app: attached module-contributed transport transport="Scheduler"
- INFO nest_rs::schedule: scheduled job (interval) provider="AudioTasks" method="enqueue_transcode" interval_ms=5000 replicas="one" key="features::AudioTasks::enqueue_transcode"
- INFO nest_rs::schedule: scheduled job (one-shot) provider="AudioTasks" method="warmup_on_boot" delay_ms=3000 replicas="each"
- INFO nest_rs::schedule: scheduled job (cron) provider="AudioTasks" method="heartbeat" timezone="UTC" replicas="each"
+ INFO nest_rs::schedule: mounted host="AudioTasks" method="enqueue_transcode" trigger="every" interval_ms=5000 replicas="one" key="features::AudioTasks::enqueue_transcode"
+ INFO nest_rs::schedule: mounted host="AudioTasks" method="warmup_on_boot" trigger="after" delay_ms=3000 replicas="each"
+ INFO nest_rs::schedule: mounted host="AudioTasks" method="heartbeat" trigger="cron" timezone="UTC" replicas="each"
  INFO features::audio: audio pipeline ready to enqueue phase="warmup" trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
  INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" replicas="each" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
 DEBUG features::audio: enqueued transcode job queue="audio" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
  INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" replicas="one" occurrence=1787069800000 outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
 ```
 
-The scheduler logs one line per job at boot, then one `schedule.tick` line at
+The scheduler logs one `mounted` line per job at boot, its `trigger` the
+decorator that declared it (`every`, `after` or `cron`), then one
+`schedule.tick` line at
 `info` on `nest_rs::operation` for every tick it fires, whatever the tick came
 to — its `provider`, `method`, `replicas`, `outcome` and `duration_ms`, and the
 `occurrence` a job firing once claimed. It is the same operation line every edge
@@ -439,7 +441,7 @@ crate that declared it, its host struct and its method. The boot line of a job
 firing once names it:
 
 ```text frame="terminal"
- INFO nest_rs::schedule: scheduled job (interval) provider="NotificationsTasks" method="purge_expired" interval_ms=3600000 replicas="one" key="features::NotificationsTasks::purge_expired"
+ INFO nest_rs::schedule: mounted host="NotificationsTasks" method="purge_expired" trigger="every" interval_ms=3600000 replicas="one" key="features::NotificationsTasks::purge_expired"
 ```
 
 So a job declared in a crate every app links — `features`, in the demo — is one

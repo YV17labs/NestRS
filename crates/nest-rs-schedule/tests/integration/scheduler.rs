@@ -351,9 +351,10 @@ async fn a_cron_jobs_boot_line_names_its_zone_and_the_database_release_it_read()
         .expect("both jobs configure");
 
     let line = |provider: &str| {
-        logs.find(nest_rs_schedule::TARGET, "scheduled job (cron)")
+        logs.find(nest_rs_schedule::TARGET, "mounted")
             .into_iter()
-            .find(|line| line.field("provider").as_deref() == Some(provider))
+            .filter(|line| line.field("trigger").as_deref() == Some("cron"))
+            .find(|line| line.field("host").as_deref() == Some(provider))
             .unwrap_or_else(|| panic!("{provider} files a boot line: {:#?}", logs.events()))
     };
     let zoned = line("ZonedHost");
@@ -1379,9 +1380,10 @@ async fn an_occurrence_whose_lock_fails_is_skipped_and_says_so() {
     // Filtered by provider: with no reachable set seeded, every `#[scheduled]`
     // method linked into the binary files a boot line too.
     let boot = logs
-        .find("nest_rs::schedule", "scheduled job (interval)")
+        .find("nest_rs::schedule", "mounted")
         .into_iter()
-        .find(|line| line.field("provider").as_deref() == Some("UnclaimedHost"))
+        .filter(|line| line.field("trigger").as_deref() == Some("every"))
+        .find(|line| line.field("host").as_deref() == Some("UnclaimedHost"))
         .unwrap_or_else(|| panic!("the job files a boot line: {:#?}", logs.events()));
     assert_eq!(
         boot.field("replicas").as_deref(),
@@ -1719,9 +1721,10 @@ async fn a_job_firing_once_names_its_identity_at_boot() {
         .expect("three jobs, three identities");
 
     let booted = |provider: &str| {
-        logs.find(nest_rs_schedule::TARGET, "scheduled job (interval)")
+        logs.find(nest_rs_schedule::TARGET, "mounted")
             .into_iter()
-            .find(|line| line.field("provider").as_deref() == Some(provider))
+            .filter(|line| line.field("trigger").as_deref() == Some("every"))
+            .find(|line| line.field("host").as_deref() == Some(provider))
             .unwrap_or_else(|| panic!("{provider} files its boot line"))
             .field("key")
     };

@@ -35,8 +35,8 @@ One client, one URL, both features' tools:
 
 ```text frame="terminal"
 INFO nest_rs::routes: mounted endpoint kind="mcp" path="/mcp"
-INFO nest_rs::routes: mounted mcp host kind="mcp" path="/mcp" host="AudioTool" tools="transcode_status"
-INFO nest_rs::routes: mounted mcp host kind="mcp" path="/mcp" host="UsersTool" tools="list_people"
+INFO nest_rs::routes: mounted host="AudioTool" method="transcode_status" path="/mcp" tool="transcode_status"
+INFO nest_rs::routes: mounted host="UsersTool" method="list_people" path="/mcp" tool="list_people"
 ```
 
 Nothing in a host changes: it stays a plain `ServerHandler` and never learns

@@ -639,3 +639,20 @@ mod meta_twice {
         assert_eq!(refused.declared_on, "TaggedTwiceResolver::tagged");
     }
 }
+
+/// Each field the boot mounts is one `mounted` line, naming its resolver, the
+/// method it dispatches to and the field, as every edge's unit line does.
+#[tokio::test]
+async fn each_field_mounted_names_its_resolver_and_its_method() {
+    let logs = LogCapture::install();
+    let _app = boot().await;
+
+    let mounted = logs.find(nest_rs_http::target::ROUTES, "mounted");
+    let notes = mounted
+        .iter()
+        .find(|line| line.field("field").as_deref() == Some("notes"))
+        .unwrap_or_else(|| panic!("the field files its mount line: {mounted:#?}"));
+    assert_eq!(notes.field("host").as_deref(), Some("NoteResolver"));
+    assert_eq!(notes.field("method").as_deref(), Some("notes"));
+    assert_eq!(notes.field("kind").as_deref(), Some("query"));
+}

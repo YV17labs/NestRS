@@ -314,6 +314,22 @@ struct UsersService {
 #[module(providers = [SmtpMailer as dyn Mailer, UsersService])]
 struct UsersModule;
 
+/// A module's providers registered is said as such, at register, never as an
+/// initialization no init hook has run yet.
+#[tokio::test]
+async fn a_module_registering_its_providers_says_it_registered() {
+    let logs = LogCapture::install();
+    let _app = App::builder()
+        .module::<UsersModule>()
+        .build()
+        .await
+        .expect("the module boots");
+
+    let registered = logs.expect_one(target::MODULE, "module registered");
+    assert_eq!(registered.field("module").as_deref(), Some("UsersModule"));
+    logs.expect_none(target::MODULE, "module dependencies initialized");
+}
+
 fn refused(built: anyhow::Result<App>) -> anyhow::Error {
     match built {
         Ok(_) => panic!("the boot passed"),

@@ -194,12 +194,12 @@ the full CRUD surface of one `#[crud]` block, before you wrote a single
 handler body, beside the greeting and the development token route:
 
 ```text frame="terminal"
-INFO nest_rs::routes: mounted route controller="DevTokenController" method="POST" path="/auth/dev-token" handler="dev_token"
-INFO nest_rs::routes: mounted route controller="PostsController" method="GET" path="/posts" handler="list"
-INFO nest_rs::routes: mounted route controller="PostsController" method="POST" path="/posts" handler="create"
-INFO nest_rs::routes: mounted route controller="PostsController" method="GET" path="/posts/{id}" handler="get"
-INFO nest_rs::routes: mounted route controller="PostsController" method="PUT" path="/posts/{id}" handler="update"
-INFO nest_rs::routes: mounted route controller="PostsController" method="DELETE" path="/posts/{id}" handler="delete"
+INFO nest_rs::routes: mounted host="DevTokenController" method="dev_token" verb="POST" path="/auth/dev-token"
+INFO nest_rs::routes: mounted host="PostsController" method="list" verb="GET" path="/posts"
+INFO nest_rs::routes: mounted host="PostsController" method="create" verb="POST" path="/posts"
+INFO nest_rs::routes: mounted host="PostsController" method="get" verb="GET" path="/posts/{id}"
+INFO nest_rs::routes: mounted host="PostsController" method="update" verb="PUT" path="/posts/{id}"
+INFO nest_rs::routes: mounted host="PostsController" method="delete" verb="DELETE" path="/posts/{id}"
 ```
 
 Every route is behind the guards you bound on the previous page, so an

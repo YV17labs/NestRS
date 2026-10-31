@@ -966,9 +966,11 @@ async fn the_boot_log_names_the_address_a_client_connects_to() {
     assert_eq!(endpoint.field("path").as_deref(), Some("/v1/ws"));
     assert_eq!(endpoint.field("kind").as_deref(), Some("ws"));
 
-    let message = logs.expect_one("nest_rs::routes", "mounted message");
+    let message = logs.expect_one("nest_rs::routes", "mounted");
     assert_eq!(message.field("path").as_deref(), Some("/v1/ws"));
     assert_eq!(message.field("event").as_deref(), Some("ping"));
+    assert!(message.field("host").is_some(), "{message:?}");
+    assert!(message.field("method").is_some(), "{message:?}");
 }
 
 // Each version's connection guard denies with its own reason, so the response

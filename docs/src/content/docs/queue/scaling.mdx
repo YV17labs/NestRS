@@ -26,7 +26,7 @@ impl NotificationsProcessor {
 The worker states both at boot, beside the retry budget:
 
 ```text frame="terminal"
- INFO nest_rs::queue: registered queue processor processor="NotificationsProcessor::notify" queue="notifications" retries=3 concurrency=4 throttle_limit=120 throttle_window_ms=60000
+ INFO nest_rs::queue: mounted host="NotificationsProcessor" method="notify" queue="notifications" retries=3 concurrency=4 throttle_limit=120 throttle_window_ms=60000
 ```
 
 ## Where each key applies

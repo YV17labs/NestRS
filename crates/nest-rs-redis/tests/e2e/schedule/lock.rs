@@ -338,7 +338,7 @@ async fn the_documented_wiring_claims_each_occurrence_it_fires_in_redis() {
             "the claim expires within the port's one-minute hold, it has {left} ms left"
         );
     }
-    let booted = logs.expect_one(nest_rs_schedule::TARGET, "scheduled job (interval)");
+    let booted = logs.expect_one(nest_rs_schedule::TARGET, "mounted");
     assert_eq!(
         booted.field("key"),
         Some(job("WiredTasks:sweep").replace(':', "::")),
@@ -539,9 +539,9 @@ async fn a_renamed_job_pinning_its_key_shares_its_occurrences_with_the_old_build
     let new = schedule_replica::<after::AfterModule>(schedule_config()).await;
     let both_up_ms = now_ms();
     let booted_key = |provider: &str| {
-        logs.find(nest_rs_schedule::TARGET, "scheduled job (interval)")
+        logs.find(nest_rs_schedule::TARGET, "mounted")
             .into_iter()
-            .find(|line| filed_by(line, &[provider]))
+            .find(|line| line.field("host").as_deref() == Some(provider))
             .and_then(|line| line.field("key"))
     };
     assert_eq!(

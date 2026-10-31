@@ -37,7 +37,7 @@ pub(crate) mod __private {
         tracing::info!(
             target: crate::target::MODULE,
             module = name,
-            "module dependencies initialized",
+            "module registered",
         );
     }
 

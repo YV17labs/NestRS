@@ -143,7 +143,8 @@ and `unique job cancelled` at `info` when a cancel answered `true`.
 ## What boot looks like
 
 The worker logs one `attached` line (from the transport), and each active
-processor one `registered queue processor` line carrying what it declared — its `retries`,
+processor one `mounted` line — its `host`, its `method` and its `queue`, as
+every edge names a unit it serves — carrying what it declared: its `retries`,
 its `concurrency`, and its throttle when it has one. A `#[process]` method that
 compiled in but whose provider isn't reachable from this app's module tree is
 skipped, and said once, at the level its cause earns. Your app's own code is a
@@ -151,7 +152,7 @@ skipped, and said once, at the level its cause earns. Your app's own code is a
 
 ```text frame="terminal"
  INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
- INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3 concurrency=4
+ INFO nest_rs::queue: mounted host="AudioProcessor" method="transcode" queue="audio" retries=3 concurrency=4
  WARN nest_rs::queue: skipped #[process] method: no instance of the provider in
       this app's container processor=ReportJobs::weekly queue=reports
       origin="worker::reports::queue::processor" cause="module_not_imported"

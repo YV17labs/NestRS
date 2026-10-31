@@ -96,3 +96,33 @@ async fn a_process_host_the_worker_serves_is_not_named_at_run() {
     logs.expect_one(target::APP, "app ready");
     logs.expect_none(target::APP, UNSERVED);
 }
+
+/// A `#[process]` method the worker serves is one `mounted` line naming its
+/// host, its method and its queue, as every edge's unit line does.
+#[tokio::test]
+async fn a_process_method_the_worker_serves_is_mounted_naming_its_host_and_method() {
+    let logs = LogCapture::install();
+    let memory = Memory::new(&PLAIN, Duration::from_secs(30));
+    let app = App::builder()
+        .provide(BoundConsumer::new(memory.consumer()))
+        .provide(Jobs::new(Arc::new(memory.clone())))
+        .module::<ServedReindexModule>()
+        .build()
+        .await
+        .expect("the module boots over the in-memory backend");
+    let lifecycle = app
+        .container()
+        .get::<AppLifecycle>()
+        .expect("every app is seeded its lifecycle");
+    let running = tokio::spawn(app.run());
+    assert!(lifecycle.ready().await, "the app serves");
+    running.abort();
+
+    let mounted = logs.expect_one(nest_rs_queue::TARGET, "mounted");
+    assert_eq!(mounted.field("host").as_deref(), Some("ReindexProcessor"));
+    assert_eq!(mounted.field("method").as_deref(), Some("reindex"));
+    assert_eq!(
+        mounted.field("queue").as_deref(),
+        Some("nestrs-module-reindex")
+    );
+}

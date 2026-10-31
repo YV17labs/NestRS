@@ -2140,3 +2140,40 @@ async fn an_endpoints_checks_run_in_an_app_serving_no_http() {
     let said = format!("{refused:#}");
     assert!(said.contains("duplicate MCP tool name"), "{said}");
 }
+
+/// Each prompt a host serves is a `mounted` line of its own, naming the host,
+/// the method and the prompt, never a list joined into one field.
+#[tokio::test]
+async fn each_operation_mounts_on_a_line_of_its_own() {
+    let logs = LogCapture::install();
+    let _app = TestApp::for_module::<PromptsApp>()
+        .await
+        .expect("two prompt hosts on one path boot");
+
+    let mounted: Vec<(Option<String>, Option<String>, Option<String>)> = logs
+        .find(nest_rs_http::target::ROUTES, "mounted")
+        .into_iter()
+        .filter(|line| line.field("path").as_deref() == Some(PROMPTS))
+        .map(|line| {
+            (
+                line.field("host"),
+                line.field("method"),
+                line.field("prompt"),
+            )
+        })
+        .collect();
+    for (host, method) in [("OpeningPrompts", "opening"), ("ClosingPrompts", "closing")] {
+        assert!(
+            mounted.contains(&(
+                Some(host.to_owned()),
+                Some(method.to_owned()),
+                Some(method.to_owned())
+            )),
+            "{mounted:?}"
+        );
+    }
+    assert!(
+        logs.find(nest_rs_http::target::ROUTES, "mounted mcp host")
+            .is_empty()
+    );
+}

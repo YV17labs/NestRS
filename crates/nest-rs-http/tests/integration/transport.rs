@@ -1341,13 +1341,20 @@ async fn a_route_a_controller_registers_by_hand_runs_inside_a_unit_of_work() {
 }
 
 #[tokio::test]
-async fn the_route_log_prints_the_method_token() {
+async fn the_route_log_names_the_host_its_method_and_the_verb() {
     let logs = LogCapture::install();
     let _client = crate::boot::<crate::MethodsModule>().await;
-    let logged: Vec<(String, String)> = logs
-        .find(nest_rs_http::target::ROUTES, "mounted route")
+    let mounted = logs.find(nest_rs_http::target::ROUTES, "mounted");
+    assert!(
+        mounted
+            .iter()
+            .filter(|line| line.field("verb").is_some())
+            .all(|line| line.field("host").as_deref() == Some("MethodsController")),
+        "{mounted:#?}"
+    );
+    let logged: Vec<(String, String)> = mounted
         .into_iter()
-        .filter_map(|line| Some((line.field("handler")?, line.field("method")?)))
+        .filter_map(|line| Some((line.field("method")?, line.field("verb")?)))
         .collect();
     assert_eq!(
         logged,

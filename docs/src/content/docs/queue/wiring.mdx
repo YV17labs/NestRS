@@ -201,13 +201,13 @@ injects something its module doesn't own or import transitively.
 ```text frame="terminal"
 $ nestrs run dev worker
  INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
- INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3 concurrency=4
+ INFO nest_rs::queue: mounted host="AudioProcessor" method="transcode" queue="audio" retries=3 concurrency=4
 ```
 
-One `attached` line per transport, and one `registered` line per discovered
+One `attached` line per transport, and one `mounted` line per discovered
 method that survived the reachability filter. The producer-only API's boot
 opens the same connection, but logs no `attached transport=QueueWorker` and no
-`registered queue processor` line — the worker side never wakes up.
+`mounted` line on `nest_rs::queue` — the worker side never wakes up.
 
 ## Reference
 

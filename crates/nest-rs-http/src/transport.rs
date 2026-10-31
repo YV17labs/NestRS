@@ -527,12 +527,12 @@ impl Transport for HttpTransport {
                     };
                     tracing::info!(
                         target: crate::target::ROUTES,
-                        controller = controller,
-                        method = r.method().as_str(),
+                        host = controller,
+                        method = r.handler(),
+                        verb = r.method().as_str(),
                         path = routes.served(&logged).as_str(),
                         version = version,
-                        handler = r.handler(),
-                        "mounted route",
+                        "mounted",
                     );
                     if r.access_is_implicit(global_guards) {
                         unguarded.push(format!(

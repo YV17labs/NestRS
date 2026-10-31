@@ -206,7 +206,7 @@ async fn the_boot_lines_name_the_paths_served_under_the_prefix() {
     let logs = nest_rs_testing::LogCapture::install();
     let _client = boot_with_prefix(Some("/api")).await;
     let routes: Vec<_> = logs
-        .find(nest_rs_http::target::ROUTES, "mounted route")
+        .find(nest_rs_http::target::ROUTES, "mounted")
         .into_iter()
         .filter_map(|line| line.field("path"))
         .collect();

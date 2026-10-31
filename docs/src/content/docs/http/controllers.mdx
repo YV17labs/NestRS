@@ -70,16 +70,18 @@ Run it:
 ```bash frame="terminal"
 $ nestrs run dev
 …
-2026-06-03T10:14:22Z  INFO nest_rs::routes: mounted route controller="HelloController" method="GET" path="/" handler="hello"
+2026-06-03T10:14:22Z  INFO nest_rs::routes: mounted host="HelloController" method="hello" verb="GET" path="/"
 
 $ curl http://localhost:3000
 Hello World
 ```
 
 **The boot line is authoritative about the served path.** One
-`nest_rs::routes: mounted route` event per route, with the full path in the
-`path` field — the transport logs what it actually mounted, prefix and version
-folded in.
+`nest_rs::routes: mounted` event per route — its `host` the controller, its
+`method` the handler, its `verb` the HTTP method — with the full path in the
+`path` field: the transport logs what it actually mounted, prefix and version
+folded in. Every edge says a unit it serves the same way, so one filter on
+`mounted` lists what the binary serves.
 
 `#[get("/")]` on `#[controller(path = "/greetings")]` serves `/greetings`, and
 `/greetings/` reaches the same handler: the transport edge trims the trailing

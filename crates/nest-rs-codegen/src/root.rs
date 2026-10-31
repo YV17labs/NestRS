@@ -643,7 +643,7 @@ mod tests {
     #[test]
     fn an_attribute_gated_crate_is_checked_once_after_the_expansion() {
         let out = checked(quote! {
-            fn read(ctx: &Ambient) -> Result<(), Error> {
+            fn read(ctx: &Ctx) -> Result<(), Error> {
                 ::nest_rs_authz::class_gate::<::nest_rs_authz::Read, Note>(ctx)?;
                 ::nest_rs_authz::graphql::masked_value_for::<::nest_rs_authz::Read, Note, _>(ctx, 0)
             }

@@ -171,8 +171,8 @@ pub(crate) async fn cancel_unique(
 
 /// The one path every push takes to its backend: check, refuse, mint, seal,
 /// file — and answer with receipts naming the ids the port minted.
-pub(crate) async fn push_values<P: JobProducer + ?Sized>(
-    producer: &P,
+pub(crate) async fn push_values(
+    producer: &dyn JobProducer,
     queue: &QueueName,
     payloads: Vec<Value>,
     options: &PushOptions,
@@ -219,8 +219,8 @@ pub(crate) async fn push_values<P: JobProducer + ?Sized>(
 }
 
 /// [`push_values`] for one job, answering its one receipt.
-pub(crate) async fn push_value<P: JobProducer + ?Sized>(
-    producer: &P,
+pub(crate) async fn push_value(
+    producer: &dyn JobProducer,
     queue: &QueueName,
     payload: Value,
     options: &PushOptions,
@@ -288,8 +288,8 @@ enum Unkeep<'a> {
 }
 
 /// One call to the backend's [`JobProducer::enqueue`], under the net.
-async fn enqueue<P: JobProducer + ?Sized>(
-    producer: &P,
+async fn enqueue(
+    producer: &dyn JobProducer,
     queue: &QueueName,
     envelopes: Vec<Envelope>,
     options: &PushOptions,

@@ -17,8 +17,7 @@ use nest_rs_core::__private::Site;
 use nest_rs_core::{
     Container, ContainerBuilder, Discovery, Handler, Posture, WiringContribution, anyhow,
 };
-use nest_rs_http::__private::normalize_mount_path;
-use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
+use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin, normalize_mount_path};
 use nest_rs_http::{DetachedWork, HttpEndpointMeta, HttpRoutes};
 use rmcp::model::{Prompt, ProtocolVersion, ResourceTemplate, Tool};
 

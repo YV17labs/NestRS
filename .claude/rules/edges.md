@@ -340,7 +340,8 @@ the visible opening.
   gates; `/mcp` is `Gated`, and with neither pool nor endpoint guards it is
   deny-all, said once at boot and per refusal. The one opening is
   `McpModule::for_root(McpAccess::Public)`, written in code at one import —
-  `McpAccess` has no other variant than `Gated`, so no other posture compiles —
+  `McpAccess` has that variant alone, gated being the bare import no line
+  spells, so no other posture compiles —
   (a second is a contested declaration), and a module declaring guards beside it
   fails the boot
   (`.claude/decisions/bridge-joins-the-pool.md`).

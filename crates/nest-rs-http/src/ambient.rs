@@ -13,8 +13,8 @@ use crate::response::{IntoResponse, Response};
 /// credential, rejected it, and admitted the request anyway because the route
 /// is `#[public]`.
 ///
-/// A [`Ambient`] of the `principal` type then answers the deferred `401` instead of
-/// a `500`; any other missing context stays a wiring bug.
+/// An [`Ambient`] of the `principal` type then answers the deferred `401`
+/// instead of a `500`; any other missing context stays a wiring bug.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct RejectedCredential {

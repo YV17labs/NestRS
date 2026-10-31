@@ -88,9 +88,9 @@ impl ResponseError for BodyError {
 /// A domain error implements [`ToProblem`] instead, its one mapping on every
 /// edge, which makes it a `ResponseError` answering the problem it says: a
 /// route returning it answers that problem, and so does `?` on it where a body
-/// answers an [`HttpError`]. This trait is for an answer that is no problem — another protocol's (RFC 6749
-/// §5.2's token error), a challenge, a response of its own — and for the
-/// edge's own refusals ([`BodyError`]).
+/// answers an [`HttpError`]. This trait is for an answer that is no problem —
+/// another protocol's (RFC 6749 §5.2's token error), a challenge, a response of
+/// its own — and for the edge's own refusals ([`BodyError`]).
 ///
 /// Rendering it files nothing: what a `5xx` answer keeps from the client of
 /// its chain is filed by the edge, once the answer is final, by the status it

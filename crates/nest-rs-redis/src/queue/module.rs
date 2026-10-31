@@ -5,12 +5,11 @@
 
 use std::borrow::Borrow;
 use std::marker::PhantomData;
-use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::{ConfigModule, ConfigSetup, ForInstance, Namespaced, instance_namespace};
 use nest_rs_core::{Collecting, ContainerBuilder, Instance, Module, Registering, Unnamed};
-use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, JobProducer, Jobs};
+use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, Jobs};
 
 use super::consumer::RedisQueueConsumer;
 use super::{LEASE, RedisQueueConfig, RedisQueueProducer};
@@ -41,9 +40,10 @@ impl RedisQueueModule {
 
 impl<I: Instance> RedisQueueModule<I> {
     /// The producer, as the port's [`Jobs`], and the consumer, each bound under
-    /// the port's type and declared, so a second queue backend imported beside this one fails the
-    /// boot naming both ([`BACKEND_REMEDY`]); and the port's net over the
-    /// connection, which the boot holds the connection's budget under.
+    /// the port's type and declared, so a second queue backend imported beside
+    /// this one fails the boot naming both ([`BACKEND_REMEDY`]); and the port's
+    /// net over the connection, which the boot holds the connection's budget
+    /// under.
     fn bind(builder: ContainerBuilder) -> ContainerBuilder {
         RedisConnection::<I>::netted(builder, "the queue port", BACKEND_TIMEOUT)
             .provide_factory_after::<RedisQueueProducer<I>, (RedisConnection<I>,), _, _>(
@@ -62,7 +62,7 @@ impl<I: Instance> RedisQueueModule<I> {
                     let producer = container.get::<RedisQueueProducer<I>>().ok_or_else(|| {
                         anyhow::anyhow!("RedisQueueModule: RedisQueueProducer was not resolved")
                     })?;
-                    Ok(Jobs::new(producer as Arc<dyn JobProducer>))
+                    Ok(Jobs::new(producer))
                 },
             )
             .provide_declared_factory_after::<

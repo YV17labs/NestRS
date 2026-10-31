@@ -15,7 +15,7 @@ use object_store::path::Path;
 use object_store::{GetOptions, GetRange, GetResult};
 
 use crate::client::bounded;
-use crate::config::READ_TIMEOUT;
+use crate::config::StorageConfig;
 use crate::error::{Result, StorageError};
 use crate::store::Store;
 
@@ -142,7 +142,7 @@ fn stalled(read_timeout: Duration, backend: &'static str) -> object_store::Error
             format!(
                 "the download sent nothing for {read_timeout:?} while it was read — the bound {} \
                  sets",
-                nest_rs_config::var_name("storage", READ_TIMEOUT.key()),
+                StorageConfig::READ_TIMEOUT.var("storage"),
             ),
         )),
     }

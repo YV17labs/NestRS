@@ -28,7 +28,6 @@ use redis::{
 };
 
 use crate::cluster::{ClusterLink, SlotLink};
-use crate::config::CONNECT_TIMEOUT;
 use crate::error::RedisError;
 use crate::instance::RedisInstance;
 use crate::script::{Invocation, RedisScript};
@@ -189,12 +188,8 @@ impl<I: Instance> RedisConnection<I> {
     /// carry `I`'s name and its refusals name `I`'s variables.
     pub(crate) async fn open(config: &RedisConfig) -> Result<Self, RedisError> {
         let instance = RedisInstance::of::<I>();
-        let budget = CONNECT_TIMEOUT
-            .check(
-                instance.namespace(),
-                CONNECT_TIMEOUT.field(),
-                config.connect_timeout,
-            )
+        let budget = RedisConfig::CONNECT_TIMEOUT
+            .check(instance.namespace(), config.connect_timeout)
             .map_err(RedisError::Budget)?;
         let link = match RedisUrl::parse(config.url.expose_secret(), &instance)? {
             RedisUrl::Standalone(info) => Link::Standalone(
@@ -253,11 +248,7 @@ impl<I: Instance> RedisConnection<I> {
     pub(crate) fn declared_budget() -> nest_rs_core::Budget {
         nest_rs_core::Budget::of::<Self>(
             "the Redis connection",
-            nest_rs_config::var_name_or_field(
-                RedisInstance::of::<I>().namespace(),
-                CONNECT_TIMEOUT.key(),
-                CONNECT_TIMEOUT.field(),
-            ),
+            RedisConfig::CONNECT_TIMEOUT.var_or_field(RedisInstance::of::<I>().namespace()),
             |conn| Some(conn.budget()),
         )
     }

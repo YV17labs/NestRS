@@ -83,6 +83,58 @@ impl<T: FromSetting> ConfigField for Vec<T> {
     }
 }
 
+/// A `#[config]` field as the environment and code name it: the key its
+/// variable is read under — its name in SCREAMING_SNAKE — and the path code
+/// pins it through, `Config::field`.
+///
+/// `#[config(with = reader)]` hands it to its reader, so a value set in code
+/// is refused naming the field it came from, and a [`BoundedSetting`](crate::BoundedSetting)
+/// holds one: both are read off the struct, never typed.
+///
+/// ```
+/// use nest_rs_config::{ConfigError, ConfigService, Field, Result};
+///
+/// fn even(env: &ConfigService, field: Field, base: u32) -> Result<u32> {
+///     let value = env.parse::<u32>(field.key())?.unwrap_or(base);
+///     if value % 2 == 1 {
+///         return Err(ConfigError::parse(
+///             env.var_name(field.key()),
+///             format!("must be even, as must `{}` set in code", field.path()),
+///         ));
+///     }
+///     Ok(value)
+/// }
+///
+/// let env = ConfigService::with_vars("fixture", []);
+/// let refused = even(&env, Field::new("SLOTS", "FixtureConfig::slots"), 3).unwrap_err();
+/// assert!(refused.to_string().contains("`FixtureConfig::slots` set in code"));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Field {
+    key: &'static str,
+    path: &'static str,
+}
+
+impl Field {
+    /// The field read under `key` and pinned through `path` — what
+    /// `#[config]` writes from the struct, and what a hand-written overlay
+    /// writes for itself.
+    pub const fn new(key: &'static str, path: &'static str) -> Self {
+        Self { key, path }
+    }
+
+    /// The key its variable is read under, in the namespace — `PORT`; a
+    /// duration's variable carries its unit after it.
+    pub const fn key(&self) -> &'static str {
+        self.key
+    }
+
+    /// The path code pins it through — `HttpConfig::port`.
+    pub const fn path(&self) -> &'static str {
+        self.path
+    }
+}
+
 /// A structured value under `key` decoded as JSON over `base`: what
 /// `#[config(json)]` expands to. Not API.
 #[doc(hidden)]

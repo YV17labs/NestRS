@@ -47,13 +47,15 @@ mod tls;
 pub mod unclaimed;
 
 pub use authorities::system_authorities;
-pub use bounds::{Bound, BoundedDuration, DurationBounds, DurationUnit, Floor};
+pub use bounds::{
+    Bound, BoundedField, BoundedSetting, CountBounds, DurationBounds, DurationUnit, Floor,
+};
 pub use config::{Config, Namespaced, read};
 pub use dotenv::load_cascade;
 pub use endpoint::endpoint_shown;
 pub use environment::Environment;
 pub use error::{ConfigError, ConfigNotResolvedError, Result};
-pub use field::ConfigField;
+pub use field::{ConfigField, Field};
 pub use for_instance::ForInstance;
 pub use material::{Material, read_material};
 pub use module::{ConfigModule, ConfigSetup};
@@ -73,11 +75,14 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 ///
 /// The namespace is the stem of the file's path below `src/`, read and never
 /// chosen (`redis/src/queue/config.rs` reads `"redis__queue"`). A field says
-/// how it is read when its type cannot: `bounds = CONST` names the
-/// [`DurationBounds`] a `Duration`, or an `Option<Duration>` whose `None` is
-/// off, is held to, its key carrying the unit; `json` decodes a structured
-/// value; `count` reads `0` as unlimited, `None`; `with = path` names a
-/// `fn(&ConfigService, &str, T) -> Result<T>`. On the struct, `defaults =
+/// how it is read when its type cannot: `bounds = RANGE` names the range — a
+/// [`DurationBounds`] for a `Duration` or an `Option<Duration>` whose `None`
+/// is off, a [`CountBounds`] for a `usize` — and binds it to the field as the
+/// associated [`BoundedSetting`] named for it (`ReportsConfig::WINDOW`), its
+/// key the field's name with a duration's unit after it; `json` decodes a
+/// structured value; `count` reads `0` as unlimited, `None`; `with = path`
+/// names a `fn(&ConfigService, Field, T) -> Result<T>`, handed the field's key
+/// and path ([`Field`]). On the struct, `defaults =
 /// path` names the profile-aware [`Config::defaults`], `validate = "manual"`
 /// leaves the `Validate` derive to a hand-written impl, and `from_env =
 /// "manual"` the whole `impl Config`, for an overlay whose fields depend on
@@ -89,8 +94,6 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 /// use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Namespaced, config};
 ///
 /// const WINDOW: DurationBounds = DurationBounds::secs(
-///     "WINDOW_SECS",
-///     "ReportsConfig::window",
 ///     Floor::Units(Bound::new(1, "a shorter window counts nothing")),
 ///     Bound::new(3600, "past an hour the report is stale before it is read"),
 /// );
@@ -112,6 +115,7 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 /// }
 ///
 /// assert_eq!(<ReportsConfig as Namespaced>::NAMESPACE, "reports");
+/// assert_eq!(ReportsConfig::WINDOW.key(), "WINDOW_SECS");
 /// let env = ConfigService::with_vars(
 ///     "reports",
 ///     [("PAGE_SIZE", "20"), ("RECIPIENTS", "ops@example.com"), ("WINDOW_SECS", "300")],
@@ -129,7 +133,6 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::bounds::{BoundedField, reads_field};
     pub use crate::dotenv::load_app_cascade;
     pub use crate::endpoint::is_loopback;
     pub use crate::field::overlay_json;

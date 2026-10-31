@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use nest_rs_config::{ConfigError, ConfigService, Environment, Result, config};
+use nest_rs_config::{ConfigError, ConfigService, Environment, Field, Result, config};
 use nest_rs_core::AppIdentity;
 
 use crate::contact::OpenApiContact;
@@ -121,7 +121,7 @@ impl OpenApiConfig {
 /// The contact, its vocabulary's `CONTACT_*` keys; none when every part is unset.
 fn contact(
     env: &ConfigService,
-    _key: &str,
+    _: Field,
     base: Option<OpenApiContact>,
 ) -> Result<Option<OpenApiContact>> {
     let base = base.unwrap_or_default();
@@ -138,7 +138,7 @@ fn contact(
 /// stand without one; it is known by its SPDX identifier or its URL, never both.
 fn license(
     env: &ConfigService,
-    _key: &str,
+    _: Field,
     base: Option<OpenApiLicense>,
 ) -> Result<Option<OpenApiLicense>> {
     let identifier = env.get("LICENSE_IDENTIFIER")?;

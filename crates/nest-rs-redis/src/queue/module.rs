@@ -12,7 +12,7 @@ use nest_rs_core::{Collecting, ContainerBuilder, Instance, Module, Registering, 
 use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, Jobs};
 
 use super::consumer::RedisQueueConsumer;
-use super::{LEASE, RedisQueueConfig, RedisQueueProducer};
+use super::{RedisQueueConfig, RedisQueueProducer};
 use crate::instance::RedisInstance;
 use crate::{RedisConnection, RedisError};
 
@@ -107,10 +107,8 @@ fn renewable<I: Instance>(lease: Duration, budget: Duration) -> Result<(), Redis
         Err(RedisError::BudgetPastLease {
             budget,
             lease,
-            lease_var: nest_rs_config::var_name(
-                &instance_namespace::<I>(RedisQueueConfig::NAMESPACE),
-                LEASE.key(),
-            ),
+            lease_var: RedisQueueConfig::LEASE
+                .var(&instance_namespace::<I>(RedisQueueConfig::NAMESPACE)),
             connect_timeout_var: RedisInstance::of::<I>().connect_timeout_var(),
         })
     }

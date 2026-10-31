@@ -1,12 +1,13 @@
 //! The overlay `#[config]` writes: `Config::from_env`, one field at a time, each
-//! key the field's name and each reader chosen by the field's type.
+//! key the field's name and each reader chosen by the field's type — and, per
+//! bounded field, the `BoundedSetting` it reads through, named for the field.
 
 use nest_rs_codegen::Grammar;
-use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{quote, quote_spanned};
+use proc_macro2::{Group, Span, TokenStream as TokenStream2, TokenTree};
+use quote::{ToTokens, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::spanned::Spanned;
-use syn::{Expr, Ident, ItemStruct, Path, Type};
+use syn::{Expr, Ident, ItemStruct, LitStr, Path, Type, Visibility};
 
 /// Every key `#[config]` takes on a field, in the order its refusals list them.
 pub(crate) const FIELD: Grammar =
@@ -23,19 +24,22 @@ fn the_structs_key(key: &str) -> Option<String> {
 enum Reader {
     /// By its type, through `ConfigField`.
     Typed,
-    /// A `Duration` or an `Option<Duration>` through the `DurationBounds` named.
+    /// Through the range named, bound to the field: a `Duration` or an
+    /// `Option<Duration>` held to a `DurationBounds`, a `usize` to a
+    /// `CountBounds`.
     Bounds(Expr),
     /// A structured value, as JSON.
     Json,
     /// An `Option<usize>` whose `0` is unlimited.
     Count,
-    /// Through the function named, `fn(&ConfigService, &str, T) -> Result<T>`.
+    /// Through the function named, `fn(&ConfigService, Field, T) -> Result<T>`.
     With(Path),
 }
 
-/// One field: its ident, its type, its key, and how it is read.
+/// One field: its ident, its visibility, its type, its key, and how it is read.
 struct Field {
     ident: Ident,
+    vis: Visibility,
     ty: Type,
     key: String,
     reader: Reader,
@@ -81,6 +85,7 @@ impl Fields {
             let reader = take_reader(&mut field.attrs)?;
             fields.push(Field {
                 ident,
+                vis: field.vis.clone(),
                 ty: field.ty.clone(),
                 key: name.to_ascii_uppercase(),
                 reader,
@@ -161,7 +166,7 @@ fn take_reader(attrs: &mut Vec<syn::Attribute>) -> syn::Result<Reader> {
                         return Err(syn::Error::new_spanned(
                             other,
                             "#[config] `with` takes the path of a \
-                             `fn(&ConfigService, &str, T) -> Result<T>`, e.g. \
+                             `fn(&ConfigService, Field, T) -> Result<T>`, e.g. \
                              `with = pseudonym_key`",
                         ));
                     }
@@ -177,56 +182,95 @@ fn take_reader(attrs: &mut Vec<syn::Attribute>) -> syn::Result<Reader> {
 }
 
 /// `impl Config`, its `from_env` the overlay of every field, and `defaults`
-/// when the struct named one; then a compile-time check per bounded field.
+/// when the struct named one; then, per bounded field, the setting it reads
+/// through, an associated constant named for the field.
 pub(crate) fn overlay(item: &ItemStruct, fields: &Fields, defaults: Option<&Path>) -> TokenStream2 {
     let name = &item.ident;
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     // Mixed-site: a field named `env` or `base` cannot shadow them.
     let env = Ident::new("env", Span::mixed_site());
     let base = Ident::new("base", Span::mixed_site());
+    let field_of = |field: &Field| {
+        let path = LitStr::new(
+            &format!("{}::{}", name.unraw(), field.ident.unraw()),
+            field.ident.span(),
+        );
+        let key = &field.key;
+        quote! { ::nest_rs_config::Field::new(#key, #path) }
+    };
     let reads = fields.0.iter().map(|field| {
         let Field {
             ident,
             ty,
             key,
             reader,
+            ..
         } = field;
         let read = match reader {
             Reader::Typed => quote_spanned! {ty.span()=>
                 <#ty as ::nest_rs_config::ConfigField>::overlay(#env, #key, #base.#ident)
             },
-            Reader::Bounds(bounds) => quote_spanned! {ty.span()=>
-                <#ty as ::nest_rs_config::__private::BoundedField>::overlay_within(
-                    &#bounds, #env, #base.#ident,
-                )
-            },
+            Reader::Bounds(_) => {
+                let at = ty.span();
+                let setting = Ident::new(&field.key, at);
+                let (env, base, ident) =
+                    (located(&env, at), located(&base, at), located(ident, at));
+                quote_spanned! {at=>
+                    <#ty as ::nest_rs_config::BoundedField>::read(
+                        &Self::#setting, #env, #base.#ident,
+                    )
+                }
+            }
             Reader::Json => quote! {
                 ::nest_rs_config::__private::overlay_json::<#ty>(#env, #key, #base.#ident)
             },
             Reader::Count => quote_spanned! {ty.span()=>
                 ::nest_rs_config::ConfigService::count(#env, #key, #base.#ident)
             },
-            Reader::With(path) => quote_spanned! {path.span()=>
-                #path(#env, #key, #base.#ident)
-            },
+            Reader::With(path) => {
+                let field = field_of(field);
+                quote_spanned! {path.span()=>
+                    #path(#env, #field, #base.#ident)
+                }
+            }
         };
         quote! { #ident: #read? }
     });
-    let checks = fields.0.iter().filter_map(|field| {
-        let Reader::Bounds(bounds) = &field.reader else {
-            return None;
-        };
-        let (key, ident) = (&field.key, field.ident.unraw().to_string());
-        Some(quote_spanned! {bounds.span()=>
-            const _: () = ::core::assert!(
-                ::nest_rs_config::__private::reads_field(
-                    &#bounds, #key, ::core::stringify!(#name), #ident,
-                ),
-                "the `DurationBounds` a `#[config(bounds = …)]` names reads the field it \
-                 bounds: its key is the field's name in SCREAMING_SNAKE with its unit after \
-                 it (`_SECS`, `_MS`), and its field is `Config::field`",
+    let settings: Vec<TokenStream2> = fields
+        .0
+        .iter()
+        .filter_map(|field| {
+            let Reader::Bounds(bounds) = &field.reader else {
+                return None;
+            };
+            let (vis, ty, setting) = (&field.vis, &field.ty, setting_ident(field));
+            let doc = format!(
+                "`{}`'s range, bound to the variable it is read from and the field that pins \
+                 it: a `BoundedSetting` over the field's type.",
+                field.ident.unraw()
             );
+            let field = relocated(field_of(field), ty.span());
+            // Every token naming the field's type goes through `BoundedField`
+            // at that type's location, so rustc says a type no range holds, or
+            // a range of the other kind, once — at the field.
+            let at = ty.span();
+            let range = Ident::new("__NESTRS_RANGE", at);
+            let bounds = relocated(bounds.to_token_stream(), at);
+            Some(quote_spanned! {at=>
+                #[doc = #doc]
+                #vis const #setting: <#ty as ::nest_rs_config::BoundedField>::Setting = {
+                    const #range: <#ty as ::nest_rs_config::BoundedField>::Bounds = #bounds;
+                    ::nest_rs_config::BoundedSetting::new(#range, #field)
+                };
+            })
         })
+        .collect();
+    let settings = (!settings.is_empty()).then(|| {
+        quote! {
+            impl #impl_generics #name #ty_generics #where_clause {
+                #(#settings)*
+            }
+        }
     });
     // Read whole, a field's variable sets everything a refusal finds inside it.
     let whole: Vec<String> = fields
@@ -266,6 +310,35 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields, defaults: Option<&Path
             #defaults
         }
 
-        #(#checks)*
+        #settings
     }
+}
+
+/// The associated constant a bounded field's setting is bound to: the field's
+/// name in SCREAMING_SNAKE, its key's stem, at the field type's location.
+fn setting_ident(field: &Field) -> Ident {
+    Ident::new(&field.key, field.ty.span())
+}
+
+/// `ident`, its hygiene kept, at `at`'s location.
+fn located(ident: &Ident, at: Span) -> Ident {
+    let mut ident = ident.clone();
+    ident.set_span(ident.span().located_at(at));
+    ident
+}
+
+/// `tokens`, each keeping its hygiene, at `at`'s location.
+fn relocated(tokens: TokenStream2, at: Span) -> TokenStream2 {
+    tokens
+        .into_iter()
+        .map(|mut tree| {
+            if let TokenTree::Group(group) = &tree {
+                let mut moved = Group::new(group.delimiter(), relocated(group.stream(), at));
+                moved.set_span(group.span().located_at(at));
+                return TokenTree::Group(moved);
+            }
+            tree.set_span(tree.span().located_at(at));
+            tree
+        })
+        .collect()
 }

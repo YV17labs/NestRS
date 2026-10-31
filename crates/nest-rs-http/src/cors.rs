@@ -13,7 +13,9 @@ use http::header::{
     ACCESS_CONTROL_REQUEST_HEADERS, ACCESS_CONTROL_REQUEST_METHOD, ORIGIN,
 };
 use http::{HeaderName, HeaderValue, Method, StatusCode};
-use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Namespaced};
+use nest_rs_config::{
+    Bound, BoundedSetting, ConfigService, DurationBounds, Field, Floor, Namespaced,
+};
 
 use crate::endpoint::Endpoint;
 use crate::error::{HttpError, ORIGIN_GRAMMAR};
@@ -23,19 +25,21 @@ use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 use crate::vary::vary_on;
 
-/// The preflight lifetime's range, the variable that sets it, and why.
-const MAX_AGE: DurationBounds = DurationBounds::secs(
-    "CORS_MAX_AGE_SECS",
-    "HttpCors::max_age",
-    Floor::UnitsOrOff(Bound::new(
-        1,
-        "a lifetime under a second caches no preflight, which leaving it off already says",
-    )),
-    Bound::new(
-        24 * 60 * 60,
-        "every browser caps a preflight's cache at a day or less (Firefox a day, Chromium \
-         two hours), so a longer lifetime is a unit slip",
+/// The preflight lifetime: its range, the vocabulary's key it is read under,
+/// and the field that pins it.
+const MAX_AGE: BoundedSetting<Option<Duration>> = BoundedSetting::new(
+    DurationBounds::secs(
+        Floor::Units(Bound::new(
+            1,
+            "a lifetime under a second caches no preflight, which leaving it off already says",
+        )),
+        Bound::new(
+            24 * 60 * 60,
+            "every browser caps a preflight's cache at a day or less (Firefox a day, Chromium \
+             two hours), so a longer lifetime is a unit slip",
+        ),
     ),
+    Field::new("CORS_MAX_AGE", "HttpCors::max_age"),
 );
 
 /// Cross-Origin Resource Sharing policy. `origins` empty ⇒ no CORS layer
@@ -602,9 +606,7 @@ impl HttpCors {
             headers: env.list(CorsList::Headers.key(), base.headers)?,
             exposed_headers: env.list(CorsList::ExposedHeaders.key(), base.exposed_headers)?,
             credentials: env.flag("CORS_CREDENTIALS", base.credentials)?,
-            max_age: MAX_AGE
-                .read_optional(env, base.max_age)?
-                .map(|read| read.value),
+            max_age: MAX_AGE.read(env, base.max_age)?,
         }))
     }
 }

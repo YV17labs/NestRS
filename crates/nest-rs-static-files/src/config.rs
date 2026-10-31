@@ -6,14 +6,14 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use nest_rs_config::{Bound, ConfigError, ConfigService, DurationBounds, Floor, Result, config};
+use nest_rs_config::{
+    Bound, ConfigError, ConfigService, DurationBounds, Field, Floor, Result, config,
+};
 
 /// How long a client may reuse a file before it asks again, the variable that
 /// sets it, and why its range ends where it does.
 pub(crate) const MAX_AGE: DurationBounds = DurationBounds::secs(
-    "MAX_AGE_SECS",
-    "StaticFilesConfig::max_age",
-    Floor::UnitsOrOff(Bound::new(
+    Floor::Units(Bound::new(
         1,
         "a lifetime under a second is a revalidation on every request, which is what \
          leaving it off already says",
@@ -64,15 +64,18 @@ impl Default for StaticFilesConfig {
 }
 
 /// The mount path, held to a literal the router matches as written.
-fn mount_path(env: &ConfigService, key: &str, base: String) -> Result<String> {
-    let path = env.get(key)?.unwrap_or(base);
+fn mount_path(env: &ConfigService, field: Field, base: String) -> Result<String> {
+    let path = env.get(field.key())?.unwrap_or(base);
     nest_rs_http::__private::literal_mount_path(&path).ok_or_else(|| {
         ConfigError::parse(
-            env.var_name(key),
-            "must be a literal URL path such as `/` or `/assets`, which the router matches as \
-             written: no empty, `.` or `..` segment, no template syntax (`{` `}`) nor what the \
-             router reads as a parameter (`:` `*` `<`), and none of `%` `?` `#` `\\` — set \
-             here, or as `StaticFilesConfig::path` in code",
+            env.var_name(field.key()),
+            format!(
+                "must be a literal URL path such as `/` or `/assets`, which the router matches \
+                 as written: no empty, `.` or `..` segment, no template syntax (`{{` `}}`) nor \
+                 what the router reads as a parameter (`:` `*` `<`), and none of `%` `?` `#` \
+                 `\\` — set here, or as `{}` in code",
+                field.path()
+            ),
         )
     })
 }

@@ -1,14 +1,9 @@
-//! The bounds a field names read that field: a `DurationBounds` whose key is
-//! another field's is a compile error, never a variable read under a key the
-//! field does not spell.
-
-use std::time::Duration;
+//! A count is held to a `CountBounds`: a `DurationBounds` named on a `usize`
+//! is a compile error at the field naming both, never a count read in seconds.
 
 use nest_rs::config::{Bound, DurationBounds, Floor, config};
 
 const LEASE: DurationBounds = DurationBounds::secs(
-    "LEASE_SECS",
-    "KilnConfig::lease",
     Floor::Units(Bound::new(1, "a shorter lease renews in a loop")),
     Bound::new(3600, "past an hour it is a unit slip"),
 );
@@ -17,12 +12,12 @@ const LEASE: DurationBounds = DurationBounds::secs(
 #[derive(Clone)]
 struct KilnConfig {
     #[config(bounds = LEASE)]
-    window: Duration,
+    kilns: usize,
 }
 
 impl Default for KilnConfig {
     fn default() -> Self {
-        Self { window: Duration::from_secs(60) }
+        Self { kilns: 2 }
     }
 }
 

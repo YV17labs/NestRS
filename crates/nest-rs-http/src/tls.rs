@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use nest_rs_config::__private::{PairRefusal, certified_key as checked_pair, crypto_provider};
-use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Setting};
+use nest_rs_config::{Bound, BoundedSetting, ConfigService, DurationBounds, Field, Floor, Setting};
 use nest_rs_core::Secret;
 use rustls::ServerConfig;
 use rustls::crypto::aws_lc_rs;
@@ -21,21 +21,24 @@ nest_rs_core::inventory::submit! {
 /// How often a file-sourced certificate is re-read.
 const DEFAULT_RELOAD: Duration = Duration::from_secs(60);
 
-const RELOAD: DurationBounds = DurationBounds::secs(
-    "TLS_RELOAD_SECS",
-    "HttpTls::with_reload",
-    Floor::UnitsOrOff(Bound::new(
-        1,
-        "the kernel's timers and the files' own write settle are not finer than that, and \
-         a renewal is not that urgent",
-    )),
-    Bound::new(
-        24 * 60 * 60,
-        "a certificate replaced on disk is served only once the next read finds it, and a \
-         replacement after a key compromise is due within a day of it (CA/Browser Forum \
-         Baseline Requirements §4.9.1.1) — a watch rarer than that serves the revoked one \
-         past it",
+/// The watch's interval: its range, the vocabulary's key it is read under,
+/// and the method that sets it in code.
+const RELOAD: BoundedSetting<Option<Duration>> = BoundedSetting::new(
+    DurationBounds::secs(
+        Floor::Units(Bound::new(
+            1,
+            "the kernel's timers and the files' own write settle are not finer than that, and \
+             a renewal is not that urgent",
+        )),
+        Bound::new(
+            24 * 60 * 60,
+            "a certificate replaced on disk is served only once the next read finds it, and a \
+             replacement after a key compromise is due within a day of it (CA/Browser Forum \
+             Baseline Requirements §4.9.1.1) — a watch rarer than that serves the revoked one \
+             past it",
+        ),
     ),
+    Field::new("TLS_RELOAD", "HttpTls::with_reload"),
 );
 
 /// Where the PEM material came from: only files are reloaded.
@@ -146,7 +149,7 @@ impl HttpTls {
             (_, _, Some(base)) => base.reload,
             _ => None,
         };
-        let reload = RELOAD.read_optional(env, overlaid)?.map(|read| read.value);
+        let reload = RELOAD.read(env, overlaid)?;
         match (cert, key) {
             (Some(Setting { value: cert, .. }), Some(Setting { value: key, .. })) => {
                 // A mixed pair is not watched: reloading one half would pair a
@@ -179,13 +182,10 @@ impl HttpTls {
     pub(crate) fn into_listener(self) -> Result<ListenerTls> {
         let current = certified_key(&self.cert, self.key.expose_secret())?;
         // A pair built in code reaches here without a config read.
-        if let Some(interval) = self.reload {
-            RELOAD.check(
-                <crate::HttpConfig as nest_rs_config::Namespaced>::NAMESPACE,
-                RELOAD.field(),
-                interval,
-            )?;
-        }
+        RELOAD.check(
+            <crate::HttpConfig as nest_rs_config::Namespaced>::NAMESPACE,
+            self.reload,
+        )?;
         let resolver = Arc::new(ReloadingResolver {
             current: RwLock::new(Arc::new(current)),
         });

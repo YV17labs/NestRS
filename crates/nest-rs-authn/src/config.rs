@@ -3,7 +3,8 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Bound, ClientTls, ConfigService, DurationBounds, Floor, Namespaced, config, endpoint_shown,
+    Bound, ClientTls, ConfigService, DurationBounds, Field, Floor, Namespaced, config,
+    endpoint_shown,
 };
 use nest_rs_core::Secret;
 
@@ -12,10 +13,8 @@ use crate::error::AuthError;
 use crate::service::one_of;
 use crate::{Algorithm, JwtKey, JwtOptions};
 
-/// The token lifetime's range, the variable that sets it, and why.
-pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds::secs(
-    "EXPIRES_IN_SECS",
-    "AuthnConfig::expires_in",
+/// The token lifetime's range, and why.
+const EXPIRES_IN: DurationBounds = DurationBounds::secs(
     Floor::Units(Bound::new(
         1,
         "a token that expires as it is minted is refused by every verifier, so every \
@@ -29,10 +28,8 @@ pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds::secs(
     ),
 );
 
-/// The clock-skew leeway's range, the variable that sets it, and why.
-pub(crate) const LEEWAY: DurationBounds = DurationBounds::secs(
-    "LEEWAY_SECS",
-    "AuthnConfig::leeway",
+/// The clock-skew leeway's range, and why.
+const LEEWAY: DurationBounds = DurationBounds::secs(
     Floor::Units(Bound::new(0, "no leeway is a leeway")),
     Bound::new(
         5 * 60,
@@ -175,10 +172,10 @@ impl std::fmt::Debug for AuthnConfig {
 /// names — as the text the JWT library parses, over `base`.
 fn pem_text<T: From<String>>(
     env: &ConfigService,
-    key: &str,
+    field: Field,
     base: Option<T>,
 ) -> nest_rs_config::Result<Option<T>> {
-    let Some(pem) = env.material(key)? else {
+    let Some(pem) = env.material(field.key())? else {
         return Ok(base);
     };
     match std::str::from_utf8(&pem.value.bytes) {
@@ -193,10 +190,10 @@ fn pem_text<T: From<String>>(
 /// [`JwtService::new`](crate::JwtService::new)'s to judge.
 fn algorithms(
     env: &ConfigService,
-    key: &str,
+    field: Field,
     base: Option<Vec<Algorithm>>,
 ) -> nest_rs_config::Result<Option<Vec<Algorithm>>> {
-    let Some(setting) = env.setting(key)? else {
+    let Some(setting) = env.setting(field.key())? else {
         return Ok(base);
     };
     let known = || one_of(algorithms_of(Family::ALL));

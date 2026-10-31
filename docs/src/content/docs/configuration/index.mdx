@@ -39,9 +39,7 @@ use std::time::Duration;
 use nest_rs::config::{Bound, DurationBounds, Floor, config};
 
 const CACHE_TTL: DurationBounds = DurationBounds::secs(
-    "CACHE_TTL_SECS",
-    "PostsConfig::cache_ttl",
-    Floor::UnitsOrOff(Bound::new(1, "a shorter lifetime caches nothing")),
+    Floor::Units(Bound::new(1, "a shorter lifetime caches nothing")),
     Bound::new(3600, "past an hour a post edited meanwhile is served stale"),
 );
 
@@ -98,20 +96,20 @@ three lines saying what a refused value was expected to be.
 
 | Key | Reads |
 |---|---|
-| `bounds = CONST` | A `Duration`, or an `Option<Duration>` whose `None` turns it off — the shape the bounds' floor reads into, refused at the read otherwise — held to the `DurationBounds` named, whose key carries the unit (`CACHE_TTL_SECS`) and must be the field's, checked at compile time |
+| `bounds = RANGE` | A `Duration`, or an `Option<Duration>` whose `None` turns it off, held to the `DurationBounds` named — its variable the field's name with the unit after it (`CACHE_TTL_SECS`) — or a `usize` held to a `CountBounds`; bound to the field as `PostsConfig::CACHE_TTL`, the one place a sentence or a check reads its key and path |
 | `json` | A structured value — a list of records, a map — written as JSON |
 | `count` | An `Option<usize>` where `0` from the environment is `None`, unlimited, and a pinned `Some(0)` is refused |
-| `with = path` | Through a function of yours, `fn(&ConfigService, &str, T) -> Result<T>`, handed the field's key and base |
+| `with = path` | Through a function of yours, `fn(&ConfigService, Field, T) -> Result<T>`, handed the field — its key and the path code pins it through — and its base |
 
 **A duration is a `Duration`; `None` is off and nothing else.** A field never
 names its unit — the key does, through its bounds — and its default sits in
 `Default`, never behind a `None` the code would read as "the default". A
 field named `ttl_secs`, or a `Duration` with no bounds, is a compile error
-saying so, and the read refuses a field whose shape is not its bounds' floor:
-an `Option<Duration>` under bounds with no off, or a `Duration` under
-`Floor::UnitsOrOff`. A count follows the same rule: a plain number with its
-default in `Default`, or an `Option` whose `None` is unlimited, a pinned
-`Some(0)` refused.
+saying so. Whether `0` turns it off is the field's type alone: an
+`Option<Duration>` reads `0` as `None` and refuses a pinned zero, a `Duration`
+holds `0` to the floor, so one range serves both. A count follows the same
+rule: a plain number with its default in `Default`, or an `Option` whose
+`None` is unlimited, a pinned `Some(0)` refused.
 
 ## The dual-path rule
 
@@ -270,19 +268,27 @@ a `Result`, because reading can fail before parsing does.
 
 **A duration is read through its bounds, never through `parse`.** Declare a
 `nest_rs::config::DurationBounds` beside the config with
-`DurationBounds::secs` or `DurationBounds::millis` — the key, the field that
-pins it, a floor and a ceiling each with the sentence a refusal gives — and
-name it on the field, `#[config(bounds = CACHE_TTL)]`, as the example above
-does: a value outside the range fails the boot naming the variable, from the
-environment or pinned in code alike, in the framework's own words. The
-constructor holds the key to its unit — `secs` takes a key ending in `_SECS`,
-`millis` one ending in `_MS`, and any other fails to compile — `#[config]`
-holds the key to the field (`CACHE_TTL_SECS` reads `cache_ttl`), and every
-`env.*` reader above refuses a `_SECS` or `_MS` key at boot, naming
-`DurationBounds`. A ceiling a deployment may lift deliberately takes
-`Floor::UnitsOrOff`, so `0` from the environment and `None` in code are off. A
-reader of your own reads one with `BOUNDS.read(env, base)?`, or
-`read_optional` for an `Option<Duration>`.
+`DurationBounds::secs` or `DurationBounds::millis` — a floor and a ceiling,
+each with the sentence a refusal gives, and nothing else — and name it on the
+field, `#[config(bounds = CACHE_TTL)]`, as the example above does: a value
+outside the range fails the boot naming the variable, from the environment or
+pinned in code alike, in the framework's own words. The variable is the
+field's name with the unit `secs` or `millis` chose after it
+(`CACHE_TTL_SECS`), and `#[config]` binds the range to it as
+`PostsConfig::CACHE_TTL`, a `BoundedSetting`: its `key()`, `var(namespace)`
+and `check(namespace, value)` serve every sentence that names the variable
+and every value built in code, so no line types the key — and one range
+serves every field it fits. A count takes a `CountBounds`, on a `usize`, the
+same way. Every `env.*` reader above refuses a `_SECS` or `_MS` key at boot,
+naming `DurationBounds`. A hand-written overlay binds its own once and reads
+through it:
+
+```rust
+const TTL: BoundedSetting<Option<Duration>> =
+    BoundedSetting::new(CACHE_TTL, Field::new("CACHE_TTL", "PostsConfig::cache_ttl"));
+
+let cache_ttl = TTL.read(env, base.cache_ttl)?;
+```
 
 **Every variable can be given as a file.** `<PREFIX>_<NS>__KEY_FILE=/run/secrets/key`
 supplies `KEY` from the file it names — the Docker and Kubernetes secrets

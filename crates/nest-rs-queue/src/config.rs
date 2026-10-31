@@ -12,10 +12,8 @@ use nest_rs_config::{Bound, DurationBounds, Floor, config};
 /// `nest-rs-testing` pins the sum.
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 20;
 
-/// The drain window's bounds, the variable that sets it, and why.
+/// The drain window's range, and why.
 const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "SHUTDOWN_TIMEOUT_SECS",
-    "QueueConfig::shutdown_timeout",
     Floor::Units(Bound::new(
         1,
         "the drain keeps up to half its window to hand interrupted jobs back, and with \

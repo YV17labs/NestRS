@@ -399,16 +399,18 @@ impl JwtService {
         // The ranges the variables are held to, held again here: a `JwtOptions`
         // built in code reaches this constructor without a config read, and an
         // unbounded lifetime or leeway overflows the arithmetic below it.
-        for (bounds, field, value) in [
+        for (setting, value) in [
             (
-                crate::config::EXPIRES_IN,
-                "JwtOptions::expires_in",
+                AuthnConfig::EXPIRES_IN.pinned_through("JwtOptions::expires_in"),
                 options.expires_in,
             ),
-            (crate::config::LEEWAY, "JwtOptions::leeway", options.leeway),
+            (
+                AuthnConfig::LEEWAY.pinned_through("JwtOptions::leeway"),
+                options.leeway,
+            ),
         ] {
-            bounds
-                .check(AuthnConfig::NAMESPACE, field, value)
+            setting
+                .check(AuthnConfig::NAMESPACE, value)
                 .map_err(|refused| {
                     AuthError::failed_because("the JWT options are refused", refused)
                 })?;

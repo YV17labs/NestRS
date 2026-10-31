@@ -9,9 +9,7 @@ use sea_orm::sqlx::postgres::{PgConnectOptions, PgSslMode};
 
 /// The acquire budget's range: sqlx adds it to an `Instant` unchecked, so the
 /// ceiling keeps it short of a panic inside sqlx.
-pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "CONNECT_TIMEOUT_SECS",
-    "SeaOrmConfig::connect_timeout",
+const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     Floor::Units(Bound::new(
         1,
         "the pool gives up on a zero budget before any connection opens, so the boot fails \
@@ -27,9 +25,7 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
 
 /// The statement bound's range: Postgres cancels a statement past it
 /// (`statement_timeout`).
-pub(crate) const STATEMENT_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "STATEMENT_TIMEOUT_SECS",
-    "SeaOrmConfig::statement_timeout",
+const STATEMENT_TIMEOUT: DurationBounds = DurationBounds::secs(
     Floor::Units(Bound::new(
         1,
         "Postgres cancels every statement that takes longer, and under a second it cancels \
@@ -125,11 +121,7 @@ impl SeaOrmConfig {
     /// statement bounded, the bound refused outside its range.
     pub(crate) fn app_connect_options(&self) -> Result<ConnectOptions> {
         let mut opts = self.connect_options()?;
-        let bound = STATEMENT_TIMEOUT.check(
-            Self::NAMESPACE,
-            STATEMENT_TIMEOUT.field(),
-            self.statement_timeout,
-        )?;
+        let bound = Self::STATEMENT_TIMEOUT.check(Self::NAMESPACE, self.statement_timeout)?;
         opts.statement_timeout(bound);
         Ok(opts)
     }
@@ -244,11 +236,7 @@ impl SeaOrmConfig {
             ));
         }
         let tls = self.tls()?;
-        let budget = CONNECT_TIMEOUT.check(
-            Self::NAMESPACE,
-            CONNECT_TIMEOUT.field(),
-            self.connect_timeout,
-        )?;
+        let budget = Self::CONNECT_TIMEOUT.check(Self::NAMESPACE, self.connect_timeout)?;
         let mut opts = ConnectOptions::new(self.url.expose_secret().clone());
         opts.map_sqlx_postgres_opts(tls);
         opts.max_connections(self.max_connections);

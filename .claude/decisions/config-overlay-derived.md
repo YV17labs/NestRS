@@ -106,3 +106,41 @@ Refused:
 
 Decided by correctness and security, the orchestrator's resumption of the
 identity audit's branch (B-152).
+
+## 2026-10-31 — a bound names only its range, and counts get bounds
+
+The entries above held a duration through bounds "whose key carries the unit
+and is asserted at compile time to be the field's": every bounded field cost a
+constant typing its own key and field path, which the derive already knew and
+only compared. Under the owner's "Tout faire (Recommandé)" (2026-10-31, the
+identity audit's second pass, its item 9, agreeing the public API break), a
+range names its ends and their reasons alone — `DurationBounds::secs` or
+`millis(floor, ceiling)`, `CountBounds::new(floor, ceiling)` — and
+`#[config(bounds = RANGE)]` binds it to the field as the associated constant
+named for it, a `BoundedSetting` over the field's type: its key the field's
+name with the unit's suffix after it (the unit stays in the key; the developer
+stops writing it), its path `Config::field`. The overlay reads through it, and
+so does every site naming the variable or holding a value built in code, so no
+site types the key; a hand-written overlay binds its own once. Off follows from
+the field's type (`Option<Duration>` reads `0` as `None`), so
+`Floor::UnitsOrOff` and `ConfigError::MisshapenDuration` are gone by
+construction, aliases included — the refusal below of judging `Option` by its
+tokens holds, since the trait impl on the real type answers. A count with a
+reason at each end is a `CountBounds` on a `usize`, which retired three
+hand-written readers (HTTP's connection cap, MCP's session cap, the outbox's
+batch), and a `with = path` reader is handed its `Field`, key and path, for
+the refusal of a value set in code.
+
+Refused:
+
+- **The key chosen at expansion** (the audit's "in const context by matching
+  the range's unit"). A macro sees the range as a path, never its type, and no
+  generic `const fn` joins two strings: the key is joined from the field's name
+  and the range's unit when a read or a sentence needs it, at boot.
+- **A stem passed at every read of a hand-written overlay**
+  (`RANGE.read(env, "OPERATION_TIMEOUT", base)`): storage names its budget's
+  variable in three runtime sentences, each of which would type the stem
+  again. The overlay binds its setting once, as the derive does.
+- **A range per field.** A range shared by several fields (an edge's unit
+  timeout, a connection's lifetime ceiling, a stream's keep-alive) is one
+  value, named on each field, since it names no key.

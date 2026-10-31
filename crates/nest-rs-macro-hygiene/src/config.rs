@@ -4,19 +4,25 @@
 
 use std::time::Duration;
 
-use nest_rs::config::{Bound, ConfigService, DurationBounds, Floor, Result, config};
+use nest_rs::config::{
+    Bound, ConfigService, CountBounds, DurationBounds, Field, Floor, Result, config,
+};
 
 /// The window's range, read under `WINDOW_SECS`.
 const WINDOW: DurationBounds = DurationBounds::secs(
-    "WINDOW_SECS",
-    "MacroHygieneConfig::window",
-    Floor::UnitsOrOff(Bound::new(1, "a shorter window counts nothing")),
+    Floor::Units(Bound::new(1, "a shorter window counts nothing")),
     Bound::new(3600, "past an hour it is a unit slip"),
 );
 
+/// The kilns' range, read under `KILNS`.
+const KILNS: CountBounds = CountBounds::new(
+    Bound::new(1, "a firing needs a kiln"),
+    Bound::new(64, "a controller drives no more"),
+);
+
 /// A reader of its own, as `with = …` names one.
-fn doubled(env: &ConfigService, key: &str, base: u32) -> Result<u32> {
-    Ok(env.parse::<u32>(key)?.map_or(base, |read| read * 2))
+fn doubled(env: &ConfigService, field: Field, base: u32) -> Result<u32> {
+    Ok(env.parse::<u32>(field.key())?.map_or(base, |read| read * 2))
 }
 
 /// Minimal config, one field per reader.
@@ -29,6 +35,9 @@ pub struct MacroHygieneConfig {
     /// Read through its bounds.
     #[config(bounds = WINDOW)]
     pub window: Option<Duration>,
+    /// A count read through its bounds.
+    #[config(bounds = KILNS)]
+    pub kilns: usize,
     /// Read as JSON.
     #[config(json)]
     pub tags: Vec<String>,
@@ -52,6 +61,7 @@ impl Default for MacroHygieneConfig {
         Self {
             retries: 1,
             window: Some(Duration::from_secs(60)),
+            kilns: 2,
             tags: Vec::new(),
             batches: None,
             heat: 1,

@@ -9,7 +9,7 @@ use http::{Method, StatusCode};
 use object_store::client::{HttpError, HttpErrorKind};
 use thiserror::Error;
 
-use crate::config::OPERATION_TIMEOUT;
+use crate::config::StorageConfig;
 
 /// An error object_store or the configuration handed over, boxed so its
 /// library's release is never this crate's API: a caller reads it through
@@ -158,7 +158,7 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 #[derive(Debug, Error)]
 #[error(
     "the call did not end within {budget:?}, every retry included — the budget {} sets",
-    ::nest_rs_config::var_name("storage", OPERATION_TIMEOUT.key()),
+    StorageConfig::OPERATION_TIMEOUT.var("storage"),
 )]
 pub(crate) struct CallTimedOut {
     /// The budget that cut the call.

@@ -2,9 +2,9 @@
 //!
 //! Milliseconds, unlike the framework's `*_SECS` keys: the kubelet's
 //! `timeoutSeconds` defaults to 1, so the only interval that matters is inside
-//! a second. `0` is refused rather than read as *off* ([`Floor::UnitsOrOff`]):
-//! an unbounded probe outlives the kubelet's deadline, a zero one fails every
-//! poll.
+//! a second. Each is a `Duration`, so `0` is refused rather than read as
+//! *off*: an unbounded probe outlives the kubelet's deadline, a zero one fails
+//! every poll.
 
 use std::time::Duration;
 
@@ -28,19 +28,11 @@ const PAST_A_MINUTE: Bound = Bound::new(
      bounds nothing an orchestrator waits for",
 );
 
-const INDICATOR_TIMEOUT: DurationBounds = DurationBounds::millis(
-    "INDICATOR_TIMEOUT_MS",
-    "HealthConfig::indicator_timeout",
-    Floor::Units(Bound::new(1, NOT_ZERO)),
-    PAST_A_MINUTE,
-);
+const INDICATOR_TIMEOUT: DurationBounds =
+    DurationBounds::millis(Floor::Units(Bound::new(1, NOT_ZERO)), PAST_A_MINUTE);
 
-const PROBE_DEADLINE: DurationBounds = DurationBounds::millis(
-    "PROBE_DEADLINE_MS",
-    "HealthConfig::probe_deadline",
-    Floor::Units(Bound::new(1, NOT_ZERO)),
-    PAST_A_MINUTE,
-);
+const PROBE_DEADLINE: DurationBounds =
+    DurationBounds::millis(Floor::Units(Bound::new(1, NOT_ZERO)), PAST_A_MINUTE);
 
 /// Health probe options resolved at boot (namespace `health`).
 #[config(namespace = "health")]

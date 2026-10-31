@@ -9,14 +9,6 @@ use nest_rs_config::{Bound, DurationBounds, Environment, Floor, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
-/// The subscription socket ceiling's range and the variable that sets it.
-const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
-    "MAX_CONNECTION_SECS",
-    "GraphqlConfig::max_connection",
-    nest_rs_http::MAX_CONNECTION_FLOOR,
-    nest_rs_http::MAX_CONNECTION_CEILING,
-);
-
 /// 64 KiB, as `<PREFIX>_WS__MAX_MESSAGE_BYTES` defaults: a `subscribe` carries
 /// one document and its variables.
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
@@ -24,10 +16,8 @@ const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Three seconds, the graphql-ws reference server's `connectionInitWaitTimeout`.
 const DEFAULT_CONNECTION_INIT_TIMEOUT_SECS: u64 = 3;
 
-/// The wait for `connection_init`'s range and the variable that sets it.
+/// The range of the wait for `connection_init`.
 const CONNECTION_INIT_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "CONNECTION_INIT_TIMEOUT_SECS",
-    "GraphqlConfig::connection_init_timeout",
     Floor::Units(Bound::new(
         1,
         "a client on a slow link cannot finish its first message below it",
@@ -119,7 +109,7 @@ pub struct GraphqlConfig {
     /// Read from `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`, whole seconds from 1 to
     /// 86400 or `0` for unlimited; defaults to 4 hours,
     /// [`nest_rs_http::DEFAULT_MAX_CONNECTION`].
-    #[config(bounds = MAX_CONNECTION)]
+    #[config(bounds = nest_rs_http::MAX_CONNECTION_BOUNDS)]
     pub max_connection: Option<Duration>,
     /// The graphql-ws socket's per-message and per-frame byte cap, held at the
     /// protocol layer so a larger frame is refused before it is buffered, and

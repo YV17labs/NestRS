@@ -2,7 +2,9 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use http::HeaderName;
-use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Result, config};
+use nest_rs_config::{
+    Bound, ConfigService, CountBounds, DurationBounds, Field, Floor, Namespaced, Result, config,
+};
 
 use crate::cors::HttpCors;
 use crate::raw_body::RawBody;
@@ -18,8 +20,6 @@ const DEFAULT_PORT: u16 = 3000;
 pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
 const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "SHUTDOWN_TIMEOUT_SECS",
-    "HttpConfig::shutdown_timeout",
     Floor::Units(Bound::new(
         1,
         "a shorter window cuts every request in flight at the signal, and `0` is not the \
@@ -56,58 +56,54 @@ pub const DEFAULT_SSE_KEEP_ALIVE: Duration = Duration::from_secs(15);
 /// its own variable.
 pub const DEFAULT_UNIT_TIMEOUT: Duration = DEFAULT_SHUTDOWN_TIMEOUT;
 
-/// The floor every long-lived connection's lifetime ceiling is held to — an
+/// The range every long-lived connection's lifetime ceiling is held to — an
 /// `#[sse]` stream here, a WebSocket and a GraphQL subscription in their own
-/// crates — and its off switch: `0` from the environment, `None` in code.
-pub const MAX_CONNECTION_FLOOR: Floor = Floor::UnitsOrOff(Bound::new(
-    1,
-    "a ceiling under a second ends every connection as it opens, so its client reconnects \
-     in a loop",
-));
-
-/// The ceiling on [`MAX_CONNECTION_FLOOR`]'s settings — a day.
-pub const MAX_CONNECTION_CEILING: Bound = Bound::new(
-    24 * 60 * 60,
-    "a connection keeps the privileges it authenticated with until it ends, so past a day \
-     it outlives the token that admitted it — an hour by default — many times over; a \
-     deployment that means no ceiling turns it off",
+/// crates — from a second to a day; each is an `Option<Duration>`, so `0` from
+/// the environment and `None` in code turn it off.
+pub const MAX_CONNECTION_BOUNDS: DurationBounds = DurationBounds::secs(
+    Floor::Units(Bound::new(
+        1,
+        "a ceiling under a second ends every connection as it opens, so its client \
+         reconnects in a loop",
+    )),
+    Bound::new(
+        24 * 60 * 60,
+        "a connection keeps the privileges it authenticated with until it ends, so past a \
+         day it outlives the token that admitted it — an hour by default — many times over; \
+         a deployment that means no ceiling turns it off",
+    ),
 );
 
-/// The floor of a server-sent stream's keep-alive interval — HTTP's `#[sse]`
-/// here, MCP's stream in its own crate — and its off switch.
-pub const SSE_KEEP_ALIVE_FLOOR: Floor = Floor::UnitsOrOff(Bound::new(
-    1,
-    "a comment under a second apart is traffic, not a keep-alive",
-));
-
-/// The ceiling on [`SSE_KEEP_ALIVE_FLOOR`]'s settings — an hour.
-pub const SSE_KEEP_ALIVE_CEILING: Bound = Bound::new(
-    60 * 60,
-    "a keep-alive exists to beat an intermediary's idle timeout, and those are minutes — \
-     nginx's and a cloud load balancer's sixty seconds by default — so one sent less often \
-     than hourly keeps nothing alive",
+/// The range of a server-sent stream's keep-alive interval — HTTP's `#[sse]`
+/// here, MCP's stream in its own crate — from a second to an hour, `0` turning
+/// it off.
+pub const SSE_KEEP_ALIVE_BOUNDS: DurationBounds = DurationBounds::secs(
+    Floor::Units(Bound::new(
+        1,
+        "a comment under a second apart is traffic, not a keep-alive",
+    )),
+    Bound::new(
+        60 * 60,
+        "a keep-alive exists to beat an intermediary's idle timeout, and those are minutes — \
+         nginx's and a cloud load balancer's sixty seconds by default — so one sent less \
+         often than hourly keeps nothing alive",
+    ),
 );
 
-/// The floor of an edge's per-unit timeout — HTTP's request here, a WebSocket
-/// message's and an MCP operation's in their own crates — and its off switch.
-pub const UNIT_TIMEOUT_FLOOR: Floor = Floor::UnitsOrOff(Bound::new(
-    1,
-    "a timeout under a second cuts every unit before its handler has run",
-));
-
-/// The ceiling on [`UNIT_TIMEOUT_FLOOR`]'s settings — an hour.
-pub const UNIT_TIMEOUT_CEILING: Bound = Bound::new(
-    60 * 60,
-    "a unit still running after an hour has outlived every client and proxy timeout in \
-     front of it, and a timeout that long is a typo more often than a choice (`30000` meant \
-     as milliseconds is eight hours); a handler that runs longer turns it off",
-);
-
-const REQUEST_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "REQUEST_TIMEOUT_SECS",
-    "HttpConfig::request_timeout",
-    UNIT_TIMEOUT_FLOOR,
-    UNIT_TIMEOUT_CEILING,
+/// The range of an edge's per-unit timeout — HTTP's request here, a WebSocket
+/// message's and an MCP operation's in their own crates — from a second to an
+/// hour, `0` turning it off.
+pub const UNIT_TIMEOUT_BOUNDS: DurationBounds = DurationBounds::secs(
+    Floor::Units(Bound::new(
+        1,
+        "a timeout under a second cuts every unit before its handler has run",
+    )),
+    Bound::new(
+        60 * 60,
+        "a unit still running after an hour has outlived every client and proxy timeout in \
+         front of it, and a timeout that long is a typo more often than a choice (`30000` \
+         meant as milliseconds is eight hours); a handler that runs longer turns it off",
+    ),
 );
 
 /// hyper's own head default, and Kestrel's `RequestHeadersTimeout`.
@@ -128,8 +124,6 @@ pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(75);
 pub(crate) const DEFAULT_SEND_TIMEOUT: Duration = Duration::from_secs(60);
 
 const HEADER_READ_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "HEADER_READ_TIMEOUT_SECS",
-    "HttpConfig::header_read_timeout",
     Floor::Units(Bound::new(
         1,
         "a shorter deadline cuts a client on a slow network before its request is out, and \
@@ -145,8 +139,6 @@ const HEADER_READ_TIMEOUT: DurationBounds = DurationBounds::secs(
 );
 
 const BODY_READ_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "BODY_READ_TIMEOUT_SECS",
-    "HttpConfig::body_read_timeout",
     Floor::Units(Bound::new(
         1,
         "a shorter bound fails an upload on a slow network between two of its packets, and \
@@ -161,8 +153,6 @@ const BODY_READ_TIMEOUT: DurationBounds = DurationBounds::secs(
 );
 
 const IDLE_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "IDLE_TIMEOUT_SECS",
-    "HttpConfig::idle_timeout",
     Floor::Units(Bound::new(
         1,
         "a shorter deadline closes a kept-alive connection between two requests of one \
@@ -178,8 +168,6 @@ const IDLE_TIMEOUT: DurationBounds = DurationBounds::secs(
 );
 
 const SEND_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "SEND_TIMEOUT_SECS",
-    "HttpConfig::send_timeout",
     Floor::Units(Bound::new(
         1,
         "a shorter deadline cuts a reader on a slow network mid-body, and `0` is no off \
@@ -196,35 +184,20 @@ const SEND_TIMEOUT: DurationBounds = DurationBounds::secs(
 
 pub(crate) const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 10_000;
 
-/// The key of [`HttpConfig::max_concurrent_connections`].
-const MAX_CONCURRENT_CONNECTIONS: &str = "MAX_CONCURRENT_CONNECTIONS";
+/// [`HttpConfig::version_header`], for a config that never met the
+/// environment.
+const VERSION_HEADER: Field = Field::new("VERSION_HEADER", "HttpConfig::version_header");
 
-/// The key of [`HttpConfig::version_header`].
-const VERSION_HEADER: &str = "VERSION_HEADER";
-
-const CONNECTIONS_FLOOR: Bound = Bound::new(
-    1,
-    "a cap of none binds the port and never accepts a connection",
-);
-
-const CONNECTIONS_CEILING: Bound = Bound::new(
-    1 << 20,
-    "a process holds no more open files than Linux's `fs.nr_open` allows, 1048576 by \
-     default, so the kernel refuses a socket past it before the cap is reached",
-);
-
-const SSE_MAX_CONNECTION: DurationBounds = DurationBounds::secs(
-    "SSE_MAX_CONNECTION_SECS",
-    "HttpConfig::sse_max_connection",
-    MAX_CONNECTION_FLOOR,
-    MAX_CONNECTION_CEILING,
-);
-
-const SSE_KEEP_ALIVE: DurationBounds = DurationBounds::secs(
-    "SSE_KEEP_ALIVE_SECS",
-    "HttpConfig::sse_keep_alive",
-    SSE_KEEP_ALIVE_FLOOR,
-    SSE_KEEP_ALIVE_CEILING,
+const CONNECTIONS: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "a cap of none binds the port and never accepts a connection",
+    ),
+    Bound::new(
+        1 << 20,
+        "a process holds no more open files than Linux's `fs.nr_open` allows, 1048576 by \
+         default, so the kernel refuses a socket past it before the cap is reached",
+    ),
 );
 
 /// HTTP transport options resolved at boot.
@@ -291,7 +264,7 @@ pub struct HttpConfig {
     /// admitted just before a stop is answered inside the window. A budget past
     /// the window, or none, is said once at boot with a `warn`. Off in code is
     /// `None`; a pinned zero is refused.
-    #[config(bounds = REQUEST_TIMEOUT)]
+    #[config(bounds = UNIT_TIMEOUT_BOUNDS)]
     pub request_timeout: Option<Duration>,
     /// Default security response headers (`nosniff`, `X-Frame-Options`,
     /// `Referrer-Policy`, the `Cross-Origin-*` pair, HSTS under TLS), each on a
@@ -329,15 +302,15 @@ pub struct HttpConfig {
     /// [`send_timeout`](Self::send_timeout).
     ///
     /// A security control: 4 hours by default, one second to a day
-    /// ([`MAX_CONNECTION_CEILING`]), `0` ⇒ unlimited. Read from
+    /// ([`MAX_CONNECTION_BOUNDS`]), `0` ⇒ unlimited. Read from
     /// `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`.
-    #[config(bounds = SSE_MAX_CONNECTION)]
+    #[config(bounds = MAX_CONNECTION_BOUNDS)]
     pub sse_max_connection: Option<Duration>,
     /// How often a `#[sse]` stream emits a keep-alive comment, so an idle
     /// stream is not dropped by an intermediary that sees no bytes. `None` ⇒
     /// none sent. Read from `<PREFIX>_HTTP__SSE_KEEP_ALIVE_SECS`, whole seconds
     /// from 1 to 3600 or `0` for none; defaults to 15 seconds.
-    #[config(bounds = SSE_KEEP_ALIVE)]
+    #[config(bounds = SSE_KEEP_ALIVE_BOUNDS)]
     pub sse_keep_alive: Option<Duration>,
     /// How long the transport lets open connections finish after a shutdown
     /// signal; what is still open then is closed, and one `warn` on
@@ -363,7 +336,7 @@ pub struct HttpConfig {
     /// Read from `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`, from 1 to
     /// 1 048 576 — refused outside, from the environment and from the pinned
     /// struct alike; defaults to 10 000.
-    #[config(with = max_concurrent_connections)]
+    #[config(bounds = CONNECTIONS)]
     pub max_concurrent_connections: usize,
     /// How long a connection has to deliver its first request head, counted
     /// from accept with the TLS handshake and HTTP/2's preface inside it, and on
@@ -454,8 +427,9 @@ impl HttpConfig {
         let header = header_name(
             nest_rs_config::var_name(
                 <Self as nest_rs_config::Namespaced>::NAMESPACE,
-                VERSION_HEADER,
+                VERSION_HEADER.key(),
             ),
+            VERSION_HEADER,
             &self.version_header,
             "",
         )?;
@@ -466,35 +440,30 @@ impl HttpConfig {
     /// [`max_concurrent_connections`](Self::max_concurrent_connections), held to
     /// the range the variable is, for a config that never met the environment.
     pub(crate) fn connection_cap(&self) -> Result<usize> {
-        check_connection_cap(
-            Self::connection_cap_variable(),
-            self.max_concurrent_connections,
-            "",
-        )
+        Self::MAX_CONCURRENT_CONNECTIONS.check(Self::NAMESPACE, self.max_concurrent_connections)
     }
 
     /// [`request_timeout`](Self::request_timeout), held to the range its
     /// variable is, for a config that never met the environment.
     pub(crate) fn request_budget(&self) -> Result<Option<Duration>> {
-        self.request_timeout
-            .map(|budget| in_range(REQUEST_TIMEOUT, budget))
-            .transpose()
+        Self::REQUEST_TIMEOUT.check(Self::NAMESPACE, self.request_timeout)
     }
 
     /// [`shutdown_timeout`](Self::shutdown_timeout), held to the range its
     /// variable is, for a config that never met the environment.
     pub(crate) fn shutdown_window(&self) -> Result<Duration> {
-        in_range(SHUTDOWN_TIMEOUT, self.shutdown_timeout)
+        Self::SHUTDOWN_TIMEOUT.check(Self::NAMESPACE, self.shutdown_timeout)
     }
 
     /// The four connection deadlines, each held to the range its variable is,
     /// for a config that never met the environment.
     pub(crate) fn deadlines(&self) -> Result<crate::server::Deadlines> {
         Ok(crate::server::Deadlines {
-            header_read: in_range(HEADER_READ_TIMEOUT, self.header_read_timeout)?,
-            body_read: in_range(BODY_READ_TIMEOUT, self.body_read_timeout)?,
-            idle: in_range(IDLE_TIMEOUT, self.idle_timeout)?,
-            send: in_range(SEND_TIMEOUT, self.send_timeout)?,
+            header_read: Self::HEADER_READ_TIMEOUT
+                .check(Self::NAMESPACE, self.header_read_timeout)?,
+            body_read: Self::BODY_READ_TIMEOUT.check(Self::NAMESPACE, self.body_read_timeout)?,
+            idle: Self::IDLE_TIMEOUT.check(Self::NAMESPACE, self.idle_timeout)?,
+            send: Self::SEND_TIMEOUT.check(Self::NAMESPACE, self.send_timeout)?,
         })
     }
 
@@ -541,17 +510,18 @@ impl HttpConfig {
 
     /// `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`, as this process spells it.
     pub(crate) fn connection_cap_variable() -> String {
-        nest_rs_config::var_name(
-            <Self as nest_rs_config::Namespaced>::NAMESPACE,
-            MAX_CONCURRENT_CONNECTIONS,
-        )
+        Self::MAX_CONCURRENT_CONNECTIONS.var(Self::NAMESPACE)
     }
 }
 
 /// The server's own certificate, its vocabulary's `TLS_*` keys; a reading
 /// failure that names no variable is named under them, its I/O source kept.
-fn tls(env: &ConfigService, key: &str, base: Option<HttpTls>) -> Result<Option<HttpTls>> {
-    debug_assert_eq!(key, "TLS", "HttpTls reads its fields' names under `tls`");
+fn tls(env: &ConfigService, field: Field, base: Option<HttpTls>) -> Result<Option<HttpTls>> {
+    debug_assert_eq!(
+        field.key(),
+        "TLS",
+        "HttpTls reads its fields' names under `tls`"
+    );
     HttpTls::from_env(env, base).map_err(|e| match e.downcast::<nest_rs_config::ConfigError>() {
         Ok(worded) => worded,
         Err(e) => nest_rs_config::ConfigError::parse(env.var_name("TLS_*"), format!("{e:#}")),
@@ -559,8 +529,12 @@ fn tls(env: &ConfigService, key: &str, base: Option<HttpTls>) -> Result<Option<H
 }
 
 /// The CORS policy, each key its field's name after `CORS_`.
-fn cors(env: &ConfigService, key: &str, base: Option<HttpCors>) -> Result<Option<HttpCors>> {
-    debug_assert_eq!(key, "CORS", "HttpCors reads its fields' names under `cors`");
+fn cors(env: &ConfigService, field: Field, base: Option<HttpCors>) -> Result<Option<HttpCors>> {
+    debug_assert_eq!(
+        field.key(),
+        "CORS",
+        "HttpCors reads its fields' names under `cors`"
+    );
     HttpCors::from_env(env, base)
 }
 
@@ -568,11 +542,12 @@ fn cors(env: &ConfigService, key: &str, base: Option<HttpCors>) -> Result<Option
 /// a header's 6.x flat key is refused naming the one it became.
 fn security_headers(
     env: &ConfigService,
-    key: &str,
+    field: Field,
     base: HttpSecurityHeaders,
 ) -> Result<HttpSecurityHeaders> {
     debug_assert_eq!(
-        key, "SECURITY_HEADERS",
+        field.key(),
+        "SECURITY_HEADERS",
         "HttpSecurityHeaders reads its fields' names under `security_headers`"
     );
     refuse_retired_header_keys(env)?;
@@ -610,72 +585,22 @@ fn refuse_retired_header_keys(env: &ConfigService) -> Result<()> {
 }
 
 /// The global prefix, trimmed; blank is none.
-fn global_prefix(env: &ConfigService, key: &str, base: Option<String>) -> Result<Option<String>> {
-    Ok(match env.get(key)? {
+fn global_prefix(
+    env: &ConfigService,
+    field: Field,
+    base: Option<String>,
+) -> Result<Option<String>> {
+    Ok(match env.get(field.key())? {
         Some(raw) => Some(raw.trim().to_owned()).filter(|trimmed| !trimmed.is_empty()),
         None => base,
     })
 }
 
-/// `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS` over `base`, refused outside its
-/// range from either side, never clamped.
-fn max_concurrent_connections(env: &ConfigService, key: &str, base: usize) -> Result<usize> {
-    let Some(setting) = env.setting(key)? else {
-        return check_connection_cap(env.var_name(key), base, "is not set, and ");
-    };
-    let count: usize = setting.parse()?;
-    match outside_connection_range(count) {
-        None => Ok(count),
-        Some((_, must, bound)) => Err(setting.refuse(format_args!(
-            "must be {must} {} — {}",
-            bound.count, bound.why
-        ))),
-    }
-}
-
-/// `count`, set in code, refused under `var` when it is outside the range;
-/// `lead` opens the sentence with what is known of the variable.
-fn check_connection_cap(var: String, count: usize, lead: &str) -> Result<usize> {
-    match outside_connection_range(count) {
-        None => Ok(count),
-        Some((side, must, bound)) => Err(nest_rs_config::ConfigError::parse(
-            var,
-            format!(
-                "{lead}`HttpConfig::max_concurrent_connections` set in code is {count}, {side} \
-                 the {} it must be {must} — {}",
-                bound.count, bound.why,
-            ),
-        )),
-    }
-}
-
-/// Which end of the range `count` falls past, if either.
-fn outside_connection_range(count: usize) -> Option<(&'static str, &'static str, Bound)> {
-    let count = u64::try_from(count).unwrap_or(u64::MAX);
-    if count < CONNECTIONS_FLOOR.count {
-        Some(("below", "at least", CONNECTIONS_FLOOR))
-    } else if count > CONNECTIONS_CEILING.count {
-        Some(("above", "at most", CONNECTIONS_CEILING))
-    } else {
-        None
-    }
-}
-
-/// `value`, set in code, refused under the variable `bounds` reads when it is
-/// outside that variable's range.
-fn in_range(bounds: DurationBounds, value: Duration) -> Result<Duration> {
-    bounds.check(
-        <HttpConfig as nest_rs_config::Namespaced>::NAMESPACE,
-        bounds.field(),
-        value,
-    )
-}
-
 /// The header the [`ApiVersioning::Header`] strategy reads, refused from either
 /// side when it is no HTTP header name.
-fn version_header(env: &ConfigService, key: &str, base: String) -> Result<String> {
-    let Some(raw) = env.setting(key)? else {
-        header_name(env.var_name(key), &base, "is not set, and ")?;
+fn version_header(env: &ConfigService, field: Field, base: String) -> Result<String> {
+    let Some(raw) = env.setting(field.key())? else {
+        header_name(env.var_name(field.key()), field, &base, "is not set, and ")?;
         return Ok(base);
     };
     match HeaderName::from_bytes(raw.value.as_bytes()) {
@@ -684,16 +609,17 @@ fn version_header(env: &ConfigService, key: &str, base: String) -> Result<String
     }
 }
 
-/// `name`, [`HttpConfig::version_header`] set in code, refused under `var` when
-/// it is no HTTP header name, and never quoted; `lead` opens the sentence with
-/// what is known of the variable.
-fn header_name(var: String, name: &str, lead: &str) -> Result<HeaderName> {
+/// `name`, set in code through `field`, refused under `var` when it is no HTTP
+/// header name, and never quoted; `lead` opens the sentence with what is known
+/// of the variable.
+fn header_name(var: String, field: Field, name: &str, lead: &str) -> Result<HeaderName> {
     match HeaderName::from_bytes(name.as_bytes()) {
         Ok(header) => Ok(header),
         Err(_) => Err(nest_rs_config::ConfigError::parse(
             var,
             format!(
-                "{lead}`HttpConfig::version_header` set in code is not a valid HTTP header name"
+                "{lead}`{}` set in code is not a valid HTTP header name",
+                field.path()
             ),
         )),
     }

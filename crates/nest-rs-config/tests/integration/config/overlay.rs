@@ -6,23 +6,24 @@ use std::time::Duration;
 
 use nest_rs_config::__private::validator::Validate as _;
 use nest_rs_config::{
-    Bound, Config, ConfigError, ConfigService, DurationBounds, Floor, FromSetting, Result, config,
-    var_name,
+    Bound, Config, ConfigError, ConfigService, CountBounds, DurationBounds, Field, Floor,
+    FromSetting, Result, config, var_name,
 };
 use nest_rs_core::Secret;
 
 const WINDOW: DurationBounds = DurationBounds::secs(
-    "WINDOW_SECS",
-    "KilnConfig::window",
     Floor::Units(Bound::new(1, "a shorter window counts nothing")),
     Bound::new(3600, "past an hour it is a unit slip"),
 );
 
 const CEILING: DurationBounds = DurationBounds::millis(
-    "CEILING_MS",
-    "KilnConfig::ceiling",
-    Floor::UnitsOrOff(Bound::new(1, "a shorter ceiling ends every firing")),
+    Floor::Units(Bound::new(1, "a shorter ceiling ends every firing")),
     Bound::new(60_000, "past a minute it is a unit slip"),
+);
+
+const KILNS: CountBounds = CountBounds::new(
+    Bound::new(1, "a firing needs a kiln"),
+    Bound::new(64, "a controller drives no more"),
 );
 
 /// A value a test type of its own reads.
@@ -49,9 +50,17 @@ struct Shelf {
     slots: u8,
 }
 
-/// The base a reader of its own falls back to, so the test sees it ran.
-fn doubled(env: &ConfigService, key: &str, base: u32) -> Result<u32> {
-    Ok(env.parse::<u32>(key)?.map_or(base, |read| read * 2))
+/// The base a reader of its own falls back to, so the test sees it ran; a
+/// pinned value past a thousand is refused naming the field it was set through.
+fn doubled(env: &ConfigService, field: Field, base: u32) -> Result<u32> {
+    match env.parse::<u32>(field.key())? {
+        Some(read) => Ok(read * 2),
+        None if base > 1000 => Err(ConfigError::parse(
+            env.var_name(field.key()),
+            format!("`{}` set in code is past a thousand", field.path()),
+        )),
+        None => Ok(base),
+    }
 }
 
 #[config(namespace = "overlay_kiln")]
@@ -67,8 +76,12 @@ struct KilnConfig {
     r#type: Option<String>,
     #[config(bounds = WINDOW)]
     window: Duration,
+    #[config(bounds = WINDOW)]
+    cooldown: Option<Duration>,
     #[config(bounds = CEILING)]
     ceiling: Option<Duration>,
+    #[config(bounds = KILNS)]
+    kilns: usize,
     #[config(json)]
     shelves: Vec<Shelf>,
     #[config(count)]
@@ -89,7 +102,9 @@ impl Default for KilnConfig {
             glaze: Glaze::Matte,
             r#type: None,
             window: Duration::from_secs(60),
+            cooldown: Some(Duration::from_secs(5)),
             ceiling: Some(Duration::from_millis(500)),
+            kilns: 2,
             shelves: Vec::new(),
             batches: Some(8),
             heat: 900,
@@ -117,7 +132,9 @@ fn every_field_reads_the_variable_its_name_spells() {
             ("GLAZE", "gloss"),
             ("TYPE", "electric"),
             ("WINDOW_SECS", "30"),
+            ("COOLDOWN_SECS", "7"),
             ("CEILING_MS", "250"),
+            ("KILNS", "4"),
             ("SHELVES", r#"[{"name":"top","slots":4}]"#),
             ("BATCHES", "0"),
             ("HEAT", "500"),
@@ -138,7 +155,9 @@ fn every_field_reads_the_variable_its_name_spells() {
         "a raw ident reads its name"
     );
     assert_eq!(read.window, Duration::from_secs(30));
+    assert_eq!(read.cooldown, Some(Duration::from_secs(7)));
     assert_eq!(read.ceiling, Some(Duration::from_millis(250)));
+    assert_eq!(read.kilns, 4);
     assert_eq!(
         read.shelves,
         [Shelf {
@@ -179,7 +198,7 @@ fn a_duration_reads_its_bounds_and_off_is_none_alone() {
         .to_string();
     assert!(
         refused.contains(&var_name("overlay_kiln", "WINDOW_SECS"))
-            && refused.contains("must be at least 1 second"),
+            && refused.contains("must be at least 1 second —"),
         "{refused}"
     );
     let pinned = read(
@@ -194,6 +213,130 @@ fn a_duration_reads_its_bounds_and_off_is_none_alone() {
     assert!(
         pinned.contains("`KilnConfig::window` set in code is 0ns"),
         "{pinned}"
+    );
+}
+
+/// One range bounds two fields: each reads its own key, and off follows from
+/// the field's type alone — the `Option` turns off at `0`, the `Duration`
+/// holds `0` to the floor.
+#[test]
+fn off_follows_from_the_fields_type_whatever_range_it_shares() {
+    let read_one = |vars: &[(&str, &str)]| read(vars, KilnConfig::default());
+    assert_eq!(
+        read_one(&[("COOLDOWN_SECS", "0")])
+            .expect("`0` turns the option off")
+            .cooldown,
+        None
+    );
+    let below = read_one(&[("COOLDOWN_SECS", "3601")])
+        .expect_err("the shared ceiling holds")
+        .to_string();
+    assert!(
+        below.contains(&var_name("overlay_kiln", "COOLDOWN_SECS"))
+            && below.contains("must be at most 3600 seconds, or 0 to turn it off"),
+        "{below}"
+    );
+    let pinned = read(
+        &[],
+        KilnConfig {
+            cooldown: Some(Duration::ZERO),
+            ..KilnConfig::default()
+        },
+    )
+    .expect_err("off in code is `None`")
+    .to_string();
+    assert!(
+        pinned.contains("`KilnConfig::cooldown` set in code is 0ns")
+            && pinned.contains("`None` turns it off"),
+        "{pinned}"
+    );
+    let window = read_one(&[("WINDOW_SECS", "0")])
+        .expect_err("a `Duration` has no off")
+        .to_string();
+    assert!(!window.contains("turn it off"), "{window}");
+}
+
+/// The derive binds each range to the key and the path it read off the field,
+/// once, for every site that names the variable or holds a value set in code.
+#[test]
+fn a_bounded_field_names_its_key_and_path_once() {
+    assert_eq!(KilnConfig::WINDOW.key(), "WINDOW_SECS");
+    assert_eq!(KilnConfig::COOLDOWN.key(), "COOLDOWN_SECS");
+    assert_eq!(KilnConfig::CEILING.key(), "CEILING_MS");
+    assert_eq!(KilnConfig::KILNS.key(), "KILNS");
+    assert_eq!(KilnConfig::CEILING.field().path(), "KilnConfig::ceiling");
+    assert_eq!(
+        KilnConfig::CEILING.var("overlay_kiln"),
+        var_name("overlay_kiln", "CEILING_MS")
+    );
+    let held = KilnConfig::WINDOW
+        .check("overlay_kiln", Duration::from_secs(3601))
+        .expect_err("a value built in code is held to the range")
+        .to_string();
+    assert!(
+        held.contains(&var_name("overlay_kiln", "WINDOW_SECS"))
+            && held.contains("`KilnConfig::window` set in code is 3601s")
+            && !held.contains("is not set"),
+        "{held}"
+    );
+    assert_eq!(
+        KilnConfig::COOLDOWN
+            .check("overlay_kiln", None)
+            .expect("off"),
+        None
+    );
+}
+
+/// A count reads its range from either side, refused naming its variable and
+/// the field it was pinned through, never clamped.
+#[test]
+fn a_count_is_held_to_its_range_from_either_side() {
+    for (value, expected) in [
+        ("0", "must be at least 1 — a firing needs a kiln"),
+        ("65", "must be at most 64 — a controller drives no more"),
+    ] {
+        let refused = read(&[("KILNS", value)], KilnConfig::default())
+            .expect_err("outside the range")
+            .to_string();
+        assert!(
+            refused.contains(&var_name("overlay_kiln", "KILNS")) && refused.contains(expected),
+            "{refused}"
+        );
+    }
+    let pinned = read(
+        &[],
+        KilnConfig {
+            kilns: 0,
+            ..KilnConfig::default()
+        },
+    )
+    .expect_err("a pin is held to the range the variable is")
+    .to_string();
+    assert!(
+        pinned.contains(
+            "is not set, and `KilnConfig::kilns` set in code is 0, below the 1 it must \
+             be at least — a firing needs a kiln"
+        ),
+        "{pinned}"
+    );
+}
+
+/// A field's own reader is handed its key and the path it is pinned through.
+#[test]
+fn a_reader_of_its_own_is_handed_its_field() {
+    let refused = read(
+        &[],
+        KilnConfig {
+            heat: 1200,
+            ..KilnConfig::default()
+        },
+    )
+    .expect_err("past a thousand in code")
+    .to_string();
+    assert!(
+        refused.contains(&var_name("overlay_kiln", "HEAT"))
+            && refused.contains("`KilnConfig::heat` set in code is past a thousand"),
+        "{refused}"
     );
 }
 
@@ -221,81 +364,6 @@ fn a_count_pinned_at_zero_is_refused_and_none_is_unlimited() {
         ..KilnConfig::default()
     };
     assert_eq!(read(&[], unlimited).expect("unlimited").batches, None);
-}
-
-const LULL: DurationBounds = DurationBounds::secs(
-    "LULL_SECS",
-    "LullConfig::lull",
-    Floor::Units(Bound::new(1, "a shorter lull is no pause")),
-    Bound::new(3600, "past an hour it is a unit slip"),
-);
-
-/// An `Option<Duration>` read through bounds with no off: its `None` could
-/// only mean "unset", which no duration's `None` means.
-#[config(namespace = "overlay_lull")]
-#[derive(Clone, Debug, Default)]
-struct LullConfig {
-    #[config(bounds = LULL)]
-    lull: Option<Duration>,
-}
-
-const PAUSE: DurationBounds = DurationBounds::millis(
-    "PAUSE_MS",
-    "PauseConfig::pause",
-    Floor::UnitsOrOff(Bound::new(1, "a shorter pause is none")),
-    Bound::new(60_000, "past a minute it is a unit slip"),
-);
-
-/// A `Duration` read through bounds whose `0` is off, which it cannot hold.
-#[config(namespace = "overlay_pause")]
-#[derive(Clone, Debug)]
-struct PauseConfig {
-    #[config(bounds = PAUSE)]
-    pause: Duration,
-}
-
-impl Default for PauseConfig {
-    fn default() -> Self {
-        Self {
-            pause: Duration::from_millis(5),
-        }
-    }
-}
-
-/// A duration's shape is its bounds' floor: `Option<Duration>` exactly where
-/// `0` is off, refused otherwise at every read, before any variable is.
-#[test]
-fn a_duration_whose_shape_contradicts_its_bounds_is_refused_naming_the_field() {
-    let refused = LullConfig::from_env(
-        &ConfigService::with_vars("overlay_lull", []),
-        LullConfig::default(),
-    )
-    .expect_err("an `Option<Duration>` needs an off");
-    assert!(
-        matches!(&refused, ConfigError::MisshapenDuration { var, field: "LullConfig::lull", optional: true } if *var == var_name("overlay_lull", "LULL_SECS")),
-        "{refused:?}"
-    );
-    assert!(refused.to_string().contains("admit no off"), "{refused}");
-    let refused = PauseConfig::from_env(
-        &ConfigService::with_vars("overlay_pause", [("PAUSE_MS", "5")]),
-        PauseConfig::default(),
-    )
-    .expect_err("a `Duration` cannot be off");
-    assert!(
-        matches!(
-            &refused,
-            ConfigError::MisshapenDuration {
-                field: "PauseConfig::pause",
-                optional: false,
-                ..
-            }
-        ),
-        "{refused:?}"
-    );
-    assert!(
-        refused.to_string().contains("turn it off at `0`"),
-        "{refused}"
-    );
 }
 
 #[test]

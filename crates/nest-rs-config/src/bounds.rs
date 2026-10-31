@@ -1,18 +1,25 @@
-//! [`DurationBounds`] — the one reader for a duration a deployment sets, and the
-//! one sentence refusing a value outside its range, read or pinned in code.
+//! [`DurationBounds`] and [`CountBounds`] — the range a setting a deployment
+//! sets is held to — and [`BoundedSetting`], a range bound to the field it
+//! holds: the one reader of that field, and the one sentence refusing a value
+//! outside its range, read or pinned in code.
 //!
 //! Every range has both ends: the floor is where the thing stops working, the
-//! ceiling never above what the library or kernel the value reaches accepts. `0`
-//! is off only under [`Floor::UnitsOrOff`], and refused everywhere else.
+//! ceiling never above what the library or kernel the value reaches accepts. A
+//! range names neither its variable nor its field: `#[config(bounds = …)]`
+//! reads both off the field it bounds, so one range serves every field it fits.
+//! `0` is off only for an `Option<Duration>` field — `None` in code — and held
+//! to the floor everywhere else.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::time::Duration;
 
 use crate::error::ConfigError;
-use crate::service::{ConfigService, var_name};
+use crate::field::Field;
+use crate::service::{ConfigService, var_name, var_name_or_field};
 
 /// The whole-number unit a duration's variable is written in — the suffix its
-/// key carries, `_SECS` or `_MS`.
+/// key carries after the field's name, `_SECS` or `_MS`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DurationUnit {
@@ -32,6 +39,14 @@ impl DurationUnit {
         }
     }
 
+    /// The suffix a key read in this unit carries — `_SECS` or `_MS`.
+    pub const fn suffix(self) -> &'static str {
+        match self {
+            Self::Seconds => "_SECS",
+            Self::Millis => "_MS",
+        }
+    }
+
     fn name(self, count: u64) -> &'static str {
         match (self, count) {
             (Self::Seconds, 1) => "second",
@@ -42,138 +57,118 @@ impl DurationUnit {
     }
 }
 
-/// One end of a range, in its variable's unit, and why nothing past it holds —
+/// One end of a range, in its setting's unit, and why nothing past it holds —
 /// the reason a refusal gives, so it is written for the operator reading the
 /// boot error.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct Bound {
-    /// The end, in the variable's [`DurationUnit`].
+    /// The end — a count of the [`DurationUnit`] for a duration.
     pub count: u64,
     /// Why a value past this end cannot work — never quoting the value.
     pub why: &'static str,
 }
 
 impl Bound {
-    /// The end at `count` of the variable's unit, past which nothing works
-    /// for the reason `why` gives.
+    /// The end at `count`, past which nothing works for the reason `why` gives.
     pub const fn new(count: u64, why: &'static str) -> Self {
         Self { count, why }
     }
 }
 
-/// Where a range starts.
+/// Where a duration's range starts.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub enum Floor {
-    /// At least `count` of the variable's unit, whichever side set the value.
+    /// At least `count` of the unit, whichever side set the value.
     Units(Bound),
     /// Longer than nothing: the variable is held to one whole unit, and a value
     /// set in code to anything above zero is taken. The reason is why zero fails.
     AboveZero(&'static str),
-    /// At least `count` of the variable's unit — or **off**: `0` from the
-    /// environment, `None` in code. Off has a value only through
-    /// [`read_optional`](DurationBounds::read_optional);
-    /// [`read`](DurationBounds::read) has none to return and holds `0` to the
-    /// floor.
-    UnitsOrOff(Bound),
 }
 
-/// The range one duration setting accepts, the variable that sets it, and the
-/// field that pins it in code.
+impl Floor {
+    /// The least count the variable may hold.
+    const fn count(self) -> u64 {
+        match self {
+            Self::Units(bound) => bound.count,
+            Self::AboveZero(_) => 1,
+        }
+    }
+}
+
+/// The range one duration setting accepts, in the unit its variable is written
+/// in — and nothing else: the field it bounds supplies the variable's key (its
+/// name in SCREAMING_SNAKE, the unit's suffix after it) and whether `0` turns
+/// it off (an `Option<Duration>`).
 ///
-/// Built only through [`secs`](Self::secs) or [`millis`](Self::millis), which
-/// hold the key to its unit's suffix; in a `const`, a mismatch does not compile.
+/// Built only through [`secs`](Self::secs) or [`millis`](Self::millis); a floor
+/// above the ceiling does not compile in a `const`.
 ///
 /// ```
 /// use std::time::Duration;
-/// use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor};
+/// use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, config};
 ///
 /// const WINDOW: DurationBounds = DurationBounds::secs(
-///     "WINDOW_SECS",
-///     "FixtureConfig::window",
 ///     Floor::Units(Bound::new(1, "a shorter window counts nothing")),
 ///     Bound::new(3600, "past an hour it is a unit slip"),
 /// );
 ///
-/// let env = ConfigService::with_vars("fixture", [("WINDOW_SECS", "30")]);
-/// assert_eq!(WINDOW.read(&env, Duration::from_secs(60))?.value, Duration::from_secs(30));
+/// #[config(namespace = "fixture")]
+/// #[derive(Clone, Debug)]
+/// pub struct FixtureConfig {
+///     #[config(bounds = WINDOW)]
+///     pub window: Duration,
+///     #[config(bounds = WINDOW)]
+///     pub ceiling: Option<Duration>,
+/// }
+/// # impl Default for FixtureConfig {
+/// #     fn default() -> Self {
+/// #         Self { window: Duration::from_secs(60), ceiling: None }
+/// #     }
+/// # }
+///
+/// assert_eq!(FixtureConfig::WINDOW.key(), "WINDOW_SECS");
+/// let env = ConfigService::with_vars("fixture", [("WINDOW_SECS", "30"), ("CEILING_SECS", "0")]);
+/// let read = FixtureConfig::from_env(&env, FixtureConfig::default())?;
+/// assert_eq!(read.window, Duration::from_secs(30));
+/// assert_eq!(read.ceiling, None, "`0` turns an `Option<Duration>` off");
 ///
 /// let zero = ConfigService::with_vars("fixture", [("WINDOW_SECS", "0")]);
-/// assert!(WINDOW.read(&zero, Duration::from_secs(60)).is_err());
+/// assert!(FixtureConfig::from_env(&zero, FixtureConfig::default()).is_err());
 ///
-/// let pinned = ConfigService::with_vars("fixture", []);
-/// assert!(WINDOW.read(&pinned, Duration::ZERO).is_err(), "a pin is held to the same range");
-///
-/// // A ceiling a deployment may lift says so in its floor, and `0` reads as off.
-/// const CEILING: DurationBounds = DurationBounds::secs(
-///     "WINDOW_SECS",
-///     "FixtureConfig::window",
-///     Floor::UnitsOrOff(Bound::new(1, "a shorter ceiling ends every stream")),
-///     WINDOW.most(),
-/// );
-/// let off = ConfigService::with_vars("fixture", [("WINDOW_SECS", "0")]);
-/// assert!(CEILING.read_optional(&off, Some(Duration::from_secs(60)))?.is_none());
+/// let pinned = FixtureConfig { window: Duration::ZERO, ..FixtureConfig::default() };
+/// let env = ConfigService::with_vars("fixture", []);
+/// assert!(FixtureConfig::from_env(&env, pinned).is_err(), "a pin is held to the same range");
 /// # Ok::<(), nest_rs_config::ConfigError>(())
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct DurationBounds {
-    /// The variable's key in the namespace — `SHUTDOWN_TIMEOUT_SECS`.
-    key: &'static str,
-    /// The field the value is pinned through in code, as a caller writes it —
-    /// `HttpConfig::shutdown_timeout`.
-    field: &'static str,
     /// The unit the variable is written in, which its key's suffix spells.
     unit: DurationUnit,
     /// The floor.
     least: Floor,
-    /// The ceiling; a range ending at another setting's value checks that end
-    /// once both are read, through [`BoundedDuration::refuse`].
+    /// The ceiling.
     most: Bound,
 }
 
 impl DurationBounds {
-    /// A range read in whole seconds, from a key ending in `_SECS`; any other
-    /// key is refused when the bounds are built, at compile time in a `const`.
-    pub const fn secs(key: &'static str, field: &'static str, least: Floor, most: Bound) -> Self {
+    /// A range read in whole seconds, from a key ending in `_SECS`.
+    pub const fn secs(least: Floor, most: Bound) -> Self {
+        Self::new(DurationUnit::Seconds, least, most)
+    }
+
+    /// A range read in whole milliseconds, from a key ending in `_MS`.
+    pub const fn millis(least: Floor, most: Bound) -> Self {
+        Self::new(DurationUnit::Millis, least, most)
+    }
+
+    const fn new(unit: DurationUnit, least: Floor, most: Bound) -> Self {
         assert!(
-            ends_with(key, "_SECS"),
-            "a `DurationBounds::secs` key ends in `_SECS`, the unit its value is read in",
+            least.count() <= most.count,
+            "a range's floor is at most its ceiling, or no value is inside it",
         );
-        Self {
-            key,
-            field,
-            unit: DurationUnit::Seconds,
-            least,
-            most,
-        }
-    }
-
-    /// A range read in whole milliseconds, from a key ending in `_MS`; any
-    /// other key is refused when the bounds are built, at compile time in a
-    /// `const`.
-    pub const fn millis(key: &'static str, field: &'static str, least: Floor, most: Bound) -> Self {
-        assert!(
-            ends_with(key, "_MS"),
-            "a `DurationBounds::millis` key ends in `_MS`, the unit its value is read in",
-        );
-        Self {
-            key,
-            field,
-            unit: DurationUnit::Millis,
-            least,
-            most,
-        }
-    }
-
-    /// The variable's key in the namespace — `SHUTDOWN_TIMEOUT_SECS`.
-    pub const fn key(&self) -> &'static str {
-        self.key
-    }
-
-    /// The field the value is pinned through in code, as a caller writes it.
-    pub const fn field(&self) -> &'static str {
-        self.field
+        Self { unit, least, most }
     }
 
     /// The unit the variable is written in.
@@ -192,289 +187,472 @@ impl DurationBounds {
     }
 }
 
-/// Whether `key` ends in `suffix` — `str::ends_with`, which is not `const`.
-const fn ends_with(key: &str, suffix: &str) -> bool {
-    let (key, suffix) = (key.as_bytes(), suffix.as_bytes());
-    if key.len() < suffix.len() {
-        return false;
+/// The range one count setting accepts — how many of a thing the deployment
+/// allows — each end with its reason. Its variable's key is its field's name.
+///
+/// A floor above the ceiling does not compile in a `const`.
+///
+/// ```
+/// use nest_rs_config::{Bound, Config, ConfigService, CountBounds, config};
+///
+/// const WORKERS: CountBounds = CountBounds::new(
+///     Bound::new(1, "no worker drains nothing"),
+///     Bound::new(256, "past it the pool holds more connections than the database allows"),
+/// );
+///
+/// #[config(namespace = "fixture")]
+/// #[derive(Clone, Debug)]
+/// pub struct FixtureConfig {
+///     #[config(bounds = WORKERS)]
+///     pub workers: usize,
+/// }
+/// # impl Default for FixtureConfig {
+/// #     fn default() -> Self {
+/// #         Self { workers: 4 }
+/// #     }
+/// # }
+///
+/// let env = ConfigService::with_vars("fixture", [("WORKERS", "300")]);
+/// let refused = FixtureConfig::from_env(&env, FixtureConfig::default()).unwrap_err();
+/// assert!(refused.to_string().contains("must be at most 256 — past it the pool"));
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub struct CountBounds {
+    least: Bound,
+    most: Bound,
+}
+
+impl CountBounds {
+    /// A count from `least` to `most`, each end with why nothing past it holds.
+    pub const fn new(least: Bound, most: Bound) -> Self {
+        assert!(
+            least.count <= most.count,
+            "a range's floor is at most its ceiling, or no value is inside it",
+        );
+        Self { least, most }
     }
-    let start = key.len() - suffix.len();
-    let mut i = 0;
-    while i < suffix.len() {
-        if key[start + i] != suffix[i] {
-            return false;
+
+    /// The floor.
+    pub const fn least(&self) -> Bound {
+        self.least
+    }
+
+    /// The ceiling.
+    pub const fn most(&self) -> Bound {
+        self.most
+    }
+}
+
+/// A range bound to the field it holds: the key the field's variable is read
+/// under — its name in SCREAMING_SNAKE, a duration's unit after it — and the
+/// path code pins it through, `Config::field`.
+///
+/// `#[config(bounds = RANGE)]` binds one per field, as the associated constant
+/// named for the field (`HttpConfig::REQUEST_TIMEOUT` for `request_timeout`),
+/// and the derived overlay reads the field through it; every other site naming
+/// the variable or holding a value built in code reaches the same constant, so
+/// no site types the key. A hand-written overlay binds its own with
+/// [`new`](Self::new).
+pub struct BoundedSetting<T: BoundedField> {
+    bounds: T::Bounds,
+    field: Field,
+}
+
+impl<T: BoundedField> Clone for BoundedSetting<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: BoundedField> Copy for BoundedSetting<T> {}
+
+impl<T: BoundedField> fmt::Debug for BoundedSetting<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BoundedSetting")
+            .field("bounds", &self.bounds)
+            .field("field", &self.field)
+            .finish()
+    }
+}
+
+impl<T: BoundedField> BoundedSetting<T> {
+    /// `bounds`, holding `field` — what `#[config(bounds = …)]` writes, and
+    /// what an overlay written by hand writes for itself.
+    pub const fn new(bounds: T::Bounds, field: Field) -> Self {
+        Self { bounds, field }
+    }
+
+    /// The same setting, its value pinned through `path` — a type built in code
+    /// beside the config (`JwtOptions::leeway` beside `AuthnConfig::leeway`),
+    /// whose refusal names the field its caller set, under the same variable.
+    #[must_use]
+    pub const fn pinned_through(self, path: &'static str) -> Self {
+        Self {
+            bounds: self.bounds,
+            field: Field::new(self.field.key(), path),
         }
-        i += 1;
     }
-    true
-}
 
-/// What the environment says about a setting.
-enum Variable {
-    /// Neither spelling is set.
-    Unset,
-    /// `0`, under a [`Floor::UnitsOrOff`] read through
-    /// [`read_optional`](DurationBounds::read_optional).
-    Off,
-    /// A value inside the range.
-    Set(BoundedDuration),
-}
+    /// The range.
+    pub const fn bounds(&self) -> T::Bounds {
+        self.bounds
+    }
 
-impl DurationBounds {
+    /// The field: the key its name spells, and the path code pins it through.
+    pub const fn field(&self) -> Field {
+        self.field
+    }
+
+    /// The variable's key in the namespace — `REQUEST_TIMEOUT_SECS` for a
+    /// duration in seconds, the field's key itself for a count.
+    pub fn key(&self) -> Cow<'static, str> {
+        T::key(&self.bounds, self.field.key())
+    }
+
+    /// The variable, fully qualified under `namespace` —
+    /// `<PREFIX>_<NAMESPACE>__<KEY>`.
+    pub fn var(&self, namespace: &str) -> String {
+        var_name(namespace, &self.key())
+    }
+
+    /// Every way the setting is given, as a sentence about it names them: the
+    /// variable under `namespace`, then the field's path —
+    /// `` <PREFIX>_<NAMESPACE>__<KEY>, or `Config::field` in code ``.
+    pub fn var_or_field(&self, namespace: &str) -> String {
+        var_name_or_field(namespace, &self.key(), self.field.path())
+    }
+
     /// The setting's value — the variable's when it is set, `base` when it is
     /// not — refused outside the range, never clamped in silence.
     ///
     /// A value from the environment is refused under the spelling that supplied
     /// it, so one given as a file is refused under `_FILE`; `base` — pinned in
     /// code or the default — is refused under the variable that would override
-    /// it, naming [`field`](Self::field). A value that does not parse as a whole
-    /// number is refused as [`Setting::parse`](crate::Setting::parse) refuses it.
-    pub fn read(
-        &self,
-        env: &ConfigService,
-        base: Duration,
-    ) -> Result<BoundedDuration, ConfigError> {
-        // Asked without a `None` to give it, `variable` never answers `Off`: a
-        // `0` under `Floor::UnitsOrOff` is held to the floor instead.
-        match self.variable(env, false)? {
-            Variable::Set(read) => Ok(read),
-            Variable::Unset | Variable::Off => {
-                self.pinned(env.var_name(self.key), base, "is not set, and ")
-            }
-        }
+    /// it, naming the field's path. A value that does not parse as a whole
+    /// number is refused as [`Setting::parse`](crate::Setting::parse) refuses
+    /// it. For an `Option<Duration>`, `0` from the environment is `None`, and
+    /// `None` in code stays `None`.
+    pub fn read(&self, env: &ConfigService, base: T) -> Result<T, ConfigError> {
+        T::read(self, env, base)
     }
 
-    /// [`read`](Self::read) for a setting whose absence means something — the
-    /// library's own default, or off under [`Floor::UnitsOrOff`]: `None` stays
-    /// `None` when the variable is unset too, `0` is `None` where the floor
-    /// admits off, and a value from either side is held to the range.
-    pub fn read_optional(
-        &self,
-        env: &ConfigService,
-        base: Option<Duration>,
-    ) -> Result<Option<BoundedDuration>, ConfigError> {
-        match self.variable(env, true)? {
-            Variable::Set(read) => Ok(Some(read)),
-            Variable::Off => Ok(None),
-            Variable::Unset => base
-                .map(|base| self.pinned(env.var_name(self.key), base, "is not set, and "))
-                .transpose(),
-        }
-    }
-
-    /// `value`, built in code with no reader in hand, held to the same range —
-    /// for a constructor a config and a hand-built value both reach, which must
-    /// refuse what the variable would have been refused for. `field` names what
-    /// the caller set, since that is not always [`field`](Self::field).
-    pub fn check(
-        &self,
-        namespace: &str,
-        field: &'static str,
-        value: Duration,
-    ) -> Result<Duration, ConfigError> {
-        let pinned = Self { field, ..*self };
-        pinned
-            .pinned(var_name(namespace, self.key), value, "")
-            .map(|read| read.value)
-    }
-
-    /// The variable, read and held to the range; `0` is [`Variable::Off`] when
-    /// the floor admits off and the caller has a `None` to give it.
-    fn variable(&self, env: &ConfigService, may_be_off: bool) -> Result<Variable, ConfigError> {
-        let Some(setting) = env.duration_setting(self.key)? else {
-            return Ok(Variable::Unset);
-        };
-        let count = setting.parse::<u64>()?;
-        let (least, why, off) = match self.least {
-            Floor::Units(bound) => (bound.count, bound.why, false),
-            Floor::AboveZero(why) => (1, why, false),
-            Floor::UnitsOrOff(bound) => (bound.count, bound.why, may_be_off),
-        };
-        if off && count == 0 {
-            return Ok(Variable::Off);
-        }
-        let or_off = if off { ", or 0 to turn it off" } else { "" };
-        if count < least {
-            return Err(setting.refuse(format_args!(
-                "must be at least {}{or_off} — {why}",
-                Count(self.unit, least),
-            )));
-        }
-        if count > self.most.count {
-            return Err(setting.refuse(format_args!(
-                "must be at most {}{or_off} — {}",
-                Count(self.unit, self.most.count),
-                self.most.why,
-            )));
-        }
-        Ok(Variable::Set(BoundedDuration {
-            value: self.unit.duration(count),
-            var: setting.var().to_owned(),
-        }))
-    }
-
-    /// `value`, set in code, refused under `var` when it is outside the range.
-    /// `lead` opens the sentence with what is known of the variable.
-    fn pinned(
-        &self,
-        var: String,
-        value: Duration,
-        lead: &str,
-    ) -> Result<BoundedDuration, ConfigError> {
-        let or_off = match self.least {
-            Floor::UnitsOrOff(_) => "; `None` turns it off",
-            Floor::Units(_) | Floor::AboveZero(_) => "",
-        };
-        let refuse = |side: &str, limit: Duration, must: &str, why: &str| {
-            ConfigError::parse(
-                var.clone(),
-                format!(
-                    "{lead}`{}` set in code is {value:?}, {side} the {limit:?} it must be {must} — \
-                     {why}{or_off}",
-                    self.field,
-                ),
-            )
-        };
-        match self.least {
-            Floor::Units(bound) | Floor::UnitsOrOff(bound) => {
-                let least = self.unit.duration(bound.count);
-                if value < least {
-                    return Err(refuse("below", least, "at least", bound.why));
-                }
-            }
-            Floor::AboveZero(why) if value.is_zero() => {
-                return Err(ConfigError::parse(
-                    var.clone(),
-                    format!(
-                        "{lead}`{}` set in code is {value:?}, and it must be above zero — {why}",
-                        self.field,
-                    ),
-                ));
-            }
-            Floor::AboveZero(_) => {}
-        }
-        let most = self.unit.duration(self.most.count);
-        if value > most {
-            return Err(refuse("above", most, "at most", self.most.why));
-        }
-        Ok(BoundedDuration { value, var })
+    /// `value`, built in code with no reader in hand, held to the same range
+    /// under the variable `namespace` reads it from — for a constructor a
+    /// config and a hand-built value both reach, which must refuse what the
+    /// variable would have been refused for.
+    pub fn check(&self, namespace: &str, value: T) -> Result<T, ConfigError> {
+        T::check(self, namespace, value)
     }
 }
 
-/// A duration setting as read, and the variable a refusal names it by: the
-/// spelling that supplied it, or the one that would override the value set in
-/// code.
-#[derive(Clone, Debug)]
-pub struct BoundedDuration {
-    /// The value, inside its range.
-    pub value: Duration,
-    var: String,
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for std::time::Duration {}
+    impl Sealed for Option<std::time::Duration> {}
+    impl Sealed for usize {}
 }
 
-impl BoundedDuration {
-    /// The variable a refusal of this value names.
-    pub fn var(&self) -> &str {
-        &self.var
-    }
-
-    /// The boot error refusing this value for `reason` — a check against
-    /// another setting's value, made once both are read. `reason` must not quote
-    /// a value read from a file.
-    pub fn refuse(&self, reason: impl fmt::Display) -> ConfigError {
-        ConfigError::parse(self.var.clone(), reason.to_string())
-    }
-}
-
-/// A `#[config]` field read through its [`DurationBounds`]: a `Duration` the
-/// range holds, or an `Option<Duration>` whose `None` is off — the only two
-/// shapes a duration takes, each refused under bounds of the other's floor
-/// ([`ConfigError::MisshapenDuration`]), so `None` never means "unset". Not
-/// API: what `#[config(bounds = …)]` expands to.
-#[doc(hidden)]
+/// A field type a range holds, and the range that holds it: a `Duration` and
+/// an `Option<Duration>` — `None` off, `0` from the environment — through
+/// [`DurationBounds`], a `usize` through [`CountBounds`]. Sealed.
 #[diagnostic::on_unimplemented(
-    message = "`#[config(bounds = …)]` reads a `Duration` or an `Option<Duration>`, not `{Self}`",
+    message = "`#[config(bounds = …)]` reads a `Duration`, an `Option<Duration>` or a `usize`, \
+               not `{Self}`",
     label = "a field its bounds read",
-    note = "a duration is a `Duration`, or an `Option<Duration>` only where `None` turns it off"
+    note = "a duration is a `Duration`, or an `Option<Duration>` where `None` turns it off; a \
+            count is a `usize`, and one whose `None` is unlimited reads `#[config(count)]`"
 )]
-pub trait BoundedField: Sized {
-    /// The variable `bounds` names over `base`, held to its range.
-    fn overlay_within(
-        bounds: &DurationBounds,
+pub trait BoundedField: Sized + sealed::Sealed {
+    /// The range a field of this type is held to.
+    type Bounds: Copy + fmt::Debug;
+
+    /// `BoundedSetting<Self>`, which `#[config(bounds = …)]` names through this
+    /// trait, so a type no range holds is refused in one sentence rather than
+    /// once per item the derive writes.
+    type Setting;
+
+    #[doc(hidden)]
+    fn key(bounds: &Self::Bounds, stem: &'static str) -> Cow<'static, str>;
+
+    #[doc(hidden)]
+    fn read(
+        setting: &BoundedSetting<Self>,
         env: &ConfigService,
         base: Self,
+    ) -> Result<Self, ConfigError>;
+
+    #[doc(hidden)]
+    fn check(
+        setting: &BoundedSetting<Self>,
+        namespace: &str,
+        value: Self,
     ) -> Result<Self, ConfigError>;
 }
 
 impl BoundedField for Duration {
-    fn overlay_within(
-        bounds: &DurationBounds,
+    type Bounds = DurationBounds;
+    type Setting = BoundedSetting<Self>;
+
+    fn key(bounds: &DurationBounds, stem: &'static str) -> Cow<'static, str> {
+        Cow::Owned(format!("{stem}{}", bounds.unit.suffix()))
+    }
+
+    fn read(
+        setting: &BoundedSetting<Self>,
         env: &ConfigService,
         base: Self,
     ) -> Result<Self, ConfigError> {
-        bounds.shaped(env, false)?;
-        bounds.read(env, base).map(|read| read.value)
+        let key = setting.key();
+        match read_duration(&setting.bounds, env, &key, Off::Absent)? {
+            Some(Some(read)) => Ok(read),
+            // Asked with no off to give, the read never answers it.
+            Some(None) | None => pinned_duration(
+                setting,
+                env.var_name(&key),
+                base,
+                "is not set, and ",
+                Off::Absent,
+            ),
+        }
+    }
+
+    fn check(
+        setting: &BoundedSetting<Self>,
+        namespace: &str,
+        value: Self,
+    ) -> Result<Self, ConfigError> {
+        pinned_duration(setting, setting.var(namespace), value, "", Off::Absent)
     }
 }
 
 impl BoundedField for Option<Duration> {
-    fn overlay_within(
-        bounds: &DurationBounds,
+    type Bounds = DurationBounds;
+    type Setting = BoundedSetting<Self>;
+
+    fn key(bounds: &DurationBounds, stem: &'static str) -> Cow<'static, str> {
+        Duration::key(bounds, stem)
+    }
+
+    fn read(
+        setting: &BoundedSetting<Self>,
         env: &ConfigService,
         base: Self,
     ) -> Result<Self, ConfigError> {
-        bounds.shaped(env, true)?;
-        Ok(bounds.read_optional(env, base)?.map(|read| read.value))
-    }
-}
-
-impl DurationBounds {
-    /// Refused unless a field of this shape — an `Option<Duration>` when
-    /// `optional` — is the one these bounds' floor reads into: `None` exists
-    /// exactly where `0` is off.
-    fn shaped(&self, env: &ConfigService, optional: bool) -> Result<(), ConfigError> {
-        let off = matches!(self.least, Floor::UnitsOrOff(_));
-        if off == optional {
-            return Ok(());
+        let key = setting.key();
+        match read_duration(&setting.bounds, env, &key, Off::AtZero)? {
+            Some(read) => Ok(read),
+            None => base
+                .map(|base| {
+                    pinned_duration(
+                        setting,
+                        env.var_name(&key),
+                        base,
+                        "is not set, and ",
+                        Off::AtZero,
+                    )
+                })
+                .transpose(),
         }
-        Err(ConfigError::MisshapenDuration {
-            var: env.var_name(self.key),
-            field: self.field,
-            optional,
-        })
+    }
+
+    fn check(
+        setting: &BoundedSetting<Self>,
+        namespace: &str,
+        value: Self,
+    ) -> Result<Self, ConfigError> {
+        value
+            .map(|value| pinned_duration(setting, setting.var(namespace), value, "", Off::AtZero))
+            .transpose()
     }
 }
 
-/// Whether `bounds` reads the field `field` of `config` under `key`, the
-/// field's name in SCREAMING_SNAKE: its key is that name with its unit's
-/// suffix after it, and it pins `Config::field`. What `#[config(bounds = …)]`
-/// asserts at compile time, so a bound cannot drift from the field it reads.
-#[doc(hidden)]
-pub const fn reads_field(bounds: &DurationBounds, key: &str, config: &str, field: &str) -> bool {
-    let suffix = match bounds.unit {
-        DurationUnit::Seconds => "_SECS",
-        DurationUnit::Millis => "_MS",
+impl BoundedField for usize {
+    type Bounds = CountBounds;
+    type Setting = BoundedSetting<Self>;
+
+    fn key(_: &CountBounds, stem: &'static str) -> Cow<'static, str> {
+        Cow::Borrowed(stem)
+    }
+
+    fn read(
+        setting: &BoundedSetting<Self>,
+        env: &ConfigService,
+        base: Self,
+    ) -> Result<Self, ConfigError> {
+        let Some(read) = env.setting(setting.field.key())? else {
+            return pinned_count(
+                setting,
+                env.var_name(setting.field.key()),
+                base,
+                "is not set, and ",
+            );
+        };
+        let count: Self = read.parse()?;
+        match outside(&setting.bounds, count) {
+            None => Ok(count),
+            Some(Past { must, bound, .. }) => Err(read.refuse(format_args!(
+                "must be {must} {} — {}",
+                bound.count, bound.why
+            ))),
+        }
+    }
+
+    fn check(
+        setting: &BoundedSetting<Self>,
+        namespace: &str,
+        value: Self,
+    ) -> Result<Self, ConfigError> {
+        pinned_count(setting, setting.var(namespace), value, "")
+    }
+}
+
+/// Whether the field a duration is read into has an off: `None`, `0` from the
+/// environment.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Off {
+    /// A `Duration`: `0` is held to the floor.
+    Absent,
+    /// An `Option<Duration>`: `0` is `None`.
+    AtZero,
+}
+
+/// The variable under `key`, held to `bounds`: `None` when it is unset, and
+/// `Some(None)` for `0` where the field has an off.
+fn read_duration(
+    bounds: &DurationBounds,
+    env: &ConfigService,
+    key: &str,
+    off: Off,
+) -> Result<Option<Option<Duration>>, ConfigError> {
+    let Some(setting) = env.duration_setting(key)? else {
+        return Ok(None);
     };
-    joined(bounds.key, &[key, suffix]) && joined(bounds.field, &[config, "::", field])
+    let count = setting.parse::<u64>()?;
+    if off == Off::AtZero && count == 0 {
+        return Ok(Some(None));
+    }
+    let or_off = match off {
+        Off::AtZero => ", or 0 to turn it off",
+        Off::Absent => "",
+    };
+    let (least, why) = match bounds.least {
+        Floor::Units(bound) => (bound.count, bound.why),
+        Floor::AboveZero(why) => (1, why),
+    };
+    if count < least {
+        return Err(setting.refuse(format_args!(
+            "must be at least {}{or_off} — {why}",
+            Count(bounds.unit, least),
+        )));
+    }
+    if count > bounds.most.count {
+        return Err(setting.refuse(format_args!(
+            "must be at most {}{or_off} — {}",
+            Count(bounds.unit, bounds.most.count),
+            bounds.most.why,
+        )));
+    }
+    Ok(Some(Some(bounds.unit.duration(count))))
 }
 
-/// Whether `whole` is `parts` end to end — a `const` concatenation compare.
-const fn joined(whole: &str, parts: &[&str]) -> bool {
-    let whole = whole.as_bytes();
-    let mut at = 0;
-    let mut part = 0;
-    while part < parts.len() {
-        let bytes = parts[part].as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if at >= whole.len() || whole[at] != bytes[i] {
-                return false;
+/// `value`, set in code through `setting`'s field, refused under `var` when it
+/// is outside the range. `lead` opens the sentence with what is known of the
+/// variable.
+fn pinned_duration<T: BoundedField<Bounds = DurationBounds>>(
+    setting: &BoundedSetting<T>,
+    var: String,
+    value: Duration,
+    lead: &str,
+    off: Off,
+) -> Result<Duration, ConfigError> {
+    let bounds = setting.bounds;
+    let path = setting.field.path();
+    let or_off = match off {
+        Off::AtZero => "; `None` turns it off",
+        Off::Absent => "",
+    };
+    let refuse = |side: &str, limit: Duration, must: &str, why: &str| {
+        ConfigError::parse(
+            var.clone(),
+            format!(
+                "{lead}`{path}` set in code is {value:?}, {side} the {limit:?} it must be {must} — \
+                 {why}{or_off}",
+            ),
+        )
+    };
+    match bounds.least {
+        Floor::Units(bound) => {
+            let least = bounds.unit.duration(bound.count);
+            if value < least {
+                return Err(refuse("below", least, "at least", bound.why));
             }
-            at += 1;
-            i += 1;
         }
-        part += 1;
+        Floor::AboveZero(why) if value.is_zero() => {
+            return Err(ConfigError::parse(
+                var.clone(),
+                format!(
+                    "{lead}`{path}` set in code is {value:?}, and it must be above zero — \
+                     {why}{or_off}",
+                ),
+            ));
+        }
+        Floor::AboveZero(_) => {}
     }
-    at == whole.len()
+    let most = bounds.unit.duration(bounds.most.count);
+    if value > most {
+        return Err(refuse("above", most, "at most", bounds.most.why));
+    }
+    Ok(value)
+}
+
+/// `count`, set in code through `setting`'s field, refused under `var` when it
+/// is outside the range; `lead` opens the sentence with what is known of the
+/// variable.
+fn pinned_count(
+    setting: &BoundedSetting<usize>,
+    var: String,
+    count: usize,
+    lead: &str,
+) -> Result<usize, ConfigError> {
+    match outside(&setting.bounds, count) {
+        None => Ok(count),
+        Some(Past { side, must, bound }) => Err(ConfigError::parse(
+            var,
+            format!(
+                "{lead}`{}` set in code is {count}, {side} the {} it must be {must} — {}",
+                setting.field.path(),
+                bound.count,
+                bound.why,
+            ),
+        )),
+    }
+}
+
+/// The end of a count's range a value falls past.
+struct Past {
+    side: &'static str,
+    must: &'static str,
+    bound: Bound,
+}
+
+/// Which end of `bounds` `count` falls past, if either.
+fn outside(bounds: &CountBounds, count: usize) -> Option<Past> {
+    let count = u64::try_from(count).unwrap_or(u64::MAX);
+    if count < bounds.least.count {
+        Some(Past {
+            side: "below",
+            must: "at least",
+            bound: bounds.least,
+        })
+    } else if count > bounds.most.count {
+        Some(Past {
+            side: "above",
+            must: "at most",
+            bound: bounds.most,
+        })
+    } else {
+        None
+    }
 }
 
 /// `count` followed by its unit, singular or plural.
@@ -491,43 +669,62 @@ mod tests {
     use super::*;
 
     const RANGE: DurationBounds = DurationBounds::secs(
-        "WINDOW_SECS",
-        "FixtureConfig::window",
         Floor::Units(Bound::new(1, "the floor's reason")),
         Bound::new(60, "the ceiling's reason"),
+    );
+
+    const WINDOW: BoundedSetting<Duration> =
+        BoundedSetting::new(RANGE, Field::new("WINDOW", "FixtureConfig::window"));
+
+    const CEILING: BoundedSetting<Option<Duration>> = BoundedSetting::new(
+        DurationBounds::secs(
+            Floor::Units(Bound::new(10, "the floor's reason")),
+            Bound::new(60, "the ceiling's reason"),
+        ),
+        Field::new("CEILING", "FixtureConfig::ceiling"),
     );
 
     fn env(vars: &[(&str, &str)]) -> ConfigService {
         ConfigService::with_vars("fixture", vars.iter().copied())
     }
 
-    fn refused(result: Result<BoundedDuration, ConfigError>) -> String {
+    fn refused<T: fmt::Debug>(result: Result<T, ConfigError>) -> String {
         result.expect_err("refused").to_string()
     }
 
     #[test]
+    fn the_key_is_the_fields_name_with_the_units_suffix_after_it() {
+        assert_eq!(WINDOW.key(), "WINDOW_SECS");
+        let millis: BoundedSetting<Duration> = BoundedSetting::new(
+            DurationBounds::millis(Floor::AboveZero("why"), Bound::new(5, "why")),
+            Field::new("DEADLINE", "FixtureConfig::deadline"),
+        );
+        assert_eq!(millis.key(), "DEADLINE_MS");
+        assert_eq!(WINDOW.var("fixture"), var_name("fixture", "WINDOW_SECS"));
+    }
+
+    #[test]
     fn a_value_inside_the_range_is_read_from_either_side() {
-        let read = RANGE
+        let read = WINDOW
             .read(&env(&[("WINDOW_SECS", "60")]), Duration::from_secs(5))
             .expect("the ceiling itself is accepted");
-        assert_eq!(read.value, Duration::from_secs(60));
-        assert_eq!(read.var(), var_name("fixture", "WINDOW_SECS"));
+        assert_eq!(read, Duration::from_secs(60));
 
-        let pinned = RANGE
+        let pinned = WINDOW
             .read(&env(&[]), Duration::from_millis(1500))
             .expect("a pin inside the range, sub-unit included");
-        assert_eq!(pinned.value, Duration::from_millis(1500));
+        assert_eq!(pinned, Duration::from_millis(1500));
     }
 
     #[test]
     fn the_environment_is_refused_past_either_end_naming_the_variable_and_the_unit() {
-        let below = refused(RANGE.read(&env(&[("WINDOW_SECS", "0")]), Duration::from_secs(5)));
+        let below = refused(WINDOW.read(&env(&[("WINDOW_SECS", "0")]), Duration::from_secs(5)));
         assert!(
             below.contains(&var_name("fixture", "WINDOW_SECS"))
                 && below.contains("must be at least 1 second — the floor's reason"),
             "{below}",
         );
-        let above = refused(RANGE.read(&env(&[("WINDOW_SECS", "61")]), Duration::from_secs(5)));
+        let above = refused(WINDOW.read(&env(&[("WINDOW_SECS", "61")]), Duration::from_secs(5)));
         assert!(
             above.contains("must be at most 60 seconds — the ceiling's reason"),
             "{above}"
@@ -536,14 +733,14 @@ mod tests {
 
     #[test]
     fn a_pin_is_held_to_the_range_the_variable_is() {
-        let below = refused(RANGE.read(&env(&[]), Duration::ZERO));
+        let below = refused(WINDOW.read(&env(&[]), Duration::ZERO));
         assert!(
             below.contains(&var_name("fixture", "WINDOW_SECS"))
                 && below.contains("is not set, and `FixtureConfig::window` set in code is 0ns")
                 && below.contains("below the 1s it must be at least — the floor's reason"),
             "{below}",
         );
-        let above = refused(RANGE.read(&env(&[]), Duration::from_secs(61)));
+        let above = refused(WINDOW.read(&env(&[]), Duration::from_secs(61)));
         assert!(
             above.contains("above the 60s it must be at most — the ceiling's reason"),
             "{above}"
@@ -551,41 +748,16 @@ mod tests {
     }
 
     #[test]
-    fn an_optional_setting_stays_unset_and_is_held_to_the_range_once_set() {
-        assert!(
-            RANGE
-                .read_optional(&env(&[]), None)
-                .expect("unset")
-                .is_none()
-        );
-        let pinned = RANGE
-            .read_optional(&env(&[]), Some(Duration::ZERO))
-            .expect_err("a pinned zero is refused");
-        assert!(
-            pinned.to_string().contains("set in code is 0ns"),
-            "{pinned}"
-        );
-        let read = RANGE
-            .read_optional(&env(&[("WINDOW_SECS", "7")]), None)
-            .expect("read")
-            .expect("set");
-        assert_eq!(read.value, Duration::from_secs(7));
-    }
-
-    #[test]
     fn a_value_built_in_code_is_refused_naming_the_field_it_was_built_through() {
-        let err = RANGE
-            .check("fixture", "FixtureOptions::window", Duration::ZERO)
-            .expect_err("refused");
-        let text = err.to_string();
+        let text = refused(WINDOW.check("fixture", Duration::ZERO));
         assert!(
-            text.contains("`FixtureOptions::window` set in code is 0ns")
+            text.contains("`FixtureConfig::window` set in code is 0ns")
                 && !text.contains("is not set"),
             "{text}",
         );
         assert_eq!(
-            RANGE
-                .check("fixture", "FixtureOptions::window", Duration::from_secs(3))
+            WINDOW
+                .check("fixture", Duration::from_secs(3))
                 .expect("inside"),
             Duration::from_secs(3),
         );
@@ -593,11 +765,12 @@ mod tests {
 
     #[test]
     fn a_millisecond_unit_names_itself() {
-        const PROBE: DurationBounds = DurationBounds::millis(
-            "DEADLINE_MS",
-            "FixtureConfig::deadline",
-            Floor::Units(Bound::new(1, "why")),
-            Bound::new(60_000, "past a minute"),
+        const PROBE: BoundedSetting<Duration> = BoundedSetting::new(
+            DurationBounds::millis(
+                Floor::Units(Bound::new(1, "why")),
+                Bound::new(60_000, "past a minute"),
+            ),
+            Field::new("DEADLINE", "FixtureConfig::deadline"),
         );
         let text = refused(PROBE.read(&env(&[("DEADLINE_MS", "0")]), Duration::from_millis(5)));
         assert!(text.contains("must be at least 1 millisecond"), "{text}");
@@ -614,7 +787,7 @@ mod tests {
     /// The top of `u64` is past every ceiling, and is refused naming its variable.
     #[test]
     fn the_top_of_the_range_is_refused_from_either_side() {
-        let text = refused(RANGE.read(
+        let text = refused(WINDOW.read(
             &env(&[("WINDOW_SECS", "18446744073709551615")]),
             Duration::from_secs(5),
         ));
@@ -623,77 +796,61 @@ mod tests {
                 && text.contains("must be at most 60 seconds"),
             "{text}"
         );
-        let text = refused(RANGE.read(&env(&[]), Duration::MAX));
+        let text = refused(WINDOW.read(&env(&[]), Duration::MAX));
         assert!(text.contains("above the 60s it must be at most"), "{text}");
     }
 
-    /// A floor that admits off reads `0` as `None` where the caller has one to
-    /// give, holds every other value to the range, and refuses a pinned zero —
-    /// off in code is `None`, never a zero that would cut every connection.
+    /// An `Option<Duration>` reads `0` as `None`, holds every other value to
+    /// the range, and refuses a pinned zero — off in code is `None`, never a
+    /// zero that would cut every connection. Unset, its `None` stays `None`.
     #[test]
     fn an_off_switch_is_zero_from_the_environment_and_none_in_code() {
-        const CEILING: DurationBounds = DurationBounds {
-            least: Floor::UnitsOrOff(Bound::new(10, "the floor's reason")),
-            ..RANGE
-        };
         assert!(
             CEILING
-                .read_optional(&env(&[("WINDOW_SECS", "0")]), Some(Duration::from_secs(30)))
+                .read(
+                    &env(&[("CEILING_SECS", "0")]),
+                    Some(Duration::from_secs(30))
+                )
                 .expect("off")
                 .is_none(),
             "`0` is off, over a pinned value too",
         );
-        assert!(
-            CEILING
-                .read_optional(&env(&[]), None)
-                .expect("off")
-                .is_none()
-        );
-        let below = refused(
-            CEILING
-                .read_optional(&env(&[("WINDOW_SECS", "3")]), None)
-                .map(|read| read.expect("set")),
-        );
+        assert!(CEILING.read(&env(&[]), None).expect("off").is_none());
+        let below = refused(CEILING.read(&env(&[("CEILING_SECS", "3")]), None));
         assert!(
             below.contains("must be at least 10 seconds, or 0 to turn it off — the floor's reason"),
             "{below}"
         );
-        let above = refused(
-            CEILING
-                .read_optional(&env(&[("WINDOW_SECS", "61")]), None)
-                .map(|read| read.expect("set")),
-        );
+        let above = refused(CEILING.read(&env(&[("CEILING_SECS", "61")]), None));
         assert!(
             above
                 .contains("must be at most 60 seconds, or 0 to turn it off — the ceiling's reason"),
             "{above}"
         );
-        let pinned = refused(
-            CEILING
-                .read_optional(&env(&[]), Some(Duration::ZERO))
-                .map(|read| read.expect("set")),
-        );
+        let pinned = refused(CEILING.read(&env(&[]), Some(Duration::ZERO)));
         assert!(
             pinned.contains("set in code is 0ns, below the 10s it must be at least")
                 && pinned.contains("`None` turns it off"),
             "{pinned}"
         );
-        let held = refused(CEILING.read(&env(&[("WINDOW_SECS", "0")]), Duration::from_secs(30)));
+        let held = refused(CEILING.check("fixture", Some(Duration::ZERO)));
         assert!(
-            held.contains("must be at least 10 seconds — the floor's reason"),
-            "`read` has no `None` to give, so `0` is held to the floor: {held}"
+            held.contains("`None` turns it off") && !held.contains("is not set"),
+            "{held}"
         );
+        assert_eq!(CEILING.check("fixture", None).expect("off"), None);
     }
 
     /// A floor whose only failure is zero holds the variable to one unit, and a
     /// value set in code to anything above zero.
     #[test]
     fn a_floor_above_zero_takes_a_sub_unit_value_set_in_code() {
-        const BUDGET: DurationBounds = DurationBounds::secs(
-            "BUDGET_SECS",
-            "FixtureConfig::budget",
-            Floor::AboveZero("a zero budget gives up before its first attempt"),
-            Bound::new(3600, "why"),
+        const BUDGET: BoundedSetting<Duration> = BoundedSetting::new(
+            DurationBounds::secs(
+                Floor::AboveZero("a zero budget gives up before its first attempt"),
+                Bound::new(3600, "why"),
+            ),
+            Field::new("BUDGET", "FixtureConfig::budget"),
         );
         let from_env = refused(BUDGET.read(&env(&[("BUDGET_SECS", "0")]), Duration::from_secs(5)));
         assert!(
@@ -708,7 +865,7 @@ mod tests {
         let sub_unit = BUDGET
             .read(&env(&[]), Duration::from_millis(300))
             .expect("a sub-unit budget set in code is a budget");
-        assert_eq!(sub_unit.value, Duration::from_millis(300));
+        assert_eq!(sub_unit, Duration::from_millis(300));
     }
 
     #[test]
@@ -718,10 +875,61 @@ mod tests {
         std::fs::write(&path, "0\n").expect("write");
         let path = path.to_string_lossy().into_owned();
         let text =
-            refused(RANGE.read(&env(&[("WINDOW_SECS_FILE", &path)]), Duration::from_secs(5)));
+            refused(WINDOW.read(&env(&[("WINDOW_SECS_FILE", &path)]), Duration::from_secs(5)));
         assert!(
             text.contains(&var_name("fixture", "WINDOW_SECS_FILE")),
             "{text}"
+        );
+    }
+
+    const SESSIONS: BoundedSetting<usize> = BoundedSetting::new(
+        CountBounds::new(
+            Bound::new(1, "the floor's reason"),
+            Bound::new(1024, "the ceiling's reason"),
+        ),
+        Field::new("SESSIONS", "FixtureConfig::sessions"),
+    );
+
+    #[test]
+    fn a_count_reads_its_key_and_is_held_to_its_range_from_either_side() {
+        assert_eq!(SESSIONS.key(), "SESSIONS");
+        assert_eq!(
+            SESSIONS
+                .read(&env(&[("SESSIONS", "1024")]), 3)
+                .expect("the ceiling itself"),
+            1024
+        );
+        assert_eq!(
+            SESSIONS.read(&env(&[]), 3).expect("unset keeps the base"),
+            3
+        );
+        let below = refused(SESSIONS.read(&env(&[("SESSIONS", "0")]), 3));
+        assert!(
+            below.contains(&var_name("fixture", "SESSIONS"))
+                && below.contains("must be at least 1 — the floor's reason"),
+            "{below}"
+        );
+        let above = refused(SESSIONS.read(&env(&[("SESSIONS", "1025")]), 3));
+        assert!(
+            above.contains("must be at most 1024 — the ceiling's reason"),
+            "{above}"
+        );
+        let unparsed = refused(SESSIONS.read(&env(&[("SESSIONS", "-1")]), 3));
+        assert!(!unparsed.contains("-1"), "{unparsed}");
+        let pinned = refused(SESSIONS.read(&env(&[]), usize::MAX));
+        assert!(
+            pinned.contains(&format!(
+                "is not set, and `FixtureConfig::sessions` set in code is {}, above the 1024 it \
+                 must be at most — the ceiling's reason",
+                usize::MAX
+            )),
+            "{pinned}"
+        );
+        let held = refused(SESSIONS.check("fixture", 0));
+        assert!(
+            held.contains("`FixtureConfig::sessions` set in code is 0, below the 1")
+                && !held.contains("is not set"),
+            "{held}"
         );
     }
 }

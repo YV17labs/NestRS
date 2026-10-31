@@ -2,7 +2,7 @@ use std::any::TypeId;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_config::{ClientTls, ConfigModule, ConfigSetup, DurationBounds, Namespaced};
+use nest_rs_config::{BoundedSetting, ClientTls, ConfigModule, ConfigSetup, Namespaced};
 use nest_rs_core::{
     Attempt, Backoff, Budget, Collecting, ContainerBuilder, Module, Proving, Registering,
     SHUTDOWN_SETTLE_TIMEOUT, Unnamed, Unproved, process_seed, prove,
@@ -15,7 +15,7 @@ use sea_orm::{
 };
 
 use crate::SeaOrmConfig;
-use crate::config::{CONNECT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT, STATEMENT_TIMEOUT};
+use crate::config::DEFAULT_CONNECT_TIMEOUT;
 use crate::error::ConnectError;
 
 /// Where the substrate's variables live: `<PREFIX>_SEAORM__*`.
@@ -85,16 +85,24 @@ pub(crate) enum BudgetReach {
 /// The pool's [`Budget`]s: how long a query waits for a connection, and how
 /// long a statement runs before Postgres cancels it.
 pub(crate) fn budgets(reach: BudgetReach) -> [Budget; 2] {
-    let declare = |resource, bounds: &DurationBounds, read| {
-        let setting = nest_rs_config::var_name_or_field(NAMESPACE, bounds.key(), bounds.field());
+    let declare = |resource, bounds: &BoundedSetting<Duration>, read| {
+        let setting = bounds.var_or_field(NAMESPACE);
         match reach {
             BudgetReach::Injected => Budget::of::<DatabaseConnection>(resource, setting, read),
             BudgetReach::Ambient => Budget::ambient::<DatabaseConnection>(resource, setting, read),
         }
     };
     [
-        declare("the SeaORM pool", &CONNECT_TIMEOUT, acquire_budget),
-        declare("the SeaORM statements", &STATEMENT_TIMEOUT, statement_bound),
+        declare(
+            "the SeaORM pool",
+            &SeaOrmConfig::CONNECT_TIMEOUT,
+            acquire_budget,
+        ),
+        declare(
+            "the SeaORM statements",
+            &SeaOrmConfig::STATEMENT_TIMEOUT,
+            statement_bound,
+        ),
     ]
 }
 
@@ -385,7 +393,7 @@ fn unproved(
             budget,
             attempts,
             url: nest_rs_config::var_name(NAMESPACE, "URL"),
-            timeout: nest_rs_config::var_name(NAMESPACE, CONNECT_TIMEOUT.key()),
+            timeout: SeaOrmConfig::CONNECT_TIMEOUT.var(NAMESPACE),
             source: last,
         },
     }

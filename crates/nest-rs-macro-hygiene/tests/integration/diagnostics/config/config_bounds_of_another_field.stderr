@@ -1,5 +1,0 @@
-error[E0080]: evaluation panicked: the `DurationBounds` a `#[config(bounds = …)]` names reads the field it bounds: its key is the field's name in SCREAMING_SNAKE with its unit after it (`_SECS`, `_MS`), and its field is `Config::field`
-  --> tests/integration/diagnostics/config/config_bounds_of_another_field.rs:19:23
-   |
-19 |     #[config(bounds = LEASE)]
-   |                       ^^^^^ evaluation of `_` failed here

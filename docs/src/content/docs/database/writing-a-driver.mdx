@@ -291,20 +291,24 @@ among them:
 
 ```rust title="from nest-rs-seaorm's substrate"
 pub(crate) fn budgets(reach: BudgetReach) -> [Budget; 2] {
-    let declare = |resource, bounds: &DurationBounds, read| {
-        let setting = format!(
-            "{}, or `{}` in code",
-            nest_rs_config::var_name(NAMESPACE, bounds.key()),
-            bounds.field(),
-        );
+    let declare = |resource, bounds: &BoundedSetting<Duration>, read| {
+        let setting = bounds.var_or_field(NAMESPACE);
         match reach {
             BudgetReach::Injected => Budget::of::<DatabaseConnection>(resource, setting, read),
             BudgetReach::Ambient => Budget::ambient::<DatabaseConnection>(resource, setting, read),
         }
     };
     [
-        declare("the SeaORM pool", &CONNECT_TIMEOUT, acquire_budget),
-        declare("the SeaORM statements", &STATEMENT_TIMEOUT, statement_bound),
+        declare(
+            "the SeaORM pool",
+            &SeaOrmConfig::CONNECT_TIMEOUT,
+            acquire_budget,
+        ),
+        declare(
+            "the SeaORM statements",
+            &SeaOrmConfig::STATEMENT_TIMEOUT,
+            statement_bound,
+        ),
     ]
 }
 ```

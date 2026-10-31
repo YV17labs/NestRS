@@ -7,7 +7,6 @@ use nest_rs_config::{ConfigService, Namespaced, instance_namespace};
 use nest_rs_core::Instance;
 
 use crate::RedisConfig;
-use crate::config::CONNECT_TIMEOUT;
 
 /// The instance a connection was opened for: the name every line it files
 /// carries as `instance` — empty for the default one — and the namespace its
@@ -56,7 +55,7 @@ impl RedisInstance {
 
     /// The connect budget's variable.
     pub(crate) fn connect_timeout_var(&self) -> String {
-        self.var(CONNECT_TIMEOUT.key())
+        RedisConfig::CONNECT_TIMEOUT.var(&self.namespace)
     }
 
     /// The TLS material's three variables, listed.

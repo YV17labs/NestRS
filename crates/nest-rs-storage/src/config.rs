@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Bound, ClientTls, Config, ConfigError, ConfigField, ConfigService, DurationBounds, Environment,
-    Floor, Namespaced, Setting, config, endpoint_shown,
+    Bound, BoundedSetting, ClientTls, Config, ConfigError, ConfigField, ConfigService,
+    DurationBounds, Environment, Field, Floor, Namespaced, Setting, config, endpoint_shown,
 };
 use nest_rs_core::Secret;
 
@@ -15,29 +15,6 @@ const DEFAULT_OPERATION_TIMEOUT_SECS: u64 = 15;
 /// How long a transfer waits for its next bytes by default: the 30 seconds
 /// object_store waits for a request by default.
 const DEFAULT_READ_TIMEOUT_SECS: u64 = 30;
-
-/// The operation budget's range, the variable that sets it, and why.
-pub(crate) const OPERATION_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "OPERATION_TIMEOUT_SECS",
-    "StorageConfig::operation_timeout",
-    Floor::AboveZero("a zero budget gives up on every call before the store is asked"),
-    Bound::new(
-        60 * 60,
-        "the budget bounds every call a caller waits on, and a store silent for an hour is \
-         gone rather than slow",
-    ),
-);
-
-/// The read bound's range, the variable that sets it, and why.
-pub(crate) const READ_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "READ_TIMEOUT_SECS",
-    "StorageConfig::read_timeout",
-    Floor::AboveZero("a zero bound cuts every transfer before its first bytes"),
-    Bound::new(
-        60 * 60,
-        "a transfer that moved nothing for an hour is a dead connection, not a slow one",
-    ),
-);
 
 /// The object store's configuration, read from the framework-namespaced
 /// `<PREFIX>_STORAGE__*` keys: [`url`](Self::url) names the store, and its
@@ -152,8 +129,8 @@ impl Config for StorageConfig {
             None => Backend::parse(&d.url).map_err(|why| refuse_url(env, why)),
         }?;
         let url = url.map_or(d.url.clone(), |setting| setting.value);
-        let operation_timeout = OPERATION_TIMEOUT.read(env, d.operation_timeout)?.value;
-        let read_timeout = READ_TIMEOUT.read(env, d.read_timeout)?.value;
+        let operation_timeout = Self::OPERATION_TIMEOUT.read(env, d.operation_timeout)?;
+        let read_timeout = Self::READ_TIMEOUT.read(env, d.read_timeout)?;
         if let Backend::Memory { .. } = backend {
             refuse_memory_deployed(env)?;
             refuse_s3_settings(env)?;
@@ -187,6 +164,33 @@ impl Config for StorageConfig {
 }
 
 impl StorageConfig {
+    /// The operation budget, bound to
+    /// [`operation_timeout`](Self::operation_timeout) as `#[config(bounds = …)]`
+    /// binds a field — the overlay here is written by hand.
+    pub(crate) const OPERATION_TIMEOUT: BoundedSetting<Duration> = BoundedSetting::new(
+        DurationBounds::secs(
+            Floor::AboveZero("a zero budget gives up on every call before the store is asked"),
+            Bound::new(
+                60 * 60,
+                "the budget bounds every call a caller waits on, and a store silent for an hour \
+                 is gone rather than slow",
+            ),
+        ),
+        Field::new("OPERATION_TIMEOUT", "StorageConfig::operation_timeout"),
+    );
+
+    /// The read bound, bound to [`read_timeout`](Self::read_timeout).
+    pub(crate) const READ_TIMEOUT: BoundedSetting<Duration> = BoundedSetting::new(
+        DurationBounds::secs(
+            Floor::AboveZero("a zero bound cuts every transfer before its first bytes"),
+            Bound::new(
+                60 * 60,
+                "a transfer that moved nothing for an hour is a dead connection, not a slow one",
+            ),
+        ),
+        Field::new("READ_TIMEOUT", "StorageConfig::read_timeout"),
+    );
+
     /// The store this config names, once every refusal the read makes holds
     /// for a config built in code too — what [`Storage::connect`] checks
     /// before anything is sent.
@@ -195,11 +199,11 @@ impl StorageConfig {
     pub(crate) fn backend(&self) -> nest_rs_config::Result<Backend> {
         let env = ConfigService::for_namespace(Self::NAMESPACE);
         let backend = Backend::parse(&self.url).map_err(|why| refuse_url(&env, why))?;
-        for (bounds, value) in [
-            (OPERATION_TIMEOUT, self.operation_timeout),
-            (READ_TIMEOUT, self.read_timeout),
+        for (setting, value) in [
+            (Self::OPERATION_TIMEOUT, self.operation_timeout),
+            (Self::READ_TIMEOUT, self.read_timeout),
         ] {
-            bounds.check(Self::NAMESPACE, bounds.field(), value)?;
+            setting.check(Self::NAMESPACE, value)?;
         }
         if let Backend::Memory { .. } = backend {
             refuse_memory_deployed(&env)?;

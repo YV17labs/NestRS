@@ -1,0 +1,13 @@
+error[E0277]: `#[config(bounds = …)]` reads a `Duration`, an `Option<Duration>` or a `usize`, not `u64`
+  --> tests/integration/diagnostics/config/config_bounds_on_a_type_no_range_holds.rs:16:13
+   |
+16 |     window: u64,
+   |             ^^^ a field its bounds read
+   |
+   = help: the trait `BoundedField` is not implemented for `u64`
+   = note: a duration is a `Duration`, or an `Option<Duration>` where `None` turns it off; a count is a `usize`, and one whose `None` is unlimited reads `#[config(count)]`
+help: the trait `BoundedField` is implemented for `usize`
+  --> $WORKSPACE/crates/nest-rs-config/src/bounds.rs
+   |
+   | impl BoundedField for usize {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^

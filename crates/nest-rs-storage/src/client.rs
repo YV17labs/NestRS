@@ -15,7 +15,7 @@ use object_store::{
     PutOptions, PutPayload,
 };
 
-use crate::config::{OPERATION_TIMEOUT, StorageConfig};
+use crate::config::StorageConfig;
 use crate::error::{CallTimedOut, Exchange, Result, StorageError};
 use crate::store::{Store, witnessed};
 use crate::transfer::download;
@@ -76,11 +76,7 @@ impl Discoverable for Storage {
             .provide(Self { config, store })
             .provide_meta(Budget::of::<Self>(
                 "the object store",
-                nest_rs_config::var_name_or_field(
-                    "storage",
-                    OPERATION_TIMEOUT.key(),
-                    OPERATION_TIMEOUT.field(),
-                ),
+                StorageConfig::OPERATION_TIMEOUT.var_or_field("storage"),
                 |storage| Some(storage.config.operation_timeout),
             ))
     }

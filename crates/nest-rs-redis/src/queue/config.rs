@@ -8,10 +8,8 @@ use nest_rs_config::{Bound, DurationBounds, Floor, config};
 /// Default lease: thirty seconds, renewed every ten while the attempt runs.
 const DEFAULT_LEASE_SECS: u64 = 30;
 
-/// The lease's bounds, the variable that sets it, and why.
-pub(crate) const LEASE: DurationBounds = DurationBounds::secs(
-    "LEASE_SECS",
-    "RedisQueueConfig::lease",
+/// The lease's range, and why.
+const LEASE: DurationBounds = DurationBounds::secs(
     Floor::Units(Bound::new(
         1,
         "a lease is renewed every third of it, and a renewal is a round trip to Redis",

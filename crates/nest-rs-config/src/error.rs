@@ -39,8 +39,9 @@ pub enum ConfigError {
     /// [`ConfigService`](crate::ConfigService) reader, which holds a value to no
     /// range — a defect in the config's `from_env`.
     #[error(
-        "{var} is a duration, and a duration is read through `DurationBounds`, which holds it \
-         to a floor and a ceiling and names its unit — never through a `ConfigService` reader"
+        "{var} is a duration, and a duration is read through the `DurationBounds` its field \
+         names, `#[config(bounds = …)]`, which hold it to a floor and a ceiling and name its unit \
+         — never through a `ConfigService` reader"
     )]
     UnboundedDuration {
         /// The variable the reader was asked for.
@@ -64,25 +65,6 @@ pub enum ConfigError {
         field: &'static str,
         /// The stem its refusals name, the field's key under the namespace.
         named: String,
-    },
-    /// A duration field whose shape contradicts its bounds — an
-    /// `Option<Duration>`, whose `None` is off, under bounds with no off, or a
-    /// `Duration` under bounds whose `0` is off — a defect in the config's
-    /// declaration.
-    #[error(
-        "`{field}` is {}, and the bounds {var} is read through {}: a duration is an \
-         `Option<Duration>` where its bounds turn it off (`Floor::UnitsOrOff`), `None` off, \
-         and a `Duration` everywhere else",
-        if *.optional { "an `Option<Duration>`" } else { "a `Duration`" },
-        if *.optional { "admit no off" } else { "turn it off at `0`" }
-    )]
-    MisshapenDuration {
-        /// The variable the field is read from, `<PREFIX>_<DOMAIN>__<KEY>`.
-        var: String,
-        /// The field, as its bounds name it — `HttpConfig::request_timeout`.
-        field: &'static str,
-        /// Whether the field is an `Option<Duration>`.
-        optional: bool,
     },
     /// A loaded config failed `validator::Validate`.
     ///

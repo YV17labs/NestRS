@@ -5,15 +5,13 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Bound, ConfigError, ConfigService, DurationBounds, Floor, Result, config};
+use nest_rs_config::{Bound, CountBounds, DurationBounds, Floor, config};
 
 use crate::ENQUEUE_BATCH;
 
 /// How often the relay looks for due records nothing woke it for, its bounds,
 /// and why.
 const SWEEP_INTERVAL: DurationBounds = DurationBounds::millis(
-    "SWEEP_INTERVAL_MS",
-    "OutboxConfig::sweep_interval",
     Floor::Units(Bound::new(
         100,
         "a shorter sweep queries the store several times a second for records a commit \
@@ -29,8 +27,6 @@ const SWEEP_INTERVAL: DurationBounds = DurationBounds::millis(
 /// When records waiting unfiled are an outage the relay says at `error`, its
 /// bounds, and why.
 const STALL_WARNING: DurationBounds = DurationBounds::secs(
-    "STALL_WARNING_SECS",
-    "OutboxConfig::stall_warning",
     Floor::Units(Bound::new(
         1,
         "a record waits at least one pass, so a shorter warning fires on every write",
@@ -39,6 +35,18 @@ const STALL_WARNING: DurationBounds = DurationBounds::secs(
         24 * 60 * 60,
         "a backend refusing every job for a day has stopped serving; the table grows \
          until it is said",
+    ),
+);
+
+/// How many records one pass claims: at most what one call to the backend
+/// files.
+const BATCH_SIZE: CountBounds = CountBounds::new(
+    Bound::new(1, "a pass that claims nothing files nothing"),
+    Bound::new(
+        ENQUEUE_BATCH as u64,
+        "a pass claims what one call to the backend files, holding it locked until it is \
+         filed, and a claim the port could not hand the backend in one call holds its locks \
+         for several",
     ),
 );
 
@@ -57,7 +65,7 @@ pub struct OutboxConfig {
     /// How many records one pass claims, holding them locked while it files
     /// them. Read from `<PREFIX>_QUEUE__OUTBOX__BATCH_SIZE`, at least 1 and at
     /// most [`ENQUEUE_BATCH`]; defaults to 100.
-    #[config(with = batch_size)]
+    #[config(bounds = BATCH_SIZE)]
     pub batch_size: usize,
     /// How long records may wait unfiled before the relay says so at `error`,
     /// once per outage. Read from
@@ -77,34 +85,10 @@ impl Default for OutboxConfig {
     }
 }
 
-/// `<PREFIX>_QUEUE__OUTBOX__BATCH_SIZE` over `base`, refused outside 1 to
-/// [`ENQUEUE_BATCH`] from either side: a claim the port could not hand the
-/// backend in one call holds its locks for several.
-fn batch_size(env: &ConfigService, key: &str, base: usize) -> Result<usize> {
-    let range = format!(
-        "must be 1 to {ENQUEUE_BATCH} — a pass claims what one call to the backend files, \
-         holding it locked until it is filed"
-    );
-    let Some(setting) = env.setting(key)? else {
-        if (1..=ENQUEUE_BATCH).contains(&base) {
-            return Ok(base);
-        }
-        return Err(ConfigError::parse(
-            env.var_name(key),
-            format!("is not set, and `OutboxConfig::batch_size` set in code {range}"),
-        ));
-    };
-    let size: usize = setting.parse()?;
-    if !(1..=ENQUEUE_BATCH).contains(&size) {
-        return Err(setting.refuse(range));
-    }
-    Ok(size)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_config::{Config, Namespaced};
+    use nest_rs_config::{Config, ConfigService, Namespaced, Result};
 
     fn read(vars: &[(&str, &str)]) -> Result<OutboxConfig> {
         read_over(vars, OutboxConfig::default())

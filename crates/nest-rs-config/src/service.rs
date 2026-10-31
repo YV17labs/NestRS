@@ -309,15 +309,16 @@ impl ConfigService {
     /// set and never quotes the value.
     ///
     /// A duration's key — one ending in `_SECS` or `_MS` — is refused here and
-    /// at every reader built on this one: it is read through
-    /// [`DurationBounds`](crate::DurationBounds).
+    /// at every reader built on this one: it is read through the
+    /// [`BoundedSetting`](crate::BoundedSetting) its field binds.
     pub fn setting(&self, key: &str) -> Result<Option<Setting>, ConfigError> {
         self.refuse_duration(key)?;
         self.duration_setting(key)
     }
 
     /// [`setting`](Self::setting) without the duration check — the reader
-    /// [`DurationBounds`](crate::DurationBounds) reads through, and nothing else.
+    /// a [`BoundedSetting`](crate::BoundedSetting) reads a duration through,
+    /// and nothing else.
     pub(crate) fn duration_setting(&self, key: &str) -> Result<Option<Setting>, ConfigError> {
         match self.spelled(key)? {
             None => Ok(None),
@@ -377,8 +378,8 @@ impl ConfigService {
         })
     }
 
-    /// Refuse `key` when it names a duration, which only
-    /// [`DurationBounds`](crate::DurationBounds) reads.
+    /// Refuse `key` when it names a duration, which only a
+    /// [`BoundedSetting`](crate::BoundedSetting) reads.
     fn refuse_duration(&self, key: &str) -> Result<(), ConfigError> {
         let key = key.to_ascii_uppercase();
         if key.ends_with("_SECS") || key.ends_with("_MS") {
@@ -1291,17 +1292,17 @@ mod tests {
             }
         }
 
-        const WINDOW: crate::DurationBounds = crate::DurationBounds::secs(
-            "WINDOW_SECS",
-            "FixtureConfig::window",
-            crate::Floor::AboveZero("why"),
-            crate::Bound::new(60, "why"),
+        const WINDOW: crate::BoundedSetting<std::time::Duration> = crate::BoundedSetting::new(
+            crate::DurationBounds::secs(
+                crate::Floor::AboveZero("why"),
+                crate::Bound::new(60, "why"),
+            ),
+            crate::Field::new("WINDOW", "FixtureConfig::window"),
         );
         assert_eq!(
             WINDOW
                 .read(&env, std::time::Duration::from_secs(5))
-                .expect("the bounds read it")
-                .value,
+                .expect("the bounds read it"),
             std::time::Duration::from_secs(30),
         );
         assert_eq!(env.get("WINDOWS").expect("not a duration"), None);

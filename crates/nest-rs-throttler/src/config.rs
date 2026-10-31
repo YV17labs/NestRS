@@ -2,16 +2,16 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Bound, ConfigError, ConfigService, DurationBounds, Floor, Result, config};
+use nest_rs_config::{
+    Bound, ConfigError, ConfigService, DurationBounds, Field, Floor, Result, config,
+};
 use nest_rs_core::Secret;
 
 use crate::pseudonym::MIN_KEY_BYTES;
 use crate::throttle::DEFAULT_THROTTLE;
 
-/// The window's range, the variable that sets it, and why.
+/// The window's range, and why.
 const WINDOW: DurationBounds = DurationBounds::secs(
-    "WINDOW_SECS",
-    "ThrottlerConfig::window",
     Floor::Units(Bound::new(
         1,
         "a zero window resets every bucket on every hit, so the count never passes one and \
@@ -70,17 +70,17 @@ const SHORT_KEY: &str = "must be at least 32 bytes: HMAC-SHA256's key is as stro
 /// either side, never shown.
 fn pseudonym_key(
     env: &ConfigService,
-    key: &str,
+    field: Field,
     base: Option<Secret<String>>,
 ) -> Result<Option<Secret<String>>> {
-    match env.setting(key)? {
+    match env.setting(field.key())? {
         Some(setting) if setting.value.len() < MIN_KEY_BYTES => Err(setting.refuse(SHORT_KEY)),
         Some(setting) => Ok(Some(Secret::new(setting.value))),
         None => match base {
             Some(pinned) if pinned.expose_secret().len() < MIN_KEY_BYTES => {
                 Err(ConfigError::parse(
-                    env.var_name(key),
-                    format!("`ThrottlerConfig::pseudonym_key` set in code {SHORT_KEY}"),
+                    env.var_name(field.key()),
+                    format!("`{}` set in code {SHORT_KEY}", field.path()),
                 ))
             }
             pinned => Ok(pinned),

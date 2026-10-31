@@ -16,8 +16,9 @@ generic over a type the app fills, which no derive can bound.
 
 A field whose value is refused on a rule its type does not know names the
 function that reads it, `with = path`. The function is handed the reader, the
-field's key and its base — the value pinned in code, or the default — and
-answers the field. The throttler's pseudonym key is one: a key shorter than
+field — `field.key()`, the key its name spells, and `field.path()`, the path
+code pins it through — and its base, the value pinned in code or the default,
+and answers the field. The throttler's pseudonym key is one: a key shorter than
 HMAC's own length is refused, from the environment or pinned in code alike,
 and never shown.
 
@@ -34,17 +35,17 @@ pub struct ThrottlerConfig {
 
 fn pseudonym_key(
     env: &ConfigService,
-    key: &str,
+    field: Field,
     base: Option<Secret<String>>,
 ) -> Result<Option<Secret<String>>> {
-    match env.setting(key)? {
+    match env.setting(field.key())? {
         Some(setting) if setting.value.len() < MIN_KEY_BYTES => Err(setting.refuse(SHORT_KEY)),
         Some(setting) => Ok(Some(Secret::new(setting.value))),
         None => match base {
             Some(pinned) if pinned.expose_secret().len() < MIN_KEY_BYTES => {
                 Err(ConfigError::parse(
-                    env.var_name(key),
-                    format!("`ThrottlerConfig::pseudonym_key` set in code {SHORT_KEY}"),
+                    env.var_name(field.key()),
+                    format!("`{}` set in code {SHORT_KEY}", field.path()),
                 ))
             }
             pinned => Ok(pinned),
@@ -53,9 +54,10 @@ fn pseudonym_key(
 }
 ```
 
-`env.setting(key)` keeps which spelling the deployment used — the variable or
-its `_FILE` — so `setting.refuse(reason)` names that one, and `reason` says
-what was expected, never the value.
+`env.setting(field.key())` keeps which spelling the deployment used — the
+variable or its `_FILE` — so `setting.refuse(reason)` names that one, and
+`reason` says what was expected, never the value; a value set in code is
+refused naming `field.path()`, which the derive read off the struct.
 
 ## A rule spanning the whole struct, on a generic config
 

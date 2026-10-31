@@ -259,17 +259,19 @@ arbitrates between variables or tiers.
   off and nothing else**: a duration is a `Duration`, or an `Option<Duration>`
   only where an off exists; a count the same, `0` from the environment its
   `None`; a default sits in `Default`, never behind a `None`, and no field
-  names a unit. Held by the derive's compile errors and its reads, which
-  refuse a duration whose shape is not its bounds' floor
-  (`ConfigError::MisshapenDuration`) and a count pinned at `Some(0)`.
-- **A duration a deployment sets has a floor and a ceiling**, refused naming the
-  variable whether pinned or read, never clamped. The floor is where the thing
-  stops working; the ceiling is where a value becomes a slip, **and never above
-  what the library or kernel it reaches accepts** — no value the boot accepts may
-  panic or be refused below it. `0` is off only where the declaration says so
-  (`Floor::UnitsOrOff`); a pinned `Some(Duration::ZERO)` is refused, since off in
-  code is `None`. Held by the `DurationBounds` type, whose rustdoc has the
-  mechanics, including the hand-built path through `DurationBounds::check`.
+  names a unit. Held by the derive's compile errors and its reads, which read
+  off from the field's type and refuse a count pinned at `Some(0)`.
+- **A duration or a count a deployment sets has a floor and a ceiling**,
+  refused naming the variable whether pinned or read, never clamped. The floor
+  is where the thing stops working; the ceiling is where a value becomes a
+  slip, **and never above what the library or kernel it reaches accepts** — no
+  value the boot accepts may panic or be refused below it. A range names
+  nothing but its ends and their reasons: the derive binds it to the field it
+  bounds, whose name is its variable's key — a duration's unit after it — and
+  whose type says whether `0` is off (an `Option<Duration>`; a pinned
+  `Some(Duration::ZERO)` is refused, since off in code is `None`), so no site
+  types the key. Held by the `BoundedSetting` the derive binds, whose rustdoc
+  has the mechanics, including a hand-written overlay's own binding.
 - **A variable no config claims is reported, never ignored** — at `warn`, once,
   by name and never by value: a key under a namespace this binary read that no
   config read, a near miss of such a namespace, and a cascade key in a
@@ -463,7 +465,7 @@ read gap at or past the deadline, is told at
 boot. **An edge's per-unit deadline is `<unit>_timeout` in its config**, read
 from `<PREFIX>_<EDGE>__<UNIT>_TIMEOUT_SECS` with the unit's second segment —
 `HTTP__REQUEST_`, `WS__MESSAGE_`, `MCP__OPERATION_`, never a mechanism
-(`READ_TIMEOUT`) — on `nest_rs_http::UNIT_TIMEOUT_FLOOR`'s range. A unit
+(`READ_TIMEOUT`) — on `nest_rs_http::UNIT_TIMEOUT_BOUNDS`. A unit
 whose head leaves before its answer (a socket's message, an MCP operation on
 an event stream) needs its own, since the request timeout ends at the head.
 **A unit's deadline bounds its body; its commit is never cut, and a commit

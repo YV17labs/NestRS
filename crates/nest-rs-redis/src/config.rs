@@ -4,19 +4,17 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Bound, ClientTls, ConfigError, ConfigService, DurationBounds, Floor, Result, config,
+    Bound, ClientTls, ConfigError, ConfigService, DurationBounds, Field, Floor, Result, config,
 };
 use nest_rs_core::Secret;
 
 /// Default boot budget for reaching Redis: 10s.
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 
-/// The connect budget's range, the variable that sets it, and why. The ceiling
+/// The connect budget's range, and why. The ceiling
 /// also keeps the socket's liveness under what the kernel accepts, which
 /// `connection.rs` asserts at compile time.
 pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "CONNECT_TIMEOUT_SECS",
-    "RedisConfig::connect_timeout",
     Floor::AboveZero(
         "the budget bounds the boot's connect and every command after it, and a zero one gives \
          up before the first attempt and fails every command at once",
@@ -82,15 +80,15 @@ impl Default for RedisConfig {
 /// The deployment's URL, else the base's — a pin — refusing a blank one under
 /// the spelling that set it, or the variable of the instance `env` reads when
 /// neither holds one.
-fn url(env: &ConfigService, key: &str, base: Secret<String>) -> Result<Secret<String>> {
-    match env.setting(key)? {
+fn url(env: &ConfigService, field: Field, base: Secret<String>) -> Result<Secret<String>> {
+    match env.setting(field.key())? {
         Some(setting) if setting.value.trim().is_empty() => {
             Err(setting.refuse("is blank — it must hold the Redis URL"))
         }
         Some(setting) => Ok(Secret::new(setting.value)),
         None if base.expose_secret().trim().is_empty() => Err(ConfigError::unset(
             env.namespace(),
-            key,
+            field.key(),
             "the URL is deployment data, which no default holds in any profile, and a config \
              pinned in code reads it from the deployment, not `.env`",
         )),

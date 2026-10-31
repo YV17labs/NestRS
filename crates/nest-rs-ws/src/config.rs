@@ -13,42 +13,11 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{DurationBounds, config};
-
-/// The socket-lifetime ceiling's range and the variable that sets it.
-const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
-    "MAX_CONNECTION_SECS",
-    "WsConfig::max_connection",
-    nest_rs_http::MAX_CONNECTION_FLOOR,
-    nest_rs_http::MAX_CONNECTION_CEILING,
-);
+use nest_rs_config::config;
+use nest_rs_http::{MAX_CONNECTION_BOUNDS, UNIT_TIMEOUT_BOUNDS};
 
 /// Default per-message byte cap: 64 KiB, against tungstenite's own 64 MiB.
 pub(crate) const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
-
-/// The message deadline's range and the variable that sets it.
-const MESSAGE_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "MESSAGE_TIMEOUT_SECS",
-    "WsConfig::message_timeout",
-    nest_rs_http::UNIT_TIMEOUT_FLOOR,
-    nest_rs_http::UNIT_TIMEOUT_CEILING,
-);
-
-/// The connect hook's deadline's range and the variable that sets it.
-const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "CONNECT_TIMEOUT_SECS",
-    "WsConfig::connect_timeout",
-    nest_rs_http::UNIT_TIMEOUT_FLOOR,
-    nest_rs_http::UNIT_TIMEOUT_CEILING,
-);
-
-/// The disconnect hook's deadline's range and the variable that sets it.
-const DISCONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
-    "DISCONNECT_TIMEOUT_SECS",
-    "WsConfig::disconnect_timeout",
-    nest_rs_http::UNIT_TIMEOUT_FLOOR,
-    nest_rs_http::UNIT_TIMEOUT_CEILING,
-);
 
 /// WebSocket transport options resolved at boot (namespace `ws`).
 #[config(namespace = "ws")]
@@ -59,7 +28,7 @@ pub struct WsConfig {
     /// `<PREFIX>_WS__MAX_CONNECTION_SECS`, whole seconds from 1 to 86400 or `0`
     /// for unlimited; defaults to 4 hours,
     /// [`nest_rs_http::DEFAULT_MAX_CONNECTION`].
-    #[config(bounds = MAX_CONNECTION)]
+    #[config(bounds = MAX_CONNECTION_BOUNDS)]
     pub max_connection: Option<Duration>,
     /// Maximum bytes accepted for a single inbound message, enforced at the
     /// protocol layer so a giant frame is refused before it is buffered. Read
@@ -75,20 +44,20 @@ pub struct WsConfig {
     /// struct alike; defaults to 20 seconds,
     /// [`nest_rs_http::DEFAULT_UNIT_TIMEOUT`]. A deadline past the HTTP
     /// shutdown window, or none, is said at boot with a `warn`.
-    #[config(bounds = MESSAGE_TIMEOUT)]
+    #[config(bounds = UNIT_TIMEOUT_BOUNDS)]
     pub message_timeout: Option<Duration>,
     /// Wall-clock deadline for the `#[on_connect]` hook; past it the hook's
     /// work is dropped and rolled back, and the socket is closed unserved with
     /// 1011, as when the hook panics. `None` ⇒ no deadline. Read from
     /// `<PREFIX>_WS__CONNECT_TIMEOUT_SECS`, on `message_timeout`'s range and
     /// with its default, 20 seconds.
-    #[config(bounds = CONNECT_TIMEOUT)]
+    #[config(bounds = UNIT_TIMEOUT_BOUNDS)]
     pub connect_timeout: Option<Duration>,
     /// Wall-clock deadline for the `#[on_disconnect]` hook; past it the hook's
     /// work is dropped and rolled back, and the close goes on. `None` ⇒ no
     /// deadline. Read from `<PREFIX>_WS__DISCONNECT_TIMEOUT_SECS`, on
     /// `message_timeout`'s range and with its default, 20 seconds.
-    #[config(bounds = DISCONNECT_TIMEOUT)]
+    #[config(bounds = UNIT_TIMEOUT_BOUNDS)]
     pub disconnect_timeout: Option<Duration>,
 }
 

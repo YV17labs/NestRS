@@ -204,8 +204,7 @@ pub use body::Body;
 pub use client_ip::{ClientIp, ClientOrigin};
 pub use config::{
     DEFAULT_MAX_CONNECTION, DEFAULT_SSE_KEEP_ALIVE, DEFAULT_UNIT_TIMEOUT, HttpConfig,
-    MAX_CONNECTION_CEILING, MAX_CONNECTION_FLOOR, SSE_KEEP_ALIVE_CEILING, SSE_KEEP_ALIVE_FLOOR,
-    UNIT_TIMEOUT_CEILING, UNIT_TIMEOUT_FLOOR,
+    MAX_CONNECTION_BOUNDS, SSE_KEEP_ALIVE_BOUNDS, UNIT_TIMEOUT_BOUNDS,
 };
 pub use controller::{HttpControllerMeta, HttpRouteMeta, RequestBodyMeta, SchemaFn};
 pub use cors::HttpCors;

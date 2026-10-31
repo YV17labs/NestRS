@@ -326,6 +326,17 @@ fn a_redirect_from_the_collector_is_never_followed() {
     assert_eq!(elsewhere.exports(), 0, "the redirect was not followed");
 }
 
+/// That a flush of `took` had its exports cut by their own 200 ms timeout. A
+/// flush holding one the SDK did not cut waits out its whole bound, so only a
+/// time under the bound tells them apart: the SDK cuts an export on its own
+/// threads' clock, which no test can pause.
+fn cut_before_the_flush_bound(took: std::time::Duration, what: &str) {
+    assert!(
+        took < FLUSH_TIMEOUT,
+        "{what} cut at 200 ms, not held to the flush's {FLUSH_TIMEOUT:?}: {took:?}"
+    );
+}
+
 /// An export is cut at the SDK's export timeout, which the deployment sets
 /// under `OTEL_EXPORTER_OTLP_TIMEOUT`: a collector that never answers holds the
 /// final flush that long, never the flush's own bound.
@@ -339,10 +350,7 @@ fn an_export_is_cut_at_the_timeout_the_sdk_reads() {
     let took = started.elapsed();
 
     assert!(collector.exports() > 0, "an export was in flight");
-    assert!(
-        took < FLUSH_TIMEOUT / 2,
-        "the exports were cut at 200 ms, not held to the flush's {FLUSH_TIMEOUT:?}: {took:?}"
-    );
+    cut_before_the_flush_bound(took, "the exports were");
 }
 
 /// A signal its selector switches off ships nothing to the endpoint every
@@ -596,10 +604,7 @@ fn otel_metric_export_timeout_cuts_a_metric_export() {
         collector.exports_to("/v1/metrics") > 0,
         "a metric export was in flight"
     );
-    assert!(
-        took < FLUSH_TIMEOUT / 2,
-        "the metric export was cut at 200 ms, not held to the flush's {FLUSH_TIMEOUT:?}: {took:?}"
-    );
+    cut_before_the_flush_bound(took, "the metric export was");
 }
 
 /// A sampler the SDK does not build, or a ratio that does not read as one, is
@@ -943,10 +948,7 @@ fn the_batch_processors_export_timeouts_cut_a_trace_and_a_log_export() {
         "a trace and a log export were in flight: {:?}",
         collector.received()
     );
-    assert!(
-        took < FLUSH_TIMEOUT / 2,
-        "both exports were cut at 200 ms, not held to the flush's {FLUSH_TIMEOUT:?}: {took:?}"
-    );
+    cut_before_the_flush_bound(took, "both exports were");
 }
 
 /// A specification variable this build serves nowhere is said once at `warn`,

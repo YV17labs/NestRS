@@ -2206,14 +2206,19 @@ mod tests {
         let flushed = provider.shutdown_with_timeout(bound);
         let took = started.elapsed();
 
-        assert!(
-            flushed.is_err(),
-            "the final export never answered, so the flush cannot have succeeded",
+        let Err(cut) = flushed else {
+            panic!("the final export never answered, so the flush cannot have succeeded");
+        };
+        // The SDK's own word for where it stopped waiting, which no stall moves.
+        let at_the_bound = format!(
+            "{:?}",
+            opentelemetry_sdk::error::OTelSdkError::Timeout(bound)
         );
         assert!(
-            took >= bound && took < bound + std::time::Duration::from_secs(1),
-            "shutdown gave the export its bound and no more, took {took:?}",
+            cut.to_string().contains(&at_the_bound),
+            "shutdown gave the export its bound and no more: {cut}",
         );
+        assert!(took >= bound, "and gave it all of it: took {took:?}");
     }
 
     /// The specification's exporter selectors, which no crate of the SDK names.

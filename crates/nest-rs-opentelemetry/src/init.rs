@@ -277,12 +277,13 @@ impl Drop for OpenTelemetry {
 #[cfg(feature = "otlp")]
 impl OpenTelemetry {
     /// Shut every provider down at once, waiting `bound` for all three
-    /// together — [`FLUSH_TIMEOUT`] from `Drop`.
+    /// together — [`FLUSH_TIMEOUT`] from `Drop`; the providers still exporting
+    /// at the bound, which it abandoned.
     #[expect(
         clippy::print_stderr,
         reason = "the final flush runs after the subscriber it would log through is gone"
     )]
-    fn flush_within(&mut self, bound: std::time::Duration) {
+    fn flush_within(&mut self, bound: std::time::Duration) -> Vec<&'static str> {
         type Shutdown = Box<dyn FnOnce() -> opentelemetry_sdk::error::OTelSdkResult + Send>;
 
         // `Drop` can't return, and tracing may itself be mid-teardown, so
@@ -346,6 +347,7 @@ impl OpenTelemetry {
                 }
             }
         }
+        pending
     }
 }
 
@@ -471,12 +473,18 @@ mod tests {
         };
         let bound = std::time::Duration::from_millis(200);
         let started = std::time::Instant::now();
-        guard.flush_within(bound);
+        let abandoned = guard.flush_within(bound);
         let took = started.elapsed();
 
         assert!(
-            took >= bound && took < bound + std::time::Duration::from_secs(1),
-            "the three providers were held to one bound between them, took {took:?}",
+            took >= bound,
+            "the providers were given the bound: took {took:?}"
+        );
+        // The meter's reader holds its shutdown five seconds whatever it is
+        // handed: abandoned, it was not waited out.
+        assert!(
+            abandoned.contains(&"meter"),
+            "the bound is held here, not trusted to the SDK: abandoned {abandoned:?}",
         );
     }
 

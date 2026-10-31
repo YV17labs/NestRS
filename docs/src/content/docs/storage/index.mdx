@@ -225,8 +225,16 @@ within 15s, every retry included — the budget
 <PREFIX>_STORAGE__OPERATION_TIMEOUT_SECS sets` — under a handler, before the
 HTTP edge's 20-second timeout answers a bare `503` in its place. A call whose
 attempts keep failing stops retrying once half the budget is spent and fails on
-the store's own error. An upload's body is part of its request: `put_bytes`
-moves within the budget, and `put_stream` ships 5 MiB parts that each do. A
+the store's own error. When the budget cuts a call after an attempt failed — a
+loaded machine held the last one back, or its dial was still waiting — the cut
+names that attempt below its own sentence: `… sets: could not connect:
+Connection refused (os error 111)`, or `… sets: the store answered 503 Service
+Unavailable`. One failure stays unnamed: S3 may answer a `put_stream`'s
+completion `200` with `InternalError` or `SlowDown` in its body, which
+object_store retries like a `503`, but a cut after it reads that `200` as an
+answer and names nothing below its sentence. An upload's body is part of its
+request: `put_bytes` moves within the budget, and `put_stream` ships 5 MiB
+parts that each do. A
 download's body is a transfer, never cut for its size nor for its reader's
 pauses: one that sends nothing for `READ_TIMEOUT_SECS` while it is read is cut
 and resumed from the byte it stopped at, provided the object is still the

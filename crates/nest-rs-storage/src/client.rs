@@ -16,8 +16,8 @@ use object_store::{
 };
 
 use crate::config::{OPERATION_TIMEOUT, StorageConfig};
-use crate::error::{Result, StorageError};
-use crate::store::Store;
+use crate::error::{CallTimedOut, Exchange, Result, StorageError};
+use crate::store::{Store, witnessed};
 use crate::transfer::download;
 
 /// Bytes buffered before a multipart part is shipped: S3 requires every part
@@ -461,29 +461,26 @@ impl Storage {
 }
 
 /// `call`'s output, or once `budget` elapses an error of the `backend` store
-/// naming the budget and what sets it.
+/// naming the budget, what sets it, and how the call's last attempt failed
+/// when one did before the cut.
 pub(crate) async fn bounded<F: Future>(
     budget: Duration,
     backend: &'static str,
     call: F,
 ) -> object_store::Result<F::Output> {
-    #[expect(
-        clippy::map_err_ignore,
-        reason = "Elapsed carries nothing the timeout's own message does not say"
-    )]
-    tokio::time::timeout(budget, call)
-        .await
-        .map_err(|_| object_store::Error::Generic {
+    match witnessed(tokio::time::timeout(budget, call)).await {
+        (Ok(output), _) => Ok(output),
+        (Err(_elapsed), last) => Err(object_store::Error::Generic {
             store: backend,
             source: Box::new(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                format!(
-                    "the call did not end within {budget:?}, every retry included — the budget \
-                     {} sets",
-                    nest_rs_config::var_name("storage", OPERATION_TIMEOUT.key()),
-                ),
+                CallTimedOut {
+                    budget,
+                    last: last.filter(Exchange::failed),
+                },
             )),
-        })
+        }),
+    }
 }
 
 /// Holds a multipart upload so that a cancelled one is aborted too: S3 bills
@@ -708,7 +705,13 @@ pub struct ObjectEntry {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    use http::StatusCode;
     use nest_rs_core::Secret;
+    use object_store::ClientOptions;
+    use object_store::client::{
+        HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpRequest, HttpResponse,
+        HttpService, ReqwestConnector,
+    };
 
     use super::*;
 
@@ -716,8 +719,14 @@ mod tests {
         /// A client over the store `config` names, opened without its proof,
         /// for the tests of what a call does once it is open.
         fn unproved(config: StorageConfig) -> Self {
+            Self::dialing(config, ReqwestConnector::default())
+        }
+
+        /// [`unproved`](Self::unproved), its calls to an `s3://` store dialing
+        /// through `connector`.
+        fn dialing<C: HttpConnector>(config: StorageConfig, connector: C) -> Self {
             Self {
-                store: Arc::new(Store::built(&config).expect("the store builds")),
+                store: Arc::new(Store::dialing(&config, connector).expect("the store builds")),
                 config: Arc::new(config),
             }
         }
@@ -733,6 +742,14 @@ mod tests {
             allow_http,
             ..StorageConfig::default()
         }
+    }
+
+    /// What a call `budget` cuts says, before anything its last attempt met.
+    fn cut_at(budget: Duration) -> String {
+        format!(
+            "the call did not end within {budget:?}, every retry included — the budget {} sets",
+            nest_rs_config::var_name("storage", "OPERATION_TIMEOUT_SECS")
+        )
     }
 
     /// A multipart upload that talks to nothing but records whether it was
@@ -1227,30 +1244,144 @@ mod tests {
             .expect_err("a store answering only a 503 returns nothing");
         let chain = nest_rs_core::error_message(&refused);
         assert!(
-            chain.contains(&format!(
-                "the call did not end within {budget:?}, every retry included — the budget {} sets",
-                nest_rs_config::var_name("storage", "OPERATION_TIMEOUT_SECS")
-            )) && !chain.contains("did not answer"),
+            chain.contains(&cut_at(budget)) && !chain.contains("did not answer"),
             "{chain}"
         );
     }
 
+    /// No clock is read: a loaded machine moves where the call ends — its
+    /// retries' own error, or the budget's cut past a stalled last attempt —
+    /// and never what it names.
     #[tokio::test]
-    async fn a_call_whose_attempts_keep_failing_ends_on_their_cause_before_the_budget() {
+    async fn a_refused_connection_names_its_cause_however_the_call_ends() {
         let closed = std::net::TcpListener::bind("127.0.0.1:0")
             .and_then(|listener| listener.local_addr())
             .expect("a port nothing listens on once its listener is dropped");
-        let budget = Duration::from_secs(1);
         let storage = Storage::unproved(StorageConfig {
-            operation_timeout: budget,
+            operation_timeout: Duration::from_secs(1),
             ..s3_at(&format!("http://{closed}"), true)
         });
-        let started = tokio::time::Instant::now();
         let refused = storage.head("k").await.expect_err("nothing listens");
         let chain = nest_rs_core::error_message(&refused);
-        assert!(started.elapsed() < budget, "{:?}", started.elapsed());
         assert!(
-            !chain.contains("did not end within") && chain.contains("could not connect"),
+            chain.contains("could not connect: Connection refused"),
+            "{chain}"
+        );
+    }
+
+    /// How one exchange with an S3 double ends.
+    type Exchanged = std::result::Result<HttpResponse, HttpError>;
+
+    /// An S3 double whose first request meets `first` and every later one
+    /// waits forever, so the budget cuts the retry that follows.
+    #[derive(Debug, Clone)]
+    struct FailingOnce {
+        first: fn() -> Exchanged,
+        met: Arc<AtomicBool>,
+    }
+
+    impl HttpConnector for FailingOnce {
+        fn connect(&self, _options: &ClientOptions) -> object_store::Result<HttpClient> {
+            Ok(HttpClient::new(self.clone()))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HttpService for FailingOnce {
+        async fn call(&self, _request: HttpRequest) -> Exchanged {
+            if self.met.swap(true, Ordering::SeqCst) {
+                std::future::pending().await
+            } else {
+                (self.first)()
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_call_the_budget_cuts_names_what_its_last_attempt_met() {
+        let budget = Duration::from_secs(1);
+        let refused: fn() -> Exchanged = || {
+            Err(HttpError::new(
+                HttpErrorKind::Connect,
+                std::io::Error::from(std::io::ErrorKind::ConnectionRefused),
+            ))
+        };
+        let unavailable: fn() -> Exchanged = || {
+            let mut answer = HttpResponse::new(String::new().into());
+            *answer.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+            Ok(answer)
+        };
+        for (first, met) in [
+            (refused, "could not connect: connection refused"),
+            (unavailable, "the store answered 503 Service Unavailable"),
+        ] {
+            let storage = Storage::dialing(
+                StorageConfig {
+                    operation_timeout: budget,
+                    ..s3_at("https://s3.test", false)
+                },
+                FailingOnce {
+                    first,
+                    met: Arc::default(),
+                },
+            );
+            let cut = storage
+                .head("k")
+                .await
+                .expect_err("nothing answers past the first attempt");
+            let chain = nest_rs_core::error_message(&cut);
+            assert!(
+                chain.ends_with(&format!("{}: {met}", cut_at(budget))),
+                "{chain}"
+            );
+        }
+    }
+
+    /// An S3 double refusing every connection once it has held its thread for
+    /// as long as it says.
+    #[derive(Debug, Clone)]
+    struct RefusingAfter(Duration);
+
+    impl HttpConnector for RefusingAfter {
+        fn connect(&self, _options: &ClientOptions) -> object_store::Result<HttpClient> {
+            Ok(HttpClient::new(self.clone()))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HttpService for RefusingAfter {
+        async fn call(&self, _request: HttpRequest) -> Exchanged {
+            std::thread::sleep(self.0);
+            Err(HttpError::new(
+                HttpErrorKind::Connect,
+                std::io::Error::from(std::io::ErrorKind::ConnectionRefused),
+            ))
+        }
+    }
+
+    /// object_store's retry window reads the real clock, which moves only
+    /// while an attempt holds the thread; the budget reads the paused one,
+    /// which moves only in the backoffs between attempts. A loaded machine
+    /// lengthens the attempts, so it closes the window sooner and never brings
+    /// the cut nearer.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_whose_attempts_keep_failing_ends_on_their_cause_before_the_budget() {
+        let budget = Duration::from_secs(1);
+        let storage = Storage::dialing(
+            StorageConfig {
+                operation_timeout: budget,
+                ..s3_at("https://s3.test", false)
+            },
+            RefusingAfter(budget / 10),
+        );
+        let refused = storage
+            .head("k")
+            .await
+            .expect_err("every attempt is refused");
+        let chain = nest_rs_core::error_message(&refused);
+        assert!(
+            !chain.contains(&cut_at(budget))
+                && chain.contains("could not connect: connection refused"),
             "{chain}"
         );
     }
@@ -1306,14 +1437,7 @@ mod tests {
                 waited >= budget && waited < budget + Duration::from_secs(1),
                 "{name}: {waited:?}"
             );
-            assert!(
-                chain.contains(&format!(
-                    "the call did not end within {budget:?}, every retry included — the budget {} \
-                     sets",
-                    nest_rs_config::var_name("storage", "OPERATION_TIMEOUT_SECS")
-                )),
-                "{name}: {chain}"
-            );
+            assert!(chain.contains(&cut_at(budget)), "{name}: {chain}");
             tokio::time::resume();
         }
     }

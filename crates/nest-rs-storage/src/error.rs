@@ -5,8 +5,11 @@
 use std::error::Error;
 use std::time::Duration;
 
-use http::Method;
+use http::{Method, StatusCode};
+use object_store::client::{HttpError, HttpErrorKind};
 use thiserror::Error;
+
+use crate::config::OPERATION_TIMEOUT;
 
 /// An error object_store or the configuration handed over, boxed so its
 /// library's release is never this crate's API: a caller reads it through
@@ -150,6 +153,66 @@ impl From<StorageError> for std::io::Error {
 /// Result alias for storage operations.
 pub type Result<T> = std::result::Result<T, StorageError>;
 
+/// A call the operation budget cut, every retry included, keeping what its
+/// last attempt met when that attempt failed before the cut.
+#[derive(Debug, Error)]
+#[error(
+    "the call did not end within {budget:?}, every retry included — the budget {} sets",
+    ::nest_rs_config::var_name("storage", OPERATION_TIMEOUT.key()),
+)]
+pub(crate) struct CallTimedOut {
+    /// The budget that cut the call.
+    pub(crate) budget: Duration,
+    /// How the call's last attempt failed, if one failed before the cut.
+    #[source]
+    pub(crate) last: Option<Exchange>,
+}
+
+/// How one exchange with the store ended: the status a listing of the boot's
+/// proof is read by, and what a call the budget cut names of its last attempt.
+#[derive(Debug, Error)]
+pub(crate) enum Exchange {
+    /// The store answered.
+    #[error("the store answered {0}")]
+    Answered(StatusCode),
+    /// No answer came.
+    #[error("{}", http_kind(*.kind))]
+    Unanswered {
+        /// The HTTP client's kind of failure.
+        kind: HttpErrorKind,
+        /// The I/O error under it — a refused connection, a TLS certificate.
+        #[source]
+        cause: Option<std::io::Error>,
+    },
+}
+
+impl Exchange {
+    /// The exchange `failed` ended with no answer, said as [`below`] says it:
+    /// its kind, and the I/O error under it.
+    pub(crate) fn unanswered(failed: &HttpError) -> Self {
+        let cause = nest_rs_core::__private::find_in_chain::<std::io::Error>(failed)
+            .map(|io| std::io::Error::new(io.kind(), io.to_string()));
+        Self::Unanswered {
+            kind: failed.kind(),
+            cause,
+        }
+    }
+
+    /// The status the store answered, if it answered.
+    pub(crate) fn status(&self) -> Option<StatusCode> {
+        match self {
+            Self::Answered(status) => Some(*status),
+            Self::Unanswered { .. } => None,
+        }
+    }
+
+    /// Whether the exchange failed: no answer, or one whose status is not a
+    /// success.
+    pub(crate) fn failed(&self) -> bool {
+        !self.status().is_some_and(|status| status.is_success())
+    }
+}
+
 /// How object_store's errors are said: its sentences quote the object's path,
 /// its retry error the request's URI — the key, a value when keys carry user
 /// input — and its HTTP client's the URL. Each link is said by its kind, and
@@ -181,19 +244,24 @@ fn say(link: &(dyn Error + 'static)) -> Option<String> {
 nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say) }
 
 /// `said`, followed by what the links from `link` down say without quoting a
-/// URL: an I/O error (a refused connection, a TLS certificate, the client's
-/// own budget), the HTTP client's kind of failure, and what the store answered
-/// — never its body, which may name the key.
+/// URL: an I/O error (a refused connection, a TLS certificate, a bound the
+/// client holds, and below the budget's cut how the last attempt failed), the
+/// HTTP client's kind of failure, and what the store answered — never its
+/// body, which may name the key.
 fn below(mut link: Option<&(dyn Error + 'static)>, said: String) -> String {
     let mut sentence = said;
     while let Some(current) = link {
-        if let Some(io) = current.downcast_ref::<std::io::Error>() {
+        let part = if let Some(io) = current.downcast_ref::<std::io::Error>() {
             sentence.push_str(": ");
             sentence.push_str(&io.to_string());
-            return sentence;
-        }
-        let part = if let Some(http) = current.downcast_ref::<object_store::client::HttpError>() {
+            if !io.get_ref().is_some_and(|cut| cut.is::<CallTimedOut>()) {
+                return sentence;
+            }
+            None
+        } else if let Some(http) = current.downcast_ref::<HttpError>() {
             Some(http_kind(http.kind()).to_owned())
+        } else if current.is::<Exchange>() {
+            Some(current.to_string())
         } else {
             answered(&current.to_string())
         };
@@ -207,8 +275,7 @@ fn below(mut link: Option<&(dyn Error + 'static)>, said: String) -> String {
 }
 
 /// What an HTTP failure of `kind` was, as a link says it.
-fn http_kind(kind: object_store::client::HttpErrorKind) -> &'static str {
-    use object_store::client::HttpErrorKind;
+fn http_kind(kind: HttpErrorKind) -> &'static str {
     match kind {
         HttpErrorKind::Connect => "could not connect",
         HttpErrorKind::Request => "the request failed",
@@ -271,6 +338,19 @@ mod tests {
             "failed to download an object from the object store s3://media: no object at that key"
         );
         assert!(!chain.contains("ada@example.com"), "{chain}");
+    }
+
+    #[test]
+    fn an_exchange_failed_unless_the_store_answered_a_success() {
+        assert!(!Exchange::Answered(StatusCode::OK).failed());
+        assert!(Exchange::Answered(StatusCode::SERVICE_UNAVAILABLE).failed());
+        assert!(
+            Exchange::Unanswered {
+                kind: HttpErrorKind::Connect,
+                cause: None,
+            }
+            .failed()
+        );
     }
 
     #[test]

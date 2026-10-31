@@ -4,7 +4,9 @@
 //! refuses the boot instead of the first call. The same listing, one attempt
 //! at a time, is what a health probe reads.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::cell::Cell;
+use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -22,7 +24,7 @@ use object_store::{BackoffConfig, ClientOptions, ObjectStore, RetryConfig};
 
 use crate::backend::Backend;
 use crate::config::{StorageConfig, is_plaintext};
-use crate::error::{Result, StorageError};
+use crate::error::{Exchange, Result, StorageError};
 
 /// The longest a dial to S3 waits — DNS, TCP and the TLS handshake; never
 /// scaled down with the budget, since a dial cut shorter never connects.
@@ -85,6 +87,12 @@ impl Store {
 
     /// The store `config` names, built and not yet proved.
     pub(crate) fn built(config: &StorageConfig) -> Result<Self> {
+        Self::dialing(config, ReqwestConnector::default())
+    }
+
+    /// The store `config` names, built and not yet proved, its calls to an
+    /// `s3://` store dialing through `connector`.
+    pub(crate) fn dialing<C: HttpConnector>(config: &StorageConfig, connector: C) -> Result<Self> {
         let backend = config
             .backend()
             .map_err(|refused| StorageError::Init(Box::new(refused)))?;
@@ -99,7 +107,7 @@ impl Store {
             ),
             Backend::S3 { bucket, prefix } => {
                 let retries = retries_within(config.operation_timeout);
-                let s3 = s3(config, bucket, ReqwestConnector::default(), retries)?;
+                let s3 = s3(config, bucket, connector, retries)?;
                 let probe = Probe::new(config, bucket, prefix)?;
                 let shown = match &config.endpoint {
                     Some(endpoint) => format!("{url} at {}", endpoint_shown(endpoint)),
@@ -184,8 +192,9 @@ fn confined<S: ObjectStore>(store: S, prefix: &Path) -> Arc<dyn ObjectStore> {
     }
 }
 
-/// The S3 client `config` describes for `bucket`, dialing through `connector`
-/// and retrying a failed request as `retries` says.
+/// The S3 client `config` describes for `bucket`, dialing through `connector`,
+/// each exchange [`Witnessed`], and retrying a failed request as `retries`
+/// says.
 fn s3<C: HttpConnector>(
     config: &StorageConfig,
     bucket: &str,
@@ -218,7 +227,7 @@ fn s3<C: HttpConnector>(
         ClientOptions::with_root_certificate,
     );
     let mut builder = AmazonS3Builder::new()
-        .with_http_connector(connector)
+        .with_http_connector(Witnessed(connector))
         .with_client_options(options)
         .with_retry(retries)
         .with_region(&config.region)
@@ -243,18 +252,16 @@ enum Listed {
     Forbidden(object_store::Error),
 }
 
-/// What lists a bucket to prove it answers, through a client of its own that
-/// reads each answer's status: object_store does not say a listing's. That
-/// client never retries, so each attempt's failure is classified the moment it
-/// is met.
+/// What lists a bucket to prove it answers, through a client of its own, and
+/// reads the status of its answer off [`witnessed`]: object_store does not say
+/// a listing's. That client never retries, so each attempt's failure is
+/// classified the moment it is met.
 #[derive(Debug)]
 struct Probe {
     client: AmazonS3,
-    /// The status of the last answer the store gave the client.
-    status: Arc<Mutex<Option<StatusCode>>>,
     /// Whether the store refused the last listing. Held across one listing,
-    /// so the status read is that listing's (a readiness and a startup probe
-    /// may ask at once) and a store refusing on every probe is said once.
+    /// so a store refusing on every probe is said once, even when a readiness
+    /// and a startup probe ask at once.
     refusing: tokio::sync::Mutex<bool>,
     /// The prefix the store's keys live under, listed alone.
     prefix: Path,
@@ -263,13 +270,10 @@ struct Probe {
 impl Probe {
     /// The probe of `bucket` under `prefix`, dialing as `config` says.
     fn new(config: &StorageConfig, bucket: &str, prefix: &Path) -> Result<Self> {
-        let status = Arc::new(Mutex::new(None));
         let client = s3(
             config,
             bucket,
-            Witnessed {
-                status: Arc::clone(&status),
-            },
+            ReqwestConnector::default(),
             RetryConfig {
                 max_retries: 0,
                 ..RetryConfig::default()
@@ -277,7 +281,6 @@ impl Probe {
         )?;
         Ok(Self {
             client,
-            status,
             refusing: tokio::sync::Mutex::new(false),
             prefix: prefix.clone(),
         })
@@ -292,12 +295,10 @@ impl Probe {
         shown: &str,
     ) -> std::result::Result<(), Attempt<object_store::Error, StorageError>> {
         let mut refusing = self.refusing.lock().await;
-        *self.status.lock().unwrap_or_else(PoisonError::into_inner) = None;
         let prefix = (!self.prefix.as_ref().is_empty()).then_some(&self.prefix);
-        let listed = match self.client.list(prefix).next().await {
-            Some(Err(error)) => {
-                let answered = *self.status.lock().unwrap_or_else(PoisonError::into_inner);
-                classify(error, answered, env, shown)
+        let listed = match witnessed(self.client.list(prefix).next()).await {
+            (Some(Err(error)), last) => {
+                classify(error, last.as_ref().and_then(Exchange::status), env, shown)
             }
             _ => Ok(Listed::Answered),
         };
@@ -426,40 +427,55 @@ fn said(store: &str, budget: Duration) -> impl FnMut(Proving<'_, object_store::E
     }
 }
 
-/// The HTTP connector of the boot's proof: object_store's own, keeping the
-/// status of the last answer the store gave.
-#[derive(Debug)]
-struct Witnessed {
-    status: Arc<Mutex<Option<StatusCode>>>,
+tokio::task_local! {
+    /// How the last exchange of the unit [`witnessed`] runs ended.
+    static LAST_EXCHANGE: Cell<Option<Exchange>>;
 }
 
-impl HttpConnector for Witnessed {
+/// `unit`'s output, and how its last exchange with the store ended, as every
+/// S3 client of the store keeps it ([`Witnessed`]).
+pub(crate) async fn witnessed<F: Future>(unit: F) -> (F::Output, Option<Exchange>) {
+    LAST_EXCHANGE
+        .scope(Cell::new(None), async {
+            let output = unit.await;
+            (output, LAST_EXCHANGE.with(Cell::take))
+        })
+        .await
+}
+
+/// The HTTP connector of every S3 client the store opens: `C`'s, keeping how
+/// each exchange ended for the unit [`witnessed`] runs it in.
+#[derive(Debug)]
+struct Witnessed<C>(C);
+
+impl<C: HttpConnector> HttpConnector for Witnessed<C> {
     fn connect(&self, options: &ClientOptions) -> object_store::Result<HttpClient> {
-        Ok(HttpClient::new(Witness {
-            client: ReqwestConnector::default().connect(options)?,
-            status: Arc::clone(&self.status),
-        }))
+        Ok(HttpClient::new(Witness(self.0.connect(options)?)))
     }
 }
 
 /// One client of [`Witnessed`]'s.
 #[derive(Debug)]
-struct Witness {
-    client: HttpClient,
-    status: Arc<Mutex<Option<StatusCode>>>,
-}
+struct Witness(HttpClient);
 
 #[async_trait::async_trait]
 impl HttpService for Witness {
     async fn call(&self, request: HttpRequest) -> std::result::Result<HttpResponse, HttpError> {
-        let answer = self.client.execute(request).await?;
-        *self.status.lock().unwrap_or_else(PoisonError::into_inner) = Some(answer.status());
-        Ok(answer)
+        let answer = self.0.execute(request).await;
+        let exchange = match &answer {
+            Ok(answered) => Exchange::Answered(answered.status()),
+            Err(failed) => Exchange::unanswered(failed),
+        };
+        // An exchange outside a witnessed unit has no reader: object_store's
+        // own resume of a download's body, read after its call returned.
+        LAST_EXCHANGE.try_with(|last| last.set(Some(exchange))).ok();
+        answer
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU16, Ordering};
 
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};

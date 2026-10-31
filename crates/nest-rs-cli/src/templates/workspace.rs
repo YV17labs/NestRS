@@ -76,7 +76,8 @@ pub mod {{snake}};
 pub use {{snake}}::{{http_module}};
 "#;
 
-/// Thin workspace app — composition only (`apps/api` shape).
+/// Thin workspace app — composition only (`apps/api` shape). The app alone
+/// links OpenTelemetry, which its `main` installs.
 pub(crate) const APP_CARGO: &str = r#"[package]
 name = "{{kebab}}"
 version.workspace = true
@@ -86,7 +87,7 @@ publish = false
 
 [dependencies]
 features.workspace = true
-nest-rs.workspace = true
+nest-rs = { workspace = true, features = ["opentelemetry"] }
 anyhow.workspace = true
 
 [dev-dependencies]
@@ -101,13 +102,18 @@ mod module;
 pub use module::{{module}};
 "#;
 
+/// The binary: the one line that installs OpenTelemetry, which exports
+/// wherever the deployment's `OTEL_*` point, then the app.
 pub(crate) const APP_MAIN: &str = r#"use anyhow::Result;
 use nest_rs::core::App;
+use nest_rs::opentelemetry::OpenTelemetry;
 
 use {{snake}}::{{module}};
 
 #[nest_rs::main]
 async fn main() -> Result<()> {
+    let _otel = OpenTelemetry::init()?;
+
     App::builder()
         .module::<{{module}}>()
         .build()

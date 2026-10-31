@@ -142,16 +142,6 @@ impl TestAppBuilder {
     }
 }
 
-#[cfg(feature = "opentelemetry")]
-impl TestAppBuilder {
-    /// Install console-only test OpenTelemetry once, which `OpenTelemetryModule`'s
-    /// boot guard requires.
-    pub fn with_test_telemetry(self) -> Self {
-        nest_rs_opentelemetry::__private::init_for_tests();
-        self
-    }
-}
-
 /// The HTTP half (feature `http`): the app booted with its HTTP transport
 /// mounted, and the builder's seams that only an HTTP app reads.
 #[cfg(feature = "http")]

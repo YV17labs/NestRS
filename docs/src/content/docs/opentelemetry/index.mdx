@@ -1,6 +1,6 @@
 ---
 title: OpenTelemetry
-description: First-class OpenTelemetry for nestrs — traces, logs and metrics, W3C propagation, OTLP export — wired by one line in main and one import, and configured by the specification's own OTEL_* variables.
+description: First-class OpenTelemetry for nestrs — traces, logs and metrics, W3C propagation, OTLP export — wired by one line in main, and configured by the specification's own OTEL_* variables.
 sidebar:
   order: 1
 ---
@@ -17,7 +17,7 @@ for resource and HTTP attributes, and links the `tracing` span tree to its OTel
 counterpart through
 [`tracing-opentelemetry`](https://crates.io/crates/tracing-opentelemetry).
 
-Three signal types ship in one crate, behind one import:
+Three signal types ship in one crate, behind one line of `main`:
 
 - **[Traces](/opentelemetry/traces/)** — every request, job and scheduled tick
   opens a span, and so does every unit a package declares, exported under the
@@ -65,18 +65,9 @@ async fn main() -> Result<()> {
 }
 ```
 
-```rust title="apps/auth/src/module.rs (from the demo, abridged)"
-#[module(
-    imports = [
-        OpenTelemetryModule,
-        // …
-    ],
-)]
-pub struct AuthModule;
-```
-
-Two pieces, one rule. `OpenTelemetry::init()?` installs the global
-subscriber and must run **before** `App::builder()`. It takes no name: the
+One line, one rule: there is no module to import for it, and nothing for a
+suite to call. `OpenTelemetry::init()?` installs the global subscriber and
+must run **before** `App::builder()`. It takes no name: the
 service is the binary `#[nest_rs::main]` started, named and versioned from its
 package's manifest. The returned guard flushes batch exporters on Drop, so it
 must live until `main` returns — bind it to `_otel`, never `_`, which drops it
@@ -90,9 +81,11 @@ so a collector that stopped answering delays the exit by three seconds and
 never holds it. Three is the step of
 [the way down](/fundamentals/shutdown/#the-way-down) before the console's last
 second, which sums to 29.5 seconds under a Kubernetes pod's 30-second grace.
-`OpenTelemetryModule` then exposes the meter as a provider; it mounts no
-per-request layer, since what it adds to a span reaches every edge through
-the framework's span constructor.
+Nothing is mounted per request: what it adds to a span reaches every edge
+through the framework's span constructor. The one module of this crate,
+`OpenTelemetryModule`, provides [`Metrics`](/opentelemetry/metrics/) to the
+module whose provider injects them, and an app recording no metric of its own
+imports it nowhere.
 
 `init` stays a line of `main` rather than a `#[nest_rs::main]` key: a pinned
 config goes through `init_with`, and one way to start telemetry beats two.
@@ -339,9 +332,10 @@ umbrella's `opentelemetry` feature turns it on.
 - **`otlp`** (default) — pulls the `opentelemetry-*` crates, installs the OTLP
   exporters for traces / metrics / logs, bridges `tracing` events into OTel
   logs, seeds the remote parent link and the sampler's verdict onto the
-  framework's span constructor, and provides `Metrics`. Without it, the
-  subscriber stays a console-only `tracing` setup and `OpenTelemetryModule`
-  provides nothing — useful for a tiny binary that should not link the OTel SDK.
+  framework's span constructor, and provides `Metrics` through
+  `OpenTelemetryModule`. Without it, the subscriber stays a console-only
+  `tracing` setup, and neither `Metrics` nor its module exists — useful for a
+  tiny binary that should not link the OTel SDK.
   Such a binary still reads the three selectors: `none` is all it honours, and
   any other value, `otlp` included, fails the boot naming the variable, since
   nothing would ship. For the same reason an endpoint set for a signal its
@@ -363,17 +357,26 @@ nest-rs = { workspace = true, features = ["opentelemetry"] }
 ## Boot-time safety
 
 ```text frame="terminal"
-Error: OpenTelemetryModule was imported without calling `OpenTelemetry::init`
-first — the global tracer and meter are no-ops, so traces and metrics would be
-silently dropped. Add `let _otel = nest_rs::opentelemetry::OpenTelemetry::init()?;`
-at the top of `main`, before building the app.
+Error: OTEL_EXPORTER_OTLP_ENDPOINT sets an OTLP endpoint, but nothing exports to
+it: the process logs through the kernel's console alone — add `let _otel =
+nest_rs::opentelemetry::OpenTelemetry::init()?;` at the top of `main`, with the
+umbrella's `opentelemetry` feature, or set OTEL_SDK_DISABLED=true where this
+binary exports nothing
 ```
 
 Forgetting `OpenTelemetry::init` is the failure mode that hurts in production:
 the backend stays quiet, the team thinks observability is on, and the first
-time someone needs a trace there's nothing to grep. The boot guard makes it a
-deterministic startup error instead — visible the first time you run the
-binary locally.
+time someone needs a trace there's nothing to grep. So the deployment's intent
+decides: `App::run` refuses to start when `OTEL_EXPORTER_OTLP_ENDPOINT`, or a
+signal's own endpoint, is set for a signal the deployment leaves on — no
+`OTEL_SDK_DISABLED=true`, no `OTEL_TRACES_EXPORTER=none` — while the process
+logs through the kernel's console alone, which exports nothing. The check
+lives in the kernel, so it holds in a binary that links no telemetry at all.
+An `init` with no endpoint exports nothing either, so a binary run on your
+machine is never refused; an app that installs a subscriber of its own before
+the boot is its own to judge. The refusal is `App::run`'s alone: a suite boots
+through `App::builder().build()`, never `run`, so a `.env` naming a local
+collector never stops one.
 
 ## Tests
 
@@ -384,7 +387,6 @@ use nest_rs::testing::TestApp;
 async fn users_list_returns_a_page() {
     let app = TestApp::builder()
         .module::<ApiModule>()
-        .with_test_telemetry()
         .build()
         .await
         .unwrap();
@@ -393,13 +395,10 @@ async fn users_list_returns_a_page() {
 }
 ```
 
-`with_test_telemetry` installs console-only telemetry, honouring
-`<PREFIX>_LOG` then `RUST_LOG` (default `warn` for noise control); a setting
-that does not parse fails the test, naming it. It is
-idempotent; the first test to run wins, the rest no-op. It is gated by the
-`opentelemetry` feature on `nest-rs-testing`.
-
-A test that does **not** import `OpenTelemetryModule` does not need it.
+A suite boots the module `main` boots and never runs `main`, so it asks
+nothing of telemetry: it logs through the console the boot installs, under
+`RUST_LOG` and `<PREFIX>_LOG_*`, and exports nothing. A provider injecting
+`Metrics` gets them all the same, recording on a meter nothing exports.
 
 ## Reference
 

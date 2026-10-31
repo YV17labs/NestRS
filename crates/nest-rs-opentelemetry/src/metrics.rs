@@ -10,7 +10,8 @@ use opentelemetry::metrics::{InstrumentBuilder, Meter};
 use crate::{Counter, Gauge, Histogram, UpDownCounter};
 
 /// Records measurements on the app's meter; provided by
-/// [`OpenTelemetryModule`](crate::OpenTelemetryModule) under `otlp`.
+/// [`OpenTelemetryModule`](crate::OpenTelemetryModule), which the module
+/// whose provider injects it imports.
 ///
 /// Each method hands back the instrument of that name, made on the first call
 /// and the same one on every call after it: a lookup, never a rebuild, so

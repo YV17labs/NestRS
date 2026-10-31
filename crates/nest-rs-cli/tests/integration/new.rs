@@ -135,6 +135,7 @@ fn new_workspace_greenfield() {
     );
     assert!(root.join("apps/hello/src/module.rs").is_file());
     assert!(!root.join("apps/hello/src/controller.rs").exists());
+    assert_the_app_s_main_installs_telemetry(&root.join("apps/hello"));
     // The greeting logs nothing, so its feature declares no log target.
     let hello = fs::read_to_string(root.join("crates/features/src/hello/mod.rs")).unwrap();
     assert!(!hello.contains("TARGET"), "{hello}");
@@ -349,9 +350,31 @@ fn new_workspace_app_scaffold() {
     let env = fs::read_to_string(dir.path().join(".env")).unwrap();
     assert!(!env.contains("NESTRS_HTTP__PORT"));
 
-    let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
-    assert!(!module.contains("OpenTelemetryModule"));
+    assert_the_app_s_main_installs_telemetry(&app);
     assert_the_port_is_the_app_s_own_setting(&app, 3000);
+}
+
+/// `apps.md`: a deployed app exports OTLP, so `main` holds the one line that
+/// installs the exporter and the app's manifest the feature that builds it;
+/// the root imports no module for it, and its suite calls nothing.
+#[track_caller]
+fn assert_the_app_s_main_installs_telemetry(app: &Path) {
+    let main = fs::read_to_string(app.join("src/main.rs")).unwrap();
+    assert!(
+        main.contains("    let _otel = OpenTelemetry::init()?;\n"),
+        "{main}"
+    );
+    assert!(
+        main.contains("use nest_rs::opentelemetry::OpenTelemetry;"),
+        "{main}"
+    );
+    let manifest = fs::read_to_string(app.join("Cargo.toml")).unwrap();
+    assert!(
+        manifest.contains(r#"nest-rs = { workspace = true, features = ["opentelemetry"] }"#),
+        "{manifest}"
+    );
+    let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
+    assert!(!module.contains("OpenTelemetryModule"), "{module}");
 }
 
 /// The port sits in the app's own `.env`, never pinned in code: a pin would cut

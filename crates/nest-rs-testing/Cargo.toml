@@ -35,8 +35,6 @@ database = ["dep:nest-rs-database"]
 # The same unit as a request granted an ability (`TestApp::unit`,
 # `HeadlessApp::unit`).
 authz = ["database", "dep:nest-rs-authz"]
-# Satisfy the OpenTelemetryModule boot guard in tests (`with_test_telemetry`).
-opentelemetry = ["dep:nest-rs-opentelemetry"]
 # An ephemeral, migrated Postgres database fixture for e2e (`EphemeralDatabase`),
 # opening its connections through the app pool's own options, and the one a
 # test app boots on (`TestAppBuilder::ephemeral_database`).
@@ -118,8 +116,6 @@ nest-rs-authn = { workspace = true, optional = true }
 # it runs under.
 nest-rs-database = { workspace = true, optional = true }
 nest-rs-authz = { workspace = true, optional = true }
-# Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
-nest-rs-opentelemetry = { workspace = true, optional = true }
 # Behind `orm`: `SeaOrmConfig::connect_options`, the one constructor of a
 # Postgres connection, so the fixture verifies TLS as the app's pool does. It
 # also selects the pool's TLS backend. `nest-rs-seaorm` dev-depends on this

@@ -1,7 +1,6 @@
 use nest_rs::core::module;
 use nest_rs::guards::GlobalGuards;
 use nest_rs::health::HealthModule;
-use nest_rs::opentelemetry::OpenTelemetryModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
 use features::authn::AuthnGuard;
@@ -11,7 +10,6 @@ use features::users::UsersWsModule;
 
 #[module(
     imports = [
-        OpenTelemetryModule,
         SeaOrmModule,
         SeaOrmDatabaseModule,
         HealthModule,

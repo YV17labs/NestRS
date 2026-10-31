@@ -104,7 +104,7 @@ publish = false
 
 [dependencies]
 features.workspace = true
-nest-rs.workspace = true
+nest-rs = { workspace = true, features = ["opentelemetry"] }
 anyhow.workspace = true
 
 [dev-dependencies]
@@ -114,10 +114,11 @@ tokio.workspace = true
 
 One `nest-rs` dependency, and it stays one for the rest of this tutorial: the
 capabilities arrive as **features** on it (`[workspace.dependencies]` in the
-root manifest is where the list lives). The dev-dependency adds `testing`, the
-harness, to the tests alone, so no release binary carries it. `anyhow` is there
-because `main.rs` writes it, and `tokio` only for the tests, which write
-`#[tokio::test]`: `#[nest_rs::main]` builds the runtime `main` runs on itself.
+root manifest is where the list lives). The app adds `opentelemetry`, which its
+`main` installs; the dev-dependency adds `testing`, the harness, to the tests
+alone, so no release binary carries it. `anyhow` is there because `main.rs`
+writes it, and `tokio` only for the tests, which write `#[tokio::test]`:
+`#[nest_rs::main]` builds the runtime `main` runs on itself.
 
 The root module lists the edges the app serves. `BlogHttpModule`, the
 feature's HTTP adapter, imports `HttpModule` itself, so the app names no
@@ -158,11 +159,14 @@ crates, no collision — the app only ever names the `…HttpModule` edge.
 ```rust title="apps/blog/src/main.rs"
 use anyhow::Result;
 use nest_rs::core::App;
+use nest_rs::opentelemetry::OpenTelemetry;
 
 use blog::BlogModule;
 
 #[nest_rs::main]
 async fn main() -> Result<()> {
+    let _otel = OpenTelemetry::init()?;
+
     App::builder()
         .module::<BlogModule>()
         .build()
@@ -172,9 +176,14 @@ async fn main() -> Result<()> {
 }
 ```
 
-`App::builder()` runs the four boot phases — seeds, collect, factories,
-register — verifies the access graph, then `.run()` blocks on the
-transports. `#[nest_rs::main]` builds the runtime all of it runs on, and once
+`OpenTelemetry::init()` is the app's whole telemetry: it installs the
+console, and an OTLP exporter for each signal the deployment's `OTEL_*`
+point at — none on your machine, where the console is all there is. It stays
+the first line of `main`, so its guard flushes what is left when `main`
+returns; there is no module to import for it, and nothing for a test to call
+([OpenTelemetry](/opentelemetry/)). `App::builder()` runs the four boot phases
+— seeds, collect, factories, register — verifies the access graph, then
+`.run()` blocks on the transports. `#[nest_rs::main]` builds the runtime all of it runs on, and once
 `run` returns it ends the process within the
 [shutdown budget](/fundamentals/shutdown/#the-way-down) rather than waiting on
 whatever the way down abandoned. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`

@@ -192,9 +192,7 @@ oauth-resource = ["dep:nest-rs-oauth-resource", "authn", "http"]
 # Beside `testing`, the harness runs a unit of work under an ability (`unit`).
 authz = ["dep:nest-rs-authz", "nest-rs-testing?/authz"]
 social = ["dep:nest-rs-social", "authn", "oauth-client"]
-# Same shape: the `with_test_telemetry` boot guard lives behind testing's
-# `opentelemetry` feature.
-opentelemetry = ["dep:nest-rs-opentelemetry", "nest-rs-testing?/opentelemetry"]
+opentelemetry = ["dep:nest-rs-opentelemetry"]
 openapi = ["dep:nest-rs-openapi", "http"]
 # A resource the framework opens ships its indicator in its own crate, behind
 # a `health` feature forwarded weakly here: beside `seaorm`, `redis` or

@@ -446,6 +446,24 @@ pub struct UnboundedTransportError {
     pub stop_bound_ms: u64,
 }
 
+/// The deployment sets an OTLP endpoint for a signal it leaves on, and the
+/// process logs through the kernel's console alone, which exports nothing:
+/// refused by [`App::run`](crate::App::run) before any transport is built,
+/// naming the variable and the line that installs the exporter. A suite,
+/// which boots without `run`, is never refused.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "{variable} sets an OTLP endpoint, but nothing exports to it: the process logs through the \
+     kernel's console alone — add `let _otel = nest_rs::opentelemetry::OpenTelemetry::init()?;` \
+     at the top of `main`, with the umbrella's `opentelemetry` feature, or set \
+     OTEL_SDK_DISABLED=true where this binary exports nothing"
+)]
+pub struct UnservedExportError {
+    /// The variable that sets the endpoint.
+    pub variable: &'static str,
+}
+
 /// The app's init phases failed, were interrupted, or were dropped before they
 /// finished, on an earlier call: they do not run again, so neither
 /// [`App::init`](crate::App::init) nor [`App::run`](crate::App::run) proceeds.

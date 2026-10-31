@@ -78,11 +78,15 @@ its authn or authz port: the feature declares those where the access graph
 checks them. A module's settings are set through its variables, or pinned
 through its `for_root` (`architecture.md`, *Configuration*).
 
-**A deployed app exports OTLP**: `main` holds the `OpenTelemetry::init()` guard
-and the root imports `OpenTelemetryModule`, which refuses to register without
-it; the service is named after the binary, and where it exports is the
-deployment's `OTEL_*`. The console format follows the declared profile — text
-under development and test, JSON otherwise (`nest_rs_core::logging`).
+**A deployed app exports OTLP**: `main` holds the `OpenTelemetry::init()`
+guard, the whole wiring — no module to import, nothing for a suite to call;
+the service is named after the binary, and where it exports is the
+deployment's `OTEL_*`. `App::run` refuses an OTLP endpoint while the kernel's
+console is all the process logs through (`UnservedExportError`), so a `main`
+that forgot the line fails its first deploy rather than exporting nothing.
+`OpenTelemetryModule` is imported only by the module whose provider injects
+`Metrics`. The console reads `RUST_LOG` and follows the declared profile —
+text under development and test, JSON otherwise (`nest_rs_core::logging`).
 
 **A GraphQL app commits its SDL** (`apps/<app>/schema.graphql`), and an
 OpenAPI one its document (`apps/<app>/openapi.json`), each regenerated as a

@@ -132,7 +132,6 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
         .expect("create + migrate a throwaway database");
     let served = HeadlessApp::builder()
         .module::<ApiModule>()
-        .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),

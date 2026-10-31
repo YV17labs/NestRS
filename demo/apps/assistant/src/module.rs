@@ -5,7 +5,6 @@ use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::mcp::{McpIdentity, McpModule};
 use nest_rs::oauth::resource::OAuthResourceModule;
-use nest_rs::opentelemetry::OpenTelemetryModule;
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::server_timing::ServerTimingModule;
@@ -18,7 +17,6 @@ const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped
 
 #[module(
     imports = [
-        OpenTelemetryModule,
         ServerTimingModule,
         HealthModule,
         McpModule::for_root(

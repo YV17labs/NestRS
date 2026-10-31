@@ -1,4 +1,5 @@
-//! `OpenTelemetryModule`'s boot contract, and the OTLP exporters' client.
+//! The subscriber `init` installs, `Metrics`' provider, and the OTLP
+//! exporters' client.
 //! nextest runs every test in a process of its own, so a test that initialises
 //! OpenTelemetry never does it for another.
 #![allow(
@@ -12,6 +13,7 @@
 mod init;
 #[cfg(feature = "otlp")]
 mod metrics;
+#[cfg(feature = "otlp")]
 mod module;
 #[cfg(feature = "otlp")]
 mod otlp;

@@ -20,6 +20,8 @@ mod container;
 mod discoverable;
 mod error_message;
 mod exception_filter;
+#[cfg(feature = "logging")]
+mod export;
 mod instance;
 mod interceptor;
 mod lifecycle;

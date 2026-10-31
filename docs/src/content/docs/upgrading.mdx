@@ -911,6 +911,10 @@ lists what the boot, a log or the wire shows when one is missed.
     | a `CronJobMeta { … }` registered by hand | `CronJobMeta::new(module_path!(), provider, method, trigger, run)`, then `.with_timeout(…)`, `.with_transaction(TransactionPolicy::Pool)`, `.with_replicas(Replicas::One)`, `.with_key(…)` for each field you set away from its default |
     | `Bound { count, why }` | `Bound::new(count, why)` |
     | `let _otel = OpenTelemetry::init("api")?;` | `let _otel = OpenTelemetry::init()?;` — the service is the binary's name and version |
+    | `OpenTelemetryModule` in the root's `imports` | delete it: `main`'s `let _otel = OpenTelemetry::init()?;` is the whole wiring; the module stays only where a provider injects `Arc<Metrics>` |
+    | `.with_test_telemetry()` on a `TestApp::builder()`, and `nest-rs-testing`'s `opentelemetry` feature | delete them: a suite asks nothing of telemetry, and logs through the console the boot installs |
+    | `OpenTelemetryError::InitMissing` matched | nothing: no module refuses; `App::run` refuses an OTLP endpoint no exporter serves with `nest_rs::core::UnservedExportError` |
+    | an app's `main` with no `OpenTelemetry::init()` | `let _otel = OpenTelemetry::init()?;` as its first line, with the `opentelemetry` feature on the app's `nest-rs`, wherever a deployment sets `OTEL_EXPORTER_OTLP_ENDPOINT` |
     | `OpenTelemetryConfig::new("api")`, `OpenTelemetryConfig::from_env("api")?` | `OpenTelemetryConfig::default()`, `OpenTelemetryConfig::from_env()?`; `service_name: Some("api".into())` to name the service otherwise |
     | `.with_log_filter(f)`, `.with_log_format(x)`, `.with_log_source_location(b)`, `.with_otlp_endpoint(e)`, `.with_service_version(v)`, `.with_deployment_environment(d)`, `.with_trace_sample_ratio(r)`, `.with_metric_interval(i)` on an `OpenTelemetryConfig` | the field in a literal over its base: `OpenTelemetryConfig { trace_sample_ratio: 0.1, ..OpenTelemetryConfig::from_env()? }`; a ratio outside `[0, 1]` now fails `init_with` instead of being clamped |
     | `OpenApiLicense { name, identifier: Some(id), url: None }` | `OpenApiLicense::new(name).with_identifier(id)` |
@@ -1234,6 +1238,13 @@ lists what the boot, a log or the wire shows when one is missed.
 
 ## What fails if you get it wrong
 
+- **A binary whose `main` installs no exporter, run where the deployment sets
+  `OTEL_EXPORTER_OTLP_ENDPOINT`** (or a signal's own endpoint) — a platform
+  injecting it into every pod included — fails `App::run` before serving,
+  naming the variable and the line to add: 6.x booted it and exported nothing.
+  Add `let _otel = OpenTelemetry::init()?;` to `main`, or set
+  `OTEL_SDK_DISABLED=true` where that binary exports nothing. A suite, which
+  boots without `run`, is never refused.
 - **A `.env` file or a deployment still setting `<PREFIX>_LOG`** filters
   nothing: the console logs at `info`, or at what `RUST_LOG` says, and says
   once at `warn` on `nest_rs::app` that the variable is read by nothing

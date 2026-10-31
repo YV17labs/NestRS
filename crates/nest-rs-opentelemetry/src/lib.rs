@@ -7,12 +7,14 @@
 //! with the service named after the binary `#[nest_rs::main]` started. The
 //! returned guard flushes on drop, so it must outlive `main`.
 //!
-//! Under the `otlp` feature, [`OpenTelemetryModule`] provides `Metrics`, where
-//! an app records its measurements through instruments named by the
-//! OpenTelemetry Metrics API — `Counter`, `UpDownCounter`, `Histogram`,
-//! `Gauge` — with no `opentelemetry` type in its signatures. The remote parent
-//! link and the sampler's verdict are seeded onto the framework's span
-//! constructor at `init`, so they reach **every** edge.
+//! That line is the whole wiring: no module to import, nothing for a suite to
+//! call. Under the `otlp` feature, [`OpenTelemetryModule`] provides `Metrics`
+//! to the module whose provider injects them, where an app records its
+//! measurements through instruments named by the OpenTelemetry Metrics API —
+//! `Counter`, `UpDownCounter`, `Histogram`, `Gauge` — with no `opentelemetry`
+//! type in its signatures. The remote parent link and the sampler's verdict
+//! are seeded onto the framework's span constructor at `init`, so they reach
+//! **every** edge.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
@@ -33,6 +35,7 @@ mod instruments;
 mod linker;
 #[cfg(feature = "otlp")]
 mod metrics;
+#[cfg(feature = "otlp")]
 mod module;
 #[cfg(feature = "otlp")]
 mod otlp;
@@ -50,12 +53,5 @@ pub use init::{FLUSH_TIMEOUT, OpenTelemetry};
 pub use instruments::{Counter, Gauge, Histogram, UpDownCounter};
 #[cfg(feature = "otlp")]
 pub use metrics::{Describe, Metrics};
+#[cfg(feature = "otlp")]
 pub use module::OpenTelemetryModule;
-
-#[doc(hidden)]
-pub mod __private {
-    //! Called by this framework's macro expansions and sibling crates. Not API:
-    //! may change in any release.
-
-    pub use crate::init::init_for_tests;
-}

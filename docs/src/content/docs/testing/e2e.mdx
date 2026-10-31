@@ -539,14 +539,13 @@ torn down before the error returns, as `App::run` tears it down.
 
 ## Test telemetry
 
-`with_test_telemetry()` installs console-only telemetry, honouring
-`<PREFIX>_LOG` then `RUST_LOG` (default `warn` for noise control). It is idempotent; the first test to run wins, the rest no-op.
-Required when the module tree imports `OpenTelemetryModule` (the boot
-guard panics otherwise). Gated by the `opentelemetry` feature on
-`nest-rs-testing`.
-
-A test whose module tree does **not** import `OpenTelemetryModule` does
-not need it.
+A suite asks nothing of telemetry. `main`'s `OpenTelemetry::init()` is the
+app's whole wiring, and a suite never runs `main`: it logs through the console
+the boot installs, under `RUST_LOG` (default `info`) and `<PREFIX>_LOG_*`, and
+exports nothing. A provider injecting `Metrics` gets them all the same,
+recording on a meter nothing exports. `App::run`'s refusal of an OTLP endpoint
+no exporter serves is the binary's: the boot a suite runs never makes it, so a
+`.env.test` naming a local collector stops no suite.
 
 ## Subscriptions
 

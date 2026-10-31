@@ -3207,7 +3207,6 @@ dependencies = [
  "nest-rs-database",
  "nest-rs-graphql",
  "nest-rs-http",
- "nest-rs-opentelemetry",
  "nest-rs-queue",
  "nest-rs-seaorm",
  "nest-rs-ws",

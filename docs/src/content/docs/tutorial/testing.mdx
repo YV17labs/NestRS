@@ -59,10 +59,9 @@ release binary carries the harness. Its throwaway database rides the `seaorm`
 feature the workspace's `nest-rs` has carried since `nestrs new`, and the bearer
 it signs the `authn` one the auth adapter added. `migrations` is the
 workspace's migrator, `serde_json` writes the request bodies, and `uuid` the
-subject a token names. There is no telemetry feature to enable: `blog`
-imports no `OpenTelemetryModule`, so `TestApp` needs no
-`with_test_telemetry()` — that builder method exists only to satisfy that
-module's boot guard, and it lives behind `features = ["opentelemetry"]`.
+subject a token names. The suite asks nothing of telemetry: `main`'s
+`OpenTelemetry::init()` is the app's whole wiring, and a suite never runs
+`main`, so it logs through the console the boot installs and exports nothing.
 
 ## The boot harness
 

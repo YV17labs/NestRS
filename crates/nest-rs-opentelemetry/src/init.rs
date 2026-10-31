@@ -3,27 +3,12 @@ use tracing_subscriber::Layer as _;
 use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use nest_rs_core::__private::{ConsoleLayer, install_global_subscriber, log_filter};
-use nest_rs_core::logging::{LogFormat, LogSettings};
 
 use crate::config::{OpenTelemetryConfig, say_retired_variables};
 use crate::error::OpenTelemetryError;
 
-/// `OpenTelemetryModule` reads this to fail fast rather than register no-op providers
-/// when `OpenTelemetry::init` was forgotten.
-static INITIALIZED: AtomicBool = AtomicBool::new(false);
-
 const ALREADY_INSTALLED: &str = "a global subscriber is already installed, and is kept";
-
-pub(crate) fn initialized() -> bool {
-    INITIALIZED.load(Ordering::Relaxed)
-}
-
-fn mark_initialized() {
-    INITIALIZED.store(true, Ordering::Relaxed);
-}
 
 /// Drop synchronously flushes pending traces/metrics/logs. Keep the binding
 /// alive for the whole program: `let _otel = OpenTelemetry::init()?;`.
@@ -102,7 +87,6 @@ impl OpenTelemetry {
             ) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }
-            mark_initialized();
 
             say_retired_variables();
             let summary = exporters.summary;
@@ -143,7 +127,6 @@ impl OpenTelemetry {
             if !install_global_subscriber(Registry::default().with(filter).with(console_layer)) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }
-            mark_initialized();
             say_retired_variables();
             tracing::info!(
                 target: crate::TARGET,
@@ -206,46 +189,6 @@ fn refuse_what_no_exporter_serves(
         }
     }
     Ok(())
-}
-
-/// The filter a test run logs under when `RUST_LOG` sets none: a passing test
-/// says little.
-const TEST_FILTER: &str = "warn";
-
-/// Console-only init for tests. Idempotent; first call wins. No flush
-/// guard. Log level honours `RUST_LOG`, default `warn`; a
-/// setting that does not parse panics with the sentence naming it.
-pub fn init_for_tests() {
-    if initialized() {
-        return;
-    }
-    #[expect(
-        clippy::panic,
-        reason = "a test run with a broken log setting fails loudly, never quietly logs less"
-    )]
-    let settings = LogSettings::from_env().unwrap_or_else(|error| panic!("{error}"));
-    let filter = if filter_is_set() {
-        settings.filter
-    } else {
-        TEST_FILTER.to_owned()
-    };
-    // `false` is a subscriber already installed, which a test run keeps.
-    install_global_subscriber(
-        Registry::default()
-            .with(log_filter(&filter))
-            .with(ConsoleLayer::new(LogFormat::Text, false)),
-    );
-    mark_initialized();
-}
-
-/// Whether `RUST_LOG` holds a directive, as `LogSettings` reads it: blank is
-/// unset.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the logging bootstrap runs before any config exists"
-)]
-fn filter_is_set() -> bool {
-    std::env::var_os("RUST_LOG").is_some_and(|value| !value.to_string_lossy().trim().is_empty())
 }
 
 /// How long the final telemetry flush may hold the exit, every provider at once.
@@ -349,30 +292,6 @@ mod tests {
     use super::*;
     #[cfg(not(feature = "otlp"))]
     use crate::testing::reading;
-
-    /// `INITIALIZED` is a process-wide `AtomicBool`; tests that mutate it must
-    /// serialize so an interleaved check does not see another test's write.
-    static INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    #[test]
-    fn initialized_reflects_the_mark() {
-        let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Restored after: `init_for_tests` depends on the prior state.
-        let prior = INITIALIZED.swap(false, Ordering::Relaxed);
-        assert!(!initialized());
-        mark_initialized();
-        assert!(initialized());
-        INITIALIZED.store(prior, Ordering::Relaxed);
-    }
-
-    #[test]
-    fn init_for_tests_is_idempotent() {
-        let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        init_for_tests();
-        assert!(initialized(), "init_for_tests must flip the global flag");
-        init_for_tests();
-        assert!(initialized());
-    }
 
     /// A filter pinned in code is checked by the kernel's parser, which names
     /// the field and never quotes the directive.

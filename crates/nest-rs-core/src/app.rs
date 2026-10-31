@@ -373,6 +373,14 @@ impl App {
     /// others. A transport whose `serve` returns before a stop was asked, `Ok`
     /// included, has failed.
     ///
+    /// A deployment setting an OTLP endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`, or a
+    /// signal's own) for a signal it leaves on, while the process logs
+    /// through the kernel's console alone, is refused first, before any
+    /// transport is built ([`UnservedExportError`](crate::UnservedExportError)):
+    /// `main` never called `OpenTelemetry::init()`, so nothing would export. A
+    /// subscriber of the app's own is its own to judge, and
+    /// [`AppBuilder::build`], which a suite boots through, never refuses.
+    ///
     /// A site a transport composes as it configures — a route, a gateway — that
     /// could not compose (a layer it declares resolves to no provider, a
     /// misordered guard chain) fails the boot here, before any hook runs, as
@@ -426,6 +434,8 @@ impl App {
             version = env!("CARGO_PKG_VERSION"),
             "nestrs starting",
         );
+        #[cfg(feature = "logging")]
+        crate::export::refuse_unserved_export()?;
         if !crate::way_down::watched() {
             crate::way_down::watch_app(&self.lifecycle);
         }

@@ -119,6 +119,8 @@ pub mod env_prefix;
 pub mod error;
 pub mod error_message;
 mod exception_filter;
+#[cfg(feature = "logging")]
+mod export;
 mod factory_inputs;
 mod handler;
 mod identifier;
@@ -181,7 +183,8 @@ pub use error::{
     LateOptionalDependencyError, MissingAmbientError, MissingDependencyError,
     OverriddenDependencyError, ProviderCycleError, ScopeViolationError, ScopedLayerError,
     UnboundedTransportError, UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError,
-    UngatedDiscoveryError, UnregisteredModuleError, UnresolvedLayerError, WiringFailedError,
+    UngatedDiscoveryError, UnregisteredModuleError, UnresolvedLayerError, UnservedExportError,
+    WiringFailedError,
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
 pub use exception_filter::{

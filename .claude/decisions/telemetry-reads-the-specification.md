@@ -475,3 +475,56 @@ said. Decided on the owner's agreement to the identity audit's second pass
   stop every boot over a filter, where the variable costs nothing but the
   filter it no longer sets; said at `warn`, as the retired OpenTelemetry
   namespace is.
+
+## 2026-10-31 — telemetry is one line in `main`, and `App::run` holds the deployment to it
+
+Every demo app wrote telemetry three times: `OpenTelemetry::init()` in
+`main`, `OpenTelemetryModule` in the root, and `.with_test_telemetry()` in
+every suite, since a suite boots the root and never runs `main`. The module
+did two things — refuse the boot when `init` had not run, and provide
+`Metrics`, which nothing in the demo injected — so its import only checked
+that the other line was written, and an app with neither line (every
+`nestrs new` app) exported nothing in silence. Decided on the owner's
+agreement to the identity audit's second pass ("Tout faire (Recommandé)",
+2026-10-31, its item 6), which covers this public API break:
+
+- **`let _otel = OpenTelemetry::init()?;` in `main` is the whole wiring.** The
+  refusals above of a `#[nest_rs::main]` key and of an install the Cargo
+  feature activates stand; `init` stays the line, and `nestrs new` writes it,
+  with the umbrella's `opentelemetry` feature on the app's own dependency.
+- **`OpenTelemetryModule` provides `Metrics` and refuses nothing**, under
+  `otlp` alone, over the global meter: it is imported by the module whose
+  provider injects `Metrics`, and a provider injecting them with no import is
+  refused naming it (its `DependencyRemedy`). In a suite, which never runs
+  `main`, `Metrics` record on a meter nothing exports.
+  `OpenTelemetryError::InitMissing`, `TestAppBuilder::with_test_telemetry`,
+  `nest-rs-testing`'s `opentelemetry` feature and the crate's private test
+  subscriber are gone.
+- **`App::run` refuses an OTLP endpoint no exporter serves**
+  (`UnservedExportError`): `OTEL_EXPORTER_OTLP_ENDPOINT`, or a signal's own,
+  set for a signal `OTEL_SDK_DISABLED` and its selector leave on, while the
+  process logs through the kernel's console alone — the one subscriber of
+  which the kernel knows that nothing exports. The check lives in the kernel,
+  so it holds in a binary linking no telemetry crate; it reads the
+  deployment's intent where the deployment states it, and catches the
+  forgotten pair the module guard could not, while an `init` with no endpoint
+  exports nothing anyway. `App::build`, which a suite boots through, never
+  makes it: a suite's `.env` naming a local collector stops no suite.
+
+**Refused:**
+
+- **Moving the 'init did not run' refusal into `Metrics`' provider**, as the
+  audit's synthesis first proposed: a suite never runs `main`, so every
+  suite of an app injecting `Metrics` would need `with_test_telemetry` back,
+  and the binary's case is `App::run`'s refusal already.
+- **A flag `OpenTelemetry::init` sets, which `App::run` reads**: an app that
+  installs an observability stack of its own before the boot — a shape the
+  kernel's logging supports — would be refused whenever its platform injects
+  `OTEL_EXPORTER_OTLP_ENDPOINT`, naming a remedy that cannot apply (`init`
+  refuses a second global subscriber). The kernel judges only the subscriber
+  it installed itself.
+- **Refusing in `App::build`**: every suite whose `.env` names a local
+  collector would stop.
+- **Keeping the module's guard beside the new refusal**: it caught a missing
+  `init` only in an app that remembered the import, and only cost a line in
+  every root and suite that did.

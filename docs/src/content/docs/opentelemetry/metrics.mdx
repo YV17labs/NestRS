@@ -9,8 +9,13 @@ Metrics are the aggregate counterpart to [traces](/opentelemetry/traces/) —
 reach for them when you need a number over time (signups per minute, job
 duration percentiles, queue depth) rather than the story of one request.
 
-`OpenTelemetryModule` provides `Arc<Metrics>`, the app's meter. Inject it like
-any other dependency.
+`OpenTelemetryModule` provides `Arc<Metrics>`, the app's meter: import it in
+the module whose provider injects it, and inject it like any other
+dependency. Telemetry itself needs no import — `main`'s `OpenTelemetry::init()`
+installs the meter the module hands out — so an app recording no metric of its
+own imports the module nowhere. A provider injecting `Metrics` whose module
+does not import it fails the boot, naming `OpenTelemetryModule`; in a suite,
+which never runs `main`, `Metrics` record on a meter nothing exports.
 
 ## A first counter
 

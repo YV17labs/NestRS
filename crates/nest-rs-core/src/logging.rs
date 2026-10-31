@@ -1521,7 +1521,21 @@ pub(crate) fn init_fallback() -> Result<()> {
 /// }
 /// ```
 pub fn install_console(settings: &LogSettings) -> bool {
-    __private::install_global_subscriber(console(settings))
+    let installed = __private::install_global_subscriber(console(settings));
+    if installed {
+        KERNEL_CONSOLE.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    installed
+}
+
+/// Whether [`install_console`] made the kernel's console the process's global
+/// subscriber, which exports nothing.
+static KERNEL_CONSOLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the process logs through the kernel's console alone — the one
+/// subscriber of which the kernel knows that nothing is exported.
+pub(crate) fn kernel_console_installed() -> bool {
+    KERNEL_CONSOLE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The kernel's console subscriber, as `settings` describe it.

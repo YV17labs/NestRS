@@ -42,7 +42,6 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
         .expect("create + migrate a throwaway database");
     let app = builder
         .module::<ApiModule>()
-        .with_test_telemetry()
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),

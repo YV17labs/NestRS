@@ -13,7 +13,6 @@ async fn the_live_app_requires_its_own_audience_read_from_its_own_file() {
         .expect("create + migrate a throwaway database");
     let app = TestApp::builder()
         .module::<LiveModule>()
-        .with_test_telemetry()
         .provide_arc(db.connection())
         .build_ws()
         .await

@@ -180,24 +180,6 @@ fn init_with_writes_the_exporter_s_debug_lines_a_filter_names() {
     assert!(tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::DEBUG));
 }
 
-/// The test subscriber clamps as the app's does, whatever filter it reads.
-#[cfg(feature = "otlp")]
-#[test]
-#[expect(
-    clippy::result_large_err,
-    reason = "figment::Jail fixes the closure's error type"
-)]
-fn the_test_subscriber_clamps_the_exporter_s_debug_lines_under_a_bare_trace() {
-    figment::Jail::expect_with(|jail| {
-        jail.set_env("RUST_LOG", "trace");
-        nest_rs_opentelemetry::__private::init_for_tests();
-        Ok(())
-    });
-
-    assert!(!tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::DEBUG));
-    assert!(tracing::event_enabled!(target: "opentelemetry_sdk", tracing::Level::TRACE));
-}
-
 /// A clamp narrows the filter it is given: under `warn`, stricter than the
 /// exporter's `info` clamp, the exporter's `info` lines stay closed, and the
 /// process's `tracing` and `log` levels are the filter's.
@@ -237,29 +219,6 @@ fn init_with_a_filter_naming_one_target_writes_no_clamped_library() {
 
     assert!(tracing::event_enabled!(target: "billing::service", tracing::Level::DEBUG));
     assert!(!tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::ERROR));
-}
-
-/// The test subscriber's own default, `warn`, is stricter than the exporter's
-/// clamp, and stays the process's level.
-#[cfg(feature = "otlp")]
-#[test]
-#[expect(
-    clippy::result_large_err,
-    reason = "figment::Jail fixes the closure's error type"
-)]
-fn the_test_subscriber_s_default_never_opens_a_clamped_library() {
-    figment::Jail::expect_with(|jail| {
-        jail.clear_env();
-        nest_rs_opentelemetry::__private::init_for_tests();
-        Ok(())
-    });
-
-    assert!(!tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::INFO));
-    assert!(tracing::event_enabled!(target: "opentelemetry-otlp", tracing::Level::WARN));
-    assert_eq!(
-        tracing::level_filters::LevelFilter::current(),
-        tracing::level_filters::LevelFilter::WARN
-    );
 }
 
 /// A config pinned in code is the base the console's variables overlay, field

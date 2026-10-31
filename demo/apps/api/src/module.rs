@@ -2,7 +2,6 @@ use nest_rs::core::module;
 use nest_rs::guards::GlobalGuards;
 use nest_rs::health::HealthModule;
 use nest_rs::openapi::OpenApiModule;
-use nest_rs::opentelemetry::OpenTelemetryModule;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::server_timing::ServerTimingModule;
@@ -19,7 +18,6 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
 
 #[module(
     imports = [
-        OpenTelemetryModule,
         SeaOrmModule,
         SeaOrmDatabaseModule,
         RedisModule,

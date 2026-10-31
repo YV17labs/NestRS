@@ -136,3 +136,86 @@ pub struct {{controller}} {
 #[crud(service = svc)]
 impl {{controller}} {}
 "#;
+
+/// The app's `e2e` suite root, written over the empty one `nestrs new`
+/// scaffolds by the first `g resource` wired into the app: its module list and
+/// the fixture every test boots — the module `main` runs, on a throwaway
+/// database migrated by the workspace's migrator.
+pub(crate) const E2E_MAIN: &str = r#"//! The app's suite against a throwaway database: every test boots the
+//! composition `main` runs, migrated by the workspace's migrator.
+
+mod {{snake}};
+
+use nest_rs::testing::TestApp;
+
+use {{app_snake}}::{{app_module}};
+
+pub(crate) async fn boot() -> TestApp {
+    TestApp::builder()
+        .module::<{{app_module}}>()
+        .ephemeral_database::<migrations::Migrator>()
+        .build()
+        .await
+        .expect("{{app_module}} boots against a throwaway database")
+}
+"#;
+
+/// [`E2E_MAIN`]'s fixture, appended to a suite root that has tests of its own
+/// and no `boot`: every path spelled in full, so it adds no import a root may
+/// already hold.
+pub(crate) const E2E_BOOT: &str = r#"
+pub(crate) async fn boot() -> nest_rs::testing::TestApp {
+    nest_rs::testing::TestApp::builder()
+        .module::<{{app_snake}}::{{app_module}}>()
+        .ephemeral_database::<migrations::Migrator>()
+        .build()
+        .await
+        .expect("{{app_module}} boots against a throwaway database")
+}
+"#;
+
+/// The resource's round trip through the app, as a caller the guards admit:
+/// a token the app's own `JwtService` signs over the auth adapter's `Claims`.
+/// It passes once the migration creates the table and `AuthzAbility` grants
+/// the entity — until then it fails on the status that says which.
+pub(crate) const E2E_TEST: &str = r#"use nest_rs::http::StatusCode;
+use serde_json::json;
+use uuid::Uuid;
+
+use features::authn::{Claims, Role, Subject};
+
+use crate::boot;
+
+#[tokio::test]
+async fn {{snake}}_round_trip() {
+    let app = boot().await;
+    let bearer = app.bearer(|exp| Claims {
+        sub: Subject::User(Uuid::now_v7()),
+        roles: vec![Role::User],
+        exp,
+    });
+
+    let created = app
+        .http()
+        .post("/{{kebab}}")
+        .header("authorization", &bearer)
+        .body_json(&json!({ "name": "First" }))
+        .send()
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let body = created.json().await;
+    let id = body.value().object().get("id").string().to_owned();
+
+    let read = app
+        .http()
+        .get(format!("/{{kebab}}/{id}"))
+        .header("authorization", &bearer)
+        .send()
+        .await;
+    read.assert_status_is_ok();
+    assert_eq!(
+        read.json().await.value().object().get("name").string(),
+        "First"
+    );
+}
+"#;

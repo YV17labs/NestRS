@@ -255,6 +255,20 @@ use crate::post::PostModule;
 pub struct PostHttpModule;
 "#;
 
+/// The app's root as `nestrs new` wrote it, and its empty `e2e` suite: what
+/// the resource wired into them names the auth adapter this test undeclares.
+const HELLO_ONLY_ROOT: &str = r#"use nest_rs::core::module;
+
+use features::hello::HelloHttpModule;
+
+#[module(
+    imports = [
+        HelloHttpModule,
+    ],
+)]
+pub struct HelloModule;
+"#;
+
 #[test]
 fn crud_needs_no_dependency_the_controller_does_not_name() {
     // Without the auth adapter (whose claims name `uuid`) and the guards, the
@@ -266,6 +280,8 @@ fn crud_needs_no_dependency_the_controller_does_not_name() {
         &[],
         &[
             ("crates/features/src/lib.rs", RESOURCE_ONLY_LIB),
+            ("apps/hello/src/module.rs", HELLO_ONLY_ROOT),
+            ("apps/hello/tests/e2e/main.rs", ""),
             (
                 "crates/features/src/post/http/controller.rs",
                 UNGUARDED_CRUD_CONTROLLER,

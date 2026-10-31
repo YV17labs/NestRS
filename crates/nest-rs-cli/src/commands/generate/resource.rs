@@ -8,12 +8,15 @@
 use std::path::PathBuf;
 
 use super::auth;
-use super::cargo::{auth_deps, ensure_features_deps, ensure_workspace_deps, resource_deps};
+use super::cargo::{
+    auth_deps, ensure_dev_deps, ensure_features_deps, ensure_workspace_deps, resource_deps,
+    round_trip_dev_deps,
+};
 use super::migration::refuse_reserved;
 use super::support::{Import, Wiring, data_layer, finish, wire_into_app, wiring_lines};
 use crate::commands::resolve_start;
-use crate::context::Context;
-use crate::error::{CliError, CliResult};
+use crate::context::{Context, NestrsWorkspace, TargetApp};
+use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, ensure_lines};
 use crate::templates::resource;
@@ -74,9 +77,15 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
         decls.extend(auth::lib_decls());
     }
     decls.push(format!("pub mod {};", names.snake));
+    // The app's round-trip test, beside the app the resource is wired into.
+    let round_trip = round_trip_test(&ws, &target, &names)?;
+    let mut workspace_deps = deps.clone();
+    if round_trip.is_some() {
+        workspace_deps.extend(round_trip_dev_deps());
+    }
     s.edit(
         ws.root.join("Cargo.toml"),
-        ensure_workspace_deps(deps.clone()),
+        ensure_workspace_deps(workspace_deps),
     );
     s.edit(ws.features_cargo(), ensure_features_deps(deps));
     s.edit(ws.features_lib(), ensure_lines(decls));
@@ -96,6 +105,9 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
         .chain(beside.iter().cloned())
         .collect();
     let wiring = wire_into_app(&target, &mut s, &imports)?;
+    if let Some(test) = &round_trip {
+        test.queue(&mut s);
+    }
 
     finish(
         s,
@@ -103,8 +115,106 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
         &ws.root,
         &format!("resource `{}`", names.snake),
     )?;
-    print_next_steps(&names, &wiring, &edge, &beside, bootstrapped.as_ref());
+    print_next_steps(
+        &names,
+        &wiring,
+        &edge,
+        &beside,
+        round_trip.as_ref(),
+        bootstrapped.as_ref(),
+    );
     Ok(())
+}
+
+/// The round-trip test `g resource` writes into the app's `e2e` suite: the
+/// test file, the suite root's module line and `boot` fixture, and the
+/// suite's dev-dependencies.
+struct RoundTrip {
+    /// The app's crate root.
+    app: PathBuf,
+    test: PathBuf,
+    test_body: String,
+    main: PathBuf,
+    /// The root's whole contents when it has none yet (`nestrs new`'s is
+    /// empty), else the lines it gains.
+    main_body: MainBody,
+}
+
+enum MainBody {
+    Whole(String),
+    Gains {
+        module: String,
+        boot: Option<String>,
+    },
+}
+
+/// The test for a resource wired into `target`, when the workspace keeps the
+/// migrator its fixture migrates with; none for a resource no app serves.
+fn round_trip_test(
+    ws: &NestrsWorkspace,
+    target: &TargetApp,
+    names: &Names,
+) -> CliResult<Option<RoundTrip>> {
+    let TargetApp::App { name, root } = target else {
+        return Ok(None);
+    };
+    if !ws.migrations_lib().is_file() {
+        return Ok(None);
+    }
+    let app = Names::parse(name);
+    let r = Renderer::new(names)
+        .with("app_snake", app.snake.clone())
+        .with("app_module", app.module());
+    let main = root.join("tests/e2e/main.rs");
+    let module = format!("mod {};", names.snake);
+    let main_body = match read_if_exists(&main)? {
+        Some(current) if !current.trim().is_empty() => MainBody::Gains {
+            module,
+            boot: (!current.contains("fn boot(")).then(|| r.render(resource::E2E_BOOT)),
+        },
+        _ => MainBody::Whole(r.render(resource::E2E_MAIN)),
+    };
+    Ok(Some(RoundTrip {
+        app: root.clone(),
+        test: root.join(format!("tests/e2e/{}.rs", names.snake)),
+        test_body: r.render(resource::E2E_TEST),
+        main,
+        main_body,
+    }))
+}
+
+impl RoundTrip {
+    fn queue(&self, s: &mut Scaffold) {
+        s.create(&self.test, self.test_body.clone());
+        match &self.main_body {
+            MainBody::Whole(body) if self.main.is_file() => {
+                let body = body.clone();
+                s.edit(&self.main, Box::new(move |_| Some(body.clone())));
+            }
+            MainBody::Whole(body) => {
+                s.create(&self.main, body.clone());
+            }
+            MainBody::Gains { module, boot } => {
+                let lines = ensure_lines(vec![module.clone()]);
+                let boot = boot.clone();
+                s.edit(
+                    &self.main,
+                    Box::new(move |current: &str| {
+                        let declared = lines(current).unwrap_or_else(|| current.to_owned());
+                        let out = match &boot {
+                            Some(boot) => format!("{declared}{boot}"),
+                            None => declared,
+                        };
+                        (out != current).then_some(out)
+                    }),
+                );
+            }
+        }
+        s.edit(
+            self.app.join("Cargo.toml"),
+            ensure_dev_deps(round_trip_dev_deps()),
+        );
+    }
 }
 
 fn print_next_steps(
@@ -112,6 +222,7 @@ fn print_next_steps(
     wiring: &Wiring,
     edge: &Import,
     beside: &[Import],
+    round_trip: Option<&RoundTrip>,
     bootstrapped: Option<&auth::Secrets>,
 ) {
     let snake = &names.snake;
@@ -127,6 +238,18 @@ fn print_next_steps(
     for (i, line) in wiring_lines(wiring, edge, beside).iter().enumerate() {
         let lead = if i == 0 { "  3. " } else { "     " };
         println!("{lead}{line}");
+    }
+    if let (Some(test), Wiring::Wired { root, .. }) = (round_trip, wiring) {
+        let file = test
+            .test
+            .strip_prefix(root)
+            .unwrap_or(&test.test)
+            .display()
+            .to_string();
+        println!(
+            "     Its round trip is `{file}` in that app: `nestrs run test e2e` passes it once"
+        );
+        println!("     the migration creates the table and the grant is in.");
     }
     println!("  4. Add transports:  nestrs g graphql|ws {}", names.kebab);
     if let Some(secrets) = bootstrapped {

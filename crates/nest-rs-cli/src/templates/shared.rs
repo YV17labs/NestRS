@@ -506,11 +506,14 @@ The scaffolded `tests/integration/main.rs` boots the **feature's own** module
 through `TestApp`, never the app root: the root grows every transport and
 connection the app serves, and the moment it imports `SeaOrmDatabaseModule` a suite
 defined as infrastructure-free waits 30 s for a pool. Assert on the composed app
-in `tests/e2e/main.rs` instead — scaffolded empty, and where a test boots against
-a throwaway database with `nest_rs::testing`'s `EphemeralDatabase` (`nest-rs`'s
-`seaorm` feature, on since `nestrs new`, and its `testing` feature, which each
-app enables in its `[dev-dependencies]` alone, so no release binary carries the
-harness) before driving it through `TestApp` the same way.
+in `tests/e2e/` instead — scaffolded empty, and where a test boots the module
+`main` runs on a throwaway database, `TestApp::builder()` with
+`.ephemeral_database::<migrations::Migrator>()` (`nest-rs`'s `seaorm` feature, on
+since `nestrs new`, and its `testing` feature, which each app enables in its
+`[dev-dependencies]` alone, so no release binary carries the harness), and calls
+a guarded route with `app.bearer(|exp| claims)`, a token the app's own key
+signs. `nestrs g resource` writes the first: the resource's round trip in
+`tests/e2e/<resource>.rs`, and the `boot` fixture in `tests/e2e/main.rs`.
 
 ## Commands
 

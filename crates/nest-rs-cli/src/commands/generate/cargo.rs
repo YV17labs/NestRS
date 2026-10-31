@@ -69,6 +69,16 @@ const UUID: Dep = Dep {
     workspace_value: "{ version = \"1.29\", features = [\"v7\", \"serde\"] }",
     features: &[],
 };
+const SERDE_JSON: Dep = Dep {
+    name: "serde_json",
+    workspace_value: "\"1.0\"",
+    features: &[],
+};
+const MIGRATIONS: Dep = Dep {
+    name: "migrations",
+    workspace_value: "{ path = \"crates/migrations\" }",
+    features: &[],
+};
 const SERDE: Dep = Dep {
     name: "serde",
     workspace_value: "{ version = \"1.0\", features = [\"derive\"] }",
@@ -101,6 +111,13 @@ const SEA_ORM_MIGRATION: Dep = Dep {
 /// `http` it carries, because `#[crud]` writes an `#[authorize]` on every route.
 pub(super) fn resource_deps() -> Vec<&'static Dep> {
     vec![&SEAORM, &AUTHZ, &SEA_ORM, &SERDE]
+}
+
+/// What an app's `e2e` suite needs to run a resource's round-trip test: the
+/// workspace's migrator, a JSON body, and the `Uuid` the auth adapter's
+/// subject holds.
+pub(super) fn round_trip_dev_deps() -> Vec<&'static Dep> {
+    vec![&MIGRATIONS, &SERDE_JSON, &UUID]
 }
 
 /// The crates one `#[expose]`d entity needs — [`resource_deps`] without `authz`.
@@ -164,6 +181,14 @@ pub(super) fn graphql_port_deps() -> Vec<&'static Dep> {
 /// Edit the root manifest: add any missing `[workspace.dependencies]` entries.
 pub(super) fn ensure_workspace_deps(deps: Vec<&'static Dep>) -> Transform {
     ensure_deps(deps, &["workspace", "dependencies"], Dep::workspace_item)
+}
+
+/// Edit a member manifest's `[dev-dependencies]`: add any missing entries as
+/// `{ workspace = true, features = [...] }`.
+pub(super) fn ensure_dev_deps(deps: Vec<&'static Dep>) -> Transform {
+    ensure_deps(deps, &["dev-dependencies"], |_| {
+        Item::Value(workspace_value())
+    })
 }
 
 /// Edit the `features` manifest: add any missing `[dependencies]` entries as

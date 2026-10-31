@@ -334,3 +334,90 @@ fn generate_resource_in_a_workspace_of_several_apps_wires_the_named_one() {
         "only the named app is wired"
     );
 }
+
+/// Wired into an app, `g resource` writes the resource's round trip into the
+/// app's `e2e` suite: the test, the suite root's fixture booting the module
+/// `main` runs on a throwaway database, and the dev-dependencies they name. A
+/// second resource joins the same root.
+#[test]
+fn generate_resource_writes_the_round_trip_test_of_the_app_it_wires() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+    let app = write_fake_app(dir.path(), "blog");
+    let root = dir.path().to_str().unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "resource", "posts", "-p", root]);
+
+    let suite = app.join("tests/e2e");
+    let test = fs::read_to_string(suite.join("posts.rs")).unwrap();
+    for line in [
+        "use crate::boot;",
+        "async fn posts_round_trip() {",
+        ".post(\"/posts\")",
+        "let bearer = app.bearer(|exp| Claims {",
+        "created.assert_status(StatusCode::CREATED);",
+    ] {
+        assert!(test.contains(line), "{line}: {test}");
+    }
+    let main = fs::read_to_string(suite.join("main.rs")).unwrap();
+    for line in [
+        "mod posts;",
+        "use blog::BlogModule;",
+        ".module::<BlogModule>()",
+        ".ephemeral_database::<migrations::Migrator>()",
+    ] {
+        assert!(main.contains(line), "{line}: {main}");
+    }
+    assert!(
+        !main.contains("#[tokio::test]"),
+        "the root holds no test: {main}"
+    );
+    let app_cargo = fs::read_to_string(app.join("Cargo.toml")).unwrap();
+    let dev = app_cargo
+        .split_once("[dev-dependencies]")
+        .map(|(_, dev)| dev)
+        .unwrap_or_else(|| panic!("a dev-dependencies table: {app_cargo}"));
+    for dep in ["migrations", "serde_json", "uuid"] {
+        assert!(dev.contains(dep), "{dep}: {app_cargo}");
+    }
+    assert!(
+        fs::read_to_string(dir.path().join("Cargo.toml"))
+            .unwrap()
+            .contains("serde_json = \"1.0\""),
+        "the workspace pins what the app's suite names"
+    );
+    assert!(
+        printed.contains("Its round trip is `tests/e2e/posts.rs` in that app"),
+        "{printed}"
+    );
+
+    run_ok(dir.path(), &["g", "resource", "orders", "-p", root]);
+    let main = fs::read_to_string(suite.join("main.rs")).unwrap();
+    assert!(
+        main.contains("mod orders;") && main.contains("mod posts;"),
+        "{main}"
+    );
+    assert_eq!(main.matches("fn boot(").count(), 1, "one fixture: {main}");
+    assert!(suite.join("orders.rs").is_file());
+}
+
+/// A resource no app serves gets no round-trip test: there is no composition
+/// to boot.
+#[test]
+fn generate_resource_wired_nowhere_writes_no_round_trip_test() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+    let root = dir.path().to_str().unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "resource", "posts", "-p", root]);
+
+    assert!(!printed.contains("round trip"), "{printed}");
+    assert!(
+        files_under(dir.path())
+            .keys()
+            .all(|path| !path.starts_with("apps")),
+        "no app, no suite written"
+    );
+}

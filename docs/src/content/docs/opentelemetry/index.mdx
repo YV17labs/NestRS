@@ -138,10 +138,12 @@ variable and never its value:
   under 1 ms, on which the SDK's worker polls its channel without pause — a
   core for each processor, idle or not — and an `OTEL_BSP_MAX_QUEUE_SIZE` or
   `OTEL_BLRP_MAX_QUEUE_SIZE` above 1,048,576. The SDK allocates the whole
-  queue when its processor starts: under opentelemetry_sdk 0.33 a span takes
-  368 bytes of it, so the ceiling holds 368 MiB of spans up front, and a log
-  record 16 bytes, the record itself allocated as it is queued. The refusal
-  says what the linked SDK takes.
+  queue when its processor starts, and its worker a buffer as large as the
+  batch, which may reach the queue: under opentelemetry_sdk 0.33 a span takes
+  368 bytes of the queue and 352 of the buffer, so the ceiling holds up to
+  720 MiB of spans up front, and a log record 16 and 8 bytes, 24 MiB, the
+  record itself allocated as it is queued. The refusal says what the linked
+  SDK takes.
 - A service name that names nothing fails: a blank `OTEL_SERVICE_NAME`,
   which the SDK would export under, an empty or blank `service.name` in
   `OTEL_RESOURCE_ATTRIBUTES`, or a pinned `service_name` of either. An empty

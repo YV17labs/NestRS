@@ -431,9 +431,13 @@ admits**, as the metric period outside a second to an hour already is.
   allocates every slot when the processor starts — under opentelemetry_sdk 0.33
   368 bytes a span, 16 a boxed log record — so a size past what the process
   holds aborted the boot naming no variable. The batch, held at most the queue,
-  is bounded with it. The ceiling is 512 times the specification's default
-  queue, past what a deployment tuning for throughput writes; the sentence
-  computes each slot's size from the linked SDK's types.
+  is bounded with it, and costs up front too: the worker allocates a buffer as
+  large as the batch when it starts (`Vec::with_capacity(max_export_batch_size)`),
+  352 bytes a span, 8 a boxed record, so the sentence states the sum at the
+  ceiling with a batch as large as its queue — up to 720 MiB of spans, 24 of log
+  records. The ceiling is 512 times the specification's default queue, past
+  what a deployment tuning for throughput writes; the sentence computes each
+  slot's size from the linked SDK's types.
 
 **Refused:**
 

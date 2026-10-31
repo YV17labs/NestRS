@@ -183,7 +183,8 @@ impl Signal {
                 batch: OTEL_BSP_MAX_EXPORT_BATCH_SIZE,
                 default_queue: OTEL_BSP_MAX_QUEUE_SIZE_DEFAULT,
                 item: "span",
-                slot_bytes: slot_bytes::<SpanData>(),
+                queue_slot_bytes: slot_bytes::<SpanData>(),
+                batch_slot_bytes: size_of::<SpanData>(),
             }),
             Self::Metrics => None,
             Self::Logs => Some(BatchProcessor {
@@ -192,7 +193,8 @@ impl Signal {
                 batch: OTEL_BLRP_MAX_EXPORT_BATCH_SIZE,
                 default_queue: OTEL_BLRP_MAX_QUEUE_SIZE_DEFAULT,
                 item: "log record",
-                slot_bytes: slot_bytes::<Box<(SdkLogRecord, InstrumentationScope)>>(),
+                queue_slot_bytes: slot_bytes::<QueuedLogRecord>(),
+                batch_slot_bytes: size_of::<QueuedLogRecord>(),
             }),
         }
     }
@@ -296,9 +298,14 @@ const DELAY_FLOOR_MS: u64 = 1;
 /// aborts the boot naming no variable.
 const QUEUE_CEILING: usize = 1 << 20;
 
+/// What the SDK's log processor queues and batches: each record boxed with
+/// its scope.
+type QueuedLogRecord = Box<(SdkLogRecord, InstrumentationScope)>;
+
 /// The variables a batch processor reads itself — its delay, in
 /// milliseconds, and its queue and batch sizes — the queue size it takes
-/// when its variable is unset, and what one slot of that queue holds.
+/// when its variable is unset, and what one slot of its queue and of its
+/// batch holds.
 #[derive(Clone, Copy, Debug)]
 struct BatchProcessor {
     delay: &'static str,
@@ -309,7 +316,10 @@ struct BatchProcessor {
     item: &'static str,
     /// The bytes one slot of the queue takes — the channel's stamp beside the
     /// item the SDK queues, a span whole, a log record boxed.
-    slot_bytes: usize,
+    queue_slot_bytes: usize,
+    /// The bytes one item of the batch buffer takes, which the SDK's worker
+    /// allocates as large as the batch when it starts.
+    batch_slot_bytes: usize,
 }
 
 pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelemetryError> {
@@ -831,7 +841,8 @@ fn compression(
 /// into a spin or into an allocation no process holds whatever the
 /// specification's type admits — a delay under [`DELAY_FLOOR_MS`], on which
 /// its worker polls without pause, and a queue above [`QUEUE_CEILING`], every
-/// slot of which it allocates when the processor starts.
+/// slot of which it allocates when the processor starts, beside a batch buffer
+/// that may reach the queue.
 fn refuse_unservable_batch_numbers(
     signal: Signal,
     read: &impl Fn(&str) -> Option<String>,
@@ -871,11 +882,15 @@ fn refuse_unservable_batch_numbers(
             processor.queue,
             format!(
                 "must be at most {QUEUE_CEILING} — the SDK allocates the whole queue when the \
-                 processor starts, {} bytes a {} slot, {} MiB at that ceiling, and a queue \
-                 past what the process holds would abort the boot naming nothing",
-                processor.slot_bytes,
-                processor.item,
-                (QUEUE_CEILING * processor.slot_bytes).div_ceil(1 << 20),
+                 processor starts, {} bytes a {item} slot, and its worker a buffer as large as \
+                 the batch, which may reach the queue, {} bytes a {item}: up to {} MiB at that \
+                 ceiling, and a queue past what the process holds would abort the boot naming \
+                 nothing",
+                processor.queue_slot_bytes,
+                processor.batch_slot_bytes,
+                (QUEUE_CEILING * (processor.queue_slot_bytes + processor.batch_slot_bytes))
+                    .div_ceil(1 << 20),
+                item = processor.item,
             ),
         ));
     }
@@ -3058,12 +3073,25 @@ mod tests {
     /// as the metric period is: a schedule delay under a millisecond, on which
     /// the SDK's worker polls its channel without pause, a core per processor
     /// idle or not; and a queue above the ceiling, every slot of which the SDK
-    /// allocates when its processor starts, said with what the ceiling costs.
-    /// Each at its bound runs.
+    /// allocates when its processor starts, said with what the ceiling costs
+    /// up front — the queue, and the batch buffer its worker allocates as it
+    /// starts, as large as a batch that may reach the queue. Each at its bound
+    /// runs.
     #[test]
     fn a_batch_number_the_sdk_would_spin_on_or_allocate_without_bound_is_refused_naming_it() {
         let above = (QUEUE_CEILING + 1).to_string();
         let huge = usize::MAX.to_string();
+        let up_front = |queue_slot: usize, batch_slot: usize| {
+            format!(
+                "up to {} MiB at that ceiling",
+                (QUEUE_CEILING * (queue_slot + batch_slot)).div_ceil(1 << 20)
+            )
+        };
+        let spans = up_front(slot_bytes::<SpanData>(), size_of::<SpanData>());
+        let records = up_front(
+            slot_bytes::<QueuedLogRecord>(),
+            size_of::<QueuedLogRecord>(),
+        );
         for (signal, variable, value, expected) in [
             (
                 Signal::Traces,
@@ -3076,9 +3104,14 @@ mod tests {
                 Signal::Traces,
                 OTEL_BSP_MAX_QUEUE_SIZE,
                 above.as_str(),
-                "MiB",
+                spans.as_str(),
             ),
-            (Signal::Logs, OTEL_BLRP_MAX_QUEUE_SIZE, huge.as_str(), "MiB"),
+            (
+                Signal::Logs,
+                OTEL_BLRP_MAX_QUEUE_SIZE,
+                huge.as_str(),
+                records.as_str(),
+            ),
         ] {
             let Err(refused) =
                 resolved(signal, Some("http://collector:4318"), &[(variable, value)])

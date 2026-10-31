@@ -41,9 +41,10 @@ impl BlogService {
 }
 ```
 
-`crate::blog::TARGET` is the log target the generated feature declares at the
-top of `blog/mod.rs` — one constant the feature's files name, never a literal
-each one retypes.
+`crate::blog::TARGET` is the log target the feature declares at the top of
+`blog/mod.rs` once it logs — `pub const TARGET: &str = "features::blog";`, one
+constant the feature's files name, never a literal each one retypes. A
+generated port emits nothing, so it starts without one.
 
 The `#[hooks]` block is separate from the one `#[injectable]` decorates
 — a provider keeps its primary `impl` for methods, and adds a second,

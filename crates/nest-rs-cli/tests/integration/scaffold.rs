@@ -319,14 +319,28 @@ impl BlogService {
 }
 "#;
 
+/// The `mod.rs` of a `g feature blog` port once it logs, the target declared
+/// as `/fundamentals/lifecycle/` spells it.
+const LOGGING_BLOG_MOD: &str = r#"pub const TARGET: &str = "features::blog";
+
+mod module;
+mod service;
+
+pub use module::BlogModule;
+pub use service::BlogService;
+"#;
+
 #[test]
 fn a_feature_can_log_and_return_a_fallible_hook() {
     scaffold_write_and_check(
         &[&["g", "feature", "blog"]],
-        &[(
-            "crates/features/src/blog/service.rs",
-            LIFECYCLE_PAGE_SERVICE,
-        )],
+        &[
+            (
+                "crates/features/src/blog/service.rs",
+                LIFECYCLE_PAGE_SERVICE,
+            ),
+            ("crates/features/src/blog/mod.rs", LOGGING_BLOG_MOD),
+        ],
         "a feature service that logs and returns a fallible hook",
     );
 }

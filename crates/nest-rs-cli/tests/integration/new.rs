@@ -135,6 +135,9 @@ fn new_workspace_greenfield() {
     );
     assert!(root.join("apps/hello/src/module.rs").is_file());
     assert!(!root.join("apps/hello/src/controller.rs").exists());
+    // The greeting logs nothing, so its feature declares no log target.
+    let hello = fs::read_to_string(root.join("crates/features/src/hello/mod.rs")).unwrap();
+    assert!(!hello.contains("TARGET"), "{hello}");
     // An empty `e2e` suite beside it so the nextest filtersets resolve.
     assert!(root.join("apps/hello/tests/integration/main.rs").is_file());
     assert!(root.join("apps/hello/tests/e2e/main.rs").is_file());

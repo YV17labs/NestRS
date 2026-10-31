@@ -1080,3 +1080,39 @@ fn generate_graphql_over_a_crud_port_announces_the_auth_adapter_it_bootstraps() 
         );
     }
 }
+
+/// A feature that emits nothing declares no log target (the features rule):
+/// neither `g feature`'s port nor `g resource`'s declares one, and `g ws`,
+/// whose gateway logs, adds it once, at the top of the port's `mod.rs`.
+#[test]
+fn only_a_feature_that_logs_declares_its_target() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    let src = dir.path().join("crates/features/src");
+    let declares = |feature: &str| {
+        fs::read_to_string(src.join(feature).join("mod.rs"))
+            .unwrap()
+            .matches("pub const TARGET: &str")
+            .count()
+    };
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "resource", "orders", "-p", path]);
+    assert_eq!(declares("posts"), 0, "a port emits nothing");
+    assert_eq!(declares("orders"), 0, "a resource emits nothing");
+
+    run_ok(dir.path(), &["g", "http", "posts", "-p", path]);
+    assert_eq!(declares("posts"), 0, "a controller emits nothing");
+    run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
+    let index = fs::read_to_string(src.join("posts/mod.rs")).unwrap();
+    assert!(
+        index.starts_with("pub const TARGET: &str = \"features::posts\";\n"),
+        "the gateway logs, so its port declares the target first: {index}"
+    );
+    assert!(index.contains("pub use ws::PostsWsModule;"), "{index}");
+    assert_eq!(declares("posts"), 1);
+
+    run_ok(dir.path(), &["g", "ws", "orders", "-p", path]);
+    assert_eq!(declares("orders"), 1, "declared once, by the gateway's run");
+}

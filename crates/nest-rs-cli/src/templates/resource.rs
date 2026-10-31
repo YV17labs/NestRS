@@ -7,9 +7,7 @@
 //! `Ability`, which only an `AbilityGuard` installs, so an unguarded DB-backed
 //! controller answers 500 on every route. `g resource` bootstraps `g auth`.
 
-pub(crate) const MOD: &str = r#"pub const TARGET: &str = "features::{{snake}}";
-
-mod entity;
+pub(crate) const MOD: &str = r#"mod entity;
 mod module;
 mod service;
 

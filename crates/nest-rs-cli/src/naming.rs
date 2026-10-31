@@ -90,6 +90,20 @@ impl Transport {
         }
     }
 
+    /// Whether this transport's generated handler emits an event, on the log
+    /// target its feature declares.
+    pub(crate) fn logs(self) -> bool {
+        match self {
+            Self::Ws => true,
+            Self::Http
+            | Self::Graphql
+            | Self::Queue
+            | Self::Schedule
+            | Self::Mcp
+            | Self::Events => false,
+        }
+    }
+
     /// Whether this transport's adapter serves on the HTTP listener, so an app
     /// importing it listens.
     pub(crate) fn serves_on_http(self) -> bool {

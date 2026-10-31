@@ -1,14 +1,12 @@
 //! **Port** templates — a transport-agnostic feature slice (`g feature`).
 //!
-//! The bare port: a `mod.rs` index that also declares the feature's log
-//! target, a `module.rs` DI module, and a `service.rs` with a `count()`
-//! stand-in. Add a transport with
+//! The bare port: a `mod.rs` index, a `module.rs` DI module, and a
+//! `service.rs` with a `count()` stand-in. It emits nothing, so it declares no
+//! log target: the generator whose output logs adds one ([`TARGET`]). Add a transport with
 //! `g http|graphql|ws|queue|schedule|mcp|events <feature>`; each adapter delegates
 //! to this service.
 
-pub(crate) const MOD: &str = r#"pub const TARGET: &str = "features::{{snake}}";
-
-mod module;
+pub(crate) const MOD: &str = r#"mod module;
 mod service;
 
 pub use module::{{module}};
@@ -43,4 +41,9 @@ impl {{service}} {
         0
     }
 }
+"#;
+
+/// The feature's log target, which every event it emits names: declared at the
+/// top of its `mod.rs` by the first generator whose output logs.
+pub(crate) const TARGET: &str = r#"pub const TARGET: &str = "features::{{snake}}";
 "#;

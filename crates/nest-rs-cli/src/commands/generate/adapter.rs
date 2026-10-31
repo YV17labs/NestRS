@@ -28,7 +28,7 @@ use crate::context::{Context, NestrsWorkspace};
 use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::{Names, Transport, command_file};
 use crate::scaffold::{
-    Renderer, Scaffold, ensure_expose_graphql, ensure_lines, ensure_module_imports,
+    Renderer, Scaffold, Transform, ensure_expose_graphql, ensure_lines, ensure_module_imports,
 };
 use crate::templates::adapter;
 
@@ -212,10 +212,17 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         s.edit(ws.features_lib(), ensure_lines(auth::lib_decls()));
     }
 
-    // One edit per file: each `s.edit` re-reads the file from disk.
+    // One edit per file: each `s.edit` re-reads the file from disk. A handler
+    // that logs names its feature's target, declared here when the port has none.
     port_lines.push(format!("pub mod {};", transport.folder()));
     port_lines.push(format!("pub use {}::{};", transport.folder(), tmodule));
-    s.edit(feature_root.join("mod.rs"), ensure_lines(port_lines));
+    let log_target = transport
+        .logs()
+        .then(|| r.render(crate::templates::feature::TARGET));
+    s.edit(
+        feature_root.join("mod.rs"),
+        ensure_target_and_lines(log_target, port_lines),
+    );
 
     // The edge, and what it runs on that the app's root chooses: the data layer
     // under a `#[crud]` handler, a queue's backend, the token route of the auth
@@ -280,6 +287,23 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         auth::print_bootstrapped(secrets);
     }
     Ok(())
+}
+
+/// `target` above everything in a port's `mod.rs` that declares none, then
+/// `lines` in place — one transform, since the file takes one edit.
+fn ensure_target_and_lines(target: Option<String>, lines: Vec<String>) -> Transform {
+    let lines = ensure_lines(lines);
+    Box::new(move |current: &str| {
+        let declared = current
+            .lines()
+            .any(|line| line.trim_start().starts_with("pub const TARGET:"));
+        let targeted = target
+            .as_ref()
+            .filter(|_| !declared)
+            .map(|target| format!("{target}\n{current}"));
+        let base = targeted.as_deref().unwrap_or(current);
+        lines(base).or(targeted)
+    })
 }
 
 /// Whether the port's service implements `CrudService`, read from the source:

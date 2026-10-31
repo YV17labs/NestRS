@@ -48,9 +48,7 @@ impl {{controller}} {
 // The feature is named after the app it serves: an app crate keeps no
 // `service.rs` / `controller.rs`.
 
-pub(crate) const FEATURE_MOD: &str = r#"pub const TARGET: &str = "features::{{snake}}";
-
-mod module;
+pub(crate) const FEATURE_MOD: &str = r#"mod module;
 mod service;
 
 pub mod http;

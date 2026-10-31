@@ -487,8 +487,9 @@ target per concern per crate: `features::users` here. A crate whose name is
 not the product's keeps its own root anyway — the target's one job is to say
 where the event came from. **It is declared once, by the module that owns it**
 — `pub const TARGET: &str = "features::users";` at the top of
-`users/mod.rs`, which every generated feature starts with — and every call site
-names that constant. A literal retyped per file is a typo away from a target
+`users/mod.rs`, written by the first file that logs (`nestrs g ws` writes it
+with the gateway); a feature that emits nothing declares none — and every call
+site names that constant. A literal retyped per file is a typo away from a target
 no filter selects, and nothing says so; a test asserts against the same
 constant for the same reason.
 

@@ -243,7 +243,7 @@ pub struct PostsHttpModule;
 
 ```rust title="crates/features/src/authn/module.rs (from the demo)"
 #[module(
-    imports = [nest_rs::authn::AuthnModule::for_root(None)],
+    imports = [nest_rs::authn::AuthnModule],
     providers = [AuthnStrategy, AuthnGuard],
 )]
 pub struct AuthnModule;

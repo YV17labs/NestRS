@@ -5,12 +5,12 @@ sidebar:
   order: 2
 ---
 
-The quickstart opened `/mcp` deliberately with `McpOptions { posture:
-Posture::Public, .. }`. To authenticate instead — bearer JWT, ability,
+The quickstart opened `/mcp` deliberately with
+`McpModule::for_root(McpAccess::Public)`. To authenticate instead — bearer JWT, ability,
 row-level filtering — import `AuthzMcpModule`, which declares
 [`EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>`](/security/authorization/endpoint-guards/)
-(mirroring `AuthzModule`, `AuthzGraphqlModule`, and `AuthzWsModule` on the
-other transports). The transport runs your `AuthnGuard` + `AuthzGuard` on every
+(mirroring `AuthzModule` on HTTP and WebSocket, and `AuthzGraphqlModule` on
+GraphQL). The transport runs your `AuthnGuard` + `AuthzGuard` on every
 MCP request, and every operation it carries runs under the `Ability` they
 attached — the same guards HTTP and GraphQL run, in the same order, nothing
 re-implemented per transport.
@@ -19,9 +19,8 @@ re-implemented per transport.
 #[module(
     imports = [
         HttpModule,
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        AuthnModule,
         AuthzMcpModule,
     ],
     providers = [HelloTool],
@@ -29,8 +28,8 @@ re-implemented per transport.
 pub struct AssistantModule;
 ```
 
-With `AuthzMcpModule` imported you drop the opening — keep `McpOptions` at its
-default, `Posture::Gated`: the module's guards are the endpoint's, so the
+With `AuthzMcpModule` imported you drop the opening — leave `McpModule` bare,
+gated by default: the module's guards are the endpoint's, so the
 closed default is met, not silenced, and a module declaring guards beside an
 opening fails the boot. They join the app's global guard pool rather than
 replacing it: every guard listed in `use_guards_global(...)` still runs at the
@@ -131,7 +130,7 @@ MCP authorization spec requires the server to publish that, so add
 `OAuthResourceModule` and name the deployment:
 
 ```rust title="apps/api/src/module.rs"
-imports = [/* … */, OAuthResourceModule::for_root(None)]
+imports = [/* … */, OAuthResourceModule]
 ```
 
 ```bash

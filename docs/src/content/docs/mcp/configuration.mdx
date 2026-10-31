@@ -7,8 +7,8 @@ sidebar:
 
 `McpConfig` carries the streamable-HTTP options, dual-path like every
 `nest-rs-*` config: `<PREFIX>_MCP__*` env vars over an optional pinned base.
-Importing `McpModule` is what resolves it; without the import every mount runs
-on the defaults.
+Importing `McpModule` bare is what resolves it, and `for_root` pins a base;
+without the import every mount runs on the defaults.
 
 ```rust title="apps/api/src/module.rs"
 #[module(imports = [
@@ -20,20 +20,21 @@ on the defaults.
 pub struct AssistantModule;
 ```
 
-Pinning options *and* declaring the app's identity is the same one call — an `McpConfig`
-converts into an `McpOptions` whose `server` is empty, so write the whole value
-out when you need both:
+Pinning options *and* declaring the app's identity is the same one call: the
+declaration first, the config last, as a tuple —
 
 ```rust title="apps/api/src/module.rs"
-McpModule::for_root(McpOptions {
-    config: Some(McpConfig {
+McpModule::for_root((
+    McpIdentity::default().title("Acme assistant"),
+    McpConfig {
         allowed_hosts: vec!["mcp.example.com".into()],
         ..Default::default()
-    }),
-    server: Some(McpIdentity::default().title("Acme assistant")),
-    ..Default::default()
-}),
+    },
+)),
 ```
+
+— and `McpAccess::Public`, when the app opens the endpoint, leads the tuple:
+`(McpAccess::Public, identity, config)`.
 
 | Variable | Default | What it controls |
 |---|---|---|
@@ -162,7 +163,7 @@ A client that has none still calls statelessly, on protocol `2026-07-28`,
 which opens no session; in a suite, `nest_rs::testing::mcp::call_tool_statelessly`
 calls a tool that way.
 
-A public endpoint (`McpOptions::posture = Posture::Public`) runs no guard at
+A public endpoint (`McpModule::for_root(McpAccess::Public)`) runs no guard at
 its request, so it authenticates no one: its sessions all belong to the
 anonymous principal, and the session id is their only key. That principal
 names no subject, so a gated endpoint reading the same `SessionStore` — yours

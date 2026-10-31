@@ -17,12 +17,12 @@ database to point at.
 ## The data layer in one import
 
 Two imports activate the SeaORM data layer, one per shape:
-`SeaOrmModule::for_root(None)` opens the pool from `<PREFIX>_SEAORM__URL`, and
+`SeaOrmModule` opens the pool from `<PREFIX>_SEAORM__URL`, and
 `SeaOrmDatabaseModule` — the line the last page's boot named, a bare import
 beside it — binds over that pool the unit of work each request and each job
 runs in. The configuration
-uses the framework's dual-path rule — pin a value here or leave it
-`None` and let env vars supply it.
+uses the framework's dual-path rule — import the module bare and let env vars
+supply it, or pin a value with its `for_root`.
 
 The data layer crates are
 [**`nest-rs-database`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database)
@@ -30,19 +30,15 @@ The data layer crates are
 [**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm)
 (the SeaORM implementation, on top of [SeaORM](https://www.sea-ql.org/SeaORM/)).
 
-```rust title="apps/blog/src/module.rs" {2, 9-10}
+```rust title="apps/blog/src/module.rs" {2, 7-8}
 use nest_rs::core::module;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
-use features::authn::AuthnModule;
-use features::authz::AuthzModule;
 use features::posts::PostsHttpModule;
 
 #[module(imports = [
-    SeaOrmModule::for_root(None),
+    SeaOrmModule,
     SeaOrmDatabaseModule,
-    AuthnModule,
-    AuthzModule,
     PostsHttpModule,
 ])]
 pub struct BlogModule;
@@ -256,7 +252,7 @@ tags the request's span and the SQL spans.
 
 ## What you have now
 
-- `SeaOrmModule::for_root(None)` + `SeaOrmDatabaseModule` in the app — the
+- `SeaOrmModule` + `SeaOrmDatabaseModule` in the app — the
   data layer is on, and the five CRUD routes mount.
 - A migration adding the `post` table, applied through
   `nestrs run db up`.

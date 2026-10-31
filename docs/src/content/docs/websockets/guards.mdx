@@ -241,7 +241,8 @@ WebSockets reuse the HTTP pair **directly** — there is no WS-specific
 guard type. The gateway struct binds
 `#[use_guards(AuthnGuard, AuthzGuard)]`; both run once on the upgrade
 (an HTTP `GET`) and are access-graph-validated like any HTTP binding:
-omit `AuthzWsModule` and those guards are unreachable, so boot fails.
+omit `AuthzModule` from the adapter's imports and those guards are
+unreachable, so boot fails.
 Because the upgrade has returned before message handlers run, the
 connection carries the ability those guards attached — with every other value
 the upgrade carried — into each message, and the gateway opens each message's
@@ -251,7 +252,7 @@ through `check`: it denies, fail-closed, when no ambient ability is present.
 
 See [Security](/security/) for the strategy + ability composition, and
 [Endpoint guards](/security/authorization/endpoint-guards/) for
-`AuthzWsModule` beside its GraphQL and MCP siblings.
+`AuthzModule` beside its GraphQL and MCP siblings.
 
 ## Reference
 

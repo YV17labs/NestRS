@@ -35,22 +35,20 @@ workspace that was not scaffolded.
 
 | Module | Provides | What runs at the request |
 |--------|----------|--------------------------|
-| `AuthzModule` | `AuthzGuard` (`AbilityGuard<AuthzAbility>`) | The route's own guards, on each HTTP request |
+| `AuthzModule` | `AuthzGuard` (`AbilityGuard<AuthzAbility>`) | The route's own guards, on each HTTP request; a gateway's, on its upgrade, whose ability crosses the connection into each message |
 | `AuthzGraphqlModule` | `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` | Both guards on each `/graphql` request; every operation it carries runs under the ability they attached, the dataloader batches it triggers included |
-| `AuthzWsModule` | nothing of its own: `AuthzModule` and `WsModule` | The gateway's guards, on its upgrade; the ability crosses the connection into each message |
 | `AuthzMcpModule` | `EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>` | Both guards on each `/mcp` request; each tool call runs under the ability they attached |
 
-An app imports the matching module along with its feature module:
+Each adapter imports the module its edge needs — `UsersHttpModule` and
+`UsersWsModule` import `AuthzModule`, `UsersGraphqlModule` imports
+`AuthzGraphqlModule` — so the app lists the adapters it serves and nothing
+they bring:
 
 ```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        AuthnModule,
-        AuthzModule,
-        AuthzGraphqlModule,
-        AuthzWsModule,
         UsersHttpModule,
         UsersGraphqlModule,
         UsersWsModule,
@@ -198,12 +196,15 @@ resolver threading anything, and with nothing more to register.
 
 A WS connection is one HTTP upgrade; messages arrive over a long-lived socket
 and dispatch into separate handlers. The upgrade is the gateway's own request,
-so the gateway declares its guards itself, and `AuthzWsModule` only brings
-them:
+so the gateway declares its guards itself, and its adapter imports the module
+providing them, as an HTTP adapter does:
 
-```rust title="crates/features/src/authz/ws/module.rs (from the demo)"
-#[module(imports = [AuthzModule, WsModule])]
-pub struct AuthzWsModule;
+```rust title="crates/features/src/users/ws/module.rs (from the demo)"
+#[module(
+    imports = [UsersModule, AuthzModule, HttpModule, WsModule],
+    providers = [UsersGateway],
+)]
+pub struct UsersWsModule;
 ```
 
 The ability the upgrade's guards attach crosses the connection into every
@@ -213,7 +214,7 @@ an error frame — with no shared state across messages.
 
 The gateway struct binds the real guards; because the upgrade is an HTTP `GET`,
 they run once on it, after the browser origin is checked, and the access graph
-validates them like any HTTP binding (omit `AuthzWsModule` ⇒ the guards are
+validates them like any HTTP binding (omit `AuthzModule` ⇒ the guards are
 unreachable ⇒ boot fails):
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
@@ -242,8 +243,8 @@ other transport**, and it is mandatory: `#[authorize(Action, Entity)]` or
 (`nest_rs::authz::class_gate`, every edge's) before the payload is deserialized and
 the reply mask afterwards — so a handler answering with entity rows
 writes **no masking call**. It fails closed when no ambient ability is
-present, which is exactly the state of a gateway whose app imported
-`AuthzModule` instead of `AuthzWsModule`.
+present, which is exactly the state of a gateway that binds no `AuthzGuard`
+at its upgrade.
 
 The mask acts on the serialized reply, so a withheld column is absent
 from the frame rather than an error — HTTP's behaviour, not GraphQL's,
@@ -278,10 +279,7 @@ whoever the throttler admits.
 An endpoint meant for anyone is opened in code, where a reviewer sees it:
 
 ```rust
-McpModule::for_root(McpOptions {
-    posture: Posture::Public,
-    ..Default::default()
-})
+McpModule::for_root(McpAccess::Public)
 ```
 
 A public `/mcp` runs no guard at its request, the global pool's included. A

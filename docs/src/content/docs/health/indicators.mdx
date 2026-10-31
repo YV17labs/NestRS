@@ -98,9 +98,9 @@ import nothing beside it:
 
 | Resource | Opened by | Key | Check |
 |---|---|---|---|
-| The SeaORM pool | `SeaOrmModule::for_root` | `seaorm` | `DatabaseConnection::ping` |
-| A Redis instance | `RedisModule::for_root` | `redis` | `PING` on the instance's connection |
-| A named Redis instance | `RedisModule::for_root((Cache, None))` | `redis:cache` | the same, on that instance |
+| The SeaORM pool | `SeaOrmModule` | `seaorm` | `DatabaseConnection::ping` |
+| A Redis instance | `RedisModule` | `redis` | `PING` on the instance's connection |
+| A named Redis instance | `RedisModule::<Cache>` | `redis:cache` | the same, on that instance |
 | The object store | `StorageModule` | `storage` | one page of the bucket's listing |
 
 ```rust title="apps/api/src/module.rs"
@@ -112,9 +112,9 @@ use nest_rs::storage::StorageModule;
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule::for_root(None),
+        RedisModule,
         StorageModule,
         HealthModule,
     ],
@@ -143,7 +143,7 @@ sends — the Redis connection's
 **A key names the resource, never the probe.** A framework indicator is named
 for the crate owning the resource, plus `:` and the instance for a
 [named one](/queue/topologies/#a-second-valkey) — `redis:cache` for the
-instance `RedisModule::for_root((Cache, None))` opens — so a readiness `503`
+instance `RedisModule::<Cache>` opens — so a readiness `503`
 says which Valkey went away. Your own indicator keeps its method name: a method
 named `redis` in an app that opens Redis fails the boot naming both, and the
 fix is to drop yours.
@@ -185,16 +185,16 @@ rooted at the package's crate, as every name it owns is
 `nestrs_acme:<instance>` for a named one.
 
 **The attaching module is imported by type.** Two features may each call
-`AcmeModule::for_root`, and the entry must land once. `ConfigModule::setup`
-imports `AcmeModule` by type, so its `register` runs once per app — as
-`SeaOrmModule::for_root` and `RedisModule::for_root` import the module that
-opens their pool or instance. Never attach from a hand-written
+`AcmeModule`, bare or through its `for_root`, and the entry must land once.
+`AcmeModule` is imported by type, and `ConfigModule::setup` imports it by type
+too, so its `register` runs once per app — as `SeaOrmModule` and `RedisModule`
+open their pool or instance. Never attach from a hand-written
 `DynamicModule`'s own `register`: it runs once per import site, so the second
 feature's entry claims the key again and the boot's name check refuses it.
 
 ```rust title="crates/acme/src/module.rs"
 use nest_rs::config::{ConfigModule, ConfigSetup};
-use nest_rs::core::{Collecting, Container, ContainerBuilder, Module, Registering};
+use nest_rs::core::{Collecting, Container, ContainerBuilder, Module, Registering, Unnamed};
 use nest_rs::health::{IndicatorEntry, IndicatorFuture, ProbeKind};
 
 use crate::{AcmeClient, AcmeConfig};
@@ -212,14 +212,15 @@ pub struct AcmeModule;
 pub type AcmeSetup = ConfigSetup<AcmeModule, AcmeConfig>;
 
 impl AcmeModule {
-    pub fn for_root(config: impl Into<Option<AcmeConfig>>) -> AcmeSetup {
-        ConfigModule::setup(config.into())
+    pub fn for_root(config: AcmeConfig) -> AcmeSetup {
+        ConfigModule::setup(config)
     }
 }
 
 impl Module for AcmeModule {
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        builder.provide_factory(|_| AcmeClient::connect())
+        ConfigModule::provide_feature::<Unnamed, AcmeConfig>(builder)
+            .provide_factory(|_| AcmeClient::connect())
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {

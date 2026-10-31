@@ -251,7 +251,7 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
 #[module(
     imports = [
         // …
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
         // …
         RedisScheduleModule,
@@ -397,7 +397,7 @@ use features::notifications::{NotificationsQueueModule, NotificationsScheduleMod
 #[module(
     imports = [
         // …
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
         RedisScheduleModule,
         // …
@@ -409,7 +409,7 @@ pub struct WorkerModule;
 ```
 
 `RedisScheduleModule` is a bare import: it owns no configuration, and runs over
-the connection `RedisModule::for_root` opens — the worker's queue bindings
+the connection `RedisModule` opens — the worker's queue bindings
 share that one `RedisConnection`. The boot holds you to it both ways: a
 reachable job declaring `replicas = "one"` with no lock bound fails the boot
 naming the job, and a second lock binding beside this one fails it too, naming

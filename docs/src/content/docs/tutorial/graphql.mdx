@@ -149,10 +149,11 @@ The app root imports the feature's GraphQL adapter, which brings the endpoint
 with it: `GraphqlModule` mounts once however many adapters import it.
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
-        AuthzGraphqlModule,
-        // …
         UsersGraphqlModule,
 ```
+
+`UsersGraphqlModule` imports `AuthzGraphqlModule`, which declares the guards
+`/graphql`'s request runs, so the root lists the adapter alone.
 
 `GraphqlModule` mounts `POST /graphql` on the HTTP transport it imports.
 `GET /graphql` serves the playground, and introspection answers, **under a

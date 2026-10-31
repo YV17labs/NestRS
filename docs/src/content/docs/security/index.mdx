@@ -71,12 +71,8 @@ The wiring sketch for an app that serves all three transports:
 ```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        AuthnModule,
-        AuthzModule,
-        AuthzGraphqlModule,
-        AuthzWsModule,
         UsersHttpModule,
         UsersGraphqlModule,
         UsersWsModule,
@@ -85,8 +81,13 @@ The wiring sketch for an app that serves all three transports:
 pub struct ApiModule;
 ```
 
+Each adapter imports what its guards need — `UsersHttpModule` and
+`UsersWsModule` import `AuthzModule`, `UsersGraphqlModule` the
+`AuthzGraphqlModule` that declares `/graphql`'s guards — so the root lists the
+edges it serves, and the access graph checks each import where it is used.
+
 <Aside type="note">
-A handler opts **out** by not importing the transport's authz module —
+An adapter opts **out** by not importing its edge's authz module —
 public endpoints do exactly that and lose every layer transitively.
 Visitor-rule policy then lives in your `AbilityFactory`, not in
 `AuthnGuard`.

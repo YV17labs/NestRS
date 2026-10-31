@@ -64,8 +64,9 @@ pub(crate) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
-/// settable via a `<PREFIX>_SEAORM__*` env var, its name in SCREAMING_SNAKE, or
-/// pinned through [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
+/// settable via a `<PREFIX>_SEAORM__*` env var, its name in SCREAMING_SNAKE,
+/// which the bare import reads, or pinned through
+/// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
 #[config(namespace = "seaorm")]
 #[derive(Clone, Debug)]
 pub struct SeaOrmConfig {

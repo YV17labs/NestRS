@@ -12,7 +12,7 @@ Reached through the [`nest-rs`](https://crates.io/crates/nest-rs) umbrella: one 
 
 ## What it holds
 
-`OAuthServerConfig<P>` is the authorization server's client registry (§2), read from `<PREFIX>_OAUTH__SERVER__CLIENTS` once `OAuthServerModule::for_root::<P>` is imported, generic over the payload `P` each `RegisteredClient<P>` carries for the app; the boot refuses a registry that serves no token or the wrong one — none, a client with no resource, a duplicate or empty id, an empty secret — naming each client by its id, never its secret.
+`OAuthServerConfig<P>` is the authorization server's client registry (§2), read from `<PREFIX>_OAUTH__SERVER__CLIENTS` once `OAuthServerModule::<P>` is imported, generic over the payload `P` each `RegisteredClient<P>` carries for the app; the boot refuses a registry that serves no token or the wrong one — none, a client with no resource, a duplicate or empty id, an empty secret — naming each client by its id, never its secret.
 
 `ClientAuthenticationGuard<S>` authenticates the client at the token endpoint (§2.3), bound with `#[use_guards]` over an authn `Strategy` — `ClientSecretBasicStrategy<P>` checks §2.3.1's HTTP Basic pair against the registry — which it runs as `AuthnGuard` does. It refuses as §5.2 answers, on every route, `#[public]` included: `401 invalid_client` with the `Basic` challenge for a client refused over the `Authorization` header, `400 invalid_client` for one that sent no header — credentials in the body are not read — and `503 server_error` for a strategy that could not evaluate it. An unknown client and a wrong secret read the same bytes, and each refusal files one `warn` naming the method and the reason, never the client.
 

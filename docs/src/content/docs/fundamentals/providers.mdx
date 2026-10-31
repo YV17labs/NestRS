@@ -370,11 +370,12 @@ pub struct Cache;
 The marker's name is its ident in snake case — `Cache` reads `cache`, read and
 never chosen — and the default instance, `Unnamed`, is the one an app gets
 without naming any. A module that can be opened once per instance takes the
-marker in its `for_root` value: `x` for the default, `(Cache, x)` for the named
-one. Its config then reads `<PREFIX>_<VENDOR>__CACHE__*` (the vendor first,
+marker as a type argument where it is imported bare — `RedisModule` for the
+default, `RedisModule::<Cache>` for the named one — and in the value where its
+`for_root` pins it: `x` for the default, `(Cache, x)` for the named one. Its config then reads `<PREFIX>_<VENDOR>__CACHE__*` (the vendor first,
 then the instance), and its resource is injected as `Arc<Resource<Cache>>`
 beside the default's `Arc<Resource>` — Redis is one:
-`RedisModule::for_root((Cache, None))` opens
+`RedisModule::<Cache>` opens
 [a second Valkey](/queue/topologies/#a-second-valkey), injected as
 `Arc<RedisConnection<Cache>>`. Each instance pins its config once; two
 instances never contest. A module generic over the instance is written by

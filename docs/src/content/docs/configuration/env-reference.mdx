@@ -126,7 +126,7 @@ config survives adopting or dropping the observability stack.
 
 ## `seaorm` — `<PREFIX>_SEAORM__*`
 
-The one pool every SeaORM binding shares, opened by `SeaOrmModule::for_root`,
+The one pool every SeaORM binding shares, opened by `SeaOrmModule`,
 on Postgres — the one engine the framework builds sea-orm with.
 
 | Key | Meaning |
@@ -143,7 +143,7 @@ on Postgres — the one engine the framework builds sea-orm with.
 
 The Redis connection every Redis binding shares — the queue's producer and
 consumer, the rate-limit store and the schedule's occurrence lock — opened by
-`RedisModule::for_root`, on one server, Sentinel or a Cluster alike. One connection, one variable: a throttler-only app sets
+`RedisModule`, on one server, Sentinel or a Cluster alike. One connection, one variable: a throttler-only app sets
 the same `URL` a queue app does. A [second Valkey](/queue/topologies/#a-second-valkey)
 reads the same keys under its instance — `<PREFIX>_REDIS__CACHE__URL` for
 `#[instance] struct Cache`. The TLS material is read at boot, so a renewed file takes effect at the
@@ -276,8 +276,8 @@ boot naming the field:
 
 The clients an authorization server registers (RFC 6749 §2), read by
 `OAuthServerConfig<P>` in `nest-rs-oauth-server` once
-`OAuthServerModule::for_root::<P>` is imported, `P` the payload the app's
-own type carries:
+`OAuthServerModule::<P>` is imported (or `OAuthServerModule::for_root(cfg)`
+pins it), `P` the payload the app's own type carries:
 
 | Key | Meaning |
 |---|---|

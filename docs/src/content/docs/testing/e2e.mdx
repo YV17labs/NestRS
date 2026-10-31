@@ -173,7 +173,7 @@ opens is the app's pool's: TLS verified or off as the URL says, an `sslmode`
 that encrypts without verifying refused.
 
 `provide_arc(db.connection())` seeds the real connection into the
-container, in place of the pool `SeaOrmModule::for_root` would open. The
+container, in place of the pool `SeaOrmModule` would open. The
 rest of the app builds normally.
 
 ```rust title="apps/api/tests/e2e/users.rs"

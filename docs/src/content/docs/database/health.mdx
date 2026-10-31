@@ -22,7 +22,7 @@ use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
         HealthModule,
     ],
@@ -30,7 +30,7 @@ use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 pub struct AppModule;
 ```
 
-That's it. `SeaOrmModule::for_root` attaches the pool's indicator, `seaorm`,
+That's it. `SeaOrmModule` attaches the pool's indicator, `seaorm`,
 to both the **readiness** and the **startup** probe — `HealthModule` runs it
 beside every other indicator the app opened, and refuses the boot when a second
 one claims the name. A pool a feature opens is checked the same way: there is

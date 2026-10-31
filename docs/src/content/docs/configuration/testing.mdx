@@ -72,9 +72,9 @@ committed `.env.test`, and produces the same result on any machine.
 
 ## Pinning through `for_root`
 
-Every configurable module's `for_root` accepts a `pinned: Option<C>`: `None`
-loads from the environment over the config's defaults, `Some(cfg)` makes `cfg`
-the **base** the environment overlays.
+Every configurable module's bare import loads its config from the environment
+over the config's defaults; its `for_root(cfg)` makes `cfg` the **base** the
+environment overlays.
 
 <Aside type="caution">
 `for_root` is not a hermetic pin. A `<PREFIX>_<NS>__<KEY>` set in the ambient
@@ -107,16 +107,16 @@ let app = TestApp::builder()
 pub struct ApiModule;
 ```
 
-`HttpModule::for_root(opts)` routes its `Option<HttpConfig>` through
-`ConfigModule::provide_feature`, which queues one resolving factory either way
-— the `Option` only decides what the environment overlays. Use this when the
+`HttpModule::for_root(cfg)` routes its `HttpConfig` through
+`ConfigModule::provide_root`, which queues the one resolving factory its bare
+import would — the pin only decides what the environment overlays. Use this when the
 test module **owns** the binding (it composes the app) and an ambient
 `<PREFIX>_HTTP__*` overriding it is *welcome*; use `.provide()` when the value
 must hold regardless of the environment.
 
 ## A test-specific source
 
-`ConfigModule::for_root()` always uses the default `EnvSource`. To
+A module's bare import always reads the default `EnvSource`. To
 isolate config loading from `std::env` entirely, build the
 `ConfigService` yourself with a [custom source](/configuration/sources/)
 and seed the loaded `Config`:

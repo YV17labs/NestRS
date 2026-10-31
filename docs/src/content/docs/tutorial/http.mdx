@@ -210,14 +210,10 @@ scaffold wired on page 1.
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
 
-use features::authn::AuthnModule;
-use features::authz::AuthzModule;
 use features::blog::BlogHttpModule;
 use features::posts::PostsHttpModule;
 
 #[module(imports = [
-    AuthnModule,
-    AuthzModule,
     BlogHttpModule,
     PostsHttpModule,
 ])]
@@ -228,10 +224,9 @@ pub struct BlogModule;
 `crates/features/src/blog/` whenever you want — it exists so page 1 had
 something to prove.
 
-`PostsHttpModule` already imports `AuthzModule` transitively, so listing
-both here changes nothing at boot. It changes what the file *tells you*: an
-app's root module is the inventory of the concerns it serves, and auth is one of
-them.
+`PostsHttpModule` imports `AuthzModule`, and `AuthzModule` imports
+`AuthnModule`, so the root lists the edges it serves and nothing they bring:
+the access graph checks each import where it is used.
 
 No manifest line moves: `apps/blog/Cargo.toml` has depended on `features`
 since `nestrs new`.

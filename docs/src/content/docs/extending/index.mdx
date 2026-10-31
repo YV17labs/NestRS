@@ -24,8 +24,8 @@ use nest_rs::redis::{RedisModule, RedisThrottlerModule};
 use nest_rs::throttler::ThrottlerModule;
 
 #[module(imports = [
-    ThrottlerModule::for_root(None),
-    RedisModule::for_root(None),
+    ThrottlerModule,
+    RedisModule,
     RedisThrottlerModule,
 ])]
 pub struct ApiModule;

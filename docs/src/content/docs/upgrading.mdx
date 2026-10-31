@@ -435,7 +435,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `GraphqlAbilityBridge<AuthnGuard, AuthzGuard> as dyn GraphqlOperationGuard` in a module's `providers` | `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` |
    | `McpAbilityBridge<AuthnGuard, AuthzGuard> as dyn McpOperationGuard` in a module's `providers` | `EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>` |
    | an `impl GraphqlOperationGuard` / `impl McpOperationGuard` of your own | a `Guard` with `check_http` and `impl GuardFor<HttpView>`, listed in `EndpointGuards<…>` |
-   | `AllowAllMcpGuard as dyn McpOperationGuard` | `McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })` in the app's root |
+   | `AllowAllMcpGuard as dyn McpOperationGuard` | `McpModule::for_root(McpAccess::Public)` in the app's root |
    | `GlobalPoolOperationGuard`, `GlobalPoolMcpGuard` | nothing: the transport runs the global pool at the `/graphql` and `/mcp` requests |
    | `forward_principal!(Claims);` in a module, `ctx.data::<Claims>()?` in a resolver | nothing in the module; a `claims: Ctx<Claims>` parameter on the operation, no argument of the schema |
    | `nest_rs::core::ambient::<Claims>()` read by hand in a resolver, a message handler or a tool, with an `.ok_or(…)` of its own | a `caller: Ctx<Claims>` parameter — not a compile error: the hand-written read still compiles, and the parameter answers a miss opaquely, its type filed at `error` |
@@ -490,9 +490,11 @@ lists what the boot, a log or the wire shows when one is missed.
    refused `401`, where the visitor's rules used to decide it: mark the route
    `#[public]` and take `Authorize<A, E>` by hand to serve visitors.
 
-8. **Pin a module's config as a struct literal, and open an instance by its
-   type.** A module's config is one value, pinned through `for_root` as a
-   struct literal over its base: every `with_*` helper is gone. A config's
+8. **Import a module bare to read its environment, pin a config as a struct
+   literal, and open an instance by its type.** Every module owning a config is
+   imported bare to read its variables, and `for_root` takes only the value it
+   pins — never `None`. A module's config is one value, pinned through
+   `for_root` as a struct literal over its base: every `with_*` helper is gone. A config's
    `Default` opens nothing in any profile — no loopback URL, no development
    credential, no surface — while `Config::defaults()` is the profile's base,
    and a pinned config reads the process environment, never `.env`. A struct
@@ -501,12 +503,16 @@ lists what the boot, a log or the wire shows when one is missed.
 
    | 6.x | 7.0 |
    |---|---|
+   | `SeaOrmModule::for_root(None)`, `RedisModule::for_root(None)`, `ThrottlerModule::for_root(None)`, `AuthnModule::for_root(None)`, `HttpModule::for_root(None)` — any `X::for_root(None)` | the bare import, `SeaOrmModule`, `RedisModule`, …: it reads `<PREFIX>_<NS>__*` over the defaults, and `for_root` only pins |
+   | `X::for_root(Some(cfg))` | `X::for_root(cfg)` |
+   | `OAuthServerModule::for_root::<P>(None)` | `OAuthServerModule::<P>`; a pin infers `P` from its value, `OAuthServerModule::for_root(cfg)` |
+   | `ConfigModule::for_root()` first in a root's `imports` | delete it: the cascade needs no import, and the first config the boot loads registers `Environment` and says an undeclared one at `info` |
    | `HttpConfig::default().with_global_prefix(p)` (and every config `with_*`) | the field in a struct literal over `..Default::default()` |
    | `HealthConfig::default().with_probe_deadline(Duration::from_millis(400))` | `HealthConfig { probe_deadline: Duration::from_millis(400), ..Default::default() }` |
    | `impl Config for MyConfig { fn from_env(…) }` beside `#[config(namespace = "…")]` | delete it: `#[config]` writes it, each field reading `<PREFIX>_<NAMESPACE>__<FIELD>`, its name in SCREAMING_SNAKE, through the reader its type chooses. A field your `from_env` read under another key is renamed, or its key is renamed in the deployment; a field it read with `env.json` takes `#[config(json)]`, one with `env.count` `#[config(count)]`, one it judged itself `#[config(with = your_fn)]` (`fn(&ConfigService, &str, T) -> Result<T>`); a `fn defaults()` moves to `#[config(defaults = Self::your_fn)]`. Fields that depend on each other keep the impl under `#[config(namespace = "…", from_env = "manual")]` |
    | a duration field `window_secs: u64` or `timeout_ms: Option<u64>` read through `DURATION.read(env, …)` | `window: Duration` with `#[config(bounds = WINDOW)]`, its default in `Default`; `Option<Duration>` only where `None` turns it off. The bounds' key keeps the unit (`WINDOW_SECS`), so no variable moves |
    | a field of a type of your own read with `env.parse` | `impl FromSetting for YourType`, saying what a refused value was expected to be |
-   | `ConfigModule::for_feature::<C>()` in a module's `imports` | delete it: the provider that injects `Arc<C>` loads `C`. A module reading `C` only in a `register` of its own calls `ConfigModule::provide_feature(None::<C>, builder)` from its `collect` |
+   | `ConfigModule::for_feature::<C>()` in a module's `imports` | delete it: the provider that injects `Arc<C>` loads `C`. A module reading `C` only in a `register` of its own calls `ConfigModule::provide_feature::<Unnamed, C>(builder)` from its `collect` |
    | `SeaOrmConfig { connect_timeout_secs: Some(5), statement_timeout_secs: Some(10), max_connections: Some(20), min_connections: Some(2), .. }` | `connect_timeout: Duration::from_secs(5)`, `statement_timeout: Duration::from_secs(10)`, `max_connections: 20`, `min_connections: 2` — unset is `Default`'s 10 s, 15 s, 10 and 0, which the pool is now always handed |
    | `AuthnConfig { leeway_secs: Some(45), expires_in_secs: Some(7200), explicit_typing: Some(false), .. }` | `leeway: Duration::from_secs(45)`, `expires_in: Duration::from_secs(7200)`, `explicit_typing: false` — `Default` holds 30 s, an hour and `true` |
    | `ThrottlerConfig { limit: Some(120), window_secs: Some(30), .. }` | `limit: 120, window: Duration::from_secs(30)` — `Default` holds 60 a minute |
@@ -521,7 +527,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | a suite asserting that the bare `GraphqlModule` answers a plain `GET` with `405`, or refuses introspection, under the test profile | pin `GraphqlModule::for_root(GraphqlConfig::default())`: the test profile opens both |
    | `OpenApiModule::for_root(OpenApiConfig { …, ..OpenApiConfig::default() })` expecting `/api` served | `..OpenApiConfig::defaults()` to serve it in development and test only, or `enabled: true` written in the pin |
    | an `HttpConfig`, `StorageConfig`, `AuthnConfig`, `GraphqlConfig`, `WsConfig`, `McpConfig`, `OAuthClientConfig` or `OpenTelemetryConfig` literal written out whole | the same, ending in `..Default::default()` — each gained fields (`shutdown_timeout`; `operation_timeout`, `read_timeout`, `tls`; `jwks_uri`, `algorithms`, `tls`; the graphql-ws bounds; `message_timeout`, `connect_timeout`, `disconnect_timeout`; `operation_timeout`, `max_concurrent_sessions`, `session_idle_timeout`; `tls`) |
-   | `McpOptions { config, server }`, every field named | `McpOptions { config, server, ..Default::default() }` |
+   | `McpModule::for_root(McpOptions { server: Some(identity), .. })` | `McpModule::for_root(identity)` |
+   | `McpModule::for_root(McpOptions { config: Some(cfg), server: Some(identity) })` | `McpModule::for_root((identity, cfg))` — the declaration first, the config last; `McpAccess::Public` leads when the app opens the endpoint, `(McpAccess::Public, identity, cfg)` |
    | `env.get("KEY")` and `env.list("KEY", default)` in a `from_env` | `env.get("KEY")?` and `env.list("KEY", default)?` — a `_FILE` read can fail |
    | `env.seconds("KEY", base)`, or any `env.*` reader asked for a key ending in `_SECS` or `_MS` | a `DurationBounds::secs(…)` or `DurationBounds::millis(…)` declared beside the config, read with `BOUNDS.read(env, base)?` or `read_optional`; see [Configuration](/configuration/#configservice-api) |
    | `serde_json::from_str` over a structured variable in a `from_env` of your own | `env.json::<T>("KEY")?`, which refuses it naming the variable, where it failed and the type it expected, never the value |
@@ -536,7 +543,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `conn.manager()` | the connection itself — it is `ConnectionLike` and `Clone` |
    | `Material { bytes, path: None }` | `Material::inline(bytes)` |
    | `Throttle { limit, window }` and its fields, on the rate limiter | `Throttle::new(limit, window)`, `.limit()`, `.window()` — a window under a millisecond is refused |
-   | `ThrottlerGuard::new(store, limit)` | gone: `ThrottlerModule::for_root` builds the guard; a `ThrottlerConfig` literal gains `pseudonym_key` |
+   | `ThrottlerGuard::new(store, limit)` | gone: `ThrottlerModule` builds the guard; a `ThrottlerConfig` literal gains `pseudonym_key` |
    | a `String` or a `format!` given to `SeaOrmConfig::url`, `RedisConfig::url`, `StorageConfig::access_key` / `secret_key`, `ThrottlerConfig::pseudonym_key`, `AuthnConfig::secret` / `private_key`, or `client_secret` on `OAuthClientConfig`, `GithubSocialConfig`, `GoogleSocialConfig` | the same with `.into()`: each is a `nest_rs::core::Secret<String>` (in an `Option` where it was one); a literal `"…".into()` compiles as it was |
    | `config.url`, `config.secret`, `config.client_secret` read as a string | `config.url.expose_secret()`: `Debug` prints `<redacted>` in its place |
    | a secret field of your own config, kept out of logs by a hand-written `Debug` or by no `Debug` | `pub api_key: Secret<String>` and `#[derive(Debug)]`, read with `expose_secret()`; a `custom(function = …)` rule on it takes `&Secret<String>` |
@@ -544,14 +551,15 @@ lists what the boot, a log or the wire shows when one is missed.
    **Two values of one type are two types.** String-keyed injection is gone: a
    second Redis, or a second value your app builds, is a named instance — a
    type of its own, declared `#[instance] pub struct Cache;` — and a resource
-   opened more than once takes the instance in its `for_root` value. A second
-   Valkey reads `<PREFIX>_REDIS__CACHE__*`. See
+   opened more than once is imported per instance: `RedisModule::<Cache>`
+   bare, or `RedisModule::for_root((Cache, cfg))` to pin. A second Valkey reads
+   `<PREFIX>_REDIS__CACHE__*`. See
    [Instances](/fundamentals/providers/#instances--one-resource-opened-twice).
 
    | 6.x | 7.0 |
    |---|---|
    | `#[inject(key = "cache")] cache: Arc<RedisConnection>` | `#[inject] cache: Arc<RedisConnection<Cache>>` |
-   | `App::builder().provide_keyed("cache", RedisConnection::connect(&cfg).await?)` | `RedisModule::for_root((Cache, cfg))` in the root's `imports` — `(Cache, None)` to read the environment |
+   | `App::builder().provide_keyed("cache", RedisConnection::connect(&cfg).await?)` | `RedisModule::<Cache>` in the root's `imports` to read the environment, `RedisModule::for_root((Cache, cfg))` to pin |
    | `#[inject(key = "x")] client: Arc<T>`, a value your app builds | `#[inject] client: Arc<XClient>`, a newtype, or `Arc<Instanced<X, T>>` |
    | `.provide_keyed("x", value)`, a value your app builds | `.provide(XClient(value))`, or `.provide(Instanced::<X, _>::from(value))` |
    | `container.get_keyed::<T>("x")` | `container.get::<XClient>()`, or `container.get::<Instanced<X, T>>()` |
@@ -562,9 +570,10 @@ lists what the boot, a log or the wire shows when one is missed.
 
    | 6.x | 7.0 |
    |---|---|
-   | `fn for_root(config: impl Into<Option<C>>) -> CSetup { ConfigModule::setup(config) }` | `… { ConfigModule::setup(config.into()) }` |
-   | `ConfigModule::setup::<M, C>(cfg)` | `ConfigModule::setup::<M, C, Unnamed>(cfg)`, or no turbofish |
-   | `ConfigModule::provide_feature::<C>(None, builder)` | `ConfigModule::provide_feature(None::<C>, builder)` |
+   | `fn for_root(config: impl Into<Option<C>>) -> CSetup { ConfigModule::setup(config) }` | `fn for_root(config: C) -> CSetup { ConfigModule::setup(config) }`, and the module imported bare reads its environment: an `impl Module` whose `collect` calls `ConfigModule::provide_feature::<Unnamed, C>(builder)`, or a `#[module]` whose provider injects `Arc<C>` |
+   | `ConfigModule::setup::<M, C>(cfg)` | `ConfigModule::setup::<M, C, Unnamed>(cfg)`, or no turbofish; it takes the value to pin, never `None` |
+   | `ConfigModule::provide_feature::<C>(None, builder)` | `ConfigModule::provide_feature::<Unnamed, C>(builder)`, what a bare import reads |
+   | `ConfigModule::provide_feature::<C>(Some(cfg), builder)` in a setup of your own | `ConfigModule::provide_root(cfg, builder)`, the declaration a `for_root` pins |
    | a hand-written `Namespaced` impl setting `DECLARATION` | leave it out: a hand-written impl answers by its type name |
 
 9. **Compose the container, and follow the lifecycle's order.** The boot now
@@ -593,10 +602,10 @@ lists what the boot, a log or the wire shows when one is missed.
    | `provide_factory_after::<T, A, _, _>(f)`, and the same for the declared and `dyn` forms | `provide_factory_after::<T, (A,), _, _>(f)` |
    | a module filling a registry the app reads from an `OnApplicationBootstrap` hook | `ContainerBuilder::provide_wiring("<crate>::<registry>", wire)` in its `register` |
    | `builder.provide_meta(TransportContribution { name: "MyTransport", build: \|c\| Ok(Box::new(MyTransport::new(c)?)) })` | `builder.provide_transport(\|c\| MyTransport::new(c))` — named `MyTransport`, read off the type |
-   | a feature module importing `HttpModule::for_root(None)` (or GraphQL's, OpenAPI's) to declare it serves over HTTP | a bare `HttpModule` (`GraphqlModule`, `OpenApiModule`) in its `imports`; the app keeps a `for_root` only to pin a config |
-   | an edge adapter importing its port alone, and the app root importing `HttpModule::for_root(None)`, `GraphqlModule::for_root(None)`, `QueueModule::for_root(None)` or `ScheduleModule` beside it | the adapter imports what serves its edge, bare — `HttpModule` (HTTP, WebSocket, MCP), plus `WsModule`, `GraphqlModule`, `QueueModule` or `ScheduleModule` — and the root drops the line unless it pins a value; the queue's backend binding (`RedisQueueModule`) stays at the root. Nothing refuses the old shape: it still runs one transport of each type |
+   | a feature module importing `HttpModule` (or GraphQL's, OpenAPI's) to declare it serves over HTTP | a bare `HttpModule` (`GraphqlModule`, `OpenApiModule`) in its `imports`; the app keeps a `for_root` only to pin a config |
+   | an edge adapter importing its port alone, and the app root importing `HttpModule`, `GraphqlModule`, `QueueModule` or `ScheduleModule` beside it | the adapter imports what serves its edge, bare — `HttpModule` (HTTP, WebSocket, MCP), plus `WsModule`, `GraphqlModule`, `QueueModule` or `ScheduleModule` — and the root drops the line unless it pins a value; the queue's backend binding (`RedisQueueModule`) stays at the root. Nothing refuses the old shape: it still runs one transport of each type |
    | a container built by hand importing `GraphqlModule`, `HealthModule`, `OpenApiModule`, `McpModule`, `StaticFilesModule` or `OAuthResourceModule`, seeding the module's config | seed `HttpConfig::default()` beside it: each imports `HttpModule` |
-   | `McpModule::for_root(..)` declaring `server` or opening the posture at two imports | declare it at one; the other imports leave it unset |
+   | `McpModule::for_root(..)` declaring an identity or `McpAccess::Public` at two imports | declare each at one; the other imports leave it out, or import `McpModule` bare |
    | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` |
    | `ReachableProviders::reaches(Some(&set), id)`, `ReachableProviders(set)` built by hand | `ReachableProviders::of(container, "<what you discover>")?.reaches(id)`; a test boots the modules it means through `TestApp`, `HeadlessApp` or `App::builder`, which seal the set they reach |
    | a `match` on `InertHost::BoundUnderAnotherKey`, or on `DuplicateProviderError { type_name }` | drop the arm; read `DuplicateProviderError`'s `first`, `second` and `scopes` with `..`, and match `InertHost` with a `_` arm |
@@ -644,13 +653,15 @@ lists what the boot, a log or the wire shows when one is missed.
     listener, a lifecycle hook — runs its work through one port,
     `nest_rs::database::UnitOfWork`, which `SeaOrmDatabaseModule` binds. Delete
     the data contexts from your authz modules first: `WsDataContext as dyn
-    SocketContext` leaves `authz/ws/module.rs` (`#[module(imports =
-    [AuthzModule, WsModule])]`) and `McpDataContext as dyn McpToolContext`
-    leaves `authz/mcp/module.rs`; the edges open their units themselves. An
+    SocketContext` leaves `authz/ws/module.rs` — and `nestrs g ws` now writes
+    none: a gateway's adapter imports `AuthzModule`, `HttpModule` and
+    `WsModule` itself, as an HTTP adapter does — and `McpDataContext as dyn
+    McpToolContext` leaves `authz/mcp/module.rs`; the edges open their units
+    themselves. An
     app reaching a `#[crud]` host, a route or field under `#[authorize(A, bind
     = S)]`, or the service a GraphQL-exposed entity names (`#[expose(service =
     S, graphql)]`) imports `SeaOrmDatabaseModule` beside
-    `SeaOrmModule::for_root(None)`: 6.x booted without it and failed every call
+    `SeaOrmModule`: 6.x booted without it and failed every call
     such a host made; 7.0 refuses the boot naming it.
 
     | 6.x | 7.0 |
@@ -688,8 +699,8 @@ lists what the boot, a log or the wire shows when one is missed.
     | `params.after_uuid()` | `params.cursor().map_err(\|refused\| nest_rs::http::pipe_error(&refused))?` |
     | `Page::next_cursor: Option<Uuid>`; `Repo::page`, `Repo::relation_pages`, `CrudService::page`, `RelationKey::after` taking `Option<Uuid>` | `Option<PageCursor>`: `PageCursor::from(uuid)` builds one, `cursor.to_string()` is its text |
     | a `Page { items, next_cursor, has_more }` literal | `Page::new(items, next_cursor, has_more)` |
-    | `SeaOrmHealthModule` in `imports`; `nest_rs::seaorm::SeaOrmHealthIndicator` named in code | delete both: `SeaOrmModule::for_root` attaches the pool's indicator, and `HealthModule` checks every resource the app or its features opened |
-    | a hand-written `#[readiness] async fn redis(&self)` sending `PING` over an injected `RedisConnection` | delete it: `RedisModule::for_root` attaches each instance's `PING` — a method named `redis` beside it fails the boot |
+    | `SeaOrmHealthModule` in `imports`; `nest_rs::seaorm::SeaOrmHealthIndicator` named in code | delete both: `SeaOrmModule` attaches the pool's indicator, and `HealthModule` checks every resource the app or its features opened |
+    | a hand-written `#[readiness] async fn redis(&self)` sending `PING` over an injected `RedisConnection` | delete it: `RedisModule` attaches each instance's `PING` — a method named `redis` beside it fails the boot |
     | `report.details.keys().copied()` as `&'static str`; `IndicatorReport { name: "x", .. }` | `&Cow<'static, str>` keys; `name: "x".into()` |
 
     **Readiness waits on every resource the app opens.** 6.x checked the pool
@@ -754,7 +765,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | a token route reading `Form<AccessTokenRequest>`, or code decoding it with serde | `request: AccessTokenRequest`, the handler parameter: the type derives no `Deserialize`, and its refusals are `invalid_request` |
     | `if request.grant_type != "client_credentials" { return Err(TokenError::UnsupportedGrant) }` | nothing: `request.grant_type` is a `GrantType` (`GrantType::ClientCredentials`), and a grant the endpoint does not serve is refused `unsupported_grant_type` before the handler runs |
     | `request.scope` read as an `Option<String>` and narrowed to the client's scopes by hand | `client.scope_for(&request.scope)?`: `scope` is §3.3's `Vec<String>`, and the grant is strict — none asked is the whole registration, an unregistered scope `invalid_scope` |
-    | a client registry in a config of your own, checked by a strategy calling `authenticate_against_registry` | `OAuthServerModule::for_root::<P>(None)` in the module's `imports`, `P` your payload, read from `<PREFIX>_OAUTH__SERVER__CLIENTS`; the guard is `ClientAuthenticationGuard<ClientSecretBasicStrategy<P>>`, and `Arc<OAuthServerConfig<P>>` is injectable where you read the registry |
+    | a client registry in a config of your own, checked by a strategy calling `authenticate_against_registry` | `OAuthServerModule::<P>` in the module's `imports`, `P` your payload, read from `<PREFIX>_OAUTH__SERVER__CLIENTS`; the guard is `ClientAuthenticationGuard<ClientSecretBasicStrategy<P>>`, and `Arc<OAuthServerConfig<P>>` is injectable where you read the registry |
     | `hash_password(p)?` stored or compared as a `String` | a `Secret<String>`: store it as is, and pass `hash.expose_secret()` to `verify_password` |
     | the development-token route's `DevOnlyGuard` and `DevTokenAudit`, written by an earlier `nestrs g auth` | `nest_rs::authn::DevelopmentOnlyGuard`, bound with `#[use_guards]` on the controller and listed in its module's `providers`; delete `authn/http/guard.rs` and `authn/http/audit.rs` |
     | `TokenError::InvalidClient` built or matched | `TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretBasic)` for a client refused over the `Authorization` header, `ClientSecretPost` for credentials in the body, `None` for none; matched as `InvalidClient(_)` |
@@ -774,7 +785,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `client.authorize(&jwt, provider)`, `provider.authorize(&jwt)` | `client.authorize(&jwt, provider, resource)`, `provider.authorize(&jwt, resource)`: the RFC 8707 resource the sign-in asks for, or `None`, signed into the transaction |
     | `client.exchange(&jwt, provider, transaction, state, code).await?` | `let response = OAuthClient::callback(&jwt, provider, transaction, req.uri().query().unwrap_or_default())?;` then `client.exchange(response).await?` — `callback` reads `state`, `code` and §4.1.2.1's `error` off the query itself; `response.resource()` reads the resource back |
     | a `SocialProvider::exchange` override taking the transaction, `state` and `code` | the same override taking the matched `AuthorizationResponse`, and building its answer with `TokenSet::new(access_token)`, `.with_id_token(…)`, `.with_refresh_token(…)` |
-    | `#[module(imports = [SocialModule, …])]`, providers enabled by their credentials | add each provider's module beside it: `SocialModule, GithubSocialModule, GoogleSocialModule` |
+    | `#[module(imports = [SocialModule, …])]`, providers enabled by their credentials | import each provider's module in its place: `GithubSocialModule, GoogleSocialModule`, each importing `SocialModule` |
     | a `SocialProviderEntry { … }` of your own | `SocialProviderEntry::new::<AcmeProvider, AcmeSocialModule>(key, AcmeSocialConfig::NAMESPACE, build)`, and a `#[module(imports = [SocialModule])] pub struct AcmeSocialModule;` the app imports |
     | `Ability::can(action, &model)` under a grant resting on a relation, which answered `true` | `false`: `Repo::<E>::can(action, &model).await?` asks SQL, one indexed query |
     | `Predicate::matches` on a relational predicate | `false`: `Ability::can` is the instance check |
@@ -824,7 +835,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | rmcp's `Parameters`, named from rmcp in an operation's signature | `nest_rs::mcp::Parameters`, the framework's own type with rmcp's shape |
     | an `impl McpHost` written by hand | the same with `negotiate_initialize` |
     | `McpIdentity::declared(name, title)` | `#[mcp(name = …, title = …)]`, or `McpIdentity::new` for the app's own |
-    | `McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))` in `McpOptions::server` | `McpIdentity::default()`, then its `title`, `instructions`…: the name, version and description are the binary's; `new` stays to report others |
+    | `McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))` in `McpOptions::server` | `McpModule::for_root(McpIdentity::default())`, then its `title`, `instructions`…: the name, version and description are the binary's; `new` stays to report others |
     | `.map_err(\|e\| problem_error(&e))?` in an operation answering `McpError` | return the `ToProblem` error itself from an operation spelled `Result<T, E>` |
     | `#[mcp] struct Host<T>`, `#[tools] impl<T> Host<T>` | a non-generic host type per instantiation |
     | `nest_rs::mcp::McpMount`, `endpoint`, `resolve_operation_guard` | the `#[mcp]` host; a request's guards are the transport's |
@@ -1233,6 +1244,21 @@ lists what the boot, a log or the wire shows when one is missed.
 - **`ConfigModule::for_feature` left in an import list** fails to compile; a
   config no provider of an imported module injects is no longer loaded — read
   it through a provider, or queue it from the module's `collect`.
+- **`X::for_root(None)` left in an import list** fails to compile — `for_root`
+  takes the value it pins, `expected XConfig, found Option<_>` — and so does
+  `RedisModule::for_root((Cache, None))`: write the bare import, `X` or
+  `RedisModule::<Cache>`, which reads the same variables.
+- **`ConfigModule::for_root()` left in an import list** fails to compile
+  (`no function or associated item named for_root`): delete the line, nothing
+  replaces it. A process declaring no `<PREFIX>_ENV` still says so once at
+  `info`, in every app that reads a config — apps `nestrs new` scaffolded
+  included, which never said it in 6.x. An app that reads no config gets no
+  `Environment`: a provider injecting it, or a test overriding it, is refused
+  at boot naming the type — read `Environment::from_env()` there.
+- **`McpOptions`, or `posture: Posture::InBand` on it,** fails to compile:
+  `McpModule::for_root` takes an `McpIdentity`, an `McpAccess` or an
+  `McpConfig`, alone or as a tuple, and `McpAccess` has `Gated` and `Public`
+  alone.
 
 - **A value breaking its type's rules that 6.x let through**, because no
   `Valid` wrapped its parameter, is now refused at the edge that decodes it:
@@ -1409,8 +1435,8 @@ lists what the boot, a log or the wire shows when one is missed.
 
   A provider injecting `Arc<dyn JobProducer>` with no queue backend names
   `RedisQueueModule`, one injecting the pool or the default instance's
-  `RedisConnection` with no module opening it names `SeaOrmModule::for_root(None)`
-  or `RedisModule::for_root(None)` — where 6.x told it to add a provider or
+  `RedisConnection` with no module opening it names `SeaOrmModule`
+  or `RedisModule` — where 6.x told it to add a provider or
   seed one. A GraphQL schema serving an exposed relation whose target's module
   the app does not import names the field, the entity declaring it and the
   module, where 6.x counted the loader at `warn` and erred on every query

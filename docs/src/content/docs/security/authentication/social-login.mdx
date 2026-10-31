@@ -25,14 +25,14 @@ The `social` feature implies `authn`: the authorization-code machinery
 
 ```rust title="apps/auth/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::social::{GithubSocialModule, GoogleSocialModule, SocialModule};
+use nest_rs::social::{GithubSocialModule, GoogleSocialModule};
 
-#[module(imports = [SocialModule, GithubSocialModule, GoogleSocialModule, SignInHttpModule])]
+#[module(imports = [GithubSocialModule, GoogleSocialModule, SignInHttpModule])]
 pub struct AuthModule;
 ```
 
-`SocialModule` owns the registry, and each provider's module opens that
-provider: a provider whose module the app does not import stays closed,
+`SocialModule` owns the registry, which each provider's module imports, and
+each provider's module opens that provider: a provider whose module the app does not import stays closed,
 whatever its credentials say. So every provider an app can log in with is
 a line in its composition root, and an opening is never a side effect of
 a dependency.

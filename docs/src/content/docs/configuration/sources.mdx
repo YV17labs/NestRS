@@ -134,8 +134,8 @@ process with one thread is what makes the write sound. A binary without
 What this means in practice:
 
 - **Resolving config is side-effect-free**, whichever source you use. Neither
-  `for_namespace` nor `ConfigModule::for_root()` publishes anything;
-  `for_root`'s collect registers the active `Environment` and stops there.
+  `for_namespace` nor a module's import publishes anything; the first config
+  load registers the active `Environment` and stops there.
 - **`TestApp::builder()` *does* publish the cascade.** The e2e harness reads
   backend URLs through `std::env` before any `ConfigService` exists, so it calls
   `load_cascade` (the explicit form of what `#[nest_rs::main]` does) once per

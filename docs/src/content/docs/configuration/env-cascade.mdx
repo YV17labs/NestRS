@@ -120,8 +120,8 @@ rewritten, storage refuses plain HTTP, and the console writes JSON. No
 profile names a database, a Redis or a store, nor the credentials to reach
 them: the profile's `.env` file does — `nestrs new` writes `compose.yml`'s
 services into `.env.development` and `.env.test` — and a deployment names its
-own. An app importing
-`ConfigModule::for_root()` says so once at boot, at `info` on
+own. An app that reads any config — every app importing a module that owns
+one — says so once at boot, at `info` on
 `nest_rs::config` — `no environment declared; running as production` — and an
 unrecognized value is said once on stderr, by the variable's name.
 `nestrs run dev` declares `development` on the process; a run outside it, an
@@ -160,7 +160,7 @@ Exactly once per process, before your `main` runs:
 - **The default `EnvSource`** reads that same parse. A
   [custom `ConfigSource`](/configuration/sources/) never does; it supplies its
   own values.
-- **`ConfigModule::for_root()`** does *not* parse it. Its collect reads
+- **The first config the boot loads** does *not* parse it. It reads
   `<PREFIX>_ENV` from the real environment and registers the resulting
   `Arc<Environment>`, which is what decides *which* files the parse read — and
   files the `info` line above when the process declared none.

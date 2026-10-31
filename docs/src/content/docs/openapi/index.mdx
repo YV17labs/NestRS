@@ -36,7 +36,7 @@ use nest_rs::openapi::OpenApiModule;
 #[module(
     imports = [
         // …
-        OpenApiModule::for_root(None),
+        OpenApiModule,
         // …
         UsersHttpModule,
         // … the rest of the HTTP modules
@@ -47,9 +47,9 @@ pub struct ApiModule;
 
 That's the whole opt-in. The module self-mounts both endpoints on the
 `HttpTransport` it imports — the one the app's HTTP adapters serve on: same
-port, same CORS, no second server. `None` reads
+port, same CORS, no second server. The bare import reads
 `<PREFIX>_OPENAPI__*` from the [`.env` cascade](/configuration/); pass an
-`OpenApiConfig` to pin it in code instead.
+`OpenApiConfig` to `OpenApiModule::for_root` to pin it in code instead.
 
 ## What you get
 
@@ -206,7 +206,7 @@ serving it is a string write.)
 
 ## Reference
 
-- `apps/api/` — mounts `OpenApiModule::for_root(None)` next to REST + GraphQL.
+- `apps/api/` — mounts `OpenApiModule` next to REST + GraphQL.
 - `crates/features/src/users/http/controller.rs` — real `#[api(...)]` usage.
 - `crates/nest-rs-openapi/` — `OpenApiModule`, `OpenApiConfig`, the document
   composer, the bundled Swagger UI.

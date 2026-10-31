@@ -11,8 +11,8 @@ resources it opens and closes when the app ends. At the end of this page your
 module boots in every app that imports it, in none that does not, and your
 tests boot it the same way.
 
-A module that owns a configuration offers one `for_root`, taking the value an
-app pins, or `None` to read the environment alone:
+A module that owns a configuration reads it from its bare import, and offers
+one `for_root` taking the value an app pins:
 
 ```rust title="src/module.rs"
 #[module(providers = [AcmeClient])]
@@ -20,19 +20,20 @@ pub struct AcmeModule;
 pub type AcmeSetup = ConfigSetup<AcmeModule, AcmeConfig>;
 
 impl AcmeModule {
-    pub fn for_root(config: impl Into<Option<AcmeConfig>>) -> AcmeSetup {
-        ConfigModule::setup(config.into())
+    pub fn for_root(config: AcmeConfig) -> AcmeSetup {
+        ConfigModule::setup(config)
     }
 }
 ```
 
 `AcmeClient` injects `Arc<AcmeConfig>`, and that injection loads the config,
-so a bare `AcmeModule` import still reads its variables; `for_root` pins the
-base those variables overlay, field by field. A second pin of the same config
-fails the boot, naming both imports: one config has one seam. A module that
-reads its config only in a `register` of its own, injecting it nowhere, queues
-it from its `collect` with `ConfigModule::provide_feature(None::<AcmeConfig>,
-builder)`.
+so a bare `AcmeModule` import reads its variables; `for_root` pins the base
+those variables overlay, field by field, and takes no `None`: nothing pinned
+is the bare import. A second pin of the same config fails the boot, naming both
+imports: one config has one seam. A module that reads its config only in a
+`register` of its own, injecting it nowhere, queues it from its `collect` with
+`ConfigModule::provide_feature::<Unnamed, AcmeConfig>(builder)`, and a
+hand-written setup pins it with `ConfigModule::provide_root(config, builder)`.
 
 ## The manifest and the names
 
@@ -85,7 +86,7 @@ whose refusal names the config when nothing resolved it:
 ```rust title="from nest-rs-config's ConfigModule::resolved example"
 pub struct Bucket(String);
 
-pub struct BucketSetup(Option<BucketConfig>);
+pub struct BucketSetup(BucketConfig);
 
 impl DynamicModule for BucketSetup {
     fn module() -> TypeId {
@@ -93,7 +94,7 @@ impl DynamicModule for BucketSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.0.clone(), builder)
+        ConfigModule::provide_root(self.0.clone(), builder)
             .provide_factory_after::<Bucket, (BucketConfig,), _, _>(|container| async move {
                 let config = ConfigModule::resolved::<BucketConfig>(&container)?;
                 Ok(Bucket(config.name.clone()))
@@ -151,9 +152,11 @@ kernel skips it. The [database driver page](/database/writing-a-driver/#close-wh
 shows a pool's close that waits for the units still settling.
 
 A resource an app may open more than once is generic over its instance:
-`I: Instance = Unnamed` on the resource, its setup and each binding, the
-config read with `ConfigModule::resolved_for::<I, C>` under the instance's
-namespace — as `RedisModule::for_root((Cache, None))` opens a second Valkey.
+`I: Instance = Unnamed` on the resource, its setup and each binding, its bare
+import typed (`AcmeModule::<Cache>`), the config queued with
+`ConfigModule::provide_feature::<I, C>` and read with
+`ConfigModule::resolved_for::<I, C>` under the instance's namespace — as
+`RedisModule::<Cache>` opens a second Valkey.
 
 ## A registry it fills
 

@@ -308,7 +308,7 @@ same block — same convention as `#[routes]` and `#[scheduled]`.
 
 Three modules, three roles:
 
-- **`RedisModule::for_root(None)`** — opens the Redis connection every Redis
+- **`RedisModule`** — opens the Redis connection every Redis
   binding shares (`<PREFIX>_REDIS__URL`). Every app that touches Redis needs
   it; a [second Valkey](/queue/topologies/#a-second-valkey) is a named
   instance beside it.
@@ -323,7 +323,6 @@ Three modules, three roles:
   `QueueModule::for_root(cfg)` at the root only pins the drain window.
 
 ```rust title="apps/worker/src/module.rs (from the demo, abridged)"
-use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 // …
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
@@ -334,9 +333,8 @@ use features::audio::AudioQueueModule;
 
 #[module(
     imports = [
-        ConfigModule::for_root(),
         // …
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
         // …
         AudioQueueModule,

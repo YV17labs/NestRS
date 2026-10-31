@@ -84,17 +84,14 @@ for every endpoint it exposes:
 
 ```rust title="apps/assistant/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
+use nest_rs::mcp::{McpIdentity, McpModule};
 
 #[module(imports = [
-    McpModule::for_root(McpOptions {
-        server: Some(
-            McpIdentity::default()
-                .title("Acme assistant")
-                .instructions("Ask before writing anything. Every result is scoped to your token."),
-        ),
-        ..Default::default()
-    }),
+    McpModule::for_root(
+        McpIdentity::default()
+            .title("Acme assistant")
+            .instructions("Ask before writing anything. Every result is scoped to your token."),
+    ),
     AudioMcpModule,
     UsersMcpModule,
     PostsMcpModule,
@@ -115,9 +112,9 @@ tool *does* is already carried by its own `#[tool(description = "…")]`, which 
 what the model reads when it chooses between them.
 
 The identity is a declaration, made at one import. A second
-`McpModule::for_root` naming a `server` fails the boot before anything is built,
-naming both imports — even when the two are equal, since two sites would have to
-change together. Every other import of the module leaves `server` unset.
+`McpModule::for_root` declaring an `McpIdentity` fails the boot before anything
+is built, naming both imports — even when the two are equal, since two sites
+would have to change together. Every other import of the module declares none.
 
 **A host says which endpoint stands apart**, on the file that serves it:
 

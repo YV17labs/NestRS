@@ -178,17 +178,20 @@ tests](/configuration/testing/).
 
 ## One seam per module
 
-`Module::for_root(x)` is the **only** way to configure a module, and `x` is
-**one** value carrying everything the app declares about it. There is no
-builder chain to continue on the result, and no second constructor on the
-module type — so "how do I configure this?" has one answer per module,
-readable in one expression.
+Every module is imported bare to read its variables — `HttpModule`,
+`SeaOrmModule`, `RedisModule::<Cache>` for a named instance — and
+`Module::for_root(x)` is the **only** way to pin one, `x` **one** value
+carrying everything the app pins about it. There is no builder chain to
+continue on the result, no second constructor on the module type, and no
+`None` to pass: nothing pinned is the bare import. So "how do I configure
+this?" has one answer per module, readable in one expression.
 
-**`for_root` configures, and nothing registers.** A config loads the moment a
-provider of a module your app imports asks for it — `#[inject] config:
-Arc<C>` is the whole declaration. Every `nest-rs-*` module that owns a config
-gives you a `for_root` to pin it from; there is no second seam, so a config's
-value never depends on import order.
+**The bare import reads, `for_root` pins, and nothing registers.** A config
+loads the moment a provider of a module your app imports asks for it —
+`#[inject] config: Arc<C>` is the whole declaration. Every `nest-rs-*` module
+that owns a config reads it from its bare import and gives you a `for_root` to
+pin it from; there is no second seam, so a config's value never depends on
+import order.
 
 **Your own feature modules write neither.** You own the struct, so its
 `impl Default` is already your in-code path; that is precisely what a
@@ -214,36 +217,35 @@ HttpModule::for_root(HttpConfig { compression: true, ..Default::default() }),
 ```
 
 A module that also carries a declaration with **no env twin** — the app's own
-MCP name and version — takes an `Options` struct instead, so the two still
-travel in one value:
+MCP identity, its opening, the folder static files serve from the binary —
+takes that declaration alone, or before the config as a tuple, so the two
+still travel in one value:
 
 ```rust title="apps/api/src/module.rs"
-McpModule::for_root(McpOptions {
-    config: Some(McpConfig {
-        allowed_hosts: vec!["mcp.example.com".into()],
-        ..Default::default()
-    }),
-    server: Some(McpIdentity::default().title("Acme assistant")),
-    ..Default::default()
-}),
+McpModule::for_root(McpIdentity::default().title("Acme assistant")),
+// or, pinning the server too:
+McpModule::for_root((
+    McpIdentity::default().title("Acme assistant"),
+    McpConfig { allowed_hosts: vec!["mcp.example.com".into()], ..Default::default() },
+)),
 ```
 
-The `config` field stays an `Option` for the reason the precedence table
-above gives: `None` means "nothing pinned", which lets the `.env` cascade
-outrank the defaults. Passing the bare config still works — `McpConfig`
-converts into `McpOptions` — so a call site that declares no identity reads
-exactly like every other module's.
+Declaring the identity pins nothing: the config is pinned only when it is in
+the value, so the `.env` cascade keeps outranking the defaults for a call site
+that declares an identity alone.
 
 A module an app can open more than once — one resource per
 [instance](/fundamentals/providers/#instances--one-resource-opened-twice) —
-takes the instance in the same value: the config alone for the default, the
-marker and the config for a named one. Each instance pins once, and reads its
-own variables (`<PREFIX>_<VENDOR>__CACHE__*`, see the
+names the instance as a type argument where it is imported bare, and in the
+value where it is pinned: the config alone for the default, the marker and the
+config for a named one. Each instance pins once, and reads its own variables
+(`<PREFIX>_<VENDOR>__CACHE__*`, see the
 [env-var reference](/configuration/env-reference/)):
 
 ```rust title="apps/api/src/module.rs"
-BucketModule::for_root(None),            // the default instance
-BucketModule::for_root((Cache, None)),   // the `cache` instance
+BucketModule,                                  // the default instance
+BucketModule::<Cache>,                         // the `cache` instance
+BucketModule::for_root((Archive, archive())),  // the `archive` instance, pinned
 ```
 
 ## `ConfigService` API
@@ -373,12 +375,10 @@ pub struct PostsModule;
 ```
 
 ```rust title="apps/api/src/module.rs"
-use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 
 #[module(
     imports = [
-        ConfigModule::for_root(),
         PostsHttpModule,
     ],
 )]
@@ -392,12 +392,14 @@ pub struct AppModule;
   the variable named. A config only an unimported module asks for is never
   read, and a test that seeds the config (`App::builder().provide(cfg)`)
   wins over the factory.
-- **`ConfigModule::for_root()`** registers `Arc<Environment>` — the active
-  profile, read from `<PREFIX>_ENV` — so a provider can inject it and branch. It
-  writes nothing to the process environment, and its position among the imports
-  carries no meaning: every module's `collect` runs before any config factory.
-  What puts the `.env` cascade in the process environment is
-  `#[nest_rs::main]`, before your `main` runs; see
+- **The first config the boot loads registers `Arc<Environment>`** — the
+  active profile, read from `<PREFIX>_ENV` — so a provider can inject it and
+  branch, with no import of its own, and a test overrides it like any
+  provider (`App::builder().override_value(Environment::Test)`); a process
+  that declares none says so once, at `info`. It writes nothing to the process
+  environment. What puts the
+  `.env` cascade in the process environment is `#[nest_rs::main]`, before your
+  `main` runs; see
   [alternative sources](/configuration/sources/#what-fails-if-you-get-it-wrong--hermeticity-and-the-cascade).
 
 ## Run it

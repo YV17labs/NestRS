@@ -68,7 +68,6 @@ async fn main() -> Result<()> {
 ```rust title="apps/auth/src/module.rs (from the demo, abridged)"
 #[module(
     imports = [
-        ConfigModule::for_root(),
         OpenTelemetryModule,
         // …
     ],

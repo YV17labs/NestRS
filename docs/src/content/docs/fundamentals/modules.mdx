@@ -140,16 +140,16 @@ Framework and feature modules appear in `imports` two ways.
 with configuration at the import site:
 
 ```rust title="apps/blog/src/module.rs"
-SeaOrmModule::for_root(None)
-
 HttpModule::for_root(HttpConfig {
     compression: true,
     ..Default::default()
 })
 ```
 
-**Static** — a bare type, no parameters. Feature adapters like
-`PostsHttpModule` import this way:
+**Static** — a type, bare or with a type argument naming an instance
+(`RedisModule::<Cache>`, below). Feature adapters like `PostsHttpModule`
+import this way, and so does every module reading its config from the
+environment alone (`SeaOrmModule`):
 
 ```rust title="apps/blog/src/module.rs"
 PostsHttpModule
@@ -166,20 +166,20 @@ names its `module`: importing `StorageModule::for_root(cfg)` reaches what
 `StorageModule` provides, exactly as importing `StorageModule` does.
 
 A module an app can open once per [instance](/fundamentals/providers/#instances--one-resource-opened-twice)
-names it in both shapes: a dynamic import in its value, `for_root((Cache, None))`
-beside the default's `for_root(None)`, and a static one as a type argument,
-`BucketModule::<Cache>` beside the default's bare `BucketModule`.
+names it as a type argument in a bare import, `BucketModule::<Cache>` beside
+the default's bare `BucketModule`, and in the value of a pin,
+`BucketModule::for_root((Cache, cfg))` beside the default's `for_root(cfg)`.
 
 <Aside type="tip">
 Env vars (`<PREFIX>_<NAMESPACE>__<KEY>`) fill a module's config at boot. A
-bare import, or a dynamic one passed `None`, reads it from the environment
-alone; pass a config to set defaults in code that the real environment can
+bare import reads it from the environment alone; `for_root` pins a config,
+defaults in code that the real environment can
 still override **per field** — never a lock — while the `.env` files no longer
 reach that namespace at all, see
 [the dual-path rule](/configuration/#the-dual-path-rule). For the imports above:
 
 ```rust title="apps/blog/src/module.rs"
-SeaOrmModule::for_root(None)
+SeaOrmModule
 HttpModule
 ```
 
@@ -204,8 +204,7 @@ providers — it only composes imports:
 ```rust title="apps/blog/src/module.rs"
 #[module(
     imports = [
-        ConfigModule::for_root(),
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
         PostsHttpModule,
     ],
@@ -246,7 +245,7 @@ framework modules; let adapters own the handlers.
 ```mermaid
 flowchart TB
   BM[BlogModule]
-  BM --> CM[ConfigModule]
+  BM --> SM[SeaOrmModule]
   BM --> DM[SeaOrmDatabaseModule]
   BM --> PHM[PostsHttpModule]
   PHM --> HM[HttpModule]

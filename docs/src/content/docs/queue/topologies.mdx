@@ -177,7 +177,8 @@ these pages grants — so it is the deployment's to set.
 A cache that lives by evicting cannot share the server the queue runs on, so an
 app that does both opens a second connection: a named
 [instance](/fundamentals/providers/#instances--one-resource-opened-twice). You
-declare its marker, and pass it beside the config at `for_root`:
+declare its marker, and import the module with it as a type argument —
+`RedisModule::for_root((Cache, cfg))` when you pin its config:
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::{instance, module};
@@ -187,9 +188,9 @@ use nest_rs::redis::{RedisModule, RedisQueueModule};
 pub struct Cache;
 
 #[module(imports = [
-    RedisModule::for_root(None),
+    RedisModule,
     RedisQueueModule,
-    RedisModule::for_root((Cache, None)),
+    RedisModule::<Cache>,
 ])]
 pub struct ApiModule;
 ```

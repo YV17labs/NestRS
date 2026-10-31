@@ -40,13 +40,13 @@ use nest_rs::core::module;
 use super::strategy::{AuthnGuard, AuthnStrategy};
 
 #[module(
-    imports = [nest_rs::authn::AuthnModule::for_root(None)],
+    imports = [nest_rs::authn::AuthnModule],
     providers = [AuthnStrategy, AuthnGuard],
 )]
 pub struct AuthnModule;
 ```
 
-`AuthnModule::for_root(None)` reads `AuthnConfig` from the environment;
+`AuthnModule` reads `AuthnConfig` from the environment;
 pass an `AuthnConfig` to pin it in code. The factory phase builds
 `JwtService` once and registers it as global infrastructure —
 controllers, login services, OAuth flows all inject the same instance.

@@ -36,7 +36,7 @@ cargo add nest-rs --features static-files
 
 `root` names a directory read at runtime — relative to the working directory,
 resolved at boot — so a file changed under it is served as it now is. Leave it
-out of the pin, or import `StaticFilesModule::for_root(None)`, and the
+out of the pin, or import `StaticFilesModule`, and the
 deployment sets it:
 
 ```bash frame="terminal"
@@ -141,25 +141,25 @@ reaches no byte; `If-Range` sends a changed file whole.
 An HTML document is always `Cache-Control: no-cache`: no bundler fingerprints
 it. Every other file is `no-cache` too until you set `max_age`, which is the
 right call only when the file names change with their content, as a
-fingerprinting build's do. A config beside an embedded folder goes in
-`StaticFilesOptions`:
+fingerprinting build's do. A config beside an embedded folder follows it, as a
+tuple — the folder first, the config last:
 
 ```rust title="apps/api/src/module.rs"
 use std::time::Duration;
 
 use nest_rs::core::module;
-use nest_rs::static_files::{Embedded, StaticFilesConfig, StaticFilesModule, StaticFilesOptions};
+use nest_rs::static_files::{Embedded, StaticFilesConfig, StaticFilesModule};
 
 use crate::assets::WebAssets;
 
-#[module(imports = [StaticFilesModule::for_root(StaticFilesOptions {
-    config: Some(StaticFilesConfig {
+#[module(imports = [StaticFilesModule::for_root((
+    Embedded::of::<WebAssets>(),
+    StaticFilesConfig {
         spa_fallback: true,
         max_age: Some(Duration::from_secs(365 * 24 * 60 * 60)),
         ..Default::default()
-    }),
-    embedded: Some(Embedded::of::<WebAssets>()),
-})])]
+    },
+))])]
 pub struct ApiModule;
 ```
 

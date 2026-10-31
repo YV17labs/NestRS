@@ -34,16 +34,15 @@ as its shared flow.
 
 ## Wire it in
 
-`OAuthClientModule::for_root(None)` registers an `OAuthClient` as global
+`OAuthClientModule` registers an `OAuthClient` as global
 infrastructure, configured via `<PREFIX>_OAUTH__CLIENT__*` env vars. Pin the
 config in code by passing an `OAuthClientConfig`.
 
 ```rust title="apps/auth/src/module.rs"
 #[module(
     imports = [
-        ConfigModule::for_root(),
-        AuthnModule::for_root(None),
-        OAuthClientModule::for_root(None),
+        OAuthClientModule,
+        AuthnHttpModule,
     ],
 )]
 pub struct AuthModule;
@@ -344,7 +343,7 @@ authenticates the client, `AccessTokenRequest` reads the request, and
 `TokenError` is what the handler itself refuses. The clients it registers are
 `OAuthServerConfig<P>`'s, under `<PREFIX>_OAUTH__SERVER__CLIENTS` — a JSON
 array, or its `_FILE` — generic over the payload `P` each client carries,
-your own type: `OAuthServerModule::for_root::<P>(None)` registers it, and the
+your own type: `OAuthServerModule::<P>` registers it, and the
 boot refuses a registry that could serve no token or the wrong one (none, a
 client with no resource, a duplicate or empty id, an empty secret), naming
 each client by its id. The demo's endpoint is the whole protocol bound:

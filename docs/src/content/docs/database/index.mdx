@@ -190,16 +190,15 @@ The app root activates the database and lists the slice:
 ```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        PostsModule,
         PostsHttpModule,
     ],
 )]
 pub struct AppModule;
 ```
 
-Two lines, two shapes. `SeaOrmModule::for_root(None)` opens the one pool: it
+Two lines, two shapes. `SeaOrmModule` opens the one pool: it
 reads `<PREFIX>_SEAORM__URL` and the other `<PREFIX>_SEAORM__*` keys from the
 environment, or a `SeaOrmConfig` you pass to set those values in code —
 still overridable per field by the real environment, though no longer by a

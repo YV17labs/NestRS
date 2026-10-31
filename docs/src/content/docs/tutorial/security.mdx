@@ -169,22 +169,19 @@ masker. Forgetting the import is caught at boot by the access graph —
 the binary fails to start with a clear "missing guard" error rather
 than running silently unprotected.
 
-The app root — `api`, not `blog` — imports `AuthnModule` and
-`AuthzModule` once:
+The app root — `api`, not `blog` — lists the adapter, and nothing it brings:
+`AuthzModule` reaches it through `UsersHttpModule`, and `AuthnModule` through
+`AuthzModule`, where the access graph checks each import.
 
 ```rust title="apps/api/src/module.rs"
-use features::authn::AuthnModule;
-use features::authz::AuthzModule;
 use features::users::UsersHttpModule;
 use nest_rs::core::module;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        AuthnModule,
-        AuthzModule,
         UsersHttpModule,
     ],
 )]

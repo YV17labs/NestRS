@@ -23,7 +23,7 @@ workers take over.
 
 3. **Replace the 6.x workers with 7.0 workers.** A 7.0 worker's queue
    adapters import `QueueModule` from `nest_rs::queue`, which attaches the
-   worker where 6.x imported `RedisWorkerModule::for_root(None)`; the root
+   worker where 6.x imported `RedisWorkerModule`; the root
    writes `QueueModule::for_root(cfg)` only to pin the drain window.
 
 </Steps>

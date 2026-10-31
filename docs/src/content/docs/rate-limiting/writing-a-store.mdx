@@ -103,7 +103,7 @@ impl<I: Instance> Module for RedisThrottlerModule<I> {
 }
 ```
 
-The app imports it beside `ThrottlerModule::for_root`, which keeps the policy
+The app imports it beside `ThrottlerModule`, which keeps the policy
 (`<PREFIX>_THROTTLER__*`) and the `ThrottlerGuard`, unchanged by the swap.
 
 ## Budget and net

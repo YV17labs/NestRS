@@ -53,12 +53,10 @@ pub type SeaOrmSetup = ConfigSetup<SeaOrmModule, SeaOrmConfig>;
 
 impl Module for SeaOrmModule {
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        let builder = ConfigModule::provide_feature::<Unnamed, SeaOrmConfig>(builder);
         budgets(BudgetReach::Injected)
             .into_iter()
-            .fold(
-                ConfigModule::provide_feature::<Unnamed, SeaOrmConfig>(builder),
-                ContainerBuilder::provide_meta,
-            )
+            .fold(builder, ContainerBuilder::provide_meta)
             .provide_factory_after::<DatabaseConnection, (SeaOrmConfig,), _, _>(
                 |container| async move {
                     let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;

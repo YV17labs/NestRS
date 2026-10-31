@@ -1,9 +1,9 @@
 //! [`RedisThrottlerModule`] — the Redis binding of the throttler port. A bare
 //! import beside `ThrottlerModule` (the policy and the guard) and
-//! [`RedisModule`](crate::RedisModule) (the connection): it
-//! declares [`RedisThrottler`] as the `dyn ThrottlerStore`, which supersedes the
-//! port's in-process default wherever the three fall in `imports`. Enabled by
-//! the `throttler` feature.
+//! [`RedisModule`](crate::RedisModule) (the connection): it declares
+//! [`RedisThrottler`] as the `dyn ThrottlerStore`, which supersedes the port's
+//! in-process default wherever the three fall in `imports`. Enabled by the
+//! `throttler` feature.
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -14,7 +14,8 @@ use nest_rs_throttler::ThrottlerStore;
 use crate::RedisConnection;
 use crate::throttler::RedisThrottler;
 
-/// Cross-process rate-limit store. Import beside `ThrottlerModule` to share the counters across every replica of the app; the policy
+/// Cross-process rate-limit store. Import beside `ThrottlerModule` to share the
+/// counters across every replica of the app; the policy
 /// (`<PREFIX>_THROTTLER__*`) and the `ThrottlerGuard` stay the port's. It
 /// counts on the default instance's connection, or on a named one's when
 /// imported as `RedisThrottlerModule::<Cache>`.

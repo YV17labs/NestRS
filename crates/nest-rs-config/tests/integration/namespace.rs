@@ -1,8 +1,11 @@
 //! Covers `src/namespace.rs` — a namespace belongs to one type.
 
+use std::marker::PhantomData;
+
 use nest_rs_config::{
     Config, ConfigError, ConfigModule, ConfigService, Namespaced, Result, config,
 };
+use nest_rs_core::{Collecting, ContainerBuilder, Instance, Module, Registering};
 
 #[config(namespace = "shared_namespace")]
 #[derive(Clone, Debug, Default)]
@@ -136,19 +139,13 @@ mod right {
 }
 
 /// The drawers of one instance, read from its environment as a bare import reads.
-struct Drawers<I>(std::marker::PhantomData<fn() -> I>);
+struct Drawers<I>(PhantomData<fn() -> I>);
 
-impl<I: nest_rs_core::Instance> nest_rs_core::Module for Drawers<I> {
-    fn register(
-        builder: nest_rs_core::ContainerBuilder,
-        _: nest_rs_core::Registering<Self>,
-    ) -> nest_rs_core::ContainerBuilder {
+impl<I: Instance> Module for Drawers<I> {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
     }
-    fn collect(
-        builder: nest_rs_core::ContainerBuilder,
-        _: nest_rs_core::Collecting<Self>,
-    ) -> nest_rs_core::ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature::<I, DrawerConfig>(builder)
     }
 }
@@ -161,8 +158,7 @@ struct TwinDrawer;
 
 /// The boot of `M` refused as a shared instance: its marker, its namespace and
 /// the claims beside it, then the sentence.
-fn shared_instance<M: nest_rs_core::Module + 'static>()
--> (&'static str, String, Vec<&'static str>, String) {
+fn shared_instance<M: Module + 'static>() -> (&'static str, String, Vec<&'static str>, String) {
     let booted = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("test runtime")

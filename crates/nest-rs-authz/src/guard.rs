@@ -365,8 +365,8 @@ mod tests {
 
     impl UnitView for Message {}
 
-    // A gateway importing `AuthzHttpModule` instead of `AuthzWsModule` seeds no
-    // ability around messages: the per-message guard must deny.
+    // A message whose upgrade attached no ability carries none: the
+    // per-message guard must deny.
     #[tokio::test]
     async fn ws_message_without_ambient_ability_is_denied() {
         let mut view = Message;

@@ -909,52 +909,42 @@ fn generate_adapter_requires_existing_feature() {
 /// generated adapter imports and the app does not.
 #[test]
 fn generate_mcp_writes_the_authz_adapter_its_own_output_names() {
-    // (transport, authz dir, module, what only that adapter names)
-    const CASES: [(&str, &str, &str, &str); 1] = [(
-        "mcp",
-        "mcp",
-        "AuthzMcpModule",
-        "EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>",
-    )];
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let app = write_fake_app(dir.path(), "api");
+    let path = dir.path().to_str().unwrap();
 
-    for (transport, authz_dir, module, provider) in CASES {
-        let dir = tempfile::tempdir().unwrap();
-        write_fake_workspace(dir.path());
-        let app = write_fake_app(dir.path(), "api");
-        let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    run_ok(&app, &["g", "mcp", "posts"]);
 
-        run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
-        run_ok(&app, &["g", transport, "posts"]);
+    let src = dir.path().join("crates/features/src");
+    let authz_module = fs::read_to_string(src.join("authz/mcp/module.rs"))
+        .expect("`g mcp` writes authz/mcp/module.rs");
+    assert!(
+        authz_module.contains("EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>"),
+        "the MCP authz adapter declares the endpoint's guards: {authz_module}"
+    );
+    assert!(
+        !authz_module.contains("DataContext"),
+        "the edge opens its own units of work; no data context is listed: {authz_module}"
+    );
 
-        let src = dir.path().join("crates/features/src");
-        let authz_module = fs::read_to_string(src.join(format!("authz/{authz_dir}/module.rs")))
-            .unwrap_or_else(|_| panic!("`g {transport}` writes authz/{authz_dir}/module.rs"));
-        assert!(
-            authz_module.contains(provider),
-            "the {transport} authz adapter names {provider}: {authz_module}"
-        );
-        assert!(
-            !authz_module.contains("DataContext"),
-            "the edge opens its own units of work; no data context is listed: {authz_module}"
-        );
-
-        // An unimported `AuthzMcpModule` leaves `/mcp` deny-all.
-        let authz_mod = fs::read_to_string(src.join("authz/mod.rs")).unwrap();
-        assert!(
-            authz_mod.contains(&format!("pub use {authz_dir}::{module};")),
-            "{authz_mod}"
-        );
-        let adapter = fs::read_to_string(src.join(format!("posts/{transport}/module.rs"))).unwrap();
-        assert!(
-            adapter.contains(module),
-            "the adapter imports {module}: {adapter}"
-        );
-        let app_module = fs::read_to_string(app.join("src/module.rs")).unwrap();
-        assert!(
-            !app_module.contains(module),
-            "the app lists the adapter, not what it brings: {app_module}"
-        );
-    }
+    // An unimported `AuthzMcpModule` leaves `/mcp` deny-all.
+    let authz_mod = fs::read_to_string(src.join("authz/mod.rs")).unwrap();
+    assert!(
+        authz_mod.contains("pub use mcp::AuthzMcpModule;"),
+        "{authz_mod}"
+    );
+    let adapter = fs::read_to_string(src.join("posts/mcp/module.rs")).unwrap();
+    assert!(
+        adapter.contains("AuthzMcpModule"),
+        "the adapter imports AuthzMcpModule: {adapter}"
+    );
+    let app_module = fs::read_to_string(app.join("src/module.rs")).unwrap();
+    assert!(
+        !app_module.contains("AuthzMcpModule"),
+        "the app lists the adapter, not what it brings: {app_module}"
+    );
 }
 
 /// A generated gateway is guarded at its upgrade: over a `g feature` port with

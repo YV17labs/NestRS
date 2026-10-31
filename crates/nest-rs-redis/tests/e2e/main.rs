@@ -70,8 +70,8 @@ fn redis_url() -> String {
 }
 
 /// Pinned rather than read from the env: the framework workspace ships no
-/// `.env`, so `for_root(None)` would resolve to the localhost default and a
-/// suite would fail on connect instead of measuring anything.
+/// `.env`, so a bare `RedisModule` could find no URL and a suite would fail at
+/// boot instead of measuring anything.
 fn redis_config() -> RedisConfig {
     RedisConfig {
         url: redis_url().into(),

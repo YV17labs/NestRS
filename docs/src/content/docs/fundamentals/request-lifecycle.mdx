@@ -17,12 +17,12 @@ compose — every other page links here instead of re-explaining it.
 
 ## One pool per family
 
-Declaring a layer at any scope — **global** (`use_*_global`), **host** (on
-the controller, resolver, gateway, MCP host or worker block), or **handler**
-(beside the method) — contributes to **one pool per family**, deduplicated by
-`TypeId` in a single composition. The layer executes **exactly once per
-unit**. Broadest scope wins; `#[force_guards]` is the opt-in to re-run a
-guard.
+Declaring a layer at any scope — **global** (`GlobalGuards<(…)>` and its
+siblings, listed by the module the app boots), **host** (on the controller,
+resolver, gateway, MCP host or worker block), or **handler** (beside the
+method) — contributes to **one pool per family**, deduplicated by `TypeId` in
+a single composition. The layer executes **exactly once per unit**. Broadest
+scope wins; `#[force_guards]` is the opt-in to re-run a guard.
 
 Scope never multiplies executions — it chooses the **execution site**. The
 teachable rule:
@@ -31,7 +31,7 @@ teachable rule:
 > Either way, once.
 
 You can watch the dedup happen. Declare `AuthnGuard` both globally
-(`use_guards_global`) and on a controller (`#[use_guards(AuthnGuard, …)]`), and
+(`GlobalGuards<(AuthnGuard,)>`) and on a controller (`#[use_guards(AuthnGuard, …)]`), and
 boot logs the redundant declaration it dropped — the guard still runs exactly
 once:
 
@@ -96,8 +96,9 @@ framework runs before them reads an HTTP body: the transport wraps it, and
 whatever reads it first — a guard, the pipe pool, an extractor — reads it
 under [the body cap and its gap bound](/http/configuration/#request-body-size-limit).
 
-Two ways to be app-wide, both at the handler stage: `use_interceptors_global`
-is the app's list, and `#[interceptor]` is what a module import brings. Only
+Two ways to be app-wide, both at the handler stage: `GlobalInterceptors<(…)>`
+is the app's list, declared by the module it boots, and `#[interceptor]` is
+what a module import brings. Only
 an interceptor its module declares `#[interceptor(stage = unit)]` runs around
 the guards — a `404` and a refusal included — and writing `stage = unit` is
 the visible line that opens it.

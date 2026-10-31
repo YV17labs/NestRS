@@ -281,9 +281,6 @@ Solid arrows from `BlogModule` are **direct** imports. `PostsModule` and
    module registers later — fails the boot naming it and why
    (`UnbuiltProviderError`).
 
-Sync-only apps skip collect/factories and call
-`App::new::<BlogModule>()` directly.
-
 ## What is global
 
 What a seed or a factory makes is **app-global**: any provider may inject

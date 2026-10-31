@@ -156,7 +156,7 @@ emits inside a resolver body is not where they are gated. **The app-wide guard
 pool runs in front of both**, once per field, through a schema extension
 `GraphqlModule` installs on a subgraph and wherever the app lists a pool. Each
 field is a `graphql.field` unit of role `federation`, inside the app's exception
-filters and interceptors. A `use_guards_global([AuthnGuard])` therefore refuses
+filters and interceptors. A `GlobalGuards<(AuthnGuard,)>` therefore refuses
 `_service` and `_entities` exactly as it refuses a `#[query]`, with the same
 native GraphQL error frame.
 

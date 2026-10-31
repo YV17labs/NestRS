@@ -194,7 +194,8 @@ Drop the filter above, and `DomainError`'s default `500` files
 `domain failure: boom` the same way.
 
 Bind it like any other layer: for the whole app with
-`App::builder().use_exception_filters_global([exception_filter::<DomainErrorFilter>()])`,
+`GlobalExceptionFilters<(DomainErrorFilter,)>` in the providers of the module
+the app boots,
 on a controller with `#[use_exception_filters(DomainErrorFilter)]`, or beside a
 verb:
 

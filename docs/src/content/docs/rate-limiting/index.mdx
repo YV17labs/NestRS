@@ -43,7 +43,7 @@ route, a `#[query]`, a `#[subscribe_message]` or a `#[tool]`, or on its host
 for all of them; a unit that pins none counts against `ThrottlerConfig`'s
 limit.
 
-Bind it **per route**, or per controller. `use_guards_global` works and reads
+Bind it **per route**, or per controller. The app's `GlobalGuards` works and reads
 the same `#[meta(Throttle::…)]` — the guard pool runs post-routing, see
 [the request lifecycle](/fundamentals/request-lifecycle/) — but it meters
 *every* route the pool reaches at the module default, which is a wider

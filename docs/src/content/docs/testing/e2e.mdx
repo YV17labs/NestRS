@@ -21,16 +21,9 @@ never trips.
 
 ```rust title="apps/api/tests/e2e/main.rs (from the demo, abridged)"
 use api::ApiModule;
-use features::authn::AuthnGuard;
-use features::authz::AuthzGuard;
 use nest_rs::authn::AuthnConfig;
-use nest_rs::guards::{GuardSpec, guard};
 use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
 // …
-
-pub(crate) fn global_guards() -> [GuardSpec; 2] {
-    [guard::<AuthnGuard>(), guard::<AuthzGuard>()]
-}
 
 pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
     boot_with(TestApp::builder()).await
@@ -42,7 +35,6 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
         .await
         .expect("create + migrate a throwaway database");
     let app = builder
-        .use_guards_global(global_guards())
         .module::<ApiModule>()
         .provide_arc(db.connection())
         .provide(AuthnConfig {
@@ -53,18 +45,18 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
         .build()
         .await
         .expect("ApiModule boots against the throwaway database");
-    arm_outbox(app.container()).await;
     (db, app)
 }
 ```
 
-`global_guards()` is the list the api's `main` passes to `use_guards_global`.
-A global seam lives on the builder, outside the module tree, so the suite
-repeats it. Without it, every route runs, and the OpenAPI document describes
-it, without the guards the binary puts in front of it. `arm_outbox` arms the
-app's outbox, as the binary's relay does at boot, so what a test pushes waits in
-the throwaway database
-([below](#a-job-pushed-inside-a-transaction-waits-for-a-relay)).
+The suite boots `ApiModule`, the module the api's `main` boots, and nothing
+beside it: the app's guard pool is `GlobalGuards<(AuthnGuard, AuthzGuard)>` in
+that module's providers, so every route runs behind the guards the binary puts
+in front of it, and the OpenAPI document describes them. The boot also arms the
+app's outbox, as the binary's relay does, so what a test pushes waits in the
+throwaway database
+([below](#a-job-pushed-inside-a-transaction-waits-for-a-relay)). The database is
+created apart here because several tests seed it, or boot a second app on it.
 
 Each test module reaches for that `boot()` and the token helpers beside it:
 
@@ -184,6 +176,61 @@ let app = TestApp::builder()
     .build()
     .await?;
 ```
+
+An app that is the database's only user lets the harness hold it:
+`ephemeral_database::<Migrator>()` creates, migrates and seeds it at the boot,
+and drops it after the app, closed or dropped.
+
+```rust title="crates/features/tests/e2e/main.rs (from the demo)"
+pub(crate) async fn data_app() -> TestApp {
+    TestApp::builder()
+        .module::<DataModule>()
+        .ephemeral_database::<migrations::Migrator>()
+        .build()
+        .await
+        .expect("the data layer boots on a throwaway database")
+}
+```
+
+## A service in a unit
+
+A service reads the executor and the ability its unit installs, so a test
+calling one directly runs it in a unit of the app's own binding:
+`app.unit(ability, || svc.list())` as a request granted `ability`,
+`app.system_unit(|| svc.purge_expired())` as a job. The unit commits on the
+body's `Ok` and rolls back on its `Err`, as an edge's does — never an executor or
+an ability installed by hand.
+
+```rust title="crates/features/tests/e2e/orgs/service.rs (from the demo, abridged)"
+let app = data_app().await;
+seed_org(&connection(&app), org_id, "Acme").await;
+
+let rows = app
+    .unit(read_all_ability(), || OrgsService.list())
+    .await
+    .expect("list succeeds");
+```
+
+`unit` and `system_unit` are `nest-rs`'s `authz` and `database` features
+beside `testing`.
+
+## A bearer the app signs
+
+An app that signs its own tokens — `nestrs g auth`'s HS256 secret, an issuer's
+key — mints a test's bearer with its own `JwtService`, so the token carries the
+key the app verifies with and the expiry it stamps:
+
+```rust title="apps/blog/tests/e2e/main.rs"
+let auth = app.bearer(|exp| Claims {
+    sub: Subject::User(Uuid::now_v7()),
+    roles: vec![Role::User],
+    exp,
+});
+```
+
+`bearer` is the `authn` feature beside `testing`. An app that only verifies —
+the demo's `api`, whose tokens the `auth` app issues — signs nothing, and its
+suite mints tokens with the issuer's key instead.
 
 ## Driving the HTTP surface
 
@@ -442,22 +489,11 @@ can own is the database. Two settings keep a suite apart:
 ### A job pushed inside a transaction waits for a relay
 
 A harness runs no transport you did not spawn, so the outbox relay a served app
-runs is absent, and an app booted by `TestApp` or `HeadlessApp` files a push at
-once, as an app with no database does — onto the suites' Redis database, where
-nothing drains. The demo's suites run what a served app runs instead: their boot
-arms the app's outbox, as the relay does at boot, so a push waits in the
-throwaway database and is dropped with it:
-
-```rust title="crates/features/src/testing.rs (from the demo)"
-pub async fn arm_outbox(container: &Container) {
-    container
-        .get_dyn::<dyn OutboxStore>()
-        .expect("SeaOrmDatabaseModule keeps the app's outbox")
-        .arm()
-        .await
-        .expect("the outbox arms over the migrated database");
-}
-```
+runs is absent. It does what that relay does at boot, though: `TestApp` and
+`HeadlessApp` arm the outbox of an app binding a store and a queue backend, so a
+push inside a unit waits in the throwaway database and is dropped with it, never
+filed on the suites' Redis database where nothing drains. A store whose table
+is missing refuses the boot, naming the migration, as the binary's does.
 
 A test proving that a job waits for its commit, or needing it run, spawns a
 relay beside the worker that drains — any relay files any app's records from

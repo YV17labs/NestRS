@@ -112,9 +112,10 @@ that never queries — costs no round-trip at all. `Txn` is the eager handle,
 for a transaction something already opened. `Savepoint` is what an
 [atomic block](/database/transactions/#atomic-blocks) runs on inside a
 transaction. The enum can grow within 7.x, so a `match` on it keeps a `_` arm.
-A test installs one it built through `nest_rs::database::with_request_executor`
-or `with_job_executor`, as `SeaOrmExecutor::Pool(pool).into()`; the one a unit
-installs is never handed back to a service.
+A test runs a service in a unit of the app's own binding instead —
+`app.unit(ability, || svc.list())` as a request granted `ability`,
+`app.system_unit(|| svc.purge())` as a job ([E2E tests](/testing/e2e/#a-service-in-a-unit)) —
+and the handle a unit installs is never handed back to a service.
 
 Three scopes coexist:
 

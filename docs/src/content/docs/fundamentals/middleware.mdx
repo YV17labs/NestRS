@@ -71,8 +71,8 @@ impl Interceptor for NoIndex {
 
 Bind it for the whole app — either by writing `#[interceptor]` on the struct
 in place of `#[injectable]` (its module's import brings it to every route) or
-via `App::builder().use_interceptors_global([interceptor::<NoIndex>()])` in
-`main`. Either runs after the guards, so a refused request never reaches it;
+by listing `GlobalInterceptors<(NoIndex,)>` in the providers of the module the
+app boots. Either runs after the guards, so a refused request never reaches it;
 an interceptor that must see every answer, refusals and `404`s included, is
 declared `#[interceptor(stage = unit)]`.
 
@@ -113,8 +113,8 @@ impl GuardFor<HttpView> for RequireApiKey {}
 ```
 
 Bind with `#[use_guards(RequireApiKey)]` per controller or per handler,
-or globally via
-`App::builder().use_guards_global([guard::<RequireApiKey>()])`. The key is
+or globally by listing `GlobalGuards<(RequireApiKey,)>` in the module the app
+boots. The key is
 the request's, so `check_http` decides it, and `check` admits the GraphQL
 fields, WebSocket messages and MCP operations a checked request carries: the
 global pool runs `check` on each of them, where there is no HTTP request to

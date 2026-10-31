@@ -21,14 +21,14 @@ binary; nextest gates it through a binary filter, not `#[ignore]`.
 
 The crate driving this page is
 [**`nest-rs-testing`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-testing) —
-it provides `TestApp` (the in-process boot harness) and
-`EphemeralDatabase` (a throwaway database, created and dropped per run).
+it provides `TestApp` (the in-process boot harness) and the throwaway
+database it boots on, created and dropped per test.
 
-`EphemeralDatabase` needs a **reachable Postgres**, not a container runtime:
-it reads `<PREFIX>_SEAORM__URL` from the project's `.env` cascade — under
+That database needs a **reachable Postgres**, not a container runtime: the
+harness reads `<PREFIX>_SEAORM__URL` from the project's `.env` cascade — under
 `<PREFIX>_ENV=test`, the scaffold's `.env.test` names `compose.yml`'s — issues a
 `CREATE DATABASE nest_rs_e2e_…` against that server, migrates it, and drops it
-when the guard drops. Whatever provides that server — the devcontainer's
+once the app is gone. Whatever provides that server — the devcontainer's
 `compose.yml`, a service container in CI, a local install — is your choice.
 When the suite cannot connect, `<PREFIX>_SEAORM__URL` is what to check.
 
@@ -54,9 +54,10 @@ like every other line here — the app manifest only points at the root.
 
 `testing` is what brings `TestApp` in, and `nestrs new` already put it on the
 app's `nest-rs` dev-dependency: it stays out of the workspace's `nest-rs`, so no
-release binary carries the harness. `EphemeralDatabase` rides the `seaorm`
-feature the workspace's `nest-rs` has carried since `nestrs new`, which is what a
-suite testing against a real schema already has. There is no telemetry feature
+release binary carries the harness. Its throwaway database rides the `seaorm`
+feature the workspace's `nest-rs` has carried since `nestrs new`, and the bearer
+it signs the `authn` one, which is what a suite testing a guarded API against a
+real schema already has. There is no telemetry feature
 to enable: `blog` imports no `OpenTelemetryModule`, so
 `TestApp` needs no `with_test_telemetry()` — that builder method exists only to
 satisfy that module's boot guard, and it lives behind
@@ -64,46 +65,40 @@ satisfy that module's boot guard, and it lives behind
 
 ## The boot harness
 
-`TestApp::builder()` runs the same four-phase boot as `main`,
-including the access-graph check. The harness seeds the connection, and
-because the controller is guarded, it also mints the bearer every request
-carries — with the app's own `JwtService`, taken from its container, so the
-token is signed with exactly the key the app verifies with. `TestApp` runs
-under `<PREFIX>_ENV=test`, which reads the secret `nestrs g auth` drew into
-`.env.test`; the test never spells it.
+`TestApp::builder()` runs the same four-phase boot as `main`, including the
+access-graph check, on the module `main` boots — its guards and every other
+app-wide layer it declares come with it. `ephemeral_database` creates the
+throwaway database, migrates it, seeds its connection as the app's pool and
+drops it after the app. Because the controller is guarded, every request
+carries a bearer, and `app.bearer` signs it with the app's own `JwtService`, so
+the token is signed with exactly the key the app verifies with and carries the
+expiry it stamps. `TestApp` runs under `<PREFIX>_ENV=test`, which reads the
+secret `nestrs g auth` drew into `.env.test`; the test never spells it.
 
 ```rust title="apps/blog/tests/e2e/main.rs"
-use nest_rs::authn::JwtService;
-use nest_rs::testing::{EphemeralDatabase, TestApp};
 use nest_rs::http::StatusCode;
+use nest_rs::testing::TestApp;
 use serde_json::json;
 
 use blog::BlogModule;
 use features::authn::{Claims, Role, Subject};
 use uuid::Uuid;
 
-fn bearer(app: &TestApp) -> String {
-    let jwt = app.container().get::<JwtService>().expect("AuthnModule provides the JwtService");
-    let claims = Claims {
-        sub: Subject::User(Uuid::now_v7()),
-        roles: vec![Role::User],
-        exp: jwt.expiry(),
-    };
-    let token = jwt.sign(&claims).expect("sign the test token");
-    format!("Bearer {token}")
-}
-
-async fn boot() -> (EphemeralDatabase, TestApp) {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let app = TestApp::builder()
+async fn boot() -> TestApp {
+    TestApp::builder()
         .module::<BlogModule>()
-        .provide_arc(db.connection())
+        .ephemeral_database::<migrations::Migrator>()
         .build()
         .await
-        .expect("BlogModule boots against the throwaway database");
-    (db, app)
+        .expect("BlogModule boots against a throwaway database")
+}
+
+fn bearer(app: &TestApp) -> String {
+    app.bearer(|exp| Claims {
+        sub: Subject::User(Uuid::now_v7()),
+        roles: vec![Role::User],
+        exp,
+    })
 }
 ```
 
@@ -125,7 +120,7 @@ wiring chain for a bare CRUD feature.
 ```rust title="apps/blog/tests/e2e/main.rs"
 #[tokio::test]
 async fn posts_round_trip() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let auth = bearer(&app);
 
     let created = app
@@ -163,7 +158,7 @@ A happy-path test is half a test. Add one negative path — the same
 ```rust title="apps/blog/tests/e2e/main.rs"
 #[tokio::test]
 async fn create_with_empty_title_returns_400() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     app.http()
         .post("/posts")
         .header("authorization", bearer(&app))
@@ -175,7 +170,7 @@ async fn create_with_empty_title_returns_400() {
 
 #[tokio::test]
 async fn create_without_a_token_returns_401() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     app.http()
         .post("/posts")
         .body_json(&json!({ "title": "Hello", "body": "World" }))
@@ -257,4 +252,5 @@ matrix, open [`api`](/publish/) and
 ## Going further
 
 - [Authenticate and authorize](/tutorial/security/) — the next step: add guards, ability, and masking on `api`.
-- [E2E tests](/testing/e2e/) — the reference page for `TestApp` and `EphemeralDatabase`.
+- [E2E tests](/testing/e2e/) — the reference page for `TestApp`, its throwaway
+  database, the bearer it signs and the unit it runs a service in.

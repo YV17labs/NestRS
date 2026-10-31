@@ -370,7 +370,7 @@ Three rules pin the contract:
   controller's value of another type still reads through.
 - Scope does not change what a guard reads. The pool executes
   post-routing in the route's guard stage, which carries the route's
-  declaration, so a guard bound with `use_guards_global` reads the
+  declaration, so a guard the app's `GlobalGuards` lists reads the
   route's `#[meta]` exactly as a `#[use_guards]` one does — see
   [the request lifecycle](/fundamentals/request-lifecycle/).
 

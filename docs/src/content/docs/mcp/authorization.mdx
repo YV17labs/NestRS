@@ -32,7 +32,7 @@ With `AuthzMcpModule` imported you drop the opening — leave `McpModule` bare,
 gated by default: the module's guards are the endpoint's, so the
 closed default is met, not silenced, and a module declaring guards beside an
 opening fails the boot. They join the app's global guard pool rather than
-replacing it: every guard listed in `use_guards_global(...)` still runs at the
+replacing it: every guard the app's `GlobalGuards<(...)>` lists still runs at the
 request, and a guard in both runs once. Tools then
 read the ambient ability the same way HTTP handlers do: through a service that
 goes through `Repo`, which applies the ability's row-level filter automatically.

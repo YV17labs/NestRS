@@ -287,22 +287,31 @@ from the same provider — declare once, choose *where* it runs.
 
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
-| **Global** | `App::builder().use_guards_global([guard::<AuthnGuard>()])` in `main` | The route's guard stage, post-routing (a self-mount's request stage for gateways) |
+| **Global** | `GlobalGuards<(AuthnGuard,)>` in the providers of the module the app boots | The route's guard stage, post-routing (a self-mount's request stage for gateways) |
 | **Controller / Resolver / Gateway** | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct — a resolver binds `AuthzGuard` alone, [authenticated in band](/fundamentals/guards-beyond-http/#a-guard-declares-the-edges-it-checks) | Container, at mount |
 | **Per-handler** | `#[use_guards(AdminGuard)]` beside a verb / `#[query]` / `#[subscribe_message]` | Container, at mount |
 
 Multiple guards in one attribute run in **declaration order**, outermost
 first — the first listed sees the request before the second.
 
-```rust title="apps/blog/src/main.rs"
-use nest_rs::guards::{AppBuilderGuardsExt, guard};
+```rust title="apps/blog/src/module.rs"
+use nest_rs::guards::GlobalGuards;
 use features::authn::AuthnGuard;
 use features::authz::AuthzGuard;
 
-App::builder()
-    .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
-    .module::<BlogModule>()
+#[module(
+    imports = [/* … */],
+    providers = [GlobalGuards<(AuthnGuard, AuthzGuard)>],
+)]
+pub struct BlogModule;
 ```
+
+The pool lives in the module `main` boots, so `TestApp::builder().module::<BlogModule>()`
+boots it too: a suite never re-types it. Only that module declares it — one a
+module the app imports lists fails the boot, since a feature would otherwise
+choose what covers every route — and once. The pool resolves each guard once,
+at mount, so a guard in it is a singleton: a request-scoped or transient one
+fails the boot with `ScopedLayerError`.
 
 Across scopes the chain composes **global → controller → handler**,
 outermost first. `Layer::priority` is an optional tiebreaker within one scope
@@ -539,10 +548,12 @@ the three sites. When the same guard is declared at several levels, the
 **broadest site wins**; narrower declarations log a `debug` line at boot
 (deduped once on `nest_rs::layers`) but never re-execute.
 
-```rust title="apps/blog/src/main.rs"
-App::builder()
-    .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
-    .module::<BlogModule>()
+```rust title="apps/blog/src/module.rs"
+#[module(
+    imports = [/* … */],
+    providers = [GlobalGuards<(AuthnGuard, AuthzGuard)>],
+)]
+pub struct BlogModule;
 ```
 
 ```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
@@ -585,8 +596,8 @@ Writing it on the struct is a compile error that says so.
 
 **Declare layers on the provider that needs them, not only at the app
 boundary.** A `crates/features` controller is designed to be portable — if
-it relies only on `use_guards_global([...])` to be secure, a second app
-without that line could not serve it. The compiler will not complain, but
+it relies only on the app's `GlobalGuards<(...)>` to be secure, a second app
+without that declaration could not serve it. The compiler will not complain, but
 the boot refuses: with **no global guard pool active**, every route that
 binds no controller/method guard and is not marked `#[public]` is named in
 one boot error, which gives both remedies. Redeclare on `PostsController`
@@ -596,7 +607,7 @@ and filters, which have no such refusal.
 
 ```mermaid
 flowchart TB
-  MAIN["main: use_guards_global([AuthnGuard, AuthzGuard])"]
+  MAIN["BlogModule: GlobalGuards<(AuthnGuard, AuthzGuard)>"]
   PC["PostsController: #[use_guards(AuthnGuard, AuthzGuard)]"]
   MAIN -. "dedup — runs once" .-> RUN[per-request chain]
   PC -. "debug at boot, zero extra cost" .-> RUN

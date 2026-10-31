@@ -53,8 +53,9 @@ resolver — carries across intact.
 | `@UseGuards(...)` | `#[use_guards(...)]` |
 | `@UseInterceptors(...)` | `#[use_interceptors(...)]` |
 | `@UseFilters(...)` (binds `@Catch(...)` classes) | `#[use_exception_filters(...)]`; `@Catch(T)` is `type Exception = T`, and `@Catch()` with no argument is `type Exception = dyn Error + Send + Sync` |
-| `APP_INTERCEPTOR` | `#[interceptor]` on the struct, so its module's import brings it; or `use_interceptors_global` in `main` |
-| `APP_FILTER`, `APP_PIPE` | `use_exception_filters_global`, `use_pipes_global` in `main` |
+| `APP_GUARD` | `GlobalGuards<(AuthnGuard, AuthzGuard)>` in the providers of the module the app boots |
+| `APP_INTERCEPTOR` | `#[interceptor]` on the struct, so its module's import brings it; or `GlobalInterceptors<(…)>` in the module the app boots |
+| `APP_FILTER`, `APP_PIPE` | `GlobalExceptionFilters<(…)>`, `GlobalPipes<(…)>` in the module the app boots |
 | an `HttpException` whose body carries an error code | a `nest_rs::core::Problem` and its `Code`, which every edge renders in its own form |
 | `AsyncLocalStorage`, `nestjs-cls` | the [ambient context](/fundamentals/execution-context/#what-a-unit-carries): `cx.attach(value)` in a layer, `ambient::<T>()` anywhere the unit reaches |
 | `@Resolver()` operation | `#[operations]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
@@ -194,8 +195,9 @@ not a review catch.
 
 `APP_GUARD` binds a NestJS guard once, in a module, for the whole app — and a
 controller has no way to say it depends on that binding, so the app that forgets
-it serves the controller open. NestRS binds globals in `main` with
-`App::builder().use_guards_global([...])`, and an HTTP route no guard covers —
+it serves the controller open. NestRS declares the app's pool in the module
+`main` boots, `GlobalGuards<(...)>` — never in a feature, which would choose
+what covers every route — and an HTTP route no guard covers —
 not the global pool, not a `#[use_guards]` on its controller or itself — refuses
 the boot unless it says `#[public]`. The refusal names every such route, so the
 omission is a failed start, never an open route.

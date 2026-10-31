@@ -456,8 +456,10 @@ lists what the boot, a log or the wire shows when one is missed.
    | `fn transform_body(&self, v: &mut Value) -> Result<(), PipeError>` on a global pipe | `fn transform(&self, cx: &UnitContext<'_>, argument: ArgumentKind, v: &mut Value) -> Result<(), PipeError>`, acting when `argument == ArgumentKind::Body` |
    | `fn transform_graphql_variables(&self, v: &mut Value)` | the same `transform`, on `ArgumentKind::Variables` |
    | `fn transform_ws_data(&self, event: &str, v: &mut Value)` | the same `transform`, on `ArgumentKind::Data`; the event is `cx.handler().address()`, or `cx.switch_to::<WsView>()`'s `event()` |
-   | `use nest_rs::guards::{AppBuilderPipesExt, pipe};` | `use nest_rs::pipes::{AppBuilderPipesExt, pipe};` |
-   | `nest_rs::guards::PipeSpec` | `nest_rs::pipes::PipeSpec` |
+   | `App::builder().use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])` in `main`, and `use nest_rs::guards::{AppBuilderGuardsExt, guard};` | `GlobalGuards<(AuthnGuard, AuthzGuard)>` in the providers of the module `main` boots, `use nest_rs::guards::GlobalGuards;`, and `main` keeps `App::builder().module::<AppModule>()`: a suite booting that module runs the pool, so delete the copy it made (`.use_guards_global(…)` on `TestApp::builder()`) |
+   | `App::builder().use_pipes_global([pipe::<P>()])`, through `nest_rs::guards::AppBuilderPipesExt` or `nest_rs::pipes::AppBuilderPipesExt` | `GlobalPipes<(P,)>` in the providers of the module `main` boots |
+   | `nest_rs::guards::{PipeSpec, PipeSpecs}`, `nest_rs::guards::GuardSpecs`, `nest_rs::pipes::PipeSpecs`, `nest_rs::core::layer_chain::GlobalSpecs` | `nest_rs::pipes::PipeSpec`; the pools are the declarations above, and the registries no API |
+   | `GlobalGuards<…>` or another pool listed in a feature's module | the module the app boots lists it: one an imported module lists fails the boot |
 
    **Interceptors and exception filters**
 
@@ -465,9 +467,9 @@ lists what the boot, a log or the wire shows when one is missed.
    |---|---|
    | `impl Interceptor` from `nest_rs::interceptors`, `async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>` | `nest_rs::core::Interceptor`, `async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome`: run the rest with `next.run(cx).await`, the request through `HttpView::of(cx)?.request()`, the reply through `response_mut()` once it returned — see [Interceptors](/fundamentals/interceptors/) |
    | `impl ExceptionFilter` from `nest_rs::exception_filters`, `async fn catch(&self, err: E) -> Response` | `nest_rs::core::ExceptionFilter`, `async fn catch(&self, err: &E, cx: &mut UnitContext<'_>) -> Caught`: `match HttpView::of(cx) { Ok(view) => Caught::Answered(view.respond(response)), Err(_) => Caught::Declined }`, `Caught::Problem(problem)` or `Caught::Declined` — see [Error handling](/fundamentals/exception-filters/) |
-   | `impl Filter` from `nest_rs::filters`, `#[use_filters(F)]`, `use_filters_global([filter::<F>()])` | an exception filter whose `type Exception = dyn Error + Send + Sync`, bound with `#[use_exception_filters(F)]` or `use_exception_filters_global([exception_filter::<F>()])`; `#[use_filters]` is refused naming it |
+   | `impl Filter` from `nest_rs::filters`, `#[use_filters(F)]`, `use_filters_global([filter::<F>()])` | an exception filter whose `type Exception = dyn Error + Send + Sync`, bound with `#[use_exception_filters(F)]` or `GlobalExceptionFilters<(F,)>` in the providers of the module `main` boots; `#[use_filters]` is refused naming it |
    | `LayerKind::Filter` | `LayerKind::ExceptionFilter` |
-   | `use nest_rs::interceptors::AppBuilderInterceptorsExt;`, `AppBuilderExceptionFiltersExt`, `AppBuilderFiltersExt` | nothing: `use_interceptors_global` and `use_exception_filters_global` are `AppBuilder`'s own methods, taking `nest_rs::core::{interceptor, exception_filter}` specs |
+   | `use nest_rs::interceptors::AppBuilderInterceptorsExt;`, `AppBuilderExceptionFiltersExt`, `AppBuilderFiltersExt`, and `App::builder().use_interceptors_global([interceptor::<I>()])`, `.use_exception_filters_global([exception_filter::<F>()])` | `GlobalInterceptors<(I,)>` and `GlobalExceptionFilters<(F,)>` from `nest_rs::core`, in the providers of the module `main` boots |
    | `#[nest_rs::http::interceptor(priority = n)]` | `#[nest_rs::core::interceptor]`, at the handler stage, or `#[interceptor(stage = unit)]` around the guards; the order within a stage is `Layer::priority` on the struct's `Layer` impl |
    | `#[use_interceptors]` / `#[use_exception_filters]` on a `#[controller]` only | also on a `#[resolver]` and beside its fields, a `#[gateway]` and beside a `#[subscribe_message]`, an `#[mcp]` host and beside its `#[tool]`, `#[prompt]`, `#[resource]` and `#[resources]` methods, a `#[processor]`, `#[scheduled]` or `#[listeners]` block |
    | an interceptor or exception filter written around a gateway's handler bodies by hand | `#[use_interceptors(...)]` / `#[use_exception_filters(...)]` on the `#[gateway]` or beside a `#[subscribe_message]` |
@@ -610,6 +612,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | a container built by hand importing `GraphqlModule`, `HealthModule`, `OpenApiModule`, `McpModule`, `StaticFilesModule` or `OAuthResourceModule`, seeding the module's config | seed `HttpConfig::default()` beside it: each imports `HttpModule` |
    | `McpModule::for_root(..)` declaring an identity or `McpAccess::Public` at two imports | declare each at one; the other imports leave it out, or import `McpModule` bare |
    | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` |
+   | `App::new::<AppModule>()?`, and a match on `UnresolvedFactoryError` | `App::builder().module::<AppModule>().build().await?`, the one boot: every module owning a config queues a factory, which the synchronous boot refused |
+   | `App::builder().provide_meta(x)` or `.provide_wiring(name, wire)` | attach it from the `register` of a module the app imports (`ContainerBuilder::provide_meta`, `provide_wiring`) |
    | `ReachableProviders::reaches(Some(&set), id)`, `ReachableProviders(set)` built by hand | `ReachableProviders::of(container, "<what you discover>")?.reaches(id)`; a test boots the modules it means through `TestApp`, `HeadlessApp` or `App::builder`, which seal the set they reach |
    | a `match` on `InertHost::BoundUnderAnotherKey`, or on `DuplicateProviderError { type_name }` | drop the arm; read `DuplicateProviderError`'s `first`, `second` and `scopes` with `..`, and match `InertHost` with a `_` arm |
    | `ProviderCycleError { module, type_names }`, `ContestedDeclarationError { … }` naming every field | read `chain` and `scope`; `first` and `second`; each with `..` |
@@ -628,6 +632,11 @@ lists what the boot, a log or the wire shows when one is missed.
    | an override of a `#[controller]` (or another edge host) | override the provider the controller injects |
    | a seeded config outside its ranges or its `validate()` rules | seed a value a read would accept |
    | `TestApp::builder()` … `.build_headless()` in a suite without `http`, and in a `KitBackend`'s `fn app` | `HeadlessApp::builder()` … `.build_headless()` |
+   | `.use_guards_global(…)`, `.use_pipes_global(…)`, `.use_interceptors_global(…)` or `.use_exception_filters_global(…)` on `TestApp::builder()` | nothing for the app's suite, which boots the module declaring them; a test of a feature declares its pool on a root module of its own, `#[module(imports = [Feature], providers = [GlobalGuards<(G,)>])]` |
+   | a suite arming the app's outbox by hand (`container.get_dyn::<dyn OutboxStore>()…arm()`) | delete it: `TestApp` and `HeadlessApp` arm the outbox of an app binding a store and a queue backend, as the relay does at boot |
+   | a service test installing `SeaOrmExecutor::Pool(pool).into()` with `with_request_executor` or `with_job_executor`, and an ability with `with_ability` | `app.unit(ability, \|\| svc.call())` as a request, `app.system_unit(\|\| svc.call())` as a job, on a `TestApp` booting the binding — `nest-rs`'s `authz` and `database` features beside `testing` |
+   | `EphemeralDatabase::create::<M>()` held in a tuple beside the app it seeds | `TestApp::builder()…ephemeral_database::<M>()`, held and dropped by the app; `app.container().get::<DatabaseConnection>()` reaches it |
+   | a test helper signing a bearer with `app.container().get::<JwtService>()` | `app.bearer(\|exp\| claims)`, `nest-rs`'s `authn` feature beside `testing` |
 
    **Lifecycle hooks and the way down**
 
@@ -879,8 +888,8 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::http::{version_path, versions_declare, join_path, normalize_mount_path, literal_mount_path, declared_versions}` | nothing public: `#[controller]`, `#[gateway]` and the framework's own mounts call them |
     | `nest_rs::ws::{ReplyValue, ReplyOutcome, ErrorReport, HandlerFailed}` and their fallbacks, `nest_rs::ws::target` | nothing public: `#[messages]` emits them; a handler returns its value or its `Result` |
     | `nest_rs::ws::nest_rs_http::…` | `nest_rs::http::…`, which the `ws` feature turns on |
-    | `nest_rs::guards::GuardSpecs(vec![…])`, `nest_rs::pipes::PipeSpecs(vec![…])` seeded by hand | `App::builder().use_guards_global([…])`, `.use_pipes_global([…])` |
-    | `nest_rs::core::layer_chain::GlobalSpecs` | nothing public: the guards', pipes', interceptors' and exception filters' global pools implement it, and `App::builder().use_*_global([…])` seeds each |
+    | `nest_rs::guards::GuardSpecs(vec![…])`, `nest_rs::pipes::PipeSpecs(vec![…])` seeded by hand | `GlobalGuards<(…)>`, `GlobalPipes<(…)>` in the providers of the module `main` boots |
+    | `nest_rs::core::layer_chain::GlobalSpecs` | nothing public: each family's pool is a declaration the root module lists — `GlobalGuards`, `GlobalPipes`, `GlobalInterceptors`, `GlobalExceptionFilters` |
     | `nest_rs::mcp::hosts_on(container, path)` | `Discovery::new(container).meta::<McpHostMeta>()`, filtered on `meta.path()` |
     | `nest_rs::mcp::current_container()` in a tool's body | an `#[inject]`ed field on the `#[mcp]` host, or a `Scoped<T>` parameter |
     | `nest_rs::schedule::nest_rs_database::TransactionPolicy` | `nest_rs::database::TransactionPolicy`, which the `schedule` feature turns on |
@@ -1415,11 +1424,36 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A route 6.x served unguarded** stops the boot:
 
   ```text frame="terminal"
-  Error: routes no guard covers and none marks `#[public]`: POST /thing (create), GET /thing (read) — a route runs a guard or is open on purpose; bind a guard with `#[use_guards(...)]` on the controller or the route, or list the app's global pool (`App::builder().use_guards_global([...])`), or mark a route open on purpose with `#[public]`
+  Error: routes no guard covers and none marks `#[public]`: POST /thing (create), GET /thing (read) — a route runs a guard or is open on purpose; bind a guard with `#[use_guards(...)]` on the controller or the route, or declare the app's global pool (`GlobalGuards<(...)>` in the providers of the module the app boots), or mark a route open on purpose with `#[public]`
   ```
 
   Bind a guard where the route should be closed, and write `#[public]` where it
   is open on purpose.
+- **`use_guards_global`, `use_pipes_global`, `use_interceptors_global` or
+  `use_exception_filters_global` left in `main`** fails to compile (`no method
+  named use_guards_global found for struct AppBuilder`): list the pool in the
+  module `main` boots. Listed by a feature's module instead, the boot refuses:
+
+  ```text frame="terminal"
+  Error: the `nest_rs::guards::global` wiring failed: `GlobalGuards<(TenantGuard,)>` is listed by `BillingHttpModule`, a module the app imports: the app-wide guard pool is declared by the module the app boots — list it in that module's providers
+  ```
+- **A transient guard, pipe, interceptor or exception filter in the app's
+  pool** booted in 6.x, built once and shared by every request. Its
+  declaration now fails the boot, as a transient layer on a job does:
+
+  ```text frame="terminal"
+  Error: scope violation: `TenantGuard` is bound by `GlobalGuards<(TenantGuard,)>` (in module `ApiModule`), which resolves its layers once, at boot, and is request-scoped or transient — a request-scoped `TenantGuard` would never be built there, and a transient one would be built once and shared by every run. Make `TenantGuard` a singleton.
+  ```
+
+  Drop `scope = transient` from its `#[injectable]`: the pool holds one
+  instance either way.
+- **`App::new::<M>()`** fails to compile: boot with
+  `App::builder().module::<M>().build().await`.
+- **An app's suite pushing inside a unit** no longer files the job on Redis:
+  the harness armed the outbox, so the job waits in the test's database until a
+  relay the test spawns files it. A suite whose database lacks the outbox's
+  table now fails its boot naming `nestrs g migration nestrs_outbox`, as the
+  binary does.
 - **A variable kept under its 6.x name** is read by nothing, and the boot says so
   once per variable, at `warn`, before a missing required value stops it. The
   demo's `assistant`, started with a 6.x `.env`:

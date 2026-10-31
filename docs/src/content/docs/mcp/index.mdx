@@ -79,7 +79,7 @@ nobody thought about does not compile, rather than shipping ungated to a model.
 
 That's a complete MCP server — but a bare `#[mcp]` endpoint is **closed by
 default**. Its request runs the global guard pool
-(`App::builder().use_guards_global(...)`) and the
+(the `GlobalGuards<(...)>` the module the app boots declares) and the
 [endpoint guards](/security/authorization/endpoint-guards/) the app's modules
 declare for it, either alone when the other is missing, and with neither it is
 **deny-all** — every request answers `401`, so a schema-added tool can never
@@ -355,7 +355,7 @@ route reads it. Neither parameter is an argument of the tool: the input schema
 a client lists names neither, and an absent value answers opaquely, its type
 filed at `error`.
 
-The app's own interceptors (`use_interceptors_global`, a module's
+The app's own interceptors (`GlobalInterceptors`, a module's
 `#[interceptor]`) run around every operation `#[tools]` declares too, outermost,
 after the guards. An `#[interceptor(stage = unit)]` serving MCP runs once
 around every request — a listing, a handshake, a tool call alike, one naming

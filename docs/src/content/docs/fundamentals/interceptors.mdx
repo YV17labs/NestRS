@@ -94,7 +94,7 @@ macro no longer matches it (`E0195`).
 
 | Scope | Binding | Runs |
 |-------|---------|------|
-| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main` | around every unit's handler — a route, a field, a message, a tool call, a job, a tick, a listener call — after its guards |
+| **Global** | `GlobalInterceptors<(Tracer,)>` in the providers of the module the app boots | around every unit's handler — a route, a field, a message, a tool call, a job, a tick, a listener call — after its guards |
 | **Host** | `#[use_interceptors(Tracer)]` on the controller, resolver, gateway, MCP host or worker block | around each of its handlers |
 | **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb | around that handler |
 

@@ -55,7 +55,7 @@ the framework runs each at its own seam:
 | `check` | once per inbound envelope, after the upgrade | beside a `#[subscribe_message]` |
 | `check` | once per `#[tool]`, `#[prompt]`, `#[resource]` or `#[resources]` operation, inside rmcp's dispatch | `#[mcp]` host / `#[tools]` operation |
 
-`use_guards_global([...])` reaches every edge at every entry it
+The app's `GlobalGuards<(...)>` reaches every edge at every entry it
 implements. `/graphql` and `/mcp` run the pool at their request and in each
 operation: `check_http` once on the request, `check` once per operation it
 carries — so a global `ThrottlerGuard` rate-limits the `/mcp` request and each

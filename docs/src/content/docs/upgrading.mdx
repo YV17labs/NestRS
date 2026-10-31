@@ -1145,8 +1145,9 @@ lists what the boot, a log or the wire shows when one is missed.
     `#[process]` method, a listener, a lifecycle hook, a health indicator — is a
     `warn` naming its `cause` and the remedy when it is this app's own code, and
     a `debug` line when it belongs to a dependency (`cause="dependency"`). A
-    configuration refusal's first line reads ``the factory for
-    `<crate>::…Config` failed``, the variable and the rule under `Caused by:`.
+    configuration refusal's first line names the variable it refuses —
+    ``invalid value for <PREFIX>_HTTP__PORT: …`` — and a validation failure lists
+    each field beside its variable.
     The boot's last line is `app ready` at `info`, naming the addresses bound.
     An HTTP route no guard covers and no `#[public]` opens, which 6.x served
     after one `unguarded routes detected` warning, now stops the boot naming
@@ -1463,7 +1464,7 @@ lists what the boot, a log or the wire shows when one is missed.
   module `main` boots. Listed by a feature's module instead, the boot refuses:
 
   ```text frame="terminal"
-  Error: the `nest_rs::guards::global` wiring failed: `GlobalGuards<(TenantGuard,)>` is listed by `BillingHttpModule`, a module the app imports: the app-wide guard pool is declared by the module the app boots — list it in that module's providers
+  Error: the `GlobalGuards` wiring failed: `GlobalGuards<(TenantGuard,)>` is listed by `BillingHttpModule`, a module the app imports: the app-wide guard pool is declared by the module the app boots — list it in `ApiModule`'s providers
   ```
 - **A transient guard, pipe, interceptor or exception filter in the app's
   pool** booted in 6.x, built once and shared by every request. Its
@@ -1549,11 +1550,25 @@ lists what the boot, a log or the wire shows when one is missed.
   `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION=false`** keeps it closed: the key is
   read by nothing, and the boot says so at `warn`. `<PREFIX>_GRAPHQL__INTROSPECTION=true`
   opens it, and that boot says so at `warn` too.
-- **A configuration refusal** opens on ``the factory for `<crate>::…Config`
-  failed``; the variable, the rule and the place are under `Caused by:`, never
-  the value. A log setting that does not parse — `<PREFIX>_LOG_FORMAT=jsno`, a
+- **A configuration refusal** opens on the variable it refuses —
+  ``invalid value for <PREFIX>_HTTP__PORT: …`` — and a validation failure lists
+  each field beside its variable, ``client_id (<PREFIX>_ISSUER__CLIENT_ID):
+  length``, never the value; code downcasting the boot's error to
+  `FactoryFailedError` to read a config failure finds the `ConfigError` itself.
+  A log setting that does not parse — `<PREFIX>_LOG_FORMAT=jsno`, a
   `<PREFIX>_LOG` directive with a wrong level — stops the boot naming the
   variable, where 6.x took the default in silence.
+- **A log filter or a dashboard keyed on a unit's boot line** — `mounted route`,
+  `mounted operation`, `mounted message`, `mounted mcp host`,
+  `registered queue processor`, `scheduled job (…)` — or on its `controller`,
+  `handler`, `resolver`, `gateway` or `processor` field, the schedule's
+  `provider`, or MCP's `kind` and `tools`, reads nothing: every edge says a
+  unit it serves as one `mounted` line with `host` and `method` and its
+  address (`verb` and `path`, `field`, `event`, `tool`, `prompt` or
+  `resource`, `queue`, `trigger`), and the module line at register reads
+  `module registered`. On HTTP's mount line `method` is now the Rust method
+  and the HTTP method is `verb`, so a filter on `method="GET"` there reads
+  nothing; the request's own line keeps `method` for the HTTP method.
 - **A bounded duration outside its range** — a zero lease, a drain window
   above an hour, a body-read gap at `0`, a request or message timeout past 3600
   — fails the boot naming the variable and why the bound is there, whether the
@@ -1690,7 +1705,7 @@ lists what the boot, a log or the wire shows when one is missed.
   `400 unsupported_grant_type`.
 - **A client registry the boot refuses**: `<PREFIX>_OAUTH__SERVER__CLIENTS`
   unset or empty, a client with no resource, a duplicate or empty id, an empty
-  secret — `configuration validation failed for 'oauth__server'`, each client
+  secret — ``configuration validation failed for `<PREFIX>_OAUTH__SERVER__*` ``, each client
   named by its id — which is what a deployment still setting
   `<PREFIX>_OAUTH__CLIENTS` alone meets, since nothing reads that name now.
 - **A development-only route kept in a deployment**: an app listing

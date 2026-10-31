@@ -877,6 +877,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::mcp::hosts_on(container, path)` | `Discovery::new(container).meta::<McpHostMeta>()`, filtered on `meta.path()` |
     | `nest_rs::mcp::current_container()` in a tool's body | an `#[inject]`ed field on the `#[mcp]` host, or a `Scoped<T>` parameter |
     | `nest_rs::schedule::nest_rs_database::TransactionPolicy` | `nest_rs::database::TransactionPolicy`, which the `schedule` feature turns on |
+    | `scope: Scope<E, A>` on a route, its `Condition` applied to a query of the handler's own (`nest_rs::authz::http::Scope`) | the query in the service, through `Repo::<E>::scoped(A::ACTION)`, which applies the caller's filter itself |
     | `Correlation::mint()` | `Correlation::minted(None)` |
     | `TlsConfig`, `CorsConfig`, `SecurityHeadersConfig` | `HttpTls`, `HttpCors`, `HttpSecurityHeaders` |
     | `method.retries`, `method.queue` on a `ProcessMethod` | `method.options().retries()`, `method.queue()` |

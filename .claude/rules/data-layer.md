@@ -300,8 +300,7 @@ handler they bypass the posture nobody can then `rg` for.
 
 **`#[authorize(A, bind = S)]`** loads and authorizes through the service (404
 absent, 403 denied) into the operation's `Authorized<A, E>` parameter, on HTTP
-and GraphQL alike, and needs an `AbilityGuard` on the route; **`Scope<E, A>`**
-hands a hand-built query the explicit `Condition`.
+and GraphQL alike, and needs an `AbilityGuard` on the route.
 
 Each edge's authz half lives in `nest-rs-authz` and its data-layer half in
 `nest-rs-seaorm`, each behind the matching edge feature — **the split avoids a

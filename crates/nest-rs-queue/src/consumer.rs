@@ -206,7 +206,7 @@ pub enum LeaseHold {
 /// Built from any [`JobConsumer`] and declared with
 /// `ContainerBuilder::provide_declared_factory_after`, carrying
 /// [`BACKEND_REMEDY`](crate::BACKEND_REMEDY): two backends imported is a boot
-/// error naming both, as for `Arc<dyn JobProducer>`.
+/// error naming both, as for the port's [`Jobs`](crate::Jobs).
 pub struct BoundConsumer {
     run: Box<dyn Run>,
 }

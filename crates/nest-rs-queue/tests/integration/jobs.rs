@@ -1,5 +1,7 @@
-//! The push and cancel surface through a backend that records what it is
-//! handed, and the net under every call, on a paused clock.
+//! Covers `src/jobs.rs`: the handle's pushes and cancels, through a backend
+//! that records what it is handed, and the path `src/producer.rs` takes each
+//! one down — the checks, the seal, the outbox and the net under every call,
+//! on a paused clock.
 
 use std::future::Future;
 use std::sync::{Arc, Mutex};

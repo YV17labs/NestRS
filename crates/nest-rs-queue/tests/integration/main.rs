@@ -12,13 +12,13 @@ mod backend;
 mod checkpoint;
 mod consume;
 mod inventory;
+mod jobs;
 #[path = "../harness/memory.rs"]
 mod memory;
 mod module;
 mod outbox;
 #[path = "../harness/outbox.rs"]
 mod outbox_store;
-mod producer;
 mod queue;
 mod queue_name;
 mod unit;

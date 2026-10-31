@@ -606,13 +606,14 @@ async fn a_pass_still_running_the_ports_net_after_the_stop_is_cut_and_leaves_its
 #[tokio::test(start_paused = true)]
 async fn a_relay_without_a_store_or_a_backend_idles_until_the_stop() {
     let store = MemoryOutbox::new();
+    let producer = Arc::new(Filing::default());
     for container in [
         Container::builder()
             .provide_dyn::<dyn OutboxStore>(Arc::new(store.clone()))
             .build()
             .expect("the container builds"),
         Container::builder()
-            .provide_dyn::<dyn JobProducer>(Arc::new(Filing::default()) as Arc<dyn JobProducer>)
+            .provide(Jobs::new(Arc::clone(&producer) as Arc<dyn JobProducer>))
             .build()
             .expect("the container builds"),
     ] {
@@ -622,6 +623,10 @@ async fn a_relay_without_a_store_or_a_backend_idles_until_the_stop() {
         relay.shutdown().await;
     }
     assert!(!store.is_armed(), "a store no relay drains is never armed");
+    assert!(
+        producer.calls().is_empty(),
+        "a backend no store feeds files nothing"
+    );
 }
 
 #[tokio::test(start_paused = true)]

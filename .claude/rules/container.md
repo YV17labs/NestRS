@@ -367,9 +367,11 @@ questions shape a port:
   `BACKEND_REMEDY` declared in the file holding what a backend supplies, never in
   a `module.rs`, and it may name the first-party binding as the remedy. None,
   where a provider injects the port, is the same sentence: the file submits it
-  as the `DependencyRemedy` of the port's trait object, which the unmet
-  dependency names in place of the kernel's — as the module opening a resource
-  does for the resource's type. *By type
+  as the `DependencyRemedy` of the type a provider injects — the port's trait
+  object, or its handle where the binding registers one (`Jobs`) — which the
+  unmet dependency names in place of the kernel's, as the module opening a
+  resource does for the resource's type; a contract no binding registers
+  carries a remedy naming the handle. *By type
   parameter* (`AuthnGuard<S: Strategy>`): two instantiations are two types, so
   no arbitration is owed. *By configuration*: the import opens the gate and
   configuration decides which members are active, zero to all — or, for a

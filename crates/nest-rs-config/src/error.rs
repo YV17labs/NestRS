@@ -86,19 +86,29 @@ pub enum ConfigError {
     },
     /// A loaded config failed `validator::Validate`.
     ///
-    /// Renders the **namespace** and one line per offending field, never
-    /// `validator`'s `Debug` payload, which holds the submitted value.
+    /// Renders the namespace's variables and one line per offending field —
+    /// the field, then the variable that sets it, since a value may come from
+    /// a pinned base as well — never `validator`'s `Debug` payload, which
+    /// holds the submitted value. A config its caller composed, read under no
+    /// variable, is named by its type and its fields alone.
     #[error(
-        "configuration validation failed for '{namespace}'\n{}",
-        render(errors)
+        "configuration validation failed for `{}`\n{}",
+        validated(namespace),
+        render(namespace, errors, whole_fields)
     )]
+    #[non_exhaustive]
     Validation {
         /// The namespace the config was read under: its `#[config(namespace = "…")]`,
-        /// with a named instance's name inserted after the vendor.
+        /// with a named instance's name inserted after the vendor — or the
+        /// config's type, when its caller composed it.
         namespace: Cow<'static, str>,
         /// The field-level failures. Not `#[source]`: a `Display` chain would
         /// print `validator`'s raw payload, submitted value included.
         errors: ValidationErrors,
+        /// The fields read whole from their one variable — each
+        /// `#[config(json)]` field — so a failure inside one names that
+        /// variable.
+        whole_fields: &'static [&'static str],
     },
     /// Two config types read one environment variable, raised at boot from the
     /// resolved name.
@@ -177,11 +187,13 @@ impl ConfigError {
         }
     }
 
-    /// Build a [`Validation`](Self::Validation) error for `namespace`.
+    /// Build a [`Validation`](Self::Validation) error for `namespace`, whose
+    /// fields are each read from a variable of their own.
     pub fn validation(namespace: impl Into<Cow<'static, str>>, errors: ValidationErrors) -> Self {
         Self::Validation {
             namespace: namespace.into(),
             errors,
+            whole_fields: &[],
         }
     }
 
@@ -220,9 +232,10 @@ impl ConfigError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 #[error(
-    "`{type_name}`{of_instance} was read before any factory resolved it: the module owning it is \
-     not imported, or is imported in a `register` alone, or the factory reading it does not name \
-     it among its inputs",
+    "`{}`{of_instance} was read before any factory resolved it: the module owning it is not \
+     imported, or is imported in a `register` alone, or the factory reading it does not name it \
+     among its inputs",
+    nest_rs_core::__private::shorten(.type_name),
     of_instance = of_instance(instance),
 )]
 pub struct ConfigNotResolvedError {
@@ -270,22 +283,67 @@ fn is_source_excerpt(line: &str) -> bool {
         .starts_with('|')
 }
 
-/// One `  - field: rule` line per failure, deepest field path flattened into a
-/// dotted name.
+/// Whether a validation refusal's `namespace` is one — lowercase, as every
+/// namespace is — rather than the type of a config its caller composed.
+fn is_namespace(namespace: &str) -> bool {
+    !namespace.is_empty()
+        && namespace
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// What a validation refusal is about: the namespace's variables, or a
+/// composed config's type.
+fn validated(namespace: &str) -> String {
+    if is_namespace(namespace) {
+        crate::var_name(namespace, "*")
+    } else {
+        namespace.to_owned()
+    }
+}
+
+/// One `  - field (VARIABLE): rule` line per failure, deepest field path
+/// flattened into a dotted name; the variable is the namespace's key for the
+/// path — a member of a vocabulary extends its field's key with `_`, an item
+/// of a list is the list's, and anything inside a field read whole is that
+/// field's — and is left out for a composed config.
 ///
 /// A rule's parameters are never said: `value` is the rejected input,
 /// `must_match`'s `other` another field's, and a bound can read another field.
-fn render(errors: &ValidationErrors) -> String {
+fn render(namespace: &str, errors: &ValidationErrors, whole_fields: &[&str]) -> String {
     let mut out = String::new();
-    render_into(&mut out, errors, "");
+    let fields = Fields {
+        namespace,
+        whole: whole_fields,
+    };
+    render_into(&mut out, &fields, errors, "");
     out.trim_end().to_owned()
+}
+
+/// What names a failing field's variable: the namespace it was read under,
+/// and the fields read whole from one variable.
+struct Fields<'a> {
+    namespace: &'a str,
+    whole: &'a [&'a str],
+}
+
+impl Fields<'_> {
+    /// The variable that sets the field at `path`.
+    fn variable(&self, path: &str) -> String {
+        let field = path.split('[').next().unwrap_or(path);
+        let top = field.split('.').next().unwrap_or(field);
+        if self.whole.contains(&top) {
+            return crate::var_name(self.namespace, top);
+        }
+        crate::var_name(self.namespace, &field.replace('.', "_"))
+    }
 }
 
 #[expect(
     clippy::let_underscore_must_use,
     reason = "fmt::Write for String never fails"
 )]
-fn render_into(out: &mut String, errors: &ValidationErrors, prefix: &str) {
+fn render_into(out: &mut String, fields: &Fields<'_>, errors: &ValidationErrors, prefix: &str) {
     for (field, kind) in errors.errors() {
         let path = if prefix.is_empty() {
             field.to_string()
@@ -294,14 +352,19 @@ fn render_into(out: &mut String, errors: &ValidationErrors, prefix: &str) {
         };
         match kind {
             ValidationErrorsKind::Field(list) => {
+                let named = if is_namespace(fields.namespace) {
+                    format!("{path} ({})", fields.variable(&path))
+                } else {
+                    path.clone()
+                };
                 for error in list {
-                    let _ = writeln!(out, "  - {path}: {}", error.code);
+                    let _ = writeln!(out, "  - {named}: {}", error.code);
                 }
             }
-            ValidationErrorsKind::Struct(nested) => render_into(out, nested, &path),
+            ValidationErrorsKind::Struct(nested) => render_into(out, fields, nested, &path),
             ValidationErrorsKind::List(items) => {
                 for (index, nested) in items {
-                    render_into(out, nested, &format!("{path}[{index}]"));
+                    render_into(out, fields, nested, &format!("{path}[{index}]"));
                 }
             }
         }
@@ -330,8 +393,16 @@ mod tests {
         ConfigError::validation(namespace, errors).to_string()
     }
 
+    /// `  - field (VARIABLE): rule`, the variable under `namespace` for `key`.
+    fn line(namespace: &str, field: &str, key: &str, rule: &str) -> String {
+        format!(
+            "\n  - {field} ({}): {rule}",
+            crate::var_name(namespace, key)
+        )
+    }
+
     #[test]
-    fn a_validation_failure_names_its_namespace_and_lists_the_fields() {
+    fn a_validation_failure_names_its_variables_and_lists_each_field_with_its_own() {
         let text = rendered(
             "issuer",
             &Issuer {
@@ -341,11 +412,104 @@ mod tests {
         );
 
         assert!(
-            text.starts_with("configuration validation failed for 'issuer'"),
-            "the namespace disambiguates which config failed: {text}",
+            text.starts_with(&format!(
+                "configuration validation failed for `{}`",
+                crate::var_name("issuer", "*")
+            )),
+            "the namespace's variables say which config failed: {text}",
         );
-        assert!(text.contains("\n  - client_id: length"), "{text}");
-        assert!(text.contains("\n  - page_size: range"), "{text}");
+        assert!(
+            text.contains(&line("issuer", "client_id", "CLIENT_ID", "length")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&line("issuer", "page_size", "PAGE_SIZE", "range")),
+            "{text}"
+        );
+    }
+
+    #[derive(Validate)]
+    struct Client {
+        #[validate(length(min = 1))]
+        secret: String,
+    }
+
+    #[derive(Validate)]
+    struct Clients {
+        #[validate(nested)]
+        clients: Vec<Client>,
+    }
+
+    #[test]
+    fn an_item_of_a_list_is_set_by_the_lists_variable() {
+        let text = rendered(
+            "issuer",
+            &Clients {
+                clients: vec![Client {
+                    secret: String::new(),
+                }],
+            },
+        );
+        assert!(
+            text.contains(&line("issuer", "clients[0].secret", "CLIENTS", "length")),
+            "{text}"
+        );
+    }
+
+    #[derive(Validate)]
+    struct Limits {
+        #[validate(range(max = 10))]
+        max: u32,
+    }
+
+    #[derive(Validate)]
+    struct Limited {
+        #[validate(nested)]
+        limits: Limits,
+    }
+
+    /// A field read whole — `#[config(json)]` — is set by its one variable,
+    /// whatever inside it failed; a vocabulary's member keeps its own.
+    #[test]
+    fn a_failure_inside_a_field_read_whole_names_that_fields_variable() {
+        let refused = |whole_fields: &'static [&'static str]| {
+            let errors = Limited {
+                limits: Limits { max: 99 },
+            }
+            .validate()
+            .expect_err("must fail");
+            ConfigError::Validation {
+                namespace: "kiln".into(),
+                errors,
+                whole_fields,
+            }
+            .to_string()
+        };
+        let whole = refused(&["limits"]);
+        assert!(
+            whole.contains(&line("kiln", "limits.max", "LIMITS", "range")),
+            "{whole}"
+        );
+        let vocabulary = refused(&[]);
+        assert!(
+            vocabulary.contains(&line("kiln", "limits.max", "LIMITS_MAX", "range")),
+            "{vocabulary}"
+        );
+    }
+
+    #[test]
+    fn a_composed_config_is_named_by_its_type_and_its_fields_alone() {
+        let text = rendered(
+            "OAuthClientConfig",
+            &Issuer {
+                client_id: String::new(),
+                page_size: 1,
+            },
+        );
+        assert_eq!(
+            text,
+            "configuration validation failed for `OAuthClientConfig`\n  - client_id: length"
+        );
     }
 
     const SECRET: &str = "sk_live_51HsecretTOKEN";
@@ -376,10 +540,18 @@ mod tests {
         assert!(!text.contains("sk_live"), "{text}");
         assert!(!text.contains("4242424242"), "{text}");
         assert!(
-            text.contains("\n  - signing_key_confirm: must_match"),
+            text.contains(&line(
+                "signing",
+                "signing_key_confirm",
+                "SIGNING_KEY_CONFIRM",
+                "must_match"
+            )),
             "{text}"
         );
-        assert!(text.contains("\n  - burst: range"), "{text}");
+        assert!(
+            text.contains(&line("signing", "burst", "BURST", "range")),
+            "{text}"
+        );
     }
 
     /// A JSON decoder's sentence handed to the sink whole, as a reader judging
@@ -459,7 +631,10 @@ mod tests {
             },
         );
 
-        assert!(text.contains("\n  - page_size: range"), "{text}");
+        assert!(
+            text.contains(&line("issuer", "page_size", "PAGE_SIZE", "range")),
+            "{text}"
+        );
         assert!(
             !text.contains("900"),
             "the submitted value must not be echoed: {text}",

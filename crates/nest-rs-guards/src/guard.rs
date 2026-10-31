@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(denial.http_status(), 500);
         assert_eq!(denial.reason(), Some(crate::denial::MISSING_AMBIENT));
         let chain = crate::denial::failure_chain(&denial).unwrap_or_default();
-        assert!(chain.contains(std::any::type_name::<Author>()), "{chain}");
+        assert!(chain.contains("no `Author` is ambient"), "{chain}");
 
         cx.attach(Author);
         let unit = guard.as_ref().check(&mut cx).await;

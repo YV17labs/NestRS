@@ -270,10 +270,7 @@ async fn a_factory_that_fails_is_named_and_its_cause_kept_in_the_chain() {
         .downcast_ref::<nest_rs_core::FactoryFailedError>()
         .unwrap_or_else(|| panic!("not the factory refusal: {refused:#}"));
     assert_eq!(failed.type_name, std::any::type_name::<Pool>());
-    assert_eq!(
-        refused.to_string(),
-        format!("the factory for `{}` failed", std::any::type_name::<Pool>()),
-    );
+    assert_eq!(refused.to_string(), "the factory for `Pool` failed");
     assert!(
         refused
             .chain()
@@ -282,10 +279,7 @@ async fn a_factory_that_fails_is_named_and_its_cause_kept_in_the_chain() {
     );
     assert_eq!(
         nest_rs_core::error_message(refused.as_ref()),
-        format!(
-            "the factory for `{}` failed: connection refused by the database host",
-            std::any::type_name::<Pool>()
-        ),
+        "the factory for `Pool` failed: connection refused by the database host",
     );
 }
 
@@ -660,12 +654,13 @@ async fn a_consumer_of_a_key_an_override_removed_is_told_to_override_what_it_inj
         .downcast_ref::<OverriddenDependencyError>()
         .unwrap_or_else(|| panic!("not the removed dependency: {refused:#}"));
     assert_eq!(removed.consumer, "Calendar");
+    assert_eq!(removed.through, std::any::type_name::<Arc<dyn Clock>>());
     assert!(
-        refused.to_string().contains(&format!(
-            "`Sundial` is overridden through `{}`: override the key this consumer injects",
-            std::any::type_name::<Arc<dyn Clock>>()
-        )),
-        "{refused}"
+        refused.to_string().contains(
+            "`Sundial` is overridden through `Arc<dyn Clock>`: override the key this consumer \
+             injects"
+        ),
+        "the key is named as an app writes it: {refused}"
     );
 }
 

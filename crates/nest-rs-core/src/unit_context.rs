@@ -334,7 +334,7 @@ mod tests {
         assert!(
             missing
                 .to_string()
-                .contains(std::any::type_name::<Author>()),
+                .starts_with("no `Author` is ambient on this unit"),
             "{missing}",
         );
 

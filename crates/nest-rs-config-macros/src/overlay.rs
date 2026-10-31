@@ -228,6 +228,18 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields, defaults: Option<&Path
             );
         })
     });
+    // Read whole, a field's variable sets everything a refusal finds inside it.
+    let whole: Vec<String> = fields
+        .0
+        .iter()
+        .filter(|field| matches!(field.reader, Reader::Json))
+        .map(|field| field.ident.unraw().to_string())
+        .collect();
+    let whole = (!whole.is_empty()).then(|| {
+        quote! {
+            const __WHOLE_FIELDS: &'static [&'static str] = &[#(#whole),*];
+        }
+    });
     let body = if fields.0.is_empty() {
         quote! { ::core::result::Result::Ok(#base) }
     } else {
@@ -248,6 +260,8 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields, defaults: Option<&Path
             ) -> ::nest_rs_config::Result<Self> {
                 #body
             }
+
+            #whole
 
             #defaults
         }

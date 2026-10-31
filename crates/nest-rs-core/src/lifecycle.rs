@@ -76,6 +76,17 @@ pub enum LifecyclePhase {
 }
 
 impl LifecyclePhase {
+    /// The attribute a hook of this phase is written with, `#[on_module_init]`.
+    pub(crate) fn attribute(self) -> &'static str {
+        match self {
+            Self::OnModuleInit => "#[on_module_init]",
+            Self::OnApplicationBootstrap => "#[on_application_bootstrap]",
+            Self::OnModuleDestroy => "#[on_module_destroy]",
+            Self::BeforeApplicationShutdown => "#[before_application_shutdown]",
+            Self::OnApplicationShutdown => "#[on_application_shutdown]",
+        }
+    }
+
     fn shuts_down(self) -> bool {
         match self {
             Self::OnModuleInit | Self::OnApplicationBootstrap => false,

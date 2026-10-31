@@ -537,7 +537,7 @@ async fn a_panicking_init_hook_aborts_the_boot_with_an_error_naming_it() {
     let error = outcome.expect_err("an init hook that panicked aborts the boot");
     assert_eq!(
         error.to_string(),
-        "lifecycle hook integration::lifecycle::PanicsOnInit::warm (OnModuleInit) panicked",
+        "the `#[on_module_init]` hook `PanicsOnInit::warm` in `integration::lifecycle` panicked",
     );
     let event = logs.expect_one(
         target::LIFECYCLE,

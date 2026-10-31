@@ -829,6 +829,12 @@ mod tests {
                     .ends_with("Recording<nest_rs_core::site::tests::Fourth>")
             );
             assert_eq!(refused.site, "ChatGateway::send");
+            assert!(
+                refused
+                    .to_string()
+                    .starts_with("`Recording<Fourth>` is declared on `ChatGateway::send`"),
+                "the sentence names the layer as an app writes it: {refused}"
+            );
         }
 
         let provided = ContainerBuilder::default()
@@ -962,6 +968,12 @@ mod tests {
                 .unwrap_or_else(|| panic!("not a duplicate value: {refused:#}"));
             assert_eq!(refused.type_name, "nest_rs_core::site::tests::Tag");
             assert_eq!(refused.declared_on, declared_on);
+            assert!(
+                refused.to_string().starts_with(&format!(
+                    "`#[meta]` declares two `Tag` values on `{declared_on}`"
+                )),
+                "the sentence names the type as an app writes it: {refused}"
+            );
         }
         composed(
             &container,

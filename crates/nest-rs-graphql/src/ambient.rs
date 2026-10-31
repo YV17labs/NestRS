@@ -110,7 +110,7 @@ mod tests {
         let line = logs.expect_one(crate::TARGET, "graphql operation failed");
         assert!(
             line.field("error")
-                .is_some_and(|error| error.contains("ambient::tests::Hidden")),
+                .is_some_and(|error| error.contains("no `Hidden` is ambient")),
             "{:?}",
             line.fields,
         );

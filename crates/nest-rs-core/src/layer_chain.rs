@@ -106,7 +106,8 @@ pub(crate) mod __private {
     pub trait GlobalLayer: 'static {
         /// The family's layer as a boot error names it: `"guard"`.
         const KIND: &'static str;
-        /// The pool as the wiring step names it: `"nest_rs::guards::global"`.
+        /// The pool as the wiring step names it, by its declaration's type:
+        /// `"GlobalGuards"`.
         const POOL: &'static str;
 
         /// The family's own check of the pool the app declared, once the
@@ -211,15 +212,17 @@ pub(crate) mod __private {
                     Listing::BelowTheRoot(module) => anyhow::bail!(
                         "`{declaration}` is listed by `{module}`, a module the app imports: the \
                          app-wide {kind} pool is declared by the module the app boots — list it \
-                         in that module's providers",
+                         in {booted}'s providers",
                         module = crate::type_name::shorten(module),
                         kind = L::KIND,
+                        booted = booted(&composition),
                     ),
                     Listing::Unlisted => anyhow::bail!(
                         "`{declaration}` is registered by no module's providers: the app-wide \
-                         {kind} pool is declared by the module the app boots — list it in that \
-                         module's providers",
+                         {kind} pool is declared by the module the app boots — list it in \
+                         {booted}'s providers",
                         kind = L::KIND,
+                        booted = booted(&composition),
                     ),
                 }
             }
@@ -236,6 +239,20 @@ pub(crate) mod __private {
             );
         }
         L::check(container).map_err(anyhow::Error::msg)
+    }
+
+    /// The module the app boots, as a remedy names it: `` `ApiModule` ``, or
+    /// each of several roots.
+    fn booted(composition: &Composition) -> String {
+        let roots: Vec<String> = inventory::iter::<ModuleDescriptor>()
+            .filter(|descriptor| composition.is_root((descriptor.module)()))
+            .map(|descriptor| format!("`{}`", crate::type_name::shorten(descriptor.name)))
+            .collect();
+        match roots.as_slice() {
+            [] => "that module".to_owned(),
+            [root] => root.clone(),
+            [init @ .., last] => format!("{} or {last}", init.join(", ")),
+        }
     }
 
     /// The module that registered `pool`, as a refusal names it.

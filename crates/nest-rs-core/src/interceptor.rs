@@ -349,7 +349,7 @@ crate::__global_layer_pool! {
 
 impl GlobalLayer for dyn Interceptor {
     const KIND: &'static str = "interceptor";
-    const POOL: &'static str = "nest_rs::layers::interceptors";
+    const POOL: &'static str = "GlobalInterceptors";
 }
 
 /// `interceptor` is private: its tier-2 items live here, reached only through

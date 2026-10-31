@@ -240,7 +240,7 @@ pub mod __private {
     pub use crate::app_identity::{capture_app_identity, package_identity};
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,
-        declaring_site, enter_import, leave_import, overrides_any, record_absent_optional,
+        declaring_site, enter_import, leave_import, overrides_any, reading, record_absent_optional,
         record_stall, refuse_site, register_dynamic_import, site_chains, stand_down,
         take_site_refusal,
     };
@@ -286,7 +286,7 @@ pub mod __private {
         current_correlation, hex, link_span, pending_ids, set_actor_id, set_sampled,
         set_span_linker, with_pending_ids,
     };
-    pub use crate::type_name::short_type_name;
+    pub use crate::type_name::{short_type_name, shorten};
     pub use crate::unit_context::{new_unit_context, pending_of, take_pending};
     pub use crate::way_down::{MainCrate, main};
 

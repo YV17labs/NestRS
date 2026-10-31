@@ -32,6 +32,7 @@ use crate::millis::millis;
 use crate::module::Module;
 use crate::net::check_budgets;
 use crate::transport::{Transport, TransportContribution};
+use crate::type_name::shorten;
 
 /// Entry point for a nestrs application. Builds the container from a root
 /// [`Module`] and runs every transport its imports contribute concurrently
@@ -67,6 +68,12 @@ pub enum BootStep {
         /// The type the factory builds.
         type_name: &'static str,
     },
+    /// An async factory reading its type's value — a `#[config]` from the
+    /// environment.
+    Read {
+        /// The type the factory reads.
+        type_name: &'static str,
+    },
     /// A transport's [`configure`](Transport::configure).
     Configure {
         /// The transport, by its short type name.
@@ -93,7 +100,8 @@ pub enum BootStep {
 impl std::fmt::Display for BootStep {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Factory { type_name } => write!(f, "the factory for `{type_name}`"),
+            Self::Factory { type_name } => write!(f, "the factory for `{}`", shorten(type_name)),
+            Self::Read { type_name } => write!(f, "the read of `{}`", shorten(type_name)),
             Self::Configure { transport } => {
                 write!(f, "the `configure` of transport `{transport}`")
             }
@@ -105,7 +113,8 @@ impl std::fmt::Display for BootStep {
                 origin,
             } => write!(
                 f,
-                "lifecycle hook {origin}::{provider}::{method} ({phase:?})"
+                "the `{}` hook `{provider}::{method}` in `{origin}`",
+                phase.attribute()
             ),
         }
     }
@@ -973,12 +982,21 @@ async fn assemble(
             }
             Box::new(move |builder| builder.stand_down(id))
         } else {
-            let type_name = queued.name;
+            let (type_name, reads) = (queued.name, queued.reads);
+            let step = if reads {
+                BootStep::Read { type_name }
+            } else {
+                BootStep::Factory { type_name }
+            };
             let factory = (queued.factory)(slot.snapshot());
-            lifecycle
-                .boot(&BootStep::Factory { type_name }, factory)
-                .await?
-                .map_err(|source| FactoryFailedError { type_name, source })?
+            // A read's refusal names the variable an operator sets: it leads.
+            lifecycle.boot(&step, factory).await?.map_err(|source| {
+                if reads {
+                    source
+                } else {
+                    FactoryFailedError { type_name, source }.into()
+                }
+            })?
         };
         *slot = std::mem::take(slot).install(
             queued.queued_by,

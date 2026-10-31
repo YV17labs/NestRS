@@ -1,12 +1,18 @@
 //! An app reading any config registers the active environment, with no
 //! import of its own, and says once when the process declared none; a test's
 //! override or seed of the environment stands in for it; the default
-//! instance's config resolves through its `Config::resolve`.
+//! instance's config resolves through its `Config::resolve`; a config that
+//! fails to read fails the boot with its own refusal, however it is loaded.
 
 use std::sync::Arc;
 
-use nest_rs_config::{Config, ConfigModule, ConfigService, Environment, Result, config};
-use nest_rs_core::{App, AppBuilder, Module, Unnamed, injectable, module};
+use nest_rs_config::{
+    Config, ConfigError, ConfigModule, ConfigService, Environment, Result, config, var_name,
+};
+use nest_rs_core::{
+    App, AppBuilder, Collecting, ContainerBuilder, FactoryFailedError, Module, Registering,
+    Unnamed, injectable, module,
+};
 use nest_rs_testing::LogCapture;
 
 const UNDECLARED: &str = "no environment declared; running as production";
@@ -143,4 +149,89 @@ fn heat<M: Module + 'static>() -> Option<u16> {
 fn the_boot_resolves_the_default_instance_through_its_config_s_resolve() {
     assert_eq!(heat::<KilnRead>(), Some(1000));
     assert_eq!(heat::<KilnPinned>(), Some(1007));
+}
+
+#[config(namespace = "kiln_door")]
+#[derive(Clone, Debug, Default)]
+struct KilnDoorConfig {
+    width: Option<u16>,
+}
+
+/// A module reading the door's config on its bare import, written by hand as
+/// a binding is.
+struct KilnDoorModule;
+
+impl Module for KilnDoorModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+    }
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature::<Unnamed, KilnDoorConfig>(builder)
+    }
+}
+
+#[module(imports = [KilnDoorModule])]
+struct KilnDoorRead;
+
+#[module]
+struct KilnDoors;
+
+#[module(imports = [ConfigModule::setup::<KilnDoors, KilnDoorConfig, Unnamed>(KilnDoorConfig { width: Some(3) })])]
+struct KilnDoorPinned;
+
+/// What reads the door's config, and so loads it.
+#[injectable]
+struct KilnDoor {
+    #[inject]
+    _config: Arc<KilnDoorConfig>,
+}
+
+#[module(providers = [KilnDoor])]
+struct KilnDoorInjected;
+
+/// The refusal `M`'s boot fails with while the door's width does not parse.
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn refused<M: Module + 'static>() -> anyhow::Error {
+    let mut refused = None;
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(var_name("kiln_door", "WIDTH"), "wide");
+        let booted = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime")
+            .block_on(async { App::builder().module::<M>().build().await });
+        refused = booted.err();
+        Ok(())
+    });
+    refused.expect("a width that does not parse fails the boot")
+}
+
+#[test]
+fn a_config_that_fails_to_read_fails_the_boot_with_its_own_refusal_however_it_is_loaded() {
+    let variable = var_name("kiln_door", "WIDTH");
+    for (loaded, refused) in [
+        ("a bare import", refused::<KilnDoorRead>()),
+        ("a pin", refused::<KilnDoorPinned>()),
+        ("an injection", refused::<KilnDoorInjected>()),
+    ] {
+        assert!(
+            refused
+                .to_string()
+                .starts_with(&format!("invalid value for {variable}: ")),
+            "{loaded}: the variable leads: {refused:#}"
+        );
+        assert!(
+            refused.downcast_ref::<FactoryFailedError>().is_none(),
+            "{loaded}: no factory wraps a read: {refused:#}"
+        );
+        assert!(
+            matches!(
+                refused.downcast_ref::<ConfigError>(),
+                Some(ConfigError::Parse { var, .. }) if *var == variable
+            ),
+            "{loaded}: the boot's error is the config's own: {refused:#}"
+        );
+    }
 }

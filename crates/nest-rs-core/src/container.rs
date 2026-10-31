@@ -103,6 +103,9 @@ pub(crate) struct QueuedFactory {
     /// Whether an import site chose `T`, so a value already present is not
     /// the one it declared.
     pub(crate) declared: bool,
+    /// Whether the factory reads `T`'s value rather than builds it — a
+    /// `#[config]` from the environment — so its refusal is the boot's.
+    pub(crate) reads: bool,
     /// The trait objects bound off `T` once it is present, whoever built it:
     /// this entry's factory, a seed, or the declaration that superseded it.
     pub(crate) derives: Vec<Registrar>,
@@ -1294,6 +1297,7 @@ impl ContainerBuilder {
             provides: vec![id],
             after,
             declared: remedy.is_some(),
+            reads: false,
             derives: Vec::new(),
             factory: boxed,
         };
@@ -1756,6 +1760,18 @@ pub(crate) mod __private {
         if slot.is_none() {
             *slot = Some(error);
         }
+    }
+
+    /// Mark the factory queued for `T` as reading `T`'s value — a `#[config]`
+    /// from the environment — rather than building it: its refusal fails the
+    /// boot as it is, naming what an operator sets, and the boot step names a
+    /// read.
+    pub fn reading<T: 'static>(mut builder: ContainerBuilder) -> ContainerBuilder {
+        let id = TypeId::of::<T>();
+        if let Some(queued) = builder.factories.iter_mut().find(|q| q.id() == id) {
+            queued.reads = true;
+        }
+        builder
     }
 
     /// The chains `container`'s sites composed, which it holds for its life —

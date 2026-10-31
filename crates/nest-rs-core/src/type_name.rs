@@ -7,7 +7,7 @@ pub fn short_type_name<T: ?Sized>() -> String {
 }
 
 /// [`short_type_name`] for a name already in hand.
-pub(crate) fn shorten(name: &str) -> String {
+pub fn shorten(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut segment_start = 0;
     for (i, c) in name.char_indices() {

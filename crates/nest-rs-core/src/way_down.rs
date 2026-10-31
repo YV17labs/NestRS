@@ -118,7 +118,7 @@ fn exit_at_once(signal: Received) -> ! {
         match &*step {
             Step::Main => before_any_app(signal, code),
             Step::Boot(None) => abandoning!(step = "boot"),
-            Step::Boot(Some(BootStep::Factory { type_name })) => {
+            Step::Boot(Some(BootStep::Factory { type_name } | BootStep::Read { type_name })) => {
                 abandoning!(step = "boot", type_name)
             }
             Step::Boot(Some(

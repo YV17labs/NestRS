@@ -42,9 +42,10 @@ impl ConfigModule {
     /// through [`Config::resolve`], a named one takes its steps under its own
     /// namespace.
     pub fn provide_feature<I: Instance, C: Config>(builder: ContainerBuilder) -> ContainerBuilder {
-        prepare::<I, C>(builder).provide_factory::<I::Of<C>, _, _>(|_| async move {
+        let builder = prepare::<I, C>(builder).provide_factory::<I::Of<C>, _, _>(|_| async move {
             resolve_instance::<C, I>(None, None).map_err(anyhow::Error::from)
-        })
+        });
+        nest_rs_core::__private::reading::<I::Of<C>>(builder)
     }
 
     /// Queue `config`, the base a module's `for_root` pinned for one instance,
@@ -63,13 +64,14 @@ impl ConfigModule {
         let builder = prepare::<I, C>(builder);
         let base = config.into().into_pinned();
         let site = nest_rs_core::__private::declaring_site(&builder);
-        builder.provide_declared_factory::<I::Of<C>, _, _>(
+        let builder = builder.provide_declared_factory::<I::Of<C>, _, _>(
             "A config has one seam — pin it once, on the `for_root` of the module that owns it, \
              and let every other import of that module stay bare.",
             |_| async move {
                 resolve_instance::<C, I>(Some(base), Some(site)).map_err(anyhow::Error::from)
             },
-        )
+        );
+        nest_rs_core::__private::reading::<I::Of<C>>(builder)
     }
 
     /// The `C` this boot resolved, or the refusal naming it: what a module
@@ -490,12 +492,9 @@ mod tests {
             assert_eq!(refused.instance, "");
             assert_eq!(
                 refused.to_string(),
-                format!(
-                    "`{}` was read before any factory resolved it: the module owning it is not \
-                     imported, or is imported in a `register` alone, or the factory reading it \
-                     does not name it among its inputs",
-                    std::any::type_name::<SeamConfig>()
-                )
+                "`SeamConfig` was read before any factory resolved it: the module owning it is not \
+                 imported, or is imported in a `register` alone, or the factory reading it does \
+                 not name it among its inputs"
             );
         }
 
@@ -510,10 +509,10 @@ mod tests {
             };
             assert_eq!(refused.instance, "archive");
             assert!(
-                refused.to_string().starts_with(&format!(
-                    "`{}` of the instance `archive` was read before any factory resolved it",
-                    std::any::type_name::<SeamConfig>()
-                )),
+                refused.to_string().starts_with(
+                    "`SeamConfig` of the instance `archive` was read before any factory resolved \
+                     it"
+                ),
                 "{refused}"
             );
         }

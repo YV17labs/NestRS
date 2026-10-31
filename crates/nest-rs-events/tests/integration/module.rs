@@ -214,7 +214,8 @@ async fn two_values_of_one_hidden_type_on_a_listener_host_fail_the_boot_naming_i
     };
     let chain = format!("{refused:#}");
     assert!(
-        chain.contains("module::Tag`") && chain.contains("on `TaggedTwiceListeners`"),
-        "the refusal names the type and the host declaring it twice: {chain}",
+        chain.contains("two `Tag` values on `TaggedTwiceListeners`"),
+        "the refusal names the type as an app writes it and the host declaring it twice: \
+         {chain}",
     );
 }

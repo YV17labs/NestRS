@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
+use nest_rs_config::__private::validator::Validate as _;
 use nest_rs_config::{
     Bound, Config, ConfigError, ConfigService, DurationBounds, Floor, FromSetting, Result, config,
     var_name,
@@ -313,6 +314,41 @@ fn a_value_that_does_not_read_is_refused_by_its_variable_never_by_its_value() {
         assert!(refused.contains(expected), "{refused}");
         assert!(!refused.contains("hunter2"), "{refused}");
     }
+}
+
+/// A firing's limits, read whole as JSON and validated inside.
+#[derive(
+    Clone, Debug, Default, serde::Deserialize, ::nest_rs_config::__private::validator::Validate,
+)]
+#[validate(crate = ::nest_rs_config::__private::validator)]
+struct Limits {
+    #[validate(range(max = 10))]
+    max: u32,
+}
+
+#[config(namespace = "overlay_firing")]
+#[derive(Clone, Debug, Default)]
+struct FiringConfig {
+    #[config(json)]
+    #[validate(nested)]
+    limits: Limits,
+}
+
+#[test]
+fn a_failure_inside_a_json_field_names_the_one_variable_that_sets_it() {
+    let refused = FiringConfig {
+        limits: Limits { max: 99 },
+    }
+    .check()
+    .expect_err("a max past ten is refused")
+    .to_string();
+    assert!(
+        refused.contains(&format!(
+            "  - limits.max ({}): range",
+            var_name("overlay_firing", "LIMITS")
+        )),
+        "{refused}"
+    );
 }
 
 #[config(namespace = "overlay_profiled", defaults = profiled)]

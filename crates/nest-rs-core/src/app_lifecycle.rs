@@ -51,6 +51,18 @@ impl StopCause {
             Self::TransportFailed | Self::NoTransport | Self::BootFailed | Self::Closed => None,
         }
     }
+
+    /// What a sentence calls the cause: the signal's name for a signal.
+    pub(crate) fn described(self) -> &'static str {
+        match self {
+            Self::Interrupt => "SIGINT",
+            Self::Terminate => "SIGTERM",
+            Self::TransportFailed => "a transport that failed",
+            Self::NoTransport => "the absence of any transport",
+            Self::BootFailed => "a boot step that failed",
+            Self::Closed => "`App::close`",
+        }
+    }
 }
 
 /// The state and the cause, moved together so that no reader sees one without
@@ -361,10 +373,7 @@ mod tests {
             .map(|interrupted| (interrupted.cause, interrupted.step.to_string()));
         assert_eq!(
             interrupted,
-            Some((
-                StopCause::Terminate,
-                "the factory for `app::Pool`".to_owned()
-            ))
+            Some((StopCause::Terminate, "the factory for `Pool`".to_owned()))
         );
         let line = logs.expect_one(
             crate::target::APP,
@@ -374,7 +383,7 @@ mod tests {
         assert_eq!(line.field("signal").as_deref(), Some("SIGTERM"));
         assert_eq!(
             line.field("step").as_deref(),
-            Some("the factory for `app::Pool`")
+            Some("the factory for `Pool`")
         );
     }
 

@@ -191,7 +191,7 @@ crate::__global_layer_pool! {
 
 impl GlobalLayer for dyn __private::ErasedExceptionFilter {
     const KIND: &'static str = "exception filter";
-    const POOL: &'static str = "nest_rs::layers::exception_filters";
+    const POOL: &'static str = "GlobalExceptionFilters";
 }
 
 /// Try `filters` in order on `failure`; the first that answers wins, and the

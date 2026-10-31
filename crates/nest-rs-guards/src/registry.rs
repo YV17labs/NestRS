@@ -92,7 +92,7 @@ nest_rs_core::__global_layer_pool! {
 
 impl GlobalLayer for dyn Guard {
     const KIND: &'static str = "guard";
-    const POOL: &'static str = "nest_rs::guards::global";
+    const POOL: &'static str = "GlobalGuards";
 
     fn check(container: &Container) -> Result<(), String> {
         crate::validate::boot_validate_guards(container, &[], "the global guard chain")

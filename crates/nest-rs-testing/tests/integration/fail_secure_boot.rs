@@ -216,7 +216,7 @@ async fn a_global_pool_a_module_the_app_imports_declares_fails_the_boot_naming_i
             .await,
         "a feature would choose the guards every route of the app runs",
     );
-    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
+    assert_eq!(registry, "GlobalGuards", "{chain}");
     assert!(
         chain.contains("GlobalGuards<(WiredGuard,)>")
             && chain.contains("FeatureDeclaringThePoolModule")
@@ -247,11 +247,12 @@ async fn a_global_pool_no_modules_providers_list_fails_the_boot_naming_it() {
             .await,
         "a binding would choose the guards every route of the app runs",
     );
-    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
+    assert_eq!(registry, "GlobalGuards", "{chain}");
     assert!(
         chain.contains("GlobalGuards<(WiredGuard,)>")
-            && chain.contains("registered by no module's providers"),
-        "the refusal names the declaration and why: {chain}",
+            && chain.contains("registered by no module's providers")
+            && chain.contains("list it in `AppOverAHandWrittenPoolModule`'s providers"),
+        "the refusal names the declaration, why, and the module to list it in: {chain}",
     );
 }
 
@@ -271,7 +272,7 @@ async fn a_global_pool_declared_twice_fails_the_boot_naming_both() {
             .await,
         "one of two pools would run without the other",
     );
-    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
+    assert_eq!(registry, "GlobalGuards", "{chain}");
     assert!(
         chain.contains("declared twice")
             && chain.contains("`GlobalGuards<(WiredGuard,)>` in `FirstPoolModule`")
@@ -293,7 +294,7 @@ async fn one_pool_two_roots_list_fails_the_boot_naming_both_roots() {
             .await,
         "one listing would hide the other",
     );
-    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
+    assert_eq!(registry, "GlobalGuards", "{chain}");
     assert!(
         chain.contains("declared twice")
             && chain.contains("`GlobalGuards<(WiredGuard,)>` in `FirstPoolModule`")
@@ -317,11 +318,11 @@ async fn one_pool_the_root_and_a_module_it_imports_list_fails_the_boot_naming_th
             .await,
         "a feature would choose the guards every route of the app runs",
     );
-    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
+    assert_eq!(registry, "GlobalGuards", "{chain}");
     assert!(
         chain
             .contains("`GlobalGuards<(WiredGuard,)>` is listed by `FeatureDeclaringThePoolModule`")
-            && chain.contains("the module the app boots"),
+            && chain.contains("list it in `RootRelistingAFeaturesPoolModule`'s providers"),
         "the refusal names the imported module listing the pool: {chain}",
     );
 }

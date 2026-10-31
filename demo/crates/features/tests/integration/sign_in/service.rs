@@ -4,6 +4,7 @@ use features::Role;
 use features::authz::constants::{POSTS_READ, POSTS_WRITE};
 use features::sign_in::{ClientPayload, SignInConfig, SignInModule, SignInService};
 use nest_rs::authn::{AuthnConfig, AuthnModule, JwtOptions, JwtService};
+use nest_rs::config::{Namespaced, var_name};
 use nest_rs::core::module;
 use nest_rs::http::StatusCode;
 use nest_rs::oauth::server::{OAuthServerConfig, RegisteredClient, TokenError};
@@ -116,15 +117,19 @@ fn sign_in_app(clients: Vec<RegisteredClient<ClientPayload>>) -> TestAppBuilder 
 #[tokio::test]
 async fn a_client_registered_outside_the_policy_refuses_the_boot_naming_it() {
     let user_shaped = Uuid::now_v7().to_string();
+    let clients = var_name(
+        <OAuthServerConfig<ClientPayload> as Namespaced>::NAMESPACE,
+        "CLIENTS",
+    );
 
     for (client, said) in [
         (
             registered("ci-runner", &[POSTS_READ, "admin"]),
-            "clients[ci-runner].scopes: unknown_scope".to_owned(),
+            format!("clients[ci-runner].scopes ({clients}): unknown_scope"),
         ),
         (
             registered(&user_shaped, &[POSTS_READ]),
-            format!("clients[{user_shaped}].client_id: reads_as_a_user"),
+            format!("clients[{user_shaped}].client_id ({clients}): reads_as_a_user"),
         ),
     ] {
         let app = sign_in_app(vec![client])

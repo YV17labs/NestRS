@@ -984,8 +984,8 @@ mod tests {
         for (config, composed, read) in [
             (
                 invalid,
-                "configuration validation failed for 'OAuthClientConfig'".to_owned(),
-                "configuration validation failed for 'oauth__client'".to_owned(),
+                "configuration validation failed for `OAuthClientConfig`".to_owned(),
+                format!("configuration validation failed for `{}`", var("*")),
             ),
             (
                 unusable,
@@ -1104,7 +1104,13 @@ mod tests {
             panic!("a refused config is a failed authentication setup");
         };
         let sentence = nest_rs_core::error_message(&sentence);
-        assert!(sentence.contains("client_secret: refused"), "{sentence}");
+        assert!(
+            sentence.contains(&format!(
+                "client_secret ({}): refused",
+                nest_rs_config::var_name(OAuthClientConfig::NAMESPACE, "CLIENT_SECRET")
+            )),
+            "{sentence}"
+        );
         assert!(!sentence.contains("s3cr3t"), "{sentence}");
         assert!(!sentence.contains("value"), "{sentence}");
     }

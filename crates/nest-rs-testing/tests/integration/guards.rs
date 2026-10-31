@@ -668,7 +668,7 @@ async fn a_global_pool_listing_authorization_first_fails_the_boot_of_an_app_serv
         result,
         "the app would boot with a pool that answers 500 wherever it runs",
     );
-    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
+    assert_eq!(registry, "GlobalGuards", "{chain}");
     assert!(
         chain.contains("PolicyGuard") && chain.contains("SessionGuard"),
         "the refusal names both guards: {chain}",

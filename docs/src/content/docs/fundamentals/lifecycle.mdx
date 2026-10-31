@@ -231,7 +231,7 @@ is sized against their sum. A bound per hook could not hold a sum — four hooks
 that hang would spend twenty seconds — which is why it is a budget.
 
 ```text frame="terminal"
-Error: lifecycle hook api::migrations::MigrationGuard::check (OnModuleInit) failed: pending migrations
+Error: the `#[on_module_init]` hook `MigrationGuard::check` in `api::migrations` failed: pending migrations
 ```
 
 ## A hook is a unit of work

@@ -114,7 +114,17 @@ fn a_validation_refusal_names_the_namespace_the_instance_read() {
         .err()
         .expect("zero slots is refused");
     assert!(
-        refused.contains("configuration validation failed for 'shelf__cache'"),
+        refused.contains(&format!(
+            "configuration validation failed for `{}`",
+            var_name("shelf__cache", "*")
+        )),
+        "{refused}"
+    );
+    assert!(
+        refused.contains(&format!(
+            "slots ({}): range",
+            var_name("shelf__cache", "SLOTS")
+        )),
         "{refused}"
     );
 }
@@ -137,9 +147,7 @@ fn two_pins_for_one_instance_contest() {
         .expect("two pins of one instance fail the boot");
     assert!(refused.contains("contested declaration"), "{refused}");
     assert!(
-        refused.contains(
-            "Instanced<integration::for_instance::Cache, integration::for_instance::ShelfConfig>"
-        ),
+        refused.contains("contested declaration: `Instanced<Cache, ShelfConfig>`"),
         "the key names its instance: {refused}"
     );
 }

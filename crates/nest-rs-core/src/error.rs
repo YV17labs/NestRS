@@ -7,6 +7,7 @@ use serde_json::error::Category;
 use thiserror::Error;
 
 use crate::container::ProviderScope;
+use crate::type_name::shorten;
 
 /// A provider depends on something its module does not import and that is not
 /// global infrastructure. Raised at boot by the access-graph validation.
@@ -47,8 +48,9 @@ pub struct AccessGraphError {
 /// filed once at `error` by the edge, naming the guard and the value.
 #[derive(Debug, Error)]
 #[error(
-    "no `{value}` is ambient on this unit: the layer that attaches it is not bound before the \
-     one requiring it"
+    "no `{}` is ambient on this unit: the layer that attaches it is not bound before the one \
+     requiring it",
+    shorten(.value)
 )]
 #[non_exhaustive]
 pub struct MissingAmbientError {
@@ -149,21 +151,17 @@ impl std::fmt::Display for MissingDependencyError {
     }
 }
 
-/// A **singleton** provider `#[inject]`s one the container never places in the
-/// singleton map — a `#[injectable(scope = request)]` or `scope = transient`
-/// provider.
-///
-/// Neither is ever placed in the singleton map the register phase gates
-/// readiness on, so the singleton could never be built. The remedy names the
-/// concept (`Scoped<T>`), never an edge crate: the kernel knows none.
+/// A **singleton** provider `#[inject]`s a `#[injectable(scope = request)]` or
+/// `scope = transient` provider, which is built per request or per
+/// resolution, never once at boot where the singleton is built. The remedy
+/// names the concept (`Scoped<T>`), never an edge crate: the kernel knows
+/// none.
 #[derive(Debug, Error)]
 #[error(
     "scope violation: `{consumer}` (in module `{module}`) is a singleton and injects \
-     `{dependency}`, which is request-scoped or transient. Neither is ever placed in \
-     the singleton map a singleton's dependencies are resolved from, so there is \
-     nothing for `{consumer}` to hold once at boot. Reach it through the request \
-     boundary of the edge that dispatches the work — the `Scoped<T>` its crate \
-     exports — or make `{consumer}` request-scoped too."
+     `{dependency}`, which is request-scoped or transient: `{consumer}` is built once, at boot, \
+     where no request exists to build `{dependency}` for it. Reach `{dependency}` through the \
+     `Scoped<T>` of the edge that dispatches the work, or make `{consumer}` request-scoped too."
 )]
 #[non_exhaustive]
 pub struct ScopeViolationError {
@@ -323,13 +321,15 @@ impl ContainerError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 #[error(
-    "duplicate provider: `{type_name}` is registered by {first} and again by {second}{} — one \
-     type has one provider: remove one registration; a test replaces a provider with \
-     `override_value`, `override_arc` or `override_dyn`",
+    "duplicate provider: `{}` is registered by {first} and again by {second}{} — one type has \
+     one provider: remove one registration; a test replaces a provider with `override_value`, \
+     `override_arc` or `override_dyn`",
+    shorten(.type_name),
     scopes_clause(*.scopes)
 )]
 pub struct DuplicateProviderError {
-    /// The type registered twice.
+    /// The type registered twice, as `std::any::type_name` spells it; the
+    /// sentence says it without its module paths.
     pub type_name: &'static str,
     /// The registration made first: an import site, a seed, or a factory and
     /// the site that queued it.
@@ -368,11 +368,13 @@ fn scopes_clause(scopes: Option<(ProviderScope, ProviderScope)>) -> String {
 /// attached.
 #[derive(Debug, Error)]
 #[error(
-    "contested declaration: `{type_name}` is declared twice — by {first}, and by {second}. {remedy}"
+    "contested declaration: `{}` is declared twice — by {first}, and by {second}. {remedy}",
+    shorten(.type_name)
 )]
 #[non_exhaustive]
 pub struct ContestedDeclarationError {
-    /// The type declared more than once.
+    /// The type declared more than once, as `std::any::type_name` spells it;
+    /// the sentence says it without its module paths.
     pub type_name: &'static str,
     /// The declaration made first, as the import that made it.
     pub first: String,
@@ -387,9 +389,9 @@ pub struct ContestedDeclarationError {
 /// declarations.
 #[derive(Debug, Error)]
 #[error(
-    "factory cycle: {type_names:?} — each waits on a factory output that a member \
-     of this set (itself included) would provide, so no order satisfies them. \
-     Drop one `_after` declaration."
+    "factory cycle: {} — each waits on a factory output that a member of this set (itself \
+     included) would provide, so no order satisfies them. Drop one `_after` declaration.",
+    and_list(&.type_names.iter().map(|name| shorten(name)).collect::<Vec<_>>())
 )]
 #[non_exhaustive]
 pub struct FactoryCycleError {
@@ -399,11 +401,16 @@ pub struct FactoryCycleError {
 
 /// A factory failed, so the boot ends before any provider is built from it:
 /// named by the type it would have built, its cause the factory's own error.
+///
+/// A factory that reads its value rather than builds it — a `#[config]` from
+/// the environment — fails the boot with its own refusal instead, which names
+/// the variable an operator sets.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-#[error("the factory for `{type_name}` failed")]
+#[error("the factory for `{}` failed", shorten(.type_name))]
 pub struct FactoryFailedError {
-    /// The type the factory would have built.
+    /// The type the factory would have built, as `std::any::type_name`
+    /// spells it; the sentence says it without its module paths.
     pub type_name: &'static str,
     /// What the factory failed with.
     #[source]
@@ -414,7 +421,7 @@ pub struct FactoryFailedError {
 /// dropped where it waited, and the app never served.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-#[error("the boot was stopped by {cause:?} during {step}")]
+#[error("the boot was stopped by {} during {step}", .cause.described())]
 pub struct BootInterruptedError {
     /// Why the app stops.
     pub cause: crate::StopCause,
@@ -458,7 +465,7 @@ pub struct InitFailedError;
 /// phase from the start and drains no factory, so its sentence prescribes
 /// that builder's edit: a seed for a default, the boot for a declaration.
 #[derive(Debug, Error)]
-#[error("{}", late_factory_sentence(.type_name, *.queued_on))]
+#[error("{}", late_factory_sentence(&shorten(.type_name), *.queued_on))]
 pub struct LateFactoryError {
     /// The type whose factory was queued too late to run.
     pub type_name: &'static str,
@@ -704,9 +711,10 @@ fn unbuilt_clause(cause: &UnbuiltCause, module: &str, count: usize) -> String {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 #[error(
-    "the test overrides `{type_name}`, which nothing in this app's graph provides — no module \
-     lists it, and no factory or seed makes it — so the double would never be read: override \
-     the type the app registers (for a `Foo as dyn Trait` binding, `override_dyn::<dyn Trait>`)"
+    "the test overrides `{}`, which nothing in this app's graph provides — no module lists it, \
+     and no factory or seed makes it — so the double would never be read: override the type \
+     the app registers (for a `Foo as dyn Trait` binding, `override_dyn::<dyn Trait>`)",
+    shorten(.type_name)
 )]
 pub struct UnclaimedOverrideError {
     /// The overridden type.
@@ -720,8 +728,9 @@ pub struct UnclaimedOverrideError {
 #[non_exhaustive]
 #[error(
     "unmet dependency: `{consumer}` (in module `{module}`) injects `{dependency}`, which the \
-     test removed with its provider — `{provider}` is overridden through `{through}`: override \
-     the key this consumer injects"
+     test removed with its provider — `{provider}` is overridden through `{}`: override the key \
+     this consumer injects",
+    shorten(.through)
 )]
 pub struct OverriddenDependencyError {
     /// The module listing the consumer.
@@ -737,13 +746,16 @@ pub struct OverriddenDependencyError {
 }
 
 /// `` `A` ``, `` `A` and `B` ``, `` `A`, `B` and `C` ``.
-fn and_list(names: &[&str]) -> String {
+fn and_list<S: AsRef<str>>(names: &[S]) -> String {
     match names {
         [] => String::new(),
-        [only] => format!("`{only}`"),
+        [only] => format!("`{}`", only.as_ref()),
         [init @ .., last] => {
-            let init: Vec<String> = init.iter().map(|name| format!("`{name}`")).collect();
-            format!("{} and `{last}`", init.join(", "))
+            let init: Vec<String> = init
+                .iter()
+                .map(|name| format!("`{}`", name.as_ref()))
+                .collect();
+            format!("{} and `{}`", init.join(", "), last.as_ref())
         }
     }
 }
@@ -789,8 +801,9 @@ pub struct WiringFailedError {
 /// otherwise run without it.
 #[derive(Debug, Error)]
 #[error(
-    "`{layer}` is declared on `{site}`, and no imported module provides it — import the module \
-     that provides it"
+    "`{}` is declared on `{site}`, and no imported module provides it — import the module that \
+     provides it",
+    shorten(.layer)
 )]
 #[non_exhaustive]
 pub struct UnresolvedLayerError {
@@ -809,9 +822,10 @@ pub struct UnresolvedLayerError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 #[error(
-    "`#[meta]` declares two `{type_name}` values on `{declared_on}` — a read takes the first \
-     value of a type, so the second would be read by nothing: keep one; a method's own value \
-     already overrides its host's"
+    "`#[meta]` declares two `{}` values on `{declared_on}` — a read takes the first value of a \
+     type, so the second would be read by nothing: keep one; a method's own value already \
+     overrides its host's",
+    shorten(.type_name)
 )]
 pub struct DuplicateMetaError {
     /// The values' type.
@@ -1934,7 +1948,7 @@ mod boot_refusal_tests {
         };
         assert_eq!(
             factory.to_string(),
-            "the boot was stopped by Terminate during the factory for `app::Pool`"
+            "the boot was stopped by SIGTERM during the factory for `Pool`"
         );
         let configure = BootInterruptedError {
             cause: crate::StopCause::Interrupt,
@@ -1944,7 +1958,7 @@ mod boot_refusal_tests {
         };
         assert_eq!(
             configure.to_string(),
-            "the boot was stopped by Interrupt during the `configure` of transport `HttpTransport`"
+            "the boot was stopped by SIGINT during the `configure` of transport `HttpTransport`"
         );
         let hook = BootInterruptedError {
             cause: crate::StopCause::Terminate,
@@ -1957,8 +1971,18 @@ mod boot_refusal_tests {
         };
         assert_eq!(
             hook.to_string(),
-            "the boot was stopped by Terminate during lifecycle hook app::cache::CacheWarmer::warm \
-             (OnModuleInit)"
+            "the boot was stopped by SIGTERM during the `#[on_module_init]` hook \
+             `CacheWarmer::warm` in `app::cache`"
+        );
+        let closed = BootInterruptedError {
+            cause: crate::StopCause::Closed,
+            step: crate::BootStep::Read {
+                type_name: "nest_rs_http::config::HttpConfig",
+            },
+        };
+        assert_eq!(
+            closed.to_string(),
+            "the boot was stopped by `App::close` during the read of `HttpConfig`"
         );
     }
 
@@ -1970,7 +1994,32 @@ mod boot_refusal_tests {
         };
         assert_eq!(
             crate::error_message(&failed),
-            "the factory for `app::Pool` failed: connection refused"
+            "the factory for `Pool` failed: connection refused"
+        );
+    }
+
+    #[test]
+    fn a_boot_refusal_names_a_type_by_the_path_an_app_writes() {
+        let duplicate = DuplicateProviderError {
+            type_name: "api::users::service::UsersService",
+            first: "`UsersModule`".to_owned(),
+            second: "`AdminModule`".to_owned(),
+            scopes: None,
+        };
+        assert!(
+            duplicate
+                .to_string()
+                .starts_with("duplicate provider: `UsersService` is registered by"),
+            "{duplicate}"
+        );
+        let cycle = FactoryCycleError {
+            type_names: vec!["app::A", "app::B<app::C>"],
+        };
+        assert!(
+            cycle
+                .to_string()
+                .starts_with("factory cycle: `A` and `B<C>` — "),
+            "{cycle}"
         );
     }
 }

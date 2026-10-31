@@ -353,11 +353,10 @@ both imports before anything is built — here `BlogModule` pins a port and so
 does the `PostsHttpModule` it imports:
 
 ```text title="two pins of one config"
-contested declaration: `nest_rs_http::config::HttpConfig` is declared twice — by
-`HttpModule::for_root(..)` at `imports[0]` of `BlogModule`, and by
-`HttpModule::for_root(..)` at `imports[0]` of `PostsHttpModule`. A config has one
-seam — pin it once, on the `for_root` of the module that owns it, and let every
-other import of that module stay bare.
+contested declaration: `HttpConfig` is declared twice — by `HttpModule::for_root(..)`
+at `imports[0]` of `BlogModule`, and by `HttpModule::for_root(..)` at `imports[0]`
+of `PostsHttpModule`. A config has one seam — pin it once, on the `for_root` of
+the module that owns it, and let every other import of that module stay bare.
 ```
 
 ## Going further

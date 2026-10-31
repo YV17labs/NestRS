@@ -74,7 +74,7 @@ nest_rs_core::__global_layer_pool! {
 
 impl GlobalLayer for dyn GlobalPipe {
     const KIND: &'static str = "pipe";
-    const POOL: &'static str = "nest_rs::pipes::global";
+    const POOL: &'static str = "GlobalPipes";
 }
 
 /// The global pool as an edge folds it: resolved once, at mount, composed as

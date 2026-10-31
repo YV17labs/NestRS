@@ -266,7 +266,7 @@ async fn two_values_of_one_hidden_type_on_a_route_fail_the_boot_naming_it_and_th
     };
     let chain = format!("{refused:#}");
     assert!(
-        chain.contains("route_site::Tag`") && chain.contains("TaggedTwiceController::read"),
-        "the refusal names the type and the route: {chain}",
+        chain.contains("two `Tag` values on `TaggedTwiceController::read`"),
+        "the refusal names the type as an app writes it and the route: {chain}",
     );
 }

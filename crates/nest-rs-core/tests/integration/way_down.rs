@@ -6,8 +6,8 @@
 use std::time::Duration;
 
 use nest_rs_core::{
-    App, BootInterruptedError, Container, ContainerBuilder, Module, Registering, Transport, hooks,
-    injectable, module,
+    App, AppLifecycle, BootInterruptedError, Collecting, Container, ContainerBuilder, Module,
+    Registering, Transport, hooks, injectable, module,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -134,6 +134,41 @@ const WAITS_FOR: Duration = Duration::from_secs(30);
 const BOOT_FAILED: &str = "WAY-DOWN-CHILD BOOT FAILED";
 
 struct SlowPool;
+
+/// What a `#[config]` read hands back, queued as one: the boot names its step
+/// "the read of `Settings`".
+struct Settings;
+
+/// Queues a factory that prints [`READY`] and blocks its thread until the stop
+/// is asked, then a read: the stop is first seen at the read's step.
+struct ReadsAfterTheStopModule;
+
+impl Module for ReadsAfterTheStopModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+    }
+
+    #[expect(
+        clippy::print_stdout,
+        reason = "the child's stdout is the protocol its parent test reads"
+    )]
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        let builder = builder
+            .provide_factory::<SlowPool, _, _>(|container| async move {
+                let lifecycle = container
+                    .get::<AppLifecycle>()
+                    .ok_or_else(|| anyhow::anyhow!("every boot is seeded its lifecycle"))?;
+                println!("{READY}");
+                let deadline = std::time::Instant::now() + WAITS_FOR;
+                while lifecycle.cause().is_none() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Ok(SlowPool)
+            })
+            .provide_factory::<Settings, _, _>(|_| async { Ok(Settings) });
+        nest_rs_core::__private::reading::<Settings>(builder)
+    }
+}
 
 /// Prints [`READY`] once its `configure` is under way, then waits.
 struct ConfiguresSlowly;
@@ -336,6 +371,13 @@ async fn run_child(role: String) -> anyhow::Result<()> {
                 .await
                 .map(drop),
         ),
+        "read" => said(
+            App::builder()
+                .module::<ReadsAfterTheStopModule>()
+                .build()
+                .await
+                .map(drop),
+        ),
         "configure" => said(
             App::builder()
                 .module::<ConfiguresSlowlyModule>()
@@ -520,7 +562,7 @@ fn signalled_during_the_boot(role: &str, step: &str) -> Vec<String> {
     );
     assert!(failed.contains(step), "{failed}");
     assert!(
-        failed.contains("the boot was stopped by Terminate during"),
+        failed.contains("the boot was stopped by SIGTERM during"),
         "{failed}"
     );
     printed
@@ -530,6 +572,12 @@ fn signalled_during_the_boot(role: &str, step: &str) -> Vec<String> {
 #[test]
 fn a_signal_during_a_factory_stops_the_boot_naming_its_type() {
     signalled_during_the_boot("factory", "SlowPool");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_signal_before_a_config_read_stops_the_boot_naming_the_read() {
+    signalled_during_the_boot("read", "the read of `Settings`");
 }
 
 #[cfg(unix)]

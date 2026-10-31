@@ -9,11 +9,11 @@ use std::borrow::{Borrow, Cow};
 use std::sync::Arc;
 
 use nest_rs_core::{Container, Instance};
-use validator::Validate;
+use validator::{Validate, ValidationErrors};
 
-use crate::Result;
 use crate::service::ConfigService;
 use crate::source::MapSource;
+use crate::{ConfigError, Result};
 
 /// The `<DOMAIN>` in `<PREFIX>_<DOMAIN>__<KEY>`. Supplied by the
 /// [`config`](macro@crate::config) macro from `#[config(namespace = "…")]`.
@@ -75,7 +75,20 @@ fn check_under<C: Config>(namespace: &str, value: &C) -> Result<()> {
     let unset = ConfigService::with_source(namespace, Arc::new(MapSource::default()));
     read(&unset, value.clone())?
         .validate()
-        .map_err(|errors| crate::ConfigError::validation(namespace.to_owned(), errors))
+        .map_err(|errors| invalid::<C>(namespace.to_owned(), errors))
+}
+
+/// The refusal of `C`'s value read under `namespace`, naming the variable of
+/// each failing field.
+fn invalid<C: Config>(
+    namespace: impl Into<Cow<'static, str>>,
+    errors: ValidationErrors,
+) -> ConfigError {
+    ConfigError::Validation {
+        namespace: namespace.into(),
+        errors,
+        whole_fields: C::__WHOLE_FIELDS,
+    }
 }
 
 /// Hold the `C` seeded for the instance `I` to the checks a read one passes:
@@ -100,7 +113,7 @@ fn resolve_under<C: Config>(namespace: Cow<'static, str>, pinned: Option<C>) -> 
     let config = read(&env, base)?;
     config
         .validate()
-        .map_err(|errors| crate::ConfigError::validation(namespace, errors))?;
+        .map_err(|errors| invalid::<C>(namespace, errors))?;
     Ok(config)
 }
 
@@ -142,6 +155,13 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
     /// A set-but-unparseable variable returns `Err` (naming it) and aborts
     /// boot — never a silent fallback.
     fn from_env(env: &ConfigService, base: Self) -> Result<Self>;
+
+    /// The fields [`from_env`](Self::from_env) reads whole from one variable —
+    /// each `#[config(json)]` field — so a validation failure inside one names
+    /// that variable. `#[config]` writes it. Not API: may change in any
+    /// release.
+    #[doc(hidden)]
+    const __WHOLE_FIELDS: &'static [&'static str] = &[];
 
     /// The base the environment overlays when the call site pinned nothing.
     ///

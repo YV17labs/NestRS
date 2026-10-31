@@ -76,7 +76,7 @@ pub(crate) fn registered_within_policy(
 
 #[cfg(test)]
 mod tests {
-    use nest_rs::config::{Config, ConfigError, ConfigService, Namespaced};
+    use nest_rs::config::{Config, ConfigError, ConfigService, Namespaced, var_name};
     use nest_rs::oauth::server::RegisteredClient;
 
     use super::*;
@@ -124,7 +124,13 @@ mod tests {
 
         assert_eq!(keys, ["clients[legacy-runner].scopes"]);
         assert!(
-            rendered.contains("clients[legacy-runner].scopes: unknown_scope"),
+            rendered.contains(&format!(
+                "clients[legacy-runner].scopes ({}): unknown_scope",
+                var_name(
+                    <OAuthServerConfig<ClientPayload> as Namespaced>::NAMESPACE,
+                    "CLIENTS"
+                )
+            )),
             "{rendered}"
         );
         assert!(!rendered.contains("s3cr3t"), "{rendered}");

@@ -467,7 +467,16 @@ mod tests {
         );
         // `install` formats the error itself into the boot's sentence.
         let sentence = err.to_string();
-        assert!(sentence.contains("client_secret: length"), "{sentence}");
+        assert!(
+            sentence.contains(&format!(
+                "client_secret ({}): length",
+                nest_rs_config::var_name(
+                    <StubConfig as nest_rs_config::Namespaced>::NAMESPACE,
+                    "CLIENT_SECRET"
+                )
+            )),
+            "{sentence}"
+        );
         assert!(!sentence.contains("value"), "{sentence}");
         assert!(!sentence.contains("s3cr3t"), "{sentence}");
     }

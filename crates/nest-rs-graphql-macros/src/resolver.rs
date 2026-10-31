@@ -16,10 +16,10 @@ use syn::{
 
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
-    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Collision, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, InjectableBody, SitePosture, TailParam, VersionedEdge,
-    answer_span, at_most_one_authorize, await_if_async, build_injectable_body, camel_case,
-    cfg_attrs, concrete_signature, delegated_attrs, force_guard_typeids, forwarded_arg_idents,
+    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Conditional, DispatchKeys, HandlerSite,
+    HostBorrow, HostMeta, InjectableBody, SitePosture, TailParam, VersionedEdge, answer_span,
+    at_most_one_authorize, await_if_async, build_injectable_body, camel_case, cfg_attrs,
+    concrete_signature, delegated_attrs, force_guard_typeids, forwarded_arg_idents,
     forwarded_idents, from_container_method, guard_capability_bounds, handler_const, handler_ref,
     host_meta_fn, impl_self_ident, injected_field_types, injected_keys_with_layers,
     injected_methods_with_layers, injected_names_with_layers, injected_optional_fns,
@@ -1005,7 +1005,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 (format!("{root} {field}"), format!("#[{root}] {field}"))
             };
             declared.declare(
-                Collision::Marker,
                 "field",
                 &identity,
                 &key,
@@ -1520,7 +1519,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         quote!(::nest_rs_guards::GuardFor<::nest_rs_graphql::GraphqlView>),
     );
 
-    let markers = declared.markers(&self_ty, &item.generics);
+    let crossings = declared.crossings();
 
     Ok(quote! {
         #item
@@ -1546,7 +1545,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
         #capability_bounds
 
-        #markers
+        #crossings
 
         #(#bound_entities)*
 

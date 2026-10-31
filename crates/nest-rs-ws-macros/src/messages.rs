@@ -13,8 +13,8 @@ use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
-    Collision, Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta,
-    Posture, PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs, concrete_signature,
+    Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta, Posture,
+    PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs, concrete_signature,
     declared_handler, force_guard_typeids, guard_capability_bounds, handler_const, handler_ref,
     impl_self_ident, injected_methods_with_layers, injected_per_request_method, layer_deps,
     one_role_per_method, piped_input, reject_meta_on_operations, returns_unit, scoped_specs,
@@ -130,8 +130,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     // are two definitions of one trait method, which rustc refuses.
     let mut hooks: Vec<TokenStream2> = Vec::new();
     let mut site_items: Vec<TokenStream2> = Vec::new();
-    // A second declaration is refused by the macro without `#[cfg]`, and by
-    // rustc through the marker when both are compiled in.
+    // A second declaration is refused by the macro without `#[cfg]`, and under
+    // both `#[cfg]`s when either has one.
     let mut declared = DispatchKeys::new(
         "#[messages]",
         "a gateway dispatches each event, and each connection hook, to one method, so the \
@@ -175,20 +175,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 Err(err) => return err.to_compile_error().into(),
             },
         };
-        // A hook's own trait method is its marker; an event has no item, so it gets one.
-        let collision = match hook {
-            Some(_) => Collision::Item,
-            None => Collision::Marker,
-        };
-        let refused = declared.declare(
-            collision,
-            kind,
-            &identity,
-            &key,
-            &method.sig.ident,
-            &cfgs,
-            &role_attr,
-        );
+        let refused = declared.declare(kind, &identity, &key, &method.sig.ident, &cfgs, &role_attr);
         if let Err(err) = refused {
             return err.to_compile_error().into();
         }
@@ -542,7 +529,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     // A provider a parameter resolves per message is checked like an `#[inject]`
     // one: an unimported `Scoped<T>` target fails the boot.
     let injected_per_request = injected_per_request_method(conditional(&message_params));
-    let markers = declared.markers(&self_ty, &item.generics);
+    let crossings = declared.crossings();
     let gate_lookup = if gate_arms.is_empty() {
         quote! {
             let _ = __event;
@@ -599,7 +586,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         #capability_bounds
 
-        #markers
+        #crossings
 
         #[::nest_rs_core::async_trait]
         impl ::nest_rs_ws::Gateway for #self_ty {
@@ -611,8 +598,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             ) -> ::core::result::Result<::nest_rs_ws::WsReply, ::nest_rs_ws::__private::HandlerFailed> {
                 let _ = &__data;
                 let _ = __client;
-                // Two arms for one event are refused — by the macro, or by rustc
-                // at the marker — so the lint would only repeat that refusal.
+                // Two arms for one event are refused — by the macro, or under both
+                // arms' `#[cfg]`s — so the lint would only repeat that refusal.
                 #[allow(unreachable_patterns)]
                 match __event {
                     #(#arms)*

@@ -1,6 +1,7 @@
 //! Two `#[on_connect]` hooks whose `#[cfg]`s both hold are two hooks for one
 //! connection, and the gateway runs one — refused, rather than one replacing
-//! the other in silence.
+//! the other in silence. The hook is its trait method, so rustc's duplicate
+//! definition stays beside the decorator's sentence.
 
 use nest_rs::ws::{gateway, messages};
 

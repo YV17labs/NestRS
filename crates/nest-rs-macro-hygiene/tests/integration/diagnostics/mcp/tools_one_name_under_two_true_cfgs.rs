@@ -1,6 +1,6 @@
 //! Two tools whose `#[cfg]`s both hold, one named after the other's method, are
-//! two routes for one name — refused by rustc, which is what evaluates the
-//! conditions.
+//! two routes for one name — refused in the decorator's sentence by a `const`
+//! compiled under both conditions, since rustc is what evaluates them.
 
 use nest_rs::mcp::model::GetPromptResult;
 use nest_rs::mcp::{McpError, mcp, tools};

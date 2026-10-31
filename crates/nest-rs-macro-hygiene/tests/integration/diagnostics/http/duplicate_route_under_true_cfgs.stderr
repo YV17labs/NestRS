@@ -1,8 +1,5 @@
-error[E0592]: duplicate definitions with name `__nestrs_routes_dispatches_route_get____f663c99a4305674e_to_one_method`
-  --> tests/integration/diagnostics/http/duplicate_route_under_true_cfgs.rs:18:7
+error[E0080]: evaluation panicked: `#[routes]` declares `GET /` on `first` and again on `second`: a controller serves each verb and path with one handler in each version, so the second would never run — give one a distinct path, verb or `#[version]`
+  --> tests/integration/diagnostics/http/duplicate_route_under_true_cfgs.rs:19:7
    |
-12 |     #[get("/")]
-   |       --- other definition for `__nestrs_routes_dispatches_route_get____f663c99a4305674e_to_one_method`
-...
-18 |     #[get("/")]
-   |       ^^^ duplicate definitions for `__nestrs_routes_dispatches_route_get____f663c99a4305674e_to_one_method`
+19 |     #[get("/")]
+   |       ^^^ evaluation of `_` failed here

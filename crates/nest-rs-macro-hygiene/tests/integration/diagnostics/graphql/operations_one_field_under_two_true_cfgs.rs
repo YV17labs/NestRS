@@ -1,5 +1,6 @@
 //! Two fields of one root under `#[cfg]`s that both hold are two resolvers for
-//! one name — refused by rustc, which is what evaluates the conditions.
+//! one name — refused in the decorator's sentence by a `const` compiled under
+//! both conditions, since rustc is what evaluates them.
 
 use nest_rs::graphql::{operations, resolver};
 

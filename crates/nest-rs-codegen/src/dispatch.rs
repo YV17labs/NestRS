@@ -2,26 +2,17 @@
 //! methods claim it.
 //!
 //! The macro cannot evaluate `#[cfg]`, so it refuses two unconditional claims
-//! itself and leaves the rest to rustc: each claim emits a unit associated
-//! constant named for the key under its method's conditions, so two compiled
-//! claims are `E0201`/`E0592`. A scoped claim (an HTTP route under some
-//! versions) emits one marker per member; an unscoped claim beside a scoped one
-//! is a `const` evaluated under both claims' conditions.
+//! itself, and for two claims of one key of which either carries a `#[cfg]` it
+//! emits a `const` panicking with the same sentence under both claims'
+//! conditions: compiled only where both are, it says the framework's refusal
+//! wherever rustc would otherwise meet two definitions. A host's impl half is
+//! one block, its `impl Discoverable` refusing a second, so no claim escapes
+//! the expansion that sees it. A WS lifecycle hook's claim is its trait method,
+//! so rustc's own duplicate-definition error stays beside the sentence.
 
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use syn::Ident;
-
-/// What rustc finds when two claims of one key are both compiled.
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Collision {
-    /// [`DispatchKeys::markers`] emits a constant that collides.
-    Marker,
-    /// The claim emits an item named for the key (the trait method
-    /// `on_connect`), already a duplicate definition.
-    Item,
-}
 
 /// One host's keys, as its decorator collects them.
 pub struct DispatchKeys {
@@ -40,7 +31,6 @@ struct Declared {
     method: String,
     cfgs: Vec<TokenStream>,
     span: Span,
-    marker: Option<TokenStream>,
 }
 
 impl Declared {
@@ -73,13 +63,8 @@ impl DispatchKeys {
     /// `kind` is the key's family word (`event`, `route`, `tool`), and `key` the
     /// key as a reader wrote it — `#[subscribe_message("ping")]`, `GET /users`.
     /// Two declarations sharing a `kind` and an `identity` claim one key.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each argument is one chain a decorator collected; a struct would only rename them"
-    )]
     pub fn declare(
         &mut self,
-        collision: Collision,
         kind: &str,
         identity: &str,
         key: &str,
@@ -87,7 +72,7 @@ impl DispatchKeys {
         cfgs: &[TokenStream],
         attr: &syn::Attribute,
     ) -> syn::Result<()> {
-        self.declare_in(collision, kind, identity, &[], key, method, cfgs, attr)
+        self.declare_in(kind, identity, &[], key, method, cfgs, attr)
     }
 
     /// [`declare`](Self::declare), for a key served only in `scope` — empty
@@ -99,7 +84,6 @@ impl DispatchKeys {
     )]
     pub fn declare_in(
         &mut self,
-        collision: Collision,
         kind: &str,
         identity: &str,
         scope: &[String],
@@ -109,8 +93,7 @@ impl DispatchKeys {
         attr: &syn::Attribute,
     ) -> syn::Result<()> {
         let method = method.to_string();
-        let unconditional = cfgs.is_empty();
-        if unconditional
+        if cfgs.is_empty()
             && let Some(first) = self
                 .declared
                 .iter()
@@ -127,20 +110,6 @@ impl DispatchKeys {
             .segments
             .last()
             .map_or_else(Span::call_site, |segment| segment.ident.span());
-        let names: Vec<Ident> = if scope.is_empty() {
-            vec![Ident::new(
-                &marker_name(self.decorator, kind, identity),
-                span,
-            )]
-        } else {
-            scope
-                .iter()
-                .map(|member| {
-                    let scoped = format!("{identity} @{member}");
-                    Ident::new(&marker_name(self.decorator, kind, &scoped), span)
-                })
-                .collect()
-        };
         self.declared.push(Declared {
             kind: kind.to_owned(),
             identity: identity.to_owned(),
@@ -149,19 +118,6 @@ impl DispatchKeys {
             method,
             cfgs: cfgs.to_vec(),
             span,
-            marker: (collision == Collision::Marker).then(|| {
-                names
-                    .iter()
-                    .map(|name| {
-                        quote_spanned! {span=>
-                            #(#cfgs)*
-                            #[doc(hidden)]
-                            #[allow(non_upper_case_globals, dead_code)]
-                            const #name: () = ();
-                        }
-                    })
-                    .collect()
-            }),
         });
         Ok(())
     }
@@ -174,33 +130,21 @@ impl DispatchKeys {
         )
     }
 
-    /// Every marker, as associated constants of `self_ty` — scoped to the host,
-    /// so two hosts answering one key each are two constants of two types.
-    pub fn markers(&self, self_ty: &syn::Type, generics: &syn::Generics) -> TokenStream {
-        let markers: Vec<&TokenStream> = self
-            .declared
-            .iter()
-            .filter_map(|declared| declared.marker.as_ref())
-            .collect();
-        let (impl_generics, _, where_clause) = generics.split_for_impl();
-        let markers = (!markers.is_empty()).then(|| {
-            quote! {
-                impl #impl_generics #self_ty #where_clause {
-                    #(#markers)*
-                }
-            }
-        });
-        // Unscoped beside scoped: no pair of marker names can meet.
+    /// For every two claims of one key of which either carries a `#[cfg]`, a
+    /// `const` refusing them under both claims' conditions, at the later one.
+    pub fn crossings(&self) -> TokenStream {
         let mut crossings = Vec::new();
         for (index, later) in self.declared.iter().enumerate() {
             for earlier in &self.declared[..index] {
-                if later.marker.is_none()
-                    || earlier.scope.is_empty() == later.scope.is_empty()
+                if (earlier.unconditional() && later.unconditional())
                     || !earlier.meets(&later.kind, &later.identity, &later.scope)
                 {
                     continue;
                 }
-                let refusal = self.refusal(&later.key, &earlier.method, &later.method);
+                let refusal = self
+                    .refusal(&later.key, &earlier.method, &later.method)
+                    .replace('{', "{{")
+                    .replace('}', "}}");
                 let (earlier_cfgs, later_cfgs) = (&earlier.cfgs, &later.cfgs);
                 crossings.push(quote_spanned! {later.span=>
                     #(#earlier_cfgs)*
@@ -209,44 +153,8 @@ impl DispatchKeys {
                 });
             }
         }
-        quote! {
-            #markers
-            #(#crossings)*
-        }
+        quote!(#(#crossings)*)
     }
-}
-
-/// The marker constant's name: a clause that reads as the rule in rustc's
-/// `duplicate definitions with name` sentence.
-///
-/// The identity is folded to `[a-z0-9_]`; a lossy fold is followed by `__` and
-/// a stable hash of the original, so two identities folding alike stay distinct.
-fn marker_name(decorator: &str, kind: &str, identity: &str) -> String {
-    let decorator: String = decorator
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
-        .collect();
-    let folded: String = identity
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | '0'..='9' | '_' => c,
-            _ => '_',
-        })
-        .collect();
-    let lossless = !folded.is_empty() && folded == identity && !folded.contains("__");
-    let identity = if lossless {
-        folded
-    } else {
-        format!("{folded}__{:016x}", fnv1a(identity))
-    };
-    format!("__nestrs_{decorator}_dispatches_{kind}_{identity}_to_one_method")
-}
-
-/// FNV-1a, 64-bit: `std`'s hashers promise no stability across releases.
-fn fnv1a(text: &str) -> u64 {
-    text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-    })
 }
 
 #[cfg(test)]
@@ -256,47 +164,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_plain_identity_reads_as_written() {
-        assert_eq!(
-            marker_name("#[messages]", "event", "ping"),
-            "__nestrs_messages_dispatches_event_ping_to_one_method",
-        );
-    }
-
-    #[test]
-    fn identities_that_fold_alike_name_two_constants() {
-        let dotted = marker_name("#[messages]", "event", "a.b");
-        let dashed = marker_name("#[messages]", "event", "a-b");
-        let plain = marker_name("#[messages]", "event", "a_b");
-        assert_ne!(dotted, dashed);
-        assert_ne!(dotted, plain);
-        assert_ne!(dashed, plain);
-        assert!(syn::parse_str::<syn::Ident>(&dotted).is_ok(), "{dotted}");
-        assert!(
-            syn::parse_str::<syn::Ident>(&marker_name("#[routes]", "route", "GET /users/{}"))
-                .is_ok()
-        );
-    }
-
-    #[test]
     fn two_unconditional_claims_are_refused_by_the_macro() {
         let mut keys = DispatchKeys::new("#[messages]", "the second would never run");
         let (first, second) = (format_ident!("first"), format_ident!("second"));
         let at: syn::Attribute = syn::parse_quote!(#[subscribe_message("ping")]);
         assert!(
-            keys.declare(Collision::Marker, "event", "ping", "ping", &first, &[], &at)
+            keys.declare("event", "ping", "ping", &first, &[], &at)
                 .is_ok()
         );
         let refusal = keys
-            .declare(
-                Collision::Marker,
-                "event",
-                "ping",
-                "ping",
-                &second,
-                &[],
-                &at,
-            )
+            .declare("event", "ping", "ping", &second, &[], &at)
             .err()
             .map(|err| err.to_string());
         assert_eq!(
@@ -314,7 +191,6 @@ mod tests {
         let scope = |members: &[&str]| members.iter().map(|m| (*m).to_owned()).collect::<Vec<_>>();
         let claim = |keys: &mut DispatchKeys, method: &str, members: &[&str]| {
             keys.declare_in(
-                Collision::Marker,
                 "route",
                 "get /v",
                 &scope(members),
@@ -338,44 +214,30 @@ mod tests {
     }
 
     #[test]
-    fn a_conditional_claim_is_left_to_the_compiler() {
+    fn a_conditional_claim_is_refused_under_both_claims_conditions() {
+        let mut keys = DispatchKeys::new("#[messages]", "the second would never run");
+        let at: syn::Attribute = syn::parse_quote!(#[subscribe_message("ping")]);
+        let cfg = [quote!(#[cfg(feature = "late")])];
+        let (a, b) = (format_ident!("a"), format_ident!("b"));
+        assert!(keys.declare("event", "ping", "ping", &a, &[], &at).is_ok());
+        assert!(keys.declare("event", "ping", "ping", &b, &cfg, &at).is_ok());
+        let crossings = keys.crossings().to_string();
+        assert_eq!(crossings.matches("const _").count(), 1, "{crossings}");
+        assert!(crossings.contains("feature = \"late\""), "{crossings}");
+        assert!(
+            crossings.contains("declares `ping` on `a` and again on `b`"),
+            "{crossings}"
+        );
+    }
+
+    #[test]
+    fn claims_of_two_keys_cross_nothing() {
         let mut keys = DispatchKeys::new("#[messages]", "the second would never run");
         let at: syn::Attribute = syn::parse_quote!(#[subscribe_message("ping")]);
         let cfg = [quote!(#[cfg(all())])];
-        assert!(
-            keys.declare(
-                Collision::Marker,
-                "event",
-                "ping",
-                "ping",
-                &format_ident!("a"),
-                &[],
-                &at
-            )
-            .is_ok()
-        );
-        assert!(
-            keys.declare(
-                Collision::Marker,
-                "event",
-                "ping",
-                "ping",
-                &format_ident!("b"),
-                &cfg,
-                &at
-            )
-            .is_ok()
-        );
-        let self_ty: syn::Type = syn::parse_quote!(Gateway);
-        let markers = keys
-            .markers(&self_ty, &syn::Generics::default())
-            .to_string();
-        assert_eq!(
-            markers
-                .matches("__nestrs_messages_dispatches_event_ping_to_one_method")
-                .count(),
-            2,
-            "{markers}",
-        );
+        let (a, b) = (format_ident!("a"), format_ident!("b"));
+        assert!(keys.declare("event", "ping", "ping", &a, &cfg, &at).is_ok());
+        assert!(keys.declare("event", "pong", "pong", &b, &cfg, &at).is_ok());
+        assert!(keys.crossings().is_empty());
     }
 }

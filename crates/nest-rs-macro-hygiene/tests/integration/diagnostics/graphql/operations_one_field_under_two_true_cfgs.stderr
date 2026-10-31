@@ -1,8 +1,5 @@
-error[E0592]: duplicate definitions with name `__nestrs_operations_dispatches_field_query_widget__0a97c0e1cf798071_to_one_method`
-  --> tests/integration/diagnostics/graphql/operations_one_field_under_two_true_cfgs.rs:19:7
+error[E0080]: evaluation panicked: `#[operations]` declares `#[query] widget` on `widget` and again on `other_widget`: a schema resolves each field of a type with one method, so the SDL would document one and the dispatch run the other — give one a distinct name
+  --> tests/integration/diagnostics/graphql/operations_one_field_under_two_true_cfgs.rs:20:7
    |
-12 |     #[query]
-   |       ----- other definition for `__nestrs_operations_dispatches_field_query_widget__0a97c0e1cf798071_to_one_method`
-...
-19 |     #[query]
-   |       ^^^^^ duplicate definitions for `__nestrs_operations_dispatches_field_query_widget__0a97c0e1cf798071_to_one_method`
+20 |     #[query]
+   |       ^^^^^ evaluation of `_` failed here

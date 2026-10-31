@@ -14,8 +14,8 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
-    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Collision, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath, SitePosture,
+    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Conditional, DispatchKeys, HandlerSite,
+    HostBorrow, HostMeta, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath, SitePosture,
     at_most_one_authorize, await_if_async, cfg_attrs, concrete_signature, deprecation_header,
     force_guard_typeids, guard_capability_bounds, handler_const, handler_ref, impl_self_ident,
     injected_methods_with_layers, injected_per_request_method, layer_deps, mixed_site_ident,
@@ -628,7 +628,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             method_name: method_name.clone(),
         };
         // Two handlers for one (verb, path) would leave one unreachable; refused
-        // here without `#[cfg]`, and by rustc through the marker when both compile.
+        // here without `#[cfg]`, and under both `#[cfg]`s when either has one.
         let served: Vec<String> = method_versions.iter().map(LitStr::value).collect();
         let route = match served.as_slice() {
             [] => format!("{method_const} {}", route_path.value()),
@@ -643,10 +643,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             ),
         };
         if let Err(err) = routes_declared.declare_in(
-            Collision::Marker,
             "route",
-            // The verb folds, the path does not: the marker's hash keeps `/Users` and
-            // `/users` apart.
             &format!("{} {}", verb_ident, parsed_path.identity()),
             &served,
             &route,
@@ -989,7 +986,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         });
     }
 
-    let markers = routes_declared.markers(&self_ty, &item.generics);
+    let crossings = routes_declared.crossings();
 
     quote! {
         #item
@@ -998,7 +995,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             #(#handler_consts)*
         }
 
-        #markers
+        #crossings
 
         #capability_bounds
 

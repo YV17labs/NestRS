@@ -1,17 +1,11 @@
-error[E0592]: duplicate definitions with name `__nestrs_tools_dispatches_tool_lookup_to_one_method`
+error[E0080]: evaluation panicked: `#[tools]` declares `#[tool(name = "lookup")]` on `lookup` and again on `second`: a host routes each tool name, and each prompt name, to one method, so one of the two would never run — give one a distinct `name`
   --> tests/integration/diagnostics/mcp/tools_one_name_under_two_true_cfgs.rs:21:7
    |
-15 |     #[tool(description = "Look one up.")]
-   |       ---- other definition for `__nestrs_tools_dispatches_tool_lookup_to_one_method`
-...
 21 |     #[tool(name = "lookup", description = "Look one up, again.")]
-   |       ^^^^ duplicate definitions for `__nestrs_tools_dispatches_tool_lookup_to_one_method`
+   |       ^^^^ evaluation of `_` failed here
 
-error[E0592]: duplicate definitions with name `__nestrs_tools_dispatches_prompt_brief_to_one_method`
+error[E0080]: evaluation panicked: `#[tools]` declares `#[prompt(name = "brief")]` on `brief` and again on `brief_again`: a host routes each tool name, and each prompt name, to one method, so one of the two would never run — give one a distinct `name`
   --> tests/integration/diagnostics/mcp/tools_one_name_under_two_true_cfgs.rs:35:7
    |
-28 |     #[prompt(name = "brief", description = "A brief.")]
-   |       ------ other definition for `__nestrs_tools_dispatches_prompt_brief_to_one_method`
-...
 35 |     #[prompt(name = "brief", description = "Another brief.")]
-   |       ^^^^^^ duplicate definitions for `__nestrs_tools_dispatches_prompt_brief_to_one_method`
+   |       ^^^^^^ evaluation of `_` failed here

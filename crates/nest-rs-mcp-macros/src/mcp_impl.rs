@@ -25,8 +25,8 @@ use syn::{
 
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
-    Collision, Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, Posture, PostureRules,
-    TailParam, answer_span, await_if_async, cfg_attrs, concrete_signature, force_guard_typeids,
+    Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, Posture, PostureRules, TailParam,
+    answer_span, await_if_async, cfg_attrs, concrete_signature, force_guard_typeids,
     forwarded_arg_idents, generic_args, guard_capability_bounds, handler_const, handler_ref,
     impl_self_ident, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
     piped_input, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
@@ -278,10 +278,8 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         ));
     }
     let (operations, declared) = take_operations(&mut item, &base)?;
-    let markers = declared
-        .iter()
-        .map(|keys| keys.markers(&self_ty, &item.generics));
-    let markers = quote!(#(#markers)*);
+    let crossings = declared.iter().map(DispatchKeys::crossings);
+    let crossings = quote!(#(#crossings)*);
     if operations.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.self_ty,
@@ -407,7 +405,7 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
         #(#description_checks)*
 
-        #markers
+        #crossings
 
         #sites
 
@@ -1087,7 +1085,6 @@ fn take_operations(
                     None => method.sig.ident.to_string(),
                 };
                 declared.declare(
-                    Collision::Marker,
                     role.label(),
                     &wire_name,
                     &format!(
@@ -1104,7 +1101,6 @@ fn take_operations(
                 let decl = resource::declaration(method, index)?;
                 let wire_name = decl.template.value();
                 templates.declare(
-                    Collision::Marker,
                     role.label(),
                     &wire_name,
                     &format!("#[resource(template = {wire_name:?})]"),
@@ -1117,7 +1113,6 @@ fn take_operations(
             Role::Resources => {
                 resource::listing_declaration(role_attr)?;
                 listings.declare(
-                    Collision::Marker,
                     role.label(),
                     "resources/list",
                     "#[resources]",

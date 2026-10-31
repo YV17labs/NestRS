@@ -190,6 +190,34 @@ pub struct WiredTarget {
     pub dry_run: bool,
 }
 
+/// What `g resource` takes: [`WiredTarget`]'s, plus the columns its table
+/// holds.
+#[derive(Args, Debug)]
+pub struct ResourceTarget {
+    /// Name (e.g. `posts`).
+    pub name: String,
+
+    /// The table's columns beside its key and timestamps, each
+    /// `<name>:<type>`, or `<name>:<type>:nullable` for one a row may leave
+    /// empty; the type one of string, text, integer, bigint, float, boolean,
+    /// uuid, date, datetime (default: `name:string`).
+    #[arg(value_name = "COLUMN")]
+    pub columns: Vec<String>,
+
+    /// Workspace root or working directory (default: auto-discover from cwd).
+    #[arg(long, short = 'p')]
+    pub path: Option<PathBuf>,
+
+    /// App to wire it into (default: the app the working directory is in, else
+    /// the workspace's only app).
+    #[arg(long, value_name = "APP")]
+    pub app: Option<String>,
+
+    /// Print what would be written without touching the filesystem.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
 /// `g entity` takes a two-part target: the feature it joins, and — when the
 /// feature's own singular is not the entity's name — the entity itself. A
 /// struct of its own rather than [`GenTarget`] so `--help` spells that grammar
@@ -230,8 +258,9 @@ pub struct AuthTarget {
 pub enum GenerateCommand {
     /// A transport-agnostic port (mod + module + service).
     Feature(GenTarget),
-    /// A DB-backed CRUD slice (entity + CrudService + guarded HTTP adapter).
-    Resource(WiredTarget),
+    /// A DB-backed CRUD slice (entity + CrudService + guarded HTTP adapter), its
+    /// table's migration and its round trip.
+    Resource(ResourceTarget),
     /// One `#[expose]` entity in an existing feature, without the CRUD slice.
     ///
     /// Placement follows the feature: its first entity is the lone `entity.rs`,
@@ -325,6 +354,7 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
         }),
         Resource(t) => commands::run_resource(commands::ResourceOptions {
             name: t.name,
+            columns: t.columns,
             path: t.path,
             app: t.app,
             dry_run: t.dry_run,
@@ -389,6 +419,25 @@ fn run_check(names: &Names, output: &std::path::Path) -> CliResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--help` is where a reader finds the column grammar: it names every
+    /// type word the parser reads.
+    #[test]
+    fn the_resource_help_names_every_column_type() {
+        use clap::CommandFactory;
+
+        let mut cli = Cli::command();
+        let help = cli
+            .find_subcommand_mut("generate")
+            .and_then(|generate| generate.find_subcommand_mut("resource"))
+            .expect("g resource")
+            .render_long_help()
+            .to_string();
+        for word in crate::column::type_words() {
+            assert!(help.contains(word), "{word}: {help}");
+        }
+        assert!(help.contains(":nullable"), "{help}");
+    }
 
     #[test]
     fn after_help_includes_docs_and_repo() {

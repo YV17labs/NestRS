@@ -239,3 +239,103 @@ fn a_nestrs_name_the_framework_does_not_ship_is_refused() {
         );
     }
 }
+
+/// The one migration `crates/migrations/src` holds under `name`.
+fn read_migration(root: &std::path::Path, name: &str) -> String {
+    let file = migration_files(root)
+        .into_iter()
+        .find(|file| file.ends_with(&format!("_{name}.rs")))
+        .unwrap_or_else(|| panic!("the `{name}` migration is written"));
+    fs::read_to_string(root.join("crates/migrations/src").join(file)).unwrap()
+}
+
+/// `g migration create_<x>` over a feature whose entity declares the table
+/// writes the table that entity's `Model` declares, its columns in the
+/// builder and in the enum alike.
+#[test]
+fn a_create_migration_takes_its_columns_from_the_entity() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+    let root = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", root]);
+    run_ok(dir.path(), &["g", "entity", "posts/comments", "-p", root]);
+
+    let printed = run_ok(
+        dir.path(),
+        &["g", "migration", "create_comments", "-p", root],
+    );
+
+    let migration = read_migration(dir.path(), "create_comments");
+    for line in [
+        ".table(Comment::Table)",
+        ".col(ColumnDef::new(Comment::Id).uuid().not_null().primary_key())",
+        ".col(ColumnDef::new(Comment::Name).string().not_null())",
+        "ColumnDef::new(Comment::CreatedAt)",
+        "    Table,\n    Id,\n    Name,\n    CreatedAt,\n    UpdatedAt,\n    DeletedAt,\n",
+    ] {
+        assert!(migration.contains(line), "{line}: {migration}");
+    }
+    assert!(!migration.contains("TODO"), "{migration}");
+    assert!(
+        printed.contains("crates/features/src/posts/entity.rs"),
+        "the run names the entity it read: {printed}"
+    );
+}
+
+/// A field whose type the builder cannot read off its Rust type is named in
+/// the next steps, and left out of the builder and the enum alike; a
+/// relation is no column.
+#[test]
+fn a_field_the_builder_cannot_type_is_named_for_the_developer() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+    let root = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", root]);
+    run_ok(dir.path(), &["g", "entity", "posts", "-p", root]);
+    let entity = dir.path().join("crates/features/src/posts/entity.rs");
+    let edited = fs::read_to_string(&entity).unwrap().replace(
+        "    pub name: String,\n",
+        "    pub name: String,\n    pub status: PostStatus,\n    \
+         #[sea_orm(belongs_to, from = \"author_id\", to = \"id\")]\n    \
+         pub author: HasOne<crate::users::Entity>,\n",
+    );
+    fs::write(&entity, edited).unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "migration", "create_posts", "-p", root]);
+
+    let migration = read_migration(dir.path(), "create_posts");
+    assert!(migration.contains("Post::Name"), "{migration}");
+    for absent in ["Status", "Author"] {
+        assert!(!migration.contains(absent), "{absent}: {migration}");
+    }
+    assert!(
+        printed.contains("`status` (`PostStatus`)"),
+        "the run names the field it could not type: {printed}"
+    );
+    assert!(
+        !printed.contains("`author`"),
+        "a relation is no column: {printed}"
+    );
+}
+
+/// With no entity declaring its table, the create-table skeleton carries the
+/// house columns and leaves the rest to fill.
+#[test]
+fn a_create_migration_with_no_entity_is_the_skeleton() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+    let root = dir.path().to_str().unwrap();
+
+    run_ok(
+        dir.path(),
+        &["g", "migration", "create_widgets", "-p", root],
+    );
+
+    let migration = read_migration(dir.path(), "create_widgets");
+    for line in ["Widget::Id", "Widget::DeletedAt", "TODO"] {
+        assert!(migration.contains(line), "{line}: {migration}");
+    }
+}

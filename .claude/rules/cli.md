@@ -48,8 +48,11 @@ generated GraphQL operation or MCP tool is gated on its port's entity or the
 `#[subject]` the generator writes beside a port with none (`subject.rs`, placed
 by `architecture.md`), so an opening is always the developer's line, never the
 generator's. A grant a next step prints names its subject by the path
-`authz/ability.rs` resolves, and `g entity` refuses a port whose subject holds
-the entity's name, which the subject's re-export would shadow. Prose the framework compiles into behaviour is still an argument
+`authz/ability.rs` resolves. `g entity` retires a subject holding the entity's
+name, which its re-export would shadow, while it is what the generator wrote —
+the operations gated on it re-gated on the entity, which fails closed, and
+their grant printed, never written — and refuses, naming the file, one edited
+beyond that. Prose the framework compiles into behaviour is still an argument
 there, as in `demo/` (`demo.md`).
 
 ## Scaffolds emit exactly what the rules mandate
@@ -60,21 +63,27 @@ naming rule updates the matching template in the same change, and the
 converse. A generator emitting a layout the rules forbid is a defect on a par
 with breaking the exemplar.
 
+**What generators write about one thing agrees, unedited.** One column list
+writes the entity's fields, its table's migration and the round trip that
+posts and reads back each column, and `g migration` reads an entity's
+columns off its `Model` rather than asking for them twice: a scaffold whose
+own files contradict each other fails the developer before a line is theirs.
+
 **Every generator is compiled, not only read.** The scaffold suite runs every
 adapter generator — every edge `Transport` carries — over both port shapes,
 from the root of a one-app workspace, which wires that app, so the edits it
 makes to that app's `module.rs` and manifest compile too, plus `nestrs new`'s
 second app and `g migration`, and holds the result to the scaffold's own
-`clippy -D warnings`. Its e2e half replays the tutorial from the workspace
-root — `--app` naming the app, as a reader with two apps types it — and runs
-the suite it ends on against the live Postgres. The integration suite's text
+`clippy -D warnings`. Its e2e half replays every tutorial page that edits
+`blog` from the workspace root — `--app` naming the app, as a reader with two
+apps types it — and runs the suite they leave against the live Postgres. The integration suite's text
 assertions are not that proof: they read a wrong import as readily as a right
 one.
 
 **A generator wires what it wrote into the app that serves it**, from
 anywhere in the workspace, writing in one edit every import its code needs
-that the root does not name — the backends the root chooses included: a next
-step the generator could have taken is a defect
+that the root does not name — the backends the root chooses included, and the
+table's migration: a next step the generator could have taken is a defect
 (`decisions/generator-wires-its-app.md`). The integration suite holds each
 generator to it.
 

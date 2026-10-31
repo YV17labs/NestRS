@@ -24,11 +24,11 @@ pub(crate) const ENTITY: &str = r#"use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-// `soft_delete` + `timestamps` match the three columns `nestrs g migration`
-// scaffolds for this table, and the `users/` exemplar. `soft_delete` makes
-// DELETE stamp `deleted_at` and hides a stamped row from every read; drop it
-// for a resource that should really erase rows. `timestamps` emits the
-// `ActiveModelBehavior`, so the resource must not also write an empty one.
+// `soft_delete` + `timestamps` match the three columns this table's migration
+// creates, and the `users/` exemplar. `soft_delete` makes DELETE stamp
+// `deleted_at` and hides a stamped row from every read; drop it for a resource
+// that should really erase rows. `timestamps` emits the `ActiveModelBehavior`,
+// so the resource must not also write an empty one.
 #[expose(
     name = "{{entity}}",
     service = super::service::{{service}},
@@ -45,9 +45,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
     pub id: Uuid,
-    #[expose(input(create, update), validate(length(min = 1)))]
-    pub name: String,
-    #[expose]
+{{columns}}    #[expose]
     pub created_at: DateTimeWithTimeZone,
     #[expose]
     pub updated_at: DateTimeWithTimeZone,
@@ -176,8 +174,9 @@ pub(crate) async fn boot() -> nest_rs::testing::TestApp {
 
 /// The resource's round trip through the app, as a caller the guards admit:
 /// a token the app's own `JwtService` signs over the auth adapter's `Claims`.
-/// It passes once the migration creates the table and `AuthzAbility` grants
-/// the entity — until then it fails on the status that says which.
+/// It posts a value of every column and reads each back: it passes once
+/// `AuthzAbility` grants the entity — until then it fails on the 403 that says
+/// so.
 pub(crate) const E2E_TEST: &str = r#"use nest_rs::http::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
@@ -199,12 +198,12 @@ async fn {{snake}}_round_trip() {
         .http()
         .post("/{{kebab}}")
         .header("authorization", &bearer)
-        .body_json(&json!({ "name": "First" }))
+        .body_json(&json!({{body}}))
         .send()
         .await;
     created.assert_status(StatusCode::CREATED);
-    let body = created.json().await;
-    let id = body.value().object().get("id").string().to_owned();
+    let created = created.json().await;
+    let id = created.value().object().get("id").string().to_owned();
 
     let read = app
         .http()
@@ -213,9 +212,7 @@ async fn {{snake}}_round_trip() {
         .send()
         .await;
     read.assert_status_is_ok();
-    assert_eq!(
-        read.json().await.value().object().get("name").string(),
-        "First"
-    );
-}
+    let read = read.json().await;
+    let fields = read.value().object();
+{{assertions}}}
 "#;

@@ -1,7 +1,9 @@
 //! `nestrs g migration <name>` — a SeaORM migration file, registered in **both**
 //! `crates/migrations/src/lib.rs` (the `mod` line) and `migrator.rs` (the
 //! `MigratorTrait` vec). `migrator.rs` is regenerated from the module list so
-//! the two registrations can never drift.
+//! the two registrations can never drift. A `create_<table>` migration over a
+//! table an entity declares creates the columns its `Model` does; a name
+//! registered already is refused, the next change to a table taking its own.
 //!
 //! The `nestrs_` prefix is the framework's: `g migration nestrs_outbox`
 //! registers a migration `nest_rs` ships — one `migrator.rs` entry, no file —
@@ -13,9 +15,10 @@ use std::path::{Path, PathBuf};
 
 use super::cargo::{Dep, OUTBOX, ensure_workspace_deps, migrations_deps};
 use super::support::finish;
+use crate::column::{ModelColumns, Table, read_model, table_name};
 use crate::commands::resolve_start;
 use crate::context::{Context, NestrsWorkspace};
-use crate::error::{CliError, CliResult, FileAction};
+use crate::error::{CliError, CliResult, FileAction, read_if_exists};
 use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, Transform, ensure_decl};
 use crate::templates::{migration, workspace};
@@ -198,8 +201,63 @@ pub(crate) fn run(opts: MigrationOptions) -> CliResult<()> {
 }
 
 /// Write the app's migration `names`, about the table `subject`, and register
-/// it in both files.
+/// it in both files: the columns its entity declares for a `create_` one over
+/// a table an entity declares, else the skeleton.
 fn generate(ws: &NestrsWorkspace, names: &Names, subject: &Names, dry_run: bool) -> CliResult<()> {
+    let table = subject.table();
+    let entity = if names.snake.starts_with("create_") {
+        entity_declaring(ws, &table)?
+    } else {
+        Declared::Nowhere
+    };
+    let body = match &entity {
+        Declared::Once { model, .. } => render_migration(subject, &model.table, false),
+        Declared::Nowhere | Declared::Several(_) => {
+            render_migration(subject, &Table::around(&[]), true)
+        }
+    };
+
+    let mut s = Scaffold::new();
+    let mut deps = Vec::new();
+    let stem = queue_migration(&mut s, ws, names, body, &mut deps)?;
+    if !deps.is_empty() {
+        s.edit(ws.root.join("Cargo.toml"), ensure_workspace_deps(deps));
+    }
+
+    finish(s, dry_run, &ws.root, &format!("migration `{stem}`"))?;
+    print_next_steps(&stem, &table, &entity, &ws.root);
+    Ok(())
+}
+
+/// The `create_table` migration over `subject`'s table, its columns those of
+/// `table`; `skeleton` when no entity declared them, the rest left to fill.
+pub(crate) fn render_migration(subject: &Names, table: &Table, skeleton: bool) -> String {
+    Renderer::new(subject)
+        .with(
+            "note",
+            if skeleton {
+                migration::SKELETON_NOTE
+            } else {
+                ""
+            },
+        )
+        .with("columns", table.builder(&subject.singular, skeleton))
+        .with("variants", table.variants())
+        .render(migration::MIGRATION)
+}
+
+/// Queue the app's migration `names` with its `body`: its file, and its
+/// registration in `lib.rs` and `migrator.rs` — the crates themselves on a
+/// workspace without them, whose root manifest gains `deps`, the caller's one
+/// edit of it. Refused when a migration of the same name is registered.
+/// Answers the migration's module stem.
+pub(crate) fn queue_migration(
+    s: &mut Scaffold,
+    ws: &NestrsWorkspace,
+    names: &Names,
+    body: String,
+    deps: &mut Vec<&'static Dep>,
+) -> CliResult<String> {
     let lib_path = ws.migrations_lib();
     let bootstrapping = !lib_path.is_file();
     let lib = if bootstrapping {
@@ -207,16 +265,22 @@ fn generate(ws: &NestrsWorkspace, names: &Names, subject: &Names, dry_run: bool)
     } else {
         std::fs::read_to_string(&lib_path).map_err(CliError::file(FileAction::Read, &lib_path))?
     };
+    let mods = read_migration_mods(&lib);
+    if let Some(taken) = mods
+        .iter()
+        .find(|m| m.splitn(3, '_').nth(2) == Some(names.snake.as_str()))
+    {
+        let path = ws.migrations_root().join(format!("{taken}.rs"));
+        return Err(CliError::MigrationExists {
+            name: names.snake.clone(),
+            path: path.strip_prefix(&ws.root).unwrap_or(&path).to_path_buf(),
+        });
+    }
 
     let date = chrono::Utc::now().format("%Y%m%d").to_string();
-    let seq = next_seq(&read_migration_mods(&lib), &date);
+    let seq = next_seq(&mods, &date);
     let stem = format!("m{date}_{seq:06}_{}", names.snake);
-
-    let mut s = Scaffold::new();
-    s.create(
-        ws.migrations_root().join(format!("{stem}.rs")),
-        Renderer::new(subject).render(migration::MIGRATION),
-    );
+    s.create(ws.migrations_root().join(format!("{stem}.rs")), body);
     if bootstrapping {
         // `create` writes are staged in memory, so an `edit` on a file this same
         // transaction creates would fail on disk: render into the created files.
@@ -224,11 +288,8 @@ fn generate(ws: &NestrsWorkspace, names: &Names, subject: &Names, dry_run: bool)
             mods: vec![stem.clone()],
             ..Registered::default()
         };
-        queue_db_crates(&mut s, &ws.root, &registered, ws.lints);
-        s.edit(
-            ws.root.join("Cargo.toml"),
-            ensure_workspace_deps(migrations_deps()),
-        );
+        queue_db_crates(s, &ws.root, &registered, ws.lints);
+        deps.extend(migrations_deps());
     } else {
         s.edit(lib_path, ensure_decl(&format!("mod {stem};")));
         s.edit(
@@ -236,10 +297,68 @@ fn generate(ws: &NestrsWorkspace, names: &Names, subject: &Names, dry_run: bool)
             regenerate(format!("{lib}\nmod {stem};\n"), None),
         );
     }
+    Ok(stem)
+}
 
-    finish(s, dry_run, &ws.root, &format!("migration `{stem}`"))?;
-    print_next_steps(&stem, &subject.table());
-    Ok(())
+/// Which entity of the workspace's features declares a table.
+enum Declared {
+    Nowhere,
+    /// One entity, by its file, and what its `Model` declares.
+    Once {
+        file: PathBuf,
+        model: ModelColumns,
+    },
+    /// Several, by their files: none is read.
+    Several(Vec<PathBuf>),
+}
+
+/// The entity declaring `table` among every feature's `entity.rs` and
+/// `entities/*.rs`.
+fn entity_declaring(ws: &NestrsWorkspace, table: &str) -> CliResult<Declared> {
+    let mut found = Vec::new();
+    for feature in list_dir(&ws.features_root())? {
+        if !feature.is_dir() {
+            continue;
+        }
+        let mut files = vec![feature.join("entity.rs")];
+        let folder = feature.join("entities");
+        if folder.is_dir() {
+            files.extend(
+                list_dir(&folder)?
+                    .into_iter()
+                    .filter(|f| f.extension().is_some_and(|e| e == "rs")),
+            );
+        }
+        for file in files {
+            if let Some(source) = read_if_exists(&file)?
+                && table_name(&source).as_deref() == Some(table)
+                && let Some(model) = read_model(&source)
+            {
+                found.push((file, model));
+            }
+        }
+    }
+    Ok(match found.len() {
+        0 => Declared::Nowhere,
+        1 => {
+            let (file, model) = found.remove(0);
+            Declared::Once { file, model }
+        }
+        _ => Declared::Several(found.into_iter().map(|(file, _)| file).collect()),
+    })
+}
+
+/// `dir`'s entries, sorted, so a run reads them in one order everywhere.
+fn list_dir(dir: &Path) -> CliResult<Vec<PathBuf>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(CliError::file(FileAction::List, dir))? {
+        entries.push(entry.map_err(CliError::file(FileAction::List, dir))?.path());
+    }
+    entries.sort();
+    Ok(entries)
 }
 
 /// Register the framework's migration `framework`: one `migrator.rs` entry,
@@ -401,9 +520,40 @@ fn render_migrator(registered: &Registered) -> String {
     )
 }
 
-fn print_next_steps(stem: &str, table: &str) {
+fn print_next_steps(stem: &str, table: &str, entity: &Declared, root: &Path) {
+    let rel = |file: &Path| {
+        file.strip_prefix(root)
+            .unwrap_or(file)
+            .display()
+            .to_string()
+    };
     println!();
     println!("Next steps:");
+    match entity {
+        Declared::Once { file, model } => {
+            println!(
+                "  Its columns are the ones `{}` declares, in the builder and in the enum.",
+                rel(file)
+            );
+            for field in &model.untyped {
+                println!(
+                    "  `{}` ({}) is no column the builder types: add it to the builder and the \
+                     enum by hand.",
+                    field.field, field.what
+                );
+            }
+            println!("  Apply it:  nestrs run db up   (or `db reset` to re-seed).");
+            return;
+        }
+        Declared::Several(files) => {
+            let files: Vec<String> = files.iter().map(|f| format!("`{}`", rel(f))).collect();
+            println!(
+                "  Several entities declare `{table}` ({}): the builder reads none of them.",
+                files.join(", ")
+            );
+        }
+        Declared::Nowhere => {}
+    }
     println!("  1. Fill in `crates/migrations/src/{stem}.rs` (columns).");
     println!("     Add each column to the builder AND as a variant of the identifier enum;");
     println!("     it writes the `{table}` table — rename the enum if your entity disagrees,");
@@ -437,8 +587,11 @@ mod tests {
 
     #[test]
     fn the_skeleton_names_the_table_not_the_migration() {
-        let rendered = Renderer::new(&crate::naming::migration_subject("create_widgets"))
-            .render(migration::MIGRATION);
+        let rendered = render_migration(
+            &crate::naming::migration_subject("create_widgets"),
+            &Table::around(&[]),
+            true,
+        );
 
         assert!(
             rendered.contains("enum Widget {") && rendered.contains(".table(Widget::Table)"),

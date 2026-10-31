@@ -1,5 +1,5 @@
 //! `nestrs g resource` — the CRUD slice, its guarded HTTP form, and the columns
-//! it has to declare in lockstep with `g migration`.
+//! one list writes into its entity, its migration and its round trip.
 
 use crate::harness::{
     assert_256_bit_hex, assigned, files_under, run_err, run_ok, scaffolded_var, write_fake_app,
@@ -163,15 +163,36 @@ fn generate_resource_from_the_root_wires_everything_its_code_needs() {
     }
 }
 
-/// `g resource`'s entity declares the `created_at`/`updated_at`/`deleted_at`
-/// columns `g migration` scaffolds.
+/// The one migration `crates/migrations/src` holds under `name`, by its
+/// stem and its contents.
+fn migration_named(root: &std::path::Path, name: &str) -> (String, String) {
+    let dir = root.join("crates/migrations/src");
+    let found: Vec<std::path::PathBuf> = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with(&format!("_{name}.rs")))
+        })
+        .collect();
+    assert_eq!(found.len(), 1, "one `{name}` migration: {found:?}");
+    let stem = found[0].file_stem().unwrap().to_string_lossy().into_owned();
+    (stem, fs::read_to_string(&found[0]).unwrap())
+}
+
+/// Unedited, the three files `g resource` writes about one table agree: the
+/// entity's placeholder column is the one its migration creates and its round
+/// trip posts, beside the house columns `timestamps` and `soft_delete` read.
 #[test]
-fn generate_resource_declares_the_columns_its_migration_scaffolds() {
+fn generate_resource_writes_the_migration_its_entity_and_round_trip_agree_with() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+    write_fake_app(dir.path(), "blog");
     let root = dir.path().to_str().unwrap();
 
-    run_ok(dir.path(), &["g", "resource", "posts", "-p", root]);
+    let printed = run_ok(dir.path(), &["g", "resource", "posts", "-p", root]);
 
     let feature = dir.path().join("crates/features/src/posts");
     let entity = fs::read_to_string(feature.join("entity.rs")).unwrap();
@@ -181,39 +202,214 @@ fn generate_resource_declares_the_columns_its_migration_scaffolds() {
             "entity must declare `{flag}`: {entity}"
         );
     }
-    for column in ["created_at", "updated_at", "deleted_at"] {
+    for column in [
+        "pub name: String,",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+    ] {
         assert!(
             entity.contains(column),
-            "entity must carry `{column}`, which the migration creates: {entity}",
+            "the entity carries `{column}`: {entity}"
         );
     }
     assert!(
         !entity.contains("impl ActiveModelBehavior for ActiveModel {}"),
         "`timestamps` emits the behaviour — a second empty impl is a conflict: {entity}",
     );
-
     let service = fs::read_to_string(feature.join("service.rs")).unwrap();
     assert!(
         !service.contains("soft_delete"),
         "the entity's flag alone tombstones and hides deleted rows: {service}",
     );
 
-    write_fake_migrations_crate(dir.path());
-    run_ok(dir.path(), &["g", "migration", "create_posts", "-p", root]);
-    let migrations = dir.path().join("crates/migrations/src");
-    let generated = fs::read_dir(&migrations)
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .find(|p| {
-            p.file_name()
-                .is_some_and(|n| n.to_string_lossy().contains("create_posts"))
-        })
-        .expect("the migration file");
-    let migration = fs::read_to_string(generated).unwrap();
-    for column in ["CreatedAt", "UpdatedAt", "DeletedAt"] {
-        assert!(migration.contains(column), "{migration}");
+    let (stem, migration) = migration_named(dir.path(), "create_posts");
+    for line in [
+        ".table(Post::Table)",
+        ".col(ColumnDef::new(Post::Id).uuid().not_null().primary_key())",
+        ".col(ColumnDef::new(Post::Name).string().not_null())",
+        "ColumnDef::new(Post::CreatedAt)",
+        "ColumnDef::new(Post::UpdatedAt)",
+        "ColumnDef::new(Post::DeletedAt)",
+        "    Name,\n",
+    ] {
+        assert!(migration.contains(line), "{line}: {migration}");
     }
+    assert!(
+        !migration.contains("TODO"),
+        "nothing is left to fill: {migration}"
+    );
+    let lib = fs::read_to_string(dir.path().join("crates/migrations/src/lib.rs")).unwrap();
+    assert!(lib.contains(&format!("mod {stem};")), "{lib}");
+    let migrator =
+        fs::read_to_string(dir.path().join("crates/migrations/src/migrator.rs")).unwrap();
+    assert!(
+        migrator.contains(&format!("Box::new({stem}::Migration)")),
+        "{migrator}"
+    );
+
+    let test = fs::read_to_string(dir.path().join("apps/blog/tests/e2e/posts.rs")).unwrap();
+    for line in [
+        r#".body_json(&json!({ "name": "Name 1" }))"#,
+        r#"assert_eq!(fields.get("name").string(), "Name 1");"#,
+    ] {
+        assert!(test.contains(line), "{line}: {test}");
+    }
+    assert!(
+        !printed.contains("nestrs g migration"),
+        "the migration is written, not a next step: {printed}"
+    );
+    assert!(
+        printed.contains(&format!("crates/migrations/src/{stem}.rs")),
+        "the run names the migration it wrote: {printed}"
+    );
+}
+
+/// `g resource` takes its columns as `<name>:<type>[:nullable]`, and the one
+/// list writes the entity's fields, the migration's columns and enum, and the
+/// round trip's body and assertions.
+#[test]
+fn generate_resource_takes_its_columns_from_the_command_line() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+    write_fake_app(dir.path(), "blog");
+    let root = dir.path().to_str().unwrap();
+
+    run_ok(
+        dir.path(),
+        &[
+            "g",
+            "resource",
+            "posts",
+            "title:string",
+            "body:text",
+            "views:integer",
+            "bio:text:nullable",
+            "-p",
+            root,
+        ],
+    );
+
+    let entity =
+        fs::read_to_string(dir.path().join("crates/features/src/posts/entity.rs")).unwrap();
+    for line in [
+        "    #[expose(input(create, update), validate(length(min = 1)))]\n    pub title: String,\n",
+        "    #[sea_orm(column_type = \"Text\")]\n    #[expose(input(create, update), validate(length(min = 1)))]\n    pub body: String,\n",
+        "    #[expose(input(create, update))]\n    pub views: i32,\n",
+        "    #[sea_orm(column_type = \"Text\")]\n    #[expose(input(create, update))]\n    pub bio: Option<String>,\n",
+    ] {
+        assert!(entity.contains(line), "{line}: {entity}");
+    }
+    assert!(
+        !entity.contains("pub name:"),
+        "no placeholder beside named columns: {entity}"
+    );
+
+    let (_, migration) = migration_named(dir.path(), "create_posts");
+    for line in [
+        ".col(ColumnDef::new(Post::Title).string().not_null())",
+        ".col(ColumnDef::new(Post::Body).text().not_null())",
+        ".col(ColumnDef::new(Post::Views).integer().not_null())",
+        ".col(ColumnDef::new(Post::Bio).text().null())",
+        "    Title,\n    Body,\n    Views,\n    Bio,\n",
+    ] {
+        assert!(migration.contains(line), "{line}: {migration}");
+    }
+
+    let test = fs::read_to_string(dir.path().join("apps/blog/tests/e2e/posts.rs")).unwrap();
+    for line in [
+        r#""title": "Title 1""#,
+        r#""body": "Body 1""#,
+        r#""views": 1"#,
+        r#""bio": "Bio 1""#,
+        r#"assert_eq!(fields.get("title").string(), "Title 1");"#,
+        r#"assert_eq!(fields.get("views").i64(), 1);"#,
+    ] {
+        assert!(test.contains(line), "{line}: {test}");
+    }
+}
+
+/// A column list the grammar does not read is refused before anything is
+/// written, the refusal naming the grammar or the clash.
+#[test]
+fn a_column_the_grammar_does_not_read_is_refused() {
+    for (columns, says) in [
+        (&["title"][..], "`title` names no type"),
+        (
+            &["title:strin"],
+            "string, text, integer, bigint, float, boolean, uuid, date, datetime",
+        ),
+        (&["title:string:null"], "`nullable`"),
+        (&["Title:string"], "snake_case"),
+        (&["type:string"], "keyword"),
+        (&["created_at:datetime"], "every table"),
+        (&["title:string", "title:text"], "twice"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        write_fake_migrations_crate(dir.path());
+        let before = files_under(dir.path());
+        let mut args = vec!["g", "resource", "posts"];
+        args.extend_from_slice(columns);
+        args.extend(["-p", dir.path().to_str().unwrap()]);
+
+        let refused = run_err(dir.path(), &args);
+
+        assert!(refused.contains(says), "{columns:?}: {says}: {refused}");
+        assert_eq!(
+            files_under(dir.path()),
+            before,
+            "{columns:?}: nothing is written"
+        );
+    }
+}
+
+/// The migration `g resource` wrote is not written twice: `g migration` of
+/// its name is refused, naming the file, and so is a resource whose table
+/// already has one.
+#[test]
+fn a_migration_name_already_registered_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+    let root = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", root]);
+    let (stem, _) = migration_named(dir.path(), "create_posts");
+    let before = files_under(dir.path());
+
+    let refused = run_err(dir.path(), &["g", "migration", "create_posts", "-p", root]);
+    assert!(
+        refused.contains(&format!("crates/migrations/src/{stem}.rs")),
+        "the refusal names the migration that holds the name: {refused}"
+    );
+    assert_eq!(files_under(dir.path()), before, "nothing is written");
+
+    fs::remove_dir_all(dir.path().join("crates/features/src/posts")).unwrap();
+    let refused = run_err(dir.path(), &["g", "resource", "posts", "-p", root]);
+    assert!(refused.contains(&format!("{stem}.rs")), "{refused}");
+}
+
+/// A workspace without the migrations crate gets it, with the resource's
+/// migration registered: `g resource` takes the step `g migration` would.
+#[test]
+fn generate_resource_bootstraps_the_migrations_crate_when_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let root = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", root]);
+
+    let (stem, _) = migration_named(dir.path(), "create_posts");
+    let lib = fs::read_to_string(dir.path().join("crates/migrations/src/lib.rs")).unwrap();
+    assert!(lib.contains(&format!("mod {stem};")), "{lib}");
+    assert!(
+        dir.path()
+            .join("crates/migrations/src/bin/migrate.rs")
+            .is_file()
+    );
+    let manifest = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(manifest.contains("sea-orm-migration"), "{manifest}");
 }
 
 /// The `nestrs_` prefix names the framework's tables, the outbox's among them:

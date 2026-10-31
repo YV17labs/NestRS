@@ -7,20 +7,26 @@
 //! No entity yet ⇒ the lone `entity.rs`; an `entities/` folder ⇒ one more file in
 //! it. A lone `entity.rs` becoming the first of several moves into `entities/`
 //! in the same transaction ([`Promotion`]), its paths rewritten — or the run is
-//! refused naming the reference it cannot rewrite with certainty.
+//! refused naming the reference it cannot rewrite with certainty. A port whose
+//! `#[subject]`, written by `g graphql|mcp`, holds the entity's name has it
+//! retired in the same transaction, every operation gated on it re-gated on
+//! the entity — or the run is refused naming the file edited beyond what the
+//! generator wrote.
 
 use std::path::{Path, PathBuf};
 
+use super::adapter::{adapter_renderer, templates_for};
 use super::cargo::{ensure_features_deps, ensure_workspace_deps, entity_deps};
 use super::migration::refuse_reserved;
 use super::promotion::Promotion;
 use super::support::{declares_mod, finish};
+use crate::column::{self, Column, table_name};
 use crate::commands::resolve_start;
 use crate::context::Context;
 use crate::error::{CliError, CliResult, read_if_exists};
-use crate::naming::Names;
-use crate::scaffold::{Renderer, Scaffold, ensure_decl, ensure_lines};
-use crate::templates::entity;
+use crate::naming::{Names, Transport};
+use crate::scaffold::{Renderer, Scaffold, Transform, ensure_decl, ensure_lines, rustfmt_source};
+use crate::templates::{entity, feature};
 
 pub(crate) struct EntityOptions {
     /// `<feature>` or `<feature>/<entity>`.
@@ -92,16 +98,17 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
     {
         return Err(CliError::AlreadyExists(root.join("entity.rs")));
     }
-    if placement == Placement::Lone && subject_declares(&root, &target.entity.entity())? {
-        return Err(CliError::EntityNameTakenBySubject {
-            feature: target.feature.snake.clone(),
-            name: target.entity.entity(),
-            target: opts.target.clone(),
-        });
-    }
+    let retirement =
+        if placement == Placement::Lone && subject_declares(&root, &target.entity.entity())? {
+            Some(Retirement::read(&root, &ws.root, &target.feature)?)
+        } else {
+            None
+        };
     let stem = target.stem();
 
-    let r = Renderer::new(&target.entity).with("stem", stem.clone());
+    let r = Renderer::new(&target.entity)
+        .with("stem", stem.clone())
+        .with("columns", column::fields(&[Column::placeholder()]));
     let mut s = Scaffold::new();
 
     // Read up front: `ensure_lines` compares verbatim, so an existing
@@ -144,9 +151,12 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
         // The move folds the re-export into its own edit of `mod.rs`.
         Placement::Promote { moved } => Promotion::new(&root, &target.feature.snake, moved)
             .queue(&mut s, vec![format!("pub use entities::{stem};")])?,
-        Placement::Lone | Placement::Folder => {
-            s.edit(mod_rs, ensure_lines(port_lines));
-        }
+        Placement::Lone | Placement::Folder => match &retirement {
+            Some(retirement) => retirement.queue(&mut s, &root, mod_rs, port_lines),
+            None => {
+                s.edit(mod_rs, ensure_lines(port_lines));
+            }
+        },
     }
 
     let deps = entity_deps();
@@ -166,8 +176,107 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
             target.feature.snake
         ),
     )?;
-    print_next_steps(&target, &placement, &stem);
+    print_next_steps(&target, &placement, &stem, retirement.as_ref());
     Ok(())
+}
+
+/// The port's `#[subject]`, written by `g graphql|mcp` under the name the
+/// entity takes, retired as it was written: the file and its two lines in
+/// `mod.rs` go, and each operation gated on it is gated on the entity.
+struct Retirement {
+    /// The subject's name, the port's singular.
+    name: String,
+    /// `mod.rs`'s two lines declaring and re-exporting it.
+    lines: [String; 2],
+    /// Each handler gated on it, by its path, as it reads gated on the entity.
+    regated: Vec<(PathBuf, String)>,
+}
+
+impl Retirement {
+    /// What retiring `feature`'s subject takes, read off the port at `root`;
+    /// refused, naming the file, when the subject, its lines in `mod.rs` or a
+    /// handler gated on it is no longer what the generator wrote.
+    fn read(root: &Path, ws_root: &Path, feature: &Names) -> CliResult<Self> {
+        let name = feature.entity();
+        let edited = |file: &Path| CliError::SubjectEdited {
+            feature: feature.snake.clone(),
+            name: name.clone(),
+            file: file
+                .strip_prefix(ws_root)
+                .unwrap_or(file)
+                .display()
+                .to_string(),
+        };
+
+        let subject = root.join("subject.rs");
+        let written = Renderer::new(feature).render(feature::SUBJECT);
+        if !as_generated(&subject, &written)? {
+            return Err(edited(&subject));
+        }
+        let lines = [
+            "mod subject;".to_owned(),
+            format!("pub use subject::{name};"),
+        ];
+        let index = read_if_exists(&root.join("mod.rs"))?.unwrap_or_default();
+        if !lines
+            .iter()
+            .all(|line| index.lines().any(|l| l.trim() == line))
+        {
+            return Err(edited(&root.join("mod.rs")));
+        }
+
+        let mut regated = Vec::new();
+        for transport in [Transport::Graphql, Transport::Mcp] {
+            let handler = root.join(transport.folder()).join(transport.handler_file());
+            if !handler.is_file() {
+                continue;
+            }
+            let (template, _) = templates_for(transport, false);
+            let on_subject = adapter_renderer(feature, transport, false, false).render(template);
+            if !as_generated(&handler, &on_subject)? {
+                return Err(edited(&handler));
+            }
+            let on_entity = adapter_renderer(feature, transport, false, true).render(template);
+            regated.push((handler, on_entity));
+        }
+        Ok(Self {
+            name,
+            lines,
+            regated,
+        })
+    }
+
+    /// Queue the retirement, `port_lines` joining `mod_rs` in its one edit.
+    fn queue(&self, s: &mut Scaffold, root: &Path, mod_rs: PathBuf, port_lines: Vec<String>) {
+        s.remove(root.join("subject.rs"));
+        let retired = self.lines.clone();
+        let declare = ensure_lines(port_lines);
+        let index: Transform = Box::new(move |current: &str| {
+            let kept: Vec<&str> = current
+                .lines()
+                .filter(|line| !retired.iter().any(|r| line.trim() == r))
+                .collect();
+            let mut kept = kept.join("\n");
+            if current.ends_with('\n') {
+                kept.push('\n');
+            }
+            Some(declare(&kept).unwrap_or(kept))
+        });
+        s.edit(mod_rs, index);
+        for (handler, on_entity) in &self.regated {
+            let on_entity = on_entity.clone();
+            s.edit(handler, Box::new(move |_| Some(on_entity.clone())));
+        }
+    }
+}
+
+/// Whether `file` holds `written`, a template's rendering, as the generator
+/// left it: formatted by rustfmt, or not when it could not run.
+fn as_generated(file: &Path, written: &str) -> CliResult<bool> {
+    let Some(on_disk) = read_if_exists(file)? else {
+        return Ok(false);
+    };
+    Ok(on_disk == written || rustfmt_source(written).is_some_and(|formatted| on_disk == formatted))
 }
 
 /// Which of the two legal layouts this feature is in, and whether its lone
@@ -196,13 +305,6 @@ fn existing_stem(entity_rs: &Path) -> CliResult<Option<String>> {
     Ok(table_name(&source))
 }
 
-/// The `table_name = "…"` an entity's source declares.
-fn table_name(source: &str) -> Option<String> {
-    let (_, rest) = source.split_once("table_name = \"")?;
-    let (table, _) = rest.split_once('"')?;
-    (!table.is_empty()).then(|| table.to_owned())
-}
-
 /// Whether the port's `subject.rs`, written by `g graphql|mcp` over a port with
 /// no entity, declares `name`: a lone entity's glob re-export of its wire type
 /// would then lose to the subject's explicit one, with no error.
@@ -216,7 +318,12 @@ fn subject_declares(root: &Path, name: &str) -> CliResult<bool> {
         }))
 }
 
-fn print_next_steps(target: &Target, placement: &Placement, stem: &str) {
+fn print_next_steps(
+    target: &Target,
+    placement: &Placement,
+    stem: &str,
+    retirement: Option<&Retirement>,
+) {
     let feature = &target.feature.snake;
     let (file, type_path) = match placement {
         Placement::Lone => (
@@ -230,6 +337,30 @@ fn print_next_steps(target: &Target, placement: &Placement, stem: &str) {
     };
 
     println!();
+    if let Some(retirement) = retirement {
+        let handlers: Vec<String> = retirement
+            .regated
+            .iter()
+            .filter_map(|(handler, _)| {
+                let edge = handler.parent()?.file_name()?.to_string_lossy();
+                let file = handler.file_name()?.to_string_lossy();
+                Some(format!("`{edge}/{file}`"))
+            })
+            .collect();
+        println!(
+            "`{name}` stood in for the entity in `{feature}/subject.rs`, which is retired: {}.",
+            if handlers.is_empty() {
+                "nothing was gated on it".to_owned()
+            } else {
+                format!(
+                    "{} gate on `crate::{feature}::Entity` now",
+                    handlers.join(" and ")
+                )
+            },
+            name = retirement.name,
+        );
+        println!();
+    }
     if let Placement::Promote { moved } = placement {
         println!(
             "`{feature}`'s first entity moved to `entities/{moved}.rs`, its paths rewritten: \
@@ -267,6 +398,16 @@ fn print_next_steps(target: &Target, placement: &Placement, stem: &str) {
     println!("     read by the caller's ambient `Ability`:");
     println!();
     println!("       ab.can(nest_rs::authz::Action::Manage, {type_path});");
+    if let Some(retirement) = retirement {
+        println!();
+        println!(
+            "     A grant of `crate::{feature}::{}` there names a subject that is gone: grant",
+            retirement.name
+        );
+        println!("     the entity in its place, which no generator does for you:");
+        println!();
+        println!("       ab.can(nest_rs::authz::Action::Read, {type_path});");
+    }
 }
 
 #[cfg(test)]

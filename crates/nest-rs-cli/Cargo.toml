@@ -24,6 +24,9 @@ anyhow.workspace = true
 # `g migration` stamps the migration filename with today's date.
 chrono.workspace = true
 clap.workspace = true
+# `DeriveIden` snake-cases a migration's variants with heck, so a generated
+# column's variant is checked against the name it must give back with it.
+heck.workspace = true
 # `g auth` draws each development signing secret from the OS's CSPRNG: one read,
 # no generator to seed.
 getrandom.workspace = true

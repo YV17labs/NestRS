@@ -41,3 +41,51 @@ Refused:
 Held by `nest-rs-cli`'s integration suite (each generator from the root, with
 one app, several, `--app`, a pinned data layer) and the e2e replay of the
 tutorial, which runs every generator from the workspace root.
+
+## 2026-10-31 — the table's migration is a step the generator takes
+
+The identity audit's second pass (new-3, read2-6, new-6) found the generators
+contradicting each other: `g resource` wrote a `name` column, the migration
+`g migration` wrote created none, and the round trip posted it, so the
+unedited scaffold answered 500; every column was typed four times in three
+files; and `g entity` refused a `#[subject]` `g graphql|mcp` had written,
+handing back three steps over the CLI's own files. The owner agreed with the
+audit's twenty items (2026-10-31, "Tout faire (Recommandé)").
+
+Adopted:
+
+- **One column list, `<name>:<type>[:nullable]`**, the field grammar Rails'
+  and Phoenix's generators share, writes the entity's fields, the table's
+  migration — its `ColumnDef`s and `DeriveIden` variants — and the round trip
+  that posts and reads back each column, in `g resource`'s one transaction;
+  with none, one `name:string` column runs through all three.
+- **`g migration create_<table>` reads the entity declaring that table**, its
+  `Model`'s fields, and names any it cannot type rather than guessing.
+- **A migration name registered already is refused**, as Rails' generator
+  refuses it: the database that applied it never runs it again, so a second
+  `create_posts` is a change that silently never lands.
+- **`g entity` retires the subject the generators wrote** — the file, its two
+  lines in `mod.rs`, each operation re-gated on the entity, which fails
+  closed — and refuses, naming the file, one edited beyond that.
+
+Refused:
+
+- **Writing the entity's grant into `ability.rs` on a retirement**: an opening
+  is the developer's line, never the generator's; it is printed.
+- **`ab` in place of `_ab` in the empty policy, under
+  `#[expect(unused_variables)]`**: the first grant leaves the expectation
+  unfulfilled, which the scaffold's own `clippy -D warnings` refuses, so the
+  edit moves rather than goes; `_ab` is the honest mark of an empty policy.
+- **`?` as the nullable marker** (`bio:text?`): zsh, macOS's shell, reads it
+  as a glob and refuses the word unquoted. The third segment is Rails'
+  modifier slot, and `nullable` SeaORM's and Laravel's word for it.
+- **A `text` column with no `column_type = "Text"`**, as the demo's `posts`
+  spells it: `g migration` could then read the column back only as a
+  `string`, and two generators would disagree on one column.
+
+Held by `nest-rs-cli`'s integration suite (the column grammar and its
+refusals, the migration `g resource` writes, the `Model` `g migration` reads,
+the retirement and its refusal), its scaffold suite (every column type and an
+entity's migration compiled under the scaffold's `clippy -D warnings`) and the
+e2e replay of every tutorial page that edits `blog`, which runs an every-type
+resource's round trip against the live Postgres.

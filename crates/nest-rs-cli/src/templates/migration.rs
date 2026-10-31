@@ -1,7 +1,9 @@
 //! **Migration** templates — the `migrations` + `seed` crates every workspace
-//! ships, and the SeaORM migration skeleton `g migration` writes into them.
+//! ships, and the SeaORM migration `g migration` and `g resource` write into
+//! them.
 //!
-//! [`MIGRATION`] is a create-table starting point with the house columns
+//! [`MIGRATION`] creates a table: the columns an entity declares, or, for a
+//! table none declares, a starting point with the house columns
 //! (`created_at`/`updated_at`/`deleted_at`); the generator also registers it in
 //! `lib.rs` and regenerates `migrator.rs`. `nestrs new` scaffolds both crates
 //! because `db.just` names them in every recipe.
@@ -88,9 +90,11 @@ async fn main() -> Result<()> {
 }
 "#;
 
-/// The create-table skeleton. Render it through the **table**'s [`Names`]
+/// The create-table migration. Render it through the **table**'s [`Names`]
 /// ([`crate::naming::migration_subject`]), never the migration's — the enum
-/// reaches the DDL verbatim.
+/// reaches the DDL verbatim — with its `.col(…)` lines as `{{columns}}` and
+/// its enum's variants as `{{variants}}` ([`crate::column::Table`]), and
+/// `{{note}}` above the builder when what it creates is left to fill.
 ///
 /// [`Names`]: crate::naming::Names
 pub(crate) const MIGRATION: &str = r#"use sea_orm_migration::prelude::*;
@@ -101,32 +105,12 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Create-table skeleton — replace with an `alter_table` for a change.
-        manager
+{{note}}        manager
             .create_table(
                 Table::create()
                     .table({{singular}}::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new({{singular}}::Id).uuid().not_null().primary_key())
-                    // TODO: add your columns here, and as a variant of the enum below.
-                    .col(
-                        ColumnDef::new({{singular}}::CreatedAt)
-                            .timestamp_with_time_zone()
-                            .not_null()
-                            .default(Expr::current_timestamp()),
-                    )
-                    .col(
-                        ColumnDef::new({{singular}}::UpdatedAt)
-                            .timestamp_with_time_zone()
-                            .not_null()
-                            .default(Expr::current_timestamp()),
-                    )
-                    .col(
-                        ColumnDef::new({{singular}}::DeletedAt)
-                            .timestamp_with_time_zone()
-                            .null(),
-                    )
-                    .to_owned(),
+{{columns}}                    .to_owned(),
             )
             .await
     }
@@ -144,9 +128,9 @@ impl MigrationTrait for Migration {
 #[derive(DeriveIden)]
 enum {{singular}} {
     Table,
-    Id,
-    CreatedAt,
-    UpdatedAt,
-    DeletedAt,
-}
+{{variants}}}
 "#;
+
+/// [`MIGRATION`]'s `{{note}}` over a table no entity declares.
+pub(crate) const SKELETON_NOTE: &str =
+    "        // Create-table skeleton — replace with an `alter_table` for a change.\n";

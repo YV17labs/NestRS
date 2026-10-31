@@ -230,25 +230,81 @@ fn generate_entity_refuses_a_move_it_cannot_rewrite_with_certainty() {
 }
 
 /// `g graphql|mcp` over a port with no entity wrote its `#[subject]` under the
-/// port's singular, the name the entity's wire type takes: `pub use subject::Post;`
-/// would silently shadow the `Post` that `pub use entity::*;` exports, so the
-/// generator refuses and names the re-gating. An entity of another name joins.
+/// port's singular, the name the entity's wire type takes. `g entity` retires
+/// it as written: the file and its two lines in `mod.rs` go, each operation
+/// is gated on the entity instead, and the grant is printed, never written —
+/// `ability.rs` is the developer's.
 #[test]
-fn generate_entity_refuses_a_port_whose_subject_holds_its_name() {
+fn generate_entity_retires_the_subject_the_generators_wrote() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+    let feature = dir.path().join("crates/features/src/posts");
+    let read = |file: &str| fs::read_to_string(feature.join(file)).unwrap();
+    let ability = dir.path().join("crates/features/src/authz/ability.rs");
+    let policy = fs::read_to_string(&ability).unwrap();
+    assert!(feature.join("subject.rs").is_file());
+    assert!(read("graphql/resolver.rs").contains("#[authorize(Read, Post)]"));
+
+    let printed = run_ok(dir.path(), &["g", "entity", "posts", "-p", path]);
+
+    assert!(
+        !feature.join("subject.rs").exists(),
+        "the subject is retired"
+    );
+    let index = read("mod.rs");
+    for gone in ["mod subject;", "pub use subject::Post;"] {
+        assert!(!index.contains(gone), "{gone}: {index}");
+    }
+    for line in ["mod entity;", "pub use entity::*;"] {
+        assert!(index.contains(line), "{line}: {index}");
+    }
+    for file in ["graphql/resolver.rs", "mcp/tool.rs"] {
+        let handler = read(file);
+        assert!(
+            handler.contains("#[authorize(Read, PostEntity)]")
+                && handler.contains("Entity as PostEntity")
+                && !handler.contains("#[authorize(Read, Post)]"),
+            "{file} is gated on the entity: {handler}"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(&ability).unwrap(),
+        policy,
+        "the policy is the developer's: nothing granted"
+    );
+    assert!(
+        printed.contains("ab.can(nest_rs::authz::Action::Read, crate::posts::Entity);")
+            && printed.contains("crate::posts::Post"),
+        "the run prints the grant that replaces the subject's: {printed}"
+    );
+}
+
+/// A subject or a posture edited beyond what the generator wrote is the
+/// developer's: `g entity` refuses, naming the file, and writes nothing. An
+/// entity of another name joins the port beside its subject.
+#[test]
+fn generate_entity_refuses_a_subject_edited_beyond_the_template() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let path = dir.path().to_str().unwrap();
     run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
     run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+    let tool = dir.path().join("crates/features/src/posts/mcp/tool.rs");
+    let edited = fs::read_to_string(&tool)
+        .unwrap()
+        .replace("#[authorize(Read, Post)]", "#[authorize(Update, Post)]");
+    fs::write(&tool, edited).unwrap();
     let before = files_under(dir.path());
 
     let refused = run_err(dir.path(), &["g", "entity", "posts", "-p", path]);
 
     assert!(
-        refused.contains("crates/features/src/posts/subject.rs")
-            && refused.contains("#[authorize(Read, PostEntity)]")
-            && refused.contains("crate::posts::Entity"),
-        "the refusal names the subject and the re-gating: {refused}"
+        refused.contains("crates/features/src/posts/mcp/tool.rs") && refused.contains("`Post`"),
+        "the refusal names the file edited beyond the template: {refused}"
     );
     assert_eq!(files_under(dir.path()), before, "a refusal writes nothing");
 

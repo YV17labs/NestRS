@@ -1,31 +1,39 @@
 ---
 title: Declare the entity
-description: "nestrs g resource posts writes the posts feature; you give its Post entity a title and a body, and #[expose] derives the wire DTO, the inputs and the JSON schema from that one declaration."
+description: "nestrs g resource posts title:string body:text writes the posts feature, its table's migration and its round trip from one column list; #[expose] derives the wire DTO, the inputs and the JSON schema from the Post entity it declares."
 sidebar:
   order: 3
 ---
 
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
-You generate the `posts` feature in one command, then declare the shape of a
-post — a SeaORM model decorated with `#[expose]` — from which the macro
-emits the wire DTO, the create/update inputs, the validator wiring and the
-JSON schema the HTTP transport reaches for. By the end of this page,
-`nestrs run check` passes on a `posts` feature whose `Post` has a title and a
-body.
+You generate the `posts` feature in one command that names a post's columns,
+and read the shape it declares — a SeaORM model decorated with `#[expose]` —
+from which the macro emits the wire DTO, the create/update inputs, the
+validator wiring and the JSON schema the HTTP transport reaches for. By the end
+of this page, `nestrs run check` passes on a `posts` feature whose `Post` has a
+title and a body.
 
 ## Generate the feature
 
 From the workspace root:
 
 ```bash
-nestrs g resource posts --app blog
+nestrs g resource posts title:string body:text --app blog
 ```
+
+Each column after the name is `<name>:<type>`, the field grammar Rails' and
+Phoenix's generators share: a post has a `title`, a short string, and a
+`body`, a text of any length. The type is one of `string`, `text`, `integer`,
+`bigint`, `float`, `boolean`, `uuid`, `date` and `datetime`, and a third part,
+`:nullable`, lets a row leave the column empty. The key and the timestamps
+come without asking; named nothing, a resource gets one `name:string` column.
 
 Your workspace has two apps, `hello` and `blog`, so the generator is told
 which one serves the feature; run from inside `apps/blog/`, or in a workspace
-of one app, it would find it alone. It writes the feature and wires it, in one
-transaction — a step it cannot take leaves nothing half-written:
+of one app, it would find it alone. It writes the feature, the table's
+migration and the round trip, and wires them, in one transaction — a step it
+cannot take leaves nothing half-written:
 
 <FileTree>
 - apps/blog/
@@ -49,18 +57,23 @@ transaction — a step it cannot take leaves nothing half-written:
       - module.rs
       - mod.rs
   - lib.rs edited
+- crates/migrations/src/
+  - m20260609_000000_create_posts.rs the `post` table, which [Persist through Postgres](/tutorial/database/) applies
+  - lib.rs edited
+  - migrator.rs edited
 </FileTree>
 
-Three things arrived that you did not name. `authn/` and `authz/` are the
+Four things arrived that you did not name. `authn/` and `authz/` are the
 **auth adapter**: the generated controller binds `AuthnGuard` and
 `AuthzGuard`, two types your workspace defines rather than the framework, and
 `nestrs g resource` writes them when the workspace has none — with a
 development-only `POST /auth/dev-token` route and an HS256 secret drawn into
 the git-ignored `.env.local` (and another, the suites', into `.env.test`).
-[Expose over HTTP](/tutorial/http/) reads them. The test is the resource's
-round trip through `blog`, written now so the feature is never untested. And
-the edits to the manifests and to `blog`'s root, which the next pages read as
-they need them.
+[Expose over HTTP](/tutorial/http/) reads them. The migration creates the
+table the entity declares, column for column. The test is the resource's round
+trip through `blog`, written now so the feature is never untested: it posts a
+value of each column and reads each back. And the edits to the manifests and
+to `blog`'s root, which the next pages read as they need them.
 
 The capabilities ride the workspace's one `nest-rs` line, which **gains**
 features rather than being replaced (`nestrs new` already put `http` and
@@ -89,24 +102,24 @@ generates, `Uuid` as the primary-key type. The derives `#[expose]` emits —
 `schemars::JsonSchema`, `validator::Validate` — are routed back through the
 framework with a `crate = ` override, so neither appears here.
 
-## Give the post its columns
+## The post's columns
 
-The generator's entity has one column of its own, `name`. A post has a title
-and a body instead: replace the `name` field with the two, and keep the rest
-as it was written. SeaORM owns the column types; `#[expose]` decides which
+The entity carries the two columns you named, between the key and the
+timestamps. SeaORM owns the column types — a `text` column says so with
+`column_type`, since both are a `String` to Rust; `#[expose]` decides which
 columns cross the wire and which inputs the HTTP layer accepts. Exposure is
 opt-in — a field surfaces only when it carries `#[expose]`.
 
-```rust title="crates/features/src/posts/entity.rs" {26-29}
+```rust title="crates/features/src/posts/entity.rs"
 use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-// `soft_delete` + `timestamps` match the three columns `nestrs g migration`
-// scaffolds for this table, and the `users/` exemplar. `soft_delete` makes
-// DELETE stamp `deleted_at` and hides a stamped row from every read; drop it
-// for a resource that should really erase rows. `timestamps` emits the
-// `ActiveModelBehavior`, so the resource must not also write an empty one.
+// `soft_delete` + `timestamps` match the three columns this table's migration
+// creates, and the `users/` exemplar. `soft_delete` makes DELETE stamp
+// `deleted_at` and hides a stamped row from every read; drop it for a resource
+// that should really erase rows. `timestamps` emits the `ActiveModelBehavior`,
+// so the resource must not also write an empty one.
 #[expose(
     name = "Post",
     service = super::service::PostsService,
@@ -125,6 +138,7 @@ pub struct Model {
     pub id: Uuid,
     #[expose(input(create, update), validate(length(min = 1)))]
     pub title: String,
+    #[sea_orm(column_type = "Text")]
     #[expose(input(create, update), validate(length(min = 1)))]
     pub body: String,
     #[expose]
@@ -221,13 +235,13 @@ $ nestrs run check
 
 The macro expanded, the entity compiled, and `Post` / `CreatePost`
 / `UpdatePost` are usable from the rest of the crate — the generated test
-included, though it still posts the `name` you just replaced: it fails until
-[Test it end to end](/tutorial/testing/) gives it a title and a body.
+included, which posts a title and a body.
 
 ## What you have now
 
 - A `posts` feature `nestrs g resource` wrote, wired into `blog`.
-- A `Post` SeaORM entity with `id`, `title`, `body` and the two timestamps.
+- A `Post` SeaORM entity with `id`, `title`, `body` and the two timestamps,
+  and the migration creating its table.
 - An auto-generated `Post` wire DTO and `CreatePost` /
   `UpdatePost` input structs.
 

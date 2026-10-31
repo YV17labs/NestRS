@@ -113,7 +113,7 @@ nextest rejects a filterset naming a binary the workspace does not have.
 
 ```bash
 nestrs new blog
-nestrs g resource posts
+nestrs g resource posts title:string body:text --app blog
 ```
 
 
@@ -240,10 +240,12 @@ HTTP adapter in one shot.
 # Port only (service + module, no transport)
 nestrs g feature posts
 
-# DB-backed CRUD: #[expose] entity + CrudService + guarded #[crud] controller.
-# Bootstraps the auth adapter below when the workspace has none — its routes
-# name AuthnGuard/AuthzGuard, so they would not compile without it.
-nestrs g resource posts
+# DB-backed CRUD: #[expose] entity + CrudService + guarded #[crud] controller,
+# its table's migration and, in the app serving it, its round trip — all from
+# the one column list. Bootstraps the auth adapter below when the workspace has
+# none — its routes name AuthnGuard/AuthzGuard, so they would not compile
+# without it.
+nestrs g resource posts title:string body:text published_at:datetime:nullable
 
 # One #[expose] entity in an existing feature — no controller, no auth
 # bootstrap. The name after the slash is the entity's own when the feature's
@@ -260,8 +262,12 @@ nestrs g entity posts/comment     # → Comment
 # variable: a secret beside your own key would fail the boot.
 nestrs g auth
 
-# A SeaORM migration, registered in lib.rs and migrator.rs
-nestrs g migration create_posts
+# A SeaORM migration, registered in lib.rs and migrator.rs. `create_<table>`
+# over a table an entity declares creates the columns its Model does; any
+# other name writes the create-table skeleton to fill. A name registered
+# already is refused: the next change to a table takes a name of its own.
+nestrs g migration create_comments
+nestrs g migration add_status_to_posts
 
 # The framework's own migration, the outbox's table: one migrator.rs entry, no
 # file. The `nestrs_` prefix is the framework's: any other `nestrs_` name, and a
@@ -323,6 +329,35 @@ $ nestrs g resource posts --app blog
 …
   3. PostsHttpModule is wired into `blog`, beside SeaOrmModule, SeaOrmDatabaseModule and AuthnHttpModule.
 ```
+
+### The columns `g resource` takes
+
+Each column after the name is `<name>:<type>`, the field grammar Rails' and
+Phoenix's generators share, or `<name>:<type>:nullable` for one a row may leave
+empty; with none, a resource gets one `name:string` column. The key and the
+three timestamps come with every table, so no list names `id`, `created_at`,
+`updated_at` or `deleted_at`.
+
+| Type | Field | Column | The round trip posts |
+|------|-------|--------|----------------------|
+| `string` | `String`, at least one character | `varchar` | `"Title 1"` |
+| `text` | `String`, `column_type = "Text"`, at least one character | `text` | `"Body 1"` |
+| `integer` | `i32` | `integer` | `1` |
+| `bigint` | `i64` | `bigint` | `1` |
+| `float` | `f64` | `double precision` | `1.5` |
+| `boolean` | `bool` | `boolean` | `true` |
+| `uuid` | `Uuid` | `uuid` | a UUID |
+| `date` | `Date` | `date` | `"2026-01-01"` |
+| `datetime` | `DateTimeWithTimeZone` | `timestamptz` | an instant |
+
+One list writes three files that must agree, and a column typed four times by
+hand is four chances to disagree: the entity's field, exposed as an input of
+both writes; the migration's `ColumnDef` and `DeriveIden` variant; and the
+round trip's body, which writes a value of each column and reads each back. A
+name the grammar does not read, a type it does not know, a column named twice
+or a house column is refused before anything is written. A column added later
+goes into the entity, and into a migration of its own — `nestrs g migration
+add_<column>_to_<table>` writes the file to fill.
 
 ### Why `g resource` is guarded
 
@@ -394,10 +429,13 @@ A port with an entity but no service gates on that entity instead. The file is
 
 A subject masks nothing, so an operation that starts answering with rows is
 re-gated on their entity, `#[authorize(Read, PostEntity)]`. `g entity posts`
-refuses while `subject.rs` declares `Post`: the entity's wire type takes that
-name, and the subject's re-export would quietly shadow it. The refusal lists the
-steps — retire the subject, run `g entity` again, re-gate the operations and
-their grant on the entity.
+does it: the entity's wire type takes the subject's name, so the run retires
+`subject.rs` and its two lines in `mod.rs`, and gates on `crate::posts::Entity`
+each operation `g graphql` and `g mcp` gated on `Post`, in the same
+transaction. The grant stays yours — the run prints the line to write in
+`authz/ability.rs` where you granted `crate::posts::Post`, and until you do the
+operations answer `FORBIDDEN`. A subject or an operation you edited beyond what
+the generator wrote is yours too: the run refuses, naming the file.
 
 ### A generated route or socket is never open
 
@@ -524,10 +562,10 @@ nestrs update --from-path
 | `nestrs update --force` | Reinstall from crates.io even when already on the latest version |
 | `nestrs update --from-path` | Reinstall from monorepo `crates/nest-rs-cli` |
 | `nestrs g feature <name>` | Transport-agnostic port in `crates/features/src/` |
-| `nestrs g resource <name>` | DB-backed CRUD port + guarded HTTP adapter (deps auto-added) |
+| `nestrs g resource <name> [<column>:<type>[:nullable]…]` | DB-backed CRUD port + guarded HTTP adapter, its table's migration and round trip (deps auto-added) |
 | `nestrs g entity <feature>[/<name>]` | One `#[expose]` entity in an existing feature |
 | `nestrs g auth` | The app's authn/authz adapter — one per workspace |
-| `nestrs g migration <name>` | SeaORM migration, registered in `lib.rs` and `migrator.rs`; `nestrs_outbox` registers the framework's own |
+| `nestrs g migration <name>` | SeaORM migration, registered in `lib.rs` and `migrator.rs`, its columns an entity's for `create_<table>`; `nestrs_outbox` registers the framework's own |
 | `nestrs g http\|graphql\|ws\|queue\|schedule\|mcp <name>` | Add one transport adapter to a port |
 
 Every generator accepts **`--dry-run`** and **`-p <path>`**; the ones that wire

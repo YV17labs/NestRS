@@ -13,6 +13,11 @@ the worker run migrations on startup; you run them explicitly with `nestrs run d
 
 ## Write a migration
 
+A table's first migration comes with its resource: `nestrs g resource` writes
+it from the same column list as the entity
+([CLI](/cli/#the-columns-g-resource-takes)). Any other comes from
+`g migration`:
+
 ```bash
 nestrs g migration create_org
 ```
@@ -20,7 +25,14 @@ nestrs g migration create_org
 One file per migration, named `m<utc-date>_<seq>_<what>.rs`.
 `DeriveMigrationName` takes the version from the file name; a `DeriveIden`
 enum names the table and its columns so there are no stringly-typed
-identifiers. Fill in the columns the generator stubbed:
+identifiers. `create_<table>` over a table an entity declares creates the
+columns its `Model` does, each in the builder and in the enum; a field whose
+type the builder cannot read off it — an enum of yours, a `unique` — is named
+in the run's next steps, for you to add. Any other name writes the
+create-table skeleton, its columns yours to fill, and a name registered
+already is refused, since the database that applied it never runs it again:
+the next change to a table takes a name of its own, `add_status_to_posts`.
+The demo's `org` table, filled in:
 
 ```rust title="crates/migrations/src/m20260526_000000_create_org.rs (from the demo)"
 use sea_orm_migration::prelude::*;

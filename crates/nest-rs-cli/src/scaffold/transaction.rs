@@ -1,10 +1,11 @@
 //! Transactional file scaffolding.
 //!
-//! A [`Scaffold`] collects every file a command wants to create, move or
-//! edit, then commits them **all-or-nothing**: validation runs first (no
-//! `create` or move may clobber an existing file, every `edit` target and
-//! move source must exist), and a write the system refuses mid-commit rolls
-//! back every one before it, so a failure never leaves a half-written tree.
+//! A [`Scaffold`] collects every file a command wants to create, move, edit or
+//! remove, then commits them **all-or-nothing**: validation runs first (no
+//! `create` or move may clobber an existing file, every `edit` target, move
+//! source and removed file must exist), and a write the system refuses
+//! mid-commit rolls back every one before it, so a failure never leaves a
+//! half-written tree.
 //! `--dry-run` runs the exact same pipeline but writes nothing and returns
 //! the [`Report`] of what *would* change.
 
@@ -39,12 +40,17 @@ enum Action {
         to: PathBuf,
         transform: Transform,
     },
+    /// The file goes; the rollback puts its bytes back.
+    Remove {
+        path: PathBuf,
+    },
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct Report {
     pub created: Vec<PathBuf>,
     pub moved: Vec<(PathBuf, PathBuf)>,
+    pub removed: Vec<PathBuf>,
     pub modified: Vec<(PathBuf, Vec<String>)>,
     pub unchanged: Vec<PathBuf>,
     pub dry_run: bool,
@@ -127,6 +133,12 @@ impl Scaffold {
         self
     }
 
+    /// Queue the removal of a file that exists.
+    pub(crate) fn remove(&mut self, path: impl Into<PathBuf>) -> &mut Self {
+        self.actions.push(Action::Remove { path: path.into() });
+        self
+    }
+
     /// Validate everything, then commit (unless `dry_run`).
     pub(crate) fn apply(self, dry_run: bool) -> CliResult<Report> {
         // Phase 1 — validate creates and moves up front so we fail before any
@@ -135,7 +147,14 @@ impl Scaffold {
             let target = match action {
                 Action::Create { path, .. } => path,
                 Action::Move { to, .. } => to,
-                Action::CreateIfMissing { .. } | Action::Edit { .. } => continue,
+                Action::Remove { path } if !path.is_file() => {
+                    return Err(CliError::file(FileAction::Remove, path)(
+                        std::io::ErrorKind::NotFound.into(),
+                    ));
+                }
+                Action::CreateIfMissing { .. } | Action::Edit { .. } | Action::Remove { .. } => {
+                    continue;
+                }
             };
             if target.exists() {
                 return Err(CliError::AlreadyExists(target.clone()));
@@ -174,6 +193,10 @@ impl Scaffold {
                     report.moved.push((from.clone(), to.clone()));
                     planned.push(PlannedWrite::Write { path: to, contents });
                     planned.push(PlannedWrite::Remove { path: from });
+                }
+                Action::Remove { path } => {
+                    report.removed.push(path.clone());
+                    planned.push(PlannedWrite::Remove { path });
                 }
                 Action::Edit {
                     path,
@@ -331,6 +354,9 @@ impl Report {
         for (from, to) in &self.moved {
             println!("  > {} → {}", rel(from, base), rel(to, base));
         }
+        for path in &self.removed {
+            println!("  - {}", rel(path, base));
+        }
         for (path, added) in &self.modified {
             println!("  ~ {}", rel(path, base));
             for line in added {
@@ -378,6 +404,28 @@ pub(crate) fn rustfmt(paths: &[PathBuf]) {
         }
         Err(e) => eprintln!("note: generated code left unformatted: {e}"),
     }
+}
+
+/// `source` as the `rustfmt` [`rustfmt`] runs would leave it, `None` when it
+/// cannot run: what a generator wrote, to compare a file on disk with.
+pub(crate) fn rustfmt_source(source: &str) -> Option<String> {
+    use std::io::Write;
+
+    let mut child = std::process::Command::new("rustfmt")
+        .arg("--edition")
+        .arg("2024")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(source.as_bytes()).ok()?;
+    let output = child.wait_with_output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8(output.stdout).ok())
+        .flatten()
 }
 
 #[cfg(test)]
@@ -536,6 +584,36 @@ mod tests {
         ));
         assert!(!dir.path().join("new.rs").exists());
         assert_eq!(fs::read_to_string(&to).unwrap(), "b");
+    }
+
+    #[test]
+    fn a_removed_file_comes_back_when_a_later_step_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let subject = dir.path().join("subject.rs");
+        fs::write(&subject, "pub struct Post;\n").unwrap();
+        fs::write(dir.path().join("blocked"), "").unwrap();
+
+        let mut s = Scaffold::new();
+        s.remove(&subject);
+        let report = s.apply(true).unwrap();
+        assert_eq!(report.removed, vec![subject.clone()]);
+        assert!(subject.is_file(), "a dry run removes nothing");
+
+        let mut s = Scaffold::new();
+        s.remove(&subject);
+        s.create(dir.path().join("blocked/late.rs"), "x");
+        s.apply(false).unwrap_err();
+        assert_eq!(fs::read_to_string(&subject).unwrap(), "pub struct Post;\n");
+
+        let mut s = Scaffold::new();
+        s.remove(dir.path().join("absent.rs"));
+        assert!(matches!(
+            s.apply(false).unwrap_err(),
+            CliError::File {
+                action: FileAction::Remove,
+                ..
+            }
+        ));
     }
 
     #[test]

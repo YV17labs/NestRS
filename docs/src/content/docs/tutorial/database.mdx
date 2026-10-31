@@ -1,14 +1,14 @@
 ---
 title: Persist through Postgres
-description: Start Postgres, declare the post table's migration, run the binary on the data layer blog imports — mutating routes commit in a transaction; failures roll back.
+description: Start Postgres, apply the post table's migration, run the binary on the data layer blog imports — mutating routes commit in a transaction; failures roll back.
 sidebar:
   order: 6
 ---
 
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
-You start Postgres and add the post table's migration to the workspace, and
-the data layer `blog` imports comes alive. By the end of this page, the
+You start Postgres and apply the post table's migration, and the data layer
+`blog` imports comes alive. By the end of this page, the
 five CRUD routes mount, `POST /posts` persists into Postgres inside a
 transaction, a failing handler rolls back automatically, and the e2e
 baseline you add in [Test it end to end](/tutorial/testing/) has a real
@@ -40,14 +40,11 @@ controller reaches the database through `Repo`.
 ## A migration for the post table
 
 `nestrs new` ships a `migrations` crate holding every SeaORM migration, plus
-the `migrate` binary the `nestrs run db …` verbs drive. Generate the file the
-resource's next steps named — the CLI registers it in **both** `lib.rs` and
-`migrator.rs`, which is the pair people forget by hand, and `migrator.rs` is
-regenerated from `lib.rs`'s list, so the two can never disagree:
-
-```bash
-nestrs g migration create_posts
-```
+the `migrate` binary the `nestrs run db …` verbs drive. `nestrs g resource`
+wrote the `post` table's migration into it on page 2, from the column list
+that wrote the entity, and registered it in **both** `lib.rs` and
+`migrator.rs` — the pair people forget by hand. `migrator.rs` is regenerated
+from `lib.rs`'s list, so the two can never disagree:
 
 <FileTree>
 - crates/migrations/
@@ -59,12 +56,11 @@ nestrs g migration create_posts
       - migrate.rs
 </FileTree>
 
-It stubs the `post` table with the columns every generated entity declares —
-the id and the three timestamps `timestamps` and `soft_delete` read. Add the
-two your `Post` declared, in the builder and as variants of the enum, which
-`DeriveIden` writes into the DDL:
+It creates the columns `Post` declares, the key and the three timestamps
+`timestamps` and `soft_delete` read included, each in the builder and as a
+variant of the enum, which `DeriveIden` writes into the DDL:
 
-```rust title="crates/migrations/src/m20260609_000000_create_posts.rs" {15-16, 53-54}
+```rust title="crates/migrations/src/m20260609_000000_create_posts.rs"
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -125,9 +121,12 @@ enum Post {
 }
 ```
 
-The file name carries the day you ran the command; yours differs from the
-one above. The reference workspace lists other migrations (`org`, `user`, …)
-for `api`. Your tutorial migrator only needs `post` until you extend the
+The file name carries the day you ran `nestrs g resource`; yours differs from
+the one above. A later change to the table takes a migration of its own,
+named for what it does — `nestrs g migration add_status_to_posts` writes one
+for you to fill — since the database that applied this one never runs it
+again. The reference workspace lists other migrations (`org`, `user`, …) for
+`api`. Your tutorial migrator only needs `post` until you extend the
 workspace.
 
 ## Run Postgres
@@ -268,8 +267,7 @@ tags the request's span and the SQL spans.
 
 - Postgres running beside `blog`, and the data layer `g resource` wired —
   the five CRUD routes mount.
-- A migration adding the `post` table, applied through
-  `nestrs run db up`.
+- The `post` table's migration, applied through `nestrs run db up`.
 - `POST /posts` persisting into Postgres inside an automatic
   transaction, scoped by the caller's ability.
 

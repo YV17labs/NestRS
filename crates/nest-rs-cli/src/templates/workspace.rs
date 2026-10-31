@@ -167,9 +167,8 @@ production, which reads no app's own file: a deployment names the port.
 ## Grow the workspace
 
 ```bash
-nestrs new blog                    # another app + its own hello on GET /
-nestrs g resource posts            # DB-backed CRUD, behind the app's guards
-nestrs g migration create_posts    # its table
+nestrs new blog                                              # another app + its own hello on GET /
+nestrs g resource posts title:string body:text --app blog    # DB-backed CRUD behind blog's guards, its table's migration
 docker compose up -d && nestrs run db up
 ```
 

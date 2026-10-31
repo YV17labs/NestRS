@@ -73,31 +73,32 @@ pub enum CliError {
         what: &'static str,
     },
 
-    /// `g entity` on a port whose `subject.rs` declares the entity's name.
-    ///
-    /// The subject's explicit `pub use` would shadow the wire type the entity's
-    /// glob re-exports; re-gating the operations is left to the developer
-    /// (`commands::generate::entity`).
+    /// `g entity` on a port whose `#[subject]` holds the entity's name, where
+    /// a file the retirement rewrites is no longer what the generator wrote.
     #[error(
-        "feature `{feature}` declares `{name}` in `subject.rs`, the capability its \
-         operations are gated on, and the entity's wire type takes that name: \
-         `pub use subject::{name};` would shadow it. Retire the subject first, then \
-         re-run:\n  \
-         1. delete crates/features/src/{feature}/subject.rs, and `mod subject;` / \
-         `pub use subject::{name};` in `{feature}/mod.rs`\n  \
-         2. nestrs g entity {target}\n  \
-         3. re-gate on the entity every operation gated on `{name}`, with \
-         `use crate::{feature}::Entity as {name}Entity;` and \
-         `#[authorize(Read, {name}Entity)]` (`g graphql` wrote one in \
-         `graphql/resolver.rs`, `g mcp` in `mcp/tool.rs`), and grant \
-         `crate::{feature}::Entity` in `authz/ability.rs` where you granted \
-         `crate::{feature}::{name}`"
+        "feature `{feature}` gates its operations on `{name}`, the `#[subject]` in \
+         `subject.rs`, and the entity takes that name — but `{file}` is no longer what \
+         the generator wrote, so `g entity` leaves it to you: gate on \
+         `crate::{feature}::Entity` what `{name}` gates, delete `subject.rs` and its two \
+         lines in `{feature}/mod.rs`, then re-run"
     )]
-    EntityNameTakenBySubject {
+    SubjectEdited {
         feature: String,
         name: String,
-        target: String,
+        file: String,
     },
+
+    /// A column list the grammar does not read.
+    #[error("{0}")]
+    InvalidColumn(String),
+
+    /// A migration name the migrations crate already registers.
+    #[error(
+        "a migration named `{name}` is registered already: `{}`. A change to its table takes \
+         a name of its own (`add_<column>_to_<table>`)",
+        path.display()
+    )]
+    MigrationExists { name: String, path: PathBuf },
 
     #[error(
         "`{0}` is not a `<feature>` or `<feature>/<entity>` target — one optional `/`, no more"

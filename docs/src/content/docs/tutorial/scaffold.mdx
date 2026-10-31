@@ -150,11 +150,14 @@ files are shared by every app; `apps/blog/.env` is read over them under the
 there ([an app's own files](/configuration/env-cascade/#an-apps-own-files)).
 
 `BlogModule` has no `providers = [...]` list. A root module composes
-feature modules and lets each own its providers — the
+feature modules and lets each own its providers; what a root provides itself
+is app-wide — the
 [reference root](https://github.com/YV17labs/NestRS/blob/main/demo/apps/api/src/module.rs)
-carries only `imports`. Note the two `BlogModule`s: this one is the app's
-composition root, and `features::blog::BlogModule` is the feature's own. Two
-crates, no collision — the app only ever names the `…HttpModule` edge.
+lists one, `GlobalGuards<(AuthnGuard, AuthzGuard)>`, the guards every route it
+serves runs first, where `blog`'s controllers will bind their own. Note the
+two `BlogModule`s: this one is the app's composition root, and
+`features::blog::BlogModule` is the feature's own. Two crates, no collision —
+the app only ever names the `…HttpModule` edge.
 
 ```rust title="apps/blog/src/main.rs"
 use anyhow::Result;

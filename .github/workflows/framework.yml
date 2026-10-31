@@ -23,6 +23,8 @@ on:
       - 'docs/src/content/docs/tutorial/database.mdx'
       - 'docs/src/content/docs/tutorial/validation.mdx'
       - 'docs/src/content/docs/tutorial/testing.mdx'
+      - 'docs/src/content/docs/tutorial/security.mdx'
+      - 'docs/src/content/docs/tutorial/graphql.mdx'
   pull_request:
     paths: *tree
   workflow_dispatch:

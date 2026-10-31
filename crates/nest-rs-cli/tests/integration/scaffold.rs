@@ -77,21 +77,40 @@ fn a_greenfield_workspace_compiles() {
 /// The empty `define` the auth adapter scaffolds, as `ability.rs` spells it.
 const EMPTY_DEFINE: &str = "fn define(&self, _actor: &Claims, _ab: &mut AbilityBuilder) {}";
 
+/// Every column type the grammar reads, once, the last one nullable.
+const EVERY_COLUMN_TYPE: [&str; 10] = [
+    "title:string",
+    "body:text",
+    "views:integer",
+    "total:bigint",
+    "score:float",
+    "published:boolean",
+    "author_id:uuid",
+    "due_on:date",
+    "published_at:datetime",
+    "bio:text:nullable",
+];
+
 #[test]
 fn a_generated_resource_and_entity_compile_with_the_grants_they_print() {
     // `#[crud]` and `#[expose]` need a real entity and service, so their contract
-    // is proved here, not in `nest-rs-macro-hygiene`. One entity sits on a plain
-    // `g feature` port, whose service is no `CrudService`; a second on the
-    // resource's port moves its first into `entities/`, every path rewritten.
-    // The grants each generator prints are pasted into `define`, as the
-    // developer would.
+    // is proved here, not in `nest-rs-macro-hygiene`. The resource takes every
+    // column type, into its entity, its migration and its round trip. One entity
+    // sits on a plain `g feature` port, whose service is no `CrudService`; a
+    // second on the resource's port moves its first into `entities/`, every path
+    // rewritten; `g migration` reads each one's columns. The grants each
+    // generator prints are pasted into `define`, as the developer would.
+    let mut resource = vec!["g", "resource", "post"];
+    resource.extend(EVERY_COLUMN_TYPE);
     scaffold_write_and_check_in(
         &["new", "acme"],
         &[
-            &["g", "resource", "post"],
+            &resource,
             &["g", "feature", "blog"],
             &["g", "entity", "blog/article"],
             &["g", "entity", "post/comment"],
+            &["g", "migration", "create_article"],
+            &["g", "migration", "create_comment"],
         ],
         &[],
         &[],
@@ -363,15 +382,15 @@ fn every_adapter_over_a_plain_port_compiles() {
 #[test]
 fn every_adapter_over_a_resource_port_compiles() {
     // The authz adapters share the `authz/` tree and name providers behind
-    // features only a compile can judge. `http` is skipped: `g resource` writes it.
-    // `g migration nestrs_outbox` runs before `g queue`, which registers the
-    // same entry: after it, the command would find it listed and write nothing.
+    // features only a compile can judge. `http` is skipped: `g resource` writes it,
+    // with its table's migration. `g migration nestrs_outbox` runs before
+    // `g queue`, which registers the same entry: after it, the command would find
+    // it listed and write nothing.
     let mut generate = vec![
         vec!["g", "resource", "post", "-p", "apps/hello"],
         vec!["g", "migration", "nestrs_outbox"],
     ];
     generate.extend(every_edge("post", &["http"]));
-    generate.push(vec!["g", "migration", "create_post"]);
     check_all(
         &generate,
         "every adapter over a resource port, the outbox's migration and its own",

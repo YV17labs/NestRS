@@ -42,6 +42,7 @@ pub mod cli;
 #[doc(hidden)]
 pub mod error;
 
+mod column;
 mod commands;
 mod context;
 mod dotenv;

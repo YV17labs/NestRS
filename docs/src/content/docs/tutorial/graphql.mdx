@@ -117,30 +117,28 @@ use crate::users::UsersModule;
 pub struct UsersGraphqlModule;
 ```
 
-```rust title="crates/features/src/users/graphql/mod.rs"
+```rust title="crates/features/src/users/graphql/mod.rs (from the demo)"
 mod module;
 mod resolver;
 
 pub use module::UsersGraphqlModule;
-pub use resolver::UsersResolver;
 ```
 
-And the feature root:
+The folder exports the module alone, as the HTTP adapter's does. And the
+feature root declares it beside the others:
 
-```rust title="crates/features/src/users/mod.rs" {7, 12}
-mod entity;
-mod module;
+```rust title="crates/features/src/users/mod.rs (from the demo, abridged)" {4, 9}
+// …
 mod service;
 
-pub mod http;
 pub mod graphql;
+pub mod http;
+// …
+pub use service::{SocialIdentity, UsersService};
 
-pub use entity::*;
-pub use module::UsersModule;
-pub use service::UsersService;
-
-pub use graphql::{UsersGraphqlModule, UsersResolver};
-pub use http::{UsersController, UsersHttpModule};
+pub use graphql::UsersGraphqlModule;
+pub use http::UsersHttpModule;
+// …
 ```
 
 ## Wire the adapter
@@ -191,16 +189,22 @@ emits the `Org` PK loader on `OrgsService` and a `#[ComplexObject]`
 field resolver on the wire DTO. No `#[field_resolver]` to write, no
 `#[dataloader]` to call by hand.
 
-```rust title="crates/features/src/users/entity.rs"
-#[expose(name = "User", service = super::service::UsersService, graphql)]
+```rust title="crates/features/src/users/entities/user.rs (from the demo, abridged)"
+#[expose(
+    name = "User",
+    service = super::super::service::UsersService,
+    graphql,
+    // …
+)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
+// …
 pub struct Model {
-    // ... id, org_id, name, email — each carrying #[expose] ...
-
+    // … id, org_id, name, email — each carrying #[expose]
     #[sea_orm(belongs_to, from = "org_id", to = "id")]
     #[expose]
     pub org: HasOne<crate::orgs::Entity>,
+    // …
 }
 ```
 
@@ -261,12 +265,23 @@ $ nestrs g graphql posts --app blog
 ```
 
 That writes `crates/features/src/posts/graphql/{resolver.rs,module.rs,mod.rs}`
-— the module importing `GraphqlModule` — and the GraphQL authz module under
-`authz/graphql/`, flags the entity `#[expose(graphql)]`, and wires
-`PostsGraphqlModule` into `blog`. Restart, and `POST /graphql`, carrying the
-same bearer your `curl`s do, answers `{ posts { id title } }` through the
-same ability filter your HTTP routes go through. No `User.org` equivalent — that field is the one thing on this page
-that needs a relation `blog` does not have.
+— the `#[crud]` resolver, and the module importing `GraphqlModule` — and the
+GraphQL authz module under `authz/graphql/`, flags the entity
+`#[expose(graphql)]`, and wires `PostsGraphqlModule` into `blog`. Restart, and
+`POST /graphql`, carrying the same bearer your `curl`s do, answers through the
+same ability your HTTP routes go through — a plain token reads, an admin's
+writes:
+
+```bash frame="terminal"
+$ curl -s -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"{ posts { id title } }"}' \
+    http://localhost:3001/graphql
+{"data":{"posts":[{"id":"019f…","title":"Hello"}]}}
+```
+
+No `User.org` equivalent — that field is the one thing on this page that needs
+a relation `blog` does not have.
 
 ## What the reference feature has
 

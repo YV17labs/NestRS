@@ -20,8 +20,8 @@ only the traps a session hits before it thinks to look.
 
 No script checks a page against the code: the author does, before it ships,
 with `STYLE.md` § F as the list of what has shipped wrong. A few tests read a
-fact off a page — the Redis ACL lines, and the tutorial, whose pages building
-`blog` up to *Test it end to end* `nest-rs-cli`'s e2e suite replays: each
+fact off a page — the Redis ACL lines, and the tutorial, whose every page
+editing `blog` is replayed by `nest-rs-cli`'s e2e suite: each
 `nestrs new` or `nestrs g` line of a `bash` block runs, and each `rust` block
 titled with a bare path is the whole file — written when the block marks the
 lines the reader changes or the file is new, otherwise held to what the

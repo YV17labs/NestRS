@@ -67,11 +67,13 @@ so it cannot ship a `Claims` or an `AuthzAbility` for you.
 Admins manage their org's users; plain users read a scoped, redacted
 view. The reference policy fits in one method:
 
-```rust title="crates/features/src/authz/ability.rs (from the demo)"
+```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs::core::injectable;
 
+// …
 use crate::Claims;
+// …
 use crate::users as user;
 
 #[injectable]
@@ -82,15 +84,19 @@ impl AbilityFactory for AuthzAbility {
 
     fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
         if actor.is_admin() {
+            // …
             ab.can(Action::Manage, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+            // …
         } else {
             ab.can(Action::Read, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id))
                 .fields([user::Column::Id, user::Column::Name]);
             ab.can(Action::Create, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+            // …
         }
+        // …
     }
 }
 ```
@@ -147,7 +153,8 @@ tenant.
 
 ## Import the authz module
 
-The HTTP adapter now needs the authz module:
+The HTTP adapter imports the authz module, as `blog`'s `PostsHttpModule` has
+since `nestrs g resource` wrote it:
 
 ```rust title="crates/features/src/users/http/module.rs (from the demo)" {5, 9}
 use nest_rs::core::module;
@@ -171,19 +178,32 @@ than running silently unprotected.
 
 The app root — `api`, not `blog` — lists the adapter, and nothing it brings:
 `AuthzModule` reaches it through `UsersHttpModule`, and `AuthnModule` through
-`AuthzModule`, where the access graph checks each import.
+`AuthzModule`, where the access graph checks each import. Its one provider,
+[`GlobalGuards`](/fundamentals/guards/#the-three-scopes), puts the two guards
+in the app-wide pool every route runs first; `blog` declares none, its
+controllers binding theirs.
 
-```rust title="apps/api/src/module.rs"
-use features::users::UsersHttpModule;
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
+use nest_rs::guards::GlobalGuards;
+// …
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+// …
+use features::authn::AuthnGuard;
+use features::authz::AuthzGuard;
+// …
+use features::users::{UsersGraphqlModule, UsersHttpModule};
 
 #[module(
     imports = [
+        // …
         SeaOrmModule,
         SeaOrmDatabaseModule,
+        // …
         UsersHttpModule,
+        // …
     ],
+    providers = [GlobalGuards<(AuthnGuard, AuthzGuard)>],
 )]
 pub struct ApiModule;
 ```
@@ -250,28 +270,134 @@ never had to know.
 
 Step 4 left `posts` on one blanket rule — `Action::Manage` for everybody.
 Rewriting `define` in `crates/features/src/authz/ability.rs` turns it into a
-policy, using only the columns `blog` already has (the actor comes first — the
-trait's own order):
+policy, using only the columns `blog` already has:
 
-```rust title="crates/features/src/authz/ability.rs"
+```rust title="crates/features/src/authz/ability.rs" {21-25}
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
+use nest_rs::core::injectable;
 
 use crate::authn::Claims;
 use crate::posts as post;
 
+#[injectable]
+pub struct AuthzAbility;
+
 impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
-    fn define(&self, actor: &Self::Actor, ability: &mut AbilityBuilder) {
-        ability.can(Action::Read, post::Entity);
+    /// Every rule this app grants, keyed off the authenticated actor. Nothing
+    /// is granted until you add a `can` here — reads return 403 and no row
+    /// crosses the data layer.
+    ///
+    /// `nestrs g resource <name>` prints the grant to paste for the resource it
+    /// just generated, with `_ab` renamed `ab`; narrow it to a user's own rows
+    /// with `.when(|p| p.eq(Column::AuthorId, user_id))` under
+    /// `if let Some(user_id) = actor.sub.user_id()` — a client owns none.
+    fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
+        ab.can(Action::Read, post::Entity);
         if actor.is_admin() {
-            ability.can(Action::Manage, post::Entity);
+            ab.can(Action::Manage, post::Entity);
         }
     }
+
+    /// What an *unauthenticated* caller may do, on a `#[public]` route only.
+    /// Empty on purpose: nothing is public until you say so here, and a route
+    /// you open with `#[public]` still serves no row without a grant — a
+    /// `can(Action::Read, …)` narrowed by `.when(…)` to the rows meant for
+    /// anyone.
+    ///
+    /// A `#[public]` route reached with a valid token uses `define` instead —
+    /// this branch answers only for the visitor.
+    fn define_visitor(&self, _ab: &mut AbilityBuilder) {}
 }
 ```
 
-Anyone signed in may read; only an admin may write.
+Anyone signed in may read; only an admin may write. The suite you finished on
+page 7 signs its tokens as a plain user, so its writes now answer `403`: sign
+them as an admin, and pin the refusal a plain user gets — the policy is as
+much the feature as its routes:
+
+```rust title="apps/blog/tests/e2e/posts.rs" {9, 12, 20, 51, 69-79}
+use nest_rs::http::StatusCode;
+use serde_json::json;
+use uuid::Uuid;
+
+use features::authn::{Claims, Role, Subject};
+
+use crate::boot;
+
+fn bearer(app: &nest_rs::testing::TestApp, role: Role) -> String {
+    app.bearer(|exp| Claims {
+        sub: Subject::User(Uuid::now_v7()),
+        roles: vec![role],
+        exp,
+    })
+}
+
+#[tokio::test]
+async fn posts_round_trip() {
+    let app = boot().await;
+    let bearer = bearer(&app, Role::Admin);
+
+    let created = app
+        .http()
+        .post("/posts")
+        .header("authorization", &bearer)
+        .body_json(&json!({ "title": "Title 1", "body": "Body 1" }))
+        .send()
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let created = created.json().await;
+    let id = created.value().object().get("id").string().to_owned();
+
+    let read = app
+        .http()
+        .get(format!("/posts/{id}"))
+        .header("authorization", &bearer)
+        .send()
+        .await;
+    read.assert_status_is_ok();
+    let read = read.json().await;
+    let fields = read.value().object();
+    assert_eq!(fields.get("title").string(), "Title 1");
+    assert_eq!(fields.get("body").string(), "Body 1");
+}
+
+#[tokio::test]
+async fn create_with_empty_title_returns_400() {
+    let app = boot().await;
+    app.http()
+        .post("/posts")
+        .header("authorization", bearer(&app, Role::Admin))
+        .body_json(&json!({ "title": "", "body": "Body 1" }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_without_a_token_returns_401() {
+    let app = boot().await;
+    app.http()
+        .post("/posts")
+        .body_json(&json!({ "title": "Title 1", "body": "Body 1" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_plain_user_cannot_create_a_post() {
+    let app = boot().await;
+    app.http()
+        .post("/posts")
+        .header("authorization", bearer(&app, Role::User))
+        .body_json(&json!({ "title": "Title 1", "body": "Body 1" }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+}
+```
 
 Restart, mint a plain token and a `{"roles":["admin"]}` one from
 `POST /auth/dev-token`, and `POST /posts` answers `201` for the second and

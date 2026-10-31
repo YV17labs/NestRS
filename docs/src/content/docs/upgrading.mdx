@@ -70,6 +70,11 @@ lists what the boot, a log or the wire shows when one is missed.
      dependency of your own
      where your code names it; `#[input]`, `#[expose]` and `#[config]` still
      need none.
+   - **A script running `nestrs g resource <name>` then `nestrs g migration
+     create_<name>`** drops the second line: the resource writes its table's
+     migration, from the columns it now takes (`nestrs g resource posts
+     title:string body:text`). A later change to the table takes a migration
+     of its own name, `add_<column>_to_<table>`.
 
    Take the patched rustls while the lockfile moves — 0.23.44 carries
    RUSTSEC-2026-0285:
@@ -1250,6 +1255,10 @@ lists what the boot, a log or the wire shows when one is missed.
   once at `warn` on `nest_rs::app` that the variable is read by nothing
   (`variable read by nothing: the console's filter is RUST_LOG`). Rename it
   `RUST_LOG` (step 3).
+- **`nestrs g migration create_<table>` after `nestrs g resource`** writes
+  nothing: ``a migration named `create_posts` is registered already:
+  `crates/migrations/src/m…_create_posts.rs` ``. The resource wrote it; a
+  change to the table takes a name of its own.
 - **A deployment still setting `<PREFIX>_OPENTELEMETRY__*`** exports nothing
   through it: `OpenTelemetry::init` names each such variable once at `warn` on
   `nest_rs::opentelemetry` (`variable read by nothing: OpenTelemetry reads the

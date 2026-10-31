@@ -1,6 +1,6 @@
 ---
 title: Test it end to end
-description: The round-trip test nestrs g resource wrote boots the real BlogModule against a throwaway database; you give it the post's fields and two failure modes, and nestrs run test e2e runs them.
+description: The round-trip test nestrs g resource wrote boots the real BlogModule against a throwaway database; you add two failure modes beside it, and nestrs run test e2e runs them.
 sidebar:
   order: 8
 ---
@@ -109,12 +109,12 @@ with exactly the key the app verifies with and carries the expiry it stamps.
 `TestApp` runs under `<PREFIX>_ENV=test`, which reads the secret the auth
 adapter drew into `.env.test`; the test never spells it.
 
-The generated `posts_round_trip` still posts the `name` column page 2
-replaced. Give it the post's two fields, then add two negative paths — the
-`400` you will meet in [Validate inputs](/tutorial/validation/), and the
-`401` of a call with no token:
+The generated `posts_round_trip` posts a value of each column you named on
+page 2 and reads each back. Add two negative paths beside it — the `400` you
+met in [Validate inputs](/tutorial/validation/), and the `401` of a call with
+no token:
 
-```rust title="apps/blog/tests/e2e/posts.rs" {9-15, 20, 26, 40-43, 46-67}
+```rust title="apps/blog/tests/e2e/posts.rs" {9-15, 20, 46-67}
 use nest_rs::http::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
@@ -140,12 +140,12 @@ async fn posts_round_trip() {
         .http()
         .post("/posts")
         .header("authorization", &bearer)
-        .body_json(&json!({ "title": "Hello", "body": "World" }))
+        .body_json(&json!({ "title": "Title 1", "body": "Body 1" }))
         .send()
         .await;
     created.assert_status(StatusCode::CREATED);
-    let body = created.json().await;
-    let id = body.value().object().get("id").string().to_owned();
+    let created = created.json().await;
+    let id = created.value().object().get("id").string().to_owned();
 
     let read = app
         .http()
@@ -155,9 +155,9 @@ async fn posts_round_trip() {
         .await;
     read.assert_status_is_ok();
     let read = read.json().await;
-    let post = read.value().object();
-    assert_eq!(post.get("title").string(), "Hello");
-    assert_eq!(post.get("body").string(), "World");
+    let fields = read.value().object();
+    assert_eq!(fields.get("title").string(), "Title 1");
+    assert_eq!(fields.get("body").string(), "Body 1");
 }
 
 #[tokio::test]
@@ -166,7 +166,7 @@ async fn create_with_empty_title_returns_400() {
     app.http()
         .post("/posts")
         .header("authorization", bearer(&app))
-        .body_json(&json!({ "title": "", "body": "World" }))
+        .body_json(&json!({ "title": "", "body": "Body 1" }))
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
@@ -177,7 +177,7 @@ async fn create_without_a_token_returns_401() {
     let app = boot().await;
     app.http()
         .post("/posts")
-        .body_json(&json!({ "title": "Hello", "body": "World" }))
+        .body_json(&json!({ "title": "Title 1", "body": "Body 1" }))
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);

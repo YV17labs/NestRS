@@ -66,16 +66,6 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let tmodule = names.module_for(transport);
     let is_graphql = transport == Transport::Graphql;
     let crud_port = is_crud_port(&ws, &names.snake)?;
-    let (runtime_uses, runtime_imports) = runtime_vars(transport);
-    let mut r = Renderer::new(&names)
-        .with("handler", names.handler_for(transport))
-        .with("handler_mod", transport.handler_mod())
-        .with("tmodule", tmodule.clone())
-        .with("runtime_uses", runtime_uses)
-        .with("runtime_imports", runtime_imports);
-    for (key, value) in crate::templates::crud::crud_vars(crud_port, transport) {
-        r = r.with(key, value);
-    }
     // What an operation's posture names: the port's entity, or the capability
     // a port with none declares, written once by the first adapter gating on it.
     let gated_operation = matches!(transport, Transport::Graphql | Transport::Mcp);
@@ -84,22 +74,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     // hold `blog/blog.rs`, a module of its own name.
     let subject_file = feature_root.join("subject.rs");
     let writes_subject = gated_operation && !port_entity && !subject_file.exists();
-    r = if port_entity {
-        let note = if transport == Transport::Mcp {
-            [adapter::GATED_ON_ENTITY, adapter::ROWS_MASKED_AS_JSON].join("\n")
-        } else {
-            adapter::GATED_ON_ENTITY.to_owned()
-        };
-        r.with("subject", "{{entity}}Entity")
-            .with("subject_use", "Entity as {{entity}}Entity")
-            .with("granted", "crate::{{snake}}::Entity")
-            .with("posture_note", note)
-    } else {
-        r.with("subject", "{{entity}}")
-            .with("subject_use", "{{entity}}")
-            .with("granted", "crate::{{snake}}::{{entity}}")
-            .with("posture_note", adapter::GATED_ON_SUBJECT)
-    };
+    let r = adapter_renderer(&names, transport, crud_port, port_entity);
     let (handler_tmpl, module_tmpl) = templates_for(transport, crud_port);
     // A `#[crud]` handler runs every call in a unit of work, so the app gets the
     // data layer beside it, as `g resource` writes it: an app without is refused at
@@ -284,6 +259,44 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         auth::print_bootstrapped(secrets);
     }
     Ok(())
+}
+
+/// What an adapter for `transport` over `names`' port is written with: the
+/// port's names, the transport's, the handler a `CrudService` port takes, and
+/// what its operation is gated on — the port's entity, or, over a port with
+/// none, the `#[subject]` written beside its service.
+pub(crate) fn adapter_renderer(
+    names: &Names,
+    transport: Transport,
+    crud_port: bool,
+    port_entity: bool,
+) -> Renderer {
+    let (runtime_uses, runtime_imports) = runtime_vars(transport);
+    let mut r = Renderer::new(names)
+        .with("handler", names.handler_for(transport))
+        .with("handler_mod", transport.handler_mod())
+        .with("tmodule", names.module_for(transport))
+        .with("runtime_uses", runtime_uses)
+        .with("runtime_imports", runtime_imports);
+    for (key, value) in crate::templates::crud::crud_vars(crud_port, transport) {
+        r = r.with(key, value);
+    }
+    if port_entity {
+        let note = if transport == Transport::Mcp {
+            [adapter::GATED_ON_ENTITY, adapter::ROWS_MASKED_AS_JSON].join("\n")
+        } else {
+            adapter::GATED_ON_ENTITY.to_owned()
+        };
+        r.with("subject", "{{entity}}Entity")
+            .with("subject_use", "Entity as {{entity}}Entity")
+            .with("granted", "crate::{{snake}}::Entity")
+            .with("posture_note", note)
+    } else {
+        r.with("subject", "{{entity}}")
+            .with("subject_use", "{{entity}}")
+            .with("granted", "crate::{{snake}}::{{entity}}")
+            .with("posture_note", adapter::GATED_ON_SUBJECT)
+    }
 }
 
 /// `target` above everything in a port's `mod.rs` that declares none, then

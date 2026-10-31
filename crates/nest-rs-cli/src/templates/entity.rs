@@ -3,8 +3,8 @@
 //! [`resource::ENTITY`](super::resource::ENTITY) without `service = …`: a
 //! `CrudService` owns exactly one entity and `g entity` writes no service, so the
 //! link is the developer's to declare. The file names no `super::` path, so it
-//! compiles at `entity.rs` or in `entities/`; its columns match what
-//! `nestrs g migration create_<name>` scaffolds.
+//! compiles at `entity.rs` or in `entities/`; `nestrs g migration
+//! create_<name>` reads its columns off it.
 
 pub(crate) const ENTITY: &str = r#"use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
@@ -21,9 +21,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
     pub id: Uuid,
-    #[expose(input(create, update), validate(length(min = 1)))]
-    pub name: String,
-    #[expose]
+{{columns}}    #[expose]
     pub created_at: DateTimeWithTimeZone,
     #[expose]
     pub updated_at: DateTimeWithTimeZone,

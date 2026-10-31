@@ -330,6 +330,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `impl nest_rs::http::IntoInner for MyExtractor<T>` | `impl nest_rs::pipes::Source for MyExtractor<T>` (`type Value`, `into_value`), and `validator::Validate` when `T` declares rules |
    | `SseEvent::retry(ms)` | `SseEvent::message("").retry(Duration::from_millis(ms))` |
    | `match event { SseEvent::Message { .. } => … }` | none: an event is written, never read back |
+   | `SseEvent::message(serde_json::to_string(&payload)…)`, with a fallback body when it fails | `SseEvent::json(&payload)`: a payload that does not serialize sends no event — its chain is filed and the stream ends there |
    | `SseSettings::respond(stream)`, answering poem's `SSE` | the same, answering a `Response` marked to end at the shutdown signal |
    | `PATCH /<resource>/{id}` on a `#[crud]` controller | `PUT /<resource>/{id}` — a wire change, no compile error |
    | `impl RouteResponseShaper` / `ResponseShaping` on `poem::Request`, `poem::Response`, `poem::Result` | the same impl on `nest_rs::http::{Request, Response, Result}` |

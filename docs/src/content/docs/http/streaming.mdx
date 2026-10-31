@@ -70,12 +70,19 @@ async fn events(
         .transcode_events(file)
         // … drop the progress ticks `seen` says the browser already showed
         .map(|payload| {
-            // … `body` is the payload as JSON, `id` its poll attempt
-            SseEvent::message(body).event_type("transcode").id(id)
+            SseEvent::json(&payload)
+                .event_type("transcode")
+                .id(payload.attempt.to_string())
         });
     SseStream::new(events)
 }
 ```
+
+`SseEvent::json` writes the payload as the JSON a listener parses. A payload
+that does not serialize sends no event in its place: the failure is filed at
+`error` with its chain, as a JSON answer's is, and the stream ends there —
+the browser reads no made-up state, and its `EventSource` reconnects.
+`SseEvent::message` carries text as it is.
 
 Each event carries an `id`, so a browser that reconnects sends the last one
 back as `Last-Event-ID`; `Header<StreamResumeDto>` reads it, and the stream

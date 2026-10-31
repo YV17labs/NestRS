@@ -1,7 +1,7 @@
-use schemars::JsonSchema;
-use serde::Deserialize;
+use nest_rs::core::input;
 
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[input]
+#[derive(Debug, Clone, Copy)]
 pub struct StreamResumeDto {
     #[serde(rename = "Last-Event-ID")]
     pub last_event_id: Option<u32>,

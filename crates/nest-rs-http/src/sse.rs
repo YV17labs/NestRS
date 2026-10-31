@@ -19,8 +19,10 @@ use futures_util::stream::BoxStream;
 use futures_util::{Stream, StreamExt};
 use http::{HeaderName, HeaderValue, header};
 use nest_rs_core::Container;
+use serde::Serialize;
 
 use crate::config::HttpConfig;
+use crate::error::UnserializedEvent;
 use crate::response::Response;
 
 /// One event on a `text/event-stream` (WHATWG HTML §9.2): a message, and
@@ -30,7 +32,8 @@ use crate::response::Response;
 /// Every line break the data holds — `\r\n`, `\n` or `\r`, as the client
 /// reads them — opens a `data:` line of its own, so no text can open a field;
 /// an id or an event type cannot hold one, so each of their line breaks is
-/// dropped.
+/// dropped. A payload a listener parses as JSON is written with
+/// [`json`](Self::json).
 ///
 /// ```
 /// use std::time::Duration;
@@ -52,6 +55,8 @@ pub struct SseEvent {
     event: String,
     id: String,
     retry: Option<Duration>,
+    /// Its payload did not serialize: it ends its stream in place of a frame.
+    unserialized: bool,
 }
 
 impl SseEvent {
@@ -60,6 +65,41 @@ impl SseEvent {
         Self {
             data: data.into(),
             ..Self::default()
+        }
+    }
+
+    /// A message carrying `payload` serialized as JSON, the data a listener
+    /// parses with `JSON.parse`.
+    ///
+    /// A payload that does not serialize is no event: the failure is filed at
+    /// `error` with its chain, as a JSON answer's is, and the stream ends
+    /// there with an error in place of a frame — the client reads no
+    /// placeholder, and an `EventSource` reconnects.
+    ///
+    /// ```
+    /// use nest_rs_http::SseEvent;
+    ///
+    /// #[derive(serde::Serialize)]
+    /// struct Progress {
+    ///     state: &'static str,
+    /// }
+    ///
+    /// let event = SseEvent::json(&Progress { state: "ready" }).event_type("transcode");
+    /// assert_eq!(
+    ///     event.to_string(),
+    ///     "event: transcode\ndata: {\"state\":\"ready\"}\n\n",
+    /// );
+    /// ```
+    pub fn json<T: Serialize + ?Sized>(payload: &T) -> Self {
+        match serde_json::to_string(payload) {
+            Ok(data) => Self::message(data),
+            Err(error) => {
+                crate::json::unserialized(&error);
+                Self {
+                    unserialized: true,
+                    ..Self::default()
+                }
+            }
         }
     }
 
@@ -270,7 +310,12 @@ impl SseSettings {
                 .boxed(),
             None => events,
         };
-        let mut frames = events.map(|event| event.frame()).boxed();
+        let mut frames = events
+            .map(|event| match event.unserialized {
+                false => Ok(event.frame()),
+                true => Err(UnserializedEvent),
+            })
+            .boxed();
         if let Some(every) = self.keep_alive {
             let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
             frames = futures_util::stream::poll_fn(move |cx| {
@@ -279,7 +324,7 @@ impl SseSettings {
                 }
                 interval
                     .poll_tick(cx)
-                    .map(|_| Some(Bytes::from_static(KEEP_ALIVE)))
+                    .map(|_| Some(Ok(Bytes::from_static(KEEP_ALIVE))))
             })
             .boxed();
         }
@@ -288,9 +333,7 @@ impl SseSettings {
             .header(X_ACCEL_BUFFERING, HeaderValue::from_static("no"))
             .header(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"))
             .extension(crate::OpenEndedBody)
-            .body(crate::Body::from_stream(
-                frames.map(Ok::<_, std::convert::Infallible>),
-            ))
+            .body(crate::Body::from_stream(frames))
     }
 }
 
@@ -468,6 +511,62 @@ mod tests {
             let frame = SseEvent::message("").retry(after).to_string();
             assert_eq!(frame, format!("retry: {}\n\n", after.as_millis()));
         }
+    }
+
+    #[tokio::test]
+    async fn a_json_event_carries_its_payload_serialized_on_one_data_line() {
+        let body = served(vec![
+            SseEvent::json(&serde_json::json!({ "state": "ready" }))
+                .event_type("transcode")
+                .id("3"),
+        ])
+        .await;
+        assert_eq!(
+            body,
+            "id: 3\nevent: transcode\ndata: {\"state\":\"ready\"}\n\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_payload_that_does_not_serialize_ends_the_stream_with_its_chain_filed() {
+        use http_body_util::BodyExt;
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let keyed = std::collections::HashMap::from([((1, 2), "sk_live_51")]);
+        let events = vec![
+            SseEvent::json(&serde_json::json!({ "n": 1 })),
+            SseEvent::json(&keyed).event_type("transcode").id("2"),
+            SseEvent::json(&serde_json::json!({ "n": 3 })),
+        ];
+        let settings = SseSettings {
+            keep_alive: None,
+            max_connection: None,
+        };
+        let mut body = settings
+            .respond(SseStream::new(stream::iter(events)))
+            .into_body();
+
+        let mut read = String::new();
+        let ended = loop {
+            match body.frame().await {
+                Some(Ok(frame)) => read.push_str(
+                    std::str::from_utf8(frame.data_ref().expect("a data frame")).unwrap(),
+                ),
+                Some(Err(error)) => break Some(error),
+                None => break None,
+            }
+        };
+
+        assert_eq!(
+            read, "data: {\"n\":1}\n\n",
+            "no frame in the failed event's place"
+        );
+        assert!(ended.is_some(), "the stream ends there, with an error");
+        let line = logs.expect_one("nest_rs::http", "a JSON answer did not serialize");
+        assert_eq!(line.level, "error");
+        let chain = line.field("error").expect("the chain is filed");
+        assert!(chain.contains("key must be a string"), "{line:?}");
+        assert!(!chain.contains("sk_live"), "{line:?}");
     }
 
     #[tokio::test]

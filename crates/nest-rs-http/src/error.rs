@@ -826,6 +826,12 @@ impl ResponseError for QueryError {
     }
 }
 
+/// What ends an event stream at an event whose payload did not serialize: the
+/// body fails there, so the client reads no frame in its place.
+#[derive(Debug, thiserror::Error)]
+#[error("an event's payload did not serialize; the stream ends")]
+pub(crate) struct UnserializedEvent;
+
 /// What [`Form`](crate::Form) refused.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum FormError {

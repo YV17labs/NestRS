@@ -4,7 +4,6 @@ use std::future::ready;
 
 use futures_util::StreamExt;
 use nest_rs::authz::Manage;
-use nest_rs::core::error_message;
 use nest_rs::http::{
     Body, Header, HeaderValue, HttpError, Json, Opaque, Query, Response, Result, SseEvent,
     SseStream, StatusCode, controller, routes,
@@ -141,16 +140,9 @@ impl AudioController {
                 ready(!replayed)
             })
             .map(|payload| {
-                let id = payload.attempt.to_string();
-                let body = serde_json::to_string(&payload).unwrap_or_else(|e| {
-                    tracing::error!(
-                        target: crate::audio::TARGET,
-                        error = %error_message(&e),
-                        "failed to serialize transcode event",
-                    );
-                    r#"{"state":"error"}"#.to_string()
-                });
-                SseEvent::message(body).event_type("transcode").id(id)
+                SseEvent::json(&payload)
+                    .event_type("transcode")
+                    .id(payload.attempt.to_string())
             });
         SseStream::new(events)
     }

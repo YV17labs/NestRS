@@ -122,17 +122,22 @@ impl<T: Serialize + Send> IntoResponse for Json<T> {
                 .content_type(HeaderValue::from_static("application/json; charset=utf-8"))
                 .body(bytes),
             Err(error) => {
-                // A `Serialize` impl's own message may quote the value it refused.
-                let said = nest_rs_core::error_message(&error);
-                tracing::error!(
-                    target: crate::target::HTTP,
-                    error = %DecodeError::redact(&said, Some(&error)),
-                    "a JSON answer did not serialize",
-                );
+                unserialized(&error);
                 ProblemDetails::from_status(StatusCode::INTERNAL_SERVER_ERROR).into_response()
             }
         }
     }
+}
+
+/// File a JSON answer that did not serialize, its chain whole but for the
+/// value a `Serialize` impl's own message may quote.
+pub(crate) fn unserialized(error: &serde_json::Error) {
+    let said = nest_rs_core::error_message(error);
+    tracing::error!(
+        target: crate::target::HTTP,
+        error = %DecodeError::redact(&said, Some(error)),
+        "a JSON answer did not serialize",
+    );
 }
 
 /// Whether `content_type` names JSON: `application/json`, or a structured

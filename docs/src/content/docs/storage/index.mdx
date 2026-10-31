@@ -58,6 +58,13 @@ NESTRS_STORAGE__ACCESS_KEY=nestrs
 NESTRS_STORAGE__SECRET_KEY=nestrs
 ```
 
+A workspace `nestrs new` wrote has these lines already. Its `compose.yml` runs
+a RustFS store on `localhost:9000` and creates two buckets: the one
+`.env.development` names (`s3://<workspace>`) and the one `.env.test` names
+(`s3://<workspace>-test`), so what a test uploads never sits among what a
+running app lists. It speaks plain HTTP there, which storage accepts under a
+declared development or test profile only.
+
 ## Name the store
 
 The URL's scheme picks the backend, and a path after the bucket confines every

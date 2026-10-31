@@ -96,15 +96,15 @@ pub(crate) fn prefix_vars(env_prefix: &str) -> Vec<(&'static str, String)> {
 /// created with `--env-prefix` gets a cascade its app actually reads.
 pub(crate) fn queue_env_files(s: &mut Scaffold, base: &Path, r: &Renderer) {
     s.create_if_missing(base.join(".env"), r.render(shared::ENV));
-    for (file, profile, redis) in [
+    for (file, profile, own) in [
         (
             ".env.development",
             shared::ENV_DEVELOPMENT,
-            shared::ENV_DEVELOPMENT_REDIS,
+            shared::DEVELOPMENT_SERVICES,
         ),
-        (".env.test", shared::ENV_TEST, shared::ENV_TEST_REDIS),
+        (".env.test", shared::ENV_TEST, shared::TEST_SERVICES),
     ] {
-        let body = format!("{profile}\n{}{redis}", shared::DEV_SERVICES);
+        let body = format!("{profile}\n{}{own}", shared::DEV_SERVICES);
         s.create_if_missing(base.join(file), r.render(&body));
     }
     s.create_if_missing(base.join(".env.example"), r.render(shared::ENV_EXAMPLE));
@@ -188,6 +188,53 @@ mod tests {
                 database(&test),
                 database(&development),
                 "the test profile ({test}) enqueues on development's database ({development})"
+            );
+            Ok(())
+        });
+    }
+
+    /// The suites file into a bucket of their own, beside development's, on
+    /// the store `compose.yml` runs, which creates both.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail's closure signature is fixed"
+    )]
+    fn the_generated_test_profile_files_into_a_bucket_development_never_lists() {
+        let prefix = nest_rs_core::EnvPrefix::current();
+        figment::Jail::expect_with(|jail| {
+            let mut scaffold = Scaffold::new();
+            queue_env_files(
+                &mut scaffold,
+                jail.directory(),
+                &with_env_prefix(Renderer::new(&Names::parse("shop")), prefix),
+            );
+            scaffold.apply(false).expect("the profiles are written");
+            let mut storage = |profile, key| {
+                jail.clear_env();
+                load_cascade(jail.directory(), profile);
+                ConfigService::for_namespace("storage")
+                    .get(key)
+                    .expect("the storage setting reads")
+                    .expect("the profile names it")
+            };
+            let development = storage(Environment::Development, "URL");
+            let test = storage(Environment::Test, "URL");
+
+            assert_eq!(development, "s3://shop");
+            assert_eq!(test, "s3://shop-test");
+            for profile in [Environment::Development, Environment::Test] {
+                assert_eq!(
+                    storage(profile, "ENDPOINT"),
+                    "http://localhost:9000",
+                    "compose's store, on the port it publishes"
+                );
+            }
+            let compose =
+                Renderer::new(&Names::parse("shop")).render(crate::templates::shared::COMPOSE);
+            assert!(
+                compose.contains("for bucket in shop shop-test; do"),
+                "compose creates both buckets: {compose}"
             );
             Ok(())
         });

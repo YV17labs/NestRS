@@ -49,16 +49,18 @@ seed:
 reset: fresh seed
 "#;
 
-/// `compose.yml` — Postgres + Redis for local development, shipped so a
-/// DB-backed feature works the moment you add one: `docker compose up -d`,
-/// then `nestrs run db up`. `.env.development` and `.env.test` point at these
-/// services on `localhost`. Delete it if your project never touches a database or a queue.
+/// `compose.yml` — Postgres, Valkey and an S3 object store for local
+/// development, shipped so a feature reaching any of them works the moment you
+/// add it: `docker compose up -d`, then `nestrs run db up`. `.env.development`
+/// and `.env.test` point at these services on `localhost`. Delete what your
+/// project never touches.
 pub(crate) const COMPOSE: &str = r#"# Local development services. Start them with:
 #
 #   docker compose up -d
 #
-# `.env.development` and `.env.test` point {{env_prefix}}_SEAORM__URL / {{env_prefix}}_REDIS__URL
-# at these on localhost. `nestrs run db up` then applies your migrations.
+# `.env.development` and `.env.test` point {{env_prefix}}_SEAORM__URL, {{env_prefix}}_REDIS__URL and
+# {{env_prefix}}_STORAGE__* at these on localhost. `nestrs run db up` then applies your
+# migrations.
 
 services:
   postgres:
@@ -84,9 +86,43 @@ services:
     volumes:
       - valkeydata:/data
 
+  # An S3 object store (RustFS). The storage client proves its bucket at boot,
+  # so `storage-buckets` creates development's and the suites' once it answers.
+  storage:
+    image: rustfs/rustfs:1.0.1
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_ACCESS_KEY: {{kebab}}
+      RUSTFS_SECRET_KEY: {{kebab}}
+    ports:
+      - "9000:9000"
+    volumes:
+      - storagedata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/health >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  storage-buckets:
+    image: rustfs/rustfs:1.0.1
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        for bucket in {{kebab}} {{kebab}}-test; do
+          status=$$(curl -sS -o /dev/null -w '%{http_code}' --aws-sigv4 'aws:amz:us-east-1:s3' \
+            --user '{{kebab}}:{{kebab}}' -X PUT "http://storage:9000/$$bucket")
+          case $$status in 200 | 409) ;; *) echo "bucket $$bucket: $$status" >&2; exit 1 ;; esac
+        done
+
 volumes:
   pgdata:
   valkeydata:
+  storagedata:
 "#;
 
 /// The line that puts the project's env prefix on every process `just` starts.
@@ -167,23 +203,34 @@ pub(crate) const ENV_TEST: &str = r#"# nestrs workspace — test-profile overrid
 /// `compose.yml`'s services, in plaintext, appended to the two profiles that
 /// run beside it, each followed by its own Redis line: never in `.env`, which
 /// production reads.
-pub(crate) const DEV_SERVICES: &str = r#"# Postgres + Valkey as `compose.yml` exposes them on localhost. Start them with
-# `docker compose up -d`, then `nestrs run db up`. An app only connects if it
-# imports SeaOrmModule / RedisModule, so these are inert for a plain HTTP app.
-# Both run without TLS here, which the URLs say: Postgres's connection is
-# verified TLS unless `sslmode=disable` opens it.
+pub(crate) const DEV_SERVICES: &str = r#"# Postgres, Valkey and the S3 store as `compose.yml` exposes them on localhost.
+# Start them with `docker compose up -d`, then `nestrs run db up`. An app only
+# connects if it imports SeaOrmModule / RedisModule / StorageModule, so these
+# are inert for a plain HTTP app. All run without TLS here, which the URLs say:
+# Postgres's connection is verified TLS unless `sslmode=disable` opens it, and
+# the store's `http://` endpoint is refused outside development and test.
 {{env_prefix}}_SEAORM__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}?sslmode=disable
 "#;
 
-/// Development's Redis: database 0, the one `nestrs run dev` drains.
-pub(crate) const ENV_DEVELOPMENT_REDIS: &str = r#"{{env_prefix}}_REDIS__URL=redis://localhost:6379
+/// Development's Redis: database 0, the one `nestrs run dev` drains — and its
+/// bucket, the one a running app lists.
+pub(crate) const DEVELOPMENT_SERVICES: &str = r#"{{env_prefix}}_REDIS__URL=redis://localhost:6379
+{{env_prefix}}_STORAGE__URL=s3://{{kebab}}
+{{env_prefix}}_STORAGE__ENDPOINT=http://localhost:9000
+{{env_prefix}}_STORAGE__ACCESS_KEY={{kebab}}
+{{env_prefix}}_STORAGE__SECRET_KEY={{kebab}}
 "#;
 
 /// The suites' Redis: a database of their own, so a running app never runs a
-/// test's job, nor a test a job the app filed.
-pub(crate) const ENV_TEST_REDIS: &str = r#"# The test suites enqueue on Redis database 1, never on the 0 a running
-# `nestrs run dev` drains.
+/// test's job, nor a test a job the app filed — and a bucket of their own, so
+/// what a test uploads never sits among what a running app lists.
+pub(crate) const TEST_SERVICES: &str = r#"# The test suites enqueue on Redis database 1, never on the 0 a running
+# `nestrs run dev` drains, and file into a bucket of their own.
 {{env_prefix}}_REDIS__URL=redis://localhost:6379/1
+{{env_prefix}}_STORAGE__URL=s3://{{kebab}}-test
+{{env_prefix}}_STORAGE__ENDPOINT=http://localhost:9000
+{{env_prefix}}_STORAGE__ACCESS_KEY={{kebab}}
+{{env_prefix}}_STORAGE__SECRET_KEY={{kebab}}
 "#;
 
 /// The file that *instructs* a developer to write `.env.local`, so it is where

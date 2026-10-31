@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_core::{DuplicateMetaError, Transport, injectable, module};
-use nest_rs_queue::{BoundConsumer, JobProducer, QueueName, QueueWorker, processor, queue};
+use nest_rs_queue::{BoundConsumer, Jobs, QueueName, QueueWorker, processor, queue};
 use nest_rs_testing::HeadlessApp;
 use nest_rs_testing::queue::KitBackend;
 use serde::{Deserialize, Serialize};
@@ -41,10 +41,10 @@ impl KitBackend for MemoryKit {
     const IN_PROCESS: bool = true;
 
     fn app(&self) -> nest_rs_testing::TestAppBuilder {
-        let producer: Arc<dyn JobProducer> = Arc::new(self.memory.clone());
+        let producer = Jobs::new(Arc::new(self.memory.clone()));
         HeadlessApp::builder()
             .provide(BoundConsumer::new(self.memory.consumer()))
-            .provide_dyn(producer)
+            .provide(producer)
     }
 
     fn lease(&self) -> Duration {
@@ -131,12 +131,12 @@ async fn a_method_with_no_backend_bound_fails_the_boot_naming_the_remedy() {
 
 #[tokio::test]
 async fn a_producer_and_a_consumer_of_two_backends_fail_the_boot_naming_both() {
-    let producer: Arc<dyn JobProducer> = Arc::new(Memory::new(&PLAIN, LEASE));
+    let producer = Jobs::new(Arc::new(Memory::new(&PLAIN, LEASE)));
     let consumer = Memory::new(&DELAYING, LEASE).consumer();
     let app = HeadlessApp::builder()
         .module::<BootModule>()
         .provide(BoundConsumer::new(consumer))
-        .provide_dyn(producer)
+        .provide(producer)
         .build_headless()
         .await
         .expect("the app boots");
@@ -240,11 +240,11 @@ async fn boot_worker_of<M: nest_rs_core::Module>(
     CancellationToken,
     tokio::task::JoinHandle<anyhow::Result<()>>,
 ) {
-    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let producer = Jobs::new(Arc::new(memory.clone()));
     let app = HeadlessApp::builder()
         .module::<M>()
         .provide(BoundConsumer::new(memory.consumer()))
-        .provide_dyn(producer)
+        .provide(producer)
         .build_headless()
         .await
         .expect("the app boots");
@@ -264,11 +264,9 @@ async fn a_record_that_is_not_json_is_dead_lettered_alone_without_its_value() {
     let queue = "nestrs-worker-boot";
     memory.file_raw(queue, b"secret-token-not-json".to_vec());
     let (app, stop, serving) = boot_worker(&memory).await;
-    let producer = app
-        .container()
-        .get_dyn::<dyn JobProducer>()
-        .expect("the producer");
-    nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 1 }, None)
+    let producer = app.container().get::<Jobs>().expect("the producer");
+    producer
+        .push(BootQueue, WorkerCommand { seq: 1 })
         .await
         .expect("a push");
     nest_rs_testing::wait_until(Duration::from_secs(10), || {
@@ -361,14 +359,14 @@ const SETTLE_LEASE: Duration = Duration::from_secs(2);
 /// times, and return the store once the job's record is gone or `within` passed.
 async fn settle_failing(failures: u32, within: Duration) -> Memory {
     let memory = Memory::new(&DELAYING, SETTLE_LEASE);
-    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let producer = Jobs::new(Arc::new(memory.clone()));
     let app = HeadlessApp::builder()
         .module::<BootModule>()
         .provide(BoundConsumer::new(Flaky {
             inner: memory.consumer(),
             failures: std::sync::atomic::AtomicU32::new(failures),
         }))
-        .provide_dyn(Arc::clone(&producer))
+        .provide(producer.clone())
         .build_headless()
         .await
         .expect("the app boots");
@@ -379,7 +377,8 @@ async fn settle_failing(failures: u32, within: Duration) -> Memory {
         .expect("the worker configures");
     let stop = CancellationToken::new();
     let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
-    nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 0 }, None)
+    producer
+        .push(BootQueue, WorkerCommand { seq: 0 })
         .await
         .expect("a push");
     let deadline = tokio::time::Instant::now() + within;
@@ -520,14 +519,14 @@ async fn a_delivery_whose_task_panics_lets_its_lease_lapse() {
     let logs = nest_rs_testing::LogCapture::install_global();
     let lease = Duration::from_millis(500);
     let memory = Memory::new(&DELAYING, lease);
-    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let producer = Jobs::new(Arc::new(memory.clone()));
     let app = HeadlessApp::builder()
         .module::<CheckpointedModule>()
         .provide(BoundConsumer::new(PanicsOnce {
             inner: memory.consumer(),
             panicked: std::sync::atomic::AtomicBool::new(false),
         }))
-        .provide_dyn(Arc::clone(&producer))
+        .provide(producer.clone())
         .build_headless()
         .await
         .expect("the app boots");
@@ -538,14 +537,10 @@ async fn a_delivery_whose_task_panics_lets_its_lease_lapse() {
         .expect("the worker configures");
     let stop = CancellationToken::new();
     let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
-    nest_rs_queue::JobProducerExt::push(
-        &*producer,
-        CheckpointedQueue,
-        WorkerCommand { seq: 0 },
-        None,
-    )
-    .await
-    .expect("a push");
+    producer
+        .push(CheckpointedQueue, WorkerCommand { seq: 0 })
+        .await
+        .expect("a push");
     let queue = "nestrs-worker-checkpointed";
     let deadline = tokio::time::Instant::now() + lease * 10;
     tokio::time::sleep(lease).await;
@@ -655,14 +650,14 @@ impl nest_rs_queue::JobConsumer for Misbehaving {
 async fn a_settle_that_panics_is_retried_and_said_once() {
     let logs = nest_rs_testing::LogCapture::install_global();
     let memory = Memory::new(&DELAYING, SETTLE_LEASE);
-    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let producer = Jobs::new(Arc::new(memory.clone()));
     let app = HeadlessApp::builder()
         .module::<BootModule>()
         .provide(BoundConsumer::new(Misbehaving {
             unwind_settle: std::sync::atomic::AtomicBool::new(true),
             ..Misbehaving::over(&memory)
         }))
-        .provide_dyn(Arc::clone(&producer))
+        .provide(producer.clone())
         .build_headless()
         .await
         .expect("the app boots");
@@ -674,7 +669,8 @@ async fn a_settle_that_panics_is_retried_and_said_once() {
     let stop = CancellationToken::new();
     let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
     let sent = tokio::time::Instant::now();
-    nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 0 }, None)
+    producer
+        .push(BootQueue, WorkerCommand { seq: 0 })
         .await
         .expect("a push");
     let queue = "nestrs-worker-boot";
@@ -777,13 +773,13 @@ struct LongModule;
 async fn a_renewal_left_unanswered_cuts_its_attempt_when_its_lease_lapses() {
     let logs = nest_rs_testing::LogCapture::install_global();
     let memory = Memory::new(&DELAYING, LEASE);
-    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let producer = Jobs::new(Arc::new(memory.clone()));
     let app = HeadlessApp::builder()
         .module::<LongModule>()
         .provide(BoundConsumer::new(Silent {
             inner: memory.consumer(),
         }))
-        .provide_dyn(Arc::clone(&producer))
+        .provide(producer.clone())
         .provide(nest_rs_queue::QueueConfig {
             shutdown_timeout: Duration::from_secs(1),
         })
@@ -797,7 +793,8 @@ async fn a_renewal_left_unanswered_cuts_its_attempt_when_its_lease_lapses() {
         .expect("the worker configures");
     let stop = CancellationToken::new();
     let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
-    nest_rs_queue::JobProducerExt::push(&*producer, LongQueue, WorkerCommand { seq: 0 }, None)
+    producer
+        .push(LongQueue, WorkerCommand { seq: 0 })
         .await
         .expect("a push");
     let cut = "job lease not renewed for a whole lease; its attempt is cut and the job handed back";
@@ -843,11 +840,9 @@ async fn an_attempt_past_its_timeout_is_cut_retried_and_dead_lettered_naming_it(
     let memory = Memory::new(&DELAYING, LEASE);
     let queue = "nestrs-worker-hung";
     let (app, stop, serving) = boot_worker_of::<HungModule>(&memory).await;
-    let producer = app
-        .container()
-        .get_dyn::<dyn JobProducer>()
-        .expect("the producer");
-    nest_rs_queue::JobProducerExt::push(&*producer, HungQueue, WorkerCommand { seq: 1 }, None)
+    let producer = app.container().get::<Jobs>().expect("the producer");
+    producer
+        .push(HungQueue, WorkerCommand { seq: 1 })
         .await
         .expect("a push");
     nest_rs_testing::wait_until(Duration::from_secs(10), || {
@@ -904,7 +899,7 @@ async fn a_backend_answering_at_or_past_the_net_fails_the_boot_naming_it() {
 async fn a_receive_that_panics_is_retried_and_said_once() {
     let logs = nest_rs_testing::LogCapture::install_global();
     let memory = Memory::new(&DELAYING, LEASE);
-    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let producer = Jobs::new(Arc::new(memory.clone()));
     let consumer = Misbehaving::over(&memory);
     consumer
         .unwind_receive
@@ -912,7 +907,7 @@ async fn a_receive_that_panics_is_retried_and_said_once() {
     let app = HeadlessApp::builder()
         .module::<BootModule>()
         .provide(BoundConsumer::new(consumer))
-        .provide_dyn(Arc::clone(&producer))
+        .provide(producer.clone())
         .build_headless()
         .await
         .expect("the app boots");
@@ -923,7 +918,8 @@ async fn a_receive_that_panics_is_retried_and_said_once() {
         .expect("the worker configures");
     let stop = CancellationToken::new();
     let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
-    nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 0 }, None)
+    producer
+        .push(BootQueue, WorkerCommand { seq: 0 })
         .await
         .expect("a push");
     let queue = "nestrs-worker-boot";
@@ -980,18 +976,11 @@ async fn a_method_is_handed_the_id_its_push_returned_and_the_number_of_each_atte
     let memory = Memory::new(&DELAYING, LEASE);
     let queue = "nestrs-worker-attempted";
     let (app, stop, serving) = boot_worker_of::<AttemptedModule>(&memory).await;
-    let producer = app
-        .container()
-        .get_dyn::<dyn JobProducer>()
-        .expect("the producer");
-    let receipt = nest_rs_queue::JobProducerExt::push(
-        &*producer,
-        AttemptedQueue,
-        WorkerCommand { seq: 1 },
-        None,
-    )
-    .await
-    .expect("a push");
+    let producer = app.container().get::<Jobs>().expect("the producer");
+    let receipt = producer
+        .push(AttemptedQueue, WorkerCommand { seq: 1 })
+        .await
+        .expect("a push");
     nest_rs_testing::wait_until(Duration::from_secs(60), || {
         memory.dead(queue).len() == 1 && memory.held(queue) == 0
     })

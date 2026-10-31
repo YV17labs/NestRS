@@ -394,9 +394,9 @@ fn print_next_steps(
             );
         }
         println!(
-            "  Push from a provider injecting Arc<dyn JobProducer>, with \
-             JobProducerExt in scope: `queue.push({}, job, None)`. The app that \
-             pushes imports nest_rs::redis::RedisQueueModule beside RedisModule.",
+            "  Push from a provider injecting Arc<nest_rs::queue::Jobs>: \
+             `jobs.push({}, job)`. The app that pushes imports \
+             nest_rs::redis::RedisQueueModule beside RedisModule.",
             names.queue()
         );
     }

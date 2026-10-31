@@ -5,7 +5,7 @@ use crate::{Job, QueueError, QueueName};
 /// What a push names, and the payload it accepts.
 ///
 /// Implemented by the marker `#[queue(name = ..)]` declares, so
-/// `queue.push(AudioQueue, job, None)` checks the payload against the queue's
+/// `jobs.push(AudioQueue, job)` checks the payload against the queue's
 /// `Job` at compile time. "Destination" is the OpenTelemetry messaging word for
 /// where a message is sent — what a job span reports as
 /// `messaging.destination.name`.

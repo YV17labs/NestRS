@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_core::{App, instance, module};
-use nest_rs_queue::JobProducer;
+use nest_rs_queue::Jobs;
 use nest_rs_redis::{
     RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer, RedisThrottlerModule,
 };
@@ -54,8 +54,7 @@ async fn the_queue_binds_the_default_instance_and_the_rate_limiter_the_cache() {
     assert_eq!(cache.get_db(), i64::from(DB_SELECT_RETRIED));
     assert_ne!(default.get_db(), cache.get_db());
     assert!(
-        container.get::<RedisQueueProducer>().is_some()
-            && container.get::<Arc<dyn JobProducer>>().is_some(),
+        container.get::<RedisQueueProducer>().is_some() && container.get::<Jobs>().is_some(),
         "the queue binds the default instance"
     );
 

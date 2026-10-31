@@ -2073,7 +2073,7 @@ static RELAYED_FOR: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
 /// Pushes the next hop of every job it runs, as a handler enqueueing follow-up
 /// work does.
 struct RelayProcessor {
-    producer: crate::memory::Memory,
+    jobs: nest_rs_queue::Jobs,
 }
 
 // Hand-provided: no decorator built this type to state its residency.
@@ -2089,13 +2089,9 @@ impl RelayProcessor {
             .lock()
             .expect("lock")
             .push(nest_rs_core::current_tenant_id());
-        nest_rs_queue::JobProducerExt::push(
-            &self.producer,
-            RelayedQueue,
-            RelayCommand { hop: job.hop + 1 },
-            None,
-        )
-        .await?;
+        self.jobs
+            .push(RelayedQueue, RelayCommand { hop: job.hop + 1 })
+            .await?;
         Ok(())
     }
 }
@@ -2105,7 +2101,7 @@ async fn relay(stored: serde_json::Value) -> (AttemptOutcome, Vec<serde_json::Va
     let producer = crate::memory::Memory::new(&crate::memory::PLAIN, Duration::from_secs(30));
     let container = Container::builder()
         .provide(RelayProcessor {
-            producer: producer.clone(),
+            jobs: nest_rs_queue::Jobs::new(std::sync::Arc::new(producer.clone())),
         })
         .build()
         .expect("the container builds");

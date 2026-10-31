@@ -19,7 +19,7 @@ use crate::Job;
 /// assert_eq!(<TranscodeQueue as Queue>::NAME, "transcode");
 /// ```
 ///
-/// Both sides then name the type — `queue.push(TranscodeQueue, job, None)` on the
+/// Both sides then name the type — `jobs.push(TranscodeQueue, job)` on the
 /// producer, `#[process(queue = TranscodeQueue)]` on the consumer — and the
 /// decorator checks the consumer's job argument is `Self::Job`, so a mismatch is
 /// a compile error naming both types.

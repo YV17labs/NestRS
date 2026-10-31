@@ -63,7 +63,7 @@ async fn a_service_the_sentinels_do_not_know_fails_the_boot_naming_it() {
 mod failover {
     use std::time::Duration;
 
-    use nest_rs_queue::{JobProducerExt, PushOptions, Queue};
+    use nest_rs_queue::{PushOptions, Queue};
 
     use crate::{FAILOVER, FailoverCommand, FailoverModule, FailoverQueue};
 
@@ -79,7 +79,7 @@ mod failover {
         for offset in 0..5 {
             replica
                 .producer
-                .push(FailoverQueue, FailoverCommand { run: run + offset }, None)
+                .push(FailoverQueue, FailoverCommand { run: run + offset })
                 .await
                 .expect("a push before the failover");
         }
@@ -116,7 +116,7 @@ mod failover {
         // the primary the producer writes to.
         let held = replica
             .producer
-            .push(
+            .push_with(
                 FailoverQueue,
                 FailoverCommand { run: run + 10 },
                 PushOptions::default().with_delay(Duration::from_secs(600)),

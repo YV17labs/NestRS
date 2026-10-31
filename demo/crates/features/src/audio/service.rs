@@ -4,7 +4,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
 use nest_rs::core::{error_message, injectable};
-use nest_rs::queue::{JobProducer, JobProducerExt};
+use nest_rs::queue::Jobs;
 use nest_rs::redis::RedisConnection;
 use nest_rs::storage::{SignedPut, Storage};
 use uuid::Uuid;
@@ -25,7 +25,7 @@ const TRANSCODE_RECORD_TTL_SECS: u64 = 24 * 60 * 60;
 #[injectable]
 pub struct AudioService {
     #[inject]
-    queue: Arc<dyn JobProducer>,
+    jobs: Arc<Jobs>,
     #[inject]
     storage: Arc<Storage>,
     #[inject]
@@ -52,8 +52,8 @@ impl AudioService {
     }
 
     pub async fn enqueue_transcode(&self, file: Uuid) -> Result<(), AudioError> {
-        self.queue
-            .push(AudioQueue, TranscodeCommand { file }, None)
+        self.jobs
+            .push(AudioQueue, TranscodeCommand { file })
             .await?;
         tracing::debug!(target: crate::audio::TARGET, queue = AUDIO_QUEUE, "enqueued transcode job");
         Ok(())

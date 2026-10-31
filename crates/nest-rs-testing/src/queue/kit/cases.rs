@@ -10,9 +10,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use nest_rs_core::{
     Correlation, Transport, async_trait, current_trace_id, operation_log, with_request_scope,
 };
+use nest_rs_queue::__private::producer_of;
 use nest_rs_queue::{
-    Capability, Destination, Envelope, JobProducer, JobProducerExt, PushOptions, PushReceipt,
-    Queue, QueueBackend, QueueConfig, QueueError, QueueName, QueueWorker, TARGET, unit,
+    Capability, Destination, Envelope, JobProducer, Jobs, PushOptions, PushReceipt, Queue,
+    QueueBackend, QueueConfig, QueueError, QueueName, QueueWorker, TARGET, unit,
 };
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -322,7 +323,7 @@ pub async fn a_delayed_push_runs_once_its_delay_has_passed<B: KitBackend>(
     let kit = Kit::begin(backend, logs, DelayQueue).await;
     let worker = kit.worker(WINDOW).await;
     if !worker
-        .producer
+        .jobs
         .backend()
         .capabilities()
         .contains(Capability::DelayedPush)
@@ -381,15 +382,16 @@ pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: K
     let kit = Kit::begin(backend, logs, ResendQueue).await;
     let queue = queue_name::<ResendQueue>();
     let pushing = kit.producer().await;
-    let recording = Recording::new(Arc::clone(&pushing.producer));
-    let capabilities = recording.backend().capabilities();
-    kit.push_on(&recording, ResendQueue, 0, Act::Hold { ms: 300 }, None)
+    let recording = Arc::new(Recording::new(Arc::clone(producer_of(&pushing.jobs))));
+    let recorded = Jobs::new(Arc::clone(&recording) as Arc<dyn JobProducer>);
+    let capabilities = recorded.backend().capabilities();
+    kit.push_on(&recorded, ResendQueue, 0, Act::Hold { ms: 300 }, None)
         .await;
     let pushed = recording.sent();
     let delayed = if capabilities.contains(Capability::DelayedPush) {
         let options = PushOptions::default().with_delay(Duration::from_secs(1));
         kit.push_on(
-            &recording,
+            &recorded,
             ResendQueue,
             1,
             Act::Complete,
@@ -401,7 +403,7 @@ pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: K
         None
     };
     kit.push_on(
-        &recording,
+        &recorded,
         ResendQueue,
         2,
         Act::FailFirst { attempts: 1 },
@@ -413,7 +415,7 @@ pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: K
         let options = PushOptions::default().with_unique(format!("kit-resend-{}", kit.run));
         let holder = kit
             .push_on(
-                &recording,
+                &recorded,
                 ResendQueue,
                 3,
                 Act::Complete,
@@ -431,15 +433,15 @@ pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: K
     if let Some((envelopes, options, holder)) = &keyed {
         enqueue_again(&pushing, &queue, envelopes, Some(options), "keyed").await;
         let refused = pushing
-            .producer
-            .push(
+            .jobs
+            .push_with(
                 ResendQueue,
                 KitCommand {
                     run: kit.run,
                     seq: 4,
                     act: Act::Complete,
                 },
-                Some(options.clone()),
+                options.clone(),
             )
             .await;
         assert!(
@@ -531,18 +533,18 @@ struct Kit<B, C> {
     case: PhantomData<fn() -> C>,
 }
 
-/// A worker of a case: its app, its transport's task, and the producer of the
-/// same app.
+/// A worker of a case: its app, its transport's task, and the jobs handle of
+/// the same app.
 struct Worker {
     serving: JoinHandle<anyhow::Result<()>>,
     stop: CancellationToken,
-    producer: Arc<dyn JobProducer>,
+    jobs: Jobs,
     _app: HeadlessApp,
 }
 
 /// An app of a case pushing through the backend, with no worker draining.
 struct Pushing {
-    producer: Arc<dyn JobProducer>,
+    jobs: Jobs,
     _app: HeadlessApp,
 }
 
@@ -597,8 +599,7 @@ async fn enqueue_again(
     options: Option<&PushOptions>,
     state: &str,
 ) {
-    pushing
-        .producer
+    producer_of(&pushing.jobs)
         .enqueue(
             queue,
             envelopes.to_vec(),
@@ -656,7 +657,7 @@ impl<B: KitBackend, C: Queue + CaseModule> Kit<B, C> {
     async fn producer(&self) -> Pushing {
         let app = self.app(WINDOW).await;
         Pushing {
-            producer: producer_of(&app),
+            jobs: jobs_of(&app),
             _app: app,
         }
     }
@@ -674,7 +675,7 @@ impl<B: KitBackend, C: Queue + CaseModule> Kit<B, C> {
         Worker {
             serving,
             stop,
-            producer: producer_of(&app),
+            jobs: jobs_of(&app),
             _app: app,
         }
     }
@@ -688,31 +689,29 @@ impl<B: KitBackend, C: Queue + CaseModule> Kit<B, C> {
         act: Act,
         options: Option<PushOptions>,
     ) -> PushReceipt {
-        self.push_on(&*worker.producer, queue, seq, act, options)
-            .await
+        self.push_on(&worker.jobs, queue, seq, act, options).await
     }
 
-    /// Push job `seq` of this run on `queue` through `producer`, doing `act`.
+    /// Push job `seq` of this run on `queue` through `jobs`, doing `act`.
     async fn push_on<Q: Destination<Job = KitCommand> + Send>(
         &self,
-        producer: &dyn JobProducer,
+        jobs: &Jobs,
         queue: Q,
         seq: u32,
         act: Act,
         options: Option<PushOptions>,
     ) -> PushReceipt {
-        producer
-            .push(
-                queue,
-                KitCommand {
-                    run: self.run,
-                    seq,
-                    act,
-                },
-                options,
-            )
-            .await
-            .expect("the push is filed")
+        jobs.push_with(
+            queue,
+            KitCommand {
+                run: self.run,
+                seq,
+                act,
+            },
+            options.unwrap_or_default(),
+        )
+        .await
+        .expect("the push is filed")
     }
 
     fn attempts(&self, queue: &'static str, seq: u32) -> Vec<Attempt> {
@@ -762,11 +761,13 @@ impl Worker {
     }
 }
 
-/// The producer `app`'s backend binds.
-fn producer_of(app: &HeadlessApp) -> Arc<dyn JobProducer> {
-    app.container()
-        .get_dyn::<dyn JobProducer>()
-        .expect("the backend binds a producer")
+/// The jobs handle `app`'s backend binds.
+fn jobs_of(app: &HeadlessApp) -> Jobs {
+    Jobs::clone(
+        &app.container()
+            .get::<Jobs>()
+            .expect("the backend binds its jobs handle"),
+    )
 }
 
 /// The name of `Q`'s queue, checked.

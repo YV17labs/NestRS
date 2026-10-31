@@ -7,8 +7,8 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Pushing a job is a one-line call — `queue.push(AudioQueue, job, None).await?`
-— but *where* that line lives decides whether the feature stays auditable.
+Pushing a job is a one-line call — `jobs.push(AudioQueue, job).await?` —
+but *where* that line lives decides whether the feature stays auditable.
 The rule is the same one that holds `Repo` calls behind a service:
 controllers, resolvers, and gateways ask the service to enqueue. The
 service names the queue; the transport adapter doesn't.
@@ -64,14 +64,14 @@ marker it cannot see is a marker it cannot use.
 
 A producer is any code that asks the service to enqueue. The HTTP
 controller, the GraphQL resolver, the scheduled producer — all of them
-delegate. They do **not** hold the producer and do **not** know the queue
-name.
+delegate. They do **not** hold the queue's handle and do **not** know the
+queue name.
 
 ```rust title="crates/features/src/audio/service.rs (from the demo, abridged)"
 use std::sync::Arc;
 
 use nest_rs::core::{error_message, injectable};
-use nest_rs::queue::{JobProducer, JobProducerExt};
+use nest_rs::queue::Jobs;
 use uuid::Uuid;
 
 use super::command::{AUDIO_QUEUE, AudioQueue, TranscodeCommand};
@@ -80,14 +80,12 @@ use super::error::AudioError;
 #[injectable]
 pub struct AudioService {
     #[inject]
-    queue: Arc<dyn JobProducer>,
+    jobs: Arc<Jobs>,
 }
 
 impl AudioService {
     pub async fn enqueue_transcode(&self, file: Uuid) -> Result<(), AudioError> {
-        self.queue
-            .push(AudioQueue, TranscodeCommand { file }, None)
-            .await?;
+        self.jobs.push(AudioQueue, TranscodeCommand { file }).await?;
         tracing::debug!(target: crate::audio::TARGET, queue = AUDIO_QUEUE, "enqueued transcode job");
         Ok(())
     }
@@ -96,11 +94,11 @@ impl AudioService {
 
 `push` takes both the wire name and the accepted payload from the marker, so
 enqueueing onto the wrong queue, or with the wrong payload, does not compile,
-and answers with a `PushReceipt` naming the queue and the job's id. `push`
-comes from `JobProducerExt`, a blanket extension over any producer — import the
-trait, and it is available on `Arc<dyn JobProducer>` and on a backend's
-concrete producer alike. `push_many` takes an iterator of jobs for one queue and
-answers one receipt per job, in order. Both are `async` because the backend is.
+and answers with a `PushReceipt` naming the queue and the job's id. `push_with`
+takes what a push declares besides — a delay, a unique key — and `push_many`
+an iterator of jobs for one queue, answering one receipt per job, in order
+(`push_many_with` for a delay on all of them). All are `async` because the
+backend is.
 
 The port does the rest before the backend sees the job: it checks the options,
 mints the job's id — a UUID v7, the `job_id` every attempt at the job reports —
@@ -111,19 +109,17 @@ where you pushed. You never see either — see
 [Correlation](/fundamentals/correlation/) and
 [Multi-tenant SaaS](/security/multi-tenant-saas/).
 
-<Aside type="caution">
-One escape hatch: `push_json(name, value, None)` takes a raw name and a JSON
-payload — correct **only** for a queue this binary does not declare, drained
-by another deployment whose `#[queue]` types it does not link. It opts out of
-both the name check and the payload check, so it is never the default path.
-</Aside>
+A queue another deployment drains — its worker in another binary — takes a
+marker of its own on this side, naming that queue and the payload both sides
+agree on, `#[queue(name = "billing-invoices", job = InvoiceCommand)]`; the
+push is then as typed as any other. A payload lives at the port, so the
+producer links the type its consumer reads.
 
-`Arc<dyn nest_rs::queue::JobProducer>` is the form to inject: the feature names
-no backend, so it compiles unchanged against a different driver.
-`RedisQueueModule` binds **both** that name and the concrete
-`nest_rs::redis::RedisQueueProducer` over the connection `RedisModule` opens
-for its instance ([a second Valkey](/queue/topologies/#a-second-valkey) has
-one of its own), so the concrete type resolves too when a service genuinely needs it.
+`Arc<nest_rs::queue::Jobs>` is the form to inject: the feature names no
+backend, so it compiles unchanged against a different driver.
+`RedisQueueModule` binds it over the producer it opens on the connection
+`RedisModule` opens for its instance ([a second
+Valkey](/queue/topologies/#a-second-valkey) has one of its own).
 
 ## When a push fails
 
@@ -198,12 +194,12 @@ once](/queue/delivery/#filed-after-the-commit).
 
 ## Holding a job back
 
-The third argument carries what a push declares besides its queue and its
-payload. A delay holds the job for a `Duration`, or until a `SystemTime`:
+`push_with` carries what a push declares besides its queue and its payload.
+A delay holds the job for a `Duration`, or until a `SystemTime`:
 
 ```rust title="crates/features/src/audio/service.rs"
-self.queue
-    .push(
+self.jobs
+    .push_with(
         AudioQueue,
         TranscodeCommand { file },
         PushOptions::default().with_delay(Duration::from_secs(60)),
@@ -227,8 +223,8 @@ files nothing:
 
 ```rust title="crates/features/src/audio/service.rs"
 let pushed = self
-    .queue
-    .push(
+    .jobs
+    .push_with(
         AudioQueue,
         TranscodeCommand { file },
         PushOptions::default().with_unique(format!("transcode-{file}")),
@@ -247,7 +243,7 @@ match pushed {
 The key is held from the push until the job reaches its outcome — it
 completes, it dead-letters, or it is cancelled — and is free for the next push
 from then on. It is scoped to the queue: the same key on two queues names two
-jobs. A key is 1 to 256 bytes with no control character, and `push_many`
+jobs. A key is 1 to 256 bytes with no control character, and `push_many_with`
 refuses one, since a key names one job.
 
 **At most once over pushes, never a lock.** A unique key keeps a sequence of
@@ -267,9 +263,9 @@ The receipt a push returns names the job, and `cancel` takes it back while it
 waits:
 
 ```rust title="crates/features/src/audio/service.rs"
-let receipt = self.queue.push(AudioQueue, job, None).await?;
+let receipt = self.jobs.push(AudioQueue, job).await?;
 
-if self.queue.cancel(&receipt).await? {
+if self.jobs.cancel(&receipt).await? {
     tracing::info!(target: crate::audio::TARGET, job_id = %receipt.id(), "transcode withdrawn");
 }
 ```
@@ -390,8 +386,10 @@ push side. The service is the contract; transports adapt.
 - `crates/features/src/audio/http/controller.rs` — the HTTP producer.
 - `crates/features/src/audio/schedule/tasks.rs` — the scheduled
   producer (a timer that calls the same service).
-- `crates/nest-rs-queue/src/producer.rs` — `JobProducer`, and
-  `JobProducerExt`'s `push`, `push_many`, `cancel` and `cancel_unique`.
+- `crates/nest-rs-queue/src/jobs.rs` — `Jobs`: `push`, `push_with`,
+  `push_many`, `push_many_with`, `cancel` and `cancel_unique`.
+- `crates/nest-rs-queue/src/producer.rs` — `JobProducer`, what a backend
+  implements, and the path every push takes to it.
 - `crates/nest-rs-queue/src/outbox/relay.rs` — `OutboxRelay`, which files
   what a committed transaction wrote.
 - `crates/nest-rs-seaorm/src/queue/outbox.rs` — `SeaOrmOutbox`, the table's

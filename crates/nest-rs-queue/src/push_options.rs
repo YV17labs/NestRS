@@ -94,7 +94,7 @@ impl PushOptions {
     ///
     /// The key is held from the push until its job reaches a terminal outcome —
     /// it completes, it dead-letters, or it is cancelled — and is free for the
-    /// next push from then on. [`cancel_unique`](crate::JobProducerExt::cancel_unique)
+    /// next push from then on. [`cancel_unique`](crate::Jobs::cancel_unique)
     /// cancels the job waiting under a key.
     ///
     /// **At-most-once over pushes, never a distributed lock.** It keeps a

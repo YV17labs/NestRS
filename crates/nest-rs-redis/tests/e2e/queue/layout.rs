@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt as _;
 use nest_rs_core::{injectable, module};
-use nest_rs_queue::{Checkpoint, JobProducerExt, PushOptions, QueueModule, processor, queue};
+use nest_rs_queue::{Checkpoint, PushOptions, QueueModule, processor, queue};
 use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueModule, RedisTopology};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -231,7 +231,7 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
         act,
     };
     let waiting = producer
-        .push(
+        .push_with(
             ConfinedQueue,
             job(100, Act::Complete),
             PushOptions::default().with_unique("one"),
@@ -239,7 +239,7 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
         .await
         .expect("a unique push");
     let held = producer
-        .push(
+        .push_with(
             ConfinedQueue,
             job(101, Act::Complete),
             PushOptions::default().with_delay(Duration::from_secs(60)),
@@ -249,20 +249,20 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
     assert!(producer.cancel(&waiting).await.expect("a cancel"));
     assert!(producer.cancel(&held).await.expect("a cancel"));
     producer
-        .push(ConfinedQueue, job(0, Act::Complete), None)
+        .push(ConfinedQueue, job(0, Act::Complete))
         .await
         .expect("a push");
     producer
-        .push(ConfinedQueue, job(1, Act::Linger), None)
+        .push(ConfinedQueue, job(1, Act::Linger))
         .await
         .expect("a push");
     producer
-        .push(ConfinedQueue, job(2, Act::Fail), None)
+        .push(ConfinedQueue, job(2, Act::Fail))
         .await
         .expect("a push");
     for paced in 3..6 {
         producer
-            .push(ThrottledQueue, job(paced, Act::Complete), None)
+            .push(ThrottledQueue, job(paced, Act::Complete))
             .await
             .expect("a push");
     }

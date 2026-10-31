@@ -1,6 +1,6 @@
 //! [`RedisQueueProducer`] — the queue port's producer half over the shared
-//! [`RedisConnection`]: the [`JobProducer`] binding a feature injects as
-//! `Arc<dyn JobProducer>` to push without naming the backend.
+//! [`RedisConnection`]: the [`JobProducer`] the port's `Jobs` hands each push
+//! to, so a feature pushes without naming the backend.
 //!
 //! What is stored is the sealed envelope as the port handed it, keyed by the
 //! port's id ([`super::layout`]).
@@ -41,9 +41,9 @@ const _: () = assert!(
     "a delay to the latest instant a job may be due at reaches Redis whole",
 );
 
-/// The producer a feature pushes through. Bound by
-/// [`RedisQueueModule`](crate::RedisQueueModule) under both its own name and
-/// `Arc<dyn JobProducer>`; a `Clone` shares the underlying connection.
+/// The producer a feature's pushes reach. Bound by
+/// [`RedisQueueModule`](crate::RedisQueueModule) under its own name and as the
+/// port's `Jobs`; a `Clone` shares the underlying connection.
 ///
 /// It honours every capability the crate's backend declaration names: a delay,
 /// a unique key, a cancel by receipt or by unique key. `I` is the instance it

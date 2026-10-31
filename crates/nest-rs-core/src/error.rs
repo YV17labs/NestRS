@@ -73,15 +73,15 @@ impl MissingAmbientError {
 ///
 /// When the crate owning the dependency's type names the line to add — a
 /// [`DependencyRemedy`](crate::DependencyRemedy), `RedisQueueModule` for the
-/// queue port's producer — the refusal says that line in place of the
+/// queue port's `Jobs` — the refusal says that line in place of the
 /// kernel's generic one:
 ///
 /// ```
-/// let refused = nest_rs_core::MissingDependencyError::new("PostsModule", "PostsService", "dyn JobProducer")
+/// let refused = nest_rs_core::MissingDependencyError::new("PostsModule", "PostsService", "Jobs")
 ///     .with_remedy("Import exactly one queue backend's binding.");
 /// assert_eq!(
 ///     refused.to_string(),
-///     "unmet dependency: `PostsService` (in module `PostsModule`) depends on `dyn JobProducer`, \
+///     "unmet dependency: `PostsService` (in module `PostsModule`) depends on `Jobs`, \
 ///      which no module this app imports provides. Import exactly one queue backend's binding.",
 /// );
 /// ```

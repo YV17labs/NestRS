@@ -46,7 +46,7 @@ use crate::consume::{self, AttemptOutcome, millis};
 use crate::error::CallFailed;
 use crate::{
     Ask, BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, Capability, Delivery, Disposition,
-    JobConsumer, JobError, JobId, JobProducer, LeaseHold, Prepared, ProcessMethod, QueueBackend,
+    JobConsumer, JobError, JobId, Jobs, LeaseHold, Prepared, ProcessMethod, QueueBackend,
     QueueConfig, QueueError, QueueName, Received, TARGET,
 };
 
@@ -137,12 +137,12 @@ impl Transport for QueueWorker {
         };
         let backend = consumer.backend();
         let methods = consume::check(reachable, backend)?;
-        if let Some(producer) = container.get_dyn::<dyn JobProducer>()
-            && producer.backend().name() != backend.name()
+        if let Some(jobs) = container.get::<Jobs>()
+            && jobs.backend().name() != backend.name()
         {
             anyhow::bail!(
                 "the queue's producer runs on `{}` and its consumer on `{}`. {BACKEND_REMEDY}",
-                producer.backend().name(),
+                jobs.backend().name(),
                 backend.name(),
             );
         }

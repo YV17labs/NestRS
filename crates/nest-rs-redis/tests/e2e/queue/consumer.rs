@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
-use nest_rs_queue::{Checkpoint, JobProducerExt, QueueName, processor, queue};
+use nest_rs_queue::{Checkpoint, QueueName, processor, queue};
 use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueConfig, RedisQueueModule};
 use nest_rs_testing::HeadlessApp;
 use nest_rs_testing::queue::KitBackend;
@@ -151,12 +151,12 @@ async fn a_job_that_ended_leaves_no_record_but_its_dead_letter() {
     let unique = |key: &str| nest_rs_queue::PushOptions::default().with_unique(key);
     replica
         .producer
-        .push(EndQueue, EndCommand { run, fail: false }, unique("done"))
+        .push_with(EndQueue, EndCommand { run, fail: false }, unique("done"))
         .await
         .expect("a push that completes");
     let doomed = replica
         .producer
-        .push(
+        .push_with(
             EndQueue,
             EndCommand {
                 run: run + 1,
@@ -288,7 +288,7 @@ async fn a_checkpoint_survives_a_retry_and_a_dead_replica_and_is_cleared_at_the_
     let doomed = crate::mortal_replica::<ImportModule>().await;
     let receipt = doomed
         .producer
-        .push(ImportQueue, ImportCommand { run }, None)
+        .push(ImportQueue, ImportCommand { run })
         .await
         .expect("enqueue");
     let job = receipt.id().to_string();
@@ -365,7 +365,7 @@ async fn a_throttle_caps_starts_per_window_across_replicas() {
     for _ in 0..6 {
         first
             .producer
-            .push(PacedQueue, PacedCommand { run }, None)
+            .push(PacedQueue, PacedCommand { run })
             .await
             .expect("enqueue");
     }
@@ -442,7 +442,7 @@ async fn a_throttle_window_in_its_last_millisecond_opens_the_next() {
     let jobs = 300;
     replica
         .producer
-        .push_many(BriskQueue, (0..jobs).map(|_| BriskCommand { run }), None)
+        .push_many(BriskQueue, (0..jobs).map(|_| BriskCommand { run }))
         .await
         .expect("enqueue");
     crate::wait_until(Duration::from_secs(20), || BRISK.of(run).len() == jobs).await;
@@ -510,7 +510,7 @@ async fn cancellation_while_an_attempt_runs_is_refused_and_the_job_runs_to_its_e
     let replica = crate::replica::<HeldModule>().await;
     let receipt = replica
         .producer
-        .push(HeldQueue, HeldCommand { run }, None)
+        .push(HeldQueue, HeldCommand { run })
         .await
         .expect("enqueue");
     crate::wait_until(Duration::from_secs(10), || HELD.of(run).len() == 1).await;
@@ -598,7 +598,7 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
         crate::replica_on::<PlainModule>(crate::redis_config_on(crate::DB_BLOCKED_READ)).await;
     replica
         .producer
-        .push(PlainQueue, PlainCommand { run }, None)
+        .push(PlainQueue, PlainCommand { run })
         .await
         .expect("enqueue");
     crate::wait_until(Duration::from_secs(10), || PLAIN.of(run).len() == 1).await;
@@ -615,7 +615,7 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
     let started = std::time::Instant::now();
     replica
         .producer
-        .push(PlainQueue, PlainCommand { run: run + 1 }, None)
+        .push(PlainQueue, PlainCommand { run: run + 1 })
         .await
         .expect("a push while the read blocks");
     assert!(
@@ -630,7 +630,7 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
         .expect("the stream goes under the running worker");
     replica
         .producer
-        .push(PlainQueue, PlainCommand { run: run + 2 }, None)
+        .push(PlainQueue, PlainCommand { run: run + 2 })
         .await
         .expect("a push after the stream went");
     crate::wait_until(Duration::from_secs(10), || PLAIN.of(run + 2).len() == 1).await;
@@ -780,7 +780,7 @@ async fn a_dead_letter_filed_back_as_the_page_prints_runs_once_more() {
     let replica = crate::replica::<RefiledModule>().await;
     replica
         .producer
-        .push(RefiledQueue, RefiledCommand { run }, None)
+        .push(RefiledQueue, RefiledCommand { run })
         .await
         .expect("enqueue");
     crate::wait_for(Duration::from_secs(10), || async {
@@ -998,7 +998,7 @@ async fn a_held_back_job_whose_record_went_is_said_and_let_go() {
     let unique = || nest_rs_queue::PushOptions::default().with_unique("lost");
     let held = replica
         .producer
-        .push(
+        .push_with(
             LostQueue,
             LostCommand { run },
             unique().with_delay(Duration::from_millis(300)),
@@ -1025,7 +1025,7 @@ async fn a_held_back_job_whose_record_went_is_said_and_let_go() {
 
     replica
         .producer
-        .push(LostQueue, LostCommand { run: run + 1 }, unique())
+        .push_with(LostQueue, LostCommand { run: run + 1 }, unique())
         .await
         .expect("a later push under the key it held");
     crate::wait_until(Duration::from_secs(10), || LOST.of(run + 1).len() == 1).await;
@@ -1088,7 +1088,7 @@ async fn an_entry_deleted_while_delivered_is_said() {
     let replica = crate::replica::<LongModule>().await;
     let pushed = replica
         .producer
-        .push(LongQueue, LongCommand { run }, None)
+        .push(LongQueue, LongCommand { run })
         .await
         .expect("enqueue");
     crate::wait_until(Duration::from_secs(10), || LONG.of(run).len() == 1).await;
@@ -1169,7 +1169,7 @@ async fn a_queue_runs_on_after_its_scripts_are_flushed() {
         .expect("SCRIPT FLUSH");
     replica
         .producer
-        .push(FlushedQueue, FlushedCommand { run }, None)
+        .push(FlushedQueue, FlushedCommand { run })
         .await
         .expect("a push after the flush");
     crate::wait_until(Duration::from_secs(10), || FLUSHED.of(run).len() == 1).await;
@@ -1233,7 +1233,7 @@ async fn a_look_for_lapsed_leases_reads_one_page_and_the_next_reads_on() {
     let (first, second, running) = (run, run + 1, run + 2);
     let producer = crate::producer_on(paged_redis()).await;
     producer
-        .push(PagedQueue, PagedCommand { run: first }, None)
+        .push(PagedQueue, PagedCommand { run: first })
         .await
         .expect("the first lapsed job");
     let pushed = (0..999)
@@ -1241,7 +1241,7 @@ async fn a_look_for_lapsed_leases_reads_one_page_and_the_next_reads_on() {
         .chain([second])
         .chain((0..9_001).map(|_| running));
     producer
-        .push_many(PagedQueue, pushed.map(|run| PagedCommand { run }), None)
+        .push_many(PagedQueue, pushed.map(|run| PagedCommand { run }))
         .await
         .expect("the running jobs, the second lapsed one first past a page");
     let jobs = crate::key_of(queue, "jobs");
@@ -1335,7 +1335,7 @@ mod standalone {
         let replica = crate::replica_on::<GatedModule>(crate::through(proxy.url())).await;
         crate::producer()
             .await
-            .push(GatedQueue, GatedCommand { run }, None)
+            .push(GatedQueue, GatedCommand { run })
             .await
             .expect("enqueue");
         crate::wait_until(Duration::from_secs(10), || GATED.of(run).len() == 1).await;

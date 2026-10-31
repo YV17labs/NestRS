@@ -16,8 +16,8 @@ use nest_rs_database::{
 use nest_rs_events::{EventBus, EventsModule, listeners};
 use nest_rs_http::{Response, StatusCode};
 use nest_rs_queue::{
-    Capabilities, Capability, Envelope, JobId, JobProducer, JobProducerExt, OutboxConfig,
-    OutboxRelay, PushOptions, PushReceipt, QueueBackend, QueueError, QueueName, TARGET,
+    Capabilities, Capability, Envelope, JobId, JobProducer, Jobs, OutboxConfig, OutboxRelay,
+    PushOptions, PushReceipt, QueueBackend, QueueError, QueueName, TARGET,
 };
 use nest_rs_seaorm::queue::OutboxMigration;
 use nest_rs_seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
@@ -204,14 +204,14 @@ impl Pushing {
             Box::pin(async move {
                 let pushed = if jobs == 1 {
                     vec![
-                        filing
-                            .push(NoteQueue, Note { n: 1 }, None)
+                        jobs_on(&filing)
+                            .push(NoteQueue, Note { n: 1 })
                             .await
                             .expect("pushed"),
                     ]
                 } else {
-                    filing
-                        .push_many(NoteQueue, (0..jobs).map(|n| Note { n }), None)
+                    jobs_on(&filing)
+                        .push_many(NoteQueue, (0..jobs).map(|n| Note { n }))
                         .await
                         .expect("pushed")
                 };
@@ -250,14 +250,14 @@ struct NoteAsked;
 #[injectable]
 struct NotingListeners {
     #[inject]
-    queue: Arc<dyn JobProducer>,
+    jobs: Arc<Jobs>,
 }
 
 #[listeners]
 impl NotingListeners {
     #[on_event]
     async fn pushes_a_note(&self, _: NoteAsked) -> anyhow::Result<()> {
-        self.queue.push(NoteQueue, Note { n: 7 }, None).await?;
+        self.jobs.push(NoteQueue, Note { n: 7 }).await?;
         Ok(())
     }
 }
@@ -268,11 +268,16 @@ impl NotingListeners {
 )]
 struct OutboxAppModule;
 
+/// The port's handle over `filing`, which the test keeps to read what it filed.
+fn jobs_on(filing: &Arc<Filing>) -> Jobs {
+    Jobs::new(Arc::clone(filing) as Arc<dyn JobProducer>)
+}
+
 /// An app over `db`, pushing onto `filing`, its route running `pushing`.
 async fn app_over(db: &EphemeralDatabase, filing: &Arc<Filing>, pushing: Pushing) -> TestApp {
     TestApp::builder()
         .provide_arc(db.connection())
-        .provide_dyn::<dyn JobProducer>(Arc::clone(filing) as Arc<dyn JobProducer>)
+        .provide(jobs_on(filing))
         .provide(pushing)
         .provide(OutboxConfig {
             sweep_interval: Duration::from_millis(100),
@@ -542,14 +547,14 @@ async fn a_push_inside_an_atomic_block_that_rolls_back_is_dropped_while_its_unit
     in_a_unit(&app, {
         let (filing, kept_id) = (Arc::clone(&filing), Arc::clone(&kept_id));
         async move {
-            let outside = filing
-                .push(NoteQueue, Note { n: 1 }, None)
+            let outside = jobs_on(&filing)
+                .push(NoteQueue, Note { n: 1 })
                 .await
                 .expect("kept by the unit");
             *kept_id.lock().expect("lock") = Some(outside.id().to_string());
             let block = atomic(async {
-                filing
-                    .push(NoteQueue, Note { n: 2 }, None)
+                jobs_on(&filing)
+                    .push(NoteQueue, Note { n: 2 })
                     .await
                     .expect("kept by the block");
                 Err::<(), _>(Refused)
@@ -585,8 +590,8 @@ async fn a_cancel_inside_a_unit_deletes_the_record_no_relay_filed() {
         let (filing, receipt) = (Arc::clone(&filing), Arc::clone(&receipt));
         async move {
             *receipt.lock().expect("lock") = Some(
-                filing
-                    .push(NoteQueue, Note { n: 1 }, None)
+                jobs_on(&filing)
+                    .push(NoteQueue, Note { n: 1 })
                     .await
                     .expect("kept"),
             );
@@ -601,7 +606,7 @@ async fn a_cancel_inside_a_unit_deletes_the_record_no_relay_filed() {
     in_a_unit(&app, {
         let filing = Arc::clone(&filing);
         async move {
-            assert!(filing.cancel(&receipt).await.expect("cancelled"));
+            assert!(jobs_on(&filing).cancel(&receipt).await.expect("cancelled"));
             Ok(())
         }
     })
@@ -642,7 +647,10 @@ where
     let cancelling = in_a_unit(app, {
         let (filing, answer) = (Arc::clone(filing), Arc::clone(&answer));
         async move {
-            let cancelled = filing.cancel(&receipt).await.expect("the cancel answers");
+            let cancelled = jobs_on(&filing)
+                .cancel(&receipt)
+                .await
+                .expect("the cancel answers");
             *answer.lock().expect("lock") = Some(cancelled);
             Ok(())
         }
@@ -739,7 +747,7 @@ async fn a_cancel_by_key_inside_a_unit_deletes_only_the_record_carrying_it() {
         let filing = Arc::clone(&filing);
         async move {
             assert!(
-                filing
+                jobs_on(&filing)
                     .cancel_unique(NoteQueue, "song")
                     .await
                     .expect("cancelled")
@@ -765,7 +773,10 @@ async fn a_cancel_on_a_safe_request_deletes_the_committed_record_on_the_pool() {
             let (receipt, answer) = (Arc::clone(&receipt), Arc::clone(&answer));
             async move {
                 let receipt = receipt.lock().expect("lock").clone().expect("a receipt");
-                let cancelled = filing.cancel(&receipt).await.expect("the cancel answers");
+                let cancelled = jobs_on(&filing)
+                    .cancel(&receipt)
+                    .await
+                    .expect("the cancel answers");
                 *answer.lock().expect("lock") = Some(cancelled);
             }
         }
@@ -794,8 +805,8 @@ async fn an_atomic_block_on_a_safe_request_keeps_its_push_until_it_commits_and_d
             let receipts = Arc::clone(&receipts);
             async move {
                 let committed = atomic(async {
-                    let receipt = filing
-                        .push(NoteQueue, Note { n: 1 }, None)
+                    let receipt = jobs_on(&filing)
+                        .push(NoteQueue, Note { n: 1 })
                         .await
                         .expect("kept by the block");
                     Ok::<_, Refused>(receipt)
@@ -804,8 +815,8 @@ async fn an_atomic_block_on_a_safe_request_keeps_its_push_until_it_commits_and_d
                 .expect("the block commits");
                 receipts.lock().expect("lock").push(committed);
                 let rolled_back = atomic(async {
-                    filing
-                        .push(NoteQueue, Note { n: 2 }, None)
+                    jobs_on(&filing)
+                        .push(NoteQueue, Note { n: 2 })
                         .await
                         .expect("kept by the block");
                     Err::<(), _>(Refused)
@@ -837,11 +848,13 @@ async fn committed_note(app: &TestApp, filing: &Arc<Filing>, key: Option<&str>) 
     let receipt = Arc::new(Mutex::new(None));
     in_a_unit(app, {
         let (filing, receipt) = (Arc::clone(filing), Arc::clone(&receipt));
-        let options = key.map(|key| PushOptions::default().with_unique(key));
+        let options = key.map_or_else(PushOptions::default, |key| {
+            PushOptions::default().with_unique(key)
+        });
         async move {
             *receipt.lock().expect("lock") = Some(
-                filing
-                    .push(NoteQueue, Note { n: 1 }, options)
+                jobs_on(&filing)
+                    .push_with(NoteQueue, Note { n: 1 }, options)
                     .await
                     .expect("kept"),
             );
@@ -995,7 +1008,7 @@ async fn two_relays_on_one_table_never_file_one_record_twice() {
     let replicas = [
         TestApp::builder()
             .provide_arc(db.connection())
-            .provide_dyn::<dyn JobProducer>(Arc::clone(&filing) as Arc<dyn JobProducer>)
+            .provide(jobs_on(&filing))
             .provide(Pushing::then_answer(
                 &filing,
                 &Arc::default(),
@@ -1009,7 +1022,7 @@ async fn two_relays_on_one_table_never_file_one_record_twice() {
             .expect("the first replica boots"),
         TestApp::builder()
             .provide_arc(db.connection())
-            .provide_dyn::<dyn JobProducer>(Arc::clone(&filing) as Arc<dyn JobProducer>)
+            .provide(jobs_on(&filing))
             .provide(Pushing::then_answer(
                 &filing,
                 &Arc::default(),
@@ -1026,8 +1039,8 @@ async fn two_relays_on_one_table_never_file_one_record_twice() {
     in_a_unit(&replicas[0], {
         let filing = Arc::clone(&filing);
         async move {
-            filing
-                .push_many(NoteQueue, (0..200).map(|n| Note { n }), None)
+            jobs_on(&filing)
+                .push_many(NoteQueue, (0..200).map(|n| Note { n }))
                 .await
                 .expect("kept");
             Ok(())

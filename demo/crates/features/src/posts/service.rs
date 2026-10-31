@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use nest_rs::core::injectable;
 use nest_rs::events::EventBus;
-use nest_rs::queue::{JobProducer, JobProducerExt};
+use nest_rs::queue::Jobs;
 use nest_rs::seaorm::{Creatable, CrudService, Deletable, Repo, ServiceError, Updatable};
 use sea_orm::{IntoActiveModel, Set};
 use uuid::Uuid;
@@ -18,7 +18,7 @@ pub struct PostsService {
     #[inject]
     bus: Arc<EventBus>,
     #[inject]
-    queue: Arc<dyn JobProducer>,
+    jobs: Arc<Jobs>,
 }
 
 impl CrudService for PostsService {
@@ -54,7 +54,7 @@ impl PostsService {
             org_id,
             message: format!("Post \"{}\" was published", published.title),
         };
-        let receipt = self.queue.push(NotifyQueue, notification, None).await?;
+        let receipt = self.jobs.push(NotifyQueue, notification).await?;
 
         Repo::<publication::Entity>::insert_unscoped(publication::ActiveModel {
             post_id: Set(post_id),

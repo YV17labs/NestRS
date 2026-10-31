@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use nest_rs_config::{ConfigModule, ConfigSetup, ForInstance, Namespaced, instance_namespace};
 use nest_rs_core::{Collecting, ContainerBuilder, Instance, Module, Registering, Unnamed};
-use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, JobProducer};
+use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, JobProducer, Jobs};
 
 use super::consumer::RedisQueueConsumer;
 use super::{LEASE, RedisQueueConfig, RedisQueueProducer};
@@ -18,12 +18,13 @@ use crate::instance::RedisInstance;
 use crate::{RedisConnection, RedisError};
 
 /// The Redis queue binding. Import it beside
-/// [`RedisModule`](crate::RedisModule): an app pushing jobs
-/// injects `Arc<dyn JobProducer>`, and an app running them imports
-/// `QueueModule` beside it too. A bare import reads `<PREFIX>_REDIS__QUEUE__*`;
+/// [`RedisModule`](crate::RedisModule): an app pushing jobs injects the port's
+/// `Arc<Jobs>`, and an app running them imports `QueueModule` beside it too. A
+/// bare import reads `<PREFIX>_REDIS__QUEUE__*`;
 /// [`for_root`](RedisQueueModule::for_root) pins the base those variables
 /// overlay. It queues on the default instance's connection, or on a named
-/// one's — `RedisQueueModule::<Jobs>` reading `<PREFIX>_REDIS__JOBS__QUEUE__*`.
+/// one's — `RedisQueueModule::<Background>` reading
+/// `<PREFIX>_REDIS__BACKGROUND__QUEUE__*`.
 pub struct RedisQueueModule<I = Unnamed>(PhantomData<fn() -> I>);
 
 impl RedisQueueModule {
@@ -39,8 +40,8 @@ impl RedisQueueModule {
 }
 
 impl<I: Instance> RedisQueueModule<I> {
-    /// The producer and the consumer, each bound under the port's type and
-    /// declared, so a second queue backend imported beside this one fails the
+    /// The producer, as the port's [`Jobs`], and the consumer, each bound under
+    /// the port's type and declared, so a second queue backend imported beside this one fails the
     /// boot naming both ([`BACKEND_REMEDY`]); and the port's net over the
     /// connection, which the boot holds the connection's budget under.
     fn bind(builder: ContainerBuilder) -> ContainerBuilder {
@@ -55,13 +56,13 @@ impl<I: Instance> RedisQueueModule<I> {
                     Ok(producer)
                 },
             )
-            .provide_declared_factory_after::<Arc<dyn JobProducer>, (RedisQueueProducer<I>,), _, _>(
+            .provide_declared_factory_after::<Jobs, (RedisQueueProducer<I>,), _, _>(
                 BACKEND_REMEDY,
                 |container| async move {
                     let producer = container.get::<RedisQueueProducer<I>>().ok_or_else(|| {
                         anyhow::anyhow!("RedisQueueModule: RedisQueueProducer was not resolved")
                     })?;
-                    Ok(producer as Arc<dyn JobProducer>)
+                    Ok(Jobs::new(producer as Arc<dyn JobProducer>))
                 },
             )
             .provide_declared_factory_after::<

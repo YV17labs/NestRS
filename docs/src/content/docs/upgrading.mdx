@@ -168,16 +168,19 @@ lists what the boot, a log or the wire shows when one is missed.
    silent: the boot names it and its new spelling, as shown
    [below](#what-fails-if-you-get-it-wrong).
 
-4. **Push through the queue's type.** `push_to::<Q>(job)` and the string-taking
-   `push(name, job)` are gone. A push names the queue's `#[queue]` marker, takes
-   `PushOptions` — `None` for an immediate push — and answers with a
-   `PushReceipt` naming the job's id:
+4. **Push through the queue's type, on the port's handle.** A feature injects
+   `Arc<nest_rs::queue::Jobs>`, which the backend's binding registers, where it
+   injected the backend's producer. `push_to::<Q>(job)` and the string-taking
+   `push(name, job)` are gone: a push names the queue's `#[queue]` marker and
+   answers with a `PushReceipt` naming the job's id; `push_with` takes
+   `PushOptions` for a delay or a unique key:
 
-   ```rust title="crates/features/src/audio/service.rs" del={2} ins={3}
-   self.queue
-       .push_to::<AudioQueue>(TranscodeCommand { file: file.clone() })
-       .push(AudioQueue, TranscodeCommand { file: file.clone() }, None)
-       .await?;
+   ```rust title="crates/features/src/audio/service.rs" del={1,4} ins={2,5}
+   queue: Arc<dyn JobProducer>,
+   jobs: Arc<Jobs>,
+   // …
+   self.queue.push_to::<AudioQueue>(TranscodeCommand { file }).await?;
+   self.jobs.push(AudioQueue, TranscodeCommand { file }).await?;
    ```
 
    The queue section lists every call a producer changes, `push_many` and
@@ -1299,6 +1302,11 @@ lists what the boot, a log or the wire shows when one is missed.
 
   Import it from `nest_rs::core`, its one path, or through
   `nest_rs::prelude::*`; `nest_rs::guards::prelude` is gone the same way.
+- **A provider still injecting `Arc<dyn JobProducer>`** fails the boot: no
+  binding registers a backend's contract any more, and the refusal names the
+  handle to inject, `Arc<nest_rs::queue::Jobs>`. A `push` still passing a third
+  argument, `JobProducerExt` imported, or `push_json` fails to compile: the
+  handle's `push` takes the marker and the job, `push_with` the options too.
 - **`McpOptions`, or `posture: Posture::InBand` on it,** fails to compile:
   `McpModule::for_root` takes an `McpIdentity`, an `McpAccess` or an
   `McpConfig`, alone or as a tuple, and `McpAccess` has `Public` alone: a gated
@@ -1477,7 +1485,7 @@ lists what the boot, a log or the wire shows when one is missed.
   unmet dependency: `UsersController` (in module `UsersHttpModule`) depends on `dyn UnitOfWork`, which no module this app imports provides. Import exactly one unit-of-work binding: `nest_rs::seaorm::SeaOrmDatabaseModule` runs every edge's units of work over SeaORM's executor.
   ```
 
-  A provider injecting `Arc<dyn JobProducer>` with no queue backend names
+  A provider injecting `Arc<Jobs>` with no queue backend names
   `RedisQueueModule`, one injecting the pool or the default instance's
   `RedisConnection` with no module opening it names `SeaOrmModule`
   or `RedisModule` — where 6.x told it to add a provider or
@@ -1648,8 +1656,8 @@ lists what the boot, a log or the wire shows when one is missed.
 - `demo/crates/features/src/audio/service.rs` and
   `demo/crates/features/src/chat/ws/gateway.rs` — the 7.0 lines of steps 4
   and 13, as the demo writes them.
-- `crates/nest-rs-queue/src/producer.rs` — `push`, `push_many`, `push_json` and
-  the receipt; `crates/nest-rs-queue/tests/integration/diagnostics/` — each
+- `crates/nest-rs-queue/src/jobs.rs` — `push`, `push_with`, `push_many`,
+  `push_many_with` and the receipt; `crates/nest-rs-queue/tests/integration/diagnostics/` — each
   `#[queue]` and `#[process]` refusal, pinned.
 - `crates/nest-rs-redis/src/error.rs` — the boot's refusals: an `#insecure`
   URL, TLS that cannot work.

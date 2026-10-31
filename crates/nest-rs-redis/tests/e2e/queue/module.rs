@@ -1,14 +1,14 @@
-//! `RedisQueueModule` binds the **portable** names — `Arc<dyn JobProducer>` and
-//! the `BoundConsumer` — over the default instance's connection, bare import or
+//! `RedisQueueModule` binds the **portable** names — the port's `Jobs` and the
+//! `BoundConsumer` — over the default instance's connection, bare import or
 //! `for_root`.
 
 use std::sync::Arc;
 
 use nest_rs_core::{App, module};
-use nest_rs_queue::{BoundConsumer, JobProducer, JobProducerExt};
+use nest_rs_queue::{BoundConsumer, Jobs};
 use nest_rs_redis::{RedisModule, RedisQueueConfig, RedisQueueModule, RedisQueueProducer};
 
-use crate::redis_config;
+use crate::{Named, redis_config};
 
 #[module(imports = [RedisModule::for_root(redis_config()), RedisQueueModule])]
 struct PortableProducerModule;
@@ -25,17 +25,17 @@ async fn the_queue_binding_resolves_both_the_concrete_and_the_portable_producer_
         app.container().get::<RedisQueueProducer>().is_some(),
         "the concrete backend stays injectable",
     );
-    let producer: Option<Arc<dyn JobProducer>> = app.container().get_dyn::<dyn JobProducer>();
+    let producer: Option<Arc<Jobs>> = app.container().get::<Jobs>();
     let producer = producer.expect(
         "the documented portable form must resolve from the container, not only \
-         by hand-coercing the concrete type",
+         by hand-wrapping the concrete type",
     );
 
     // A live producer, not an empty registration — on a queue nothing drains,
     // so it is named for this run and deleted.
     let queue = format!("nestrs-e2e-portable-{}", crate::this_run());
     let receipt = producer
-        .push_json(&queue, serde_json::json!({ "probe": true }), None)
+        .push(Named::of(&queue), serde_json::json!({ "probe": true }))
         .await
         .expect("the portable handle pushes onto the same connection");
     assert_eq!(receipt.queue().as_str(), queue);

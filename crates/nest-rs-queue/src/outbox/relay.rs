@@ -33,10 +33,11 @@ use crate::backend::bounded;
 use crate::backoff::retry_after;
 use crate::consume::millis;
 use crate::envelope::Envelope;
+use crate::jobs::__private::producer_of;
 use crate::producer::refuse_what_no_push_may_carry;
 use crate::{
-    BACKEND_TIMEOUT, ENQUEUE_BATCH, JobId, JobProducer, OutboxConfig, PushOptions, QueueError,
-    QueueName, TARGET,
+    BACKEND_TIMEOUT, ENQUEUE_BATCH, JobId, JobProducer, Jobs, OutboxConfig, PushOptions,
+    QueueError, QueueName, TARGET,
 };
 
 /// The transport [`OutboxModule`](crate::OutboxModule) attaches: it files the
@@ -77,9 +78,9 @@ impl Transport for OutboxRelay {
         if let Some(config) = container.get::<OutboxConfig>() {
             self.config = (*config).clone();
         }
-        let (Some(store), Some(producer)) = (
+        let (Some(store), Some(jobs)) = (
             container.get_dyn::<dyn OutboxStore>(),
-            container.get_dyn::<dyn JobProducer>(),
+            container.get::<Jobs>(),
         ) else {
             return Ok(());
         };
@@ -96,7 +97,7 @@ impl Transport for OutboxRelay {
         );
         self.ready = Some(Ready {
             store,
-            producer,
+            producer: Arc::clone(producer_of(&jobs)),
             net,
         });
         Ok(())

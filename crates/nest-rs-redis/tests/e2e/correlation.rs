@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::__private::consume::Delivery;
+use nest_rs_queue::__private::producer_of;
 use nest_rs_queue::{
-    JobProducer, JobProducerExt, PushOptions, Queue, QueueModule, QueueName, QueueWorker,
-    WIRE_FORMAT_VERSION, processor, queue,
+    Jobs, PushOptions, Queue, QueueModule, QueueName, QueueWorker, WIRE_FORMAT_VERSION, processor,
+    queue,
 };
 use nest_rs_redis::{RedisModule, RedisQueueModule, RedisQueueProducer};
 use nest_rs_testing::HeadlessApp;
@@ -86,7 +87,7 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
 
     // Enqueue *under an ambient context*, the way an HTTP handler does. This id
     // is the one the consumer must end up running under.
-    let conn = RedisQueueProducer::new(crate::connect().await);
+    let jobs = Jobs::new(Arc::new(RedisQueueProducer::new(crate::connect().await)));
     let correlation = nest_rs_core::Correlation::minted(None);
     // This run's own marker, so a job left behind by an earlier run cannot be
     // mistaken for it — see `SEEN`.
@@ -98,7 +99,7 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
         // Exactly what an authenticated HTTP handler's guard did before it
         // reached the service that enqueues.
         nest_rs_core::__private::set_actor_id("alice-42");
-        conn.push(CorrelationQueue, TraceCommand { seq }, None)
+        jobs.push(CorrelationQueue, TraceCommand { seq })
             .await
             .expect("enqueue");
     })
@@ -155,14 +156,14 @@ struct RelayedQueue;
 #[injectable]
 struct RelayProcessor {
     #[inject]
-    queue: Arc<dyn JobProducer>,
+    jobs: Arc<Jobs>,
 }
 
 #[processor]
 impl RelayProcessor {
     #[process(queue = RelayQueue, retries = 0)]
     async fn relay(&self, job: RelayCommand) -> anyhow::Result<()> {
-        self.queue.push(RelayedQueue, job, None).await?;
+        self.jobs.push(RelayedQueue, job).await?;
         Ok(())
     }
 }
@@ -197,7 +198,7 @@ async fn a_job_carries_its_tenant_and_its_baggage_through_redis_into_what_it_pus
     // files a record carrying one, as a producer forwarding it would.
     let queue = QueueName::new(relay).expect("a valid name");
     let sealed = Delivery::new(
-        JobProducer::backend(&replica.producer),
+        replica.producer.backend(),
         queue.clone(),
         json!({
             "v": WIRE_FORMAT_VERSION,
@@ -207,14 +208,10 @@ async fn a_job_carries_its_tenant_and_its_baggage_through_redis_into_what_it_pus
         }),
     )
     .retry_envelope();
-    JobProducer::enqueue(
-        &replica.producer,
-        &queue,
-        vec![sealed],
-        &PushOptions::default(),
-    )
-    .await
-    .expect("the test producer files the record");
+    producer_of(&replica.producer)
+        .enqueue(&queue, vec![sealed], &PushOptions::default())
+        .await
+        .expect("the test producer files the record");
 
     crate::wait_for(Duration::from_secs(10), || async move {
         filed_for(relayed, run).await.is_some()

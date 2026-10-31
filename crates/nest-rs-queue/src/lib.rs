@@ -3,8 +3,9 @@
 //! `nest-rs-queue` defines **what every queue backend must agree on**: a
 //! queue's identity ([`Queue`], [`QueueName`]) and the payload bound ([`Job`]);
 //! the `#[processor]` inventory ([`ProcessMethod`]) and the worker running each
-//! attempt at a job ([`QueueWorker`]); the push surface ([`JobProducerExt`])
-//! over the seam a backend enqueues and removes jobs through ([`JobProducer`]);
+//! attempt at a job ([`QueueWorker`]); the handle a feature pushes through
+//! ([`Jobs`]) over the seam a backend enqueues and removes jobs through
+//! ([`JobProducer`]);
 //! and the capability model a backend declares what it honours with
 //! ([`QueueBackend`], [`Capability`]).
 //!
@@ -40,7 +41,7 @@
 //!    round trips well inside that net, so an outage reaches the caller as your
 //!    failure, with its cause. A call that panics is dropped the same way, as
 //!    [`QueueError::Panicked`], its panic filed once by the port.
-//!    Bind it as `Arc<dyn JobProducer>` with
+//!    Bind it as the port's [`Jobs`], built over it with [`Jobs::new`], through
 //!    `ContainerBuilder::provide_declared_factory_after`, carrying
 //!    [`BACKEND_REMEDY`]: **two backends imported is a boot error naming both**.
 //! 3. **Run jobs**: implement [`JobConsumer`] — hand over leased
@@ -97,6 +98,7 @@ mod error;
 mod inventory;
 mod job;
 mod job_id;
+mod jobs;
 mod module;
 mod outbox;
 mod process_options;
@@ -126,10 +128,11 @@ pub use error::{JobError, QueueError};
 pub use inventory::ProcessMethod;
 pub use job::Job;
 pub use job_id::JobId;
+pub use jobs::Jobs;
 pub use module::{QueueModule, QueueSetup};
 pub use outbox::{OutboxConfig, OutboxModule, OutboxRelay, OutboxSetup};
 pub use process_options::{ProcessOptions, Throttle};
-pub use producer::{ENQUEUE_BATCH, JobProducer, JobProducerExt};
+pub use producer::{ENQUEUE_BATCH, JobProducer};
 pub use push_options::{Delay, PushOptions};
 pub use push_receipt::PushReceipt;
 pub use queue::Queue;
@@ -154,6 +157,7 @@ pub mod __private {
     pub use crate::inventory::{
         HandlerContext, JobHandler, decode, process_method, required_capabilities,
     };
+    pub use crate::jobs::__private::producer_of;
     pub use crate::queue_name::is_valid_queue_name;
 
     pub use nest_rs_database;

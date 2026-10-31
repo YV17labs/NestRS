@@ -4,8 +4,8 @@ use std::time::Duration;
 use features::notifications::{Column, Entity, NotifyCommand, NotifyQueue};
 use features::testing::RedisDatabase;
 use nest_rs::core::module;
-use nest_rs::queue::{JobProducerExt, PushReceipt, QueueWorker};
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisQueueProducer};
+use nest_rs::queue::{Jobs, PushReceipt, QueueWorker};
+use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::schedule::Scheduler;
 use nest_rs::testing::{EphemeralDatabase, HeadlessApp};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
@@ -15,21 +15,20 @@ use worker::WorkerModule;
 #[module(imports = [RedisModule, RedisQueueModule])]
 struct SuitesProducer;
 
-fn producer(app: &HeadlessApp) -> Arc<RedisQueueProducer> {
+fn jobs(app: &HeadlessApp) -> Arc<Jobs> {
     app.container()
-        .get::<RedisQueueProducer>()
-        .expect("RedisQueueModule bound the producer")
+        .get::<Jobs>()
+        .expect("RedisQueueModule bound the jobs handle")
 }
 
 async fn notify(app: &HeadlessApp, org_id: Uuid) -> PushReceipt {
-    producer(app)
+    jobs(app)
         .push(
             NotifyQueue,
             NotifyCommand {
                 org_id,
                 message: format!("for {org_id}"),
             },
-            None,
         )
         .await
         .expect("enqueue a notification")
@@ -87,7 +86,7 @@ async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suit
         .shutdown()
         .await
         .expect("WorkerModule's QueueWorker stops cleanly");
-    let waiting = producer(&suites)
+    let waiting = jobs(&suites)
         .cancel(&foreign_job)
         .await
         .expect("the suites' database answers the cancel");

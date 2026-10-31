@@ -1,9 +1,8 @@
 //! The producer seam: [`JobProducer`], what a backend implements to enqueue jobs,
-//! and [`JobProducerExt`], what a feature calls to push them — and to cancel one
-//! that has not started.
+//! and the path every push and cancel of [`Jobs`](crate::Jobs) takes to it.
 //!
 //! **The port pushes; a backend enqueues.** Every push goes through
-//! [`JobProducerExt`], which checks the queue's name and the options, refuses an
+//! [`Jobs`](crate::Jobs), which checks the queue's name and the options, refuses an
 //! option the backend does not declare, mints each job's [`JobId`] and seals the
 //! [`Envelope`] — then hands the backend sealed jobs and answers the caller with
 //! receipts it wrote itself. A cancel takes the same path back.
@@ -30,8 +29,8 @@ use crate::backend::bounded;
 use crate::error::Unimplemented;
 use crate::push_options::check_unique_key;
 use crate::{
-    Capabilities, Capability, Delay, Destination, Envelope, JobId, PushOptions, PushReceipt,
-    QueueBackend, QueueError, QueueName, TARGET, envelope,
+    Capabilities, Capability, Delay, Envelope, JobId, PushOptions, PushReceipt, QueueBackend,
+    QueueError, QueueName, TARGET, envelope,
 };
 
 /// The most jobs the port hands a backend's [`JobProducer::enqueue`] in one
@@ -39,8 +38,9 @@ use crate::{
 /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT).
 pub const ENQUEUE_BATCH: usize = 100;
 
-/// What a queue backend implements to enqueue jobs. Inject it as
-/// `Arc<dyn JobProducer>` and push through [`JobProducerExt`].
+/// What a queue backend implements to enqueue jobs. Its binding registers it
+/// as the port's [`Jobs`](crate::Jobs), which a feature injects and pushes
+/// through.
 ///
 /// **On failure**, the port answers the caller: a backend's `Err` as it is,
 /// a call silent past [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) as
@@ -112,221 +112,66 @@ pub trait JobProducer: Send + Sync + 'static {
     }
 }
 
-/// Push jobs through any [`JobProducer`] — `Arc<dyn JobProducer>` included.
-///
-/// An extension trait so the producer stays object-safe; import it beside
-/// `JobProducer` and every method below is on the handle you injected.
-#[async_trait]
-pub trait JobProducerExt: JobProducer {
-    /// Push `job` onto `destination`, a queue's marker. `options` is `None` for
-    /// an immediate push, or a [`PushOptions`].
-    ///
-    /// The queue and the payload type both come from `destination`, so a push
-    /// onto the wrong queue, or with the wrong payload, does not compile:
-    ///
-    /// ```compile_fail,E0308
-    /// use nest_rs_queue::{queue, JobProducer, JobProducerExt};
-    ///
-    /// #[queue(name = "transcode", job = String)]
-    /// struct TranscodeQueue;
-    ///
-    /// async fn demo<P: JobProducer>(producer: &P) {
-    ///     // `TranscodeQueue`'s job is `String`; a `u32` does not compile.
-    ///     producer.push(TranscodeQueue, 42u32, None).await.unwrap();
-    /// }
-    /// ```
-    ///
-    /// The receipt names the queue and the [`JobId`] the port minted for the job.
-    ///
-    /// Fails with [`QueueError::Unsupported`] for an option the backend does not
-    /// declare, [`QueueError::InvalidQueueName`] or
-    /// [`QueueError::InvalidUniqueKey`] for a value no backend could file,
-    /// [`QueueError::Serialize`] for a payload that does not serialize,
-    /// [`QueueError::UniqueKeyHeld`] for a unique key another job still holds,
-    /// [`QueueError::Unanswered`], naming the queue, for a backend silent past
-    /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT), [`QueueError::Panicked`] for
-    /// one that panicked answering, and with whatever the backend returns
-    /// otherwise.
-    ///
-    /// A backend's failure is a failure to *answer*: the write may have reached
-    /// the backend and its reply not come back, in which case the job is enqueued
-    /// and will run. A caller that retries such a failure enqueues it twice — each
-    /// push mints a new id, so the backend cannot tell the second from a new job —
-    /// unless the push carries a unique key: the same at-least-once the worker's
-    /// side has, met at the push.
-    ///
-    /// **Inside a unit of work whose data driver keeps an outbox**, the job is
-    /// written into the unit's transaction instead, so it is filed after the
-    /// commit and never on a rollback, and the receipt names a job that exists
-    /// exactly when the caller's writes do. The backend is not asked then: a
-    /// write the outbox refuses is [`QueueError::Outbox`], and a unique key
-    /// another job holds is checked once the unit committed — the record is
-    /// then dropped, said at `info` naming both jobs, and no error reaches the
-    /// caller.
-    async fn push<D, O>(
-        &self,
-        destination: D,
-        job: D::Job,
-        options: O,
-    ) -> Result<PushReceipt, QueueError>
-    where
-        D: Destination + Send,
-        O: Into<Option<PushOptions>> + Send,
-    {
-        let options = options.into().unwrap_or_default();
-        let queue = destination.queue_name()?;
-        let payload = serde_json::to_value(&job)?;
-        push_value(self, &queue, payload, &options).await
+/// Cancel the job `receipt` names on `producer`'s backend: the outbox of the
+/// unit the cancel runs in first, then the backend, under the net.
+pub(crate) async fn cancel(
+    producer: &dyn JobProducer,
+    receipt: &PushReceipt,
+) -> Result<bool, QueueError> {
+    let queue = receipt.queue();
+    producer
+        .backend()
+        .check(Capabilities::NONE.with(Capability::Cancellation))?;
+    let unkept = unkeep(queue, Unkeep::Job(receipt.id())).await?;
+    let removed = bounded(queue, "JobProducer::remove", async {
+        producer.remove(queue, receipt.id()).await
+    })
+    .await?
+        || unkept;
+    if removed {
+        tracing::info!(
+            target: TARGET,
+            queue = %queue,
+            job_id = %receipt.id(),
+            "queued job cancelled",
+        );
     }
-
-    /// Push every job of `jobs` onto `destination`, in calls to the backend of
-    /// [`ENQUEUE_BATCH`] jobs at most, in order, returning one receipt per job in
-    /// input order.
-    ///
-    /// Not atomic on its own. A failure after the backend accepted some of its
-    /// calls is [`QueueError::PartiallyQueued`], carrying the receipts of the
-    /// jobs of those calls — queued, and to be left out of a retry — beside the
-    /// failure that stopped the push; the jobs of the failing call may be queued
-    /// too, and no receipt says which, so retrying them can queue one twice.
-    /// Inside a unit of work whose data driver keeps an outbox, every job is
-    /// written into its transaction in one write, so the push commits or rolls
-    /// back whole with it. Each
-    /// call is waited on for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at most. A delay applies to
-    /// every job; a unique key names one job and is refused here with
-    /// [`QueueError::InvalidOptions`] — push jobs that each need one with
-    /// [`push`](Self::push).
-    async fn push_many<D, I, O>(
-        &self,
-        destination: D,
-        jobs: I,
-        options: O,
-    ) -> Result<Vec<PushReceipt>, QueueError>
-    where
-        D: Destination + Send,
-        I: IntoIterator<Item = D::Job> + Send,
-        I::IntoIter: Send,
-        O: Into<Option<PushOptions>> + Send,
-    {
-        let options = options.into().unwrap_or_default();
-        if options.unique_key().is_some() {
-            return Err(QueueError::InvalidOptions {
-                reason: "a unique key names one job, so a push of many cannot carry one",
-            });
-        }
-        let queue = destination.queue_name()?;
-        let payloads = jobs
-            .into_iter()
-            .map(|job| serde_json::to_value(&job))
-            .collect::<Result<Vec<_>, _>>()?;
-        push_values(self, &queue, payloads, &options).await
-    }
-
-    /// Push a JSON `payload` onto the queue named `queue`, for the one case no
-    /// marker type is in reach: a queue **this binary does not declare**, drained
-    /// by another deployment whose `#[queue]` types it does not link.
-    ///
-    /// This hatch checks neither the name against a declared queue nor the
-    /// payload against its job type, so prefer [`push`](Self::push) wherever a
-    /// marker exists.
-    async fn push_json<O>(
-        &self,
-        queue: &str,
-        payload: Value,
-        options: O,
-    ) -> Result<PushReceipt, QueueError>
-    where
-        O: Into<Option<PushOptions>> + Send,
-    {
-        let options = options.into().unwrap_or_default();
-        let queue = QueueName::new(queue.to_owned())?;
-        push_value(self, &queue, payload, &options).await
-    }
-
-    /// Cancel the job `receipt` names, so it never starts.
-    ///
-    /// Inside a unit of work whose data driver keeps an outbox, a record of the
-    /// job no relay has filed yet is deleted first, on the unit's transaction,
-    /// then the backend is asked; either answers `true`.
-    ///
-    /// `Ok(true)`: the job had not started, and now never will — whether it was
-    /// waiting on its queue, or on the schedule a delay or a retry holds it on.
-    /// Cancelling is the job's terminal outcome, so its unique key, if it held
-    /// one, is free for the next push. `Ok(false)`: it already started — it then
-    /// runs to its own outcome — already finished, or is unknown to the backend.
-    ///
-    /// Fails with [`QueueError::Unsupported`] on a backend without
-    /// [`Capability::Cancellation`], before the backend sees the call, with
-    /// [`QueueError::Unanswered`] when the backend does not answer within
-    /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT), and with
-    /// [`QueueError::Panicked`] when it panicked answering — the cancel may then
-    /// still land.
-    async fn cancel(&self, receipt: &PushReceipt) -> Result<bool, QueueError> {
-        let queue = receipt.queue();
-        self.backend()
-            .check(Capabilities::NONE.with(Capability::Cancellation))?;
-        let unkept = unkeep(queue, Unkeep::Job(receipt.id())).await?;
-        let removed = bounded(queue, "JobProducer::remove", async {
-            self.remove(queue, receipt.id()).await
-        })
-        .await?
-            || unkept;
-        if removed {
-            tracing::info!(
-                target: TARGET,
-                queue = %queue,
-                job_id = %receipt.id(),
-                "queued job cancelled",
-            );
-        }
-        Ok(removed)
-    }
-
-    /// Cancel the job holding the unique key `key` on `destination` —
-    /// [`cancel`](Self::cancel), naming the job by its key rather than its
-    /// receipt, with the same answer: `Ok(true)` when it had not started and now
-    /// never will, which frees the key; `Ok(false)` when it already started,
-    /// already finished, or no job holds the key. A record carrying the key in
-    /// the unit's outbox is deleted too.
-    ///
-    /// Fails with [`QueueError::InvalidUniqueKey`] for a key no push could file,
-    /// and with [`QueueError::Unsupported`] on a backend without unique jobs or
-    /// without cancellation, before the backend sees the call — and with
-    /// [`QueueError::Unanswered`] or [`QueueError::Panicked`] as
-    /// [`cancel`](Self::cancel) does.
-    async fn cancel_unique<D>(&self, destination: D, key: &str) -> Result<bool, QueueError>
-    where
-        D: Destination + Send,
-    {
-        let queue = destination.queue_name()?;
-        check_unique_key(key)?;
-        self.backend().check(
-            Capabilities::NONE
-                .with(Capability::UniquePush)
-                .with(Capability::Cancellation),
-        )?;
-        let unkept = unkeep(&queue, Unkeep::Key(key)).await?;
-        let removed = bounded(&queue, "JobProducer::remove_unique", async {
-            self.remove_unique(&queue, key).await
-        })
-        .await?
-            || unkept;
-        if removed {
-            tracing::info!(
-                target: TARGET,
-                queue = %queue,
-                unique_key = key,
-                "unique job cancelled",
-            );
-        }
-        Ok(removed)
-    }
+    Ok(removed)
 }
 
-impl<T: JobProducer + ?Sized> JobProducerExt for T {}
+/// Cancel the job holding the unique key `key` on `queue`, as [`cancel`] does a
+/// receipt's.
+pub(crate) async fn cancel_unique(
+    producer: &dyn JobProducer,
+    queue: QueueName,
+    key: &str,
+) -> Result<bool, QueueError> {
+    check_unique_key(key)?;
+    producer.backend().check(
+        Capabilities::NONE
+            .with(Capability::UniquePush)
+            .with(Capability::Cancellation),
+    )?;
+    let unkept = unkeep(&queue, Unkeep::Key(key)).await?;
+    let removed = bounded(&queue, "JobProducer::remove_unique", async {
+        producer.remove_unique(&queue, key).await
+    })
+    .await?
+        || unkept;
+    if removed {
+        tracing::info!(
+            target: TARGET,
+            queue = %queue,
+            unique_key = key,
+            "unique job cancelled",
+        );
+    }
+    Ok(removed)
+}
 
 /// The one path every push takes to its backend: check, refuse, mint, seal,
 /// file — and answer with receipts naming the ids the port minted.
-async fn push_values<P: JobProducer + ?Sized>(
+pub(crate) async fn push_values<P: JobProducer + ?Sized>(
     producer: &P,
     queue: &QueueName,
     payloads: Vec<Value>,
@@ -374,7 +219,7 @@ async fn push_values<P: JobProducer + ?Sized>(
 }
 
 /// [`push_values`] for one job, answering its one receipt.
-async fn push_value<P: JobProducer + ?Sized>(
+pub(crate) async fn push_value<P: JobProducer + ?Sized>(
     producer: &P,
     queue: &QueueName,
     payload: Value,

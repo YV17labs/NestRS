@@ -241,9 +241,8 @@ pub struct {{command}} {
 /// The queue's identity — wire name + payload type in one artifact the producer
 /// and the processor both import, so a typo or a mismatched payload is a compile
 /// error rather than a job that silently never drains. Push with
-/// `queue.push({{queue}}, job, None).await?` from a provider injecting
-/// `queue: Arc<dyn JobProducer>`, with `JobProducerExt` in scope; it answers the
-/// job's `PushReceipt`.
+/// `jobs.push({{queue}}, job).await?` from a provider injecting
+/// `jobs: Arc<Jobs>`; it answers the job's `PushReceipt`.
 #[queue(name = "{{kebab}}", job = {{command}})]
 pub struct {{queue}};
 "#;

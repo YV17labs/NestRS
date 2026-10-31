@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use nest_rs_core::{App, Collecting, ContainerBuilder, Module, Registering, module};
 use nest_rs_queue::{
-    Ask, BoundConsumer, Capabilities, Disposition, Envelope, JobConsumer, JobProducer, LeaseHold,
-    Prepared, ProcessMethod, PushOptions, QueueBackend, QueueError, QueueName, Received,
+    Ask, BoundConsumer, Capabilities, Disposition, Envelope, JobConsumer, JobProducer, Jobs,
+    LeaseHold, Prepared, ProcessMethod, PushOptions, QueueBackend, QueueError, QueueName, Received,
 };
 use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueModule};
 
@@ -42,10 +42,9 @@ impl Module for ElsewhereQueueModule {
     }
 
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        builder.provide_declared_factory::<Arc<dyn JobProducer>, _, _>(
-            nest_rs_queue::BACKEND_REMEDY,
-            |_| async { Ok(Arc::new(ElsewhereProducer) as Arc<dyn JobProducer>) },
-        )
+        builder.provide_declared_factory::<Jobs, _, _>(nest_rs_queue::BACKEND_REMEDY, |_| async {
+            Ok(Jobs::new(Arc::new(ElsewhereProducer)))
+        })
     }
 }
 

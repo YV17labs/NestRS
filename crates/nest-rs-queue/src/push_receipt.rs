@@ -7,7 +7,7 @@ use crate::{JobId, QueueName};
 /// What a push returns for each job it filed: the queue it went to, and the
 /// [`JobId`] the port minted for it.
 ///
-/// The receipt is what [`cancel`](crate::JobProducerExt::cancel) takes to name
+/// The receipt is what [`cancel`](crate::Jobs::cancel) takes to name
 /// the job, on its own queue.
 ///
 /// A receipt is data: it serializes as `{"queue": …, "id": …}`, so a caller that

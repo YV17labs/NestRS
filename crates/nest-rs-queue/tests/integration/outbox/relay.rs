@@ -12,7 +12,7 @@ use futures_util::future::BoxFuture;
 use nest_rs_core::{Container, Transport, async_trait};
 use nest_rs_database::{Executor as DatabaseExecutor, OutboxError, OutboxRecord, OutboxStore};
 use nest_rs_queue::{
-    BACKEND_TIMEOUT, Capabilities, Capability, Delay, Envelope, JobId, JobProducer, JobProducerExt,
+    BACKEND_TIMEOUT, Capabilities, Capability, Delay, Envelope, JobId, JobProducer, Jobs,
     OutboxConfig, OutboxRelay, PushOptions, PushReceipt, QueueBackend, QueueError, QueueName,
     TARGET,
 };
@@ -148,14 +148,16 @@ impl DatabaseExecutor for Keeping {
 }
 
 /// The records the pushes `push` makes write, through the port's own push.
-async fn written<F, T>(push: impl FnOnce(Arc<Filing>) -> F) -> (Vec<OutboxRecord>, T)
+async fn written<F, T>(push: impl FnOnce(Jobs) -> F) -> (Vec<OutboxRecord>, T)
 where
     F: Future<Output = T>,
 {
     let keeping = Arc::new(Keeping::default());
-    let answer =
-        nest_rs_database::with_job_executor(keeping.clone(), push(Arc::new(Filing::default())))
-            .await;
+    let answer = nest_rs_database::with_job_executor(
+        keeping.clone(),
+        push(Jobs::new(Arc::new(Filing::default()))),
+    )
+    .await;
     let records = std::mem::take(&mut *keeping.0.lock().expect("lock"));
     (records, answer)
 }
@@ -164,7 +166,7 @@ where
 async fn one_transcode(file: &str, options: PushOptions) -> (Vec<OutboxRecord>, PushReceipt) {
     let (records, receipt) = written(|producer| async move {
         producer
-            .push(
+            .push_with(
                 TranscodeQueue,
                 TranscodeCommand {
                     file: file.to_owned(),
@@ -188,7 +190,7 @@ fn settings() -> OutboxConfig {
 fn container(store: &MemoryOutbox, producer: &Arc<Filing>, config: OutboxConfig) -> Container {
     Container::builder()
         .provide_dyn::<dyn OutboxStore>(Arc::new(store.clone()))
-        .provide_dyn::<dyn JobProducer>(Arc::clone(producer) as Arc<dyn JobProducer>)
+        .provide(Jobs::new(Arc::clone(producer) as Arc<dyn JobProducer>))
         .provide(config)
         .build()
         .expect("the container builds")
@@ -256,16 +258,15 @@ async fn records_share_a_call_per_queue_and_delay_and_a_keyed_one_has_its_own() 
             .push_many(
                 TranscodeQueue,
                 ["a.wav", "b.wav", "c.wav"].map(|file| TranscodeCommand { file: file.into() }),
-                None,
             )
             .await
             .expect("written");
         producer
-            .push(SyncQueue, SyncCommand { org: "acme".into() }, None)
+            .push(SyncQueue, SyncCommand { org: "acme".into() })
             .await
             .expect("written");
         producer
-            .push(
+            .push_with(
                 TranscodeQueue,
                 TranscodeCommand {
                     file: "d.wav".into(),
@@ -275,7 +276,7 @@ async fn records_share_a_call_per_queue_and_delay_and_a_keyed_one_has_its_own() 
             .await
             .expect("written");
         producer
-            .push(
+            .push_with(
                 TranscodeQueue,
                 TranscodeCommand {
                     file: "e.wav".into(),
@@ -531,7 +532,7 @@ async fn the_way_down_lets_the_call_in_flight_answer_and_starts_no_other() {
     let (transcode, _) = one_transcode("a.wav", PushOptions::default()).await;
     let (sync, _) = written(|producer| async move {
         producer
-            .push(SyncQueue, SyncCommand { org: "acme".into() }, None)
+            .push(SyncQueue, SyncCommand { org: "acme".into() })
             .await
             .expect("written")
     })

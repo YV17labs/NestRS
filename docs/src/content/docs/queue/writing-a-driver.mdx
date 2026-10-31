@@ -161,18 +161,21 @@ acknowledgement lost — and a `#[process]` handler is idempotent.
 
 ## The binding
 
-`<Vendor>QueueModule` binds the producer as `Arc<dyn JobProducer>` and the
-consumer as `BoundConsumer`, each a **declaration** carrying `BACKEND_REMEDY`,
-so a second backend imported beside yours fails the boot naming both:
+`<Vendor>QueueModule` binds the producer as the port's `Jobs`, built over it
+with `Jobs::new`, and the consumer as `BoundConsumer`, each a **declaration**
+carrying `BACKEND_REMEDY`, so a second backend imported beside yours fails the
+boot naming both, and a feature injecting `Arc<Jobs>` reaches no backend's
+contract:
 
 ```rust title="from nest-rs-redis's queue binding, abridged"
 fn bind(builder: ContainerBuilder) -> ContainerBuilder {
     RedisConnection::<I>::netted(builder, "the queue port", BACKEND_TIMEOUT)
         // …
-        .provide_declared_factory_after::<Arc<dyn JobProducer>, (RedisQueueProducer<I>,), _, _>(
+        .provide_declared_factory_after::<Jobs, (RedisQueueProducer<I>,), _, _>(
             BACKEND_REMEDY,
             |container| async move {
                 // …
+                Ok(Jobs::new(producer as Arc<dyn JobProducer>))
             },
         )
         .provide_declared_factory_after::<
@@ -328,10 +331,10 @@ impl KitBackend for MemoryKit {
     const IN_PROCESS: bool = true;
 
     fn app(&self) -> nest_rs_testing::TestAppBuilder {
-        let producer: Arc<dyn JobProducer> = Arc::new(self.memory.clone());
+        let producer = Jobs::new(Arc::new(self.memory.clone()));
         HeadlessApp::builder()
             .provide(BoundConsumer::new(self.memory.consumer()))
-            .provide_dyn(producer)
+            .provide(producer)
     }
 
     fn lease(&self) -> Duration {

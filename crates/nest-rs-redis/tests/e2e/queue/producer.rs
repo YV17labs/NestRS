@@ -13,13 +13,15 @@
 //! one connection budget, with the connection's own cause, so the port's net
 //! never answers first.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use nest_rs_queue::{
-    JobId, JobProducer, JobProducerExt, PushOptions, PushReceipt, QueueError, QueueName,
-};
+use nest_rs_queue::__private::producer_of;
+use nest_rs_queue::{JobId, Jobs, PushOptions, PushReceipt, QueueError, QueueName};
 use nest_rs_redis::{RedisConfig, RedisQueueProducer};
 use serde_json::json;
+
+use crate::Named;
 
 /// The holder a refused push names, or a panic saying what came back instead.
 fn holder_of(refused: QueueError) -> JobId {
@@ -58,8 +60,8 @@ async fn a_delayed_push_waits_off_the_stream_until_redis_says_it_is_due() {
     let queue = format!("nestrs-e2e-producer-delay-{}", crate::this_run());
     let before = redis_now().await;
     let held = producer
-        .push_json(
-            &queue,
+        .push_with(
+            Named::of(&queue),
             json!({ "take": 1 }),
             PushOptions::default().with_delay(Duration::from_secs(60)),
         )
@@ -85,7 +87,7 @@ async fn a_delayed_push_waits_off_the_stream_until_redis_says_it_is_due() {
     );
 
     let now = producer
-        .push_json(&queue, json!({ "take": 2 }), None)
+        .push(Named::of(&queue), json!({ "take": 2 }))
         .await
         .expect("an immediate push");
     assert_eq!(
@@ -112,11 +114,11 @@ async fn a_unique_push_under_a_held_key_is_refused_naming_the_holder_and_files_n
     let under = || PushOptions::default().with_unique("song-1");
 
     let first = producer
-        .push_json(&queue, json!({ "take": 1 }), under())
+        .push_with(Named::of(&queue), json!({ "take": 1 }), under())
         .await
         .expect("the first push takes the key");
     let refused = producer
-        .push_json(&queue, json!({ "take": 2 }), under())
+        .push_with(Named::of(&queue), json!({ "take": 2 }), under())
         .await
         .expect_err("the key is held");
     let message = refused.to_string();
@@ -136,7 +138,7 @@ async fn a_unique_push_under_a_held_key_is_refused_naming_the_holder_and_files_n
     );
 
     producer
-        .push_json(&elsewhere, json!({ "take": 1 }), under())
+        .push_with(Named::of(&elsewhere), json!({ "take": 1 }), under())
         .await
         .expect("a key is scoped to its queue");
 
@@ -155,8 +157,8 @@ async fn unique_push_racing_for_one_key_files_exactly_one_job() {
         let queue = queue.clone();
         tokio::spawn(async move {
             producer
-                .push_json(
-                    &queue,
+                .push_with(
+                    Named::of(&queue),
                     json!({ "take": take }),
                     PushOptions::default().with_unique("the-one"),
                 )
@@ -190,16 +192,16 @@ async fn cancellation_answers_true_once_for_a_waiting_job_and_leaves_nothing() {
     let producer = crate::producer().await;
     let queue = format!("nestrs-e2e-cancel-waiting-{}", crate::this_run());
     let waiting = producer
-        .push_json(
-            &queue,
+        .push_with(
+            Named::of(&queue),
             json!({ "take": 1 }),
             PushOptions::default().with_unique("song-1"),
         )
         .await
         .expect("a push nothing drains");
     let held = producer
-        .push_json(
-            &queue,
+        .push_with(
+            Named::of(&queue),
             json!({ "take": 2 }),
             PushOptions::default()
                 .with_delay(Duration::from_secs(60))
@@ -220,14 +222,14 @@ async fn cancellation_answers_true_once_for_a_waiting_job_and_leaves_nothing() {
     );
     let name = QueueName::new(queue.clone()).expect("a valid name");
     assert!(
-        producer
+        producer_of(&producer)
             .remove_unique(&name, "song-2")
             .await
             .expect("a cancel by key"),
         "a job held back is cancelled by the key it holds",
     );
     assert!(
-        !producer
+        !producer_of(&producer)
             .remove_unique(&name, "song-2")
             .await
             .expect("a second cancel by key"),
@@ -269,7 +271,7 @@ mod standalone {
             ..crate::through(proxy.url())
         })
         .await;
-        let producer = RedisQueueProducer::new(conn.clone());
+        let producer = Jobs::new(Arc::new(RedisQueueProducer::new(conn.clone())));
 
         proxy.go_dark();
         // The first command to fail is where the client starts reopening the
@@ -294,7 +296,7 @@ mod standalone {
         let queue = format!("nestrs-e2e-silent-{}", crate::this_run());
         let started = Instant::now();
         let refused = producer
-            .push_json(&queue, json!({ "probe": true }), None)
+            .push(Named::of(&queue), json!({ "probe": true }))
             .await
             .expect_err("nothing answers once the proxy is dark");
         let took = started.elapsed();

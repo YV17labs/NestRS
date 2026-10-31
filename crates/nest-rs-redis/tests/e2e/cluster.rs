@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
-use nest_rs_queue::{JobProducerExt, Queue, QueueModule, processor, queue};
+use nest_rs_queue::{Queue, QueueModule, processor, queue};
 use nest_rs_redis::{RedisModule, RedisQueueModule};
 use serde::{Deserialize, Serialize};
 
@@ -143,7 +143,7 @@ async fn a_queue_runs_on_while_its_slot_moves_to_another_node() {
     for offset in 0..3 {
         replica
             .producer
-            .push(MovedQueue, MovedCommand { run: run + offset }, None)
+            .push(MovedQueue, MovedCommand { run: run + offset })
             .await
             .expect("a push to a slot that moved");
     }
@@ -223,7 +223,7 @@ async fn a_blocked_read_follows_the_ask_of_a_slot_being_moved() {
     let run = crate::this_run();
     crate::producer()
         .await
-        .push(AskedQueue, AskedCommand { run }, None)
+        .push(AskedQueue, AskedCommand { run })
         .await
         .expect("a push before the move");
 
@@ -375,7 +375,7 @@ async fn a_queue_runs_on_through_an_atomic_migration_of_its_slot() {
             }
             replica
                 .producer
-                .push(AtomicQueue, AtomicCommand { run: run + pushed }, None)
+                .push(AtomicQueue, AtomicCommand { run: run + pushed })
                 .await
                 .expect("every push answers while the slot moves whole");
             pushed += 1;
@@ -421,7 +421,7 @@ async fn a_queue_runs_on_through_an_atomic_migration_of_its_slot() {
 mod failover {
     use std::time::Duration;
 
-    use nest_rs_queue::{JobProducerExt, Queue};
+    use nest_rs_queue::Queue;
 
     use crate::{FAILOVER, FailoverCommand, FailoverModule, FailoverQueue};
 
@@ -436,7 +436,7 @@ mod failover {
         for offset in 0..5 {
             replica
                 .producer
-                .push(FailoverQueue, FailoverCommand { run: run + offset }, None)
+                .push(FailoverQueue, FailoverCommand { run: run + offset })
                 .await
                 .expect("a push before the failover");
         }

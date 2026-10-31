@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_core::{App, AppLifecycle, injectable, module, target};
-use nest_rs_queue::{BoundConsumer, JobProducer, QueueModule, processor, queue};
+use nest_rs_queue::{BoundConsumer, Jobs, QueueModule, processor, queue};
 use nest_rs_testing::LogCapture;
 use serde::{Deserialize, Serialize};
 
@@ -71,10 +71,10 @@ struct ServedReindexModule;
 async fn a_process_host_the_worker_serves_is_not_named_at_run() {
     let logs = LogCapture::install();
     let memory = Memory::new(&PLAIN, Duration::from_secs(30));
-    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let producer = Jobs::new(Arc::new(memory.clone()));
     let app = App::builder()
         .provide(BoundConsumer::new(memory.consumer()))
-        .provide_dyn(producer)
+        .provide(producer)
         .module::<ServedReindexModule>()
         .build()
         .await

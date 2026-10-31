@@ -153,13 +153,13 @@ pub struct PostsService {
     #[inject]
     bus: Arc<EventBus>,
     #[inject]
-    queue: Arc<dyn JobProducer>,
+    jobs: Arc<Jobs>,
 }
 
 impl PostsService {
     pub async fn publish(&self, model: Model, actor_id: Uuid) -> Result<Post, PostError> {
         // …
-        let receipt = self.queue.push(NotifyQueue, notification, None).await?;
+        let receipt = self.jobs.push(NotifyQueue, notification).await?;
         // …
         let post = Post::from(&published);
         self.bus

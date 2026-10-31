@@ -93,7 +93,7 @@ pub enum QueueError {
     ///
     /// The push filed nothing. The key is held while its job is pending or
     /// running, and is free again once that job completes, dead-letters or is
-    /// cancelled — [`cancel_unique`](crate::JobProducerExt::cancel_unique)
+    /// cancelled — [`cancel_unique`](crate::Jobs::cancel_unique)
     /// frees it while the job waits.
     #[error(
         "unique key {key:?} on queue `{queue}` is held by job `{holder}`, which is still pending \

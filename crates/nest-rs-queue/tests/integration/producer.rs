@@ -10,9 +10,8 @@ use nest_rs_core::async_trait;
 use nest_rs_database::{Executor as DatabaseExecutor, OutboxError, OutboxRecord};
 use nest_rs_http::HttpConfig;
 use nest_rs_queue::{
-    BACKEND_TIMEOUT, Capabilities, Capability, ENQUEUE_BATCH, Envelope, JobId, JobProducer,
-    JobProducerExt, PushOptions, PushReceipt, QueueBackend, QueueError, QueueName,
-    WIRE_FORMAT_VERSION,
+    BACKEND_TIMEOUT, Capabilities, Capability, ENQUEUE_BATCH, Envelope, JobId, JobProducer, Jobs,
+    PushOptions, PushReceipt, QueueBackend, QueueError, QueueName, WIRE_FORMAT_VERSION,
 };
 use serde_json::{Value, json};
 
@@ -44,13 +43,13 @@ struct RecordingProducer {
 }
 
 impl RecordingProducer {
-    fn on(backend: &'static QueueBackend) -> Self {
-        Self {
+    fn on(backend: &'static QueueBackend) -> Arc<Self> {
+        Arc::new(Self {
             backend,
             filed: Mutex::new(Vec::new()),
             waiting: Mutex::new(Vec::new()),
             removed: Mutex::new(Vec::new()),
-        }
+        })
     }
 
     fn filed(&self) -> Vec<Filed> {
@@ -138,11 +137,17 @@ fn song() -> TranscodeCommand {
     }
 }
 
+/// The port's handle over `producer`, which the test keeps to read what it
+/// was handed.
+fn jobs_on<P: JobProducer>(producer: &Arc<P>) -> Jobs {
+    Jobs::new(Arc::clone(producer) as Arc<dyn JobProducer>)
+}
+
 #[tokio::test]
 async fn a_push_names_its_queue_seals_its_payload_and_returns_the_id_it_sealed() {
     let producer = RecordingProducer::on(&BARE);
-    let receipt = producer
-        .push(TranscodeQueue, song(), None)
+    let receipt = jobs_on(&producer)
+        .push(TranscodeQueue, song())
         .await
         .expect("a plain push needs no capability");
 
@@ -177,11 +182,10 @@ async fn a_push_names_its_queue_seals_its_payload_and_returns_the_id_it_sealed()
 #[tokio::test]
 async fn a_push_of_many_files_every_job_in_one_call_with_a_receipt_each() {
     let producer = RecordingProducer::on(&BARE);
-    let receipts = producer
+    let receipts = jobs_on(&producer)
         .push_many(
             TranscodeQueue,
             ["a.wav", "b.wav", "c.wav"].map(|file| TranscodeCommand { file: file.into() }),
-            None,
         )
         .await
         .expect("a bulk push needs no capability");
@@ -210,8 +214,8 @@ async fn a_push_of_many_files_every_job_in_one_call_with_a_receipt_each() {
 #[tokio::test]
 async fn a_push_of_nothing_reaches_no_backend() {
     let producer = RecordingProducer::on(&BARE);
-    let receipts = producer
-        .push_many(TranscodeQueue, Vec::<TranscodeCommand>::new(), None)
+    let receipts = jobs_on(&producer)
+        .push_many(TranscodeQueue, Vec::<TranscodeCommand>::new())
         .await
         .expect("nothing to push");
     assert!(receipts.is_empty());
@@ -221,8 +225,8 @@ async fn a_push_of_nothing_reaches_no_backend() {
 #[tokio::test]
 async fn a_push_of_nothing_is_still_refused_what_the_backend_cannot_honour() {
     let producer = RecordingProducer::on(&BARE);
-    let refused = producer
-        .push_many(
+    let refused = jobs_on(&producer)
+        .push_many_with(
             TranscodeQueue,
             Vec::<TranscodeCommand>::new(),
             PushOptions::default().with_delay(Duration::from_secs(60)),
@@ -242,18 +246,37 @@ async fn a_push_of_nothing_is_still_refused_what_the_backend_cannot_honour() {
     assert!(producer.filed().is_empty(), "nothing reached the backend");
 }
 
+/// A queue another deployment drains, named where this one pushes: a
+/// destination written by hand, its payload the type both sides agree on.
+struct Billing(&'static str);
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Invoice {
+    invoice: u32,
+}
+
+impl nest_rs_queue::Destination for Billing {
+    type Job = Invoice;
+
+    fn queue_name(&self) -> Result<QueueName, QueueError> {
+        QueueName::new(self.0)
+    }
+}
+
 #[tokio::test]
-async fn the_raw_hatch_takes_a_runtime_name_and_checks_it() {
+async fn a_destination_named_at_run_time_pushes_its_typed_payload_and_its_name_is_checked() {
     let producer = RecordingProducer::on(&FULL);
-    producer
-        .push_json("billing.invoices", json!({ "invoice": 7 }), None)
+    jobs_on(&producer)
+        .push(Billing("billing.invoices"), Invoice { invoice: 7 })
         .await
         .expect("a runtime name inside the rule");
-    assert_eq!(producer.filed()[0].0, "billing.invoices");
+    let filed = producer.filed();
+    assert_eq!(filed[0].0, "billing.invoices");
+    assert_eq!(filed[0].1[0]["payload"], json!({ "invoice": 7 }));
 
     for refused in ["nestrs:queue:dead", "", "with space", "tenant#acme"] {
-        let error = producer
-            .push_json(refused, json!({}), None)
+        let error = jobs_on(&producer)
+            .push(Billing(refused), Invoice { invoice: 0 })
             .await
             .expect_err("a name outside the rule is refused");
         assert!(
@@ -289,8 +312,8 @@ fn assert_refused_at_the_push(
 #[tokio::test]
 async fn delayed_push_is_refused_at_the_push_by_a_backend_without_it() {
     let producer = RecordingProducer::on(&BARE);
-    let result = producer
-        .push(
+    let result = jobs_on(&producer)
+        .push_with(
             TranscodeQueue,
             song(),
             PushOptions::default().with_delay(Duration::from_secs(60)),
@@ -302,8 +325,8 @@ async fn delayed_push_is_refused_at_the_push_by_a_backend_without_it() {
 #[tokio::test]
 async fn unique_push_is_refused_at_the_push_by_a_backend_without_it() {
     let producer = RecordingProducer::on(&BARE);
-    let result = producer
-        .push(
+    let result = jobs_on(&producer)
+        .push_with(
             TranscodeQueue,
             song(),
             PushOptions::default().with_unique("song-1"),
@@ -318,8 +341,8 @@ async fn a_backend_declaring_the_options_receives_them_as_declared() {
     let options = PushOptions::default()
         .with_delay(Duration::from_secs(60))
         .with_unique("song-1");
-    producer
-        .push(TranscodeQueue, song(), options.clone())
+    jobs_on(&producer)
+        .push_with(TranscodeQueue, song(), options.clone())
         .await
         .expect("declared, so served");
     let (_, envelopes, filed_options) = &producer.filed()[0];
@@ -335,13 +358,13 @@ async fn a_backend_declaring_the_options_receives_them_as_declared() {
 async fn a_unique_push_under_a_held_key_is_refused_naming_the_holder() {
     let producer = RecordingProducer::on(&FULL);
     let unique = PushOptions::default().with_unique("song-1");
-    let first = producer
-        .push(TranscodeQueue, song(), unique.clone())
+    let first = jobs_on(&producer)
+        .push_with(TranscodeQueue, song(), unique.clone())
         .await
         .expect("the key is free");
 
-    let refused = producer
-        .push(TranscodeQueue, song(), unique.clone())
+    let refused = jobs_on(&producer)
+        .push_with(TranscodeQueue, song(), unique.clone())
         .await
         .expect_err("the key is held");
     let QueueError::UniqueKeyHeld { queue, key, holder } = &refused else {
@@ -355,9 +378,14 @@ async fn a_unique_push_under_a_held_key_is_refused_naming_the_holder() {
         "{sentence}"
     );
 
-    assert!(producer.cancel(&first).await.expect("declared, so served"));
-    producer
-        .push(TranscodeQueue, song(), unique)
+    assert!(
+        jobs_on(&producer)
+            .cancel(&first)
+            .await
+            .expect("declared, so served")
+    );
+    jobs_on(&producer)
+        .push_with(TranscodeQueue, song(), unique)
         .await
         .expect("a cancelled job's key is free again");
 }
@@ -365,8 +393,8 @@ async fn a_unique_push_under_a_held_key_is_refused_naming_the_holder() {
 #[tokio::test]
 async fn a_unique_key_is_refused_on_a_push_of_many_and_an_invalid_one_anywhere() {
     let producer = RecordingProducer::on(&FULL);
-    let many = producer
-        .push_many(
+    let many = jobs_on(&producer)
+        .push_many_with(
             TranscodeQueue,
             [song(), song()],
             PushOptions::default().with_unique("song-1"),
@@ -375,8 +403,8 @@ async fn a_unique_key_is_refused_on_a_push_of_many_and_an_invalid_one_anywhere()
         .expect_err("one key cannot name several jobs");
     assert!(matches!(many, QueueError::InvalidOptions { .. }), "{many}");
 
-    let invalid = producer
-        .push(
+    let invalid = jobs_on(&producer)
+        .push_with(
             TranscodeQueue,
             song(),
             PushOptions::default().with_unique("song\n1"),
@@ -393,8 +421,8 @@ async fn a_unique_key_is_refused_on_a_push_of_many_and_an_invalid_one_anywhere()
 #[tokio::test]
 async fn a_receipt_kept_as_data_still_names_its_job() {
     let producer = RecordingProducer::on(&FULL);
-    let receipt = producer
-        .push(TranscodeQueue, song(), None)
+    let receipt = jobs_on(&producer)
+        .push(TranscodeQueue, song())
         .await
         .expect("a plain push");
 
@@ -404,7 +432,7 @@ async fn a_receipt_kept_as_data_still_names_its_job() {
         json!({ "queue": "transcode", "id": receipt.id().to_string() })
     );
     let read_back: PushReceipt = serde_json::from_value(kept).expect("and reads back");
-    assert!(producer.cancel(&read_back).await.expect("served"));
+    assert!(jobs_on(&producer).cancel(&read_back).await.expect("served"));
 
     for forged in [
         json!({ "queue": "a:b", "id": receipt.id().to_string() }),
@@ -439,13 +467,13 @@ fn assert_cancel_refused(
 async fn cancellation_is_refused_by_a_backend_without_what_it_needs() {
     let bare = RecordingProducer::on(&BARE);
     assert_cancel_refused(
-        bare.cancel(&stray_receipt()).await,
+        jobs_on(&bare).cancel(&stray_receipt()).await,
         Capability::Cancellation,
         "bare",
         &bare,
     );
     assert_cancel_refused(
-        bare.cancel_unique(TranscodeQueue, HELD_KEY).await,
+        jobs_on(&bare).cancel_unique(TranscodeQueue, HELD_KEY).await,
         Capability::UniquePush,
         "bare",
         &bare,
@@ -453,7 +481,9 @@ async fn cancellation_is_refused_by_a_backend_without_what_it_needs() {
 
     let unique_only = RecordingProducer::on(&UNIQUE_ONLY);
     assert_cancel_refused(
-        unique_only.cancel_unique(TranscodeQueue, HELD_KEY).await,
+        jobs_on(&unique_only)
+            .cancel_unique(TranscodeQueue, HELD_KEY)
+            .await,
         Capability::Cancellation,
         "unique-only",
         &unique_only,
@@ -464,23 +494,23 @@ async fn cancellation_is_refused_by_a_backend_without_what_it_needs() {
 async fn a_cancel_reaches_the_backend_and_says_what_it_cancelled() {
     let logs = nest_rs_testing::LogCapture::install();
     let producer = RecordingProducer::on(&FULL);
-    let receipt = producer
-        .push(TranscodeQueue, song(), None)
+    let receipt = jobs_on(&producer)
+        .push(TranscodeQueue, song())
         .await
         .expect("a plain push");
     assert!(
-        producer
+        jobs_on(&producer)
             .cancel(&receipt)
             .await
             .expect("declared, so served"),
         "the job waited, so it never starts"
     );
     assert!(
-        !producer.cancel(&receipt).await.expect("served"),
+        !jobs_on(&producer).cancel(&receipt).await.expect("served"),
         "a job already cancelled is no longer the backend's to cancel"
     );
     assert!(
-        !producer
+        !jobs_on(&producer)
             .cancel(&stray_receipt())
             .await
             .expect("a job nothing filed is no error")
@@ -509,8 +539,8 @@ async fn a_cancel_reaches_the_backend_and_says_what_it_cancelled() {
 async fn a_unique_cancel_names_its_queue_and_checks_its_key_before_the_backend_sees_it() {
     let logs = nest_rs_testing::LogCapture::install();
     let producer = RecordingProducer::on(&FULL);
-    producer
-        .push(
+    jobs_on(&producer)
+        .push_with(
             TranscodeQueue,
             song(),
             PushOptions::default().with_unique(HELD_KEY),
@@ -518,18 +548,18 @@ async fn a_unique_cancel_names_its_queue_and_checks_its_key_before_the_backend_s
         .await
         .expect("the key is free");
     assert!(
-        producer
+        jobs_on(&producer)
             .cancel_unique(TranscodeQueue, HELD_KEY)
             .await
             .expect("declared, so served")
     );
     assert!(
-        !producer
+        !jobs_on(&producer)
             .cancel_unique(TranscodeQueue, "song-2")
             .await
             .expect("a key holding nothing is no error")
     );
-    let invalid = producer
+    let invalid = jobs_on(&producer)
         .cancel_unique(TranscodeQueue, "song\n1")
         .await
         .expect_err("a key no push could file");
@@ -572,11 +602,13 @@ impl JobProducer for ForgetfulProducer {
 async fn cancellation_declared_and_not_implemented_is_named_a_driver_defect() {
     let outcomes = [
         (
-            ForgetfulProducer.cancel(&stray_receipt()).await,
+            jobs_on(&Arc::new(ForgetfulProducer))
+                .cancel(&stray_receipt())
+                .await,
             "`JobProducer::remove`",
         ),
         (
-            ForgetfulProducer
+            jobs_on(&Arc::new(ForgetfulProducer))
                 .cancel_unique(TranscodeQueue, HELD_KEY)
                 .await,
             "`JobProducer::remove_unique`",
@@ -602,13 +634,12 @@ async fn cancellation_declared_and_not_implemented_is_named_a_driver_defect() {
 async fn a_push_of_more_than_a_batch_reaches_the_backend_a_batch_at_a_time_in_order() {
     let producer = RecordingProducer::on(&BARE);
     let jobs = ENQUEUE_BATCH * 2 + 1;
-    let receipts = producer
+    let receipts = jobs_on(&producer)
         .push_many(
             TranscodeQueue,
             (0..jobs).map(|n| TranscodeCommand {
                 file: format!("{n}.wav"),
             }),
-            None,
         )
         .await
         .expect("a bulk push needs no capability");
@@ -651,12 +682,12 @@ struct SilentProducer {
 }
 
 impl SilentProducer {
-    fn answering(answered: usize, delay: Duration) -> Self {
-        Self {
+    fn answering(answered: usize, delay: Duration) -> Arc<Self> {
+        Arc::new(Self {
             answered,
             delay,
             calls: Mutex::new(Vec::new()),
-        }
+        })
     }
 
     fn calls(&self) -> Vec<usize> {
@@ -710,7 +741,7 @@ fn unanswered(error: &QueueError, queue: &str, call: &str) -> bool {
 async fn a_push_the_backend_never_answers_fails_at_the_net_naming_the_queue() {
     let producer = SilentProducer::answering(0, Duration::ZERO);
     let started = tokio::time::Instant::now();
-    let refused = within_twice_the_net(producer.push(TranscodeQueue, song(), None))
+    let refused = within_twice_the_net(jobs_on(&producer).push(TranscodeQueue, song()))
         .await
         .expect_err("the backend never answered");
     let waited = started.elapsed();
@@ -728,19 +759,19 @@ async fn a_push_the_backend_never_answers_fails_at_the_net_naming_the_queue() {
 #[tokio::test(start_paused = true)]
 async fn a_cancel_the_backend_never_answers_fails_at_the_net_naming_the_queue() {
     let producer = SilentProducer::answering(1, Duration::ZERO);
-    let receipt = producer
-        .push(TranscodeQueue, song(), None)
+    let receipt = jobs_on(&producer)
+        .push(TranscodeQueue, song())
         .await
         .expect("the push is answered");
 
-    let refused = within_twice_the_net(producer.cancel(&receipt))
+    let refused = within_twice_the_net(jobs_on(&producer).cancel(&receipt))
         .await
         .expect_err("the backend never answered the cancel");
     assert!(
         unanswered(&refused, "transcode", "JobProducer::remove"),
         "{refused:?}"
     );
-    let refused = within_twice_the_net(producer.cancel_unique(TranscodeQueue, HELD_KEY))
+    let refused = within_twice_the_net(jobs_on(&producer).cancel_unique(TranscodeQueue, HELD_KEY))
         .await
         .expect_err("the backend never answered the cancel");
     assert!(
@@ -782,8 +813,8 @@ impl JobProducer for PanickingProducer {
 #[tokio::test]
 async fn a_push_the_backend_panics_answering_is_an_error_naming_the_queue() {
     let logs = nest_rs_testing::LogCapture::install();
-    let refused = PanickingProducer
-        .push(TranscodeQueue, song(), None)
+    let refused = jobs_on(&Arc::new(PanickingProducer))
+        .push(TranscodeQueue, song())
         .await
         .expect_err("the backend unwound");
 
@@ -816,8 +847,8 @@ async fn a_push_the_backend_panics_answering_is_an_error_naming_the_queue() {
 #[tokio::test(start_paused = true)]
 async fn a_backend_answering_inside_the_net_is_waited_for() {
     let producer = SilentProducer::answering(1, BACKEND_TIMEOUT - Duration::from_millis(1));
-    producer
-        .push(TranscodeQueue, song(), None)
+    jobs_on(&producer)
+        .push(TranscodeQueue, song())
         .await
         .expect("answered inside the net");
 }
@@ -839,12 +870,11 @@ fn the_bound_answers_before_the_http_edge_times_a_request_out() {
 #[tokio::test(start_paused = true)]
 async fn a_push_of_many_the_net_cuts_short_stops_at_the_batch_never_answered() {
     let producer = SilentProducer::answering(1, Duration::ZERO);
-    let refused = within_twice_the_net(producer.push_many(
+    let refused = within_twice_the_net(jobs_on(&producer).push_many(
         TranscodeQueue,
         (0..=ENQUEUE_BATCH).map(|n| TranscodeCommand {
             file: format!("{n}.wav"),
         }),
-        None,
     ))
     .await
     .expect_err("the second batch is never answered");
@@ -878,12 +908,11 @@ async fn a_push_of_many_the_net_cuts_short_stops_at_the_batch_never_answered() {
     );
 
     let silent = SilentProducer::answering(0, Duration::ZERO);
-    let refused = within_twice_the_net(silent.push_many(
+    let refused = within_twice_the_net(jobs_on(&silent).push_many(
         TranscodeQueue,
         (0..=ENQUEUE_BATCH).map(|n| TranscodeCommand {
             file: format!("{n}.wav"),
         }),
-        None,
     ))
     .await
     .expect_err("nothing is answered");
@@ -1001,9 +1030,12 @@ async fn inside<F: Future>(executor: Arc<dyn DatabaseExecutor>, push: F) -> F::O
 async fn a_push_inside_a_unit_keeping_an_outbox_is_written_there_and_never_reaches_the_backend() {
     let producer = RecordingProducer::on(&FULL);
     let keeping = Arc::new(Keeping::default());
-    let receipt = inside(keeping.clone(), producer.push(TranscodeQueue, song(), None))
-        .await
-        .expect("written to the outbox");
+    let receipt = inside(
+        keeping.clone(),
+        jobs_on(&producer).push(TranscodeQueue, song()),
+    )
+    .await
+    .expect("written to the outbox");
 
     assert!(
         producer.filed().is_empty(),
@@ -1034,12 +1066,11 @@ async fn a_push_of_many_inside_such_a_unit_is_one_write_with_a_record_per_receip
     let keeping = Arc::new(Keeping::default());
     let receipts = inside(
         keeping.clone(),
-        producer.push_many(
+        jobs_on(&producer).push_many(
             TranscodeQueue,
             (0..=ENQUEUE_BATCH).map(|n| TranscodeCommand {
                 file: format!("{n}.wav"),
             }),
-            None,
         ),
     )
     .await
@@ -1068,7 +1099,7 @@ async fn a_push_on_a_handle_keeping_no_outbox_is_filed_at_once() {
     let producer = RecordingProducer::on(&FULL);
     let receipt = inside(
         Arc::new(OnThePool),
-        producer.push(TranscodeQueue, song(), None),
+        jobs_on(&producer).push(TranscodeQueue, song()),
     )
     .await
     .expect("filed");
@@ -1087,8 +1118,8 @@ async fn a_push_keeps_its_options_on_the_record_and_is_refused_what_the_backend_
     let keeping = Arc::new(Keeping::default());
     let at = SystemTime::now() + Duration::from_secs(600);
     inside(keeping.clone(), async {
-        producer
-            .push(
+        jobs_on(&producer)
+            .push_with(
                 TranscodeQueue,
                 song(),
                 PushOptions::default()
@@ -1097,8 +1128,8 @@ async fn a_push_keeps_its_options_on_the_record_and_is_refused_what_the_backend_
             )
             .await
             .expect("a delay and a key the backend declares");
-        producer
-            .push(
+        jobs_on(&producer)
+            .push_with(
                 TranscodeQueue,
                 song(),
                 PushOptions::default().with_delay(at),
@@ -1120,7 +1151,7 @@ async fn a_push_keeps_its_options_on_the_record_and_is_refused_what_the_backend_
     let keeping = Arc::new(Keeping::default());
     let refused = inside(
         keeping.clone(),
-        bare.push(
+        jobs_on(&bare).push_with(
             TranscodeQueue,
             song(),
             PushOptions::default().with_delay(Duration::from_secs(60)),
@@ -1137,8 +1168,8 @@ async fn a_push_keeps_its_options_on_the_record_and_is_refused_what_the_backend_
 #[tokio::test]
 async fn a_key_another_job_holds_is_not_refused_at_a_push_the_outbox_keeps() {
     let producer = RecordingProducer::on(&FULL);
-    producer
-        .push(
+    jobs_on(&producer)
+        .push_with(
             TranscodeQueue,
             song(),
             PushOptions::default().with_unique(HELD_KEY),
@@ -1148,7 +1179,7 @@ async fn a_key_another_job_holds_is_not_refused_at_a_push_the_outbox_keeps() {
     let keeping = Arc::new(Keeping::default());
     inside(
         keeping.clone(),
-        producer.push(
+        jobs_on(&producer).push_with(
             TranscodeQueue,
             song(),
             PushOptions::default().with_unique(HELD_KEY),
@@ -1164,7 +1195,7 @@ async fn a_write_the_outbox_refuses_fails_the_push() {
     let producer = RecordingProducer::on(&FULL);
     let refused = inside(
         Arc::new(Keeping::refusing()),
-        producer.push(TranscodeQueue, song(), None),
+        jobs_on(&producer).push(TranscodeQueue, song()),
     )
     .await
     .expect_err("nothing was kept");
@@ -1180,15 +1211,15 @@ async fn a_cancel_inside_a_unit_removes_a_record_not_yet_filed_then_asks_the_bac
     let producer = RecordingProducer::on(&FULL);
     let keeping = Arc::new(Keeping::default());
     let cancelled = inside(keeping.clone(), async {
-        let receipt = producer
-            .push(TranscodeQueue, song(), None)
+        let receipt = jobs_on(&producer)
+            .push(TranscodeQueue, song())
             .await
             .expect("written to the outbox");
         assert!(keeping.keeps(
             "transcode",
             receipt.id().to_string().parse().expect("a uuid")
         ));
-        producer.cancel(&receipt).await
+        jobs_on(&producer).cancel(&receipt).await
     })
     .await;
     assert!(
@@ -1200,15 +1231,17 @@ async fn a_cancel_inside_a_unit_removes_a_record_not_yet_filed_then_asks_the_bac
 
     let keeping = Arc::new(Keeping::default());
     let cancelled = inside(keeping.clone(), async {
-        producer
-            .push(
+        jobs_on(&producer)
+            .push_with(
                 TranscodeQueue,
                 song(),
                 PushOptions::default().with_unique(HELD_KEY),
             )
             .await
             .expect("written to the outbox");
-        producer.cancel_unique(TranscodeQueue, HELD_KEY).await
+        jobs_on(&producer)
+            .cancel_unique(TranscodeQueue, HELD_KEY)
+            .await
     })
     .await;
     assert!(cancelled.expect("cancelled"));

@@ -36,9 +36,9 @@ budget:
 
 | 6.x | 7.0 |
 |---|---|
-| `queue.push_to::<AudioQueue>(job)` | `queue.push(AudioQueue, job, None)`, answering a `PushReceipt` |
-| `queue.push("audio", job)` | the queue's marker, as above; `push_json("audio", value, None)` for a queue this binary does not declare |
-| `queue.push_json(name, value)` | `queue.push_json(name, value, None)` |
+| `queue.push_to::<AudioQueue>(job)` on the injected producer | `jobs.push(AudioQueue, job)` on the injected `Arc<Jobs>`, answering a `PushReceipt`; `push_with(AudioQueue, job, options)` for a delay or a unique key |
+| `queue.push("audio", job)` | the queue's marker, as above, declared on this side too for a queue another deployment drains |
+| `queue.push_json(name, value)` | a `#[queue(name = …, job = …)]` marker naming that queue and the payload both sides agree on, then `jobs.push(Marker, job)` |
 | `<AudioQueue as QueueName>::NAME` | `<AudioQueue as Queue>::NAME` — `QueueName` is now the checked name a backend receives |
 | `RedisWorkerModule::for_root(cfg)` | `QueueModule` from `nest_rs::queue`, imported bare by each queue adapter (`QueueModule::for_root(cfg)` at the root to pin it), beside `RedisQueueModule`, which now binds the consumer too |
 | `RedisWorkerConfig { shutdown_timeout }` | `QueueConfig { shutdown_timeout }`; the lease is `RedisQueueModule::for_root(RedisQueueConfig { lease })` |

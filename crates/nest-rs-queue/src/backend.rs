@@ -9,14 +9,26 @@ use nest_rs_core::{Unanswered, within};
 use crate::{Capabilities, QueueError, QueueName, TARGET};
 
 /// The remedy the boot names when two queue backends bind the queue port, or
-/// none binds the producer a provider injects.
+/// none binds the [`Jobs`](crate::Jobs) a provider injects.
 pub const BACKEND_REMEDY: &str = "Import exactly one queue backend's binding — \
      `nest_rs::redis::RedisQueueModule` binds the queue port over Redis.";
 
 nest_rs_core::inventory::submit! {
     nest_rs_core::DependencyRemedy::new(
-        std::any::TypeId::of::<std::sync::Arc<dyn crate::JobProducer>>,
+        std::any::TypeId::of::<crate::Jobs>,
         BACKEND_REMEDY,
+    )
+}
+
+/// The remedy a provider injecting a backend's contract is refused with: no
+/// binding registers it, and a feature pushes through the port's handle.
+const CONTRACT_REMEDY: &str = "A feature pushes through the queue port's handle: inject \
+     `Arc<nest_rs::queue::Jobs>`, which the backend's binding registers over its producer.";
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<std::sync::Arc<dyn crate::JobProducer>>,
+        CONTRACT_REMEDY,
     )
 }
 

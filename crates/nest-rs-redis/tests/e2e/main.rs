@@ -48,10 +48,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::Transport;
-use nest_rs_queue::{QueueConfig, QueueWorker};
+use nest_rs_queue::{Destination, Jobs, QueueConfig, QueueError, QueueName, QueueWorker};
 use nest_rs_redis::{
-    RedisConfig, RedisConnection, RedisModule, RedisQueueConfig, RedisQueueModule,
-    RedisQueueProducer, RedisTopology,
+    RedisConfig, RedisConnection, RedisModule, RedisQueueConfig, RedisQueueModule, RedisTopology,
 };
 use nest_rs_testing::{
     CapturedEvent, HeadlessApp, TransportHandle, url_as, url_at, url_on, wait_for, wait_until,
@@ -994,10 +993,11 @@ impl MutingProxy {
     }
 }
 
-/// One worker replica: its running transport, and the producer its app bound.
+/// One worker replica: its running transport, and the jobs handle its app
+/// bound.
 struct Replica {
     worker: TransportHandle,
-    producer: RedisQueueProducer,
+    producer: Jobs,
 }
 
 /// Boot the worker app `M` and start its worker — one replica, leasing for
@@ -1031,17 +1031,17 @@ async fn replica_of<M: nest_rs_core::Module + 'static>(
 /// binds.
 async fn booted<M: nest_rs_core::Module + 'static>(
     builder: nest_rs_testing::TestAppBuilder,
-) -> (HeadlessApp, RedisQueueProducer) {
+) -> (HeadlessApp, Jobs) {
     let app = brisk(builder)
         .module::<M>()
         .build_headless()
         .await
         .expect("the worker app boots against the dev container Redis");
     app.init().await.expect("init phases");
-    let producer = RedisQueueProducer::clone(
+    let producer = Jobs::clone(
         &app.container()
-            .get::<RedisQueueProducer>()
-            .expect("RedisQueueModule binds the producer"),
+            .get::<Jobs>()
+            .expect("RedisQueueModule binds the jobs handle"),
     );
     (app, producer)
 }
@@ -1051,7 +1051,7 @@ async fn booted<M: nest_rs_core::Module + 'static>(
 /// renewals — the way a killed process does.
 struct Mortal {
     serving: tokio::task::JoinHandle<anyhow::Result<()>>,
-    producer: RedisQueueProducer,
+    producer: Jobs,
 }
 
 impl Mortal {
@@ -1252,11 +1252,10 @@ struct FailoverModule;
 
 /// Push `run`'s job once the producer answers again: through a failover, a
 /// push fails until the topology names its new primary.
-async fn push_through_a_failover(producer: &RedisQueueProducer, run: u64) {
-    use nest_rs_queue::JobProducerExt as _;
+async fn push_through_a_failover(producer: &Jobs, run: u64) {
     wait_for(Duration::from_secs(20), || async {
         producer
-            .push(FailoverQueue, FailoverCommand { run }, None)
+            .push(FailoverQueue, FailoverCommand { run })
             .await
             .is_ok()
     })
@@ -1266,27 +1265,41 @@ async fn push_through_a_failover(producer: &RedisQueueProducer, run: u64) {
 #[nest_rs_core::module(imports = [RedisModule::for_root(redis_config()), RedisQueueModule])]
 struct ProducerOnlyModule;
 
-/// A producer-only app's producer: pushes, and cancels, with no worker running
-/// anywhere to take a job.
-async fn producer() -> RedisQueueProducer {
+/// A producer-only app's jobs handle: pushes, and cancels, with no worker
+/// running anywhere to take a job.
+async fn producer() -> Jobs {
     producer_on(redis_config()).await
 }
 
 /// A producer-only app reaching Redis as `redis` says.
-async fn producer_on(redis: RedisConfig) -> RedisQueueProducer {
+async fn producer_on(redis: RedisConfig) -> Jobs {
     let app = HeadlessApp::builder()
         .provide(redis)
         .module::<ProducerOnlyModule>()
         .build_headless()
         .await
         .expect("a producer-only app boots against the dev container Redis");
-    let producer = RedisQueueProducer::clone(
-        &app.container()
-            .get::<RedisQueueProducer>()
-            .expect("the producer binding"),
-    );
+    let producer = Jobs::clone(&app.container().get::<Jobs>().expect("the jobs binding"));
     Box::leak(Box::new(app));
     producer
+}
+
+/// A queue a test names at run time, its payload any JSON: each test drains a
+/// queue of its own, which no marker could name.
+struct Named(String);
+
+impl Named {
+    fn of(name: impl ToString) -> Self {
+        Self(name.to_string())
+    }
+}
+
+impl Destination for Named {
+    type Job = serde_json::Value;
+
+    fn queue_name(&self) -> Result<QueueName, QueueError> {
+        QueueName::new(self.0.clone())
+    }
 }
 
 /// The password every ACL user a test creates is given — a fixture, never a

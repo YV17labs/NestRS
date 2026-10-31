@@ -24,7 +24,7 @@ pub enum Capability {
     DelayedPush,
     /// A second pending job under one key refused: `PushOptions::with_unique`.
     UniquePush,
-    /// A pushed job removed before it starts: `JobProducerExt::cancel`, and
+    /// A pushed job removed before it starts: `Jobs::cancel`, and
     /// `cancel_unique` beside [`UniquePush`](Self::UniquePush).
     Cancellation,
     /// A rate at which a method's attempts start, across the deployment:
@@ -56,7 +56,7 @@ impl Capability {
         match self {
             Self::DelayedPush => "`PushOptions::with_delay`",
             Self::UniquePush => "`PushOptions::with_unique`",
-            Self::Cancellation => "`JobProducerExt::cancel` or `cancel_unique`",
+            Self::Cancellation => "`Jobs::cancel` or `cancel_unique`",
             Self::Throttle => "`#[process(throttle(..))]`",
             Self::Checkpoint => "a `Checkpoint<_>` parameter",
         }
@@ -129,8 +129,8 @@ mod tests {
     use crate::consume::unsupported_by;
     use crate::inventory::{HandlerContext, JobHandler, process_method};
     use crate::{
-        Envelope, JobError, JobId, JobProducer, JobProducerExt, ProcessOptions, PushOptions,
-        PushReceipt, QueueBackend, QueueError, QueueName, Throttle,
+        Envelope, JobError, JobId, JobProducer, Jobs, ProcessOptions, PushOptions, PushReceipt,
+        QueueBackend, QueueError, QueueName, Throttle,
     };
 
     /// A backend declaring no optional capability, so every declaration that
@@ -138,6 +138,17 @@ mod tests {
     static NOTHING: QueueBackend = QueueBackend::new("nothing", Capabilities::NONE);
 
     const QUEUE: &str = "audio";
+
+    /// The queue every push of this suite names.
+    struct AudioQueue;
+
+    impl crate::Destination for AudioQueue {
+        type Job = ();
+
+        fn queue_name(&self) -> Result<QueueName, QueueError> {
+            QueueName::new(QUEUE)
+        }
+    }
     const METHOD: &str = "AudioProcessor::transcode";
 
     struct Producer;
@@ -190,7 +201,8 @@ mod tests {
     /// it, against [`NOTHING`]. Exhaustive, so a capability added to the port
     /// does not compile until it names the declaration that needs it.
     async fn refusal(capability: Capability) -> String {
-        let push = |options| Producer.push_json(QUEUE, Value::Null, options);
+        let jobs = Jobs::new(std::sync::Arc::new(Producer));
+        let push = |options| jobs.push_with(AudioQueue, (), options);
         match capability {
             Capability::DelayedPush => {
                 refused(push(PushOptions::default().with_delay(Duration::from_secs(1))).await)
@@ -200,11 +212,7 @@ mod tests {
             }
             Capability::Cancellation => {
                 let queue = QueueName::new(QUEUE).expect("a valid name");
-                refused(
-                    Producer
-                        .cancel(&PushReceipt::new(queue, JobId::mint()))
-                        .await,
-                )
+                refused(jobs.cancel(&PushReceipt::new(queue, JobId::mint())).await)
             }
             Capability::Throttle => boot(
                 ProcessOptions::DEFAULT

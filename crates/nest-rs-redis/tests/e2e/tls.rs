@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 
 use nest_rs_core::{injectable, module};
-use nest_rs_queue::{JobProducerExt, QueueModule, processor, queue};
+use nest_rs_queue::{QueueModule, processor, queue};
 use nest_rs_redis::{RedisModule, RedisQueueModule};
 use serde::{Deserialize, Serialize};
 
@@ -65,7 +65,7 @@ async fn a_queue_runs_over_a_redis_speaking_tls_every_connection_verified() {
     let replica = crate::replica_on::<SealedModule>(crate::redis_config_on(db)).await;
     replica
         .producer
-        .push(SealedQueue, SealedCommand { run }, None)
+        .push(SealedQueue, SealedCommand { run })
         .await
         .expect("a push over TLS");
     crate::wait_until(Duration::from_secs(10), || SEALED.of(run).len() == 1).await;

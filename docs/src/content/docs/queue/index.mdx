@@ -26,7 +26,8 @@ Read this section, then start from the working reference: the
 [`worker`](/publish/) app in Publish — audio transcoding jobs, with the
 `api` app as the producer.
 
-The contract — `Queue`, `JobProducer`, `PushOptions`, the `#[processor]`
+The contract — `Queue`, the `Jobs` handle a feature pushes through and the
+`JobProducer` a backend implements, `PushOptions`, the `#[processor]`
 macro, what one attempt at a job is, and the `QueueWorker` that runs them —
 ships in **`nest-rs-queue`**. The first-class storage, **Redis**, ships in
 **`nest-rs-redis`**, written on Redis Streams: `RedisQueueModule` binds its
@@ -71,9 +72,8 @@ pub struct AudioQueue;
 pub const AUDIO_QUEUE: &str = <AudioQueue as Queue>::NAME;
 ```
 
-Re-export both from the feature's `mod.rs`. A marker that is not reachable
-from the port leaves the untyped `push_json(name, payload, None)` escape hatch
-as the only way to enqueue — which loses the check `Queue` exists to provide.
+Re-export both from the feature's `mod.rs`: a producer pushes through the
+marker, so one it cannot reach is a queue it cannot push onto.
 
 The name is 1 to 128 of `A-Z a-z 0-9 _ . -`, checked when the macro expands:
 `:` separates the levels of a key, and whitespace would reach a log field.
@@ -313,8 +313,8 @@ Three modules, three roles:
   it; a [second Valkey](/queue/topologies/#a-second-valkey) is a named
   instance beside it.
 - **`RedisQueueModule`** — binds the queue port over that connection: the
-  producer, as `Arc<dyn JobProducer>`, and the consumer the worker runs jobs
-  through. Every app that enqueues or runs jobs imports it.
+  `Jobs` handle a feature injects as `Arc<Jobs>`, and the consumer the worker
+  runs jobs through. Every app that enqueues or runs jobs imports it.
 - **`QueueModule`** — from `nest_rs::queue`, attaches the port's
   `QueueWorker` transport. At boot it discovers the reachable `#[process]`
   methods, runs each over the bound consumer, and drains them with the app.
@@ -417,7 +417,7 @@ The last two lines share the job's `trace_id`, and it is the producer's; the
 ## Reference
 
 - `crates/nest-rs-queue/` — the contract: `#[queue]`, `#[processor]`,
-  `#[process]`, `Queue`, `JobProducer`, `PushOptions`, `PushReceipt`,
+  `#[process]`, `Queue`, `Jobs`, `JobProducer`, `PushOptions`, `PushReceipt`,
   `Checkpoint`, `Capability`, and `QueueModule` with its `QueueWorker`.
 - `crates/nest-rs-redis/` — the Redis storage: `RedisModule` and its
   `RedisConnection`, `RedisQueueModule` with its `RedisQueueProducer` and the

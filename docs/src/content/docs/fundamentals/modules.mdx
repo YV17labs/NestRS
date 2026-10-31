@@ -295,8 +295,8 @@ opens once:
 - every `#[config]` a module reads;
 - the connections — `DatabaseConnection`, and `RedisConnection` once per
   [instance](/fundamentals/providers/#instances--one-resource-opened-twice);
-- the backend a binding plugs into a port — `dyn UnitOfWork`,
-  `dyn JobProducer`, `dyn ThrottlerStore`, `dyn OccurrenceLock` — and the
+- the backend a binding plugs into a port — `dyn UnitOfWork`, the queue's
+  `Jobs`, `dyn ThrottlerStore`, `dyn OccurrenceLock` — and the
   `ThrottlerGuard` over its store;
 - `JwtService` and `OAuthClient`;
 - the kernel's own: `AppLifecycle`, `ReachableProviders`, `ProviderOrder`

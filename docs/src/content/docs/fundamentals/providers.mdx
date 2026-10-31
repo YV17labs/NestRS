@@ -165,10 +165,10 @@ through, and for the unit of work that load runs in, which
 
 When the crate owning a missing dependency's type knows the line to add, the
 refusal says it in place of the generic one. A service injecting
-`Arc<dyn JobProducer>` in an app that binds no queue backend reads:
+`Arc<Jobs>` in an app that binds no queue backend reads:
 
 ```text frame="terminal"
-unmet dependency: `PostsService` (in module `PostsModule`) depends on `dyn JobProducer`, which no module this app imports provides. Import exactly one queue backend's binding — `nest_rs::redis::RedisQueueModule` binds the queue port over Redis.
+unmet dependency: `PostsService` (in module `PostsModule`) depends on `Jobs`, which no module this app imports provides. Import exactly one queue backend's binding — `nest_rs::redis::RedisQueueModule` binds the queue port over Redis.
 ```
 
 A crate of your own names one for a type it owns with

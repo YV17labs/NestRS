@@ -82,6 +82,30 @@ impl NestrsWorkspace {
         self.root.join("apps")
     }
 
+    /// Every app's name — a directory under `apps/` holding a `Cargo.toml` —
+    /// sorted; none when there is no `apps/`.
+    pub(crate) fn app_names(&self) -> CliResult<Vec<String>> {
+        let apps = self.apps_root();
+        let entries = match std::fs::read_dir(&apps) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(CliError::file(FileAction::List, &apps)(e)),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let path = entry
+                .map_err(CliError::file(FileAction::List, &apps))?
+                .path();
+            if path.join("Cargo.toml").is_file()
+                && let Some(name) = path.file_name().and_then(|name| name.to_str())
+            {
+                names.push(name.to_owned());
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
     /// `crates/migrations/src` — the SeaORM migration crate's source dir.
     pub(crate) fn migrations_root(&self) -> PathBuf {
         self.root.join("crates/migrations/src")

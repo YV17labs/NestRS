@@ -42,6 +42,10 @@ pub enum CliError {
     #[error("app `{name}` already exists at {path}")]
     AppExists { name: String, path: PathBuf },
 
+    /// `--app` named no app of the workspace.
+    #[error("no app `{name}` in this workspace — its apps: {apps}")]
+    AppNotFound { name: String, apps: String },
+
     #[error(
         "not inside a nestrs workspace (expected root Cargo.toml with members = [\"crates/*\", \"apps/*\"])"
     )]

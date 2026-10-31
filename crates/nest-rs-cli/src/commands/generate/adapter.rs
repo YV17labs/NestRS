@@ -22,7 +22,7 @@ use super::cargo::{
     graphql_port_deps,
 };
 use super::migration::{OUTBOX_MIGRATION, queue_framework_entry};
-use super::support::{finish, wire_into_app};
+use super::support::{Import, Wiring, data_layer, finish, wire_into_app, wiring_lines};
 use crate::commands::resolve_start;
 use crate::context::{Context, NestrsWorkspace};
 use crate::error::{CliError, CliResult, read_if_exists};
@@ -35,12 +35,15 @@ use crate::templates::adapter;
 pub(crate) struct AdapterOptions {
     pub name: String,
     pub path: Option<PathBuf>,
+    /// The app to wire into (`--app`).
+    pub app: Option<String>,
     pub dry_run: bool,
 }
 
 pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.clone().ok_or(CliError::NotNestrsWorkspace)?;
+    let target = ctx.target_app(opts.app.as_deref())?;
 
     crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
@@ -98,8 +101,9 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
             .with("posture_note", adapter::GATED_ON_SUBJECT)
     };
     let (handler_tmpl, module_tmpl) = templates_for(transport, crud_port);
-    // A `#[crud]` handler runs every call in a unit of work, so it wires only into
-    // an app binding one, as `g resource` does: an app without is refused at boot.
+    // A `#[crud]` handler runs every call in a unit of work, so the app gets the
+    // data layer beside it, as `g resource` writes it: an app without is refused at
+    // boot.
     let needs_unit_of_work = crud_port && matches!(transport, Transport::Http | Transport::Graphql);
     let mut s = Scaffold::new();
     s.create(dir.join(transport.handler_file()), r.render(handler_tmpl));
@@ -213,32 +217,31 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     port_lines.push(format!("pub use {}::{};", transport.folder(), tmodule));
     s.edit(feature_root.join("mod.rs"), ensure_lines(port_lines));
 
-    let use_path = format!("features::{}::{}", names.snake, tmodule);
-    let mut imports = vec![(use_path.as_str(), tmodule.as_str())];
-    if scaffolded_auth {
-        imports.extend(auth::app_imports());
+    // The edge, and what it runs on that the app's root chooses: the data layer
+    // under a `#[crud]` handler, a queue's backend, the token route of the auth
+    // adapter this run wrote.
+    let edge = Import::new(format!("features::{}::{}", names.snake, tmodule));
+    let mut beside = Vec::new();
+    if needs_unit_of_work {
+        beside.extend(data_layer());
     }
-    let wired_app = wire_into_app(
-        &ctx,
-        &mut s,
-        &imports,
-        needs_unit_of_work.then_some("SeaOrmDatabaseModule"),
-    )?;
-    // Read before the edit lands: the app's own binding of a queue backend.
-    let backend_bound = match wired_app.as_deref() {
-        Some(module_rs) if transport == Transport::Queue => {
-            read_if_exists(module_rs)?.is_some_and(|src| src.contains("RedisQueueModule"))
-        }
-        _ => false,
-    };
-    // The app crate needs the crate owning the binding its next step names, or
-    // that step fails with `E0433`.
+    if transport == Transport::Queue {
+        beside.extend(queue_backend());
+    }
+    if scaffolded_auth {
+        beside.push(auth::app_import());
+    }
+    let imports: Vec<Import> = std::iter::once(edge.clone())
+        .chain(beside.iter().cloned())
+        .collect();
+    let wiring = wire_into_app(&target, &mut s, &imports)?;
+    // The app crate needs the crate owning the binding it now names, or its
+    // build fails with `E0433`.
     let host_deps = app_host_deps(transport);
-    if wired_app.is_some()
+    if let Wiring::Wired { root, .. } = &wiring
         && !host_deps.is_empty()
-        && let Some(app) = ctx.current_app.as_ref()
     {
-        s.edit(app.join("Cargo.toml"), ensure_features_deps(host_deps));
+        s.edit(root.join("Cargo.toml"), ensure_features_deps(host_deps));
     }
 
     finish(
@@ -255,13 +258,12 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         }
     });
     print_next_steps(
-        &ctx,
         transport,
         &names,
-        Wiring {
-            wired: wired_app.is_some(),
-            backend_bound,
-            needs_unit_of_work,
+        Placed {
+            wiring: &wiring,
+            edge: &edge,
+            beside: &beside,
         },
         authz,
         grant,
@@ -324,8 +326,14 @@ pub(crate) fn runtime_vars(transport: Transport) -> (String, String) {
 }
 
 /// What an app binds at its root to run a queue adapter's jobs: the backend
-/// is the composition's choice, so no adapter imports it.
-const QUEUE_BACKEND: &str = "nest_rs::redis::RedisModule and nest_rs::redis::RedisQueueModule";
+/// is the composition's choice, so no adapter imports it, and the generator
+/// writes it into the root that has none.
+fn queue_backend() -> [Import; 2] {
+    [
+        Import::new("nest_rs::redis::RedisModule"),
+        Import::new("nest_rs::redis::RedisQueueModule"),
+    ]
+}
 
 /// What a generated GraphQL or MCP adapter waits for in `authz/ability.rs`,
 /// its subject named by the path that resolves there.
@@ -336,65 +344,27 @@ enum Grant {
     EveryAction(String),
 }
 
-/// What the next steps cannot derive from the transport: whether the adapter
-/// was wired into the current app, whether that app binds a queue backend, and
-/// whether serving it needs the app's unit-of-work binding.
-struct Wiring {
-    wired: bool,
-    backend_bound: bool,
-    needs_unit_of_work: bool,
+/// Where the adapter went: the wiring, the edge, and what was written or is to
+/// be written beside it.
+struct Placed<'a> {
+    wiring: &'a Wiring,
+    edge: &'a Import,
+    beside: &'a [Import],
 }
 
 fn print_next_steps(
-    ctx: &Context,
     transport: Transport,
     names: &Names,
-    wiring: Wiring,
+    placed: Placed<'_>,
     authz: Option<&'static auth::AuthzAdapter>,
     grant: Option<Grant>,
 ) {
-    let Wiring {
-        wired,
-        backend_bound,
-        needs_unit_of_work,
-    } = wiring;
-    let tmodule = names.module_for(transport);
     println!();
     println!("Next steps:");
-    if wired {
-        println!("  {tmodule} is wired into the current app, and imports what serves it.");
-    } else if ctx.current_app.is_some() && needs_unit_of_work {
-        println!(
-            "  Add `SeaOrmModule` and `SeaOrmDatabaseModule` to this app, then \
-             import `features::{}::{}`: it imports what serves it.",
-            names.snake, tmodule,
-        );
-    } else if ctx.current_app.is_some() {
-        println!(
-            "  Import `features::{}::{}` in this app: it imports what serves it.",
-            names.snake, tmodule,
-        );
-    } else if needs_unit_of_work {
-        println!(
-            "  Import `features::{}::{}` in an app that has `SeaOrmDatabaseModule`: it \
-             imports what serves it.",
-            names.snake, tmodule,
-        );
-    } else {
-        println!(
-            "  Import `features::{}::{}` in the app that serves it: it imports what serves it.",
-            names.snake, tmodule,
-        );
+    for line in wiring_lines(placed.wiring, placed.edge, placed.beside) {
+        println!("  {line}");
     }
     if transport == Transport::Queue {
-        if !wired {
-            println!("  The app importing it binds a queue backend at its root: {QUEUE_BACKEND}.");
-        } else if !backend_bound {
-            println!(
-                "  The app binds no queue backend yet: import {QUEUE_BACKEND} at its root, \
-                 where the backend is chosen, so its worker has one to consume."
-            );
-        }
         println!(
             "  Push from a provider injecting Arc<nest_rs::queue::Jobs>: \
              `jobs.push({}, job)`. The app that pushes imports \

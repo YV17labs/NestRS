@@ -839,21 +839,20 @@ fn every_adapter_imports_the_modules_that_serve_its_edge() {
     }
 }
 
-/// The queue backend is the app's choice, so `g queue` names its binding when
-/// the app binds none, and only then.
+/// The queue backend is chosen at the app's root, so `g queue` writes its
+/// binding there when the app binds none, and leaves a root that binds one as
+/// it is.
 #[test]
-fn generate_queue_names_the_backend_binding_only_when_the_app_binds_none() {
-    const UNBOUND: &str = "binds no queue backend";
-
+fn generate_queue_writes_the_backend_binding_only_when_the_app_binds_none() {
     for bound in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         write_fake_workspace(dir.path());
         let app = write_fake_app(dir.path(), "worker");
+        let module_rs = app.join("src/module.rs");
         if bound {
-            let module_rs = app.join("src/module.rs");
             let source = fs::read_to_string(&module_rs).unwrap().replace(
                 "        HttpModule,",
-                "        HttpModule,\n        RedisQueueModule,",
+                "        HttpModule,\n        RedisModule::for_root(redis()),\n        RedisQueueModule,",
             );
             fs::write(&module_rs, source).unwrap();
         }
@@ -862,10 +861,26 @@ fn generate_queue_names_the_backend_binding_only_when_the_app_binds_none() {
         run_ok(dir.path(), &["g", "feature", "audio", "-p", root]);
         let printed = run_ok(&app, &["g", "queue", "audio"]);
 
+        let module = fs::read_to_string(&module_rs).unwrap();
+        assert!(module.contains("        AudioQueueModule,"), "{module}");
+        for ident in ["RedisModule", "RedisQueueModule"] {
+            assert_eq!(
+                module
+                    .matches(&format!("use nest_rs::redis::{ident};"))
+                    .count(),
+                usize::from(!bound),
+                "the binding is written only where the app has none: {module}",
+            );
+            assert_eq!(
+                module.matches(ident).count(),
+                if bound { 1 } else { 2 },
+                "listed once: {module}",
+            );
+        }
         assert_eq!(
-            printed.contains(UNBOUND),
+            printed.contains("beside RedisModule and RedisQueueModule"),
             !bound,
-            "the binding is named only where the app has none: {printed}",
+            "the run says what it wrote beside the adapter: {printed}",
         );
         let app_cargo = fs::read_to_string(app.join("Cargo.toml")).unwrap();
         assert!(
@@ -976,10 +991,11 @@ fn generate_ws_over_a_feature_port_guards_the_upgrade_and_bootstraps_its_auth() 
 
 /// A `#[crud]` controller or resolver runs each call in the unit of work
 /// `SeaOrmDatabaseModule` binds, and an app without it is refused at boot: over
-/// a CRUD port, `g http` and `g graphql` wire only into an app importing the
-/// binding, as `g resource` does, and otherwise name it in the next step.
+/// a CRUD port, `g http` and `g graphql` write the data layer beside the
+/// adapter into an app that has none, as `g resource` does, and leave one that
+/// has it as it is.
 #[test]
-fn a_crud_adapter_is_wired_only_into_an_app_binding_the_unit_of_work() {
+fn a_crud_adapter_brings_the_data_layer_into_an_app_without_one() {
     for (transport, module) in [
         ("http", "PostsHttpModule"),
         ("graphql", "PostsGraphqlModule"),
@@ -1008,15 +1024,21 @@ fn a_crud_adapter_is_wired_only_into_an_app_binding_the_unit_of_work() {
             let printed = run_ok(&app, &["g", transport, "posts"]);
 
             let composed = fs::read_to_string(&module_rs).unwrap();
-            assert_eq!(
-                composed.contains(module),
-                bound,
-                "`g {transport}` wires {module} only beside the binding: {composed}"
+            assert!(
+                composed.contains(&format!("        {module},")),
+                "`g {transport}` wires {module}: {composed}"
             );
+            for ident in ["SeaOrmModule", "SeaOrmDatabaseModule"] {
+                assert_eq!(
+                    composed.matches(&format!("        {ident},")).count(),
+                    1,
+                    "the data layer is listed once: {composed}"
+                );
+            }
             assert_eq!(
-                printed.contains("Add `SeaOrmModule` and `SeaOrmDatabaseModule` to this app"),
+                printed.contains("beside SeaOrmModule, SeaOrmDatabaseModule"),
                 !bound,
-                "the next step names the binding the app lacks: {printed}"
+                "the run says what it wrote beside the adapter: {printed}"
             );
         }
     }

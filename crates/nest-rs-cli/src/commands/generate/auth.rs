@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 
 use super::cargo::{auth_deps, ensure_features_deps, ensure_workspace_deps};
-use super::support::{finish, wire_into_app};
+use super::support::{Import, Wiring, finish, wire_into_app, wiring_lines};
 use crate::commands::resolve_start;
 use crate::context::{Context, NestrsWorkspace};
 use crate::error::{CliError, CliResult};
@@ -21,12 +21,15 @@ use crate::templates::auth;
 
 pub(crate) struct AuthOptions {
     pub path: Option<PathBuf>,
+    /// The app to wire into (`--app`).
+    pub app: Option<String>,
     pub dry_run: bool,
 }
 
 pub(crate) fn run(opts: AuthOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.clone().ok_or(CliError::NotNestrsWorkspace)?;
+    let target = ctx.target_app(opts.app.as_deref())?;
 
     if exists(&ws) {
         return Err(CliError::Anyhow(anyhow::anyhow!(
@@ -43,10 +46,11 @@ pub(crate) fn run(opts: AuthOptions) -> CliResult<()> {
     );
     s.edit(ws.features_cargo(), ensure_features_deps(auth_deps()));
     s.edit(ws.features_lib(), ensure_lines(lib_decls()));
-    let wired_app = wire(&ctx, &mut s)?;
+    let edge = app_import();
+    let wiring = wire_into_app(&target, &mut s, std::slice::from_ref(&edge))?;
 
     finish(s, opts.dry_run, &ws.root, "the auth adapter")?;
-    print_next_steps(&secrets, wired_app.is_some());
+    print_next_steps(&secrets, &wiring, &edge);
     Ok(())
 }
 
@@ -274,19 +278,15 @@ pub(super) fn print_bootstrapped(secrets: &Secrets) {
     println!();
     println!("It includes `POST /auth/dev-token`, which mints a token with no credential so");
     println!("your guarded routes are callable at once. It refuses to boot outside");
-    println!("development and test. Import `features::authn::AuthnHttpModule` to serve it,");
-    println!("or delete `crates/features/src/authn/http/` and write the real login route.");
+    println!("development and test: delete `crates/features/src/authn/http/`, and its");
+    println!("`AuthnHttpModule` import, when you write the real login route.");
 }
 
 /// The app import `g auth` wires: the development token route, the one edge it
 /// serves. The authn and authz ports reach the app through every adapter that
 /// binds their guards, which imports them where the access graph checks it.
-pub(super) fn app_imports() -> [(&'static str, &'static str); 1] {
-    [("features::authn::AuthnHttpModule", "AuthnHttpModule")]
-}
-
-fn wire(ctx: &Context, s: &mut Scaffold) -> CliResult<Option<PathBuf>> {
-    wire_into_app(ctx, s, &app_imports(), None)
+pub(super) fn app_import() -> Import {
+    Import::new("features::authn::AuthnHttpModule")
 }
 
 pub(super) fn exists(ws: &NestrsWorkspace) -> bool {
@@ -418,20 +418,16 @@ static MCP_AUTHZ: AuthzAdapter = AuthzAdapter {
     written_by_g_auth: false,
 };
 
-fn print_next_steps(secrets: &Secrets, wired: bool) {
+fn print_next_steps(secrets: &Secrets, wiring: &Wiring, edge: &Import) {
     println!();
     println!("Next steps:");
     println!("  1. Add your rules in `crates/features/src/authz/ability.rs` — nothing is");
     println!("     granted until you do, so guarded routes answer 403.");
-    if wired {
-        println!("  2. AuthnHttpModule is wired into the current app; every adapter binding the");
-        println!("     guards imports AuthnModule or AuthzModule itself.");
-    } else {
-        println!("  2. Import `features::authn::AuthnHttpModule` in your app's `module.rs`;");
-        println!(
-            "     every adapter binding the guards imports AuthnModule or AuthzModule itself."
-        );
+    for (i, line) in wiring_lines(wiring, edge, &[]).iter().enumerate() {
+        let lead = if i == 0 { "  2. " } else { "     " };
+        println!("{lead}{line}");
     }
+    println!("     Every adapter binding the guards imports AuthnModule or AuthzModule itself.");
     println!("  3. `POST /auth/dev-token` mints a bearer token to call your guarded routes");
     println!("     with. It refuses to boot outside development and test — delete");
     println!("     `crates/features/src/authn/http/` when you write the real login.");

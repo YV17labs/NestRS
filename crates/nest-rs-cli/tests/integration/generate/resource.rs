@@ -116,24 +116,45 @@ fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
     }
 }
 
-// `g resource` bootstrapping the adapter owes the composition site the same
-// entries.
+/// Run from the workspace root of a one-app workspace, `g resource` writes
+/// every import its code needs into that app, in one edit: the edge, the data
+/// layer, and the token route of the auth adapter it bootstrapped — and none
+/// the adapters bring.
 #[test]
-fn generate_resource_wires_the_auth_roots_it_bootstrapped() {
+fn generate_resource_from_the_root_wires_everything_its_code_needs() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let app = write_fake_app(dir.path(), "api");
     let module_rs = app.join("src/module.rs");
-    let with_db = fs::read_to_string(&module_rs).unwrap().replace(
-        "    ],",
-        "        SeaOrmModule,\n        SeaOrmDatabaseModule,\n    ],",
-    );
-    fs::write(&module_rs, with_db).unwrap();
 
-    run_ok(&app, &["g", "resource", "posts"]);
+    let printed = run_ok(
+        dir.path(),
+        &["g", "resource", "posts", "-p", dir.path().to_str().unwrap()],
+    );
 
     let module = fs::read_to_string(&module_rs).unwrap();
-    assert!(module.contains("PostsHttpModule,"), "{module}");
+    for (use_path, ident) in [
+        ("features::posts::PostsHttpModule", "PostsHttpModule"),
+        ("nest_rs::seaorm::SeaOrmModule", "SeaOrmModule"),
+        (
+            "nest_rs::seaorm::SeaOrmDatabaseModule",
+            "SeaOrmDatabaseModule",
+        ),
+        ("features::authn::AuthnHttpModule", "AuthnHttpModule"),
+    ] {
+        assert!(
+            module.contains(&format!("use {use_path};"))
+                && module.contains(&format!("        {ident},")),
+            "the app imports {ident}: {module}"
+        );
+    }
+    assert!(
+        printed.contains(
+            "PostsHttpModule is wired into `api`, beside SeaOrmModule, SeaOrmDatabaseModule \
+             and AuthnHttpModule."
+        ),
+        "{printed}"
+    );
     for ident in ["AuthnModule", "AuthzModule"] {
         assert!(
             !module.contains(&format!("{ident},")),
@@ -219,4 +240,97 @@ fn a_resource_whose_table_takes_the_nestrs_prefix_is_refused() {
             "`{name}`: nothing is written"
         );
     }
+}
+
+/// An app already importing the data layer — pinned, here — keeps its own
+/// import: the generator writes only what the root does not name.
+#[test]
+fn generate_resource_leaves_a_pinned_data_layer_as_it_is() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let app = write_fake_app(dir.path(), "api");
+    let module_rs = app.join("src/module.rs");
+    let pinned = fs::read_to_string(&module_rs).unwrap().replace(
+        "    ],",
+        "        SeaOrmModule::for_root(database()),\n        SeaOrmDatabaseModule,\n    ],",
+    );
+    fs::write(&module_rs, pinned).unwrap();
+
+    run_ok(&app, &["g", "resource", "posts"]);
+
+    let module = fs::read_to_string(&module_rs).unwrap();
+    assert_eq!(module.matches("SeaOrmModule").count(), 1, "{module}");
+    assert_eq!(
+        module.matches("SeaOrmDatabaseModule").count(),
+        1,
+        "{module}"
+    );
+    assert!(module.contains("        PostsHttpModule,"), "{module}");
+}
+
+/// With several apps and none named, the generator writes the feature and
+/// wires nothing, listing the apps and every import to write; `--app` names
+/// the one, and a name no app answers to is refused before anything is
+/// written.
+#[test]
+fn generate_resource_in_a_workspace_of_several_apps_wires_the_named_one() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let hello = write_fake_app(dir.path(), "hello");
+    let blog = write_fake_app(dir.path(), "blog");
+    let root = dir.path().to_str().unwrap();
+    let untouched = fs::read_to_string(hello.join("src/module.rs")).unwrap();
+
+    let before = files_under(dir.path());
+    let refused = run_err(
+        dir.path(),
+        &["g", "resource", "posts", "-p", root, "--app", "ghost"],
+    );
+    assert!(
+        refused.contains("no app `ghost` in this workspace — its apps: blog, hello"),
+        "{refused}"
+    );
+    assert_eq!(
+        files_under(dir.path()),
+        before,
+        "a refused run writes nothing"
+    );
+
+    let printed = run_ok(dir.path(), &["g", "resource", "posts", "-p", root]);
+    assert!(
+        printed.contains("Not wired: this workspace has several apps (blog, hello)"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains(
+            "Import `features::posts::PostsHttpModule`, `nest_rs::seaorm::SeaOrmModule`, \
+             `nest_rs::seaorm::SeaOrmDatabaseModule` and `features::authn::AuthnHttpModule` \
+             in the one that serves it"
+        ),
+        "{printed}"
+    );
+    for app in [&hello, &blog] {
+        assert_eq!(
+            fs::read_to_string(app.join("src/module.rs")).unwrap(),
+            untouched,
+            "no app is wired"
+        );
+    }
+
+    run_ok(dir.path(), &["g", "feature", "notes", "-p", root]);
+    let printed = run_ok(
+        dir.path(),
+        &["g", "http", "notes", "-p", root, "--app", "blog"],
+    );
+    assert!(
+        printed.contains("NotesHttpModule is wired into `blog`."),
+        "{printed}"
+    );
+    let composed = fs::read_to_string(blog.join("src/module.rs")).unwrap();
+    assert!(composed.contains("        NotesHttpModule,"), "{composed}");
+    assert_eq!(
+        fs::read_to_string(hello.join("src/module.rs")).unwrap(),
+        untouched,
+        "only the named app is wired"
+    );
 }

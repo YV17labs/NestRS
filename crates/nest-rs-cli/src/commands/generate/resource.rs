@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use super::auth;
 use super::cargo::{auth_deps, ensure_features_deps, ensure_workspace_deps, resource_deps};
 use super::migration::refuse_reserved;
-use super::support::{finish, wire_into_app};
+use super::support::{Import, Wiring, data_layer, finish, wire_into_app, wiring_lines};
 use crate::commands::resolve_start;
 use crate::context::Context;
 use crate::error::{CliError, CliResult};
@@ -21,12 +21,15 @@ use crate::templates::resource;
 pub(crate) struct ResourceOptions {
     pub name: String,
     pub path: Option<PathBuf>,
+    /// The app to wire into (`--app`).
+    pub app: Option<String>,
     pub dry_run: bool,
 }
 
 pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.clone().ok_or(CliError::NotNestrsWorkspace)?;
+    let target = ctx.target_app(opts.app.as_deref())?;
 
     crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
@@ -78,15 +81,21 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
     s.edit(ws.features_cargo(), ensure_features_deps(deps));
     s.edit(ws.features_lib(), ensure_lines(decls));
 
-    // Only into an app with a DB: the resource module needs
-    // `SeaOrmDatabaseModule` at boot.
-    let use_path = format!("features::{}::{}", names.snake, names.http_module());
-    let http_module = names.http_module();
-    let mut imports = vec![(use_path.as_str(), http_module.as_str())];
+    // The edge, the data layer every `#[crud]` route runs its unit of work on,
+    // and the token route of the auth adapter this run wrote.
+    let edge = Import::new(format!(
+        "features::{}::{}",
+        names.snake,
+        names.http_module()
+    ));
+    let mut beside = data_layer().to_vec();
     if scaffolded_auth {
-        imports.extend(auth::app_imports());
+        beside.push(auth::app_import());
     }
-    let wired_app = wire_into_app(&ctx, &mut s, &imports, Some("SeaOrmDatabaseModule"))?;
+    let imports: Vec<Import> = std::iter::once(edge.clone())
+        .chain(beside.iter().cloned())
+        .collect();
+    let wiring = wire_into_app(&target, &mut s, &imports)?;
 
     finish(
         s,
@@ -94,14 +103,15 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
         &ws.root,
         &format!("resource `{}`", names.snake),
     )?;
-    print_next_steps(&ctx, &names, wired_app, bootstrapped.as_ref());
+    print_next_steps(&names, &wiring, &edge, &beside, bootstrapped.as_ref());
     Ok(())
 }
 
 fn print_next_steps(
-    ctx: &Context,
     names: &Names,
-    wired_app: Option<PathBuf>,
+    wiring: &Wiring,
+    edge: &Import,
+    beside: &[Import],
     bootstrapped: Option<&auth::Secrets>,
 ) {
     let snake = &names.snake;
@@ -114,24 +124,9 @@ fn print_next_steps(
     println!();
     println!("       ab.can(nest_rs::authz::Action::Manage, crate::{snake}::Entity);");
     println!();
-    if wired_app.is_some() {
-        println!(
-            "  3. {} is wired into the current app.",
-            names.http_module()
-        );
-    } else if ctx.current_app.is_some() {
-        println!(
-            "  3. Add `SeaOrmModule` and `SeaOrmDatabaseModule` to this app, then import \
-             `features::{}::{}`.",
-            snake,
-            names.http_module()
-        );
-    } else {
-        println!(
-            "  3. Import `features::{}::{}` in an app that has `SeaOrmDatabaseModule`.",
-            snake,
-            names.http_module()
-        );
+    for (i, line) in wiring_lines(wiring, edge, beside).iter().enumerate() {
+        let lead = if i == 0 { "  3. " } else { "     " };
+        println!("{lead}{line}");
     }
     println!("  4. Add transports:  nestrs g graphql|ws {}", names.kebab);
     if let Some(secrets) = bootstrapped {

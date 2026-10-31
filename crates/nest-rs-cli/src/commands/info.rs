@@ -8,7 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::context::{
-    Context, DEFAULT_ENV_PREFIX, ENV_PREFIX_VAR, EnvPrefixSource, NestrsWorkspace, framework_pin,
+    Context, DEFAULT_ENV_PREFIX, ENV_PREFIX_VAR, EnvPrefixSource, NestrsWorkspace, TargetApp,
+    framework_pin,
 };
 use crate::error::{CliError, CliResult, FileAction};
 
@@ -44,10 +45,15 @@ fn print_workspace(ws: &NestrsWorkspace, ctx: &Context, here: &Path) -> CliResul
     row("Framework", &framework_line(&ws.root)?);
     row("Apps", &list(&dir_names(&ws.apps_root())?));
     row("Features", &list(&dir_names(&ws.features_root())?));
-    // Which app a generator would wire into.
-    if let Some(app) = ctx.current_app.as_ref().and_then(|app| app.file_name()) {
-        row("Current app", &app.to_string_lossy());
-    }
+    // Which app a generator run here, naming none, wires into.
+    let wires_into = match ctx.target_app(None)? {
+        TargetApp::App { name, .. } => name,
+        TargetApp::NoApp => "none — no app yet".to_owned(),
+        TargetApp::Unchosen(_) => {
+            "none — several apps: a generator takes `--app <name>`".to_owned()
+        }
+    };
+    row("Wires into", &wires_into);
     Ok(())
 }
 

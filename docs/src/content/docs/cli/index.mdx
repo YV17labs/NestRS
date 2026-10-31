@@ -222,12 +222,15 @@ nestrs run start hello        # build + run in release
 ## Generate features and adapters
 
 Generators scaffold under `crates/features/src/<name>/`, register
-`pub mod …` in `crates/features/src/lib.rs`, and — when you run them from inside
-an app — wire the edge module into that app's `module.rs`. Every command takes
-**`--dry-run`** (print what would change, write nothing) and a **`-p`** path
-override (default: auto-discover from the current directory). Re-running a
-generator is safe: it refuses to overwrite an existing feature or adapter, and
-the wiring edits are idempotent.
+`pub mod …` in `crates/features/src/lib.rs`, and wire what they wrote into the
+app that serves it, from wherever in the workspace you run them. That app is
+the one **`--app <name>`** names, else the one your directory is in, else the
+workspace's only app; with several apps and none named, the generator writes
+the feature, wires nothing, and lists the apps and the imports to write. Every
+command takes **`--dry-run`** (print what would change, write nothing) and a
+**`-p`** path override (default: auto-discover from the current directory).
+Re-running a generator is safe: it refuses to overwrite an existing feature or
+adapter, and the wiring edits are idempotent.
 
 A **port** is the transport-agnostic core (service + module). An **adapter**
 bolts one transport onto a port. A **resource** is a DB-backed CRUD port plus its
@@ -277,7 +280,7 @@ nestrs g events posts      # event listener, with its event at the port
 
 `g graphql`, `g ws` and `g mcp` also write that transport's **authz module**
 under `crates/features/src/authz/` when the workspace has a policy to enforce,
-and wire it into the app. It is not optional wiring: `/graphql` and `/mcp` run
+and the adapter imports it. It is not optional wiring: `/graphql` and `/mcp` run
 the guards a module declares at their request, so without it `/mcp` denies
 every call and `/graphql` runs operations with no ability attached. A gateway's
 module brings the guards whose ability crosses the connection and scopes its
@@ -301,26 +304,21 @@ any adapter compiles immediately — the handler is the seam you fill in. Its
 `module.rs` imports what serves its edge (`HttpModule`, `GraphqlModule`,
 `WsModule`, `QueueModule`, `ScheduleModule`), so an app importing the adapter
 serves it and imports nothing more; `g events` imports `EventsModule` into the
-port that emits. The app's root keeps only the bindings it chooses. The queue's
-backend is one: `g queue` names `RedisModule` and
-`RedisQueueModule` when the app binds none. The unit of work is the other: a
-`#[crud]` handler — `g resource`'s controller, `g http` or `g graphql` over a
-resource port — runs each call in the unit of work `SeaOrmDatabaseModule`
-binds, and an app without that binding is refused at boot, so the generator
-wires it only into an app that imports the binding, and elsewhere names the
-binding beside the import.
+port that emits. The app's root keeps only the bindings it chooses, and the
+generator writes them there, in the same edit as the adapter, when the root has
+none. The queue's backend is one: `g queue` writes `RedisModule` and
+`RedisQueueModule`. The data layer is the other: a `#[crud]` handler —
+`g resource`'s controller, `g http` or `g graphql` over a resource port — runs
+each call in the unit of work `SeaOrmDatabaseModule` binds over the pool
+`SeaOrmModule` opens, so the generator writes both. A root already naming one —
+bare, pinned with `for_root`, or a named instance — keeps its own line. And the
+auth adapter's token route: a generator that wrote the adapter on the way
+writes `AuthnHttpModule`.
 
-When the cursor isn't inside an app, wire the edge module by hand:
-
-```rust title="apps/api/src/module.rs"
-use features::posts::PostsHttpModule;
-use nest_rs::core::module;
-
-#[module(imports = [
-    // …
-    PostsHttpModule,
-])]
-pub struct ApiModule;
+```text frame="terminal"
+$ nestrs g resource posts --app blog
+…
+  3. PostsHttpModule is wired into `blog`, beside SeaOrmModule, SeaOrmDatabaseModule and AuthnHttpModule.
 ```
 
 ### Why `g resource` is guarded
@@ -525,7 +523,8 @@ nestrs update --from-path
 | `nestrs g migration <name>` | SeaORM migration, registered in `lib.rs` and `migrator.rs`; `nestrs_outbox` registers the framework's own |
 | `nestrs g http\|graphql\|ws\|queue\|schedule\|mcp <name>` | Add one transport adapter to a port |
 
-Every generator accepts **`--dry-run`** and **`-p <path>`**.
+Every generator accepts **`--dry-run`** and **`-p <path>`**; the ones that wire
+an app (`resource`, `auth` and the adapters) also take **`--app <name>`**.
 Aliases: **`nestrs g`** = **`nestrs generate`**.
 **All of them require a workspace**, which is what `nestrs new` writes.
 
@@ -592,7 +591,8 @@ and app once yours is serving.
 `crates/migrations/` and `crates/seed/` come from `nestrs new`, so the database
 verbs and `g migration` work from the first `nestrs run db up`. From here
 every generator is available: `nestrs g http <feature>` and its siblings wire
-themselves into the app whose directory you are standing in.
+themselves into the app whose directory you are standing in, or the one
+`--app` names.
 
 ## Going further
 

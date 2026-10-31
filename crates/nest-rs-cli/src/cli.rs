@@ -169,6 +169,27 @@ pub struct GenTarget {
     pub dry_run: bool,
 }
 
+/// What a generator wiring its output into an app takes: [`GenTarget`]'s,
+/// plus the app.
+#[derive(Args, Debug)]
+pub struct WiredTarget {
+    /// Name (e.g. `posts`).
+    pub name: String,
+
+    /// Workspace root or working directory (default: auto-discover from cwd).
+    #[arg(long, short = 'p')]
+    pub path: Option<PathBuf>,
+
+    /// App to wire it into (default: the app the working directory is in, else
+    /// the workspace's only app).
+    #[arg(long, value_name = "APP")]
+    pub app: Option<String>,
+
+    /// Print what would be written without touching the filesystem.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
 /// `g entity` takes a two-part target: the feature it joins, and — when the
 /// feature's own singular is not the entity's name — the entity itself. A
 /// struct of its own rather than [`GenTarget`] so `--help` spells that grammar
@@ -195,6 +216,11 @@ pub struct AuthTarget {
     #[arg(long, short = 'p')]
     pub path: Option<PathBuf>,
 
+    /// App to serve its token route (default: the app the working directory is
+    /// in, else the workspace's only app).
+    #[arg(long, value_name = "APP")]
+    pub app: Option<String>,
+
     /// Print what would be written without touching the filesystem.
     #[arg(long)]
     pub dry_run: bool,
@@ -205,7 +231,7 @@ pub enum GenerateCommand {
     /// A transport-agnostic port (mod + module + service).
     Feature(GenTarget),
     /// A DB-backed CRUD slice (entity + CrudService + guarded HTTP adapter).
-    Resource(GenTarget),
+    Resource(WiredTarget),
     /// One `#[expose]` entity in an existing feature, without the CRUD slice.
     ///
     /// Placement follows the feature: its first entity is the lone `entity.rs`,
@@ -219,19 +245,19 @@ pub enum GenerateCommand {
     /// framework's own, in migrator.rs alone).
     Migration(GenTarget),
     /// Add an HTTP controller adapter to an existing feature.
-    Http(GenTarget),
+    Http(WiredTarget),
     /// Add a GraphQL resolver adapter to an existing feature.
-    Graphql(GenTarget),
+    Graphql(WiredTarget),
     /// Add a WebSocket gateway adapter to an existing feature.
-    Ws(GenTarget),
+    Ws(WiredTarget),
     /// Add a queue processor adapter to an existing feature.
-    Queue(GenTarget),
+    Queue(WiredTarget),
     /// Add a scheduled-tasks adapter to an existing feature.
-    Schedule(GenTarget),
+    Schedule(WiredTarget),
     /// Add an MCP tool adapter to an existing feature.
-    Mcp(GenTarget),
+    Mcp(WiredTarget),
     /// Add an event listener adapter to an existing feature.
-    Events(GenTarget),
+    Events(WiredTarget),
 }
 
 pub fn run(cli: Cli) -> CliResult<()> {
@@ -300,6 +326,7 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
         Resource(t) => commands::run_resource(commands::ResourceOptions {
             name: t.name,
             path: t.path,
+            app: t.app,
             dry_run: t.dry_run,
         }),
         Entity(t) => commands::run_entity(commands::EntityOptions {
@@ -309,6 +336,7 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
         }),
         Auth(t) => commands::run_auth(commands::AuthOptions {
             path: t.path,
+            app: t.app,
             dry_run: t.dry_run,
         }),
         Migration(t) => commands::run_migration(commands::MigrationOptions {
@@ -326,12 +354,13 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
     }
 }
 
-fn adapter(transport: Transport, t: GenTarget) -> CliResult<()> {
+fn adapter(transport: Transport, t: WiredTarget) -> CliResult<()> {
     commands::run_adapter(
         transport,
         commands::AdapterOptions {
             name: t.name,
             path: t.path,
+            app: t.app,
             dry_run: t.dry_run,
         },
     )

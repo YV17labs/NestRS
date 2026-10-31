@@ -27,7 +27,7 @@ fn info_reports_the_workspace_the_cursor_stands_in() {
         stdout.contains("Features:") && stdout.contains("posts"),
         "{stdout}",
     );
-    assert!(stdout.contains("Current app:"), "{stdout}");
+    assert!(stdout.contains("Wires into:    api"), "{stdout}");
     assert!(stdout.contains("Env prefix:"), "{stdout}");
     assert!(stdout.contains("Toolchain:"), "{stdout}");
 }
@@ -95,4 +95,21 @@ fn info_is_listed_in_help() {
 
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("info"));
+}
+
+/// From the root of a workspace of two apps, `info` says a generator wires into
+/// none until one is named.
+#[test]
+fn info_says_a_generator_at_the_root_of_two_apps_needs_one_named() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_app(dir.path(), "api");
+    write_fake_app(dir.path(), "blog");
+
+    let stdout = run_ok(dir.path(), &["info"]);
+
+    assert!(
+        stdout.contains("Wires into:    none — several apps: a generator takes `--app <name>`"),
+        "{stdout}"
+    );
 }

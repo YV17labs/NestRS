@@ -72,10 +72,13 @@ Sub-crates are compilation units, not the install surface. A capability ships
 with all of this, or it is not shipped:
 
 1. An umbrella feature pulling everything its decorators emit, and
-   `pub use nest_rs_<x> as <x>;`. A feature an attribute pulls in rather
-   than a decorator (`#[authorize]` → `authz`) is a row of codegen's crate
-   table naming that attribute and a `__requires_<feature>` pair in the
-   umbrella, so a build without it is told which feature to add.
+   `pub mod <x> { pub use nest_rs_<x>::*; }` — a module, never
+   `pub use nest_rs_<x> as <x>;`, which rustc prints as `nest_rs::nest_rs_<x>`
+   in every diagnostic. A feature an attribute pulls in rather than a
+   decorator (`#[authorize]` → `authz`) is a row of codegen's crate table
+   naming that attribute and a `__requires_<feature>` pair in the umbrella,
+   one link of the chain that tells a build without it, in one error naming
+   the attribute the developer wrote, every feature to add.
 2. `cargo add nest-rs --features <x>` in the crate README and the docs page's
    `## Install`.
 3. Every derive its decorators emit routed through the surface crate with its

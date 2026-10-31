@@ -103,7 +103,10 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// (`nest_rs_authz::graphql::masked_value_for`) over what it returned.
 #[proc_macro_attribute]
 pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(resolver::operations(args, input).into()).into()
+    ::nest_rs_codegen::__private::reroot_impl_half(args.into(), |args| {
+        resolver::operations(args.into(), input).into()
+    })
+    .into()
 }
 
 /// Generates the CRUD operations of a resolver; it stands in for
@@ -141,7 +144,7 @@ pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
 /// then the whole block re-emitted under `#[operations]`.
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(crud::entry(args, input).into()).into()
+    ::nest_rs_codegen::__private::reroot_as("`#[crud]`", crud::entry(args, input).into()).into()
 }
 
 /// Each method `async fn name(&self, keys: &[K]) -> HashMap<K, V>` (or

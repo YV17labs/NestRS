@@ -219,23 +219,27 @@ pub mod storage {
 }
 
 // What codegen appends after an expansion reaching a feature an attribute
-// pulls in (`#[authorize]`, `#[crud]`), with the sentence naming it. Written
-// out pair by pair: a `#[macro_export]` a macro produces is unreachable by an
-// absolute path inside its own crate.
+// pulls in (`#[authorize]`, `#[crud]`): one chain per expansion, each link
+// adding its feature when this build lacks it, the last saying one sentence
+// for them all. Written out pair by pair: a `#[macro_export]` a macro produces
+// is unreachable by an absolute path inside its own crate, and a `#[cfg]` a
+// `macro_rules!` emits is read in the caller's crate.
 
 #[cfg(feature = "authz")]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __requires_authz {
-    ($sentence:literal) => {};
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)*] $($rest)* }
+    };
 }
 
 #[cfg(not(feature = "authz"))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __requires_authz {
-    ($sentence:literal) => {
-        ::core::compile_error!($sentence);
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)* "authz"] $($rest)* }
     };
 }
 
@@ -243,15 +247,38 @@ macro_rules! __requires_authz {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __requires_seaorm {
-    ($sentence:literal) => {};
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)*] $($rest)* }
+    };
 }
 
 #[cfg(not(feature = "seaorm"))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __requires_seaorm {
-    ($sentence:literal) => {
-        ::core::compile_error!($sentence);
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)* "seaorm"] $($rest)* }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_end {
+    ($what:literal $req:literal []) => {};
+    ($what:literal $req:literal [$only:literal]) => {
+        ::core::compile_error!(::core::concat!(
+            $what, " expands into `nest_rs::", $only,
+            "`, which this build does not enable. Add the feature to Cargo.toml:\n\n    \
+             nest-rs = { version = \"", $req, "\", features = [\"", $only, "\"] }"
+        ));
+    };
+    ($what:literal $req:literal [$first:literal $($more:literal)+]) => {
+        ::core::compile_error!(::core::concat!(
+            $what, " expands into `nest_rs::", $first, "`", $(" and `nest_rs::", $more, "`",)+
+            ", which this build does not enable. Add the features to Cargo.toml:\n\n    \
+             nest-rs = { version = \"", $req, "\", features = [\"", $first, "\""
+            $(, ", \"", $more, "\"")+, "] }"
+        ));
     };
 }
 

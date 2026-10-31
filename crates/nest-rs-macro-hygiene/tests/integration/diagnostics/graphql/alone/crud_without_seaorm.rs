@@ -1,6 +1,7 @@
-//! `#[crud]` in a build without `seaorm` names the features its expansion
-//! needs, `seaorm` and the `authz` its operations carry — once for itself and
-//! once for the `#[operations]` it re-emits — where rustc said `E0433`. It
+//! `#[crud]` in a build without `seaorm` names, in one error, every feature
+//! its expansion needs — `seaorm` and the `authz` its operations carry — and
+//! the attribute the developer wrote, never the `#[authorize]` it emits, nor
+//! again for the `#[operations]` it re-emits; rustc said `E0433`. It
 //! deliberately fails to resolve: the expansion names `nest_rs::seaorm` and
 //! `nest_rs::authz`, which the build does not enable.
 

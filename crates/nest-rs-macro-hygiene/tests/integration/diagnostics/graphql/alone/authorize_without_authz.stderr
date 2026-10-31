@@ -6,4 +6,4 @@ error: `#[authorize]` expands into `nest_rs::authz`, which this build does not e
 13 | #[operations]
    | ^^^^^^^^^^^^^
    |
-   = note: this error originates in the macro `::nest_rs::__requires_authz` which comes from the expansion of the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `$crate::__requires_end` which comes from the expansion of the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)

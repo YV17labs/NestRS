@@ -210,9 +210,10 @@ error[E0433]: failed to resolve: could not find `seaorm` in `nest_rs`
 Add the feature named in the note to the `nest-rs` line — never a second crate.
 
 A feature an *attribute* pulls into a decorator's expansion — `authz` for
-`#[authorize]`, `seaorm` for `#[crud]` — is named by the decorator itself,
-before rustc's own errors, and its message ends on the line to paste, its
-version elided here for the same reason:
+`#[authorize]`, `seaorm` and `authz` for `#[crud]` — is named by the decorator
+itself, before rustc's own errors, in one message naming every feature the
+attribute you wrote needs and ending on the line to paste, its version elided
+here for the same reason:
 
 ```text frame="terminal"
 error: `#[authorize]` expands into `nest_rs::authz`, which this build does not

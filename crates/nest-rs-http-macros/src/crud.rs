@@ -11,8 +11,8 @@ use quote::quote;
 use syn::{ImplItem, ItemImpl, parse_quote};
 
 use nest_rs_codegen::__private::{
-    CrudDeclaration, CrudOp, CrudTypes, GeneratedOps, Paginate, cfg_attrs, impl_self_ident,
-    parse_crud_args, resource_noun, unit_of_work_required,
+    CHECKED_BY_CRUD, CrudDeclaration, CrudOp, CrudTypes, GeneratedOps, Paginate, cfg_attrs,
+    impl_self_ident, parse_crud_args, resource_noun, unit_of_work_required,
 };
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -257,10 +257,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     item.items = generated;
     let unit_of_work = unit_of_work_required(&self_ty, &cfg_attrs(&item.attrs));
 
+    let checked = proc_macro2::Ident::new(CHECKED_BY_CRUD, proc_macro2::Span::call_site());
     Ok(quote! {
         #aliases
 
-        #[::nest_rs_http::routes]
+        #[::nest_rs_http::routes(#checked)]
         #item
 
         #prefix_check

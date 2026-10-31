@@ -11,8 +11,8 @@ use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl, parse_quote};
 
 use nest_rs_codegen::__private::{
-    CrudOp, CrudTypes, Paginate, cfg_attrs, impl_self_ident, parse_crud_args, resolver_singular,
-    unit_of_work_required,
+    CHECKED_BY_CRUD, CrudOp, CrudTypes, Paginate, cfg_attrs, impl_self_ident, parse_crud_args,
+    resolver_singular, unit_of_work_required,
 };
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -239,10 +239,11 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     item.items = generated;
     let unit_of_work = unit_of_work_required(&item.self_ty, &cfg_attrs(&item.attrs));
 
+    let checked = proc_macro2::Ident::new(CHECKED_BY_CRUD, proc_macro2::Span::call_site());
     Ok(quote! {
         #aliases
 
-        #[::nest_rs_graphql::operations]
+        #[::nest_rs_graphql::operations(#checked)]
         #item
 
         #unit_of_work

@@ -88,7 +88,10 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// which the boot's access graph checks.
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(routes::routes(args, input).into()).into()
+    ::nest_rs_codegen::__private::reroot_impl_half(args.into(), |args| {
+        routes::routes(args.into(), input).into()
+    })
+    .into()
 }
 
 /// Grammar: `#[crud(service = svc, ops = [list, get, ...], paginate = cursor|none,
@@ -136,7 +139,7 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// empty-bodied 500.
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(crud::entry(args, input).into()).into()
+    ::nest_rs_codegen::__private::reroot_as("`#[crud]`", crud::entry(args, input).into()).into()
 }
 
 /// `#[http_code(N)]` — override the response status (`100..=999`). A marker

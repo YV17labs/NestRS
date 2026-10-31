@@ -30,6 +30,10 @@ unasked := if postgres == "mutual-tls" { "none()" } else { "binary_id(nest-rs-se
 # union cannot reach.
 graphql_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --features graphql --test integration --no-fail-fast"
 
+# What a binary without OTLP export refuses: nest-rs-opentelemetry built
+# without its `otlp` feature, the console alone, which the union turns on.
+console_alone := "cargo nextest run -p nest-rs-opentelemetry --no-default-features --no-fail-fast"
+
 # Every test: unit, integration, e2e and the doc examples
 all: && doc
     #!/usr/bin/env bash
@@ -37,6 +41,7 @@ all: && doc
     export NESTRS_REDIS__URL='{{redis_url}}'
     {{nextest}} -E 'not ({{elsewhere}}) and not ({{alone}}) and not ({{unasked}})'
     {{graphql_alone}}
+    {{console_alone}} --lib --test integration
     # A failover moves the primaries every other test runs on, and a node
     # requiring a client certificate refuses their connections: last, one at a time.
     if [ "{{topology}}" != standalone ]; then
@@ -46,11 +51,13 @@ all: && doc
 # The `#[cfg(test)]` modules in each crate's `src/`
 unit:
     {{nextest}} --lib --bins
+    {{console_alone}} --lib
 
 # The in-process suites under each crate's `tests/`, no service needed
 integration:
     {{nextest}} -E 'kind(test) and not binary(e2e)'
     {{graphql_alone}}
+    {{console_alone}} --test integration
 
 # The `tests/e2e` suites, against Postgres, Valkey and S3
 e2e:

@@ -10,8 +10,6 @@ use nest_rs_core::logging::LogSettings;
 
 use crate::config::{LogFormat, OpenTelemetryConfig, say_retired_variables};
 use crate::error::OpenTelemetryError;
-#[cfg(not(feature = "otlp"))]
-use crate::signal::Signal;
 
 /// `OpenTelemetryModule` reads this to fail fast rather than register no-op providers
 /// when `OpenTelemetry::init` was forgotten.
@@ -57,10 +55,17 @@ impl OpenTelemetry {
     /// console's (`<PREFIX>_LOG`, else `RUST_LOG`, `<PREFIX>_LOG_FORMAT`,
     /// `<PREFIX>_LOG_SOURCE_LOCATION`), as [`OpenTelemetryConfig::from_env`]
     /// reads them. Returns the flush guard that must outlive `main`, or an
-    /// error that aborts boot on a filter or a setting that does not parse, an
-    /// exporter selector naming one this binary does not build (any but `none`
-    /// without the `otlp` feature, which reads no other `OTEL_*`), a metric
-    /// interval or sample ratio outside its range, or a failed exporter build.
+    /// error that aborts boot on a filter or a setting that does not parse, a
+    /// request this binary cannot serve — an exporter, a compression or a
+    /// propagator it does not build, `OTEL_CONFIG_FILE`, a header beside a
+    /// plaintext endpoint on another host or a query or userinfo in one, an
+    /// endpoint in a binary built
+    /// without the `otlp` feature — a metric interval or sample ratio outside
+    /// its range, or a failed exporter build.
+    ///
+    /// The framework propagates W3C Trace Context at every edge and carries a
+    /// queue job's W3C Baggage onto the pushes it makes, whatever this crate
+    /// installs, so `OTEL_PROPAGATORS` may only name those two.
     pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
         let console = config.console()?;
         let filter = log_filter(&console.filter);
@@ -106,14 +111,16 @@ impl OpenTelemetry {
                      specification orders",
                 );
             }
-            let [traces, metrics, logs] = summary.destinations;
+            // Strings, which the console quotes, so a logfmt reader takes
+            // `off (no endpoint)` whole.
+            let [traces, metrics, logs] = summary.destinations.map(|to| to.to_string());
             tracing::info!(
                 target: crate::TARGET,
-                service = %summary.service,
+                service = summary.service.as_str(),
                 mode = "otlp",
-                traces = %traces,
-                metrics = %metrics,
-                logs = %logs,
+                traces = traces.as_str(),
+                metrics = metrics.as_str(),
+                logs = logs.as_str(),
                 sampler = if summary.sampler_from_env { "OTEL_TRACES_SAMPLER" } else { "ratio" },
                 sample_ratio = config.trace_sample_ratio,
                 log_format = ?console.format,
@@ -129,9 +136,7 @@ impl OpenTelemetry {
 
         #[cfg(not(feature = "otlp"))]
         {
-            for signal in [Signal::Traces, Signal::Metrics, Signal::Logs] {
-                signal.selection(&nest_rs_config::env_var)?;
-            }
+            refuse_what_no_exporter_serves(&config, &nest_rs_config::env_var)?;
             if !install_global_subscriber(Registry::default().with(filter).with(console_layer)) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }
@@ -151,6 +156,53 @@ impl OpenTelemetry {
             Ok(OpenTelemetry {})
         }
     }
+}
+
+/// What a binary built without the `otlp` feature cannot honour, refused
+/// naming the variable or the field, never the value: the specification's
+/// file configuration, a propagator the framework does not speak, a selector
+/// naming an exporter, and an endpoint set for a signal its selector and
+/// `OTEL_SDK_DISABLED` leave on — a signal's own variable, then
+/// `OTEL_EXPORTER_OTLP_ENDPOINT`, then the pinned one — since the binary
+/// builds no exporter and the deployment would believe it ships.
+#[cfg(not(feature = "otlp"))]
+fn refuse_what_no_exporter_serves(
+    config: &OpenTelemetryConfig,
+    read: &impl Fn(&str) -> Option<String>,
+) -> Result<(), nest_rs_config::ConfigError> {
+    use crate::signal::{OTEL_EXPORTER_OTLP_ENDPOINT, SdkSwitch, Selection, Signal};
+
+    let read = |name: &str| read(name).filter(|value| !value.trim().is_empty());
+    crate::config::refuse_config_file(&read)?;
+    crate::propagators::read_propagators(&read)?;
+    let disabled = SdkSwitch::read(&read) == SdkSwitch::Off;
+    for signal in Signal::ALL {
+        if signal.selection(&read)? == Selection::None || disabled {
+            continue;
+        }
+        let set_by = [signal.endpoint_var(), OTEL_EXPORTER_OTLP_ENDPOINT]
+            .into_iter()
+            .find(|variable| read(variable).is_some())
+            .or_else(|| {
+                config
+                    .otlp_endpoint
+                    .is_some()
+                    .then_some(crate::config::PINNED_ENDPOINT)
+            });
+        if let Some(set_by) = set_by {
+            return Err(nest_rs_config::ConfigError::parse(
+                set_by,
+                format!(
+                    "sets an endpoint for {}, but this binary was built without the otlp feature \
+                     and exports nothing — build it with the feature (the umbrella's \
+                     opentelemetry turns it on), or turn the signal off with {}=none",
+                    signal.name(),
+                    signal.exporter_var(),
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The filter a test run logs under when neither `<PREFIX>_LOG` nor `RUST_LOG`
@@ -420,6 +472,151 @@ mod tests {
         assert!(
             took >= bound && took < bound + std::time::Duration::from_secs(1),
             "the three providers were held to one bound between them, took {took:?}",
+        );
+    }
+
+    /// The variables `set` holds, and nothing else.
+    #[cfg(not(feature = "otlp"))]
+    fn reading(set: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name: &str| {
+            set.iter()
+                .find(|(variable, _)| *variable == name)
+                .map(|(_, value)| (*value).to_owned())
+        }
+    }
+
+    /// The refusal of an endpoint `set` names, in a binary built without the
+    /// `otlp` feature, as said.
+    #[cfg(not(feature = "otlp"))]
+    fn refused(
+        config: &OpenTelemetryConfig,
+        set: &'static [(&'static str, &'static str)],
+    ) -> String {
+        refuse_what_no_exporter_serves(config, &reading(set))
+            .expect_err("an endpoint nothing exports to")
+            .to_string()
+    }
+
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_otel_exporter_otlp_endpoint_is_refused_naming_it() {
+        let said = refused(
+            &OpenTelemetryConfig::default(),
+            &[("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")],
+        );
+        assert!(
+            said.contains("OTEL_EXPORTER_OTLP_ENDPOINT")
+                && said.contains("for traces")
+                && said.contains("without the otlp feature"),
+            "{said}"
+        );
+        assert!(!said.contains("collector"), "{said}");
+    }
+
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_the_traces_endpoint_is_refused_naming_it() {
+        let said = refused(
+            &OpenTelemetryConfig::default(),
+            &[(
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                "http://collector:4318/v1/traces",
+            )],
+        );
+        assert!(
+            said.contains("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") && said.contains("for traces"),
+            "{said}"
+        );
+    }
+
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_the_metrics_endpoint_is_refused_naming_it() {
+        let said = refused(
+            &OpenTelemetryConfig::default(),
+            &[(
+                "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+                "http://collector:4318/v1/metrics",
+            )],
+        );
+        assert!(
+            said.contains("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") && said.contains("for metrics"),
+            "{said}"
+        );
+    }
+
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_the_logs_endpoint_is_refused_naming_it() {
+        let said = refused(
+            &OpenTelemetryConfig::default(),
+            &[(
+                "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+                "http://collector:4318/v1/logs",
+            )],
+        );
+        assert!(
+            said.contains("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") && said.contains("for logs"),
+            "{said}"
+        );
+    }
+
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_a_pinned_endpoint_is_refused_naming_the_field() {
+        let said = refused(
+            &OpenTelemetryConfig {
+                otlp_endpoint: Some("http://collector:4318".into()),
+                ..OpenTelemetryConfig::default()
+            },
+            &[],
+        );
+        assert!(
+            said.contains("OpenTelemetryConfig::otlp_endpoint") && said.contains("for traces"),
+            "{said}"
+        );
+        assert!(!said.contains("collector"), "{said}");
+    }
+
+    /// A signal its selector or `OTEL_SDK_DISABLED` switches off exports nothing,
+    /// as the binary does: its endpoint is no refusal, while another signal's
+    /// still is.
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_an_endpoint_switched_off_boots() {
+        let pinned = OpenTelemetryConfig {
+            otlp_endpoint: Some("http://collector:4318".into()),
+            ..OpenTelemetryConfig::default()
+        };
+        assert!(
+            refuse_what_no_exporter_serves(
+                &pinned,
+                &reading(&[
+                    ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318"),
+                    ("OTEL_TRACES_EXPORTER", "none"),
+                    ("OTEL_METRICS_EXPORTER", "none"),
+                    ("OTEL_LOGS_EXPORTER", "NONE"),
+                ])
+            )
+            .is_ok()
+        );
+        assert!(
+            refuse_what_no_exporter_serves(&pinned, &reading(&[("OTEL_SDK_DISABLED", "true")]))
+                .is_ok()
+        );
+        let said = refused(
+            &OpenTelemetryConfig::default(),
+            &[
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318"),
+                ("OTEL_TRACES_EXPORTER", "none"),
+            ],
+        );
+        assert!(
+            said.contains("OTEL_EXPORTER_OTLP_ENDPOINT") && said.contains("for metrics"),
+            "{said}"
+        );
+        assert!(
+            refuse_what_no_exporter_serves(&OpenTelemetryConfig::default(), &reading(&[])).is_ok()
         );
     }
 

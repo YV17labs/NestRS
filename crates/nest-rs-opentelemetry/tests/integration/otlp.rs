@@ -3,6 +3,7 @@
 //! issued. Each test initialises OpenTelemetry once, in its own process.
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
@@ -35,11 +36,34 @@ enum Behaviour {
 const ACCEPTED: &str = "HTTP/1.1 200 OK\r\ncontent-type: application/x-protobuf\r\n\
                         content-length: 0\r\nconnection: close\r\n\r\n";
 
+/// One export a collector read: where it was posted, and how its body was
+/// encoded.
+#[derive(Clone)]
+struct Received {
+    path: String,
+    /// Its `content-encoding`, lowercased.
+    encoding: Option<String>,
+    body: Vec<u8>,
+}
+
+/// Its path, encoding and size, never its bytes.
+impl std::fmt::Debug for Received {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {:?} ({} bytes)",
+            self.path,
+            self.encoding,
+            self.body.len()
+        )
+    }
+}
+
 /// An OTLP/HTTP collector over TLS on loopback, on a runtime of its own, every
-/// export it reads kept by the path it was posted to.
+/// export it reads kept.
 struct Collector {
     addr: SocketAddr,
-    exports: Arc<Mutex<Vec<String>>>,
+    exports: Arc<Mutex<Vec<Received>>>,
 }
 
 impl Collector {
@@ -99,7 +123,15 @@ impl Collector {
                             .next()
                             .and_then(|line| line.split_whitespace().nth(1))
                             .unwrap_or_default();
-                        kept.lock().expect("the exports").push(path.to_owned());
+                        let encoding = head
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-encoding:"))
+                            .map(|value| value.trim().to_owned());
+                        kept.lock().expect("the exports").push(Received {
+                            path: path.to_owned(),
+                            encoding,
+                            body: read[body_at..].to_vec(),
+                        });
                         match behaviour {
                             Behaviour::Answer(answer) => {
                                 let _ = tls.write_all(answer.as_bytes()).await;
@@ -124,8 +156,15 @@ impl Collector {
 
     /// How many exports were posted to `path`.
     fn exports_to(&self, path: &str) -> usize {
-        let exports = self.exports.lock().expect("the exports");
-        exports.iter().filter(|posted| *posted == path).count()
+        self.received()
+            .iter()
+            .filter(|received| received.path == path)
+            .count()
+    }
+
+    /// Every export read so far.
+    fn received(&self) -> Vec<Received> {
+        self.exports.lock().expect("the exports").clone()
     }
 }
 
@@ -369,4 +408,266 @@ fn a_variable_of_the_retired_namespace_is_said_at_warn() {
     assert_eq!(event.field("variable").as_deref(), Some(retired.as_str()));
     assert!(!event.quotes("collector:4318"), "{event:?}");
     drop(otel);
+}
+
+/// The specification's `gzip` is honoured: every export reaches the collector
+/// compressed, said by its `content-encoding` and its body's gzip header.
+#[test]
+fn otel_exporter_otlp_compression_gzip_compresses_every_export() {
+    let collector = Collector::serving();
+
+    export_through(trusting(
+        &collector,
+        &[("OTEL_EXPORTER_OTLP_COMPRESSION", "gzip")],
+    ));
+
+    let received = collector.received();
+    assert!(!received.is_empty(), "the flush reached the collector");
+    for export in received {
+        assert_eq!(export.encoding.as_deref(), Some("gzip"), "{export:?}");
+        assert!(export.body.starts_with(&[0x1f, 0x8b]), "{export:?}");
+    }
+}
+
+/// A signal's own `none` keeps its exports plain under a general `gzip`, as the
+/// specification orders the two.
+#[test]
+fn a_signal_s_own_compression_wins_over_the_general_one() {
+    let collector = Collector::serving();
+
+    export_through(trusting(
+        &collector,
+        &[
+            ("OTEL_EXPORTER_OTLP_COMPRESSION", "GZIP"),
+            ("OTEL_EXPORTER_OTLP_LOGS_COMPRESSION", "none"),
+        ],
+    ));
+
+    let received = collector.received();
+    let logs: Vec<&Received> = received.iter().filter(|r| r.path == "/v1/logs").collect();
+    assert!(!logs.is_empty(), "the logs exported");
+    assert!(logs.iter().all(|r| r.encoding.is_none()), "{logs:?}");
+    let traces: Vec<&Received> = received.iter().filter(|r| r.path == "/v1/traces").collect();
+    assert!(!traces.is_empty(), "the traces exported");
+    assert!(
+        traces.iter().all(|r| r.encoding.as_deref() == Some("gzip")),
+        "{traces:?}"
+    );
+}
+
+/// A compression this exporter does not build is refused naming its variable,
+/// never passed over while the deployment believes its exports compressed.
+#[test]
+fn a_compression_this_exporter_does_not_build_is_refused_naming_its_variable() {
+    let Err(refused) = init_under(
+        &[
+            (OTEL_EXPORTER_OTLP_ENDPOINT, "http://127.0.0.1:4318"),
+            ("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION", "zstd"),
+        ],
+        OpenTelemetryConfig::default(),
+    ) else {
+        panic!("zstd must not boot an exporter that builds gzip alone");
+    };
+    assert!(
+        matches!(refused, OpenTelemetryError::Config(_)),
+        "{refused}"
+    );
+    let said = refused.to_string();
+    assert!(
+        said.contains("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION") && said.contains("gzip"),
+        "{said}"
+    );
+    assert!(!said.contains("zstd"), "{said}");
+}
+
+/// A collector's credential never crosses the network in clear: a header set
+/// beside an `http://` endpoint on another host refuses the boot, naming both
+/// variables and quoting neither value.
+#[test]
+fn a_header_beside_a_plaintext_endpoint_on_another_host_is_refused_naming_both() {
+    let Err(refused) = init_under(
+        &[
+            (
+                OTEL_EXPORTER_OTLP_ENDPOINT,
+                "http://collector.internal:4318",
+            ),
+            ("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer s3cr3t"),
+        ],
+        OpenTelemetryConfig::default(),
+    ) else {
+        panic!("a header over plaintext to another host must not boot");
+    };
+    assert!(
+        matches!(refused, OpenTelemetryError::Config(_)),
+        "{refused}"
+    );
+    let said = refused.to_string();
+    assert!(
+        said.contains("OTEL_EXPORTER_OTLP_HEADERS") && said.contains(OTEL_EXPORTER_OTLP_ENDPOINT),
+        "{said}"
+    );
+    assert!(
+        !said.contains("s3cr3t") && !said.contains("Bearer"),
+        "{said}"
+    );
+}
+
+/// On this host's loopback, where the credential never leaves the machine — a
+/// collector beside the app — a header over plaintext boots.
+#[test]
+fn a_header_beside_a_plaintext_endpoint_on_loopback_boots() {
+    let otel = init_under(
+        &[
+            (OTEL_EXPORTER_OTLP_ENDPOINT, "http://localhost:4318"),
+            ("OTEL_TRACES_EXPORTER", "none"),
+            ("OTEL_METRICS_EXPORTER", "none"),
+            (
+                "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+                "authorization=Bearer s3cr3t",
+            ),
+            (
+                "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+                "http://127.0.0.1:9/v1/logs",
+            ),
+        ],
+        OpenTelemetryConfig::default(),
+    )
+    .expect("a header to a collector on loopback");
+    drop(otel);
+}
+
+/// A proxy that counts the connections it is offered and serves none.
+fn proxy() -> (String, Arc<AtomicUsize>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let url = format!("http://{}", listener.local_addr().expect("its address"));
+    let offered = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&offered);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            counted.fetch_add(1, Ordering::SeqCst);
+            drop(stream);
+        }
+    });
+    (url, offered)
+}
+
+/// A proxy the environment names reaches its own host's loopback, never this
+/// one's, and would carry a header sent there off the machine: a collector on
+/// loopback is dialled directly, the export landing and the proxy offered
+/// nothing.
+#[test]
+fn an_export_to_a_collector_on_loopback_never_goes_through_a_proxy() {
+    let collector = Collector::serving();
+    let (proxy, offered) = proxy();
+
+    export_through(trusting(
+        &collector,
+        &[
+            ("HTTP_PROXY", proxy.as_str()),
+            ("HTTPS_PROXY", proxy.as_str()),
+            ("ALL_PROXY", proxy.as_str()),
+            ("NO_PROXY", ""),
+            ("no_proxy", ""),
+            ("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer s3cr3t"),
+        ],
+    ));
+
+    assert!(collector.exports() > 0, "the flush reached the collector");
+    assert_eq!(
+        offered.load(Ordering::SeqCst),
+        0,
+        "the proxy was offered an export"
+    );
+}
+
+/// `OTEL_METRIC_EXPORT_TIMEOUT` bounds a metric export beside the exporter's
+/// own timeout, the earlier of the two cutting it: a collector that never
+/// answers holds the final flush that long, never the flush's own bound.
+#[test]
+fn otel_metric_export_timeout_cuts_a_metric_export() {
+    let collector = Collector::serving_to(Behaviour::Silent, None);
+    let otel = trusting(
+        &collector,
+        &[
+            ("OTEL_TRACES_EXPORTER", "none"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+            ("OTEL_METRIC_EXPORT_TIMEOUT", "200"),
+        ],
+    );
+    opentelemetry::global::meter_provider()
+        .meter("probe")
+        .u64_counter("probe")
+        .build()
+        .add(1, &[]);
+
+    let started = Instant::now();
+    drop(otel);
+    let took = started.elapsed();
+
+    assert!(
+        collector.exports_to("/v1/metrics") > 0,
+        "a metric export was in flight"
+    );
+    assert!(
+        took < FLUSH_TIMEOUT / 2,
+        "the metric export was cut at 200 ms, not held to the flush's {FLUSH_TIMEOUT:?}: {took:?}"
+    );
+}
+
+/// A sampler the SDK does not build, or a ratio that does not read as one, is
+/// refused naming its variable: the SDK would sample every trace in its place,
+/// over the ratio the app pinned.
+#[test]
+fn a_sampler_or_a_ratio_the_sdk_would_pass_over_is_refused_naming_its_variable() {
+    let Err(refused) = init_under(
+        &[
+            ("OTEL_TRACES_SAMPLER", "parentbased_traceidratio"),
+            ("OTEL_TRACES_SAMPLER_ARG", "10%"),
+        ],
+        OpenTelemetryConfig {
+            trace_sample_ratio: 0.1,
+            ..OpenTelemetryConfig::default()
+        },
+    ) else {
+        panic!("a ratio that does not read must not sample every trace");
+    };
+    assert!(
+        matches!(refused, OpenTelemetryError::Config(_)),
+        "{refused}"
+    );
+    let said = refused.to_string();
+    assert!(
+        said.contains("OTEL_TRACES_SAMPLER_ARG") && said.contains("between 0 and 1"),
+        "{said}"
+    );
+    assert!(!said.contains("10%"), "{said}");
+}
+
+/// A metric temporality the SDK does not know is refused naming its variable,
+/// where the SDK would export cumulative sums the backend did not ask for.
+#[test]
+fn a_metric_temporality_the_sdk_does_not_know_is_refused_naming_its_variable() {
+    let Err(refused) = init_under(
+        &[
+            (OTEL_EXPORTER_OTLP_ENDPOINT, "http://127.0.0.1:4318"),
+            (
+                "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
+                "deltas",
+            ),
+        ],
+        OpenTelemetryConfig::default(),
+    ) else {
+        panic!("a temporality the SDK does not know must not boot");
+    };
+    assert!(
+        matches!(refused, OpenTelemetryError::Config(_)),
+        "{refused}"
+    );
+    let said = refused.to_string();
+    assert!(
+        said.contains("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
+            && said.contains("cumulative"),
+        "{said}"
+    );
+    assert!(!said.contains("deltas"), "{said}");
 }

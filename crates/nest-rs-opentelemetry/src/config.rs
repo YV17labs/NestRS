@@ -1,12 +1,25 @@
 use std::time::Duration;
 
-use nest_rs_config::{ClientTls, endpoint_shown};
+use nest_rs_config::{ClientTls, ConfigError, endpoint_shown};
 use nest_rs_core::logging::LogSettings;
 
 use crate::error::OpenTelemetryError;
 
 /// The OTel SDK's own metric export period.
 pub const DEFAULT_METRIC_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The fields a config built in code sets, as a refusal names them.
+pub(crate) const PINNED_ENDPOINT: &str = "`OpenTelemetryConfig::otlp_endpoint` in code";
+#[cfg(feature = "otlp")]
+pub(crate) const PINNED_TLS: &str = "`OpenTelemetryConfig::tls` in code";
+#[cfg(feature = "otlp")]
+pub(crate) const PINNED_INTERVAL: &str = "`OpenTelemetryConfig::metric_interval` in code";
+#[cfg(feature = "otlp")]
+pub(crate) const PINNED_RATIO: &str = "`OpenTelemetryConfig::trace_sample_ratio` in code";
+
+/// The specification's file configuration, under its name and the name it had
+/// while experimental.
+const CONFIG_FILES: [&str; 2] = ["OTEL_CONFIG_FILE", "OTEL_EXPERIMENTAL_CONFIG_FILE"];
 
 /// What an app pins about its telemetry, under what the variables set: the
 /// OpenTelemetry specification's own (`OTEL_*`) and the console's
@@ -158,6 +171,25 @@ impl OpenTelemetryConfig {
         pinned.format = self.log_format;
         pinned.source_location = self.log_source_location;
         Ok(pinned.overlaid_by_env()?)
+    }
+}
+
+/// Refuses the specification's file configuration, naming its variable and
+/// never the path: the Rust SDK reads no such file, so a deployment pointing
+/// at one would believe a configuration nothing applies.
+pub(crate) fn refuse_config_file(
+    read: &impl Fn(&str) -> Option<String>,
+) -> Result<(), ConfigError> {
+    match CONFIG_FILES
+        .into_iter()
+        .find(|variable| read(variable).is_some_and(|path| !path.trim().is_empty()))
+    {
+        Some(variable) => Err(ConfigError::parse(
+            variable,
+            "names a configuration file, which the Rust SDK cannot read, so nothing in it would \
+             apply — set the OTEL_* variables it holds instead",
+        )),
+        None => Ok(()),
     }
 }
 
@@ -408,6 +440,27 @@ mod tests {
             assert!(!refused.contains("notalevel"), "{refused}");
             Ok(())
         });
+    }
+
+    /// The specification's file configuration, under either name, is refused
+    /// naming the variable, never the path; blank is unset.
+    #[test]
+    fn a_configuration_file_is_refused_naming_its_variable() {
+        for variable in CONFIG_FILES {
+            let read =
+                move |name: &str| (name == variable).then(|| "/etc/otel/sdk.yaml".to_owned());
+            let refused = refuse_config_file(&read)
+                .expect_err("a file nothing reads")
+                .to_string();
+            assert!(
+                refused.contains(variable) && refused.contains("the Rust SDK cannot read"),
+                "{refused}"
+            );
+            assert!(!refused.contains("sdk.yaml"), "{refused}");
+            let blank = move |name: &str| (name == variable).then(|| " ".to_owned());
+            assert!(refuse_config_file(&blank).is_ok());
+        }
+        assert!(refuse_config_file(&|_: &str| None).is_ok());
     }
 
     #[test]

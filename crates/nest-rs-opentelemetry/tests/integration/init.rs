@@ -35,28 +35,53 @@ async fn inside_the_subscriber() -> nest_rs_core::anyhow::Result<()> {
     Ok(())
 }
 
+/// The role whose child writes the boot line on a text console.
+const BOOT_LINE: &str = "boot-line";
+
+/// The boot line on a text console, under the variables the parent set.
+fn boot_line_on_a_text_console() {
+    let otel = OpenTelemetry::init_with(OpenTelemetryConfig {
+        log_format: LogFormat::Text,
+        log_filter: "info".into(),
+        ..OpenTelemetryConfig::default()
+    })
+    .expect("the child's subscriber");
+    drop(otel);
+}
+
 #[test]
 #[expect(
     clippy::disallowed_methods,
     reason = "the parent test hands the child its role through the environment"
 )]
 fn init_child_process() {
-    if std::env::var(CHILD_ROLE).is_ok() {
-        let _ = inside_the_subscriber();
+    match std::env::var(CHILD_ROLE).as_deref() {
+        Ok(BOOT_LINE) => boot_line_on_a_text_console(),
+        Ok(_) => {
+            let _ = inside_the_subscriber();
+        }
+        Err(_) => {}
     }
 }
 
-/// This test binary, re-run on the child test alone, to its exit, every one of
-/// [`console_vars`] removed.
-fn child() -> Output {
+/// This test binary, re-run on the child test alone in `role`, with `vars`
+/// set, to its exit, every one of [`console_vars`] removed.
+fn child_in(role: &str, vars: &[(&str, &str)]) -> Output {
     let mut child = Command::new(std::env::current_exe().expect("the test binary"));
     child
         .args(["--exact", CHILD_TEST, "--nocapture"])
-        .env(CHILD_ROLE, "inside-the-subscriber");
+        .env(CHILD_ROLE, role);
     for name in console_vars() {
         child.env_remove(name);
     }
+    for (name, value) in vars {
+        child.env(name, value);
+    }
     child.output().expect("the child runs")
+}
+
+fn child() -> Output {
+    child_in("inside-the-subscriber", &[])
 }
 
 /// The production shape with an exporter's subscriber: OpenTelemetry's is the
@@ -354,4 +379,157 @@ fn without_the_otlp_feature_a_selector_naming_an_exporter_is_refused_and_none_bo
         OpenTelemetryConfig::default(),
     )
     .expect("none is what a binary built without the otlp feature exports");
+}
+
+/// `OTEL_CONFIG_FILE` names a file the Rust SDK cannot read: a deployment
+/// believing it configures the telemetry is refused at boot, the variable
+/// named, its path never quoted.
+#[test]
+fn otel_config_file_is_refused_naming_it() {
+    let Err(refused) = init_under(
+        &[("OTEL_CONFIG_FILE", "/etc/nestrs/otel-config.yaml")],
+        OpenTelemetryConfig::default(),
+    ) else {
+        panic!("a configuration file nothing reads must not boot");
+    };
+    assert!(
+        matches!(refused, OpenTelemetryError::Config(_)),
+        "{refused:?}"
+    );
+    let said = refused.to_string();
+    assert!(said.contains("OTEL_CONFIG_FILE"), "{said}");
+    assert!(!said.contains("otel-config.yaml"), "{said}");
+}
+
+/// `OTEL_PROPAGATORS` naming a format the framework does not speak is refused
+/// at boot, naming the variable and what it accepts, never the value.
+#[test]
+fn otel_propagators_naming_a_format_the_framework_does_not_speak_is_refused() {
+    let Err(refused) = init_under(
+        &[("OTEL_PROPAGATORS", "tracecontext,baggage,b3multi")],
+        OpenTelemetryConfig::default(),
+    ) else {
+        panic!("a propagator the framework does not speak must not boot");
+    };
+    assert!(
+        matches!(refused, OpenTelemetryError::Config(_)),
+        "{refused:?}"
+    );
+    let said = refused.to_string();
+    assert!(
+        said.contains("OTEL_PROPAGATORS") && said.contains("tracecontext and baggage"),
+        "{said}"
+    );
+    assert!(!said.contains("b3multi"), "{said}");
+}
+
+/// `key=value` pairs of a logfmt line, as an operator's filter reads them: a
+/// value runs to the next space unless it is quoted.
+#[cfg(feature = "otlp")]
+fn logfmt(line: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    let mut rest = line.trim();
+    while let Some(at) = rest.find('=') {
+        let key = rest[..at].rsplit(' ').next().unwrap_or_default().to_owned();
+        let after = &rest[at + 1..];
+        let (value, next) = if let Some(quoted) = after.strip_prefix('"') {
+            let mut value = String::new();
+            let mut chars = quoted.char_indices();
+            let mut end = quoted.len();
+            while let Some((i, c)) = chars.next() {
+                match c {
+                    '\\' => {
+                        if let Some((_, escaped)) = chars.next() {
+                            value.push(escaped);
+                        }
+                    }
+                    '"' => {
+                        end = i + 1;
+                        break;
+                    }
+                    other => value.push(other),
+                }
+            }
+            (value, &quoted[end..])
+        } else {
+            let end = after.find(' ').unwrap_or(after.len());
+            (after[..end].to_owned(), &after[end..])
+        };
+        pairs.push((key, value));
+        rest = next.trim_start();
+    }
+    pairs
+}
+
+/// The boot line's per-signal state reads whole to a logfmt filter, its
+/// spaces inside the value: `traces="off (OTEL_TRACES_EXPORTER=none)"`. The
+/// console colours a text line unless `NO_COLOR` is set, as a pipe to a
+/// reader sets it.
+#[cfg(feature = "otlp")]
+#[test]
+fn the_boot_line_s_signal_states_read_whole_as_logfmt() {
+    let output = child_in(
+        BOOT_LINE,
+        &[
+            ("NO_COLOR", "1"),
+            ("OTEL_TRACES_EXPORTER", "none"),
+            (
+                "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+                "http://127.0.0.1:9/v1/metrics",
+            ),
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("OpenTelemetry initialised"))
+        .unwrap_or_else(|| panic!("the boot line: {stdout}"));
+    let pairs = logfmt(line);
+    let field = |name: &str| {
+        pairs
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+            .unwrap_or_else(|| panic!("{name} in {line}"))
+    };
+    assert_eq!(field("traces"), "off (OTEL_TRACES_EXPORTER=none)", "{line}");
+    assert_eq!(field("metrics"), "http://127.0.0.1:9/v1/metrics", "{line}");
+    assert_eq!(field("logs"), "off (no endpoint)", "{line}");
+    assert_eq!(field("mode"), "otlp", "{line}");
+}
+
+/// A binary built without the `otlp` feature exports nothing, so an endpoint
+/// set for a signal its selector leaves on refuses the boot, naming the
+/// variable and the feature; `none` lets it boot.
+#[cfg(not(feature = "otlp"))]
+#[test]
+fn without_the_otlp_feature_an_endpoint_is_refused_and_none_boots() {
+    let Err(refused) = init_under(
+        &[("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")],
+        OpenTelemetryConfig::default(),
+    ) else {
+        panic!("an endpoint nothing exports to must not boot");
+    };
+    assert!(
+        matches!(refused, OpenTelemetryError::Config(_)),
+        "{refused:?}"
+    );
+    let said = refused.to_string();
+    assert!(
+        said.contains("OTEL_EXPORTER_OTLP_ENDPOINT") && said.contains("otlp feature"),
+        "{said}"
+    );
+    assert!(!said.contains("collector:4318"), "{said}");
+
+    let _otel = init_under(
+        &[
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318"),
+            ("OTEL_TRACES_EXPORTER", "none"),
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+        ],
+        OpenTelemetryConfig::default(),
+    )
+    .expect("every signal switched off exports nothing, as the binary does");
 }

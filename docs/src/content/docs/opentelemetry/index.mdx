@@ -123,15 +123,29 @@ field by field; `OpenTelemetry::init()` starts from the defaults, and
 
 Any other variable the SDK reads — `OTEL_EXPORTER_OTLP_HEADERS`, the batch
 processors' `OTEL_BSP_*` and `OTEL_BLRP_*`, the span limits — it reads as it
-always does. `OTEL_EXPORTER_OTLP_COMPRESSION` takes `none` alone: this crate
-builds neither `gzip` nor `zstd`, which the SDK passes over with a `warn`.
-`OTEL_EXPORTER_OTLP_PROTOCOL` (or a signal's own) may only say
-`http/protobuf`, the one protocol this exporter speaks: any other fails the
-boot naming it, rather than send protobuf to a port that expects gRPC.
-`OTEL_PROPAGATORS` is read by nothing — the framework propagates W3C Trace
-Context at every edge itself ([Correlation](/fundamentals/correlation/)) —
-and neither is `OTEL_CONFIG_FILE`, since the Rust SDK has no file
-configuration.
+always does. What this crate cannot honour fails the boot, naming the
+variable and never its value:
+
+- `OTEL_EXPORTER_OTLP_COMPRESSION` (or a signal's own) takes `gzip`, the one
+  compression the OTLP specification names, or `none`; `zstd` and anything
+  else fail.
+- `OTEL_EXPORTER_OTLP_PROTOCOL` (or a signal's own) may only say
+  `http/protobuf`, the one protocol this exporter speaks, rather than send
+  protobuf to a port that expects gRPC.
+- `OTEL_TRACES_SAMPLER` may only name a sampler the SDK builds, and
+  `OTEL_TRACES_SAMPLER_ARG` a ratio between 0 and 1
+  ([Sampling](/opentelemetry/traces/#sampling)).
+- `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` takes `cumulative`
+  (default), `delta` or `lowmemory`, in any case.
+- `OTEL_PROPAGATORS` may only name `tracecontext` and `baggage`, its default.
+  The framework propagates W3C Trace Context at every edge itself
+  ([Correlation](/fundamentals/correlation/)), and W3C Baggage reaches the
+  queue alone: a job carries the `baggage` it came with onto every push it
+  makes, and no HTTP, WebSocket, GraphQL or MCP request reads or answers one.
+  Another format (`b3`, `jaeger`), a list leaving one of the two out, and
+  `none`, which cannot turn that correlation off, fail.
+- `OTEL_CONFIG_FILE` fails: the Rust SDK has no file configuration, so
+  nothing in the file would apply.
 
 The three `<PREFIX>_LOG*` variables are read by the kernel's one parser, as
 the baseline logger reads them: a value that does not parse fails `init` with
@@ -166,7 +180,8 @@ OTEL_TRACES_EXPORTER=none \
 The boot line, `OpenTelemetry initialised` on `nest_rs::opentelemetry`, says
 where each signal goes: its `traces`, `metrics` and `logs` fields hold the
 endpoint, or why nothing is exported — `off (OTEL_TRACES_EXPORTER=none)`,
-`off (OTEL_SDK_DISABLED=true)` or `off (no endpoint)`.
+`off (OTEL_SDK_DISABLED=true)` or `off (no endpoint)` — each quoted on a text
+console, `traces="off (no endpoint)"`, so a logfmt reader takes it whole.
 
 ```bash frame="terminal"
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \
@@ -224,10 +239,25 @@ start, so a renewed file takes effect at the next one: rotate it with a rolling
 restart. The clients are this crate's own: they follow no redirect, give up
 reaching the collector after 3 s, and cut each export where the SDK stops
 waiting for it — `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` (or `_METRICS_`, `_LOGS_`), then
-`OTEL_EXPORTER_OTLP_TIMEOUT`, in milliseconds, then 10 s. A value that is
-not a whole number of milliseconds is ignored, as the SDK ignores it, and
-said once at `warn` with the variable's name; so is an
-`OTEL_METRIC_EXPORT_INTERVAL` that is not one.
+`OTEL_EXPORTER_OTLP_TIMEOUT`, in milliseconds, then 10 s. A metric export is
+also cut at `OTEL_METRIC_EXPORT_TIMEOUT`, the metric reader's bound (30 s by
+default), whichever of the two comes first. A value that is not a whole
+number of milliseconds is ignored, as the SDK ignores it, and said once at
+`warn` with the variable's name; so is an `OTEL_METRIC_EXPORT_INTERVAL` that
+is not one.
+
+A header the SDK sends — `OTEL_EXPORTER_OTLP_HEADERS`, or a signal's own,
+where a collector's credential travels — fails the boot beside an `http://`
+endpoint on another host, naming both variables: the credential would cross
+the network in clear, where RFC 6750 sends a bearer token over TLS alone, and
+no header's name tells a credential from another. So does such an endpoint
+carrying a query or userinfo (`?api-key=…`, `user:pass@`), which the request
+line carries, naming the variable that set it. To a collector on this host's
+loopback — `localhost`, `127.0.0.1`, `[::1]`, a sidecar beside the app — both
+are sent, since they never leave the machine: the client dials it directly,
+past any proxy `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names, which would
+reach its own host's loopback instead. Every other collector is reached
+through the environment's proxy, as any client is.
 
 ```bash frame="terminal"
 OTEL_EXPORTER_OTLP_ENDPOINT=https://otel-collector.internal:4318 \
@@ -248,7 +278,10 @@ umbrella's `opentelemetry` feature turns it on.
   provides nothing — useful for a tiny binary that should not link the OTel SDK.
   Such a binary still reads the three selectors: `none` is all it honours, and
   any other value, `otlp` included, fails the boot naming the variable, since
-  nothing would ship.
+  nothing would ship. For the same reason an endpoint set for a signal its
+  selector leaves on — `OTEL_EXPORTER_OTLP_ENDPOINT`, a signal's own, or a
+  pinned `otlp_endpoint` — fails the boot naming it and the feature, unless
+  `OTEL_SDK_DISABLED=true`.
 
 There is no `http` feature: the remote parent link and the sampling decision
 reach every edge through the span constructor, so a queue worker gets them as

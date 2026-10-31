@@ -1208,6 +1208,29 @@ lists what the boot, a log or the wire shows when one is missed.
   another service's sake unsets it, or sets `none`. `none` and
   `OTEL_SDK_DISABLED=true` are honoured, so a signal they switch off exports
   nothing, and the boot line says `off (OTEL_TRACES_EXPORTER=none)`.
+- **An OpenTelemetry variable nestrs cannot honour** fails `OpenTelemetry::init`
+  naming it and never its value: `OTEL_EXPORTER_OTLP_COMPRESSION` other than
+  `gzip` or `none` (`zstd` included), `OTEL_PROPAGATORS` other than
+  `tracecontext,baggage` (`b3`, `jaeger`, `none`, or one of the two alone),
+  `OTEL_TRACES_SAMPLER` naming a sampler the SDK does not build (`xray`,
+  `jaeger_remote`, a name not in lowercase), `OTEL_TRACES_SAMPLER_ARG` outside
+  0 to 1, an `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` other than
+  `cumulative`, `delta` or `lowmemory`, and `OTEL_CONFIG_FILE`. 6.x read none
+  of them: unset it, or set what the sentence accepts.
+- **`OTEL_EXPORTER_OTLP_HEADERS` beside an `http://` endpoint on another
+  host** fails the boot naming both variables, since the collector's
+  credential would cross the network in clear; so does such an endpoint
+  carrying userinfo or a query, naming the variable that set it. Export over
+  `https://`, or to a collector on loopback (`localhost`, `127.0.0.1`,
+  `[::1]`), which keeps receiving both, dialled past any proxy the
+  environment names.
+- **A binary built without the `otlp` feature with an endpoint set** —
+  `OTEL_EXPORTER_OTLP_ENDPOINT`, a signal's own, or a pinned `otlp_endpoint` —
+  fails the boot naming it and the feature, rather than export nothing in
+  silence. Build it with the umbrella's `opentelemetry` feature, or switch the
+  signal off (`OTEL_TRACES_EXPORTER=none`, or `OTEL_SDK_DISABLED=true`).
+- **A filter matching the boot line's `traces=off (no endpoint)`** reads
+  `traces="off (no endpoint)"` on a text console now; JSON is unchanged.
 - **A log setting pinned through `OpenTelemetry::init_with`** — a
   `log_filter`, `log_format` or `log_source_location` in the config it takes —
   gives way to `<PREFIX>_LOG` (else `RUST_LOG`), `<PREFIX>_LOG_FORMAT` or

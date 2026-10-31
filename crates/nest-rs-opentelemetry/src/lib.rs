@@ -36,6 +36,7 @@ mod metrics;
 mod module;
 #[cfg(feature = "otlp")]
 mod otlp;
+mod propagators;
 mod signal;
 
 #[cfg(feature = "otlp")]

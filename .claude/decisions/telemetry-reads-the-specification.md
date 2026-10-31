@@ -135,3 +135,105 @@ off as support: a deployment setting `OTEL_TRACES_EXPORTER=none` beside
 - **Reading the console's variables over a pin from the deployment tier
   alone**, as a `#[config]` pin does: `OTEL_*` would then need the same cut,
   and `init()` would stop reading a `.env` file's `OTEL_*`.
+
+## 2026-10-31 — every variable for what the crate builds is honoured or refused
+
+The entry above left variables a deployment sets passed over: a compression
+the SDK warned about and dropped, a propagator list and a configuration file
+nothing read, a metric reader's bound nobody applied, an endpoint a binary
+without the exporter ignored. Each is a deployment believing what the binary
+does not do. So:
+
+- **`OTEL_EXPORTER_OTLP_COMPRESSION` (and per signal) is resolved here and
+  handed to the exporter**: `gzip`, the one compression the OTLP
+  specification names, under opentelemetry-otlp's `gzip-http` (flate2, already
+  locked), or `none`, in any case. `zstd` is refused at boot: the SDK offers
+  it, the specification does not, and its feature would build a second copy of
+  the zstd C library beside the HTTP edge's (opentelemetry-otlp 0.33 asks zstd
+  0.13 where the workspace locks 0.14). A value is matched untrimmed, as the
+  SDK matches it, so the two never read one apart.
+- **The timeout and the compression are handed to each exporter**, never left
+  for the SDK to read again its own way: its retry deadline is then this
+  crate's bound whatever the variable's spelling.
+- **`OTEL_METRIC_EXPORT_TIMEOUT` bounds a metric export beside the exporter's
+  own timeout, and the earlier cuts it.** The specification defines both, at
+  30 s and 10 s; reading the reader's alone when the exporter's is unset, as
+  first proposed, would let it raise the exporter's specified 10 s. Not a
+  whole number of milliseconds is passed over and said, as its siblings are.
+- **`OTEL_PROPAGATORS` may only name what the framework propagates**:
+  `tracecontext` and `baggage`, its default, in any order and case. The kernel
+  propagates W3C Trace Context at every edge, and the queue carries a job's
+  W3C Baggage onto every push it makes — the one place baggage reaches; no
+  HTTP, WebSocket, GraphQL or MCP request reads or answers it. Neither goes
+  through the SDK's propagator, so a format the framework does not speak
+  (`b3`, `jaeger`, `xray`), a list leaving one of the two out, and `none` —
+  which cannot turn a correlation the framework owns off — are refused. A
+  list naming `tracecontext` alone is refused too, though an app with no
+  queue would honour it: the crate cannot see whether the queue is linked,
+  and a deployment believing baggage is not carried where it is would be the
+  defect. The SDK's global propagator, for what reads it outside the
+  framework, holds both formats, the specification's default, where it held
+  Trace Context alone.
+- **The sampler and the metric temporality, which the SDK passes over at
+  `warn` quoting the value, are resolved here and handed to the builders.**
+  `OTEL_TRACES_SAMPLER` names a sampler the SDK builds, matched as the SDK
+  matches it (lowercase), so the SDK never reads it apart; `jaeger_remote`,
+  `xray` and a misspelling are refused, where the SDK would sample every trace
+  over the pinned ratio. `OTEL_TRACES_SAMPLER_ARG` reads as a ratio between 0
+  and 1 or is refused — the specification would ignore it, but ignoring it
+  samples every trace — and one beside a sampler that takes none is passed
+  over and said. `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` is read
+  by the SDK's own parser and refused when it does not parse.
+- **`OTEL_CONFIG_FILE` (and its experimental name) is refused at boot**: the
+  Rust SDK has no file configuration, so nothing in the file would apply.
+- **A binary built without the `otlp` feature refuses an endpoint** —
+  `OTEL_EXPORTER_OTLP_ENDPOINT`, a signal's own, or a pinned `otlp_endpoint` —
+  for a signal its selector leaves on, naming it and the feature, and reads
+  the propagators and the configuration file as every build does. It now
+  reads `OTEL_SDK_DISABLED` too, where the entry above said it did not:
+  `true` says nothing exports, which is what such a binary does, so the
+  endpoint is no refusal there.
+- **A header beside a plaintext endpoint on another host is refused** — the
+  security decision this entry was asked for. `OTEL_EXPORTER_OTLP_HEADERS` (or
+  a signal's own), which the SDK sends with every export, is where a
+  collector's credential travels; over `http://` it crosses the network in
+  clear, where RFC 6750 §5.3 sends a bearer token over TLS alone (and RFC
+  7617 §4 a Basic one). No header's name tells a credential from another (vendors
+  name theirs `x-api-key`, `dd-api-key`, `x-honeycomb-team`), so every header
+  is held to it. The endpoint's own query and userinfo are held to it too:
+  every request line carries the query, a proxy's request line the userinfo
+  (reqwest 0.13 sends `http://user:pass@host/…` to an `HTTP_PROXY` whole), and
+  no parameter's name tells a credential apart either; the variable or field
+  that set the endpoint is named. On this host's loopback — `localhost`,
+  `127.0.0.0/8`, `::1`, in every profile — the credential never leaves the
+  machine, and a collector beside the app is the common plaintext shape, so it
+  is sent there.
+- **A loopback collector is dialled directly**, past any proxy the environment
+  names (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`): reqwest takes the
+  environment's proxy for every host, loopback included, unless `NO_PROXY`
+  lists it, so the exemption above would otherwise hand the credential, in
+  clear, to the proxy — which reaches its own host's loopback, the wrong
+  collector whatever the scheme. Any other endpoint keeps the environment's
+  proxy, as an egress proxy expects.
+- **The boot line's per-signal state is a string**, which the console quotes
+  (`traces="off (no endpoint)"`), so a logfmt reader takes it whole; so is
+  `service`.
+
+**Refused:**
+
+- **A `warn` naming the header variable, and the export sent** (the
+  deployment wrote `http://`, an explicit opening): the credential would still
+  ship in clear at every export, and safe by default outranks a line nobody
+  acts on. The opening `http://` declares is the telemetry's, not a
+  credential's.
+- **Refusing every header over plaintext, loopback included**: it refuses the
+  one plaintext shape where the credential never leaves the host.
+- **Refusing `Authorization` alone**: a vendor's key header is a credential no
+  standard names, and telling them apart by name is invented.
+- **A service mesh's encryption as an exemption**: the crate cannot see a
+  mesh, and a header that relies on one ships in clear wherever it is absent
+  or bypassed; such a deployment writes `https://`.
+- **Refusing a loopback endpoint while a proxy is set**, rather than dialling
+  it directly: a proxy cannot reach this host's loopback, so there is no
+  deployment the refusal would serve.
+- **Honouring `zstd`**, above.

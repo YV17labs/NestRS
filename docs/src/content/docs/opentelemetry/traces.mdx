@@ -79,13 +79,19 @@ preserved across the hop.
 
 `ParentBased(TraceIdRatioBased(ratio))` — children inherit the parent's
 sampling decision, so a request either samples end-to-end or not at all. The
-deployment picks the sampler with the specification's own variables, which
-the SDK reads:
+deployment picks the sampler with the specification's own variables, read as
+the SDK reads them:
 
 ```bash
 OTEL_TRACES_SAMPLER=parentbased_traceidratio
 OTEL_TRACES_SAMPLER_ARG=0.1
 ```
+
+A sampler the SDK does not build (`jaeger_remote`, `xray`, a misspelling,
+`Always_On` — the names are lowercase) and an argument that is not a number
+between 0 and 1 fail the boot naming the variable, where the SDK would sample
+every trace in their place. An argument beside a sampler that takes none is
+ignored and said at `warn`.
 
 Or pinned, in `main`, under those variables:
 

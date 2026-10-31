@@ -159,6 +159,7 @@ pub mod __private {
     };
     pub use crate::jobs::__private::producer_of;
     pub use crate::outbox::arm_outbox;
+    pub use crate::queue::IsJob;
     pub use crate::queue_name::is_valid_queue_name;
 
     pub use nest_rs_database;

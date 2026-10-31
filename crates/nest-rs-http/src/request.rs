@@ -722,6 +722,12 @@ impl fmt::Debug for RequestBody {
 /// # Ok(())
 /// # }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a handler parameter",
+    label = "not read off the request",
+    note = "a body is `Json<T>`, a path `Path<T>`, a query `Query<T>`; a service is `#[inject]`ed \
+            on the controller struct, and a request-scoped one read through `Scoped<T>`"
+)]
 pub trait FromRequest<'a>: Sized {
     /// Reads `Self` from `req`, taking `body` if it needs it.
     fn from_request(

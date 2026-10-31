@@ -17,7 +17,7 @@ use nest_rs_codegen::__private::{
 use nest_rs_codegen::{Grammar, Refusals, duration_millis, snake_case};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
@@ -229,14 +229,11 @@ fn emit_method(
 
     let QueueId::Type(queue_ty) = &queue;
     let queue_str = quote!(<#queue_ty as ::nest_rs_queue::Queue>::NAME);
-    let queue_assert = quote! {
+    let queue_assert = quote_spanned! {queue_ty.span()=>
         const _: () = {
-            // Requires `<#queue_ty as Queue>::Job == #deser_ty`; a mismatch
-            // fails here naming both the queue's `Job` and the handler's
-            // argument type.
-            fn __nestrs_assert_queue_job<__Q>()
+            fn __nestrs_assert_queue_job<__Q: ::nest_rs_queue::Queue>()
             where
-                __Q: ::nest_rs_queue::Queue<Job = #deser_ty>,
+                <__Q as ::nest_rs_queue::Queue>::Job: ::nest_rs_queue::__private::IsJob<#deser_ty>,
             {
             }
             let _ = __nestrs_assert_queue_job::<#queue_ty>;

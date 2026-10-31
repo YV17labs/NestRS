@@ -29,3 +29,18 @@ pub trait Queue: 'static {
     /// The payload pushed onto and drained off this queue.
     type Job: Job;
 }
+
+/// What `#[process]` bounds a queue's `Job` by: `T` itself, and nothing else.
+///
+/// An identity, never `Queue<Job = T>`: a projection's mismatch is `E0271`,
+/// which blames the queue's declaration as the type "expected"; a missing impl
+/// is `E0277`, which says this sentence naming both types.
+#[diagnostic::on_unimplemented(
+    message = "`#[process]` takes `{T}`, and its queue's job is `{Self}`",
+    label = "this queue's job is `{Self}`",
+    note = "a `#[process]` method's argument is the job of the queue it names: take `{Self}`, or \
+            name the queue whose job is `{T}`"
+)]
+pub trait IsJob<T> {}
+
+impl<T> IsJob<T> for T {}

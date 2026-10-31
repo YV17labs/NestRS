@@ -1,0 +1,46 @@
+error[E0277]: `Settings` is not a handler parameter
+  --> tests/integration/diagnostics/http/a_handler_parameter_that_is_not_an_extractor_says_what_reads_one.rs:16:37
+   |
+16 |     async fn read(&self, _settings: Settings) -> &'static str {
+   |                                     ^^^^^^^^ not read off the request
+   |
+help: the trait `FromRequest<'_>` is not implemented for `Settings`
+  --> tests/integration/diagnostics/http/a_handler_parameter_that_is_not_an_extractor_says_what_reads_one.rs:8:1
+   |
+ 8 | struct Settings;
+   | ^^^^^^^^^^^^^^^
+   = note: a body is `Json<T>`, a path `Path<T>`, a query `Query<T>`; a service is `#[inject]`ed on the controller struct, and a request-scoped one read through `Scoped<T>`
+   = help: the following other types implement trait `FromRequest<'a>`:
+             &'a nest_rs::http::Request
+             Ambient<T>
+             Authorize<A, S>
+             ClientIp
+             RawBody
+             Result<T, HttpError>
+             nest_rs::http::Body
+             nest_rs::http::Form<T>
+           and $N others
+
+error[E0277]: `Settings` is not a handler parameter
+  --> tests/integration/diagnostics/http/a_handler_parameter_that_is_not_an_extractor_says_what_reads_one.rs:13:1
+   |
+13 | #[routes]
+   | ^^^^^^^^^ not read off the request
+   |
+help: the trait `FromRequest<'_>` is not implemented for `Settings`
+  --> tests/integration/diagnostics/http/a_handler_parameter_that_is_not_an_extractor_says_what_reads_one.rs:8:1
+   |
+ 8 | struct Settings;
+   | ^^^^^^^^^^^^^^^
+   = note: a body is `Json<T>`, a path `Path<T>`, a query `Query<T>`; a service is `#[inject]`ed on the controller struct, and a request-scoped one read through `Scoped<T>`
+   = help: the following other types implement trait `FromRequest<'a>`:
+             &'a nest_rs::http::Request
+             Ambient<T>
+             Authorize<A, S>
+             ClientIp
+             RawBody
+             Result<T, HttpError>
+             nest_rs::http::Body
+             nest_rs::http::Form<T>
+           and $N others
+   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

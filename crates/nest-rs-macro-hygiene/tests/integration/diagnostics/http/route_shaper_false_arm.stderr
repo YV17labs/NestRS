@@ -1,14 +1,15 @@
-error[E0277]: the trait bound `Authorize<u8>: FromRequest<'_>` is not satisfied
+error[E0277]: `Authorize<u8>` is not a handler parameter
   --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:20:34
    |
 20 |     async fn list(&self, _authz: Authorize<u8>) -> Result<Json<u8>> {
-   |                                  ^^^^^^^^^^^^^ unsatisfied trait bound
+   |                                  ^^^^^^^^^^^^^ not read off the request
    |
 help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
   --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:11:1
    |
 11 | struct Authorize<T>(T);
    | ^^^^^^^^^^^^^^^^^^^
+   = note: a body is `Json<T>`, a path `Path<T>`, a query `Query<T>`; a service is `#[inject]`ed on the controller struct, and a request-scoped one read through `Scoped<T>`
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::http::Request
              Ambient<T>
@@ -20,17 +21,18 @@ help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
              nest_rs::http::Form<T>
            and $N others
 
-error[E0277]: the trait bound `Authorize<u8>: FromRequest<'_>` is not satisfied
+error[E0277]: `Authorize<u8>` is not a handler parameter
   --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:16:1
    |
 16 | #[routes]
-   | ^^^^^^^^^ unsatisfied trait bound
+   | ^^^^^^^^^ not read off the request
    |
 help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
   --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:11:1
    |
 11 | struct Authorize<T>(T);
    | ^^^^^^^^^^^^^^^^^^^
+   = note: a body is `Json<T>`, a path `Path<T>`, a query `Query<T>`; a service is `#[inject]`ed on the controller struct, and a request-scoped one read through `Scoped<T>`
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::http::Request
              Ambient<T>

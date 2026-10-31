@@ -749,8 +749,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 None => typed_body,
             },
         };
-        // Read by its type, so an alias documents it too; a type no expression
-        // can name, or an `#[sse]` stream, answers nothing beside its body.
+        // Probed by its type for its body and what it answers beside it, so an
+        // alias documents both; a type no expression can name, or an `#[sse]`
+        // stream, is not probed.
         let answered = answer_type(&method.sig.output).filter(|_| !is_sse);
         // Kept under a shaper: masking returns a subset of this shape, recorded as `masked`.
         let response = match (&api.response, answered) {

@@ -56,7 +56,7 @@ impl<W: RouteWrapper> SiteTail for RouteTail<W> {
             Box::pin(self.pipes.apply(self.handler, req)).await?;
         }
         let mut response = self.wrapper.call(req).await?;
-        stamp_answer(caller_path(req), &mut response);
+        stamp_answer(|| caller_path(req), &mut response);
         Ok(response)
     }
 }

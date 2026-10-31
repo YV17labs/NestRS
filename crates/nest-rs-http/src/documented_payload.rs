@@ -114,7 +114,7 @@ mod tests {
 
     type Minted = Created<Json<String>>;
 
-    /// The schema `R`'s body is documented with, rendered.
+    /// The schema a probed body is documented with, rendered.
     fn documented(payload: Option<SchemaFn>) -> Option<serde_json::Value> {
         payload.map(|schema_of| schema_of(&mut schemars::SchemaGenerator::default()).to_value())
     }

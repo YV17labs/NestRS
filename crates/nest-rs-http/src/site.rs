@@ -68,7 +68,7 @@ impl SiteTail for EndpointTail {
         // hold no head: the address its answer is stamped on is kept first.
         let caller = caller_uri(&taken).clone();
         let mut response = self.endpoint.call(taken).await?;
-        stamp_answer(caller.path(), &mut response);
+        stamp_answer(|| caller.path(), &mut response);
         Ok(response)
     }
 }
@@ -76,10 +76,11 @@ impl SiteTail for EndpointTail {
 /// Write the headers a typed answer carries until the path the caller
 /// addressed is at hand — a [`Created`](crate::Created)'s `Location`, a
 /// [`Paginated`](crate::Paginated)'s `Link` — whoever answered it: every tail
-/// running a developer's code calls it on its answer.
-pub(crate) fn stamp_answer(caller_path: &str, response: &mut Response) {
-    crate::created::stamp_location(caller_path, response);
-    crate::paginated::stamp_next_link(caller_path, response);
+/// running a developer's code calls it on its answer. `caller_path` is read
+/// only for an answer carrying one.
+pub(crate) fn stamp_answer<'a>(caller_path: impl Fn() -> &'a str, response: &mut Response) {
+    crate::created::stamp_location(&caller_path, response);
+    crate::paginated::stamp_next_link(&caller_path, response);
 }
 
 /// How the unit of work a request runs is settled.

@@ -62,8 +62,8 @@ impl<T> Paginated<T> {
     }
 }
 
-/// The next page a [`Paginated`] answer carries until its route writes the
-/// `Link`, which needs the request.
+/// The next page a [`Paginated`] answer carries until the tail answering it
+/// writes the `Link`, which needs the path the caller addressed.
 #[derive(Clone, Debug)]
 struct NextPage {
     first: u64,
@@ -80,10 +80,11 @@ impl<T: IntoResponse> IntoResponse for Paginated<T> {
     }
 }
 
-/// Write the `Link` a [`Paginated`] answer carries, under `caller_path`.
-pub(crate) fn stamp_next_link(caller_path: &str, response: &mut Response) {
+/// Write the `Link` a [`Paginated`] answer carries, under the path
+/// `caller_path` reads, read only when one is carried.
+pub(crate) fn stamp_next_link<'a>(caller_path: impl FnOnce() -> &'a str, response: &mut Response) {
     if let Some(NextPage { first, after }) = response.extensions_mut().remove::<NextPage>() {
-        set_next_link(response, caller_path, first, &after);
+        set_next_link(response, caller_path(), first, &after);
     }
 }
 
@@ -95,7 +96,7 @@ mod tests {
 
     fn stamped(page: Paginated<&'static str>) -> Option<String> {
         let mut response = page.into_response();
-        stamp_next_link("/tracks", &mut response);
+        stamp_next_link(|| "/tracks", &mut response);
         response
             .headers()
             .get(LINK)

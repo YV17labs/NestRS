@@ -62,8 +62,8 @@ impl<T> Created<T> {
     }
 }
 
-/// The id a [`Created`] answer carries until its route writes the
-/// `Location`, which needs the request.
+/// The id a [`Created`] answer carries until the tail answering it writes the
+/// `Location`, which needs the path the caller addressed.
 #[derive(Clone)]
 struct CreatedAt(String);
 
@@ -76,10 +76,11 @@ impl<T: IntoResponse> IntoResponse for Created<T> {
     }
 }
 
-/// Write the `Location` a [`Created`] answer carries, under `caller_path`.
-pub(crate) fn stamp_location(caller_path: &str, response: &mut Response) {
+/// Write the `Location` a [`Created`] answer carries, under the path
+/// `caller_path` reads, read only when one is carried.
+pub(crate) fn stamp_location<'a>(caller_path: impl FnOnce() -> &'a str, response: &mut Response) {
     if let Some(CreatedAt(id)) = response.extensions_mut().remove::<CreatedAt>() {
-        set_created_location(response, caller_path, &id);
+        set_created_location(response, caller_path(), &id);
     }
 }
 
@@ -95,7 +96,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
         assert!(response.headers().get(LOCATION).is_none());
 
-        stamp_location("/orgs", &mut response);
+        stamp_location(|| "/orgs", &mut response);
 
         assert_eq!(
             response
@@ -111,7 +112,7 @@ mod tests {
     fn a_response_no_created_answer_built_keeps_its_headers() {
         let mut response = "plain".into_response();
 
-        stamp_location("/orgs", &mut response);
+        stamp_location(|| "/orgs", &mut response);
 
         assert!(response.headers().get(LOCATION).is_none());
     }

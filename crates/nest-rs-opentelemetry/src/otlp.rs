@@ -67,7 +67,7 @@ use uuid::Uuid;
 
 use crate::config::{
     OpenTelemetryConfig, PINNED_ENDPOINT, PINNED_INTERVAL, PINNED_RATIO, PINNED_TLS,
-    refuse_config_file,
+    blank_as_unset, refuse_config_file,
 };
 use crate::error::OpenTelemetryError;
 use crate::propagators::{global_propagator, read_propagators};
@@ -297,7 +297,7 @@ fn build_reading(
     binary: Option<&AppIdentity>,
     read: impl Fn(&str) -> Option<String>,
 ) -> Result<Exporters, OpenTelemetryError> {
-    let read = |name: &str| read(name).filter(|value| !value.trim().is_empty());
+    let read = blank_as_unset(read);
     refuse_config_file(&read)?;
     read_propagators(&read)?;
     let mut passed_over = Vec::new();
@@ -652,7 +652,7 @@ fn export(
 ) -> Result<Option<Export>, ConfigError> {
     let (url, set_by) = if let Some(full) = read(signal.endpoint_var()) {
         let set_by = signal.endpoint_var();
-        (parsed_endpoint(full.trim(), set_by)?, set_by)
+        (parsed_endpoint(&full, set_by)?, set_by)
     } else if let Some(base) = read(OTEL_EXPORTER_OTLP_ENDPOINT) {
         (
             base_endpoint(&base, signal, OTEL_EXPORTER_OTLP_ENDPOINT)?,
@@ -726,10 +726,10 @@ fn export(
     }))
 }
 
-/// `raw`, set by `set_by`, parsed as a URL, its refusal naming the setter and
-/// never quoting the value, which may carry a credential.
+/// `raw`, set by `set_by`, trimmed and parsed as a URL, its refusal naming the
+/// setter and never quoting the value, which may carry a credential.
 fn parsed_endpoint(raw: &str, set_by: &str) -> Result<url::Url, ConfigError> {
-    url::Url::parse(raw)
+    url::Url::parse(raw.trim())
         .map_err(|error| ConfigError::parse(set_by, format!("does not parse as a URL: {error}")))
 }
 
@@ -739,7 +739,7 @@ fn parsed_endpoint(raw: &str, set_by: &str) -> Result<url::Url, ConfigError> {
 /// place: one is refused, where appending the path as a string would hide it
 /// inside the query and export to the collector's root.
 fn base_endpoint(base: &str, signal: Signal, set_by: &str) -> Result<url::Url, ConfigError> {
-    let mut url = parsed_endpoint(base.trim(), set_by)?;
+    let mut url = parsed_endpoint(base, set_by)?;
     if url.query().is_some_and(|query| !query.is_empty()) {
         return Err(ConfigError::parse(
             set_by,
@@ -1050,7 +1050,7 @@ const NO_VALUE_LENGTH_LIMIT: &str =
 /// Every specification variable no crate this build links reads, nor offers a
 /// setting for (opentelemetry_sdk 0.33, opentelemetry-otlp 0.33), and the
 /// SDK's own the processor this crate builds ignores.
-const UNSERVED: [Unserved; 8] = [
+const UNSERVED: &[Unserved] = &[
     Unserved {
         variable: OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT,
         honoured: None,
@@ -2475,12 +2475,15 @@ mod tests {
         }
     }
 
-    /// The export a plaintext endpoint with `set` resolves to, or its refusal.
-    fn plaintext_export(
-        endpoint: &str,
-        set: &'static [(&'static str, &'static str)],
+    /// The export `signal` resolves to under `set`, the pinned endpoint
+    /// `pinned`, or its refusal.
+    fn resolved(
+        signal: Signal,
+        pinned: Option<&str>,
+        set: &[(&str, &str)],
     ) -> Result<Option<Export>, ConfigError> {
-        export(Signal::Logs, &pinned_endpoint(endpoint), &reading(set))
+        let config = pinned.map_or_else(OpenTelemetryConfig::default, pinned_endpoint);
+        export(signal, &config, &reading(set))
     }
 
     /// A header, which may be a collector's credential, never crosses the
@@ -2498,7 +2501,7 @@ mod tests {
                 OTEL_EXPORTER_OTLP_HEADERS => &[(OTEL_EXPORTER_OTLP_HEADERS, "api-key=s3cr3t")],
                 _ => &[(OTEL_EXPORTER_OTLP_LOGS_HEADERS, "api-key=s3cr3t")],
             };
-            let Err(refused) = plaintext_export(endpoint, set) else {
+            let Err(refused) = resolved(Signal::Logs, Some(endpoint), set) else {
                 panic!("a header over plaintext to {endpoint} must not build");
             };
             let said = refused.to_string();
@@ -2528,25 +2531,11 @@ mod tests {
             ("https://localhost:4318", true),
             ("https://collector.internal:4318", false),
         ] {
-            let export = plaintext_export(endpoint, HEADERS)
+            let export = resolved(Signal::Logs, Some(endpoint), HEADERS)
                 .expect(endpoint)
                 .expect(endpoint);
             assert_eq!(export.loopback, loopback, "{endpoint}");
         }
-    }
-
-    /// The export `signal` resolves to under `set`, the pinned endpoint
-    /// `pinned`, or its refusal.
-    fn resolved(
-        signal: Signal,
-        pinned: Option<&str>,
-        set: &[(&str, &str)],
-    ) -> Result<Option<Export>, ConfigError> {
-        let config = OpenTelemetryConfig {
-            otlp_endpoint: pinned.map(str::to_owned),
-            ..OpenTelemetryConfig::default()
-        };
-        export(signal, &config, &reading(set))
     }
 
     /// An endpoint's own query, which every request line carries, may hold a
@@ -2816,9 +2805,7 @@ mod tests {
     #[test]
     fn a_signal_s_headers_are_its_own_then_the_general_ones_and_blank_is_unset() {
         let read = |set: &[(&str, &str)], signal: Signal| {
-            let read = reading(set);
-            let blank_is_unset = |name: &str| read(name).filter(|value| !value.trim().is_empty());
-            headers(signal, &blank_is_unset).expect("readable")
+            headers(signal, &blank_as_unset(reading(set))).expect("readable")
         };
         let pairs = |set_by: &'static str, pairs: &[(&str, &str)]| {
             Some(Headers {

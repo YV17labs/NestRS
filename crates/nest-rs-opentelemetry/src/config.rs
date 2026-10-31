@@ -173,6 +173,14 @@ impl OpenTelemetryConfig {
     }
 }
 
+/// `read`, a blank value read as unset, as the specification orders every
+/// variable's.
+pub(crate) fn blank_as_unset(
+    read: impl Fn(&str) -> Option<String>,
+) -> impl Fn(&str) -> Option<String> {
+    move |name: &str| read(name).filter(|value| !value.trim().is_empty())
+}
+
 /// Refuses the specification's file configuration, naming its variable and
 /// never the path: the Rust SDK reads no such file, so a deployment pointing
 /// at one would believe a configuration nothing applies.

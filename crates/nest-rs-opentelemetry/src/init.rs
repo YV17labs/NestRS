@@ -173,7 +173,7 @@ fn refuse_what_no_exporter_serves(
 ) -> Result<(), nest_rs_config::ConfigError> {
     use crate::signal::{OTEL_EXPORTER_OTLP_ENDPOINT, SdkSwitch, Selection, Signal};
 
-    let read = |name: &str| read(name).filter(|value| !value.trim().is_empty());
+    let read = crate::config::blank_as_unset(read);
     crate::config::refuse_config_file(&read)?;
     crate::propagators::read_propagators(&read)?;
     let disabled = SdkSwitch::read(&read) == SdkSwitch::Off;

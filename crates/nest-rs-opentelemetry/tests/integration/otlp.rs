@@ -34,13 +34,10 @@ enum Behaviour {
 const ACCEPTED: &str = "HTTP/1.1 200 OK\r\ncontent-type: application/x-protobuf\r\n\
                         content-length: 0\r\nconnection: close\r\n\r\n";
 
-/// One export a collector read: where it was posted, its headers, and how its
-/// body was encoded.
+/// One export a collector read: where it was posted, its headers and its body.
 #[derive(Clone)]
 struct Received {
     path: String,
-    /// Its `content-encoding`, lowercased.
-    encoding: Option<String>,
     /// Every header line, name and value lowercased.
     headers: Vec<(String, String)>,
     body: Vec<u8>,
@@ -63,7 +60,7 @@ impl std::fmt::Debug for Received {
             f,
             "{} {:?} ({} bytes)",
             self.path,
-            self.encoding,
+            self.header("content-encoding"),
             self.body.len()
         )
     }
@@ -133,19 +130,14 @@ impl Collector {
                             .next()
                             .and_then(|line| line.split_whitespace().nth(1))
                             .unwrap_or_default();
-                        let headers: Vec<(String, String)> = head
+                        let headers = head
                             .lines()
                             .skip(1)
                             .filter_map(|line| line.split_once(':'))
                             .map(|(name, value)| (name.trim().to_owned(), value.trim().to_owned()))
                             .collect();
-                        let encoding = headers
-                            .iter()
-                            .find(|(name, _)| name == "content-encoding")
-                            .map(|(_, value)| value.clone());
                         kept.lock().expect("the exports").push(Received {
                             path: path.to_owned(),
-                            encoding,
                             headers,
                             body: read[body_at..].to_vec(),
                         });
@@ -425,7 +417,11 @@ fn otel_exporter_otlp_compression_gzip_compresses_every_export() {
     let received = collector.received();
     assert!(!received.is_empty(), "the flush reached the collector");
     for export in received {
-        assert_eq!(export.encoding.as_deref(), Some("gzip"), "{export:?}");
+        assert_eq!(
+            export.header("content-encoding"),
+            Some("gzip"),
+            "{export:?}"
+        );
         assert!(export.body.starts_with(&[0x1f, 0x8b]), "{export:?}");
     }
 }
@@ -447,11 +443,16 @@ fn a_signal_s_own_compression_wins_over_the_general_one() {
     let received = collector.received();
     let logs: Vec<&Received> = received.iter().filter(|r| r.path == "/v1/logs").collect();
     assert!(!logs.is_empty(), "the logs exported");
-    assert!(logs.iter().all(|r| r.encoding.is_none()), "{logs:?}");
+    assert!(
+        logs.iter().all(|r| r.header("content-encoding").is_none()),
+        "{logs:?}"
+    );
     let traces: Vec<&Received> = received.iter().filter(|r| r.path == "/v1/traces").collect();
     assert!(!traces.is_empty(), "the traces exported");
     assert!(
-        traces.iter().all(|r| r.encoding.as_deref() == Some("gzip")),
+        traces
+            .iter()
+            .all(|r| r.header("content-encoding") == Some("gzip")),
         "{traces:?}"
     );
 }
@@ -662,23 +663,29 @@ fn an_empty_signal_headers_variable_reads_as_unset_and_the_general_headers_reach
     ));
 
     let received = collector.received();
-    let logs: Vec<&Received> = received.iter().filter(|r| r.path == "/v1/logs").collect();
-    assert!(!logs.is_empty(), "the logs exported");
-    assert!(
-        logs.iter().all(|r| r.header("x-probe") == Some("general")),
-        "the general headers reach a signal whose own variable is empty: {:?}",
-        logs.iter().map(|r| r.header("x-probe")).collect::<Vec<_>>()
-    );
-    let traces: Vec<&Received> = received.iter().filter(|r| r.path == "/v1/traces").collect();
-    assert!(!traces.is_empty(), "the traces exported");
-    assert!(
-        traces.iter().all(|r| r.header("x-probe") == Some("traces")),
-        "a signal's own headers win over the general ones: {:?}",
-        traces
+    for (path, probe, why) in [
+        (
+            "/v1/logs",
+            "general",
+            "the general headers reach a signal whose own variable is empty",
+        ),
+        (
+            "/v1/traces",
+            "traces",
+            "a signal's own headers win over the general ones",
+        ),
+    ] {
+        let probes: Vec<Option<&str>> = received
             .iter()
+            .filter(|r| r.path == path)
             .map(|r| r.header("x-probe"))
-            .collect::<Vec<_>>()
-    );
+            .collect();
+        assert!(!probes.is_empty(), "{path} exported");
+        assert!(
+            probes.iter().all(|p| *p == Some(probe)),
+            "{why}: {probes:?}"
+        );
+    }
 }
 
 /// A header's value is percent-decoded once, whichever variable reaches the

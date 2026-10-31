@@ -357,11 +357,14 @@ fn check_all(generate: &[Vec<&str>], what: &str) {
 fn every_adapter_over_a_plain_port_compiles() {
     let mut generate = vec![vec!["g", "feature", "blog"]];
     generate.extend(every_edge("blog", &[]));
+    // The entity retires the `#[subject]` `g graphql` and `g mcp` wrote,
+    // re-gating both edges' operations on it.
+    generate.push(vec!["g", "entity", "blog"]);
     // An app added to a workspace that already has one.
     generate.push(vec!["new", "admin"]);
     check_all(
         &generate,
-        "every adapter over a plain port, and a second app",
+        "every adapter over a plain port, the entity retiring its subject, and a second app",
     );
 }
 

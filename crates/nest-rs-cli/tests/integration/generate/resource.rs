@@ -347,11 +347,13 @@ fn a_column_the_grammar_does_not_read_is_refused() {
     }
 }
 
-/// The migration `g resource` wrote is not written twice: `g migration` of
-/// its name is refused, naming the file, and so is a resource whose table
-/// already has one.
+/// The table `g resource` wrote a migration for is not created twice: a `g
+/// migration` creating it, however spelled, is refused naming the file and
+/// the table, while a later change to it is a migration of its own; and a
+/// resource over a table a migration creates is refused with its own way
+/// through, never `g migration`'s.
 #[test]
-fn a_migration_name_already_registered_is_refused() {
+fn a_table_a_registered_migration_creates_is_not_created_twice() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     write_fake_migrations_crate(dir.path());
@@ -360,16 +362,59 @@ fn a_migration_name_already_registered_is_refused() {
     let (stem, _) = migration_named(dir.path(), "create_posts");
     let before = files_under(dir.path());
 
-    let refused = run_err(dir.path(), &["g", "migration", "create_posts", "-p", root]);
-    assert!(
-        refused.contains(&format!("crates/migrations/src/{stem}.rs")),
-        "the refusal names the migration that holds the name: {refused}"
+    for name in ["create_posts", "create_post", "create_posts_table"] {
+        let refused = run_err(dir.path(), &["g", "migration", name, "-p", root]);
+        for says in [
+            format!("crates/migrations/src/{stem}.rs"),
+            "the table `post`".to_owned(),
+            "`add_<column>_to_post`".to_owned(),
+        ] {
+            assert!(refused.contains(&says), "{name}: {says}: {refused}");
+        }
+        assert_eq!(
+            files_under(dir.path()),
+            before,
+            "{name}: nothing is written"
+        );
+    }
+
+    run_ok(
+        dir.path(),
+        &["g", "migration", "add_body_to_posts", "-p", root],
     );
-    assert_eq!(files_under(dir.path()), before, "nothing is written");
+    let refused = run_err(
+        dir.path(),
+        &["g", "migration", "add_body_to_posts", "-p", root],
+    );
+    assert!(
+        refused.contains("a migration named `add_body_to_posts` is registered already"),
+        "{refused}"
+    );
+    run_ok(
+        dir.path(),
+        &["g", "migration", "create_index_on_posts", "-p", root],
+    );
+    let (_, index) = migration_named(dir.path(), "create_index_on_posts");
+    assert!(
+        index.contains("TODO") && !index.contains("Post::Name"),
+        "an index is no create-table of the entity's columns: {index}"
+    );
 
     fs::remove_dir_all(dir.path().join("crates/features/src/posts")).unwrap();
+    let before = files_under(dir.path());
     let refused = run_err(dir.path(), &["g", "resource", "posts", "-p", root]);
-    assert!(refused.contains(&format!("{stem}.rs")), "{refused}");
+    for says in [
+        format!("crates/migrations/src/{stem}.rs"),
+        "delete that file and its two registrations".to_owned(),
+        "`nestrs g entity posts`".to_owned(),
+    ] {
+        assert!(refused.contains(&says), "{says}: {refused}");
+    }
+    assert!(
+        !refused.contains("add_<column>"),
+        "`g migration`'s remedy is not the resource's: {refused}"
+    );
+    assert_eq!(files_under(dir.path()), before, "nothing is written");
 }
 
 /// A workspace without the migrations crate gets it, with the resource's

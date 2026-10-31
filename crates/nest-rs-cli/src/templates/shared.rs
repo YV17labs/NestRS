@@ -369,18 +369,24 @@ all.
 
 ## Database — migrations and seed
 
-`nestrs g migration <name>` writes the file, its `mod` line in
-`crates/migrations/src/lib.rs`, and regenerates `migrator.rs` from that list —
-the two registrations cannot drift, and neither is written by hand.
+A migration is a file in `crates/migrations/src/`, its `mod` line in `lib.rs`,
+and `migrator.rs` regenerated from that list — the two registrations cannot
+drift, and neither is written by hand. `nestrs g resource <name>
+<column>:<type>…` writes its table's migration from the same column list as
+the entity and the round trip; `nestrs g migration <name>` writes any other.
 
 **The `DeriveIden` enum in a migration names the table, not the migration.**
 `DeriveIden` snake-cases it straight into the DDL, so it must agree with the
 entity's `#[sea_orm(table_name = "...")]` or the entity reads a table nothing
-created. The scaffolded body creates a table with the house columns
-(`created_at` / `updated_at` / `deleted_at`, matching what `#[expose(...,
-soft_delete, timestamps)]` expects); swap it for an `alter_table` to change an
-existing one. Every column you add goes in **twice** — once in the builder, once
-as a variant of that enum.
+created. `nestrs g migration create_<table>` over an entity `nestrs g entity`
+wrote reads its `Model`: each column goes into the builder and the enum, and a
+field it cannot type is named for you to add. A table a registered migration
+creates is never created twice, so `create_posts` after `g resource posts` is
+refused: a later change takes a migration of its own name
+(`add_<column>_to_<table>`), whose skeleton — a table with the house columns
+`created_at` / `updated_at` / `deleted_at` that `#[expose(..., soft_delete,
+timestamps)]` expects — you swap for an `alter_table`, each column you add in
+the builder and as a variant of that enum.
 
 `crates/seed/` runs on `nestrs run db seed`, and `nestrs run db reset` runs it
 against a database that may already hold rows — so every insert there is

@@ -47,6 +47,10 @@ A resource server pins a single alias once. The reference feature's
 back.
 
 ```rust title="crates/features/src/authn/strategy.rs (from the demo)"
+use nest_rs::authn::JwtStrategy;
+
+use super::Claims;
+
 pub type AuthnStrategy = JwtStrategy<Claims>;
 
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;

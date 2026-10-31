@@ -272,7 +272,7 @@ fn check_name(name: &str) -> Result<(), String> {
              letter (`published_at`)"
         ));
     }
-    if syn::parse_str::<syn::Ident>(name).is_err() {
+    if crate::naming::is_keyword(name) {
         return Err(format!("`{name}` is a Rust keyword, which no field takes"));
     }
     if HOUSE.contains(&name) {
@@ -319,43 +319,77 @@ pub(crate) fn assertions(columns: &[Column]) -> String {
     columns.iter().map(Column::assertion).collect()
 }
 
-/// A column of the table a migration creates, with what its builder adds to
-/// its type.
+/// What the database writes into a column an insert leaves unset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fill {
+    /// Nothing: an insert names it.
+    Nothing,
+    /// The insert's instant: a creation or update stamp.
+    Now,
+    /// Its identity's next integer: the key SeaORM auto-increments, which an
+    /// insert leaves to the database.
+    Identity,
+    /// A version-7 UUID: the `Uuid` key of a table no `#[expose]` seeds.
+    UuidV7,
+}
+
+impl Fill {
+    /// What a column holding no key defaults to: a creation or update stamp
+    /// its insert's instant, any other nothing.
+    fn of_plain(column: &Column) -> Self {
+        let stamp = column.ty == ColumnType::Datetime
+            && !column.nullable
+            && matches!(column.name.as_str(), "created_at" | "updated_at");
+        if stamp { Self::Now } else { Self::Nothing }
+    }
+
+    /// What a table's sole key defaults to, read as SeaORM reads it: an
+    /// `auto_increment` it declares, else auto-incremented unless a `String`
+    /// or a `Uuid`; a `Uuid` key no `#[expose]` seeds takes `uuidv7()`. An
+    /// auto-incremented key of another type than an integer is no column the
+    /// builder types, which `Err` names.
+    fn of_key(ty: ColumnType, auto_increment: Option<bool>, exposed: bool) -> Result<Self, String> {
+        let incremented = auto_increment.unwrap_or(!matches!(
+            ty,
+            ColumnType::String | ColumnType::Text | ColumnType::Uuid
+        ));
+        match (incremented, ty) {
+            (true, ColumnType::Integer | ColumnType::Bigint) => Ok(Self::Identity),
+            (true, _) => Err(format!("an auto-incremented `{}` key", ty.rust())),
+            (false, ColumnType::Uuid) if !exposed => Ok(Self::UuidV7),
+            (false, _) => Ok(Self::Nothing),
+        }
+    }
+
+    /// The builder's call that sets it.
+    fn call(self) -> Option<&'static str> {
+        match self {
+            Self::Nothing => None,
+            Self::Now => Some(".default(Expr::current_timestamp())"),
+            Self::Identity => Some(".auto_increment()"),
+            Self::UuidV7 => Some(".default(Expr::cust(\"uuidv7()\"))"),
+        }
+    }
+}
+
+/// A column of the table a migration creates, with what the database fills
+/// it with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TableColumn {
     column: Column,
-    /// The primary key.
-    key: bool,
-    /// A creation or update stamp, defaulting to the insert's instant.
-    stamped: bool,
+    fill: Fill,
 }
 
 impl TableColumn {
     fn plain(column: Column) -> Self {
-        let stamped = column.ty == ColumnType::Datetime
-            && !column.nullable
-            && matches!(column.name.as_str(), "created_at" | "updated_at");
-        Self {
-            column,
-            key: false,
-            stamped,
-        }
+        let fill = Fill::of_plain(&column);
+        Self { column, fill }
     }
 
-    /// Its `DeriveIden` variant, and the `iden` its name needs when heck,
-    /// which `DeriveIden` snake-cases the variant with, would not give it back.
-    fn variant(&self) -> (String, Option<&str>) {
-        let name = &self.column.name;
-        let variant = name.to_upper_camel_case();
-        let iden = (variant.to_snake_case() != *name).then_some(name.as_str());
-        (variant, iden)
-    }
-
-    /// The builder's `.col(…)`, laid out as rustfmt lays a chain out: on one
-    /// line within its 60-column chain width, else a call per line.
-    fn builder(&self, singular: &str) -> String {
-        let (variant, _) = self.variant();
-        let head = format!("ColumnDef::new({singular}::{variant})");
+    /// The builder's `.col(…)`, `.primary_key()` among its calls when it is
+    /// the table's sole key.
+    fn builder(&self, singular: &str, sole_key: bool) -> String {
+        let (variant, _) = variant(&self.column.name);
         let mut calls = vec![
             self.column.ty.def(),
             if self.column.nullable {
@@ -364,29 +398,50 @@ impl TableColumn {
                 ".not_null()"
             },
         ];
-        if self.key {
+        if sole_key {
             calls.push(".primary_key()");
         }
-        if self.stamped {
-            calls.push(".default(Expr::current_timestamp())");
-        }
-        let chain = format!("{head}{}", calls.concat());
-        if chain.len() <= 60 {
-            return format!("                    .col({chain})\n");
-        }
-        let calls: String = calls
-            .iter()
-            .map(|call| format!("\n                            {call}"))
-            .collect();
-        format!(
-            "                    .col(\n                        {head}{calls},\n                    )\n"
+        calls.extend(self.fill.call());
+        laid_out(
+            "col",
+            &format!("ColumnDef::new({singular}::{variant})"),
+            &calls,
         )
     }
 }
 
-/// The columns of a table, in the order its migration creates them.
+/// A column's `DeriveIden` variant, and the `iden` its name needs when heck,
+/// which `DeriveIden` snake-cases the variant with, would not give it back.
+fn variant(name: &str) -> (String, Option<&str>) {
+    let variant = name.to_upper_camel_case();
+    let iden = (variant.to_snake_case() != name).then_some(name);
+    (variant, iden)
+}
+
+/// The builder's `.<method>(<head><calls>)`, laid out as rustfmt lays a chain
+/// out: on one line within its 60-column chain width, else a call per line.
+fn laid_out<S: AsRef<str>>(method: &str, head: &str, calls: &[S]) -> String {
+    let calls: Vec<&str> = calls.iter().map(AsRef::as_ref).collect();
+    let chain = format!("{head}{}", calls.concat());
+    if chain.len() <= 60 {
+        return format!("                    .{method}({chain})\n");
+    }
+    let calls: String = calls
+        .iter()
+        .map(|call| format!("\n                            {call}"))
+        .collect();
+    format!(
+        "                    .{method}(\n                        {head}{calls},\n                    )\n"
+    )
+}
+
+/// The columns of a table, in the order its migration creates them, and the
+/// ones its key spans.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Table(Vec<TableColumn>);
+pub(crate) struct Table {
+    columns: Vec<TableColumn>,
+    key: Vec<String>,
+}
 
 impl Table {
     /// A generated entity's table: its key, `columns`, then the three house
@@ -399,44 +454,56 @@ impl Table {
                 nullable,
             })
         };
-        let mut table = vec![TableColumn {
-            column: Column {
-                name: "id".to_owned(),
-                ty: ColumnType::Uuid,
-                nullable: false,
-            },
-            key: true,
-            stamped: false,
-        }];
+        let mut table = vec![TableColumn::plain(Column {
+            name: "id".to_owned(),
+            ty: ColumnType::Uuid,
+            nullable: false,
+        })];
         table.extend(columns.iter().cloned().map(TableColumn::plain));
         table.extend([
             house("created_at", false),
             house("updated_at", false),
             house("deleted_at", true),
         ]);
-        Self(table)
+        Self {
+            columns: table,
+            key: vec!["id".to_owned()],
+        }
     }
 
     /// The builder's `.col(…)` lines, its key first, over the enum
-    /// `singular`; `todo` marks after the key where the columns are to come.
+    /// `singular`, then a key spanning several columns; `todo` marks after
+    /// the key where the columns are to come.
     pub(crate) fn builder(&self, singular: &str, todo: bool) -> String {
+        let sole_key = match self.key.as_slice() {
+            [key] => Some(key.as_str()),
+            _ => None,
+        };
         let mut lines = String::new();
-        for (i, column) in self.0.iter().enumerate() {
-            lines.push_str(&column.builder(singular));
+        for (i, column) in self.columns.iter().enumerate() {
+            lines.push_str(&column.builder(singular, sole_key == Some(&column.column.name)));
             if todo && i == 0 {
                 lines.push_str(
                     "                    // TODO: add your columns here, and as a variant of the enum below.\n",
                 );
             }
         }
+        if self.key.len() > 1 {
+            let calls: Vec<String> = self
+                .key
+                .iter()
+                .map(|name| format!(".col({singular}::{})", variant(name).0))
+                .collect();
+            lines.push_str(&laid_out("primary_key", "Index::create()", &calls));
+        }
         lines
     }
 
     /// The identifier enum's variants after `Table`, one per column.
     pub(crate) fn variants(&self) -> String {
-        self.0
+        self.columns
             .iter()
-            .map(|column| match column.variant() {
+            .map(|column| match variant(&column.column.name) {
                 (variant, None) => format!("    {variant},\n"),
                 (variant, Some(iden)) => {
                     format!("    #[sea_orm(iden = \"{iden}\")]\n    {variant},\n")
@@ -472,8 +539,9 @@ pub(crate) fn table_name(source: &str) -> Option<String> {
 }
 
 /// The columns an entity's `pub struct Model` declares, each field read off
-/// its Rust type and its `#[sea_orm(…)]`; a relation or an ignored field is no
-/// column. `None` when the source declares no `Model`.
+/// its Rust type and its `#[sea_orm(…)]`, and the key's default off the
+/// `#[expose]` over it; a relation or an ignored field is no column. `None`
+/// when the source declares no `Model`.
 pub(crate) fn read_model(source: &str) -> Option<ModelColumns> {
     let file = syn::parse_file(source).ok()?;
     let model = file.items.iter().find_map(|item| match item {
@@ -483,35 +551,76 @@ pub(crate) fn read_model(source: &str) -> Option<ModelColumns> {
     let Fields::Named(fields) = &model.fields else {
         return None;
     };
-    let mut table = Vec::new();
+    let exposed = model.attrs.iter().any(|attr| {
+        attr.path()
+            .segments
+            .last()
+            .is_some_and(|last| last.ident == "expose")
+    });
+    let fields: Vec<(String, Field)> = fields
+        .named
+        .iter()
+        .filter_map(|field| Some((field.ident.as_ref()?.to_string(), read_field(field))))
+        .filter(|(_, field)| !matches!(field.read, Read::NoColumn))
+        .collect();
+    let key: Vec<String> = fields
+        .iter()
+        .filter(|(_, field)| field.key)
+        .map(|(name, _)| name.clone())
+        .collect();
+    let mut columns = Vec::new();
     let mut untyped = Vec::new();
-    for field in &fields.named {
-        let Some(name) = field.ident.as_ref().map(ToString::to_string) else {
-            continue;
-        };
-        match read_field(field) {
-            Read::Column { ty, nullable, key } => {
-                let mut column = TableColumn::plain(Column { name, ty, nullable });
-                column.key = key;
-                table.push(column);
+    for (name, field) in fields {
+        let (ty, nullable) = match field.read {
+            Read::Column { ty, nullable } => (ty, nullable),
+            Read::Untyped(what) if field.key => {
+                untyped.push(Untyped {
+                    field: name,
+                    what: format!("{what}, the table's key"),
+                });
+                continue;
             }
-            Read::Untyped(what) => untyped.push(Untyped { field: name, what }),
-            Read::NoColumn => {}
-        }
+            Read::Untyped(what) => {
+                untyped.push(Untyped { field: name, what });
+                continue;
+            }
+            Read::NoColumn => continue,
+        };
+        let column = Column { name, ty, nullable };
+        let fill = if field.key && key.len() == 1 {
+            match Fill::of_key(ty, field.auto_increment, exposed) {
+                Ok(fill) => fill,
+                Err(what) => {
+                    untyped.push(Untyped {
+                        field: column.name,
+                        what,
+                    });
+                    continue;
+                }
+            }
+        } else {
+            Fill::of_plain(&column)
+        };
+        columns.push(TableColumn { column, fill });
     }
     Some(ModelColumns {
-        table: Table(table),
+        table: Table { columns, key },
         untyped,
     })
 }
 
+/// One `Model` field as the builder reads it.
+struct Field {
+    read: Read,
+    /// It is, or is part of, the primary key.
+    key: bool,
+    /// The `auto_increment` it declares.
+    auto_increment: Option<bool>,
+}
+
 /// What one `Model` field is to the builder.
 enum Read {
-    Column {
-        ty: ColumnType,
-        nullable: bool,
-        key: bool,
-    },
+    Column { ty: ColumnType, nullable: bool },
     Untyped(String),
     NoColumn,
 }
@@ -523,8 +632,9 @@ const READ_KEYS: [&str; 3] = ["primary_key", "auto_increment", "column_type"];
 /// The keys that make a field no column of its own table.
 const NO_COLUMN_KEYS: [&str; 4] = ["ignore", "belongs_to", "has_one", "has_many"];
 
-fn read_field(field: &syn::Field) -> Read {
+fn read_field(field: &syn::Field) -> Field {
     let (mut key, mut text) = (false, false);
+    let mut auto_increment = None;
     let mut unread = None;
     let mut no_column = false;
     for attr in field.attrs.iter().filter(|a| a.path().is_ident("sea_orm")) {
@@ -542,16 +652,22 @@ fn read_field(field: &syn::Field) -> Read {
                 Ok(value) => Some(value.parse::<syn::Expr>()?),
                 Err(_) => None,
             };
+            let lit = match &value {
+                Some(syn::Expr::Lit(syn::ExprLit { lit, .. })) => Some(lit),
+                _ => None,
+            };
             if NO_COLUMN_KEYS.contains(&ident.as_str()) {
                 no_column = true;
             } else if ident == "primary_key" {
                 key = true;
+            } else if ident == "auto_increment" {
+                match lit {
+                    Some(syn::Lit::Bool(flag)) => auto_increment = Some(flag.value),
+                    _ => unread = Some("its `auto_increment`".to_owned()),
+                }
             } else if ident == "column_type" {
-                match value {
-                    Some(syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(lit),
-                        ..
-                    })) if lit.value() == "Text" => text = true,
+                match lit {
+                    Some(syn::Lit::Str(lit)) if lit.value() == "Text" => text = true,
                     _ => unread = Some("its `column_type`".to_owned()),
                 }
             } else if !READ_KEYS.contains(&ident.as_str()) {
@@ -568,15 +684,20 @@ fn read_field(field: &syn::Field) -> Read {
         None => (&field.ty, false),
     };
     let rust = type_name(inner);
-    if no_column || matches!(rust.as_str(), "HasOne<…>" | "HasMany<…>") {
-        return Read::NoColumn;
-    }
-    if let Some(what) = unread {
-        return Read::Untyped(what);
-    }
-    match ColumnType::of_rust(&rust, text) {
-        Some(ty) => Read::Column { ty, nullable, key },
-        None => Read::Untyped(format!("`{rust}`")),
+    let read = if no_column || matches!(rust.as_str(), "HasOne<…>" | "HasMany<…>") {
+        Read::NoColumn
+    } else if let Some(what) = unread {
+        Read::Untyped(what)
+    } else {
+        match ColumnType::of_rust(&rust, text) {
+            Some(ty) => Read::Column { ty, nullable },
+            None => Read::Untyped(format!("`{rust}`")),
+        }
+    };
+    Field {
+        read,
+        key,
+        auto_increment,
     }
 }
 
@@ -671,6 +792,7 @@ mod tests {
             ("1st:string", "snake_case"),
             ("x_1:string", "snake_case"),
             ("type:string", "keyword"),
+            ("gen:string", "keyword"),
             ("id:uuid", "every table"),
             ("deleted_at:datetime", "every table"),
             ("table:string", "identifier enum"),
@@ -808,7 +930,7 @@ mod tests {
             }
         "#;
         let read = read_model(source).expect("a Model");
-        assert_eq!(read.table.0.len(), 1, "{:?}", read.table);
+        assert_eq!(read.table.columns.len(), 1, "{:?}", read.table);
         assert_eq!(
             read.untyped,
             [
@@ -825,6 +947,109 @@ mod tests {
                     what: "its `column_type`".into()
                 },
             ]
+        );
+    }
+    /// The builder `g migration` writes off `model`, over the enum `Widget`.
+    fn builder_of(model: &str) -> (String, Vec<Untyped>) {
+        let read = read_model(model).expect("a Model");
+        (read.table.builder("Widget", false), read.untyped)
+    }
+
+    /// SeaORM auto-increments a sole key unless it says otherwise or is a
+    /// `String` or a `Uuid`: an insert then leaves the key to the database,
+    /// whose column has to be an identity.
+    #[test]
+    fn a_sole_integer_key_sea_orm_auto_increments_is_an_identity() {
+        for model in [
+            "pub struct Model { #[sea_orm(primary_key)] pub id: i32 }",
+            "pub struct Model { #[sea_orm(primary_key, auto_increment = true)] pub id: i64 }",
+        ] {
+            let (builder, untyped) = builder_of(model);
+            assert!(
+                builder.contains(".primary_key()") && builder.contains(".auto_increment()"),
+                "{model}: {builder}"
+            );
+            assert!(untyped.is_empty(), "{model}: {untyped:?}");
+        }
+        let (builder, _) = builder_of(
+            "pub struct Model { #[sea_orm(primary_key, auto_increment = false)] pub id: i32 }",
+        );
+        assert!(!builder.contains(".auto_increment()"), "{builder}");
+    }
+
+    /// A `Uuid` key is seeded by the `#[expose]` over its `Model`; with none,
+    /// its migration defaults it to `uuidv7()`, as nothing else fills it.
+    #[test]
+    fn a_uuid_key_no_expose_seeds_defaults_to_uuidv7() {
+        let key = "#[sea_orm(primary_key, auto_increment = false)] pub id: Uuid,";
+        let (internal, _) = builder_of(&format!("pub struct Model {{ {key} }}"));
+        assert!(
+            internal.contains(
+                "                    .col(\n                        ColumnDef::new(Widget::Id)\n                            .uuid()\n                            .not_null()\n                            .primary_key()\n                            .default(Expr::cust(\"uuidv7()\")),\n                    )\n"
+            ),
+            "{internal}"
+        );
+        let (exposed, _) = builder_of(&format!(
+            "#[expose(name = \"Widget\")] pub struct Model {{ {key} }}"
+        ));
+        assert!(!exposed.contains("uuidv7"), "{exposed}");
+        let entity = crate::scaffold::Renderer::new(&crate::naming::Names::parse("widgets"))
+            .with("columns", fields(&[Column::placeholder()]))
+            .render(crate::templates::entity::ENTITY);
+        let (generated, _) = builder_of(&entity);
+        assert!(!generated.contains("uuidv7"), "{generated}");
+    }
+
+    /// A key over several columns is the table's: `.primary_key()` on each
+    /// would declare several keys, which Postgres refuses.
+    #[test]
+    fn a_key_over_several_columns_is_the_table_s() {
+        let (builder, untyped) = builder_of(
+            "pub struct Model {
+                #[sea_orm(primary_key, auto_increment = false)] pub post_id: Uuid,
+                #[sea_orm(primary_key, auto_increment = false)] pub tag_id: Uuid,
+            }",
+        );
+        assert!(untyped.is_empty(), "{untyped:?}");
+        assert!(
+            builder.contains(".col(ColumnDef::new(Widget::PostId).uuid().not_null())")
+                && builder.contains(".col(ColumnDef::new(Widget::TagId).uuid().not_null())"),
+            "{builder}"
+        );
+        assert!(
+            builder.ends_with(
+                "                    .primary_key(Index::create().col(Widget::PostId).col(Widget::TagId))\n"
+            ),
+            "{builder}"
+        );
+        assert!(
+            !builder.contains("uuidv7"),
+            "a key part is no seeded key: {builder}"
+        );
+    }
+
+    /// The builder auto-increments an integer alone, as sea-query does: any
+    /// other auto-incremented key is named for the developer.
+    #[test]
+    fn an_auto_incremented_key_of_another_type_is_named() {
+        let (builder, untyped) =
+            builder_of("pub struct Model { #[sea_orm(primary_key)] pub day: Date }");
+        assert!(!builder.contains("Widget::Day"), "{builder}");
+        assert_eq!(
+            untyped,
+            [Untyped {
+                field: "day".into(),
+                what: "an auto-incremented `Date` key".into()
+            }]
+        );
+        let (_, untyped) =
+            builder_of("pub struct Model { #[sea_orm(primary_key)] pub status: PostStatus }");
+        assert_eq!(
+            untyped,
+            [Untyped {
+                field: "status".into(),
+                what: "`PostStatus`, the table's key".into()
+            }]
         );
     }
 }

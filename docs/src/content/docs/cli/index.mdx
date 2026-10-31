@@ -263,9 +263,11 @@ nestrs g entity posts/comment     # → Comment
 nestrs g auth
 
 # A SeaORM migration, registered in lib.rs and migrator.rs. `create_<table>`
-# over a table an entity declares creates the columns its Model does; any
-# other name writes the create-table skeleton to fill. A name registered
-# already is refused: the next change to a table takes a name of its own.
+# over a table an entity declares creates the columns its Model does, and its
+# key's default; any other name writes the create-table skeleton to fill. A
+# name registered already, or a table a registered `create_` migration creates
+# (`create_post` after `create_posts`), is refused: the next change to a table
+# takes a name of its own.
 nestrs g migration create_comments
 nestrs g migration add_status_to_posts
 

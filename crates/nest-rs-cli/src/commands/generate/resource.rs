@@ -93,6 +93,11 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
         &Names::parse(&format!("create_{}", names.snake)),
         render_migration(&names, &Table::around(&columns), false),
         &mut workspace_deps,
+        |repeated| CliError::ResourceTableMigrated {
+            resource: names.snake.clone(),
+            table: names.table(),
+            path: repeated.path,
+        },
     )?;
     let round_trip = round_trip_test(&target, &names, &columns)?;
     if round_trip.is_some() {

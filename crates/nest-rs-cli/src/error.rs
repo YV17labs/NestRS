@@ -100,6 +100,32 @@ pub enum CliError {
     )]
     MigrationExists { name: String, path: PathBuf },
 
+    /// `g migration create_<table>` over a table a registered `create_`
+    /// migration creates.
+    #[error(
+        "a migration creates the table `{table}` already: `{}`. A change to it takes a \
+         migration of its own name (`add_<column>_to_{table}`)",
+        path.display()
+    )]
+    TableMigrated { table: String, path: PathBuf },
+
+    /// `g resource` over a table a registered `create_` migration creates,
+    /// where it would write the table's migration itself.
+    #[error(
+        "a migration creates the table `{table}` already: `{}`, and `g resource` writes its \
+         table's migration from the columns it takes. To regenerate the resource, delete that \
+         file and its two registrations — its `mod` line in `crates/migrations/src/lib.rs` and \
+         its entry in `migrator.rs` — rolling it back first wherever a database applied it; to \
+         keep it, write the feature and its entity alone: `nestrs g feature {resource}`, then \
+         `nestrs g entity {resource}`",
+        path.display()
+    )]
+    ResourceTableMigrated {
+        resource: String,
+        table: String,
+        path: PathBuf,
+    },
+
     #[error(
         "`{0}` is not a `<feature>` or `<feature>/<entity>` target — one optional `/`, no more"
     )]

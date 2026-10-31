@@ -3,7 +3,8 @@
 //! `MigratorTrait` vec). `migrator.rs` is regenerated from the module list so
 //! the two registrations can never drift. A `create_<table>` migration over a
 //! table an entity declares creates the columns its `Model` does; a name
-//! registered already is refused, the next change to a table taking its own.
+//! registered already, or a table a registered `create_` migration creates, is
+//! refused, the next change to a table taking a name of its own.
 //!
 //! The `nestrs_` prefix is the framework's: `g migration nestrs_outbox`
 //! registers a migration `nest_rs` ships — one `migrator.rs` entry, no file —
@@ -205,7 +206,7 @@ pub(crate) fn run(opts: MigrationOptions) -> CliResult<()> {
 /// a table an entity declares, else the skeleton.
 fn generate(ws: &NestrsWorkspace, names: &Names, subject: &Names, dry_run: bool) -> CliResult<()> {
     let table = subject.table();
-    let entity = if names.snake.starts_with("create_") {
+    let entity = if created_table(&names.snake).is_some() {
         entity_declaring(ws, &table)?
     } else {
         Declared::Nowhere
@@ -219,7 +220,17 @@ fn generate(ws: &NestrsWorkspace, names: &Names, subject: &Names, dry_run: bool)
 
     let mut s = Scaffold::new();
     let mut deps = Vec::new();
-    let stem = queue_migration(&mut s, ws, names, body, &mut deps)?;
+    let refuse = |repeated: Repeated| match repeated.table {
+        Some(table) => CliError::TableMigrated {
+            table,
+            path: repeated.path,
+        },
+        None => CliError::MigrationExists {
+            name: names.snake.clone(),
+            path: repeated.path,
+        },
+    };
+    let stem = queue_migration(&mut s, ws, names, body, &mut deps, refuse)?;
     if !deps.is_empty() {
         s.edit(ws.root.join("Cargo.toml"), ensure_workspace_deps(deps));
     }
@@ -246,17 +257,51 @@ pub(crate) fn render_migration(subject: &Names, table: &Table, skeleton: bool) -
         .render(migration::MIGRATION)
 }
 
+/// A registered migration the one queued would repeat.
+pub(crate) struct Repeated {
+    /// Its file, relative to the workspace root.
+    pub path: PathBuf,
+    /// The table both create; `None` when only the name repeats.
+    pub table: Option<String>,
+}
+
+/// The table a `create_<table>` migration creates — `create_posts`,
+/// `create_post`, `create_posts_table` all create `post` — and `None` for any
+/// other name, `create_index_on_posts` included.
+fn created_table(name: &str) -> Option<String> {
+    let rest = name.strip_prefix("create_")?;
+    let rest = rest.strip_suffix("_table").unwrap_or(rest);
+    let subject = crate::naming::migration_subject(name);
+    (subject.snake == rest).then(|| subject.table())
+}
+
+/// The registered module `names` would repeat: one creating the same table,
+/// for a `create_<table>` name, else one of the same name.
+fn repeated<'a>(mods: &'a [String], names: &Names) -> Option<(&'a str, Option<String>)> {
+    let table = created_table(&names.snake);
+    mods.iter().find_map(|module| {
+        let name = module.splitn(3, '_').nth(2)?;
+        if table.is_some() && created_table(name) == table {
+            Some((module.as_str(), table.clone()))
+        } else {
+            (name == names.snake).then_some((module.as_str(), None))
+        }
+    })
+}
+
 /// Queue the app's migration `names` with its `body`: its file, and its
 /// registration in `lib.rs` and `migrator.rs` — the crates themselves on a
 /// workspace without them, whose root manifest gains `deps`, the caller's one
-/// edit of it. Refused when a migration of the same name is registered.
-/// Answers the migration's module stem.
+/// edit of it. A registered migration it would repeat is refused with what
+/// `refuse` makes of it, the caller's remedy. Answers the migration's module
+/// stem.
 pub(crate) fn queue_migration(
     s: &mut Scaffold,
     ws: &NestrsWorkspace,
     names: &Names,
     body: String,
     deps: &mut Vec<&'static Dep>,
+    refuse: impl FnOnce(Repeated) -> CliError,
 ) -> CliResult<String> {
     let lib_path = ws.migrations_lib();
     let bootstrapping = !lib_path.is_file();
@@ -266,15 +311,12 @@ pub(crate) fn queue_migration(
         std::fs::read_to_string(&lib_path).map_err(CliError::file(FileAction::Read, &lib_path))?
     };
     let mods = read_migration_mods(&lib);
-    if let Some(taken) = mods
-        .iter()
-        .find(|m| m.splitn(3, '_').nth(2) == Some(names.snake.as_str()))
-    {
+    if let Some((taken, table)) = repeated(&mods, names) {
         let path = ws.migrations_root().join(format!("{taken}.rs"));
-        return Err(CliError::MigrationExists {
-            name: names.snake.clone(),
+        return Err(refuse(Repeated {
             path: path.strip_prefix(&ws.root).unwrap_or(&path).to_path_buf(),
-        });
+            table,
+        }));
     }
 
     let date = chrono::Utc::now().format("%Y%m%d").to_string();
@@ -602,6 +644,49 @@ mod tests {
             !rendered.contains("{{"),
             "every placeholder is substituted: {rendered}"
         );
+    }
+
+    #[test]
+    fn a_create_migration_names_the_table_it_creates_however_it_is_spelled() {
+        for name in ["create_posts", "create_post", "create_posts_table"] {
+            assert_eq!(created_table(name).as_deref(), Some("post"), "{name}");
+        }
+        for name in [
+            "create_index_on_posts",
+            "add_title_to_posts",
+            "posts",
+            "create",
+        ] {
+            assert_eq!(created_table(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_migration_repeats_a_registered_one_by_its_table_or_its_name() {
+        let mods = [
+            "m20260101_000000_create_posts".to_owned(),
+            "m20260101_000001_add_title_to_posts".to_owned(),
+        ];
+        let repeats = |name: &str| repeated(&mods, &Names::parse(name));
+
+        for name in ["create_posts", "create_post", "create_posts_table"] {
+            assert_eq!(
+                repeats(name),
+                Some(("m20260101_000000_create_posts", Some("post".to_owned()))),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            repeats("add_title_to_posts"),
+            Some(("m20260101_000001_add_title_to_posts", None))
+        );
+        for name in [
+            "create_index_on_posts",
+            "create_comments",
+            "add_body_to_posts",
+        ] {
+            assert_eq!(repeats(name), None, "{name}");
+        }
     }
 
     #[test]

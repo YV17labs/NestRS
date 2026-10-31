@@ -202,8 +202,25 @@ pub(crate) fn validate_feature_name(raw: &str) -> Result<(), String> {
     // identifier.
     let kebab = to_kebab(trimmed);
     validate_derived_kebab(&kebab)?;
+    let snake = kebab.replace('-', "_");
+    if is_keyword(&snake) {
+        return Err(format!(
+            "`{snake}` is a Rust keyword, which no module takes: pick the domain word around it \
+             (`post_types`, not `type`)"
+        ));
+    }
     validate_not_reserved(&kebab)?;
     Ok(())
+}
+
+/// The keywords edition 2024, the scaffold's, reserves beyond those `syn`
+/// refuses, whose list stops at edition 2018's.
+const EDITION_KEYWORDS: [&str; 1] = ["gen"];
+
+/// Whether `word`, shaped as an identifier, is a keyword of the scaffold's
+/// edition, which no module, field or binding can be named.
+pub(crate) fn is_keyword(word: &str) -> bool {
+    syn::parse_str::<syn::Ident>(word).is_err() || EDITION_KEYWORDS.contains(&word)
 }
 
 /// Refuse a name the structural vocabulary has already spent — `ModuleModule`,
@@ -564,6 +581,29 @@ mod tests {
                 .copied()
                 .collect();
         assert_eq!(refused, scraped);
+    }
+
+    /// A module, a field or a binding the generators write in the name's
+    /// snake form cannot be a keyword of the edition they write it under.
+    #[test]
+    fn a_keyword_names_no_module() {
+        for name in ["type", "gen", "self", "async", "Gen"] {
+            let refused = validate_feature_name(name).expect_err(name);
+            assert!(refused.contains("keyword"), "{name}: {refused}");
+        }
+        for name in ["types", "generator", "self_service", "async-jobs"] {
+            assert!(validate_feature_name(name).is_ok(), "{name}");
+        }
+    }
+
+    /// `EDITION_KEYWORDS` is the edition the scaffold compiles under: a new
+    /// one fails here until its reserved words are read.
+    #[test]
+    fn the_keywords_refused_are_those_of_the_scaffold_s_edition() {
+        assert!(
+            crate::templates::workspace::ROOT_CARGO.contains("\nedition = \"2024\"\n"),
+            "the scaffold's edition moved: `EDITION_KEYWORDS` lists edition 2024's"
+        );
     }
 
     #[test]

@@ -26,12 +26,17 @@ One file per migration, named `m<utc-date>_<seq>_<what>.rs`.
 `DeriveMigrationName` takes the version from the file name; a `DeriveIden`
 enum names the table and its columns so there are no stringly-typed
 identifiers. `create_<table>` over a table an entity declares creates the
-columns its `Model` does, each in the builder and in the enum; a field whose
-type the builder cannot read off it — an enum of yours, a `unique` — is named
-in the run's next steps, for you to add. Any other name writes the
-create-table skeleton, its columns yours to fill, and a name registered
-already is refused, since the database that applied it never runs it again:
-the next change to a table takes a name of its own, `add_status_to_posts`.
+columns its `Model` does, each in the builder and in the enum, and the default
+its key takes: an identity for an integer key SeaORM auto-increments,
+`uuidv7()` for the `Uuid` key of a table no `#[expose]` seeds, and a key over
+several columns declared on the table. A field whose type the builder cannot
+read off it — an enum of yours, a `unique` — is named in the run's next steps,
+for you to add. Any other name writes the create-table skeleton, its columns
+yours to fill. A name registered already is refused, and so is a
+`create_<table>` whose table a registered one creates, however it is spelled
+(`create_post` after `create_posts`): its create-table, under
+`if_not_exists()`, would find the table and change nothing. The next change to
+a table takes a name of its own, `add_status_to_posts`.
 The demo's `org` table, filled in:
 
 ```rust title="crates/migrations/src/m20260526_000000_create_org.rs (from the demo)"

@@ -68,17 +68,19 @@ writes the entity's fields, its table's migration and the round trip that
 posts and reads back each column, and `g migration` reads an entity's
 columns off its `Model` rather than asking for them twice: a scaffold whose
 own files contradict each other fails the developer before a line is theirs.
+Held by the integration suite's resource and migration tests, the scaffold
+suite's every-type compile and the e2e replay.
 
 **Every generator is compiled, not only read.** The scaffold suite runs every
 adapter generator — every edge `Transport` carries — over both port shapes,
 from the root of a one-app workspace, which wires that app, so the edits it
 makes to that app's `module.rs` and manifest compile too, plus `nestrs new`'s
-second app and `g migration`, and holds the result to the scaffold's own
-`clippy -D warnings`. Its e2e half replays every tutorial page that edits
-`blog` from the workspace root — `--app` naming the app, as a reader with two
-apps types it — and runs the suite they leave against the live Postgres. The integration suite's text
-assertions are not that proof: they read a wrong import as readily as a right
-one.
+second app, `g migration` and `g entity`'s retirement of a subject, and holds
+the result to the scaffold's own `clippy -D warnings`. Its e2e half replays
+every tutorial page that edits `blog` from the workspace root — `--app` naming
+the app, as a reader with two apps types it — and runs the suite they leave
+against the live Postgres. The integration suite's text assertions are not
+that proof: they read a wrong import as readily as a right one.
 
 **A generator wires what it wrote into the app that serves it**, from
 anywhere in the workspace, writing in one edit every import its code needs

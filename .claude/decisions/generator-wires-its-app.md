@@ -60,10 +60,17 @@ Adopted:
   that posts and reads back each column, in `g resource`'s one transaction;
   with none, one `name:string` column runs through all three.
 - **`g migration create_<table>` reads the entity declaring that table**, its
-  `Model`'s fields, and names any it cannot type rather than guessing.
+  `Model`'s fields and the default its key takes as SeaORM reads it — an
+  identity for an auto-incremented integer, `uuidv7()` for a `Uuid` key no
+  `#[expose]` seeds, a key over several columns the table's — and names any
+  it cannot type rather than guessing.
 - **A migration name registered already is refused**, as Rails' generator
-  refuses it: the database that applied it never runs it again, so a second
-  `create_posts` is a change that silently never lands.
+  refuses it, and so is a `create_<table>` whose table a registered one
+  creates, however it is spelled (`create_post` after `create_posts`): under
+  `if_not_exists()` its create-table would find the table and change nothing,
+  a change that silently never lands. `g resource` over such a table is
+  refused with its own way through — the migration removed, or the feature
+  and its entity written alone.
 - **`g entity` retires the subject the generators wrote** — the file, its two
   lines in `mod.rs`, each operation re-gated on the entity, which fails
   closed — and refuses, naming the file, one edited beyond that.

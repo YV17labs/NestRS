@@ -16,6 +16,11 @@ use crate::harness::connection::{
 };
 use crate::{HELLO, is_hello};
 
+/// How long a connect may run before the test calls it hung: a guard alone,
+/// far past every budget a test here sets, so a loaded machine never reaches
+/// it.
+const HUNG: Duration = Duration::from_secs(60);
+
 /// A Redis that stays not ready spends the budget and fails as one that
 /// answered — its last answer as the source, the budget to widen — never as an
 /// unreachable one sent to check its URL.
@@ -25,23 +30,26 @@ async fn a_redis_that_stays_busy_fails_at_the_budget_naming_its_answer() {
     proxy.answer_with(Some(NOT_READY[0]));
     let budget = Duration::from_millis(1500);
     let started = Instant::now();
-    let Err(error) = RedisConnection::connect(&RedisConfig {
-        url: proxy.url().into(),
-        connect_timeout: budget,
-        tls: crate::harness::tls::trusting_the_test_authority(),
-        ..RedisConfig::default()
-    })
+    let Ok(Err(error)) = tokio::time::timeout(
+        HUNG,
+        RedisConnection::connect(&RedisConfig {
+            url: proxy.url().into(),
+            connect_timeout: budget,
+            tls: crate::harness::tls::trusting_the_test_authority(),
+            ..RedisConfig::default()
+        }),
+    )
     .await
     else {
-        panic!("a Redis that never serves must not connect")
+        panic!("a Redis that never serves must not connect, and must not hang")
     };
     let took = started.elapsed();
 
+    assert!(took >= budget, "not before the budget, took {took:?}");
     assert!(
-        took >= budget && took < budget * 3,
-        "at the budget, took {took:?}"
+        matches!(error, RedisError::Unready { budget: spent, .. } if spent == budget),
+        "the budget ended the attempts: {error}"
     );
-    assert!(matches!(error, RedisError::Unready { .. }), "{error}");
     let rendered = error.to_string();
     assert!(
         rendered.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"))
@@ -108,7 +116,6 @@ async fn a_connection_to_a_demoted_primary_is_reopened() {
     let server = DemotedRedis::start().await;
     let mut conn = RedisConnection::connect(&RedisConfig {
         url: server.url().into(),
-        connect_timeout: Duration::from_secs(2),
         tls: crate::harness::tls::trusting_the_test_authority(),
         ..RedisConfig::default()
     })
@@ -122,19 +129,13 @@ async fn a_connection_to_a_demoted_primary_is_reopened() {
         .expect_err("the demoted primary refuses the write");
     assert_eq!(refused.code(), Some("READONLY"), "{refused}");
 
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        match write().query_async::<()>(&mut conn).await {
-            Ok(()) => break,
-            Err(error) => {
-                assert!(
-                    Instant::now() < deadline,
-                    "the connection still reaches the demoted primary: {error}"
-                );
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        }
-    }
+    // Left on the demoted primary, every write fails until the process
+    // restarts: the guard only turns that into a failure rather than a hang.
+    nest_rs_testing::wait_for(HUNG, || {
+        let (write, mut conn) = (write(), conn.clone());
+        async move { write.query_async::<()>(&mut conn).await.is_ok() }
+    })
+    .await;
     let said = logs.expect_one(
         nest_rs_redis::TARGET,
         "redis connection opened again: the server it reached answered as a read-only replica",

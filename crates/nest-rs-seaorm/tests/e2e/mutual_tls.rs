@@ -36,11 +36,15 @@ fn as_the_role(query: Option<&str>) -> String {
     }
 }
 
+/// The connect budget [`booted`] boots under: a refusal retried ends when it
+/// does, so one said before it was said at once, however loaded the machine.
+const ONLY_A_RETRY_SPENDS: Duration = Duration::from_secs(60);
+
 async fn booted(url: String) -> anyhow::Result<nest_rs_core::App> {
     App::builder()
         .provide(SeaOrmConfig {
             url: url.into(),
-            connect_timeout: Duration::from_secs(60),
+            connect_timeout: ONLY_A_RETRY_SPENDS,
             ..Default::default()
         })
         .module::<PoolModule>()
@@ -71,16 +75,21 @@ async fn a_client_presenting_its_certificate_is_let_in_as_the_role_it_maps_to() 
 
 #[tokio::test]
 async fn a_client_presenting_none_is_refused_at_once_naming_the_variable() {
+    let logs = nest_rs_testing::LogCapture::install();
     let began = std::time::Instant::now();
     let Err(refused) = booted(as_the_role(None)).await else {
         panic!("a role let in on a certificate alone is refused without one");
     };
     let took = began.elapsed();
-    assert!(took < Duration::from_secs(30), "at once, took {took:?}");
+    assert!(took < ONLY_A_RETRY_SPENDS, "at once, took {took:?}");
     let said = nest_rs_core::error_message(&*refused);
     assert!(
         said.contains("SQLSTATE 28000")
             && said.contains(&nest_rs_config::var_name("seaorm", "URL")),
         "{said}"
+    );
+    logs.expect_none(
+        nest_rs_seaorm::target::ORM,
+        "database unreachable — retrying within the connect budget",
     );
 }

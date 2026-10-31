@@ -206,14 +206,18 @@ fn with_database(url: &str, name: &str) -> String {
     format!("{scheme}://{host}/{name}{query}")
 }
 
-/// Boots a pool on `url` under a budget only a retry could spend, and returns
-/// its refusal with how long it took.
+/// The connect budget [`refused_at`] boots under: a refusal retried ends when
+/// it does, so one said before it was said at once, however loaded the machine.
+const ONLY_A_RETRY_SPENDS: Duration = Duration::from_secs(60);
+
+/// Boots a pool on `url` under [`ONLY_A_RETRY_SPENDS`], and returns its refusal
+/// with how long it took.
 async fn refused_at(url: String) -> (anyhow::Error, Duration) {
     let began = std::time::Instant::now();
     let Err(refused) = App::builder()
         .provide(SeaOrmConfig {
             url: url.into(),
-            connect_timeout: Duration::from_secs(60),
+            connect_timeout: ONLY_A_RETRY_SPENDS,
             ..Default::default()
         })
         .module::<PoolModule>()
@@ -234,7 +238,7 @@ async fn a_password_postgres_refuses_fails_the_boot_at_once() {
     let (refused, took) =
         refused_at(with_password(&crate::harness::url(), "n0t-the-password")).await;
 
-    assert!(took < Duration::from_secs(30), "at once, took {took:?}");
+    assert!(took < ONLY_A_RETRY_SPENDS, "at once, took {took:?}");
     let said = nest_rs_core::error_message(&*refused);
     assert!(
         said.contains("SQLSTATE 28P01")
@@ -255,13 +259,14 @@ async fn a_password_postgres_refuses_fails_the_boot_at_once() {
 /// A database the server does not have fails every attempt the same way too.
 #[tokio::test]
 async fn a_database_postgres_does_not_have_fails_the_boot_at_once() {
+    let logs = nest_rs_testing::LogCapture::install();
     let (refused, took) = refused_at(with_database(
         &crate::harness::url(),
         "nestrs_boot_proof_absent",
     ))
     .await;
 
-    assert!(took < Duration::from_secs(30), "at once, took {took:?}");
+    assert!(took < ONLY_A_RETRY_SPENDS, "at once, took {took:?}");
     let said = nest_rs_core::error_message(&*refused);
     assert!(
         said.contains("SQLSTATE 3D000")
@@ -270,6 +275,10 @@ async fn a_database_postgres_does_not_have_fails_the_boot_at_once() {
     );
     assert!(!said.contains("nestrs_boot_proof_absent"), "{said}");
     assert!(!said.contains("  "), "one sentence, unpadded: {said}");
+    logs.expect_none(
+        nest_rs_seaorm::target::ORM,
+        "database unreachable — retrying within the connect budget",
+    );
 }
 
 /// `url` naming its connections `name` in `pg_stat_activity`.

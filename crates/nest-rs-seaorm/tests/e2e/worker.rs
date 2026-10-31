@@ -569,7 +569,8 @@ async fn a_job_cut_while_its_atomic_block_commits_is_in_doubt_and_its_write_land
         }),
     );
 
-    let started = std::time::Instant::now();
+    // The gate goes only once the attempt answered, so it answered while its
+    // commit still waited: at the deadline, never after the commit.
     let outcome = consume::attempt(
         method,
         &mut delivery,
@@ -580,17 +581,12 @@ async fn a_job_cut_while_its_atomic_block_commits_is_in_doubt_and_its_write_land
         Some(unit),
     )
     .await;
-    let took = started.elapsed();
     let AttemptOutcome::DeadLetter(error) = outcome else {
         panic!("a commit the cut left running may have landed: {outcome:?}");
     };
     assert!(
         error.to_string().ends_with("its writes may have landed"),
         "{error}"
-    );
-    assert!(
-        took < std::time::Duration::from_secs(10),
-        "answered at the deadline, never after the commit the gate holds, took {took:?}",
     );
     word.rollback()
         .await

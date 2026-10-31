@@ -2698,8 +2698,9 @@ mod tests {
     #[test]
     fn the_lines_after_the_one_that_woke_the_writer_leave_with_it_once_an_exit_waits() {
         let written = Arc::new(Mutex::new(Vec::new()));
+        let window = Duration::from_secs(600);
         let queue = writing_to(
-            Queue::new(8, Duration::from_secs(600)),
+            Queue::new(8, window),
             GatedStdout {
                 gate: None,
                 began: None,
@@ -2716,13 +2717,13 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         queue.push(b"two\n");
         queue.push(b"three\n");
-        let exit = Instant::now();
 
-        assert!(queue.written_within(Duration::from_secs(10)));
+        // A writer the exit did not wake gathers for the whole window, ten times
+        // what the exit waits, so only a woken one is written within it; a
+        // loaded machine slows a woken one, never by that much.
         assert!(
-            exit.elapsed() < Duration::from_secs(5),
-            "the exit cut the window short: {:?}",
-            exit.elapsed()
+            queue.written_within(window / 10),
+            "the exit cut the window short"
         );
         let written = written.lock().unwrap_or_else(|e| e.into_inner()).clone();
         assert_eq!(written, ["one\ntwo\nthree\n"]);

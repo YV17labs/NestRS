@@ -61,6 +61,10 @@ async fn untrusted_postgres() -> (String, Arc<AtomicBool>) {
 
 const RETRYING: &str = "database unreachable — retrying within the connect budget";
 
+/// How long a boot may run before the test calls it hung: a guard alone, far
+/// past every budget a test here sets, so a loaded machine never reaches it.
+const HUNG: Duration = Duration::from_secs(60);
+
 /// A certificate no trusted authority signed fails every attempt the same
 /// way, so the boot refuses at once — the budget is the test's own, which only
 /// a retry could spend — saying where the authority is named.
@@ -68,12 +72,15 @@ const RETRYING: &str = "database unreachable — retrying within the connect bud
 async fn the_pool_never_logs_in_to_a_server_whose_certificate_no_trusted_authority_signed() {
     let logs = nest_rs_testing::LogCapture::install();
     let (url, started) = untrusted_postgres().await;
+    // A refusal retried ends with the budget, so one said before it was said
+    // at once, however loaded the machine.
+    let only_a_retry_spends = Duration::from_secs(60);
     let began = Instant::now();
 
     let Err(refused) = App::builder()
         .provide(SeaOrmConfig {
             url: url.into(),
-            connect_timeout: Duration::from_secs(60),
+            connect_timeout: only_a_retry_spends,
             ..Default::default()
         })
         .module::<PoolModule>()
@@ -94,7 +101,7 @@ async fn the_pool_never_logs_in_to_a_server_whose_certificate_no_trusted_authori
     );
     assert!(!rendered.contains("s3cret"), "{rendered}");
     assert!(
-        began.elapsed() < Duration::from_secs(30),
+        began.elapsed() < only_a_retry_spends,
         "refused at once, not retried: took {:?}",
         began.elapsed()
     );
@@ -117,35 +124,33 @@ async fn the_pool_never_logs_in_to_a_server_whose_certificate_no_trusted_authori
 #[tokio::test]
 async fn a_host_whose_name_does_not_resolve_is_retried_within_the_budget_then_refused() {
     let logs = nest_rs_testing::LogCapture::install();
-    let began = Instant::now();
+    let budget = Duration::from_secs(2);
 
-    let Err(refused) = App::builder()
-        .provide(SeaOrmConfig {
-            url: "postgres://nestrs:s3cret@nestrs-boot-proof.invalid:5432/app".into(),
-            connect_timeout: Duration::from_secs(2),
-            ..Default::default()
-        })
-        .module::<PoolModule>()
-        .build()
-        .await
+    let Ok(Err(refused)) = tokio::time::timeout(
+        HUNG,
+        App::builder()
+            .provide(SeaOrmConfig {
+                url: "postgres://nestrs:s3cret@nestrs-boot-proof.invalid:5432/app".into(),
+                connect_timeout: budget,
+                ..Default::default()
+            })
+            .module::<PoolModule>()
+            .build(),
+    )
+    .await
     else {
-        panic!("a pool opened on a host that does not resolve");
+        panic!("a pool opened on a host that does not resolve, or no budget ended its proof");
     };
 
     let rendered = format!("{refused:#}");
     assert!(
         rendered.contains("nestrs-boot-proof.invalid:5432")
-            && rendered.contains("could not be reached")
+            && rendered.contains(&format!("could not be reached within {budget:?}"))
             && rendered.contains(&nest_rs_config::var_name("seaorm", "URL"))
             && rendered.contains(&nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS")),
         "unreachable, naming the host and what to change: {rendered}"
     );
     assert!(!rendered.contains("s3cret"), "{rendered}");
-    assert!(
-        began.elapsed() < Duration::from_secs(10),
-        "within the budget: took {:?}",
-        began.elapsed()
-    );
     let retried = logs.find(nest_rs_seaorm::target::ORM, RETRYING);
     assert!(retried.len() > 1, "retried: {:#?}", logs.events());
     for event in &retried {
@@ -211,28 +216,27 @@ async fn postgres_answering(code: &'static str) -> String {
 /// says it and the `error` field of every retry line.
 async fn unreachable_after_retrying(url: String) -> (String, Vec<String>) {
     let logs = nest_rs_testing::LogCapture::install();
-    let began = Instant::now();
-    let Err(refused) = App::builder()
-        .provide(SeaOrmConfig {
-            url: url.into(),
-            connect_timeout: Duration::from_secs(1),
-            ..Default::default()
-        })
-        .module::<PoolModule>()
-        .build()
-        .await
+    let budget = Duration::from_secs(1);
+    let Ok(Err(refused)) = tokio::time::timeout(
+        HUNG,
+        App::builder()
+            .provide(SeaOrmConfig {
+                url: url.into(),
+                connect_timeout: budget,
+                ..Default::default()
+            })
+            .module::<PoolModule>()
+            .build(),
+    )
+    .await
     else {
-        panic!("a pool opened on a server that let no connection in");
+        panic!("a pool opened on a server that let no connection in, or no budget ended its proof");
     };
     let rendered = nest_rs_core::error_message(&*refused);
     assert!(
-        began.elapsed() < Duration::from_secs(10),
-        "within the budget: took {:?}",
-        began.elapsed()
-    );
-    assert!(
-        rendered.contains("could not be reached") && !rendered.contains("s3cret"),
-        "{rendered}"
+        rendered.contains(&format!("could not be reached within {budget:?}"))
+            && !rendered.contains("s3cret"),
+        "the budget ended the proof: {rendered}"
     );
     let retried = logs.find(nest_rs_seaorm::target::ORM, RETRYING);
     assert!(

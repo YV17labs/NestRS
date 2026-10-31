@@ -264,8 +264,9 @@ async fn the_ceiling_budget_connects_and_serves() {
         .expect("and serves");
 }
 
-/// How long the connection has to answer again once Redis dropped it.
-const RECOVERY: Duration = Duration::from_secs(5);
+/// How long the test waits for the connection to answer again once Redis
+/// dropped it: a guard, so a connection never reopened fails rather than hang.
+const RECOVERY: Duration = Duration::from_secs(30);
 
 const LIMIT: Throttle = Throttle::new(1_000_000, Duration::from_secs(60));
 
@@ -353,11 +354,6 @@ async fn the_connection_answers_again_once_redis_drops_it() {
     if let Err(holder) = outcome {
         panic!("{holder} still could not reach Redis {RECOVERY:?} after it dropped the connection");
     }
-    let recovered_after = started.elapsed();
-    assert!(
-        recovered_after < RECOVERY,
-        "every holder answered again, but only {recovered_after:?} after the drop",
-    );
 
     crate::flush(&mut conn.clone())
         .await

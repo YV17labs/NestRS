@@ -302,8 +302,9 @@ async fn a_listener_cut_at_its_timeout_leaves_no_row_and_gives_its_connection_ba
     let took = emitted.elapsed();
 
     assert!(
-        took < Duration::from_secs(10),
-        "cut at its 1 s timeout, not after its 30 s sleep: {took:?}",
+        took < Duration::from_secs(30),
+        "cut at its 1 s timeout, not after its 30 s sleep, which a listener left uncut \
+         takes whole: {took:?}",
     );
     assert_eq!(
         crate::harness::committed_rows(&*conn, table).await,

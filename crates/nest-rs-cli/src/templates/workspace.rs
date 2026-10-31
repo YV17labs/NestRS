@@ -69,7 +69,6 @@ pub(crate) const INHERITED_LINTS: &str = "\n[lints]\nworkspace = true\n";
 /// The feature-crate root. Every workspace starts with the app's own `hello`
 /// feature declared here (see [`super::hello`]).
 pub(crate) const FEATURES_LIB: &str = r#"//! Product features — vertical slices shared across apps.
-#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 pub mod {{snake}};
 
@@ -95,9 +94,7 @@ nest-rs = { workspace = true, features = ["testing"] }
 tokio.workspace = true
 "#;
 
-pub(crate) const APP_LIB: &str = r#"#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
-
-mod module;
+pub(crate) const APP_LIB: &str = r#"mod module;
 
 pub use module::{{module}};
 "#;

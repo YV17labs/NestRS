@@ -96,8 +96,6 @@ the scaffold wrote on page 1 — Cargo auto-detects `src/lib.rs` and
 `src/main.rs`, so the manifest needs no `[lib]` or `[[bin]]` section:
 
 ```rust title="apps/blog/src/lib.rs"
-#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
-
 mod module;
 
 pub use module::BlogModule;

@@ -22,12 +22,12 @@ identifies itself. **The stem is the crate's subject plus every folder below
 
 | path | type |
 |---|---|
+| `features/src/audio/http/module.rs` | `AudioHttpModule` |
 | `nest-rs-http/src/module.rs` | `HttpModule` |
 | `nest-rs-throttler/src/module.rs` | `ThrottlerModule` |
 | `nest-rs-redis/src/queue/module.rs` | `RedisQueueModule` |
 | `nest-rs-redis/src/throttler/module.rs` | `RedisThrottlerModule` |
 | `nest-rs-seaorm/src/database/module.rs` | `SeaOrmDatabaseModule` |
-| `features/src/audio/http/module.rs` | `AudioHttpModule` |
 
 **A port keeps the bare name; a driver carries its own**: `ThrottlerModule` is
 the port's, `nest_rs::redis::RedisThrottlerModule` Redis's binding — unambiguous

@@ -3,7 +3,7 @@
 //! `RedisScheduleModule` binds.
 //!
 //! Every app here is the documented wiring — `ScheduleModule`,
-//! `RedisModule::for_root(None)`, `RedisScheduleModule` and a `#[scheduled]`
+//! `RedisModule`, `RedisScheduleModule` and a `#[scheduled]`
 //! host — booted through the harness, with its scheduler started the way the
 //! app's run starts it. Each boot seeds its `RedisConfig`, the hermetic-test
 //! hatch: a seed freezes the namespace, so the `NESTRS_REDIS__URL` the suite
@@ -268,7 +268,7 @@ impl WiredTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule::for_root(None), RedisScheduleModule],
+    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
     providers = [WiredTasks],
 )]
 struct WiredModule;
@@ -361,7 +361,7 @@ impl ReplicatedTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule::for_root(None), RedisScheduleModule],
+    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
     providers = [ReplicatedTasks],
 )]
 struct ReplicatedModule;
@@ -430,7 +430,7 @@ impl OverlapTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule::for_root(None), RedisScheduleModule],
+    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
     providers = [OverlapTasks],
 )]
 struct OverlapModule;
@@ -492,7 +492,7 @@ mod before {
     }
 
     #[module(
-        imports = [ScheduleModule, RedisModule::for_root(None), RedisScheduleModule],
+        imports = [ScheduleModule, RedisModule, RedisScheduleModule],
         providers = [InvoiceTasks],
     )]
     pub(super) struct BeforeModule;
@@ -518,7 +518,7 @@ mod after {
     }
 
     #[module(
-        imports = [ScheduleModule, RedisModule::for_root(None), RedisScheduleModule],
+        imports = [ScheduleModule, RedisModule, RedisScheduleModule],
         providers = [LedgerTasks],
     )]
     pub(super) struct AfterModule;
@@ -658,7 +658,7 @@ impl OutageTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule::for_root(None), RedisScheduleModule],
+    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
     providers = [OutageTasks],
 )]
 struct OutageModule;
@@ -758,7 +758,7 @@ impl StalledTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule::for_root(None), RedisScheduleModule],
+    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
     providers = [StalledTasks],
 )]
 struct StalledModule;
@@ -778,7 +778,7 @@ impl ConfinedTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule::for_root(None), RedisScheduleModule],
+    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
     providers = [ConfinedTasks],
 )]
 struct ConfinedModule;

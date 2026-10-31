@@ -16,7 +16,7 @@ pub struct Throttle {
 
 /// The port's default rate limit when neither config nor a route pins one:
 /// 60/minute. Deliberately **not** `Throttle`'s `Default`, so a guard built
-/// outside `ThrottlerModule::for_root` cannot run it silently.
+/// outside `ThrottlerModule` cannot run it silently.
 pub const DEFAULT_THROTTLE: Throttle = Throttle::per_minute(60);
 
 impl Throttle {

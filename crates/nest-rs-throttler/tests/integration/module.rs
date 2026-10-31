@@ -81,7 +81,7 @@ mod pseudonym_key {
         }
     }
 
-    #[module(imports = [ThrottlerModule::for_root(None), ElsewhereModule])]
+    #[module(imports = [ThrottlerModule, ElsewhereModule])]
     struct KeylessModule;
 
     #[module(imports = [

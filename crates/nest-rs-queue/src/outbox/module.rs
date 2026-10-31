@@ -2,7 +2,7 @@
 //! wrote into the outbox a data driver keeps.
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering};
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, Unnamed};
 
 use super::{OutboxConfig, OutboxRelay};
 
@@ -15,10 +15,10 @@ use super::{OutboxConfig, OutboxRelay};
 pub struct OutboxModule;
 
 impl OutboxModule {
-    /// `None` loads [`OutboxConfig`] from `<PREFIX>_QUEUE__OUTBOX__*`;
-    /// `Some(cfg)` pins the base those variables overlay, field by field.
-    pub fn for_root(config: impl Into<Option<OutboxConfig>>) -> OutboxSetup {
-        ConfigModule::setup(config.into())
+    /// Pin `config` as the base `<PREFIX>_QUEUE__OUTBOX__*` overlays, per field; the
+    /// bare import reads those variables over [`OutboxConfig`]'s defaults.
+    pub fn for_root(config: OutboxConfig) -> OutboxSetup {
+        ConfigModule::setup(config)
     }
 }
 
@@ -27,9 +27,9 @@ pub type OutboxSetup = ConfigSetup<OutboxModule, OutboxConfig>;
 
 impl Module for OutboxModule {
     // A bare import still reads `<PREFIX>_QUEUE__OUTBOX__*`; a
-    // `for_root(Some(cfg))`'s declared value supersedes this env-only one.
+    // `for_root(cfg)`'s declared value supersedes this env-only one.
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(None::<OutboxConfig>, builder)
+        ConfigModule::provide_feature::<Unnamed, OutboxConfig>(builder)
     }
 
     // Registered once however many bindings import it: one relay per app.

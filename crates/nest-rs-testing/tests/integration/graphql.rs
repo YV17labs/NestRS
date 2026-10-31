@@ -35,7 +35,7 @@ impl CallerResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [CallerResolver])]
+#[module(imports = [GraphqlModule], providers = [CallerResolver])]
 struct CallerModule;
 
 async fn first_caller(attached: Option<Caller>) -> serde_json::Value {

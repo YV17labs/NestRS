@@ -134,9 +134,9 @@ impl ShelfResolver {
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        HttpModule::for_root(None),
+        HttpModule,
         GraphqlModule::for_root(GraphqlConfig::default()),
     ],
     providers = [

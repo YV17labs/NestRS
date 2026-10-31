@@ -128,7 +128,7 @@ impl NoteResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [NoteResolver],
 )]
 struct OperationTestModule;
@@ -507,7 +507,7 @@ impl StoreDownResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [StoreDownResolver, crate::FieldStoreDown],
 )]
 struct StoreDownModule;
@@ -576,7 +576,7 @@ mod nested_panic {
         }
     }
 
-    #[module(imports = [GraphqlModule::for_root(None)], providers = [CrateResolver])]
+    #[module(imports = [GraphqlModule], providers = [CrateResolver])]
     struct CrateModule;
 
     #[tokio::test]
@@ -622,7 +622,7 @@ mod meta_twice {
         }
     }
 
-    #[module(imports = [GraphqlModule::for_root(None)], providers = [TaggedTwiceResolver])]
+    #[module(imports = [GraphqlModule], providers = [TaggedTwiceResolver])]
     struct TaggedTwiceModule;
 
     #[tokio::test]

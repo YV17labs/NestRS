@@ -72,7 +72,7 @@ impl ConfinedProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(None), RedisQueueModule, QueueModule::for_root(None)],
+    imports = [RedisModule, RedisQueueModule, QueueModule],
     providers = [ConfinedProcessor],
 )]
 struct WorkerModule;

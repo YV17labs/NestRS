@@ -24,7 +24,7 @@ slice: the port at the feature root, one adapter folder per edge.
   does all three. If the copy is not enough, fix the exemplar; never invent a
   second pattern.
 - **Security is wired by composition, not ceremony.** Importing
-  `SeaOrmModule::for_root`, `SeaOrmDatabaseModule` and `Authz<Edge>Module`
+  `SeaOrmModule`, `SeaOrmDatabaseModule` and `Authz<Edge>Module`
   turns on row filtering, the transaction scope and response masking. Guards
   still bind per route: the principal source is a policy decision.
 

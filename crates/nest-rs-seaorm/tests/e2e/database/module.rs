@@ -34,7 +34,7 @@ impl Strategy for LocalStrategy {
 type LocalGuard = AuthnGuard<LocalStrategy>;
 
 #[module(
-    imports = [SeaOrmModule::for_root(None), SeaOrmDatabaseModule],
+    imports = [SeaOrmModule, SeaOrmDatabaseModule],
     providers = [LocalStrategy, LocalGuard],
 )]
 struct BoundPoolModule;

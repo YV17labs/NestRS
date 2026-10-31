@@ -36,7 +36,7 @@ impl Strategy for PoolStrategy {
 type PoolGuard = AuthnGuard<PoolStrategy>;
 
 #[module(
-    imports = [SeaOrmModule::for_root(None)],
+    imports = [SeaOrmModule],
     providers = [PoolStrategy, PoolGuard],
 )]
 struct GuardedPoolModule;
@@ -57,7 +57,7 @@ impl Strategy for LocalStrategy {
 type LocalGuard = AuthnGuard<LocalStrategy>;
 
 #[module(
-    imports = [SeaOrmModule::for_root(None)],
+    imports = [SeaOrmModule],
     providers = [LocalStrategy, LocalGuard],
 )]
 struct UnboundPoolModule;
@@ -130,7 +130,7 @@ pub(crate) fn bounding_statements(bound: Duration) -> SeaOrmConfig {
     }
 }
 
-#[module(imports = [SeaOrmModule::for_root(None)])]
+#[module(imports = [SeaOrmModule])]
 struct PoolModule;
 
 /// Postgres cancels a statement running past the bound and says why, so a lock
@@ -361,7 +361,7 @@ impl ReadsAtShutdown {
 }
 
 #[module(
-    imports = [SeaOrmModule::for_root(None), nest_rs_seaorm::SeaOrmDatabaseModule],
+    imports = [SeaOrmModule, nest_rs_seaorm::SeaOrmDatabaseModule],
     providers = [ReadsAtShutdown],
 )]
 struct ClosingModule;

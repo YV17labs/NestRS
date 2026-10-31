@@ -149,7 +149,7 @@ impl nest_rs_core::ToProblem for Taken {
 #[module(providers = [ChargeResolver])]
 struct ChargeFeature;
 
-#[module(imports = [GraphqlModule::for_root(None), ChargeFeature])]
+#[module(imports = [GraphqlModule, ChargeFeature])]
 struct ChargeApp;
 
 async fn boot() -> TestApp {

@@ -184,9 +184,9 @@ impl WritesResolver {
 
 #[module(
     imports = [
-        HttpModule::for_root(None),
+        HttpModule,
         SeaOrmDatabaseModule,
-        nest_rs_graphql::GraphqlModule::for_root(None),
+        nest_rs_graphql::GraphqlModule,
     ],
     providers = [WritesResolver, ProbeController],
 )]

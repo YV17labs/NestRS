@@ -25,11 +25,10 @@ use crate::interceptor::ServerTiming;
 pub struct ServerTimingModule;
 
 impl ServerTimingModule {
-    /// `None` ⇒ load [`ServerTimingConfig`] from `<PREFIX>_SERVER_TIMING__*`
-    /// over its profile's defaults; `Some(cfg)` makes `cfg` the base those
-    /// variables overlay.
-    pub fn for_root(config: impl Into<Option<ServerTimingConfig>>) -> ServerTimingSetup {
-        ConfigModule::setup(config.into())
+    /// Pin `config` as the base `<PREFIX>_SERVER_TIMING__*` overlays, per field; the
+    /// bare import reads those variables over [`ServerTimingConfig`]'s defaults.
+    pub fn for_root(config: ServerTimingConfig) -> ServerTimingSetup {
+        ConfigModule::setup(config)
     }
 }
 

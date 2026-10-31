@@ -80,7 +80,7 @@ async fn the_binding_without_its_connection_fails_the_boot_naming_the_import() {
     };
     let rendered = format!("{error:#}");
     assert!(
-        rendered.contains("RedisModule::for_root(None)"),
+        rendered.contains("import RedisModule, which opens the Redis connection"),
         "the boot error names the import that opens the connection: {rendered}",
     );
 }

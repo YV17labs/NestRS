@@ -1,10 +1,9 @@
 use features::audio::AudioMcpModule;
 use features::posts::PostsMcpModule;
 use features::users::UsersMcpModule;
-use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
+use nest_rs::mcp::{McpIdentity, McpModule};
 use nest_rs::oauth::resource::OAuthResourceModule;
 use nest_rs::opentelemetry::OpenTelemetryModule;
 use nest_rs::redis::{RedisModule, RedisQueueModule};
@@ -19,22 +18,18 @@ const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped
 
 #[module(
     imports = [
-        ConfigModule::for_root(),
         OpenTelemetryModule,
         ServerTimingModule,
         HealthModule,
-        McpModule::for_root(McpOptions {
-            server: Some(
-                McpIdentity::default()
-                    .title(SERVER_TITLE)
-                    .instructions(INSTRUCTIONS),
-            ),
-            ..Default::default()
-        }),
-        OAuthResourceModule::for_root(None),
-        SeaOrmModule::for_root(None),
+        McpModule::for_root(
+            McpIdentity::default()
+                .title(SERVER_TITLE)
+                .instructions(INSTRUCTIONS),
+        ),
+        OAuthResourceModule,
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
         AudioMcpModule,
         UsersMcpModule,

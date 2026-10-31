@@ -226,7 +226,7 @@ mod module {
 
     #[module(imports = [
         RedisThrottlerModule,
-        ThrottlerModule::for_root(None),
+        ThrottlerModule,
         RedisModule::for_root(redis_config()),
     ])]
     struct KeylessThrottlerHost;

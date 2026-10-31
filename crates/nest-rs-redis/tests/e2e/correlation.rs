@@ -65,7 +65,7 @@ impl CorrelationProcessor {
     imports = [
         RedisModule::for_root(crate::at_default_budget(crate::redis_config())),
         RedisQueueModule,
-        QueueModule::for_root(None),
+        QueueModule,
     ],
     providers = [CorrelationProcessor],
 )]
@@ -168,7 +168,7 @@ impl RelayProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, QueueModule],
     providers = [RelayProcessor],
 )]
 struct RelayModule;

@@ -3,7 +3,7 @@
 //! It ships the [`SocialProvider`] trait, an inventory-based [`SocialRegistry`],
 //! the [`SocialModule`] that owns it, and two providers (GitHub, Google), each
 //! opened by its own module: an app imports [`GithubSocialModule`] or
-//! [`GoogleSocialModule`] beside [`SocialModule`], one visible line per
+//! [`GoogleSocialModule`], which import [`SocialModule`], one visible line per
 //! provider. A third-party provider is a crate implementing [`SocialProvider`] +
 //! [`SocialProviderConfig`], shipping its module and submitting one
 //! [`SocialProviderEntry`] that names it ([`SocialProviderEntry::new`]).

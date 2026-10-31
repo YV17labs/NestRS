@@ -2,7 +2,7 @@
 //! a token from somebody else's authorization server.
 //!
 //! It holds the Authorization Code flow with PKCE ([`OAuthClient`]) and the
-//! `for_root` seam that wires one configured client ([`OAuthClientModule`]).
+//! module that wires one configured client ([`OAuthClientModule`]).
 //! Authenticating a client at *our* token endpoint lives in
 //! `nest-rs-oauth-server`; social login (GitHub, Google, custom providers) in
 //! `nest-rs-social`, built on this client.

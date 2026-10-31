@@ -704,8 +704,7 @@ fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> 
         .map(|host| host.name)
         .collect::<Vec<_>>()
         .join(", ");
-    let name_the_app = "McpModule::for_root(McpOptions { server: \
-                        Some(McpIdentity::new(name, version)), ..Default::default() })";
+    let name_the_app = "McpModule::for_root(McpIdentity::new(name, version))";
 
     if reported == sdk_default {
         tracing::warn!(
@@ -753,8 +752,8 @@ pub(crate) fn server_reaches_a_host(container: &Container) -> anyhow::Result<()>
     }
     anyhow::bail!(
         "an MCP server identity is declared but no #[mcp] host serves anything, so the \
-         declaration reaches nothing: import the module owning your tool host, or drop \
-         `server` from McpOptions"
+         declaration reaches nothing: import the module owning your tool host, or drop the \
+         McpIdentity from McpModule::for_root"
     )
 }
 

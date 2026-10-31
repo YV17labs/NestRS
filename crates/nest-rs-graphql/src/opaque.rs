@@ -40,7 +40,7 @@
 //! }
 //! # }
 //! #
-//! # #[module(imports = [GraphqlModule::for_root(None)], providers = [RoomsService, RoomsResolver])]
+//! # #[module(imports = [GraphqlModule], providers = [RoomsService, RoomsResolver])]
 //! # struct AppModule;
 //! #
 //! # #[nest_rs_core::main]

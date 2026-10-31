@@ -152,7 +152,7 @@ impl DoorGateway {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None), WsModule],
+    imports = [GraphqlModule, WsModule],
     providers = [
         DeclaredDoor,
         SilentDoor,

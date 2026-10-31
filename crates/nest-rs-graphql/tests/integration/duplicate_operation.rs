@@ -31,7 +31,7 @@ impl SecondContestedResolver {
 #[module(providers = [FirstContestedResolver, SecondContestedResolver])]
 struct ContestedModule;
 
-#[module(imports = [GraphqlModule::for_root(None), ContestedModule])]
+#[module(imports = [GraphqlModule, ContestedModule])]
 struct ContestedApp;
 
 #[tokio::test]
@@ -83,7 +83,7 @@ impl SoloMutationResolver {
 #[module(providers = [SoloQueryResolver, SoloMutationResolver])]
 struct OverlappingModule;
 
-#[module(imports = [GraphqlModule::for_root(None), OverlappingModule])]
+#[module(imports = [GraphqlModule, OverlappingModule])]
 struct OverlappingApp;
 
 #[tokio::test]

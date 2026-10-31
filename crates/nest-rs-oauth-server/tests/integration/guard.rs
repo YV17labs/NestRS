@@ -93,7 +93,7 @@ impl TokenController {
 }
 
 #[module(
-    imports = [HttpModule::for_root(None)],
+    imports = [HttpModule],
     providers = [TokenController, Registry, Outage, Authenticated, Unavailable],
 )]
 struct TokenApp;
@@ -104,7 +104,7 @@ const RESOURCE: &str = "http://localhost";
 /// 9728 interceptor runs around every HTTP unit.
 #[module(
     imports = [
-        HttpModule::for_root(None),
+        HttpModule,
         AuthnModule::for_root(AuthnConfig {
             secret: Some("resource-server-secret-0123456789".into()),
             ..AuthnConfig::default()

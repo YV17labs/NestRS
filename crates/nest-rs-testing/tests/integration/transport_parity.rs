@@ -234,7 +234,7 @@ impl ServerHandler for ParityTool {}
 
 /// One module, both transports, **no** endpoint guards on either side.
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [
         BearerGuard,
         PublicOnlyGuard,
@@ -248,7 +248,7 @@ struct BothTransportsModule;
 
 /// Same, plus guards declared for `/mcp` that admit every request.
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [
         BearerGuard,
         PassGuard,
@@ -262,7 +262,7 @@ struct DeclaredMcpModule;
 /// Both endpoints' guards authenticating a bearer, beside an HTTP-only guard
 /// the app lists in its pool.
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [
         ApiKeyGuard,
         BearerGuard,
@@ -279,7 +279,7 @@ struct BearerDeclaredModule;
 
 /// Both endpoints' guards over recording guards, the pool chosen per test.
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [
         Trail,
         FirstGuard,

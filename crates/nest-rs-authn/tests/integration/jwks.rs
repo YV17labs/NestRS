@@ -833,7 +833,7 @@ impl PostsController {
 #[module(
     imports = [
         HttpModule::for_root(HttpConfig { port: 0, ..Default::default() }),
-        AuthnModule::for_root(None),
+        AuthnModule,
     ],
     providers = [JwksStrategy, JwksGuard, PostsController],
 )]
@@ -939,7 +939,7 @@ async fn an_unreachable_set_answers_503_on_a_guarded_and_a_public_route() {
 const RESOURCE: &str = "https://api.example";
 const ADVERTISED: [&str; 2] = ["https://as-1.example", "https://as-2.example"];
 
-#[module(imports = [AuthnModule::for_root(None)])]
+#[module(imports = [AuthnModule])]
 struct BoundJwksHost;
 
 /// A token from `iss`, when it names one, for `aud`, signed by the key the set

@@ -107,11 +107,11 @@ async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
-        QueueModule::for_root(None),
+        QueueModule,
         AudioQueueModule,
     ],
 )]

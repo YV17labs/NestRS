@@ -139,7 +139,7 @@ promises more; this is how the Redis backend keeps it, on Redis Streams
 ## The Redis connection
 
 `RedisConnection` is the connection: one link per instance, opened by
-`RedisModule::for_root` over the topology the URL's scheme declares — one
+`RedisModule` (`RedisModule::<Cache>` for a named one) over the topology the URL's scheme declares — one
 server, Sentinel, Cluster — and shared by every binding of that instance, each
 of which declares it runs after the connection's factory; a second Valkey is a
 named instance (`container.md`), the default instance's spelling unchanged. Every binding runs on all three

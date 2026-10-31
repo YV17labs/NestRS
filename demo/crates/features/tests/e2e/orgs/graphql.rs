@@ -15,9 +15,9 @@ use features::testing::{API, DEV_PUBLIC_KEY, token, user};
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
         AuthnModule,
         OrgsGraphqlModule,

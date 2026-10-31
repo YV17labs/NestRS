@@ -59,7 +59,7 @@ impl StreamController {
     }
 }
 
-#[module(imports = [HttpModule::for_root(None)], providers = [StreamController])]
+#[module(imports = [HttpModule], providers = [StreamController])]
 struct StreamModule;
 
 /// The access log is off: correlation must not depend on it.

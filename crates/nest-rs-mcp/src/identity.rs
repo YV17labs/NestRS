@@ -3,7 +3,7 @@
 //! An endpoint reports one `serverInfo` and one `instructions`. Its name,
 //! version and description default to the binary's ([`AppIdentity`]); the app
 //! declares the rest, or overrides them, through
-//! [`McpOptions::server`](crate::McpOptions::server); a host may refine only
+//! [`McpModule::for_root`](crate::McpModule::for_root); a host may refine only
 //! `name` and `title` for its endpoint, and two hosts declaring on one path fail
 //! the boot. Capabilities are never declared, only observed from the hosts.
 
@@ -210,8 +210,7 @@ impl IdentityError {
              version — an endpoint reports both, and the version is the binary's, which a \
              feature library does not know and no #[nest_rs::main] captured in this process. \
              Start it from #[nest_rs::main], or name the app once with \
-             McpModule::for_root(McpOptions {{ server: \
-             Some(McpIdentity::new(\"{name}\", version)), ..Default::default() }})",
+             McpModule::for_root(McpIdentity::new(\"{name}\", version))",
         )
     }
 }

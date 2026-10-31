@@ -2,10 +2,10 @@ use std::any::TypeId;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_config::{ClientTls, ConfigModule, DurationBounds, Namespaced};
+use nest_rs_config::{ClientTls, ConfigModule, ConfigSetup, DurationBounds, Namespaced};
 use nest_rs_core::{
-    Attempt, Backoff, Budget, Collecting, ContainerBuilder, DynamicModule, Module, Proving,
-    Registering, SHUTDOWN_SETTLE_TIMEOUT, Unproved, process_seed, prove,
+    Attempt, Backoff, Budget, Collecting, ContainerBuilder, Module, Proving, Registering,
+    SHUTDOWN_SETTLE_TIMEOUT, Unnamed, Unproved, process_seed, prove,
 };
 use sea_orm::sqlx::Connection as _;
 use sea_orm::sqlx::postgres::{PgConnectOptions, PgConnection};
@@ -22,62 +22,43 @@ use crate::error::ConnectError;
 const NAMESPACE: &str = <SeaOrmConfig as Namespaced>::NAMESPACE;
 
 /// What every binding says when the pool or its config is missing.
-pub(crate) const SUBSTRATE_REMEDY: &str = "import `SeaOrmModule::for_root(None)`, which resolves \
-                                           `SeaOrmConfig` and opens the one pool every SeaORM \
-                                           binding shares";
+pub(crate) const SUBSTRATE_REMEDY: &str = "import `SeaOrmModule`, which resolves `SeaOrmConfig` \
+                                           and opens the one pool every SeaORM binding shares";
 
 nest_rs_core::inventory::submit! {
     nest_rs_core::DependencyRemedy::new(
         TypeId::of::<DatabaseConnection>,
-        "Import `nest_rs::seaorm::SeaOrmModule::for_root(None)`, which resolves `SeaOrmConfig` \
-         and opens the one pool every SeaORM binding shares.",
+        "Import `nest_rs::seaorm::SeaOrmModule`, which resolves `SeaOrmConfig` and opens the one \
+         pool every SeaORM binding shares.",
     )
 }
 
-/// The SeaORM substrate. Import [`SeaOrmModule::for_root`] once, then the
-/// bindings your app needs beside it — they share the pool it opens.
+/// The SeaORM substrate: the pool, its budgets, its close and, under the
+/// `health` feature, its indicator. Import it once — bare to read
+/// `<PREFIX>_SEAORM__*`, or through [`SeaOrmModule::for_root`] to pin — then
+/// the bindings your app needs beside it, which share the pool it opens. It is
+/// imported by type, so two imports open, close and report one pool.
 pub struct SeaOrmModule;
 
 impl SeaOrmModule {
-    /// `None` ⇒ load [`SeaOrmConfig`] from `<PREFIX>_SEAORM__*`; `Some(cfg)` pins
-    /// the base those variables overlay, per field, so the environment still
-    /// wins over it.
-    pub fn for_root(config: impl Into<Option<SeaOrmConfig>>) -> SeaOrmSetup {
-        SeaOrmSetup {
-            pinned: config.into(),
-        }
+    /// Pin `config` as the base `<PREFIX>_SEAORM__*` overlays, per field; the
+    /// bare import reads those variables over [`SeaOrmConfig`]'s defaults.
+    pub fn for_root(config: SeaOrmConfig) -> SeaOrmSetup {
+        ConfigModule::setup(config)
     }
 }
 
-/// The configured import produced by [`SeaOrmModule::for_root`].
-pub struct SeaOrmSetup {
-    pinned: Option<SeaOrmConfig>,
-}
+/// The configured import [`SeaOrmModule::for_root`] returns.
+pub type SeaOrmSetup = ConfigSetup<SeaOrmModule, SeaOrmConfig>;
 
-impl DynamicModule for SeaOrmSetup {
-    fn module() -> TypeId {
-        TypeId::of::<SeaOrmModule>()
-    }
-
-    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.pinned.clone(), builder.import::<SeaOrmOpening>())
-    }
-
-    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.import::<SeaOrmOpening>()
-    }
-}
-
-/// What [`SeaOrmModule::for_root`] opens: the pool, its budgets, its close
-/// and, under the `health` feature, its indicator — imported by type so that
-/// two `for_root`s open, close and report one pool.
-struct SeaOrmOpening;
-
-impl Module for SeaOrmOpening {
+impl Module for SeaOrmModule {
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         budgets(BudgetReach::Injected)
             .into_iter()
-            .fold(builder, ContainerBuilder::provide_meta)
+            .fold(
+                ConfigModule::provide_feature::<Unnamed, SeaOrmConfig>(builder),
+                ContainerBuilder::provide_meta,
+            )
             .provide_factory_after::<DatabaseConnection, (SeaOrmConfig,), _, _>(
                 |container| async move {
                     let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;

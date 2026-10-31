@@ -178,7 +178,7 @@ impl TicketsResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None), nest_rs_seaorm::SeaOrmDatabaseModule],
+    imports = [GraphqlModule, nest_rs_seaorm::SeaOrmDatabaseModule],
     providers = [ticket::TicketsService, GrantsCreate, TicketsController, TicketsResolver],
 )]
 struct TicketsModule;

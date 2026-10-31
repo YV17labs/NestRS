@@ -199,5 +199,8 @@ async fn the_module_without_a_verifier_fails_the_boot() {
     struct Unverified;
 
     let refused = boot_error::<Unverified>("a resource with no verifier must not boot").await;
-    assert!(refused.contains("AuthnModule::for_root"), "{refused}");
+    assert!(
+        refused.contains("import `nest_rs::authn::AuthnModule` alongside it"),
+        "{refused}"
+    );
 }

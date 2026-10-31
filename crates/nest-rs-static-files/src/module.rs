@@ -4,7 +4,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Module, Registering};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Module, Registering, Unnamed};
 use nest_rs_http::{BoxEndpoint, HttpFallbackMeta, HttpModule};
 
 use crate::config::StaticFilesConfig;
@@ -35,58 +35,50 @@ use crate::files::Files;
 pub struct StaticFilesModule;
 
 impl StaticFilesModule {
-    /// Everything the app says about its static files, in one value — see
-    /// [`StaticFilesOptions`]. A config alone, or `None` for the environment
-    /// alone, reads like every other module's `for_root`.
-    pub fn for_root(options: impl Into<StaticFilesOptions>) -> StaticFilesSetup {
-        StaticFilesSetup {
-            options: options.into(),
-        }
-    }
-}
-
-/// What an app declares about its static files: the config the environment
-/// overlays, and the embedded folder served in place of a directory — code,
-/// with no variable to set it.
-#[derive(Clone, Debug, Default)]
-pub struct StaticFilesOptions {
-    /// The base `<PREFIX>_STATIC_FILES__*` overlays, per field. `None` ⇒ the
-    /// environment over [`StaticFilesConfig::default`].
-    pub config: Option<StaticFilesConfig>,
-    /// The folder served from the binary; `None` serves the directory
-    /// [`StaticFilesConfig::root`] names.
-    pub embedded: Option<Embedded>,
-}
-
-impl From<StaticFilesConfig> for StaticFilesOptions {
-    fn from(config: StaticFilesConfig) -> Self {
-        Some(config).into()
-    }
-}
-
-impl From<Option<StaticFilesConfig>> for StaticFilesOptions {
-    fn from(config: Option<StaticFilesConfig>) -> Self {
-        Self {
-            config,
-            embedded: None,
-        }
-    }
-}
-
-impl From<Embedded> for StaticFilesOptions {
-    fn from(embedded: Embedded) -> Self {
-        Self {
-            config: None,
-            embedded: Some(embedded),
-        }
+    /// What the app declares about its static files, in one value: a
+    /// [`StaticFilesConfig`] pinned as the base `<PREFIX>_STATIC_FILES__*`
+    /// overlays, per field; the [`Embedded`] folder served in place of a
+    /// directory — code, with no variable to set it; or both, the folder
+    /// first, `(Embedded, StaticFilesConfig)`. The bare import reads those
+    /// variables over the defaults and serves the directory they name.
+    pub fn for_root(declared: impl Into<StaticFilesSetup>) -> StaticFilesSetup {
+        declared.into()
     }
 }
 
 /// [`DynamicModule`] returned by [`StaticFilesModule::for_root`]: resolves
-/// [`StaticFilesConfig`] (environment over the pinned base) and declares the
-/// embedded folder, if any.
+/// [`StaticFilesConfig`] (environment over the pinned base, when one is) and
+/// declares the embedded folder, if any.
 pub struct StaticFilesSetup {
-    options: StaticFilesOptions,
+    embedded: Option<Embedded>,
+    config: Option<StaticFilesConfig>,
+}
+
+impl From<StaticFilesConfig> for StaticFilesSetup {
+    fn from(config: StaticFilesConfig) -> Self {
+        Self {
+            embedded: None,
+            config: Some(config),
+        }
+    }
+}
+
+impl From<Embedded> for StaticFilesSetup {
+    fn from(embedded: Embedded) -> Self {
+        Self {
+            embedded: Some(embedded),
+            config: None,
+        }
+    }
+}
+
+impl From<(Embedded, StaticFilesConfig)> for StaticFilesSetup {
+    fn from((embedded, config): (Embedded, StaticFilesConfig)) -> Self {
+        Self {
+            embedded: Some(embedded),
+            config: Some(config),
+        }
+    }
 }
 
 /// The remedy a second declared source is refused with.
@@ -99,12 +91,13 @@ impl DynamicModule for StaticFilesSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        let builder = ConfigModule::provide_feature(
-            self.options.config.clone(),
-            builder.import::<StaticFilesModule>(),
-        );
+        let builder = builder.import::<StaticFilesModule>();
+        let builder = match self.config.clone() {
+            Some(config) => ConfigModule::provide_root(config, builder),
+            None => builder,
+        };
         // A factory, so the module's register reads it wherever the imports fall.
-        match self.options.embedded {
+        match self.embedded {
             Some(embedded) => builder
                 .provide_declared_factory::<Embedded, _, _>(ONE_SOURCE, move |_| async move {
                     Ok(embedded)
@@ -120,7 +113,7 @@ impl DynamicModule for StaticFilesSetup {
 
 impl Module for StaticFilesModule {
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(None::<StaticFilesConfig>, builder).import::<HttpModule>()
+        ConfigModule::provide_feature::<Unnamed, StaticFilesConfig>(builder).import::<HttpModule>()
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
@@ -169,11 +162,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_config_only_call_site_needs_no_options_literal() {
-        let unpinned = StaticFilesModule::for_root(None).options;
-        assert!(unpinned.config.is_none() && unpinned.embedded.is_none());
-
-        let pinned = StaticFilesModule::for_root(StaticFilesConfig::default()).options;
+    fn each_declaration_reaches_the_setup_and_nothing_else_does() {
+        let pinned = StaticFilesModule::for_root(StaticFilesConfig::default());
         assert!(pinned.config.is_some() && pinned.embedded.is_none());
     }
 }

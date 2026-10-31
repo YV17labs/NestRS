@@ -4,7 +4,7 @@ error: #[module] `providers` takes a list of provider types, e.g. `providers = [
 11 | #[module(providers = UsersService)]
    |                      ^^^^^^^^^^^^
 
-error: #[module] `imports` takes a list of modules, e.g. `imports = [UsersModule, HttpModule::for_root(None)]`
+error: #[module] `imports` takes a list of modules, e.g. `imports = [UsersModule, RedisModule::<Cache>, HttpModule::for_root(cfg)]`
   --> tests/integration/diagnostics/core/module_value_of_the_wrong_kind.rs:14:20
    |
 14 | #[module(imports = UsersModule)]

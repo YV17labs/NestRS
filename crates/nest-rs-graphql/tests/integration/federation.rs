@@ -504,7 +504,7 @@ impl UnflaggedResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [UnflaggedResolver])]
+#[module(imports = [GraphqlModule], providers = [UnflaggedResolver])]
 struct UnflaggedModule;
 
 /// Two `#[entity]` resolvers for one type: no clashing SDL field, only a
@@ -1427,7 +1427,7 @@ mod keyed_outside_a_subgraph {
     #[module(providers = [CatalogResolver, Closed])]
     struct CatalogProviders;
 
-    #[module(imports = [GraphqlModule::for_root(None), CatalogProviders])]
+    #[module(imports = [GraphqlModule, CatalogProviders])]
     struct CatalogModule;
 
     #[tokio::test]

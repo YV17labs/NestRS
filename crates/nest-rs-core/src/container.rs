@@ -1884,6 +1884,15 @@ pub(crate) mod __private {
         claim_override(builder, own, name, scope, &[(own, name)])
     }
 
+    /// Skip registering `key`, which `builder` already
+    /// [`contains`](ContainerBuilder::contains): a test's override of it is
+    /// claimed, a seed or an earlier registration is left as it is. What a
+    /// sibling crate registering a value once per boot calls when it finds the
+    /// key held.
+    pub fn stand_down(builder: ContainerBuilder, key: TypeId) -> ContainerBuilder {
+        builder.stand_down(key)
+    }
+
     /// Hold every seed of the factory output `id` to `check` before anything
     /// reads it: the factory drain runs it where the seed makes the factory
     /// skip. `ConfigModule` declares it for each config it queues.

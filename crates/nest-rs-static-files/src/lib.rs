@@ -38,7 +38,7 @@ mod validators;
 pub use config::StaticFilesConfig;
 pub use embedded::Embedded;
 pub use error::StaticFilesError;
-pub use module::{StaticFilesModule, StaticFilesOptions, StaticFilesSetup};
+pub use module::{StaticFilesModule, StaticFilesSetup};
 
 /// `#[derive(Embed)]` compiles a folder into the binary, for
 /// [`Embedded::of`] to name as the source; give it this crate's re-export as

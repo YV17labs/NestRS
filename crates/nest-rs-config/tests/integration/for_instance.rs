@@ -25,7 +25,7 @@ impl<I: Instance> Module for ShelfModule<I> {
         builder
     }
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(ForInstance::<I, ShelfConfig>::default(), builder)
+        ConfigModule::provide_feature::<I, ShelfConfig>(builder)
     }
 }
 
@@ -44,7 +44,7 @@ fn pinned(slots: u16) -> ShelfConfig {
     ShelfConfig { slots: Some(slots) }
 }
 
-#[module(imports = [ShelfModule::for_root(None), ShelfModule::for_root((Cache, None))])]
+#[module(imports = [ShelfModule, ShelfModule::<Cache>])]
 struct BothRead;
 
 #[module(imports = [ShelfModule::for_root(pinned(2)), ShelfModule::for_root((Cache, pinned(3)))])]
@@ -151,7 +151,7 @@ fn a_marker_declared_inside_a_function_reads_its_own_namespace() {
     #[instance]
     struct Local;
 
-    #[module(imports = [ShelfModule::for_root((Local, None))])]
+    #[module(imports = [ShelfModule::<Local>])]
     struct LocalRead;
 
     let app = boot::<LocalRead>(&[(var_name("shelf__local", "SLOTS"), "4")])

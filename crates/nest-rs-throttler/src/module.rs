@@ -3,46 +3,39 @@
 //! applies it, and the in-process [`InMemoryThrottler`] as the default
 //! `dyn ThrottlerStore`, which a vendor binding imported beside it supersedes.
 
-use std::any::TypeId;
-
 use std::sync::Arc;
 
-use nest_rs_config::ConfigModule;
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, MissingDependencyError};
+use nest_rs_config::{ConfigModule, ConfigSetup};
+use nest_rs_core::{
+    Collecting, ContainerBuilder, MissingDependencyError, Module, Registering, Unnamed,
+};
 
 use crate::config::ThrottlerConfig;
 use crate::guard::ThrottlerGuard;
 use crate::store::{InMemoryThrottler, ThrottlerStore};
 use crate::throttle::Throttle;
 
-/// The throttler port: policy, guard, and the in-process default store. Wire
-/// with `ThrottlerModule::for_root(None)` (env-driven, default
+/// The throttler port: policy, guard, and the in-process default store.
+/// Imported bare, it reads `<PREFIX>_THROTTLER__*` (default
 /// `Throttle::per_minute(60)`); add a vendor binding beside it to share the
 /// counters across instances.
 pub struct ThrottlerModule;
 
 impl ThrottlerModule {
-    /// Pass `None` to load [`ThrottlerConfig`] from `<PREFIX>_THROTTLER__*`, or a
-    /// [`ThrottlerConfig`] to pin as the base those variables overlay, per field.
-    pub fn for_root(config: impl Into<Option<ThrottlerConfig>>) -> ThrottlerSetup {
-        ThrottlerSetup {
-            pinned: config.into(),
-        }
+    /// Pin `config` as the base `<PREFIX>_THROTTLER__*` overlays, per field;
+    /// the bare import reads those variables over [`ThrottlerConfig`]'s
+    /// defaults.
+    pub fn for_root(config: ThrottlerConfig) -> ThrottlerSetup {
+        ConfigModule::setup(config)
     }
 }
 
-/// The configured import produced by [`ThrottlerModule::for_root`].
-pub struct ThrottlerSetup {
-    pinned: Option<ThrottlerConfig>,
-}
+/// The configured import [`ThrottlerModule::for_root`] returns.
+pub type ThrottlerSetup = ConfigSetup<ThrottlerModule, ThrottlerConfig>;
 
-impl DynamicModule for ThrottlerSetup {
-    fn module() -> TypeId {
-        TypeId::of::<ThrottlerModule>()
-    }
-
-    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
+impl Module for ThrottlerModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        let builder = ConfigModule::provide_feature::<Unnamed, ThrottlerConfig>(builder);
         // An *ordinary* factory, so a vendor binding's declared one supersedes it
         // wherever the two fall in `imports`.
         let builder = builder.provide_factory::<Arc<dyn ThrottlerStore>, _, _>(|_| async {
@@ -71,7 +64,7 @@ impl DynamicModule for ThrottlerSetup {
             let store = container.get_dyn::<dyn ThrottlerStore>().ok_or_else(|| {
                 anyhow::anyhow!(
                     "ThrottlerGuard needs a `dyn ThrottlerStore` binding — \
-                     `ThrottlerModule::for_root` binds the in-process default"
+                     `ThrottlerModule` binds the in-process default"
                 )
             })?;
             let config = ConfigModule::resolved::<ThrottlerConfig>(&container)?;
@@ -81,6 +74,10 @@ impl DynamicModule for ThrottlerSetup {
                 .map(|key| key.expose_secret().as_str());
             ThrottlerGuard::new(store, *default, pseudonym_key)
         })
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
     }
 }
 

@@ -25,7 +25,7 @@
 //! binary's. A key holding `__` under a known namespace is a sub-namespace
 //! another binary links (`redis__queue` under `redis`), reported only as a near
 //! miss of a key read here. A named instance's namespace (`redis__cache`, for
-//! `RedisModule::for_root((Cache, None))`) is claimed when its module registers
+//! `RedisModule::<Cache>`) is claimed when its module registers
 //! it, before any read, so a variable under it is never judged by the vendor's
 //! keys.
 //!

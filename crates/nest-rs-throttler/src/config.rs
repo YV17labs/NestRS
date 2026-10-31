@@ -24,8 +24,9 @@ const WINDOW: DurationBounds = DurationBounds::secs(
     ),
 );
 
-/// Rate-limit settings, settable via `<PREFIX>_THROTTLER__*` or pinned through
-/// [`ThrottlerModule::for_root`](crate::ThrottlerModule::for_root).
+/// Rate-limit settings, read by [`ThrottlerModule`](crate::ThrottlerModule)
+/// from `<PREFIX>_THROTTLER__*` over a base
+/// [`ThrottlerModule::for_root`](crate::ThrottlerModule::for_root) may pin.
 #[config(namespace = "throttler")]
 #[derive(Clone, Debug)]
 pub struct ThrottlerConfig {

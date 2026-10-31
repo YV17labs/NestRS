@@ -125,7 +125,7 @@ impl SealedController {
 }
 
 #[module(
-    imports = [HttpModule::for_root(None), SeaOrmDatabaseModule],
+    imports = [HttpModule, SeaOrmDatabaseModule],
     providers = [SealedController],
 )]
 struct SealedModule;

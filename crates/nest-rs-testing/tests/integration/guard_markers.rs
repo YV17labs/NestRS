@@ -135,7 +135,7 @@ impl Guard for ChecksRequestsOnly {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None), WsModule],
+    imports = [GraphqlModule, WsModule],
     providers = [
         DecidesOnce,
         ChecksUnitsOnly,

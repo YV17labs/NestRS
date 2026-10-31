@@ -106,7 +106,7 @@ impl NotesProcessor {
 }
 
 #[module(
-    imports = [HttpModule::for_root(None), GraphqlModule::for_root(None), WsModule],
+    imports = [HttpModule, GraphqlModule, WsModule],
     providers = [NotesController, NotesResolver, NotesGateway, NotesProcessor],
 )]
 struct DestructuredModule;

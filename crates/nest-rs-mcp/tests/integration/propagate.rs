@@ -1671,12 +1671,8 @@ fn without_keep_alive() -> nest_rs_mcp::McpConfig {
 }
 
 /// `config`, the endpoint opened in code, so the tests reach their tools.
-fn opened(config: nest_rs_mcp::McpConfig) -> nest_rs_mcp::McpOptions {
-    nest_rs_mcp::McpOptions {
-        config: Some(config),
-        posture: nest_rs_core::Posture::Public,
-        ..Default::default()
-    }
+fn opened(config: nest_rs_mcp::McpConfig) -> (nest_rs_mcp::McpAccess, nest_rs_mcp::McpConfig) {
+    (nest_rs_mcp::McpAccess::Public, config)
 }
 
 #[module(

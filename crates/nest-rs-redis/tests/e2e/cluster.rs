@@ -85,7 +85,7 @@ impl MovedProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(None), RedisQueueModule, QueueModule::for_root(None)],
+    imports = [RedisModule, RedisQueueModule, QueueModule],
     providers = [MovedProcessor],
 )]
 struct MovedModule;
@@ -197,7 +197,7 @@ impl AskedProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(None), RedisQueueModule, QueueModule::for_root(None)],
+    imports = [RedisModule, RedisQueueModule, QueueModule],
     providers = [AskedProcessor],
 )]
 struct AskedModule;
@@ -317,7 +317,7 @@ impl AtomicProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(None), RedisQueueModule, QueueModule::for_root(None)],
+    imports = [RedisModule, RedisQueueModule, QueueModule],
     providers = [AtomicProcessor],
 )]
 struct AtomicModule;

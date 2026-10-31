@@ -1,7 +1,7 @@
 //! SeaORM for nestrs — the adapter that wraps `sea_orm` over PostgreSQL, the
 //! one engine it supports, as CI runs it. One substrate and its bindings:
 //!
-//! - [`SeaOrmModule::for_root`] resolves [`SeaOrmConfig`] (`<PREFIX>_SEAORM__*`)
+//! - [`SeaOrmModule`] resolves [`SeaOrmConfig`] (`<PREFIX>_SEAORM__*`)
 //!   and opens the one `sea_orm::DatabaseConnection` every binding shares,
 //!   closing it when the app ends, after every shutdown hook, without waiting
 //!   past the settle for a connection no unit holds. Under the `health`
@@ -34,7 +34,7 @@
 //! # use nest_rs_database::UnitOfWork;
 //! # #[module(providers = [])]
 //! # pub struct UsersModule;
-//! #[module(imports = [SeaOrmModule::for_root(None), SeaOrmDatabaseModule, UsersModule])]
+//! #[module(imports = [SeaOrmModule, SeaOrmDatabaseModule, UsersModule])]
 //! pub struct AppModule;
 //! # #[nest_rs_core::main]
 //! # async fn main() -> anyhow::Result<()> {
@@ -48,7 +48,8 @@
 //! # }
 //! ```
 //!
-//! Pin explicit values with [`SeaOrmModule::for_root`]`(SeaOrmConfig { .. })`.
+//! Pin a base those variables overlay with
+//! [`SeaOrmModule::for_root`]`(SeaOrmConfig { .. })`.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

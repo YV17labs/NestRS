@@ -47,12 +47,13 @@ trait, no `<Vendor><Port>Module`.
 
 | Shape | Example | Role | Variables |
 |---|---|---|---|
-| `<Vendor>Module::for_root(cfg)` | `SeaOrmModule`, `RedisModule` | opens the **resource** — the pool, the connection — once, for every binding in the crate | `<PREFIX>_<VENDOR>__*` |
-| `<Port>Module::for_root(cfg)` | `ThrottlerModule`, `HttpModule`, `HealthModule` | the **capability**: its policy, its guard, its default implementation — when the port has any | `<PREFIX>_<PORT>__*` |
-| `<Vendor><Port>Module` | `SeaOrmDatabaseModule`, `RedisQueueModule`, `RedisThrottlerModule` | **binds** the vendor to the port; a bare import, unless it owns settings of its own — then a `for_root` | `<PREFIX>_<VENDOR>__<PORT>__*` |
+| `<Vendor>Module` | `SeaOrmModule`, `RedisModule` | opens the **resource** — the pool, the connection — once, for every binding in the crate | `<PREFIX>_<VENDOR>__*` |
+| `<Port>Module` | `ThrottlerModule`, `HttpModule`, `HealthModule` | the **capability**: its policy, its guard, its default implementation — when the port has any | `<PREFIX>_<PORT>__*` |
+| `<Vendor><Port>Module` | `SeaOrmDatabaseModule`, `RedisQueueModule`, `RedisThrottlerModule` | **binds** the vendor to the port | `<PREFIX>_<VENDOR>__<PORT>__*` |
 
-A module owning a `#[config]` offers a `for_root`; a bare import still reads its
-variables. An adapter crate's root holds the resource and **one folder per port
+**Every module is imported bare, and a bare import reads its variables**; a
+module owning a `#[config]` also offers a `for_root(cfg)`, which only pins a
+base those variables overlay. An adapter crate's root holds the resource and **one folder per port
 it binds** (`queue/`, `throttler/`); a binding never names a sibling's type, and
 a port crate with nothing to register holds no module. **Swapping a backend
 edits the composition root alone**: a vendor binding supersedes the port's
@@ -61,7 +62,7 @@ default anywhere in `imports`, and two bindings of one port fail the boot.
 **The crate counts only when it is a subject** (`features` is a container:
 `audio/http/module.rs` is `AudioHttpModule`). **Every type in a `module.rs`
 shares the stem** (`OAuthResourceModule`, `OAuthResourceSetup`,
-`OAuthResourceHost`); a `#[module]` lives only in a `module.rs`, and another
+`OAuthResourceWiring`); a `#[module]` lives only in a `module.rs`, and another
 provider gets a file named for it. `posts/http/controller.rs` is
 `PostsController`; an edge folder right under a framework crate's `src/` adapts
 the crate, and under a product crate's is refused. **The one precedence**: a
@@ -94,8 +95,8 @@ crate name.
 A product module is named from its path like any other, with **no marker** to
 tell it from a framework name. Where the two collide, the framework's is written
 in full at the point of use, never aliased — `#[module]` names a module in boot
-errors by its own ident: `#[module(imports =
-[nest_rs::authn::AuthnModule::for_root(None)])] pub struct AuthnModule;`. **What
+errors by its own ident: `#[module(imports = [nest_rs::authn::AuthnModule])]
+pub struct AuthnModule;`. **What
 every consumer would write identically belongs to the framework** — a wire shape
 a specification fixes, a type with no members declared only for a macro to gate
 on. The product keeps what it decides: claims, policy, scopes, validation.
@@ -122,14 +123,16 @@ everything cancels the encapsulation. **No `*_module.rs`, ever**: one
 
 Who can edit the struct decides: `HttpModule::for_root(cfg)` sets a config you
 cannot touch, your own config's `impl Default` is its in-code path, and it gets
-a `for_root` only once an app must pin it from outside. The one homonym,
-`ConfigModule::for_root()`, is the `.env` cascade, first in the root's imports.
-**`for_root` configures; nothing registers**: a reached provider's
-`#[inject] Arc<C>` loads `C`, so a library module writes `for_root(c: impl
-Into<Option<C>>)` returning `ConfigModule::setup(c.into())` as a
-`ConfigSetup<M, C>` alias (a hand-rolled `*Setup` only to queue more), and
-queues its config from its own imports only when it reads it in `register`
-rather than injecting it. **A module owning no config gets no `for_root`**
+a `for_root` only once an app must pin it from outside. The `.env` cascade
+needs no import: the loader reads it, and the first config a boot loads
+registers the active environment. **The bare import reads; `for_root` only
+pins; nothing registers**: a reached provider's `#[inject] Arc<C>` loads `C`,
+a library module's bare import queues its config (`ConfigModule::provide_feature`
+in a hand-written `collect`, or its own imports when it reads it in
+`register`), and its `for_root(c: C)` returns `ConfigModule::setup(c)` as a
+`ConfigSetup<M, C>` alias (a hand-rolled `*Setup` only for a declaration the
+environment has no twin for). `None` is never a `for_root` value: nothing
+pinned is the bare import. **A module owning no config gets no `for_root`**
 (`SocialModule` discovers providers that carry their own).
 
 **A `#[config]`'s keys are its fields' names**, the overlay derived from the
@@ -157,9 +160,10 @@ supersedes a bare import; two fail the boot
 `<PREFIX>_<VENDOR>__<INSTANCE>__<PORT>__*`, `<PREFIX>_REDIS__CACHE__URL` for
 `#[instance] struct Cache` — read off the marker's ident like a namespace off
 its path; the default instance, `Unnamed`, inserts nothing. A resource opened
-more than once takes the instance in its `for_root` value: `x` for the default,
-`(Cache, x)` for a named one; a typed import names it as a type argument
-(`<Vendor><Port>Module::<Cache>`). Each instance pins once; two instances never
+more than once names the instance as a type argument where it is imported bare
+(`RedisModule::<Cache>`, `<Vendor><Port>Module::<Cache>`), and in the value
+where its `for_root` pins it: `x` for the default, `(Cache, x)` for a named
+one. Each instance pins once; two instances never
 contest. A database is never opened twice: `Repo` holds one connection per
 binary, and a second database is a second project.
 

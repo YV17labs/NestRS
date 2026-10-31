@@ -12,7 +12,7 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, Quer
 use uuid::Uuid;
 use worker::WorkerModule;
 
-#[module(imports = [RedisModule::for_root(None), RedisQueueModule])]
+#[module(imports = [RedisModule, RedisQueueModule])]
 struct SuitesProducer;
 
 fn producer(app: &HeadlessApp) -> Arc<RedisQueueProducer> {

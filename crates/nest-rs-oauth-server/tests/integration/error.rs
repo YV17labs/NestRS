@@ -52,7 +52,7 @@ impl TokenController {
     }
 }
 
-#[module(imports = [HttpModule::for_root(None)], providers = [TokenController])]
+#[module(imports = [HttpModule], providers = [TokenController])]
 struct TokenApp;
 
 /// RFC 6749 §5.2's `application/json` body, with §5.1's `no-store` and

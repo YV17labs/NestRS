@@ -22,9 +22,9 @@ use uuid::Uuid;
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
         PostsModule,
     ],
@@ -33,11 +33,11 @@ struct PublishingHarness;
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
-        QueueModule::for_root(None),
+        QueueModule,
         NotificationsQueueModule,
     ],
 )]

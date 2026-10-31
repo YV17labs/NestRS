@@ -1,5 +1,5 @@
 //! What an app has to write to rate-limit a route — the boot half of the
-//! contract: `ThrottlerModule::for_root(None)` plus `#[use_guards(ThrottlerGuard)]`,
+//! contract: `ThrottlerModule` plus `#[use_guards(ThrottlerGuard)]`,
 //! nothing in `providers`.
 
 use std::sync::Arc;
@@ -27,7 +27,7 @@ struct LimitedModule;
 #[module(
     imports = [
         HttpModule::for_root(HttpConfig { port: 0, ..Default::default() }),
-        ThrottlerModule::for_root(None),
+        ThrottlerModule,
         LimitedModule,
     ],
 )]

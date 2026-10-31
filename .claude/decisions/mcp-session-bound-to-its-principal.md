@@ -154,3 +154,8 @@ session it names, and is refused by the same rule as any request naming
 another principal's session. rmcp 3.8 still removes a failed restore's entry on
 a task of its own (`PendingRestoreGuard`), so the instant that entry describes
 stays.
+
+**2026-10-31 — the posture is spelled `McpAccess`.** Where this entry reads
+`McpOptions::posture`, the app now declares `McpModule::for_root(McpAccess::Public)`
+(`.claude/decisions/bare-import-reads-for-root-pins.md`); what a public
+endpoint binds a session to is unchanged.

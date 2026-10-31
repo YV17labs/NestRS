@@ -9,7 +9,7 @@ use nest_rs::storage::Storage;
 use nest_rs::testing::HeadlessApp;
 use uuid::Uuid;
 
-#[module(imports = [RedisModule::for_root(None), RedisQueueModule, AudioModule])]
+#[module(imports = [RedisModule, RedisQueueModule, AudioModule])]
 struct AudioHarness;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

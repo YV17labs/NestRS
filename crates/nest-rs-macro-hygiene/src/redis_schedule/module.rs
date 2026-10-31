@@ -4,5 +4,5 @@
 use nest_rs::core::module;
 use nest_rs::redis::{RedisModule, RedisScheduleModule};
 
-#[module(imports = [RedisModule::for_root(None), RedisScheduleModule])]
+#[module(imports = [RedisModule, RedisScheduleModule])]
 pub struct MacroHygieneRedisScheduleModule;

@@ -25,10 +25,10 @@ use crate::service::HealthService;
 pub struct HealthModule;
 
 impl HealthModule {
-    /// `None` ⇒ load [`HealthConfig`] from `<PREFIX>_HEALTH__*` over its defaults;
-    /// `Some(cfg)` makes `cfg` the base those variables overlay.
-    pub fn for_root(config: impl Into<Option<HealthConfig>>) -> HealthSetup {
-        ConfigModule::setup(config.into())
+    /// Pin `config` as the base `<PREFIX>_HEALTH__*` overlays, per field; the
+    /// bare import reads those variables over [`HealthConfig`]'s defaults.
+    pub fn for_root(config: HealthConfig) -> HealthSetup {
+        ConfigModule::setup(config)
     }
 }
 

@@ -7,7 +7,7 @@ use nest_rs_guards::{Denial, Guard, GuardFor, guard};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
-use nest_rs_static_files::{Embedded, StaticFilesConfig, StaticFilesModule, StaticFilesOptions};
+use nest_rs_static_files::{Embedded, StaticFilesConfig, StaticFilesModule};
 use nest_rs_testing::{LogCapture, TestApp};
 
 use crate::embedded::Site;
@@ -42,10 +42,10 @@ async fn boot_error<M: nest_rs_core::Module>() -> String {
     }
 }
 
-#[module(imports = [StaticFilesModule::for_root(StaticFilesOptions {
-    config: Some(StaticFilesConfig { root: Some(SITE.into()), ..Default::default() }),
-    embedded: Some(Embedded::of::<Site>()),
-})])]
+#[module(imports = [StaticFilesModule::for_root((
+    Embedded::of::<Site>(),
+    StaticFilesConfig { root: Some(SITE.into()), ..Default::default() },
+))])]
 struct RootBesideEmbeddedApp;
 
 #[tokio::test]
@@ -90,7 +90,7 @@ struct MissingRootApp;
 })])]
 struct FileRootApp;
 
-#[module(imports = [StaticFilesModule::for_root(None)])]
+#[module(imports = [StaticFilesModule])]
 struct UnsetRootApp;
 
 #[tokio::test]

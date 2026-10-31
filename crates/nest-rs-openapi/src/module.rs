@@ -3,7 +3,7 @@
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
 use nest_rs_core::{
-    Collecting, Container, ContainerBuilder, Handler, Module, Posture, Registering,
+    Collecting, Container, ContainerBuilder, Handler, Module, Posture, Registering, Unnamed,
 };
 use nest_rs_http::{
     HttpEndpointMeta, HttpModule, Method, declare_endpoint, join_path, version_path,
@@ -24,7 +24,7 @@ const VERSIONED_SPEC_PATTERN: &str = "/api-json/{*version}";
 
 /// Add to a `#[module(imports = [...])]` to expose `GET /api-json` (the OpenAPI
 /// 3.1 document) and `GET /api` (bundled Swagger UI). Wire it with
-/// `OpenApiModule::for_root(None)`; configuration loads from `<PREFIX>_OPENAPI__*`.
+/// `OpenApiModule`; configuration loads from `<PREFIX>_OPENAPI__*`.
 ///
 /// Both endpoints are public, so they are served in a development or test
 /// profile alone until `<PREFIX>_OPENAPI__ENABLED=true` (or a pinned
@@ -35,10 +35,10 @@ const VERSIONED_SPEC_PATTERN: &str = "/api-json/{*version}";
 pub struct OpenApiModule;
 
 impl OpenApiModule {
-    /// Pass `None` to load [`OpenApiConfig`] from `<PREFIX>_OPENAPI__*`, or an
-    /// `OpenApiConfig` to pin as the base those variables overlay, per field.
-    pub fn for_root(config: impl Into<Option<OpenApiConfig>>) -> OpenApiSetup {
-        ConfigModule::setup(config.into())
+    /// Pin `config` as the base `<PREFIX>_OPENAPI__*` overlays, per field; the
+    /// bare import reads those variables over [`OpenApiConfig`]'s defaults.
+    pub fn for_root(config: OpenApiConfig) -> OpenApiSetup {
+        ConfigModule::setup(config)
     }
 }
 
@@ -46,10 +46,10 @@ impl OpenApiModule {
 pub type OpenApiSetup = ConfigSetup<OpenApiModule, OpenApiConfig>;
 
 impl Module for OpenApiModule {
-    // A bare import still reads `<PREFIX>_OPENAPI__*`; a `for_root(Some(cfg))`'s
+    // A bare import still reads `<PREFIX>_OPENAPI__*`; a `for_root(cfg)`'s
     // declared value supersedes this env-only one.
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(None::<OpenApiConfig>, builder).import::<HttpModule>()
+        ConfigModule::provide_feature::<Unnamed, OpenApiConfig>(builder).import::<HttpModule>()
     }
 
     // Registered once however many modules import it, so the document mounts once.
@@ -172,7 +172,7 @@ mod tests {
             .len()
     }
 
-    #[module(imports = [OpenApiModule::for_root(None)])]
+    #[module(imports = [OpenApiModule])]
     struct ServesDocumentation;
 
     /// A hand-written importer that imports the module in its register alone.

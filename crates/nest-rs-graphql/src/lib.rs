@@ -145,7 +145,7 @@ pub use nest_rs_graphql_macros::dataloader;
 /// }
 ///
 /// fn implements<T: Discoverable>() {}
-/// # #[module(imports = [GraphqlModule::for_root(None)], providers = [UsersResolver])]
+/// # #[module(imports = [GraphqlModule], providers = [UsersResolver])]
 /// # struct AppModule;
 /// #
 /// # async fn query(app: &nest_rs_testing::TestApp, query: &str) -> serde_json::Value {
@@ -199,7 +199,7 @@ pub use nest_rs_graphql_macros::operations;
 /// }
 ///
 /// #[module(
-///     imports = [GraphqlModule::for_root(None)],
+///     imports = [GraphqlModule],
 ///     providers = [GreetingService, GreetingResolver],
 /// )]
 /// struct AppModule;

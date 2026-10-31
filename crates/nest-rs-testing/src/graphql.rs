@@ -43,7 +43,7 @@
 //! #     }
 //! # }
 //! #
-//! # #[module(imports = [GraphqlModule::for_root(None)], providers = [PostsResolver])]
+//! # #[module(imports = [GraphqlModule], providers = [PostsResolver])]
 //! # struct AppModule;
 //! #
 //! # #[nest_rs_core::main]

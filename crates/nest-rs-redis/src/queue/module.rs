@@ -18,7 +18,7 @@ use crate::instance::RedisInstance;
 use crate::{RedisConnection, RedisError};
 
 /// The Redis queue binding. Import it beside
-/// [`RedisModule::for_root`](crate::RedisModule::for_root): an app pushing jobs
+/// [`RedisModule`](crate::RedisModule): an app pushing jobs
 /// injects `Arc<dyn JobProducer>`, and an app running them imports
 /// `QueueModule` beside it too. A bare import reads `<PREFIX>_REDIS__QUEUE__*`;
 /// [`for_root`](RedisQueueModule::for_root) pins the base those variables
@@ -27,10 +27,10 @@ use crate::{RedisConnection, RedisError};
 pub struct RedisQueueModule<I = Unnamed>(PhantomData<fn() -> I>);
 
 impl RedisQueueModule {
-    /// `None` loads [`RedisQueueConfig`] from `<PREFIX>_REDIS__QUEUE__*`;
-    /// `Some(cfg)` pins the base those variables overlay, field by field. A
-    /// queue on a named instance takes `(Marker, x)` and reads
-    /// `<PREFIX>_REDIS__<INSTANCE>__QUEUE__*`.
+    /// Pin `config` as the base `<PREFIX>_REDIS__QUEUE__*` overlays, per
+    /// field; a queue on a named instance takes `(Marker, config)` and reads
+    /// `<PREFIX>_REDIS__<INSTANCE>__QUEUE__*`. The bare import reads those
+    /// variables over [`RedisQueueConfig`]'s defaults.
     pub fn for_root<I: Instance>(
         config: impl Into<ForInstance<I, RedisQueueConfig>>,
     ) -> RedisQueueSetup<I> {
@@ -81,10 +81,9 @@ impl<I: Instance> RedisQueueModule<I> {
 
 impl<I: Instance> Module for RedisQueueModule<I> {
     // A bare import still reads `<PREFIX>_REDIS__QUEUE__*`; a
-    // `for_root(Some(cfg))`'s declared value supersedes this env-only one.
+    // `for_root(cfg)`'s declared value supersedes this env-only one.
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        Self::bind(ConfigModule::provide_feature(
-            ForInstance::<I, RedisQueueConfig>::default(),
+        Self::bind(ConfigModule::provide_feature::<I, RedisQueueConfig>(
             builder,
         ))
     }

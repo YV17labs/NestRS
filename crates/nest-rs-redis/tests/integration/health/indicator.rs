@@ -34,7 +34,7 @@ async fn answering_up(health: &HealthService, kind: ProbeKind) -> Vec<String> {
 
 #[module(imports = [
     HealthModule,
-    RedisModule::for_root(None),
+    RedisModule,
     RedisModule::for_root((Cache, cache_config())),
 ])]
 struct TwoOpened;
@@ -73,7 +73,7 @@ async fn each_instance_answers_the_readiness_and_startup_probes_under_its_own_na
 struct CachingFeature;
 
 /// A second feature opening the same instance, bare.
-#[module(imports = [RedisModule::for_root((Cache, None))])]
+#[module(imports = [RedisModule::<Cache>])]
 struct CacheReadingFeature;
 
 /// An app naming no Redis of its own: its features open the cache.
@@ -103,7 +103,7 @@ async fn an_instance_features_open_answers_once_in_an_app_that_never_names_it() 
     }
 }
 
-#[module(imports = [RedisModule::for_root(None)])]
+#[module(imports = [RedisModule])]
 struct OpenedUnprobed;
 
 #[tokio::test]

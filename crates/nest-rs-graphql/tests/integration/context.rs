@@ -59,7 +59,7 @@ impl TagResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [TagGuard, TagResolver])]
+#[module(imports = [GraphqlModule], providers = [TagGuard, TagResolver])]
 struct GraphqlTestModule;
 
 #[tokio::test]
@@ -110,7 +110,7 @@ mod an_unguarded_schema_announces_itself {
         }
     }
 
-    #[module(imports = [GraphqlModule::for_root(None)], providers = [OpenResolver])]
+    #[module(imports = [GraphqlModule], providers = [OpenResolver])]
     struct OpenModule;
 
     #[tokio::test]
@@ -187,7 +187,7 @@ mod a_resolver_no_module_lists {
         }
     }
 
-    #[module(imports = [GraphqlModule::for_root(None)], providers = [ListedResolver])]
+    #[module(imports = [GraphqlModule], providers = [ListedResolver])]
     struct PartialModule;
 
     #[module(
@@ -345,7 +345,7 @@ async fn a_multipart_part_that_does_not_decode_is_answered_without_its_value() {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [crate::RequestStoreDown, TagResolver],
 )]
 struct RequestStoreDownModule;
@@ -464,7 +464,7 @@ mod the_endpoint_guards_speak_the_request_vocabulary {
     }
 
     #[module(
-        imports = [GraphqlModule::for_root(None)],
+        imports = [GraphqlModule],
         providers = [TenantResolver, TenantGate, EndpointGuards<GraphqlView, (TenantGate,)>],
     )]
     struct TenantModule;

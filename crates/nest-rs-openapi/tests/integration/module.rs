@@ -117,7 +117,7 @@ struct DocumentedApp;
 #[module(imports = [openapi(false)], providers = [WidgetsController])]
 struct UndocumentedApp;
 
-#[module(imports = [OpenApiModule::for_root(None)], providers = [WidgetsController])]
+#[module(imports = [OpenApiModule], providers = [WidgetsController])]
 struct UnpinnedApp;
 
 /// Pinned over the profile's defaults, as the docs teach a pin that keeps the
@@ -149,17 +149,17 @@ async fn the_test_profile_serves_the_documentation_unpinned_or_pinned_over_its_d
 }
 
 /// A feature configuring the module as the app does.
-#[module(imports = [OpenApiModule::for_root(None)], providers = [WidgetsController])]
+#[module(imports = [OpenApiModule], providers = [WidgetsController])]
 struct ConfiguringWidgetsModule;
 
 /// A feature declaring the dependency bare.
 #[module(imports = [OpenApiModule], providers = [WidgetsController])]
 struct BareWidgetsModule;
 
-#[module(imports = [OpenApiModule::for_root(None), ConfiguringWidgetsModule])]
+#[module(imports = [OpenApiModule, ConfiguringWidgetsModule])]
 struct TwiceConfiguredApp;
 
-#[module(imports = [BareWidgetsModule, OpenApiModule::for_root(None)])]
+#[module(imports = [BareWidgetsModule, OpenApiModule])]
 struct BareBesideTheConfiguredApp;
 
 /// The document mounts once and answers, imported by `M`.

@@ -185,11 +185,11 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
-        QueueModule::for_root(None),
+        QueueModule,
         NotificationsQueueModule,
     ],
 )]

@@ -57,7 +57,7 @@
 //! The HTTP transport runs the endpoint's request guards in front of it: the
 //! app's global guard pool and the `EndpointGuards<McpView, _>` its modules
 //! declare, each once — and with neither, **deny-all**, unless the app opens
-//! the endpoint in code ([`McpOptions::posture`]). Without a bound unit of work
+//! the endpoint in code ([`McpAccess::Public`]). Without a bound unit of work
 //! a `Repo`-backed body fails closed (every `Repo` call errors), and without an
 //! ability `scope_for` denies every row.
 #![warn(missing_docs)]
@@ -66,6 +66,7 @@
 /// This crate's span target — MCP operations, hosts and the merged endpoint.
 pub const TARGET: &str = "nest_rs::mcp";
 
+mod access;
 mod ambient;
 mod composite;
 mod config;
@@ -89,13 +90,14 @@ pub mod unit;
 mod uri_template;
 mod view;
 
+pub use access::McpAccess;
 pub use composite::CompositeHandler;
 pub use config::McpConfig;
 pub use error::{Opaque, pipe_error, problem_error};
 pub use guard::{BoxFuture, denial_to_mcp_error};
 pub use host::McpHost;
 pub use identity::{McpIdentity, ResolvedIdentity};
-pub use module::{McpModule, McpOptions, McpSetup};
+pub use module::{McpModule, McpSetup};
 pub use operation::{McpOperationKind, current_container};
 pub use propagate::PropagatingHandler;
 pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity, hosts_on};
@@ -193,8 +195,7 @@ pub use nest_rs_core::input;
 /// use nest_rs_core::Discoverable;
 /// use nest_rs_mcp::{DEFAULT_PATH, hosts_on, mcp};
 /// # use nest_rs_core::{injectable, module};
-/// # use nest_rs_core::Posture;
-/// # use nest_rs_mcp::{McpError, McpIdentity, McpModule, McpOptions, tools};
+/// # use nest_rs_mcp::{McpError, McpIdentity, McpAccess, McpModule, tools};
 /// # use nest_rs_testing::mcp::{initialize, result};
 /// #
 /// # #[injectable]
@@ -236,11 +237,7 @@ pub use nest_rs_core::input;
 /// # }
 /// #
 /// # #[module(imports = [
-/// #     McpModule::for_root(McpOptions {
-/// #         server: Some(McpIdentity::new("assistant", "1.0.0")),
-/// #         posture: Posture::Public,
-/// #         ..Default::default()
-/// #     }),
+/// #     McpModule::for_root((McpAccess::Public, McpIdentity::new("assistant", "1.0.0"))),
 /// # ], providers = [
 /// #     MyService,
 /// #     PostsService,
@@ -275,8 +272,7 @@ pub use nest_rs_mcp_macros::mcp;
 /// use std::sync::Arc;
 /// use nest_rs_mcp::{McpError, Parameters, ServerHandler, input, mcp, tools};
 /// # use nest_rs_core::{injectable, module};
-/// # use nest_rs_core::Posture;
-/// # use nest_rs_mcp::{DEFAULT_PATH, McpModule, McpOptions, hosts_on};
+/// # use nest_rs_mcp::{DEFAULT_PATH, McpAccess, McpModule, hosts_on};
 /// # use nest_rs_testing::mcp::{call_tool_with, result};
 /// #
 /// # #[injectable]
@@ -305,7 +301,7 @@ pub use nest_rs_mcp_macros::mcp;
 /// }
 ///
 /// fn implements<T: ServerHandler>() {}
-/// # #[module(imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })], providers = [MyService, MyHandler])]
+/// # #[module(imports = [McpModule::for_root(McpAccess::Public)], providers = [MyService, MyHandler])]
 /// # struct AppModule;
 /// #
 /// # #[nest_rs_core::main]
@@ -333,8 +329,8 @@ pub use nest_rs_mcp_macros::mcp;
 ///
 /// ```
 /// use nest_rs_mcp::{McpError, mcp, tools};
-/// # use nest_rs_core::{Posture, module};
-/// # use nest_rs_mcp::{DEFAULT_PATH, McpModule, McpOptions};
+/// # use nest_rs_core::module;
+/// # use nest_rs_mcp::{DEFAULT_PATH, McpAccess, McpModule};
 /// # use nest_rs_testing::mcp::{call_method, open_session, result};
 ///
 /// #[mcp]
@@ -349,7 +345,7 @@ pub use nest_rs_mcp_macros::mcp;
 ///         Ok((id == 1).then(|| "the first note".to_owned()))
 ///     }
 /// }
-/// # #[module(imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })], providers = [NotesHost])]
+/// # #[module(imports = [McpModule::for_root(McpAccess::Public)], providers = [NotesHost])]
 /// # struct AppModule;
 /// #
 /// # #[nest_rs_core::main]

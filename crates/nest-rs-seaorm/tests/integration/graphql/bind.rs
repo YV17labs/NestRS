@@ -51,7 +51,7 @@ impl NotesResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [NotesResolver])]
+#[module(imports = [GraphqlModule], providers = [NotesResolver])]
 struct NotesGraphqlModule;
 
 /// The service's module is reached through a sibling, never imported by the
@@ -95,7 +95,7 @@ impl UngatedResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [ListedService, UngatedResolver],
 )]
 struct UnboundModule;
@@ -120,7 +120,7 @@ async fn a_bound_field_with_no_unit_of_work_binding_is_refused_at_boot_naming_it
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None), nest_rs_seaorm::SeaOrmDatabaseModule],
+    imports = [GraphqlModule, nest_rs_seaorm::SeaOrmDatabaseModule],
     providers = [ListedService, UngatedResolver],
 )]
 struct UngatedModule;

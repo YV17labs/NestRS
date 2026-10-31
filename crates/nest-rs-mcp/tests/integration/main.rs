@@ -146,10 +146,7 @@ use tokio_util::sync::CancellationToken;
 /// The MCP module with its endpoints opened in code, for a suite whose subject
 /// is not who may call them.
 pub(crate) fn open_mcp() -> nest_rs_mcp::McpSetup {
-    nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpOptions {
-        posture: nest_rs_core::Posture::Public,
-        ..Default::default()
-    })
+    nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpAccess::Public)
 }
 
 /// A session on `path` declaring the tasks extension, which `tasks/*`

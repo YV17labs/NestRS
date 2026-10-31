@@ -548,7 +548,7 @@ mod graphql {
 
     #[module(
         imports = [
-            GraphqlModule::for_root(None),
+            GraphqlModule,
             ThrottlerModule::for_root(generous()),
         ],
         providers = [RatedResolver],
@@ -558,7 +558,7 @@ mod graphql {
     #[module(
         imports = [
             nest_rs_http::HttpModule::for_root(edge()),
-            GraphqlModule::for_root(None),
+            GraphqlModule,
             ThrottlerModule::for_root(generous()),
             StalledStoreModule,
         ],
@@ -710,10 +710,7 @@ mod mcp {
     // whether the per-operation chain ran at all: the endpoint is opened.
     #[module(
         imports = [
-            nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpOptions {
-                posture: nest_rs_core::Posture::Public,
-                ..Default::default()
-            }),
+            nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpAccess::Public),
             ThrottlerModule::for_root(generous()),
         ],
         providers = [RatedTool],
@@ -725,14 +722,13 @@ mod mcp {
     #[module(
         imports = [
             nest_rs_http::HttpModule::for_root(edge()),
-            nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpOptions {
-                config: Some(nest_rs_mcp::McpConfig {
+            nest_rs_mcp::McpModule::for_root((
+                nest_rs_mcp::McpAccess::Public,
+                nest_rs_mcp::McpConfig {
                     sse_keep_alive: None,
                     ..Default::default()
-                }),
-                posture: nest_rs_core::Posture::Public,
-                ..Default::default()
-            }),
+                },
+            )),
             ThrottlerModule::for_root(generous()),
             StalledStoreModule,
         ],

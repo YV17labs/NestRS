@@ -60,3 +60,11 @@ guard listed between two of them runs after the block. The tests above keep
 their behaviour under the new names
 (`transport_parity::endpoint_guards_run_where_the_pool_lists_the_first_guard_they_name`,
 `…::a_guard_in_both_pool_and_endpoint_guards_runs_once`).
+
+**2026-10-31 — the opening is typed.** `McpOptions::posture` took core's
+four-variant `Posture` and refused all but two at boot. The opening is now
+`McpModule::for_root(McpAccess::Public)`, `McpAccess` holding `Gated` and
+`Public` alone, so a posture the boot refused no longer compiles; it is still
+a declaration, contested at a second import and refused beside an
+`EndpointGuards` declaration
+(`.claude/decisions/bare-import-reads-for-root-pins.md`).

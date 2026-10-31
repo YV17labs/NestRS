@@ -70,7 +70,7 @@ impl ShapeResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [ShapeResolver])]
+#[module(imports = [GraphqlModule], providers = [ShapeResolver])]
 struct ShapeApp;
 
 async fn boot() -> TestApp {

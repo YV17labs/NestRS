@@ -296,7 +296,7 @@ impl ProbeResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [ProbeResolver])]
+#[module(imports = [GraphqlModule], providers = [ProbeResolver])]
 struct ProbeModule;
 
 #[module(
@@ -305,7 +305,7 @@ struct ProbeModule;
             request_timeout: Some(Duration::from_secs(1)),
             ..HttpConfig::default()
         }),
-        GraphqlModule::for_root(None),
+        GraphqlModule,
     ],
     providers = [ProbeResolver],
 )]

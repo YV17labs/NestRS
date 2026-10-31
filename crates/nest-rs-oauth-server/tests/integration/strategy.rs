@@ -39,7 +39,7 @@ impl TokenController {
 
 #[module(
     imports = [
-        HttpModule::for_root(None),
+        HttpModule,
         OAuthServerModule::for_root(OAuthServerConfig {
             clients: vec![RegisteredClient::new(
                 CLIENT_ID,

@@ -23,7 +23,7 @@ impl SeedController {
 }
 
 #[module(
-    imports = [HttpModule::for_root(None)],
+    imports = [HttpModule],
     providers = [DevelopmentOnlyGuard, SeedController],
 )]
 struct DevApp;

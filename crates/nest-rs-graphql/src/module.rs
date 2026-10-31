@@ -10,7 +10,7 @@ use nest_rs_core::__private::{
 use nest_rs_core::anyhow;
 use nest_rs_core::{
     Collecting, Container, ContainerBuilder, Discovery, Edge, Module, ReachableProviders,
-    Registering, inventory,
+    Registering, Unnamed, inventory,
 };
 use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
 use nest_rs_http::{DetachedWork, HttpEndpointMeta, HttpModule, HttpRoutes, HttpTransport, Method};
@@ -44,7 +44,7 @@ use crate::view::GraphqlView;
 /// use nest_rs_core::module;
 /// use nest_rs_graphql::{GraphqlConfig, GraphqlModule};
 ///
-/// #[module(imports = [GraphqlModule::for_root(None)])]
+/// #[module(imports = [GraphqlModule])]
 /// struct AppModule;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> nest_rs_core::anyhow::Result<()> {
@@ -59,10 +59,10 @@ use crate::view::GraphqlView;
 pub struct GraphqlModule;
 
 impl GraphqlModule {
-    /// Pass `None` to load [`GraphqlConfig`] from `<PREFIX>_GRAPHQL__*`, or a
-    /// `GraphqlConfig` to pin as the base those variables overlay, per field.
-    pub fn for_root(config: impl Into<Option<GraphqlConfig>>) -> GraphqlSetup {
-        ConfigModule::setup(config.into())
+    /// Pin `config` as the base `<PREFIX>_GRAPHQL__*` overlays, per field; the
+    /// bare import reads those variables over [`GraphqlConfig`]'s defaults.
+    pub fn for_root(config: GraphqlConfig) -> GraphqlSetup {
+        ConfigModule::setup(config)
     }
 }
 
@@ -70,10 +70,10 @@ impl GraphqlModule {
 pub type GraphqlSetup = ConfigSetup<GraphqlModule, GraphqlConfig>;
 
 impl Module for GraphqlModule {
-    // A bare import still reads `<PREFIX>_GRAPHQL__*`; a `for_root(Some(cfg))`'s
+    // A bare import still reads `<PREFIX>_GRAPHQL__*`; a `for_root(cfg)`'s
     // declared value supersedes this env-only one.
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(None::<GraphqlConfig>, builder).import::<HttpModule>()
+        ConfigModule::provide_feature::<Unnamed, GraphqlConfig>(builder).import::<HttpModule>()
     }
 
     // Registered once however many modules import it, so `/graphql` mounts once.
@@ -268,7 +268,7 @@ mod tests {
 
     use super::*;
 
-    #[module(imports = [GraphqlModule::for_root(None)])]
+    #[module(imports = [GraphqlModule])]
     struct ServesGraphql;
 
     /// A hand-written importer that imports the module in its register alone.

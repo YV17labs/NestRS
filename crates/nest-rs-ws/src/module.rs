@@ -24,10 +24,10 @@ use crate::server::WsServer;
 pub struct WsModule;
 
 impl WsModule {
-    /// `None` ⇒ load [`WsConfig`] from `<PREFIX>_WS__*` over its defaults;
-    /// `Some(cfg)` makes `cfg` the base those variables overlay.
-    pub fn for_root(config: impl Into<Option<WsConfig>>) -> WsSetup {
-        ConfigModule::setup(config.into())
+    /// Pin `config` as the base `<PREFIX>_WS__*` overlays, per field; the
+    /// bare import reads those variables over [`WsConfig`]'s defaults.
+    pub fn for_root(config: WsConfig) -> WsSetup {
+        ConfigModule::setup(config)
     }
 }
 

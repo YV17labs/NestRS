@@ -791,7 +791,7 @@ mod graphql {
     }
 
     #[module(
-        imports = [HttpModule::for_root(edge()), GraphqlModule::for_root(None)],
+        imports = [HttpModule::for_root(edge()), GraphqlModule],
         providers = [StalledStrategy, StalledAuthn, TickResolver],
     )]
     struct StalledGraphqlModule;
@@ -847,7 +847,7 @@ mod graphql {
     type BearerAuthn = AuthnGuard<BearerStrategy>;
 
     #[module(
-        imports = [GraphqlModule::for_root(None)],
+        imports = [GraphqlModule],
         providers = [BearerStrategy, BearerAuthn, TickResolver],
     )]
     struct BearerGraphqlModule;

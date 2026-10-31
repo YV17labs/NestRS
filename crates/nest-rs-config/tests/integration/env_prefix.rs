@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_config::{ConfigModule, ConfigService, Environment, Namespaced, config, var_name};
+use nest_rs_config::{ConfigService, Environment, Namespaced, config, var_name};
 use nest_rs_core::{App, EnvPrefix, injectable, module};
 
 #[config(namespace = "widget")]
@@ -32,7 +32,7 @@ struct Widget {
     _config: Arc<WidgetConfig>,
 }
 
-#[module(imports = [ConfigModule::for_root()], providers = [Widget])]
+#[module(providers = [Widget])]
 struct WidgetModule;
 
 #[test]

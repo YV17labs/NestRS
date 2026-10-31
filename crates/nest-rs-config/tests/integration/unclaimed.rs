@@ -9,7 +9,7 @@ use nest_rs_config::unclaimed::{
     MISSPELLED_CONFIG_NAMESPACE, SHADOWED_CONFIG_VARIABLE, UNREAD_CONFIG_VARIABLE,
 };
 use nest_rs_config::{
-    Config, ConfigModule, ConfigService, ConfigSetup, Environment, ForInstance, config, var_name,
+    Config, ConfigModule, ConfigService, ConfigSetup, Environment, config, var_name,
 };
 use nest_rs_core::{App, Container, EnvPrefix, module};
 use nest_rs_testing::{CapturedEvent, LogCapture};
@@ -68,8 +68,8 @@ struct SingleConfig {
 struct KeysModule;
 
 impl KeysModule {
-    fn for_root(config: impl Into<Option<KeysConfig>>) -> ConfigSetup<Self, KeysConfig> {
-        ConfigModule::setup(config.into())
+    fn for_root(config: KeysConfig) -> ConfigSetup<Self, KeysConfig> {
+        ConfigModule::setup(config)
     }
 }
 
@@ -93,10 +93,7 @@ fn boot_pinned() -> KeysConfig {
 /// Register the instance [`Spare`] of [`VendorConfig`], as its module's
 /// `collect` does before any factory reads a config.
 fn register_spare() {
-    let _ = ConfigModule::provide_feature(
-        ForInstance::<Spare, VendorConfig>::default(),
-        Container::builder(),
-    );
+    let _ = ConfigModule::provide_feature::<Spare, VendorConfig>(Container::builder());
 }
 
 /// The events `message` filed for `variable`.

@@ -5,5 +5,5 @@ use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::redis::RedisModule;
 
-#[module(imports = [RedisModule::for_root(None), HealthModule])]
+#[module(imports = [RedisModule, HealthModule])]
 pub struct MacroHygieneRedisHealthModule;

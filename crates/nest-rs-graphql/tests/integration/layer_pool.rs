@@ -77,13 +77,13 @@ impl PingResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [CountingPassGuard, CountingInterceptor, PingResolver],
 )]
 struct FallbackModule;
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [
         CountingPassGuard,
         PingResolver,
@@ -342,7 +342,7 @@ mod pipeline {
     }
 
     #[module(
-        imports = [GraphqlModule::for_root(None)],
+        imports = [GraphqlModule],
         providers = [AroundRootFields, AroundLabels, LedgerConflict, Recorder, ShelfResolver],
     )]
     struct ShelfModule;
@@ -567,7 +567,7 @@ mod pipeline {
     }
 
     #[module(
-        imports = [GraphqlModule::for_root(None)],
+        imports = [GraphqlModule],
         providers = [LedgerConflict, CountOpenings, Entries, VaultResolver],
     )]
     struct VaultModule;
@@ -599,7 +599,7 @@ mod pipeline {
     }
 
     #[module(
-        imports = [GraphqlModule::for_root(None)],
+        imports = [GraphqlModule],
         providers = [LedgerConflict, BareLedgerResolver],
     )]
     struct BareLedgerModule;

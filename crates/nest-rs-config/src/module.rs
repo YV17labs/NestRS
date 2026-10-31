@@ -1,5 +1,5 @@
-//! [`ConfigModule`] — the `ConfigModule.for_root` DI wiring, and the seam
-//! every config's loading routes through.
+//! [`ConfigModule`] — the seam every config's loading routes through: the
+//! environment a bare import reads, and the base a `for_root` pins.
 
 use std::any::TypeId;
 use std::marker::PhantomData;
@@ -14,73 +14,62 @@ use crate::environment::Environment;
 use crate::error::ConfigNotResolvedError;
 use crate::for_instance::ForInstance;
 
-/// Sole owner of config loading: [`setup`](Self::setup) backs a module's
-/// `for_root`, and [`provide_feature`](Self::provide_feature) is the primitive
-/// it routes through, as does the boot's own load of a config a reachable
-/// provider injects — `#[inject] config: Arc<C>` is the whole declaration of
-/// a config an app owns.
+/// Sole owner of config loading: [`provide_feature`](Self::provide_feature)
+/// queues what a module's bare import reads, [`provide_root`](Self::provide_root)
+/// what its `for_root` pins, and [`setup`](Self::setup) is the whole body of a
+/// `for_root` that pins and imports its module — as is the boot's own load of
+/// a config a reachable provider injects: `#[inject] config: Arc<C>` is the
+/// whole declaration of a config an app owns.
 ///
 /// Config reads see the `.env` cascade without any import; `#[nest_rs::main]`
 /// also publishes it into `std::env`, before the runtime exists, for readers
-/// that know only the process environment.
+/// that know only the process environment. The first config a boot loads
+/// registers the active [`Environment`], so a provider can inject
+/// `Arc<Environment>` with no import of its own; a process declaring no
+/// `<PREFIX>_ENV` runs as production, and that boot says so once at `info`.
 pub struct ConfigModule;
 
 impl ConfigModule {
-    /// Register the active [`Environment`] so a provider can inject
-    /// `Arc<Environment>` and branch on the profile. Its position among
-    /// `imports` carries no meaning. A process that declares no
-    /// `<PREFIX>_ENV` runs as production, and the boot says so once at `info`.
-    pub fn for_root() -> ConfigRootSetup {
-        ConfigRootSetup
+    /// Queue the factory that resolves `C` for the instance `I` from the
+    /// environment over `C::defaults()` — what a bare import of the module
+    /// owning `C` queues. A pinned base for the same instance
+    /// ([`provide_root`](Self::provide_root)) supersedes it, wherever the two
+    /// fall in `imports = [..]`.
+    ///
+    /// The default instance is held as `C`; a named one reads `C` under the
+    /// namespace its name derives ([`instance_namespace`](crate::instance_namespace))
+    /// and is held as `Instanced<Marker, C>`. The default instance resolves
+    /// through [`Config::resolve`], a named one takes its steps under its own
+    /// namespace.
+    pub fn provide_feature<I: Instance, C: Config>(builder: ContainerBuilder) -> ContainerBuilder {
+        prepare::<I, C>(builder).provide_factory::<I::Of<C>, _, _>(|_| async move {
+            resolve_instance::<C, I>(None, None).map_err(anyhow::Error::from)
+        })
     }
 
-    /// Queue the factory that resolves `C` for the boot, for one instance. `None`
-    /// loads from the environment over `C::defaults()`; `Some(cfg)` makes `cfg`
-    /// the **base** the environment overlays — what an app passes to
-    /// `Module::for_root(config)`. Every configurable module's `for_root` routes
-    /// through this.
-    ///
-    /// The default instance takes `x` and is held as `C`; a named one takes
-    /// `(Marker, x)`, reads `C` under the namespace its name derives
-    /// ([`instance_namespace`](crate::instance_namespace)) and is held as
-    /// `Instanced<Marker, C>` ([`ForInstance`]).
-    ///
-    /// The default instance resolves through [`Config::resolve`], a named one
-    /// takes its steps under its own namespace, so the override is per field. A pinned base is a declaration
+    /// Queue `config`, the base a module's `for_root` pinned for one instance,
+    /// which the environment overlays per field: the default instance takes
+    /// `x`, a named one `(Marker, x)` ([`ForInstance`]). A pinned base is a
+    /// declaration
     /// ([`provide_declared_factory`](ContainerBuilder::provide_declared_factory)):
     /// it supersedes the environment-only factory a bare import of the same
-    /// module queues, wherever the two fall in `imports = [..]`, and two pinned
-    /// bases for one instance fail the boot
+    /// module queues, wherever the two fall in `imports = [..]`, and two
+    /// pinned bases for one instance fail the boot
     /// ([`ContestedDeclarationError`](nest_rs_core::ContestedDeclarationError)).
-    pub fn provide_feature<I: Instance, C: Config>(
+    pub fn provide_root<I: Instance, C: Config>(
         config: impl Into<ForInstance<I, C>>,
         builder: ContainerBuilder,
     ) -> ContainerBuilder {
-        if !I::NAME.is_empty() {
-            crate::unclaimed::claim(&crate::instance_namespace::<I>(C::NAMESPACE));
-        }
-        // A seed skips the factory below, never the checks its read runs.
-        let builder = nest_rs_core::__private::check_seed(
-            builder,
-            TypeId::of::<I::Of<C>>(),
-            check_seed::<C, I>,
-        );
-        match config.into().into_pinned() {
-            Some(base) => {
-                let site = nest_rs_core::__private::declaring_site(&builder);
-                builder.provide_declared_factory::<I::Of<C>, _, _>(
-                    "A config has one seam — pin it once, on the `for_root` of the module that \
-                     owns it, and let every other import of that module stay bare.",
-                    |_| async move {
-                        resolve_instance::<C, I>(Some(base), Some(site))
-                            .map_err(anyhow::Error::from)
-                    },
-                )
-            }
-            None => builder.provide_factory::<I::Of<C>, _, _>(|_| async move {
-                resolve_instance::<C, I>(None, None).map_err(anyhow::Error::from)
-            }),
-        }
+        let builder = prepare::<I, C>(builder);
+        let base = config.into().into_pinned();
+        let site = nest_rs_core::__private::declaring_site(&builder);
+        builder.provide_declared_factory::<I::Of<C>, _, _>(
+            "A config has one seam — pin it once, on the `for_root` of the module that owns it, \
+             and let every other import of that module stay bare.",
+            |_| async move {
+                resolve_instance::<C, I>(Some(base), Some(site)).map_err(anyhow::Error::from)
+            },
+        )
     }
 
     /// The `C` this boot resolved, or the refusal naming it: what a module
@@ -99,7 +88,7 @@ impl ConfigModule {
     /// # }
     /// pub struct Bucket(String);
     ///
-    /// pub struct BucketSetup(Option<BucketConfig>);
+    /// pub struct BucketSetup(BucketConfig);
     ///
     /// impl DynamicModule for BucketSetup {
     ///     fn module() -> TypeId {
@@ -107,14 +96,14 @@ impl ConfigModule {
     ///     }
     ///
     ///     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-    ///         ConfigModule::provide_feature(self.0.clone(), builder)
+    ///         ConfigModule::provide_root(self.0.clone(), builder)
     ///             .provide_factory_after::<Bucket, (BucketConfig,), _, _>(|container| async move {
     ///                 let config = ConfigModule::resolved::<BucketConfig>(&container)?;
     ///                 Ok(Bucket(config.name.clone()))
     ///             })
     ///     }
     /// }
-    /// # #[module(imports = [BucketSetup(Some(BucketConfig { name: "media".into() }))])]
+    /// # #[module(imports = [BucketSetup(BucketConfig { name: "media".into() })])]
     /// # struct AppModule;
     /// # #[nest_rs_core::main]
     /// # async fn main() -> anyhow::Result<()> {
@@ -138,7 +127,7 @@ impl ConfigModule {
     /// ```
     /// # use std::borrow::Borrow;
     /// # use std::marker::PhantomData;
-    /// # use nest_rs_config::{ConfigModule, ForInstance, config};
+    /// # use nest_rs_config::{ConfigModule, config};
     /// # use nest_rs_core::{App, Collecting, ContainerBuilder, Instance, Module, Registering, instance, module};
     /// # #[config(namespace = "bucket_for")]
     /// # #[derive(Clone, Debug, Default)]
@@ -155,7 +144,7 @@ impl ConfigModule {
     ///     }
     ///
     ///     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-    ///         ConfigModule::provide_feature(ForInstance::<I, BucketConfig>::default(), builder)
+    ///         ConfigModule::provide_feature::<I, BucketConfig>(builder)
     ///             .provide_factory_after::<Bucket<I>, (I::Of<BucketConfig>,), _, _>(
     ///                 |container| async move {
     ///                     let held = ConfigModule::resolved_for::<I, BucketConfig>(&container)?;
@@ -187,7 +176,8 @@ impl ConfigModule {
     }
 
     /// The whole body of a `for_root` whose module pins a config and does
-    /// nothing else:
+    /// nothing else: the bare import of the module reads its environment, and
+    /// `for_root` takes only the value it pins.
     ///
     /// ```
     /// # use nest_rs_config::{ConfigModule, ConfigSetup, config};
@@ -202,8 +192,8 @@ impl ConfigModule {
     /// pub type WsSetup = ConfigSetup<WsModule, WsConfig>;
     ///
     /// impl WsModule {
-    ///     pub fn for_root(config: impl Into<Option<WsConfig>>) -> WsSetup {
-    ///         ConfigModule::setup(config.into())
+    ///     pub fn for_root(config: WsConfig) -> WsSetup {
+    ///         ConfigModule::setup(config)
     ///     }
     /// }
     /// # #[module(imports = [WsModule::for_root(WsConfig { max_message_bytes: 42 })])]
@@ -229,6 +219,41 @@ impl ConfigModule {
     }
 }
 
+/// What both primitives do before they queue `C`'s factory for the instance
+/// `I`: claim a named instance's namespace before any read, register the
+/// active environment once, and hold a seed of `C` to the checks its read runs.
+fn prepare<I: Instance, C: Config>(builder: ContainerBuilder) -> ContainerBuilder {
+    if !I::NAME.is_empty() {
+        crate::unclaimed::claim(&crate::instance_namespace::<I>(C::NAMESPACE));
+    }
+    nest_rs_core::__private::check_seed(
+        environment(builder),
+        TypeId::of::<I::Of<C>>(),
+        check_seed::<C, I>,
+    )
+}
+
+/// Register the active [`Environment`] the first time a boot loads a config,
+/// filing then the one `info` that says a process declared none — unless a
+/// test's override or a seed already holds it, the override then claimed.
+fn environment(builder: ContainerBuilder) -> ContainerBuilder {
+    let key = TypeId::of::<Environment>();
+    if builder.contains(key) {
+        return nest_rs_core::__private::stand_down(builder, key);
+    }
+    let (environment, declared) = Environment::read_declared();
+    if declared.is_none() {
+        tracing::info!(
+            target: crate::TARGET,
+            environment = environment.as_str(),
+            declared = false,
+            "no environment declared; running as production",
+        );
+    }
+    // No `set_var` on the boot path: a spawned worker's `getenv` could race it.
+    builder.provide(environment)
+}
+
 /// The [`DynamicModule`] behind a `for_root` that only pins a config: resolves
 /// `C` for the instance `I` (environment over the pinned base, per field) in
 /// the factory phase, and imports `M`, its ordinary wiring, in both phases.
@@ -244,7 +269,7 @@ impl<M: Module + 'static, C: Config, I: Instance> DynamicModule for ConfigSetup<
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.config.clone(), builder.import::<M>())
+        ConfigModule::provide_root(self.config.clone(), builder.import::<M>())
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
@@ -268,7 +293,7 @@ pub fn feature<C: Config>() -> ConfigFeatureSetup<C> {
 /// the boot to call once a reachable provider injects `C`. Not API.
 #[doc(hidden)]
 pub fn queue_feature<C: Config>(builder: ContainerBuilder) -> ContainerBuilder {
-    ConfigModule::provide_feature(None::<C>, builder)
+    ConfigModule::provide_feature::<Unnamed, C>(builder)
 }
 
 /// The checks a seeded `C` passes before anything reads it: what `#[config]`
@@ -288,49 +313,6 @@ impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
     }
 }
 
-/// The import produced by [`ConfigModule::for_root`]. Registers the active
-/// [`Environment`] so later config loads see the resolved `.env` cascade, and
-/// files one `info` when the process declared none.
-pub struct ConfigRootSetup;
-
-impl DynamicModule for ConfigRootSetup {
-    fn module() -> TypeId {
-        TypeId::of::<ConfigModule>()
-    }
-
-    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        builder.import::<ConfigRoot>()
-    }
-
-    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.import::<ConfigRoot>()
-    }
-}
-
-/// What [`ConfigModule::for_root`] registers, imported by type so that a
-/// second import registers nothing twice.
-struct ConfigRoot;
-
-impl Module for ConfigRoot {
-    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        let (environment, declared) = Environment::read_declared();
-        if declared.is_none() {
-            tracing::info!(
-                target: crate::TARGET,
-                environment = environment.as_str(),
-                declared = false,
-                "no environment declared; running as production",
-            );
-        }
-        // No `set_var` on the boot path: a spawned worker's `getenv` could race it.
-        builder.provide(environment)
-    }
-
-    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder
-    }
-}
-
 #[cfg(test)]
 #[expect(
     clippy::result_large_err,
@@ -347,7 +329,7 @@ mod tests {
 
         /// A namespace no deployment sets, so these tests read only what they pin.
         #[derive(Clone, Default, Validate)]
-        struct SeamConfig {
+        pub(super) struct SeamConfig {
             bucket: String,
         }
 
@@ -364,14 +346,21 @@ mod tests {
         }
 
         /// Stands in for a framework module that registers its own config unpinned.
-        struct OwnerModule;
+        pub(super) struct OwnerModule;
 
         impl Module for OwnerModule {
             fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
                 builder
             }
             fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-                ConfigModule::provide_feature(None::<SeamConfig>, builder)
+                ConfigModule::provide_feature::<Unnamed, SeamConfig>(builder)
+            }
+        }
+
+        /// A `SeamConfig` a hand-built container holds before any module loads it.
+        pub(super) fn seeded() -> SeamConfig {
+            SeamConfig {
+                bucket: "seeded".into(),
             }
         }
 
@@ -590,38 +579,37 @@ mod tests {
 
     use super::*;
     use crate::service::var_name;
-    use nest_rs_core::{App, module};
 
-    #[module(imports = [ConfigModule::for_root()])]
-    struct RootOnly;
-
-    /// `ConfigModule::for_root()` registers the active [`Environment`] and does not
-    /// merge the `.env` cascade into the process environment.
+    /// The first config a boot loads registers the active [`Environment`]
+    /// and does not merge the `.env` cascade into the process environment.
     #[test]
     #[expect(
         clippy::disallowed_methods,
         reason = "the test asserts the process environment was left alone"
     )]
-    fn for_root_collect_does_not_publish_the_cascade_into_the_process_env() {
+    fn a_config_load_does_not_publish_the_cascade_into_the_process_env() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 ".env",
                 &format!(
                     "{}=from_dotenv",
-                    var_name("for_root_guard", "SHOULD_STAY_UNSET"),
+                    var_name("environment_guard", "SHOULD_STAY_UNSET"),
                 ),
             )?;
 
-            let app = App::new::<RootOnly>().expect("an app importing the root boots");
-            let container = app.container();
+            let container = Container::builder()
+                .provide(seam::seeded())
+                .import::<seam::OwnerModule>()
+                .build()
+                .expect("a module loading a seeded config builds");
 
             assert!(
                 container.get::<Environment>().is_some(),
-                "collect registers the active Environment",
+                "the config load registers the active Environment",
             );
             assert!(
-                std::env::var(var_name("for_root_guard", "SHOULD_STAY_UNSET")).is_err(),
-                "importing ConfigModule::for_root() must not write the cascade into std::env",
+                std::env::var(var_name("environment_guard", "SHOULD_STAY_UNSET")).is_err(),
+                "a config load must not write the cascade into std::env",
             );
             Ok(())
         });

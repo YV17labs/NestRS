@@ -1,7 +1,7 @@
 //! Redis for nestrs — one crate, one connection per instance, one binding per
 //! port.
 //!
-//! [`RedisModule::for_root`] opens the default instance's [`RedisConnection`]
+//! [`RedisModule`] opens the default instance's [`RedisConnection`]
 //! (`<PREFIX>_REDIS__*`) over the [`RedisTopology`] the URL's scheme declares —
 //! one server (`rediss://`), the primary Sentinel names (`rediss-sentinel://`),
 //! or a Cluster (`rediss-cluster://`), every connection encrypted and verified
@@ -22,15 +22,15 @@
 //!
 //! A binding pulls its port's crate, which an app using Redis for another port
 //! does not compile. Under the `health` feature, each instance
-//! [`RedisModule::for_root`] opens reports its own readiness: a `PING`, which
+//! [`RedisModule`] opens reports its own readiness: a `PING`, which
 //! an app importing `HealthModule` runs on the readiness and startup probes as
 //! `redis`, or `redis:cache` for a named instance — no import of its own.
 //!
 //! An app opening a second Valkey — the queue's refuses `allkeys-*` eviction, a
 //! cache's lives by it — names it with an instance marker:
-//! `RedisModule::for_root((Cache, None))` reads `<PREFIX>_REDIS__CACHE__*` and
+//! the typed import `RedisModule::<Cache>` reads `<PREFIX>_REDIS__CACHE__*` and
 //! provides `RedisConnection<Cache>`, and a binding over a named instance is a
-//! typed import, `RedisScheduleModule::<Locks>`. Every refusal names the
+//! typed import too, `RedisScheduleModule::<Locks>`. Every refusal names the
 //! failing instance's variables, and every line the connection files carries
 //! it as `instance`.
 //!

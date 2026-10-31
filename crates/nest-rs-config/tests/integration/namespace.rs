@@ -135,15 +135,28 @@ mod right {
     pub(super) struct Twin;
 }
 
-#[nest_rs_core::module]
-struct Drawers;
+/// The drawers of one instance, read from its environment as a bare import reads.
+struct Drawers<I>(std::marker::PhantomData<fn() -> I>);
 
-#[nest_rs_core::module(imports = [ConfigModule::setup::<Drawers, _, _>((Lock, None::<DrawerConfig>))])]
+impl<I: nest_rs_core::Instance> nest_rs_core::Module for Drawers<I> {
+    fn register(
+        builder: nest_rs_core::ContainerBuilder,
+        _: nest_rs_core::Registering<Self>,
+    ) -> nest_rs_core::ContainerBuilder {
+        builder
+    }
+    fn collect(
+        builder: nest_rs_core::ContainerBuilder,
+        _: nest_rs_core::Collecting<Self>,
+    ) -> nest_rs_core::ContainerBuilder {
+        ConfigModule::provide_feature::<I, DrawerConfig>(builder)
+    }
+}
+
+#[nest_rs_core::module(imports = [Drawers::<Lock>])]
 struct LockDrawer;
 
-#[nest_rs_core::module(imports = [
-    ConfigModule::setup::<Drawers, _, _>((left::Twin, None::<DrawerConfig>)),
-])]
+#[nest_rs_core::module(imports = [Drawers::<left::Twin>])]
 struct TwinDrawer;
 
 /// The boot of `M` refused as a shared instance: its marker, its namespace and

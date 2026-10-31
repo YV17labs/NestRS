@@ -7,7 +7,7 @@ use nest_rs_health::HealthModule;
 use nest_rs_seaorm::SeaOrmModule;
 use nest_rs_testing::TestApp;
 
-#[module(imports = [HealthModule, SeaOrmModule::for_root(None)])]
+#[module(imports = [HealthModule, SeaOrmModule])]
 struct Probed;
 
 #[tokio::test]

@@ -227,3 +227,23 @@ edge in silence.
 **Status (2026-10-17):** string keys are gone — `#[inject(key)]`,
 `provide_keyed`, `get_keyed`, `ProviderKey`, `KeyedDependency` and its error;
 storage keeps one disk (above).
+
+## 2026-10-31 — a named instance's bare import is typed; `for_root` only pins
+
+The spelling paragraph above named the instance by value at `for_root` —
+`RedisModule::for_root((Cache, None))` — and by type at a binding, because
+`RedisModule` had no bare form: two spellings of one instance, and `None` a
+word typed to say nothing (the identity audit's comp-6, the owner's "Tout
+faire" of 2026-10-28 agreeing the break). `RedisModule<I>` now implements
+`Module` by hand, so its bare import is the typed one, `RedisModule` for the
+default and `RedisModule::<Cache>` for a named instance — the type position
+this entry already said applies defaults, and no constructor added. `for_root`
+keeps the value form, `(Cache, cfg)`, for a pin alone, and `ForInstance<I, C>`
+no longer holds `None`: nothing pinned is the bare import
+(`.claude/decisions/bare-import-reads-for-root-pins.md`). What this entry
+refused stands: the turbofish at `for_root`, a builder method on the setup.
+
+An instance-capable module's bare import calls
+`ConfigModule::provide_feature::<I, C>`, which replaces
+`ForInstance::default()` as the one way to read an instance unpinned; a pin
+goes through `ConfigModule::provide_root`.

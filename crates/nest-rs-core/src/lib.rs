@@ -234,7 +234,8 @@ pub mod __private {
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,
         declaring_site, enter_import, leave_import, overrides_any, record_absent_optional,
-        record_stall, refuse_site, register_dynamic_import, site_chains, take_site_refusal,
+        record_stall, refuse_site, register_dynamic_import, site_chains, stand_down,
+        take_site_refusal,
     };
     pub use crate::ctx::attached;
     pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};

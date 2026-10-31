@@ -72,3 +72,13 @@ config crate the binary links, when it builds the console.
   a binary calling `load_cascade` run no `main` macro, and would log JSON while
   declaring `test` or `development`; the kernel asks the linked config crate
   instead, as late as it builds the console.
+
+**2026-10-31 — every app that reads a config says it.** The line lived in
+`ConfigModule::for_root()`'s collect, an import the demo's roots wrote first and
+`nestrs new`'s apps never wrote, so a scaffolded app running as production in
+silence was the common case. The first config a boot loads — through
+`ConfigModule::provide_feature` or `provide_root`, which every module owning a
+config and every injected config route through — now registers `Environment`
+and files the line, once per boot; `ConfigModule::for_root()` is gone
+(`.claude/decisions/bare-import-reads-for-root-pins.md`). The line keeps its
+level and its words.

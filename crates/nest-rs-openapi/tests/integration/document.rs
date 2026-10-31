@@ -440,7 +440,7 @@ mod guards {
     }
 
     #[module(
-        imports = [openapi(), ThrottlerModule::for_root(None)],
+        imports = [openapi(), ThrottlerModule],
         providers = [OfficeOnly, RatedController],
     )]
     struct RatedApp;
@@ -469,7 +469,7 @@ mod guards {
     }
 
     #[module(
-        imports = [openapi(), ThrottlerModule::for_root(None)],
+        imports = [openapi(), ThrottlerModule],
         providers = [LimitedController],
     )]
     struct LimitedApp;

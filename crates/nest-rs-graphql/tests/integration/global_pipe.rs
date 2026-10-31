@@ -117,7 +117,7 @@ impl GlobalPipe for RecordingPipe {
 #[module(providers = [EchoResolver, VarPipe, BangPipe, RecordingPipe])]
 struct EchoFeatureModule;
 
-#[module(imports = [GraphqlModule::for_root(None), EchoFeatureModule])]
+#[module(imports = [GraphqlModule, EchoFeatureModule])]
 struct AppWithVarPipe;
 
 async fn boot() -> TestApp {

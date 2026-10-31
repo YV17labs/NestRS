@@ -135,7 +135,7 @@ impl TraceShelfResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [
         TraceShelf,
         TraceShelfResolver,
@@ -267,7 +267,7 @@ impl SlowShelfResolver {
 
 #[module(
     imports = [
-        GraphqlModule::for_root(None),
+        GraphqlModule,
         HttpModule::for_root(HttpConfig {
             shutdown_timeout: std::time::Duration::from_secs(1),
             ..Default::default()
@@ -362,7 +362,7 @@ mod panicking_batch {
     }
 
     #[module(
-        imports = [GraphqlModule::for_root(None)],
+        imports = [GraphqlModule],
         providers = [BrokenShelf, BrokenShelfResolver],
     )]
     struct BrokenShelfApp;

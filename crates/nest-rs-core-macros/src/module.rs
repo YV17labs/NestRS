@@ -401,8 +401,8 @@ struct ModuleArgs {
     providers: Vec<ProviderBinding>,
 }
 
-const IMPORTS_TAKE: &str =
-    "a list of modules, e.g. `imports = [UsersModule, HttpModule::for_root(None)]`";
+const IMPORTS_TAKE: &str = "a list of modules, e.g. `imports = [UsersModule, \
+                            RedisModule::<Cache>, HttpModule::for_root(cfg)]`";
 
 const PROVIDERS_TAKE: &str = "a list of provider types, e.g. `providers = [UsersService]`, or \
      `Store as dyn Cache` to register one under a trait object";

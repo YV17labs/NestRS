@@ -164,7 +164,7 @@ impl ExportsGateway {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [Grants, ExportsController, ExportsResolver, ExportsTool],
 )]
 struct ExportsModule;

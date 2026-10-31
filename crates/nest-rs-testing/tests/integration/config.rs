@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigError, ConfigModule, ConfigService, MapSource, config};
 use nest_rs_core::{
-    Collecting, Container, ContainerBuilder, ContainerError, DynamicModule, injectable, module,
+    Collecting, Container, ContainerBuilder, ContainerError, DynamicModule, Unnamed, injectable,
+    module,
 };
 use nest_rs_http::HttpConfig;
 use nest_rs_testing::HeadlessApp;
@@ -146,7 +147,7 @@ fn the_synchronous_boot_refuses_an_injected_config_for_its_factory() {
 }
 
 /// What every configurable module's `for_root(cfg)` does: hand the pinned struct
-/// to `ConfigModule::provide_feature`.
+/// to `ConfigModule::provide_root`.
 struct DemoPinnedSetup(DemoConfig);
 
 impl DynamicModule for DemoPinnedSetup {
@@ -155,7 +156,7 @@ impl DynamicModule for DemoPinnedSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(Some(self.0.clone()), builder)
+        ConfigModule::provide_root(self.0.clone(), builder)
     }
 }
 
@@ -279,7 +280,7 @@ impl DynamicModule for ProbeSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(None::<HttpConfig>, builder)
+        ConfigModule::provide_feature::<Unnamed, HttpConfig>(builder)
             .provide_factory_after::<Probe, (HttpConfig,), _, _>(|_| async {
                 PROBE_BUILT.store(true, Ordering::SeqCst);
                 Ok(Probe)

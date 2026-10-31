@@ -100,7 +100,7 @@ impl GuardedResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [RequireAdmin, RoleHeaderGuard, GuardedResolver])]
+#[module(imports = [GraphqlModule], providers = [RequireAdmin, RoleHeaderGuard, GuardedResolver])]
 struct GuardedModule;
 
 async fn boot() -> TestApp {
@@ -369,7 +369,7 @@ impl SealedResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [DenyAll, CountingGuard, ShelfResolver, SealedResolver],
 )]
 struct ChainModule;
@@ -643,7 +643,7 @@ mod owned_chain {
     }
 
     #[module(
-        imports = [GraphqlModule::for_root(None)],
+        imports = [GraphqlModule],
         providers = [CountsItsDrop, CountedResolver],
     )]
     struct CountedModule;
@@ -736,7 +736,7 @@ mod request_decided {
     }
 
     #[module(
-        imports = [GraphqlModule::for_root(None)],
+        imports = [GraphqlModule],
         providers = [KeyAtTheRequest, KeyAtTheUnit, PingResolver],
     )]
     struct KeyModule;

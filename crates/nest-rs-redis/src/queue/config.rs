@@ -23,9 +23,10 @@ pub(crate) const LEASE: DurationBounds = DurationBounds::secs(
     ),
 );
 
-/// The Redis queue binding's settings, set through `<PREFIX>_REDIS__QUEUE__*`
-/// or pinned through
-/// [`RedisQueueModule::for_root`](crate::RedisQueueModule::for_root).
+/// The Redis queue binding's settings, read by
+/// [`RedisQueueModule`](crate::RedisQueueModule) from
+/// `<PREFIX>_REDIS__QUEUE__*` over a base
+/// [`RedisQueueModule::for_root`](crate::RedisQueueModule::for_root) may pin.
 #[config(namespace = "redis__queue")]
 #[derive(Clone, Debug)]
 pub struct RedisQueueConfig {

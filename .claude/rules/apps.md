@@ -71,9 +71,11 @@ A transport is activated by the module that serves on it: the adapters the
 root imports bring theirs, and the root names one only to pin it
 (`HttpModule::for_root(cfg)`), never through a `.transport(…)` call
 (`edges.md`, *Surface decisions*). The root imports the stacks and backend
-bindings it chooses (`RedisModule::for_root(…)`, `RedisQueueModule`,
-`OpenApiModule`, …). A module's settings are pinned through its `for_root` or
-set through its variables (`architecture.md`, *Configuration*).
+bindings it chooses, bare (`RedisModule`, `RedisQueueModule`, `OpenApiModule`,
+…), and never a module an edge it lists already imports — a feature's guards,
+its authn or authz port: the feature declares those where the access graph
+checks them. A module's settings are set through its variables, or pinned
+through its `for_root` (`architecture.md`, *Configuration*).
 
 **A deployed app exports OTLP**: `main` holds the `OpenTelemetry::init()` guard
 and the root imports `OpenTelemetryModule`, which refuses to register without

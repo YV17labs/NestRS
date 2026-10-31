@@ -1,12 +1,11 @@
-//! Every first-party `for_root` imported twice — unpinned, pinned, beside a
-//! bare import, in both orders — boots wired as if imported once, or refuses
-//! naming both imports: a feature declaring its dependency beside the app's
-//! own import never wires the app twice.
+//! Every first-party module owning a config imported twice — bare, pinned
+//! through its `for_root`, the two together in both orders — boots wired as if
+//! imported once, or refuses naming both pins: a feature declaring its
+//! dependency bare beside the app's own pin never wires the app twice.
 
 use std::time::Duration;
 
 use nest_rs_authn::{AuthnConfig, AuthnModule};
-use nest_rs_config::ConfigModule;
 use nest_rs_core::{
     App, CloseContribution, Container, ContestedDeclarationError, Discovery, Module,
     TransportContribution, UnresolvedFactoryError, WiringContribution, instance, module,
@@ -111,92 +110,42 @@ async fn contested<M: Module>(seeds: Seeds, root: &str) {
     names_both_imports(&refused, root, [0, 1]);
 }
 
-/// A row of the table: the setup unpinned, pinned, and — where the module is a
-/// dependency a feature may declare bare — that bare import.
+/// A row of the table: the module imported bare, and pinned through its
+/// `for_root`.
 macro_rules! imported_twice {
-    ($row:ident, seeds = $seeds:expr, unpinned = [$($u:tt)*] $(,)?) => {
+    ($row:ident, seeds = $seeds:expr, bare = [$($b:tt)*], pinned = [$($p:tt)*] $(,)?) => {
         mod $row {
             use super::*;
 
-            #[module(imports = [$($u)*])]
-            struct OnceUnpinned;
+            #[module(imports = [$($b)*])]
+            struct OnceBare;
 
-            #[module(imports = [$($u)*, $($u)*])]
-            struct TwiceUnpinned;
+            #[module(imports = [$($p)*])]
+            struct OncePinned;
 
-            #[tokio::test]
-            async fn imported_twice_wires_once() {
-                let seeds: Seeds = $seeds;
-                assert_eq!(
-                    wiring::<TwiceUnpinned>(seeds).await,
-                    wiring::<OnceUnpinned>(seeds).await,
-                );
-            }
-        }
-    };
-    (
-        $row:ident,
-        seeds = $seeds:expr,
-        unpinned = [$($u:tt)*],
-        pinned = [$($p:tt)*],
-        bare = [$($b:tt)*] $(,)?
-    ) => {
-        imported_twice!(@row $row, $seeds, [$($u)*], [$($p)*], [BareThenPinned, PinnedThenBare], {
+            #[module(imports = [$($b)*, $($b)*])]
+            struct TwiceBare;
+
             #[module(imports = [$($b)*, $($p)*])]
             struct BareThenPinned;
 
             #[module(imports = [$($p)*, $($b)*])]
             struct PinnedThenBare;
-        });
-    };
-    ($row:ident, seeds = $seeds:expr, unpinned = [$($u:tt)*], pinned = [$($p:tt)*] $(,)?) => {
-        imported_twice!(@row $row, $seeds, [$($u)*], [$($p)*], [], {});
-    };
-    (
-        @row $row:ident,
-        $seeds:expr,
-        [$($u:tt)*],
-        [$($p:tt)*],
-        [$($beside:ident),*],
-        { $($items:tt)* }
-    ) => {
-        mod $row {
-            use super::*;
-
-            #[module(imports = [$($u)*])]
-            struct OnceUnpinned;
-
-            #[module(imports = [$($p)*])]
-            struct OncePinned;
-
-            #[module(imports = [$($u)*, $($u)*])]
-            struct TwiceUnpinned;
-
-            #[module(imports = [$($u)*, $($p)*])]
-            struct UnpinnedThenPinned;
-
-            #[module(imports = [$($p)*, $($u)*])]
-            struct PinnedThenUnpinned;
 
             #[module(imports = [$($p)*, $($p)*])]
             struct TwicePinned;
-
-            $($items)*
 
             #[tokio::test]
             async fn imported_twice_wires_once_or_names_both_imports() {
                 let seeds: Seeds = $seeds;
                 assert_eq!(
-                    wiring::<TwiceUnpinned>(seeds).await,
-                    wiring::<OnceUnpinned>(seeds).await,
-                    "TwiceUnpinned",
+                    wiring::<TwiceBare>(seeds).await,
+                    wiring::<OnceBare>(seeds).await,
+                    "TwiceBare",
                 );
                 let pinned = wiring::<OncePinned>(seeds).await;
-                assert_eq!(wiring::<UnpinnedThenPinned>(seeds).await, pinned, "UnpinnedThenPinned");
-                assert_eq!(wiring::<PinnedThenUnpinned>(seeds).await, pinned, "PinnedThenUnpinned");
-                $(
-                    assert_eq!(wiring::<$beside>(seeds).await, pinned, stringify!($beside));
-                )*
+                assert_eq!(wiring::<BareThenPinned>(seeds).await, pinned, "BareThenPinned");
+                assert_eq!(wiring::<PinnedThenBare>(seeds).await, pinned, "PinnedThenBare");
                 contested::<TwicePinned>(seeds, "TwicePinned").await;
             }
         }
@@ -277,131 +226,114 @@ fn pinned_storage() -> StorageConfig {
 }
 
 imported_twice!(
-    config,
-    seeds = unseeded,
-    unpinned = [ConfigModule::for_root()]
-);
-
-imported_twice!(
     http,
     seeds = unseeded,
-    unpinned = [HttpModule::for_root(None)],
-    pinned = [HttpModule::for_root(pinned_http())],
     bare = [HttpModule],
+    pinned = [HttpModule::for_root(pinned_http())],
 );
 
 imported_twice!(
     graphql,
     seeds = unseeded,
-    unpinned = [GraphqlModule::for_root(None)],
-    pinned = [GraphqlModule::for_root(GraphqlConfig::default())],
     bare = [GraphqlModule],
+    pinned = [GraphqlModule::for_root(GraphqlConfig::default())],
 );
 
 imported_twice!(
     openapi,
     seeds = unseeded,
-    unpinned = [OpenApiModule::for_root(None)],
-    pinned = [OpenApiModule::for_root(pinned_openapi())],
     bare = [OpenApiModule],
+    pinned = [OpenApiModule::for_root(pinned_openapi())],
 );
 
 imported_twice!(
     mcp,
     seeds = unseeded,
-    unpinned = [McpModule::for_root(None)],
-    pinned = [McpModule::for_root(McpConfig::default())],
     bare = [McpModule],
+    pinned = [McpModule::for_root(McpConfig::default())],
 );
 
 imported_twice!(
     queue,
     seeds = unseeded,
-    unpinned = [QueueModule::for_root(None)],
-    pinned = [QueueModule::for_root(QueueConfig::default())],
     bare = [QueueModule],
+    pinned = [QueueModule::for_root(QueueConfig::default())],
 );
 
 imported_twice!(
     outbox,
     seeds = unseeded,
-    unpinned = [OutboxModule::for_root(None)],
-    pinned = [OutboxModule::for_root(OutboxConfig::default())],
     bare = [OutboxModule],
+    pinned = [OutboxModule::for_root(OutboxConfig::default())],
 );
 
 imported_twice!(
     ws,
     seeds = unseeded,
-    unpinned = [WsModule::for_root(None)],
-    pinned = [WsModule::for_root(WsConfig::default())],
     bare = [WsModule],
+    pinned = [WsModule::for_root(WsConfig::default())],
 );
 
 imported_twice!(
     health,
     seeds = unseeded,
-    unpinned = [HealthModule::for_root(None)],
-    pinned = [HealthModule::for_root(HealthConfig::default())],
     bare = [HealthModule],
+    pinned = [HealthModule::for_root(HealthConfig::default())],
 );
 
 imported_twice!(
     server_timing,
     seeds = unseeded,
-    unpinned = [ServerTimingModule::for_root(None)],
-    pinned = [ServerTimingModule::for_root(ServerTimingConfig::default())],
     bare = [ServerTimingModule],
+    pinned = [ServerTimingModule::for_root(ServerTimingConfig::default())],
 );
 
 imported_twice!(
     static_files,
     seeds = |app| app.provide(pinned_static_files()),
-    unpinned = [StaticFilesModule::for_root(None)],
-    pinned = [StaticFilesModule::for_root(pinned_static_files())],
     bare = [StaticFilesModule],
+    pinned = [StaticFilesModule::for_root(pinned_static_files())],
 );
 
 imported_twice!(
     storage,
     seeds = |app| app.provide(pinned_storage()),
-    unpinned = [StorageModule::for_root(None)],
-    pinned = [StorageModule::for_root(pinned_storage())],
     bare = [StorageModule],
+    pinned = [StorageModule::for_root(pinned_storage())],
 );
 
 imported_twice!(
     throttler,
     seeds = unseeded,
-    unpinned = [ThrottlerModule::for_root(None)],
+    bare = [ThrottlerModule],
     pinned = [ThrottlerModule::for_root(ThrottlerConfig::default())],
 );
 
 imported_twice!(
     authn,
     seeds = |app| app.provide(pinned_authn()),
-    unpinned = [AuthnModule::for_root(None)],
+    bare = [AuthnModule],
     pinned = [AuthnModule::for_root(pinned_authn())],
 );
 
 imported_twice!(
     oauth_client,
     seeds = |app| app.provide(pinned_oauth_client()),
-    unpinned = [OAuthClientModule::for_root(None)],
+    bare = [OAuthClientModule],
     pinned = [OAuthClientModule::for_root(pinned_oauth_client())],
 );
 
 imported_twice!(
     oauth_server,
     seeds = |app| app.provide(pinned_oauth_server()),
-    unpinned = [OAuthServerModule::for_root::<()>(None)],
+    bare = [OAuthServerModule::<()>],
     pinned = [OAuthServerModule::for_root(pinned_oauth_server())],
 );
 
 /// The token verifier `OAuthResourceModule` binds to its resource, which an app
 /// imports beside it: a second root, so the row's contest stays at its own
 /// imports.
-#[module(imports = [AuthnModule::for_root(None)])]
+#[module(imports = [AuthnModule])]
 struct ProtectedVerifier;
 
 imported_twice!(
@@ -411,7 +343,7 @@ imported_twice!(
             .provide(pinned_authn())
             .module::<ProtectedVerifier>()
     },
-    unpinned = [OAuthResourceModule::for_root(None)],
+    bare = [OAuthResourceModule],
     pinned = [OAuthResourceModule::for_root(pinned_oauth_resource())],
 );
 
@@ -421,7 +353,7 @@ imported_twice!(
         app.provide(nest_rs_seaorm::sea_orm::DatabaseConnection::default())
             .provide(SeaOrmConfig::default())
     },
-    unpinned = [SeaOrmModule::for_root(None)],
+    bare = [SeaOrmModule],
     pinned = [SeaOrmModule::for_root(SeaOrmConfig::default())],
 );
 
@@ -473,7 +405,7 @@ mod mounts_on_http {
                 .provide(pinned_authn())
                 .module::<ProtectedVerifier>()
         },
-        import = [OAuthResourceModule::for_root(None)],
+        import = [OAuthResourceModule],
     );
 }
 
@@ -510,21 +442,24 @@ struct RedisTwicePinned;
 struct RedisInstanceTwicePinned;
 
 #[module(imports = [
-    RedisModule::for_root(None),
+    RedisModule,
     RedisModule::for_root(pinned_redis()),
+    RedisModule::<Cache>,
     RedisModule::for_root((Cache, pinned_redis())),
+    RedisModule::<Cache>,
 ])]
 struct RedisEachInstancePinnedOnce;
 
 #[module(imports = [
-    RedisModule::for_root(None),
+    RedisModule,
     RedisQueueModule::for_root(RedisQueueConfig::default()),
     RedisQueueModule::for_root(RedisQueueConfig::default()),
 ])]
 struct RedisQueueTwicePinned;
 
 /// One instance pinned twice is contested, the default's as a named one's;
-/// two instances each pinned once never contest.
+/// two instances each pinned once never contest, nor does either's bare
+/// import beside its pin.
 #[test]
 fn a_redis_instance_pinned_twice_names_both_imports_and_two_instances_never_contest() {
     for (refused, root) in [

@@ -82,7 +82,7 @@ async fn the_bindings_producer_loads_its_scripts_at_boot() {
     assert_eq!(server.loads(), 2, "the push's script and the cancel's");
 }
 
-#[nest_rs_core::module(imports = [nest_rs_redis::RedisModule::for_root(None), nest_rs_redis::RedisQueueModule])]
+#[nest_rs_core::module(imports = [nest_rs_redis::RedisModule, nest_rs_redis::RedisQueueModule])]
 struct ProducerModule;
 
 /// A server whose first `lost` script loads are flushed as soon as they land:

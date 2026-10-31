@@ -11,7 +11,7 @@ use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 /// Binds the `nest-rs-database` port: [`SeaOrmUnitOfWork`] as `dyn
 /// UnitOfWork`, which every edge opens its units of work through and every
 /// lifecycle hook runs in. A bare import beside
-/// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
+/// [`SeaOrmModule`](crate::SeaOrmModule).
 ///
 /// Under the `queue` feature it also keeps the queue port's outbox:
 /// [`SeaOrmOutbox`](crate::queue::SeaOrmOutbox) as `dyn OutboxStore`, written by
@@ -169,7 +169,7 @@ mod tests {
         let refused = format!("{refused:#}");
         assert!(
             refused.contains(": SeaOrmDatabaseModule: no `SeaOrmConfig` in the container")
-                && refused.contains("`SeaOrmModule::for_root(None)`"),
+                && refused.contains("import `SeaOrmModule`, which resolves `SeaOrmConfig`"),
             "the factory's own sentence, after the one naming it: {refused}"
         );
     }

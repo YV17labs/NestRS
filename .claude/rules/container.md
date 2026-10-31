@@ -107,40 +107,47 @@ framework half.
 
 ## `for_root` — one seam, one value, no chain
 
-A module is configured in exactly one place, by exactly one value:
-`Module::for_root(x)`, where `x` carries everything the app declares about it.
-The `*Setup` it returns is opaque — no public method, no second constructor on
-the module type. A declaration that does not fit makes `x` grow a **field**,
-never the seam a **method**. Held by review: no inherent `impl` on a `*Setup`,
-and no inherent `pub fn` on a module type besides `for_root`.
-`ConfigModule` is the one carve-out — its `for_root` / `provide_feature` /
-`setup` / `resolved` (`resolved_for` per instance) are the primitives every
-other seam is built from, and `provide_feature` and `resolved`, the read a
+**A module is imported bare to read its environment, and `for_root` only
+pins.** Every module owning a `#[config]` implements `Module` by type, so its
+bare import (`HttpModule`, `RedisModule::<Cache>` for a named instance) queues
+the environment over `C::defaults()` and does its whole wiring; a module is
+configured in exactly one place, by exactly one value: `Module::for_root(x)`,
+where `x` carries everything the app pins about it. The `*Setup` it returns is
+opaque — no public method, no second constructor on the module type. A
+declaration that does not fit makes `x` grow a **field**, never the seam a
+**method**. Held by review: no inherent `impl` on a `*Setup`, and no inherent
+`pub fn` on a module type besides `for_root`. `ConfigModule` is the one
+carve-out — its `provide_feature` (what a bare import queues),
+`provide_root` (what a `for_root` pins), `setup` and `resolved`
+(`resolved_for` per instance) are the primitives every other seam is built
+from, and `provide_feature`, `provide_root` and `resolved`, the reads a
 `register` or a factory makes of the config, are public for third-party
-drivers. A seam one framework
-crate needs from another lives in its crate's `__private` (`macros.md`); one
-only its own crate needs stays private.
+drivers. The first config a boot loads, through either, registers the active
+`Environment` and files the undeclared-environment line
+(`.claude/decisions/undeclared-environment-is-production.md`), so no app
+imports anything for it. A seam one framework crate needs from another lives
+in its crate's `__private` (`macros.md`); one only its own crate needs stays
+private.
 
-`x` has three shapes and only three:
+`x` has three shapes and only three, and none is `None` — nothing pinned is
+the bare import:
 
-- **`impl Into<Option<C>>`**, `C` the module's `#[config]` — the default.
-  `None` is the environment over `C::defaults()`; `Some(c)` is the environment
-  over `c`, per field.
-- **`impl Into<MOptions>`**, a plain `Default` struct `{ config: Option<C>, … }`
-  beside the setup — only when the module carries a declaration with **no
-  environment twin** (MCP's identity). It keeps `From<C>` and `From<Option<C>>`
-  so the config-only call reads like every other module's, and the `Option` is
-  load-bearing: flattening it demotes the `.env` cascade below the pin.
+- **`C`**, the module's `#[config]` — the default: the environment over `c`,
+  per field.
 - **`impl Into<ForInstance<I, C>>`** — only for a module whose resource an app
   may open more than once: the default instance takes `x`, a named one
-  `(Marker, x)`. A value names the instance because Rust applies no default
-  type parameter while inferring an expression; a typed import, where it
-  does, keeps the turbofish (`RedisThrottlerModule::<Cache>`).
+  `(Marker, x)`. A value names the instance at `for_root` because Rust applies
+  no default type parameter while inferring an expression; a bare import,
+  where it does, names it as a type argument (`RedisModule::<Cache>`).
+- **`impl Into<MSetup>`** — only when the module carries a declaration with
+  **no environment twin** (MCP's identity and access, static files' embedded
+  folder): that declaration `D` alone, the config alone, or the declarations
+  before the config as a tuple, `(D, C)`, as a marker precedes its config. The
+  setup stays opaque: the conversions are its only constructors.
 
 A setup that only pins its config is `ConfigSetup<M, C>` (`ConfigSetup<M, C,
 I>` per instance) behind a named alias, built by `ConfigModule::setup`; a
-hand-written setup is for one whose `collect` queues more than the config or
-whose `register` does more than recurse.
+hand-written setup is for one whose declarations go beyond the config.
 
 **A setup imported twice wires once**: what it wires per app — a transport,
 a mount, a close, a registry — runs in the module it imports by type from both
@@ -148,12 +155,11 @@ of its phases, never in its own, so a feature importing the module bare beside
 the app's `for_root` wires nothing twice; what an import site chose is a
 declaration, so two refuse naming both. An app runs one transport of each
 type (`ContainerBuilder::provide_transport`). Held by `nest-rs-testing`'s
-setups table, which imports every first-party `for_root` twice.
+setups table, which imports every first-party module owning a config bare,
+pinned, and both together.
 
-- **A bare import is a dependency declaration**, not a second seam. A module
-  that must not be imported bare hides its `#[module]` behind a private host
-  struct and exposes only the façade (`OAuthResourceHost` /
-  `OAuthResourceModule`).
+- **A bare import is a dependency declaration and the environment-only form
+  at once**: the module it names does its whole wiring by type.
 - **Who gets a `for_root` is `architecture.md`'s** (*Configuration*): every
   `nest-rs-*` module owning a `#[config]`, never one owning none
   (`.claude/decisions/config-one-seam.md`). **A config a reached provider
@@ -397,10 +403,11 @@ to go (`.claude/decisions/one-execution-pipeline.md`).
 - the resource, its setup and each binding take `I: Instance = Unnamed`, so
   one instance is the app's spelling unchanged; a binding is a hand-written
   `impl<I: Instance> Module`, since `#[module]` is not generic;
-- `for_root` takes `impl Into<ForInstance<I, C>>`, and
-  `ConfigModule::provide_feature` reads `C` under the instance's namespace and
-  holds it as `I::Of<C>`, which a factory reads back with
-  `ConfigModule::resolved_for::<I, C>`;
+- the bare import is the typed one (`RedisModule::<Cache>`), whose `collect`
+  calls `ConfigModule::provide_feature::<I, C>`, and `for_root` takes `impl
+  Into<ForInstance<I, C>>`, which `ConfigModule::provide_root` pins; both read
+  `C` under the instance's namespace and hold it as `I::Of<C>`, which a
+  factory reads back with `ConfigModule::resolved_for::<I, C>`;
 - a helper called in expression position takes `I` from its caller's own type
   parameter, never from a default;
 - every refusal and every line names its instance's variables.

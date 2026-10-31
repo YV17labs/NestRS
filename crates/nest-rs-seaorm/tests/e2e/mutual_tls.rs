@@ -17,7 +17,7 @@ const ROLE: &str = "nestrs_certificate";
 /// (`.devcontainer/scripts/issue-certificates.sh`, its `CLIENTS`).
 const CERTIFICATE: &str = "sslcert=/certs/dev/client.pem&sslkey=/certs/dev/client.key";
 
-#[module(imports = [SeaOrmModule::for_root(None)])]
+#[module(imports = [SeaOrmModule])]
 struct PoolModule;
 
 /// The suite's URL, signed in as [`ROLE`] with no password, and `query`

@@ -13,7 +13,7 @@ use nest_rs_testing::TestAuthority;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 
-#[module(imports = [SeaOrmModule::for_root(None)])]
+#[module(imports = [SeaOrmModule])]
 struct PoolModule;
 
 /// The `SSLRequest` a Postgres client opens with: its length, then the code
@@ -313,9 +313,9 @@ async fn a_provider_injecting_a_pool_no_module_opens_is_refused_naming_the_modul
         .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
     assert_eq!(missing.consumer, "InjectsThePool");
     assert!(
-        missing.remedy.is_some_and(
-            |remedy| remedy.contains("`nest_rs::seaorm::SeaOrmModule::for_root(None)`")
-        ),
+        missing
+            .remedy
+            .is_some_and(|remedy| remedy.contains("`nest_rs::seaorm::SeaOrmModule`")),
         "{missing}"
     );
 }

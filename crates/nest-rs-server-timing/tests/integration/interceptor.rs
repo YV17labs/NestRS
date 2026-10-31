@@ -283,7 +283,7 @@ impl LimitedResolver {
 }
 
 #[module(
-    imports = [ServerTimingModule, nest_rs_graphql::GraphqlModule::for_root(None)],
+    imports = [ServerTimingModule, nest_rs_graphql::GraphqlModule],
     providers = [OperationLimit, LimitedResolver],
 )]
 struct LimitedGraphqlModule;
@@ -330,7 +330,7 @@ impl LimitedTools {
 }
 
 #[module(
-    imports = [ServerTimingModule, nest_rs_mcp::McpModule::for_root(None)],
+    imports = [ServerTimingModule, nest_rs_mcp::McpModule],
     providers = [OperationLimit, LimitedTools],
 )]
 struct LimitedMcpModule;

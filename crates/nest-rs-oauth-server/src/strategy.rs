@@ -48,7 +48,7 @@ use crate::registry::{AuthenticatedClient, authenticate_against_registry};
 /// }
 ///
 /// #[module(
-///     imports = [OAuthServerModule::for_root::<()>(None)],
+///     imports = [OAuthServerModule::<()>],
 ///     providers = [ClientSecretBasicStrategy<()>, ClientGuard, TokenController],
 /// )]
 /// struct IssuerModule;

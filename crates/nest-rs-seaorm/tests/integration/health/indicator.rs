@@ -30,11 +30,11 @@ async fn booted<M: nest_rs_core::Module>() -> App {
 }
 
 /// A feature opening the pool, as each feature reaching the database may.
-#[module(imports = [SeaOrmModule::for_root(None)])]
+#[module(imports = [SeaOrmModule])]
 struct ReadingFeature;
 
 /// An app opening the pool beside a feature that opens it too.
-#[module(imports = [HealthModule, SeaOrmModule::for_root(None), ReadingFeature])]
+#[module(imports = [HealthModule, SeaOrmModule, ReadingFeature])]
 struct OpenedTwice;
 
 #[tokio::test]
@@ -66,7 +66,7 @@ async fn a_pool_no_round_trip_reaches_fails_readiness_and_startup_once_as_seaorm
     );
 }
 
-#[module(imports = [SeaOrmModule::for_root(None)])]
+#[module(imports = [SeaOrmModule])]
 struct OpenedUnprobed;
 
 #[tokio::test]

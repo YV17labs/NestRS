@@ -26,7 +26,7 @@ pub(crate) fn bind(
     let Some(authn) = authn else {
         anyhow::bail!(
             "OAuthResourceModule needs the token verifier it protects: import \
-             AuthnModule::for_root(..) alongside it"
+             `nest_rs::authn::AuthnModule` alongside it"
         );
     };
     let authn_variable = |key| nest_rs_config::var_name(AuthnConfig::NAMESPACE, key);
@@ -214,6 +214,6 @@ mod tests {
 
     #[test]
     fn no_authn_config_at_all_is_refused_naming_the_missing_module() {
-        assert!(refusal(None).contains("AuthnModule::for_root"));
+        assert!(refusal(None).contains("import `nest_rs::authn::AuthnModule` alongside it"));
     }
 }

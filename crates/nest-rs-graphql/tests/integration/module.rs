@@ -24,17 +24,17 @@ impl PingResolver {
 }
 
 /// A feature configuring the module as the app does.
-#[module(imports = [GraphqlModule::for_root(None)], providers = [PingResolver])]
+#[module(imports = [GraphqlModule], providers = [PingResolver])]
 struct ConfiguringPingModule;
 
 /// A feature declaring the dependency bare.
 #[module(imports = [GraphqlModule], providers = [PingResolver])]
 struct BarePingModule;
 
-#[module(imports = [GraphqlModule::for_root(None), ConfiguringPingModule])]
+#[module(imports = [GraphqlModule, ConfiguringPingModule])]
 struct TwiceConfiguredApp;
 
-#[module(imports = [BarePingModule, GraphqlModule::for_root(None)])]
+#[module(imports = [BarePingModule, GraphqlModule])]
 struct BareBesideTheConfiguredApp;
 
 /// `/graphql` mounts once and answers, imported by `M`.

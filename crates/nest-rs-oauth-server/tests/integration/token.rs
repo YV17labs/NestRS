@@ -62,7 +62,7 @@ impl IssuerController {
     }
 }
 
-#[module(imports = [HttpModule::for_root(None)], providers = [IssuerController])]
+#[module(imports = [HttpModule], providers = [IssuerController])]
 struct IssuerApp;
 
 /// RFC 6749 §5.1's `no-store` and `no-cache` reach the client through the edge.
@@ -140,7 +140,7 @@ impl RequestController {
     }
 }
 
-#[module(imports = [HttpModule::for_root(None)], providers = [RequestController])]
+#[module(imports = [HttpModule], providers = [RequestController])]
 struct RequestApp;
 
 #[module(

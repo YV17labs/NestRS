@@ -47,7 +47,7 @@ impl CountingProcessor {
 
 #[module(
     imports = [
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
         ScheduleModule,
         RedisScheduleModule,
@@ -57,7 +57,7 @@ impl CountingProcessor {
 struct ScheduleHarness;
 
 #[module(
-    imports = [RedisModule::for_root(None), RedisQueueModule, QueueModule::for_root(None)],
+    imports = [RedisModule, RedisQueueModule, QueueModule],
     providers = [CountingProcessor],
 )]
 struct CountingWorkerHarness;

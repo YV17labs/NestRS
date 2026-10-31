@@ -2,9 +2,9 @@
 //! and challenge — the MCP endpoint answers the `Host` its resource names.
 
 use nest_rs_authn::{AuthnConfig, AuthnModule};
-use nest_rs_core::{Posture, module};
+use nest_rs_core::module;
 use nest_rs_http::StatusCode;
-use nest_rs_mcp::{McpConfig, McpModule, McpOptions};
+use nest_rs_mcp::{McpAccess, McpConfig, McpModule};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule};
 use nest_rs_testing::TestApp;
 
@@ -23,7 +23,7 @@ const RESOURCE: &str = "https://mcp.example.com/mcp";
             authorization_servers: vec!["https://auth.example.com".into()],
             ..OAuthResourceConfig::default()
         }),
-        McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() }),
+        McpModule::for_root(McpAccess::Public),
     ],
     providers = [EchoTool],
 )]

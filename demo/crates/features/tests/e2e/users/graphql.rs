@@ -15,9 +15,9 @@ use features::users::{ActiveModel as UserActive, UserRole, UsersGraphqlModule};
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
         AuthnModule,
         UsersGraphqlModule,

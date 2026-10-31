@@ -86,7 +86,7 @@ fn policy() -> ThrottlerSetup {
     })
 }
 
-#[module(imports = [RedisThrottlerModule, policy(), RedisModule::for_root(None)])]
+#[module(imports = [RedisThrottlerModule, policy(), RedisModule])]
 struct RedisThrottlerHost;
 
 struct Routes;

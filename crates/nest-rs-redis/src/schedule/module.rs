@@ -1,6 +1,6 @@
 //! [`RedisScheduleModule`] — the Redis binding of the schedule port's occurrence
 //! lock. A bare import beside `ScheduleModule` and
-//! [`RedisModule::for_root`](crate::RedisModule::for_root): it declares
+//! [`RedisModule`](crate::RedisModule): it declares
 //! [`RedisOccurrenceLock`] as the `dyn OccurrenceLock` a job declared
 //! `replicas = "one"` claims its occurrences through. Enabled by the `schedule`
 //! feature.

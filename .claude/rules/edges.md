@@ -337,8 +337,9 @@ the visible opening.
   `InBand` posture lets `AuthnGuard` admit anonymous operations to resolver
   gates; `/mcp` is `Gated`, and with neither pool nor endpoint guards it is
   deny-all, said once at boot and per refusal. The one opening is
-  `McpOptions::posture = Posture::Public`, written in code at one import (a
-  second is a contested declaration), and a module declaring guards beside it
+  `McpModule::for_root(McpAccess::Public)`, written in code at one import —
+  `McpAccess` has no other variant than `Gated`, so no other posture compiles —
+  (a second is a contested declaration), and a module declaring guards beside it
   fails the boot
   (`.claude/decisions/bridge-joins-the-pool.md`).
 - **A failed unit never commits, answered or not**: a handler's `Err` or a
@@ -531,11 +532,12 @@ router parses. The rewrite is skipped when nothing is versioned.
   its own `McpError` as built, a `ToProblem` error the problem it says, any
   other opaquely, its chain filed — and an exception filter may answer any of
   them with a problem; `Opaque` says the same at a call site. **Identity has two
-  owners** over the binary's name and version: the app declares `McpOptions {
-  server }` — branding and `instructions`, and a name or version only to
-  override the binary's — and a host may refine only `name` and `title` for its
-  endpoint; `instructions` on `#[mcp]` is a compile error. Identity has no
-  environment twin, which is why it travels in `McpOptions`.
+  owners** over the binary's name and version: the app declares an
+  `McpIdentity` on `McpModule::for_root` — branding and `instructions`, and a
+  name or version only to override the binary's — and a host may refine only
+  `name` and `title` for its endpoint; `instructions` on `#[mcp]` is a compile
+  error. Identity has no environment twin, which is why it travels in
+  `for_root`'s value, before the config (`container.md`, *`for_root`*).
 - **OpenAPI** self-mounts a document **composed from the route table** (schemas
   through `schemars`, `#[api(...)]` enriches) and an offline Swagger UI that
   loads nothing from elsewhere. The document is 3.1 and states only what the

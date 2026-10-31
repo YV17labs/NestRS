@@ -124,7 +124,7 @@ impl WidgetsGateway {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [NarrowToken, WidgetsController, WidgetsResolver, WidgetsTool],
 )]
 struct EveryEdgeModule;

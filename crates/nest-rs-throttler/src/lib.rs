@@ -1,6 +1,6 @@
 //! Rate limiting for nestrs.
 //!
-//! Import [`ThrottlerModule::for_root`] (env-driven, default
+//! Import [`ThrottlerModule`] (`<PREFIX>_THROTTLER__*`, default
 //! `Throttle::per_minute(60)`), bind [`ThrottlerGuard`] per route with
 //! `#[use_guards(ThrottlerGuard)]`, optionally override per route with
 //! `#[meta(Throttle::...)]`. Over-limit requests get `429 Too Many Requests`.

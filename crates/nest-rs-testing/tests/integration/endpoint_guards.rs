@@ -184,7 +184,7 @@ impl OriginGateway {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None), WsModule],
+    imports = [GraphqlModule, WsModule],
     providers = [Checks, Bearer, AssistantTool, OriginResolver, OriginGateway],
 )]
 struct EveryUpgradeModule;

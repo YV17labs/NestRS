@@ -117,7 +117,7 @@ impl WidgetResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [
         PassGuard,
         AbilityInjector,

@@ -11,7 +11,7 @@
 //! here follows, `ACME_SEAORM__URL` through `ACME_ENV`.
 //!
 //! A resource an app opens more than once reads one namespace per instance:
-//! `ConfigModule::provide_feature` takes a [`ForInstance`], and a named
+//! `ConfigModule::provide_root` takes a [`ForInstance`], and a named
 //! instance's variables carry its name after the vendor
 //! (`<PREFIX>_REDIS__CACHE__URL`, [`instance_namespace`]).
 //!
@@ -56,7 +56,7 @@ pub use error::{ConfigError, ConfigNotResolvedError, Result};
 pub use field::ConfigField;
 pub use for_instance::ForInstance;
 pub use material::{Material, read_material};
-pub use module::{ConfigModule, ConfigRootSetup, ConfigSetup};
+pub use module::{ConfigModule, ConfigSetup};
 pub use namespace::instance_namespace;
 pub use service::{ConfigService, spellings, spellings_or_field, var_name, var_name_or_field};
 pub use setting::{FromSetting, Setting};

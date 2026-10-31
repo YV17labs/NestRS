@@ -75,8 +75,8 @@ impl McpMount {
         }
     }
 
-    /// [`new`](Self::new), opened as `McpOptions::posture = Posture::Public`
-    /// opens an app's endpoint: no guard runs in front of it, so its sessions
+    /// [`new`](Self::new), opened as `McpAccess::Public` opens an app's
+    /// endpoint: no guard runs in front of it, so its sessions
     /// are the anonymous caller's.
     pub fn public() -> Self {
         Self {
@@ -96,7 +96,7 @@ impl McpMount {
     ///   (`OAuthResourceModule`'s resource) unless the list was emptied;
     /// * a registered `dyn SessionStore` (rmcp 3.x cross-instance session
     ///   recovery), if the app provides one;
-    /// * the posture the app declared, `McpOptions::posture`.
+    /// * the access the app declared, `McpAccess`.
     pub(crate) fn from_container(container: &Container) -> Self {
         let mut config = container
             .get::<McpConfig>()

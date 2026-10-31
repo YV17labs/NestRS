@@ -85,8 +85,8 @@ mod reason {
 #[derive(Layer)]
 pub struct ThrottlerGuard {
     /// The limit a site that pins no `#[meta(Throttle)]` runs under.
-    /// **Injected, never defaulted**: a guard built without `for_root` fails the
-    /// boot naming `Throttle` rather than run 60/minute in silence.
+    /// **Injected, never defaulted**: a guard built without `ThrottlerModule`
+    /// fails the boot naming `Throttle` rather than run 60/minute in silence.
     #[inject]
     default: Arc<Throttle>,
     /// The store, as [`ThrottlerGuard::new`] prepared it. No provider registers

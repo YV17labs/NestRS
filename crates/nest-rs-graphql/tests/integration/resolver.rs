@@ -20,14 +20,14 @@ impl LooseResolver {
 #[module(providers = [LooseResolver])]
 struct LooseFeatureModule;
 
-#[module(imports = [GraphqlModule::for_root(None), LooseFeatureModule])]
+#[module(imports = [GraphqlModule, LooseFeatureModule])]
 struct AppWithLoose;
 
 // Linked into this binary, but unreachable here.
-#[module(imports = [GraphqlModule::for_root(Some(GraphqlConfig {
+#[module(imports = [GraphqlModule::for_root(GraphqlConfig {
     introspection: true,
     ..GraphqlConfig::default()
-}))])]
+})])]
 struct AppWithoutLoose;
 
 #[tokio::test]
@@ -123,7 +123,7 @@ impl ParcelResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [ParcelResolver])]
+#[module(imports = [GraphqlModule], providers = [ParcelResolver])]
 struct ParcelModule;
 
 #[tokio::test]
@@ -207,7 +207,7 @@ impl CrateResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [CrateResolver])]
+#[module(imports = [GraphqlModule], providers = [CrateResolver])]
 struct CrateModule;
 
 #[tokio::test]
@@ -280,7 +280,7 @@ impl NamingResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [NamingResolver])]
+#[module(imports = [GraphqlModule], providers = [NamingResolver])]
 struct NamingModule;
 
 async fn naming_query(query: &str) -> serde_json::Value {
@@ -401,10 +401,10 @@ impl OracleResolver {
 struct OracleFeatureModule;
 
 #[module(imports = [
-    GraphqlModule::for_root(Some(GraphqlConfig {
+    GraphqlModule::for_root(GraphqlConfig {
         introspection: true,
         ..GraphqlConfig::default()
-    })),
+    }),
     OracleFeatureModule,
 ])]
 struct AppWithOracleNames;

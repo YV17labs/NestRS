@@ -4,5 +4,5 @@
 use nest_rs::core::module;
 use nest_rs::redis::{RedisModule, RedisThrottlerModule};
 
-#[module(imports = [RedisModule::for_root(None), RedisThrottlerModule])]
+#[module(imports = [RedisModule, RedisThrottlerModule])]
 pub struct MacroHygieneRedisThrottlerModule;

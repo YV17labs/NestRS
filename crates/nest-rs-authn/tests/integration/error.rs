@@ -69,7 +69,7 @@ impl SignInController {
     }
 }
 
-#[module(imports = [HttpModule::for_root(None)], providers = [SignInController])]
+#[module(imports = [HttpModule], providers = [SignInController])]
 struct SignInModule;
 
 /// Every `warn` and `error` a request filed: its level, its target, its

@@ -1,4 +1,3 @@
-use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::openapi::OpenApiModule;
@@ -10,8 +9,6 @@ use nest_rs::throttler::ThrottlerModule;
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 use features::audit::AuditHttpModule;
-use features::authn::AuthnModule;
-use features::authz::{AuthzGraphqlModule, AuthzModule};
 use features::notifications::NotificationsHttpModule;
 use features::orgs::{OrgsGraphqlModule, OrgsHttpModule};
 use features::posts::{PostsGraphqlModule, PostsHttpModule};
@@ -19,20 +16,16 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
 
 #[module(
     imports = [
-        ConfigModule::for_root(),
         OpenTelemetryModule,
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
         HealthModule,
         ServerTimingModule,
         RedisScheduleModule,
-        ThrottlerModule::for_root(None),
-        OpenApiModule::for_root(None),
-        AuthnModule,
-        AuthzModule,
-        AuthzGraphqlModule,
+        ThrottlerModule,
+        OpenApiModule,
         AuditHttpModule,
         OrgsHttpModule,
         OrgsGraphqlModule,

@@ -8,7 +8,8 @@ use crate::users::UsersModule;
 
 #[module(
     imports = [
-        OAuthServerModule::for_root::<ClientPayload>(None),
+        nest_rs::authn::AuthnModule,
+        OAuthServerModule::<ClientPayload>,
         UsersModule,
         SocialModule,
     ],

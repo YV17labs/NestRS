@@ -41,7 +41,7 @@ impl TouchResolver {
 }
 
 #[module(
-    imports = [HttpModule::for_root(None), SeaOrmDatabaseModule, GraphqlModule::for_root(None)],
+    imports = [HttpModule, SeaOrmDatabaseModule, GraphqlModule],
     providers = [TouchResolver],
 )]
 struct TouchModule;

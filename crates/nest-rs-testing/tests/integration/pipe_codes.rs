@@ -136,14 +136,11 @@ impl PipedGateway {
 /// The endpoint opened as an app opens it in code, so the tools are reached
 /// with no guard in front of them.
 fn open_mcp() -> nest_rs_mcp::McpSetup {
-    nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpOptions {
-        posture: nest_rs_core::Posture::Public,
-        ..Default::default()
-    })
+    nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpAccess::Public)
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None), WsModule, open_mcp()],
+    imports = [GraphqlModule, WsModule, open_mcp()],
     providers = [PipedController, PipedResolver, PipedTools, PipedGateway],
 )]
 struct EveryEdgeModule;

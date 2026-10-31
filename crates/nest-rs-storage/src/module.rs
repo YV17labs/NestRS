@@ -20,10 +20,10 @@ use crate::store::Store;
 pub struct StorageModule;
 
 impl StorageModule {
-    /// `None` ⇒ load [`StorageConfig`] from `<PREFIX>_STORAGE__*` over its
-    /// defaults; `Some(cfg)` makes `cfg` the base those variables overlay.
-    pub fn for_root(config: impl Into<Option<StorageConfig>>) -> StorageSetup {
-        ConfigModule::setup(config.into())
+    /// Pin `config` as the base `<PREFIX>_STORAGE__*` overlays, per field; the
+    /// bare import reads those variables over [`StorageConfig`]'s defaults.
+    pub fn for_root(config: StorageConfig) -> StorageSetup {
+        ConfigModule::setup(config)
     }
 }
 

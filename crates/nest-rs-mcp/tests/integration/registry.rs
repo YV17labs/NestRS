@@ -16,9 +16,9 @@ use nest_rs_mcp::rmcp;
 use nest_rs_mcp::rmcp::serde_json::json;
 use nest_rs_mcp::service::{RequestContext, RoleServer};
 use nest_rs_mcp::{
-    CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpIdentity, McpModule, McpOptions,
-    McpSetup, ServerHandler, hosts_on, mcp, prompt, prompt_handler, prompt_router, tool,
-    tool_handler, tool_router, tools,
+    CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpIdentity, McpModule, McpSetup,
+    ServerHandler, hosts_on, mcp, prompt, prompt_handler, prompt_router, tool, tool_handler,
+    tool_router, tools,
 };
 use nest_rs_testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use nest_rs_testing::{LogCapture, TestApp};
@@ -736,14 +736,11 @@ async fn initialize_advertises_the_union_of_capabilities_and_instructions() {
 
 /// The app naming itself once, for every endpoint no host on it refines.
 fn app_identity() -> McpSetup {
-    McpModule::for_root(McpOptions {
-        server: Some(
-            McpIdentity::new("composition-witness", "9.9.9")
-                .title("Composition witness")
-                .instructions("Endpoint instructions."),
-        ),
-        ..Default::default()
-    })
+    McpModule::for_root(
+        McpIdentity::new("composition-witness", "9.9.9")
+            .title("Composition witness")
+            .instructions("Endpoint instructions."),
+    )
 }
 
 #[module(imports = [AlphaMcpModule, BetaMcpModule, app_identity()])]
@@ -1067,10 +1064,7 @@ async fn an_identity_no_host_serves_fails_boot() {
 #[module(imports = [
     AlphaMcpModule,
     app_identity(),
-    McpModule::for_root(McpOptions {
-        server: Some(McpIdentity::new("second-witness", "0.0.1")),
-        ..Default::default()
-    }),
+    McpModule::for_root(McpIdentity::new("second-witness", "0.0.1")),
 ])]
 struct ContestedServerApp;
 

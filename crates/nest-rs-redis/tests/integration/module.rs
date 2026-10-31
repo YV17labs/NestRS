@@ -38,7 +38,7 @@ pub(crate) fn cache_config() -> RedisConfig {
 /// The default instance, seeded by the test — the suite's own
 /// `<PREFIX>_REDIS__URL` would outrank a pin — beside the cache pinned here,
 /// which no variable of the suite's reaches.
-#[module(imports = [RedisModule::for_root(None), RedisModule::for_root((Cache, cache_config()))])]
+#[module(imports = [RedisModule, RedisModule::for_root((Cache, cache_config()))])]
 struct TwoInstances;
 
 /// Two instances open two connections, each to its own server: the primary
@@ -89,7 +89,7 @@ async fn two_instances_open_two_connections_each_to_its_own_server() {
 
 /// The cache's budget pinned at the rate limiter's net, on a server that
 /// answers: the boot holds the cache's budget, not the default's, under it.
-#[module(imports = [RedisModule::for_root((Cache, None)), RedisThrottlerModule::<Cache>])]
+#[module(imports = [RedisModule::<Cache>, RedisThrottlerModule::<Cache>])]
 struct PatientCache;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -128,7 +128,7 @@ async fn a_named_instance_s_budget_at_its_binding_s_net_is_refused_naming_its_va
 }
 
 /// The cache's budget pinned at the scheduler's net.
-#[module(imports = [RedisModule::for_root((Cache, None)), RedisScheduleModule::<Cache>])]
+#[module(imports = [RedisModule::<Cache>, RedisScheduleModule::<Cache>])]
 struct LockingCache;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -171,7 +171,7 @@ const CACHE_LEASE: Duration = Duration::from_secs(45);
 
 /// A queue on the cache, its config pinned on the binding.
 #[module(imports = [
-    RedisModule::for_root((Cache, None)),
+    RedisModule::<Cache>,
     RedisQueueModule::for_root((Cache, RedisQueueConfig { lease: CACHE_LEASE })),
 ])]
 struct QueueOnTheCache;
@@ -213,7 +213,7 @@ struct RedisLockConfig {
     holders: u64,
 }
 
-#[module(imports = [RedisModule::for_root((Lock, None))])]
+#[module(imports = [RedisModule::<Lock>])]
 struct LockSharingItsNamespace;
 
 #[tokio::test]
@@ -274,7 +274,7 @@ async fn an_unreachable_named_instance_fails_the_boot_naming_its_url() {
     );
 }
 
-#[module(imports = [RedisModule::for_root(None), RedisModule::for_root((Cache, None))])]
+#[module(imports = [RedisModule, RedisModule::<Cache>])]
 struct BothFromTheEnvironment;
 
 /// The cache's variables are the cache's, though the default instance's keys
@@ -358,7 +358,7 @@ async fn a_provider_injecting_a_connection_no_module_opens_is_refused_naming_the
     assert!(
         missing
             .remedy
-            .is_some_and(|remedy| remedy.contains("`nest_rs::redis::RedisModule::for_root(None)`")),
+            .is_some_and(|remedy| remedy.contains("`nest_rs::redis::RedisModule`")),
         "{missing}"
     );
 }

@@ -7,10 +7,10 @@
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
-use nest_rs_core::{Layer, Posture, injectable, module};
+use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{EndpointGuards, async_trait};
-use nest_rs_mcp::{McpError, McpModule, McpOptions, McpView, mcp, tools};
+use nest_rs_mcp::{McpAccess, McpError, McpModule, McpView, mcp, tools};
 use nest_rs_testing::{LogCapture, TestApp, mcp::call_tool};
 
 use crate::widget;
@@ -83,7 +83,7 @@ impl GuardedTool {
 /// authz module declaring the endpoint's guards never made it into the module
 /// tree.
 #[module(
-    imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })],
+    imports = [McpModule::for_root(McpAccess::Public)],
     providers = [Rules, AuthzGuard, GuardedTool],
 )]
 struct UnscopedModule;

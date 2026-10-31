@@ -19,9 +19,10 @@ mod uri_template;
 /// Every argument is optional. `path` is the **whole URL path** — omit it to
 /// serve `nest_rs_mcp::DEFAULT_PATH` (`/mcp`). Nothing nests under it: it names
 /// the one endpoint the host joins, and peers that write the same one share it.
-/// `name` / `title` override `McpOptions::server` per field for that endpoint;
-/// two hosts on one path both declaring fails boot. `version` and
-/// `instructions` are refused: they are declared once on `McpOptions::server`.
+/// `name` / `title` override the app's `McpIdentity` per field for that
+/// endpoint; two hosts on one path both declaring fails boot. `version` and
+/// `instructions` are refused: they are declared once, on the app's
+/// `McpModule::for_root(McpIdentity::…)`.
 /// A `#[meta(EXPR)]` below it is declared for every operation of the host. The
 /// struct is concrete: each operation's site is a `static`, which no parameter
 /// of a generic struct reaches.

@@ -29,7 +29,7 @@
 //! }
 //! # }
 //! #
-//! # #[module(imports = [GraphqlModule::for_root(None)], providers = [PerRequestCache, WhoResolver])]
+//! # #[module(imports = [GraphqlModule], providers = [PerRequestCache, WhoResolver])]
 //! # struct AppModule;
 //! #
 //! # #[nest_rs_core::main]

@@ -1,7 +1,8 @@
 //! [`OAuthResourceModule`] — turns this app into a conformant OAuth 2.1
 //! resource server.
 //!
-//! Importing it, at boot:
+//! Imported bare — or through `for_root`, to pin a base its variables
+//! overlay — it, at boot:
 //!
 //! 1. Validates [`OAuthResourceConfig`] into the served
 //!    [`ProtectedResourceMetadata`], and provides it as global infrastructure.
@@ -19,12 +20,10 @@
 //! what it is configured with contradicts the binding, naming the settings.
 //! And the MCP endpoint's `Host` allowlist admits the host the resource names.
 
-use std::any::TypeId;
-
 use nest_rs_authn::__private::ResourceBinding;
 use nest_rs_authn::AuthnConfig;
-use nest_rs_config::{ConfigModule, endpoint_shown};
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering, module};
+use nest_rs_config::{ConfigModule, ConfigSetup, endpoint_shown};
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, module};
 use nest_rs_http::__private::CanonicalHost;
 use nest_rs_http::HttpModule;
 
@@ -33,42 +32,38 @@ use crate::controller::OAuthResourceController;
 use crate::interceptor::ResourceChallenge;
 use crate::metadata::ProtectedResourceMetadata;
 
-/// The discovery surface, private: inert without the [`ProtectedResourceMetadata`]
-/// factory only [`OAuthResourceSetup`] queues, so `for_root` is the single seam.
+/// DI module for the RFC 9728 discovery surface. Imported bare, it reads
+/// `<PREFIX>_OAUTH__RESOURCE__*`; [`OAuthResourceModule::for_root`] pins a base
+/// those variables overlay.
 #[module(
-    imports = [nest_rs_config::__private::feature::<OAuthResourceConfig>(), HttpModule],
+    imports = [
+        nest_rs_config::__private::feature::<OAuthResourceConfig>(),
+        HttpModule,
+        OAuthResourceWiring,
+    ],
     providers = [OAuthResourceController, ResourceChallenge],
 )]
-struct OAuthResourceHost;
-
-/// DI module for the RFC 9728 discovery surface.
 pub struct OAuthResourceModule;
 
 impl OAuthResourceModule {
-    /// `None` ⇒ load [`OAuthResourceConfig`] from `<PREFIX>_OAUTH__RESOURCE__*`;
-    /// `Some(cfg)` makes `cfg` the base those variables overlay per field.
-    pub fn for_root(config: impl Into<Option<OAuthResourceConfig>>) -> OAuthResourceSetup {
-        OAuthResourceSetup {
-            pinned: config.into(),
-        }
+    /// Pin `config` as the base `<PREFIX>_OAUTH__RESOURCE__*` overlays, per
+    /// field; the bare import reads those variables over
+    /// [`OAuthResourceConfig`]'s defaults.
+    pub fn for_root(config: OAuthResourceConfig) -> OAuthResourceSetup {
+        ConfigModule::setup(config)
     }
 }
 
-/// [`DynamicModule`] returned by [`OAuthResourceModule::for_root`].
-pub struct OAuthResourceSetup {
-    pinned: Option<OAuthResourceConfig>,
-}
+/// The configured import [`OAuthResourceModule::for_root`] returns.
+pub type OAuthResourceSetup = ConfigSetup<OAuthResourceModule, OAuthResourceConfig>;
 
-impl DynamicModule for OAuthResourceSetup {
-    fn module() -> TypeId {
-        TypeId::of::<OAuthResourceHost>()
-    }
+/// Queues the served document and what it binds: `#[module]` takes only
+/// imports and providers, so this hand-written module carries the factories
+/// for [`OAuthResourceModule`].
+struct OAuthResourceWiring;
 
-    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        let builder = ConfigModule::provide_feature(
-            self.pinned.clone(),
-            builder.import::<OAuthResourceHost>(),
-        );
+impl Module for OAuthResourceWiring {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         builder
             .provide_factory_after::<ProtectedResourceMetadata, (OAuthResourceConfig,), _, _>(
                 |container| async move {
@@ -94,8 +89,8 @@ impl DynamicModule for OAuthResourceSetup {
             )
     }
 
-    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.import::<OAuthResourceHost>()
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
     }
 }
 

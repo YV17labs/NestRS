@@ -1,4 +1,3 @@
-use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::opentelemetry::OpenTelemetryModule;
@@ -10,11 +9,10 @@ use features::notifications::{NotificationsQueueModule, NotificationsScheduleMod
 
 #[module(
     imports = [
-        ConfigModule::for_root(),
         OpenTelemetryModule,
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule::for_root(None),
+        RedisModule,
         RedisQueueModule,
         RedisScheduleModule,
         HealthModule,

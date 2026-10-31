@@ -37,3 +37,15 @@ provider, and loading a config mounts and exposes nothing. Decided by elegance
 — nothing to wire — under the security and correctness lines, which it leaves
 where they were. The split stands: `for_root` configures, and a config the app
 owns needs no registering seam at all.
+
+Revisited (2026-10-31): the bare import reads; `for_root` only pins. Half the
+modules owning a config had a bare form and half did not, so
+`X::for_root(None)` and `X` were two spellings of "read my variables" on one
+and the only one on the other. Every such module now implements `Module` by
+type, its bare import the environment-only form, and `for_root` takes a value
+to pin and never `None`; the primitive a driver calls splits the same way,
+`ConfigModule::provide_feature::<I, C>` for what a bare import queues and
+`ConfigModule::provide_root` for what a `for_root` pins
+(`.claude/decisions/bare-import-reads-for-root-pins.md`). The split this entry
+holds stands, read off the same two words: one value configures, and nothing
+else does.

@@ -139,7 +139,7 @@ impl CallbackController {
 
 #[module(
     imports = [
-        HttpModule::for_root(None),
+        HttpModule,
         AuthnModule::for_root(AuthnConfig {
             secret: Some(SECRET.into()),
             ..AuthnConfig::default()

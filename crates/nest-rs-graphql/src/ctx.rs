@@ -47,7 +47,7 @@
 //!         caller.into_inner().0
 //!     }
 //! }
-//! # #[module(imports = [GraphqlModule::for_root(None)], providers = [NameGuard, MeResolver])]
+//! # #[module(imports = [GraphqlModule], providers = [NameGuard, MeResolver])]
 //! # struct AppModule;
 //! #
 //! # #[nest_rs_core::main]

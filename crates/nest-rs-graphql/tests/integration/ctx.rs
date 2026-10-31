@@ -112,7 +112,7 @@ impl CtxResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [CallerGuard, AuthorGuard, CtxResolver],
 )]
 struct CtxModule;

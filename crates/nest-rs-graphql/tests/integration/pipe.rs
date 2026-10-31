@@ -111,7 +111,7 @@ impl ShelfResolver {
 #[module(providers = [PipeResolver, ShelfResolver])]
 struct PipeFeatureModule;
 
-#[module(imports = [GraphqlModule::for_root(None), PipeFeatureModule])]
+#[module(imports = [GraphqlModule, PipeFeatureModule])]
 struct AppWithPipes;
 
 async fn boot() -> TestApp {

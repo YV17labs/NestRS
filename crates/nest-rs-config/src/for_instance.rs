@@ -10,15 +10,16 @@ use crate::config::Config;
 /// What an instance-capable module's `for_root` takes: the config pinned for
 /// one instance, the default one unless a marker names another.
 ///
-/// The default instance takes `x`, a named one `(Marker, x)` — `x` being
-/// `None`, or a config the environment overlays per field:
+/// The default instance takes `x`, a named one `(Marker, x)` — `x` a config
+/// the environment overlays, per field. Nothing pinned is the bare import,
+/// `BucketModule` or `BucketModule::<Media>`, never a value:
 ///
 /// ```
 /// # use std::marker::PhantomData;
-/// use nest_rs_config::{Config, ConfigModule, ConfigSetup, ForInstance, config};
+/// use nest_rs_config::{ConfigModule, ConfigSetup, ForInstance, config};
 /// use nest_rs_core::{
-///     App, Collecting, Container, ContainerBuilder, Instance, Instanced, Module, Registering,
-///     Unnamed, instance, module,
+///     App, Collecting, ContainerBuilder, Instance, Instanced, Module, Registering, Unnamed,
+///     instance, module,
 /// };
 ///
 /// #[config(namespace = "bucket_doc")]
@@ -35,7 +36,7 @@ use crate::config::Config;
 ///         builder
 ///     }
 ///     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-///         ConfigModule::provide_feature(ForInstance::<I, BucketConfig>::default(), builder)
+///         ConfigModule::provide_feature::<I, BucketConfig>(builder)
 ///     }
 /// }
 ///
@@ -53,33 +54,21 @@ use crate::config::Config;
 /// #[instance]
 /// pub struct Thumbnails;
 ///
-/// #[instance]
-/// pub struct Avatars;
-///
 /// #[module(imports = [
-///     BucketModule::for_root(None),
-///     BucketModule::for_root((Media, None)),
+///     BucketModule,
+///     BucketModule::<Media>,
 ///     BucketModule::for_root((Thumbnails, BucketConfig { name: "thumbs".into() })),
-///     BucketModule::<Avatars>,
 /// ])]
 /// struct AppModule;
 ///
 /// #[module(imports = [BucketModule::for_root(BucketConfig { name: "only".into() })])]
 /// struct PinnedModule;
-///
-/// // Where the config type is itself inferred, or generic.
-/// fn generic<C: Config>(config: Option<C>, builder: ContainerBuilder) -> ContainerBuilder {
-///     ConfigModule::provide_feature(config, builder)
-/// }
 /// # #[nest_rs_core::main]
 /// # async fn main() -> anyhow::Result<()> {
-/// # let _ = generic(None::<BucketConfig>, Container::builder());
-/// # let _ = ConfigModule::provide_feature(None::<BucketConfig>, Container::builder());
 /// let app = App::builder().module::<AppModule>().build().await?;
 /// let thumbnails = app.container().get::<Instanced<Thumbnails, BucketConfig>>();
 /// assert_eq!(thumbnails.map(|c| c.name.clone()).as_deref(), Some("thumbs"));
 /// assert!(app.container().get::<Instanced<Media, BucketConfig>>().is_some());
-/// assert!(app.container().get::<Instanced<Avatars, BucketConfig>>().is_some());
 /// assert!(app.container().get::<BucketConfig>().is_some());
 /// # let app = App::builder().module::<PinnedModule>().build().await?;
 /// # assert_eq!(app.container().get::<BucketConfig>().map(|c| c.name.clone()).as_deref(), Some("only"));
@@ -87,12 +76,12 @@ use crate::config::Config;
 /// # }
 /// ```
 pub struct ForInstance<I, C> {
-    pinned: Option<C>,
+    pinned: C,
     instance: PhantomData<fn() -> I>,
 }
 
 impl<I, C> ForInstance<I, C> {
-    fn pinning(pinned: Option<C>) -> Self {
+    fn pinning(pinned: C) -> Self {
         Self {
             pinned,
             instance: PhantomData,
@@ -100,16 +89,8 @@ impl<I, C> ForInstance<I, C> {
     }
 
     /// The config pinned in code, the base the environment overlays.
-    pub(crate) fn into_pinned(self) -> Option<C> {
+    pub(crate) fn into_pinned(self) -> C {
         self.pinned
-    }
-}
-
-/// Nothing pinned: the instance reads its environment over its config's
-/// defaults, as a bare import does.
-impl<I, C> Default for ForInstance<I, C> {
-    fn default() -> Self {
-        Self::pinning(None)
     }
 }
 
@@ -119,26 +100,14 @@ impl<I, C: Clone> Clone for ForInstance<I, C> {
     }
 }
 
-impl<C: Config> From<Option<C>> for ForInstance<Unnamed, C> {
-    fn from(pinned: Option<C>) -> Self {
-        Self::pinning(pinned)
-    }
-}
-
 impl<C: Config> From<C> for ForInstance<Unnamed, C> {
     fn from(pinned: C) -> Self {
-        Self::pinning(Some(pinned))
-    }
-}
-
-impl<I: Instance, C: Config> From<(I, Option<C>)> for ForInstance<I, C> {
-    fn from((_, pinned): (I, Option<C>)) -> Self {
         Self::pinning(pinned)
     }
 }
 
 impl<I: Instance, C: Config> From<(I, C)> for ForInstance<I, C> {
     fn from((_, pinned): (I, C)) -> Self {
-        Self::pinning(Some(pinned))
+        Self::pinning(pinned)
     }
 }

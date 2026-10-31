@@ -326,7 +326,7 @@ async fn a_listener_run_at_once_under_a_callers_own_transaction_runs_in_a_unit_o
     );
 }
 
-#[module(imports = [SeaOrmModule::for_root(None)])]
+#[module(imports = [SeaOrmModule])]
 struct BoundedPoolModule;
 
 /// A body cut at its deadline leaves its statement running; Postgres cancels

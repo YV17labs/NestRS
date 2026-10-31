@@ -133,7 +133,7 @@ impl EndProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [EndProcessor],
 )]
 struct EndModule;
@@ -272,7 +272,7 @@ impl ImportProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [ImportProcessor],
 )]
 struct ImportModule;
@@ -347,7 +347,7 @@ impl PacedProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [PacedProcessor],
 )]
 struct PacedModule;
@@ -423,7 +423,7 @@ impl BriskProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [BriskProcessor],
 )]
 struct BriskModule;
@@ -495,7 +495,7 @@ impl HeldProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [HeldProcessor],
 )]
 struct HeldModule;
@@ -552,7 +552,7 @@ impl PlainProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [PlainProcessor],
 )]
 struct PlainModule;
@@ -681,7 +681,7 @@ impl GatedProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(None), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule, RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [GatedProcessor],
 )]
 struct GatedModule;
@@ -720,7 +720,7 @@ impl RefiledProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [RefiledProcessor],
 )]
 struct RefiledModule;
@@ -913,7 +913,7 @@ impl TrimProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [TrimProcessor],
 )]
 struct TrimModule;
@@ -979,7 +979,7 @@ impl LostProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [LostProcessor],
 )]
 struct LostModule;
@@ -1070,7 +1070,7 @@ impl LongProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [LongProcessor],
 )]
 struct LongModule;
@@ -1148,7 +1148,7 @@ impl FlushedProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [FlushedProcessor],
 )]
 struct FlushedModule;
@@ -1204,7 +1204,7 @@ impl PagedProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(paged_redis()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(paged_redis()), RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [PagedProcessor],
 )]
 struct PagedModule;

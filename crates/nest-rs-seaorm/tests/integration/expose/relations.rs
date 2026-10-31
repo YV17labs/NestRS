@@ -312,7 +312,7 @@ impl BinsResolver {
 
 #[nest_rs_core::module(
     imports = [
-        nest_rs_graphql::GraphqlModule::for_root(None),
+        nest_rs_graphql::GraphqlModule,
         nest_rs_seaorm::SeaOrmDatabaseModule,
         BinsModule,
     ],
@@ -367,7 +367,7 @@ impl RacksResolver {
 
 #[nest_rs_core::module(
     imports = [
-        nest_rs_graphql::GraphqlModule::for_root(None),
+        nest_rs_graphql::GraphqlModule,
         nest_rs_seaorm::SeaOrmDatabaseModule,
         RacksModule,
     ],
@@ -424,7 +424,7 @@ impl RackCountResolver {
 }
 
 #[nest_rs_core::module(
-    imports = [nest_rs_graphql::GraphqlModule::for_root(None), BinsModule],
+    imports = [nest_rs_graphql::GraphqlModule, BinsModule],
     providers = [RackCountResolver],
 )]
 struct UnrelatedGraphqlModule;

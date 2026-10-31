@@ -248,7 +248,7 @@ impl Default for WidgetFeed {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [
         PassGuard,
         AbilityInjector,
@@ -605,7 +605,7 @@ impl PostFeedResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [
         PassGuard,
         AbilityInjector,
@@ -1024,7 +1024,7 @@ mod ability_of_the_unit {
     }
 
     #[module(
-        imports = [GraphqlModule::for_root(None)],
+        imports = [GraphqlModule],
         providers = [FieldAbility, FieldAbilityResolver],
     )]
     struct FieldAbilityModule;
@@ -1069,7 +1069,7 @@ mod ability_of_the_unit {
     }
 
     #[module(
-        imports = [GraphqlModule::for_root(None)],
+        imports = [GraphqlModule],
         providers = [FieldAbility, WidgetFeed, FieldFeedResolver],
     )]
     struct FieldFeedModule;

@@ -5,11 +5,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use nest_rs_core::{AmbientValue, Layer, Posture, UnitContext, injectable, module};
+use nest_rs_core::{AmbientValue, Layer, UnitContext, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, guard};
 use nest_rs_http::{EndpointGuards, HttpView, StatusCode, async_trait};
 use nest_rs_mcp::{
-    CallToolResult, ContentBlock, McpError, McpModule, McpOptions, McpView, ServerHandler, mcp,
+    CallToolResult, ContentBlock, McpAccess, McpError, McpModule, McpView, ServerHandler, mcp,
     tool, tool_handler, tool_router,
 };
 use nest_rs_testing::mcp::{call_tool, initialize_request, post_message};
@@ -184,7 +184,7 @@ async fn endpoint_guards_compose_with_the_pool() {
 }
 
 #[module(
-    imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })],
+    imports = [McpModule::for_root(McpAccess::Public)],
     providers = [PoolTool, DenyEverything],
 )]
 struct OpenedModule;
@@ -212,7 +212,7 @@ impl GuardFor<HttpView> for DenyEverything {}
 /// The app opens `/mcp` in code: no guard runs at its request, the global
 /// pool's included.
 #[tokio::test]
-async fn mcp_options_public_opens_the_endpoint() {
+async fn mcp_access_public_opens_the_endpoint() {
     let app = TestApp::builder()
         .module::<OpenedModule>()
         .use_guards_global([guard::<DenyEverything>()])
@@ -250,14 +250,16 @@ async fn two_imports_opening_the_endpoint_fail_the_boot_naming_both() {
         )
     );
     assert!(
-        contested.remedy.contains("`posture: Posture::Public`"),
-        "the remedy says which field to set once: {}",
+        contested
+            .remedy
+            .contains("pass `McpAccess::Public` to one `McpModule::for_root`"),
+        "the remedy says which declaration to make once: {}",
         contested.remedy,
     );
 }
 
 #[module(
-    imports = [McpModule::for_root(McpOptions { posture: Posture::Public, ..Default::default() })],
+    imports = [McpModule::for_root(McpAccess::Public)],
     providers = [Trail, Declared, PoolTool, EndpointGuards<McpView, (Declared,)>],
 )]
 struct OpenedAndDeclaredModule;

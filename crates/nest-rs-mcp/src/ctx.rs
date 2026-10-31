@@ -53,7 +53,7 @@
 //! }
 //! #
 //! # #[module(
-//! #     imports = [McpModule::for_root(None)],
+//! #     imports = [McpModule],
 //! #     providers = [NameGuard, WhoHost, EndpointGuards<McpView, (NameGuard,)>],
 //! # )]
 //! # struct AppModule;

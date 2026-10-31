@@ -119,7 +119,7 @@ impl EndpointGuardsMeta {
 
 /// The posture an app declares for the in-band endpoint whose units are
 /// `endpoint`, over the one its `Handler` states: an opening the app wrote in
-/// code (`McpOptions::posture`).
+/// code (`McpAccess::Public`).
 pub struct EndpointPosture {
     endpoint: TypeId,
     posture: Posture,

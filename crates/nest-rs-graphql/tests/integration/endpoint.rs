@@ -22,7 +22,7 @@ impl PingResolver {
 #[module(imports = [GraphqlModule::for_root(GraphqlConfig::default())], providers = [PingResolver])]
 struct NoPlaygroundModule;
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [PingResolver])]
+#[module(imports = [GraphqlModule], providers = [PingResolver])]
 struct BareModule;
 
 #[module(

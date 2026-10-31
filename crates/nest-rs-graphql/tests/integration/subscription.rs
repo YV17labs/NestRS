@@ -593,7 +593,7 @@ impl ExplodingResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None), TickModule], providers = [ExplodingResolver])]
+#[module(imports = [GraphqlModule, TickModule], providers = [ExplodingResolver])]
 struct ExplodingApp;
 
 #[tokio::test]
@@ -646,7 +646,7 @@ impl SlowAnswerResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None), TickModule], providers = [SlowAnswerResolver])]
+#[module(imports = [GraphqlModule, TickModule], providers = [SlowAnswerResolver])]
 struct AnsweringApp;
 
 #[tokio::test]
@@ -733,7 +733,7 @@ const SEND_DEADLINE: Duration = Duration::from_secs(2);
             send_timeout: SEND_DEADLINE,
             ..nest_rs_http::HttpConfig::default()
         }),
-        GraphqlModule::for_root(None),
+        GraphqlModule,
     ],
     providers = [FloodResolver],
 )]
@@ -852,7 +852,7 @@ impl CallerResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [StampCounter, SocketStamp, CallerInterceptor, CallerResolver],
 )]
 struct CallerApp;
@@ -961,7 +961,7 @@ async fn an_upgrade_with_no_origin_or_its_own_is_served() {
         }),
         ..nest_rs_http::HttpConfig::default()
     }),
-    GraphqlModule::for_root(None),
+    GraphqlModule,
     TickModule,
 ])]
 struct ListedOriginApp;

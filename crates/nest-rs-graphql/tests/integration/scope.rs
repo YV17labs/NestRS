@@ -75,7 +75,7 @@ struct Stamped {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [Ticker, Probe, ProbeResolver],
 )]
 struct ScopeTestModule;
@@ -197,7 +197,7 @@ mod access_contract {
         }
     }
 
-    #[module(imports = [GraphqlModule::for_root(None)], providers = [StrayAuditResolver])]
+    #[module(imports = [GraphqlModule], providers = [StrayAuditResolver])]
     struct StrayAuditModule;
 
     #[module(imports = [AuditTrailModule, StrayAuditModule])]
@@ -234,7 +234,7 @@ mod access_contract {
         }
     }
 
-    #[module(imports = [GraphqlModule::for_root(None)], providers = [UnprovidedResolver])]
+    #[module(imports = [GraphqlModule], providers = [UnprovidedResolver])]
     struct UnprovidedModule;
 
     #[tokio::test]
@@ -266,7 +266,7 @@ mod access_contract {
         }
     }
 
-    #[module(imports = [GraphqlModule::for_root(None)], providers = [DestructuringResolver])]
+    #[module(imports = [GraphqlModule], providers = [DestructuringResolver])]
     struct DestructuringModule;
 
     #[module(imports = [AuditTrailModule, DestructuringModule])]
@@ -310,7 +310,7 @@ mod access_contract {
         }
     }
 
-    #[module(imports = [GraphqlModule::for_root(None)], providers = [LedgerResolver])]
+    #[module(imports = [GraphqlModule], providers = [LedgerResolver])]
     struct LedgerModule;
 
     #[module(imports = [AuditTrailModule, LedgerModule])]

@@ -41,15 +41,14 @@ use crate::{RedisConfig, tls};
 /// instance `I` is missing.
 pub(crate) fn connection_remedy<I: Instance>() -> String {
     if I::NAME.is_empty() {
-        return "RedisConnection is not registered — import RedisModule::for_root(None), which \
-                opens the Redis connection every binding of the default instance shares"
+        return "RedisConnection is not registered — import RedisModule, which opens the Redis \
+                connection every binding of the default instance shares"
             .to_owned();
     }
     let marker = nest_rs_core::__private::short_type_name::<I>();
     format!(
-        "RedisConnection<{marker}> is not registered — import \
-         RedisModule::for_root(({marker}, None)), which opens the Redis connection every binding \
-         of the instance `{}` shares",
+        "RedisConnection<{marker}> is not registered — import RedisModule::<{marker}>, which \
+         opens the Redis connection every binding of the instance `{}` shares",
         I::NAME,
     )
 }
@@ -57,8 +56,8 @@ pub(crate) fn connection_remedy<I: Instance>() -> String {
 nest_rs_core::inventory::submit! {
     nest_rs_core::DependencyRemedy::new(
         std::any::TypeId::of::<RedisConnection>,
-        "Import `nest_rs::redis::RedisModule::for_root(None)`, which opens the Redis connection \
-         every binding of the default instance shares.",
+        "Import `nest_rs::redis::RedisModule`, which opens the Redis connection every binding of \
+         the default instance shares.",
     )
 }
 
@@ -89,7 +88,7 @@ const SCRIPT_LOADS: u32 = 3;
 /// on a Cluster, a script or a pipeline names keys of one hash slot.
 ///
 /// `I` is the instance it serves: [`Unnamed`], the default, unless the app
-/// opened another with `RedisModule::for_root((Cache, cfg))` and injects
+/// opened another with `RedisModule::<Cache>` and injects
 /// `Arc<RedisConnection<Cache>>`. Every line it files carries the instance as
 /// `instance`, and every refusal names that instance's variables.
 pub struct RedisConnection<I = Unnamed> {
@@ -178,8 +177,8 @@ impl RedisConnection {
     /// be reached. A `rediss://` URL pointed at a plaintext Redis runs out the
     /// budget as an unreachable one does.
     ///
-    /// A named instance's connection is opened by `RedisModule::for_root((Cache,
-    /// cfg))`, whose refusals name `<PREFIX>_REDIS__CACHE__*`.
+    /// A named instance's connection is opened by `RedisModule::<Cache>`, whose
+    /// refusals name `<PREFIX>_REDIS__CACHE__*`.
     pub async fn connect(config: &RedisConfig) -> Result<Self, RedisError> {
         Self::open(config).await
     }
@@ -1516,14 +1515,14 @@ mod tests {
     #[test]
     fn a_missing_connection_sends_the_binding_to_its_instance_s_import() {
         assert!(
-            connection_remedy::<Unnamed>().contains("import RedisModule::for_root(None)"),
+            connection_remedy::<Unnamed>().contains("import RedisModule, which opens"),
             "{}",
             connection_remedy::<Unnamed>()
         );
         let named = connection_remedy::<Cache>();
         assert!(
             named.starts_with("RedisConnection<Cache> is not registered")
-                && named.contains("import RedisModule::for_root((Cache, None))")
+                && named.contains("import RedisModule::<Cache>, which opens")
                 && named.contains("the instance `cache`"),
             "{named}"
         );

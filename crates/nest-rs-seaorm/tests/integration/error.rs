@@ -102,7 +102,7 @@ impl LedgerResolver {
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
+        SeaOrmModule,
         SeaOrmDatabaseModule,
         GraphqlModule::for_root(GraphqlConfig::default()),
     ],
@@ -287,7 +287,7 @@ impl LedgerController {
     }
 }
 
-#[module(imports = [HttpModule::for_root(None)], providers = [LedgerController])]
+#[module(imports = [HttpModule], providers = [LedgerController])]
 struct LedgerHttpModule;
 
 /// Every `warn` and `error` a request filed: its level, its target, its

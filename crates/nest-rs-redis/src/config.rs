@@ -29,8 +29,9 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     ),
 );
 
-/// Redis settings, settable via `<PREFIX>_REDIS__*` or pinned through
-/// [`RedisModule::for_root`](crate::RedisModule::for_root).
+/// Redis settings, read by [`RedisModule`](crate::RedisModule) from
+/// `<PREFIX>_REDIS__*` over a base
+/// [`RedisModule::for_root`](crate::RedisModule::for_root) may pin.
 ///
 /// No profile names a Redis: the boot refuses an unset `<PREFIX>_REDIS__URL`
 /// by name in every one, and the deployment — or the profile's `.env` file,

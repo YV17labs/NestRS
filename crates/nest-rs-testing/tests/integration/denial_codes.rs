@@ -299,7 +299,7 @@ impl RefusedGateway {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None), WsModule],
+    imports = [GraphqlModule, WsModule],
     providers = [Refusing, RefusedController, RefusedResolver, RefusedTools, RefusedGateway],
 )]
 struct EveryEdgeModule;

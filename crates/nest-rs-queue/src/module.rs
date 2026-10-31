@@ -6,7 +6,9 @@ use std::borrow::Cow;
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
 use nest_rs_core::__private::{EdgeHosts, EdgeRuntime, attaches_transport};
-use nest_rs_core::{Collecting, Container, ContainerBuilder, Edge, Module, Registering, inventory};
+use nest_rs_core::{
+    Collecting, Container, ContainerBuilder, Edge, Module, Registering, Unnamed, inventory,
+};
 
 use crate::{ProcessMethod, QueueConfig, QueueWorker};
 
@@ -19,10 +21,10 @@ use crate::{ProcessMethod, QueueConfig, QueueWorker};
 pub struct QueueModule;
 
 impl QueueModule {
-    /// `None` loads [`QueueConfig`] from `<PREFIX>_QUEUE__*`; `Some(cfg)` pins
-    /// the base those variables overlay, field by field.
-    pub fn for_root(config: impl Into<Option<QueueConfig>>) -> QueueSetup {
-        ConfigModule::setup(config.into())
+    /// Pin `config` as the base `<PREFIX>_QUEUE__*` overlays, per field; the
+    /// bare import reads those variables over [`QueueConfig`]'s defaults.
+    pub fn for_root(config: QueueConfig) -> QueueSetup {
+        ConfigModule::setup(config)
     }
 }
 
@@ -30,10 +32,10 @@ impl QueueModule {
 pub type QueueSetup = ConfigSetup<QueueModule, QueueConfig>;
 
 impl Module for QueueModule {
-    // A bare import still reads `<PREFIX>_QUEUE__*`; a `for_root(Some(cfg))`'s
+    // A bare import still reads `<PREFIX>_QUEUE__*`; a `for_root(cfg)`'s
     // declared value supersedes this env-only one.
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(None::<QueueConfig>, builder)
+        ConfigModule::provide_feature::<Unnamed, QueueConfig>(builder)
     }
 
     // Registered once however many modules import it, so two importers attach

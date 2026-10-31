@@ -132,7 +132,7 @@ async fn a_not_null_violation_names_its_column() {
 }
 
 #[module(
-    imports = [SeaOrmModule::for_root(None), SeaOrmDatabaseModule],
+    imports = [SeaOrmModule, SeaOrmDatabaseModule],
     providers = [ProbeController],
 )]
 struct BoundedProbeModule;

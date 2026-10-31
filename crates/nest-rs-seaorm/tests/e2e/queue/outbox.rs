@@ -264,7 +264,7 @@ impl NotingListeners {
 }
 
 #[module(
-    imports = [SeaOrmModule::for_root(None), SeaOrmDatabaseModule, EventsModule],
+    imports = [SeaOrmModule, SeaOrmDatabaseModule, EventsModule],
     providers = [OutboxController, NotingListeners],
 )]
 struct OutboxAppModule;

@@ -495,7 +495,7 @@ impl TenantResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [TenantGuard, TenantResolver],
 )]
 struct TenantGraphqlModule;

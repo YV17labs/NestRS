@@ -667,7 +667,7 @@ fn debug_free(error: &AuthError, secrets: &[&str]) {
     }
 }
 
-#[module(imports = [OAuthClientModule::for_root(None)])]
+#[module(imports = [OAuthClientModule])]
 struct OAuthClientHost;
 
 /// The client [`OAuthClientModule`] builds over `config`, seeded in place of

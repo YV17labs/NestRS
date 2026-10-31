@@ -73,7 +73,9 @@ pub struct OpenTelemetryConfig {
     pub log_source_location: bool,
     /// Base endpoint (e.g. `http://localhost:4318`), to which each signal
     /// appends `/v1/traces`, `/v1/metrics` or `/v1/logs`; `None` exports
-    /// nothing. `OTEL_EXPORTER_OTLP_ENDPOINT`, and per signal
+    /// nothing. A query on it is refused, as is userinfo, which no export
+    /// sends: a credential goes in `OTEL_EXPORTER_OTLP_HEADERS`.
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT`, and per signal
     /// `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (`_METRICS_`, `_LOGS_`) used as
     /// given, override it.
     pub otlp_endpoint: Option<String>,

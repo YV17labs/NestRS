@@ -1239,10 +1239,42 @@ lists what the boot, a log or the wire shows when one is missed.
 - **`OTEL_EXPORTER_OTLP_HEADERS` beside an `http://` endpoint on another
   host** fails the boot naming both variables, since the collector's
   credential would cross the network in clear; so does such an endpoint
-  carrying userinfo or a query, naming the variable that set it. Export over
+  carrying a query, naming the variable that set it. Export over
   `https://`, or to a collector on loopback (`localhost`, `127.0.0.1`,
   `[::1]`), which keeps receiving both, dialled past any proxy the
   environment names.
+- **A number the SDK reads that is not a whole number** — an
+  `OTEL_BSP_*` or `OTEL_BLRP_*` setting (digits alone, as the SDK reads
+  them), a span limit or `OTEL_ATTRIBUTE_COUNT_LIMIT`, an export timeout or
+  `OTEL_METRIC_EXPORT_INTERVAL` — fails `OpenTelemetry::init` naming the
+  variable, where the SDK kept its default in silence. Write it in
+  milliseconds, or as a count, or unset it.
+- **Userinfo in an OTLP endpoint** (`https://key@collector:4318`), which no
+  request carries, fails the boot naming the variable or the pinned
+  `otlp_endpoint`, over `https://` and to loopback too: the collector never
+  saw the credential, and answered 401. Move it to
+  `OTEL_EXPORTER_OTLP_HEADERS` (`authorization=Basic%20…`).
+- **A query on `OTEL_EXPORTER_OTLP_ENDPOINT`** (or the pinned
+  `otlp_endpoint`) fails the boot naming it: the signal's path landed inside
+  the query, and the export at the collector's root. Set each signal's
+  own endpoint with its query (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, …), used
+  as given, or move the parameter to a header.
+- **A headers pair the SDK dropped in silence** — no `=`, an empty key or
+  value, a name no header may carry — fails the boot naming the variable;
+  and a signal's own headers variable set empty now reads as unset, so the
+  general `OTEL_EXPORTER_OTLP_HEADERS` reach that signal too, as the
+  specification orders.
+- **`OTEL_RESOURCE_ATTRIBUTES` is percent-decoded**, as the resource
+  specification writes it: a `%` meant literally is written `%25`, and a
+  member with no `=`, an empty key or an escape that does not decode fails
+  the boot naming the variable, where the SDK dropped the member or exported
+  the escape as written.
+- **A filter on `an OpenTelemetry variable does not hold what it must`**
+  reads `an OpenTelemetry variable is passed over` now, its `expected` field
+  `reason`; it names, too, each specification variable this build serves
+  nowhere (`OTEL_LOG_LEVEL`, `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT`, …).
+- **A pipeline stripping colour escapes from a `text` console** finds none:
+  the console colours a terminal alone, and `NO_COLOR` off one.
 - **A binary built without the `otlp` feature with an endpoint set** —
   `OTEL_EXPORTER_OTLP_ENDPOINT`, a signal's own, or a pinned `otlp_endpoint` —
   fails the boot naming it and the feature, rather than export nothing in

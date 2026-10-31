@@ -237,3 +237,104 @@ does not do. So:
   it directly: a proxy cannot reach this host's loopback, so there is no
   deployment the refusal would serve.
 - **Honouring `zstd`**, above.
+
+## 2026-10-31 — no variable, endpoint or header is passed over in silence
+
+The entry above left a deployment still able to believe what the binary does
+not do: a number the SDK could not parse replaced by its default with no word,
+specification variables nothing read, a signal's empty headers variable read
+apart from the specification, a credential in an endpoint's userinfo dropped by
+the client, and a query on the base endpoint swallowing the signal's path. So:
+
+- **A number the SDK reads that does not parse is refused at boot**, naming it
+  and what it accepts: the batch processors' `OTEL_BSP_SCHEDULE_DELAY`,
+  `_MAX_QUEUE_SIZE`, `_MAX_EXPORT_BATCH_SIZE` and their `OTEL_BLRP_*` twins,
+  matched as opentelemetry_sdk 0.33 matches them (`from_str` on the raw value,
+  so ` 512` too), and, for one rule over one class, the export timeouts, the
+  processors' export bounds, the span limits and `OTEL_METRIC_EXPORT_INTERVAL`.
+  The specification would warn and ignore an unparsable number; the reference
+  SDK's autoconfiguration (Java) refuses one at start, and a deployment
+  believing its value applies is the defect, as the 2026-10-30 entry decided
+  for an exporter name. The refusal says the bound of the type the number is
+  read as, since a number past it is a whole number still. The entry above's
+  "not a whole number of milliseconds is passed over and said" no longer
+  holds.
+- **What the SDK has a setting for but reads nowhere is read here and handed
+  over**: `OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT` and `OTEL_LINK_ATTRIBUTE_COUNT_LIMIT`
+  with the span limits the SDK reads, each attribute count falling back on
+  `OTEL_ATTRIBUTE_COUNT_LIMIT`, as the specification orders a model's limit
+  before the general one (its attribute-limits section names a span's; this
+  reads an event's and a link's as models of their own); and
+  `OTEL_BSP_EXPORT_TIMEOUT` and `OTEL_BLRP_EXPORT_TIMEOUT`, which the
+  thread-based processors this crate builds ignore, as the earlier bound beside
+  the exporter's own, as `OTEL_METRIC_EXPORT_TIMEOUT` already is.
+- **A specification variable no linked crate reads nor offers a setting for is
+  said once at `warn`, never refused**: `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT`,
+  `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT`, `OTEL_LOGRECORD_ATTRIBUTE_*`,
+  `OTEL_METRICS_EXEMPLAR_FILTER`,
+  `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION`, `OTEL_LOG_LEVEL`,
+  the SDK's own `OTEL_BSP_MAX_CONCURRENT_EXPORTS`, and `OTEL_ATTRIBUTE_COUNT_LIMIT`
+  while the logs export (no log record's attributes are limited). Decided by
+  the values: what is lost is a shape of data that still ships whole, not the
+  data, and each is one a platform sets for every service's SDK — refusing it
+  would stop an app over a variable its SDK does not implement, which a refusal
+  of an exporter name, where nothing ships, does not weigh against. A value that
+  names what the build does (`always_off`, `explicit_bucket_histogram`, `1`) is
+  honoured in silence: a line on correct configuration teaches operators to
+  filter the target. The line is the passed-over one, now `an OpenTelemetry
+  variable is passed over` with `variable` and `reason`.
+- **The headers are read here and handed to each exporter.** The
+  specification reads an empty variable as unset; opentelemetry-otlp 0.33 reads
+  a signal's empty headers variable as no header for that signal, over the
+  general one. Handed over, the general headers reach that signal, as the
+  specification orders, and the plaintext refusal above, already the
+  specification's reading, is what the SDK sends. A pair the SDK would drop in
+  silence — no `=`, an empty key or value, an invalid name or value — is
+  refused; a value is checked decoded as the SDK decodes it, an escape that
+  does not decode sent as written, so the two never read a pair apart, and
+  is handed over as written, since the exporter decodes what it is handed:
+  decoded once, never twice.
+- **`OTEL_RESOURCE_ATTRIBUTES` is read here and laid over the SDK's
+  detectors**, so the 2026-10-30 entry's "nothing overrides" no longer holds
+  for it: opentelemetry_sdk 0.33's detector drops a member with no `=`, keeps
+  one with an empty key, and decodes nothing, while the resource
+  specification has the `,` and `=` of a key or value percent-encoded, other
+  characters optionally (RFC 3986 §2.1), and discards the whole variable on a
+  failure to decode. Each key and value is decoded; a member the SDK would
+  drop or keep under no name, and an escape that does not decode, refuse the
+  boot naming the variable — the reference SDK's autoconfiguration refuses a
+  member with no `=` at start too.
+- **Userinfo in any endpoint is refused**, the variables and the pinned field,
+  over `https://` and to loopback too, naming the setter and pointing to
+  `OTEL_EXPORTER_OTLP_HEADERS`, never quoting it: reqwest builds the request
+  without it, so the credential reached no collector, which answered 401.
+- **A query on the base endpoint is refused**, the variable and the pinned
+  field. The specification sends each signal to a path relative to the base
+  and lets an SDK change the URL no other way: a relative path drops the base's
+  query (RFC 3986 §5.2.2), and the SDK's string append hid the path inside it.
+  The signal's path is now set on the parsed URL, so a fragment, which no
+  request sends, stays one; a signal's own endpoint is used as given, query
+  and all.
+- **The kernel's text console is coloured on a terminal alone** (the
+  observability rule's formatters): tracing-subscriber's default coloured any
+  stream unless `NO_COLOR` was set, so a logfmt reader of a piped console met
+  escapes around every key. The console now turns colour off where stdout is
+  not a terminal, and keeps the library's `NO_COLOR` reading (no-color.org) on
+  one; JSON never carried any.
+
+**Refused:**
+
+- **Refusing the variables no linked crate serves** (`OTEL_LOG_LEVEL` first):
+  above.
+- **Saying nothing of them**: a deployment would keep believing what the
+  binary does not do.
+- **Mirroring the SDK's reading of an empty headers variable** (no header for
+  that signal): a credential the deployment set for every signal would be
+  dropped for one, the 401 the userinfo refusal ends. Refusing the empty
+  variable as ambiguous was weighed and refused too: the specification gives
+  it one meaning.
+- **Keeping a base endpoint's query beside the path**: a reading neither the
+  specification nor any SDK gives, so a deployment could not tell what its
+  query reaches.
+- **Reading `NO_COLOR` in the kernel**: the library reads it as no-color.org
+  writes it, and a second reading would be a second implementation.

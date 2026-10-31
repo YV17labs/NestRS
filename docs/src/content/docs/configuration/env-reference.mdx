@@ -81,6 +81,10 @@ boot, naming the variable and never its value — a mistyped
 `<PREFIX>_LOG_FORMAT=jsno` is said, never quietly replaced by the profile's
 default.
 
+A `text` line is coloured only on a terminal: piped or written to a file it
+carries no escape code, and `NO_COLOR` set to anything but empty turns the
+colour off on a terminal too ([no-color.org](https://no-color.org)).
+
 An app that installs its own subscriber first (e.g. through
 [OpenTelemetry](/opentelemetry/)) keeps it — the baseline logger only
 activates when none is set. The same three variables drive the console
@@ -215,21 +219,24 @@ names, unprefixed like `RUST_LOG`, over what `OpenTelemetryConfig` pins
 | Variable | Meaning |
 |---|---|
 | `OTEL_SERVICE_NAME` | service name; default the binary's package name |
-| `OTEL_RESOURCE_ATTRIBUTES` | resource attributes, `key=value` comma-separated: `service.version` (default the binary's package version), `deployment.environment.name`, `service.instance.id` (default a fresh UUIDv7) |
+| `OTEL_RESOURCE_ATTRIBUTES` | resource attributes, `key=value` comma-separated, each key and value percent-decoded (`%2C` for a comma, `%3D` for `=`): `service.version` (default the binary's package version), `deployment.environment.name`, `service.instance.id` (default a fresh UUIDv7); a member with no `=`, an empty key or an escape that does not decode fails the boot |
 | `OTEL_SDK_DISABLED` | `true`, in any case, switches every signal off whatever the endpoints and selectors say; anything else leaves the SDK on, a value neither `true` nor `false` said at `warn` |
 | `OTEL_TRACES_EXPORTER` · `OTEL_METRICS_EXPORTER` · `OTEL_LOGS_EXPORTER` | `otlp` (default) or `none`, in any case, or a comma-separated list of `otlp`: `none` switches the signal off whatever endpoint names it. Any exporter this crate does not build (`console`, `zipkin`, `prometheus`), `none` beside `otlp`, or `otlp` named with no endpoint for the signal fails the boot |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | collector base endpoint, each signal appending `/v1/traces`, `/v1/metrics`, `/v1/logs` (unset ⇒ no export): `http://` exports in plaintext, `https://` over TLS alone, a loopback host dialled past any proxy the environment names; another scheme, a value that does not parse as a URL, or a query or userinfo in an `http://` endpoint on a host other than loopback fails the boot, and so does any endpoint, a pinned one included, for a signal not switched off in a binary built without the `otlp` feature |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` · `_METRICS_ENDPOINT` · `_LOGS_ENDPOINT` | one signal's endpoint, used as given, over the base |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | collector base endpoint, each signal appending `/v1/traces`, `/v1/metrics`, `/v1/logs` (unset ⇒ no export): `http://` exports in plaintext, `https://` over TLS alone, a loopback host dialled past any proxy the environment names; another scheme, a value that does not parse as a URL, userinfo (a credential goes in `OTEL_EXPORTER_OTLP_HEADERS`), a query on this base, or a query in an `http://` endpoint on a host other than loopback fails the boot, and so does any endpoint, a pinned one included, for a signal not switched off in a binary built without the `otlp` feature |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` · `_METRICS_ENDPOINT` · `_LOGS_ENDPOINT` | one signal's endpoint, used as given, its query kept, over the base |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` (and per signal) | `http/protobuf`, the one protocol exported; any other fails the boot |
 | `OTEL_EXPORTER_OTLP_COMPRESSION` (and per signal) | `gzip` or `none` (default), in any case; `zstd` or any other fails the boot |
-| `OTEL_EXPORTER_OTLP_HEADERS` (and per signal) | `key=value` headers every export carries, read by the SDK; beside an `http://` endpoint on a host other than loopback, fails the boot |
+| `OTEL_EXPORTER_OTLP_HEADERS` (and per signal) | `key=value` headers every export carries, read as the SDK reads them, a signal's own set empty read as unset; a pair the SDK would drop (no `=`, an empty key or value, an invalid name), or any header beside an `http://` endpoint on a host other than loopback, fails the boot |
 | `OTEL_PROPAGATORS` | `tracecontext,baggage` (default), what the framework propagates; any other format, a list leaving one out, or `none` fails the boot |
 | `OTEL_CONFIG_FILE` | not read — the Rust SDK has no file configuration — so set, it fails the boot |
 | `OTEL_TRACES_SAMPLER` · `OTEL_TRACES_SAMPLER_ARG` | the sampler and its argument, as the SDK reads them; default parent-based, every trace. A sampler the SDK does not build (`jaeger_remote`, `xray`), a name not in lowercase, or an argument that is not a number between 0 and 1 fails the boot; an argument a sampler takes none of is ignored and said |
 | `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | `cumulative` (default), `delta` or `lowmemory`, in any case; any other fails the boot |
-| `OTEL_METRIC_EXPORT_INTERVAL` | metric export period in milliseconds, from `1000` to `3600000` (default `60000`); outside fails the boot, not a number is ignored and said |
-| `OTEL_EXPORTER_OTLP_TIMEOUT` (and per signal) | one export's bound in milliseconds (default `10000`); not a number is ignored and said |
-| `OTEL_METRIC_EXPORT_TIMEOUT` | the metric reader's bound on one export in milliseconds (default `30000`), the earlier of it and the exporter's cutting it; not a number is ignored and said |
+| `OTEL_METRIC_EXPORT_INTERVAL` | metric export period in milliseconds, from `1000` to `3600000` (default `60000`); outside, or not a whole number, fails the boot |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` (and per signal) | one export's bound in milliseconds (default `10000`); not a whole number fails the boot |
+| `OTEL_METRIC_EXPORT_TIMEOUT` · `OTEL_BSP_EXPORT_TIMEOUT` · `OTEL_BLRP_EXPORT_TIMEOUT` | the metric reader's, the batch span processor's and the batch log processor's bound on one export in milliseconds (default `30000`), the earlier of it and the exporter's cutting it; not a whole number fails the boot |
+| `OTEL_BSP_SCHEDULE_DELAY` · `OTEL_BSP_MAX_QUEUE_SIZE` · `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` (and the `OTEL_BLRP_*` three) | the batch processors' delay in milliseconds, queue and batch sizes, read by the SDK; not a whole number, digits alone as the SDK reads it, fails the boot |
+| `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` · `OTEL_SPAN_EVENT_COUNT_LIMIT` · `OTEL_SPAN_LINK_COUNT_LIMIT` · `OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT` · `OTEL_LINK_ATTRIBUTE_COUNT_LIMIT` | a span's attribute, event and link counts and an event's and a link's attribute counts (default `128` each), the three attribute counts falling back on `OTEL_ATTRIBUTE_COUNT_LIMIT`; not a whole number fails the boot |
+| `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT` · `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT` · `OTEL_LOGRECORD_ATTRIBUTE_*` · `OTEL_METRICS_EXEMPLAR_FILTER` · `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION` · `OTEL_LOG_LEVEL` · `OTEL_BSP_MAX_CONCURRENT_EXPORTS` | served by no crate this build links: set, each is said once at `warn`, unless its value names what the build does (`always_off`, `explicit_bucket_histogram`, `1`); `OTEL_LOG_LEVEL`'s subject follows `<PREFIX>_LOG` |
 | `OTEL_EXPORTER_OTLP_CERTIFICATE` (and per signal) | path to the PEM authorities an `https://` collector's certificate must chain to, replacing the system's. Holding no certificate, or beside an `http://` endpoint, fails the boot |
 | `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` / `OTEL_EXPORTER_OTLP_CLIENT_KEY` (and per signal) | paths to the PEM client certificate chain, leaf first, and its private key, presented to a collector that requires one. Both or neither; beside an `http://` endpoint, they fail the boot |
 

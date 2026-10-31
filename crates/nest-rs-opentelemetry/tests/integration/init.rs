@@ -442,15 +442,16 @@ fn logfmt(line: &str) -> Vec<(String, String)> {
 
 /// The boot line's per-signal state reads whole to a logfmt filter, its
 /// spaces inside the value: `traces="off (OTEL_TRACES_EXPORTER=none)"`. The
-/// console colours a text line unless `NO_COLOR` is set, as a pipe to a
-/// reader sets it.
+/// child's stdout is a pipe, as a reader's is, so the text console writes no
+/// colour escape for the reader to strip, `NO_COLOR` unset (empty, which
+/// no-color.org reads as unset) or not.
 #[cfg(feature = "otlp")]
 #[test]
 fn the_boot_line_s_signal_states_read_whole_as_logfmt() {
     let output = child_in(
         BOOT_LINE,
         &[
-            ("NO_COLOR", "1"),
+            ("NO_COLOR", ""),
             ("OTEL_TRACES_EXPORTER", "none"),
             (
                 "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
@@ -460,6 +461,10 @@ fn the_boot_line_s_signal_states_read_whole_as_logfmt() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{stdout}");
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "a console piped to a reader writes no colour escape: {stdout:?}"
+    );
     let line = stdout
         .lines()
         .find(|line| line.contains("OpenTelemetry initialised"))

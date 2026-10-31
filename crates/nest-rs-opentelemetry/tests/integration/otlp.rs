@@ -34,14 +34,26 @@ enum Behaviour {
 const ACCEPTED: &str = "HTTP/1.1 200 OK\r\ncontent-type: application/x-protobuf\r\n\
                         content-length: 0\r\nconnection: close\r\n\r\n";
 
-/// One export a collector read: where it was posted, and how its body was
-/// encoded.
+/// One export a collector read: where it was posted, its headers, and how its
+/// body was encoded.
 #[derive(Clone)]
 struct Received {
     path: String,
     /// Its `content-encoding`, lowercased.
     encoding: Option<String>,
+    /// Every header line, name and value lowercased.
+    headers: Vec<(String, String)>,
     body: Vec<u8>,
+}
+
+impl Received {
+    /// The value of the header `name` (lowercase), if the export carried it.
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(header, _)| header == name)
+            .map(|(_, value)| value.as_str())
+    }
 }
 
 /// Its path, encoding and size, never its bytes.
@@ -121,13 +133,20 @@ impl Collector {
                             .next()
                             .and_then(|line| line.split_whitespace().nth(1))
                             .unwrap_or_default();
-                        let encoding = head
+                        let headers: Vec<(String, String)> = head
                             .lines()
-                            .find_map(|line| line.strip_prefix("content-encoding:"))
-                            .map(|value| value.trim().to_owned());
+                            .skip(1)
+                            .filter_map(|line| line.split_once(':'))
+                            .map(|(name, value)| (name.trim().to_owned(), value.trim().to_owned()))
+                            .collect();
+                        let encoding = headers
+                            .iter()
+                            .find(|(name, _)| name == "content-encoding")
+                            .map(|(_, value)| value.clone());
                         kept.lock().expect("the exports").push(Received {
                             path: path.to_owned(),
                             encoding,
+                            headers,
                             body: read[body_at..].to_vec(),
                         });
                         match behaviour {
@@ -350,31 +369,22 @@ fn a_signal_its_selector_switches_off_exports_nothing_beside_one_that_exports() 
     );
 }
 
-/// An export timeout that is not a whole number of milliseconds is passed over,
-/// as the SDK passes it over, and said once at `warn` by its variable.
+/// An export timeout that is not a whole number of milliseconds is refused at
+/// boot naming its variable, where the SDK would keep its 10 s in silence.
 #[test]
-fn an_export_timeout_that_is_not_milliseconds_is_ignored_and_said() {
-    let collector = Collector::serving();
-    let logs = LogCapture::install();
-
-    let otel = trusting(&collector, &[(OTEL_EXPORTER_OTLP_TIMEOUT, "10s")]);
-
-    let event = logs.expect_one(
-        TARGET,
-        "an OpenTelemetry variable does not hold what it must; passed over, as the \
-         specification orders",
+fn an_export_timeout_that_is_not_milliseconds_is_refused_naming_it() {
+    let said = refused_under(
+        &[
+            (OTEL_EXPORTER_OTLP_ENDPOINT, "http://127.0.0.1:4318"),
+            (OTEL_EXPORTER_OTLP_TIMEOUT, "10s"),
+        ],
+        OpenTelemetryConfig::default(),
     );
-    assert_eq!(event.level, "warn");
-    assert_eq!(
-        event.field("variable").as_deref(),
-        Some(OTEL_EXPORTER_OTLP_TIMEOUT)
+    assert!(
+        said.contains(OTEL_EXPORTER_OTLP_TIMEOUT) && said.contains("whole number of milliseconds"),
+        "{said}"
     );
-    assert_eq!(
-        event.field("expected").as_deref(),
-        Some("a whole number of milliseconds")
-    );
-    assert!(!event.quotes("10s"), "{event:?}");
-    drop(otel);
+    assert!(!said.contains("10s"), "{said}");
 }
 
 /// A deployment carried over from `<PREFIX>_OPENTELEMETRY__*` exports nothing
@@ -633,4 +643,274 @@ fn a_metric_temporality_the_sdk_does_not_know_is_refused_naming_its_variable() {
         "{said}"
     );
     assert!(!said.contains("deltas"), "{said}");
+}
+
+/// A signal's own headers variable set empty reads as unset, as the
+/// specification orders, so the general headers reach that signal too — where
+/// the SDK alone would send it none and the collector would turn it away.
+#[test]
+fn an_empty_signal_headers_variable_reads_as_unset_and_the_general_headers_reach_that_signal() {
+    let collector = Collector::serving();
+
+    export_through(trusting(
+        &collector,
+        &[
+            ("OTEL_EXPORTER_OTLP_HEADERS", "x-probe=general"),
+            ("OTEL_EXPORTER_OTLP_LOGS_HEADERS", ""),
+            ("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "x-probe=traces"),
+        ],
+    ));
+
+    let received = collector.received();
+    let logs: Vec<&Received> = received.iter().filter(|r| r.path == "/v1/logs").collect();
+    assert!(!logs.is_empty(), "the logs exported");
+    assert!(
+        logs.iter().all(|r| r.header("x-probe") == Some("general")),
+        "the general headers reach a signal whose own variable is empty: {:?}",
+        logs.iter().map(|r| r.header("x-probe")).collect::<Vec<_>>()
+    );
+    let traces: Vec<&Received> = received.iter().filter(|r| r.path == "/v1/traces").collect();
+    assert!(!traces.is_empty(), "the traces exported");
+    assert!(
+        traces.iter().all(|r| r.header("x-probe") == Some("traces")),
+        "a signal's own headers win over the general ones: {:?}",
+        traces
+            .iter()
+            .map(|r| r.header("x-probe"))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A header's value is percent-decoded once, whichever variable reaches the
+/// signal: `%2561` arrives as `%61` where the signal's own variable is empty
+/// as where it is unset — never decoded again into `a`, nor, decoding twice to
+/// a line feed, dropped.
+#[test]
+fn a_header_value_is_percent_decoded_once_whichever_variable_reaches_the_signal() {
+    let collector = Collector::serving();
+
+    export_through(trusting(
+        &collector,
+        &[
+            ("OTEL_EXPORTER_OTLP_HEADERS", "x-probe=a%2561,x-line=b%250a"),
+            ("OTEL_EXPORTER_OTLP_LOGS_HEADERS", ""),
+        ],
+    ));
+
+    let received = collector.received();
+    for path in ["/v1/traces", "/v1/logs"] {
+        let probes: Vec<(Option<&str>, Option<&str>)> = received
+            .iter()
+            .filter(|r| r.path == path)
+            .map(|r| (r.header("x-probe"), r.header("x-line")))
+            .collect();
+        assert!(!probes.is_empty(), "{path} exported");
+        assert!(
+            probes
+                .iter()
+                .all(|probe| *probe == (Some("a%61"), Some("b%0a"))),
+            "{path}: {probes:?}"
+        );
+    }
+}
+
+/// A header pair the SDK would drop in silence — no `=`, an empty value, a
+/// name no header may carry — refuses the boot naming its variable, never the
+/// pair.
+#[test]
+fn a_header_the_sdk_would_drop_is_refused_naming_its_variable() {
+    for value in ["api-key", "api-key=", "api key=s3cr3t"] {
+        let said = refused_under(
+            &[
+                (OTEL_EXPORTER_OTLP_ENDPOINT, "https://127.0.0.1:4318"),
+                ("OTEL_EXPORTER_OTLP_METRICS_HEADERS", value),
+            ],
+            OpenTelemetryConfig::default(),
+        );
+        assert!(
+            said.contains("OTEL_EXPORTER_OTLP_METRICS_HEADERS") && said.contains("key=value"),
+            "{said}"
+        );
+        assert!(!said.contains("s3cr3t") && !said.contains("api"), "{said}");
+    }
+}
+
+/// Userinfo in an endpoint reaches no collector — the client builds its
+/// request without it — so a credential written there is refused at boot,
+/// naming the variable or the field that set it and pointing to the headers,
+/// never quoting it: over https and to loopback as well.
+#[test]
+fn userinfo_in_an_endpoint_is_refused_naming_its_setter_and_pointing_to_the_headers() {
+    for (variable, endpoint) in [
+        (
+            OTEL_EXPORTER_OTLP_ENDPOINT,
+            "https://tenant:s3cr3t@127.0.0.1:4318",
+        ),
+        (
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "http://s3cr3t@localhost:4318/v1/traces",
+        ),
+    ] {
+        let said = refused_under(&[(variable, endpoint)], OpenTelemetryConfig::default());
+        assert!(
+            said.contains(variable)
+                && said.contains("userinfo")
+                && said.contains("OTEL_EXPORTER_OTLP_HEADERS"),
+            "{said}"
+        );
+        assert!(
+            !said.contains("s3cr3t") && !said.contains("tenant"),
+            "{said}"
+        );
+    }
+    let said = refused_under(
+        &[],
+        OpenTelemetryConfig {
+            otlp_endpoint: Some("https://tenant:s3cr3t@127.0.0.1:4318".into()),
+            ..OpenTelemetryConfig::default()
+        },
+    );
+    assert!(
+        said.contains("OpenTelemetryConfig::otlp_endpoint") && said.contains("userinfo"),
+        "{said}"
+    );
+    assert!(!said.contains("s3cr3t"), "{said}");
+}
+
+/// A query on the base endpoint has no place beside the signal's path — the
+/// specification sends each signal to a path relative to the base — so it is
+/// refused naming its variable, where the export went to the collector's root
+/// with the path inside the query.
+#[test]
+fn a_base_endpoint_carrying_a_query_is_refused_naming_it() {
+    let said = refused_under(
+        &[(
+            OTEL_EXPORTER_OTLP_ENDPOINT,
+            "https://127.0.0.1:4318?tenant=s3cr3t",
+        )],
+        OpenTelemetryConfig::default(),
+    );
+    assert!(
+        said.contains(OTEL_EXPORTER_OTLP_ENDPOINT)
+            && said.contains("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("s3cr3t") && !said.contains("tenant"),
+        "{said}"
+    );
+}
+
+/// A signal's own endpoint is used as given, its query kept.
+#[test]
+fn a_signal_s_own_endpoint_keeps_its_query() {
+    let collector = Collector::serving();
+    let traces = format!("{}/v1/traces?tenant=probe", collector.endpoint());
+
+    export_through(trusting(
+        &collector,
+        &[
+            ("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", traces.as_str()),
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+        ],
+    ));
+
+    assert!(
+        collector.exports_to("/v1/traces?tenant=probe") > 0,
+        "{:?}",
+        collector.received()
+    );
+}
+
+/// A batch processor's number the SDK reads itself, which it would replace by
+/// its default in silence when it does not parse, refuses the boot naming it.
+#[test]
+fn a_batch_processor_setting_that_does_not_parse_is_refused_naming_it() {
+    for (variable, value) in [
+        ("OTEL_BSP_SCHEDULE_DELAY", "5s"),
+        ("OTEL_BSP_MAX_QUEUE_SIZE", "4k"),
+        ("OTEL_BLRP_MAX_EXPORT_BATCH_SIZE", "-1"),
+        ("OTEL_SPAN_EVENT_COUNT_LIMIT", "lots"),
+    ] {
+        let said = refused_under(
+            &[
+                (OTEL_EXPORTER_OTLP_ENDPOINT, "http://127.0.0.1:4318"),
+                (variable, value),
+            ],
+            OpenTelemetryConfig::default(),
+        );
+        assert!(
+            said.contains(variable) && said.contains("whole number"),
+            "{said}"
+        );
+        assert!(!said.contains(value), "{said}");
+    }
+}
+
+/// The batch processors' own bounds on one export, `OTEL_BSP_EXPORT_TIMEOUT`
+/// and `OTEL_BLRP_EXPORT_TIMEOUT`, which the processors this crate builds do
+/// not read, cut a trace and a log export beside the exporter's timeout: a
+/// collector that never answers holds the final flush that long, never the
+/// flush's own bound.
+#[test]
+fn the_batch_processors_export_timeouts_cut_a_trace_and_a_log_export() {
+    let collector = Collector::serving_to(Behaviour::Silent, None);
+    let otel = trusting(
+        &collector,
+        &[
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_BSP_EXPORT_TIMEOUT", "200"),
+            ("OTEL_BLRP_EXPORT_TIMEOUT", "200"),
+        ],
+    );
+
+    let started = Instant::now();
+    export_through(otel);
+    let took = started.elapsed();
+
+    assert!(
+        collector.exports_to("/v1/traces") > 0 && collector.exports_to("/v1/logs") > 0,
+        "a trace and a log export were in flight: {:?}",
+        collector.received()
+    );
+    assert!(
+        took < FLUSH_TIMEOUT / 2,
+        "both exports were cut at 200 ms, not held to the flush's {FLUSH_TIMEOUT:?}: {took:?}"
+    );
+}
+
+/// A specification variable this build serves nowhere is said once at `warn`,
+/// naming it, never its value; one whose value is what the build does says
+/// nothing.
+#[test]
+fn a_variable_this_build_serves_nowhere_is_said_at_warn_unless_its_value_is_what_it_does() {
+    let collector = Collector::serving();
+    let logs = LogCapture::install();
+
+    let otel = trusting(
+        &collector,
+        &[
+            ("OTEL_LOG_LEVEL", "debug"),
+            ("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT", "4095"),
+            ("OTEL_METRICS_EXEMPLAR_FILTER", "always_off"),
+        ],
+    );
+
+    let said: Vec<String> = logs
+        .find(TARGET, "an OpenTelemetry variable is passed over")
+        .iter()
+        .map(|event| {
+            assert_eq!(event.level, "warn");
+            assert!(event.field("reason").is_some(), "{event:?}");
+            assert!(!event.quotes("4095") && !event.quotes("debug"), "{event:?}");
+            event.field("variable").unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(
+        said,
+        ["OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT", "OTEL_LOG_LEVEL"],
+        "each said once, and always_off, what the build does, not at all"
+    );
+    drop(otel);
 }

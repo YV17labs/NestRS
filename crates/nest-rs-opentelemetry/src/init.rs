@@ -55,13 +55,15 @@ impl OpenTelemetry {
     /// console's (`<PREFIX>_LOG`, else `RUST_LOG`, `<PREFIX>_LOG_FORMAT`,
     /// `<PREFIX>_LOG_SOURCE_LOCATION`), as [`OpenTelemetryConfig::from_env`]
     /// reads them. Returns the flush guard that must outlive `main`, or an
-    /// error that aborts boot on a filter or a setting that does not parse, a
-    /// request this binary cannot serve — an exporter, a compression or a
-    /// propagator it does not build, `OTEL_CONFIG_FILE`, a header beside a
-    /// plaintext endpoint on another host or a query or userinfo in one, an
-    /// endpoint in a binary built
-    /// without the `otlp` feature — a metric interval or sample ratio outside
-    /// its range, or a failed exporter build.
+    /// error that aborts boot on a filter, a setting, a number the SDK reads
+    /// or a header that does not parse, a request this binary cannot serve —
+    /// an exporter, a compression or a propagator it does not build,
+    /// `OTEL_CONFIG_FILE`, userinfo in an endpoint, a query on a base
+    /// endpoint, a header beside a plaintext endpoint on another host or a
+    /// query in one, an endpoint in a binary built without the `otlp`
+    /// feature — a metric interval or sample ratio outside its range, or a
+    /// failed exporter build. A specification variable this build serves
+    /// nowhere is said once at `warn`, unless its value names what it does.
     ///
     /// The framework propagates W3C Trace Context at every edge and carries a
     /// queue job's W3C Baggage onto the pushes it makes, whatever this crate
@@ -102,13 +104,12 @@ impl OpenTelemetry {
 
             say_retired_variables();
             let summary = exporters.summary;
-            for ignored in summary.ignored {
+            for over in summary.passed_over {
                 tracing::warn!(
                     target: crate::TARGET,
-                    variable = ignored.variable,
-                    expected = ignored.expected,
-                    "an OpenTelemetry variable does not hold what it must; passed over, as the \
-                     specification orders",
+                    variable = over.variable,
+                    reason = over.reason,
+                    "an OpenTelemetry variable is passed over",
                 );
             }
             // Strings, which the console quotes, so a logfmt reader takes

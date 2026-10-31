@@ -131,8 +131,8 @@ Either is held to a second to an hour — a `PeriodicReader` on a zero period
 is a tight export loop, and an hourly one reaches the collector after the
 dashboards that read it — and `OpenTelemetry::init` fails with
 `OpenTelemetryError::Config` outside that range, naming the variable or the
-field. A value that is not a whole number of milliseconds is ignored, as the
-SDK ignores it, and said once at `warn` naming the variable.
+field. A value that is not a whole number of milliseconds fails it too,
+naming the variable, where the SDK would keep its period in silence.
 
 ## Resource attributes
 

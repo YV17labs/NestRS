@@ -22,7 +22,7 @@
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fmt::{self, Write as _};
-use std::io;
+use std::io::{self, IsTerminal as _};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -1500,16 +1500,32 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     /// The console's layer writing `format`, each line with the emitting
-    /// `file:line` when `source_location` asks for it.
+    /// `file:line` when `source_location` asks for it. A text line is
+    /// coloured only when stdout, where every line goes, is a terminal, and
+    /// `NO_COLOR` set to anything but empty turns that off too
+    /// (no-color.org): a pipe or a file never reads an escape code.
     pub fn new(format: LogFormat, source_location: bool) -> Self {
-        Self::writing_to(format, source_location, ConsoleWriter::get())
+        Self::writing_to(
+            format,
+            source_location,
+            ConsoleWriter::get(),
+            io::stdout().is_terminal(),
+        )
     }
 
-    fn writing_to<W>(format: LogFormat, source_location: bool, writer: W) -> Self
+    /// `terminal`: whether the stream `writer` reaches is one.
+    fn writing_to<W>(format: LogFormat, source_location: bool, writer: W, terminal: bool) -> Self
     where
         W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
     {
+        // tracing-subscriber's default reads `NO_COLOR` but not the stream, so it
+        // decides on a terminal alone.
         let layer = tracing_subscriber::fmt::layer().with_writer(writer);
+        let layer = if terminal {
+            layer
+        } else {
+            layer.with_ansi(false)
+        };
         Self(match format {
             LogFormat::Text => layer.event_format(TextFormat::new(source_location)).boxed(),
             // `.json()` sets the field formatter only; the envelope is `JsonFormat`'s.
@@ -1644,8 +1660,12 @@ mod tests {
         for format in [LogFormat::Text, LogFormat::Json] {
             let formatted = AtomicUsize::new(0);
             let captured = Captured::default();
-            let console =
-                Registry::default().with(ConsoleLayer::writing_to(format, false, captured.clone()));
+            let console = Registry::default().with(ConsoleLayer::writing_to(
+                format,
+                false,
+                captured.clone(),
+                false,
+            ));
             tracing::subscriber::with_default(console, || {
                 let span = tracing::info_span!(
                     "fixture.unit",
@@ -1660,6 +1680,53 @@ mod tests {
             assert_eq!(formatted.load(Ordering::Relaxed), 0, "{format:?}");
             let line = captured.take();
             assert!(line.contains("inside the span"), "{format:?}: {line}");
+        }
+    }
+
+    /// What the console writes for one event, its stream a terminal or not.
+    fn console_line(format: LogFormat, terminal: bool) -> String {
+        let captured = Captured::default();
+        let console = Registry::default().with(ConsoleLayer::writing_to(
+            format,
+            false,
+            captured.clone(),
+            terminal,
+        ));
+        tracing::subscriber::with_default(console, || {
+            tracing::info!(target: FIXTURE_TARGET, field = "value", "coloured or not");
+        });
+        captured.take()
+    }
+
+    /// A text line reaching a pipe or a file carries no colour escape for its
+    /// reader to strip; on a terminal, colour is the library's default, which
+    /// `NO_COLOR` turns off; JSON never carries one.
+    #[test]
+    fn the_console_colours_a_text_line_on_a_terminal_alone() {
+        let piped = console_line(LogFormat::Text, false);
+        assert!(piped.contains("field=\"value\""), "{piped:?}");
+        assert!(!piped.contains('\u{1b}'), "{piped:?}");
+
+        let library_default = tracing_subscriber::fmt::Layer::<Registry>::default();
+        let captured = Captured::default();
+        let reference = Registry::default().with(
+            library_default
+                .event_format(TextFormat::new(false))
+                .with_writer(captured.clone()),
+        );
+        tracing::subscriber::with_default(reference, || {
+            tracing::info!(target: FIXTURE_TARGET, "the library's default");
+        });
+        assert_eq!(
+            console_line(LogFormat::Text, true).contains('\u{1b}'),
+            captured.take().contains('\u{1b}'),
+            "on a terminal, the library's default — colour unless NO_COLOR is set — decides"
+        );
+
+        for terminal in [false, true] {
+            let json = console_line(LogFormat::Json, terminal);
+            assert!(json.contains("coloured or not"), "{json:?}");
+            assert!(!json.contains('\u{1b}'), "{json:?}");
         }
     }
 

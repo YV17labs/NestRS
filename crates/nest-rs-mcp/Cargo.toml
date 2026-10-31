@@ -70,6 +70,9 @@ tokio = { workspace = true, features = ["test-util"] }
 # (`identity.rs`): the grammar lives here because a proc-macro crate exports
 # nothing a test can call.
 nest-rs-codegen = { path = "../nest-rs-codegen" }
+# `figment::Jail` scopes the `<PREFIX>_MCP__*` a test sets to that test, as
+# `nest-rs-config` tests its own env reads.
+figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

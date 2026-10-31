@@ -608,7 +608,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | a module filling a registry the app reads from an `OnApplicationBootstrap` hook | `ContainerBuilder::provide_wiring("<crate>::<registry>", wire)` in its `register` |
    | `builder.provide_meta(TransportContribution { name: "MyTransport", build: \|c\| Ok(Box::new(MyTransport::new(c)?)) })` | `builder.provide_transport(\|c\| MyTransport::new(c))` — named `MyTransport`, read off the type |
    | a feature module importing `HttpModule` (or GraphQL's, OpenAPI's) to declare it serves over HTTP | a bare `HttpModule` (`GraphqlModule`, `OpenApiModule`) in its `imports`; the app keeps a `for_root` only to pin a config |
-   | an edge adapter importing its port alone, and the app root importing `HttpModule`, `GraphqlModule`, `QueueModule` or `ScheduleModule` beside it | the adapter imports what serves its edge, bare — `HttpModule` (HTTP, WebSocket, MCP), plus `WsModule`, `GraphqlModule`, `QueueModule` or `ScheduleModule` — and the root drops the line unless it pins a value; the queue's backend binding (`RedisQueueModule`) stays at the root. Nothing refuses the old shape: it still runs one transport of each type |
+   | an edge adapter importing its port alone, and the app root importing `HttpModule`, `GraphqlModule`, `QueueModule` or `ScheduleModule` beside it | the adapter imports what serves its edge, bare — `HttpModule` (HTTP, WebSocket), plus `WsModule`, `GraphqlModule`, `McpModule`, `QueueModule` or `ScheduleModule` — and the root drops the line unless it pins a value (`McpModule::for_root` stays where it declares the identity or the opening); the queue's backend binding (`RedisQueueModule`) stays at the root. Nothing refuses the old shape: it still runs one transport of each type |
    | a container built by hand importing `GraphqlModule`, `HealthModule`, `OpenApiModule`, `McpModule`, `StaticFilesModule` or `OAuthResourceModule`, seeding the module's config | seed `HttpConfig::default()` beside it: each imports `HttpModule` |
    | `McpModule::for_root(..)` declaring an identity or `McpAccess::Public` at two imports | declare each at one; the other imports leave it out, or import `McpModule` bare |
    | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` |
@@ -1508,6 +1508,13 @@ lists what the boot, a log or the wire shows when one is missed.
   transport at all files `app serves nothing: no transport is attached` at
   `warn` and stops once its init hooks ran, for `StopCause::NoTransport`, where
   it said `app ready transports=""` then drained for `TransportFailed`.
+- **An MCP adapter importing `HttpModule` instead of `McpModule`**, in an app
+  whose root imports nothing of MCP's, serves its tools on `McpConfig`'s
+  defaults: no `<PREFIX>_MCP__*` variable is read and nothing warns, so a
+  deployment's `<PREFIX>_MCP__ALLOWED_HOSTS` goes unread and the loopback
+  default refuses its public `Host` with `403` (`mcp request refused: its Host
+  is outside the allowlist`, on `nest_rs::mcp`). Import `McpModule` in the
+  adapter.
 - **An app importing `GraphqlModule`, `HealthModule`, `OpenApiModule`,
   `McpModule`, `StaticFilesModule` or `OAuthResourceModule` without `HttpModule`**
   now serves HTTP: each imports it, so the binary listens on

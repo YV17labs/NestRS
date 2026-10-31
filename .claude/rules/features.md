@@ -40,11 +40,12 @@ The port lives at the feature **root**, never in a `core/` folder.
 | `users/ws/` | `gateway.rs` | `UsersWsModule` | `HttpModule`, `WsModule` |
 | `users/queue/` | `processor.rs` (its payload lives at the port) | `UsersQueueModule` | `QueueModule` |
 | `users/schedule/` | `tasks.rs` | `UsersScheduleModule` | `ScheduleModule` |
-| `users/mcp/` | `tool.rs` | `UsersMcpModule` | `HttpModule` |
+| `users/mcp/` | `tool.rs` | `UsersMcpModule` | `McpModule` |
 | `users/events/` | `listener.rs` | `UsersEventsModule` | — |
 
 **Each adapter imports its port explicitly** — composition, not inheritance —
-**and the transport serving its edge**, so importing the adapter serves it.
+**and the module serving its edge**, so importing the adapter serves it and
+reads its edge's config.
 Importing only the port mounts nothing, and no module re-exports every edge:
 the app lists the edges it serves, so its imports are what the binary exposes;
 the queue's backend binding is the root's, since the root chooses it.

@@ -479,12 +479,13 @@ router parses. The rewrite is skipped when nothing is versioned.
 ## Surface decisions
 
 - **A transport is activated by the module that serves on it**: every edge
-  adapter imports its edge's transport module bare — `HttpModule` for HTTP,
-  WebSocket and MCP, plus `GraphqlModule`, `WsModule`, `QueueModule` or
-  `ScheduleModule` — and so does every framework module mounting on HTTP, so an
-  app imports what it serves and nothing more; events' bus is imported by the
-  port that emits. `WsModule`, the registry a port may import to push, attaches
-  no transport. The root names a transport only to pin it (`for_root(cfg)`),
+  adapter imports its edge's module bare — `HttpModule` for HTTP and
+  WebSocket, plus `WsModule`, `GraphqlModule`, `McpModule`, `QueueModule` or
+  `ScheduleModule`, so the edge's config is read — and every framework module
+  mounting on HTTP imports `HttpModule` bare, so an app imports what it serves
+  and nothing more; events' bus is imported by the port that emits.
+  `WsModule`, the registry a port may import to push, attaches no transport.
+  The root names a transport only to pin it (`for_root(cfg)`),
   and a backend binding (`RedisQueueModule`) where it chooses the backend; no
   public `.transport(...)`. A host the app reaches whose edge's transport no
   module attaches is named at run (`container.md`, *Discovery and its gate*;

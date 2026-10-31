@@ -343,7 +343,8 @@ flowchart TB
 The same holds for a framework module you configure. Every adapter serving
 over HTTP imports a bare `HttpModule`, and an app pinning it with
 `HttpModule::for_root(...)` still runs one server; `GraphqlModule`, which
-every GraphQL adapter imports, mounts `/graphql` once. What a setup wires per
+every GraphQL adapter imports, mounts `/graphql` once, and `McpModule`, which
+every MCP adapter imports, reads `<PREFIX>_MCP__*` once. What a setup wires per
 app — its transport, its mount, the close of what it opened — sits in the
 module it imports by type, and an app runs one transport of each type.
 

@@ -74,3 +74,29 @@ printed line was a step the generator could take itself, which the
 identity's "nothing to wire" refuses (the identity audit's read-12, agreed
 with the owner's "Tout faire", 2026-10-28). A root binding a backend already
 — bare, pinned or a named instance — keeps its own line.
+
+## 2026-10-31 — An MCP adapter imports `McpModule`, so the MCP config is read
+
+The adopted line put MCP under `HttpModule` with no reason given, and it cost
+the config: `McpConfig` loads only where `McpModule` is imported, so an app
+whose MCP adapter imported `HttpModule` and whose root imported nothing of
+MCP's read no `<PREFIX>_MCP__*` variable — the Host allowlist included, which
+the mount's own refusal tells the operator to set. `nestrs g mcp` and the docs
+wrote that shape; the demo read its config only because its root pinned an
+identity (the identity audit's second pass, comp-1, agreed with the owner's
+"Tout faire (Recommandé)", 2026-10-31). Correctness decides.
+
+Adopted: **an MCP adapter imports `McpModule` bare**, as a GraphQL adapter
+imports `GraphqlModule`. `McpModule` reads `<PREFIX>_MCP__*` and imports
+`HttpModule` bare, so the adapter names one module and the app importing it
+serves the endpoint on the deployment's config. The root's
+`McpModule::for_root(…)` stays only to declare the identity, the opening or a
+pinned base, which supersedes the bare import (`McpSetup` imports the module by
+type). The run-time backstop names `nest_rs::mcp::McpModule` for an `#[mcp]`
+host left unserved; whether one is served is still read off the HTTP transport.
+
+The `WsModule` refusal does not reach this: `McpModule` mounts nothing a port
+imports to push with, and already imported `HttpModule`. A host listed beside
+`HttpModule` alone still mounts on `McpConfig::default()`: what the harnesses
+serve, and a hand-written adapter's old shape, until an edge decorator brings
+its edge's module itself.

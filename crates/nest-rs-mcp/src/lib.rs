@@ -1,11 +1,12 @@
 //! MCP — `#[mcp]` mounts a Model Context Protocol server on the HTTP transport,
 //! and `#[tools]` declares the operations it serves.
 //!
-//! An app activates MCP by listing an `#[mcp]` provider; [`McpModule`] only
-//! configures the streamable-HTTP server ([`McpConfig`]) and names the app
-//! ([`McpIdentity`]). A host's `path` is the whole URL path, [`DEFAULT_PATH`]
-//! (`/mcp`) when omitted; nothing nests under it, and hosts writing the same
-//! path share one endpoint.
+//! An app activates MCP by importing an adapter that lists an `#[mcp]` provider
+//! and imports [`McpModule`] bare, which reads the streamable-HTTP server's
+//! [`McpConfig`] and brings the HTTP transport; the root's `for_root` names the
+//! app ([`McpIdentity`]). A host's `path` is the whole URL path,
+//! [`DEFAULT_PATH`] (`/mcp`) when omitted; nothing nests under it, and hosts
+//! writing the same path share one endpoint.
 //!
 //! # An operation runs the layers every other edge runs
 //!

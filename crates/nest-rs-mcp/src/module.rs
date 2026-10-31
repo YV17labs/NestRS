@@ -2,11 +2,12 @@
 //! server ([`McpConfig`]), who the app is ([`McpIdentity`]) and who may call it
 //! ([`McpAccess`]).
 //!
-//! Listing an `#[mcp]` provider mounts the endpoint, on the HTTP transport its
-//! adapter imports; this module imports `HttpModule` bare too. Without it
-//! every mount runs on [`McpConfig::default`], gated, and reports what its
-//! hosts declare. Identity and access have no `<PREFIX>_MCP__*` twin, so
-//! [`McpModule::for_root`] takes them beside the config, before it.
+//! Listing an `#[mcp]` provider mounts the endpoint on the HTTP transport. Its
+//! adapter imports this module bare, which reads `<PREFIX>_MCP__*` and imports
+//! `HttpModule` bare in turn, so the app importing the adapter serves it on the
+//! deployment's config; the root's [`McpModule::for_root`] pins a base over
+//! it. Identity and access have no `<PREFIX>_MCP__*` twin, so `for_root` takes
+//! them beside the config, before it.
 
 use std::any::TypeId;
 use std::borrow::Cow;
@@ -237,7 +238,7 @@ impl DynamicModule for McpSetup {
 nest_rs_core::inventory::submit! {
     EdgeRuntime {
         edge: Edge::Mcp,
-        import: "nest_rs::http::HttpModule",
+        import: "nest_rs::mcp::McpModule",
         attached: attaches_transport::<HttpTransport>,
         hosts: mcp_hosts,
     }

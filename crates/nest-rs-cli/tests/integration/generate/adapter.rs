@@ -784,9 +784,10 @@ fn generate_graphql_reuses_an_existing_authz_adapter() {
     );
 }
 
-/// Every adapter imports the modules that serve its edge, bare, so the app
-/// importing the adapter serves it and is told nothing more to import; an
-/// event's bus is imported by the port that emits it.
+/// Every adapter imports the modules that serve its edge, bare, and no other
+/// edge's, so the app importing the adapter serves it — its config read — and
+/// is told nothing more to import; an event's bus is imported by the port that
+/// emits it.
 #[test]
 fn every_adapter_imports_the_modules_that_serve_its_edge() {
     // (transport, the file importing them, below the feature, each `use` path)
@@ -808,7 +809,7 @@ fn every_adapter_imports_the_modules_that_serve_its_edge() {
             "schedule/module.rs",
             &["nest_rs::schedule::ScheduleModule"],
         ),
-        ("mcp", "mcp/module.rs", &["nest_rs::http::HttpModule"]),
+        ("mcp", "mcp/module.rs", &["nest_rs::mcp::McpModule"]),
         ("events", "module.rs", &["nest_rs::events::EventsModule"]),
     ];
 
@@ -834,6 +835,16 @@ fn every_adapter_imports_the_modules_that_serve_its_edge() {
             assert!(
                 module_rs.contains(&format!("use {module};")) && listed,
                 "`g {transport}` imports {ident} in posts/{file}: {module_rs}",
+            );
+        }
+        let others = CASES
+            .iter()
+            .flat_map(|(_, _, serving)| serving.iter())
+            .filter(|other| !modules.contains(other));
+        for other in others {
+            assert!(
+                !module_rs.contains(&format!("use {other};")),
+                "`g {transport}` imports {other}, another edge's, in posts/{file}: {module_rs}",
             );
         }
         assert!(

@@ -302,8 +302,9 @@ the entity becomes a GraphQL object at the moment something asks for one.
 Each adapter delegates to the port's service, so a freshly-generated port plus
 any adapter compiles immediately — the handler is the seam you fill in. Its
 `module.rs` imports what serves its edge (`HttpModule`, `GraphqlModule`,
-`WsModule`, `QueueModule`, `ScheduleModule`), so an app importing the adapter
-serves it and imports nothing more; `g events` imports `EventsModule` into the
+`WsModule`, `McpModule`, `QueueModule`, `ScheduleModule`), so an app importing
+the adapter serves it, reads its edge's configuration and imports nothing
+more; `g events` imports `EventsModule` into the
 port that emits. The app's root keeps only the bindings it chooses, and the
 generator writes them there, in the same edit as the adapter, when the root has
 none. The queue's backend is one: `g queue` writes `RedisQueueModule`, and

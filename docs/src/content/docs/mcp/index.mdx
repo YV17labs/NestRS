@@ -90,15 +90,17 @@ WARN nest_rs::layers: a gated endpoint runs no guard at its request; it denies e
 ```
 
 The feature's MCP adapter lists its tool like any provider, and imports
-`HttpModule`, the server the endpoint mounts on:
+`McpModule` bare: it reads the endpoint's settings from `<PREFIX>_MCP__*`
+([MCP configuration](/mcp/configuration/)) and brings `HttpModule`, the server
+the endpoint mounts on:
 
 ```rust title="crates/features/src/hello/mcp/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
+use nest_rs::mcp::McpModule;
 
 use super::tool::HelloTool;
 
-#[module(imports = [HttpModule], providers = [HelloTool])]
+#[module(imports = [McpModule], providers = [HelloTool])]
 pub struct HelloMcpModule;
 ```
 

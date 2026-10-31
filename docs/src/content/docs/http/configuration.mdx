@@ -6,11 +6,11 @@ sidebar:
 ---
 
 `HttpModule` attaches the HTTP transport at boot, and every module serving on
-it imports it bare — each HTTP, WebSocket and MCP adapter, and the framework's
-own mounts (`GraphqlModule`, `HealthModule`, `OpenApiModule`, …) — so the app
-imports what it serves and the transport attaches once. A bare import reads
-every option from the environment — what `nestrs new` scaffolds, the port in
-the app's own `.env`:
+it imports it bare — each HTTP and WebSocket adapter, and the framework's own
+mounts (`GraphqlModule`, `McpModule`, `HealthModule`, `OpenApiModule`, …) — so
+the app imports what it serves and the transport attaches once. A bare import
+reads every option from the environment — what `nestrs new` scaffolds, the port
+in the app's own `.env`:
 
 ```rust title="crates/features/src/hello/http/module.rs"
 use nest_rs::core::module;

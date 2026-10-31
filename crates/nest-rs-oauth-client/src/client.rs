@@ -533,6 +533,14 @@ fn verified(
         .map_err(|error| AuthError::failed_because("the OAuth client could not be built", error))
 }
 
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<OAuthClient>,
+        "Import `nest_rs::oauth::client::OAuthClientModule`, which builds the configured \
+         `OAuthClient`.",
+    )
+}
+
 /// A transient Authorization-Code (PKCE) client built per flow from an
 /// [`OAuthClientConfig`]; its backend refuses redirects (anti-SSRF) and bounds every call.
 pub struct OAuthClient {

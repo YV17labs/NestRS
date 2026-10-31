@@ -262,6 +262,14 @@ impl JwtOptions {
     }
 }
 
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<JwtService>,
+        "Import `nest_rs::authn::AuthnModule`, which builds the one `JwtService` every guard and \
+         strategy verifies with.",
+    )
+}
+
 /// Singleton token signer/verifier, built once at boot and injected wherever a
 /// token is signed or verified.
 pub struct JwtService {

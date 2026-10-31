@@ -55,3 +55,35 @@ async fn for_root_pins_the_config_and_provides_a_client_built_from_it() {
         authorization.url,
     );
 }
+
+#[nest_rs_core::injectable]
+struct SignsIn {
+    #[inject]
+    _client: Arc<OAuthClient>,
+}
+
+#[module(providers = [SignsIn])]
+struct SignsInWithoutTheClientModule;
+
+/// A provider injecting `OAuthClient` in an app that does not import
+/// `OAuthClientModule` is refused naming the import, never the kernel's
+/// generic remedy.
+#[tokio::test]
+async fn an_oauth_client_no_import_provides_is_refused_naming_its_module() {
+    let Err(refused) = App::builder()
+        .module::<SignsInWithoutTheClientModule>()
+        .build()
+        .await
+    else {
+        panic!("no module provides the OAuthClient");
+    };
+    let missing = refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert!(
+        missing
+            .remedy
+            .is_some_and(|remedy| remedy.contains("nest_rs::oauth::client::OAuthClientModule")),
+        "{missing}"
+    );
+}

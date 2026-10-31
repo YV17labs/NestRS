@@ -206,3 +206,35 @@ async fn a_bound_service_still_verifies_its_own_handshakes() {
         "and is never an access token"
     );
 }
+
+#[nest_rs_core::injectable]
+struct SignsTokens {
+    #[inject]
+    _jwt: Arc<JwtService>,
+}
+
+#[module(providers = [SignsTokens])]
+struct SignsWithoutAuthnModule;
+
+/// A provider injecting `JwtService` in an app that does not import
+/// `AuthnModule` is refused naming the import, never the kernel's generic
+/// remedy.
+#[tokio::test]
+async fn a_jwt_service_no_import_provides_is_refused_naming_the_authn_module() {
+    let Err(refused) = App::builder()
+        .module::<SignsWithoutAuthnModule>()
+        .build()
+        .await
+    else {
+        panic!("no module provides the JwtService");
+    };
+    let missing = refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert!(
+        missing
+            .remedy
+            .is_some_and(|remedy| remedy.contains("nest_rs::authn::AuthnModule")),
+        "{missing}"
+    );
+}

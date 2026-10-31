@@ -221,7 +221,7 @@ enum PlannedWrite {
 
 /// What restores the tree to before one committed step.
 enum Undo {
-    /// Delete a file the commit created.
+    /// Delete a file the commit created, or was refused creating.
     Delete(PathBuf),
     /// Put back the bytes a file held.
     Restore(PathBuf, Vec<u8>),
@@ -269,7 +269,14 @@ fn roll_back(undo: Vec<Undo>, refused: CliError) -> CliError {
     let mut left = Vec::new();
     for step in undo.iter().rev() {
         let (path, outcome) = match step {
-            Undo::Delete(path) => (path, fs::remove_file(path)),
+            // A refused write may have created nothing: the file is already absent.
+            Undo::Delete(path) => (
+                path,
+                fs::remove_file(path).or_else(|e| match e.kind() {
+                    std::io::ErrorKind::NotFound => Ok(()),
+                    _ => Err(e),
+                }),
+            ),
             Undo::Restore(path, bytes) => (path, fs::write(path, bytes)),
             Undo::RemoveDir(path) => (path, fs::remove_dir(path)),
         };
@@ -477,6 +484,39 @@ mod tests {
         for gone in ["entities", "fresh"] {
             assert!(!dir.path().join(gone).exists(), "{gone} is rolled back");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_write_of_a_new_file_rolls_back_whole_and_reports_the_refusal_alone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let edited = dir.path().join("mod.rs");
+        fs::write(&edited, "mod service;\n").unwrap();
+        let locked = dir.path().join("notes");
+        fs::create_dir(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let mut s = Scaffold::new();
+        s.edit(&edited, ensure_decl("mod entity;"));
+        s.create(locked.join("entity.rs"), "pub struct Model;\n");
+        let refused = s.apply(false).unwrap_err();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            matches!(
+                &refused,
+                CliError::File {
+                    action: FileAction::Write,
+                    ..
+                }
+            ),
+            "the write is the refusal, and the rollback left nothing: {}",
+            crate::error::chain(&refused)
+        );
+        assert_eq!(fs::read_to_string(&edited).unwrap(), "mod service;\n");
+        assert!(!locked.join("entity.rs").exists());
     }
 
     #[test]

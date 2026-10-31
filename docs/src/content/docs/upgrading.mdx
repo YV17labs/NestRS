@@ -1278,6 +1278,21 @@ lists what the boot, a log or the wire shows when one is missed.
   member with no `=`, an empty key or an escape that does not decode fails
   the boot naming the variable, where the SDK dropped the member or exported
   the escape as written.
+- **A batch processor's queue or batch size of `0`, or a batch above its
+  queue** (`OTEL_BSP_MAX_EXPORT_BATCH_SIZE` above `OTEL_BSP_MAX_QUEUE_SIZE`,
+  2048 when unset; the `OTEL_BLRP_*` pair alike), fails the boot naming the
+  variable: a queue of none dropped every span or log record, and the SDK
+  lowered the batch to the queue in silence. Write a positive size, the
+  batch at most the queue.
+- **A zero export timeout** is no limit now, as the specification reads it:
+  the processor's bound (`OTEL_BSP_EXPORT_TIMEOUT`,
+  `OTEL_METRIC_EXPORT_TIMEOUT`, `OTEL_BLRP_EXPORT_TIMEOUT`, 30 s by default)
+  cuts the export, where a zero cut every export before it was sent. Both
+  at zero fail the boot naming them: set one to a bound in milliseconds.
+- **A blank `OTEL_SERVICE_NAME`**, an empty or blank `service.name` in
+  `OTEL_RESOURCE_ATTRIBUTES`, or an empty or blank pinned `service_name`
+  fails the boot naming it, where the app exported under the blank name.
+  Write the service's name, or leave it unset for the binary's.
 - **A filter on `an OpenTelemetry variable does not hold what it must`**
   reads `an OpenTelemetry variable is passed over` now, its `expected` field
   `reason`; it names, too, each specification variable this build serves

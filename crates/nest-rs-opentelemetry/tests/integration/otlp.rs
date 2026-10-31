@@ -855,6 +855,68 @@ fn a_batch_processor_setting_that_does_not_parse_is_refused_naming_it() {
     }
 }
 
+/// A queue or batch size its batch processor cannot run with as written
+/// refuses the boot naming it, never quoting it: a queue of none, which takes
+/// no span or record and drops every one, and a batch written above its queue,
+/// which the SDK lowers to the queue in silence.
+#[test]
+fn a_queue_or_batch_size_its_processor_cannot_run_with_refuses_the_boot_naming_it() {
+    for (set, variable, expected) in [
+        (
+            &[("OTEL_BSP_MAX_QUEUE_SIZE", "0")][..],
+            "OTEL_BSP_MAX_QUEUE_SIZE",
+            "positive",
+        ),
+        (
+            &[
+                ("OTEL_BLRP_MAX_QUEUE_SIZE", "256"),
+                ("OTEL_BLRP_MAX_EXPORT_BATCH_SIZE", "512"),
+            ][..],
+            "OTEL_BLRP_MAX_EXPORT_BATCH_SIZE",
+            "OTEL_BLRP_MAX_QUEUE_SIZE",
+        ),
+    ] {
+        let mut vars = vec![(OTEL_EXPORTER_OTLP_ENDPOINT, "http://127.0.0.1:4318")];
+        vars.extend_from_slice(set);
+        let said = refused_under(&vars, OpenTelemetryConfig::default());
+        assert!(said.contains(variable) && said.contains(expected), "{said}");
+        assert!(!said.contains("256") && !said.contains("512"), "{said}");
+    }
+}
+
+/// A zero export timeout is no limit, as the specification reads it, never a
+/// bound of none: the export lands, cut by the processor's own bound alone,
+/// where a zero handed to the client would cut every export before it is sent.
+#[test]
+fn a_zero_export_timeout_is_no_limit_and_the_export_lands() {
+    let collector = Collector::serving();
+
+    export_through(trusting(&collector, &[(OTEL_EXPORTER_OTLP_TIMEOUT, "0")]));
+
+    assert!(
+        collector.exports_to("/v1/traces") > 0 && collector.exports_to("/v1/logs") > 0,
+        "the exports landed: {:?}",
+        collector.received()
+    );
+}
+
+/// A blank `OTEL_SERVICE_NAME` names no service: it refuses the boot naming
+/// the variable, where the SDK's detector would export under the blank name.
+#[test]
+fn a_blank_service_name_refuses_the_boot_naming_its_variable() {
+    let said = refused_under(
+        &[
+            (OTEL_EXPORTER_OTLP_ENDPOINT, "http://127.0.0.1:4318"),
+            ("OTEL_SERVICE_NAME", "   "),
+        ],
+        OpenTelemetryConfig::default(),
+    );
+    assert!(
+        said.contains("OTEL_SERVICE_NAME") && said.contains("names no service"),
+        "{said}"
+    );
+}
+
 /// The batch processors' own bounds on one export, `OTEL_BSP_EXPORT_TIMEOUT`
 /// and `OTEL_BLRP_EXPORT_TIMEOUT`, which the processors this crate builds do
 /// not read, cut a trace and a log export beside the exporter's timeout: a

@@ -135,6 +135,18 @@ variable and never its value:
   metric period that is not a whole number its type holds — fails, as the
   reference SDK's autoconfiguration fails it. The batch processors' settings
   are matched as the SDK matches them, digits alone: ` 512` fails too.
+- A batch processor's queue or batch size of zero fails, as the
+  specification's sizes are positive: a queue of none takes no span or
+  record. So does a batch written above its queue (`OTEL_BSP_MAX_QUEUE_SIZE`,
+  2048 when unset), which the SDK would lower to the queue in silence. A zero
+  `OTEL_BSP_SCHEDULE_DELAY` or `OTEL_BLRP_SCHEDULE_DELAY` is honoured as no
+  pause between exports, at a cost: the SDK's worker then polls without
+  pause, a core each for the span and log processors, idle or not.
+- A service name that names nothing fails: a blank `OTEL_SERVICE_NAME`,
+  which the SDK would export under, an empty or blank `service.name` in
+  `OTEL_RESOURCE_ATTRIBUTES`, or a pinned `service_name` of either. An empty
+  `OTEL_SERVICE_NAME` is unset, as the specification reads an empty variable,
+  and the binary names the service.
 - `OTEL_RESOURCE_ATTRIBUTES` is read as the resource specification writes
   it, `key=value` pairs separated by commas, each key and value
   percent-decoded: a comma or an equals sign in one is written `%2C` or
@@ -276,9 +288,11 @@ also cut at `OTEL_METRIC_EXPORT_TIMEOUT`, the metric reader's bound (30 s by
 default), whichever of the two comes first, and so is a span export at
 `OTEL_BSP_EXPORT_TIMEOUT` and a log export at `OTEL_BLRP_EXPORT_TIMEOUT`,
 each 30 s by default, which the batch processors the SDK builds read
-nowhere. A value that is not a whole number of milliseconds fails the boot
-naming the variable, where the SDK would keep its default in silence; so does
-an `OTEL_METRIC_EXPORT_INTERVAL` that is not one.
+nowhere. A zero is no limit, as the specification reads a timeout's zero, so
+the other of the two cuts the export; both at zero fail the boot, since every
+wait the framework owns is bounded. A value that is not a whole number of
+milliseconds fails the boot naming the variable, where the SDK would keep its
+default in silence; so does an `OTEL_METRIC_EXPORT_INTERVAL` that is not one.
 
 A header the SDK sends — `OTEL_EXPORTER_OTLP_HEADERS`, or a signal's own,
 `key=value` pairs separated by commas, a value percent-encoded where it needs

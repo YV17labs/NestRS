@@ -6,7 +6,8 @@
 //! **The OpenTelemetry specification's variables configure it** (`OTEL_*`),
 //! over what the app pinned in [`OpenTelemetryConfig`]: the SDK reads its
 //! batch processors' numbers itself, and what it read is not overridden, but
-//! a number it would pass over is refused here; the resource attributes, the
+//! a number it would pass over, or could not run with as written, is refused
+//! here; the service name, the resource attributes, the
 //! selectors, the endpoints, the headers, the sampler, the compression, the
 //! temporality, the export timeouts, the span limits, the metric period and
 //! the certificates are resolved here as the specification orders them — a
@@ -47,7 +48,8 @@ use opentelemetry_otlp::{
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{
     OTEL_BLRP_EXPORT_TIMEOUT, OTEL_BLRP_EXPORT_TIMEOUT_DEFAULT, OTEL_BLRP_MAX_EXPORT_BATCH_SIZE,
-    OTEL_BLRP_MAX_QUEUE_SIZE, OTEL_BLRP_SCHEDULE_DELAY, SdkLoggerProvider,
+    OTEL_BLRP_MAX_QUEUE_SIZE, OTEL_BLRP_MAX_QUEUE_SIZE_DEFAULT, OTEL_BLRP_SCHEDULE_DELAY,
+    SdkLoggerProvider,
 };
 use opentelemetry_sdk::metrics::{
     OTEL_METRIC_EXPORT_INTERVAL, PeriodicReader, SdkMeterProvider, Temporality,
@@ -55,8 +57,8 @@ use opentelemetry_sdk::metrics::{
 use opentelemetry_sdk::resource::{SdkProvidedResourceDetector, TelemetryResourceDetector};
 use opentelemetry_sdk::trace::{
     OTEL_BSP_EXPORT_TIMEOUT, OTEL_BSP_EXPORT_TIMEOUT_DEFAULT, OTEL_BSP_MAX_EXPORT_BATCH_SIZE,
-    OTEL_BSP_MAX_QUEUE_SIZE, OTEL_BSP_SCHEDULE_DELAY, Sampler, SdkTracerProvider, SpanLimits,
-    TracerProviderBuilder,
+    OTEL_BSP_MAX_QUEUE_SIZE, OTEL_BSP_MAX_QUEUE_SIZE_DEFAULT, OTEL_BSP_SCHEDULE_DELAY, Sampler,
+    SdkTracerProvider, SpanLimits, TracerProviderBuilder,
 };
 use opentelemetry_semantic_conventions::{
     SCHEMA_URL,
@@ -66,8 +68,8 @@ use reqwest::header::{HeaderName, HeaderValue};
 use uuid::Uuid;
 
 use crate::config::{
-    OpenTelemetryConfig, PINNED_ENDPOINT, PINNED_INTERVAL, PINNED_RATIO, PINNED_TLS,
-    blank_as_unset, refuse_config_file,
+    OpenTelemetryConfig, PINNED_ENDPOINT, PINNED_INTERVAL, PINNED_RATIO, PINNED_SERVICE_NAME,
+    PINNED_TLS, blank_as_unset, refuse_config_file,
 };
 use crate::error::OpenTelemetryError;
 use crate::propagators::{global_propagator, read_propagators};
@@ -172,21 +174,22 @@ impl Signal {
         }
     }
 
-    /// What its batch processor reads itself: each variable, and whether it
-    /// holds milliseconds or a count.
-    fn batch_numbers(self) -> &'static [(&'static str, BatchNumber)] {
+    /// What its batch processor reads itself; the metrics have none.
+    fn batch_processor(self) -> Option<BatchProcessor> {
         match self {
-            Self::Traces => &[
-                (OTEL_BSP_SCHEDULE_DELAY, BatchNumber::Milliseconds),
-                (OTEL_BSP_MAX_QUEUE_SIZE, BatchNumber::Count),
-                (OTEL_BSP_MAX_EXPORT_BATCH_SIZE, BatchNumber::Count),
-            ],
-            Self::Metrics => &[],
-            Self::Logs => &[
-                (OTEL_BLRP_SCHEDULE_DELAY, BatchNumber::Milliseconds),
-                (OTEL_BLRP_MAX_QUEUE_SIZE, BatchNumber::Count),
-                (OTEL_BLRP_MAX_EXPORT_BATCH_SIZE, BatchNumber::Count),
-            ],
+            Self::Traces => Some(BatchProcessor {
+                delay: OTEL_BSP_SCHEDULE_DELAY,
+                queue: OTEL_BSP_MAX_QUEUE_SIZE,
+                batch: OTEL_BSP_MAX_EXPORT_BATCH_SIZE,
+                default_queue: OTEL_BSP_MAX_QUEUE_SIZE_DEFAULT,
+            }),
+            Self::Metrics => None,
+            Self::Logs => Some(BatchProcessor {
+                delay: OTEL_BLRP_SCHEDULE_DELAY,
+                queue: OTEL_BLRP_MAX_QUEUE_SIZE,
+                batch: OTEL_BLRP_MAX_EXPORT_BATCH_SIZE,
+                default_queue: OTEL_BLRP_MAX_QUEUE_SIZE_DEFAULT,
+            }),
         }
     }
 
@@ -272,19 +275,22 @@ pub(crate) struct PassedOver {
     pub reason: &'static str,
 }
 
-/// What a variable read in milliseconds must hold, and one read as a count:
-/// each refusal adds its type's bound, since a number past it is a whole
-/// number still.
+/// What a variable read in milliseconds must hold, one read as a count, and
+/// a batch processor's queue or batch size: each refusal adds its type's
+/// bound, since a number past it is a whole number still.
 const MILLISECONDS: &str = "must be a whole number of milliseconds";
 const COUNT: &str = "must be a whole number";
+const SIZE: &str = "must be a positive whole number";
 
-/// What a batch processor's number holds, as the SDK parses it.
+/// The variables a batch processor reads itself — its delay, in
+/// milliseconds, and its queue and batch sizes — and the queue size it takes
+/// when its variable is unset.
 #[derive(Clone, Copy, Debug)]
-enum BatchNumber {
-    /// A delay, `u64` milliseconds.
-    Milliseconds,
-    /// A size, a `usize`.
-    Count,
+struct BatchProcessor {
+    delay: &'static str,
+    queue: &'static str,
+    batch: &'static str,
+    default_queue: usize,
 }
 
 pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelemetryError> {
@@ -297,13 +303,14 @@ fn build_reading(
     binary: Option<&AppIdentity>,
     read: impl Fn(&str) -> Option<String>,
 ) -> Result<Exporters, OpenTelemetryError> {
-    let read = blank_as_unset(read);
+    let raw = read;
+    let read = blank_as_unset(&raw);
     refuse_config_file(&read)?;
     read_propagators(&read)?;
     let mut passed_over = Vec::new();
     let (sampler, sampler_from_env) = sampler(config, &read, &mut passed_over)?;
     let span_limits = span_limits(&read)?;
-    let resource = build_resource(config, binary, &read)?;
+    let resource = build_resource(config, binary, &raw)?;
     let interval = metric_interval(config, &read)?;
     let disabled = sdk_disabled(&read, &mut passed_over);
     let [traces, metrics, logs] = Signal::ALL.map(|signal| route(signal, disabled, config, &read));
@@ -699,7 +706,7 @@ fn export(
         }
     }
     let compression = compression(signal, read)?;
-    refuse_unparsable_batch_numbers(signal, read)?;
+    refuse_unservable_batch_numbers(signal, read)?;
     let (headers, headers_set_by) = match headers(signal, read)? {
         Some(headers) => (headers.pairs, Some(headers.set_by)),
         None => (HashMap::new(), None),
@@ -712,7 +719,10 @@ fn export(
             refuse_credentials_in_clear(&url, set_by, headers_set_by)?;
         }
     }
-    let timeout = export_timeout(signal.timeout_var(), read)?.min(processor_timeout(signal, read)?);
+    let timeout = export_bound(
+        export_timeout(signal.timeout_var(), read)?,
+        processor_timeout(signal, read)?,
+    )?;
     Ok(Some(Export {
         url,
         set_by,
@@ -791,33 +801,56 @@ fn compression(
     Ok(None)
 }
 
-/// Refuses a number `signal`'s batch processor reads itself that it would
-/// pass over in silence, keeping its default: parsed as the SDK parses it,
-/// untrimmed, so the two never read one apart.
-fn refuse_unparsable_batch_numbers(
+/// Refuses a number `signal`'s batch processor reads itself that it cannot
+/// serve as written, naming the variable and never quoting it: one that does
+/// not parse, which it would replace by its default in silence — parsed as the
+/// SDK parses it, untrimmed, so the two never read one apart; a queue or batch
+/// size of zero, which the specification calls invalid and with which a queue
+/// takes no span or record, every one dropped; and a batch written above its
+/// queue, which the specification forbids and the SDK lowers to the queue in
+/// silence. A zero delay is the specification's no pause between exports, and
+/// runs.
+fn refuse_unservable_batch_numbers(
     signal: Signal,
     read: &impl Fn(&str) -> Option<String>,
 ) -> Result<(), ConfigError> {
-    for &(variable, number) in signal.batch_numbers() {
-        let Some(raw) = read(variable) else {
-            continue;
-        };
-        let refused = match number {
-            BatchNumber::Milliseconds => raw
-                .parse::<u64>()
-                .is_err()
-                .then(|| format!("{MILLISECONDS} up to {}", u64::MAX)),
-            BatchNumber::Count => raw
-                .parse::<usize>()
-                .is_err()
-                .then(|| format!("{COUNT} up to {}", usize::MAX)),
-        };
-        if let Some(expected) = refused {
-            return Err(ConfigError::parse(
-                variable,
-                format!("{expected}, its digits alone, as the SDK reads it"),
-            ));
-        }
+    let Some(processor) = signal.batch_processor() else {
+        return Ok(());
+    };
+    let as_the_sdk_reads =
+        |expected: String| format!("{expected}, its digits alone, as the SDK reads it");
+    if read(processor.delay).is_some_and(|raw| raw.parse::<u64>().is_err()) {
+        return Err(ConfigError::parse(
+            processor.delay,
+            as_the_sdk_reads(format!("{MILLISECONDS} up to {}", u64::MAX)),
+        ));
+    }
+    let size = |variable: &'static str| {
+        read(variable)
+            .map(|raw| {
+                raw.parse::<usize>()
+                    .ok()
+                    .filter(|size| *size > 0)
+                    .ok_or_else(|| {
+                        ConfigError::parse(
+                            variable,
+                            as_the_sdk_reads(format!("{SIZE} up to {}", usize::MAX)),
+                        )
+                    })
+            })
+            .transpose()
+    };
+    let queue = size(processor.queue)?.unwrap_or(processor.default_queue);
+    if size(processor.batch)?.is_some_and(|batch| batch > queue) {
+        return Err(ConfigError::parse(
+            processor.batch,
+            format!(
+                "must be at most {} ({} when unset), as the specification orders — the \
+                 processor exports no batch larger than its queue holds, and the SDK would \
+                 lower it to the queue in silence",
+                processor.queue, processor.default_queue,
+            ),
+        ));
     }
     Ok(())
 }
@@ -945,36 +978,67 @@ fn refuse_credentials_in_clear(
     Ok(())
 }
 
+/// One bound on an export: the variable that set it, and its length, zero
+/// where the variable holds no limit.
+type Bound = (&'static str, Duration);
+
 /// How long `signal`'s processor lets one export take: its variable —
 /// `OTEL_BSP_EXPORT_TIMEOUT`, `OTEL_METRIC_EXPORT_TIMEOUT` or
 /// `OTEL_BLRP_EXPORT_TIMEOUT` — in milliseconds, else the specification's
 /// 30 s. The exporter's own timeout bounds the same export, so the earlier of
-/// the two cuts it; the batch processors this crate builds read neither of
-/// theirs, so it is applied here.
+/// the two cuts it ([`export_bound`]); the batch processors this crate builds
+/// read neither of theirs, so it is applied here.
 fn processor_timeout(
     signal: Signal,
     read: &impl Fn(&str) -> Option<String>,
-) -> Result<Duration, ConfigError> {
+) -> Result<Bound, ConfigError> {
     let (variable, default) = signal.processor_timeout();
-    Ok(milliseconds(variable, read)?.unwrap_or(default))
+    Ok((variable, milliseconds(variable, read)?.unwrap_or(default)))
 }
 
 /// How long one export of a signal may take: its `signal` variable, then
 /// `OTEL_EXPORTER_OTLP_TIMEOUT`, in milliseconds, then the SDK's 10 s.
 ///
 /// That is the SDK's own resolution, which bounds its retries, so an attempt is
-/// cut where the SDK stops waiting for it; a value that is not a whole number
-/// of milliseconds is refused, where the SDK would pass it over.
+/// cut where the SDK stops waiting for it — but for a zero, the
+/// specification's no limit, which [`export_bound`] reads; a value that is not
+/// a whole number of milliseconds is refused, where the SDK would pass it over.
 fn export_timeout(
     signal: &'static str,
     read: &impl Fn(&str) -> Option<String>,
-) -> Result<Duration, ConfigError> {
+) -> Result<Bound, ConfigError> {
     for variable in [signal, OTEL_EXPORTER_OTLP_TIMEOUT] {
         if let Some(timeout) = milliseconds(variable, read)? {
-            return Ok(timeout);
+            return Ok((variable, timeout));
         }
     }
-    Ok(OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT)
+    Ok((
+        OTEL_EXPORTER_OTLP_TIMEOUT,
+        OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
+    ))
+}
+
+/// What cuts one export: the earlier of the exporter's bound and its
+/// processor's, a zero being no limit, as the specification reads a timeout's
+/// zero — a zero handed to the client would cut every export before it is
+/// sent. Both at zero leave nothing bounding the export, and every wait the
+/// framework owns is bounded: refused naming both.
+fn export_bound(exporter: Bound, processor: Bound) -> Result<Duration, ConfigError> {
+    [exporter.1, processor.1]
+        .into_iter()
+        .filter(|bound| !bound.is_zero())
+        .min()
+        .ok_or_else(|| {
+            ConfigError::parse(
+                exporter.0,
+                format!(
+                    "reads as no limit, as the specification reads a zero, and so does {} — \
+                     nothing would bound an export, and every wait this framework owns is \
+                     bounded: set either to a positive number of milliseconds",
+                    processor.0,
+                ),
+            )
+        })
 }
 
 /// `variable`, a whole number of milliseconds, or `None` when unset; any other
@@ -1330,12 +1394,18 @@ const RESOURCE_ATTRIBUTES: &str = "must list key=value pairs separated by commas
                                    percent-encoded and every escape decoding to UTF-8, as the \
                                    resource specification writes them";
 
+/// Whether a service name names nothing: empty, or blank.
+fn names_no_service(name: &str) -> bool {
+    name.trim().is_empty()
+}
+
 /// The attributes `OTEL_RESOURCE_ATTRIBUTES` lists, as the resource
 /// specification writes them: each key and value trimmed and percent-decoded,
 /// a blank member skipped. What opentelemetry_sdk 0.33's detector would drop
 /// in silence — a member with no `=` — or keep under no name — an empty key —
 /// and an escape that does not decode, where the specification discards the
-/// whole variable, are refused naming it, never quoted.
+/// whole variable, are refused naming it, never quoted; so is a
+/// `service.name` that names no service, which would sit over the binary's.
 fn resource_attributes(
     read: &impl Fn(&str) -> Option<String>,
 ) -> Result<Vec<KeyValue>, ConfigError> {
@@ -1346,27 +1416,71 @@ fn resource_attributes(
         .map(str::trim)
         .filter(|member| !member.is_empty())
         .map(|member| {
-            member
+            let (key, value) = member
                 .split_once('=')
                 .and_then(|(key, value)| {
                     Some((percent_decoded(key.trim())?, percent_decoded(value.trim())?))
                 })
                 .filter(|(key, _)| !key.is_empty())
-                .map(|(key, value)| KeyValue::new(key, value))
-                .ok_or_else(|| ConfigError::parse(OTEL_RESOURCE_ATTRIBUTES, RESOURCE_ATTRIBUTES))
+                .ok_or_else(|| ConfigError::parse(OTEL_RESOURCE_ATTRIBUTES, RESOURCE_ATTRIBUTES))?;
+            if key == SERVICE_NAME && names_no_service(&value) {
+                return Err(ConfigError::parse(
+                    OTEL_RESOURCE_ATTRIBUTES,
+                    format!(
+                        "holds an empty or blank {SERVICE_NAME}, which {NAMES_NO_SERVICE} — set \
+                         the service's name there, or leave it out to name the service after \
+                         the binary"
+                    ),
+                ));
+            }
+            Ok(KeyValue::new(key, value))
         })
         .collect()
 }
 
+/// What an empty or blank service name is said to do: export under a name no
+/// backend shows, in place of the binary's.
+const NAMES_NO_SERVICE: &str = "names no service";
+
+/// `OTEL_SERVICE_NAME`, as written, or `None` where it is unset or empty, as
+/// the specification reads an empty variable. A blank one names no service, and
+/// the SDK's detector, run for its `unknown_service` fallback, would take it as
+/// the name: refused naming it, so the two never read it apart.
+fn service_name(read: &impl Fn(&str) -> Option<String>) -> Result<Option<String>, ConfigError> {
+    match read(OTEL_SERVICE_NAME) {
+        Some(name) if name.is_empty() => Ok(None),
+        Some(name) if names_no_service(&name) => Err(ConfigError::parse(
+            OTEL_SERVICE_NAME,
+            format!(
+                "is blank, so it {NAMES_NO_SERVICE} — set the service's name, or unset it to \
+                 name the service after the binary"
+            ),
+        )),
+        name => Ok(name),
+    }
+}
+
 /// The resource every signal carries: what the app pinned, and the binary's
 /// name and version, under `OTEL_RESOURCE_ATTRIBUTES`, under
-/// `OTEL_SERVICE_NAME`, which wins.
+/// `OTEL_SERVICE_NAME`, which wins. `read` is the environment as written, a
+/// blank value kept: a blank `OTEL_SERVICE_NAME` is refused, never read as
+/// unset while the SDK's detector reads it as the name.
 fn build_resource(
     config: &OpenTelemetryConfig,
     binary: Option<&AppIdentity>,
     read: &impl Fn(&str) -> Option<String>,
 ) -> Result<Resource, ConfigError> {
+    if config.service_name.as_deref().is_some_and(names_no_service) {
+        return Err(ConfigError::parse(
+            PINNED_SERVICE_NAME,
+            format!(
+                "is empty or blank, so it {NAMES_NO_SERVICE} — set the service's name, or leave \
+                 it None to name the service after the binary"
+            ),
+        ));
+    }
     let attributes = resource_attributes(read)?;
+    let service_name = service_name(read)?;
     // The SDK's environment detector, which `Resource::builder` runs, reads
     // `OTEL_RESOURCE_ATTRIBUTES` undecoded: the attributes are read above.
     let detected = Resource::builder_empty()
@@ -1413,7 +1527,7 @@ fn build_resource(
         .collect();
     // Laid last: the SDK's detectors would let a `service.name` in the
     // attributes win over it, against the specification.
-    let service_name = read(OTEL_SERVICE_NAME).map(|name| KeyValue::new(SERVICE_NAME, name));
+    let service_name = service_name.map(|name| KeyValue::new(SERVICE_NAME, name));
     Ok(Resource::builder_empty()
         .with_schema_url(Vec::<KeyValue>::new(), SCHEMA_URL)
         .with_attributes(ours)
@@ -1951,6 +2065,7 @@ mod tests {
             .map(|signal| {
                 export_timeout(signal, &reading(set))
                     .expect("milliseconds")
+                    .1
                     .as_millis()
             })
         };
@@ -2486,6 +2601,18 @@ mod tests {
         export(signal, &config, &reading(set))
     }
 
+    /// The bound, in milliseconds, on one export of each signal — traces,
+    /// metrics, logs — to a collector under `set`.
+    fn export_timeouts(set: &[(&str, &str)]) -> [u128; 3] {
+        Signal::ALL.map(|signal| {
+            resolved(signal, Some("http://collector:4318"), set)
+                .expect("builds")
+                .expect("exports")
+                .timeout
+                .as_millis()
+        })
+    }
+
     /// A header, which may be a collector's credential, never crosses the
     /// network in clear: beside an `http://` endpoint on another host it is
     /// refused naming its variable and the endpoint's setter, never a value.
@@ -2698,36 +2825,27 @@ mod tests {
     /// milliseconds is refused naming it.
     #[test]
     fn each_processor_s_bound_and_the_exporter_s_cut_an_export_the_earlier_first() {
-        let timeouts = |set: &'static [(&'static str, &'static str)]| {
-            Signal::ALL.map(|signal| {
-                resolved(signal, Some("http://collector:4318"), set)
-                    .expect("builds")
-                    .expect("exports")
-                    .timeout
-                    .as_millis()
-            })
-        };
-        assert_eq!(timeouts(&[]), [10_000; 3]);
+        assert_eq!(export_timeouts(&[]), [10_000; 3]);
         assert_eq!(
-            timeouts(&[(OTEL_METRIC_EXPORT_TIMEOUT, "2000")]),
+            export_timeouts(&[(OTEL_METRIC_EXPORT_TIMEOUT, "2000")]),
             [10_000, 2000, 10_000]
         );
         assert_eq!(
-            timeouts(&[
+            export_timeouts(&[
                 (OTEL_BSP_EXPORT_TIMEOUT, "1500"),
                 (OTEL_BLRP_EXPORT_TIMEOUT, "2500"),
             ]),
             [1500, 10_000, 2500]
         );
         assert_eq!(
-            timeouts(&[
+            export_timeouts(&[
                 (OTEL_METRIC_EXPORT_TIMEOUT, "60000"),
                 (OTEL_EXPORTER_OTLP_TIMEOUT, "40000"),
             ]),
             [30_000, 40_000, 30_000]
         );
         assert_eq!(
-            timeouts(&[
+            export_timeouts(&[
                 (OTEL_METRIC_EXPORT_TIMEOUT, "20000"),
                 (OTEL_EXPORTER_OTLP_METRICS_TIMEOUT, "45000"),
             ]),
@@ -2794,6 +2912,222 @@ mod tests {
             )
             .expect("the span processor's number is no metric export's")
             .is_some()
+        );
+    }
+
+    /// A queue or batch size its batch processor cannot run with as written
+    /// is refused naming it, never quoting it: none, which the specification
+    /// calls invalid — a queue of none takes no span or record, every one
+    /// dropped — and a batch written above its queue, which the SDK lowers to
+    /// the queue in silence. A queue below the default batch with no batch
+    /// written runs, the SDK lowering its own default; a zero delay, which the
+    /// specification reads as no pause between exports, runs.
+    #[test]
+    fn a_queue_or_batch_size_its_processor_cannot_run_with_is_refused_naming_it() {
+        for (signal, set, variable, expected) in [
+            (
+                Signal::Traces,
+                &[(OTEL_BSP_MAX_QUEUE_SIZE, "0")][..],
+                OTEL_BSP_MAX_QUEUE_SIZE,
+                "positive",
+            ),
+            (
+                Signal::Traces,
+                &[(OTEL_BSP_MAX_EXPORT_BATCH_SIZE, "0")][..],
+                OTEL_BSP_MAX_EXPORT_BATCH_SIZE,
+                "positive",
+            ),
+            (
+                Signal::Logs,
+                &[(OTEL_BLRP_MAX_QUEUE_SIZE, "0")][..],
+                OTEL_BLRP_MAX_QUEUE_SIZE,
+                "positive",
+            ),
+            (
+                Signal::Logs,
+                &[(OTEL_BLRP_MAX_EXPORT_BATCH_SIZE, "0")][..],
+                OTEL_BLRP_MAX_EXPORT_BATCH_SIZE,
+                "positive",
+            ),
+            (
+                Signal::Traces,
+                &[(OTEL_BSP_MAX_EXPORT_BATCH_SIZE, "4096")][..],
+                OTEL_BSP_MAX_EXPORT_BATCH_SIZE,
+                OTEL_BSP_MAX_QUEUE_SIZE,
+            ),
+            (
+                Signal::Logs,
+                &[
+                    (OTEL_BLRP_MAX_QUEUE_SIZE, "100"),
+                    (OTEL_BLRP_MAX_EXPORT_BATCH_SIZE, "101"),
+                ][..],
+                OTEL_BLRP_MAX_EXPORT_BATCH_SIZE,
+                OTEL_BLRP_MAX_QUEUE_SIZE,
+            ),
+        ] {
+            let Err(refused) = resolved(signal, Some("http://collector:4318"), set) else {
+                panic!("{set:?} must not build");
+            };
+            let said = refused.to_string();
+            assert!(said.contains(variable) && said.contains(expected), "{said}");
+            assert!(
+                !said.contains("4096") && !said.contains("100") && !said.contains("101"),
+                "{said}"
+            );
+        }
+        for (signal, set) in [
+            (Signal::Traces, &[(OTEL_BSP_MAX_QUEUE_SIZE, "100")][..]),
+            (
+                Signal::Logs,
+                &[
+                    (OTEL_BLRP_MAX_QUEUE_SIZE, "1"),
+                    (OTEL_BLRP_MAX_EXPORT_BATCH_SIZE, "1"),
+                ][..],
+            ),
+            (Signal::Traces, &[(OTEL_BSP_SCHEDULE_DELAY, "0")][..]),
+            (Signal::Logs, &[(OTEL_BLRP_SCHEDULE_DELAY, "0")][..]),
+        ] {
+            assert!(
+                resolved(signal, Some("http://collector:4318"), set)
+                    .expect("a size its processor runs with")
+                    .is_some(),
+                "{set:?}"
+            );
+        }
+    }
+
+    /// A zero timeout is no limit, as the specification reads a timeout's
+    /// zero, so the export's other bound cuts it: the processor's under the
+    /// exporter's zero, the exporter's under the processor's; a signal's own
+    /// zero is its own, never the general variable's value. Both at zero leave
+    /// nothing bounding an export, and every wait the framework owns is
+    /// bounded: refused naming both, never quoting them.
+    #[test]
+    fn a_zero_timeout_is_no_limit_and_the_export_s_other_bound_cuts_it() {
+        assert_eq!(
+            export_timeouts(&[(OTEL_EXPORTER_OTLP_TIMEOUT, "0")]),
+            [30_000; 3]
+        );
+        assert_eq!(
+            export_timeouts(&[
+                (OTEL_BSP_EXPORT_TIMEOUT, "0"),
+                (OTEL_METRIC_EXPORT_TIMEOUT, "0"),
+                (OTEL_BLRP_EXPORT_TIMEOUT, "0"),
+            ]),
+            [10_000; 3]
+        );
+        assert_eq!(
+            export_timeouts(&[
+                (OTEL_EXPORTER_OTLP_TIMEOUT, "2000"),
+                (OTEL_EXPORTER_OTLP_LOGS_TIMEOUT, "0"),
+            ]),
+            [2000, 2000, 30_000]
+        );
+        for (signal, exporter, processor) in [
+            (
+                Signal::Traces,
+                OTEL_EXPORTER_OTLP_TIMEOUT,
+                OTEL_BSP_EXPORT_TIMEOUT,
+            ),
+            (
+                Signal::Metrics,
+                OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,
+                OTEL_METRIC_EXPORT_TIMEOUT,
+            ),
+            (
+                Signal::Logs,
+                OTEL_EXPORTER_OTLP_TIMEOUT,
+                OTEL_BLRP_EXPORT_TIMEOUT,
+            ),
+        ] {
+            let Err(refused) = resolved(
+                signal,
+                Some("http://collector:4318"),
+                &[(exporter, "0"), (processor, "0")],
+            ) else {
+                panic!("{exporter} and {processor} at zero must not build");
+            };
+            let said = refused.to_string();
+            assert!(
+                said.contains(exporter) && said.contains(processor) && said.contains("no limit"),
+                "{said}"
+            );
+        }
+    }
+
+    /// A service name that names nothing is refused wherever it is written,
+    /// naming where and never quoting it: `OTEL_SERVICE_NAME` blank, which the
+    /// SDK's detector would take as the name over the binary's, were it read
+    /// as unset here; a `service.name` in `OTEL_RESOURCE_ATTRIBUTES` empty or
+    /// blank once decoded; a pinned `service_name` empty or blank. Empty,
+    /// `OTEL_SERVICE_NAME` is unset, as the specification orders, and the
+    /// binary names the service; padded, it is the name as written, as the
+    /// SDK reads it too.
+    #[test]
+    fn a_service_name_that_names_nothing_is_refused_wherever_it_is_written() {
+        let built = |set: &[(&str, &str)], pinned: Option<&str>| -> Result<String, String> {
+            let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let config = OpenTelemetryConfig {
+                service_name: pinned.map(str::to_owned),
+                ..OpenTelemetryConfig::default()
+            };
+            let mut outcome = None;
+            figment::Jail::expect_with(|jail| {
+                for (variable, value) in set {
+                    jail.set_env(variable, value);
+                }
+                outcome = Some(
+                    match build_reading(&config, Some(&binary()), nest_rs_config::env_var) {
+                        Ok(exporters) => {
+                            let service = exporters.summary.service.clone();
+                            shut(exporters);
+                            Ok(service)
+                        }
+                        Err(refused) => Err(refused.to_string()),
+                    },
+                );
+                Ok(())
+            });
+            outcome.expect("the jail ran")
+        };
+        for (set, pinned, named) in [
+            (&[(OTEL_SERVICE_NAME, "  ")][..], None, OTEL_SERVICE_NAME),
+            (&[(OTEL_SERVICE_NAME, "\t")][..], None, OTEL_SERVICE_NAME),
+            (
+                &[(OTEL_RESOURCE_ATTRIBUTES, "service.name=")][..],
+                None,
+                OTEL_RESOURCE_ATTRIBUTES,
+            ),
+            (
+                &[(OTEL_RESOURCE_ATTRIBUTES, "team=a, service.name = ")][..],
+                None,
+                OTEL_RESOURCE_ATTRIBUTES,
+            ),
+            (
+                &[(OTEL_RESOURCE_ATTRIBUTES, "service.name=%20%09")][..],
+                None,
+                OTEL_RESOURCE_ATTRIBUTES,
+            ),
+            (&[][..], Some(""), PINNED_SERVICE_NAME),
+            (&[][..], Some("   "), PINNED_SERVICE_NAME),
+        ] {
+            let refused = match built(set, pinned) {
+                Ok(service) => panic!("{set:?} {pinned:?} must not build, named {service:?}"),
+                Err(refused) => refused,
+            };
+            assert!(
+                refused.contains(named) && refused.contains("names no service"),
+                "{refused}"
+            );
+            assert!(!refused.contains("team"), "{refused}");
+        }
+        assert_eq!(
+            built(&[(OTEL_SERVICE_NAME, "")], None).as_deref(),
+            Ok("auth")
+        );
+        assert_eq!(
+            built(&[(OTEL_SERVICE_NAME, " billing ")], None).as_deref(),
+            Ok(" billing ")
         );
     }
 
@@ -2976,7 +3310,7 @@ mod tests {
             ),
             (
                 OTEL_BSP_SCHEDULE_DELAY,
-                refuse_unparsable_batch_numbers(
+                refuse_unservable_batch_numbers(
                     Signal::Traces,
                     &reading(&[(OTEL_BSP_SCHEDULE_DELAY, &past_u64)]),
                 ),
@@ -2985,7 +3319,7 @@ mod tests {
             ),
             (
                 OTEL_BLRP_MAX_QUEUE_SIZE,
-                refuse_unparsable_batch_numbers(
+                refuse_unservable_batch_numbers(
                     Signal::Logs,
                     &reading(&[(OTEL_BLRP_MAX_QUEUE_SIZE, &past_usize)]),
                 ),
@@ -3002,11 +3336,9 @@ mod tests {
         }
     }
 
-    /// The tracer every build starts from records within the span limits
-    /// resolved: two attributes on a span and on its event under
-    /// `OTEL_ATTRIBUTE_COUNT_LIMIT=2`, the rest dropped and counted.
-    #[test]
-    fn the_tracer_records_within_the_span_limits_resolved() {
+    /// The span the tracer every build starts from records under `set`'s span
+    /// limits: three attributes on it and on its one event.
+    fn recorded_under(set: &[(&str, &str)]) -> opentelemetry_sdk::trace::SpanData {
         use opentelemetry::trace::{Span as _, Tracer as _};
         use opentelemetry_sdk::trace::InMemorySpanExporter;
 
@@ -3014,7 +3346,7 @@ mod tests {
         let provider = tracer_provider(
             Resource::builder_empty().build(),
             Sampler::AlwaysOn,
-            span_limits(&reading(&[(OTEL_ATTRIBUTE_COUNT_LIMIT, "2")])).expect("a count"),
+            span_limits(&reading(set)).expect("a count"),
         )
         .with_simple_exporter(exporter.clone())
         .build();
@@ -3030,14 +3362,40 @@ mod tests {
             .start(&tracer);
         span.add_event("event", attributes());
         span.end();
+        let recorded = exporter
+            .get_finished_spans()
+            .expect("the spans exported")
+            .pop()
+            .expect("one span");
+        let _ = provider.shutdown();
+        recorded
+    }
 
-        let spans = exporter.get_finished_spans().expect("the spans exported");
-        let span = spans.first().expect("one span");
+    /// The tracer every build starts from records within the span limits
+    /// resolved: two attributes on a span and on its event under
+    /// `OTEL_ATTRIBUTE_COUNT_LIMIT=2`, the rest dropped and counted.
+    #[test]
+    fn the_tracer_records_within_the_span_limits_resolved() {
+        let span = recorded_under(&[(OTEL_ATTRIBUTE_COUNT_LIMIT, "2")]);
         assert_eq!(span.attributes.len(), 2, "{:?}", span.attributes);
         assert_eq!(span.dropped_attributes_count, 1);
         let event = span.events.events.first().expect("one event");
         assert_eq!(event.attributes.len(), 2, "{event:?}");
-        let _ = provider.shutdown();
+    }
+
+    /// A zero count limit is a limit, as the specification's non-negative
+    /// range reads it: the span keeps no attribute and no event, each dropped
+    /// and counted.
+    #[test]
+    fn a_zero_count_limit_records_none() {
+        let span = recorded_under(&[
+            (OTEL_ATTRIBUTE_COUNT_LIMIT, "0"),
+            (OTEL_SPAN_EVENT_COUNT_LIMIT, "0"),
+        ]);
+        assert!(span.attributes.is_empty(), "{:?}", span.attributes);
+        assert_eq!(span.dropped_attributes_count, 3);
+        assert!(span.events.events.is_empty(), "{:?}", span.events);
+        assert_eq!(span.events.dropped_count, 1);
     }
 
     /// A specification variable this build serves nowhere joins

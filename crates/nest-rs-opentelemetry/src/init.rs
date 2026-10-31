@@ -56,7 +56,9 @@ impl OpenTelemetry {
     /// `<PREFIX>_LOG_SOURCE_LOCATION`), as [`OpenTelemetryConfig::from_env`]
     /// reads them. Returns the flush guard that must outlive `main`, or an
     /// error that aborts boot on a filter, a setting, a number the SDK reads
-    /// or a header that does not parse, a request this binary cannot serve —
+    /// or a header that does not parse, a batch processor's queue or batch
+    /// size it cannot run with, an export no timeout bounds, a service name
+    /// naming nothing, a request this binary cannot serve —
     /// an exporter, a compression or a propagator it does not build,
     /// `OTEL_CONFIG_FILE`, userinfo in an endpoint, a query on a base
     /// endpoint, a header beside a plaintext endpoint on another host or a

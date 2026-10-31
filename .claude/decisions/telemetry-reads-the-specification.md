@@ -338,3 +338,72 @@ the client, and a query on the base endpoint swallowing the signal's path. So:
   query reaches.
 - **Reading `NO_COLOR` in the kernel**: the library reads it as no-color.org
   writes it, and a second reading would be a second implementation.
+
+## 2026-10-31 — no value leaves an export with nothing, or under a name the deployment did not write
+
+The entry above refused a number that does not parse and handed over one that
+does as read. Some parse and still leave a deployment believing what the
+binary does not do: a zero queue, with which opentelemetry_sdk 0.33's
+thread-based processors take nothing (`sync_channel(0)`, never received on),
+every span and log record dropped; a batch above its queue, lowered to the
+queue in silence; a zero export timeout handed to the client as a zero bound,
+every export cut before it was sent; a blank `OTEL_SERVICE_NAME`, read as unset
+here while the SDK's detector took it as the name, so the app exported under
+a blank one. So:
+
+- **A queue or batch size of zero is refused**, naming the variable: the
+  specification's sizes are positive, and the reference SDK (Java) refuses a
+  non-positive one at start.
+- **A batch written above its queue is refused**, naming the batch and the
+  queue's variable (2048 when unset): the specification has the batch at most
+  the queue — a value outside its valid range, the class the entry above
+  refuses for an unparsable number. Java warns and lowers it instead; a line
+  the deployment may never read, while the batch it wrote does not apply, is
+  the defect this crate refuses. A queue below the default batch with no
+  batch written runs, the SDK lowering its own default.
+- **A zero schedule delay is honoured**: the specification types it a
+  duration, non-negative, "between two consecutive exports", and Java takes
+  it. The SDK's worker then polls without pause (a zero `recv_timeout` every
+  turn), a core each for the span and log processors, idle or not — said on
+  the OpenTelemetry page, never at `warn`, since a line on correct
+  configuration teaches operators to filter the target.
+- **A zero span, event, link or attribute count limit is honoured**: the
+  specification's range is non-negative, and the span keeps none.
+- **A zero timeout is no limit**, as the specification reads a timeout's zero
+  (`OTEL_EXPORTER_OTLP_TIMEOUT` and per signal, `OTEL_BSP_EXPORT_TIMEOUT`,
+  `OTEL_METRIC_EXPORT_TIMEOUT`, `OTEL_BLRP_EXPORT_TIMEOUT`): the export's other
+  bound cuts it. **Both at zero are refused**, naming both: nothing would
+  bound the export, and every wait the framework owns is bounded.
+- **A service name that names nothing is refused wherever it is written**: a
+  blank `OTEL_SERVICE_NAME`, an empty or blank `service.name` in
+  `OTEL_RESOURCE_ATTRIBUTES`, an empty or blank pinned `service_name`. An
+  empty `OTEL_SERVICE_NAME` reads as unset, as the specification orders; a
+  blank one is not empty, and names no service a backend shows. A padded one
+  is the name as written, here and in the SDK. The SDK's
+  `SdkProvidedResourceDetector` keeps running for its `unknown_service`
+  fallback: with the blank refused, it reads every value as this crate does.
+- **Every variable both this crate and a linked SDK crate read is read one
+  way in effect**: what the crate hands over (the sampler and its argument,
+  the span limits, the endpoints, the protocol, the timeouts, the headers,
+  the metric period, the resource) is what the SDK uses; what the SDK reads
+  itself (the batch processors' numbers, a compression or temporality the
+  crate resolved to none) the crate checks as the SDK parses it. The SDK's own
+  warnings while the providers are built go nowhere — no subscriber is
+  installed before `init_with` installs one — so its readings count only where
+  their result is used.
+
+**Refused:**
+
+- **Computing `unknown_service:<executable>` here and dropping the detector**,
+  reading a blank `OTEL_SERVICE_NAME` as unset: the app would export under the
+  binary's name, one the deployment did not write, without a word; and a
+  second implementation of the fallback beside the SDK's.
+- **Taking a blank name as the name**, as the SDK does: no backend shows it.
+- **Substituting a very large duration for a zero timeout** (the
+  specification's "MAY"): a collector that stops answering would hold one
+  export for days, its processor's thread with it, and every span or record
+  after it dropped.
+- **Refusing every zero timeout**: the specification gives it a meaning the
+  other bound serves.
+- **Refusing, or flooring, a zero schedule delay**: a value the specification
+  gives a meaning, and a floor would be a number of ours.

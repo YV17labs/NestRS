@@ -16,6 +16,8 @@ pub(crate) const PINNED_TLS: &str = "`OpenTelemetryConfig::tls` in code";
 pub(crate) const PINNED_INTERVAL: &str = "`OpenTelemetryConfig::metric_interval` in code";
 #[cfg(feature = "otlp")]
 pub(crate) const PINNED_RATIO: &str = "`OpenTelemetryConfig::trace_sample_ratio` in code";
+#[cfg(feature = "otlp")]
+pub(crate) const PINNED_SERVICE_NAME: &str = "`OpenTelemetryConfig::service_name` in code";
 
 /// The specification's file configuration, under its name and the name it had
 /// while experimental.
@@ -45,7 +47,9 @@ const CONFIG_FILES: [&str; 2] = ["OTEL_CONFIG_FILE", "OTEL_EXPERIMENTAL_CONFIG_F
 #[derive(Clone)]
 pub struct OpenTelemetryConfig {
     /// `service.name` on every span, metric and log; `None` is the binary's
-    /// package name ([`AppIdentity`](nest_rs_core::AppIdentity)).
+    /// package name ([`AppIdentity`](nest_rs_core::AppIdentity)). An empty or
+    /// blank one names no service, and fails `init_with` where the `otlp`
+    /// feature builds the exporters.
     /// `OTEL_SERVICE_NAME`, then `service.name` in `OTEL_RESOURCE_ATTRIBUTES`,
     /// override it.
     pub service_name: Option<String>,
@@ -173,8 +177,10 @@ impl OpenTelemetryConfig {
     }
 }
 
-/// `read`, a blank value read as unset, as the specification orders every
-/// variable's.
+/// `read`, a blank value read as unset: the specification reads an empty one
+/// so, and a blank one is a value no variable read through this gives a
+/// meaning. `OTEL_SERVICE_NAME` is read without it, since the SDK takes a blank
+/// one as the name.
 pub(crate) fn blank_as_unset(
     read: impl Fn(&str) -> Option<String>,
 ) -> impl Fn(&str) -> Option<String> {

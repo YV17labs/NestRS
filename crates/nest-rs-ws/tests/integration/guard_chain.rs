@@ -319,3 +319,140 @@ async fn a_guard_forced_alone_on_a_message_runs_again_after_the_global_pool() {
     );
     app.shutdown().await.expect("the transport stops cleanly");
 }
+
+/// A pooled guard deciding on the HTTP request: in `check_http`, its `check`
+/// admitting, it gates the upgrade and every message the socket carries
+/// answers; in `check`, it runs on each message too, which has no HTTP view,
+/// and the line says which guard and what to move.
+mod request_decided {
+    use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
+    use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+    use nest_rs_http::{HttpView, StatusCode};
+    use nest_rs_testing::{LogCapture, TestApp};
+    use nest_rs_ws::{WsModule, gateway, messages};
+
+    fn keyed(cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        match HttpView::of(cx)?.request().header("x-api-key") {
+            Some(_) => Ok(()),
+            None => Err(Denial::unauthorized("missing key")),
+        }
+    }
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct KeyAtTheRequest;
+
+    #[async_trait]
+    impl Guard for KeyAtTheRequest {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for KeyAtTheRequest {}
+    impl GuardFor<nest_rs_ws::WsView> for KeyAtTheRequest {}
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct KeyAtTheUnit;
+
+    #[async_trait]
+    impl Guard for KeyAtTheUnit {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+    }
+
+    impl GuardFor<HttpView> for KeyAtTheUnit {}
+    impl GuardFor<nest_rs_ws::WsView> for KeyAtTheUnit {}
+
+    #[gateway(path = "/ws/keyed")]
+    struct KeyedGateway;
+
+    #[messages]
+    impl KeyedGateway {
+        #[subscribe_message("ping")]
+        #[public]
+        async fn ping(&self) -> &'static str {
+            "pong"
+        }
+    }
+
+    #[module(
+        imports = [WsModule],
+        providers = [KeyAtTheRequest, KeyAtTheUnit, KeyedGateway],
+    )]
+    struct KeyModule;
+
+    #[module(imports = [KeyModule], providers = [GlobalGuards<(KeyAtTheRequest,)>])]
+    struct RequestKeyPoolModule;
+
+    #[module(imports = [KeyModule], providers = [GlobalGuards<(KeyAtTheUnit,)>])]
+    struct UnitKeyPoolModule;
+
+    #[tokio::test]
+    async fn a_pooled_guard_deciding_in_check_http_gates_the_upgrade_and_admits_its_messages() {
+        let app = TestApp::builder()
+            .module::<RequestKeyPoolModule>()
+            .build_ws()
+            .await
+            .expect("boots");
+
+        let mut socket = app
+            .socket("/ws/keyed")
+            .header("x-api-key", "k")
+            .connect()
+            .await;
+        socket.send("ping", serde_json::Value::Null).await;
+        assert_eq!(socket.next_envelope().await["data"], "pong");
+        assert_eq!(
+            app.socket("/ws/keyed").expect_refused().await,
+            StatusCode::UNAUTHORIZED
+        );
+        app.shutdown().await.expect("shuts down");
+    }
+
+    #[tokio::test]
+    async fn a_pooled_guard_reading_the_request_in_check_refuses_each_message_naming_itself() {
+        let logs = LogCapture::install();
+        let app = TestApp::builder()
+            .module::<UnitKeyPoolModule>()
+            .build_ws()
+            .await
+            .expect("boots");
+
+        let mut socket = app
+            .socket("/ws/keyed")
+            .header("x-api-key", "k")
+            .connect()
+            .await;
+        for _ in 0..2 {
+            socket.send("ping", serde_json::Value::Null).await;
+            let envelope = socket.next_envelope().await;
+            assert_eq!(envelope["data"]["code"], "INTERNAL", "{envelope}");
+        }
+
+        let viewless = logs.expect_one(
+            "nest_rs::http",
+            "a guard read the HTTP request of a unit with no HTTP view",
+        );
+        assert_eq!(viewless.level, "error");
+        assert_eq!(viewless.field("guard").as_deref(), Some("KeyAtTheUnit"));
+        assert_eq!(viewless.field("unit").as_deref(), Some("ws.message"));
+        assert!(
+            viewless
+                .field("hint")
+                .is_some_and(|hint| hint.contains("decide the request in `check_http`")),
+            "{viewless:?}"
+        );
+        app.shutdown().await.expect("shuts down");
+    }
+}

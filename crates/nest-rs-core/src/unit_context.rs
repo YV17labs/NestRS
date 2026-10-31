@@ -31,6 +31,9 @@ pub struct UnitContext<'a> {
     /// The failure the rest of the unit came to, recorded by `Next::run` for
     /// the interceptor that called it.
     failed_inner: Option<Failure>,
+    /// The layer the running stage is calling, by its type's name, so what
+    /// it reads wrongly can name it.
+    running: Option<&'static str>,
 }
 
 impl<'a> UnitContext<'a> {
@@ -201,7 +204,20 @@ pub fn new_unit_context<'a>(
         deadline,
         pending: Pending::default(),
         failed_inner: None,
+        running: None,
     }
+}
+
+/// Record `layer`, by its type's name, as the one the running stage calls on
+/// `cx` — `None` once it returned.
+pub fn run_layer(cx: &mut UnitContext<'_>, layer: Option<&'static str>) {
+    cx.running = layer;
+}
+
+/// The layer the running stage is calling on `cx`, by its type's name, when
+/// the stage recorded one.
+pub fn running_layer(cx: &UnitContext<'_>) -> Option<&'static str> {
+    cx.running
 }
 
 /// What the running stage attached, taken for its install once the stage has

@@ -168,6 +168,12 @@ pub fn with_view<R>(
     answer
 }
 
+/// The edit a guard reading the HTTP request in `check` has: `check` runs on
+/// every edge's unit, `check_http` on the HTTP request alone.
+const VIEWLESS_HINT: &str = "decide the request in `check_http`, and admit in `check`: \
+     `check` runs on each unit of every edge — a GraphQL field, a WebSocket message, an MCP \
+     operation — and `check_http` on the HTTP request that carries them";
+
 /// Say once per site that an HTTP entry ran on a unit with no HTTP view.
 fn report_viewless(cx: &UnitContext<'_>) {
     static REPORTED: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(Default::default);
@@ -178,12 +184,16 @@ fn report_viewless(cx: &UnitContext<'_>) {
         .unwrap_or_else(PoisonError::into_inner)
         .insert(site);
     if first {
+        let guard =
+            nest_rs_core::__private::running_layer(cx).map(nest_rs_core::__private::shorten);
         tracing::error!(
             target: crate::target::HTTP,
+            guard = guard.as_deref(),
             unit = cx.unit().name(),
             host = cx.handler().host_name(),
             method = cx.handler().method(),
-            "an HTTP guard entry ran on a unit with no HTTP view",
+            hint = VIEWLESS_HINT,
+            "a guard read the HTTP request of a unit with no HTTP view",
         );
     }
 }
@@ -234,9 +244,15 @@ mod tests {
         }
         let event = logs.expect_one(
             "nest_rs::http",
-            "an HTTP guard entry ran on a unit with no HTTP view",
+            "a guard read the HTTP request of a unit with no HTTP view",
         );
         assert_eq!(event.level, "error");
         assert_eq!(event.field("method").as_deref(), Some("route"));
+        assert!(
+            event
+                .field("hint")
+                .is_some_and(|hint| hint.contains("check_http")),
+            "{event:?}"
+        );
     }
 }

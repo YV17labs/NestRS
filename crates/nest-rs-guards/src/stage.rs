@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_core::__private::{ClassGate, ResolvedLayer};
+use nest_rs_core::__private::{ClassGate, ResolvedLayer, run_layer};
 use nest_rs_core::{AmbientValue, Continuation, UnitContext};
 
 use crate::denial::denial_of;
@@ -96,10 +96,10 @@ pub async fn check_guards(
         // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
         // blanket would nest a second boxed future per check.
         let guard = entry.layer.as_ref();
-        guard
-            .check(cx)
-            .await
-            .map_err(|denial| Refused::by(entry.name, guard, denial))?;
+        run_layer(cx, Some(entry.name));
+        let checked = guard.check(cx).await;
+        run_layer(cx, None);
+        checked.map_err(|denial| Refused::by(entry.name, guard, denial))?;
     }
     if let Some(gate) = gate {
         gate(cx).map_err(|refused| Refused::Filed(denial_of(&refused)))?;

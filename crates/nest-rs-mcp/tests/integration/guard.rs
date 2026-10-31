@@ -432,3 +432,133 @@ async fn a_request_denial_keeping_its_cause_files_the_chain() {
         Some(crate::STORE_DOWN_CHAIN)
     );
 }
+
+/// A pooled guard deciding on the HTTP request: in `check_http`, its `check`
+/// admitting, it gates the `/mcp` request and every operation it carries
+/// answers; in `check`, it runs on each operation too, which has no HTTP view,
+/// and the line says which guard and what to move.
+mod request_decided {
+    use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
+    use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+    use nest_rs_http::{HttpView, StatusCode};
+    use nest_rs_mcp::{McpError, McpView, mcp, tools};
+    use nest_rs_testing::mcp::{call_tool_statelessly, post_message};
+    use nest_rs_testing::{LogCapture, TestApp};
+    use serde_json::json;
+
+    fn keyed(cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        match HttpView::of(cx)?.request().header("x-api-key") {
+            Some(_) => Ok(()),
+            None => Err(Denial::unauthorized("missing key")),
+        }
+    }
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct KeyAtTheRequest;
+
+    #[async_trait]
+    impl Guard for KeyAtTheRequest {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for KeyAtTheRequest {}
+    impl GuardFor<McpView> for KeyAtTheRequest {}
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct KeyAtTheUnit;
+
+    #[async_trait]
+    impl Guard for KeyAtTheUnit {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+    }
+
+    impl GuardFor<HttpView> for KeyAtTheUnit {}
+    impl GuardFor<McpView> for KeyAtTheUnit {}
+
+    #[mcp(path = "/mcp/keyed")]
+    #[derive(Clone, Default)]
+    struct KeyedTool;
+
+    #[tools]
+    impl KeyedTool {
+        /// Answer with a constant.
+        #[tool]
+        #[public]
+        async fn ping(&self) -> Result<String, McpError> {
+            Ok("pong".to_owned())
+        }
+    }
+
+    #[module(providers = [KeyAtTheRequest, KeyAtTheUnit, KeyedTool])]
+    struct KeyModule;
+
+    #[module(imports = [KeyModule], providers = [GlobalGuards<(KeyAtTheRequest,)>])]
+    struct RequestKeyPoolModule;
+
+    #[module(imports = [KeyModule], providers = [GlobalGuards<(KeyAtTheUnit,)>])]
+    struct UnitKeyPoolModule;
+
+    const KEY: &[(&str, &str)] = &[("x-api-key", "k")];
+
+    #[tokio::test]
+    async fn a_pooled_guard_deciding_in_check_http_gates_the_request_and_admits_its_operations() {
+        let app = TestApp::for_module::<RequestKeyPoolModule>()
+            .await
+            .expect("boots");
+
+        let body =
+            call_tool_statelessly(app.http(), "/mcp/keyed", "ping", None, KEY, json!({})).await;
+        assert!(body.contains("pong"), "the operation ran: {body}");
+
+        let refused = post_message(
+            app.http(),
+            "/mcp/keyed",
+            None,
+            None,
+            &nest_rs_testing::mcp::initialize_request(),
+        )
+        .await;
+        assert_eq!(refused.0.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_pooled_guard_reading_the_request_in_check_refuses_each_operation_naming_itself() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<UnitKeyPoolModule>()
+            .await
+            .expect("boots");
+
+        for _ in 0..2 {
+            let body =
+                call_tool_statelessly(app.http(), "/mcp/keyed", "ping", None, KEY, json!({})).await;
+            assert!(!body.contains("pong"), "the operation is refused: {body}");
+        }
+
+        let viewless = logs.expect_one(
+            "nest_rs::http",
+            "a guard read the HTTP request of a unit with no HTTP view",
+        );
+        assert_eq!(viewless.level, "error");
+        assert_eq!(viewless.field("guard").as_deref(), Some("KeyAtTheUnit"));
+        assert!(
+            viewless
+                .field("hint")
+                .is_some_and(|hint| hint.contains("decide the request in `check_http`")),
+            "{viewless:?}"
+        );
+    }
+}

@@ -1410,7 +1410,8 @@ lists what the boot, a log or the wire shows when one is missed.
   runs it at every GraphQL field, WebSocket message and MCP operation too, where
   `HttpView::of(cx)?` refuses each with the opaque `500`: the edge files every
   refusal at `error` (`guard denied …`, `status=500`), and once per site
-  `an HTTP guard entry ran on a unit with no HTTP view`. Keep its decision in
+  `a guard read the HTTP request of a unit with no HTTP view`, its `guard`
+  field naming the guard and its `hint` the edit. Keep its decision in
   `check_http` and admit the units in `check` (`Ok(())`).
 - **An `Ambient<T>` no guard attached on a resolver, a message handler or a tool** —
   the value an authentication guard attaches, read on an operation the guard

@@ -77,8 +77,9 @@ next still starts. Every unit of work has settled by then, so the pool waits
 half a second at most (`SHUTDOWN_SETTLE_TIMEOUT`) for a connection still on its
 way back: one a cut request left running a statement falls with the process,
 since sqlx hands it back with no goodbye, and one `warn` counts it. Then the
-container drops, on a thread of its own: a provider whose `Drop` blocks is abandoned at `warn` rather than holding the exit. A
-Valkey connection owes its server no goodbye, so Redis attaches none.
+container drops, on a thread of its own: a provider whose `Drop` blocks is
+abandoned at `warn` rather than holding the exit. A Valkey connection owes its
+server no goodbye, so Redis attaches none.
 
 ## Where the app stands
 

@@ -592,24 +592,20 @@ mod tests {
         let left = Duration::from_millis(300);
         let started = Instant::now();
         hooks_deadline(left);
-        let slot = Arc::new(std::sync::Mutex::new(None));
-        let filled = Arc::clone(&slot);
+        let (leaves, left_behind) = std::sync::mpsc::channel();
 
         let unwound = std::panic::catch_unwind(AssertUnwindSafe(|| {
             main::<(), _>(here(), async move {
-                let held = Held::left_behind().await;
-                *filled.lock().unwrap_or_else(|e| e.into_inner()) = Some(held);
+                leaves
+                    .send(Held::left_behind().await)
+                    .expect("the test hears what main left");
                 panic!("main gave up");
             })
         }))
         .expect_err("the panic goes on out of `main`");
 
         let took = started.elapsed();
-        let held = slot
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-            .expect("the work was left behind");
+        let held = left_behind.try_recv().expect("the work was left behind");
         assert!(
             held.let_go(),
             "the exit returned while the work ran: a panicking main is torn down bounded too",

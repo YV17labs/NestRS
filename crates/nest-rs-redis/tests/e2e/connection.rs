@@ -9,9 +9,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nest_rs_testing::LogCapture;
-
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisError, RedisThrottler, RedisTopology};
+use nest_rs_testing::LogCapture;
 use nest_rs_throttler::{Throttle, ThrottlerStore};
 
 use crate::harness::connection::{

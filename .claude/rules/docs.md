@@ -20,12 +20,14 @@ only the traps a session hits before it thinks to look.
 
 No script checks a page against the code: the author does, before it ships,
 with `STYLE.md` § F as the list of what has shipped wrong. A few tests read a
-fact off a page — the Redis ACL lines, and the tutorial, whose pages up to
-*Test it end to end* `nest-rs-cli`'s e2e suite replays: each `nestrs new` or
-`nestrs g` line of a `bash` block runs, and each `rust` block titled with a
-bare path is written as the whole file, so an excerpt there takes a title
-with words in it. `framework.yml` lists those pages and runs on a change to
-one, and a test that starts reading a page adds it there.
+fact off a page — the Redis ACL lines, and the tutorial, whose pages building
+`blog` up to *Test it end to end* `nest-rs-cli`'s e2e suite replays: each
+`nestrs new` or `nestrs g` line of a `bash` block runs, and each `rust` block
+titled with a bare path is the whole file — written when the block marks the
+lines the reader changes or the file is new, otherwise held to what the
+generator wrote — so an excerpt there takes a title with words in it.
+`framework.yml` lists those pages and runs on a change to one, and a test
+that starts reading a page adds it there.
 The code wins a disagreement, and the page is fixed in the same commit as the
 code it follows.
 

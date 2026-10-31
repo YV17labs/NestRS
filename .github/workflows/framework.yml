@@ -21,6 +21,7 @@ on:
       - 'docs/src/content/docs/tutorial/entity.mdx'
       - 'docs/src/content/docs/tutorial/http.mdx'
       - 'docs/src/content/docs/tutorial/database.mdx'
+      - 'docs/src/content/docs/tutorial/validation.mdx'
       - 'docs/src/content/docs/tutorial/testing.mdx'
   pull_request:
     paths: *tree

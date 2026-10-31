@@ -6,19 +6,33 @@ use std::path::{Path, PathBuf};
 
 use crate::generated::{cargo, cargo_check, nestrs, patch_to_working_tree, repo};
 
-/// The tutorial pages that build `blog`, in reading order. Each `nestrs new` or
-/// `nestrs g` line of a `bash` block runs from the workspace root; each `rust`
-/// block titled with a bare workspace path is the whole file the reader
-/// writes there. The validation page writes nothing (its blocks are excerpts),
-/// and the pages after `testing` read the reference `api`.
-const PAGES: [&str; 5] = ["scaffold", "entity", "http", "database", "testing"];
+/// The tutorial pages that build `blog`, in reading order: the checkpoint and
+/// the pages after `testing` run or read the reference `api`. Each `nestrs new`
+/// or `nestrs g` line of a `bash` block runs from the workspace root; each
+/// `rust` block titled with a bare workspace path is that whole file — the
+/// reader's when the block marks the lines they change (`{…}`) or the file is
+/// new, and otherwise what a generator wrote there. An excerpt takes a title
+/// with words in it.
+const PAGES: [&str; 6] = [
+    "scaffold",
+    "entity",
+    "http",
+    "database",
+    "validation",
+    "testing",
+];
 
-/// What a page asks of the reader, in its order.
+/// What a page asks of the reader, or shows them, in its order.
 enum Step {
     /// A `nestrs` command, its arguments after the binary's name.
     Run(Vec<String>),
-    /// A file, by its workspace path, and its whole contents.
-    Write { path: String, contents: String },
+    /// A file, by its workspace path, and its whole contents; `edited` when
+    /// the block marks the lines the reader changes.
+    File {
+        path: String,
+        contents: String,
+        edited: bool,
+    },
 }
 
 /// The steps of `docs/src/content/docs/tutorial/<page>.mdx`.
@@ -60,14 +74,14 @@ fn steps(page: &str) -> Vec<Step> {
                 )
             })),
             "rust" => {
-                let title = fence
+                let titled = fence
                     .split_once("title=\"")
-                    .and_then(|(_, rest)| rest.split_once('"'))
-                    .map(|(title, _)| title);
-                if let Some(path) = title.filter(|title| !title.contains(' ')) {
-                    steps.push(Step::Write {
+                    .and_then(|(_, rest)| rest.split_once('"'));
+                if let Some((path, marks)) = titled.filter(|(title, _)| !title.contains(' ')) {
+                    steps.push(Step::File {
                         path: path.to_owned(),
                         contents: format!("{}\n", body.join("\n")),
+                        edited: marks.contains('{'),
                     });
                 }
             }
@@ -104,9 +118,31 @@ fn resolve(workspace: &Path, path: &str) -> PathBuf {
     generated.into_iter().next().expect("one")
 }
 
+/// Hold `shown`, a page's block for a file the reader does not edit, to
+/// `on_disk`, the file a generator wrote: a difference names its first line.
+fn assert_generated(page: &str, path: &str, on_disk: &str, shown: &str) {
+    if on_disk == shown {
+        return;
+    }
+    let (written, paged): (Vec<&str>, Vec<&str>) =
+        (on_disk.lines().collect(), shown.lines().collect());
+    let line = written
+        .iter()
+        .zip(&paged)
+        .position(|(written, paged)| written != paged)
+        .unwrap_or(written.len().min(paged.len()));
+    panic!(
+        "{page}'s `{path}` shows what the generator wrote there, and differs at line {}:\n  \
+         written: {:?}\n  shown:   {:?}\nthe file as written:\n{on_disk}",
+        line + 1,
+        written.get(line),
+        paged.get(line),
+    );
+}
+
 /// `/tutorial/database/`'s `curl`s, in process: the token route the tutorial's
 /// root serves, and the guarded routes its token opens. The test's own, beside
-/// the page's: a page dropping the route from `blog`'s root fails it.
+/// the page's: a root that stops serving the route fails it.
 const TOKEN_ROUTE_TEST: &str = r#"use nest_rs::http::StatusCode;
 use serde_json::json;
 
@@ -154,12 +190,13 @@ async fn the_token_route_the_tutorial_curls_opens_the_guarded_routes() {
 "#;
 
 /// The tutorial, as written: `nestrs new hello` as Getting started leaves the
-/// reader, then every page's commands from the workspace root and every file
-/// it has them write, then the suite the testing page ends on — the generated
-/// round trip, its two failure modes, and the token route `blog` serves — run
-/// against the live Postgres. The reader never touches `blog`'s root by hand
-/// past what a page shows, so a generator that stops wiring the app, or a page
-/// whose `module.rs` drops an import, fails here.
+/// reader, then every page's commands from the workspace root, every file it
+/// has them edit, and every file it shows as generated held to the generator's,
+/// then the suite the testing page ends on — the generated round trip, its two
+/// failure modes, and the token route `blog` serves — run against the live
+/// Postgres. `blog`'s root is the generators' alone, so one that stops wiring
+/// the app `--app` names, a template drifting from the page that shows it, or
+/// a page whose `module.rs` drops an import, fails here.
 #[test]
 fn the_tutorial_reaches_a_protected_endpoint_as_written() {
     let dir = tempfile::tempdir().expect("a temp dir");
@@ -175,9 +212,20 @@ fn the_tutorial_reaches_a_protected_endpoint_as_written() {
                     nestrs(&workspace, &args, &[]);
                     ran.push(args.join(" "));
                 }
-                Step::Write { path, contents } => {
-                    std::fs::write(resolve(&workspace, &path), contents)
-                        .unwrap_or_else(|e| panic!("{page}'s `{path}` writes: {e}"));
+                Step::File {
+                    path,
+                    contents,
+                    edited,
+                } => {
+                    let file = resolve(&workspace, &path);
+                    if edited || !file.exists() {
+                        std::fs::write(&file, contents)
+                            .unwrap_or_else(|e| panic!("{page}'s `{path}` writes: {e}"));
+                    } else {
+                        let on_disk = std::fs::read_to_string(&file)
+                            .unwrap_or_else(|e| panic!("{page}'s `{path}` reads: {e}"));
+                        assert_generated(page, &path, &on_disk, &contents);
+                    }
                 }
             }
         }

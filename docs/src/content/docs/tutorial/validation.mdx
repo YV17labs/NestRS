@@ -45,7 +45,7 @@ it holds the check every edge runs on what it decoded, the transport-agnostic
 You already wrote the rules — on the entity, in
 [Declare the entity](/tutorial/entity/):
 
-```rust title="crates/features/src/posts/entity.rs"
+```rust title="crates/features/src/posts/entity.rs (abridged)"
 #[expose(input(create, update), validate(length(min = 1)))]
 pub title: String,
 
@@ -138,7 +138,7 @@ field's `validate(...)` at a function — no hand-written DTO, the rule
 rides through to `CreatePost` / `UpdatePost` exactly like the built-in
 ones:
 
-```rust title="crates/features/src/posts/entity.rs"
+```rust title="crates/features/src/posts/entity.rs (abridged)"
 #[expose(
     input(create, update),
     validate(length(min = 1), custom(function = "not_a_placeholder_title"))
@@ -146,7 +146,7 @@ ones:
 pub title: String,
 ```
 
-```rust title="crates/features/src/posts/entity.rs"
+```rust title="crates/features/src/posts/entity.rs (abridged)"
 fn not_a_placeholder_title(title: &str) -> Result<(), validator::ValidationError> {
     if title.eq_ignore_ascii_case("todo") {
         return Err(validator::ValidationError::new("placeholder_title"));

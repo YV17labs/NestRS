@@ -5,7 +5,9 @@
 //! overlay — it, at boot:
 //!
 //! 1. Validates [`OAuthResourceConfig`] into the served
-//!    [`ProtectedResourceMetadata`], and provides it as global infrastructure.
+//!    [`ProtectedResourceMetadata`] — advertising, when the deployment names
+//!    no scope, the [`Scope`]s an import declares — and provides it as global
+//!    infrastructure.
 //! 2. Mounts `GET /.well-known/oauth-protected-resource` (RFC 9728 §3),
 //!    declared `#[public]`.
 //! 3. Attaches [`ResourceChallenge`], so every `401` carries `resource_metadata`.
@@ -22,10 +24,13 @@
 //! settings. And the MCP endpoint's `Host` allowlist admits the host the
 //! resource names.
 
+use std::any::TypeId;
+
 use nest_rs_authn::__private::ResourceBinding;
 use nest_rs_authn::{AuthnConfig, AuthnModule};
-use nest_rs_config::{ConfigModule, ConfigSetup, endpoint_shown};
-use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, module};
+use nest_rs_config::{ConfigModule, endpoint_shown};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Module, Registering, module};
+use nest_rs_guards::Scope;
 use nest_rs_http::__private::CanonicalHost;
 use nest_rs_http::HttpModule;
 
@@ -35,8 +40,8 @@ use crate::interceptor::ResourceChallenge;
 use crate::metadata::ProtectedResourceMetadata;
 
 /// DI module for the RFC 9728 discovery surface. Imported bare, it reads
-/// `<PREFIX>_OAUTH__RESOURCE__*`; [`OAuthResourceModule::for_root`] pins a base
-/// those variables overlay.
+/// `<PREFIX>_OAUTH__RESOURCE__*`; [`OAuthResourceModule::for_root`] declares
+/// the scopes the app's rules gate on, or pins a base those variables overlay.
 #[module(
     imports = [
         nest_rs_config::__private::feature::<OAuthResourceConfig>(),
@@ -49,16 +54,100 @@ use crate::metadata::ProtectedResourceMetadata;
 pub struct OAuthResourceModule;
 
 impl OAuthResourceModule {
-    /// Pin `config` as the base `<PREFIX>_OAUTH__RESOURCE__*` overlays, per
-    /// field; the bare import reads those variables over
-    /// [`OAuthResourceConfig`]'s defaults.
-    pub fn for_root(config: OAuthResourceConfig) -> OAuthResourceSetup {
-        ConfigModule::setup(config)
+    /// What the app declares about this resource server, in one value: the
+    /// [`Scope`]s its rules gate on, which the document and the challenge
+    /// advertise as `scopes_supported` (RFC 9728 §2) when the deployment names
+    /// none (`<PREFIX>_OAUTH__RESOURCE__SCOPES_SUPPORTED`); an
+    /// [`OAuthResourceConfig`] pinned as the base
+    /// `<PREFIX>_OAUTH__RESOURCE__*` overlays, per field; or both, the scopes
+    /// before the config. The bare import declares no scope and reads those
+    /// variables over [`OAuthResourceConfig`]'s defaults.
+    ///
+    /// ```
+    /// use nest_rs_core::module;
+    /// use nest_rs_guards::Scope;
+    /// use nest_rs_oauth_resource::OAuthResourceModule;
+    ///
+    /// pub const POSTS_READ: Scope = Scope::new("posts:read");
+    /// pub const POSTS_WRITE: Scope = Scope::new("posts:write");
+    ///
+    /// #[module(imports = [OAuthResourceModule::for_root([POSTS_READ, POSTS_WRITE])])]
+    /// struct AssistantModule;
+    /// ```
+    pub fn for_root(declared: impl Into<OAuthResourceSetup>) -> OAuthResourceSetup {
+        declared.into()
     }
 }
 
-/// The configured import [`OAuthResourceModule::for_root`] returns.
-pub type OAuthResourceSetup = ConfigSetup<OAuthResourceModule, OAuthResourceConfig>;
+/// The configured import [`OAuthResourceModule::for_root`] returns: the
+/// scopes it declares, the config it pins, or both.
+pub struct OAuthResourceSetup {
+    scopes: Option<Vec<Scope>>,
+    config: Option<OAuthResourceConfig>,
+}
+
+impl From<OAuthResourceConfig> for OAuthResourceSetup {
+    fn from(config: OAuthResourceConfig) -> Self {
+        Self {
+            scopes: None,
+            config: Some(config),
+        }
+    }
+}
+
+impl<const N: usize> From<[Scope; N]> for OAuthResourceSetup {
+    fn from(scopes: [Scope; N]) -> Self {
+        Self {
+            scopes: Some(scopes.to_vec()),
+            config: None,
+        }
+    }
+}
+
+impl<const N: usize> From<([Scope; N], OAuthResourceConfig)> for OAuthResourceSetup {
+    fn from((scopes, config): ([Scope; N], OAuthResourceConfig)) -> Self {
+        Self {
+            scopes: Some(scopes.to_vec()),
+            config: Some(config),
+        }
+    }
+}
+
+/// The remedy a second declared scope set is refused with.
+const ONE_SCOPE_SET: &str = "A resource server advertises one scope set — declare its scopes on one \
+                             `OAuthResourceModule::for_root`, and let every other import of the \
+                             module declare none.";
+
+impl DynamicModule for OAuthResourceSetup {
+    fn module() -> TypeId {
+        TypeId::of::<OAuthResourceModule>()
+    }
+
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        let builder = builder.import::<OAuthResourceModule>();
+        let builder = match self.config.clone() {
+            Some(config) => ConfigModule::provide_root(config, builder),
+            None => builder,
+        };
+        // A declaration, so a second import declaring a set fails the boot
+        // naming both, before any factory runs.
+        match self.scopes.clone() {
+            Some(scopes) => builder.provide_declared_factory::<OAuthResourceScopes, _, _>(
+                ONE_SCOPE_SET,
+                move |_| async move { Ok(OAuthResourceScopes(scopes)) },
+            ),
+            None => builder,
+        }
+    }
+
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<OAuthResourceModule>()
+    }
+}
+
+/// The scopes an import of the module declared; none for the bare import.
+#[derive(Default)]
+struct OAuthResourceScopes(Vec<Scope>);
 
 /// Queues the served document and what it binds: `#[module]` takes only
 /// imports and providers, so this hand-written module carries the factories
@@ -68,10 +157,14 @@ struct OAuthResourceWiring;
 impl Module for OAuthResourceWiring {
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         builder
-            .provide_factory_after::<ProtectedResourceMetadata, (OAuthResourceConfig,), _, _>(
+            .provide_factory::<OAuthResourceScopes, _, _>(|_| async { Ok(OAuthResourceScopes::default()) })
+            .provide_factory_after::<ProtectedResourceMetadata, (OAuthResourceConfig, OAuthResourceScopes), _, _>(
                 |container| async move {
                     let config = ConfigModule::resolved::<OAuthResourceConfig>(&container)?;
-                    frozen((*config).clone())
+                    let declared = container.get::<OAuthResourceScopes>().ok_or_else(|| {
+                        anyhow::anyhow!("the declared scope set did not resolve")
+                    })?;
+                    frozen(advertising(&declared.0, (*config).clone()))
                 },
             )
             .provide_factory_after::<ResourceBinding, (AuthnConfig, ProtectedResourceMetadata), _, _>(
@@ -98,6 +191,14 @@ impl Module for OAuthResourceWiring {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
     }
+}
+
+/// `config`, advertising the `declared` scopes when it names none.
+fn advertising(declared: &[Scope], mut config: OAuthResourceConfig) -> OAuthResourceConfig {
+    if config.scopes_supported.is_empty() {
+        config.scopes_supported = declared.iter().copied().map(String::from).collect();
+    }
+    config
 }
 
 /// The document `config` describes, said once at `debug` with the resource as

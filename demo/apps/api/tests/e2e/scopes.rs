@@ -1,6 +1,7 @@
 use features::Subject;
 use features::authz::constants;
 use features::testing::{ORG_ID, client, token_with_scopes};
+use nest_rs::guards::Scope;
 use nest_rs::http::{StatusCode, header};
 use nest_rs::testing::{LogCapture, TestApp};
 use serde_json::json;
@@ -8,7 +9,7 @@ use uuid::Uuid;
 
 use crate::*;
 
-fn narrow_bearer(org_id: &str, sub: Subject, scopes: &[&str]) -> String {
+fn narrow_bearer(org_id: &str, sub: Subject, scopes: &[Scope]) -> String {
     format!(
         "Bearer {}",
         token_with_scopes(
@@ -16,7 +17,7 @@ fn narrow_bearer(org_id: &str, sub: Subject, scopes: &[&str]) -> String {
             Uuid::parse_str(org_id).expect("valid org uuid"),
             vec![features::Role::Admin],
             sub,
-            scopes.iter().map(|s| (*s).to_owned()).collect(),
+            scopes.iter().copied().map(String::from).collect(),
         )
     )
 }
@@ -186,7 +187,7 @@ async fn a_refused_read_names_the_one_scope_it_needs_on_every_edge() {
     let refused = crate::graphql::graphql(&app, &unrelated, "{ posts { id } }").await;
     assert_eq!(
         refused["errors"][0]["extensions"]["requiredScopes"],
-        json!([constants::POSTS_READ]),
+        json!([constants::POSTS_READ.as_str()]),
         "{refused}"
     );
 }

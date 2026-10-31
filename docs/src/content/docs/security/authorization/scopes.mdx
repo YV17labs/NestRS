@@ -1,6 +1,6 @@
 ---
 title: OAuth scopes
-description: Gate a rule on the scope a token carries with .requires_scope(...) — the refusal is an RFC 6750 insufficient_scope challenge naming what to request.
+description: Declare your scopes once, gate a rule on one with .requires_scope(...) — the refusal is an RFC 6750 insufficient_scope challenge naming what to request.
 sidebar:
   order: 8
 ---
@@ -21,6 +21,22 @@ Roles and scopes answer different questions, and both have to hold:
 
 ## Declare the scope on the rule it conditions
 
+A scope is a `nest_rs::guards::Scope`, declared once as a constant — the
+token RFC 6749 §3.3 defines, checked against its grammar when it compiles:
+
+```rust title="crates/features/src/authz/constants.rs (from the demo)"
+use nest_rs::guards::Scope;
+
+pub const POSTS_READ: Scope = Scope::new("posts:read");
+pub const POSTS_WRITE: Scope = Scope::new("posts:write");
+pub const AUDIO_TRANSCODE: Scope = Scope::new("audio:transcode");
+
+pub const ALL: [Scope; 3] = [POSTS_READ, POSTS_WRITE, AUDIO_TRANSCODE];
+```
+
+A rule requires one by name, so a scope no declaration holds does not
+compile — `requires_scope` takes a `Scope`, never a string:
+
 ```rust title="crates/features/src/authz/ability.rs" {5,9}
 impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
@@ -28,11 +44,11 @@ impl AbilityFactory for AuthzAbility {
     fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
         ab.can(Action::Read, post::Entity)
             .when(|p| p.eq(post::Column::OrgId, actor.org_id))
-            .requires_scope("posts:read");
+            .requires_scope(POSTS_READ);
 
         ab.can(Action::Manage, post::Entity)
             .when(|p| p.eq(post::Column::OrgId, actor.org_id))
-            .requires_scope("posts:write");
+            .requires_scope(POSTS_WRITE);
     }
 }
 ```
@@ -195,17 +211,28 @@ an `#[authorize]` on HTTP, GraphQL, WebSocket and MCP alike.
 ## Advertise every scope you gate on
 
 The scopes your rules require and the scopes your resource server
-advertises must be the same set:
+advertises must be the same set, so the set you declared is what it
+advertises — the metadata document's `scopes_supported` and the
+challenge's — handed to the module once:
 
-```bash title=".env"
-NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED=posts:read,posts:write,audio:transcode
+```rust title="apps/assistant/src/module.rs (from the demo, abridged)"
+#[module(
+    imports = [
+        // …
+        OAuthResourceModule::for_root(constants::ALL),
+        // …
+    ],
+)]
+pub struct AssistantModule;
 ```
 
-A scope a rule requires but the metadata document omits is a dead end —
-the client is told to request something discovery never names. The
-framework reports it at `warn` (`reason="scope_not_advertised"`) the
-first time such a refusal is emitted; keeping the names in one
-`constants.rs` and reading them from both sides is what stops it
+A deployment that sets `<PREFIX>_OAUTH__RESOURCE__SCOPES_SUPPORTED`
+advertises that list instead, and an app declaring two sets fails the boot
+naming both imports. A scope a rule requires but the metadata document
+omits is a dead end — the client is told to request something discovery
+never names. The framework reports it at `warn`
+(`reason="scope_not_advertised"`) the first time such a refusal is emitted;
+declaring the set once and handing it to both sides is what stops it
 happening.
 
 ## A scope on a capability no table holds

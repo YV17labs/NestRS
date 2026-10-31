@@ -140,7 +140,7 @@ async fn a_service_token_narrowed_to_reading_posts_is_refused_the_transcode_tool
             ORG_ID.parse().expect("a valid org uuid"),
             vec![Role::Admin],
             client(),
-            vec![constants::POSTS_READ.to_owned()],
+            vec![constants::POSTS_READ.into()],
         )
     );
 
@@ -155,7 +155,7 @@ async fn a_service_token_narrowed_to_reading_posts_is_refused_the_transcode_tool
     .await;
 
     assert!(
-        body.contains("insufficient_scope") && body.contains(constants::AUDIO_TRANSCODE),
+        body.contains("insufficient_scope") && body.contains(constants::AUDIO_TRANSCODE.as_str()),
         "the advertised scope gates the tool, and the refusal names it: {body}",
     );
     assert!(

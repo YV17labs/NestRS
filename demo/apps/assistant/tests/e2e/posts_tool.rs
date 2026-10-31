@@ -166,7 +166,7 @@ async fn a_token_without_the_read_scope_is_refused_every_posts_operation_by_name
             ORG_ID.parse().expect("a valid org uuid"),
             vec![Role::Admin],
             client(),
-            vec![constants::AUDIO_TRANSCODE.to_owned()],
+            vec![constants::AUDIO_TRANSCODE.into()],
         )
     );
 
@@ -196,7 +196,7 @@ async fn a_token_without_the_read_scope_is_refused_every_posts_operation_by_name
 
     for body in bodies {
         assert!(
-            body.contains("insufficient_scope") && body.contains(constants::POSTS_READ),
+            body.contains("insufficient_scope") && body.contains(constants::POSTS_READ.as_str()),
             "the posture gates every operation of the host, and the refusal names the \
              scope it requires rather than answering an empty list: {body}",
         );

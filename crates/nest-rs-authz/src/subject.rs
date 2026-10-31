@@ -13,13 +13,16 @@ use sea_orm::{EntityTrait, IdenStatic};
 /// use std::any::TypeId;
 ///
 /// use nest_rs_authz::{AbilityBuilder, Action, subject};
+/// use nest_rs_guards::Scope;
 ///
 /// /// May export the org's reports.
 /// #[subject]
 /// pub struct Exporting;
 ///
+/// const REPORTS_EXPORT: Scope = Scope::new("reports:export");
+///
 /// let mut ab = AbilityBuilder::new();
-/// ab.can(Action::Manage, Exporting).requires_scope("reports:export");
+/// ab.can(Action::Manage, Exporting).requires_scope(REPORTS_EXPORT);
 /// let ability = ab.build()?;
 ///
 /// assert!(ability.can_class(Action::Manage, TypeId::of::<Exporting>()));

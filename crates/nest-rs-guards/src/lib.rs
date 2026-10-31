@@ -108,7 +108,7 @@ mod validate;
 pub use denial::Denial;
 pub use guard::{Guard, GuardFor, GuardPhase, PrincipalClaim};
 pub use registry::{GlobalGuardList, GlobalGuards};
-pub use scope::{GrantedScopes, RequiredScopes};
+pub use scope::{GrantedScopes, RequiredScopes, Scope};
 
 #[doc(hidden)]
 pub mod __private {

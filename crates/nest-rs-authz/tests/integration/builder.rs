@@ -6,6 +6,7 @@
 use std::any::TypeId;
 
 use nest_rs_authz::{AbilityBuilder, Action, FieldSet};
+use nest_rs_guards::Scope;
 use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
 
 mod widget {
@@ -232,7 +233,7 @@ fn a_capability_a_token_was_not_granted_names_the_scope_it_lacks() {
     let narrow: std::sync::Arc<[String]> = std::sync::Arc::from(["reports:read".to_owned()]);
     let mut b = AbilityBuilder::new().with_granted_scopes(Some(narrow));
     b.can(Action::Manage, Exporting)
-        .requires_scope("reports:export");
+        .requires_scope(Scope::new("reports:export"));
     let ability = b.build().expect("valid test ability");
 
     let exporting = TypeId::of::<Exporting>();

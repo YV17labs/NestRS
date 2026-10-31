@@ -189,8 +189,10 @@ oauth-server = ["dep:nest-rs-oauth-server", "authn"]
 oauth-resource = ["dep:nest-rs-oauth-resource", "authn", "http"]
 # The `#[authorize]` half: the developer writes the attribute, so they enable
 # the feature named after it. Transport bindings ride the transport features.
-# Beside `testing`, the harness runs a unit of work under an ability (`unit`).
-authz = ["dep:nest-rs-authz", "nest-rs-testing?/authz"]
+# A rule's scope is a `nest_rs::guards::Scope` the developer declares, so
+# `guards`. Beside `testing`, the harness runs a unit of work under an ability
+# (`unit`).
+authz = ["dep:nest-rs-authz", "guards", "nest-rs-testing?/authz"]
 social = ["dep:nest-rs-social", "authn", "oauth-client"]
 opentelemetry = ["dep:nest-rs-opentelemetry"]
 openapi = ["dep:nest-rs-openapi", "http"]

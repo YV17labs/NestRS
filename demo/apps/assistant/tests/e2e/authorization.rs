@@ -32,7 +32,7 @@ async fn an_unauthenticated_tool_call_points_at_the_metadata_document() {
         )),
         "the challenge must point at this deployment's document: {challenge}",
     );
-    let advertised = constants::ALL.join(" ");
+    let advertised = constants::all().join(" ");
     assert!(
         challenge.contains(&advertised),
         "the challenge must advertise every scope the policy gates on \

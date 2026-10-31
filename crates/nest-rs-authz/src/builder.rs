@@ -15,6 +15,8 @@ use sea_orm::{EntityTrait, IdenStatic};
 use crate::ability::{Ability, FieldSet, Rule, When};
 use crate::action::Action;
 use crate::error::MalformedRuleError;
+use nest_rs_guards::Scope;
+
 use crate::predicate::{Predicate, PredicateBuilder};
 use crate::{RowSubject, Subject};
 
@@ -100,8 +102,9 @@ impl AbilityBuilder {
     /// #     pub enum Relation {}
     /// #     impl ActiveModelBehavior for ActiveModel {}
     /// # }
+    /// # const POSTS_ADMIN: nest_rs_guards::Scope = nest_rs_guards::Scope::new("posts:admin");
     /// # let mut ab = AbilityBuilder::new();
-    /// ab.cannot(Action::Delete, post::Entity).requires_scope("posts:admin");
+    /// ab.cannot(Action::Delete, post::Entity).requires_scope(POSTS_ADMIN);
     /// ```
     pub fn cannot<E: RowSubject>(
         &mut self,
@@ -213,12 +216,14 @@ impl<'a, S: Subject, K> RuleSpec<'a, S, K> {
 
 impl<S: Subject> RuleSpec<'_, S> {
     /// Gate this grant behind an OAuth scope: it materializes only when the
-    /// caller's credential carries `scope`.
+    /// caller's credential carries `scope`, one the app declares once as a
+    /// [`Scope`] constant, which its protected resource advertises too.
     ///
     /// ```
     /// # use std::any::TypeId;
     /// # use std::sync::Arc;
     /// # use nest_rs_authz::{AbilityBuilder, Action};
+    /// use nest_rs_guards::Scope;
     /// # mod post {
     /// #     use sea_orm::entity::prelude::*;
     /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -238,9 +243,11 @@ impl<S: Subject> RuleSpec<'_, S> {
     /// # let actor = Actor { org_id: 7 };
     /// # let granted: Arc<[String]> = Arc::from(["profile".to_owned()]);
     /// # let mut ab = AbilityBuilder::new().with_granted_scopes(Some(granted));
+    /// const POSTS_READ: Scope = Scope::new("posts:read");
+    ///
     /// ab.can(Action::Read, post::Entity)
     ///     .when(|p| p.eq(post::Column::OrgId, actor.org_id))
-    ///     .requires_scope("posts:read");
+    ///     .requires_scope(POSTS_READ);
     /// # let ability = ab.build()?;
     ///
     /// let posts = TypeId::of::<post::Entity>();
@@ -257,7 +264,18 @@ impl<S: Subject> RuleSpec<'_, S> {
     /// A credential that is not scope-aware — no
     /// [`PrincipalIdentity::scopes`](https://docs.rs/nest-rs-authn) — is not
     /// gated by this at all.
-    pub fn requires_scope(mut self, scope: impl Into<String>) -> Self {
+    ///
+    /// A string is no scope, so a rule cannot require one no declaration
+    /// holds:
+    ///
+    /// ```compile_fail,E0308
+    /// # use nest_rs_authz::{AbilityBuilder, Action, subject};
+    /// # #[subject]
+    /// # struct Exporting;
+    /// # let mut ab = AbilityBuilder::new();
+    /// ab.can(Action::Manage, Exporting).requires_scope("reports:export");
+    /// ```
+    pub fn requires_scope(mut self, scope: Scope) -> Self {
         self.required_scopes.push(scope.into());
         self
     }
@@ -378,7 +396,7 @@ mod tests {
     fn ability_with(granted: Option<Arc<[String]>>) -> Ability {
         let mut ab = AbilityBuilder::new().with_granted_scopes(granted);
         ab.can(Action::Read, widget::Entity)
-            .requires_scope("widgets:read");
+            .requires_scope(Scope::new("widgets:read"));
         ab.build().expect("a valid rule set")
     }
 
@@ -438,8 +456,8 @@ mod tests {
     fn every_named_scope_is_required_and_only_the_missing_ones_are_reported() {
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes(["widgets:read"])));
         ab.can(Action::Manage, widget::Entity)
-            .requires_scope("widgets:read")
-            .requires_scope("widgets:write");
+            .requires_scope(Scope::new("widgets:read"))
+            .requires_scope(Scope::new("widgets:write"));
         let ability = ab.build().expect("a valid rule set");
 
         assert!(
@@ -458,7 +476,7 @@ mod tests {
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));
         ab.can(Action::Read, widget::Entity);
         ab.can(Action::Read, widget::Entity)
-            .requires_scope("widgets:admin");
+            .requires_scope(Scope::new("widgets:admin"));
         let ability = ab.build().expect("a valid rule set");
 
         assert!(ability.can_class(Action::Read, subject()));
@@ -468,7 +486,7 @@ mod tests {
     fn a_scope_withheld_on_the_manage_wildcard_answers_a_read_refusal() {
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));
         ab.can(Action::Manage, widget::Entity)
-            .requires_scope("widgets:write");
+            .requires_scope(Scope::new("widgets:write"));
         let ability = ab.build().expect("a valid rule set");
 
         assert!(!ability.can_class(Action::Read, subject()));
@@ -485,11 +503,11 @@ mod tests {
     fn of_two_sufficient_grants_the_refusal_names_the_narrowest_alone() {
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));
         ab.can(Action::Manage, widget::Entity)
-            .requires_scope("widgets:write");
+            .requires_scope(Scope::new("widgets:write"));
         ab.can(Action::Read, widget::Entity)
-            .requires_scope("widgets:read");
+            .requires_scope(Scope::new("widgets:read"));
         ab.can(Action::Read, widget::Entity)
-            .requires_scope("widgets:audit");
+            .requires_scope(Scope::new("widgets:audit"));
         let ability = ab.build().expect("a valid rule set");
 
         assert!(!ability.can_class(Action::Read, subject()));

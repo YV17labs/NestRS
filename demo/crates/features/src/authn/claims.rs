@@ -173,7 +173,8 @@ mod tests {
         assert_eq!(json["sub"], sub.to_string());
         assert!(json.get("client_id").is_none(), "{json}");
         assert_eq!(
-            json["scope"], POSTS_READ,
+            json["scope"],
+            POSTS_READ.as_str(),
             "the claim goes out in the space-delimited form RFC 6749 §3.3 defines",
         );
         let back: Claims = serde_json::from_value(json).expect("deserialize");

@@ -284,6 +284,7 @@ mod tests {
     };
     use nest_rs_core::operation_log::{Kind, Unit};
     use nest_rs_core::{Handler, UnitView};
+    use nest_rs_guards::Scope;
     use nest_rs_testing::LogCapture;
 
     use super::*;
@@ -413,7 +414,9 @@ mod tests {
     fn a_denial_no_when_narrows_is_forbidden_plainly_whatever_the_token_lacks() {
         let logs = LogCapture::install();
         let mut rules = AbilityBuilder::new().with_granted_scopes(Some(Vec::new().into()));
-        rules.can(Action::Read, Post).requires_scope("posts:read");
+        rules
+            .can(Action::Read, Post)
+            .requires_scope(Scope::new("posts:read"));
         rules
             .can(Action::Manage, Post)
             .when(|p| p.eq(post::Column::Id, 1));

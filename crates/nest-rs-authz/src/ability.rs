@@ -695,6 +695,8 @@ fn predicate_of<E: EntityTrait>(predicate: &(dyn Any + Send + Sync)) -> Option<&
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_guards::Scope;
+
     use super::*;
     use crate::predicate::PredicateBuilder;
 
@@ -1214,7 +1216,7 @@ mod tests {
         let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
         b.can(Action::Create, post::Entity)
             .when(|p| p.eq(post::Column::OrgId, 7))
-            .requires_scope("posts:write");
+            .requires_scope(Scope::new("posts:write"));
         let ability = b.build().unwrap();
 
         assert_eq!(pins(&ability), []);
@@ -1408,7 +1410,7 @@ mod tests {
         let mut scoped = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
         scoped
             .can(Action::Read, post::Entity)
-            .requires_scope("posts:read");
+            .requires_scope(Scope::new("posts:read"));
         let scoped = scoped.build().unwrap();
         let mut reading = crate::AbilityBuilder::new();
         reading.can(Action::Read, post::Entity);
@@ -1653,7 +1655,7 @@ mod tests {
         let granted: std::sync::Arc<[String]> = Vec::new().into();
         let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
         b.can(Action::Create, post::Entity)
-            .requires_scope("posts:write");
+            .requires_scope(Scope::new("posts:write"));
         b.cannot(Action::Create, post::Entity);
         let ability = b.build().unwrap();
 

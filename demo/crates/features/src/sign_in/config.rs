@@ -59,7 +59,7 @@ pub(crate) fn registered_within_policy(
         if client
             .scopes
             .iter()
-            .any(|scope| !constants::ALL.contains(&scope.as_str()))
+            .any(|scope| !constants::ALL.iter().any(|known| scope == known))
         {
             refuse("scopes", "unknown_scope");
         }
@@ -77,6 +77,7 @@ pub(crate) fn registered_within_policy(
 #[cfg(test)]
 mod tests {
     use nest_rs::config::{Config, ConfigError, ConfigService, Namespaced, var_name};
+    use nest_rs::guards::Scope;
     use nest_rs::oauth::server::RegisteredClient;
 
     use super::*;
@@ -108,7 +109,7 @@ mod tests {
     #[test]
     fn clients_registered_for_the_delegated_scopes_pass() {
         registered_within_policy(&OAuthServerConfig {
-            clients: vec![client("ci-runner", &constants::ALL)],
+            clients: vec![client("ci-runner", &constants::ALL.map(Scope::as_str))],
         })
         .expect("within the policy");
     }
@@ -116,8 +117,8 @@ mod tests {
     #[test]
     fn a_registered_scope_outside_the_delegated_set_is_refused_naming_the_client() {
         let (keys, rendered) = refused(vec![
-            client("ci-runner", &[constants::POSTS_READ]),
-            client("legacy-runner", &[constants::POSTS_READ, "admin"]),
+            client("ci-runner", &[constants::POSTS_READ.as_str()]),
+            client("legacy-runner", &[constants::POSTS_READ.as_str(), "admin"]),
         ]);
 
         assert_eq!(keys, ["clients[legacy-runner].scopes"]);
@@ -136,8 +137,8 @@ mod tests {
         let user_shaped = Uuid::now_v7().to_string();
 
         let (keys, rendered) = refused(vec![
-            client("ci-runner", &[constants::POSTS_READ]),
-            client(&user_shaped, &[constants::POSTS_READ]),
+            client("ci-runner", &[constants::POSTS_READ.as_str()]),
+            client(&user_shaped, &[constants::POSTS_READ.as_str()]),
         ]);
 
         assert_eq!(keys, [format!("clients[{user_shaped}].client_id")]);

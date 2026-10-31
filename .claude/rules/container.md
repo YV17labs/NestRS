@@ -156,9 +156,11 @@ the bare import:
   where it does, names it as a type argument (`RedisModule::<Cache>`).
 - **`impl Into<MSetup>`** — only when the module carries a declaration with
   **no environment twin** (MCP's identity and access, static files' embedded
-  folder): that declaration `D` alone, the config alone, or the declarations
-  before the config as a tuple, `(D, C)`, as a marker precedes its config. The
-  setup stays opaque: the conversions are its only constructors.
+  folder, the `Scope`s a resource server's rules gate on — the variable
+  advertising scopes replaces what is advertised, never the vocabulary): that
+  declaration `D` alone, the config alone, or the declarations before the
+  config as a tuple, `(D, C)`, as a marker precedes its config. The setup
+  stays opaque: the conversions are its only constructors.
 
 A setup that only pins its config is `ConfigSetup<M, C>` (`ConfigSetup<M, C,
 I>` per instance) behind a named alias, built by `ConfigModule::setup`; a

@@ -320,11 +320,7 @@ mod tests {
     #[test]
     fn a_read_only_delegation_cannot_write_even_as_admin() {
         let org = Uuid::now_v7();
-        let ab = ability_scoped(
-            vec![Role::Admin],
-            org,
-            vec![constants::POSTS_READ.to_owned()],
-        );
+        let ab = ability_scoped(vec![Role::Admin], org, vec![constants::POSTS_READ.into()]);
 
         assert!(
             ab.can_class(Action::Read, TypeId::of::<post::Entity>()),
@@ -346,7 +342,7 @@ mod tests {
         let ab = ability_scoped(
             vec![Role::Admin],
             org,
-            vec![constants::AUDIO_TRANSCODE.to_owned()],
+            vec![constants::AUDIO_TRANSCODE.into()],
         );
 
         assert!(!ab.can_class(Action::Read, TypeId::of::<post::Entity>()));
@@ -380,7 +376,7 @@ mod tests {
         let ab = ability_scoped(
             vec![Role::Admin],
             Uuid::now_v7(),
-            vec![constants::POSTS_READ.to_owned()],
+            vec![constants::POSTS_READ.into()],
         );
         assert!(!ab.can_class(Action::Manage, TypeId::of::<Transcoding>()));
         assert_eq!(

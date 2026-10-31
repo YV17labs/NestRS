@@ -287,7 +287,6 @@ nothing, or anything.
 ```bash
 NESTRS_OAUTH__RESOURCE__RESOURCE=https://api.example.com
 NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
-NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED=users:read,users:write
 ```
 
 The resource and each issuer are absolute `https` URIs naming a host, with
@@ -357,9 +356,12 @@ WWW-Authenticate: Bearer error="insufficient_scope",
 Both are written by the same unit-stage interceptor around every HTTP
 request, so a route, a WS upgrade and `/mcp` get them identically and neither can drift from the metadata
 document. What raises the `403` is a scope-gated authorization rule —
-see [OAuth scopes](/security/authorization/scopes/). Make sure every
-scope your rules gate on appears in `SCOPES_SUPPORTED`, or you are
-telling clients to request something discovery never names.
+see [OAuth scopes](/security/authorization/scopes/). Hand the module the
+scopes your rules gate on, declared once —
+`OAuthResourceModule::for_root(constants::ALL)` — and the document and the
+challenge advertise them; a deployment setting `SCOPES_SUPPORTED` advertises
+its own list instead, which must hold every one, or you are telling clients
+to request something discovery never names.
 
 **The document is what a token is checked against.** Under this module the
 verifier binds itself to the resource it advertises, as RFC 9068 §4 asks of a

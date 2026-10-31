@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, async_trait, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_guards::{Denial, Guard, GuardFor, Scope};
 use nest_rs_http::EndpointGuards;
 use nest_rs_mcp::{McpError, McpView, mcp, tools};
 
@@ -44,7 +44,7 @@ impl Guard for AbilityInjector {
                 builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
                 builder
                     .can(Action::Read, widget::Entity)
-                    .requires_scope("widgets:read");
+                    .requires_scope(Scope::new("widgets:read"));
             }
             // The anonymous branch holds a real grant; the gate must still refuse it.
             "visitor" => {

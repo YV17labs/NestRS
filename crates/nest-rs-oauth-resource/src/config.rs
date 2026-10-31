@@ -34,7 +34,9 @@ pub struct OAuthResourceConfig {
     /// [`resource`](Self::resource)'s rules.
     pub authorization_servers: Vec<String>,
     /// The minimal scope set, advertised in the metadata document and the
-    /// `WWW-Authenticate` challenge; empty omits both.
+    /// `WWW-Authenticate` challenge; empty, the [`Scope`](nest_rs_guards::Scope)s
+    /// an import declares (`OAuthResourceModule::for_root([..])`), and with
+    /// none declared both omit it.
     pub scopes_supported: Vec<String>,
     /// How a token may be presented (RFC 9728 §2); defaults to `header`, the only
     /// form this framework accepts.

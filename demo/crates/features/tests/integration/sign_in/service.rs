@@ -66,8 +66,8 @@ fn a_first_party_sign_in_is_delegated_every_scope_of_the_policy() {
         .issue(None, Uuid::now_v7(), ORG, vec![Role::Admin])
         .expect("issued");
 
-    assert!(token.scope.iter().any(|scope| scope == POSTS_READ));
-    assert!(token.scope.iter().any(|scope| scope == POSTS_WRITE));
+    assert!(token.scope.iter().any(|scope| *scope == POSTS_READ));
+    assert!(token.scope.iter().any(|scope| *scope == POSTS_WRITE));
 }
 
 #[module(
@@ -121,11 +121,11 @@ async fn a_client_registered_outside_the_policy_refuses_the_boot_naming_it() {
 
     for (client, said) in [
         (
-            registered("ci-runner", &[POSTS_READ, "admin"]),
+            registered("ci-runner", &[POSTS_READ.as_str(), "admin"]),
             format!("clients[ci-runner].scopes ({clients}): unknown_scope"),
         ),
         (
-            registered(&user_shaped, &[POSTS_READ]),
+            registered(&user_shaped, &[POSTS_READ.as_str()]),
             format!("clients[{user_shaped}].client_id ({clients}): reads_as_a_user"),
         ),
     ] {
@@ -143,7 +143,7 @@ async fn a_client_registered_outside_the_policy_refuses_the_boot_naming_it() {
 
 #[tokio::test]
 async fn a_social_redirect_that_cannot_be_signed_is_this_servers_own_failure() {
-    let app = sign_in_app(vec![registered("ci-runner", &[POSTS_READ])])
+    let app = sign_in_app(vec![registered("ci-runner", &[POSTS_READ.as_str()])])
         .override_value(
             JwtService::new(JwtOptions::eddsa_verify(
                 "-----BEGIN PUBLIC KEY-----\n\

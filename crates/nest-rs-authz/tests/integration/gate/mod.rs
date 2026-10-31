@@ -16,7 +16,7 @@ use nest_rs_authz::{Ability, AbilityBuilder, Action, Create, Read};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, Scope};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_mcp::{McpError, mcp, tools};
@@ -36,10 +36,10 @@ fn too_narrow() -> Ability {
     let mut builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
     builder
         .can(Action::Read, widget::Entity)
-        .requires_scope("widgets:read");
+        .requires_scope(Scope::new("widgets:read"));
     builder
         .can(Action::Manage, widget::Entity)
-        .requires_scope("widgets:admin");
+        .requires_scope(Scope::new("widgets:admin"));
     builder.build().expect("valid test ability")
 }
 
@@ -56,7 +56,7 @@ fn denied_outright() -> Ability {
         .when(|p| p.eq(widget::Column::Id, 1));
     builder
         .can(Action::Create, widget::Entity)
-        .requires_scope("widgets:write");
+        .requires_scope(Scope::new("widgets:write"));
     builder.cannot(Action::Create, widget::Entity);
     builder.build().expect("valid test ability")
 }

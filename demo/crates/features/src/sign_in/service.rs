@@ -299,7 +299,7 @@ mod tests {
     #[tokio::test]
     async fn the_token_and_its_response_carry_the_scopes_granted() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
-        let issued = user_claims(vec![Role::User], vec![POSTS_READ.to_owned()]);
+        let issued = user_claims(vec![Role::User], vec![POSTS_READ.into()]);
         let token = issue_with_jwt(&jwt_svc, RESOURCE, issued).expect("issue");
 
         let claims: Claims = verifier(RESOURCE)
@@ -342,10 +342,12 @@ mod tests {
     #[tokio::test]
     async fn a_machine_grant_issues_the_requested_subset_as_its_client() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
-        let client = auth_client(vec![Role::Admin], &[POSTS_READ, POSTS_WRITE]);
-        let token =
-            grant_client_credentials_with_jwt(&jwt_svc, &[POSTS_READ.to_owned()], &[], &client)
-                .expect("issue");
+        let client = auth_client(
+            vec![Role::Admin],
+            &[POSTS_READ.as_str(), POSTS_WRITE.as_str()],
+        );
+        let token = grant_client_credentials_with_jwt(&jwt_svc, &[POSTS_READ.into()], &[], &client)
+            .expect("issue");
 
         let claims: Claims = verifier(RESOURCE)
             .verify(token.access_token.expose_secret())

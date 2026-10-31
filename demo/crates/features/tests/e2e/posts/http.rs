@@ -147,7 +147,7 @@ async fn a_client_authors_no_post_whatever_its_scope() {
         .string()
         .to_owned();
 
-    for scopes in [constants::all(), vec![constants::POSTS_READ.to_owned()]] {
+    for scopes in [constants::all(), vec![constants::POSTS_READ.into()]] {
         let machine = format!(
             "Bearer {}",
             token_with_scopes(API, org_id, vec![Role::Admin], client(), scopes)

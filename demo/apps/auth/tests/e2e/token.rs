@@ -65,7 +65,7 @@ async fn a_client_asking_for_no_scope_is_granted_exactly_its_registration() {
 
     let json = resp.json().await;
     let obj = json.value().object();
-    assert_eq!(obj.get("scope").string(), POSTS_READ);
+    assert_eq!(obj.get("scope").string(), POSTS_READ.as_str());
 
     let claims: Claims = resource_server_verifier(API)
         .verify(obj.get("access_token").string())
@@ -226,8 +226,8 @@ async fn token_endpoint_refuses_a_request_without_a_grant_type() {
     let (_db, app) = boot().await;
 
     for form in [
-        &[("scope", POSTS_READ)][..],
-        &[("grant_type", ""), ("scope", POSTS_READ)],
+        &[("scope", POSTS_READ.as_str())][..],
+        &[("grant_type", ""), ("scope", POSTS_READ.as_str())],
     ] {
         let resp = request_token(&app, (CLIENT_ID, CLIENT_SECRET), form).await;
         assert_token_error(
@@ -250,7 +250,10 @@ async fn token_endpoint_refuses_a_scope_beyond_the_registration_naming_the_clien
     let resp = request_token(
         &app,
         (READER_ID, READER_SECRET),
-        &[("grant_type", "client_credentials"), ("scope", POSTS_WRITE)],
+        &[
+            ("grant_type", "client_credentials"),
+            ("scope", POSTS_WRITE.as_str()),
+        ],
     )
     .await;
     resp.assert_status(StatusCode::BAD_REQUEST);

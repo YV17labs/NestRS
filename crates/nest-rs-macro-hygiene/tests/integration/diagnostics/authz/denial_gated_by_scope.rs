@@ -2,6 +2,9 @@
 //! grant from a narrower token, and a denial withheld that way would widen it.
 
 use nest_rs::authz::{AbilityBuilder, Action};
+use nest_rs::guards::Scope;
+
+const POSTS_ADMIN: Scope = Scope::new("posts:admin");
 
 mod posts {
     use sea_orm::entity::prelude::*;
@@ -22,5 +25,5 @@ mod posts {
 fn main() {
     let mut ab = AbilityBuilder::new();
     ab.cannot(Action::Delete, posts::Entity)
-        .requires_scope("posts:admin");
+        .requires_scope(POSTS_ADMIN);
 }

@@ -100,3 +100,39 @@ generic, and taking the product's `SocialSignIn` type would make every import
 of it — each provider's module imports it — a turbofish. JWT's guard alias
 stays the product's for the same reason: `AuthnModule` also provides the
 `JwtService` that modules import it for.
+
+## 2026-10-31 — a resource server's scopes are declared in code, its variable only replaces what it advertises
+
+The scopes an app's rules gate on were plain strings typed four times: the
+rules' constants, `<PREFIX>_OAUTH__RESOURCE__SCOPES_SUPPORTED`, each
+registered client, the tests. A drift between the first two surfaced only as
+a `warn` on a refused request. Decided on the owner's agreement to the
+identity audit's second pass ("Tout faire (Recommandé)", 2026-10-31, its item
+11), which covers this public API break:
+
+- **A scope is `nest_rs::guards::Scope`**, a newtype over RFC 6749 §3.3's
+  token, built by `Scope::new` and refused outside the grammar — at compile
+  time in a `const`, as `DurationBounds` refuses a key. It sits in
+  `nest-rs-guards`, below `nest-rs-authz` and `nest-rs-oauth-resource`,
+  beside `GrantedScopes` and `RequiredScopes`; the umbrella's `authz` feature
+  brings `guards`. `RuleSpec::requires_scope` takes a `Scope`, so a rule
+  cannot require a scope no declaration holds.
+- **`OAuthResourceModule::for_root` takes the declared set** — `[Scope; N]`,
+  the config, or `([Scope; N], config)` — and the document and the challenge
+  advertise it when the deployment names no `SCOPES_SUPPORTED`. It is a
+  declaration with no environment twin: the variable says what one
+  deployment advertises, and replaces the list, never the vocabulary the
+  rules are written in. Two declared sets contest at boot.
+- **A registered client's scopes stay strings**: they are deployment data,
+  and the product's check of them against its set stays in its module-init
+  hook (`token-endpoint-client-refusal.md`).
+
+Refused: **a type parameter on `OAuthResourceModule`** (a set as a trait's
+associated constant): a `#[module]` is not generic, the access graph reads
+only static descriptors, so the module's controller would leave the graph a
+transport gates discovery on. **Pinning the list in
+`OAuthResourceConfig`**: a pin moves the whole namespace to
+deployment-over-pin, so the cascade's resource and issuers would no longer
+be read. **Scopes discovered from the rules**: a rule is evaluated per
+actor, and nothing evaluates them at boot. **`requires_scope` keeping a
+string beside the type**: two spellings, one of which can drift.

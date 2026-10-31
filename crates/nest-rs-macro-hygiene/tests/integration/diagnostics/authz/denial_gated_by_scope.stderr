@@ -1,8 +1,8 @@
 error[E0599]: no method named `requires_scope` found for struct `RuleSpec<'_, posts::Entity, Cannot>` in the current scope
-  --> tests/integration/diagnostics/authz/denial_gated_by_scope.rs:25:10
+  --> tests/integration/diagnostics/authz/denial_gated_by_scope.rs:28:10
    |
-24 | /     ab.cannot(Action::Delete, posts::Entity)
-25 | |         .requires_scope("posts:admin");
+27 | /     ab.cannot(Action::Delete, posts::Entity)
+28 | |         .requires_scope(POSTS_ADMIN);
    | |         -^^^^^^^^^^^^^^ method not found in `RuleSpec<'_, posts::Entity, Cannot>`
    | |_________|
    |

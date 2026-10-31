@@ -10,7 +10,7 @@ use nest_rs_authz::{Ability, AbilityBuilder, Action, Manage, Read, current_abili
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, Scope};
 use nest_rs_http::futures_util::stream;
 use nest_rs_http::{HttpView, Json, SseEvent, SseStream, StatusCode, controller, header, routes};
 use nest_rs_mcp::{McpError, mcp, tools};
@@ -23,7 +23,7 @@ use nest_rs_ws::{WsError, WsModule, gateway, messages};
 struct Exporting;
 
 /// The scope a token must carry for the grant to materialize.
-const EXPORTS_RUN: &str = "exports:run";
+const EXPORTS_RUN: Scope = Scope::new("exports:run");
 
 /// RFC 6750 §3.1's description of `insufficient_scope`, the one sentence.
 const TOO_NARROW: &str = "the request requires higher privileges than provided by the access token";
@@ -35,7 +35,7 @@ const GRANT: &str = "x-grant";
 /// `narrow` delegated none, anything else holds no grant on the capability.
 fn ability_of(grant: Option<&str>) -> Ability {
     let scopes: Arc<[String]> = match grant {
-        Some("full") => Arc::from([EXPORTS_RUN.to_owned()]),
+        Some("full") => Arc::from([String::from(EXPORTS_RUN)]),
         _ => Arc::from([]),
     };
     let mut builder = AbilityBuilder::new().with_granted_scopes(Some(scopes));
@@ -359,7 +359,7 @@ async fn a_token_without_the_scope_is_challenged_for_it_on_every_edge() {
     assert_eq!(refused["message"], TOO_NARROW, "GraphQL: {graphql}");
     assert_eq!(
         refused["extensions"]["requiredScopes"],
-        serde_json::json!([EXPORTS_RUN]),
+        serde_json::json!([EXPORTS_RUN.as_str()]),
         "GraphQL: {graphql}",
     );
     assert!(
@@ -368,7 +368,7 @@ async fn a_token_without_the_scope_is_challenged_for_it_on_every_edge() {
     );
     assert_eq!(
         ws["data"]["requiredScopes"],
-        serde_json::json!([EXPORTS_RUN]),
+        serde_json::json!([EXPORTS_RUN.as_str()]),
         "WS: {ws}"
     );
 }

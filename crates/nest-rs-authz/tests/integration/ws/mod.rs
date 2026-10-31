@@ -13,7 +13,7 @@ use std::sync::Arc;
 use nest_rs_authz::__private::install_ability;
 use nest_rs_authz::{Ability, AbilityBuilder, Action};
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable};
-use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_guards::{Denial, Guard, GuardFor, Scope};
 use nest_rs_http::HttpView;
 use nest_rs_ws::{Gateway, WsClient, WsReply};
 
@@ -111,7 +111,7 @@ pub(crate) fn ability_of(role: &str) -> Ability {
         let mut builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
         builder
             .can(Action::Read, widget::Entity)
-            .requires_scope("widgets:read");
+            .requires_scope(Scope::new("widgets:read"));
         return builder.build().expect("valid test ability");
     }
     let mut builder = AbilityBuilder::new();

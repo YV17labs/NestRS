@@ -1,4 +1,5 @@
 use features::audio::AudioMcpModule;
+use features::authz::constants;
 use features::posts::PostsMcpModule;
 use features::users::UsersMcpModule;
 use nest_rs::core::module;
@@ -24,7 +25,7 @@ const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped
                 .title(SERVER_TITLE)
                 .instructions(INSTRUCTIONS),
         ),
-        OAuthResourceModule,
+        OAuthResourceModule::for_root(constants::ALL),
         SeaOrmModule,
         SeaOrmDatabaseModule,
         RedisModule,

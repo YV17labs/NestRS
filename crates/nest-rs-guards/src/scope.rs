@@ -1,14 +1,98 @@
 //! OAuth scope as a transport-agnostic dimension of a denial.
 //!
-//! Two markers, kept below both `nest-rs-authn` and `nest-rs-authz` so the two
-//! agree without depending on each other: [`GrantedScopes`] rides the unit,
-//! [`RequiredScopes`] the response. Neither is a decision; they carry the
-//! evidence to the edge, which renders the RFC 6750 `insufficient_scope`
-//! challenge once for every transport.
+//! Kept below `nest-rs-authn`, `nest-rs-authz` and `nest-rs-oauth-resource` so
+//! they agree without depending on each other: a [`Scope`] is what a rule
+//! requires and a protected resource advertises, [`GrantedScopes`] rides the
+//! unit, [`RequiredScopes`] the response. The two markers are no decision;
+//! they carry the evidence to the edge, which renders the RFC 6750
+//! `insufficient_scope` challenge once for every transport.
 
+use std::fmt;
 use std::sync::Arc;
 
 use nest_rs_core::AmbientValue;
+
+/// An OAuth scope (RFC 6749 §3.3) the app's rules gate on, declared once as a
+/// constant: a rule requires it by name
+/// (`ab.can(..).requires_scope(POSTS_READ)` in `nest_rs::authz`), so a
+/// scope no declaration holds does not compile, and a protected resource
+/// advertises the same values (`OAuthResourceModule::for_root([..])` in
+/// `nest_rs::oauth::resource`).
+///
+/// ```
+/// use nest_rs_guards::Scope;
+///
+/// pub const POSTS_READ: Scope = Scope::new("posts:read");
+/// pub const POSTS_WRITE: Scope = Scope::new("posts:write");
+///
+/// assert_eq!(POSTS_READ.as_str(), "posts:read");
+/// assert_eq!(String::from(POSTS_WRITE), "posts:write");
+/// ```
+///
+/// A token outside §3.3's grammar — empty, or holding a space, a `"` or a
+/// `\` — could not ride a space-delimited `scope` nor a quoted challenge, so
+/// it is refused, at compile time in a `const`:
+///
+/// ```compile_fail
+/// use nest_rs_guards::Scope;
+///
+/// const SPACED: Scope = Scope::new("posts read");
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Scope(&'static str);
+
+impl Scope {
+    /// The scope `token`; panics when it is not a scope token (RFC 6749
+    /// §3.3: `1*( %x21 / %x23-5B / %x5D-7E )`), which in a `const` is a
+    /// compile error.
+    pub const fn new(token: &'static str) -> Self {
+        assert!(
+            is_token(token),
+            "a scope is a token of RFC 6749 §3.3: one or more printable ASCII characters but a \
+             space, `\"` and `\\`",
+        );
+        Self(token)
+    }
+
+    /// The token, as a credential carries it.
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl fmt::Display for Scope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl From<Scope> for String {
+    fn from(scope: Scope) -> Self {
+        scope.0.to_owned()
+    }
+}
+
+impl PartialEq<Scope> for String {
+    fn eq(&self, scope: &Scope) -> bool {
+        self == scope.0
+    }
+}
+
+/// RFC 6749 §3.3's `scope-token`, read in a `const`.
+const fn is_token(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut at = 0;
+    while at < bytes.len() {
+        if !matches!(bytes[at], 0x21 | 0x23..=0x5B | 0x5D..=0x7E) {
+            return false;
+        }
+        at += 1;
+    }
+    true
+}
 
 /// The scopes a caller's credential carries, attached to the unit by the
 /// authentication guard and read back through
@@ -71,6 +155,40 @@ impl RequiredScopes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scope_is_the_token_a_credential_carries() {
+        const POSTS_READ: Scope = Scope::new("posts:read");
+        assert_eq!(POSTS_READ.as_str(), "posts:read");
+        assert_eq!(POSTS_READ.to_string(), "posts:read");
+        assert_eq!(String::from(POSTS_READ), "posts:read");
+        assert!(String::from("posts:read") == POSTS_READ);
+        assert!(String::from("posts:write") != POSTS_READ);
+    }
+
+    #[test]
+    fn a_token_is_printable_ascii_but_a_space_a_quote_and_a_backslash() {
+        for token in ["posts:read", "https://api.example.com/read", "a", "!~[]"] {
+            assert!(is_token(token), "{token}");
+        }
+        for token in [
+            "",
+            "posts read",
+            "posts\"read",
+            "posts\\read",
+            "posts\tread",
+            "pöst",
+        ] {
+            assert!(!is_token(token), "{token:?}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "a scope is a token of RFC 6749 §3.3")]
+    fn a_scope_outside_the_grammar_is_refused() {
+        let spaced = String::from("posts read").leak();
+        let _ = Scope::new(spaced);
+    }
 
     #[test]
     fn the_grant_reaches_a_consumer_without_being_copied() {

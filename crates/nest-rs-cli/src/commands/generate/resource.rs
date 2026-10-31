@@ -18,7 +18,7 @@ use crate::commands::resolve_start;
 use crate::context::{Context, NestrsWorkspace, TargetApp};
 use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::Names;
-use crate::scaffold::{Renderer, Scaffold, ensure_lines};
+use crate::scaffold::{Renderer, Scaffold, ensure_decl, ensure_lines};
 use crate::templates::resource;
 
 pub(crate) struct ResourceOptions {
@@ -97,14 +97,11 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
         names.snake,
         names.http_module()
     ));
-    let mut beside = data_layer().to_vec();
+    let mut beside = Vec::from(data_layer());
     if scaffolded_auth {
         beside.push(auth::app_import());
     }
-    let imports: Vec<Import> = std::iter::once(edge.clone())
-        .chain(beside.iter().cloned())
-        .collect();
-    let wiring = wire_into_app(&target, &mut s, &imports)?;
+    let wiring = wire_into_app(&target, &mut s, &edge, &beside)?;
     if let Some(test) = &round_trip {
         test.queue(&mut s);
     }
@@ -135,13 +132,17 @@ struct RoundTrip {
     test: PathBuf,
     test_body: String,
     main: PathBuf,
-    /// The root's whole contents when it has none yet (`nestrs new`'s is
-    /// empty), else the lines it gains.
     main_body: MainBody,
 }
 
+/// What the suite root gets, decided by what it holds.
 enum MainBody {
-    Whole(String),
+    /// No root yet: written whole.
+    Create(String),
+    /// An empty root (`nestrs new`'s): replaced whole.
+    Replace(String),
+    /// A root with tests of its own: the module line, and `boot` when it has
+    /// none.
     Gains {
         module: String,
         boot: Option<String>,
@@ -166,13 +167,15 @@ fn round_trip_test(
         .with("app_snake", app.snake.clone())
         .with("app_module", app.module());
     let main = root.join("tests/e2e/main.rs");
-    let module = format!("mod {};", names.snake);
     let main_body = match read_if_exists(&main)? {
-        Some(current) if !current.trim().is_empty() => MainBody::Gains {
-            module,
+        None => MainBody::Create(r.render(resource::E2E_MAIN)),
+        Some(current) if current.trim().is_empty() => {
+            MainBody::Replace(r.render(resource::E2E_MAIN))
+        }
+        Some(current) => MainBody::Gains {
+            module: format!("mod {};", names.snake),
             boot: (!current.contains("fn boot(")).then(|| r.render(resource::E2E_BOOT)),
         },
-        _ => MainBody::Whole(r.render(resource::E2E_MAIN)),
     };
     Ok(Some(RoundTrip {
         app: root.clone(),
@@ -187,15 +190,15 @@ impl RoundTrip {
     fn queue(&self, s: &mut Scaffold) {
         s.create(&self.test, self.test_body.clone());
         match &self.main_body {
-            MainBody::Whole(body) if self.main.is_file() => {
+            MainBody::Create(body) => {
+                s.create(&self.main, body.clone());
+            }
+            MainBody::Replace(body) => {
                 let body = body.clone();
                 s.edit(&self.main, Box::new(move |_| Some(body.clone())));
             }
-            MainBody::Whole(body) => {
-                s.create(&self.main, body.clone());
-            }
             MainBody::Gains { module, boot } => {
-                let lines = ensure_lines(vec![module.clone()]);
+                let lines = ensure_decl(module);
                 let boot = boot.clone();
                 s.edit(
                     &self.main,

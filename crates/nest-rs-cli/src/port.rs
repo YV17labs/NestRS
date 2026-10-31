@@ -36,8 +36,7 @@ fn collect_used_ports(apps_root: &Path) -> CliResult<Vec<u16>> {
         return Ok(ports);
     }
 
-    let listing = CliError::file(FileAction::List, apps_root);
-    for entry in fs::read_dir(apps_root).map_err(listing)? {
+    for entry in fs::read_dir(apps_root).map_err(CliError::file(FileAction::List, apps_root))? {
         let entry = entry.map_err(CliError::file(FileAction::List, apps_root))?;
         ports.extend(app_port(&entry.path())?);
     }

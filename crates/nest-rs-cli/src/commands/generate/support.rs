@@ -1,6 +1,8 @@
-//! Shared steps for the `g` generators: commit a generator's scaffold, and
-//! wire what it generated into the app that serves it.
+//! Shared steps for the `g` generators: commit a generator's scaffold, wire
+//! what it generated into the app that serves it, and read the source it
+//! edits by whole identifiers.
 
+use std::borrow::Borrow;
 use std::path::{Path, PathBuf};
 
 use crate::context::TargetApp;
@@ -66,14 +68,15 @@ pub(super) enum Wiring {
     Unchosen(Vec<String>),
 }
 
-/// Queue every import of `imports` the target app's `module.rs` does not
-/// already name, in **one** `edit`: a second re-reads the file from disk and
-/// clobbers the first. An app module the command cannot read fails it,
+/// Queue `edge` and every import `beside` it the target app's `module.rs` does
+/// not already name, in **one** `edit`: a second re-reads the file from disk
+/// and clobbers the first. An app module the command cannot read fails it,
 /// naming the file.
 pub(super) fn wire_into_app(
     target: &TargetApp,
     s: &mut Scaffold,
-    imports: &[Import],
+    edge: &Import,
+    beside: &[Import],
 ) -> CliResult<Wiring> {
     let (name, root) = match target {
         TargetApp::App { name, root } => (name, root),
@@ -83,8 +86,8 @@ pub(super) fn wire_into_app(
     let module_rs = root.join("src/module.rs");
     let source = std::fs::read_to_string(&module_rs)
         .map_err(CliError::file(FileAction::Read, &module_rs))?;
-    let missing: Vec<&Import> = imports
-        .iter()
+    let missing: Vec<&Import> = std::iter::once(edge)
+        .chain(beside)
         .filter(|import| !names(&source, &import.ident))
         .collect();
     if !missing.is_empty() {
@@ -110,17 +113,30 @@ fn names(source: &str, ident: &str) -> bool {
             let line = line.trim_start();
             !line.starts_with("use ") && !line.starts_with("pub use ")
         })
-        .any(|line| {
-            line.match_indices(ident).any(|(at, _)| {
-                let before = line[..at].chars().next_back();
-                let after = line[at + ident.len()..].chars().next();
-                !before.is_some_and(is_ident_char) && !after.is_some_and(is_ident_char)
-            })
-        })
+        .any(|line| words(line, ident).next().is_some())
 }
 
-fn is_ident_char(c: char) -> bool {
+/// Each byte offset where `word` stands as a whole identifier in `source`.
+pub(super) fn words<'a>(source: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
+    source.match_indices(word).filter_map(move |(at, _)| {
+        let before = source[..at].chars().next_back();
+        let after = source[at + word.len()..].chars().next();
+        (!before.is_some_and(is_ident_char) && !after.is_some_and(is_ident_char)).then_some(at)
+    })
+}
+
+pub(super) fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+/// Whether a `mod.rs` already declares `name` as a child module, in any
+/// visibility.
+pub(super) fn declares_mod(source: &str, name: &str) -> bool {
+    let decl = format!("mod {name};");
+    source
+        .lines()
+        .map(str::trim)
+        .any(|line| line == decl || line.ends_with(&format!(" {decl}")))
 }
 
 /// The next step saying where `edge` went, for every generator's closing
@@ -134,12 +150,12 @@ pub(super) fn wiring_lines(wiring: &Wiring, edge: &Import, beside: &[Import]) ->
                 .map(String::as_str)
                 .filter(|ident| *ident != edge.ident)
                 .collect();
-            let mut line = format!("{} is wired into `{app}`", edge.ident);
-            if !others.is_empty() {
-                line.push_str(&format!(", beside {}", sentence(&others)));
-            }
-            line.push('.');
-            vec![line]
+            let and = if others.is_empty() {
+                String::new()
+            } else {
+                format!(", beside {}", sentence(&others))
+            };
+            vec![format!("{} is wired into `{app}`{and}.", edge.ident)]
         }
         Wiring::NoApp => vec![format!(
             "Import {} in the app that serves it: this workspace has no app yet \
@@ -166,16 +182,15 @@ fn to_write(edge: &Import, beside: &[Import]) -> String {
         .chain(beside)
         .map(|import| format!("`{}`", import.use_path))
         .collect();
-    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
     sentence(&paths)
 }
 
 /// `a`, `a and b`, `a, b and c`.
-fn sentence(items: &[&str]) -> String {
+fn sentence<S: Borrow<str>>(items: &[S]) -> String {
     match items {
         [] => String::new(),
-        [one] => (*one).to_owned(),
-        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+        [one] => one.borrow().to_owned(),
+        [init @ .., last] => format!("{} and {}", init.join(", "), last.borrow()),
     }
 }
 

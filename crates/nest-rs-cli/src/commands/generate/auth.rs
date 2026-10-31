@@ -47,7 +47,7 @@ pub(crate) fn run(opts: AuthOptions) -> CliResult<()> {
     s.edit(ws.features_cargo(), ensure_features_deps(auth_deps()));
     s.edit(ws.features_lib(), ensure_lines(lib_decls()));
     let edge = app_import();
-    let wiring = wire_into_app(&target, &mut s, std::slice::from_ref(&edge))?;
+    let wiring = wire_into_app(&target, &mut s, &edge, &[])?;
 
     finish(s, opts.dry_run, &ws.root, "the auth adapter")?;
     print_next_steps(&secrets, &wiring, &edge);

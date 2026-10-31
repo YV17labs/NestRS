@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use super::cargo::{ensure_features_deps, ensure_workspace_deps, entity_deps};
 use super::migration::refuse_reserved;
 use super::promotion::Promotion;
-use super::support::finish;
+use super::support::{declares_mod, finish};
 use crate::commands::resolve_start;
 use crate::context::Context;
 use crate::error::{CliError, CliResult, read_if_exists};
@@ -121,12 +121,6 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
         Placement::Promote { moved } => {
             let index = format!("pub mod {moved};\npub mod {stem};\n");
             s.create(root.join("entities/mod.rs"), index);
-            s.create(
-                root.join(format!("entities/{stem}.rs")),
-                r.render(entity::ENTITY),
-            );
-            Promotion::new(&root, &target.feature.snake, moved)
-                .queue(&mut s, vec![format!("pub use entities::{stem};")])?;
             root.join(format!("entities/{stem}.rs"))
         }
         Placement::Folder => {
@@ -145,9 +139,14 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
             root.join(format!("entities/{stem}.rs"))
         }
     };
-    if !matches!(placement, Placement::Promote { .. }) {
-        s.create(file, r.render(entity::ENTITY));
-        s.edit(mod_rs, ensure_lines(port_lines));
+    s.create(file, r.render(entity::ENTITY));
+    match &placement {
+        // The move folds the re-export into its own edit of `mod.rs`.
+        Placement::Promote { moved } => Promotion::new(&root, &target.feature.snake, moved)
+            .queue(&mut s, vec![format!("pub use entities::{stem};")])?,
+        Placement::Lone | Placement::Folder => {
+            s.edit(mod_rs, ensure_lines(port_lines));
+        }
     }
 
     let deps = entity_deps();
@@ -215,16 +214,6 @@ fn subject_declares(root: &Path, name: &str) -> CliResult<bool> {
                 .iter()
                 .any(|item| matches!(item, syn::Item::Struct(s) if s.ident == name))
         }))
-}
-
-/// Whether `mod.rs` already declares `name` as a child module, in any
-/// visibility.
-fn declares_mod(source: &str, name: &str) -> bool {
-    let decl = format!("mod {name};");
-    source
-        .lines()
-        .map(str::trim)
-        .any(|line| line == decl || line.ends_with(&format!(" {decl}")))
 }
 
 fn print_next_steps(target: &Target, placement: &Placement, stem: &str) {

@@ -156,10 +156,9 @@ pub enum CliError {
 impl CliError {
     /// The [`CliError::File`] an io error on `path` becomes, for a `map_err`.
     pub(crate) fn file(action: FileAction, path: &Path) -> impl FnOnce(std::io::Error) -> Self {
-        let path = path.to_path_buf();
         move |source| Self::File {
             action,
-            path,
+            path: path.to_path_buf(),
             source,
         }
     }

@@ -238,10 +238,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     if scaffolded_auth {
         beside.push(auth::app_import());
     }
-    let imports: Vec<Import> = std::iter::once(edge.clone())
-        .chain(beside.iter().cloned())
-        .collect();
-    let wiring = wire_into_app(&target, &mut s, &imports)?;
+    let wiring = wire_into_app(&target, &mut s, &edge, &beside)?;
     // The app crate needs the crate owning the binding it now names, or its
     // build fails with `E0433`.
     let host_deps = app_host_deps(transport);

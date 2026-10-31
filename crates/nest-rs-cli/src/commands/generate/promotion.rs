@@ -9,10 +9,12 @@
 
 use std::path::{Path, PathBuf};
 
+use super::support::{declares_mod, is_ident_char, words};
 use crate::error::{CliError, CliResult, FileAction};
-use crate::scaffold::{Scaffold, Transform, ensure_lines};
+use crate::scaffold::{Scaffold, Transform, ensure_decl, ensure_lines};
 
 /// The move of `<feature>/entity.rs` to `<feature>/entities/<stem>.rs`.
+#[derive(Clone)]
 pub(super) struct Promotion {
     /// The feature's directory.
     root: PathBuf,
@@ -66,7 +68,7 @@ impl Promotion {
     }
 
     /// Where the entity lands.
-    pub(super) fn destination(&self) -> PathBuf {
+    fn destination(&self) -> PathBuf {
         self.root.join("entities").join(format!("{}.rs", self.stem))
     }
 
@@ -102,7 +104,7 @@ impl Promotion {
         s.move_to(&from, self.destination(), moved);
         for (path, depth) in edits {
             if depth == 0 {
-                let promotion = self.clone_parts();
+                let promotion = self.clone();
                 let lines = ensure_lines(mod_lines.clone());
                 s.edit(
                     path,
@@ -124,21 +126,19 @@ impl Promotion {
         Ok(())
     }
 
-    /// The parts a transform keeps, owned.
-    fn clone_parts(&self) -> Self {
-        Self::new(&self.root, &self.feature, &self.stem)
-    }
-
     /// A transform rewriting a file at `depth`, then `then` over the result.
     fn transform(&self, depth: usize, then: Option<fn(&str) -> String>) -> Transform {
-        let promotion = self.clone_parts();
+        let promotion = self.clone();
         Box::new(move |current: &str| {
             let rewritten = promotion
                 .rewrite(current, depth)
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| current.to_owned());
-            let out = then.map_or_else(|| rewritten.clone(), |f| f(&rewritten));
+            let out = match then {
+                Some(f) => f(&rewritten),
+                None => rewritten,
+            };
             (out != current).then_some(out)
         })
     }
@@ -183,10 +183,9 @@ impl Promotion {
         let mut out = String::with_capacity(source.len());
         let mut last = 0;
         for at in words(source, "entity") {
-            let prefix = path_before(source, at);
+            let segments = path_before(source, at);
             let rest = &source[at + "entity".len()..];
-            let line = source[..at].matches('\n').count() + 1;
-            let segments: Vec<&str> = prefix.iter().map(String::as_str).collect();
+            let line = || source[..at].matches('\n').count() + 1;
             let through_feature =
                 matches!(segments.as_slice(), [.., last] if *last == self.feature);
             let crate_path = segments == ["crate", self.feature.as_str()];
@@ -200,15 +199,16 @@ impl Promotion {
                     };
                 if certain {
                     out.push_str(&source[last..at]);
-                    out.push_str(&format!("entities::{}", self.stem));
+                    out.push_str("entities::");
+                    out.push_str(&self.stem);
                     last = at + "entity".len();
                 } else if segments.is_empty() {
-                    return Err((line, Uncertain::BarePath));
+                    return Err((line(), Uncertain::BarePath));
                 } else if relative || through_feature {
-                    return Err((line, Uncertain::UnreachedPath));
+                    return Err((line(), Uncertain::UnreachedPath));
                 }
             } else if relative || crate_path || through_feature || in_use_line(source, at) {
-                return Err((line, Uncertain::ModuleImported));
+                return Err((line(), Uncertain::ModuleImported));
             }
         }
         if last == 0 {
@@ -250,18 +250,9 @@ fn rust_files(root: &Path) -> CliResult<Vec<(PathBuf, usize)>> {
     Ok(found)
 }
 
-/// Each byte offset where `word` stands as a whole identifier.
-fn words<'a>(source: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
-    source.match_indices(word).filter_map(move |(at, _)| {
-        let before = source[..at].chars().next_back();
-        let after = source[at + word.len()..].chars().next();
-        (!before.is_some_and(is_ident_char) && !after.is_some_and(is_ident_char)).then_some(at)
-    })
-}
-
 /// The path segments right before `at`, read back over `segment::` pairs:
 /// `super::super::` → `["super", "super"]`, nothing → `[]`.
-fn path_before(source: &str, at: usize) -> Vec<String> {
+fn path_before(source: &str, at: usize) -> Vec<&str> {
     let mut segments = Vec::new();
     let mut end = at;
     while let Some(before) = source[..end].strip_suffix("::") {
@@ -274,7 +265,7 @@ fn path_before(source: &str, at: usize) -> Vec<String> {
         if start == before.len() {
             break;
         }
-        segments.push(before[start..].to_owned());
+        segments.push(&before[start..]);
         end = start;
     }
     segments.reverse();
@@ -326,18 +317,10 @@ fn deepen(source: &str) -> String {
 
 /// `mod entities;` declared once, for a `mod.rs` that declared no `entity`.
 fn declare_entities(source: &str) -> String {
-    let declared = source
-        .lines()
-        .map(str::trim)
-        .any(|line| line == "mod entities;" || line.ends_with(" mod entities;"));
-    if declared {
+    if declares_mod(source, "entities") {
         return source.to_owned();
     }
-    ensure_lines(vec!["mod entities;".to_owned()])(source).unwrap_or_else(|| source.to_owned())
-}
-
-fn is_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    ensure_decl("mod entities;")(source).unwrap_or_else(|| source.to_owned())
 }
 
 #[cfg(test)]

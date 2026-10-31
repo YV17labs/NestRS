@@ -267,20 +267,11 @@ impl PlannedWrite {
 /// that will not reverse is named beside it rather than dropped.
 fn roll_back(undo: Vec<Undo>, refused: CliError) -> CliError {
     let mut left = Vec::new();
-    for step in undo.into_iter().rev() {
+    for step in undo.iter().rev() {
         let (path, outcome) = match step {
-            Undo::Delete(path) => {
-                let outcome = fs::remove_file(&path);
-                (path, outcome)
-            }
-            Undo::Restore(path, bytes) => {
-                let outcome = fs::write(&path, bytes);
-                (path, outcome)
-            }
-            Undo::RemoveDir(path) => {
-                let outcome = fs::remove_dir(&path);
-                (path, outcome)
-            }
+            Undo::Delete(path) => (path, fs::remove_file(path)),
+            Undo::Restore(path, bytes) => (path, fs::write(path, bytes)),
+            Undo::RemoveDir(path) => (path, fs::remove_dir(path)),
         };
         if let Err(e) = outcome {
             left.push(format!("`{}` ({e})", path.display()));

@@ -10,9 +10,9 @@ use nest_rs_codegen::__private::layers::{
 };
 use nest_rs_codegen::__private::{
     InjectableBody, MCP_GRAMMAR, MountPath, VersionedEdge, build_injectable_body,
-    from_container_method, guard_capability_bounds, host_meta_fn, injected_keys_with_layers,
-    injected_names_with_layers, injected_optional_method, injected_optional_names_method,
-    layer_deps, reject_path, scoped_specs,
+    exception_filter_specs, from_container_method, guard_capability_bounds, host_meta_fn,
+    injected_keys_with_layers, injected_names_with_layers, injected_optional_method,
+    injected_optional_names_method, interceptor_specs, layer_deps, reject_path, scoped_specs,
 };
 
 use crate::mcp_impl::Role;
@@ -104,12 +104,8 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     let injected_optional = injected_optional_method(&opt_keys);
     let injected_optional_names = injected_optional_names_method(&opt_names);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
-    let interceptor_specs = quote! {
-        ::std::vec![#(::nest_rs_core::__private::interceptor::<#interceptors>()),*]
-    };
-    let exception_filter_specs = quote! {
-        ::std::vec![#(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*]
-    };
+    let interceptor_specs = interceptor_specs(&interceptors);
+    let exception_filter_specs = exception_filter_specs(&exception_filters);
 
     // Empty means "none declared": `nest-rs-mcp` owns the default path.
     let path = args.path.unwrap_or_else(|| LitStr::new("", name.span()));

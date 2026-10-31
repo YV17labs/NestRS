@@ -19,15 +19,15 @@ use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Conditional, DispatchKeys, HandlerSite,
     HostBorrow, HostMeta, InjectableBody, SitePosture, TailParam, VersionedEdge, answer_span,
     at_most_one_authorize, await_if_async, build_injectable_body, camel_case, cfg_attrs,
-    concrete_signature, delegated_attrs, force_guard_typeids, forwarded_arg_idents,
-    forwarded_idents, from_container_method, guard_capability_bounds, handler_const, handler_ref,
-    host_meta_fn, impl_self_ident, injected_field_types, injected_keys_with_layers,
-    injected_methods_with_layers, injected_names_with_layers, injected_optional_fns,
-    injected_per_request_method, key_as_written, layer_deps, normalize_forwarded_args,
-    one_role_per_method, piped_input, posture_contradiction, posture_required,
-    reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident, site_fn_ident,
-    site_ref, tail_param, takes_value, type_label, unit_of_work_required, unknown_argument,
-    validate_argument,
+    concrete_signature, delegated_attrs, exception_filter_specs, force_guard_typeids,
+    forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
+    handler_const, handler_ref, host_meta_fn, impl_self_ident, injected_field_types,
+    injected_keys_with_layers, injected_methods_with_layers, injected_names_with_layers,
+    injected_optional_fns, injected_per_request_method, interceptor_specs, key_as_written,
+    layer_deps, normalize_forwarded_args, one_role_per_method, piped_input, posture_contradiction,
+    posture_required, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
+    site_fn_ident, site_ref, tail_param, takes_value, type_label, unit_of_work_required,
+    unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -141,6 +141,8 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     let injected_names = injected_names_with_layers(&dep_names, &layers);
     let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
+    let interceptor_specs = interceptor_specs(&interceptors);
+    let exception_filter_specs = exception_filter_specs(&exception_filters);
     let capability_bounds = guard_capability_bounds(
         guards.iter(),
         quote!(::nest_rs_guards::GuardFor<::nest_rs_graphql::GraphqlView>),
@@ -199,14 +201,14 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
             pub fn __nestrs_resolver_interceptor_specs()
                 -> ::std::vec::Vec<::nest_rs_core::__private::InterceptorSpec>
             {
-                ::std::vec![#(::nest_rs_core::__private::interceptor::<#interceptors>()),*]
+                #interceptor_specs
             }
 
             #[doc(hidden)]
             pub fn __nestrs_resolver_exception_filter_specs()
                 -> ::std::vec::Vec<::nest_rs_core::__private::ExceptionFilterSpec>
             {
-                ::std::vec![#(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*]
+                #exception_filter_specs
             }
         }
 
@@ -627,6 +629,8 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         ),
     };
     let method_guards = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
+    let method_interceptors = interceptor_specs(interceptors);
+    let method_exception_filters = exception_filter_specs(exception_filters);
     let force = force_guard_typeids(force_guards);
     let site_kind = kind.path();
     let label = LitStr::new(label, proc_macro2::Span::call_site());
@@ -636,13 +640,9 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
             ::nest_rs_core::__private::SiteLayers {
                 host_interceptors: #host_interceptors,
-                method_interceptors: ::std::vec![
-                    #(::nest_rs_core::__private::interceptor::<#interceptors>()),*
-                ],
+                method_interceptors: #method_interceptors,
                 host_exception_filters: #host_exception_filters,
-                method_exception_filters: ::std::vec![
-                    #(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*
-                ],
+                method_exception_filters: #method_exception_filters,
             }
         }
 

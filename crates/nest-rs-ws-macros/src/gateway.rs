@@ -10,10 +10,10 @@ use syn::{LitStr, Path};
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
-    InjectableBody, MountPath, build_injectable_body, from_container_method,
-    guard_capability_bounds, host_meta_fn, injected_keys_with_layers, injected_names_with_layers,
-    injected_optional_fns, layer_deps, missing_argument, reject_path, scoped_specs, takes_value,
-    ungrouped_expr,
+    InjectableBody, MountPath, build_injectable_body, exception_filter_specs,
+    from_container_method, guard_capability_bounds, host_meta_fn, injected_keys_with_layers,
+    injected_names_with_layers, injected_optional_fns, interceptor_specs, layer_deps,
+    missing_argument, reject_path, scoped_specs, takes_value, ungrouped_expr,
 };
 
 pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -73,6 +73,8 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
 
     let edge_guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
+    let interceptor_specs = interceptor_specs(&interceptors);
+    let exception_filter_specs = exception_filter_specs(&exception_filters);
     let pipe_specs = scoped_specs(&pipes, quote!(dyn ::nest_rs_ws::__private::GlobalPipe));
     // The upgrade is an HTTP `GET`: a gateway-scope guard declares
     // `GuardFor<HttpView>`, not the `GuardFor<WsView>` per-event ones owe.
@@ -154,7 +156,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             pub fn __nestrs_gateway_interceptor_specs()
                 -> ::std::vec::Vec<::nest_rs_core::__private::InterceptorSpec>
             {
-                ::std::vec![#(::nest_rs_core::__private::interceptor::<#interceptors>()),*]
+                #interceptor_specs
             }
 
             /// The gateway's `#[use_exception_filters(...)]`, around each of its
@@ -163,7 +165,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             pub fn __nestrs_gateway_exception_filter_specs()
                 -> ::std::vec::Vec<::nest_rs_core::__private::ExceptionFilterSpec>
             {
-                ::std::vec![#(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*]
+                #exception_filter_specs
             }
 
             /// The gateway's `#[use_pipes(...)]`, over each of its messages' `data`.

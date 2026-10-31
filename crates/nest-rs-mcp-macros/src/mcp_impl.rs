@@ -26,11 +26,12 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, Posture, PostureRules, TailParam,
-    answer_span, await_if_async, cfg_attrs, concrete_signature, force_guard_typeids,
-    forwarded_arg_idents, generic_args, guard_capability_bounds, handler_const, handler_ref,
-    impl_self_ident, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
-    piped_input, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
-    site_fn_ident, tail_param, ungrouped_expr, validate_argument,
+    answer_span, await_if_async, cfg_attrs, concrete_signature, exception_filter_specs,
+    force_guard_typeids, forwarded_arg_idents, generic_args, guard_capability_bounds,
+    handler_const, handler_ref, impl_self_ident, interceptor_specs, layer_deps,
+    normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
+    reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident, site_fn_ident,
+    tail_param, ungrouped_expr, validate_argument,
 };
 use nest_rs_codegen::snake_case;
 
@@ -1294,8 +1295,8 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
         let layers_fn = site_fn_ident("layers", method);
         let guards_fn = site_fn_ident("guards", method);
         let site = site_const_ident("site", method);
-        let interceptors = &op.interceptors;
-        let exception_filters = &op.exception_filters;
+        let method_interceptors = interceptor_specs(&op.interceptors);
+        let method_exception_filters = exception_filter_specs(&op.exception_filters);
         let method_guards = scoped_specs(&op.guards, quote!(dyn ::nest_rs_guards::Guard));
         let force = force_guard_typeids(&op.force_guards);
         let kind = op.role.kind();
@@ -1308,14 +1309,10 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
             fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
                 ::nest_rs_core::__private::SiteLayers {
                     host_interceptors: <#self_ty>::__nestrs_mcp_host_interceptor_specs(),
-                    method_interceptors: ::std::vec![
-                        #(::nest_rs_core::__private::interceptor::<#interceptors>()),*
-                    ],
+                    method_interceptors: #method_interceptors,
                     host_exception_filters:
                         <#self_ty>::__nestrs_mcp_host_exception_filter_specs(),
-                    method_exception_filters: ::std::vec![
-                        #(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*
-                    ],
+                    method_exception_filters: #method_exception_filters,
                 }
             }
 

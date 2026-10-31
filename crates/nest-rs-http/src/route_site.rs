@@ -14,9 +14,8 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, Handler, Posture};
-use nest_rs_guards::__private::GuardSpec;
 use nest_rs_guards::__private::{
-    boot_validate_guards, resolve_global_guards, validate_route_chain,
+    GuardSpec, boot_validate_guards, resolve_global_guards, validate_route_chain,
 };
 use nest_rs_guards::Guard;
 use nest_rs_pipes::__private::PipeSpec;

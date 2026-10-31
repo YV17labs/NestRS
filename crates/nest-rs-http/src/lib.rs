@@ -279,8 +279,9 @@ pub mod __private {
     };
     pub use crate::versioning::{VersionLocation, declared_versions, version_location};
     pub use crate::view::with_view;
-    pub use nest_rs_pipes::__private::PipeSpec;
-    pub use nest_rs_pipes::__private::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
+    pub use nest_rs_pipes::__private::{
+        DeclaredRules, NoRules, OptionalRules, PipeSpec, ValidateProbe,
+    };
 
     pub use tracing;
 

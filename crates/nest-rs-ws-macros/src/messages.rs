@@ -15,10 +15,11 @@ use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta, Posture,
     PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs, concrete_signature,
-    declared_handler, force_guard_typeids, guard_capability_bounds, handler_const, handler_ref,
-    impl_self_ident, injected_methods_with_layers, injected_per_request_method, layer_deps,
-    one_role_per_method, piped_input, reject_meta_on_operations, returns_unit, scoped_specs,
-    shared_receiver, tail_param, takes_value, ungrouped_expr, validate_argument,
+    declared_handler, exception_filter_specs, force_guard_typeids, guard_capability_bounds,
+    handler_const, handler_ref, impl_self_ident, injected_methods_with_layers,
+    injected_per_request_method, interceptor_specs, layer_deps, one_role_per_method, piped_input,
+    reject_meta_on_operations, returns_unit, scoped_specs, shared_receiver, tail_param,
+    takes_value, ungrouped_expr, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -722,6 +723,8 @@ fn message_site(site: &MessageSite<'_>) -> EmittedSite {
     let name = format_ident!("__NESTRS_SITE_{}", method_name.to_uppercase());
     let handler = handler_ref(self_ty, method);
     let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
+    let method_interceptor_specs = interceptor_specs(interceptors);
+    let method_exception_filter_specs = exception_filter_specs(exception_filters);
     let force_typeids = force_guard_typeids(force_guards);
     let items = quote! {
         #(#cfgs)*
@@ -729,13 +732,9 @@ fn message_site(site: &MessageSite<'_>) -> EmittedSite {
         fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
             ::nest_rs_core::__private::SiteLayers {
                 host_interceptors: <#self_ty>::__nestrs_gateway_interceptor_specs(),
-                method_interceptors: ::std::vec![
-                    #(::nest_rs_core::__private::interceptor::<#interceptors>()),*
-                ],
+                method_interceptors: #method_interceptor_specs,
                 host_exception_filters: <#self_ty>::__nestrs_gateway_exception_filter_specs(),
-                method_exception_filters: ::std::vec![
-                    #(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*
-                ],
+                method_exception_filters: #method_exception_filter_specs,
             }
         }
 

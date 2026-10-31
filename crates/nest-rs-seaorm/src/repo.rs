@@ -332,8 +332,7 @@ mod tests {
 
     use nest_rs_authz::__private::install_ability;
     use nest_rs_authz::AbilityBuilder;
-    use nest_rs_database::__private::with_executor;
-    use nest_rs_database::__private::{with_job_executor, with_request_executor};
+    use nest_rs_database::__private::{with_executor, with_job_executor, with_request_executor};
     use nest_rs_database::Executor;
     use sea_orm::sea_query::{Condition, Expr};
     use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait, Set};

@@ -10,10 +10,11 @@ use syn::LitStr;
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
-    InjectableBody, MountPath, RoutePath, build_injectable_body, from_container_method,
-    guard_capability_bounds, host_meta_fn, injected_field_types, injected_keys_with_layers,
-    injected_names_with_layers, injected_optional_fns, layer_deps, missing_argument,
-    refuse_rust_deprecated, reject_path, scoped_specs,
+    InjectableBody, MountPath, RoutePath, build_injectable_body, exception_filter_specs,
+    from_container_method, guard_capability_bounds, host_meta_fn, injected_field_types,
+    injected_keys_with_layers, injected_names_with_layers, injected_optional_fns,
+    interceptor_specs, layer_deps, missing_argument, refuse_rust_deprecated, reject_path,
+    scoped_specs,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -72,18 +73,14 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let injected_names = injected_names_with_layers(&dep_names, &layers);
     let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
 
-    let interceptor_specs = quote! {
-        ::std::vec![#(::nest_rs_core::__private::interceptor::<#interceptors>()),*]
-    };
+    let interceptor_specs = interceptor_specs(&interceptors);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
     let capability_bounds = guard_capability_bounds(
         guards.iter(),
         quote!(::nest_rs_guards::GuardFor<::nest_rs_http::HttpView>),
     );
     let pipe_specs = scoped_specs(&pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
-    let exception_filter_specs = quote! {
-        ::std::vec![#(::nest_rs_core::__private::exception_filter::<#exception_filters>()),*]
-    };
+    let exception_filter_specs = exception_filter_specs(&exception_filters);
 
     let residency = pair::HTTP.host_residency(&name, &item.generics);
 

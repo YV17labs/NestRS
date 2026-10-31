@@ -21,9 +21,9 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nest_rs_core::__private::{
     ClassGate, GlobalLayers, GuardStage, GuardStageFactory, HandlerDeclaration, MetaLevels,
     ResolvedLayer, Site, SiteDeclaration, SiteLayers, Tail, UnitChains, compose_chain,
-    declare_handler, declare_site, declare_unit, dispatch, new_unit_context, settled,
+    declare_handler, declare_site, declare_unit, dispatch, exception_filter, interceptor,
+    new_unit_context, settled,
 };
-use nest_rs_core::__private::{exception_filter, interceptor};
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::operation_log::Kind;
 use nest_rs_core::{

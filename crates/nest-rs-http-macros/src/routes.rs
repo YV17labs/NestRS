@@ -17,11 +17,12 @@ use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Conditional, DispatchKeys, HandlerSite,
     HostBorrow, HostMeta, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath, SitePosture,
     at_most_one_authorize, await_if_async, cfg_attrs, concrete_signature, deprecation_header,
-    force_guard_typeids, guard_capability_bounds, handler_const, handler_ref, impl_self_ident,
-    injected_methods_with_layers, injected_per_request_method, layer_deps, mixed_site_ident,
-    normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
-    refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
-    takes_value, ungrouped_expr, unit_of_work_required, unknown_argument, validate_argument,
+    exception_filter_specs, force_guard_typeids, guard_capability_bounds, handler_const,
+    handler_ref, impl_self_ident, injected_methods_with_layers, injected_per_request_method,
+    interceptor_specs, layer_deps, mixed_site_ident, normalize_forwarded_args, nth_generic_type,
+    one_role_per_method, posture_key_unsupported, refuse_rust_deprecated,
+    reject_meta_on_operations, scoped_specs, shared_receiver, site, takes_value, ungrouped_expr,
+    unit_of_work_required, unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -1460,6 +1461,8 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
         None => quote! {},
     };
     let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
+    let method_interceptor_specs = interceptor_specs(interceptors);
+    let method_exception_filter_specs = exception_filter_specs(method_exception_filters);
     let force_guard_typeids = force_guard_typeids(force_guards);
     let method_pipe_specs = scoped_specs(method_pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
     let no_pipes_flag = if *no_pipes {
@@ -1473,13 +1476,9 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
         fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
             ::nest_rs_core::__private::SiteLayers {
                 host_interceptors: <#self_ty>::__nestrs_controller_interceptor_specs(),
-                method_interceptors: ::std::vec![
-                    #(::nest_rs_core::__private::interceptor::<#interceptors>()),*
-                ],
+                method_interceptors: #method_interceptor_specs,
                 host_exception_filters: <#self_ty>::__nestrs_controller_exception_filter_specs(),
-                method_exception_filters: ::std::vec![
-                    #(::nest_rs_core::__private::exception_filter::<#method_exception_filters>()),*
-                ],
+                method_exception_filters: #method_exception_filter_specs,
             }
         }
 

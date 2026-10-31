@@ -1005,8 +1005,7 @@ pub fn current_executor() -> Option<SeaOrmExecutor> {
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_database::__private::with_executor;
-    use nest_rs_database::__private::{with_job_executor, with_request_executor};
+    use nest_rs_database::__private::{with_executor, with_job_executor, with_request_executor};
     use nest_rs_database::{ExecutorScope, current_executor_scope};
 
     use super::*;

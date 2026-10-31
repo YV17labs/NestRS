@@ -14,6 +14,7 @@ use syn::Type;
 use crate::inject::{LayerDeps, layer_deps};
 use crate::layers::Layers;
 use crate::meta::{handler_ref, site_const_ident, site_fn_ident};
+use crate::specs::{exception_filter_specs, interceptor_specs};
 
 /// One dispatch site of a provider-hosted impl half, with the layers its block
 /// and its method bound.
@@ -47,27 +48,19 @@ pub fn site_const(site: &ProviderSite<'_>) -> TokenStream {
     let name = site_const_ident("site", method);
     let layers_fn = site_fn_ident("layers", method);
     let handler = handler_ref(self_ty, method);
-    let host_interceptors = &host.interceptors;
-    let method_interceptors = &method_layers.interceptors;
-    let host_exception_filters = &host.exception_filters;
-    let method_exception_filters = &method_layers.exception_filters;
+    let host_interceptors = interceptor_specs(&host.interceptors);
+    let method_interceptors = interceptor_specs(&method_layers.interceptors);
+    let host_exception_filters = exception_filter_specs(&host.exception_filters);
+    let method_exception_filters = exception_filter_specs(&method_layers.exception_filters);
     quote! {
         #(#cfgs)*
         #[doc(hidden)]
         fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
             ::nest_rs_core::__private::SiteLayers {
-                host_interceptors: ::std::vec![
-                    #(::nest_rs_core::__private::interceptor::<#host_interceptors>()),*
-                ],
-                method_interceptors: ::std::vec![
-                    #(::nest_rs_core::__private::interceptor::<#method_interceptors>()),*
-                ],
-                host_exception_filters: ::std::vec![
-                    #(::nest_rs_core::__private::exception_filter::<#host_exception_filters>()),*
-                ],
-                method_exception_filters: ::std::vec![
-                    #(::nest_rs_core::__private::exception_filter::<#method_exception_filters>()),*
-                ],
+                host_interceptors: #host_interceptors,
+                method_interceptors: #method_interceptors,
+                host_exception_filters: #host_exception_filters,
+                method_exception_filters: #method_exception_filters,
             }
         }
 

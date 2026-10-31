@@ -121,7 +121,7 @@ fn print_next_steps(
         );
     } else if ctx.current_app.is_some() {
         println!(
-            "  3. Add `SeaOrmModule::for_root(None)` and `SeaOrmDatabaseModule` to this app, then import \
+            "  3. Add `SeaOrmModule` and `SeaOrmDatabaseModule` to this app, then import \
              `features::{}::{}`.",
             snake,
             names.http_module()

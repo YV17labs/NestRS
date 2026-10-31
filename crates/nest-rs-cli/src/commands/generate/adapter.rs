@@ -215,9 +215,6 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
 
     let use_path = format!("features::{}::{}", names.snake, tmodule);
     let mut imports = vec![(use_path.as_str(), tmodule.as_str())];
-    if let Some(b) = authz {
-        imports.push((b.app_path, b.module));
-    }
     if scaffolded_auth {
         imports.extend(auth::app_imports());
     }
@@ -326,8 +323,7 @@ pub(crate) fn runtime_vars(transport: Transport) -> (String, String) {
 
 /// What an app binds at its root to run a queue adapter's jobs: the backend
 /// is the composition's choice, so no adapter imports it.
-const QUEUE_BACKEND: &str =
-    "nest_rs::redis::RedisModule::for_root(None) and nest_rs::redis::RedisQueueModule";
+const QUEUE_BACKEND: &str = "nest_rs::redis::RedisModule and nest_rs::redis::RedisQueueModule";
 
 /// What a generated GraphQL or MCP adapter waits for in `authz/ability.rs`,
 /// its subject named by the path that resolves there.
@@ -367,7 +363,7 @@ fn print_next_steps(
         println!("  {tmodule} is wired into the current app, and imports what serves it.");
     } else if ctx.current_app.is_some() && needs_unit_of_work {
         println!(
-            "  Add `SeaOrmModule::for_root(None)` and `SeaOrmDatabaseModule` to this app, then \
+            "  Add `SeaOrmModule` and `SeaOrmDatabaseModule` to this app, then \
              import `features::{}::{}`: it imports what serves it.",
             names.snake, tmodule,
         );

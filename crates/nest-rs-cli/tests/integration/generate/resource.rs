@@ -126,15 +126,19 @@ fn generate_resource_wires_the_auth_roots_it_bootstrapped() {
     let module_rs = app.join("src/module.rs");
     let with_db = fs::read_to_string(&module_rs).unwrap().replace(
         "    ],",
-        "        SeaOrmModule::for_root(None),\n        SeaOrmDatabaseModule,\n    ],",
+        "        SeaOrmModule,\n        SeaOrmDatabaseModule,\n    ],",
     );
     fs::write(&module_rs, with_db).unwrap();
 
     run_ok(&app, &["g", "resource", "posts"]);
 
     let module = fs::read_to_string(&module_rs).unwrap();
-    for ident in ["PostsHttpModule", "AuthnModule", "AuthzModule"] {
-        assert!(module.contains(&format!("{ident},")), "{ident}: {module}");
+    assert!(module.contains("PostsHttpModule,"), "{module}");
+    for ident in ["AuthnModule", "AuthzModule"] {
+        assert!(
+            !module.contains(&format!("{ident},")),
+            "the adapter imports {ident}, not the root: {module}"
+        );
     }
 }
 

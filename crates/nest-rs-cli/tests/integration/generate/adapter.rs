@@ -852,8 +852,8 @@ fn generate_queue_names_the_backend_binding_only_when_the_app_binds_none() {
         if bound {
             let module_rs = app.join("src/module.rs");
             let source = fs::read_to_string(&module_rs).unwrap().replace(
-                "HttpModule::for_root(None),",
-                "HttpModule::for_root(None),\n        RedisQueueModule,",
+                "        HttpModule,",
+                "        HttpModule,\n        RedisQueueModule,",
             );
             fs::write(&module_rs, source).unwrap();
         }
@@ -905,24 +905,17 @@ fn generate_adapter_requires_existing_feature() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("not found"));
 }
 
-/// `g ws` and `g mcp` write the authz adapter their output and code name.
+/// `g mcp` writes the authz adapter its output and code name, which the
+/// generated adapter imports and the app does not.
 #[test]
-fn generate_ws_and_mcp_write_the_authz_adapters_their_own_output_names() {
+fn generate_mcp_writes_the_authz_adapter_its_own_output_names() {
     // (transport, authz dir, module, what only that adapter names)
-    const CASES: [(&str, &str, &str, &str); 2] = [
-        (
-            "ws",
-            "ws",
-            "AuthzWsModule",
-            "imports = [AuthzModule, WsModule]",
-        ),
-        (
-            "mcp",
-            "mcp",
-            "AuthzMcpModule",
-            "EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>",
-        ),
-    ];
+    const CASES: [(&str, &str, &str, &str); 1] = [(
+        "mcp",
+        "mcp",
+        "AuthzMcpModule",
+        "EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>",
+    )];
 
     for (transport, authz_dir, module, provider) in CASES {
         let dir = tempfile::tempdir().unwrap();
@@ -951,17 +944,23 @@ fn generate_ws_and_mcp_write_the_authz_adapters_their_own_output_names() {
             authz_mod.contains(&format!("pub use {authz_dir}::{module};")),
             "{authz_mod}"
         );
+        let adapter = fs::read_to_string(src.join(format!("posts/{transport}/module.rs"))).unwrap();
+        assert!(
+            adapter.contains(module),
+            "the adapter imports {module}: {adapter}"
+        );
         let app_module = fs::read_to_string(app.join("src/module.rs")).unwrap();
         assert!(
-            app_module.contains(module),
-            "the app composes {module}: {app_module}"
+            !app_module.contains(module),
+            "the app lists the adapter, not what it brings: {app_module}"
         );
     }
 }
 
 /// A generated gateway is guarded at its upgrade: over a `g feature` port with
-/// no auth adapter, `g ws` bootstraps it and writes the WebSocket authz adapter
-/// the guards are imported through.
+/// no auth adapter, `g ws` bootstraps it, and the gateway's adapter imports
+/// `AuthzModule`, as an HTTP adapter does — no WebSocket authz adapter of its
+/// own.
 #[test]
 fn generate_ws_over_a_feature_port_guards_the_upgrade_and_bootstraps_its_auth() {
     let dir = tempfile::tempdir().unwrap();
@@ -978,10 +977,10 @@ fn generate_ws_over_a_feature_port_guards_the_upgrade_and_bootstraps_its_auth() 
         "{gateway}"
     );
     let module = fs::read_to_string(src.join("posts/ws/module.rs")).unwrap();
-    assert!(module.contains("AuthzWsModule"), "{module}");
+    assert!(module.contains("AuthzModule"), "{module}");
     assert!(
-        src.join("authz/ws/module.rs").is_file(),
-        "its authz adapter lands"
+        !src.join("authz/ws").exists(),
+        "a gateway reuses the HTTP pair, through AuthzModule"
     );
 }
 
@@ -1011,7 +1010,7 @@ fn a_crud_adapter_is_wired_only_into_an_app_binding_the_unit_of_work() {
             if bound {
                 let with_db = fs::read_to_string(&module_rs).unwrap().replace(
                     "    ],",
-                    "        SeaOrmModule::for_root(None),\n        SeaOrmDatabaseModule,\n    ],",
+                    "        SeaOrmModule,\n        SeaOrmDatabaseModule,\n    ],",
                 );
                 fs::write(&module_rs, with_db).unwrap();
             }
@@ -1025,9 +1024,7 @@ fn a_crud_adapter_is_wired_only_into_an_app_binding_the_unit_of_work() {
                 "`g {transport}` wires {module} only beside the binding: {composed}"
             );
             assert_eq!(
-                printed.contains(
-                    "Add `SeaOrmModule::for_root(None)` and `SeaOrmDatabaseModule` to this app"
-                ),
+                printed.contains("Add `SeaOrmModule` and `SeaOrmDatabaseModule` to this app"),
                 !bound,
                 "the next step names the binding the app lacks: {printed}"
             );

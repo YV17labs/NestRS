@@ -278,15 +278,11 @@ pub(super) fn print_bootstrapped(secrets: &Secrets) {
     println!("or delete `crates/features/src/authn/http/` and write the real login route.");
 }
 
-/// The app imports `g auth` wires: both roots, though `AuthzModule` pulls
-/// `AuthnModule` in transitively — an app's `module.rs` is the inventory of what
-/// it serves.
-pub(super) fn app_imports() -> [(&'static str, &'static str); 3] {
-    [
-        ("features::authn::AuthnModule", "AuthnModule"),
-        ("features::authn::AuthnHttpModule", "AuthnHttpModule"),
-        (HTTP_AUTHZ.app_path, HTTP_AUTHZ.module),
-    ]
+/// The app import `g auth` wires: the development token route, the one edge it
+/// serves. The authn and authz ports reach the app through every adapter that
+/// binds their guards, which imports them where the access graph checks it.
+pub(super) fn app_imports() -> [(&'static str, &'static str); 1] {
+    [("features::authn::AuthnHttpModule", "AuthnHttpModule")]
 }
 
 fn wire(ctx: &Context, s: &mut Scaffold) -> Option<PathBuf> {
@@ -307,8 +303,6 @@ pub(super) struct AuthzAdapter {
     pub module: &'static str,
     /// How an adapter's own `module.rs` reaches it (inside the features crate).
     pub feature_path: &'static str,
-    /// How an app's composition site reaches it.
-    pub app_path: &'static str,
     /// `(file name, template)`, mirroring `demo/crates/features/src/authz/<dir>/`.
     pub files: &'static [(&'static str, &'static str)],
     /// What this adapter buys, printed as the run's next steps.
@@ -351,7 +345,7 @@ pub(super) fn authz_for(transport: Transport) -> Option<&'static AuthzAdapter> {
     match transport {
         Transport::Http => Some(&HTTP_AUTHZ),
         Transport::Graphql => Some(&GRAPHQL_AUTHZ),
-        Transport::Ws => Some(&WS_AUTHZ),
+        Transport::Ws => Some(&HTTP_AUTHZ),
         Transport::Mcp => Some(&MCP_AUTHZ),
         Transport::Queue | Transport::Schedule | Transport::Events => None,
     }
@@ -359,12 +353,13 @@ pub(super) fn authz_for(transport: Transport) -> Option<&'static AuthzAdapter> {
 
 /// The base adapter, with no folder of its own: `AbilityGuard` answers every
 /// transport, so its guard and `AuthzModule` sit at the `authz/` root, written
-/// by `g auth` itself. `dir` and `files` are empty and never read.
+/// by `g auth` itself — and a gateway imports it too, since a WS upgrade is an
+/// HTTP `GET` whose ability crosses the connection into every message. `dir`
+/// and `files` are empty and never read.
 static HTTP_AUTHZ: AuthzAdapter = AuthzAdapter {
     dir: "",
     module: "AuthzModule",
     feature_path: "crate::authz::AuthzModule",
-    app_path: "features::authz::AuthzModule",
     files: &[],
     rationale: &[
         "The guard attaches the caller's Ability and answers every transport, so it is",
@@ -382,7 +377,6 @@ static GRAPHQL_AUTHZ: AuthzAdapter = AuthzAdapter {
     dir: "graphql",
     module: "AuthzGraphqlModule",
     feature_path: "crate::authz::AuthzGraphqlModule",
-    app_path: "features::authz::AuthzGraphqlModule",
     files: &[
         ("mod.rs", auth::AUTHZ_GRAPHQL_MOD),
         ("module.rs", auth::AUTHZ_GRAPHQL_MODULE),
@@ -401,38 +395,12 @@ static GRAPHQL_AUTHZ: AuthzAdapter = AuthzAdapter {
     written_by_g_auth: false,
 };
 
-/// A WS upgrade is an HTTP GET, so a gateway reuses the HTTP guards rather than
-/// an adapter of its own: the ability they attach crosses the connection into
-/// every message.
-static WS_AUTHZ: AuthzAdapter = AuthzAdapter {
-    dir: "ws",
-    module: "AuthzWsModule",
-    feature_path: "crate::authz::AuthzWsModule",
-    app_path: "features::authz::AuthzWsModule",
-    files: &[
-        ("mod.rs", auth::AUTHZ_WS_MOD),
-        ("module.rs", auth::AUTHZ_WS_MODULE),
-    ],
-    rationale: &[
-        "A gateway reuses the HTTP guards — bind #[use_guards(AuthnGuard, AuthzGuard)]",
-        "on the struct and import AuthzWsModule in the adapter's module.rs: the ability",
-        "the upgrade attaches scopes every message's rows to the caller.",
-    ],
-    deps: &[
-        &super::cargo::AUTHZ,
-        &super::cargo::SEAORM,
-        &super::cargo::WS,
-    ],
-    written_by_g_auth: false,
-};
-
 /// `/mcp` gates at its request; with no guard there — neither the global pool
 /// nor the `EndpointGuards` its module declares — it is **deny-all**.
 static MCP_AUTHZ: AuthzAdapter = AuthzAdapter {
     dir: "mcp",
     module: "AuthzMcpModule",
     feature_path: "crate::authz::AuthzMcpModule",
-    app_path: "features::authz::AuthzMcpModule",
     files: &[
         ("mod.rs", auth::AUTHZ_MCP_MOD),
         ("module.rs", auth::AUTHZ_MCP_MODULE),
@@ -456,12 +424,13 @@ fn print_next_steps(secrets: &Secrets, wired: bool) {
     println!("  1. Add your rules in `crates/features/src/authz/ability.rs` — nothing is");
     println!("     granted until you do, so guarded routes answer 403.");
     if wired {
-        println!("  2. AuthnModule, AuthnHttpModule and AuthzModule are wired into the");
-        println!("     current app.");
+        println!("  2. AuthnHttpModule is wired into the current app; every adapter binding the");
+        println!("     guards imports AuthnModule or AuthzModule itself.");
     } else {
-        println!("  2. Import `features::authn::AuthnModule`,");
-        println!("     `features::authn::AuthnHttpModule` and");
-        println!("     `features::authz::AuthzModule` in your app's `module.rs`.");
+        println!("  2. Import `features::authn::AuthnHttpModule` in your app's `module.rs`;");
+        println!(
+            "     every adapter binding the guards imports AuthnModule or AuthzModule itself."
+        );
     }
     println!("  3. `POST /auth/dev-token` mints a bearer token to call your guarded routes");
     println!("     with. It refuses to boot outside development and test — delete");

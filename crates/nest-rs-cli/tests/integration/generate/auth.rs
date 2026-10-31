@@ -72,10 +72,10 @@ fn generate_auth_scaffolds_the_adapter_once() {
     assert!(!second.status.success());
 }
 
-// Every auth root reaches the composition site from one run, in one edit:
-// separate edits would drop all but the last.
+// The app lists the route `g auth` serves, and nothing an adapter brings: the
+// authn and authz ports reach it through every adapter binding their guards.
 #[test]
-fn generate_auth_wires_every_root_into_the_app() {
+fn generate_auth_wires_the_route_it_serves_into_the_app() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let app = write_fake_app(dir.path(), "api");
@@ -83,18 +83,18 @@ fn generate_auth_wires_every_root_into_the_app() {
     run_ok(&app, &["g", "auth"]);
 
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
-    for (use_path, ident) in [
-        ("features::authn::AuthnModule", "AuthnModule"),
-        ("features::authn::AuthnHttpModule", "AuthnHttpModule"),
-        ("features::authz::AuthzModule", "AuthzModule"),
-    ] {
-        assert!(module.contains(&format!("use {use_path};")), "{module}");
+    assert!(
+        module.contains("use features::authn::AuthnHttpModule;")
+            && module.contains("AuthnHttpModule,"),
+        "the imports array must list AuthnHttpModule: {module}"
+    );
+    for ident in ["AuthnModule", "AuthzModule"] {
         assert!(
-            module.contains(&format!("{ident},")),
-            "the imports array must list {ident}: {module}"
+            !module.contains(&format!("{ident},")),
+            "the root lists no {ident}, which the adapters import: {module}"
         );
     }
-    assert!(module.contains("HttpModule::for_root"), "{module}");
+    assert!(module.contains("        HttpModule,"), "{module}");
 }
 
 fn generated_secrets() -> (String, String) {

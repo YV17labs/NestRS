@@ -112,13 +112,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let apps = dir.path().join("apps");
         let roots = [
-            ("auth", "HttpModule::for_root(None)"),
+            ("auth", "HttpModule"),
             ("api", "BlogHttpModule"),
             (
                 "legacy",
                 "HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })",
             ),
-            ("hello", "HttpModule::for_root(None)"),
+            ("hello", "HttpModule"),
             ("blog", "[BlogHttpModule]"),
             ("live", "[ChatWsModule, NotificationsWsModule]"),
             ("assistant", "[McpModule::for_root(opts), UsersMcpModule]"),
@@ -132,7 +132,7 @@ mod tests {
                 "[AudioQueueModule, RedisQueueModule, AudioScheduleModule]",
             ),
             ("pushes", "// HttpModule\n[ChatModule, WsModule]"),
-            ("cli", "ConfigModule::for_root()"),
+            ("cli", "[SeaOrmModule, SeaOrmDatabaseModule]"),
         ];
         for (app, module) in roots {
             fs::create_dir_all(apps.join(app).join("src")).unwrap();

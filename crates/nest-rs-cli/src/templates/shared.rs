@@ -412,7 +412,7 @@ module imported in that adapter's `module.rs`:
 | Edge | `#[use_guards(…)]` on the struct | Imported in `module.rs` |
 |---|---|---|
 | HTTP controller | `AuthnGuard, AuthzGuard` | `AuthzModule` |
-| WS gateway | `AuthnGuard, AuthzGuard` — they run on the upgrade, an HTTP `GET` | `AuthzWsModule` |
+| WS gateway | `AuthnGuard, AuthzGuard` — they run on the upgrade, an HTTP `GET` | `AuthzModule` |
 | GraphQL resolver | `AuthzGuard` — the guards the module declares for `/graphql` authenticate the request | `AuthzGraphqlModule` |
 | MCP tool | none — the guards the module declares for `/mcp` gate every call at its request | `AuthzMcpModule` |
 

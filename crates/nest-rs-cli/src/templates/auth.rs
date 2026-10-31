@@ -4,8 +4,8 @@
 //! (`Claims`) and the policy (`AuthzAbility`). They mirror
 //! `demo/crates/features/src/{authn,authz}/`.
 //!
-//! `authn/module.rs` writes `nest_rs::authn::AuthnModule::for_root(None)`
-//! qualified: the product's own module wears the same name (`E0255`).
+//! `authn/module.rs` writes `nest_rs::authn::AuthnModule` qualified: the
+//! product's own module wears the same name (`E0255`).
 
 /// The principal. `JwtStrategy<Claims>` deserializes a verified token into it,
 /// and `AuthzAbility` reads it to build the caller's rules.
@@ -126,7 +126,7 @@ pub(crate) const AUTHN_MODULE: &str = r#"use nest_rs::core::module;
 use super::strategy::{AuthnGuard, AuthnStrategy};
 
 #[module(
-    imports = [nest_rs::authn::AuthnModule::for_root(None)],
+    imports = [nest_rs::authn::AuthnModule],
     providers = [AuthnStrategy, AuthnGuard],
 )]
 pub struct AuthnModule;
@@ -304,24 +304,6 @@ use crate::authz::{AuthzGuard, AuthzModule};
     providers = [EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>],
 )]
 pub struct AuthzGraphqlModule;
-"#;
-
-// authz/ws/ — what a gateway imports to serve rows (`nestrs g ws`): the
-// upgrade reuses the HTTP guards, and the ability they attach crosses the
-// connection into every message's unit of work.
-
-pub(crate) const AUTHZ_WS_MOD: &str = r#"mod module;
-
-pub use module::AuthzWsModule;
-"#;
-
-pub(crate) const AUTHZ_WS_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::ws::WsModule;
-
-use crate::authz::AuthzModule;
-
-#[module(imports = [AuthzModule, WsModule])]
-pub struct AuthzWsModule;
 "#;
 
 // authz/mcp/ — the guards at `/mcp`'s request (`nestrs g mcp`); without them, or

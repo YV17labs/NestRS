@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn ensure_module_import_into_multiline_block() {
-        let src = "use nest_rs_core::module;\nuse nest_rs_http::HttpModule;\n\n#[module(\n    imports = [\n        HttpModule::for_root(None),\n    ],\n)]\npub struct AppModule;\n";
+        let src = "use nest_rs_core::module;\nuse nest_rs_http::HttpModule;\n\n#[module(\n    imports = [\n        HttpModule,\n    ],\n)]\npub struct AppModule;\n";
         let one =
             || ensure_module_imports(&[("features::posts::PostsHttpModule", "PostsHttpModule")]);
         let out = one()(src).expect("inserts");
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn ensure_module_import_single_line_block() {
-        let src = "use nest_rs_http::HttpModule;\n\n#[module(imports = [HttpModule::for_root(None)])]\npub struct AppModule;\n";
+        let src = "use nest_rs_http::HttpModule;\n\n#[module(imports = [HttpModule])]\npub struct AppModule;\n";
         let t = ensure_module_imports(&[("crate::posts::PostsHttpModule", "PostsHttpModule")]);
         let out = t(src).expect("inserts");
         assert!(out.contains("PostsHttpModule"));
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn ensure_module_imports_lands_every_pair_in_one_pass() {
-        let src = "use nest_rs_core::module;\n\n#[module(\n    imports = [\n        HttpModule::for_root(None),\n    ],\n)]\npub struct AppModule;\n";
+        let src = "use nest_rs_core::module;\n\n#[module(\n    imports = [\n        HttpModule,\n    ],\n)]\npub struct AppModule;\n";
         let pairs = [
             ("features::authn::AuthnModule", "AuthnModule"),
             ("features::authz::AuthzModule", "AuthzModule"),

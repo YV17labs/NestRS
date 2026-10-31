@@ -47,7 +47,7 @@ pub(crate) fn write_fake_app(root: &Path, name: &str) -> PathBuf {
         app.join("src/module.rs"),
         "use nest_rs_core::module;\nuse nest_rs_http::HttpModule;\n\n\
          #[module(\n    imports = [\n        \
-         HttpModule::for_root(None),\n    ],\n)]\n\
+         HttpModule,\n    ],\n)]\n\
          pub struct AppModule;\n",
     )
     .unwrap();

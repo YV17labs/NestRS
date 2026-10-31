@@ -276,11 +276,7 @@ fn new_app_picks_next_http_port() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     fs::create_dir_all(dir.path().join("apps/auth/src")).unwrap();
-    fs::write(
-        dir.path().join("apps/auth/src/module.rs"),
-        "HttpModule::for_root(None)",
-    )
-    .unwrap();
+    fs::write(dir.path().join("apps/auth/src/module.rs"), "HttpModule").unwrap();
     fs::write(
         dir.path().join("apps/auth/.env"),
         "NESTRS_HTTP__PORT=3001\n",

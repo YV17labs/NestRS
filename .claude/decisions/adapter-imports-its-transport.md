@@ -65,9 +65,10 @@ mounted, and the adapter import is the line that opens an edge.
 ## 2026-10-31 — `g queue` writes the backend binding into the root that has none
 
 The binding still sits at the root, where swapping the backend edits one
-line; what moved is who writes it there. `g queue` now writes `RedisModule`
-and `RedisQueueModule` into the app root it wires when that root binds no
-queue backend, in the same edit as the adapter, rather than printing them —
+line; what moved is who writes it there. `g queue` now writes
+`RedisQueueModule` into the app root it wires when that root binds no queue
+backend, with `RedisModule` unless the root opens the default instance the
+bare binding reads, in the same edit as the adapter, rather than printing them —
 as `g resource` writes the data layer (`generator-wires-its-app.md`). A
 printed line was a step the generator could take itself, which the
 identity's "nothing to wire" refuses (the identity audit's read-12, agreed

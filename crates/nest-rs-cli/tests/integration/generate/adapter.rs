@@ -890,6 +890,65 @@ fn generate_queue_writes_the_backend_binding_only_when_the_app_binds_none() {
     }
 }
 
+/// The binding `g queue` writes reads Redis's default instance, so a root
+/// opening only a named one gains the default beside it, and a root binding
+/// the queue in any form gains nothing.
+#[test]
+fn generate_queue_opens_the_default_instance_its_binding_reads() {
+    for (root_lines, written) in [
+        (
+            "RedisModule::<Cache>,",
+            &["RedisModule", "RedisQueueModule"][..],
+        ),
+        (
+            "RedisModule::for_root((Cache, cache())),",
+            &["RedisModule", "RedisQueueModule"],
+        ),
+        ("RedisModule::for_root(redis()),", &["RedisQueueModule"]),
+        ("RedisModule::<Unnamed>,", &["RedisQueueModule"]),
+        (
+            "RedisModule::<Jobs>,\n        RedisQueueModule::<Jobs>,",
+            &[],
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let app = write_fake_app(dir.path(), "worker");
+        let module_rs = app.join("src/module.rs");
+        let source = fs::read_to_string(&module_rs).unwrap().replace(
+            "        HttpModule,",
+            &format!("        HttpModule,\n        {root_lines}"),
+        );
+        fs::write(&module_rs, source).unwrap();
+        let root = dir.path().to_str().unwrap();
+
+        run_ok(dir.path(), &["g", "feature", "audio", "-p", root]);
+        let printed = run_ok(dir.path(), &["g", "queue", "audio", "-p", root]);
+
+        let module = fs::read_to_string(&module_rs).unwrap();
+        assert!(
+            module.contains(&format!("        {root_lines}")),
+            "the root's own lines stay: {module}"
+        );
+        for ident in ["RedisModule", "RedisQueueModule"] {
+            assert_eq!(
+                module.contains(&format!("        {ident},")),
+                written.contains(&ident),
+                "`{root_lines}`: {ident} is listed bare only when written: {module}",
+            );
+        }
+        let beside = if written.is_empty() {
+            String::new()
+        } else {
+            format!(", beside {}", written.join(" and "))
+        };
+        assert!(
+            printed.contains(&format!("AudioQueueModule is wired into `worker`{beside}.")),
+            "`{root_lines}`: the run says what it wrote: {printed}",
+        );
+    }
+}
+
 #[test]
 fn generate_adapter_is_rejected_on_rerun() {
     let dir = tempfile::tempdir().unwrap();

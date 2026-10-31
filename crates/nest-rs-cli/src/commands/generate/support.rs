@@ -32,13 +32,38 @@ pub(super) struct Import {
     pub use_path: String,
     /// The type the `imports = [ … ]` entry names.
     pub ident: String,
+    /// The binding this resource is opened for, which reads its default
+    /// instance (`RedisQueueModule` for `RedisModule`).
+    opened_for: Option<&'static str>,
 }
 
 impl Import {
     pub(super) fn new(use_path: impl Into<String>) -> Self {
         let use_path = use_path.into();
         let ident = use_path.rsplit("::").next().unwrap_or(&use_path).to_owned();
-        Self { use_path, ident }
+        Self {
+            use_path,
+            ident,
+            opened_for: None,
+        }
+    }
+
+    /// This resource, written only beside `binding`, and only into a root
+    /// that does not open its default instance: an instance named
+    /// (`X::<I>`) opens another one, which the binding never reads.
+    pub(super) fn opened_for(self, binding: &'static str) -> Self {
+        Self {
+            opened_for: Some(binding),
+            ..self
+        }
+    }
+
+    /// Whether the root `source` already provides what this import brings.
+    fn provided_by(&self, source: &str) -> bool {
+        match self.opened_for {
+            None => names(source, &self.ident),
+            Some(binding) => names(source, binding) || opens_default(source, &self.ident),
+        }
     }
 }
 
@@ -88,7 +113,7 @@ pub(super) fn wire_into_app(
         .map_err(CliError::file(FileAction::Read, &module_rs))?;
     let missing: Vec<&Import> = std::iter::once(edge)
         .chain(beside)
-        .filter(|import| !names(&source, &import.ident))
+        .filter(|import| !import.provided_by(&source))
         .collect();
     if !missing.is_empty() {
         let pairs: Vec<(&str, &str)> = missing
@@ -107,13 +132,35 @@ pub(super) fn wire_into_app(
 /// Whether `source` names `ident` outside its `use` lines: an import listed
 /// bare, pinned (`X::for_root(..)`) or of a named instance (`X::<I>`) alike.
 fn names(source: &str, ident: &str) -> bool {
-    source
-        .lines()
-        .filter(|line| {
-            let line = line.trim_start();
-            !line.starts_with("use ") && !line.starts_with("pub use ")
-        })
-        .any(|line| words(line, ident).next().is_some())
+    listed(source).any(|line| words(line, ident).next().is_some())
+}
+
+/// Whether `source` opens `ident`'s default instance: lists it bare, as
+/// `X::<Unnamed>` or pinned by a value (`X::for_root(x)`) — never only a named
+/// instance's `X::<I>` or `X::for_root((I, x))`.
+fn opens_default(source: &str, ident: &str) -> bool {
+    let listed = listed(source).collect::<Vec<_>>().join("\n");
+    words(&listed, ident).any(|at| {
+        let Some(path) = listed[at + ident.len()..].trim_start().strip_prefix("::") else {
+            return true;
+        };
+        let path = path.trim_start();
+        if let Some(generic) = path.strip_prefix('<') {
+            let instance = generic.split('>').next().unwrap_or_default().trim();
+            return instance.rsplit("::").next() == Some("Unnamed");
+        }
+        path.strip_prefix("for_root")
+            .and_then(|call| call.trim_start().strip_prefix('('))
+            .is_none_or(|value| !value.trim_start().starts_with('('))
+    })
+}
+
+/// The lines of `source` that can list an import: every one but its `use`s.
+fn listed(source: &str) -> impl Iterator<Item = &str> {
+    source.lines().filter(|line| {
+        let line = line.trim_start();
+        !line.starts_with("use ") && !line.starts_with("pub use ")
+    })
 }
 
 /// Each byte offset where `word` stands as a whole identifier in `source`.
@@ -217,6 +264,41 @@ mod tests {
         ] {
             assert!(!names(source, "SeaOrmModule"), "{source}");
         }
+    }
+
+    #[test]
+    fn the_default_instance_is_opened_bare_unnamed_or_pinned_by_a_value() {
+        for source in [
+            "#[module(imports = [RedisModule])]",
+            "        RedisModule::<Unnamed>,",
+            "        RedisModule::<nest_rs::core::Unnamed>,",
+            "        RedisModule::for_root(redis()),",
+            "        RedisModule::<Cache>,\n        RedisModule,",
+        ] {
+            assert!(opens_default(source, "RedisModule"), "{source}");
+        }
+    }
+
+    #[test]
+    fn a_named_instance_alone_leaves_the_default_unopened() {
+        for source in [
+            "        RedisModule::<Cache>,",
+            "        RedisModule::for_root((Cache, cache())),",
+            "        RedisModule::for_root(\n            (Cache, cache()),\n        ),",
+            "use nest_rs::redis::RedisModule;\n#[module(imports = [])]",
+        ] {
+            assert!(!opens_default(source, "RedisModule"), "{source}");
+        }
+    }
+
+    #[test]
+    fn a_resource_opened_for_a_binding_is_provided_by_the_binding_or_its_default() {
+        let redis = || Import::new("nest_rs::redis::RedisModule").opened_for("RedisQueueModule");
+        assert!(
+            redis().provided_by("        RedisModule::<Jobs>,\n        RedisQueueModule::<Jobs>,")
+        );
+        assert!(redis().provided_by("        RedisModule::for_root(redis()),"));
+        assert!(!redis().provided_by("        RedisModule::<Cache>,"));
     }
 
     #[test]

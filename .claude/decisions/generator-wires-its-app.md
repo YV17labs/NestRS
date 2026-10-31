@@ -17,10 +17,14 @@ Adopted:
   wired**: the run lists the apps and every import to write.
 - **One edit writes every import the generated code needs that the root does
   not already name** — the edge; `SeaOrmModule` and `SeaOrmDatabaseModule`
-  under a `#[crud]` handler; `RedisModule` and `RedisQueueModule` under a
-  processor; `AuthnHttpModule` when the run wrote the auth adapter. A root
-  naming one — bare, pinned or a named instance — keeps its own line, so the
-  root still holds every choice it makes.
+  under a `#[crud]` handler; `RedisQueueModule` under a processor, with the
+  `RedisModule` instance it reads; `AuthnHttpModule` when the run wrote the
+  auth adapter. A root naming one — bare, pinned or a named instance — keeps
+  its own line, so the root still holds every choice it makes. The one
+  resource a binding reads is the exception: the bare `RedisQueueModule`
+  reads Redis's default instance, so a root opening only a named one
+  (`RedisModule::<Cache>`) gains the default beside it, rather than a binding
+  that fails the boot on a connection nothing opens.
 
 Refused:
 

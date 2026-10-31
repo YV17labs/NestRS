@@ -348,10 +348,11 @@ pub(crate) fn runtime_vars(transport: Transport) -> (String, String) {
 
 /// What an app binds at its root to run a queue adapter's jobs: the backend
 /// is the composition's choice, so no adapter imports it, and the generator
-/// writes it into the root that has none.
+/// writes it into the root that binds none — with the connection the bare
+/// binding reads, Redis's default instance, unless the root opens it.
 fn queue_backend() -> [Import; 2] {
     [
-        Import::new("nest_rs::redis::RedisModule"),
+        Import::new("nest_rs::redis::RedisModule").opened_for("RedisQueueModule"),
         Import::new("nest_rs::redis::RedisQueueModule"),
     ]
 }

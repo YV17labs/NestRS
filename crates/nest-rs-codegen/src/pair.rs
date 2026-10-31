@@ -257,7 +257,7 @@ impl DecoratorPair {
         };
         residency_match(
             proc_macro2::Span::call_site(),
-            &quote!(#self_ty),
+            self_ty,
             [
                 refusal("is an edge host, built at mount"),
                 refusal("is `scope = request`, built per request"),
@@ -515,7 +515,7 @@ pub fn provider_residency(
 /// the edit its cause has, so each shape reads its own.
 pub fn residency_match(
     span: proc_macro2::Span,
-    ty: &TokenStream,
+    ty: &impl ToTokens,
     sentences: [String; 4],
 ) -> TokenStream {
     let [edge, request, transient, unknown] =

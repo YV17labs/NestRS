@@ -25,21 +25,12 @@ pub fn shorten(name: &str) -> String {
 /// private items beside the struct `host` of the module `host_module`: by the
 /// struct's own name, from its module or one below it.
 pub const fn reaches_host(host: &str, written: &str, host_module: &str, here: &str) -> bool {
-    if !same(host.as_bytes(), written.as_bytes()) {
+    let (here, module) = (here.as_bytes(), host_module.as_bytes());
+    if !same(host.as_bytes(), written.as_bytes()) || here.len() < module.len() {
         return false;
     }
-    let (inner, outer) = (here.as_bytes(), host_module.as_bytes());
-    if inner.len() < outer.len() {
-        return false;
-    }
-    let mut i = 0;
-    while i < outer.len() {
-        if inner[i] != outer[i] {
-            return false;
-        }
-        i += 1;
-    }
-    inner.len() == outer.len() || (inner.len() > outer.len() + 1 && inner[outer.len()] == b':')
+    let (head, below) = here.split_at(module.len());
+    same(head, module) && (below.is_empty() || (below.len() > 1 && below[0] == b':'))
 }
 
 const fn same(a: &[u8], b: &[u8]) -> bool {

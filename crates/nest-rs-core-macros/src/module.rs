@@ -340,7 +340,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             };
             Some(residency_match(
                 provider.span(),
-                &quote!(#provider),
+                provider,
                 [
                     refusal("is an edge host, built at mount", ""),
                     refusal(

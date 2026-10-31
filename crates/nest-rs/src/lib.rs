@@ -7,7 +7,9 @@
 
 // A module over a glob, never `pub use nest_rs_core as core`: rustc names a crate
 // re-exported under another name by its own, `nest_rs::nest_rs_core::…`, in every
-// diagnostic, a path no app can write.
+// diagnostic, a path no app can write. Each is written out: a module a
+// `macro_rules!` expands loses to `prelude` in the path rustc prints
+// (`nest_rs::prelude::Json`).
 
 /// The DI container, modules, the lifecycle and the unit pipeline every edge runs through.
 pub mod core {

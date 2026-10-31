@@ -69,7 +69,7 @@ the header and the answer is a `401` that never reaches the rules this page is
 about.
 
 ```bash frame="terminal"
-$ curl -i -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
+$ curl -i -X POST http://localhost:3001/posts -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"title":"","body":"World"}'
 HTTP/1.1 400 Bad Request
@@ -107,14 +107,14 @@ handed over untouched — and, with the database wired on the previous
 page, the handler persists the post and returns it.
 
 ```bash frame="terminal"
-$ curl -i -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
+$ curl -i -X POST http://localhost:3001/posts -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"title":"Hello","body":"World"}'
 HTTP/1.1 201 Created
 location: /posts/018f…
 content-type: application/json
 
-{"id":"018f…","title":"Hello","body":"World"}
+{"id":"018f…","title":"Hello","body":"World","created_at":"2026-…","updated_at":"2026-…"}
 ```
 
 A `201` with the created row, and the `Location` that names it — the body
@@ -153,6 +153,13 @@ fn not_a_placeholder_title(title: &str) -> Result<(), validator::ValidationError
     }
     Ok(())
 }
+```
+
+The function returns `validator`'s own error type, so the feature crate names
+that crate itself, at the release the framework derives with:
+
+```bash
+cargo add validator@0.21 -p features
 ```
 
 The error `code` (`"placeholder_title"`) surfaces in `errors.title[].code`

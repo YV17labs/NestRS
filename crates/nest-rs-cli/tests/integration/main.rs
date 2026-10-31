@@ -11,6 +11,8 @@
 mod cli;
 mod doctor;
 mod generate;
+#[path = "../harness/generated.rs"]
+mod generated;
 mod harness;
 mod info;
 mod lint;

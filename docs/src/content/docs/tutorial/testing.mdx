@@ -1,23 +1,25 @@
 ---
 title: Test it end to end
-description: A single tests/e2e/main.rs boots the real BlogModule against a throwaway database; nestrs run test e2e runs it; happy path and failure modes both asserted.
+description: The round-trip test nestrs g resource wrote boots the real BlogModule against a throwaway database; you give it the post's fields and two failure modes, and nestrs run test e2e runs them.
 sidebar:
   order: 8
 ---
 
 import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 
-You ship one e2e test that boots the *real* `BlogModule`
-against a throwaway Postgres, drives it through the same transport
-production runs, and asserts on the round-trip you've been verifying
-by hand. By the end of this page, `nestrs run test e2e` runs it green, a
-wiring regression in any of the previous six steps fails this test,
+You finish the e2e test `nestrs g resource` wrote on page 2: it boots the
+*real* `BlogModule` against a throwaway Postgres, drives it through the same
+transport production runs, and asserts on the round-trip you've been verifying
+by hand. By the end of this page, `nestrs run test e2e` runs it green beside
+two failure modes, a wiring regression in any of the previous pages fails it,
 and the feature is locked down.
 
-## One e2e binary per app
+## One e2e suite per app
 
 Every app ships one `tests/e2e/main.rs`. Cargo compiles it as a separate
-binary; nextest gates it through a binary filter, not `#[ignore]`.
+binary; nextest gates it through a binary filter, not `#[ignore]`. Its
+`main.rs` holds the module list and the fixtures every test shares, and each
+test file sits beside it — `posts.rs` for the `posts` feature.
 
 The crate driving this page is
 [**`nest-rs-testing`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-testing) —
@@ -36,32 +38,31 @@ When the suite cannot connect, `<PREFIX>_SEAORM__URL` is what to check.
 - apps/blog/
   - tests/
     - e2e/
-      - main.rs
+      - main.rs the fixture
+      - posts.rs the tests
 </FileTree>
 
-Add the dev-dependencies the test needs:
+`nestrs g resource` added the dev-dependencies the suite names:
 
 ```toml title="apps/blog/Cargo.toml"
 [dev-dependencies]
-nest-rs = { workspace = true, features = ["authn", "testing"] }
+nest-rs = { workspace = true, features = ["testing"] }
+tokio.workspace = true
 migrations = { workspace = true }
-serde_json.workspace = true
-uuid.workspace = true
+serde_json = { workspace = true }
+uuid = { workspace = true }
 ```
-
-`serde_json` also needs a `[workspace.dependencies]` pin (`serde_json = "1.0"`)
-like every other line here — the app manifest only points at the root.
 
 `testing` is what brings `TestApp` in, and `nestrs new` already put it on the
 app's `nest-rs` dev-dependency: it stays out of the workspace's `nest-rs`, so no
 release binary carries the harness. Its throwaway database rides the `seaorm`
 feature the workspace's `nest-rs` has carried since `nestrs new`, and the bearer
-it signs the `authn` one, which is what a suite testing a guarded API against a
-real schema already has. There is no telemetry feature
-to enable: `blog` imports no `OpenTelemetryModule`, so
-`TestApp` needs no `with_test_telemetry()` — that builder method exists only to
-satisfy that module's boot guard, and it lives behind
-`features = ["opentelemetry"]`.
+it signs the `authn` one the auth adapter added. `migrations` is the
+workspace's migrator, `serde_json` writes the request bodies, and `uuid` the
+subject a token names. There is no telemetry feature to enable: `blog`
+imports no `OpenTelemetryModule`, so `TestApp` needs no
+`with_test_telemetry()` — that builder method exists only to satisfy that
+module's boot guard, and it lives behind `features = ["opentelemetry"]`.
 
 ## The boot harness
 
@@ -69,22 +70,19 @@ satisfy that module's boot guard, and it lives behind
 access-graph check, on the module `main` boots — its guards and every other
 app-wide layer it declares come with it. `ephemeral_database` creates the
 throwaway database, migrates it, seeds its connection as the app's pool and
-drops it after the app. Because the controller is guarded, every request
-carries a bearer, and `app.bearer` signs it with the app's own `JwtService`, so
-the token is signed with exactly the key the app verifies with and carries the
-expiry it stamps. `TestApp` runs under `<PREFIX>_ENV=test`, which reads the
-secret `nestrs g auth` drew into `.env.test`; the test never spells it.
+drops it after the app. The generator wrote the one fixture every test shares:
 
 ```rust title="apps/blog/tests/e2e/main.rs"
-use nest_rs::http::StatusCode;
+//! The app's suite against a throwaway database: every test boots the
+//! composition `main` runs, migrated by the workspace's migrator.
+
+mod posts;
+
 use nest_rs::testing::TestApp;
-use serde_json::json;
 
 use blog::BlogModule;
-use features::authn::{Claims, Role, Subject};
-use uuid::Uuid;
 
-async fn boot() -> TestApp {
+pub(crate) async fn boot() -> TestApp {
     TestApp::builder()
         .module::<BlogModule>()
         .ephemeral_database::<migrations::Migrator>()
@@ -92,70 +90,79 @@ async fn boot() -> TestApp {
         .await
         .expect("BlogModule boots against a throwaway database")
 }
+```
 
-fn bearer(app: &TestApp) -> String {
+The test binary imports `BlogModule` from a `blog` **library** target, which
+the scaffold wrote on page 1 — Cargo auto-detects `src/lib.rs` and
+`src/main.rs`, so the manifest needs no `[lib]` or `[[bin]]` section:
+
+```rust title="apps/blog/src/lib.rs"
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
+
+mod module;
+
+pub use module::BlogModule;
+```
+
+## The round trip, and two failures
+
+Because the controller is guarded, every request carries a bearer, and
+`app.bearer` signs it with the app's own `JwtService`, so the token is signed
+with exactly the key the app verifies with and carries the expiry it stamps.
+`TestApp` runs under `<PREFIX>_ENV=test`, which reads the secret the auth
+adapter drew into `.env.test`; the test never spells it.
+
+The generated `posts_round_trip` still posts the `name` column page 2
+replaced. Give it the post's two fields, then add two negative paths — the
+`400` you will meet in [Validate inputs](/tutorial/validation/), and the
+`401` of a call with no token:
+
+```rust title="apps/blog/tests/e2e/posts.rs" {9-15, 20, 26, 40-43, 46-67}
+use nest_rs::http::StatusCode;
+use serde_json::json;
+use uuid::Uuid;
+
+use features::authn::{Claims, Role, Subject};
+
+use crate::boot;
+
+fn bearer(app: &nest_rs::testing::TestApp) -> String {
     app.bearer(|exp| Claims {
         sub: Subject::User(Uuid::now_v7()),
         roles: vec![Role::User],
         exp,
     })
 }
-```
 
-The test binary imports `BlogModule` from a `blog` **library** target, which
-the scaffold already wrote — Cargo auto-detects `src/lib.rs` and `src/main.rs`,
-so the manifest needs no `[lib]` or `[[bin]]` section:
-
-```rust title="apps/blog/src/lib.rs"
-mod module;
-pub use module::BlogModule;
-```
-
-## The round-trip test
-
-The shape of an e2e test: build the app, hit the route, read the
-response. Two requests, three assertions — enough to cover the entire
-wiring chain for a bare CRUD feature.
-
-```rust title="apps/blog/tests/e2e/main.rs"
 #[tokio::test]
 async fn posts_round_trip() {
     let app = boot().await;
-    let auth = bearer(&app);
+    let bearer = bearer(&app);
 
     let created = app
         .http()
         .post("/posts")
-        .header("authorization", &auth)
+        .header("authorization", &bearer)
         .body_json(&json!({ "title": "Hello", "body": "World" }))
         .send()
         .await;
     created.assert_status(StatusCode::CREATED);
     let body = created.json().await;
     let id = body.value().object().get("id").string().to_owned();
-    assert_eq!(body.value().object().get("title").string(), "Hello");
 
-    let got = app
+    let read = app
         .http()
         .get(format!("/posts/{id}"))
-        .header("authorization", &auth)
+        .header("authorization", &bearer)
         .send()
         .await;
-    got.assert_status_is_ok();
-    assert_eq!(got.json().await.value().object().get("body").string(), "World");
+    read.assert_status_is_ok();
+    let read = read.json().await;
+    let post = read.value().object();
+    assert_eq!(post.get("title").string(), "Hello");
+    assert_eq!(post.get("body").string(), "World");
 }
-```
 
-The assertions cover the entire chain: the `POST` walks validation, the unit
-of work's transaction, and the service; the `GET /posts/{id}` walks
-`CrudService::access` through `Repo`.
-
-## The validation failure
-
-A happy-path test is half a test. Add one negative path — the same
-`400` you verified by hand in [Validate inputs](/tutorial/validation/).
-
-```rust title="apps/blog/tests/e2e/main.rs"
 #[tokio::test]
 async fn create_with_empty_title_returns_400() {
     let app = boot().await;
@@ -180,6 +187,11 @@ async fn create_without_a_token_returns_401() {
 }
 ```
 
+The bearer moved into a function the three tests share, beside them in the
+file that needs it. The assertions cover the entire chain: the `POST` walks
+validation, the unit of work's transaction, and the service; the
+`GET /posts/{id}` walks `CrudService::access` through `Repo`.
+
 <Aside type="tip">
 The rest of the negative-path matrix — `403` across tenants, field masking,
 transaction rollback on a `5xx` — lives in
@@ -191,15 +203,19 @@ rule, so it has no cross-tenant case to assert yet.
 ## Run it
 
 `nestrs run test e2e` is the recipe; it routes to nextest with the binary
-filter for the e2e file.
+filter for the e2e suite.
 
 <Steps>
 
-1. Bring Postgres up (already done in [Persist through Postgres](/tutorial/database/)).
+1. Keep Postgres up — the `compose.yml` services you started in
+   [Persist through Postgres](/tutorial/database/). The suite migrates its
+   own throwaway database, so it needs no `nestrs run db up`.
 
    ```bash frame="terminal"
-   $ nestrs run db up
-   postgres ready on 127.0.0.1:5432
+   $ docker compose up -d
+   ✔ Container hello-postgres-1         Running
+   ✔ Container hello-redis-1            Running
+   ✔ Container hello-storage-1          Running
    ```
 
 2. Run the e2e suite.
@@ -208,9 +224,9 @@ filter for the e2e file.
    $ nestrs run test e2e
    ────────────
         Starting 3 tests across 1 binary
-         PASS [   1.4s] blog::e2e posts_round_trip
-         PASS [   0.8s] blog::e2e create_with_empty_title_returns_400
-         PASS [   0.7s] blog::e2e create_without_a_token_returns_401
+           PASS [   1.4s] blog::e2e posts::posts_round_trip
+           PASS [   0.8s] blog::e2e posts::create_with_empty_title_returns_400
+           PASS [   0.7s] blog::e2e posts::create_without_a_token_returns_401
    ```
 
 3. Run the rest of the workspace too — the integration suites don't need a
@@ -230,10 +246,10 @@ on `tests/e2e/main.rs`.
 
 ## What you have now
 
-- A `tests/e2e/main.rs` booting the real `BlogModule` against a
+- A `tests/e2e/` suite booting the real `BlogModule` against a
   throwaway database created on the Postgres `<PREFIX>_SEAORM__URL` names.
 - A happy path, a validation failure and an unauthenticated call — enough to
-  catch a wiring regression in any of the previous six pages.
+  catch a wiring regression in any of the previous pages.
 - A `nestrs run test e2e` recipe running them green.
 
 ## Where you are now
@@ -241,16 +257,16 @@ on `tests/e2e/main.rs`.
 You've built `posts` end to end: an entity declared once, a service
 that gates every DB call, an HTTP controller mounted in `blog`, a
 transactional Postgres, an e2e suite that locks the shape down. The
-feature lives in `crates/features/src/posts/`; copying it is the way
-to add the next bare feature.
+feature lives in `crates/features/src/posts/`; `nestrs g resource` writes the
+next one the same way.
 
-When you need auth, GraphQL, org scoping, and the full negative-path
-matrix, open [`api`](/publish/) and
+When you need GraphQL, org scoping, and the full negative-path matrix, open
+[`api`](/publish/) and
 [`crates/features/src/users/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users)
 — same port-and-adapter layout, more layers on top.
 
 ## Going further
 
-- [Authenticate and authorize](/tutorial/security/) — the next step: add guards, ability, and masking on `api`.
+- [Authenticate and authorize](/tutorial/security/) — the next step: read the policy on `api`, then narrow `blog`'s.
 - [E2E tests](/testing/e2e/) — the reference page for `TestApp`, its throwaway
   database, the bearer it signs and the unit it runs a service in.

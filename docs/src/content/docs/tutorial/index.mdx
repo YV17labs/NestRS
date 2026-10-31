@@ -24,8 +24,9 @@ one with something to do in your own `blog`.
 ## What you end up with
 
 `hello` for the quick-start binary, `apps/blog/` for the tutorial app, a
-`posts/` feature with HTTP only, and the three auth roots `nestrs g auth`
-writes on page 4 — a DB-backed route is guarded from its first request.
+`posts/` feature with HTTP only, and the auth adapter `nestrs g resource`
+writes with it on page 2 — a DB-backed route is guarded from its first
+request.
 
 <FileTree>
 - apps/blog/
@@ -37,6 +38,7 @@ writes on page 4 — a DB-backed route is guarded from its first request.
   - tests/
     - e2e/
       - main.rs
+      - posts.rs
 - crates/
   - features/
     - src/
@@ -60,20 +62,20 @@ Two `curl`s against the running binary, carrying the development token
 the database, not later.
 
 ```bash frame="terminal"
-$ curl -s -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
+$ curl -s -X POST http://localhost:3001/posts -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"title":"Hello","body":"World"}'
-{"id":"018f…","title":"Hello","body":"World"}
+{"id":"018f…","title":"Hello","body":"World","created_at":"2026-…","updated_at":"2026-…"}
 
-$ curl -s http://localhost:3005/posts/018f… -H "Authorization: Bearer $TOKEN"
-{"id":"018f…","title":"Hello","body":"World"}
+$ curl -s http://localhost:3001/posts/018f… -H "Authorization: Bearer $TOKEN"
+{"id":"018f…","title":"Hello","body":"World","created_at":"2026-…","updated_at":"2026-…"}
 ```
 
 And a passing e2e suite:
 
 ```bash frame="terminal"
 $ nestrs run test e2e
-         PASS [   …] blog::e2e posts_round_trip
+         PASS [   …] blog::e2e posts::posts_round_trip
 ```
 
 ## What you should know going in
@@ -85,9 +87,11 @@ $ nestrs run test e2e
   [Configuration](/configuration/), and [HTTP](/http/) that module,
   provider, and controller are familiar terms.
 - **Docker** available — the database and testing pages need Postgres
-  (`nestrs run db up`); earlier pages run without one.
+  (`docker compose up -d`, the services `nestrs new` scaffolded); earlier
+  pages run without one.
 - Page 1 adds `apps/blog/` with `nestrs new blog`; everything after that
-  happens in `blog`, not `hello`.
+  happens in `blog`, not `hello`, and every command runs from the workspace
+  root.
 
 <Aside type="note">
 If you cloned **this** repository to explore Publish, scaffold `hello` and
@@ -98,22 +102,24 @@ If you cloned **this** repository to explore Publish, scaffold `hello` and
 
 <CardGrid>
   <LinkCard title="1. Scaffold the app" href="/tutorial/scaffold/" description="nestrs new blog, nestrs run dev blog, Hello World on / — then read what the CLI wrote." />
-  <LinkCard title="2. Declare the entity" href="/tutorial/entity/" description="The Post entity with SeaORM and #[expose]." />
+  <LinkCard title="2. Declare the entity" href="/tutorial/entity/" description="nestrs g resource posts, then the Post entity with SeaORM and #[expose]." />
   <LinkCard title="3. See the security payoff" href="/tutorial/checkpoint/" description="Optional detour — 10 min, needs Docker + a clone. Run the reference api: an admin, a masked member, a cross-tenant 403 — no handler check." />
-  <LinkCard title="4. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts — behind AuthnGuard and AuthzGuard, which nestrs g auth writes here." />
-  <LinkCard title="5. Persist through Postgres" href="/tutorial/database/" description="SeaOrmDatabaseModule, migrations, transactional writes." />
+  <LinkCard title="4. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts — behind AuthnGuard and AuthzGuard, and the policy's first rule." />
+  <LinkCard title="5. Persist through Postgres" href="/tutorial/database/" description="Postgres, the post table's migration, transactional writes." />
   <LinkCard title="6. Validate inputs" href="/tutorial/validation/" description="The entity's rules at the boundary, 400 on a bad body." />
-  <LinkCard title="7. Test it end to end" href="/tutorial/testing/" description="apps/blog/tests/e2e/main.rs against an EphemeralDatabase." />
+  <LinkCard title="7. Test it end to end" href="/tutorial/testing/" description="The round trip g resource wrote, against a throwaway database." />
   <LinkCard title="8. Authenticate and authorize" href="/tutorial/security/" description="Read the reference api: AuthzAbility, the by-id load, response masking — the per-caller access you lived on step 3, then narrow blog's blanket Manage rule yourself." />
   <LinkCard title="9. Mirror on GraphQL" href="/tutorial/graphql/" description="Read the reference api: a UsersResolver over the same service, ability, and dataloader — then add one to blog's posts." />
 </CardGrid>
 
 <Aside type="tip">
-The tutorial feature exemplar in this repo is
+What `nestrs g resource` writes is the shape of the reference
+[`crates/features/src/users/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users)
+— compare as you go. The demo's own
 [`crates/features/src/posts/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/posts)
-— compare your scaffolded `apps/blog/` as you go. The complex reference is
-[`apps/api/`](https://github.com/YV17labs/NestRS/tree/main/demo/apps/api)
-(auth, GraphQL, orgs, queue, and the rest).
+grows the same feature with a tenant, an author, a status, events and an MCP
+tool, and [`apps/api/`](https://github.com/YV17labs/NestRS/tree/main/demo/apps/api)
+composes them all.
 </Aside>
 
 ## Going further

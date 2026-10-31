@@ -257,14 +257,15 @@ install. Commit the file and assert on it if you want a drift gate.
 more adapter over them:
 
 ```bash frame="terminal"
-$ nestrs g graphql posts
+$ nestrs g graphql posts --app blog
 ```
 
 That writes `crates/features/src/posts/graphql/{resolver.rs,module.rs,mod.rs}`
-— the module importing `GraphqlModule` — and wires `PostsGraphqlModule` into
-`blog`. Restart, and `POST /graphql` answers
-`{ posts { id title } }` through the same ability filter your HTTP routes go
-through. No `User.org` equivalent — that field is the one thing on this page
+— the module importing `GraphqlModule` — and the GraphQL authz module under
+`authz/graphql/`, flags the entity `#[expose(graphql)]`, and wires
+`PostsGraphqlModule` into `blog`. Restart, and `POST /graphql`, carrying the
+same bearer your `curl`s do, answers `{ posts { id title } }` through the
+same ability filter your HTTP routes go through. No `User.org` equivalent — that field is the one thing on this page
 that needs a relation `blog` does not have.
 
 ## What the reference feature has

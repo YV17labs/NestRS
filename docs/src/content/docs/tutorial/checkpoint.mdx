@@ -17,11 +17,12 @@ sees the same rows with `email` gone, and a cross-tenant read returns
 
 ## Run the reference workspace
 
-The tutorial `blog` app has no auth yet — that is deliberate. To live the
-payoff now, drive the reference [`api`](/publish/) app over `users` and
-`orgs`. It already wires the guards, the ability, and the masker you
-build by hand later in
-[Authenticate and authorize](/tutorial/security/).
+Your `blog` already carries the two guards `nestrs g resource` wrote, behind
+a policy that grants nothing yet — that is deliberate. To live the payoff now,
+drive the reference [`api`](/publish/) app over `users` and `orgs`. It wires
+the same guards over a real policy, and the masker that policy drives — what
+[Authenticate and authorize](/tutorial/security/) reads, before you narrow
+your own.
 
 <Steps>
 
@@ -107,15 +108,16 @@ turned a cross-tenant load into a `403`. The `UsersController` that
 produced all three is the same thin CRUD shape you are about to write for
 `posts` — it never reads the tenant or the role.
 
-You build this yourself — the guards, the `AuthzAbility`, the by-id
-load — in [Authenticate and authorize](/tutorial/security/), once
-your `posts` feature persists and is tested.
+Your `blog` has the same pieces already: the guards on `PostsController`,
+which [Expose over HTTP](/tutorial/http/) reads, and an `AuthzAbility` you
+grant its first rule there. [Authenticate and authorize](/tutorial/security/)
+reads how `api`'s policy scopes rows and masks fields, then narrows yours,
+once your `posts` persists and is tested.
 
 <Aside type="note">
 Living this needs the Publish repo (`auth` + `api` + seeded Postgres).
-Your own `blog` picks up the same two guards on the next page, but with a
-single blanket rule — conditions, field grants and cross-tenant denial are what
-you add later. The point here is to see the destination before you build toward
+Your own `blog` gets its first rule on the next page, a single blanket one —
+conditions, field grants and cross-tenant denial are what you add later. The point here is to see the destination before you build toward
 it.
 </Aside>
 

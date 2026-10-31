@@ -17,10 +17,11 @@ you write a line.
 The tutorial is **workspace-only**: shared features under `crates/features/`,
 thin apps under `apps/*`. Run every command from **your** workspace root
 (the monorepo you scaffolded in [Getting started](/getting-started/), or a
-fresh one). This repository hosts **Publish** only — use
+fresh one). Once `blog` joins `hello` there, the workspace has two apps, so a
+generator wiring one is told which: `--app blog`. This repository hosts
+**Publish** only — use
 [`nestrs new blog`](/cli/#add-an-app-to-an-existing-workspace) to create
-`apps/blog/`; compare your tree with the tutorial feature exemplar in
-[`crates/features/src/posts/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/posts).
+`apps/blog/`.
 </Aside>
 
 ## Create the app
@@ -49,7 +50,7 @@ From the workspace root:
 3. Hit the root route — use the port from `apps/blog/.env`.
 
    ```bash frame="terminal"
-   $ curl -i http://localhost:3005/
+   $ curl -i http://localhost:3001/
    HTTP/1.1 200 OK
 
    Hello World
@@ -138,12 +139,11 @@ pub struct BlogModule;
 ```
 
 ```bash title="apps/blog/.env" frame="terminal"
-NESTRS_HTTP__PORT=3005
+NESTRS_HTTP__PORT=3001
 ```
 
-The reference workspace gives `blog` port `3005`. When you scaffold with
-`nestrs new blog`, the CLI picks the next free port — yours may differ
-if other apps already exist in the workspace. The workspace's own `.env*`
+`nestrs new blog` picks the next free port: `3001` beside `hello`'s `3000`,
+and another if other apps already hold it. The workspace's own `.env*`
 files are shared by every app; `apps/blog/.env` is read over them under the
 `development` and `test` profiles, so a value that is `blog`'s alone lives
 there ([an app's own files](/configuration/env-cascade/#an-apps-own-files)).
@@ -194,7 +194,7 @@ nextest rejects a filterset naming a binary the workspace does not have.
        Compiling blog v0.1.0
         Running `target/debug/blog`
    INFO nest_rs::routes: mounted route controller="BlogController" method="GET" path="/" handler="hello"
-   INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3005"
+   INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3001"
    ```
 
    The route table prints on every boot, and `app ready` shows the port
@@ -203,7 +203,7 @@ nextest rejects a filterset naming a binary the workspace does not have.
 2. In another terminal:
 
    ```bash frame="terminal"
-   $ curl -i http://localhost:3005/
+   $ curl -i http://localhost:3001/
    HTTP/1.1 200 OK
 
    Hello World

@@ -64,9 +64,17 @@ with breaking the exemplar.
 adapter generator — every edge `Transport` carries — over both port shapes,
 from inside an app so the edits it makes to that app's `module.rs` and
 manifest compile too, plus `nestrs new`'s second app and `g migration`, and
-holds the result to the scaffold's own `clippy -D warnings`. The integration
-suite's text assertions are not that proof: they read a wrong import as
-readily as a right one.
+holds the result to the scaffold's own `clippy -D warnings`. Its e2e half
+replays the tutorial from the workspace root — `--app` naming the app, as a
+reader with two apps types it — and runs the suite it ends on against the
+live Postgres. The integration suite's text assertions are not that proof:
+they read a wrong import as readily as a right one.
+
+**A generator wires what it wrote into the app that serves it**, from
+anywhere in the workspace, writing in one edit every import its code needs
+that the root does not name — the backends the root chooses included: a next
+step the generator could have taken is a defect. The integration suite holds
+each generator to it.
 
 **Scaffolded span targets are app-style** (`features::<snake>`), never
 `nest_rs::*`: generated code is the developer's, not the framework's.

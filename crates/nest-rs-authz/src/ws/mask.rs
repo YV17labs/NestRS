@@ -78,11 +78,17 @@ where
 /// How a message's posture masks its reply on a subject's
 /// [`SubjectMask::Mask`]: an entity's rows mask it, a subject no table holds
 /// lets it through as any reply.
+#[diagnostic::on_unimplemented(
+    message = "`#[authorize]` arms no reply mask for this subject",
+    label = "neither an `#[expose]`d entity nor a `#[subject]`",
+    note = "a posture masks its reply against its entity's `#[expose]`d wire model, read and written as the entity's rows: expose the entity and answer a value that serializes, or declare a capability no table holds with `#[subject]`, whose posture masks nothing"
+)]
 pub trait WsMask<A, O: ?Sized> {
     /// The frame the reply puts on the wire.
     fn masked_reply(event: &'static str, value: &O) -> WsReply;
 }
 
+#[diagnostic::do_not_recommend]
 impl<A, E, O> WsMask<A, O> for Rows<E>
 where
     A: ActionMarker,

@@ -78,7 +78,28 @@ type Check<'fut> = Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut
 /// [`UnitContext::require`], whose `?` refuses an unwired unit with a `500`.
 ///
 /// The entries are written out as `#[async_trait]` writes an override, so an
-/// implementation is an ordinary `async fn` under `#[async_trait]`.
+/// implementation is an ordinary `async fn` under `#[async_trait]` — one
+/// closing every unit while the deployment is in maintenance:
+///
+/// ```
+/// use nest_rs_core::{Layer, UnitContext, async_trait};
+/// use nest_rs_guards::{Denial, Guard};
+///
+/// struct Maintenance {
+///     closed: bool,
+/// }
+/// # impl Layer for Maintenance {}
+///
+/// #[async_trait]
+/// impl Guard for Maintenance {
+///     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+///         if self.closed {
+///             return Err(Denial::forbidden("closed for maintenance"));
+///         }
+///         Ok(())
+///     }
+/// }
+/// ```
 pub trait Guard: Layer {
     /// An HTTP request — a route, a WebSocket upgrade, the request of an
     /// in-band endpoint (`/graphql`, `/mcp`). Read it — head and body — through

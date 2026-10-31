@@ -6,11 +6,6 @@ error[E0277]: an MCP operation returns a `Result`, and `std::string::String` is 
    |
    = help: the trait `nest_rs::mcp::__private::OperationAnswer` is not implemented for `std::string::String`
    = note: its guards, its access posture and its pipes refuse through the operation's failure, and an operation that cannot fail has nowhere to report a denial
-help: the trait `nest_rs::mcp::__private::OperationAnswer` is implemented for `Result<T, E>`
-  --> $WORKSPACE/crates/nest-rs-mcp/src/error.rs
-   |
-   | impl<T, E> OperationAnswer for Result<T, E> {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `nest_rs::mcp::__private::answer_of`
   --> $WORKSPACE/crates/nest-rs-mcp/src/error.rs
    |

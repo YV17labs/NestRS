@@ -379,7 +379,7 @@ fn value_ordering(a: &Value, b: &Value) -> Option<Ordering> {
 
 /// Handed to a rule's `when(|p| …)` closure so the condition reads
 /// `p.eq(Column::OrgId, actor.org_id)`.
-pub struct PredicateBuilder<E: EntityTrait>(PhantomData<fn() -> E>);
+pub struct PredicateBuilder<E>(PhantomData<fn() -> E>);
 
 impl<E: EntityTrait> PredicateBuilder<E> {
     pub(crate) fn new() -> Self {

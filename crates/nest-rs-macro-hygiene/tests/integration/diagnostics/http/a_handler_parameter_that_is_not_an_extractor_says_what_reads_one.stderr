@@ -13,12 +13,12 @@ help: the trait `FromRequest<'_>` is not implemented for `Settings`
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::http::Request
              Ambient<T>
-             Authorize<A, S>
              ClientIp
              RawBody
              Result<T, HttpError>
              nest_rs::http::Body
              nest_rs::http::Form<T>
+             nest_rs::http::Header<T>
            and $N others
 
 error[E0277]: `Settings` is not a handler parameter
@@ -36,11 +36,11 @@ help: the trait `FromRequest<'_>` is not implemented for `Settings`
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::http::Request
              Ambient<T>
-             Authorize<A, S>
              ClientIp
              RawBody
              Result<T, HttpError>
              nest_rs::http::Body
              nest_rs::http::Form<T>
+             nest_rs::http::Header<T>
            and $N others
    = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

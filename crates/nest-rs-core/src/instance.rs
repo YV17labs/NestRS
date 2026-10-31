@@ -39,6 +39,7 @@ pub trait InstanceSeal {}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Unnamed;
 
+#[diagnostic::do_not_recommend]
 impl InstanceSeal for Unnamed {}
 
 impl Instance for Unnamed {

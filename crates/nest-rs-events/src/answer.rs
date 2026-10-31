@@ -15,12 +15,14 @@ pub trait ListenerAnswer {
     fn into_outcome(self) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
+#[diagnostic::do_not_recommend]
 impl ListenerAnswer for () {
     fn into_outcome(self) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
 }
 
+#[diagnostic::do_not_recommend]
 impl<E: Into<Box<dyn Error + Send + Sync>> + 'static> ListenerAnswer for Result<(), E> {
     fn into_outcome(self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.map_err(nest_rs_core::boxed_error)

@@ -110,6 +110,7 @@ use crate::{ActionMarker, Subject};
 /// the route closed.
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
+#[diagnostic::do_not_recommend]
 impl<'a, A, S> FromRequest<'a> for Authorize<A, S>
 where
     A: ActionMarker,

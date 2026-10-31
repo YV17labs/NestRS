@@ -7,4 +7,4 @@ error[E0599]: no method named `fields` found for struct `RuleSpec<'_, users::Ent
    | |_________|
    |
    |
-   = note: the method was found for `RuleSpec<'_, E>`
+   = note: the method was found for `RuleSpec<'_, S>`

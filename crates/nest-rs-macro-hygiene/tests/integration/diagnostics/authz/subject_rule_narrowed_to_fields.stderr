@@ -1,0 +1,20 @@
+error[E0277]: `Exporting` has no rows to deny or narrow: `cannot`, `when` and `fields` take a SeaORM entity
+  --> tests/integration/diagnostics/authz/subject_rule_narrowed_to_fields.rs:11:39
+   |
+11 |     ab.can(Action::Manage, Exporting).fields(Vec::new());
+   |                                       ^^^^^^ not a SeaORM entity
+   |
+help: the trait `RowSubject` is not implemented for `Exporting`
+  --> tests/integration/diagnostics/authz/subject_rule_narrowed_to_fields.rs:7:1
+   |
+ 7 | pub struct Exporting;
+   | ^^^^^^^^^^^^^^^^^^^^
+   = note: a capability `#[subject]` declares has no rows: a grant covers it whole, and a grant not written is its denial
+note: required by a bound in `RuleSpec::<'_, S>::fields`
+  --> $WORKSPACE/crates/nest-rs-authz/src/builder.rs
+   |
+   |     pub fn fields<C: IdenStatic>(mut self, columns: impl IntoIterator<Item = C>) -> Self
+   |            ------ required by a bound in this associated function
+   |     where
+   |         S: RowSubject<__Column = C>,
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RuleSpec::<'_, S>::fields`

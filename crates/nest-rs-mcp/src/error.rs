@@ -646,6 +646,7 @@ pub trait OperationAnswer {
     fn into_result(self) -> Result<Self::Value, Self::Error>;
 }
 
+#[diagnostic::do_not_recommend]
 impl<T, E> OperationAnswer for Result<T, E> {
     type Value = T;
     type Error = E;

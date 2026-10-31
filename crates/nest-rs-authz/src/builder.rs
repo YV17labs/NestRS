@@ -12,11 +12,11 @@ use std::sync::Arc;
 use sea_orm::sea_query::Condition;
 use sea_orm::{EntityTrait, IdenStatic};
 
-use crate::Subject;
 use crate::ability::{Ability, FieldSet, Rule, When};
 use crate::action::Action;
 use crate::error::MalformedRuleError;
 use crate::predicate::{Predicate, PredicateBuilder};
+use crate::{RowSubject, Subject};
 
 /// Accumulates rules into an [`Ability`]. Handed to
 /// [`AbilityFactory::define`](crate::AbilityFactory::define); each
@@ -103,11 +103,11 @@ impl AbilityBuilder {
     /// # let mut ab = AbilityBuilder::new();
     /// ab.cannot(Action::Delete, post::Entity).requires_scope("posts:admin");
     /// ```
-    pub fn cannot<E>(&mut self, action: Action, _subject: E) -> RuleSpec<'_, E, Cannot>
-    where
-        E: EntityTrait,
-        E::Column: Send + Sync + 'static,
-    {
+    pub fn cannot<E: RowSubject>(
+        &mut self,
+        action: Action,
+        _subject: E,
+    ) -> RuleSpec<'_, E, Cannot> {
         RuleSpec::new(self, action, true)
     }
 
@@ -256,27 +256,27 @@ impl<S: Subject> RuleSpec<'_, S> {
     }
 }
 
-impl<E, K> RuleSpec<'_, E, K>
-where
-    E: EntityTrait,
-    E::Column: Send + Sync + 'static,
-{
+// Bounded per method, never per impl: a capability calling one is refused
+// with `RowSubject`'s sentence, where an unmet impl bound reads as no method.
+impl<S: Subject, K> RuleSpec<'_, S, K> {
     /// `.when(|p| p.eq(users::Column::OrgId, actor.org_id))`: the rule holds
     /// for the rows the predicate matches alone.
-    pub fn when(mut self, build: impl FnOnce(PredicateBuilder<E>) -> Predicate<E>) -> Self {
+    pub fn when(mut self, build: impl FnOnce(PredicateBuilder<S>) -> Predicate<S>) -> Self
+    where
+        S: RowSubject,
+    {
         self.rows = Some(Arc::new(build(PredicateBuilder::new())));
         self
     }
 }
 
-impl<E> RuleSpec<'_, E>
-where
-    E: EntityTrait,
-    E::Column: Send + Sync + 'static,
-{
+impl<S: Subject> RuleSpec<'_, S> {
     /// Restrict the grant to these columns — the response masker keeps only
     /// these fields. Without this, every field is permitted.
-    pub fn fields(mut self, columns: impl IntoIterator<Item = E::Column>) -> Self {
+    pub fn fields<C: IdenStatic>(mut self, columns: impl IntoIterator<Item = C>) -> Self
+    where
+        S: RowSubject<__Column = C>,
+    {
         self.columns = FieldSet::Only(columns.into_iter().map(|c| c.as_str()).collect());
         self
     }

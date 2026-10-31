@@ -8,18 +8,4 @@ error[E0277]: a `#[resource]` answers `Json<T>`, a `String` or a `ReadResourceRe
    |                                      ^^^^^^ not a resource's contents
    |
    = help: the trait `nest_rs::mcp::__private::ResourceBody` is not implemented for `u32`
-   = note: wrap it in `Option` to answer a resource the caller may not read as not found
-help: the following other types implement trait `nest_rs::mcp::__private::ResourceBody`
-  --> $WORKSPACE/crates/nest-rs-mcp/src/resource.rs
-   |
-   | impl<T: Serialize> ResourceBody for Json<T> {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `nest_rs::mcp::Json<T>`
-...
-   | impl ResourceBody for String {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::string::String`
-...
-   | impl ResourceBody for ReadResourceResult {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `nest_rs::mcp::model::ReadResourceResult`
-...
-   | impl<B: ResourceBody> ResourceBody for Option<B> {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::option::Option<B>`
+   = note: a `#[resource]` answers its contents as `Json<T>`, a `String` or a `ReadResourceResult`, or any of them wrapped in `Option` to answer a resource the caller may not read as not found

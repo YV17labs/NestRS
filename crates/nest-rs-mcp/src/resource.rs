@@ -21,7 +21,7 @@ const TEXT: &str = "text/plain";
     message = "a `#[resource]` answers `Json<T>`, a `String` or a `ReadResourceResult`, and \
                `{Self}` is none of them",
     label = "not a resource's contents",
-    note = "wrap it in `Option` to answer a resource the caller may not read as not found"
+    note = "a `#[resource]` answers its contents as `Json<T>`, a `String` or a `ReadResourceResult`, or any of them wrapped in `Option` to answer a resource the caller may not read as not found"
 )]
 pub trait ResourceBody: Sized {
     /// The media type its contents carry, advertised on its template; `None`
@@ -33,6 +33,7 @@ pub trait ResourceBody: Sized {
 }
 
 /// The value, serialized: a JSON text the client parses.
+#[diagnostic::do_not_recommend]
 impl<T: Serialize> ResourceBody for Json<T> {
     const MIME_TYPE: Option<&'static str> = Some(JSON);
 
@@ -46,6 +47,7 @@ impl<T: Serialize> ResourceBody for Json<T> {
 }
 
 /// Plain text.
+#[diagnostic::do_not_recommend]
 impl ResourceBody for String {
     const MIME_TYPE: Option<&'static str> = Some(TEXT);
 
@@ -57,6 +59,7 @@ impl ResourceBody for String {
 }
 
 /// The protocol's own result, as built: a blob, or several contents.
+#[diagnostic::do_not_recommend]
 impl ResourceBody for ReadResourceResult {
     const MIME_TYPE: Option<&'static str> = None;
 
@@ -67,6 +70,7 @@ impl ResourceBody for ReadResourceResult {
 
 /// `None` is a resource the caller may not read, answered as one no template
 /// reads: a reader cannot tell a row it was refused from a row that is not.
+#[diagnostic::do_not_recommend]
 impl<B: ResourceBody> ResourceBody for Option<B> {
     const MIME_TYPE: Option<&'static str> = B::MIME_TYPE;
 

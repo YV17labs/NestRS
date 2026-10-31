@@ -4,47 +4,26 @@ error[E0277]: `Exporting` is not an authorization subject
 16 |     #[authorize(Manage, Exporting)]
    |                         ^^^^^^^^^ neither an entity nor a `#[subject]`
    |
-help: the trait `EntityTrait` is not implemented for `Exporting`
+help: the trait `Subject` is not implemented for `Exporting`
   --> tests/integration/diagnostics/authz/authorize_on_a_type_that_is_no_subject.rs:7:1
    |
  7 | struct Exporting;
    | ^^^^^^^^^^^^^^^^
    = note: a posture names a SeaORM entity, whose rows it masks, or a capability no table holds, declared with `#[subject]` on a unit struct: `#[subject] pub struct Exporting;`
-help: the trait `EntityTrait` is implemented for `sea_orm_migration::seaql_migrations::Entity`
-  --> $CARGO/sea-orm-migration-$VERSION/src/seaql_migrations.rs
-   |
-   | #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-   |                                       ^^^^^^^^^^^^^^^^^
-   = note: required for `Exporting` to implement `Subject`
 note: required by a bound in `class_gate`
   --> $WORKSPACE/crates/nest-rs-authz/src/gate.rs
    |
    | pub fn class_gate<A: ActionMarker, S: Subject>(cx: &mut UnitContext<'_>) -> Result<(), Failure> {
    |                                       ^^^^^^^ required by this bound in `class_gate`
-   = note: this error originates in the derive macro `sea_orm::prelude::DeriveEntity` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the trait bound `Exporting: WireModelDefaults` is not satisfied
+error[E0277]: `#[authorize]` arms no reply mask for this subject
   --> tests/integration/diagnostics/authz/authorize_on_a_type_that_is_no_subject.rs:16:25
    |
 16 |     #[authorize(Manage, Exporting)]
-   |                         ^^^^^^^^^ unsatisfied trait bound
+   |                         ^^^^^^^^^ neither an `#[expose]`d entity nor a `#[subject]`
    |
-help: the trait `WireModelDefaults` is not implemented for `Exporting`
-  --> tests/integration/diagnostics/authz/authorize_on_a_type_that_is_no_subject.rs:7:1
-   |
- 7 | struct Exporting;
-   | ^^^^^^^^^^^^^^^^
-help: the trait `nest_rs::authz::__private::McpMask<A, O>` is implemented for `nest_rs::authz::__private::Rows<E>`
-  --> $WORKSPACE/crates/nest-rs-authz/src/mcp/mask.rs
-   |
-   | / impl<A, E, O> McpMask<A, O> for Rows<E>
-   | | where
-   | |     A: ActionMarker,
-   | |     E: EntityTrait + WireModelDefaults,
-   | |     E::Model: Serialize + DeserializeOwned,
-   | |     O: Serialize + DeserializeOwned,
-   | |____________________________________^
-   = note: required for `nest_rs::authz::__private::Rows<Exporting>` to implement `nest_rs::authz::__private::McpMask<nest_rs::authz::Manage, _>`
+   = help: the trait `nest_rs::authz::__private::McpMask<nest_rs::authz::Manage, _>` is not implemented for `nest_rs::authz::__private::Rows<Exporting>`
+   = note: a posture masks its reply against its entity's `#[expose]`d wire model, read and written as the entity's rows: expose the entity and answer a value that serializes, or declare a capability no table holds with `#[subject]`, whose posture masks nothing
 note: required by a bound in `nest_rs::authz::__private::mcp_masked_value`
   --> $WORKSPACE/crates/nest-rs-authz/src/mcp/mask.rs
    |
@@ -60,15 +39,9 @@ error[E0277]: the trait bound `Exporting: EntityTrait` is not satisfied
 13 | #[tools]
    | ^^^^^^^^ unsatisfied trait bound
    |
-help: the trait `EntityTrait` is not implemented for `Exporting`
+help: the trait `nest_rs::authz::__private::SubjectMask` is not implemented for `Exporting`
   --> tests/integration/diagnostics/authz/authorize_on_a_type_that_is_no_subject.rs:7:1
    |
  7 | struct Exporting;
    | ^^^^^^^^^^^^^^^^
-help: the trait `EntityTrait` is implemented for `sea_orm_migration::seaql_migrations::Entity`
-  --> $CARGO/sea-orm-migration-$VERSION/src/seaql_migrations.rs
-   |
-   | #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-   |                                       ^^^^^^^^^^^^^^^^^
-   = note: required for `Exporting` to implement `nest_rs::authz::__private::SubjectMask`
-   = note: this error originates in the attribute macro `tools` which comes from the expansion of the derive macro `sea_orm::prelude::DeriveEntity` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the attribute macro `tools` (in Nightly builds, run with -Z macro-backtrace for more info)

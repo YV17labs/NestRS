@@ -53,6 +53,11 @@ where
 
 /// How a route's posture shapes the reply on a subject's [`SubjectMask::Mask`]:
 /// an entity's rows mask it, a subject no table holds leaves it unshaped.
+#[diagnostic::on_unimplemented(
+    message = "`#[authorize]` arms no reply mask for this subject",
+    label = "neither an `#[expose]`d entity nor a `#[subject]`",
+    note = "a posture masks its reply against its entity's `#[expose]`d wire model, read and written as the entity's rows: expose the entity and answer a value that serializes, or declare a capability no table holds with `#[subject]`, whose posture masks nothing"
+)]
 pub trait RouteMask {
     /// Whether the posture shapes the reply at all.
     const SHAPES: bool;
@@ -61,6 +66,7 @@ pub trait RouteMask {
     fn shaping(ability: Arc<Ability>, action: Action) -> Option<Box<dyn ResponseShaping>>;
 }
 
+#[diagnostic::do_not_recommend]
 impl<E> RouteMask for Rows<E>
 where
     E: EntityTrait + WireModelDefaults,

@@ -53,3 +53,18 @@ The class gate now refuses an entity's `cannot` no `when` narrows
 (`denial-holds-whatever-the-token.md`), so a denial on a capability would no
 longer be fail-open. `cannot` stays an entity's alone all the same: on a
 subject with no rows, a grant not written is the denial, one way to say it.
+
+## 2026-10-31 — a capability's `cannot`, `when` and `fields` say why
+
+Under the owner's agreement to the identity audit's second pass ("Tout faire
+(Recommandé)", 2026-10-31). The three stayed an entity's by type, but the
+type was `EntityTrait`, so rustc asked a capability to be a SeaORM entity and
+pointed at the migration table's. `RowSubject`, a `Subject` every entity is,
+now bounds them, each method by its own where clause so a capability reads
+its sentence ("`Exporting` has no rows to deny or narrow: `cannot`, `when`
+and `fields` take a SeaORM entity", true of any type that is not an entity,
+the capability's case in its note) rather than a missing method; the
+blankets an entity reaches `Subject`, `SubjectMask` and `RowSubject` through
+are hidden from rustc's candidates. The `#[sse]` refusal and its remedy
+stand: an entity-gated stream would run with no mask
+(`unmasked-reply-withholds-the-ability.md`).

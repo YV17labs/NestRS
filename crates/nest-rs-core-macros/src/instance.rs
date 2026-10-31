@@ -40,6 +40,7 @@ fn expand(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     Ok(quote! {
         #item
 
+        #[diagnostic::do_not_recommend]
         impl ::nest_rs_core::__private::InstanceSeal for #ident {}
 
         impl ::nest_rs_core::Instance for #ident {

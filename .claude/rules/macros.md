@@ -194,6 +194,14 @@ fits on one line (`CLAUDE.md`, *Families*). A value refusal opens with its site
 shows without the source frame. No value is handed to `syn`'s own sentence or to
 `format_ident!`, which names neither the decorator nor the key, or panics.
 
+**A misuse rustc reports is one sentence, naming no expansion item.** A trait
+an expansion bounds on carries `#[diagnostic::on_unimplemented]` whose message
+and note say the whole fix; a `__private` impl rustc would list as a
+candidate, or a blanket that leads it to the wrong trait, is
+`#[diagnostic::do_not_recommend]`; and a bound one use site checks is not
+re-checked by every probe — what a decorator generates carries no probe its
+type cannot answer. Held by the hygiene snapshots, read when they move.
+
 **Every layer attribute is one cell of `nest_rs_codegen::__private::layers`'
 table** — an exhaustive `match` over the pairs, each layer attribute and the
 scopes (the host, a method, a gateway's connection hook): built, pending or

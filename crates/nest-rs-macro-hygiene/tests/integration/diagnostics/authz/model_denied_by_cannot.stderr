@@ -1,0 +1,17 @@
+error[E0277]: `post::Model` has no rows to deny or narrow: `cannot`, `when` and `fields` take a SeaORM entity
+  --> tests/integration/diagnostics/authz/model_denied_by_cannot.rs:25:8
+   |
+25 |     ab.cannot(Action::Delete, post::Model { id: Default::default() });
+   |        ^^^^^^ not a SeaORM entity
+   |
+help: the trait `RowSubject` is not implemented for `post::Model`
+  --> tests/integration/diagnostics/authz/model_denied_by_cannot.rs:12:5
+   |
+12 |     pub struct Model {
+   |     ^^^^^^^^^^^^^^^^
+   = note: a capability `#[subject]` declares has no rows: a grant covers it whole, and a grant not written is its denial
+note: required by a bound in `AbilityBuilder::cannot`
+  --> $WORKSPACE/crates/nest-rs-authz/src/builder.rs
+   |
+   |     pub fn cannot<E: RowSubject>(
+   |                      ^^^^^^^^^^ required by this bound in `AbilityBuilder::cannot`

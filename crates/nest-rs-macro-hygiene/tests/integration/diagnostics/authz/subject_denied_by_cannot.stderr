@@ -1,45 +1,17 @@
-error[E0277]: the trait bound `Exporting: EntityTrait` is not satisfied
-  --> tests/integration/diagnostics/authz/subject_denied_by_cannot.rs:11:31
+error[E0277]: `Exporting` has no rows to deny or narrow: `cannot`, `when` and `fields` take a SeaORM entity
+  --> tests/integration/diagnostics/authz/subject_denied_by_cannot.rs:11:8
    |
 11 |     ab.cannot(Action::Manage, Exporting);
-   |        ------                 ^^^^^^^^^ unsatisfied trait bound
-   |        |
-   |        required by a bound introduced by this call
+   |        ^^^^^^ not a SeaORM entity
    |
-help: the trait `EntityTrait` is not implemented for `Exporting`
+help: the trait `RowSubject` is not implemented for `Exporting`
   --> tests/integration/diagnostics/authz/subject_denied_by_cannot.rs:7:1
    |
  7 | pub struct Exporting;
    | ^^^^^^^^^^^^^^^^^^^^
-help: the trait `EntityTrait` is implemented for `sea_orm_migration::seaql_migrations::Entity`
-  --> $CARGO/sea-orm-migration-$VERSION/src/seaql_migrations.rs
-   |
-   | #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-   |                                       ^^^^^^^^^^^^^^^^^
+   = note: a capability `#[subject]` declares has no rows: a grant covers it whole, and a grant not written is its denial
 note: required by a bound in `AbilityBuilder::cannot`
   --> $WORKSPACE/crates/nest-rs-authz/src/builder.rs
    |
-   |     pub fn cannot<E>(&mut self, action: Action, _subject: E) -> RuleSpec<'_, E, Cannot>
-   |            ------ required by a bound in this associated function
-   |     where
-   |         E: EntityTrait,
-   |            ^^^^^^^^^^^ required by this bound in `AbilityBuilder::cannot`
-   = note: this error originates in the derive macro `sea_orm::prelude::DeriveEntity` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: the trait bound `Exporting: EntityTrait` is not satisfied
-  --> tests/integration/diagnostics/authz/subject_denied_by_cannot.rs:11:5
-   |
-11 |     ab.cannot(Action::Manage, Exporting);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
-   |
-help: the trait `EntityTrait` is not implemented for `Exporting`
-  --> tests/integration/diagnostics/authz/subject_denied_by_cannot.rs:7:1
-   |
- 7 | pub struct Exporting;
-   | ^^^^^^^^^^^^^^^^^^^^
-help: the trait `EntityTrait` is implemented for `sea_orm_migration::seaql_migrations::Entity`
-  --> $CARGO/sea-orm-migration-$VERSION/src/seaql_migrations.rs
-   |
-   | #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-   |                                       ^^^^^^^^^^^^^^^^^
-   = note: this error originates in the derive macro `sea_orm::prelude::DeriveEntity` (in Nightly builds, run with -Z macro-backtrace for more info)
+   |     pub fn cannot<E: RowSubject>(
+   |                      ^^^^^^^^^^ required by this bound in `AbilityBuilder::cannot`

@@ -9,12 +9,12 @@ error[E0277]: `Piped<Trim, nest_rs::http::Json<std::string::String>>` is not a h
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::http::Request
              Ambient<T>
-             Authorize<A, S>
              ClientIp
              RawBody
              Result<T, HttpError>
              nest_rs::http::Body
              nest_rs::http::Form<T>
+             nest_rs::http::Header<T>
            and $N others
 
 error[E0277]: `Piped<Trim, nest_rs::http::Json<std::string::String>>` is not a handler parameter
@@ -28,11 +28,11 @@ error[E0277]: `Piped<Trim, nest_rs::http::Json<std::string::String>>` is not a h
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::http::Request
              Ambient<T>
-             Authorize<A, S>
              ClientIp
              RawBody
              Result<T, HttpError>
              nest_rs::http::Body
              nest_rs::http::Form<T>
+             nest_rs::http::Header<T>
            and $N others
    = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

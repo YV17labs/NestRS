@@ -49,7 +49,7 @@ pub use gate::class_gate;
 pub use guard::AbilityGuard;
 pub use mask::masked_output_ambient;
 pub use predicate::{Predicate, PredicateBuilder};
-pub use subject::Subject;
+pub use subject::{RowSubject, Subject};
 
 /// Declares a unit struct a [`Subject`] no table holds — a capability a rule
 /// grants whole and `#[authorize(Action, Subject)]` gates on every edge,

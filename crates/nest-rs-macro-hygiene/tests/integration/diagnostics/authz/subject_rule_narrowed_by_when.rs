@@ -1,5 +1,5 @@
 //! `when` narrows the rows an entity's rule reaches; a subject no table holds
-//! has no rows, so the method is not there to call.
+//! has no rows, so the call is refused saying so.
 
 use nest_rs::authz::{AbilityBuilder, Action, subject};
 

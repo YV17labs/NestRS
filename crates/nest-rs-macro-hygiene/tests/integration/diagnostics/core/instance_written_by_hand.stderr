@@ -10,11 +10,6 @@ help: the trait `nest_rs::core::__private::InstanceSeal` is not implemented for 
 6 | pub struct Hand;
   | ^^^^^^^^^^^^^^^
   = note: an instance's name is read off its marker's ident, never chosen: `#[instance] pub struct Cache;`
-help: the trait `nest_rs::core::__private::InstanceSeal` is implemented for `Unnamed`
- --> $WORKSPACE/crates/nest-rs-core/src/instance.rs
-  |
-  | impl InstanceSeal for Unnamed {}
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `Instance`
  --> $WORKSPACE/crates/nest-rs-core/src/instance.rs
   |

@@ -446,7 +446,15 @@ pub fn main<T, F: Future<Output = T>>(app: MainCrate, main: F) -> T {
     // Caught so a panicking `main` gets the same bounded teardown: unwinding
     // past it would drop the runtime, which waits on blocking work unbounded.
     let ran = std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(main)));
-    let budget = teardown_budget();
+    tear_down(runtime, teardown_budget());
+    drop(watching);
+    flush_console();
+    ran.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+}
+
+/// Tear `runtime` down within `budget`, saying when work still running at its
+/// end is abandoned.
+fn tear_down(runtime: tokio::runtime::Runtime, budget: Duration) {
     let started = std::time::Instant::now();
     runtime.shutdown_timeout(budget);
     // `shutdown_timeout` returns early once every thread stops, so reaching a
@@ -459,9 +467,6 @@ pub fn main<T, F: Future<Output = T>>(app: MainCrate, main: F) -> T {
              waits for it",
         );
     }
-    drop(watching);
-    flush_console();
-    ran.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }
 
 #[cfg(test)]
@@ -485,79 +490,147 @@ mod tests {
         }
     }
 
-    /// Past every budget a test records by more than scheduling noise.
-    const BLOCKS_FOR: Duration = Duration::from_secs(8);
-
     const ABANDONED: &str = "work still running as the runtime is torn down is abandoned: the exit \
                              no longer waits for it";
 
-    async fn leave_blocking_work_behind() {
-        tokio::task::spawn_blocking(|| std::thread::sleep(BLOCKS_FOR));
+    /// Bounds a hold only so an exit that waited on the work fails the test
+    /// rather than hang it.
+    const HOLD_GUARD: Duration = Duration::from_secs(60);
+
+    /// Blocking work an exit leaves behind, held until the test lets it go: an
+    /// exit that returned first left it running, however loaded the machine.
+    struct Held {
+        release: std::sync::mpsc::Sender<()>,
+        ended: std::sync::mpsc::Receiver<bool>,
+    }
+
+    impl Held {
+        /// The work, started on the current runtime's blocking pool.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a test already gone has nothing left to hear"
+        )]
+        async fn left_behind() -> Self {
+            let (release, held) = std::sync::mpsc::channel::<()>();
+            let (ends, ended) = std::sync::mpsc::channel();
+            let (running, runs) = tokio::sync::oneshot::channel();
+            tokio::task::spawn_blocking(move || {
+                let _ = running.send(());
+                let _ = ends.send(held.recv_timeout(HOLD_GUARD).is_ok());
+            });
+            runs.await.expect("the blocking work runs");
+            Self { release, ended }
+        }
+
+        /// Let the work go: whether it was still held, its guard not run out.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "work already ended says so through `ended`"
+        )]
+        fn let_go(self) -> bool {
+            let _ = self.release.send(());
+            self.ended.recv().unwrap_or(false)
+        }
+    }
+
+    /// Every abandonment `logs` holds said a budget within `left`.
+    fn abandoned_within(logs: &LogCapture, left: Duration) {
+        for abandoned in logs.find(crate::target::APP, ABANDONED) {
+            let budget_ms: u128 = abandoned
+                .field("budget_ms")
+                .and_then(|ms| ms.parse().ok())
+                .expect("the budget it was given");
+            assert!(budget_ms <= left.as_millis(), "{abandoned:#?}");
+        }
     }
 
     #[test]
-    fn work_outliving_what_the_hooks_left_is_abandoned_at_it_and_said() {
+    fn work_outliving_its_teardown_budget_is_abandoned_at_it_and_said() {
         let logs = LogCapture::install();
-        let left = Duration::from_millis(300);
-        hooks_deadline(left);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        let held = runtime.block_on(Held::left_behind());
+        let budget = Duration::from_millis(300);
         let started = Instant::now();
 
-        main(here(), leave_blocking_work_behind());
+        tear_down(runtime, budget);
 
         let took = started.elapsed();
+        assert!(held.let_go(), "the teardown returned while the work ran");
         assert!(
-            took >= left - Duration::from_millis(100) && took < left + Duration::from_secs(1),
-            "the teardown waited out what the hooks left, not the work ({BLOCKS_FOR:?}): took \
-             {took:?}",
+            took >= budget,
+            "after waiting out its budget: took {took:?}"
         );
         let abandoned = logs.expect_one(crate::target::APP, ABANDONED);
         assert_eq!(abandoned.level, "warn");
-        let budget_ms: u128 = abandoned
-            .field("budget_ms")
-            .and_then(|ms| ms.parse().ok())
-            .expect("the budget it was given");
-        assert!(budget_ms <= left.as_millis(), "{abandoned:#?}");
+        assert_eq!(abandoned.field("budget_ms").as_deref(), Some("300"));
+    }
+
+    #[test]
+    fn work_outliving_what_the_hooks_left_is_abandoned_at_it() {
+        let logs = LogCapture::install();
+        let left = Duration::from_millis(300);
+        let started = Instant::now();
+        hooks_deadline(left);
+
+        let held = main(here(), Held::left_behind());
+
+        let took = started.elapsed();
+        assert!(held.let_go(), "the exit returned while the work ran");
+        assert!(
+            took >= left,
+            "the teardown waited out what the hooks left: took {took:?}"
+        );
+        abandoned_within(&logs, left);
     }
 
     #[test]
     fn a_main_that_panics_is_torn_down_within_what_the_hooks_left_and_keeps_its_panic() {
         let logs = LogCapture::install();
         let left = Duration::from_millis(300);
-        hooks_deadline(left);
         let started = Instant::now();
+        hooks_deadline(left);
+        let slot = Arc::new(std::sync::Mutex::new(None));
+        let filled = Arc::clone(&slot);
 
-        let unwound = std::panic::catch_unwind(|| {
-            main::<(), _>(here(), async {
-                leave_blocking_work_behind().await;
+        let unwound = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            main::<(), _>(here(), async move {
+                let held = Held::left_behind().await;
+                *filled.lock().unwrap_or_else(|e| e.into_inner()) = Some(held);
                 panic!("main gave up");
             })
-        })
+        }))
         .expect_err("the panic goes on out of `main`");
 
         let took = started.elapsed();
+        let held = slot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .expect("the work was left behind");
         assert!(
-            took < left + Duration::from_secs(1),
-            "the teardown waited out what the hooks left, not the work ({BLOCKS_FOR:?}): took \
-             {took:?}",
+            held.let_go(),
+            "the exit returned while the work ran: a panicking main is torn down bounded too",
         );
+        assert!(took >= left, "within what the hooks left: took {took:?}");
         assert_eq!(crate::panic_message(unwound.as_ref()), "main gave up");
-        logs.expect_one(crate::target::APP, ABANDONED);
         logs.expect_one(
             crate::target::APP,
             "panicked where no unit of work contains it",
         );
+        abandoned_within(&logs, left);
     }
 
     #[test]
     fn a_teardown_the_hooks_left_nothing_holds_the_exit_for_nothing() {
         let logs = LogCapture::install();
         hooks_deadline(Duration::ZERO);
-        let started = Instant::now();
 
-        main(here(), leave_blocking_work_behind());
+        let held = main(here(), Held::left_behind());
 
-        let took = started.elapsed();
-        assert!(took < Duration::from_secs(1), "took {took:?}");
+        assert!(held.let_go(), "the exit returned while the work ran");
         assert!(logs.find(crate::target::APP, ABANDONED).is_empty());
     }
 

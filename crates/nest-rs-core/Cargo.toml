@@ -74,6 +74,9 @@ nestrs-hooks-probe = { path = "tests/hooks-probe" }
 log.workspace = true
 # What each unit pays the pipeline, measured in `benches/`.
 criterion.workspace = true
+# The thread's CPU clock, which std lacks: a cost a test bounds is read on it,
+# since a thread waiting for a core accrues none.
+libc.workspace = true
 
 [[bench]]
 name = "pipeline"

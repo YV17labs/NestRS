@@ -1406,6 +1406,23 @@ mod decode_error_tests {
         DecodeError::new(&error).to_string()
     }
 
+    /// The CPU time this thread has run. A thread waiting for a core accrues
+    /// none, so a cost read on it holds however loaded the machine is.
+    #[expect(unsafe_code, reason = "std has no thread CPU clock")]
+    fn thread_cpu_time() -> std::time::Duration {
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: `now` is a valid `timespec` the call only writes.
+        let read = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
+        assert_eq!(read, 0, "the thread's CPU clock reads");
+        std::time::Duration::new(
+            u64::try_from(now.tv_sec).expect("a CPU time is not negative"),
+            u32::try_from(now.tv_nsec).expect("nanoseconds below a second"),
+        )
+    }
+
     #[test]
     fn a_refused_value_is_said_by_its_kind_and_never_quoted() {
         let secret = from_value(json!({ "amount": "sk_live_51HsecretTOKEN", "card": "Visa" }));
@@ -1635,17 +1652,17 @@ mod decode_error_tests {
             "{}, expected u64",
             "invalid type: string \"".repeat(200_000)
         );
-        let started = std::time::Instant::now();
+        let started = thread_cpu_time();
         let redacted = DecodeError::redact(&crowded, None);
+        let spent = thread_cpu_time() - started;
         assert!(
             redacted.len() < 2 * DecodeError::MAX_LEN,
             "{}",
             redacted.len()
         );
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(1),
-            "{:?} for {} bytes",
-            started.elapsed(),
+            spent < std::time::Duration::from_secs(1),
+            "{spent:?} of this thread's CPU for {} bytes",
             crowded.len(),
         );
 

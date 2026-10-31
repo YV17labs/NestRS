@@ -2769,6 +2769,7 @@ dependencies = [
  "constant_time_eq",
  "criterion",
  "inventory",
+ "libc",
  "log",
  "nest-rs-core-macros",
  "nest-rs-testing",

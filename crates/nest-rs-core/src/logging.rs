@@ -2834,9 +2834,12 @@ mod tests {
         let bound = Duration::from_millis(200);
         let started = Instant::now();
 
-        assert!(!queue.written_within(bound), "stdout never took the line");
+        assert!(
+            !queue.written_within(bound),
+            "the exit stopped waiting for a line stdout never took"
+        );
         let took = started.elapsed();
-        assert!(took >= bound && took < Duration::from_secs(2), "{took:?}");
+        assert!(took >= bound, "and not before its bound: {took:?}");
     }
 
     #[test]

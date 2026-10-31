@@ -274,11 +274,16 @@ that document onto every `401` the app emits.
 
 ```rust title="apps/api/src/module.rs"
 #[module(imports = [
-    AuthnModule,
     OAuthResourceModule,
 ])]
 pub struct ApiModule;
 ```
+
+It imports the token verifier it binds, `AuthnModule`, itself: the root
+names neither the verifier nor its key. A resource server with no key to
+verify with fails the boot as `AuthnModule` does, naming the
+`<PREFIX>_AUTHN__*` variables that give it one — never a server that accepts
+nothing, or anything.
 
 ```bash
 NESTRS_OAUTH__RESOURCE__RESOURCE=https://api.example.com

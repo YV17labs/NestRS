@@ -12,16 +12,18 @@
 //!
 //! The endpoint and the challenge ride the HTTP transport it imports bare.
 //!
-//! It also binds the token verifier [`AuthnModule`](nest_rs_authn::AuthnModule)
-//! builds to this resource — the MCP authorization spec's confused-deputy
-//! defence: a token is accepted only when its `aud` is the resource (RFC 8707;
+//! It imports the token verifier, [`AuthnModule`] bare, and binds it to this
+//! resource — the MCP authorization spec's confused-deputy defence: a token is
+//! accepted only when its `aud` is the resource (RFC 8707;
 //! `<PREFIX>_AUTHN__AUDIENCE` when set) and its `iss` one of the authorization
-//! servers (RFC 9068 §4). The boot fails when the verifier is missing, or when
-//! what it is configured with contradicts the binding, naming the settings.
-//! And the MCP endpoint's `Host` allowlist admits the host the resource names.
+//! servers (RFC 9068 §4). A resource server with no key to verify with fails
+//! the boot as the verifier does, naming the variables that give it one; one
+//! whose verifier is configured to contradict the binding fails naming the
+//! settings. And the MCP endpoint's `Host` allowlist admits the host the
+//! resource names.
 
 use nest_rs_authn::__private::ResourceBinding;
-use nest_rs_authn::AuthnConfig;
+use nest_rs_authn::{AuthnConfig, AuthnModule};
 use nest_rs_config::{ConfigModule, ConfigSetup, endpoint_shown};
 use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, module};
 use nest_rs_http::__private::CanonicalHost;
@@ -38,6 +40,7 @@ use crate::metadata::ProtectedResourceMetadata;
 #[module(
     imports = [
         nest_rs_config::__private::feature::<OAuthResourceConfig>(),
+        AuthnModule,
         HttpModule,
         OAuthResourceWiring,
     ],
@@ -76,7 +79,10 @@ impl Module for OAuthResourceWiring {
                     let metadata = container.get::<ProtectedResourceMetadata>().ok_or_else(|| {
                         anyhow::anyhow!("the protected resource metadata did not resolve")
                     })?;
-                    crate::binding::bind(container.get::<AuthnConfig>().as_deref(), &metadata)
+                    let authn = container.get::<AuthnConfig>().ok_or_else(|| {
+                        anyhow::anyhow!("the token verifier's configuration did not resolve")
+                    })?;
+                    crate::binding::bind(&authn, &metadata)
                 },
             )
             .provide_factory_after::<CanonicalHost, (ProtectedResourceMetadata,), _, _>(

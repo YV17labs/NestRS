@@ -20,15 +20,9 @@ use crate::metadata::ProtectedResourceMetadata;
 /// [`endpoint_shown`](nest_rs_config::endpoint_shown), which alters the very
 /// form it is compared in.
 pub(crate) fn bind(
-    authn: Option<&AuthnConfig>,
+    authn: &AuthnConfig,
     metadata: &ProtectedResourceMetadata,
 ) -> anyhow::Result<ResourceBinding> {
-    let Some(authn) = authn else {
-        anyhow::bail!(
-            "OAuthResourceModule needs the token verifier it protects: import \
-             `nest_rs::authn::AuthnModule` alongside it"
-        );
-    };
     let authn_variable = |key| nest_rs_config::var_name(AuthnConfig::NAMESPACE, key);
     let resource_variable = |key| nest_rs_config::var_name(OAuthResourceConfig::NAMESPACE, key);
     if authn.allow_any_audience {
@@ -103,7 +97,7 @@ mod tests {
         }
     }
 
-    fn refusal(authn: Option<&AuthnConfig>) -> String {
+    fn refusal(authn: &AuthnConfig) -> String {
         match bind(authn, &metadata()) {
             Ok(binding) => panic!("bound to {binding:?}"),
             Err(refused) => refused.to_string(),
@@ -113,7 +107,7 @@ mod tests {
     #[test]
     fn an_unset_or_blank_audience_is_the_resource() {
         for audience in [None, Some(""), Some("  ")] {
-            let binding = bind(Some(&authn(audience, None)), &metadata()).expect("bound");
+            let binding = bind(&authn(audience, None), &metadata()).expect("bound");
             assert_eq!(binding.audience, RESOURCE, "{audience:?}");
         }
     }
@@ -121,7 +115,7 @@ mod tests {
     #[test]
     fn a_matching_audience_binds_and_says_nothing() {
         let logs = nest_rs_testing::LogCapture::install();
-        let binding = bind(Some(&authn(Some(RESOURCE), None)), &metadata()).expect("bound");
+        let binding = bind(&authn(Some(RESOURCE), None), &metadata()).expect("bound");
         assert_eq!(binding.audience, RESOURCE);
         assert!(
             logs.events().is_empty(),
@@ -135,11 +129,8 @@ mod tests {
     #[test]
     fn a_differing_audience_is_bound_and_names_the_two_settings_that_disagree() {
         let logs = nest_rs_testing::LogCapture::install();
-        let binding = bind(
-            Some(&authn(Some("some-opaque-audience"), None)),
-            &metadata(),
-        )
-        .expect("a mismatch is tolerated, not refused");
+        let binding = bind(&authn(Some("some-opaque-audience"), None), &metadata())
+            .expect("a mismatch is tolerated, not refused");
         assert_eq!(binding.audience, "some-opaque-audience");
 
         let event = logs.expect_one(
@@ -166,13 +157,13 @@ mod tests {
 
     #[test]
     fn an_unset_issuer_accepts_every_advertised_server() {
-        let binding = bind(Some(&authn(None, None)), &metadata()).expect("bound");
+        let binding = bind(&authn(None, None), &metadata()).expect("bound");
         assert_eq!(binding.issuers, SERVERS);
     }
 
     #[test]
     fn a_set_issuer_among_the_servers_is_the_one_accepted() {
-        let binding = bind(Some(&authn(None, Some(SERVERS[1]))), &metadata()).expect("bound");
+        let binding = bind(&authn(None, Some(SERVERS[1])), &metadata()).expect("bound");
         assert_eq!(binding.issuers, [SERVERS[1]]);
     }
 
@@ -180,7 +171,7 @@ mod tests {
     #[test]
     fn an_issuer_outside_the_servers_is_refused_naming_both_settings() {
         for issuer in ["nestrs-demo-auth", "https://auth.example.com/"] {
-            let refused = refusal(Some(&authn(None, Some(issuer))));
+            let refused = refusal(&authn(None, Some(issuer)));
             assert!(
                 refused.contains(&nest_rs_config::var_name(AuthnConfig::NAMESPACE, "ISSUER"))
                     && refused.contains(&nest_rs_config::var_name(
@@ -196,10 +187,10 @@ mod tests {
 
     #[test]
     fn any_audience_is_refused_naming_both_settings() {
-        let refused = refusal(Some(&AuthnConfig {
+        let refused = refusal(&AuthnConfig {
             allow_any_audience: true,
             ..AuthnConfig::default()
-        }));
+        });
         assert!(
             refused.contains(&nest_rs_config::var_name(
                 AuthnConfig::NAMESPACE,
@@ -210,10 +201,5 @@ mod tests {
             )),
             "{refused}"
         );
-    }
-
-    #[test]
-    fn no_authn_config_at_all_is_refused_naming_the_missing_module() {
-        assert!(refusal(None).contains("import `nest_rs::authn::AuthnModule` alongside it"));
     }
 }

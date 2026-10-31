@@ -1,5 +1,5 @@
-//! Covers `src/binding.rs`: the token verifier `AuthnModule` builds beside
-//! `OAuthResourceModule` is bound to the resource — its audience defaults to
+//! Covers `src/binding.rs`: the token verifier `AuthnModule` builds, which
+//! `OAuthResourceModule` imports, is bound to the resource — its audience defaults to
 //! the resource (RFC 8707), and a token's `iss` must be one of the advertised
 //! authorization servers (RFC 9068 §4).
 
@@ -191,16 +191,43 @@ async fn any_audience_beside_the_module_fails_the_boot() {
     assert!(refused.contains(&resource_var("RESOURCE")), "{refused}");
 }
 
-/// The module protects tokens a verifier checks: without one it fails the
-/// boot naming the import it needs.
+/// The module imports the verifier it binds: imported alone, with the key the
+/// verifier reads and nothing else, it boots, and the verifier is bound to the
+/// resource.
 #[tokio::test]
-async fn the_module_without_a_verifier_fails_the_boot() {
+async fn the_module_alone_binds_the_verifier_it_imports() {
     #[module(imports = [OAuthResourceModule::for_root(resource())])]
-    struct Unverified;
+    struct Alone;
 
-    let refused = boot_error::<Unverified>("a resource with no verifier must not boot").await;
+    let app = TestApp::builder()
+        .module::<Alone>()
+        .provide(authn(None, None))
+        .build()
+        .await
+        .expect("a resource server with a key boots on its own import");
+    let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
+
+    jwt.verify::<Claims>(&minted(Some(TRUSTED[0]), RESOURCE))
+        .await
+        .expect("an advertised server's token for this resource verifies");
     assert!(
-        refused.contains("import `nest_rs::authn::AuthnModule` alongside it"),
-        "{refused}"
+        jwt.verify::<Claims>(&minted(Some(TRUSTED[0]), "https://billing.example.com"))
+            .await
+            .is_err(),
+        "a token for another resource is refused"
     );
+}
+
+/// A resource server with no key to verify with never boots to accept nothing
+/// or anything: the verifier it imports refuses, naming the variables that
+/// give it one.
+#[tokio::test]
+async fn a_resource_server_with_no_verifier_key_fails_the_boot_naming_its_variables() {
+    #[module(imports = [OAuthResourceModule::for_root(resource())])]
+    struct Keyless;
+
+    let refused = boot_error::<Keyless>("a resource server with no key must not boot").await;
+    for key in ["SECRET", "PUBLIC_KEY", "JWKS_URI"] {
+        assert!(refused.contains(&authn_var(key)), "{key}: {refused}");
+    }
 }

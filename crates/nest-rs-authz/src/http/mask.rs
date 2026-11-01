@@ -174,11 +174,11 @@ fn refuse_unclassifiable<S>(mut resp: Response, action: Action) -> Response {
     )
 }
 
-/// Mask a successful JSON body of an `#[expose]`d entity: read each row back into
-/// `S::Model`, judge it, and serialize what its verdict grants. A non-success response, or one whose handler
-/// declared a non-JSON media type, passes through; a JSON object/array that does
-/// not match `S::Model`, and a body with no declared type at all, fail closed
-/// (see module docs).
+/// Mask a successful JSON body of an `#[expose]`d entity: read each row back
+/// into `S::Model`, judge it, and serialize what its verdict grants. A
+/// non-success response, or one whose handler declared a non-JSON media type,
+/// passes through; a JSON object/array that does not match `S::Model`, and a
+/// body with no declared type at all, fail closed (see module docs).
 pub async fn mask_entity_response<S>(
     ability: &Ability,
     action: Action,

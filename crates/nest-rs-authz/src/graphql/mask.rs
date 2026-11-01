@@ -89,8 +89,8 @@ where
 /// round-trip (`crate::wire_mask`): serialize the value, read each object back
 /// into `E::Model` through what `#[expose]` declares, judge it as
 /// [`Ability::mask_many`] does, retain the exposed wire keys its verdict
-/// grants, deserialize back. Handles the wire DTO
-/// itself, `Option<…>`, `Vec<…>`; scalars and `None` pass through untouched.
+/// grants, deserialize back. Handles the wire DTO itself, `Option<…>`,
+/// `Vec<…>`; scalars and `None` pass through untouched.
 ///
 /// A stripped **non-null** field cannot mask to `null`: when the operation
 /// selected it, the operation is refused (`FORBIDDEN`, with the names in the

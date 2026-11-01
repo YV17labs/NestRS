@@ -31,8 +31,8 @@ const NULLABLE_REMEDY: &str = "make the column `Option` on the entity, so a fiel
 /// (`crate::wire_mask`): serialize, read each object back into `E::Model`
 /// through what `#[expose]` declares, judge it as
 /// [`Ability::mask_many`](crate::Ability::mask_many) does, retain the exposed
-/// wire keys its verdict grants, deserialize back. Rows the ability refuses are dropped; scalars
-/// and `null` pass through untouched.
+/// wire keys its verdict grants, deserialize back. Rows the ability refuses are
+/// dropped; scalars and `null` pass through untouched.
 ///
 /// MCP has no selection set: a mask that takes a key the return type requires
 /// **refuses the operation**. A column an ability rule may mask should be
@@ -108,8 +108,8 @@ where
     let declared = wire.as_object().map_or(0, serde_json::Map::len);
     let removed = match mask_wire_detail::<E>(ability, action, wire) {
         Ok(detail) => detail.removed,
-        // Unreachable short of the value's and the entity's serde disagreeing; reported
-        // as the masking failure it then is.
+        // Unreachable short of the value's and the entity's serde disagreeing;
+        // reported as the masking failure it then is.
         Err(err) => {
             return mask_failure::<E>(
                 action,

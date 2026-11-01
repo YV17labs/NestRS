@@ -7,9 +7,8 @@ use crate::ability::{Provenance, Verdict, mask_reason};
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 use std::collections::BTreeSet;
 
-use serde::de::Error as _;
-use serde::de::Unexpected;
-use serde_json::Value;
+use serde::de::{Error as _, Unexpected};
+use serde_json::{Map, Value};
 
 use crate::error::MaskReplyError;
 use crate::wire_model::WireModel;
@@ -107,14 +106,22 @@ pub(crate) fn mask_wire_json<S: WireModel>(
 }
 
 /// The verdict on one wire row, read back into `S::Model` for the rules to run
-/// on, the columns it was given rather than sent named as invented.
+/// on — its exposed columns from the object, every other one from the
+/// placeholder `#[expose]` gave it, which never reaches the wire — the columns
+/// it was given rather than sent named as invented.
 pub(crate) fn judged<S: WireModel>(
     ability: &Ability,
     action: Action,
     row: &Value,
     provenance: Provenance,
 ) -> Result<Verdict, serde_json::Error> {
-    let model = wire_to_model::<S>(row)?;
+    let Value::Object(row) = row else {
+        return Err(serde_json::Error::invalid_type(
+            Unexpected::Other(json_kind(row)),
+            &"a row object",
+        ));
+    };
+    let model = S::from_wire(row)?;
     Ok(ability.evaluate::<S>(action, &model, provenance, &invented_in::<S>(row)))
 }
 
@@ -220,19 +227,6 @@ fn collect_removed<S: WireModel>(granted: &FieldSet, row: &Value, out: &mut BTre
     }
 }
 
-/// Read a wire row back into `S::Model` so the rules can run on it: its
-/// exposed columns from the object, every other one from the placeholder
-/// `#[expose]` gave it, which never reaches the wire.
-pub(crate) fn wire_to_model<S: WireModel>(wire: &Value) -> Result<S::Model, serde_json::Error> {
-    match wire {
-        Value::Object(row) => S::from_wire(row),
-        other => Err(serde_json::Error::invalid_type(
-            Unexpected::Other(json_kind(other)),
-            &"a row object",
-        )),
-    }
-}
-
 /// The kind of a JSON value, never its content: a refusal names what it met.
 fn json_kind(value: &Value) -> &'static str {
     match value {
@@ -245,13 +239,11 @@ fn json_kind(value: &Value) -> &'static str {
     }
 }
 
-/// The columns a row rebuilt from `wire` was given rather than sent: one the
+/// The columns a row rebuilt from `row` was given rather than sent: one the
 /// rebuild invents, and one the object left out.
-pub(crate) fn invented_in<S: WireModel>(wire: &Value) -> impl Fn(S::Column) -> bool + '_ {
-    let sent = wire.as_object();
+fn invented_in<S: WireModel>(row: &Map<String, Value>) -> impl Fn(S::Column) -> bool + '_ {
     move |column| {
-        S::is_placeholdered(column)
-            || S::wire_key(column).is_some_and(|key| !sent.is_some_and(|row| row.contains_key(key)))
+        S::is_placeholdered(column) || S::wire_key(column).is_some_and(|key| !row.contains_key(key))
     }
 }
 

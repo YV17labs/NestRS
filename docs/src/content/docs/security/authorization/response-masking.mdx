@@ -191,7 +191,8 @@ Each step has a defined failure mode:
 
 ### The round trip `#[expose]` writes
 
-The `Model` derives no serde, so it serializes nowhere: a route answers
+The `Model` derives no serde — `#[expose]` refuses a `Serialize` or
+`Deserialize` derived on it — so it serializes nowhere: a route answers
 its exposed type, and a hidden column has no way onto a wire. To judge a
 row, the mask reads it back through what `#[expose]` declares — each
 exposed column through its own `Deserialize`, each hidden one from its

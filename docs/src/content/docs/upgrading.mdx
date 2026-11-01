@@ -824,7 +824,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `ab.cannot(action, E).fields([...])` | drop `.fields`: a denial hides rows, never columns. Narrow what a grant exposes with the grant's own `.fields` |
     | `RuleSpec<'_, E>` naming what `cannot` returns, a helper's return type or a binding's | `RuleSpec<'_, E, Cannot>`, `Cannot` from `nest_rs::authz`; a grant's stays `RuleSpec<'_, E>` |
     | `masked_item_for::<A, E, _>(ctx, item)` | `masked_item_for::<A, E, _>(ctx, &nest_rs::authz::graphql::ability()?, item)` |
-    | `model_attrs(derive(PartialEq, Serialize, Deserialize))` and `use serde::{Deserialize, Serialize}` on an `#[expose]`d entity | delete both, and the features crate's `serde` line if nothing else names serde: `#[expose]` writes the round trip a mask reads a row through, so the `Model` derives no serde. Keep `model_attrs(derive(PartialEq))` only where your code compares rows |
+    | `model_attrs(derive(PartialEq, Serialize, Deserialize))` — or a `Serialize` or `Deserialize` in the entity's `#[derive]` — and `use serde::{Deserialize, Serialize}` on an `#[expose]`d entity | refused at the derive: delete both, and the features crate's `serde` line if nothing else names serde. `#[expose]` writes the round trip a mask reads a row through, so the `Model` derives no serde. Keep `model_attrs(derive(PartialEq))` only where your code compares rows |
     | `Json(model)`, `WsReply::reply(&model)` answering a row | its exposed type, `Json(User::from(&model))`: once the derive goes, a raw `Model` answers nowhere, and its hidden columns with it |
     | a hidden column of a type with no placeholder — a `Uuid`, a timestamp, a `Decimal`, a custom enum, a `Secret<Vec<u8>>` — with no `#[wire_default]` | refused at the field, where a masked reply carrying its row answered `500`: `#[wire_default]` (its type's `Default`), `#[wire_default(expr)]`, or `#[expose]` it |
     | a primary key with no `#[expose]` | `#[expose]` it: a masked reply reads a row's identity off the wire and never invents one |
@@ -1861,6 +1861,24 @@ lists what the boot, a log or the wire shows when one is missed.
   Secret`: add `.into()`, or read it with `.expose_secret()`. An `#[expose]` left
   on a secret column fails with ``#[expose]: `password_hash` holds a `Secret`,
   which never crosses the wire``.
+- **A serde derive left on an `#[expose]`d entity** fails to compile at the
+  derive: ``#[expose]: `Model` derives `Serialize`, which writes every column,
+  hidden ones included, onto a wire no mask shapes — a reply answers `User`
+  (`Json(User::from(&model))`): drop the derive``, and the same for
+  `Deserialize`, naming the entity's inputs. Once it goes, a handler answering
+  the row — `Json(model)`, `WsReply::reply(&model)` — fails with `E0277`,
+  `Model: Serialize` not satisfied: answer `Json(User::from(&model))` (step 11).
+- **A hidden column of a type with no placeholder** — a tenant `Uuid`, a
+  timestamp, a custom enum — fails to compile at the field, where 6.x answered
+  every masked reply carrying its row `500`: ``#[expose]: `org_id: Uuid` is not
+  exposed, and a masked reply must rebuild it — write `#[wire_default]` (its
+  type's `Default`), `#[wire_default(expr)]`, or `#[expose]` it``. A hidden
+  primary key fails with ``#[expose]: `id: Uuid` is the primary key, which a
+  masked reply reads off the wire and never invents — `#[expose]` it``.
+- **Code reading a hidden column off `Ability::mask`'s value** finds no key —
+  not a compile error: the value carries the exposed columns alone, whatever
+  the grant, where 6.x handed every hidden column but a `Secret` to a grant
+  with no `.fields`.
 
 ## Reference
 

@@ -1,10 +1,9 @@
 //! [`ProtectedResourceMetadata`] — the RFC 9728 document this deployment
 //! serves, and the `WWW-Authenticate` challenge that points at it.
 
+use nest_rs_guards::__private::is_scope_token;
 use nest_rs_http::challenge::BEARER;
 use serde::Serialize;
-
-use crate::config::is_scope_token;
 
 /// The well-known path RFC 9728 §3 reserves, served at the resource's root.
 pub const WELL_KNOWN_PATH: &str = "/.well-known/oauth-protected-resource";

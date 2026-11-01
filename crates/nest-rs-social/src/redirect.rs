@@ -56,11 +56,12 @@ enum Destination {
 impl SocialRedirect {
     /// The answer for `redirect`, a provider's: refused when its URL or its
     /// cookie is no header value.
-    pub(crate) fn to(redirect: &AuthorizationRedirect) -> Result<Self, AuthError> {
-        let location = HeaderValue::try_from(redirect.url.as_str()).map_err(|error| {
+    pub(crate) fn to(redirect: AuthorizationRedirect) -> Result<Self, AuthError> {
+        let set_cookie = redirect.set_cookie();
+        let location = HeaderValue::try_from(redirect.url).map_err(|error| {
             AuthError::failed_because("the provider's authorization URL is no header value", error)
         })?;
-        let transaction = HeaderValue::try_from(redirect.set_cookie()).map_err(|error| {
+        let transaction = HeaderValue::try_from(set_cookie).map_err(|error| {
             AuthError::failed_because("the transaction cookie is no header value", error)
         })?;
         Ok(Self(Destination::Provider {
@@ -77,19 +78,20 @@ impl SocialRedirect {
 
 impl IntoResponse for SocialRedirect {
     fn into_response(self) -> Response {
-        let Destination::Provider {
-            location,
-            transaction,
-        } = self.0
-        else {
-            return ProblemDetails::from_status(StatusCode::NOT_FOUND).into_response();
-        };
-        let mut response = Response::builder().status(StatusCode::FOUND).finish();
-        let headers = response.headers_mut();
-        headers.insert(header::LOCATION, location);
-        headers.insert(header::SET_COOKIE, transaction);
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        response
+        match self.0 {
+            Destination::Provider {
+                location,
+                transaction,
+            } => Response::builder()
+                .status(StatusCode::FOUND)
+                .header(header::LOCATION, location)
+                .header(header::SET_COOKIE, transaction)
+                .header(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))
+                .finish(),
+            Destination::Unknown => {
+                ProblemDetails::from_status(StatusCode::NOT_FOUND).into_response()
+            }
+        }
     }
 }
 

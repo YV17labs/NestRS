@@ -15,11 +15,11 @@ use nest_rs_core::operation_log::Unit;
 use nest_rs_core::{
     Edge, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, interceptor,
 };
+use nest_rs_guards::__private::is_scope_token;
 use nest_rs_guards::RequiredScopes;
 use nest_rs_http::challenge::{BEARER, INSUFFICIENT_SCOPE, NoBearerChallenge};
 use nest_rs_http::{HeaderValue, HttpView, Response, StatusCode, header};
 
-use crate::config::is_scope_token;
 use crate::metadata::ProtectedResourceMetadata;
 
 /// Infra interceptor brought by

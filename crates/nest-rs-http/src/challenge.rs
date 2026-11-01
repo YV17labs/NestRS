@@ -1,6 +1,7 @@
 //! The `WWW-Authenticate: Bearer` challenge grammar — RFC 6750 §3.
 
 use http::{HeaderValue, header};
+use nest_rs_guards::__private::is_scope_token;
 
 use crate::response::Response;
 
@@ -86,14 +87,6 @@ pub(crate) fn stamp_insufficient_scope(res: &mut Response, scopes: &[String]) {
         "a required scope is not a scope-token; the challenge is sent without its scope attribute",
     );
     stamp_bearer_error(res, INSUFFICIENT_SCOPE);
-}
-
-/// RFC 6749 §3.3's `scope-token`: one or more `NQCHAR`.
-fn is_scope_token(scope: &str) -> bool {
-    !scope.is_empty()
-        && scope
-            .bytes()
-            .all(|b| matches!(b, 0x21 | 0x23..=0x5B | 0x5D..=0x7E))
 }
 
 /// [`stamp_bearer_error`] on a head's headers, whichever response holds them.

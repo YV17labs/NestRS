@@ -3,6 +3,7 @@
 
 use nest_rs_config::__private::is_loopback;
 use nest_rs_config::{Environment, Namespaced, config};
+use nest_rs_guards::__private::is_scope_token;
 
 use crate::metadata::ProtectedResourceMetadata;
 use nest_rs_authn::AuthError;
@@ -169,15 +170,6 @@ fn entry(index: usize, key: &str) -> String {
         index + 1,
         nest_rs_config::spellings(OAuthResourceConfig::NAMESPACE, key)
     )
-}
-
-/// RFC 6749 §3.3: `scope-token = 1*( %x21 / %x23-5B / %x5D-7E )` — printable
-/// ASCII excluding space (`%x20`), `"` (`%x22`) and `\` (`%x5C`).
-pub(crate) fn is_scope_token(scope: &str) -> bool {
-    !scope.is_empty()
-        && scope
-            .bytes()
-            .all(|b| matches!(b, 0x21 | 0x23..=0x5B | 0x5D..=0x7E))
 }
 
 /// The authority of `rest`, a URI after its `://`: everything up to its path,

@@ -9,14 +9,13 @@ use std::any::{Any, TypeId};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use nest_rs_guards::Scope;
 use sea_orm::sea_query::Condition;
 use sea_orm::{EntityTrait, IdenStatic};
 
 use crate::ability::{Ability, FieldSet, Rule, When};
 use crate::action::Action;
 use crate::error::MalformedRuleError;
-use nest_rs_guards::Scope;
-
 use crate::predicate::{Predicate, PredicateBuilder};
 use crate::{RowSubject, Subject};
 
@@ -60,14 +59,15 @@ impl AbilityBuilder {
 
     /// The scopes `required` names that this actor's credential does not carry,
     /// compared exactly (RFC 6749 §3.3: scopes are opaque tokens, never patterns).
-    fn missing_from_grant(&self, required: &[String]) -> Vec<String> {
+    fn missing_from_grant(&self, required: &[Scope]) -> Vec<String> {
         let Some(granted) = &self.granted_scopes else {
             return Vec::new();
         };
         required
             .iter()
-            .filter(|scope| !granted.contains(scope))
-            .cloned()
+            .copied()
+            .filter(|&scope| !granted.iter().any(|carried| *carried == scope))
+            .map(String::from)
             .collect()
     }
 
@@ -166,7 +166,7 @@ pub struct RuleSpec<'a, S: Subject, K = Can> {
     /// apart from that method, or a call on a denial would read as reaching a
     /// private field.
     columns: FieldSet,
-    required_scopes: Vec<String>,
+    required_scopes: Vec<Scope>,
     kind: PhantomData<fn() -> (S, K)>,
 }
 
@@ -276,7 +276,7 @@ impl<S: Subject> RuleSpec<'_, S> {
     /// ab.can(Action::Manage, Exporting).requires_scope("reports:export");
     /// ```
     pub fn requires_scope(mut self, scope: Scope) -> Self {
-        self.required_scopes.push(scope.into());
+        self.required_scopes.push(scope);
         self
     }
 }

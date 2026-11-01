@@ -47,7 +47,7 @@ impl Scope {
     /// compile error.
     pub const fn new(token: &'static str) -> Self {
         assert!(
-            is_token(token),
+            is_scope_token(token),
             "a scope is a token of RFC 6749 §3.3: one or more printable ASCII characters but a \
              space, `\"` and `\\`",
         );
@@ -78,8 +78,10 @@ impl PartialEq<Scope> for String {
     }
 }
 
-/// RFC 6749 §3.3's `scope-token`, read in a `const`.
-const fn is_token(token: &str) -> bool {
+/// RFC 6749 §3.3: `scope-token = 1*( %x21 / %x23-5B / %x5D-7E )` — printable
+/// ASCII excluding space (`%x20`), `"` (`%x22`) and `\` (`%x5C`); a `const fn`,
+/// so [`Scope::new`] refuses one at compile time.
+pub const fn is_scope_token(token: &str) -> bool {
     let bytes = token.as_bytes();
     if bytes.is_empty() {
         return false;
@@ -169,7 +171,7 @@ mod tests {
     #[test]
     fn a_token_is_printable_ascii_but_a_space_a_quote_and_a_backslash() {
         for token in ["posts:read", "https://api.example.com/read", "a", "!~[]"] {
-            assert!(is_token(token), "{token}");
+            assert!(is_scope_token(token), "{token}");
         }
         for token in [
             "",
@@ -179,7 +181,7 @@ mod tests {
             "posts\tread",
             "pöst",
         ] {
-            assert!(!is_token(token), "{token:?}");
+            assert!(!is_scope_token(token), "{token:?}");
         }
     }
 

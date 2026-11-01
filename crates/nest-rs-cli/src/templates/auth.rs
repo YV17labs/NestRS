@@ -184,7 +184,10 @@ impl DevTokenController {
             sub: Subject::User(sub.unwrap_or_else(Uuid::now_v7)),
             roles: if roles.is_empty() { vec![Role::User] } else { roles },
         };
-        Ok(AccessTokenResponse::bearer(self.jwt.sign(&claims).opaque()?, self.jwt.ttl_secs()))
+        Ok(AccessTokenResponse::bearer(
+            self.jwt.sign(&claims).opaque()?,
+            self.jwt.ttl_secs(),
+        ))
     }
 }
 "#;

@@ -7,5 +7,5 @@ pub const AUDIO_TRANSCODE: Scope = Scope::new("audio:transcode");
 pub const ALL: [Scope; 3] = [POSTS_READ, POSTS_WRITE, AUDIO_TRANSCODE];
 
 pub fn all() -> Vec<String> {
-    ALL.map(String::from).to_vec()
+    ALL.map(String::from).into()
 }

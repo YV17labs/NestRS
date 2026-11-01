@@ -92,10 +92,17 @@ mod tests {
         assert_eq!(refused.as_deref(), Some("missing field `note`"));
     }
 
+    /// serde's own sentence quotes the value; the message every mask failure
+    /// logs, `error_message`'s, says the kind alone.
     #[test]
     fn a_value_of_another_shape_is_refused_without_quoting_it() {
         let mut wire = Map::new();
         wire.insert("count".into(), serde_json::json!("seven"));
-        assert!(wire_column::<i64>(&wire, "count").is_err());
+        let refused = wire_column::<i64>(&wire, "count").expect_err("a string is no `i64`");
+        let logged = nest_rs_core::error_message(&refused);
+        assert!(
+            logged.contains("expected i64") && !logged.contains("seven"),
+            "{logged}",
+        );
     }
 }

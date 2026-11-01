@@ -149,9 +149,10 @@ pub mod __private {
 
 /// Expose a SeaORM entity to REST/OpenAPI (and optionally GraphQL) from one
 /// declaration: its wire DTO (`Serialize` + `JsonSchema`), its `Create`/`Update`
-/// inputs, and the round trip response masking reads a row through — each
-/// column by its own serde impls, so the `Model` itself derives no serde and
-/// serializes nowhere.
+/// inputs, and the round trip response masking reads a row through, each
+/// column by its own serde impls. The `Model` itself derives no serde — a
+/// `Serialize` or `Deserialize` derived on it is refused — so it serializes
+/// nowhere.
 ///
 /// **Exposure is opt-in:** a column reaches the wire only when its field
 /// carries `#[expose]` (or `#[expose(input(...))]`, which implies read). A field

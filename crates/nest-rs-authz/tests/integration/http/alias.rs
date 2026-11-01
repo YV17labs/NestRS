@@ -17,12 +17,9 @@ use nest_rs_testing::TestApp;
 mod gadget {
     use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::Serialize;
 
-    // `Serialize` and `JsonSchema` are the developer's own, so a handler can
-    // answer the raw row the mask strains.
     #[expose(name = "Gadget")]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, schemars::JsonSchema)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "gadgets")]
     pub(super) struct Model {
         #[sea_orm(primary_key)]
@@ -75,11 +72,20 @@ impl GuardFor<nest_rs_http::HttpView> for GrantInjector {}
 #[controller(path = "/gadgets")]
 struct GadgetController;
 
+/// Every column of a gadget row, the unexposed `secret` included, which the
+/// mask strains.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct RawGadget {
+    id: i32,
+    name: String,
+    secret: String,
+}
+
 /// The observation rides in the entity's exposed `name`: the shaper masks
 /// against the subject's wire model, so a body of any other shape would fail
 /// closed — correct, but not what these tests measure.
-fn probe_model(id: i32) -> gadget::Model {
-    gadget::Model {
+fn probe_model(id: i32) -> RawGadget {
+    RawGadget {
         id,
         name: format!("ambient:{}", current_ability().is_some()),
         secret: "s1".into(),
@@ -91,7 +97,7 @@ impl GadgetController {
     // Aliased parameter.
     #[get("/aliased/probe")]
     #[public]
-    async fn aliased_probe(&self, _authz: Az<Read, gadget::Entity>) -> Json<gadget::Model> {
+    async fn aliased_probe(&self, _authz: Az<Read, gadget::Entity>) -> Json<RawGadget> {
         Json(probe_model(1))
     }
 
@@ -101,16 +107,16 @@ impl GadgetController {
     async fn literal_probe(
         &self,
         _authz: nest_rs_authz::http::Authorize<Read, gadget::Entity>,
-    ) -> Json<gadget::Model> {
+    ) -> Json<RawGadget> {
         Json(probe_model(2))
     }
 
-    // Raw-`Model` body under the alias: the shaper is what strips the
-    // unexposed `secret`.
+    // A body carrying `secret` under the alias: the shaper is what strips the
+    // unexposed column.
     #[get("/aliased/raw")]
     #[public]
-    async fn aliased_raw(&self, _authz: Az<Read, gadget::Entity>) -> Json<gadget::Model> {
-        Json(gadget::Model {
+    async fn aliased_raw(&self, _authz: Az<Read, gadget::Entity>) -> Json<RawGadget> {
+        Json(RawGadget {
             id: 1,
             name: "ada".into(),
             secret: "s1".into(),
@@ -173,7 +179,7 @@ async fn an_aliased_authorize_installs_the_ambient_ability() {
 }
 
 #[tokio::test]
-async fn an_aliased_authorize_masks_a_raw_model_body() {
+async fn an_aliased_authorize_masks_an_unexposed_column_off_the_body() {
     let app = boot().await;
     let resp = app
         .http()
@@ -198,7 +204,7 @@ struct UndeclaredController;
 #[routes]
 impl UndeclaredController {
     #[get("/")]
-    async fn probe(&self, _authz: Az<Read, gadget::Entity>) -> Json<gadget::Model> {
+    async fn probe(&self, _authz: Az<Read, gadget::Entity>) -> Json<RawGadget> {
         Json(probe_model(3))
     }
 }

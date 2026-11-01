@@ -260,9 +260,11 @@ writes takes its op over, and a key only that op reads (`api(<op>(…))`,
 
 Exposure is `#[expose]` (`CLAUDE.md`, hard "no"); a column a later migration
 adds never leaks by omission, and the entity *is* the wire contract, so a
-handler returns the exposed type (`Json<User>`), never `Model` — held by
-types: **the `Model` derives no serde**, and `#[expose]` writes the round trip
-a mask reads a row through, column by column, in its own sealed seam.
+handler returns the exposed type (`Json<User>`), never `Model`: **the `Model`
+derives no serde** — held by `#[expose]`, which refuses a serde derive on the
+row and writes the round trip a mask reads it through, column by column, in its
+own sealed seam; a serde impl it cannot read — written by hand, or derived
+above `#[expose]` — is the one way past it, read in review as an opening.
 
 The mask is `nest-rs-authz`'s `wire_mask`, value-level and **fail-closed**:
 each wire row is read back into a `Model`, judged by the ability, and cut to

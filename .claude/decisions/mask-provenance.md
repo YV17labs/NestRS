@@ -115,6 +115,13 @@ identity audit's second pass ("Tout faire", 2026-10-31).
   impls, each hidden one given a placeholder written as a Rust value, the
   invented columns and the wire keys named beside them, as before. One trait
   on the entity, so every mask takes one bound. The `Model` derives no serde.
+- **A serde derive on the row is refused at the derive** — in `#[derive]`,
+  `model_attrs` or `model_ex_attrs` — naming the exposed type a reply answers
+  and the inputs a write takes: every 6.x entity carries one, and with it
+  `Json(model)` would compile again, its hidden columns on the wire, and
+  `Json<Model>` would read every column off a body no input validates. A serde
+  impl the decorator cannot read — written by hand, or derived above
+  `#[expose]` — stays the one opening, an explicit line review reads.
 - **A hidden column with no placeholder is refused at the field**, naming
   `#[wire_default]`, `#[wire_default(expr)]` and `#[expose]`; a hidden primary
   key is refused naming `#[expose]`, since a key is never invented.
@@ -133,6 +140,11 @@ The provenance reading above is unchanged.
 - **A `Serialize` on the `Model` emitted by `#[expose]`** (routed through the
   framework, so no manifest line): it keeps `Json(model)` compiling for every
   entity, the path this closes.
+- **A type-level check that the `Model` implements no serde**, which would
+  also catch a hand-written impl: an impl-ambiguity assertion reports
+  `type annotations needed` naming the expansion's trait, and a `Serialize`
+  impl bounded on a trait never implemented reports serde's own missing-impl
+  error, advising the derive — neither is the one sentence a misuse reads.
 - **Skipping the rebuild when no rule of the caller's has a `when`**, keeping
   only the cut to exposed keys. Measured in release on a 100-row list of a
   user-shaped entity: the rebuild costs 23.5 µs of the shaper's 100.5 µs

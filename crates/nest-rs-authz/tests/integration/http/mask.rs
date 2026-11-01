@@ -13,13 +13,9 @@ use serde::Serialize;
 mod widget {
     use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::Serialize;
 
-    // `Serialize` and `JsonSchema` are the developer's own, opted into so a
-    // handler can answer the raw row: the mask still strains it to `id` and
-    // `name`, the columns `#[expose]` declares.
     #[expose(name = "Widget")]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, schemars::JsonSchema)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "widgets")]
     pub(super) struct Model {
         #[sea_orm(primary_key)]
@@ -41,6 +37,15 @@ mod widget {
 struct WidgetDto {
     id: i32,
     name: String,
+}
+
+/// Every column of a widget row, the unexposed `secret` included: a body the
+/// mask must strain to `id` and `name`, the columns `#[expose]` declares.
+#[derive(Serialize, schemars::JsonSchema)]
+struct RawWidget {
+    id: i32,
+    name: String,
+    secret: String,
 }
 
 #[injectable]
@@ -120,8 +125,8 @@ impl WidgetController {
     // The decorator form arms exactly what the public-reads `Authorize<..>` parameter arms.
     #[get("/decorated")]
     #[authorize(Read, widget::Entity)]
-    async fn decorated(&self) -> Json<widget::Model> {
-        Json(widget::Model {
+    async fn decorated(&self) -> Json<RawWidget> {
+        Json(RawWidget {
             id: 1,
             name: "ada".into(),
             secret: "s1".into(),
@@ -143,32 +148,32 @@ impl WidgetController {
         ])
     }
 
-    // A handler that (incorrectly) returns a raw `Model` carrying the unexposed
-    // `secret`. The shaper must still strip it: masking keys on the entity's
-    // static wire-key set, not on whatever the body shipped.
+    // A body carrying the unexposed `secret`. The shaper must still strip it:
+    // masking keys on the entity's static wire-key set, not on whatever the
+    // body shipped.
     #[get("/raw/one")]
     #[authorize(Read, widget::Entity)]
-    async fn raw_one(&self) -> Json<widget::Model> {
-        Json(widget::Model {
+    async fn raw_one(&self) -> Json<RawWidget> {
+        Json(RawWidget {
             id: 1,
             name: "ada".into(),
             secret: "s1".into(),
         })
     }
 
-    // A raw-`Model` list where the ability drops row id=2 (so `mask_many`
+    // A list carrying `secret` where the ability drops row id=2 (so the mask
     // returns fewer rows than the body) under an unrestricted grant on id=1.
     // The dropped-row branch must still strip `secret` from the survivor.
     #[get("/raw/list")]
     #[authorize(Read, widget::Entity)]
-    async fn raw_list(&self) -> Json<Vec<widget::Model>> {
+    async fn raw_list(&self) -> Json<Vec<RawWidget>> {
         Json(vec![
-            widget::Model {
+            RawWidget {
                 id: 1,
                 name: "ada".into(),
                 secret: "s1".into(),
             },
-            widget::Model {
+            RawWidget {
                 id: 2,
                 name: "bob".into(),
                 secret: "s2".into(),
@@ -284,9 +289,9 @@ async fn an_unrestricted_grant_cannot_leak_skipped_columns() {
 }
 
 #[tokio::test]
-async fn a_raw_model_handler_cannot_leak_unexposed_columns() {
-    // A handler returning `Json(Model)` instead of the wire DTO must not leak the
-    // unexposed `secret`, even under an unrestricted (admin) grant.
+async fn a_body_carrying_an_unexposed_column_cannot_leak_it() {
+    // A body carrying the unexposed `secret` beside the wire type's keys must
+    // not leak it, even under an unrestricted (admin) grant.
     let app = boot().await;
     let resp = app
         .http()
@@ -298,7 +303,7 @@ async fn a_raw_model_handler_cannot_leak_unexposed_columns() {
     let body = resp.0.into_body().into_string().await.expect("body");
     assert!(
         !body.contains("secret") && !body.contains("s1"),
-        "a raw-Model body must be cut down to exposed columns: {body}",
+        "a body must be cut down to exposed columns: {body}",
     );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&body)

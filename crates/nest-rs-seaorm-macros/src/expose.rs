@@ -51,6 +51,7 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
+    let serde_refused = wire::serde_refusals(&item.attrs, &model);
     let output = dto::emit(&model);
     let inputs = input::emit(&model);
     let active = active::emit(&model);
@@ -66,6 +67,7 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     quote! {
+        #serde_refused
         #item
         #output
         #inputs

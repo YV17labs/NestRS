@@ -14,7 +14,7 @@ mod note {
     use sea_orm::entity::prelude::*;
 
     #[expose(name = "Note", graphql)]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "read_only_resolver_notes")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]

@@ -13,7 +13,7 @@ mod note {
     use sea_orm::entity::prelude::*;
 
     #[expose(name = "Note")]
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "misnamed_crud_notes")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]

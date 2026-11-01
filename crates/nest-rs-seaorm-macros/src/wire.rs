@@ -1,7 +1,8 @@
 //! Emit `WireModel`: the round trip a masked reply runs on the entity's rows.
 //!
 //! **Each column goes through its own serde impls**, so the `Model` derives
-//! none and crosses no wire but as its exposed type. An exposed column is read
+//! none — a serde derive written on it is refused — and crosses no wire but as
+//! its exposed type. An exposed column is read
 //! back from the wire object; any other is rebuilt from its placeholder — its
 //! type's `Default` in a narrow set (empty string, `None`, `false`, `0`), a
 //! `Secret` taking its value's, or the `#[wire_default]` written on it — and a
@@ -14,9 +15,102 @@ use nest_rs_codegen::__private::{site, type_label};
 use nest_rs_codegen::Refusals;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use syn::{Ident, LitStr, Type};
+use syn::punctuated::Punctuated;
+use syn::{Attribute, Ident, LitStr, Meta, Path, Token, Type};
 
 use crate::attr::{ResourceField, ResourceModel, holds_secret, secret_inner};
+
+/// Every serde derive written on the row, refused at its path: `Serialize`
+/// writes each column, a hidden one too, onto a wire no mask shapes, and
+/// `Deserialize` reads each one off a body no input validates. Read in
+/// `#[derive(…)]` and in sea-orm's `model_attrs(…)` and `model_ex_attrs(…)`,
+/// which put a derive on the `Model` and on the `ModelEx` beside it.
+pub(crate) fn serde_refusals(attrs: &[Attribute], model: &ResourceModel) -> Option<TokenStream> {
+    let row = model.source_ident.to_string();
+    let mut refusals = Refusals::default();
+    for attr in attrs {
+        if attr.path().is_ident("derive") {
+            if let Ok(paths) = attr.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)
+            {
+                refuse_serde(&mut refusals, &paths, &row, model);
+            }
+        } else if attr.path().is_ident("sea_orm") {
+            // sea-orm refuses its own attribute's syntax; only a derive it
+            // forwards is read here.
+            let Ok(keys) = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            else {
+                continue;
+            };
+            for key in keys {
+                let Meta::List(list) = key else { continue };
+                let target = if list.path.is_ident("model_attrs") {
+                    row.clone()
+                } else if list.path.is_ident("model_ex_attrs") {
+                    format!("{row}Ex")
+                } else {
+                    continue;
+                };
+                let Ok(forwarded) =
+                    list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+                else {
+                    continue;
+                };
+                for derive in forwarded {
+                    if let Meta::List(derive) = derive
+                        && derive.path.is_ident("derive")
+                        && let Ok(paths) =
+                            derive.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)
+                    {
+                        refuse_serde(&mut refusals, &paths, &target, model);
+                    }
+                }
+            }
+        }
+    }
+    refusals
+        .finish()
+        .err()
+        .map(|refused| refused.to_compile_error())
+}
+
+/// Refuse each `Serialize` and `Deserialize` among `paths`, derived on `row`.
+fn refuse_serde(
+    refusals: &mut Refusals,
+    paths: &Punctuated<Path, Token![,]>,
+    row: &str,
+    model: &ResourceModel,
+) {
+    let exposed = &model.output_ident;
+    for path in paths {
+        let Some(last) = path.segments.last() else {
+            continue;
+        };
+        let what = if last.ident == "Serialize" {
+            format!(
+                "writes every column, hidden ones included, onto a wire no mask shapes — a \
+                 reply answers `{exposed}` (`Json({exposed}::from(&model))`)"
+            )
+        } else if last.ident == "Deserialize" {
+            format!(
+                "reads every column, hidden ones included, off a body no input validates — a \
+                 write takes `{create}` or `{update}`, the inputs \
+                 `#[expose(input(create, update))]` declares",
+                create = model.create_ident,
+                update = model.update_ident,
+            )
+        } else {
+            continue;
+        };
+        refusals.push(syn::Error::new_spanned(
+            path,
+            format!(
+                "{}: `{row}` derives `{}`, which {what}: drop the derive",
+                site("expose", None),
+                last.ident,
+            ),
+        ));
+    }
+}
 
 /// The value a masked reply rebuilds the hidden column `field` with, or the
 /// refusal naming what to write when none exists.

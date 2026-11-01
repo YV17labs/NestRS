@@ -105,7 +105,7 @@ nest-rs-ws = { workspace = true, optional = true }
 # gains a feature from this.
 nest-rs-authz = { path = ".", features = ["full"] }
 # Engine-only tests: `tests/ability.rs` builds a throwaway SeaORM entity and
-# renders `condition_for` to SQL; the masking tests serialize a model via serde.
+# renders `condition_for` to SQL; the masking tests serialize their handlers' bodies.
 sea-orm.workspace = true
 serde.workspace = true
 # The edge tests boot the full surface (HTTP + GraphQL); compiled when the
@@ -117,9 +117,9 @@ nest-rs-guards = { path = "../nest-rs-guards" }
 # The `ws` mirror suites declare a real `#[gateway]`, whose expansion names
 # `::nest_rs_ws::` paths at the call site.
 nest-rs-ws = { path = "../nest-rs-ws" }
-# The `ws` module's example writes `#[expose]`, whose expansion implements this
-# crate's `WireModelDefaults`. Path-only: seaorm depends on this crate, and only
-# a versionless dev-edge keeps that from being a cycle a publish cannot order.
+# The edge modules' examples write `#[expose]`, whose expansion implements this
+# crate's mask round trip. Path-only: seaorm depends on this crate, and only a
+# versionless dev-edge keeps that from being a cycle a publish cannot order.
 # `http`, for the class gate's order on a `#[crud]` controller.
 nest-rs-seaorm = { path = "../nest-rs-seaorm", features = ["http"] }
 # `graphql` and `authz`: a gated subscription driven as a caller

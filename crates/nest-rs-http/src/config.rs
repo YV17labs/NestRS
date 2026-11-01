@@ -425,10 +425,7 @@ impl HttpConfig {
     /// whatever the strategy, for a config that never met the environment.
     pub(crate) fn version_selector(&self) -> Result<Option<VersionSelector>> {
         let header = header_name(
-            nest_rs_config::var_name(
-                <Self as nest_rs_config::Namespaced>::NAMESPACE,
-                VERSION_HEADER.key(),
-            ),
+            nest_rs_config::var_name(Self::NAMESPACE, VERSION_HEADER.key()),
             VERSION_HEADER,
             &self.version_header,
             "",

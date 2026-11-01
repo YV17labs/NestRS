@@ -85,8 +85,8 @@ pub(crate) enum BudgetReach {
 /// The pool's [`Budget`]s: how long a query waits for a connection, and how
 /// long a statement runs before Postgres cancels it.
 pub(crate) fn budgets(reach: BudgetReach) -> [Budget; 2] {
-    let declare = |resource, bounds: &BoundedSetting<Duration>, read| {
-        let setting = bounds.var_or_field(NAMESPACE);
+    let declare = |resource, timeout: &BoundedSetting<Duration>, read| {
+        let setting = timeout.var_or_field(NAMESPACE);
         match reach {
             BudgetReach::Injected => Budget::of::<DatabaseConnection>(resource, setting, read),
             BudgetReach::Ambient => Budget::ambient::<DatabaseConnection>(resource, setting, read),

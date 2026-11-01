@@ -211,8 +211,7 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields, defaults: Option<&Path
                 <#ty as ::nest_rs_config::ConfigField>::overlay(#env, #key, #base.#ident)
             },
             Reader::Bounds(_) => {
-                let at = ty.span();
-                let setting = Ident::new(&field.key, at);
+                let (at, setting) = (ty.span(), setting_ident(field));
                 let (env, base, ident) =
                     (located(&env, at), located(&base, at), located(ident, at));
                 quote_spanned! {at=>
@@ -244,16 +243,16 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields, defaults: Option<&Path
                 return None;
             };
             let (vis, ty, setting) = (&field.vis, &field.ty, setting_ident(field));
+            // Every token naming the field's type goes through `BoundedField`
+            // at that type's location, so rustc says a type no range holds, or
+            // a range of the other kind, once — at the field.
+            let at = ty.span();
             let doc = format!(
                 "`{}`'s range, bound to the variable it is read from and the field that pins \
                  it: a `BoundedSetting` over the field's type.",
                 field.ident.unraw()
             );
-            let field = relocated(field_of(field), ty.span());
-            // Every token naming the field's type goes through `BoundedField`
-            // at that type's location, so rustc says a type no range holds, or
-            // a range of the other kind, once — at the field.
-            let at = ty.span();
+            let field = relocated(field_of(field), at);
             let range = Ident::new("__NESTRS_RANGE", at);
             let bounds = relocated(bounds.to_token_stream(), at);
             Some(quote_spanned! {at=>

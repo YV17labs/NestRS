@@ -10,9 +10,9 @@ use nest_rs_config::{
     Bound, ConfigError, ConfigService, DurationBounds, Field, Floor, Result, config,
 };
 
-/// How long a client may reuse a file before it asks again, the variable that
-/// sets it, and why its range ends where it does.
-pub(crate) const MAX_AGE: DurationBounds = DurationBounds::secs(
+/// The range of how long a client may reuse a file before it asks again, and
+/// why it ends where it does.
+const MAX_AGE: DurationBounds = DurationBounds::secs(
     Floor::Units(Bound::new(
         1,
         "a lifetime under a second is a revalidation on every request, which is what \

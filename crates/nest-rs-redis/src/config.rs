@@ -11,10 +11,10 @@ use nest_rs_core::Secret;
 /// Default boot budget for reaching Redis: 10s.
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 
-/// The connect budget's range, and why. The ceiling
-/// also keeps the socket's liveness under what the kernel accepts, which
-/// `connection.rs` asserts at compile time.
-pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
+/// The connect budget's range, and why. The ceiling also keeps the socket's
+/// liveness under what the kernel accepts, which `connection.rs` asserts at
+/// compile time.
+const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     Floor::AboveZero(
         "the budget bounds the boot's connect and every command after it, and a zero one gives \
          up before the first attempt and fails every command at once",

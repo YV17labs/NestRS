@@ -729,9 +729,8 @@ const KEEPALIVE_IDLE_LIMIT: Duration = Duration::from_secs(32_767);
 const USER_TIMEOUT_LIMIT: Duration = Duration::from_millis(i32::MAX as u64);
 
 const _: () = {
-    let most = crate::config::CONNECT_TIMEOUT
-        .unit()
-        .duration(crate::config::CONNECT_TIMEOUT.most().count);
+    let bounds = RedisConfig::CONNECT_TIMEOUT.bounds();
+    let most = bounds.unit().duration(bounds.most().count);
     assert!(
         most.as_secs() <= KEEPALIVE_IDLE_LIMIT.as_secs()
             && most.as_millis() <= USER_TIMEOUT_LIMIT.as_millis(),

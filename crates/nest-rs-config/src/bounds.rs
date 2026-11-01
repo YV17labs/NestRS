@@ -88,12 +88,17 @@ pub enum Floor {
 }
 
 impl Floor {
+    /// The floor the variable is held to, in whole units.
+    const fn bound(self) -> Bound {
+        match self {
+            Self::Units(bound) => bound,
+            Self::AboveZero(why) => Bound::new(1, why),
+        }
+    }
+
     /// The least count the variable may hold.
     const fn count(self) -> u64 {
-        match self {
-            Self::Units(bound) => bound.count,
-            Self::AboveZero(_) => 1,
-        }
+        self.bound().count
     }
 }
 
@@ -240,6 +245,15 @@ impl CountBounds {
     /// The ceiling.
     pub const fn most(&self) -> Bound {
         self.most
+    }
+
+    /// Which end `count` falls past, if either.
+    fn outside(&self, count: usize) -> Option<Past> {
+        outside(
+            self.least,
+            self.most,
+            u64::try_from(count).unwrap_or(u64::MAX),
+        )
     }
 }
 
@@ -488,7 +502,7 @@ impl BoundedField for usize {
             );
         };
         let count: Self = read.parse()?;
-        match outside(&setting.bounds, count) {
+        match setting.bounds.outside(count) {
             None => Ok(count),
             Some(Past { must, bound, .. }) => Err(read.refuse(format_args!(
                 "must be {must} {} — {}",
@@ -531,25 +545,15 @@ fn read_duration(
     if off == Off::AtZero && count == 0 {
         return Ok(Some(None));
     }
-    let or_off = match off {
-        Off::AtZero => ", or 0 to turn it off",
-        Off::Absent => "",
-    };
-    let (least, why) = match bounds.least {
-        Floor::Units(bound) => (bound.count, bound.why),
-        Floor::AboveZero(why) => (1, why),
-    };
-    if count < least {
+    if let Some(Past { must, bound, .. }) = outside(bounds.least.bound(), bounds.most, count) {
+        let or_off = match off {
+            Off::AtZero => ", or 0 to turn it off",
+            Off::Absent => "",
+        };
         return Err(setting.refuse(format_args!(
-            "must be at least {}{or_off} — {why}",
-            Count(bounds.unit, least),
-        )));
-    }
-    if count > bounds.most.count {
-        return Err(setting.refuse(format_args!(
-            "must be at most {}{or_off} — {}",
-            Count(bounds.unit, bounds.most.count),
-            bounds.most.why,
+            "must be {must} {}{or_off} — {}",
+            Count(bounds.unit, bound.count),
+            bound.why,
         )));
     }
     Ok(Some(Some(bounds.unit.duration(count))))
@@ -614,7 +618,7 @@ fn pinned_count(
     count: usize,
     lead: &str,
 ) -> Result<usize, ConfigError> {
-    match outside(&setting.bounds, count) {
+    match setting.bounds.outside(count) {
         None => Ok(count),
         Some(Past { side, must, bound }) => Err(ConfigError::parse(
             var,
@@ -628,27 +632,26 @@ fn pinned_count(
     }
 }
 
-/// The end of a count's range a value falls past.
+/// The end of a range a value falls past.
 struct Past {
     side: &'static str,
     must: &'static str,
     bound: Bound,
 }
 
-/// Which end of `bounds` `count` falls past, if either.
-fn outside(bounds: &CountBounds, count: usize) -> Option<Past> {
-    let count = u64::try_from(count).unwrap_or(u64::MAX);
-    if count < bounds.least.count {
+/// Which end of the range from `least` to `most` `count` falls past, if either.
+fn outside(least: Bound, most: Bound, count: u64) -> Option<Past> {
+    if count < least.count {
         Some(Past {
             side: "below",
             must: "at least",
-            bound: bounds.least,
+            bound: least,
         })
-    } else if count > bounds.most.count {
+    } else if count > most.count {
         Some(Past {
             side: "above",
             must: "at most",
-            bound: bounds.most,
+            bound: most,
         })
     } else {
         None

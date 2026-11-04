@@ -4,6 +4,7 @@ use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt;
 
 use nest_rs_core::__private::{ConsoleLayer, install_global_subscriber, log_filter};
+use nest_rs_core::logging::LogFormat;
 
 use crate::config::{OpenTelemetryConfig, say_retired_variables};
 use crate::error::OpenTelemetryError;
@@ -59,6 +60,12 @@ impl OpenTelemetry {
         let console = config.console()?;
         let filter = log_filter(&console.filter);
         let console_layer = ConsoleLayer::new(console.format, console.source_location);
+        // The boot line says what the console writes: `format` may hold `ByProfile`.
+        let log_format = if console.format.writes_json() {
+            LogFormat::Json
+        } else {
+            LogFormat::Text
+        };
 
         #[cfg(feature = "otlp")]
         {
@@ -110,7 +117,7 @@ impl OpenTelemetry {
                 logs = logs.as_str(),
                 sampler = if summary.sampler_from_env { "OTEL_TRACES_SAMPLER" } else { "ratio" },
                 sample_ratio = config.trace_sample_ratio,
-                log_format = ?console.format,
+                ?log_format,
                 "OpenTelemetry initialised"
             );
 
@@ -136,7 +143,7 @@ impl OpenTelemetry {
                     .or_else(|| nest_rs_core::AppIdentity::current().map(|app| app.name.as_str()))
                     .unwrap_or_default(),
                 mode = "console",
-                log_format = ?console.format,
+                ?log_format,
                 "OpenTelemetry initialised"
             );
             Ok(OpenTelemetry {})

@@ -69,7 +69,7 @@ pub struct OpenTelemetryConfig {
     /// `RUST_LOG` overrides it.
     pub log_filter: String,
     /// Console output shape; defaults by the declared profile
-    /// ([`LogFormat::by_profile`]). The OTLP appender is unaffected.
+    /// ([`LogFormat::ByProfile`]). The OTLP appender is unaffected.
     /// `<PREFIX>_LOG_FORMAT` overrides it.
     pub log_format: LogFormat,
     /// Append the emitting `file:line` to every console event; off by default,
@@ -104,7 +104,7 @@ pub struct OpenTelemetryConfig {
 
 impl Default for OpenTelemetryConfig {
     /// The service named after the binary, the console's settings at their
-    /// defaults (`log_format` by the declared profile), every trace sampled,
+    /// defaults (`log_format` left to the declared profile), every trace sampled,
     /// the SDK's metric period, and no export.
     fn default() -> Self {
         Self {
@@ -113,7 +113,7 @@ impl Default for OpenTelemetryConfig {
             deployment_environment: None,
             service_instance_id: None,
             log_filter: "info".into(),
-            log_format: LogFormat::by_profile(),
+            log_format: LogFormat::ByProfile,
             log_source_location: false,
             otlp_endpoint: None,
             trace_sample_ratio: 1.0,
@@ -275,10 +275,24 @@ mod tests {
         assert_eq!(cfg.trace_sample_ratio, 1.0);
         assert!(cfg.otlp_endpoint.is_none());
         assert_eq!(cfg.log_filter, "info");
-        assert_eq!(cfg.log_format, LogFormat::by_profile());
+        assert_eq!(cfg.log_format, LogFormat::ByProfile);
         assert!(!cfg.log_source_location, "it leaks source paths");
         assert_eq!(cfg.metric_interval, DEFAULT_METRIC_INTERVAL);
         assert_eq!(DEFAULT_METRIC_INTERVAL, Duration::from_secs(60));
+    }
+
+    /// One default: the config's format is the type's own, whose profile is
+    /// read where the console is built.
+    #[test]
+    fn the_default_format_is_the_types_own() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(nest_rs_config::Environment::var_name(), "production");
+            assert_eq!(
+                OpenTelemetryConfig::default().log_format,
+                LogFormat::default()
+            );
+            Ok(())
+        });
     }
 
     #[test]
@@ -505,7 +519,7 @@ mod tests {
             jail.set_env(EnvPrefix::var(var::FORMAT), " ");
             jail.set_env(EnvPrefix::var(var::SOURCE_LOCATION), "");
             let cfg = OpenTelemetryConfig::from_env().expect("readable config");
-            assert_eq!(cfg.log_format, LogFormat::by_profile());
+            assert_eq!(cfg.log_format, LogFormat::ByProfile);
             assert!(!cfg.log_source_location);
             Ok(())
         });

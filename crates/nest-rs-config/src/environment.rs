@@ -99,9 +99,8 @@ impl Environment {
     }
 
     /// Whether this is a deployment — [`Staging`](Self::Staging) or
-    /// [`Production`](Self::Production) — where a config's
-    /// [`defaults`](crate::Config::defaults) arms no development convenience
-    /// and stays its `Default`.
+    /// [`Production`](Self::Production) — where a
+    /// [`Surface::ByProfile`](crate::Surface::ByProfile) stays closed.
     pub fn is_deployed(&self) -> bool {
         match self {
             Self::Staging | Self::Production => true,
@@ -246,16 +245,16 @@ mod tests {
         use nest_rs_core::logging::LogFormat;
 
         figment::Jail::expect_with(|jail| {
-            for (profile, format) in [
-                ("development", LogFormat::Text),
-                ("dev", LogFormat::Text),
-                ("test", LogFormat::Text),
-                ("staging", LogFormat::Json),
-                ("production", LogFormat::Json),
-                ("", LogFormat::Json),
+            for (profile, json) in [
+                ("development", false),
+                ("dev", false),
+                ("test", false),
+                ("staging", true),
+                ("production", true),
+                ("", true),
             ] {
                 jail.set_env(Environment::var_name(), profile);
-                assert_eq!(LogFormat::by_profile(), format, "{profile:?}");
+                assert_eq!(LogFormat::ByProfile.writes_json(), json, "{profile:?}");
             }
             Ok(())
         });

@@ -66,12 +66,14 @@ pub mod var {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LogFormat {
-    /// Human-readable text; the console's default under a declared
-    /// development or test profile.
+    /// Whatever the process declares, read as the console is built: text under
+    /// a development or test profile, JSON in every other process, a deployment
+    /// and an undeclared one alike. The cargo build profile has no say.
     #[default]
+    ByProfile,
+    /// Human-readable text.
     Text,
-    /// One JSON object per event; the console's default in every other
-    /// process, a deployment and an undeclared one alike.
+    /// One JSON object per event.
     Json,
 }
 
@@ -86,16 +88,19 @@ impl LogFormat {
         }
     }
 
-    /// Text when the process declares a development or test profile, JSON
-    /// otherwise — the cargo build profile has no say. The profile is the one
+    /// Whether the console writes this format as JSON in this process, the
+    /// question to ask of a format read back, which may hold
+    /// [`ByProfile`](Self::ByProfile). The profile that reads is the one
     /// `<PREFIX>_ENV` declares, read by the configuration crate the binary
     /// links; a binary linking none runs as production.
-    pub fn by_profile() -> Self {
-        let mut sources = inventory::iter::<ProfileSource>().peekable();
-        if sources.peek().is_some() && sources.all(|source| !(source.deployed)()) {
-            Self::Text
-        } else {
-            Self::Json
+    pub fn writes_json(self) -> bool {
+        match self {
+            Self::Text => false,
+            Self::Json => true,
+            Self::ByProfile => {
+                let mut sources = inventory::iter::<ProfileSource>().peekable();
+                sources.peek().is_none() || sources.any(|source| (source.deployed)())
+            }
         }
     }
 }
@@ -168,11 +173,11 @@ pub struct LogSettings {
 
 impl Default for LogSettings {
     /// What every setting unset or blank reads as: `info`,
-    /// [`LogFormat::by_profile`], and no source location.
+    /// [`LogFormat::ByProfile`], and no source location.
     fn default() -> Self {
         Self {
             filter: DEFAULT_FILTER.to_owned(),
-            format: LogFormat::by_profile(),
+            format: LogFormat::ByProfile,
             source_location: false,
         }
     }
@@ -180,7 +185,7 @@ impl Default for LogSettings {
 
 impl LogSettings {
     /// Read and check all three; unset or blank is the default (`info`,
-    /// [`LogFormat::by_profile`], `false`), a value that does not parse is
+    /// [`LogFormat::ByProfile`], `false`), a value that does not parse is
     /// refused naming its variable.
     pub fn from_env() -> Result<Self, LogSettingsError> {
         Self::default().overlaid_by_env()
@@ -1580,13 +1585,14 @@ where
         } else {
             layer.with_ansi(false)
         };
-        Self(match format {
-            LogFormat::Text => layer.event_format(TextFormat::new(source_location)).boxed(),
+        Self(if format.writes_json() {
             // `.json()` sets the field formatter only; the envelope is `JsonFormat`'s.
-            LogFormat::Json => layer
+            layer
                 .json()
                 .event_format(JsonFormat::new(source_location))
-                .boxed(),
+                .boxed()
+        } else {
+            layer.event_format(TextFormat::new(source_location)).boxed()
         })
     }
 }
@@ -1784,6 +1790,21 @@ mod tests {
         }
     }
 
+    /// The console resolves the profile where it is built: a line is JSON when
+    /// the format the process reads says so, the profile's table sitting in
+    /// `nest-rs-config`, which declares it.
+    #[test]
+    fn a_console_by_profile_writes_what_the_format_resolves_to() {
+        let line = console_line(LogFormat::ByProfile, false);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(line.trim()).is_ok(),
+            LogFormat::ByProfile.writes_json(),
+            "{line:?}"
+        );
+        assert!(!LogFormat::Text.writes_json());
+        assert!(LogFormat::Json.writes_json());
+    }
+
     /// Outside the edge vocabulary, so it copies no real unit's literal.
     const FIXTURE_UNIT: &str = "fixture.line";
 
@@ -1805,21 +1826,22 @@ mod tests {
 
     fn render_operation_line(format: LogFormat, duration: f64) -> String {
         let captured = Captured::default();
-        let subscriber = match format {
-            LogFormat::Text => Registry::default().with(
-                tracing_subscriber::fmt::layer()
-                    .event_format(TextFormat::new(false))
-                    .with_ansi(false)
-                    .with_writer(captured.clone())
-                    .boxed(),
-            ),
-            LogFormat::Json => Registry::default().with(
+        let subscriber = if format.writes_json() {
+            Registry::default().with(
                 tracing_subscriber::fmt::layer()
                     .json()
                     .event_format(JsonFormat::new(false))
                     .with_writer(captured.clone())
                     .boxed(),
-            ),
+            )
+        } else {
+            Registry::default().with(
+                tracing_subscriber::fmt::layer()
+                    .event_format(TextFormat::new(false))
+                    .with_ansi(false)
+                    .with_writer(captured.clone())
+                    .boxed(),
+            )
         };
         tracing::subscriber::with_default(subscriber, || emit_operation_line(duration));
         captured.take()
@@ -2234,7 +2256,7 @@ mod tests {
     fn every_setting_unset_or_blank_is_its_default() {
         let defaults = LogSettings {
             filter: "info".to_owned(),
-            format: LogFormat::by_profile(),
+            format: LogFormat::ByProfile,
             source_location: false,
         };
         assert_eq!(settings_under(&[]).expect("the defaults"), defaults);
@@ -2244,6 +2266,13 @@ mod tests {
             (EnvPrefix::var(var::SOURCE_LOCATION), "  "),
         ];
         assert_eq!(settings_under(&blank).expect("the defaults"), defaults);
+    }
+
+    /// One default: the settings' format is the type's own, whose profile is
+    /// read where the console is built.
+    #[test]
+    fn the_settings_default_format_is_the_types_own() {
+        assert_eq!(LogSettings::default().format, LogFormat::default());
     }
 
     #[test]

@@ -5,6 +5,7 @@
 
 use std::process::{Command, Output};
 
+use nest_rs_config::Environment;
 use nest_rs_core::logging::LogFormat;
 use nest_rs_core::{App, UnservedExportError, module};
 use nest_rs_opentelemetry::{OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
@@ -39,10 +40,15 @@ async fn inside_the_subscriber() -> nest_rs_core::anyhow::Result<()> {
 /// The role whose child writes the boot line on a text console.
 const BOOT_LINE: &str = "boot-line";
 
-/// The boot line on a text console, under the variables the parent set.
-fn boot_line_on_a_text_console() {
+/// The role whose child writes the boot line with its format left to the
+/// profile.
+const BOOT_LINE_BY_PROFILE: &str = "boot-line-by-profile";
+
+/// The boot line of a console set to `log_format`, under the variables the
+/// parent set.
+fn boot_line(log_format: LogFormat) {
     let otel = OpenTelemetry::init_with(OpenTelemetryConfig {
-        log_format: LogFormat::Text,
+        log_format,
         log_filter: "info".into(),
         ..OpenTelemetryConfig::default()
     })
@@ -57,7 +63,8 @@ fn boot_line_on_a_text_console() {
 )]
 fn init_child_process() {
     match std::env::var(CHILD_ROLE).as_deref() {
-        Ok(BOOT_LINE) => boot_line_on_a_text_console(),
+        Ok(BOOT_LINE) => boot_line(LogFormat::Text),
+        Ok(BOOT_LINE_BY_PROFILE) => boot_line(LogFormat::ByProfile),
         Ok(_) => {
             let _ = inside_the_subscriber();
         }
@@ -437,6 +444,41 @@ fn the_boot_line_s_signal_states_read_whole_as_logfmt() {
     assert_eq!(field("metrics"), "http://127.0.0.1:9/v1/metrics", "{line}");
     assert_eq!(field("logs"), "off (no endpoint)", "{line}");
     assert_eq!(field("mode"), "otlp", "{line}");
+}
+
+/// The boot line a child in `role` writes under `profile`, `""` declaring none.
+fn boot_line_under(role: &str, profile: &str) -> String {
+    let output = child_in(role, &[(Environment::var_name().as_str(), profile)]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{profile:?}: {stdout}");
+    stdout
+        .lines()
+        .find(|line| line.contains("OpenTelemetry initialised"))
+        .unwrap_or_else(|| panic!("the boot line under {profile:?}: {stdout}"))
+        .to_owned()
+}
+
+/// `log_format` says what the console writes, in the words a written format
+/// takes, never the `ByProfile` a format left to the profile holds: the line
+/// itself is the proof, written in the format it names.
+#[test]
+fn the_boot_line_says_the_format_the_console_writes() {
+    for profile in ["development", "test"] {
+        let line = boot_line_under(BOOT_LINE_BY_PROFILE, profile);
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&line).is_err(),
+            "{profile:?}: {line}"
+        );
+        assert!(line.contains(" log_format=Text"), "{profile:?}: {line}");
+    }
+    for profile in ["staging", "production", ""] {
+        let line = boot_line_under(BOOT_LINE_BY_PROFILE, profile);
+        let event: serde_json::Value = serde_json::from_str(&line)
+            .unwrap_or_else(|_| panic!("a JSON line under {profile:?}: {line}"));
+        assert_eq!(event["fields"]["log_format"], "Json", "{profile:?}: {line}");
+    }
+    let written = boot_line_under(BOOT_LINE, "production");
+    assert!(written.contains(" log_format=Text"), "{written}");
 }
 
 /// A binary built without the `otlp` feature exports nothing, so an endpoint

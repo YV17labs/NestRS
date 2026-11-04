@@ -413,6 +413,9 @@ lists what the boot, a log or the wire shows when one is missed.
    | `#[derive(Default)]` beside `#[injectable]` on a struct with no field | nothing: a fieldless struct, unit or braced, is built as written |
    | a `tracing::warn!` or `error!` a guard files before returning its `Err` | the denial names why — `Denial::forbidden("…").with_reason("banned_author")` — and the guard its target, `fn target(&self) -> &'static str { crate::TARGET }`: the edge files each denial once, `guard denied …` on that target, with the reason and, when the denial keeps a cause (`.with_source(err)`), the whole chain from its own text down |
    | `cx.ambient::<Claims>()` with an `else` returning `Denial::internal("… must run first")`, a value an earlier guard must have attached | `cx.require::<Claims>()?`: its absence is a `500` the edge files once at `error`, naming the guard and the type |
+   | a guard reading the principal in two bodies, `check_http` for the route's wiring gap and `check` for `/graphql`'s visitor | one `check` calling `cx.require::<Claims>()?`, and `fn expected_principal(&self) -> Option<PrincipalClaim> { Some(PrincipalClaim::of::<Claims>()) }`: absent, it is the caller's `401` on every edge, and nothing attaching it fails the boot |
+   | an authentication guard of your own, beside a guard declaring `expected_principal` | `fn produced_principal(&self) -> Option<PrincipalClaim> { Some(PrincipalClaim::of::<Claims>()) }` on it: the boot reads who attaches the principal |
+   | a guard that reads a principal where one is and decides a visitor itself, declaring it through `expected_principal` | `PrincipalClaim::of::<T>().or_visitor()`: nothing attaching it stays a `warn` |
    | a `Denial::Unauthorized(…)`, `Forbidden(…)`, `RateLimited { … }` or other variant built or matched | its constructor — `Denial::forbidden(…)`, `Denial::rate_limited(…)` — and, to tell denials apart, `denial.http_status()` and `denial.bearer_error()`: `Denial`'s fields are private |
    | `impl HttpGuard for X {}`, `GraphqlGuard`, `WsGuard`, `McpGuard` | `impl GuardFor<HttpView> for X {}`, `GuardFor<GraphqlView>`, `GuardFor<WsView>`, `GuardFor<McpView>` |
    | `req.extensions_mut().insert(value)` in a guard, read back with `Ctx<T>` | `cx.attach(value)`, with `impl AmbientValue for T {}` beside the type; a guard after it reads `cx.ambient::<T>()` |
@@ -901,6 +904,10 @@ lists what the boot, a log or the wire shows when one is missed.
     | two `#[mcp]` hosts on one path declaring one prompt name | rename one, or give each host its own `path`: the boot refuses the pair |
     | a host serving resources by hand — `#[tool_router]` tools, a `get_info`, `list_resources` / `read_resource` parsing its URIs | its tools, prompts and resources under `#[tools]`: `#[resources]` lists, `#[resource(template = "post://{id}")]` reads, `id` a typed parameter, each beside `#[authorize(…)]` or `#[public]` |
     | a `McpError::resource_not_found(…)` built for a row the caller may not read | `Ok(None)` from the `#[resource]` method, answered *Resource not found* under the `NOT_FOUND` class |
+    | a `#[resource]` reading one row with `CrudService::access(&*self.svc, Action::Read, id)` and a match over `Access` | `#[authorize(Read, bind = PostsService)]` and a `post: Authorized<Read, PostEntity>` parameter, no `id: Uuid`: `Denied`, `Missing` and an id no v7 answer *Resource not found*, and the body runs on the row alone |
+    | `#[public]` on a message or an MCP operation behind an upgrade or an endpoint whose guards authenticate it | nothing: the guards cover it, and the boot refuses a `#[public]` that could open nothing there. `#[authorize(Action, Subject)]` where it needs a gate |
+    | a hand-written `Posture::Gated` self-mount (`declare_endpoint`) with no guard, which served every caller after one `warn` | `GlobalGuards` covering it, or `Posture::Public` where it is open on purpose: the boot refuses it |
+    | `#[authorize(Action, Entity, unmasked)]` on a message only because it returns a bare value or a `Result` behind an alias | `#[authorize(Action, Entity)]`: the mask reads the reply by its type |
     | a `#[prompt]`, or a `#[tool]` answering `ContentBlock` or `InputRequiredResult`, beside `#[authorize(Action, Entity)]` | `#[authorize(Action, Entity, unmasked)]`: the mask failed every call closed on what is no row, and now does not compile |
     | `input: Valid<T>` on a GraphQL argument, a WebSocket payload or a job; `Parameters<Valid<T>>` on MCP; `nest_rs::mcp::Valid` | `input: T`, `Parameters<T>`: each edge validates what it decodes |
     | `Piped<P, T>` on a GraphQL argument, a WebSocket payload or a job, `Parameters<Piped<P, T>>` on MCP; `nest_rs::mcp::Piped` | `Piped<P>` from `nest_rs::pipes`, whose wire value is the pipe's `In`, bound `Piped(value)` |
@@ -1201,7 +1208,9 @@ lists what the boot, a log or the wire shows when one is missed.
     An HTTP route no guard covers and no `#[public]` opens, which 6.x served
     after one `unguarded routes detected` warning, now stops the boot naming
     every such route: bind a guard on its controller, the route or the app's
-    global pool, or mark it `#[public]` where it is open on purpose.
+    global pool, or mark it `#[public]` where it is open on purpose. A WebSocket
+    message takes the same rule, and a `#[public]` message or MCP operation behind
+    a guard that authenticates stops the boot, the word having nothing to open.
 
 18. **Regenerate every client from the 7.0 document**, and move what it read off
     the wire:
@@ -1546,6 +1555,25 @@ lists what the boot, a log or the wire shows when one is missed.
 
   Bind a guard where the route should be closed, and write `#[public]` where it
   is open on purpose.
+- **A gateway or an MCP endpoint whose guards authenticate, still saying `#[public]`**
+  on a message or an operation, stops the boot, naming the guard:
+
+  ```text frame="terminal"
+  Error: the `nest_rs::ws::gateways` wiring failed: `#[public]` on history of the gateway at /ws can open nothing: its upgrade runs `AuthnGuard`, so a caller with no credential never reaches a message — drop `#[public]`, the guards covering a message deciding it (`#[authorize(Action, Subject)]` adds a gate), or take that guard off the upgrade to open the gateway
+  ```
+
+  Drop the word; the guards cover the unit. `#[public]` on a gated `/mcp` with no
+  guard at all stops it too, naming `McpModule::for_root(McpAccess::Public)`.
+- **A `#[public]` dropped from a message no guard covers, or from an operation of an
+  endpoint `McpAccess::Public` opens**, stops the boot, naming every such unit: keep the
+  word where the gateway or the endpoint is open on purpose, or bind a guard.
+- **A guard declaring `expected_principal` beside an authentication guard of your own
+  that declares no `produced_principal`** stops the boot, naming both the guard and the
+  type. Declare it on the guard attaching it, or `or_visitor()` where the guard does
+  without.
+- **A client branching on `FORBIDDEN` for a visitor's call to a field whose guard reads
+  the principal** now reads `UNAUTHENTICATED`, the class a missing credential answers
+  everywhere. On HTTP, a `#[public]` route with such a guard answers `401`, not `500`.
 - **`use_guards_global`, `use_pipes_global`, `use_interceptors_global` or
   `use_exception_filters_global` left in `main`** fails to compile (`no method
   named use_guards_global found for struct AppBuilder`): list the pool in the

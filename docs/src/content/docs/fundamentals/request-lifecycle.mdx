@@ -120,7 +120,9 @@ answered.
 
 `#[public]` and `#[meta(EXPR)]` are not layers — they are **declarations** a
 layer reads. `#[public]` marks a route or an operation as anonymous-admissible
-(the authentication guard admits it through); `#[meta]` declares typed data
+(the authentication guard admits it through), on every edge; where a guard running
+at the request a WebSocket message or an MCP operation arrives on would turn a
+visitor away first, it could open nothing, and the boot refuses it; `#[meta]` declares typed data
 on a host or one of its methods, which a layer reads through
 `cx.reflector()`. Each site keeps one declaration for the process, its values
 built once as it mounts; its layers read it through a pointer, so nothing is

@@ -81,23 +81,37 @@ would see `None` once the upgrade request had unwound.
 ## Per-message: the envelope gate
 
 A per-message guard runs every time the envelope's `event` matches a
-handler the guard is attached to:
+handler the guard is attached to. Its decision is the one a route's guard writes:
 
-```rust title="crates/features/src/chat/ws/guard.rs (from the demo, abridged)"
+```rust title="crates/features/src/chat/ws/guard.rs"
+use std::sync::Arc;
+
 use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
-use nest_rs::guards::{Denial, Guard, GuardFor};
+use nest_rs::guards::{Denial, Guard, GuardFor, PrincipalClaim};
 use nest_rs::ws::WsView;
 
 use crate::Claims;
+use crate::chat::ChatService;
 
 #[injectable]
 #[derive(Layer)]
-pub struct ModerationGuard;
+pub struct MutedGuard {
+    #[inject]
+    svc: Arc<ChatService>,
+}
 
 #[async_trait]
-impl Guard for ModerationGuard {
+impl Guard for MutedGuard {
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        Self::decide(&*cx.require::<Claims>()?)
+        let caller = cx.require::<Claims>()?;
+        if self.svc.is_muted(&caller.sub).await {
+            return Err(Denial::forbidden("you are muted in this room").with_reason("muted"));
+        }
+        Ok(())
+    }
+
+    fn expected_principal(&self) -> Option<PrincipalClaim> {
+        Some(PrincipalClaim::of::<Claims>())
     }
 
     fn target(&self) -> &'static str {
@@ -105,30 +119,20 @@ impl Guard for ModerationGuard {
     }
 }
 
-impl GuardFor<WsView> for ModerationGuard {}
-
-impl ModerationGuard {
-    fn decide(caller: &Claims) -> Result<(), Denial> {
-        match caller.sub.user_id() {
-            Some(_) => Ok(()),
-            None => {
-                Err(Denial::forbidden("posting takes a token naming a user")
-                    .with_reason("not_a_user"))
-            }
-        }
-    }
-}
+impl GuardFor<WsView> for MutedGuard {}
 ```
 
-The guard decides on the caller the upgrade authenticated, which every
-message on the connection carries — never on a name the payload states, which
-the client writes. The claims are a precondition, so `cx.require` reads them:
-a gateway bound without `AuthnGuard` at its upgrade refuses every message with
-a `500`, filed once at `error`. The guard writes no log line: the edge files
-its refusal, `guard denied the message` on `features::chat`, with
-`reason = "not_a_user"`. A guard that needs the message itself switches to
-`WsView`: `event()`, `data()` and the `client()` that sent it, whose
-connection `cx.peer()` names too.
+The verified claims are the principal the guard requires, and declares
+(`expected_principal`): the boot refuses a gateway whose upgrade attaches none, so
+it never meets one at a message. The guard writes no log line: the edge files its
+refusal, `guard denied the message` on `features::chat`, with `reason = "muted"`.
+A guard that needs the message itself switches to `WsView`: `event()`, `data()`
+and the `client()` that sent it, whose connection `cx.peer()` names too.
+
+A rule about the caller alone — *a token naming a user may post* — needs no guard
+at all. It is a [capability](/security/authorization/policies/#subjects-no-table-holds),
+granted beside every other rule and gated by the posture, which is what the demo's
+chat does below.
 
 <Aside type="caution" title="A per-message guard must declare `GuardFor<WsView>`">
 A guard's `check` is the decision it wrote for the units it declares; one
@@ -157,14 +161,22 @@ and `check_http` is what runs. Both scopes are checked, each against its own
 view — which is where that distinction stops being folklore.
 </Aside>
 
-Bind it beside the message it gates:
+Bind a guard beside the message it gates, with `#[use_guards(MutedGuard)]`. The
+demo's chat needs none: its rule is a capability, granted only under a token naming
+a user, and the posture gates on it:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
+#[gateway(path = "/ws")]
+#[use_guards(AuthnGuard, AuthzGuard)]
+pub struct ChatGateway {
+    #[inject]
+    svc: Arc<ChatService>,
+}
+
 #[messages]
 impl ChatGateway {
     #[subscribe_message("message")]
-    #[public]
-    #[use_guards(ModerationGuard)]
+    #[authorize(Create, Posting)]
     async fn on_message(&self, caller: Ambient<Claims>, msg: SendMessageDto) -> Result<(), WsError> {
         self.svc.record(caller.into_inner().sub, msg).opaque()?;
         Ok(())
@@ -184,7 +196,7 @@ token, which names no user, tries to post:
 
 ```text frame="terminal"
 > {"event":"message","data":{"text":"hi"}}
-< {"event":"message","data":{"error":"posting takes a token naming a user","code":"FORBIDDEN","reason":"forbidden"}}
+< {"event":"message","data":{"error":"forbidden","code":"FORBIDDEN","reason":"forbidden"}}
 ```
 
 The connection stays open; the client can fire other events.

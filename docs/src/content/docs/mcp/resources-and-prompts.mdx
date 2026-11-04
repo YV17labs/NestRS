@@ -11,7 +11,7 @@ import { Aside } from '@astrojs/starlight/components';
 MCP defines two primitives beyond tools: **prompts** (parameterized templates
 the user picks) and **resources** (documents the model can list and read).
 Both are methods in the same `#[tools]` block as your tools, and each takes
-the same mandatory posture, guards, filters and mask a tool does.
+the same posture, guards, filters and mask a tool does.
 
 ## Prompts
 
@@ -48,7 +48,7 @@ impl PostsTool {
     #[resources]
     #[authorize(Read, PostEntity, unmasked)]
     async fn posts(&self) -> Result<Vec<Resource>, McpError> {
-        let rows = CrudService::list(&*self.svc).await.opaque()?;
+        let rows = self.svc.list().await.opaque()?;
 
         Ok(rows
             .into_iter()
@@ -60,23 +60,17 @@ impl PostsTool {
         template = "post://{id}",
         description = "One post the caller is allowed to read, as JSON."
     )]
-    #[authorize(Read, PostEntity)]
-    async fn post(&self, id: Uuid) -> Result<Option<Json<Post>>, McpError> {
-        let access = CrudService::access(&*self.svc, Action::Read, id)
-            .await
-            .opaque()?;
-        Ok(match access {
-            Access::Found(post) => Some(Json(Post::from(&post))),
-            Access::Denied | Access::Missing => None,
-        })
+    #[authorize(Read, bind = PostsService)]
+    async fn post(&self, post: Authorized<Read, PostEntity>) -> Result<Json<Post>, McpError> {
+        Ok(Json(Post::from(&post.into_inner())))
     }
 }
 ```
 
 A client reads `post://0192…` and the framework does the rest: it finds the
-template the URI was written from, parses `id` as a `Uuid`, runs the
-operation's guards and its class gate, calls `post`, masks the post and
-answers it as the contents of the URI it read. `resources/templates/list`
+template the URI was written from, runs the operation's guards and its class gate,
+loads the row `id` names through `PostsService` under the caller's ability, calls
+`post`, masks the post and answers it as the contents of the URI it read. `resources/templates/list`
 advertises every template with its `name` (the method's, unless you state
 one), its `title` and `description`, and the media type its answer is read as;
 `resources/list` is the `#[resources]` method's answer. The `resources`
@@ -99,10 +93,20 @@ capability is derived from the methods present, never written.
   found* — `-32002`, or `-32602` from protocol `2026-07-28` on — under the
   `NOT_FOUND` class, and none quotes the URI. A reader cannot tell a row it was
   refused from a row that does not exist.
-- **The posture is the tool's.** `#[authorize(Read, PostEntity)]` runs the
-  class gate before the body, so a token without `posts:read` is refused with
-  the scope it lacks rather than handed an empty listing, and masks the read
-  inside its `Option`. A listing's entries are URIs and names the round-trip
+- **`bind = Service` loads the row its template names**, on a template naming
+  exactly one variable: [`#[authorize(Read, bind = PostsService)]`](/security/authorization/by-id-binding/)
+  hands the method's `Authorized<Read, E>` parameter the row, whatever the
+  parameter is called. A row the caller may not have, one that does not exist and
+  an id that is no v7 are that one answer, and the body never runs. A template
+  naming several variables loads its row in the body, with the service's `access`
+  and an `Option` to answer.
+- **The posture is the tool's.** `#[authorize(Read, bind = PostsService)]` runs the
+  class gate before the load, so a token without `posts:read` is refused with
+  the scope it lacks rather than handed an empty listing, and masks the read,
+  inside an `Option` where it answers one. The mask reads your reply back into the
+  entity, so a reply leaving out a column the entity requires fails closed: answer
+  the whole `#[expose]`d shape, or [declare `unmasked`](/mcp/authorization/) beside
+  `bind` when the projection is deliberate. A listing's entries are URIs and names the round-trip
   cannot read: a gated `#[resources]` declares `unmasked` and lists only what
   the caller may read — the ambient ability already scopes
   `CrudService::list`. A `ReadResourceResult` is opaque to the mask too,

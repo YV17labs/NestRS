@@ -312,13 +312,8 @@ service — on HTTP, from the route's path:
     #[authorize(Update, bind = PostsService)]
     #[use_guards(PostAuthorGuard)]
     // …
-    async fn publish(
-        &self,
-        post: Authorized<Update, PostEntity>,
-        actor: Ambient<PostAuthor>,
-    ) -> Result<Json<Post>, PostError> {
-        let PostAuthor(actor_id) = *actor;
-        Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
+    async fn publish(&self, post: Authorized<Update, PostEntity>) -> Result<Json<Post>, PostError> {
+        Ok(Json(self.svc.publish(post.into_inner()).await?))
     }
 ```
 
@@ -328,18 +323,14 @@ and on GraphQL, from an `id: String!` argument the attribute synthesises:
     #[mutation]
     #[authorize(Update, bind = PostsService)]
     #[use_guards(PostAuthorGuard)]
-    async fn publish_post(
-        &self,
-        post: Authorized<Update, PostEntity>,
-        actor: Ambient<PostAuthor>,
-    ) -> Result<Post, PostError> {
-        let PostAuthor(actor_id) = *actor;
-        self.svc.publish(post.into_inner(), actor_id).await
+    async fn publish_post(&self, post: Authorized<Update, PostEntity>) -> Result<Post, PostError> {
+        self.svc.publish(post.into_inner()).await
     }
 ```
 
-`PostAuthorGuard` derives the author from the verified claims and attaches it
-on both edges, so each body reads it as `Ambient<PostAuthor>`; the service's
+`PostAuthorGuard` refuses a token naming no user, on both edges. The service writes
+the publication's audit row through `Creatable`, the `Create` grant on it pinning
+the actor to the caller, so no parameter carries who is publishing; its
 `PostError` answers its `409` or its `CONFLICT` by its own `ToProblem`.
 
 Two pieces, each with one job:

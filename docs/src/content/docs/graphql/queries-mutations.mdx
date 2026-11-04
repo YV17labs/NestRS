@@ -246,27 +246,20 @@ async fn visits(&self, counter: Scoped<crate::VisitCounter>) -> u32 {
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
 use nest_rs::authz::Update;
-use nest_rs::core::{Ambient, ambient};
+use nest_rs::core::ambient;
 use nest_rs::graphql::operations;
 use nest_rs::seaorm::Authorized;
 
 use crate::Claims;
-use crate::posts::{
-    Entity as PostEntity, Post, PostAuthor, PostAuthorGuard, PostError, PostsService,
-};
+use crate::posts::{Entity as PostEntity, Post, PostAuthorGuard, PostError, PostsService};
 
 #[operations]
 impl PostsResolver {
     #[mutation]
     #[authorize(Update, bind = PostsService)]
     #[use_guards(PostAuthorGuard)]
-    async fn publish_post(
-        &self,
-        post: Authorized<Update, PostEntity>,
-        actor: Ambient<PostAuthor>,
-    ) -> Result<Post, PostError> {
-        let PostAuthor(actor_id) = *actor;
-        self.svc.publish(post.into_inner(), actor_id).await
+    async fn publish_post(&self, post: Authorized<Update, PostEntity>) -> Result<Post, PostError> {
+        self.svc.publish(post.into_inner()).await
     }
 
     #[query]
@@ -281,10 +274,9 @@ impl PostsResolver {
 ```
 
 `#[authorize]` refuses an anonymous caller before the method runs, and
-`PostAuthorGuard`, bound on the field, attaches the author it derives from the
-claims the endpoint's guards verified (see
-[Endpoint guards](/security/authorization/endpoint-guards/)), so on this gated
-operation the `PostAuthor` is always there. A `#[public]` operation also admits
+`PostAuthorGuard`, bound on the field, reads the claims the endpoint's guards
+verified (see [Endpoint guards](/security/authorization/endpoint-guards/)) and
+refuses a token naming no user. A `#[public]` operation also admits
 anonymous callers, for whom no guard attached any: it reads
 `nest_rs::core::ambient::<Claims>()` and decides, as `greeting` does. A
 `Ambient<Claims>` there would answer every anonymous call with the internal error.

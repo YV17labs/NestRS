@@ -51,7 +51,6 @@ pub struct NotificationsGateway;
 #[messages]
 impl NotificationsGateway {
     #[subscribe_message("ping")]
-    #[public]
     async fn ping(&self, client: &WsClient) {
         // …
     }

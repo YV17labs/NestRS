@@ -111,13 +111,8 @@ signature cannot say — a summary, a description, the group it sits in:
                    service. Re-publishing an already published post returns RFC 9457 \
                    `application/problem+json` (409)."
 )]
-async fn publish(
-    &self,
-    post: Authorized<Update, PostEntity>,
-    actor: Ambient<PostAuthor>,
-) -> Result<Json<Post>, PostError> {
-    let PostAuthor(actor_id) = *actor;
-    Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
+async fn publish(&self, post: Authorized<Update, PostEntity>) -> Result<Json<Post>, PostError> {
+    Ok(Json(self.svc.publish(post.into_inner()).await?))
 }
 ```
 

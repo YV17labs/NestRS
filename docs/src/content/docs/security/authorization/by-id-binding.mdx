@@ -39,13 +39,8 @@ use nest_rs::seaorm::Authorized;
     #[authorize(Update, bind = PostsService)]
     #[use_guards(PostAuthorGuard)]
     // …
-    async fn publish(
-        &self,
-        post: Authorized<Update, PostEntity>,
-        actor: Ambient<PostAuthor>,
-    ) -> Result<Json<Post>> {
-        let PostAuthor(actor_id) = *actor;
-        Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
+    async fn publish(&self, post: Authorized<Update, PostEntity>) -> Result<Json<Post>> {
+        Ok(Json(self.svc.publish(post.into_inner()).await?))
     }
 ```
 
@@ -70,6 +65,12 @@ GraphQL takes the same attribute on a `#[query]` or `#[mutation]`: the
 operation's `Authorized<A, E>` parameter becomes an `id: String` argument
 on the schema (`id_arg = …` renames it), loaded the same way, a missing row
 answering `NOT_FOUND`.
+
+An MCP [`#[resource]`](/mcp/resources-and-prompts/#resources) takes it too, reading
+the id off its template's one variable. It has one answer for what cannot be read,
+so a denied row, a missing one and an id that is no v7 all answer *Resource not
+found*, and the body never runs. A WebSocket message and an MCP tool, prompt or
+listing name no id, and refuse the key.
 
 ## The four outcomes
 

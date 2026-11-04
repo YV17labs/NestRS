@@ -28,6 +28,7 @@ current connection's handle:
 use nest_rs::ws::{gateway, messages, WsClient};
 
 #[gateway(path = "/ws")]
+#[use_guards(AuthnGuard)]
 pub struct ChatGateway;
 
 #[messages]
@@ -38,13 +39,11 @@ impl ChatGateway {
     }
 
     #[subscribe_message("join")]
-    #[public]
     async fn join_room(&self, room: String, client: &WsClient) {
         client.join(&room);
     }
 
     #[subscribe_message("leave")]
-    #[public]
     async fn leave_room(&self, room: String, client: &WsClient) {
         client.leave(&room);
     }
@@ -74,7 +73,6 @@ on a slow client.
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("say")]
-#[public]
 async fn say(&self, msg: SendMessage, client: &WsClient) {
     let _ = client.broadcast("said", &msg);
     let _ = client.to("lobby", "said", &msg);
@@ -122,8 +120,7 @@ impl ChatGateway {
     }
 
     #[subscribe_message("message")]
-    #[public]
-    #[use_guards(ModerationGuard)]
+    #[authorize(Create, Posting)]
     async fn on_message(
         &self,
         caller: Ambient<Claims>,
@@ -134,14 +131,12 @@ impl ChatGateway {
     }
 
     #[subscribe_message("history")]
-    #[public]
     async fn history(&self) -> Vec<ChatMessageDto> {
         self.svc.history()
     }
 
     #[subscribe_message("typing")]
-    #[public]
-    #[use_guards(ModerationGuard)]
+    #[authorize(Create, Posting)]
     async fn typing(
         &self,
         caller: Ambient<Claims>,

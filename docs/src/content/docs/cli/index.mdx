@@ -447,7 +447,7 @@ authz module, and scaffold the `g auth` adapter when the workspace has none, as
 `g resource` does. A route those guards cover needs no posture of its own, and
 the boot refuses one no guard covers, so an opening is always a line you write:
 `#[public]` on the route that is open on purpose. A gateway's guards run at the
-upgrade, and each message still declares its posture.
+upgrade and cover its messages the same way.
 
 ## Doctor
 

@@ -72,10 +72,10 @@ impl HelloTool {
 }
 ```
 
-Every operation declares its access posture, and one of the two forms is
-**required** — `#[public]` here because a greeting gates nothing. An operation
-nobody thought about does not compile, rather than shipping ungated to a model.
-[Authorization](/mcp/authorization/) covers the other form.
+`#[public]` is the operation's access posture: a greeting gates nothing, so a
+caller with no credential is admitted. On an endpoint the app's guards
+authenticate an operation needs no posture of its own, as a route needs none under
+a guard, and [Authorization](/mcp/authorization/) covers the form that gates one.
 
 That's a complete MCP server — but a bare `#[mcp]` endpoint is **closed by
 default**. Its request runs the global guard pool
@@ -88,6 +88,9 @@ leak unauthenticated. The boot says so once, on `nest_rs::layers`:
 ```text frame="terminal"
 WARN nest_rs::layers: a gated endpoint runs no guard at its request; it denies every request path="/mcp" kind="mcp"
 ```
+
+A `#[public]` operation there could open nothing, so the boot refuses it and names
+the opening below, which `HelloTool` takes.
 
 The feature's MCP adapter lists its tool like any provider, and imports
 `McpModule` bare: it reads the endpoint's settings from `<PREFIX>_MCP__*`
@@ -122,7 +125,9 @@ pub struct AssistantModule;
 A public `/mcp` runs no guard at its request, the global pool's included, so the
 opening belongs where the app is composed, never in a feature crate another app
 might import — and a module declaring guards for the endpoint beside it fails
-the boot rather than seeing them dropped. The opening is made at one import: a
+the boot rather than seeing them dropped. Every operation it serves states its
+posture, `#[public]` or `#[authorize]`: no guard covers it there, and one stating
+neither fails the boot too. The opening is made at one import: a
 second `McpModule::for_root` opening the endpoint fails the boot naming both,
 even when the two agree. `#[mcp]` mounts the tool on the existing HTTP transport —
 same port, same CORS, no second server. An MCP client pointed at

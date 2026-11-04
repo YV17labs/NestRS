@@ -118,12 +118,9 @@ answers the same questions: `cx.reflector()` reads what the site declared
 ### A guard that needs an earlier one's work
 
 A value an earlier guard attaches — the principal `AuthnGuard` verified — is a
-precondition, not a decision. `cx.require::<Claims>()?` reads it, and its
-absence fails the unit with a `500` the edge files once at `error`, naming the
-guard and the missing type: a guard bound without the one it builds on is a
-wiring defect, never the caller's doing. A value whose absence is legitimate —
-an anonymous caller in-band GraphQL lets through to each field's own gate — is
-read with `cx.ambient::<T>()` and decided:
+precondition, not a decision. `cx.require::<Claims>()?` reads it, and a guard
+declaring that principal through `expected_principal` writes one decision for every
+edge, because its absence answers by cause:
 
 ```rust title="crates/features/src/posts/guard.rs (from the demo)"
 #[injectable]
@@ -132,31 +129,36 @@ pub struct PostAuthorGuard;
 
 #[async_trait]
 impl Guard for PostAuthorGuard {
-    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let claims = cx.require::<Claims>()?;
-        Self::attach_author(cx, &claims)
-    }
-
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let claims = cx
-            .ambient::<Claims>()
-            .ok_or_else(|| Self::user_required("no_claims"))?;
-        Self::attach_author(cx, &claims)
+        let claims = cx.require::<Claims>()?;
+        match claims.sub.user_id() {
+            Some(_) => Ok(()),
+            None => Err(Denial::forbidden("writing a post takes a token naming a user")
+                .with_reason("not_a_user")),
+        }
     }
 
-    fn denial_statuses(&self, _public: bool) -> &'static [u16] {
-        &[403]
+    fn expected_principal(&self) -> Option<PrincipalClaim> {
+        Some(PrincipalClaim::of::<Claims>())
     }
 
     fn target(&self) -> &'static str {
         crate::posts::TARGET
     }
 }
+
+impl<V: UnitView> GuardFor<V> for PostAuthorGuard {}
 ```
 
-The request differs from the unit here: a posts route is gated, so
-`AuthnGuard` refused an anonymous caller before this guard ran, while
-`/graphql` admits one and leaves each field to decide.
+**Nothing in the chain attaches it**, the guard that does declaring
+`produced_principal` as `AuthnGuard` does: the boot refuses the route, the field,
+the message or the operation, naming the guard and the type, so the wiring gap never
+reaches a caller. **The guard attaching it ran and admitted a caller with none** —
+`/graphql` lets a visitor through to each field's own gate, a `#[public]` route lets
+one in: the caller's `401`, on every edge. Any other value's absence stays what it
+always was, a `500` the edge files once at `error`, naming the guard and the type.
+A guard that does without the principal, and decides a visitor itself, reads it with
+`cx.ambient::<T>()` and declares `PrincipalClaim::of::<T>().or_visitor()`.
 
 ### What a route's document lists
 

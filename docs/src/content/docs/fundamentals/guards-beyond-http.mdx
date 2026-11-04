@@ -10,38 +10,37 @@ route, a GraphQL field, a WebSocket message, an MCP tool call or prompt fetch.
 It writes its decision once, in `check`, which runs on every unit and, through
 `check_http`, on an HTTP request too; it overrides `check_http` only where the
 request differs from the unit. `check` has no default: a guard admitting a
-unit says so. It declares, with one `GuardFor` line per edge,
-that it checks those units. A job, a tick and a listener call have no caller,
-so no guard runs there: guard where the work is produced.
+unit says so. It declares, with a `GuardFor` line, that it checks those units: one
+per edge, or once for all of them when its decision reads no view. A job, a tick
+and a listener call have no caller, so no guard runs there: guard where the work is
+produced.
 
 ```rust title="crates/features/src/posts/guard.rs (from the demo, abridged)"
 #[async_trait]
 impl Guard for PostAuthorGuard {
-    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let claims = cx.require::<Claims>()?;
-        Self::attach_author(cx, &claims)
+        match claims.sub.user_id() {
+            Some(_) => Ok(()),
+            None => Err(Denial::forbidden("writing a post takes a token naming a user")
+                .with_reason("not_a_user")),
+        }
     }
 
-    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let claims = cx
-            .ambient::<Claims>()
-            .ok_or_else(|| Self::user_required("no_claims"))?;
-        Self::attach_author(cx, &claims)
+    fn expected_principal(&self) -> Option<PrincipalClaim> {
+        Some(PrincipalClaim::of::<Claims>())
     }
     // …
 }
 
-impl GuardFor<HttpView> for PostAuthorGuard {}
-
-impl GuardFor<GraphqlView> for PostAuthorGuard {}
+impl<V: UnitView> GuardFor<V> for PostAuthorGuard {}
 ```
 
-Both entries attach the author the handler writes with. They differ where the
-request differs from the unit: on a gated route `AuthnGuard` already refused
-an anonymous caller, so missing claims there are a wiring defect — `require`
-answers a `500` filed once at `error` — while a GraphQL field reads what the
-`/graphql` request's guards made ambient, where an anonymous caller is
-legitimate and refused with a `403`.
+The one body serves the route and the GraphQL field alike, though only `/graphql`
+lets a visitor through: the principal it declares is one
+[`require` answers by cause](/fundamentals/guards/#a-guard-that-needs-an-earlier-ones-work),
+a `401` for a caller admitted without one, and a boot refusal where nothing attaches
+it.
 
 ## Two entries, four edges
 

@@ -1,6 +1,6 @@
 ---
 title: MCP authorization
-description: The guards every MCP request runs, the mandatory posture per operation, and what a deny-all endpoint looks like.
+description: The guards every MCP request runs, the posture an operation declares, and what a deny-all endpoint looks like.
 sidebar:
   order: 2
 ---
@@ -71,8 +71,10 @@ and its `actor_id`. See [Logs](/opentelemetry/logs/).
 
 ## Declaring the posture
 
-Each operation declares what it is, with the same two attributes a
-`#[query]` takes:
+An endpoint authenticating at its request has decided who is calling before any
+operation runs, so **an operation it covers needs no posture of its own**, as a route
+needs none under a guard. Where one declares who may call it beyond that, it
+does so with the attribute a `#[query]` takes:
 
 ```rust title="crates/features/src/users/mcp/tool.rs"
 #[tools]
@@ -80,7 +82,7 @@ impl UsersTool {
     #[tool(description = "List the people the caller may see.")]
     #[authorize(Read, UserEntity)]
     async fn list_people(&self) -> Result<Json<Vec<User>>, McpError> {
-        Ok(Json(CrudService::list(&*self.svc).await.opaque()?
+        Ok(Json(self.svc.list().await.opaque()?
             .iter().map(User::from).collect()))
     }
 }
@@ -88,16 +90,22 @@ impl UsersTool {
 
 `#[authorize(Action, Entity)]` emits the class-level gate before the body and
 masks the returned value through the caller's field grants after it — the tool
-writes neither. `#[public]` is the other half: no gate, no mask, and the
-endpoint's own guards still authenticated the request.
+writes neither.
+
+**`#[public]` means what it means on every edge: a caller with no credential is
+admitted.** So it belongs on an endpoint [the app opened](/mcp/#the-smallest-possible-tool)
+with `McpAccess::Public`, where the guards no longer run at the request and every
+operation states its posture, or the boot fails naming it. Behind a guard declaring
+`GuardPhase::Authentication` or `Authorization` at the request, and on an endpoint
+denying every request, `#[public]` could open nothing, and the boot refuses it,
+saying which guard stands in the way. A guard that identifies no one — a rate limit
+in the pool — leaves it standing: a visitor does reach the operation.
 
 For an answer that is a **capability** rather than a row — a presigned URL, a
 computed report — the posture names the capability itself: a subject
 [`#[subject]`](/security/authorization/policies/#subjects-no-table-holds)
-declares, which no table holds. `#[public]` would declare the tool open to
-every caller the endpoint admits, which an admin-only tool is not; on such a
-subject `#[authorize]` runs the same class gate and arms no mask, since its
-answer is no row:
+declares, which no table holds. On such a subject `#[authorize]` runs the same class
+gate and arms no mask, since its answer is no row:
 
 ```rust title="crates/features/src/audio/mcp/tool.rs"
     #[tool(description = "Report whether an uploaded file has been transcoded.")]

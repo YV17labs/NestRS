@@ -275,23 +275,14 @@ A guard runs before the handler, can short-circuit with a response, and
 can attach a typed value for the rest of the request. `Ambient<T>` is how the
 handler reads that value back:
 
-```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
-#[post("/{id}/publish")]
-#[authorize(Update, bind = PostsService)]
-#[use_guards(PostAuthorGuard)]
-// … #[api(…)]
-async fn publish(
-    &self,
-    post: Authorized<Update, PostEntity>,
-    actor: Ambient<PostAuthor>,
-) -> Result<Json<Post>, PostError> {
-    let PostAuthor(actor_id) = *actor;
-    Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
+```rust title="crates/features/src/posts/http/controller.rs"
+#[get("/mine")]
+async fn mine(&self, caller: Ambient<Claims>) -> Result<Json<Vec<Post>>, PostError> {
+    Ok(Json(self.svc.written_by(&caller.sub).await?))
 }
 ```
 
-`actor` is the value the route's own `PostAuthorGuard` attached, after the
-controller's `AuthnGuard` attached the principal it reads.
+`caller` is the principal the controller's `AuthnGuard` attached.
 
 `Ambient<T>` rejects with `500` if `T` is absent — a missing context means
 the guard that should have set it never ran on this route (a wiring bug,

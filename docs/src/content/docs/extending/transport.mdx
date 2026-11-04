@@ -176,9 +176,9 @@ impl Module for HygieneStatusModule {
 `Posture::Gated`, the posture of a surface that must authenticate, runs the
 app's [global guard pool](/fundamentals/guards/#the-three-scopes) in front of
 every entry, before your endpoint sees the request — and an app that lists
-no global guard serves it unguarded, its boot saying so once at `warn`,
-`unguarded self-mount edges detected`. So a gated surface's docs name the
-guard an app lists globally for it. A surface whose request carries units of
+no global guard fails its boot naming the surface, since one no guard covers would
+serve every caller. So a gated surface's docs name the guard an app lists globally
+for it. A surface whose request carries units of
 its own, as `/graphql` does, declares their view with
 `HttpEndpointMeta::carries::<V>()`: the
 [`EndpointGuards<V, _>`](/security/authorization/endpoint-guards/#endpointguards--guards-a-module-adds-to-an-endpoints-request)

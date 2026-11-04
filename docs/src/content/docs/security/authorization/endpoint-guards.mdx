@@ -276,6 +276,11 @@ every request`) and once per refusal, so a missing wiring tells itself apart
 from a refused caller. A global `ThrottlerGuard` alone is enough to open it to
 whoever the throttler admits.
 
+An operation these guards cover needs no posture of its own, as a route needs none
+under a guard. `#[public]` means a caller with no credential is admitted, so behind
+a pooled `AuthnGuard` or an authorization guard, or on an endpoint denying every
+request, where it could open nothing, it fails the boot.
+
 An endpoint meant for anyone is opened in code, where a reviewer sees it:
 
 ```rust

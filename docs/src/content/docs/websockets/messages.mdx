@@ -51,7 +51,6 @@ envelope:
 #[messages]
 impl ChatGateway {
     #[subscribe_message("message")]
-    #[public]
     async fn on_message(&self, msg: SendMessageDto) -> ChatMessageDto {
         self.svc.record(msg)
     }
@@ -85,7 +84,6 @@ handler takes it as a parameter:
 use nest_rs::ws::Scoped;
 
 #[subscribe_message("seq")]
-#[public]
 async fn seq(&self, seq: Scoped<RequestSeq>) -> u64 {
     seq.value()
 }
@@ -96,29 +94,63 @@ a `T` no module the gateway's module imports offers fails the boot, naming it.
 With no request-scoped provider anywhere in the app, every message shares one
 scope, which has nothing to build.
 
-The `#[public]` above is the message's **access posture**, and it is not
-optional — see the next section.
+## A message's posture
 
-## Every message declares its posture
-
-Each `#[subscribe_message]` carries exactly one of two attributes, and a
-message that carries neither **does not compile**:
+A message takes HTTP's grammar, because a socket authenticates where a route
+does, before any message runs. A message under its gateway's `#[use_guards]`, the
+app's pool or a guard of its own **needs no posture**: the guards decide, as they
+do on a route. Where it declares who may call it beyond them, it does so with
+`#[authorize]`:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
-#[subscribe_message("message")]
-#[public]                          // no gate, no mask
-async fn on_message(&self, msg: SendMessageDto) -> ChatMessageDto { /* ... */ }
+#[gateway(path = "/ws")]
+#[use_guards(AuthnGuard, AuthzGuard)]
+pub struct ChatGateway { /* ... */ }
 
-#[subscribe_message("users.list")]
-#[authorize(Read, users::Entity)]  // class gate + reply mask, both emitted
-async fn list(&self) -> Result<Vec<User>, ServiceError> {
-    Ok(self.svc.list().await?.iter().map(User::from).collect())
+#[messages]
+impl ChatGateway {
+    #[subscribe_message("history")]    // covered by the upgrade's guards
+    async fn history(&self) -> Vec<ChatMessageDto> { /* ... */ }
+
+    #[subscribe_message("message")]
+    #[authorize(Create, Posting)]      // a gate, on a capability no table holds
+    async fn on_message(&self, msg: SendMessageDto) -> Result<(), WsError> { /* ... */ }
+
+    #[subscribe_message("users.list")]
+    #[authorize(Read, users::Entity)]  // class gate + reply mask, both emitted
+    async fn list(&self) -> Result<Vec<User>, ServiceError> {
+        Ok(self.svc.list().await?.iter().map(User::from).collect())
+    }
 }
 ```
 
-This is the same rule a `#[query]` and a `#[tool]` carry, for the same
-reason: silence is not a decision. A handler nobody thought about the
-access of must not ship rows no ability ever filtered.
+**The boot reads the rest.** A message no guard covers says `#[public]` or fails
+the boot, which names every such message on the gateway and each remedy; a macro
+reading an `impl` cannot see the app's pool, so this is where it can be said. A
+gateway no guard covers and declaring no message fails the same way, since its
+connection hooks would run for any caller.
+
+**`#[public]` means a caller with no credential is admitted**, the word's one
+meaning on every edge. It is the line a gateway open on purpose writes, and a
+reviewer greps for:
+
+```rust title="crates/features/src/ticker/ws/gateway.rs"
+#[gateway(path = "/ticker")]
+pub struct TickerGateway;
+
+#[messages]
+impl TickerGateway {
+    #[subscribe_message("latest")]
+    #[public]
+    async fn latest(&self) -> Price { /* ... */ }
+}
+```
+
+Behind an upgrade whose guards establish or read who the caller is, one declaring
+`GuardPhase::Authentication` or `Authorization`, no visitor ever reaches the
+message, so `#[public]` could open nothing, and the boot refuses it, naming the
+guard. A guard that identifies no one — a rate limit — leaves it standing: a
+visitor does reach the message, and the word is true.
 
 **`#[authorize(Action, Entity)]` emits two things you would otherwise
 write by hand.** Right after the message's guards, before any interceptor,
@@ -126,22 +158,9 @@ exception filter or pipe, a class-level gate asks the caller's ambient
 `Ability` whether it may perform `Action` on `Entity`; a refusal is an error
 frame and nothing else runs. After the handler returns, the reply is masked —
 rows the ability refuses are dropped, columns a field grant withholds are
-stripped. **You write no masking call.**
-
-**`#[public]` is a declaration, not a shortcut.** Unlike an HTTP route
-there is no anonymous fast path to take on WebSockets; what `#[public]`
-buys is the statement that the posture was decided. The guards bound on
-the gateway struct and beside the message still run.
-
-<Aside type="caution" title="A masked message returns a literal `Result`">
-The reply shape is decided **syntactically** on the return type, so a
-`Result` behind an alias (`type ServiceResult<T> = Result<T, MyError>`)
-reads as an ordinary value and would be masked as the `Result` itself —
-a success-shaped frame carrying `{"Ok": …}`. Writing `#[authorize]` on a
-handler that does not return a literal `Result` is therefore a named
-compile error. Use `unmasked` to keep the gate and mask in the body:
-`#[authorize(Read, users::Entity, unmasked)]`.
-</Aside>
+stripped. **You write no masking call**, and the mask reads the reply by its type,
+as the frame does: a bare value, a `Result` and a `Result` behind an alias
+(`type ServiceResult<T> = Result<T, MyError>`) all mask the value they answer.
 
 ### What the mask does, and what it does not
 
@@ -177,7 +196,6 @@ struct SendMessageDto {
 }
 
 #[subscribe_message("message")]
-#[public]
 async fn on_message(&self, msg: SendMessageDto) { /* ... */ }
 ```
 
@@ -198,7 +216,6 @@ runs.
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("trim")]
-#[public]
 async fn trim_handler(&self, Piped(name): Piped<Trim>) -> String {
     name
 }
@@ -209,7 +226,6 @@ A handler that takes no payload accepts `null` or a missing `data` key
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("history")]
-#[public]
 async fn history(&self) -> Vec<ChatMessageDto> {
     self.svc.history()
 }
@@ -348,7 +364,6 @@ no reply to the sender:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("typing")]
-#[public]
 async fn typing(&self, msg: SendMessageDto, client: &WsClient) {
     let _ = client.broadcast("typing", &msg);
 }
@@ -363,7 +378,6 @@ event:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("presence")]
-#[public]
 async fn presence(&self) -> usize {
     self.svc.present()
 }
@@ -405,7 +419,6 @@ impl ToProblem for SendError {
 }
 
 #[subscribe_message("send")]
-#[public]
 async fn send(&self, msg: SendMessageDto) -> Result<ChatMessageDto, SendError> {
     if msg.text.is_empty() {
         return Err(SendError::Empty);
@@ -445,6 +458,7 @@ use std::sync::Arc;
 use nest_rs::ws::{gateway, messages};
 
 #[gateway(path = "/ws/catalog")]
+#[use_guards(AuthnGuard)]
 #[use_interceptors(Timing)]
 #[use_exception_filters(OutOfStockFilter)]
 pub struct CatalogGateway {
@@ -455,7 +469,6 @@ pub struct CatalogGateway {
 #[messages]
 impl CatalogGateway {
     #[subscribe_message("buy")]
-    #[public]
     #[use_pipes(StripUnknownFields)]
     async fn buy(&self, order: OrderDto) -> Result<ReceiptDto, OutOfStock> {
         self.svc.buy(order).await

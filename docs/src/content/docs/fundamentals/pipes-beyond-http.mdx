@@ -39,7 +39,6 @@ async fn named(&self, input: NameInput) -> async_graphql::Result<String> {
 ```rust title="crates/features/src/users/ws/gateway.rs"
 // WebSockets — the message payload is a `String`, piped before the handler.
 #[subscribe_message("trim")]
-#[public]
 async fn trim_handler(&self, Piped(name): Piped<Trim>) -> String {
     name
 }

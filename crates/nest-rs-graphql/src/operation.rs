@@ -11,7 +11,7 @@ use std::task::{Context as TaskContext, Poll, ready};
 
 use async_graphql::parser::types::OperationType;
 use async_graphql::{Context, Error as GraphqlError};
-use futures_util::FutureExt as _;
+use futures_util::TryFutureExt as _;
 use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{
     GlobalLayers, GuardStage, ResolvedLayer, Site, Tail, dispatch, new_unit_context,
@@ -210,7 +210,7 @@ where
         role,
         field_name(ctx),
         unit.run(tail)
-            .map(move |answer| answer.map_err(|error| spelled_by_schema(ctx, error))),
+            .map_err(move |error| spelled_by_schema(ctx, error)),
     )
 }
 
@@ -282,7 +282,7 @@ where
         kind.role(),
     )
     .run(tail)
-    .map(move |answer| answer.map_err(|error| spelled_by_schema(ctx, error)))
+    .map_err(move |error| spelled_by_schema(ctx, error))
 }
 
 /// The operation type as a field's line names its role.

@@ -547,16 +547,7 @@ mod field_host {
             .await
             .expect("the resolver of `veins` is reached");
 
-        let body: serde_json::Value = app
-            .http()
-            .post("/graphql")
-            .body_json(&serde_json::json!({ "query": "{ leaves { veins } }" }))
-            .send()
-            .await
-            .json()
-            .await
-            .value()
-            .deserialize();
+        let body = crate::graphql_answer(&app, "{ leaves { veins } }").await;
 
         assert_eq!(body["data"]["leaves"][0]["veins"], 2, "{body}");
     }

@@ -457,16 +457,7 @@ mod field_parameter {
             .await
             .expect("the schema boots");
 
-        let body: serde_json::Value = app
-            .http()
-            .post("/graphql")
-            .body_json(&serde_json::json!({ "query": "{ books { label } }" }))
-            .send()
-            .await
-            .json()
-            .await
-            .value()
-            .deserialize();
+        let body = crate::graphql_answer(&app, "{ books { label } }").await;
 
         assert_eq!(
             body["data"]["books"],
@@ -589,16 +580,7 @@ mod field_parameter {
             .await
             .expect("the loader `shelfLabel` reads is reached");
 
-        let body: serde_json::Value = app
-            .http()
-            .post("/graphql")
-            .body_json(&serde_json::json!({ "query": "{ volumes { shelfLabel } }" }))
-            .send()
-            .await
-            .json()
-            .await
-            .value()
-            .deserialize();
+        let body = crate::graphql_answer(&app, "{ volumes { shelfLabel } }").await;
 
         assert_eq!(
             body["data"]["volumes"][0]["shelfLabel"], "shelf 1",

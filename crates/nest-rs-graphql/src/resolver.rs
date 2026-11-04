@@ -196,7 +196,7 @@ inventory::collect!(GraphqlFieldRegistration);
 /// The objects a schema serves, each as async-graphql's registry holds it: its
 /// Rust type and its fields. Read by Rust type, never by GraphQL name, since a
 /// binary links objects of one name its schema does not all serve.
-pub(crate) struct ServedObjects(Registry);
+pub(crate) struct ServedObjects(pub(crate) Registry);
 
 impl ServedObjects {
     /// What the resolvers the app reaches serve.
@@ -208,11 +208,7 @@ impl ServedObjects {
                 (reg.type_info)(&mut registry);
             }
         }
-        Ok(Self::from_registry(registry))
-    }
-
-    pub(crate) fn from_registry(registry: Registry) -> Self {
-        Self(registry)
+        Ok(Self(registry))
     }
 
     /// The GraphQL name of the object the Rust type `parent` is served as, when

@@ -95,3 +95,16 @@ impl Guard for FieldStoreDown {
 }
 
 impl GuardFor<nest_rs_graphql::GraphqlView> for FieldStoreDown {}
+
+/// What `app`'s `/graphql` answers `query` with.
+async fn graphql_answer(app: &nest_rs_testing::TestApp, query: &str) -> serde_json::Value {
+    app.http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": query }))
+        .send()
+        .await
+        .json()
+        .await
+        .value()
+        .deserialize()
+}

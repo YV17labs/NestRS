@@ -25,13 +25,10 @@ pub(crate) struct FieldSpellings(OnceLock<Index>);
 
 /// `error`, the keys of its field map spelled as `ctx`'s schema spells them.
 pub(crate) fn spelled_by_schema(ctx: &Context<'_>, mut error: Error) -> Error {
-    let Some(spellings) = ctx.data_opt::<FieldSpellings>() else {
-        return error;
-    };
-    let Some(extensions) = error.extensions.as_mut() else {
-        return error;
-    };
-    if let Some(fields) = extensions.get(FIELD_ERRORS_EXTENSION) {
+    if let Some(extensions) = error.extensions.as_mut()
+        && let Some(fields) = extensions.get(FIELD_ERRORS_EXTENSION)
+        && let Some(spellings) = ctx.data_opt::<FieldSpellings>()
+    {
         let index = spellings
             .0
             .get_or_init(|| index_of(&ctx.schema_env.registry));
@@ -93,12 +90,11 @@ fn spelled(key: &Name, index: &Index) -> Name {
     if key.starts_with("__") {
         return key.clone();
     }
-    match index.get(&word_of(key)) {
-        Some(spellings) if !spellings.iter().any(|spelling| spelling == key.as_str()) => {
-            spellings.first().map_or_else(|| key.clone(), Name::new)
-        }
-        _ => key.clone(),
-    }
+    index
+        .get(&word_of(key))
+        .filter(|spellings| !spellings.iter().any(|spelling| spelling == key.as_str()))
+        .and_then(|spellings| spellings.first())
+        .map_or_else(|| key.clone(), Name::new)
 }
 
 #[cfg(test)]
@@ -120,9 +116,12 @@ mod tests {
         tax_code: String,
     }
 
-    fn index() -> Index {
+    /// What a schema declaring `inputs` serves.
+    fn index(inputs: &[fn(&mut Registry) -> String]) -> Index {
         let mut registry = Registry::default();
-        CamelInput::create_type_info(&mut registry);
+        for register in inputs {
+            register(&mut registry);
+        }
         index_of(&registry)
     }
 
@@ -138,7 +137,7 @@ mod tests {
                 "get_2fa": [{ "code": "length", "org_id": "not a key" }],
                 "nested": { "org_id": { "0": { "org_id": [] } } },
             })),
-            &index(),
+            &index(&[CamelInput::create_type_info]),
         );
 
         assert_eq!(
@@ -154,32 +153,31 @@ mod tests {
     #[test]
     fn a_key_no_input_serves_stays_as_it_was_said() {
         assert_eq!(
-            spelled(&Name::new("tax_code"), &index()).as_str(),
+            spelled(
+                &Name::new("tax_code"),
+                &index(&[CamelInput::create_type_info])
+            )
+            .as_str(),
             "tax_code"
         );
     }
 
     #[test]
     fn validators_key_for_a_whole_struct_is_no_field() {
-        let mut registry = Registry::default();
         #[derive(InputObject)]
         struct WithAll {
             all: String,
         }
-        WithAll::create_type_info(&mut registry);
 
         assert_eq!(
-            spelled(&Name::new("__all__"), &index_of(&registry)).as_str(),
+            spelled(&Name::new("__all__"), &index(&[WithAll::create_type_info])).as_str(),
             "__all__"
         );
     }
 
     #[test]
     fn a_key_one_of_two_rules_spells_stays_where_a_schema_mixes_them() {
-        let mut registry = Registry::default();
-        CamelInput::create_type_info(&mut registry);
-        SnakeInput::create_type_info(&mut registry);
-        let index = index_of(&registry);
+        let index = index(&[CamelInput::create_type_info, SnakeInput::create_type_info]);
 
         assert_eq!(spelled(&Name::new("org_id"), &index).as_str(), "org_id");
         assert_eq!(spelled(&Name::new("tax_code"), &index).as_str(), "tax_code");

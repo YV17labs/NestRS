@@ -124,20 +124,18 @@ impl EventBus {
     pub fn stream<E: Clone + Send + 'static>(
         &self,
     ) -> impl Stream<Item = E> + Send + 'static + use<E> {
-        let reader = {
-            let mut streams = self.streams.write();
-            let sender = streams
-                .entry(TypeId::of::<E>())
-                .or_insert_with(|| Box::new(broadcast::channel::<E>(STREAM_CAPACITY).0));
-            #[expect(
-                clippy::expect_used,
-                reason = "streams are keyed by the TypeId of E, so only a Sender<E> sits here"
-            )]
-            sender
-                .downcast_ref::<broadcast::Sender<E>>()
-                .expect("the channel downcasts to the event type it is keyed by")
-                .subscribe()
-        };
+        #[expect(
+            clippy::expect_used,
+            reason = "streams are keyed by the TypeId of E, so only a Sender<E> sits here"
+        )]
+        let reader = self
+            .streams
+            .write()
+            .entry(TypeId::of::<E>())
+            .or_insert_with(|| Box::new(broadcast::channel::<E>(STREAM_CAPACITY).0))
+            .downcast_ref::<broadcast::Sender<E>>()
+            .expect("the channel downcasts to the event type it is keyed by")
+            .subscribe();
         futures_util::stream::unfold(reader, |mut reader| async move {
             loop {
                 match reader.recv().await {

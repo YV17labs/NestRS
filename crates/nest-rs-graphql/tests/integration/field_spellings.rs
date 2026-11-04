@@ -114,16 +114,7 @@ async fn field_errors(query: &str) -> Value {
     let app = TestApp::for_module::<BadgesApp>()
         .await
         .expect("the schema boots");
-    let body: Value = app
-        .http()
-        .post("/graphql")
-        .body_json(&json!({ "query": query }))
-        .send()
-        .await
-        .json()
-        .await
-        .value()
-        .deserialize();
+    let body = crate::graphql_answer(&app, query).await;
     body["errors"][0]["extensions"]["errors"].clone()
 }
 

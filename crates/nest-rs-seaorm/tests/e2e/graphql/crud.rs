@@ -223,6 +223,8 @@ const CREATE: &str =
 
 const GET: &str = "query($id: String!) { gizmo(id: $id) { id } }";
 
+const CREATE_PLATE: &str = "mutation($input: CreatePlate!) { createPlate(input: $input) { id } }";
+
 async fn db() -> DatabaseConnection {
     let conn = crate::harness::connect().await;
     crate::harness::setup_shared_table(
@@ -304,8 +306,6 @@ async fn a_conflict_on_a_key_of_two_words_names_its_field_as_the_schema_spells_i
     let app = TestApp::for_module::<PlatesModule>()
         .await
         .expect("the subgraph boots");
-    const CREATE_PLATE: &str =
-        "mutation($input: CreatePlate!) { createPlate(input: $input) { id } }";
     let input = json!({ "input": { "serialCode": format!("serial-{}", Uuid::now_v7()) } });
 
     let (_, first) = operation(&app, CREATE_PLATE, input.clone()).await;

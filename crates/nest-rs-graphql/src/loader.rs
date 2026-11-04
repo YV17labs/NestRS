@@ -303,6 +303,8 @@ impl Extension for LoaderExtension {
 
 #[cfg(test)]
 mod tests {
+    use async_graphql::registry::Registry;
+
     use super::*;
 
     #[test]
@@ -344,24 +346,17 @@ mod tests {
 
     /// An unrelated object spelling the relation's object's GraphQL name, as a
     /// binary links objects its schema does not all serve.
-    mod elsewhere {
-        #[derive(async_graphql::SimpleObject)]
-        #[graphql(name = "Shelf")]
-        pub(super) struct NamesakeShelf {
-            pub(super) owner: i32,
-        }
+    #[derive(async_graphql::SimpleObject)]
+    #[graphql(name = "Shelf")]
+    struct NamesakeShelf {
+        owner: i32,
     }
 
     /// What a schema serving only `T` serves.
     fn serving<T: async_graphql::OutputType>() -> ServedObjects {
-        let mut registry = async_graphql::registry::Registry::default();
+        let mut registry = Registry::default();
         T::create_type_info(&mut registry);
-        ServedObjects::from_registry(registry)
-    }
-
-    /// What a schema with no field of a registered object serves.
-    fn serving_nothing_related() -> ServedObjects {
-        ServedObjects::from_registry(async_graphql::registry::Registry::default())
+        ServedObjects(registry)
     }
 
     #[tokio::test]
@@ -432,7 +427,7 @@ mod tests {
 
     #[test]
     fn an_object_of_the_same_graphql_name_serves_no_relation_of_another() {
-        check_served_relations(&reached(&[]), &serving::<elsewhere::NamesakeShelf>())
+        check_served_relations(&reached(&[]), &serving::<NamesakeShelf>())
             .expect("the schema serves its namesake, whose `owner` reads no loader");
     }
 
@@ -449,7 +444,7 @@ mod tests {
     #[test]
     fn a_loader_whose_owner_module_is_not_imported_is_counted_at_boot() {
         let logs = nest_rs_testing::LogCapture::install();
-        check_served_relations(&reached(&[]), &serving_nothing_related())
+        check_served_relations(&reached(&[]), &ServedObjects(Registry::default()))
             .expect("no served field reads it");
 
         let event = logs.expect_one("nest_rs::graphql", "dataloaders linked but unreachable");
@@ -475,7 +470,7 @@ mod tests {
     fn a_loader_whose_owner_is_reachable_is_not_reported() {
         let logs = nest_rs_testing::LogCapture::install();
         let container = reached(&[TypeId::of::<AbsentOwner>()]);
-        check_served_relations(&container, &serving_nothing_related())
+        check_served_relations(&container, &ServedObjects(Registry::default()))
             .expect("no served relation is unreached");
         logs.expect_none("nest_rs::graphql", "dataloaders linked but unreachable");
         let seeds = reachable_seeds(&container).expect("the set is seeded");

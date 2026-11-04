@@ -18,7 +18,8 @@ paths:
 Controllers, resolvers, gateways, tools and dataloader code **delegate**; they
 never touch `Repo` or the ORM. `Repo` runs every query on the ambient executor
 and filters reads **and** by-id writes by the ambient ability's condition — no
-ability means system work, unscoped. Binding a subject by id (`bind = S`) goes
+ability in a job is system work, unscoped, and outside one denies every row, a
+save or a create then running no hook and sending nothing. Binding a subject by id (`bind = S`) goes
 through `CrudService::access`.
 
 **`Repo` hands out no connection**, held by types: its selects run on the
@@ -157,7 +158,8 @@ rest of the unit once its guard stage passed. A route no response mask shapes,
 an `#[sse]` stream and a route gated on a `#[subject]` among them, runs under
 the `UnmaskedReply` marker its guard stage attaches, and
 `current_ability` withholds the ability there, so a read the mask would have
-scoped fails closed — and `nest-rs-http` knows nothing of authz or the ORM
+scoped fails closed, as a write does before its hook — and `nest-rs-http` knows
+nothing of authz or the ORM
 (`.claude/decisions/unmasked-reply-withholds-the-ability.md`).
 
 ## What waits for the commit — the event and the job

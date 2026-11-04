@@ -22,6 +22,7 @@ mod health;
 mod http;
 mod module;
 mod page;
+mod repo;
 mod savepoint;
 mod unit;
 

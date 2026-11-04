@@ -1,4 +1,3 @@
-use std::any::TypeId;
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
@@ -15,7 +14,7 @@ use nest_rs_database::atomic;
 use crate::column_default::fill_column_defaults;
 use crate::error::AtomicDbError;
 use crate::page::{Page, PageCursor};
-use crate::repo::{Repo, ability_scope, pk_condition};
+use crate::repo::{Repo, ability_scope, barred_from_class, pk_condition};
 
 /// Build a fresh `ActiveModel` from a create-input DTO. Implemented by `#[expose]`
 /// for each `Create<Name>Input`.
@@ -384,9 +383,10 @@ pub trait Creatable: CrudService {
     /// fresh row is then re-checked in SQL against `condition_for(Create)`, and
     /// one outside the caller's scope is [`DbErr::RecordNotInserted`] and never
     /// persists — so a value the grants leave undecided is refused, never
-    /// guessed. A caller no row could pass for — no `Create` grant, or a denial
-    /// no `when` narrows ([`Ability::can_class`]) — is refused the same way
-    /// before the insert is sent.
+    /// guessed. A caller no row could pass for — no `Create` grant, a denial no
+    /// `when` narrows ([`Ability::can_class`]), or a request holding no ability,
+    /// as on a route no mask shapes — is refused the same way before the hook
+    /// runs or the insert is sent.
     async fn create(
         &self,
         input: Self::Create,
@@ -403,18 +403,18 @@ pub trait Creatable: CrudService {
     ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
         let entity = Self::entity_name();
         Repo::<Self::Entity>::conn()?;
+        // No row can pass the re-check, so the insert is never sent: what the
+        // database would refuse first would answer in its place.
+        if barred_from_class::<Self::Entity>(Action::Create) {
+            tracing::warn!(
+                target: crate::target::ORM,
+                entity,
+                action = ?Action::Create,
+                "access denied — no row of the entity is in the caller's scope",
+            );
+            return Err(DbErr::RecordNotInserted);
+        }
         let active = match current_ability() {
-            // No row can pass the re-check, so the insert is never sent: what
-            // the database would refuse first would answer in its place.
-            Some(ability) if !ability.can_class(Action::Create, TypeId::of::<Self::Entity>()) => {
-                tracing::warn!(
-                    target: crate::target::ORM,
-                    entity,
-                    action = ?Action::Create,
-                    "access denied — no row of the entity is in the caller's scope",
-                );
-                return Err(DbErr::RecordNotInserted);
-            }
             Some(ability) => fill_pinned::<Self::Entity>(active, &ability, entity),
             None => active,
         };
@@ -752,5 +752,32 @@ mod tests {
         );
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("entity").as_deref(), Some("notes"));
+    }
+
+    /// A request no ability reaches — a route no mask shapes — is refused as one
+    /// its ability bars, on a pool no statement can reach.
+    #[tokio::test]
+    async fn a_create_in_a_request_holding_no_ability_runs_no_statement() {
+        use nest_rs_database::__private::with_request_executor;
+        use sea_orm::DatabaseConnection;
+
+        let logs = nest_rs_testing::LogCapture::install();
+
+        let created = with_request_executor(
+            crate::SeaOrmExecutor::Pool(DatabaseConnection::default()).into(),
+            NotesService.create(CreateNote),
+        )
+        .await;
+
+        assert!(
+            matches!(created, Err(DbErr::RecordNotInserted)),
+            "the scope refusal, never the database's: {created:?}",
+        );
+        let said = logs.expect_one(
+            crate::target::ORM,
+            "no ambient Ability outside a worker job — denying all rows",
+        );
+        assert_eq!(said.level, "warn");
+        assert_eq!(said.field("action").as_deref(), Some("Create"));
     }
 }

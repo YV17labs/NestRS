@@ -67,3 +67,37 @@ narrows, it never widens".
 - `cannot(Read, E)` beside `can(Manage, E)` refuses a `Read` site, not a
   `Manage` one: a check of `Manage` reads `Manage`'s rules alone, as
   `condition_for(Manage)` does.
+
+## 2026-10-31 — a `when` holding for every row narrows nothing
+
+Agreed by the owner on 2026-10-31 ("Tout faire (Recommandé)", the identity
+audit's second pass; the item closes the first Limit above). A rule whose
+`when` is `TRUE` for every row by its shape — `p.all([])`, `Predicate::Always`,
+a disjunction holding one, the negation of an empty disjunction — is committed
+as the rule no `when` narrows: the builder drops it at commit, and its SQL
+renders `TRUE` wherever it sits inside a larger predicate, so the class gate
+reads such a denial as the outright one it is, on every edge. The reading is
+sound, not complete: a shape whose truth depends on a column, or on `NULL`'s
+third value, stays conditional and the rows decide it. An intersection of two
+rules no `when` narrows is one such rule too, its condition a single `TRUE`.
+
+The same bar stands before `Repo`'s saves and `Creatable`'s create, for a write
+no class gate saw (a handler gated on another subject): a caller no row could
+pass for — the ability bars the action on every row, or a request holds no
+ability, as on a route gated on a `#[subject]`, whose ability `UnmaskedReply`
+withholds — gets what a row outside its scope answers, `RecordNotUpdated` or
+`RecordNotInserted`, before the entity's `before_save` runs or a statement is
+sent. A job, which holds none, stays unscoped, and `ability_scope`'s `warn` stays
+the one place the missing ability shows. `Repo::delete` runs no hook, and its
+statement carries the denial in its `WHERE`, so it still sends one:
+`DeleteResult` is `#[non_exhaustive]`, and no empty result is built without the
+round trip.
+
+**Refused:**
+
+- **Deciding a `when` by evaluating it on a synthetic row**: a column's value
+  decides a comparison, and no row stands for every row.
+- **Reading `col IN ()` as false for every row**: true of sea-query's
+  rendering today, but a narrowing read off a renderer's spelling turns a
+  grant into a rule for every row the day the spelling changes; a grant is
+  never widened on a guess.

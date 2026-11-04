@@ -170,20 +170,25 @@ impl Rule {
     /// The grant a row meets by meeting both: the two conditions conjoined, the
     /// two `when`s, the columns both permit.
     fn and(&self, other: &Rule) -> Rule {
+        let when = match (&self.when, &other.when) {
+            (None, None) => None,
+            (Some(when), None) | (None, Some(when)) => Some(when.clone()),
+            (Some(mine), Some(theirs)) => {
+                Some(When::Both(Arc::new(mine.clone()), Arc::new(theirs.clone())))
+            }
+        };
         Rule {
             inverted: false,
             // Every part kept, an empty one included: sea-query renders an empty
-            // `any` as FALSE and a negated empty `all` as NOT TRUE.
-            condition: Condition::all()
-                .add(self.condition.clone())
-                .add(other.condition.clone()),
-            when: match (&self.when, &other.when) {
-                (None, None) => None,
-                (Some(when), None) | (None, Some(when)) => Some(when.clone()),
-                (Some(mine), Some(theirs)) => {
-                    Some(When::Both(Arc::new(mine.clone()), Arc::new(theirs.clone())))
-                }
+            // `any` as FALSE and a negated empty `all` as NOT TRUE. Two rules
+            // no `when` narrows conjoin into one, as the builder commits it.
+            condition: match when {
+                None => Condition::all(),
+                Some(_) => Condition::all()
+                    .add(self.condition.clone())
+                    .add(other.condition.clone()),
             },
+            when,
             fields: FieldSet::copy_of(&self.fields).narrowed(&other.fields),
         }
     }
@@ -1586,6 +1591,51 @@ mod tests {
             ability.can_class(Action::Create, posts()),
             "the rows decide a conditional denial, in SQL and on the model",
         );
+    }
+
+    /// A `when` that holds for every row by construction narrows nothing: the
+    /// denial bars the class as one with no `when` does.
+    #[test]
+    fn a_denial_whose_when_holds_for_every_row_refuses_at_the_class_gate() {
+        type Rows = fn(PredicateBuilder<post::Entity>) -> crate::Predicate<post::Entity>;
+        let every_row: [(&str, Rows); 5] = [
+            ("an empty conjunction", |p| p.all([])),
+            ("the unconditional predicate", |_| crate::Predicate::Always),
+            ("a disjunction holding one", |p| {
+                p.any([p.eq(post::Column::OrgId, 9), p.all([])])
+            }),
+            ("a conjunction of them", |p| {
+                p.all([p.all([]), p.any([p.all([])])])
+            }),
+            ("the negation of an empty disjunction", |p| p.not(p.any([]))),
+        ];
+        for (shape, rows) in every_row {
+            let mut b = crate::AbilityBuilder::new();
+            b.can(Action::Manage, post::Entity);
+            b.cannot(Action::Create, post::Entity).when(rows);
+            let ability = b.build().unwrap();
+
+            assert!(!ability.can_class(Action::Create, posts()), "{shape}");
+            assert!(ability.can_class(Action::Read, posts()), "{shape}");
+        }
+    }
+
+    #[test]
+    fn a_denial_whose_when_still_reads_a_column_stays_conditional() {
+        type Rows = fn(PredicateBuilder<post::Entity>) -> crate::Predicate<post::Entity>;
+        let some_rows: [Rows; 3] = [
+            |p| p.all([p.all([]), p.eq(post::Column::OrgId, 9)]),
+            |p| p.any([p.any([]), p.eq(post::Column::OrgId, 9)]),
+            |p| p.not(p.eq(post::Column::OrgId, 9)),
+        ];
+        for rows in some_rows {
+            let mut b = crate::AbilityBuilder::new();
+            b.can(Action::Manage, post::Entity);
+            b.cannot(Action::Create, post::Entity).when(rows);
+            let ability = b.build().unwrap();
+
+            assert!(ability.can_class(Action::Create, posts()));
+        }
     }
 
     #[test]

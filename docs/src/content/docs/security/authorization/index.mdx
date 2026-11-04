@@ -133,7 +133,9 @@ Entity>`, run on the unit right after its guards:
   ([Scopes](/security/authorization/scopes/)).
 
 A grant or a denial a `when` narrows passes the gate: the rows decide it, in
-the query pre-filter and on the loaded row.
+the query pre-filter and on the loaded row. A `when` that holds for every row
+by its shape — `p.all([])`, a disjunction holding one — narrows nothing, and
+its denial is refused here like one with no `when`.
 
 Each refusal files one `warn`, `authorization denied`, with its `reason`, and
 reads the same on every edge, each answering in its own form. The gate is no

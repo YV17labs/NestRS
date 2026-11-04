@@ -1,3 +1,4 @@
+use std::any::TypeId;
 use std::marker::PhantomData;
 
 use nest_rs_authz::{Action, current_ability};
@@ -42,21 +43,38 @@ pub(crate) fn ability_scope<E: EntityTrait>(action: Action) -> Condition {
         Some(ability) => ability.condition_for::<E>(action),
         None if current_executor_scope() == Some(ExecutorScope::Job) => Condition::all(),
         None => {
-            let scope = current_executor_scope();
-            // The route answers `200 []`, which reads as a business bug: the
-            // event is the only place the cause shows.
-            tracing::warn!(
-                target: crate::target::ORM,
-                entity = std::any::type_name::<E>(),
-                ?action,
-                scope = ?scope,
-                hint = "bind #[use_guards(AuthnGuard, AuthzGuard)], or — on a #[public] \
-                          route — take the `Authorize<A, E>` parameter that arms the shaper",
-                "no ambient Ability outside a worker job — denying all rows",
-            );
+            denying_for_want_of_an_ability::<E>(action);
             Condition::all().add(Expr::cust("1 = 0"))
         }
     }
+}
+
+/// Whether no row of `E` can pass `action`'s scope, known without a statement:
+/// the ability bars the class — no grant, or a denial no `when` narrows — or
+/// none is ambient outside a job.
+pub(crate) fn barred_from_class<E: EntityTrait>(action: Action) -> bool {
+    match current_ability() {
+        Some(ability) => !ability.can_class(action, TypeId::of::<E>()),
+        None if current_executor_scope() == Some(ExecutorScope::Job) => false,
+        None => {
+            denying_for_want_of_an_ability::<E>(action);
+            true
+        }
+    }
+}
+
+/// The route answers `200 []`, or the write `RecordNotUpdated`, which reads as a
+/// business bug: this event is the only place the cause shows.
+fn denying_for_want_of_an_ability<E: EntityTrait>(action: Action) {
+    tracing::warn!(
+        target: crate::target::ORM,
+        entity = std::any::type_name::<E>(),
+        ?action,
+        scope = ?current_executor_scope(),
+        hint = "bind #[use_guards(AuthnGuard, AuthzGuard)], or — on a #[public] \
+                  route — take the `Authorize<A, E>` parameter that arms the shaper",
+        "no ambient Ability outside a worker job — denying all rows",
+    );
 }
 
 /// The key a host whose generated code runs `Repo` requires — a `#[crud]`
@@ -244,7 +262,10 @@ impl<E: EntityTrait> Repo<E> {
     /// and surfaces as [`DbErr::RecordNotUpdated`], so a caller cannot mutate by
     /// id past its scope.
     ///
-    /// Runs [`ActiveModelBehavior`] — see `scoped_save`.
+    /// Runs [`ActiveModelBehavior`] — see `scoped_save` — but for a caller no
+    /// row could pass for (no grant, a denial no `when` narrows, or a request
+    /// holding no ability, as on a route no mask shapes), who gets the same
+    /// error before any hook runs.
     pub async fn update<A>(active: A) -> Result<E::Model, DbErr>
     where
         A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
@@ -255,13 +276,18 @@ impl<E: EntityTrait> Repo<E> {
 
     /// The scope filter forces sea-orm's `Update::one`, which does not run
     /// [`ActiveModelBehavior`]: the hooks are driven here, or `updated_at` never
-    /// moves.
+    /// moves. A caller no row could pass for (see [`barred_from_class`]) gets
+    /// what a row outside its scope gets, before any hook runs; a job, which
+    /// holds no ability, is unscoped.
     async fn scoped_save<A>(active: A, action: Action) -> Result<E::Model, DbErr>
     where
         A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
         E::Model: IntoActiveModel<A>,
     {
         let conn = Self::conn()?;
+        if barred_from_class::<E>(action) {
+            return Err(DbErr::RecordNotUpdated);
+        }
         let active = A::before_save(active, &conn, false).await?;
         let model = Update::one(active)
             .validate()?
@@ -291,6 +317,8 @@ impl<E: EntityTrait> Repo<E> {
     /// Soft-delete a loaded row: stamp `col = now()` in the request transaction,
     /// gated by `condition_for(Delete)` ANDed with the primary key. Idempotent
     /// when the row is already tombstoned. Hard purge stays on [`Self::delete`].
+    /// A caller no row could pass for gets [`DbErr::RecordNotUpdated`] before any
+    /// hook runs, as [`update`](Self::update).
     ///
     /// The row is then hidden from every read but
     /// [`with_tombstones`](Self::with_tombstones) when `E` is declared
@@ -777,6 +805,153 @@ mod tests {
             s.contains("NULL"),
             "live filter must exclude tombstoned rows: {s}",
         );
+    }
+
+    mod hooked {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use sea_orm::entity::prelude::*;
+
+        /// How many saves reached the entity's `before_save`.
+        pub(super) static SAVES: AtomicUsize = AtomicUsize::new(0);
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "hooked")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            pub name: String,
+            pub deleted_at: Option<DateTimeWithTimeZone>,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        #[async_trait::async_trait]
+        impl ActiveModelBehavior for ActiveModel {
+            async fn before_save<C: ConnectionTrait>(self, _: &C, _: bool) -> Result<Self, DbErr> {
+                SAVES.fetch_add(1, Ordering::SeqCst);
+                Ok(self)
+            }
+        }
+    }
+
+    /// A save the ability bars on the whole class — a handler gated on
+    /// another subject, so no class gate saw it — answers what a row outside
+    /// the scope answers, before any hook runs or any statement is sent: the
+    /// pool here dials nothing, so a statement sent would fail otherwise.
+    #[tokio::test]
+    async fn a_save_the_ability_bars_on_the_class_runs_no_hook_and_sends_nothing() {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Manage, hooked::Entity)
+            .when(|p| p.eq(hooked::Column::Id, 1));
+        b.cannot(Action::Update, hooked::Entity);
+        b.cannot(Action::Delete, hooked::Entity);
+        let ability = Arc::new(b.build().expect("valid test ability"));
+        let row = hooked::Model {
+            id: 1,
+            name: "ada".to_owned(),
+            deleted_at: None,
+        };
+
+        let (updated, soft_deleted) = with_request_executor(
+            pool(),
+            install_ability(ability, async {
+                let mut renamed = row.clone().into_active_model();
+                renamed.name = Set("grace".to_owned());
+                (
+                    Repo::<hooked::Entity>::update(renamed).await,
+                    Repo::<hooked::Entity>::soft_delete(row.clone(), hooked::Column::DeletedAt)
+                        .await,
+                )
+            }),
+        )
+        .await;
+
+        assert!(
+            matches!(updated, Err(DbErr::RecordNotUpdated)),
+            "{updated:?}"
+        );
+        assert!(
+            matches!(soft_deleted, Err(DbErr::RecordNotUpdated)),
+            "{soft_deleted:?}"
+        );
+        assert_eq!(
+            hooked::SAVES.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no hook runs for a caller the ability bars",
+        );
+    }
+
+    /// A request no ability reaches — a route no mask shapes, whose ability
+    /// `UnmaskedReply` withholds — is barred like one its ability bars, saying
+    /// why once; the pool dials nothing, so a statement sent would fail otherwise.
+    #[tokio::test]
+    async fn a_save_in_a_request_holding_no_ability_runs_no_hook_and_sends_nothing() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let row = hooked::Model {
+            id: 1,
+            name: "ada".to_owned(),
+            deleted_at: None,
+        };
+
+        let (updated, soft_deleted) = with_request_executor(pool(), async {
+            let mut renamed = row.clone().into_active_model();
+            renamed.name = Set("grace".to_owned());
+            (
+                Repo::<hooked::Entity>::update(renamed).await,
+                Repo::<hooked::Entity>::soft_delete(row.clone(), hooked::Column::DeletedAt).await,
+            )
+        })
+        .await;
+
+        assert!(
+            matches!(updated, Err(DbErr::RecordNotUpdated)),
+            "{updated:?}"
+        );
+        assert!(
+            matches!(soft_deleted, Err(DbErr::RecordNotUpdated)),
+            "{soft_deleted:?}"
+        );
+        assert_eq!(hooked::SAVES.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let said = logs.find(
+            crate::target::ORM,
+            "no ambient Ability outside a worker job — denying all rows",
+        );
+        assert_eq!(said.len(), 2, "{said:#?}");
+        assert!(said.iter().all(|event| event.level == "warn"), "{said:#?}");
+    }
+
+    /// A job holds no ability and is unscoped: its save reaches the hook and the
+    /// statement, which meets a pool whose every acquire is refused.
+    #[tokio::test]
+    async fn a_save_in_a_job_runs_its_hook_and_sends_its_statement() {
+        let mut options = sea_orm::ConnectOptions::new("postgres://nestrs@127.0.0.1:1/nowhere");
+        options
+            .connect_lazy(true)
+            .acquire_timeout(std::time::Duration::from_millis(50));
+        let unreachable = sea_orm::Database::connect(options)
+            .await
+            .expect("a lazy pool opens nothing");
+        let mut renamed = hooked::Model {
+            id: 1,
+            name: "ada".to_owned(),
+            deleted_at: None,
+        }
+        .into_active_model();
+        renamed.name = Set("grace".to_owned());
+
+        let updated = with_job_executor(
+            SeaOrmExecutor::Pool(unreachable).into(),
+            Repo::<hooked::Entity>::update(renamed),
+        )
+        .await;
+
+        assert!(
+            !matches!(updated, Ok(_) | Err(DbErr::RecordNotUpdated)),
+            "{updated:?}"
+        );
+        assert_eq!(hooked::SAVES.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

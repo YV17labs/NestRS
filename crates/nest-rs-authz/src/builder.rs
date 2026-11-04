@@ -173,6 +173,9 @@ trait ErasedPredicate: Any + Send + Sync {
     /// Whether it is the `Deny` a rejected relation leaves.
     fn is_deny(&self) -> bool;
 
+    /// Whether it holds for every row by its shape, so it narrows nothing.
+    fn is_always(&self) -> bool;
+
     fn condition(&self) -> Condition;
 }
 
@@ -183,6 +186,10 @@ where
 {
     fn is_deny(&self) -> bool {
         matches!(self, Predicate::Deny)
+    }
+
+    fn is_always(&self) -> bool {
+        self.holds_for_every_row()
     }
 
     fn condition(&self) -> Condition {
@@ -314,6 +321,9 @@ impl<S: Subject, K> Drop for RuleSpec<'_, S, K> {
             }
         }
 
+        // A `when` holding for every row is a rule no `when` narrows, so the
+        // class gate reads a denial of that shape as the outright one it is.
+        self.rows.take_if(|rows| rows.is_always());
         let condition = match self.rows.as_deref() {
             Some(rows) => rows.condition(),
             None => Condition::all(),

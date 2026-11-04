@@ -141,6 +141,11 @@ impl<E: EntityTrait> Predicate<E> {
     /// Lower to a [`sea_orm::Condition`]. `Condition::all()` is SQL `TRUE`, so
     /// [`Predicate::Always`] imposes no constraint.
     pub fn to_condition(&self) -> Condition {
+        // One spelling for every row, so a rule committed with no `when` and
+        // one whose `when` reads no column render alike.
+        if self.holds_for_every_row() {
+            return Condition::all();
+        }
         match self {
             Predicate::Always => Condition::all(),
             // Fail-closed: `Condition::all().add(Expr::cust("1 = 0"))` is the
@@ -197,6 +202,31 @@ impl<E: EntityTrait> Predicate<E> {
             Predicate::Eq(col, value) => pinned.push((*col, value.clone())),
             Predicate::And(parts) => parts.iter().for_each(|part| part.pins(pinned, other)),
             constrained => constrained.columns(other),
+        }
+    }
+
+    /// Whether it is `TRUE` for every row by its shape alone, whatever a
+    /// column holds: a rule narrowed by one is narrowed by nothing. Sound, not
+    /// complete — a shape it cannot read off answers `false`.
+    pub(crate) fn holds_for_every_row(&self) -> bool {
+        match self {
+            Predicate::Always => true,
+            Predicate::And(parts) => parts.iter().all(Self::holds_for_every_row),
+            Predicate::Or(parts) => parts.iter().any(Self::holds_for_every_row),
+            Predicate::Not(inner) => inner.holds_for_no_row(),
+            _ => false,
+        }
+    }
+
+    /// Whether it is `FALSE` for every row by its shape alone — never
+    /// `UNKNOWN`, so its negation holds for every row.
+    fn holds_for_no_row(&self) -> bool {
+        match self {
+            Predicate::Deny => true,
+            Predicate::And(parts) => parts.iter().any(Self::holds_for_no_row),
+            Predicate::Or(parts) => parts.iter().all(Self::holds_for_no_row),
+            Predicate::Not(inner) => inner.holds_for_every_row(),
+            _ => false,
         }
     }
 
@@ -705,6 +735,39 @@ mod tests {
         // `all([])` mirrors `Always` — folds to `Condition::all()`.
         let p: Predicate<widget::Entity> = b().all(Vec::new());
         assert!(p.matches(&model(1, 7, "a")));
+    }
+
+    /// What every row satisfies whatever its columns hold, read off the shape:
+    /// each such predicate matches in memory too, and any shape reading a
+    /// column, or `NULL`'s third value, is not one.
+    #[test]
+    fn a_shape_holds_for_every_row_only_when_no_column_can_decide_it() {
+        let every_row = [
+            Predicate::Always,
+            b().all([]),
+            b().all([b().all([]), Predicate::Always]),
+            b().any([b().eq(widget::Column::OrgId, 7), b().all([])]),
+            b().not(b().any([])),
+            b().not(b().all([b().eq(widget::Column::OrgId, 7), b().any([])])),
+        ];
+        for p in &every_row {
+            assert!(p.holds_for_every_row(), "{}", sql(p));
+            assert!(p.matches(&model(1, 7, "a")) && p.matches(&model(2, 9, "b")));
+        }
+
+        let some_rows = [
+            b().eq(widget::Column::OrgId, 7),
+            b().is_null(widget::Column::Tag),
+            b().is_in(widget::Column::OrgId, Vec::<i32>::new()),
+            b().any([]),
+            b().not(Predicate::Always),
+            b().not(b().eq(widget::Column::OrgId, 7)),
+            b().all([b().all([]), b().eq(widget::Column::OrgId, 7)]),
+            b().not(b().not(b().eq(widget::Column::Tag, "x"))),
+        ];
+        for p in &some_rows {
+            assert!(!p.holds_for_every_row(), "{}", sql(p));
+        }
     }
 
     #[test]

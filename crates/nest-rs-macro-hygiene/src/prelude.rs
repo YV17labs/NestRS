@@ -1,7 +1,9 @@
 //! The decorators reached through `use nest_rs::prelude::*;` and nothing else.
 //!
 //! Both halves of each pair are applied, not merely imported: a glob import
-//! cannot fail on a name it does not find.
+//! cannot fail on a name it does not find. Each edge takes the one `Scoped<T>`
+//! the prelude names, so a parameter on any of them fails the day it names one
+//! edge's alone.
 
 use nest_rs::prelude::*;
 
@@ -22,6 +24,17 @@ pub struct PreludeOutput {
     pub value: String,
 }
 
+/// The enum both decoded and sent, with no feature of its own.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a witness of what a developer writes, never published"
+)]
+#[wire_enum]
+pub enum PreludeTier {
+    Free,
+    Pro,
+}
+
 #[cfg(feature = "http")]
 pub mod http {
     use nest_rs::prelude::*;
@@ -33,7 +46,7 @@ pub mod http {
     impl PreludeController {
         #[get("/")]
         #[public]
-        async fn index(&self) -> String {
+        async fn index(&self, _service: Scoped<crate::prelude::PreludeService>) -> String {
             "ok".into()
         }
     }
@@ -50,7 +63,7 @@ pub mod graphql {
     impl PreludeResolver {
         #[query]
         #[public]
-        async fn prelude(&self) -> String {
+        async fn prelude(&self, _service: Scoped<crate::prelude::PreludeService>) -> String {
             "ok".into()
         }
     }
@@ -68,7 +81,10 @@ pub mod mcp {
     impl PreludeTool {
         #[tool(description = "Answer with a constant.")]
         #[public]
-        async fn ping(&self) -> Result<String, nest_rs::mcp::McpError> {
+        async fn ping(
+            &self,
+            _service: Scoped<crate::prelude::PreludeService>,
+        ) -> Result<String, nest_rs::mcp::McpError> {
             Ok("ok".into())
         }
     }
@@ -86,7 +102,7 @@ pub mod ws {
     impl PreludeGateway {
         #[subscribe_message("prelude.ping")]
         #[public]
-        async fn ping(&self) {}
+        async fn ping(&self, _service: Scoped<crate::prelude::PreludeService>) {}
     }
 }
 

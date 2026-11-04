@@ -24,6 +24,8 @@ use crate::SeaOrmConfig;
 use crate::atomic::{AtomicExecutor, PoolCommit};
 use crate::error::CommitError;
 use crate::executor::{FinalizeOutcome, Installed, LazyTransaction, SeaOrmExecutor};
+#[cfg(any(feature = "http", feature = "graphql"))]
+use crate::unique_key::UniqueKeys;
 
 // What could not be done, never why the database refused: `finalize` already
 // logs that, with the error.
@@ -54,6 +56,9 @@ pub struct SeaOrmUnitOfWork {
     observe_conflicts: bool,
     settle_net: Duration,
     settles: Settles,
+    /// The unique keys a conflict names, read at the binding's boot.
+    #[cfg(any(feature = "http", feature = "graphql"))]
+    unique_keys: Arc<UniqueKeys>,
     /// The outbox a unit's transaction writes a push's jobs into.
     #[cfg(feature = "queue")]
     outbox: Option<Arc<crate::queue::SeaOrmOutbox>>,
@@ -83,9 +88,24 @@ impl SeaOrmUnitOfWork {
             observe_conflicts: config.observe_serialization_conflicts,
             settle_net: settle_net(config),
             settles,
+            #[cfg(any(feature = "http", feature = "graphql"))]
+            unique_keys: Arc::default(),
             #[cfg(feature = "queue")]
             outbox: None,
         }
+    }
+
+    /// The same unit of work, naming a unique conflict by `keys`.
+    #[cfg(any(feature = "http", feature = "graphql"))]
+    pub(crate) fn reading(mut self, keys: UniqueKeys) -> Self {
+        self.unique_keys = Arc::new(keys);
+        self
+    }
+
+    /// The unique keys a conflict on a unit it opened names.
+    #[cfg(any(feature = "http", feature = "graphql"))]
+    pub(crate) fn unique_keys(&self) -> Arc<UniqueKeys> {
+        Arc::clone(&self.unique_keys)
     }
 
     /// The same unit of work, its transactions writing a push's jobs into

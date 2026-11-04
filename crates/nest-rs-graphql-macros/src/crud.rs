@@ -160,7 +160,9 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ) -> ::nest_rs_graphql::async_graphql::Result<#output> {
                 let __row = ::nest_rs_seaorm::Creatable::create(#service(self), input)
                     .await
-                    .map_err(#crud_error)?;
+                    .map_err(::nest_rs_seaorm::__private::graphql_crud_write_error::<#entity>(
+                        <#create as ::nest_rs_seaorm::CreateModel<#entity>>::field_for,
+                    ))?;
                 ::core::result::Result::Ok(<#output>::from(&__row))
             }
         });
@@ -191,7 +193,9 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                             input,
                         )
                         .await
-                        .map_err(#crud_error)?;
+                        .map_err(::nest_rs_seaorm::__private::graphql_crud_write_error::<#entity>(
+                            <#update as ::nest_rs_seaorm::UpdateModel<#entity>>::field_for,
+                        ))?;
                         ::core::result::Result::Ok(::core::option::Option::Some(
                             <#output>::from(&__row),
                         ))

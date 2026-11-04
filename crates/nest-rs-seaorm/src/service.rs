@@ -21,6 +21,41 @@ use crate::repo::{Repo, ability_scope, barred_from_class, pk_condition};
 pub trait CreateModel<E: EntityTrait> {
     /// Turn the create-input DTO into a fresh `ActiveModel` ready to insert.
     fn into_active_model(self) -> E::ActiveModel;
+
+    /// The field of this input that carries `column` (as the table names it),
+    /// by the name serde reads it under, which validation's `errors` keys share:
+    /// what a `#[crud]` create a unique key refuses names under `errors`. `None`
+    /// for a column the input does not carry, and, unless an implementation says
+    /// otherwise, for every column.
+    ///
+    /// ```
+    /// # mod users {
+    /// #     use nest_rs_seaorm::expose;
+    /// #     use sea_orm::entity::prelude::*;
+    /// #[expose(name = "User")]
+    /// #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    /// #[sea_orm(table_name = "users")]
+    /// pub struct Model {
+    ///     #[sea_orm(primary_key, auto_increment = false)]
+    ///     #[expose]
+    ///     pub id: Uuid,
+    ///     #[expose(input(create))]
+    ///     #[sea_orm(column_name = "email_address")]
+    ///     pub email: String,
+    /// }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {}
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// use nest_rs_seaorm::CreateModel;
+    ///
+    /// assert_eq!(users::CreateUser::field_for("email_address"), Some("email"));
+    /// assert_eq!(users::CreateUser::field_for("id"), None);
+    /// ```
+    fn field_for(column: &str) -> Option<&'static str> {
+        let _ = column;
+        None
+    }
 }
 
 /// Apply an update-input DTO onto a loaded `ActiveModel`. Implemented by
@@ -29,6 +64,15 @@ pub trait UpdateModel<E: EntityTrait> {
     /// Apply the update-input DTO's set fields onto the loaded `ActiveModel`,
     /// leaving unset fields untouched.
     fn apply_to(self, model: E::ActiveModel) -> E::ActiveModel;
+
+    /// The field of this input that carries `column`, by the name serde reads it
+    /// under, which validation's `errors` keys share, as
+    /// [`CreateModel::field_for`] says it: what a `#[crud]` update a unique key
+    /// refuses names under `errors`.
+    fn field_for(column: &str) -> Option<&'static str> {
+        let _ = column;
+        None
+    }
 }
 
 /// Outcome of an authorized by-id load: 200/403/404 on REST, data/forbidden/null

@@ -102,3 +102,70 @@ plus `cannot(Create)` answers `403` before any statement, never the NOT NULL
 `500` or the `409` an insert would have drawn
 (`denial-holds-whatever-the-token.md`). A grant the fill cannot complete still
 answers the `500`: the gate stays optimistic about conditions.
+
+## 2026-10-31 — a unique conflict names the input's field
+
+Agreed by the owner on 2026-10-31 ("Tout faire (Recommandé)", the identity
+audit's second pass, car-4). The Limits line "`users`' duplicate email answers
+the generic `409`" is closed: a `#[crud]` create or update a unique key
+refuses answers its `409` with the input's fields that key holds under the
+`errors` member every edge already ships, in a validation failure's shape —
+`{"email": [{"code": "unique"}]}` — on HTTP and in GraphQL's extensions. The
+value is never quoted (`payload-never-quoted.md`): naming the column adds
+nothing to what the `409` already tells about the value's existence.
+
+**How the field is found.** `SeaOrmDatabaseModule` reads, once at boot, the
+key columns of every unique index on every `#[expose]` entity's table and,
+through `pg_inherits`, its partitions, since a violation reports the partition
+and the partition's index — a primary key, a unique constraint (whose index
+carries its name, which a violation reports), a unique index, partial ones
+included — from `pg_index`, `INCLUDE` columns left out. It waits as a statement
+of the pool does: for a connection, the pool's acquire budget; for the answer,
+Postgres's `statement_timeout` under the settle net; past them the boot fails
+naming the read. A binary with neither `http` nor `graphql` renders no `#[crud]`
+write, so it sends no catalog query and cannot fail its boot on one. The edge
+renders a `#[crud]` error synchronously after the unit rolled back, and Postgres
+runs nothing more on the transaction a violation aborted, so the map is the
+binding's, read off `current_unit_of_work`, and the request pays nothing. Each
+input names the field carrying each column it sets, by the name serde reads it
+under, which validation's `errors` keys share (`CreateModel::field_for`,
+`UpdateModel::field_for`, which `#[expose]` writes, `None` by default for a
+hand-written one); a key's columns the input does not carry are not named, so a
+tenant a grant pins beside the slug the client sent names `slug`, and a key over
+none of them names nothing.
+
+**Refused:**
+
+- **`pg_constraint` (`contype` u/p)**, the audit's proposal: the demo's own
+  email key is a partial unique index over live rows, which has no constraint
+  row, so the case the item exists for would have named nothing.
+- **Reading the key on error**, on the pool: the edge's mapping is synchronous,
+  and a round trip on the failure path of every conflicting write would be a
+  query the request pays for a message.
+- **Parsing the server's `DETAIL`** (`Key (email)=(…)`): it quotes the value,
+  and its words follow the server's `lc_messages`.
+- **A savepoint around every write**, so a conflict could be read inside the
+  unit: a round trip per write on the hot path.
+- **Reading on an idle connection alone** (`try_acquire`), so the boot would wait
+  on nothing: sqlx hands a connection back on a task of its own after a ping, so
+  a factory that read the pool just before the binding left none idle, and the
+  field map stayed off for the process's whole life.
+- **Registering only an entity declaring an input**: a hand-written input's
+  `field_for` then had no key to answer, for one table less in one boot query.
+- **Naming a field on a hand-written service's `ServiceError::Conflict`**: its
+  variant holds a sentence, and carrying fields beside it changes the type
+  every service matches — a break with no input to read the fields off.
+
+**Limits:**
+
+- A key over an expression (`lower(email)`) names nothing: its columns are an
+  expression's, not the input's.
+- A key created after the binding booted, a partition attached since among them,
+  names nothing until the next boot, and a pool holding no connection at boot (one
+  a test opened lazily, which proved no server) names nothing at all, said at
+  `warn`.
+- On GraphQL a two-word field is named as validation names it, `org_id`, where the
+  input spells it `orgId`: one convention for `extensions.errors`, validation's.
+- A hand-written service converting a unique violation through
+  `ServiceError::from(DbErr)` answers the bare `409`, and so does a tool on
+  MCP, which has no `#[crud]`.

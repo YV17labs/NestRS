@@ -1,7 +1,8 @@
 //! `src/error.rs` against Postgres: a refusal the server words around the input
 //! it refused is said by its SQLSTATE and the names the server reported, and a
-//! unique violation is a conflict — what no unit test can build, `PgDatabaseError`
-//! having no public constructor.
+//! unique violation is a conflict, which a `#[crud]` write answers naming the
+//! input's fields the key holds, read off the catalog at boot — what no unit
+//! test can build, `PgDatabaseError` having no public constructor.
 
 use std::time::Duration;
 
@@ -163,4 +164,341 @@ async fn a_route_whose_statement_is_cancelled_answers_its_pools_bound_as_the_wai
     let body = resp.json().await.value().deserialize::<serde_json::Value>();
     assert_eq!(body["code"], code::UNAVAILABLE.as_str(), "{body}");
     assert!(body.get("detail").is_none(), "a 5xx says no detail: {body}");
+}
+
+const HANDLES: &str = "conflict_probe_handles";
+
+mod handle {
+    use nest_rs_seaorm::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[expose(name = "Handle")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "conflict_probe_handles")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        pub org_id: i32,
+        #[expose(input(create, update))]
+        pub email: String,
+        #[expose(input(create, update))]
+        pub slug: String,
+        #[expose(input(create))]
+        #[sea_orm(column_name = "display")]
+        pub nickname: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct HandlesService;
+
+impl nest_rs_seaorm::CrudService for HandlesService {
+    type Entity = handle::Entity;
+}
+
+impl nest_rs_seaorm::Creatable for HandlesService {
+    type Create = handle::CreateHandle;
+}
+
+impl nest_rs_seaorm::Updatable for HandlesService {
+    type Update = handle::UpdateHandle;
+}
+
+/// Manages the handles of org 7: its `Create` grant pins `org_id`, which no
+/// input carries.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct OrgSeven;
+
+impl nest_rs_authz::AbilityFactory for OrgSeven {
+    type Actor = crate::Anyone;
+
+    fn define(&self, _actor: &crate::Anyone, ab: &mut nest_rs_authz::AbilityBuilder) {
+        ab.can(nest_rs_authz::Action::Manage, handle::Entity)
+            .when(|p| p.eq(handle::Column::OrgId, 7));
+    }
+}
+
+#[nest_rs_http::controller(path = "/handles")]
+#[use_guards(
+    crate::always_authenticated::AlwaysAuthenticated,
+    nest_rs_authz::AbilityGuard<OrgSeven>
+)]
+struct HandlesController {
+    #[inject]
+    svc: std::sync::Arc<HandlesService>,
+}
+
+#[nest_rs_http::crud(service = HandlesService, ops = [create, update])]
+impl HandlesController {}
+
+#[module(
+    imports = [SeaOrmModule, SeaOrmDatabaseModule],
+    providers = [
+        HandlesService,
+        OrgSeven,
+        nest_rs_authz::AbilityGuard<OrgSeven>,
+        crate::always_authenticated::AlwaysAuthenticated,
+        HandlesController,
+    ],
+)]
+struct HandlesModule;
+
+/// The keys a conflict can name, created before the app boots, which reads
+/// them: a constraint carrying an `INCLUDE` column, a partial index whose
+/// other column a grant pins, and an index over an expression.
+async fn handles_app() -> (nest_rs_testing::EphemeralDatabase, TestApp) {
+    let db = nest_rs_testing::EphemeralDatabase::create::<crate::harness::NoMigrations>()
+        .await
+        .expect("a database of the test's own");
+    db.connection()
+        .execute_unprepared(&format!(
+            "CREATE TABLE {HANDLES} (
+                id UUID PRIMARY KEY,
+                org_id INT NOT NULL,
+                email TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                display TEXT NOT NULL,
+                CONSTRAINT {HANDLES}_email_key UNIQUE (email) INCLUDE (slug)
+            );
+            CREATE UNIQUE INDEX {HANDLES}_slug_live ON {HANDLES} (org_id, slug) WHERE slug <> '';
+            CREATE UNIQUE INDEX {HANDLES}_display_folded ON {HANDLES} (lower(display));"
+        ))
+        .await
+        .expect("the probe table and its keys");
+    let app = TestApp::builder()
+        .provide_arc(db.connection())
+        .module::<HandlesModule>()
+        .build()
+        .await
+        .expect("the app boots on the probe database");
+    (db, app)
+}
+
+/// What a write answered: its status and its problem document.
+async fn written(
+    app: &TestApp,
+    method: nest_rs_http::Method,
+    path: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let resp = app
+        .http()
+        .request(method, path)
+        .body_json(&body)
+        .send()
+        .await;
+    let status = resp.0.status();
+    (
+        status,
+        resp.json().await.value().deserialize::<serde_json::Value>(),
+    )
+}
+
+/// A `#[crud]` write a unique key refuses names the fields of its input the
+/// key holds, in the shape a validation failure's fields take, and never a
+/// value, an index or a table: the key's column a grant pins is no field the
+/// client sent, an `INCLUDE` column is no part of the key, and an index over
+/// an expression names nothing.
+#[tokio::test]
+async fn a_crud_write_a_unique_key_refuses_names_the_inputs_fields_it_holds() {
+    use nest_rs_http::Method;
+    use serde_json::json;
+
+    let (_db, app) = handles_app().await;
+    let unique = json!([{ "code": "unique" }]);
+
+    let (status, first) = written(
+        &app,
+        Method::POST,
+        "/handles",
+        json!({ "email": "ada@probe.test", "slug": "ada", "nickname": "Ada" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let (status, second) = written(
+        &app,
+        Method::POST,
+        "/handles",
+        json!({ "email": "bob@probe.test", "slug": "bob", "nickname": "Bob" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+
+    for (input, named) in [
+        (
+            json!({ "email": "ada@probe.test", "slug": "fresh", "nickname": "Fresh" }),
+            Some(json!({ "email": unique })),
+        ),
+        (
+            json!({ "email": "new@probe.test", "slug": "ada", "nickname": "Newer" }),
+            Some(json!({ "slug": unique })),
+        ),
+        (
+            json!({ "email": "other@probe.test", "slug": "other", "nickname": "ADA" }),
+            None,
+        ),
+    ] {
+        let (status, problem) = written(&app, Method::POST, "/handles", input.clone()).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{input} → {problem}");
+        assert_eq!(problem["code"], code::CONFLICT.as_str(), "{problem}");
+        assert_eq!(problem.get("errors").cloned(), named, "{input} → {problem}");
+        let said = problem.to_string();
+        for withheld in [
+            "ada@probe.test",
+            "ADA",
+            HANDLES,
+            "_email_key",
+            "_slug_live",
+            "23505",
+        ] {
+            assert!(!said.contains(withheld), "{withheld} in {said}");
+        }
+    }
+
+    let id = second["id"].as_str().expect("the second handle's id");
+    let (status, problem) = written(
+        &app,
+        Method::PUT,
+        &format!("/handles/{id}"),
+        json!({ "email": "ada@probe.test", "slug": "bob" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(problem["errors"], json!({ "email": unique }), "{problem}");
+}
+
+const BESPOKE: &str = "conflict_probe_bespoke";
+
+mod bespoke {
+    use nest_rs_seaorm::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[expose(name = "Bespoke")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "conflict_probe_bespoke")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[expose]
+        pub email: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[derive(Clone, Debug, serde::Deserialize, schemars::JsonSchema, validator::Validate)]
+struct CreateBespoke {
+    email: String,
+}
+
+impl nest_rs_seaorm::CreateModel<bespoke::Entity> for CreateBespoke {
+    fn into_active_model(self) -> bespoke::ActiveModel {
+        bespoke::ActiveModel {
+            id: sea_orm::Set(Uuid::now_v7()),
+            email: sea_orm::Set(self.email),
+        }
+    }
+
+    fn field_for(column: &str) -> Option<&'static str> {
+        (column == "email").then_some("email")
+    }
+}
+
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct BespokeService;
+
+impl nest_rs_seaorm::CrudService for BespokeService {
+    type Entity = bespoke::Entity;
+}
+
+impl nest_rs_seaorm::Creatable for BespokeService {
+    type Create = CreateBespoke;
+}
+
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct EveryBespoke;
+
+impl nest_rs_authz::AbilityFactory for EveryBespoke {
+    type Actor = crate::Anyone;
+
+    fn define(&self, _actor: &crate::Anyone, ab: &mut nest_rs_authz::AbilityBuilder) {
+        ab.can(nest_rs_authz::Action::Manage, bespoke::Entity);
+    }
+}
+
+#[nest_rs_http::controller(path = "/bespoke")]
+#[use_guards(
+    crate::always_authenticated::AlwaysAuthenticated,
+    nest_rs_authz::AbilityGuard<EveryBespoke>
+)]
+struct BespokeController {
+    #[inject]
+    svc: std::sync::Arc<BespokeService>,
+}
+
+#[nest_rs_http::crud(service = BespokeService, ops = [create])]
+impl BespokeController {}
+
+#[module(
+    imports = [SeaOrmModule, SeaOrmDatabaseModule],
+    providers = [
+        BespokeService,
+        EveryBespoke,
+        nest_rs_authz::AbilityGuard<EveryBespoke>,
+        crate::always_authenticated::AlwaysAuthenticated,
+        BespokeController,
+    ],
+)]
+struct BespokeModule;
+
+/// An entity declaring no input is read too: the input a service writes by hand
+/// names its field through `field_for`.
+#[tokio::test]
+async fn a_hand_written_input_names_its_field_through_field_for() {
+    use nest_rs_http::Method;
+    use serde_json::json;
+
+    let db = nest_rs_testing::EphemeralDatabase::create::<crate::harness::NoMigrations>()
+        .await
+        .expect("a database of the test's own");
+    db.connection()
+        .execute_unprepared(&format!(
+            "CREATE TABLE {BESPOKE} (
+                id UUID PRIMARY KEY,
+                email TEXT NOT NULL CONSTRAINT {BESPOKE}_email_key UNIQUE
+            )"
+        ))
+        .await
+        .expect("the probe table");
+    let app = TestApp::builder()
+        .provide_arc(db.connection())
+        .module::<BespokeModule>()
+        .build()
+        .await
+        .expect("the app boots on the probe database");
+    let input = json!({ "email": "ada@probe.test" });
+
+    let (status, first) = written(&app, Method::POST, "/bespoke", input.clone()).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let (status, problem) = written(&app, Method::POST, "/bespoke", input).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(
+        problem["errors"],
+        json!({ "email": [{ "code": "unique" }] }),
+        "{problem}",
+    );
 }

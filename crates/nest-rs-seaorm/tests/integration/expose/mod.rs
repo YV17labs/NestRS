@@ -3,6 +3,7 @@
 //! is tested in its surface crate, so this folder mirrors the macro crate's
 //! `src/`, `nest-rs-seaorm-macros`.
 
+mod active;
 mod dto;
 #[cfg(feature = "graphql")]
 mod input;

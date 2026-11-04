@@ -33,6 +33,7 @@ mod queue;
 mod relational_authz;
 mod scope;
 mod soft_delete;
+mod unique_key;
 mod unit;
 mod worker;
 mod ws;

@@ -364,13 +364,65 @@ async fn a_duplicate_email_create_is_a_conflict_not_a_500() {
         .send()
         .await
         .assert_status(StatusCode::CREATED);
-    app.http()
+    let taken = app
+        .http()
         .post("/users")
+        .header(header::AUTHORIZATION, &token)
+        .body_json(&json!({ "name": "Other", "email": "dup@conflict.test" }))
+        .send()
+        .await;
+    taken.assert_status(StatusCode::CONFLICT);
+    let problem = taken
+        .json()
+        .await
+        .value()
+        .deserialize::<serde_json::Value>();
+    assert_eq!(
+        problem["errors"],
+        json!({ "email": [{ "code": "unique" }] }),
+        "the 409 names the field whose value is taken: {problem}",
+    );
+    for withheld in ["dup@conflict.test", "user_email_live", "23505"] {
+        assert!(
+            !problem.to_string().contains(withheld),
+            "{withheld} in {problem}"
+        );
+    }
+
+    let other = app
+        .http()
+        .post("/users")
+        .header(header::AUTHORIZATION, &token)
+        .body_json(&json!({ "name": "Other", "email": "other@conflict.test" }))
+        .send()
+        .await;
+    other.assert_status(StatusCode::CREATED);
+    let other_id = other
+        .json()
+        .await
+        .value()
+        .object()
+        .get("id")
+        .string()
+        .to_owned();
+    let renamed = app
+        .http()
+        .put(format!("/users/{other_id}"))
         .header(header::AUTHORIZATION, &token)
         .body_json(&body)
         .send()
+        .await;
+    renamed.assert_status(StatusCode::CONFLICT);
+    let problem = renamed
+        .json()
         .await
-        .assert_status(StatusCode::CONFLICT);
+        .value()
+        .deserialize::<serde_json::Value>();
+    assert_eq!(
+        problem["errors"],
+        json!({ "email": [{ "code": "unique" }] }),
+        "{problem}"
+    );
 }
 
 #[tokio::test]

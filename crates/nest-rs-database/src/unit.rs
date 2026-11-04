@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -184,8 +185,9 @@ impl LifecycleUnitOfWork for HookUnits {
 
 /// The driver's half of the port: one per app, bound as `Arc<dyn UnitOfWork>`
 /// by the driver's binding, and the one trait a data-layer driver implements to
-/// serve every edge.
-pub trait UnitOfWork: Send + Sync + 'static {
+/// serve every edge. `Any`, so a driver reads its own binding back off
+/// [`current_unit_of_work`] — what it learned at boot — by downcasting it.
+pub trait UnitOfWork: Any + Send + Sync {
     /// Open the unit `spec` declares — sending nothing to the database yet — or
     /// refuse it before its body runs, saying why (a policy the driver does not
     /// support).

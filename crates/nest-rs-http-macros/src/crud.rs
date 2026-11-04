@@ -174,7 +174,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __body.into_inner(),
                 )
                 .await
-                .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
+                .map_err(::nest_rs_seaorm::__private::http_crud_write_error::<#entity>(
+                    <#create as ::nest_rs_seaorm::CreateModel<#entity>>::field_for,
+                ))?;
                 ::core::result::Result::Ok(::nest_rs_http::Created::at(
                     ::nest_rs_seaorm::__private::created_key::<#entity>(&__row),
                     ::nest_rs_http::Json(<#output>::from(&__row)),
@@ -213,7 +215,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                             __body.into_inner(),
                         )
                         .await
-                        .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
+                        .map_err(::nest_rs_seaorm::__private::http_crud_write_error::<#entity>(
+                            <#update as ::nest_rs_seaorm::UpdateModel<#entity>>::field_for,
+                        ))?;
                         ::core::result::Result::Ok(::nest_rs_http::Json(<#output>::from(&__row)))
                     }
                     #access_refused

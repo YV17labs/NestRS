@@ -1,7 +1,8 @@
 //! `src/error.rs`'s GraphQL twin through a `#[crud]` create the database
 //! refuses, over `POST /graphql`: a unique violation is the client's `CONFLICT`
-//! and no incident, any other refusal the opaque `INTERNAL` filed once — and
-//! neither answer nor line carries the server's sentence or the input it quotes.
+//! naming the input's field, and no incident, any other refusal the opaque
+//! `INTERNAL` filed once — and neither answer nor line carries the server's
+//! sentence or the input it quotes.
 //! A caller a denial no `when` narrows bars meets none of it: the class gate
 //! refuses before Postgres sees a statement.
 
@@ -235,6 +236,11 @@ async fn a_create_hitting_a_unique_violation_answers_conflict_and_files_no_error
         answer["errors"][0]["extensions"]["code"],
         code::CONFLICT.as_str(),
         "{body}",
+    );
+    assert_eq!(
+        answer["errors"][0]["extensions"]["errors"],
+        json!({ "email": [{ "code": "unique" }] }),
+        "the conflict names the input's field whose value is taken: {body}",
     );
     for withheld in [UNIQUE, TABLE, email.as_str(), "23505"] {
         assert!(!body.contains(withheld), "{withheld} in {body}");

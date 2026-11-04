@@ -109,6 +109,16 @@ async fn every_modelled_failure_returns_rfc9457_problem_json() {
     let conflict_problem = conflict_body.value().object();
     assert_eq!(conflict_problem.get("status").i64(), 409);
     assert_eq!(conflict_problem.get("title").string(), "Conflict");
+    assert_eq!(
+        conflict_problem
+            .get("errors")
+            .object()
+            .get("name")
+            .array()
+            .len(),
+        1,
+        "the 409 names the field whose value is taken",
+    );
 }
 
 const FOREIGN_MEDIA_TYPE: &str = "text/x-quoted-marker";

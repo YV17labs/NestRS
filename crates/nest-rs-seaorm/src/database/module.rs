@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
+#[cfg(any(feature = "http", feature = "graphql"))]
+use anyhow::Context as _;
 use nest_rs_core::{Collecting, Container, ContainerBuilder, Module, Registering};
 use nest_rs_database::{UnitOfWork, provide_unit_of_work};
 use sea_orm::DatabaseConnection;
 
 use crate::module::{BudgetReach, SUBSTRATE_REMEDY, budgets};
+#[cfg(any(feature = "http", feature = "graphql"))]
+use crate::unique_key::UniqueKeys;
 use crate::unit::Settles;
 use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 
@@ -12,6 +16,11 @@ use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 /// UnitOfWork`, which every edge opens its units of work through and every
 /// lifecycle hook runs in. A bare import beside
 /// [`SeaOrmModule`](crate::SeaOrmModule).
+///
+/// Under an edge rendering a `#[crud]` write (`http`, `graphql`), it reads at boot,
+/// from the catalog, the unique keys of every `#[expose]` entity's table: a write
+/// a unique key refuses names the input's fields that key holds, with no statement
+/// on the request's path.
 ///
 /// Under the `queue` feature it also keeps the queue port's outbox:
 /// `queue::SeaOrmOutbox` as `dyn OutboxStore`, written by
@@ -39,7 +48,19 @@ impl Module for SeaOrmDatabaseModule {
         // Queued after the pool's and config's factories, so a missing one is
         // named before any later factory dials.
         let builder = provide_unit_of_work::<UnitInputs, _, _>(builder, |container| async move {
-            Ok(Arc::new(unit_of_work(&container)?) as Arc<dyn UnitOfWork>)
+            let unit_of_work = unit_of_work(&container)?;
+            #[cfg(any(feature = "http", feature = "graphql"))]
+            let unit_of_work = {
+                let db = present::<DatabaseConnection>(&container)?;
+                let keys = UniqueKeys::read(&db, unit_of_work.settle_net())
+                    .await
+                    .context(
+                        "SeaOrmDatabaseModule: could not read the unique keys of the \
+                         `#[expose]` entities' tables from the database's catalog",
+                    )?;
+                unit_of_work.reading(keys)
+            };
+            Ok(Arc::new(unit_of_work) as Arc<dyn UnitOfWork>)
         })
         // Installed after the pool, so its close drains every settle still
         // running before the pool's closes.

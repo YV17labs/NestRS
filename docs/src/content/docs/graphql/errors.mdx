@@ -190,7 +190,9 @@ impl PostsResolver {
 A `DbErr` turned into a `ServiceError` by `?` is classified on the way: a
 unique violation becomes `Conflict`, a row a write found gone `NotFound`, any
 other failure `Db`, whose chain is filed by its SQLSTATE, never by the
-server's message. A `#[crud]` operation answers the same classes
+server's message. A `#[crud]` operation answers the same classes, a create
+or an update a unique key refuses naming the input's fields that key holds
+under `extensions.errors`
 ([When the database refuses](/database/crud/#when-the-database-refuses)), and a
 mutation field answering one rolls back its own writes — the whole operation's,
 when its `null` reaches `data`

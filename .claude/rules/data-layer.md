@@ -100,7 +100,14 @@ anything else is opaque — and
 `ServiceError`, `#[crud]` and the product read it rather than matching the
 driver's error again. The server's message quotes the input it refused, so a
 driver says its errors through a `SafeLink`, by code and schema names; held by
-the unit tests beside each.
+the unit tests beside each. **A `#[crud]` create or update a unique key
+refuses names the input's fields the key holds** under `errors`
+(`{"email": [{"code": "unique"}]}`), never the value: the binding reads the
+keys of every `#[expose]` entity's table and its partitions from the catalog
+once at boot (`pg_index`, `pg_inherits`), under an edge rendering the write and
+within the pool's bounds, never on the transaction the violation aborted, so the
+request pays nothing; a key it did not read, or over columns the input does
+not carry, names nothing (`.claude/decisions/create-fills-what-the-grants-pin.md`).
 
 ## The ambient context
 

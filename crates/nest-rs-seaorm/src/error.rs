@@ -456,17 +456,26 @@ impl From<ServiceError> for nest_rs_graphql::async_graphql::Error {
 }
 
 /// What a `#[crud]` operation's failure answers on every edge: a unique
-/// violation is a `409`, a create its scope re-check rolled back
-/// (`RecordNotInserted`) a `403`, a row gone before the write a `404`, a
-/// statement Postgres cancelled a `503` filed at `warn`; any other failure a
-/// `500`, its error filed once at `error`.
+/// violation is a `409` — naming, for a create or an update, the fields of
+/// the input `written` the violated key holds — a create its scope re-check
+/// rolled back (`RecordNotInserted`) a `403`, a row gone before the write a
+/// `404`, a statement Postgres cancelled a `503` filed at `warn`; any other
+/// failure a `500`, its error filed once at `error`.
 #[cfg(any(feature = "http", feature = "graphql"))]
-fn crud_problem(err: &DbErr) -> nest_rs_core::Problem {
+fn crud_problem(err: &DbErr, written: Option<Written>) -> nest_rs_core::Problem {
     use nest_rs_core::Problem;
     use nest_rs_core::problem::code;
 
     match DbOutcome::of(err) {
-        DbOutcome::Conflict => Problem::new(409, code::CONFLICT),
+        DbOutcome::Conflict => {
+            let problem = Problem::new(409, code::CONFLICT);
+            let taken = written
+                .and_then(|written| taken_fields(err, written, &*crate::unique_key::current()?));
+            match taken {
+                Some(fields) => problem.with_errors(fields),
+                None => problem,
+            }
+        }
         DbOutcome::NotFound => Problem::new(404, code::NOT_FOUND),
         DbOutcome::Unavailable => {
             tracing::warn!(
@@ -492,11 +501,56 @@ fn crud_problem(err: &DbErr) -> nest_rs_core::Problem {
     }
 }
 
+/// The input a `#[crud]` create or update sent: the table its entity writes,
+/// and the field it carries a column in.
+#[cfg(any(feature = "http", feature = "graphql"))]
+#[derive(Clone, Copy)]
+struct Written {
+    table: &'static str,
+    field_for: fn(&str) -> Option<&'static str>,
+}
+
+#[cfg(any(feature = "http", feature = "graphql"))]
+impl Written {
+    fn on<E: sea_orm::EntityTrait>(field_for: fn(&str) -> Option<&'static str>) -> Self {
+        Self {
+            table: sea_orm::EntityName::table_name(&E::default()),
+            field_for,
+        }
+    }
+}
+
+/// The code a field's entry carries when a unique key holds its value: the
+/// key's kind, as a validation failure carries its rule's name.
+#[cfg(any(feature = "http", feature = "graphql"))]
+const UNIQUE: &str = "unique";
+
+/// The fields of `written`'s input the unique key `err` violated holds, each
+/// `[{"code": "unique"}]` — the shape [`ServiceError::field_errors`] gives a
+/// validation failure — and never the value. `None` when the violation is on
+/// another table and none of its partitions, on a key `keys` does not know, or
+/// on columns the input does not carry.
+#[cfg(any(feature = "http", feature = "graphql"))]
+fn taken_fields(
+    err: &DbErr,
+    written: Written,
+    keys: &crate::unique_key::UniqueKeys,
+) -> Option<serde_json::Value> {
+    let server = server_error(err)?;
+    let fields: serde_json::Map<String, serde_json::Value> = keys
+        .columns(written.table, server.table()?, server.constraint()?)?
+        .iter()
+        .filter_map(|column| (written.field_for)(column))
+        .map(|field| (field.to_owned(), serde_json::json!([{ "code": UNIQUE }])))
+        .collect();
+    (!fields.is_empty()).then_some(serde_json::Value::Object(fields))
+}
+
 #[cfg(feature = "http")]
-pub use http::crud_error as http_crud_error;
+pub use http::{crud_error as http_crud_error, crud_write_error as http_crud_write_error};
 
 #[cfg(feature = "graphql")]
-pub use graphql::crud_error as graphql_crud_error;
+pub use graphql::{crud_error as graphql_crud_error, crud_write_error as graphql_crud_write_error};
 
 #[cfg(feature = "graphql")]
 mod graphql {
@@ -507,7 +561,19 @@ mod graphql {
     /// on: the HTTP twin's statuses, as `CONFLICT`, `FORBIDDEN`, `NOT_FOUND` or
     /// the opaque `INTERNAL`. Called by the `#[crud]` expansion.
     pub fn crud_error(err: DbErr) -> Error {
-        nest_rs_graphql::problem_error(&super::crud_problem(&err))
+        nest_rs_graphql::problem_error(&super::crud_problem(&err, None))
+    }
+
+    /// [`crud_error`] for a create or an update on `E` whose input names a
+    /// column through `field_for`: a unique conflict names the input's fields
+    /// under `extensions.errors`. Called by the `#[crud]` expansion.
+    pub fn crud_write_error<E: sea_orm::EntityTrait>(
+        field_for: fn(&str) -> Option<&'static str>,
+    ) -> impl FnOnce(DbErr) -> Error {
+        move |err| {
+            let written = super::Written::on::<E>(field_for);
+            nest_rs_graphql::problem_error(&super::crud_problem(&err, Some(written)))
+        }
     }
 
     #[cfg(test)]
@@ -548,6 +614,26 @@ mod graphql {
                     .is_empty(),
                 "a client's class is no incident: {:#?}",
                 logs.events(),
+            );
+        }
+
+        #[tokio::test]
+        async fn a_crud_write_conflict_names_the_inputs_field_under_its_extensions() {
+            use crate::error::tests::{
+                taken_email, under_a_binding_holding, user, users_input, users_keys,
+            };
+
+            let error = under_a_binding_holding(users_keys(), async {
+                crud_write_error::<user::Entity>(users_input)(taken_email())
+            })
+            .await;
+            assert_eq!(error.message, "conflict");
+            let extensions = serde_json::to_value(&error.extensions).expect("extensions serialize");
+            assert_eq!(extensions[CODE_EXTENSION], code::CONFLICT.as_str());
+            assert_eq!(
+                extensions[nest_rs_graphql::FIELD_ERRORS_EXTENSION],
+                serde_json::json!({ "email": [{ "code": "unique" }] }),
+                "{extensions}",
             );
         }
 
@@ -641,7 +727,19 @@ mod http {
     /// `error` — each with the `code` member the other edges answer. Called by
     /// the `#[crud]` expansion.
     pub fn crud_error(err: sea_orm::DbErr) -> HttpError {
-        HttpError::from(super::crud_problem(&err))
+        HttpError::from(super::crud_problem(&err, None))
+    }
+
+    /// [`crud_error`] for a create or an update on `E` whose input names a
+    /// column through `field_for`: a unique conflict names the input's fields
+    /// under `errors`. Called by the `#[crud]` expansion.
+    pub fn crud_write_error<E: sea_orm::EntityTrait>(
+        field_for: fn(&str) -> Option<&'static str>,
+    ) -> impl FnOnce(sea_orm::DbErr) -> HttpError {
+        move |err| {
+            let written = super::Written::on::<E>(field_for);
+            HttpError::from(super::crud_problem(&err, Some(written)))
+        }
     }
 
     #[cfg(test)]
@@ -786,6 +884,53 @@ mod http {
                 ct,
                 serde_json::from_slice(&bytes).expect("problem json"),
             )
+        }
+
+        /// A `#[crud]` write a unique key refuses names, under `errors`, the
+        /// input's fields the key holds, read off the binding the request's
+        /// unit was opened by; outside one it names nothing, and no value,
+        /// index or table reaches the body.
+        #[tokio::test]
+        async fn a_crud_write_conflict_names_the_inputs_field_under_errors() {
+            use crate::error::tests::{
+                taken_email, under_a_binding_holding, user, users_input, users_keys,
+            };
+
+            let logs = nest_rs_testing::LogCapture::install();
+            let (status, ct, body) = under_a_binding_holding(users_keys(), async {
+                body_json_of(crud_write_error::<user::Entity>(users_input)(taken_email())).await
+            })
+            .await;
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(ct.as_deref(), Some("application/problem+json"));
+            assert_eq!(body["code"], code::CONFLICT.as_str(), "{body}");
+            assert_eq!(
+                body["errors"],
+                serde_json::json!({ "email": [{ "code": "unique" }] }),
+                "{body}",
+            );
+            for withheld in ["ada@example.com", "users_email_key", "users", "23505"] {
+                assert!(!body.to_string().contains(withheld), "{withheld} in {body}");
+            }
+            assert!(
+                logs.events()
+                    .iter()
+                    .all(|event| event.level != "warn" && event.level != "error"),
+                "a conflict is no incident: {:#?}",
+                logs.events(),
+            );
+
+            let (_, _, outside) =
+                body_json_of(crud_write_error::<user::Entity>(users_input)(taken_email())).await;
+            assert!(outside.get("errors").is_none(), "{outside}");
+            let (_, _, read) = under_a_binding_holding(users_keys(), async {
+                body_json_of(crud_error(taken_email())).await
+            })
+            .await;
+            assert!(
+                read.get("errors").is_none(),
+                "a read sent no input to name: {read}"
+            );
         }
 
         #[tokio::test]
@@ -996,6 +1141,130 @@ pub(crate) mod tests {
             table: Some("users"),
             message: "duplicate key value violates unique constraint: (email)=(ada@example.com)",
         })
+    }
+
+    /// A unique violation on `index` of `table`, as Postgres reports one:
+    /// its message quoting the row.
+    #[cfg(any(feature = "http", feature = "graphql"))]
+    fn unique_violation(index: &'static str, table: &'static str) -> DbErr {
+        refused(ServerRefusal {
+            code: "23505",
+            unique: true,
+            constraint: Some(index),
+            table: Some(table),
+            message: "duplicate key value violates unique constraint: (slug)=(secret-slug)",
+        })
+    }
+
+    /// The entity the tests' `users` input writes.
+    #[cfg(any(feature = "http", feature = "graphql"))]
+    pub(crate) mod user {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "users")]
+        pub(crate) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            pub email: String,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(crate) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    /// The fields the tests' `users` input carries, by column.
+    #[cfg(any(feature = "http", feature = "graphql"))]
+    pub(crate) fn users_input(column: &str) -> Option<&'static str> {
+        match column {
+            "email" => Some("email"),
+            "handle" => Some("slug"),
+            _ => None,
+        }
+    }
+
+    /// The unique keys of the tests' `users` table.
+    #[cfg(any(feature = "http", feature = "graphql"))]
+    pub(crate) fn users_keys() -> crate::unique_key::UniqueKeys {
+        crate::unique_key::tests::keys(&[
+            ("users", "users_email_key", &["email"]),
+            ("users", "users_org_handle_live", &["org_id", "handle"]),
+            ("users", "users_org_key", &["org_id"]),
+        ])
+    }
+
+    /// `body` inside a unit the binding opened, the binding holding `keys`, as
+    /// a `#[crud]` write's error is rendered at its edge. Nothing is dialled.
+    #[cfg(any(feature = "http", feature = "graphql"))]
+    pub(crate) async fn under_a_binding_holding<T: Send>(
+        keys: crate::unique_key::UniqueKeys,
+        body: impl Future<Output = T> + Send,
+    ) -> T {
+        use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec};
+
+        let binding: Arc<dyn UnitOfWork> = Arc::new(
+            crate::SeaOrmUnitOfWork::new(
+                Arc::new(sea_orm::DatabaseConnection::default()),
+                &crate::SeaOrmConfig::default(),
+            )
+            .reading(keys),
+        );
+        nest_rs_database::run_unit(
+            Some(&binding),
+            UnitSpec::new(
+                nest_rs_core::unit::HOOK,
+                ExecutorScope::Request,
+                TransactionPolicy::Pool,
+            ),
+            body,
+            |_| true,
+            |why| panic!("a pool unit is always opened: {why}"),
+        )
+        .await
+    }
+
+    #[cfg(any(feature = "http", feature = "graphql"))]
+    #[test]
+    fn a_unique_conflict_names_the_fields_of_the_input_its_key_holds() {
+        let written = Written {
+            table: "users",
+            field_for: users_input,
+        };
+        let keys = users_keys();
+        let unique = serde_json::json!([{ "code": "unique" }]);
+
+        assert_eq!(
+            taken_fields(&taken_email(), written, &keys),
+            Some(serde_json::json!({ "email": unique })),
+        );
+        assert_eq!(
+            taken_fields(
+                &unique_violation("users_org_handle_live", "users"),
+                written,
+                &keys
+            ),
+            Some(serde_json::json!({ "slug": unique })),
+            "a key's column the input does not carry is no field the client sent",
+        );
+        for (violation, why) in [
+            (
+                unique_violation("users_org_key", "users"),
+                "a key the input carries no column of",
+            ),
+            (
+                unique_violation("users_handle_lower", "users"),
+                "a key the binding did not read",
+            ),
+            (
+                unique_violation("users_email_key", "audit_log"),
+                "another table's key, a hook's insert",
+            ),
+            (DbErr::RecordNotInserted, "no server error"),
+        ] {
+            assert_eq!(taken_fields(&violation, written, &keys), None, "{why}");
+        }
     }
 
     #[test]

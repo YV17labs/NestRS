@@ -73,6 +73,7 @@ mod soft_delete;
 pub mod target;
 mod time;
 mod turn;
+mod unique_key;
 mod unit;
 
 #[cfg(feature = "graphql")]
@@ -109,11 +110,11 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::config::DEFAULT_STATEMENT_TIMEOUT;
-    #[cfg(feature = "graphql")]
-    pub use crate::error::graphql_crud_error;
-    #[cfg(feature = "http")]
-    pub use crate::error::http_crud_error;
     pub use crate::error::masking;
+    #[cfg(feature = "graphql")]
+    pub use crate::error::{graphql_crud_error, graphql_crud_write_error};
+    #[cfg(feature = "http")]
+    pub use crate::error::{http_crud_error, http_crud_write_error};
     pub use crate::executor::current_executor;
     #[cfg(feature = "graphql")]
     pub use crate::graphql::bind::graphql_bind;
@@ -129,6 +130,7 @@ pub mod __private {
     pub use crate::column_default::ColumnDefaultRegistration;
     pub use crate::exposed::ExposeDeclared;
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
+    pub use crate::unique_key::UniqueKeyRegistration;
     pub use inventory;
 
     // What `#[expose]` and `#[wire_enum]` emit, so an entity crate declares

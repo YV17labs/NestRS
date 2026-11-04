@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use futures_util::Stream;
 use nest_rs_core::__private::{
     Site, Tail, UnitChains, caught_problem, dispatch, new_unit_context, settled,
 };
@@ -15,6 +16,7 @@ use nest_rs_core::{Container, Failure, Handler, Outcome, UnitContext};
 use nest_rs_database::__private::run_unit_bounded;
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitSpec};
 use parking_lot::RwLock;
+use tokio::sync::broadcast;
 
 use crate::EventsView;
 use crate::answer::ListenerAnswer;
@@ -43,6 +45,10 @@ struct Listener {
     run: ListenerFn,
 }
 
+/// How many events of one type a [`stream`](EventBus::stream)'s reader may fall
+/// behind before it loses the oldest.
+const STREAM_CAPACITY: usize = 64;
+
 /// The typed in-process event bus; listeners are subscribed once, by
 /// [`EventsModule`](crate::EventsModule)'s wiring step, so the `RwLock` is
 /// uncontended on the emit path.
@@ -51,6 +57,10 @@ pub struct EventBus {
     /// Each event type's listeners, behind one `Arc` an emit takes rather than
     /// a copy of every listener.
     listeners: RwLock<HashMap<TypeId, Arc<Vec<Listener>>>>,
+    /// Each event type's channel to its open streams, a `broadcast::Sender<E>`
+    /// made by the first [`stream`](Self::stream) of `E`: an event nothing ever
+    /// streamed pays for none.
+    streams: RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>,
     /// Set once the wiring step subscribed the app's listeners; an emit before
     /// it would reach none, and says so rather than dropping in silence.
     wired: AtomicBool,
@@ -69,14 +79,95 @@ impl EventBus {
     }
 
     /// Let go of every listener once the app has ended: a listener that emits
-    /// holds the bus that holds it, and neither would ever drop.
+    /// holds the bus that holds it, and neither would ever drop. Every open
+    /// stream ends, once it read what it was sent.
     pub(crate) fn unsubscribe_all(&self) {
         self.listeners.write().clear();
+        self.streams.write().clear();
+    }
+
+    /// The events of type `E` emitted from now on, each once the emitter's
+    /// transaction has committed, as [`emit`](Self::emit) dispatches it to a
+    /// listener, and never one whose transaction rolled back: the read side of
+    /// the bus, for what stays open, a GraphQL subscription among them. An event
+    /// committed before the stream opened is not read; one emitted before and
+    /// committing after is read only when another stream of `E` was open at that
+    /// emit.
+    ///
+    /// It runs no layer and no transaction, and reaches this process's bus only:
+    /// a reader on another replica reads nothing, so what must reach them all is
+    /// a backend's. A reader more than 64 events behind the newest of its type
+    /// loses the oldest, and one `warn` on `nest_rs::events` says how many. The
+    /// stream ends with the app.
+    ///
+    /// ```
+    /// # use anyhow::Context as _;
+    /// # use futures_util::StreamExt;
+    /// # use nest_rs_core::{App, module};
+    /// # use nest_rs_events::{EventBus, EventsModule};
+    /// # #[derive(Clone)]
+    /// # struct PointsAwarded { amount: u32 }
+    /// # #[module(imports = [EventsModule])]
+    /// # struct AppModule;
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// # let app = App::builder().module::<AppModule>().build().await?;
+    /// # let bus = app.container().get::<EventBus>().context("EventsModule provides the bus")?;
+    /// let mut awards = std::pin::pin!(bus.stream::<PointsAwarded>());
+    ///
+    /// bus.emit(PointsAwarded { amount: 10 }).await;
+    ///
+    /// assert_eq!(awards.next().await.map(|award| award.amount), Some(10));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn stream<E: Clone + Send + 'static>(
+        &self,
+    ) -> impl Stream<Item = E> + Send + 'static + use<E> {
+        let reader = {
+            let mut streams = self.streams.write();
+            let sender = streams
+                .entry(TypeId::of::<E>())
+                .or_insert_with(|| Box::new(broadcast::channel::<E>(STREAM_CAPACITY).0));
+            #[expect(
+                clippy::expect_used,
+                reason = "streams are keyed by the TypeId of E, so only a Sender<E> sits here"
+            )]
+            sender
+                .downcast_ref::<broadcast::Sender<E>>()
+                .expect("the channel downcasts to the event type it is keyed by")
+                .subscribe()
+        };
+        futures_util::stream::unfold(reader, |mut reader| async move {
+            loop {
+                match reader.recv().await {
+                    Ok(event) => return Some((event, reader)),
+                    Err(broadcast::error::RecvError::Lagged(missed)) => tracing::warn!(
+                        target: crate::TARGET,
+                        event = std::any::type_name::<E>(),
+                        missed,
+                        "an event stream's reader fell behind",
+                    ),
+                    Err(broadcast::error::RecvError::Closed) => return None,
+                }
+            }
+        })
+    }
+
+    /// The channel to `E`'s streams, when one is open to hear it.
+    fn open_streams<E: Clone + Send + 'static>(&self) -> Option<broadcast::Sender<E>> {
+        self.streams
+            .read()
+            .get(&TypeId::of::<E>())?
+            .downcast_ref::<broadcast::Sender<E>>()
+            .filter(|sender| sender.receiver_count() > 0)
+            .cloned()
     }
 
     /// Runs each listener in registration order, awaited in turn — once the
     /// emitter's transaction has committed, when it emits inside one. No-op when
-    /// nothing is registered for `E`.
+    /// nothing is registered for `E`. An open [`stream`](Self::stream) of `E`
+    /// reads the event first, so no listener holds it back.
     ///
     /// Before the wiring step has subscribed the app's listeners — a task a
     /// factory or a constructor spawned can get there first — the event is
@@ -122,14 +213,24 @@ impl EventBus {
         }
         // Released before awaiting.
         let listeners = self.listeners.read().get(&TypeId::of::<E>()).cloned();
-        let Some(listeners) = listeners else { return };
+        let streams = self.open_streams::<E>();
+        if listeners.is_none() && streams.is_none() {
+            return;
+        }
         let event_name = std::any::type_name::<E>();
         // Outside the loop: one emit is one trace, even with nothing ambient.
         let cause = nest_rs_core::Correlation::inherited();
         // No capture here: the executor that holds the dispatch carries it into
         // its commit, and one that hands it back runs it inside the emitter.
         nest_rs_database::after_commit(async move {
-            for listener in listeners.iter() {
+            if let Some(streams) = streams {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "every reader left since the emit, so there is nobody to tell"
+                )]
+                let _ = streams.send(event.clone());
+            }
+            for listener in listeners.iter().flat_map(|listeners| listeners.iter()) {
                 let body = (listener.run)(Box::new(event.clone()));
                 dispatch_one(&cause, event_name, listener, body).await;
             }
@@ -360,6 +461,8 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use futures_util::{FutureExt, StreamExt};
+
     use super::*;
 
     /// A listener with no declared name on a bus opened by hand, as no
@@ -398,6 +501,91 @@ mod tests {
     #[derive(Clone)]
     struct OrderPlaced {
         id: u32,
+    }
+
+    #[tokio::test]
+    async fn every_open_stream_of_an_event_reads_it_and_no_other_event() {
+        let bus = EventBus::new();
+        bus.mark_wired();
+        let mut first = std::pin::pin!(bus.stream::<OrderPlaced>());
+        let mut second = std::pin::pin!(bus.stream::<OrderPlaced>());
+        let mut shipped = std::pin::pin!(bus.stream::<OrderShipped>());
+
+        bus.emit(OrderPlaced { id: 7 }).await;
+
+        assert_eq!(first.next().await.map(|order| order.id), Some(7));
+        assert_eq!(second.next().await.map(|order| order.id), Some(7));
+        assert!(shipped.next().now_or_never().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_stream_reads_an_event_it_opened_before_and_never_one_before_it() {
+        let bus = EventBus::new();
+        bus.mark_wired();
+        bus.emit(OrderPlaced { id: 1 }).await;
+        let mut stream = std::pin::pin!(bus.stream::<OrderPlaced>());
+
+        assert!(stream.next().now_or_never().is_none());
+        bus.emit(OrderPlaced { id: 2 }).await;
+        assert_eq!(stream.next().await.map(|order| order.id), Some(2));
+    }
+
+    #[tokio::test]
+    async fn a_slow_listener_never_holds_back_what_a_stream_reads() {
+        let bus = Arc::new(EventBus::new());
+        let released = Arc::new(tokio::sync::Notify::new());
+        let waiting = released.clone();
+        subscribe(&bus, move |_: OrderPlaced| {
+            let waiting = waiting.clone();
+            async move { waiting.notified().await }
+        });
+        let mut stream = std::pin::pin!(bus.stream::<OrderPlaced>());
+
+        let emitting = tokio::spawn({
+            let bus = bus.clone();
+            async move { bus.emit(OrderPlaced { id: 7 }).await }
+        });
+
+        assert_eq!(
+            stream.next().await.map(|order| order.id),
+            Some(7),
+            "the listener is still waiting",
+        );
+        released.notify_one();
+        emitting.await.expect("the emit returns once it answered");
+    }
+
+    #[tokio::test]
+    async fn a_reader_past_the_streams_capacity_loses_the_oldest_and_says_how_many() {
+        let bus = EventBus::new();
+        bus.mark_wired();
+        let mut stream = std::pin::pin!(bus.stream::<OrderPlaced>());
+        let logs = nest_rs_testing::LogCapture::install();
+        let capacity = u32::try_from(STREAM_CAPACITY).expect("a small capacity");
+
+        for id in 0..capacity + 3 {
+            bus.emit(OrderPlaced { id }).await;
+        }
+
+        assert_eq!(
+            stream.next().await.map(|order| order.id),
+            Some(3),
+            "the oldest three are gone",
+        );
+        let said = logs.expect_one(crate::TARGET, "an event stream's reader fell behind");
+        assert_eq!(said.level, "warn");
+        assert_eq!(
+            said.field("missed").as_deref(),
+            Some("3"),
+            "{:?}",
+            said.fields
+        );
+        assert!(
+            said.field("event")
+                .is_some_and(|name| name.ends_with("OrderPlaced")),
+            "{:?}",
+            said.fields,
+        );
     }
 
     #[derive(Clone)]

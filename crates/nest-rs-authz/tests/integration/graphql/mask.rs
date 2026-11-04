@@ -8,10 +8,12 @@
 use nest_rs_graphql::GraphqlView;
 use nest_rs_http::EndpointGuards;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use nest_rs_authz::__private::install_ability;
 use nest_rs_authz::{AbilityBuilder, Action, MaskReplyError, Read, masked_reply};
 use nest_rs_core::{Layer, async_trait, injectable, module};
+use nest_rs_events::{EventBus, EventsModule};
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream, StreamExt};
 use nest_rs_graphql::async_graphql::{
     Error as GqlError, Executor, Request as GqlRequest, Result as GqlResult, SimpleObject,
@@ -550,23 +552,19 @@ impl PostDto {
     }
 }
 
+/// Set once the subscription holds its stream, so a test pushes what it reads.
 #[injectable]
-struct PostFeed {
-    tx: broadcast::Sender<PostDto>,
-}
-
-impl Default for PostFeed {
-    fn default() -> Self {
-        Self {
-            tx: broadcast::channel(8).0,
-        }
-    }
+#[derive(Default)]
+struct PostFeedOpened {
+    held: AtomicBool,
 }
 
 #[resolver]
 struct PostFeedResolver {
     #[inject]
-    feed: Arc<PostFeed>,
+    bus: Arc<EventBus>,
+    #[inject]
+    opened: Arc<PostFeedOpened>,
 }
 
 #[operations]
@@ -581,24 +579,20 @@ impl PostFeedResolver {
 
     #[subscription]
     #[authorize(Read, crate::post::Entity)]
-    async fn post_feed(&self) -> Result<impl Stream<Item = PostDto>, GqlError> {
-        let rx = self.feed.tx.subscribe();
-        Ok(stream::unfold(rx, |mut rx| async move {
-            match rx.recv().await {
-                Ok(post) => Some((post, rx)),
-                Err(_) => None,
-            }
-        }))
+    async fn post_feed(&self) -> impl Stream<Item = PostDto> {
+        let stream = self.bus.stream::<PostDto>();
+        self.opened.held.store(true, Ordering::SeqCst);
+        stream
     }
 }
 
 #[module(
-    imports = [GraphqlModule],
+    imports = [GraphqlModule, EventsModule],
     providers = [
         PassGuard,
         AbilityInjector,
         EndpointGuards<GraphqlView, (PassGuard, AbilityInjector)>,
-        PostFeed,
+        PostFeedOpened,
         PostFeedResolver,
     ],
 )]
@@ -621,10 +615,14 @@ async fn first_post_pushed(ability: AbilityBuilder, posts: &[(i32, i32)]) -> ser
         &nest_rs_graphql::GraphqlConfig::default(),
     )
     .expect("the app's boot sealed its reachability set");
-    let feed = app
+    let bus = app
         .container()
-        .get::<PostFeed>()
-        .expect("the feed is a provider of the booted app");
+        .get::<EventBus>()
+        .expect("the bus is a provider of the booted app");
+    let opened = app
+        .container()
+        .get::<PostFeedOpened>()
+        .expect("provided by the booted app");
     let ability = Arc::new(ability.build().expect("valid test ability"));
     // Ambient, as the request's ability guard leaves it.
     let received = nest_rs_authz::__private::install_ability(
@@ -640,13 +638,11 @@ async fn first_post_pushed(ability: AbilityBuilder, posts: &[(i32, i32)]) -> ser
     );
     let emit = async {
         nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
-            feed.tx.receiver_count() >= 1
+            opened.held.load(Ordering::SeqCst)
         })
         .await;
         for &(id, org_id) in posts {
-            feed.tx
-                .send(PostDto::new(id, org_id))
-                .expect("the subscriber is live");
+            bus.emit(PostDto::new(id, org_id)).await;
         }
     };
     let (received, ()) = tokio::join!(received, emit);

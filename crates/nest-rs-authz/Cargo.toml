@@ -111,6 +111,8 @@ serde.workspace = true
 # The edge tests boot the full surface (HTTP + GraphQL); compiled when the
 # corresponding feature is enabled (`cargo test -p nest-rs-authz --features full`).
 nest-rs-core = { path = "../nest-rs-core" }
+# A subscription's mask, read over the stream a domain event feeds.
+nest-rs-events = { path = "../nest-rs-events" }
 nest-rs-http = { path = "../nest-rs-http" }
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 nest-rs-guards = { path = "../nest-rs-guards" }

@@ -111,3 +111,10 @@ the framework owns is where the statement runs — `all`, `one`, `count` and
 `exists` on the ambient executor — which is no copy of the library. The refusal
 stands for a wrapper that re-implements the builder; sea-orm stays a public
 dependency, and its next major is still a nestrs major.
+
+## 2026-11-04 — `EventBus::stream` answers futures-util's `Stream`
+
+Agreed by the owner's "Tout faire (Recommandé)" of 2026-10-31. futures-util stays
+public on a second count: the bus's read side returns `impl Stream`, the trait a
+subscription and an `#[sse]` route are written in. Narrowing to
+`futures_core::Stream` stays open, a re-export of the one trait.

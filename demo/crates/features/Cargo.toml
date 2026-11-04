@@ -11,7 +11,6 @@ description = "The product's feature library — vertical slices as port + adapt
 
 [dependencies]
 nest-rs.workspace = true
-async-graphql.workspace = true
 async-trait.workspace = true
 # The audio streaming download proxies object storage's chunk stream
 # (`futures_util::Stream` of `bytes::Bytes`) into `nest_rs::http::Body::from_stream`.
@@ -42,7 +41,6 @@ nest-rs = { workspace = true, features = ["testing"] }
 features = { path = ".", features = ["test-support"] }
 tokio.workspace = true
 serde_json.workspace = true
-async-graphql.workspace = true
 sea-orm.workspace = true
 uuid.workspace = true
 migrations = { workspace = true }

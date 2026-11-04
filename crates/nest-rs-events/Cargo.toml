@@ -15,6 +15,8 @@ categories = ["asynchronous", "rust-patterns"]
 nest-rs-core.workspace = true
 nest-rs-events-macros.workspace = true
 anyhow.workspace = true
+# `EventBus::stream` answers a `Stream`, the trait a subscription returns.
+futures-util.workspace = true
 tracing.workspace = true
 # Listener-registry lock — poison-free locking on the emit path.
 parking_lot.workspace = true

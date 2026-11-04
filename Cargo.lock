@@ -2668,6 +2668,7 @@ dependencies = [
  "nest-rs-authz-macros",
  "nest-rs-core",
  "nest-rs-database",
+ "nest-rs-events",
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",
@@ -2816,6 +2817,7 @@ name = "nest-rs-events"
 version = "7.0.0"
 dependencies = [
  "anyhow",
+ "futures-util",
  "nest-rs-core",
  "nest-rs-database",
  "nest-rs-events-macros",

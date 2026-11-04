@@ -17,8 +17,10 @@ pushed afterwards.
 ```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo, abridged)"
 #[subscription]
 #[authorize(Read, PostEntity)]
-async fn post_published(&self) -> Result<impl Stream<Item = Post>, Error> {
-    Ok(self.feed.subscribe())
+async fn post_published(&self) -> impl Stream<Item = Post> {
+    self.bus
+        .stream::<PostPublishedEvent>()
+        .map(|event| event.post)
 }
 ```
 
@@ -59,8 +61,10 @@ delivered with its fields nulled:
 // two subscribers, one stream
 #[subscription]
 #[authorize(Read, PostEntity)]
-async fn post_published(&self) -> Result<impl Stream<Item = Post>, Error> {
-    Ok(self.feed.subscribe())
+async fn post_published(&self) -> impl Stream<Item = Post> {
+    self.bus
+        .stream::<PostPublishedEvent>()
+        .map(|event| event.post)
 }
 ```
 
@@ -81,31 +85,32 @@ item is decided like a row.
 
 ## Feeding a subscription
 
-A stream needs a source. The demo publishes one from the event it already
-emits: `PostsService` emits `PostPublishedEvent` on publish, a
-`#[listeners]` host fans the published post into a broadcast channel, and
-the subscription reads that channel.
+A stream needs a source, and a domain event is one already: `PostsService` emits
+`PostPublishedEvent` on publish, and the resolver reads it off the bus it injects.
 
-```rust title="crates/features/src/posts/events/listener.rs (from the demo)"
-#[listeners]
-impl PostsListener {
-    #[on_event]
-    async fn on_post_published(&self, event: PostPublishedEvent) {
-        self.feed.publish(event.post);
-    }
+```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo, abridged)"
+#[resolver]
+#[use_guards(AuthzGuard)]
+pub struct PostsResolver {
+    #[inject]
+    svc: Arc<PostsService>,
+    #[inject]
+    bus: Arc<EventBus>,
 }
 ```
 
-The feed is an ordinary provider — a `tokio::sync::broadcast::Sender` and
-a `subscribe()` that adapts a receiver into a `Stream`. Nothing about it
-is GraphQL-specific, which is why it lives at the feature's port rather
-than in its GraphQL adapter.
+There is no hub to write and no listener to import: an item reaches a subscriber
+once the mutation's transaction has committed, never for one that rolled back.
+Forgetting the bus is a boot error naming it, not a silent subscription.
 
-Note what the event carries: the **published post**, not its id. A
-subscriber that re-reads the row instead races the publisher — the event
-is emitted inside the mutation's transaction, and the subscription reads
-on the pool, so the re-read can return the pre-commit row. A published
-fact carries the fact.
+The stream reaches this process, and a reader far behind loses the oldest events:
+[Read events as a stream](/events/#read-events-as-a-stream) has what it promises.
+A source of your own — a broker's consumer, a channel — is any
+`impl Stream<Item = T>`, gated and masked the same way.
+
+Note what the event carries: the **published post**, not its id. An item is
+pushed, not read through `Repo`, and the mask decides on what it carries. A
+published fact carries the fact.
 
 ## On the wire
 
@@ -264,6 +269,6 @@ Everything else is the GraphQL module's own configuration — see
   shape a subscription follows.
 - [Authorization](/security/authorization/) — what `#[authorize]` gates
   and masks.
-- [Events](/events/) — the bus the demo's subscription is fed from.
+- [Events](/events/) — the bus a subscription reads domain events from.
 - [WebSockets](/websockets/) — the other realtime surface, for
   message-shaped protocols rather than schema-shaped ones.

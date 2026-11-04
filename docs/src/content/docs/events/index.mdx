@@ -17,8 +17,10 @@ An event is any `Clone + Send + 'static` type. Dispatch is in-process and
 awaited: `bus.emit(event)` clones the event for each listener registered
 on that type and runs them in registration order — **once the emitter's
 transaction has committed** when it emits inside one, and never for a write
-that rolled back. There is no broker, no retries — for cross-process or
-durable work, push a job on the [Queue](/queue/) instead.
+that rolled back. What stays open, a GraphQL subscription among them, reads
+the same events at the same commit through
+[`bus.stream()`](#read-events-as-a-stream). There is no broker, no retries — for
+cross-process or durable work, push a job on the [Queue](/queue/) instead.
 
 ## Install
 
@@ -31,33 +33,33 @@ cargo add nest-rs --features events
 A regular `#[injectable]` provider with one decorated method. The
 `#[listeners]` attribute marks the impl block; `#[on_event]` marks the
 method as a listener for the event type read from its parameter. Here the
-`posts` slice fans a post it published out to its GraphQL subscribers:
+`posts` slice indexes a post it published for search:
 
-```rust title="crates/features/src/posts/events/listener.rs (from the demo)"
+```rust title="crates/features/src/posts/events/listener.rs"
 use std::sync::Arc;
 
 use nest_rs::core::injectable;
 use nest_rs::events::listeners;
 
-use crate::posts::{PostFeed, PostPublishedEvent};
+use crate::posts::{PostPublishedEvent, SearchIndex};
 
 #[injectable]
 pub struct PostsListener {
     #[inject]
-    feed: Arc<PostFeed>,
+    search: Arc<SearchIndex>,
 }
 
 #[listeners]
 impl PostsListener {
     #[on_event]
-    async fn on_post_published(&self, event: PostPublishedEvent) {
-        self.feed.publish(event.post);
+    async fn on_post_published(&self, event: PostPublishedEvent) -> anyhow::Result<()> {
+        self.search.index(&event.post).await?;
         tracing::debug!(
             target: crate::posts::TARGET,
-            post_id = %event.post_id,
-            org_id = %event.org_id,
-            "fanned a published post out to subscribers",
+            post_id = %event.post.id,
+            "indexed a published post",
         );
+        Ok(())
     }
 }
 ```
@@ -69,7 +71,7 @@ impl PostsListener {
   `#[on_event]` attributes and submits one listener per decorated method.
 - **`#[on_event]`** reads the event type from the method's first parameter
   after `&self`. The bus enforces `Clone + Send + 'static` on it through the
-  call site. The method returns `()`, as here, or a `Result<(), E>` whose
+  call site. The method returns `()` or, as here, a `Result<(), E>` whose
   error converts into `Box<dyn Error + Send + Sync>` — `anyhow::Result<()>` or
   a crate's own error type. Its two keys, `timeout` and `transactional`, shape
   the call's unit of work: [Event dispatch](/events/dispatch/).
@@ -92,26 +94,26 @@ listen to the *same* event; both run, in registration order:
 #[injectable]
 pub struct PostsListener {
     #[inject]
-    feed: Arc<PostFeed>,
+    search: Arc<SearchIndex>,
 }
 
 #[listeners]
 impl PostsListener {
     #[on_event]
-    async fn on_post_published(&self, event: PostPublishedEvent) {
-        self.feed.publish(event.post);
+    async fn on_post_published(&self, event: PostPublishedEvent) -> anyhow::Result<()> {
+        self.search.index(&event.post).await
     }
 
     #[on_event]
-    async fn index_for_search(&self, event: PostPublishedEvent) {
-        // reindex `event.post_id` for full-text search
+    async fn refresh_suggestions(&self, event: PostPublishedEvent) {
+        // refresh what search suggests for `event.post.title`
     }
 }
 ```
 
 Two inventory entries — `PostsListener::on_post_published` and
-`PostsListener::index_for_search` — both pointing at the same instance. Same
-`Arc<PostFeed>`, two subscriptions to `PostPublishedEvent`; both run, in
+`PostsListener::refresh_suggestions` — both pointing at the same instance. Same
+`Arc<SearchIndex>`, two subscriptions to `PostPublishedEvent`; both run, in
 registration order.
 
 <Aside type="caution">
@@ -126,14 +128,10 @@ The payload is a plain `Clone` struct at the producer's port
 (`event.rs`) — the same feature that emits it owns its definition:
 
 ```rust title="crates/features/src/posts/event.rs (from the demo)"
-use uuid::Uuid;
-
 use super::entities::post::Post;
 
 #[derive(Clone)]
 pub struct PostPublishedEvent {
-    pub post_id: Uuid,
-    pub org_id: Uuid,
     pub post: Post,
 }
 ```
@@ -163,11 +161,7 @@ impl PostsService {
         // …
         let post = Post::from(&published);
         self.bus
-            .emit(PostPublishedEvent {
-                post_id,
-                org_id,
-                post: post.clone(),
-            })
+            .emit(PostPublishedEvent { post: post.clone() })
             .await;
         Ok(post)
     }
@@ -186,6 +180,47 @@ no database — `emit` returns once every listener has run. Emitting an event
 with no subscriber is a no-op (not an error), so adding a listener later does
 not require touching the emitter.
 
+## Read events as a stream
+
+A listener reacts and is done. What stays open — a GraphQL subscription, a
+server-sent stream — reads the same events through `bus.stream::<E>()`, with
+no hub, no listener and nothing to import beyond the bus. `posts` answers its
+subscription that way:
+
+```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo, abridged)"
+#[subscription]
+#[authorize(Read, PostEntity)]
+async fn post_published(&self) -> impl Stream<Item = Post> {
+    self.bus
+        .stream::<PostPublishedEvent>()
+        .map(|event| event.post)
+}
+```
+
+`Stream` and the `StreamExt` that `.map` comes from are `futures-util`'s, a
+[library NestRS holds public](/semver/#third-party-libraries):
+`nest_rs::http::futures_util` beside the `graphql` feature, or
+`cargo add futures-util` for `events` alone.
+
+The stream reads an event when a listener would run: once the emitter's
+transaction has committed, and never for one that rolled back. It reads it ahead
+of the listeners, so a slow one holds nothing back, and it opens no unit of work:
+what you do with an item runs in whatever polls the stream. Three limits come
+with it:
+
+- **It starts when it opens.** An event committed before is not read. One
+  emitted before and committing after is read only when another reader of its
+  type was open at the emit, so nothing should rest on it.
+- **It reaches this process.** A reader on another replica reads nothing, so a
+  deployment of several replicas that must tell every reader needs a backend of
+  its own — the bus has no broker.
+- **A slow reader loses events.** A reader more than 64 events behind the newest
+  of its type loses the oldest, and one `warn` on `nest_rs::events` says how
+  many. A live feed goes on; work that must see every event is a
+  [queue](/queue/) job.
+
+The stream ends with the app, once it read what it was sent.
+
 ## Wire it in
 
 The producer's `PostsModule` lists `imports = [EventsModule]` to inject
@@ -193,7 +228,7 @@ The producer's `PostsModule` lists `imports = [EventsModule]` to inject
 bus arrives with it — a shared singleton, built once however many modules
 import it:
 
-```rust title="crates/features/src/posts/events/module.rs (from the demo)"
+```rust title="crates/features/src/posts/events/module.rs"
 use nest_rs::core::module;
 
 use super::listener::PostsListener;
@@ -206,31 +241,12 @@ use crate::posts::PostsModule;
 pub struct PostsEventsModule;
 ```
 
-The listener feeds the GraphQL subscription, so the GraphQL adapter imports
-it, and an app serving that adapter wires the listener with it:
+The app lists the adapter beside the edges it serves, so its imports say which
+reactions the binary runs:
 
-```rust title="crates/features/src/posts/graphql/module.rs (from the demo)"
-use nest_rs::core::module;
-use nest_rs::graphql::GraphqlModule;
-
-use super::resolver::PostsResolver;
-use crate::authz::graphql::AuthzGraphqlModule;
-use crate::orgs::OrgsModule;
-use crate::posts::{PostsEventsModule, PostsModule};
-use crate::users::UsersModule;
-
-#[module(
-    imports = [
-        PostsModule,
-        PostsEventsModule,
-        OrgsModule,
-        UsersModule,
-        AuthzGraphqlModule,
-        GraphqlModule,
-    ],
-    providers = [PostsResolver],
-)]
-pub struct PostsGraphqlModule;
+```rust title="apps/api/src/module.rs"
+#[module(imports = [PostsHttpModule, PostsEventsModule])]
+pub struct ApiModule;
 ```
 
 ## Run it
@@ -271,8 +287,10 @@ app's own code. Same property as queue processors and scheduled jobs.
   `#[on_event]`.
 - `crates/features/src/posts/event.rs` + `service.rs` — the producer:
   payload at the port, emitted from the service.
-- `crates/features/src/posts/events/listener.rs` — the listener host in an
-  `events/` adapter folder.
+- `crates/features/src/posts/graphql/resolver.rs` — a subscription reading the
+  event as a stream.
+- `crates/nest-rs-events/tests/integration/bus.rs` — listener hosts driven end
+  to end.
 
 ## Going further
 

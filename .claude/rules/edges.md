@@ -255,7 +255,11 @@ guard, filter or interceptor loop of its own.
 
 Argued, not gaps: a WS gateway owns its mount, and on WS the connection
 carries the ability its upgrade's guards attached (`data-layer.md`,
-*Extractors and the carried ability*).
+*Extractors and the carried ability*). `events` has no adapter in `demo/`,
+whose product has no reaction to keep and whose one subscription reads the bus:
+its witnesses are `nest-rs-events`' integration suite and `nestrs g events`,
+which the scaffold suite compiles, and the adapter lands with a reaction the
+demo needs.
 
 ## The way down at an edge (`container.md` states the invariant)
 

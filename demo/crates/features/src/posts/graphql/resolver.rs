@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use async_graphql::Error;
-use async_graphql::futures_util::stream::Stream;
+use futures_util::{Stream, StreamExt};
 use nest_rs::authz::{Read, Update};
+use nest_rs::events::EventBus;
 use nest_rs::graphql::{crud, resolver};
 use nest_rs::seaorm::Authorized;
 
 use crate::authz::AuthzGuard;
 use crate::posts::{
-    Entity as PostEntity, Post, PostAuthorGuard, PostError, PostFeed, PostsService,
+    Entity as PostEntity, Post, PostAuthorGuard, PostError, PostPublishedEvent, PostsService,
 };
 
 #[resolver]
@@ -17,7 +17,7 @@ pub struct PostsResolver {
     #[inject]
     svc: Arc<PostsService>,
     #[inject]
-    feed: Arc<PostFeed>,
+    bus: Arc<EventBus>,
 }
 
 #[crud(service = PostsService, ops = [list, get])]
@@ -31,7 +31,9 @@ impl PostsResolver {
 
     #[subscription]
     #[authorize(Read, PostEntity)]
-    async fn post_published(&self) -> Result<impl Stream<Item = Post>, Error> {
-        Ok(self.feed.subscribe())
+    async fn post_published(&self) -> impl Stream<Item = Post> {
+        self.bus
+            .stream::<PostPublishedEvent>()
+            .map(|event| event.post)
     }
 }

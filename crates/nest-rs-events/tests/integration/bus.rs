@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use futures_util::{FutureExt, StreamExt};
 use nest_rs_core::{App, injectable, module};
 use nest_rs_events::{EventBus, EventsModule, listeners};
 
@@ -240,6 +241,129 @@ async fn an_event_with_no_transaction_to_wait_for_is_dispatched_before_emit_retu
     let (_app, awarder, ledger) = booted().await;
     nest_rs_database::__private::with_request_executor(Arc::new(Pool), awarder.award(7)).await;
     assert_eq!(ledger.credited.load(Ordering::SeqCst), 7);
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Announced(u32);
+
+async fn booted_bus() -> (App, Arc<EventBus>) {
+    let app = App::builder()
+        .module::<EventsTestModule>()
+        .build()
+        .await
+        .expect("boots");
+    let bus = app
+        .container()
+        .get::<EventBus>()
+        .expect("EventBus is provided");
+    (app, bus)
+}
+
+#[tokio::test]
+async fn a_stream_reads_an_event_once_its_transaction_commits() {
+    let (_app, bus) = booted_bus().await;
+    let mut stream = std::pin::pin!(bus.stream::<Announced>());
+    let transaction = Arc::new(OpenTransaction::default());
+
+    nest_rs_database::__private::with_request_executor(transaction.clone(), bus.emit(Announced(7)))
+        .await;
+    assert_eq!(
+        stream.next().now_or_never(),
+        None,
+        "nothing is read while the emitter's transaction is open",
+    );
+
+    transaction.commit().await;
+    assert_eq!(stream.next().await, Some(Announced(7)));
+}
+
+#[tokio::test]
+async fn a_stream_never_reads_an_event_whose_transaction_rolled_back() {
+    let (_app, bus) = booted_bus().await;
+    let mut stream = std::pin::pin!(bus.stream::<Announced>());
+    let transaction = Arc::new(OpenTransaction::default());
+
+    nest_rs_database::__private::with_request_executor(transaction.clone(), bus.emit(Announced(7)))
+        .await;
+    transaction.roll_back();
+
+    bus.emit(Announced(8)).await;
+    assert_eq!(
+        stream.next().await,
+        Some(Announced(8)),
+        "the next it reads is the next that happened",
+    );
+}
+
+#[tokio::test]
+async fn an_event_no_stream_and_no_listener_reads_holds_nothing_for_the_commit() {
+    let (_app, bus) = booted_bus().await;
+    let transaction = Arc::new(OpenTransaction::default());
+
+    drop(bus.stream::<Announced>());
+    nest_rs_database::__private::with_request_executor(transaction.clone(), bus.emit(Announced(7)))
+        .await;
+
+    assert!(
+        transaction.held().is_empty(),
+        "every reader left, so nobody waits for the commit",
+    );
+}
+
+#[tokio::test]
+async fn a_stream_ends_with_the_app() {
+    let (app, bus) = booted_bus().await;
+    let mut stream = std::pin::pin!(bus.stream::<Announced>());
+    bus.emit(Announced(7)).await;
+
+    app.close().await;
+
+    assert_eq!(
+        stream.next().await,
+        Some(Announced(7)),
+        "what it was sent is still read",
+    );
+    assert_eq!(stream.next().await, None, "then it ends");
+}
+
+#[tokio::test]
+async fn a_stream_opened_after_a_commit_reads_nothing_of_it() {
+    let (_app, bus) = booted_bus().await;
+    let mut first = std::pin::pin!(bus.stream::<Announced>());
+    bus.emit(Announced(7)).await;
+
+    let mut late = std::pin::pin!(bus.stream::<Announced>());
+
+    assert_eq!(first.next().await, Some(Announced(7)));
+    assert_eq!(late.next().now_or_never(), None);
+}
+
+#[tokio::test]
+async fn a_stream_opened_before_a_commit_reads_nothing_of_an_emit_no_reader_heard() {
+    let (_app, bus) = booted_bus().await;
+    let transaction = Arc::new(OpenTransaction::default());
+
+    nest_rs_database::__private::with_request_executor(transaction.clone(), bus.emit(Announced(7)))
+        .await;
+    let mut late = std::pin::pin!(bus.stream::<Announced>());
+    transaction.commit().await;
+
+    assert_eq!(late.next().now_or_never(), None);
+}
+
+#[tokio::test]
+async fn a_stream_opened_before_a_commit_reads_an_emit_another_reader_heard() {
+    let (_app, bus) = booted_bus().await;
+    let mut first = std::pin::pin!(bus.stream::<Announced>());
+    let transaction = Arc::new(OpenTransaction::default());
+
+    nest_rs_database::__private::with_request_executor(transaction.clone(), bus.emit(Announced(7)))
+        .await;
+    let mut late = std::pin::pin!(bus.stream::<Announced>());
+    transaction.commit().await;
+
+    assert_eq!(first.next().await, Some(Announced(7)));
+    assert_eq!(late.next().await, Some(Announced(7)));
 }
 
 /// Reachable listeners in an app that never imported `EventsModule`.

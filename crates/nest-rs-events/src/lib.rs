@@ -12,7 +12,8 @@
 //! emitter's transaction has committed when it emits inside one, and never when
 //! that transaction rolls back. Each listener call is a unit of work of its
 //! own, its transaction settled on the `Result` it answers and its body cut at
-//! its timeout (see [`EventBus::emit`]).
+//! its timeout (see [`EventBus::emit`]). What stays open reads the same events
+//! as a stream, at the same commit ([`EventBus::stream`]).
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

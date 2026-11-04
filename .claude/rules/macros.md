@@ -286,5 +286,6 @@ needing `unsafe` or runtime reflection.
 It ships with rustdoc whose example, on its surface crate's re-export, runs
 and proves what the expansion provides, a test in the home crate's suite
 (or `nest-rs-testing` for cross-crate wiring), a use site in `demo/`, and its
-`nest-rs-macro-hygiene` witness. **Compile cost above 0.5 s per use site is a
+`nest-rs-macro-hygiene` witness; `#[listeners]` has no use site in `demo/`, for
+the reason `edges.md` argues. **Compile cost above 0.5 s per use site is a
 defect — measure it.**

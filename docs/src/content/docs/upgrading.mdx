@@ -714,7 +714,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::seaorm::{with_request_executor, with_job_executor}(executor, fut)`; `nest_rs::seaorm::with_executor` or `nest_rs::database::with_executor` | no public function installs an executor of its own: the edge's unit runs the body, and a service test runs it through `app.unit(ability, \|\| …)` or `app.system_unit(\|\| …)` |
     | `nest_rs::seaorm::{current_executor, ExecutorScope, current_executor_scope}` | `nest_rs::database::{ExecutorScope, current_executor_scope}`; a statement of a service's own goes through `Repo` |
     | `Unhonoured { reason, retryable }`, `JobTimedOut { timeout }` | `Unhonoured::new(reason, retryable)` (or `::retryable`, `::deterministic`), `JobTimedOut::new(timeout)` |
-    | a service catching a unique violation on the request's transaction (`Err(e) if DbOutcome::of(&e) == DbOutcome::Conflict`) and querying on | run the statement in `nest_rs::database::atomic` and match `ServiceError::Conflict` |
+    | a service catching a unique violation on the request's transaction (`Err(e) if DbOutcome::of(&e) == DbOutcome::Conflict`) and querying on | an insert that may meet the row holding its key: `Repo::<E>::insert_unscoped_or_existing(active, [key])`, which answers `Insertion::New` or `Insertion::Existing` and aborts nothing; any other statement: run it in `nest_rs::database::atomic` and match `ServiceError::Conflict` |
     | `matches!(err.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))` to tell a taken key | `nest_rs::seaorm::DbOutcome::of(&err) == DbOutcome::Conflict` |
     | `fn soft_delete_column() -> Option<Column> { Some(Column::DeletedAt) }` on a `CrudService` | delete it: `#[expose(..., soft_delete)]` alone stamps and hides |
     | `.filter(live_condition::<E>())` after a `Repo` read, `CrudService::live_read_filter()`, `audit_soft_delete_bindings()` | delete them: every `Repo` read carries the condition; `live_condition::<E>()` stays for a query outside `Repo` |
@@ -1825,6 +1825,10 @@ lists what the boot, a log or the wire shows when one is missed.
   database's `409` or `500`, and a hand-written handler body now answer that
   `403` before anything runs. A denial meant for some rows alone takes a
   `.when`.
+- **A `cannot` whose `when` holds for every row by its shape** —
+  `p.all([])`, `Predicate::Always`, a disjunction holding one — refuses the
+  same way, at the class gate, where its rows used to decide it. A denial
+  meant for some rows alone reads a column in its `.when`.
 - **`cannot(..).requires_scope(..)` or `cannot(..).fields(..)`** no longer
   compiles (`E0599`, `no method named requires_scope found for struct
   RuleSpec<'_, E, Cannot>`), nor does a `RuleSpec<'_, E>` written for what

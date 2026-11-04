@@ -29,6 +29,13 @@ fn generate_auth_scaffolds_the_adapter_once() {
     let guard = fs::read_to_string(src.join("authz/guard.rs")).unwrap();
     assert!(guard.contains("AbilityGuard<AuthzAbility>"));
 
+    // A claims role is no column: `Role`'s `#[wire_enum]` is core's, so the adapter
+    // turns no ORM on.
+    let claims = fs::read_to_string(src.join("authn/claims.rs")).unwrap();
+    assert!(claims.contains("use nest_rs::core::wire_enum;"), "{claims}");
+    let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
+    assert!(!features_cargo.contains("seaorm"), "{features_cargo}");
+
     let lib = fs::read_to_string(src.join("lib.rs")).unwrap();
     assert!(lib.contains("pub mod authn;"));
     assert!(lib.contains("pub mod authz;"));

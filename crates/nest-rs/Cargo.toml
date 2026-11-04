@@ -80,7 +80,7 @@ config = ["dep:nest-rs-config", "pipes"]
 # Beside `testing`, the harness runs a unit of work through the app's binding
 # (`system_unit`).
 database = ["dep:nest-rs-database", "nest-rs-testing?/database"]
-# `#[expose]` and `#[wire_enum]` are seaorm's own decorators.
+# `#[expose]` is seaorm's own decorator.
 # `nest-rs-testing?/orm` carries `EphemeralDatabase`: a suite that tests against
 # a real schema needs it, and "which extra feature turns the fixture on" is not
 # a question the app should have to answer.
@@ -107,7 +107,9 @@ seaorm = [
 # operation carrying `#[authorize]` (a `#[public]` one names none), and
 # `#[expose(..., graphql)]` rides `seaorm`, which enables it. A GraphQL gateway
 # with no database compiles no sea-orm; a decorator whose `#[authorize]` needs
-# the feature says so (`__requires_authz`).
+# the feature says so (`__requires_authz`). `#[wire_enum(graphql)]` is core's and
+# reaches this crate by its key alone, so a build without the feature says so too
+# (`__requires_graphql`).
 graphql = [
     "dep:nest-rs-graphql",
     "http",

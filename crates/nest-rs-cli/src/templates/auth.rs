@@ -12,7 +12,7 @@
 pub(crate) const AUTHN_CLAIMS: &str = r#"use std::fmt;
 
 use nest_rs::authn::PrincipalIdentity;
-use nest_rs::seaorm::wire_enum;
+use nest_rs::core::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

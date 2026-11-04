@@ -1,4 +1,5 @@
-use nest_rs::seaorm::{expose, wire_enum};
+use nest_rs::core::wire_enum;
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 
 #[wire_enum(graphql)]

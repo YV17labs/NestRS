@@ -40,7 +40,7 @@ impl Dep {
     }
 }
 
-// `#[expose]`, `#[wire_enum]` and `connect_from_env` are `nest_rs::seaorm`'s:
+// `#[expose]` and `connect_from_env` are `nest_rs::seaorm`'s:
 // an entity and a migration need `seaorm` alone, and no `http` until a
 // controller serves it, which `HTTP` or `AUTHZ` brings.
 pub(super) const SEAORM: Dep = nest_rs(&["seaorm"]);
@@ -130,8 +130,7 @@ pub(super) fn entity_deps() -> Vec<&'static Dep> {
 
 /// The crates the authn/authz adapter (`g auth`) needs.
 pub(super) fn auth_deps() -> Vec<&'static Dep> {
-    // `SEAORM` for `#[wire_enum]` on `Role`.
-    vec![&AUTHN, &OAUTH_SERVER, &AUTHZ, &SEAORM, &SERDE, &UUID]
+    vec![&AUTHN, &OAUTH_SERVER, &AUTHZ, &SERDE, &UUID]
 }
 
 /// The crates the `migrations` + `seed` bootstrap crates need — the union of

@@ -69,5 +69,4 @@ pub mod subject;
 pub mod tasks;
 #[cfg(feature = "mcp")]
 pub mod tool;
-#[cfg(feature = "seaorm")]
 pub mod wire_enum;

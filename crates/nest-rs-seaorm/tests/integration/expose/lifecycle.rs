@@ -40,7 +40,8 @@ mod ledger {
 }
 
 mod memo {
-    use nest_rs_seaorm::{expose, wire_enum};
+    use nest_rs_core::wire_enum;
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
 
     #[wire_enum]

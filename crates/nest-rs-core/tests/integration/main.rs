@@ -32,6 +32,7 @@ mod net;
 mod panic;
 mod process_start;
 mod way_down;
+mod wire_enum;
 mod wiring;
 
 use std::io::{BufRead, BufReader, Read, Write as _};

@@ -5,9 +5,8 @@ use syn::{Item, ItemStruct};
 
 use crate::{active, attr, dto, input, lifecycle, relations, wire};
 
-/// This decorator as written, for the sentence [`#[wire_enum]`](macro@crate::wire_enum) prints when
-/// it is handed the entity struct.
-pub(crate) const NAME: &str = "#[expose(name = \"…\")]";
+/// This decorator as written, for the sentence it prints when handed an enum.
+const NAME: &str = "#[expose(name = \"…\")]";
 
 pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut item = match parse_struct(item.into()) {
@@ -79,8 +78,8 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Parse the entity struct, naming [`#[wire_enum]`](macro@crate::wire_enum) when the developer
-/// decorated a column's enum type instead. Parsed as an [`Item`] first, so a
+/// Parse the entity struct, naming `#[wire_enum]` when the developer decorated a
+/// column's enum type instead. Parsed as an [`Item`] first, so a
 /// syntax error inside a struct reports that error, not "the other decorator".
 fn parse_struct(item: TokenStream2) -> syn::Result<ItemStruct> {
     match syn::parse2::<Item>(item)? {
@@ -89,9 +88,8 @@ fn parse_struct(item: TokenStream2) -> syn::Result<ItemStruct> {
             other,
             format!(
                 "`{NAME}` decorates the entity `Model` struct — the row. A column's enum \
-                 type takes `{enum_half}` instead, which is what carries the wire derives \
+                 type takes `#[wire_enum]` instead, which is what carries the wire derives \
                  for an enum.",
-                enum_half = crate::wire_enum::NAME,
             ),
         )),
     }

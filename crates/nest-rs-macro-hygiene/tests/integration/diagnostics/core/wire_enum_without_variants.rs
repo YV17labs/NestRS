@@ -1,7 +1,7 @@
 //! An empty enum has no value to serialize and no GraphQL enum to name, so the
 //! derives it would carry are all vacuous.
 
-use nest_rs::seaorm::wire_enum;
+use nest_rs::core::wire_enum;
 
 #[wire_enum]
 pub enum Tier {}

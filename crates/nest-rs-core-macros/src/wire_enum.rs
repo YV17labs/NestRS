@@ -1,17 +1,10 @@
-//! `#[wire_enum]` — the enum mode of `#[expose]`.
+//! `#[wire_enum]` — the enum both decoded and sent: `Serialize`, `Deserialize`
+//! and `JsonSchema` routed through `nest_rs_core`, and `async_graphql::Enum`
+//! under its `graphql` key.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Fields, Item, ItemEnum};
-
-use crate::attr::{graphql_root, graphql_root_str};
-
-/// This decorator as written, for the sentence [`#[expose]`](macro@crate::expose) prints when it
-/// is handed a column's enum.
-pub(crate) const NAME: &str = "#[wire_enum]";
-
-/// The sibling decorator a `#[wire_enum]` on the wrong item shape names.
-const HOST: &str = crate::expose::NAME;
 
 pub(crate) fn wire_enum(args: TokenStream2, item: TokenStream2) -> TokenStream2 {
     match expand(args, item) {
@@ -34,17 +27,9 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         if !matches!(variant.fields, Fields::Unit) {
             return Err(syn::Error::new_spanned(
                 &variant.fields,
-                "`#[wire_enum]` needs an enum whose variants are all unit variants — a GraphQL enum and a SeaORM `DeriveActiveEnum` column both require it; model a payload-carrying variant as its own `#[expose]`d entity",
+                "`#[wire_enum]` needs an enum whose variants are all unit variants — a GraphQL enum and a SeaORM `DeriveActiveEnum` column both require it; model a payload-carrying variant as a struct of its own",
             ));
         }
-    }
-
-    #[cfg(not(feature = "graphql"))]
-    if graphql {
-        return Err(syn::Error::new_spanned(
-            &item.ident,
-            "`#[wire_enum(graphql)]` requires the `graphql` feature on `nest-rs-seaorm` (`features = [\"graphql\"]`)",
-        ));
     }
 
     // Our derive leads the developer's attributes: a helper (`#[serde(rename_all)]`)
@@ -59,13 +44,13 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
             ::core::fmt::Debug,
             ::core::cmp::PartialEq,
             ::core::cmp::Eq,
-            ::nest_rs_seaorm::__private::serde::Serialize,
-            ::nest_rs_seaorm::__private::serde::Deserialize,
+            ::nest_rs_core::__private::serde::Serialize,
+            ::nest_rs_core::__private::serde::Deserialize,
             #graphql_derive
-            ::nest_rs_seaorm::__private::schemars::JsonSchema,
+            ::nest_rs_core::__private::schemars::JsonSchema,
         )]
-        #[serde(crate = "::nest_rs_seaorm::__private::serde")]
-        #[schemars(crate = "::nest_rs_seaorm::__private::schemars")]
+        #[serde(crate = "::nest_rs_core::__private::serde")]
+        #[schemars(crate = "::nest_rs_core::__private::schemars")]
         #graphql_crate
         #item
     })
@@ -84,20 +69,24 @@ fn parse_args(args: TokenStream2) -> syn::Result<bool> {
     Ok(graphql)
 }
 
-/// Parse the item, naming [`HOST`] when the developer decorated the entity
-/// struct instead. Parsed as an [`Item`] first, so a syntax error inside an
-/// enum reports that error, not "the other decorator".
+/// Parse the item, naming the struct's decorators when the developer decorated
+/// one. Parsed as an [`Item`] first, so a syntax error inside an enum reports
+/// that error, not "the other decorator".
 fn parse_enum(item: TokenStream2) -> syn::Result<ItemEnum> {
     match syn::parse2::<Item>(item)? {
         Item::Enum(item) => Ok(item),
         other => Err(syn::Error::new_spanned(
             other,
-            format!(
-                "`#[wire_enum]` decorates an enum — a column's type. The entity `Model` struct \
-                 that carries the column takes `{HOST}` instead.",
-            ),
+            "`#[wire_enum]` decorates an enum both decoded and sent. A struct takes `#[input]` \
+             or `#[output]`, and an entity's `Model` `#[expose(name = \"…\")]`.",
         )),
     }
+}
+
+/// The framework's re-export of async-graphql, rerooted to the umbrella's
+/// `graphql` module: the root the derive and its `crate = ` override are pinned to.
+fn graphql_root() -> TokenStream2 {
+    quote!(::nest_rs_graphql::async_graphql)
 }
 
 /// `async_graphql::Enum` spliced into the derive list, under
@@ -110,11 +99,12 @@ fn graphql_enum_derive(graphql: bool) -> TokenStream2 {
     quote! { #root::Enum, }
 }
 
-/// The `crate = ` override that derive needs.
+/// The `crate = ` override that derive needs, built from the tokens: a stale
+/// string would parse and fall back to the call site's prelude.
 fn graphql_crate_attr(graphql: bool) -> TokenStream2 {
     if !graphql {
         return TokenStream2::new();
     }
-    let root = graphql_root_str();
+    let root: String = graphql_root().into_iter().map(|t| t.to_string()).collect();
     quote! { #[graphql(crate = #root)] }
 }

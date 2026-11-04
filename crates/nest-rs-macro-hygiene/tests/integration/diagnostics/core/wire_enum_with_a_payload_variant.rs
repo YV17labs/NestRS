@@ -2,7 +2,7 @@
 //! variants; the refusal says what to do with the payload instead of leaving
 //! two foreign derives to complain about it in their own words.
 
-use nest_rs::seaorm::wire_enum;
+use nest_rs::core::wire_enum;
 
 #[wire_enum]
 pub enum Tier {

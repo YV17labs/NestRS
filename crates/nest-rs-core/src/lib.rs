@@ -528,6 +528,29 @@ pub use nest_rs_core_macros::input;
 /// ```
 pub use nest_rs_core_macros::output;
 
+/// The enum both decoded and sent — a column's, a claims role: carries
+/// `Serialize`, `Deserialize` and `JsonSchema`, routed back here, with the
+/// `Clone`, `Copy`, `Debug`, `PartialEq` and `Eq` they require; `#[wire_enum(graphql)]`
+/// adds `async_graphql::Enum`, through the umbrella's `graphql` feature. It emits
+/// nothing from SeaORM: `EnumIter`, `DeriveActiveEnum` and how the column is stored
+/// stay yours.
+///
+/// ```
+/// use nest_rs_core::wire_enum;
+///
+/// #[wire_enum]
+/// #[serde(rename_all = "lowercase")]
+/// pub enum Role {
+///     Admin,
+///     User,
+/// }
+///
+/// assert_eq!(serde_json::to_value(Role::Admin)?, "admin");
+/// assert_eq!(serde_json::from_value::<Role>("user".into())?, Role::User);
+/// # Ok::<(), serde_json::Error>(())
+/// ```
+pub use nest_rs_core_macros::wire_enum;
+
 /// Declare a struct as an interceptor its module brings for every unit it
 /// serves — `#[interceptor]` after the guards and the class gate, or
 /// `#[interceptor(stage = unit)]` around them.

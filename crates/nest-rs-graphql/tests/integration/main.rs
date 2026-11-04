@@ -30,6 +30,7 @@ mod sdl_snapshot;
 mod subscription;
 mod unit;
 mod view;
+mod wire_enum;
 
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};

@@ -263,6 +263,24 @@ macro_rules! __requires_seaorm {
     };
 }
 
+#[cfg(feature = "graphql")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_graphql {
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)*] $($rest)* }
+    };
+}
+
+#[cfg(not(feature = "graphql"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_graphql {
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)* "graphql"] $($rest)* }
+    };
+}
+
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __requires_end {
@@ -303,7 +321,7 @@ pub mod prelude {
     };
 
     // Outside every edge's feature: a headless worker needs `#[input]` too.
-    pub use nest_rs_core::{input, output};
+    pub use nest_rs_core::{input, output, wire_enum};
 
     #[cfg(feature = "http")]
     pub use nest_rs_http::{
@@ -330,7 +348,7 @@ pub mod prelude {
     pub use nest_rs_queue::{processor, queue};
 
     #[cfg(feature = "seaorm")]
-    pub use nest_rs_seaorm::{expose, wire_enum};
+    pub use nest_rs_seaorm::expose;
 
     #[cfg(feature = "schedule")]
     pub use nest_rs_schedule::scheduled;

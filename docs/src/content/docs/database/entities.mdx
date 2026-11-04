@@ -190,12 +190,13 @@ See [Response masking](/security/authorization/response-masking/#what-the-mask-c
 
 An exposed column whose type is your own enum passes through to the wire
 **verbatim**, so the enum is what has to carry the wire traits.
-`#[wire_enum]` is the enum mode of `#[expose]` and emits all of them —
-`Serialize`, `Deserialize`, `JsonSchema`, and under `graphql`
+`#[wire_enum]`, beside `#[input]` and `#[output]` in `nest_rs::core`, emits all
+of them — `Serialize`, `Deserialize`, `JsonSchema`, and under `graphql`
 `async_graphql::Enum`, plus the `Clone`/`Copy`/`Eq` shape those require:
 
 ```rust title="crates/features/src/posts/entities/post.rs"
-use nest_rs::seaorm::{expose, wire_enum};
+use nest_rs::core::wire_enum;
+use nest_rs::seaorm::expose;
 
 #[wire_enum(graphql)]
 #[derive(EnumIter, DeriveActiveEnum)]
@@ -211,9 +212,9 @@ pub enum PostStatus {
 
 Each of those derives expands against the **call site's** prelude, so
 hand-writing them put `schemars` and `async-graphql` in your manifest for
-code you never wrote. The decorator routes them back through
-`nest-rs-seaorm` with a `crate = ` override, so your manifest names
-neither.
+code you never wrote. The decorator routes them back through the framework
+with a `crate = ` override, so your manifest names neither. Its `graphql` key
+needs the `graphql` feature, and a build without it says so.
 
 It deliberately emits **nothing from SeaORM**: `EnumIter`,
 `DeriveActiveEnum`, `#[sea_orm(rs_type, db_type)]` and the per-variant

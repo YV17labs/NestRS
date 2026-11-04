@@ -134,3 +134,14 @@ signature or a page names them: `CarriedView`, `DetachedWork`, `TlsNames`,
 `TlsSetting`, `CloseCode`, `masked_item_for`, `mask_entity_response`. A body
 masking by hand reads `Ability::mask` for a row, `masked_reply` for a value it
 built.
+
+**2026-11-04 — `#[wire_enum]` is core's, beside `#[input]` and `#[output]`.** It
+derives nothing from SeaORM, yet a JWT-only app built with `nestrs g auth` turned on
+the ORM's feature to derive a role, and its path said a table where there was none.
+With the owner's agreement above it is `nest_rs::core::wire_enum`, the wire types'
+enum member for an enum both decoded and sent: serde and schemars through core's
+`__private`, the `graphql` key through the rerooted `nest_rs::graphql` path, which
+makes `graphql` a row codegen's crate table gates on that attribute, with its
+`__requires_graphql` pair. Folding it into `#[input]` by direction was refused: every
+`#[expose]` entity's column enum needs both directions for the mask's round trip, and
+the `Clone`, `Copy`, `Eq` shape a GraphQL enum requires. `#[expose]` stays SeaORM's.

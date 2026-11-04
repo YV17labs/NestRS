@@ -225,6 +225,8 @@ async fn shout(&self, Json(input): Json<GreetInput>) -> Result<Json<GreetReply>>
   all four by hand.
 - **`#[output]`** is its twin for a DTO the edge only **sends**, such as
   `GreetReply`: `Serialize` and `JsonSchema`, nothing to decode or validate.
+  An enum both decoded and sent, a role a client names and reads back, takes
+  [`#[wire_enum]`](/database/entities/#enum-columns).
 - **`Json<T>`** parses the request body into `T`. A body that does not decode
   is `400`, and its `detail` says where, in the names `T` declares, what kind
   of value it found and what was expected — ``JSON body at `author.name`:

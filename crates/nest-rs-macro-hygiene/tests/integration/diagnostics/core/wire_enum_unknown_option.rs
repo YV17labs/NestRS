@@ -1,7 +1,7 @@
 //! `graphql` is the only option, and it is the one that decides whether an
 //! `Enum` derive lands on the type — a typo silently means "HTTP only".
 
-use nest_rs::seaorm::wire_enum;
+use nest_rs::core::wire_enum;
 
 #[wire_enum(gql)]
 pub enum Tier {

@@ -107,7 +107,12 @@ const FRAMEWORK: &[FrameworkCrate] = &[
         "seaorm",
         "`#[crud]` or `#[authorize(…, bind = …)]`",
     ),
-    row("nest_rs_graphql", "graphql", "graphql"),
+    gated(
+        "nest_rs_graphql",
+        "graphql",
+        "graphql",
+        "`#[wire_enum(graphql)]`",
+    ),
     row("nest_rs_ws", "ws", "ws"),
     row("nest_rs_mcp", "mcp", "mcp"),
     row("nest_rs_queue", "queue", "queue"),
@@ -726,6 +731,38 @@ mod tests {
             struct Note;
         ));
         assert!(out.ends_with(&check("seaorm", quote!())), "{out}");
+    }
+
+    /// `#[wire_enum]` is core's, so its `graphql` key alone reaches this crate.
+    #[test]
+    fn a_wire_enums_graphql_key_is_checked_through_its_crate_attribute() {
+        let out = checked(quote!(
+            #[derive(::nest_rs_graphql::async_graphql::Enum)]
+            #[graphql(crate = "::nest_rs_graphql::async_graphql")]
+            enum Role {
+                Admin,
+            }
+        ));
+        assert!(out.ends_with(&check("graphql", quote!())), "{out}");
+        assert_eq!(out.matches("__requires_graphql").count(), 1, "{out}");
+    }
+
+    /// `graphql` sorts after `authz`, so a resolver's missing `authz` keeps
+    /// naming `#[authorize]`, the attribute the developer wrote.
+    #[test]
+    fn a_resolvers_chain_names_the_posture_it_lacks() {
+        let out = checked(quote! {
+            fn read(ctx: &Ctx) {
+                ::nest_rs_graphql::__private::field_name(ctx);
+                ::nest_rs_authz::class_gate::<::nest_rs_authz::Read, Note>(ctx);
+            }
+        });
+        let req = version_req();
+        let chain = quote!(
+            ::nest_rs::__requires_authz! { "`#[authorize]`" #req [] __requires_graphql __requires_end }
+        )
+        .to_string();
+        assert!(out.ends_with(&chain), "{out}");
     }
 
     #[test]

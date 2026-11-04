@@ -1,4 +1,4 @@
-//! `#[wire_enum]` — the enum mode of `#[expose]`: its four derives and their
+//! `#[wire_enum]`, core's, so every feature set builds it: its derives and their
 //! `crate = ` overrides resolve against the umbrella alone.
 
 #![expect(
@@ -6,7 +6,7 @@
     reason = "a witness of what a developer writes, never published"
 )]
 
-use nest_rs::seaorm::wire_enum;
+use nest_rs::core::wire_enum;
 
 /// The wire-only arm, without the GraphQL `Enum` derive.
 #[wire_enum]

@@ -15,6 +15,7 @@ mod interceptor;
 mod layer;
 mod module;
 mod output;
+mod wire_enum;
 
 /// Declares a struct as a provider: `#[inject]` fields resolve via
 /// `container.get()` (or `get_dyn` for `Arc<dyn Trait>`), other fields fall
@@ -138,6 +139,20 @@ pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn output(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(output::output(args, item).into()).into()
+}
+
+/// The enum both decoded and sent: derives `Serialize`, `Deserialize` and
+/// `JsonSchema` through the framework (its crate needs no `serde` or `schemars`
+/// line), plus the value shape they and a column's derives require — `Clone`,
+/// `Copy`, `Debug`, `PartialEq`, `Eq` — for a column's enum or a claims role.
+///
+/// Takes `graphql` alone, for `async_graphql::Enum` too, explicit because features
+/// unify across a workspace, and refuses anything but an enum of unit variants.
+/// It emits nothing from SeaORM: `EnumIter`, `DeriveActiveEnum` and their
+/// attributes stay the developer's. An enum only sent takes `#[output]`.
+#[proc_macro_attribute]
+pub fn wire_enum(args: TokenStream, item: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(wire_enum::wire_enum(args.into(), item.into())).into()
 }
 
 /// Declares a unit struct as an `Instance` marker: one instance of a resource

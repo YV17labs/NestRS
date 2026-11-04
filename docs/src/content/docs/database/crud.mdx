@@ -24,8 +24,8 @@ just wires the endpoints.
 cargo add nest-rs --features seaorm
 ```
 
-`#[expose]` and `#[wire_enum]` are SeaORM's own decorators, so they come with
-the model they decorate: `nest_rs::seaorm`, one feature. `#[crud]` belongs to
+`#[expose]` is SeaORM's own decorator, so it comes with the model it decorates:
+`nest_rs::seaorm`, one feature. `#[crud]` belongs to
 the edge it serves — `nest_rs::http::crud`, on by default, or
 `nest_rs::graphql::crud`.
 

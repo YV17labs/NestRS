@@ -1,0 +1,7 @@
+error: `#[wire_enum]` decorates an enum both decoded and sent. A struct takes `#[input]` or `#[output]`, and an entity's `Model` `#[expose(name = "…")]`.
+  --> tests/integration/diagnostics/core/wire_enum_on_a_struct.rs:8:1
+   |
+ 8 | / pub struct Model {
+ 9 | |     pub id: u32,
+10 | | }
+   | |_^

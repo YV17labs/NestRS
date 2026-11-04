@@ -24,7 +24,7 @@
 //! [`nest_rs_database::atomic`] runs a block inside a [`Savepoint`] of that
 //! executor's transaction, or a transaction of its own on the pool.
 //! An entity crosses the wire through [`macro@expose`], and a column's enum
-//! through [`macro@wire_enum`].
+//! through `nest_rs_core`'s `#[wire_enum]`.
 //!
 //! ```
 //! # use nest_rs_core::module;
@@ -137,8 +137,8 @@ pub mod __private {
     pub use crate::unique_key::UniqueKeyRegistration;
     pub use inventory;
 
-    // What `#[expose]` and `#[wire_enum]` emit, so an entity crate declares
-    // none of these; each derive carries a `crate = ` override pointing here.
+    // What `#[expose]` emits, so an entity crate declares none of these; each
+    // derive carries a `crate = ` override pointing here.
     pub use async_trait::async_trait;
     pub use chrono;
     #[cfg(feature = "graphql")]
@@ -307,37 +307,6 @@ pub mod __private {
 /// its own, but under `timestamps`, which writes it to stamp `created_at` on
 /// insert and `updated_at`, when the entity has one, on every save.
 pub use nest_rs_seaorm_macros::expose;
-
-/// The enum mode of [`macro@expose`]: make a column's enum type a wire type.
-///
-/// A column whose type is a custom enum passes through to the wire verbatim,
-/// so the enum itself carries the wire traits, each routed back through this
-/// crate so the entity crate declares neither `schemars` nor `async-graphql`.
-///
-/// ```
-/// # use nest_rs_seaorm::wire_enum;
-/// # use sea_orm::entity::prelude::*;
-/// #[wire_enum(graphql)]
-/// #[derive(EnumIter, DeriveActiveEnum)]
-/// #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
-/// #[serde(rename_all = "lowercase")]
-/// pub enum PostStatus {
-///     #[sea_orm(string_value = "draft")]
-///     Draft,
-///     #[sea_orm(string_value = "published")]
-///     Published,
-/// }
-/// # fn main() -> Result<(), serde_json::Error> {
-/// # use async_graphql::{InputType, OutputType};
-///
-/// fn implements<T: Copy + Eq + std::fmt::Debug + schemars::JsonSchema + InputType + OutputType>() {}
-/// implements::<PostStatus>();
-/// assert_eq!(serde_json::to_value(PostStatus::Published)?, "published");
-/// assert_eq!(serde_json::from_value::<PostStatus>("draft".into())?, PostStatus::Draft);
-/// # Ok(())
-/// # }
-/// ```
-pub use nest_rs_seaorm_macros::wire_enum;
 
 /// Re-exported so an app resolves the framework's exact `sea_orm` pin, part of
 /// this crate's API.

@@ -40,6 +40,7 @@ mod namespace;
 mod service;
 mod setting;
 mod source;
+mod surface;
 #[cfg(test)]
 mod testing;
 #[cfg(feature = "tls")]
@@ -63,6 +64,7 @@ pub use namespace::instance_namespace;
 pub use service::{ConfigService, spellings, spellings_or_field, var_name, var_name_or_field};
 pub use setting::{FromSetting, Setting};
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
+pub use surface::Surface;
 #[cfg(feature = "tls")]
 pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 

@@ -256,8 +256,8 @@ mod tests {
     use crate::outcome::__private::settled;
     use crate::site::{GlobalLayers, SiteDeclaration, SiteLayers};
     use crate::testing::{
-        HandlerFailed, Recording, RecordingGuards, RecordingTail, Refused, SEND, TrailView, record,
-        recording_gate, run_counting,
+        HandlerFailed, Recording, RecordingGuards, RecordingTail, Refused, SEND, TrailView,
+        provided_by_hand, record, recording_gate, run_counting,
     };
     use crate::unit_context::new_unit_context;
     use crate::{AmbientValue, Caught, ExceptionFilter, Interceptor, Layer, Next, async_trait};
@@ -279,11 +279,7 @@ mod tests {
     struct Declining;
     impl Layer for Declining {}
 
-    impl Discoverable for Declining {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
-            builder
-        }
-    }
+    provided_by_hand!(Declining);
 
     #[async_trait]
     impl ExceptionFilter for Declining {
@@ -1019,11 +1015,7 @@ mod tests {
         struct Answering;
         impl Layer for Answering {}
 
-        impl Discoverable for Answering {
-            fn register(builder: ContainerBuilder) -> ContainerBuilder {
-                builder
-            }
-        }
+        provided_by_hand!(Answering);
 
         #[async_trait]
         impl ExceptionFilter for Answering {
@@ -1061,11 +1053,7 @@ mod tests {
         struct Answering;
         impl Layer for Answering {}
 
-        impl Discoverable for Answering {
-            fn register(builder: ContainerBuilder) -> ContainerBuilder {
-                builder
-            }
-        }
+        provided_by_hand!(Answering);
 
         #[async_trait]
         impl ExceptionFilter for Answering {

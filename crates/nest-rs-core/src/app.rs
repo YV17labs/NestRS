@@ -1089,7 +1089,7 @@ fn seal(
     for pooled in builder.attached_meta::<PooledLayers>() {
         linked.pool(
             pooled.declaration,
-            &pooled.layers,
+            pooled.layers(),
             pooled.injected_by_its_own(builder),
         );
     }

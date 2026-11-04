@@ -515,18 +515,6 @@ pub(crate) struct Override {
     pub(crate) claimed: bool,
 }
 
-/// How far the register phase took a key, as an app-wide pool reads it to
-/// register what it lists.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Registration {
-    /// Nothing registers it: no seed, factory, provider or override.
-    Absent,
-    /// A test's override holds it, which nothing claimed yet.
-    Overridden,
-    /// A registration of any scope holds it, or claimed the override.
-    Held,
-}
-
 /// A provider a `#[module]` lists that a test override stands in for: it is
 /// never built, so its own dependencies go unchecked, and the keys it would
 /// have registered beside the overridden one are absent.
@@ -655,13 +643,10 @@ impl ContainerBuilder {
         self
     }
 
-    /// How far the register phase took `key`.
-    pub(crate) fn registration(&self, key: TypeId) -> Registration {
-        match self.origins.get(&key) {
-            None => Registration::Absent,
-            Some((Origin::Override, _)) => Registration::Overridden,
-            Some(_) => Registration::Held,
-        }
+    /// Where the registration holding `key`, of any scope, came from: an
+    /// override until something claims it, `None` while nothing registers it.
+    pub(crate) fn origin(&self, key: TypeId) -> Option<Origin> {
+        self.origins.get(&key).map(|(origin, _)| *origin)
     }
 
     /// Note that an app-wide pool answers for `key`, which nothing else

@@ -438,7 +438,7 @@ mod tests {
     use crate::interceptor::__private::register_interceptor;
     use crate::interceptor::interceptor;
     use crate::layer_chain::__private::declare_global;
-    use crate::testing::{JOB, RUN, Recording, SEND};
+    use crate::testing::{JOB, RUN, Recording, SEND, provided_by_hand};
     use crate::{Caught, ExceptionFilter, UnitContext, async_trait};
 
     struct First;
@@ -640,11 +640,7 @@ mod tests {
     struct Declines<M>(std::marker::PhantomData<fn() -> M>);
     impl<M: 'static> Layer for Declines<M> {}
 
-    impl<M> Discoverable for Declines<M> {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
-            builder
-        }
-    }
+    provided_by_hand!(Declines<M>);
 
     #[async_trait]
     impl<M: 'static> ExceptionFilter for Declines<M> {

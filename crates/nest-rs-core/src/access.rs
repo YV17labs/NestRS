@@ -173,7 +173,7 @@ pub(crate) struct LinkedDeclarations {
     /// What each app-wide pool's declaration injects in truth, by declaration:
     /// the dependencies of the layers it registers itself, each flagged when
     /// optional.
-    pub(crate) pools: HashMap<TypeId, Vec<(TypeId, &'static str, bool)>>,
+    pub(crate) pools: HashMap<TypeId, Vec<Injection>>,
 }
 
 impl LinkedDeclarations {
@@ -211,14 +211,11 @@ impl LinkedDeclarations {
     pub(crate) fn pool(
         &mut self,
         declaration: TypeId,
-        layers: &[(TypeId, &'static str)],
-        injected: Vec<(TypeId, &'static str, bool)>,
+        layers: impl Iterator<Item = (TypeId, &'static str)>,
+        injected: Vec<Injection>,
     ) {
         self.pools.insert(declaration, injected);
-        self.layers
-            .entry(declaration)
-            .or_default()
-            .extend_from_slice(layers);
+        self.layers.entry(declaration).or_default().extend(layers);
     }
 }
 
@@ -415,21 +412,14 @@ pub(crate) fn validate_access_graph(
             }
             // A declaration reports what every layer it lists injects, so a
             // config one injects loads; it answers only for those it registers.
-            let deps: Vec<(TypeId, &'static str, bool)> = match linked.pools.get(&host) {
-                Some(injected) => injected.clone(),
-                None => {
-                    let (injects, names) = ((p.injects)(), (p.inject_names)());
-                    let (optionals, optional_names) =
-                        ((p.injects_optional)(), (p.inject_optional_names)());
-                    labelled(&injects, &names)
-                        .map(|(dep, name)| (dep, name, false))
-                        .chain(
-                            labelled(&optionals, &optional_names)
-                                .map(|(dep, name)| (dep, name, true)),
-                        )
-                        .collect()
-                }
-            };
+            let deps = linked.pools.get(&host).cloned().unwrap_or_else(|| {
+                injections(
+                    &(p.injects)(),
+                    &(p.inject_names)(),
+                    &(p.injects_optional)(),
+                    &(p.inject_optional_names)(),
+                )
+            });
             // Without this, the register phase (which gates readiness on the
             // singleton map) silently drops a singleton holding a scoped or
             // transient dependency, and everything downstream of it — or, held
@@ -499,17 +489,14 @@ pub(crate) fn validate_access_graph(
 fn owners<'a>(
     modules: impl Iterator<Item = &'a ModuleDescriptor>,
 ) -> HashMap<TypeId, (&'static str, &'static str)> {
+    let providers: Vec<(&ModuleDescriptor, &ProviderDescriptor)> = modules
+        .flat_map(|d| d.providers.iter().map(move |p| (d, p)))
+        .collect();
     let mut owners = HashMap::new();
-    let modules: Vec<&ModuleDescriptor> = modules.collect();
-    let providers = || {
-        modules
-            .iter()
-            .flat_map(|d| d.providers.iter().map(move |p| (*d, p)))
-    };
-    for (d, p) in providers() {
+    for (d, p) in &providers {
         owners.entry((p.provides)()).or_insert((p.name, d.name));
     }
-    for (d, p) in providers() {
+    for (d, p) in &providers {
         for (key, label) in (p.also_provides)() {
             owners.entry(key).or_insert((label, d.name));
         }
@@ -526,6 +513,23 @@ pub(crate) fn labelled<'a>(
         let name = names.get(i).copied().unwrap_or(UNNAMED_DEPENDENCY);
         (*id, name)
     })
+}
+
+/// One dependency a provider injects: its key, its label, whether it is
+/// optional.
+pub(crate) type Injection = (TypeId, &'static str, bool);
+
+/// `required`, then `optional`, each beside its label and flagged.
+pub(crate) fn injections(
+    required: &[TypeId],
+    required_names: &[&'static str],
+    optional: &[TypeId],
+    optional_names: &[&'static str],
+) -> Vec<Injection> {
+    labelled(required, required_names)
+        .map(|(dep, name)| (dep, name, false))
+        .chain(labelled(optional, optional_names).map(|(dep, name)| (dep, name, true)))
+        .collect()
 }
 
 /// The first cycle among the request-scoped and transient providers the roots

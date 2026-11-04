@@ -24,9 +24,6 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
 const INTERCEPTOR: nest_rs_codegen::Grammar =
     nest_rs_codegen::Grammar::new("interceptor", &["stage"]).elsewhere(known_elsewhere);
 
-/// The stage as `stage = …` spells it, in a refusal's list.
-const STAGES: [&str; 1] = ["unit"];
-
 /// The refusal of the stage the attribute does not declare, bare or spelled.
 const HANDLER_STAGE: &str = "#[interceptor] declares what a module brings around the guards and \
      takes `stage = unit`: an app-wide interceptor at the handler stage is the root's — write \
@@ -53,7 +50,7 @@ fn parse_stage(args: TokenStream2) -> syn::Result<()> {
         let refused = |written: &str| {
             syn::Error::new_spanned(
                 &value,
-                unknown_value("interceptor", "stage", written, &STAGES),
+                unknown_value("interceptor", "stage", written, &["unit"]),
             )
         };
         let Expr::Path(path) = &value else {

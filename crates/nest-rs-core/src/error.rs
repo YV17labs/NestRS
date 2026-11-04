@@ -702,6 +702,7 @@ pub struct LateOptionalDependencyError {
 /// What an [`UnbuiltCause`] says of `count` dependencies of a provider in
 /// `module`: the cause, then its edit.
 fn unbuilt_clause(cause: &UnbuiltCause, module: &str, count: usize) -> String {
+    let them = if count == 1 { "it" } else { "them" };
     match cause {
         UnbuiltCause::ImportCycle(modules) if modules.len() == 2 => format!(
             "{} import each other, so one registers before the other's providers exist: move \
@@ -714,25 +715,18 @@ fn unbuilt_clause(cause: &UnbuiltCause, module: &str, count: usize) -> String {
             and_list(modules)
         ),
         UnbuiltCause::RegisteredLater => format!(
-            "a hand-written module or a `for_root` outside `{module}`'s imports registers {} \
-             later: import that module in `{module}`'s `imports`",
-            if count == 1 { "it" } else { "them" }
+            "a hand-written module or a `for_root` outside `{module}`'s imports registers {them} \
+             later: import that module in `{module}`'s `imports`"
         ),
-        UnbuiltCause::RegisteredByAPool => {
-            let them = if count == 1 { "it" } else { "them" };
-            format!(
-                "only an app-wide pool's declaration lists {them}, and a pool registers what it \
-                 lists once every module is built: list {them} in `{module}`'s `providers`"
-            )
-        }
-        UnbuiltCause::ImportedFirst => {
-            let them = if count == 1 { "it" } else { "them" };
-            format!(
-                "`{module}` was imported on a container built by hand while nothing there \
-                 provided {them}: provide {them}, or import what provides {them}, before \
-                 `{module}`"
-            )
-        }
+        UnbuiltCause::RegisteredByAPool => format!(
+            "only an app-wide pool's declaration lists {them}, and a pool registers what it \
+             lists once every module is built: list {them} in `{module}`'s `providers`"
+        ),
+        UnbuiltCause::ImportedFirst => format!(
+            "`{module}` was imported on a container built by hand while nothing there \
+             provided {them}: provide {them}, or import what provides {them}, before \
+             `{module}`"
+        ),
     }
 }
 

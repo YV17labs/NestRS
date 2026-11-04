@@ -12,8 +12,6 @@ use std::task::{Context, Poll, Waker};
 
 use async_trait::async_trait;
 
-use crate::container::ContainerBuilder;
-use crate::discoverable::Discoverable;
 use crate::dispatch::{BoxFuture, GuardStage, Tail};
 use crate::handler::{Handler, HandlerDeclaration, MetaLevels, Posture, declare_handler};
 use crate::layer::Layer;
@@ -21,6 +19,21 @@ use crate::operation_log::{__private::declare_unit, Kind, Unit};
 use crate::outcome::{__private::settled, Failure, Outcome};
 use crate::unit_context::{UnitContext, UnitView};
 use crate::{Interceptor, Next};
+
+/// Makes a double a test provides by hand the provider a pool's entry must be:
+/// registering nothing, it leaves what the test provided standing.
+macro_rules! provided_by_hand {
+    ($double:ident $(<$param:ident>)?) => {
+        impl $(<$param>)? $crate::discoverable::Discoverable for $double $(<$param>)? {
+            fn register(
+                builder: $crate::container::ContainerBuilder,
+            ) -> $crate::container::ContainerBuilder {
+                builder
+            }
+        }
+    };
+}
+pub(crate) use provided_by_hand;
 
 /// The unit the fake edge dispatches.
 pub(crate) const MESSAGE: Unit =
@@ -99,12 +112,7 @@ pub(crate) struct Recording<M> {
     marker: PhantomData<fn() -> M>,
 }
 
-// A test provides it by hand, so what a pool lists stands.
-impl<M> Discoverable for Recording<M> {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        builder
-    }
-}
+provided_by_hand!(Recording<M>);
 
 impl<M> Recording<M> {
     pub(crate) const fn new(name: &'static str) -> Self {

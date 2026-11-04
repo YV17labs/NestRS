@@ -129,9 +129,9 @@ pub(crate) mod __private {
 
     use super::LayerSpec;
     use crate::Discoverable;
-    use crate::access::{Composition, ModuleDescriptor, labelled};
+    use crate::access::{Composition, Injection, ModuleDescriptor, injections, labelled};
     use crate::container::__private::{StalledProvider, record_stall};
-    use crate::container::{Container, ContainerBuilder, Registration};
+    use crate::container::{Container, ContainerBuilder, Origin};
     use crate::discovery::Discovery;
     use crate::error::{MissingDependencyError, ScopeViolationError, UnresolvedLayerError};
     use crate::layer::{Layer, LayerSite};
@@ -167,34 +167,28 @@ pub(crate) mod __private {
     /// since the pool resolves them once, at mount.
     pub(crate) struct PooledLayers {
         pub(crate) declaration: TypeId,
-        pub(crate) declared_by: &'static str,
-        pub(crate) listed_by: Option<&'static str>,
-        pub(crate) layers: Vec<(TypeId, &'static str)>,
-        pub(crate) providers: Vec<PooledProvider>,
+        declared_by: &'static str,
+        listed_by: Option<&'static str>,
+        providers: Vec<PooledProvider>,
     }
 
     impl PooledLayers {
-        /// What the layers `builder` holds as this declaration's own inject,
-        /// each with its label and whether it is optional: a layer the app holds
-        /// any other way answers for itself, or was never built from them.
-        pub(crate) fn injected_by_its_own(
-            &self,
-            builder: &ContainerBuilder,
-        ) -> Vec<(TypeId, &'static str, bool)> {
-            let mut injected = Vec::new();
-            for provider in &self.providers {
-                if !builder.pooled_providers().contains(&provider.key) {
-                    continue;
-                }
-                let (ids, names) = ((provider.injected)(), (provider.injected_names)());
-                injected.extend(labelled(&ids, &names).map(|(id, name)| (id, name, false)));
-                let (ids, names) = (
-                    (provider.injected_optional)(),
-                    (provider.injected_optional_names)(),
-                );
-                injected.extend(labelled(&ids, &names).map(|(id, name)| (id, name, true)));
-            }
-            injected
+        /// Each layer it lists, with its label.
+        pub(crate) fn layers(&self) -> impl Iterator<Item = (TypeId, &'static str)> + '_ {
+            self.providers
+                .iter()
+                .map(|provider| (provider.key, provider.name))
+        }
+
+        /// What the layers `builder` holds as this declaration's own inject: a
+        /// layer the app holds any other way answers for itself, or was never
+        /// built from them.
+        pub(crate) fn injected_by_its_own(&self, builder: &ContainerBuilder) -> Vec<Injection> {
+            self.providers
+                .iter()
+                .filter(|provider| builder.pooled_providers().contains(&provider.key))
+                .flat_map(|provider| (provider.injections)())
+                .collect()
         }
     }
 
@@ -205,14 +199,9 @@ pub(crate) mod __private {
     pub struct PooledProvider {
         key: TypeId,
         name: &'static str,
-        dependencies: fn() -> Vec<TypeId>,
-        dependency_names: fn() -> Vec<&'static str>,
-        optional_dependencies: fn() -> Vec<TypeId>,
-        optional_dependency_names: fn() -> Vec<&'static str>,
-        injected: fn() -> Vec<TypeId>,
-        injected_names: fn() -> Vec<&'static str>,
-        injected_optional: fn() -> Vec<TypeId>,
-        injected_optional_names: fn() -> Vec<&'static str>,
+        /// What it waits on, as a stall reports it.
+        waits_on: fn() -> StalledProvider,
+        injections: fn() -> Vec<Injection>,
         also_provides: fn() -> Vec<(TypeId, &'static str)>,
         register: fn(ContainerBuilder) -> ContainerBuilder,
         register_overridden: fn(ContainerBuilder) -> ContainerBuilder,
@@ -224,40 +213,25 @@ pub(crate) mod __private {
             Self {
                 key: TypeId::of::<P>(),
                 name: std::any::type_name::<P>(),
-                dependencies: P::dependencies,
-                dependency_names: P::dependency_names,
-                optional_dependencies: P::optional_dependencies,
-                optional_dependency_names: P::optional_dependency_names,
-                injected: P::injected,
-                injected_names: P::injected_names,
-                injected_optional: P::injected_optional,
-                injected_optional_names: P::injected_optional_names,
+                waits_on: || StalledProvider {
+                    name: std::any::type_name::<P>(),
+                    provides: vec![TypeId::of::<P>()],
+                    dependencies: P::dependencies(),
+                    dependency_names: P::dependency_names(),
+                    optional_dependencies: P::optional_dependencies(),
+                    optional_dependency_names: P::optional_dependency_names(),
+                },
+                injections: || {
+                    injections(
+                        &P::injected(),
+                        &P::injected_names(),
+                        &P::injected_optional(),
+                        &P::injected_optional_names(),
+                    )
+                },
                 also_provides: P::also_provides,
                 register: P::register,
                 register_overridden: P::__nestrs_register_overridden,
-            }
-        }
-
-        /// Its required, then its optional, dependencies, each with its label.
-        fn waits_on(&self) -> Vec<(TypeId, &'static str)> {
-            let (required, required_names) = ((self.dependencies)(), (self.dependency_names)());
-            let (optional, optional_names) = (
-                (self.optional_dependencies)(),
-                (self.optional_dependency_names)(),
-            );
-            labelled(&required, &required_names)
-                .chain(labelled(&optional, &optional_names))
-                .collect()
-        }
-
-        fn stalled(&self) -> StalledProvider {
-            StalledProvider {
-                name: self.name,
-                provides: vec![self.key],
-                dependencies: (self.dependencies)(),
-                dependency_names: (self.dependency_names)(),
-                optional_dependencies: (self.optional_dependencies)(),
-                optional_dependency_names: (self.optional_dependency_names)(),
             }
         }
     }
@@ -283,31 +257,27 @@ pub(crate) mod __private {
     impl PoolReport {
         /// The report of `providers`, each entry's labels kept beside it.
         pub fn of(providers: &[PooledProvider]) -> Self {
-            let mut report = Self {
-                injected: Vec::new(),
-                injected_names: Vec::new(),
-                injected_optional: Vec::new(),
-                injected_optional_names: Vec::new(),
-                also_provides: Vec::new(),
-            };
-            for provider in providers {
-                let (ids, names) = ((provider.injected)(), (provider.injected_names)());
-                for (id, name) in labelled(&ids, &names) {
-                    report.injected.push(id);
-                    report.injected_names.push(name);
-                }
-                let (ids, names) = (
-                    (provider.injected_optional)(),
-                    (provider.injected_optional_names)(),
-                );
-                for (id, name) in labelled(&ids, &names) {
-                    report.injected_optional.push(id);
-                    report.injected_optional_names.push(name);
-                }
-                report.also_provides.push((provider.key, provider.name));
-                report.also_provides.extend((provider.also_provides)());
+            let (optional, required): (Vec<_>, Vec<_>) = providers
+                .iter()
+                .flat_map(|provider| (provider.injections)())
+                .partition(|(_, _, optional)| *optional);
+            let (injected, injected_names) =
+                required.into_iter().map(|(id, name, _)| (id, name)).unzip();
+            let (injected_optional, injected_optional_names) =
+                optional.into_iter().map(|(id, name, _)| (id, name)).unzip();
+            let also_provides = providers
+                .iter()
+                .flat_map(|provider| {
+                    std::iter::once((provider.key, provider.name)).chain((provider.also_provides)())
+                })
+                .collect();
+            Self {
+                injected,
+                injected_names,
+                injected_optional,
+                injected_optional_names,
+                also_provides,
             }
-            report
         }
     }
 
@@ -333,7 +303,6 @@ pub(crate) mod __private {
             declaration: TypeId::of::<D>(),
             declared_by,
             listed_by,
-            layers: specs.iter().map(|spec| (spec.type_id, spec.name)).collect(),
             providers,
         };
         builder
@@ -400,22 +369,24 @@ pub(crate) mod __private {
         loop {
             let pending: HashSet<TypeId> = waiting.iter().map(|l| l.provider.key).collect();
             let mut still = Vec::new();
-            let mut progressed = false;
-            for layer in std::mem::take(&mut waiting) {
-                match builder.registration(layer.provider.key) {
-                    Registration::Held => continue,
-                    Registration::Overridden => {
+            for layer in &waiting {
+                let key = layer.provider.key;
+                match builder.origin(key) {
+                    Some(Origin::Override) => {
                         builder = layer.registering(builder, layer.provider.register_overridden);
-                        progressed = true;
                         continue;
                     }
-                    Registration::Absent => {}
+                    Some(_) => continue,
+                    None => {}
                 }
-                if let Some((_, dependency)) = layer
-                    .provider
-                    .waits_on()
-                    .into_iter()
-                    .find(|(dependency, _)| scoped.contains(dependency))
+                let waits = (layer.provider.waits_on)();
+                if let Some((_, dependency)) =
+                    labelled(&waits.dependencies, &waits.dependency_names)
+                        .chain(labelled(
+                            &waits.optional_dependencies,
+                            &waits.optional_dependency_names,
+                        ))
+                        .find(|(dependency, _)| scoped.contains(dependency))
                 {
                     builder = builder.refuse(ScopeViolationError {
                         module: layer.module(),
@@ -424,31 +395,25 @@ pub(crate) mod __private {
                     });
                     continue;
                 }
-                let required_ready = (layer.provider.dependencies)()
+                let ready = waits
+                    .dependencies
                     .iter()
-                    .all(|dependency| builder.contains(*dependency));
-                let optional_ready =
-                    (layer.provider.optional_dependencies)()
-                        .iter()
-                        .all(|dependency| {
-                            builder.contains(*dependency) || !pending.contains(dependency)
-                        });
-                if !required_ready || !optional_ready {
-                    still.push(layer);
+                    .all(|dependency| builder.contains(*dependency))
+                    && waits.optional_dependencies.iter().all(|dependency| {
+                        builder.contains(*dependency) || !pending.contains(dependency)
+                    });
+                if !ready {
+                    still.push(*layer);
                     continue;
                 }
                 builder = layer.registering(builder, layer.provider.register);
-                builder.note_pooled_provider(layer.provider.key);
-                progressed = true;
-                builder = if matches!(
-                    builder.registration(layer.provider.key),
-                    Registration::Absent
-                ) {
-                    builder.refuse(MissingDependencyError::new(
+                builder.note_pooled_provider(key);
+                if builder.origin(key).is_none() {
+                    builder = builder.refuse(MissingDependencyError::new(
                         layer.module(),
                         layer.declared_by,
                         layer.provider.name,
-                    ))
+                    ));
                 } else {
                     tracing::debug!(
                         target: crate::target::LAYERS,
@@ -456,21 +421,21 @@ pub(crate) mod __private {
                         pool = crate::type_name::shorten(layer.declared_by),
                         "a pool registered the layer it lists",
                     );
-                    builder
-                };
+                }
             }
+            let stuck = still.len() == waiting.len();
             waiting = still;
-            if waiting.is_empty() || !progressed {
+            if stuck {
                 break;
             }
         }
-        let Some(first) = waiting.first().copied() else {
+        let Some(first) = waiting.first() else {
             return builder;
         };
         for layer in &waiting {
             builder.note_pooled_provider(layer.provider.key);
         }
-        let stalled = waiting.iter().map(|l| l.provider.stalled()).collect();
+        let stalled = waiting.iter().map(|l| (l.provider.waits_on)()).collect();
         record_stall(builder, first.declaration, first.module(), stalled)
     }
 

@@ -21,12 +21,9 @@ use nest_rs_core::{
 
 use crate::refused_boot;
 
-/// `$name` as a pooled interceptor doing nothing, its fields as written.
-macro_rules! layer {
-    ($name:ident $({ $($field:tt)* })?) => {
-        #[injectable]
-        struct $name { $($($field)*)? }
-
+/// `$name` as an interceptor doing nothing.
+macro_rules! passes_through {
+    ($name:ident) => {
         impl Layer for $name {}
 
         #[async_trait]
@@ -35,6 +32,16 @@ macro_rules! layer {
                 next.run(cx).await
             }
         }
+    };
+}
+
+/// `$name` as a pooled interceptor doing nothing, its fields as written.
+macro_rules! layer {
+    ($name:ident $({ $($field:tt)* })?) => {
+        #[injectable]
+        struct $name { $($($field)*)? }
+
+        passes_through!($name);
     };
 }
 
@@ -149,14 +156,7 @@ struct Tagged {
     tag: &'static str,
 }
 
-impl Layer for Tagged {}
-
-#[async_trait]
-impl Interceptor for Tagged {
-    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
-        next.run(cx).await
-    }
-}
+passes_through!(Tagged);
 
 #[module(providers = [GlobalInterceptors<(Tagged,)>])]
 struct ListsTagged;
@@ -209,18 +209,7 @@ async fn a_layer_the_app_holds_answers_for_nothing_it_would_inject() {
     assert!(app.container().get::<Fenced>().is_some());
 }
 
-/// Listed by two pools of different families.
-#[injectable]
-struct InTwoPools;
-
-impl Layer for InTwoPools {}
-
-#[async_trait]
-impl Interceptor for InTwoPools {
-    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
-        next.run(cx).await
-    }
-}
+layer!(InTwoPools);
 
 #[async_trait]
 impl ExceptionFilter for InTwoPools {
@@ -412,34 +401,15 @@ async fn a_provider_built_without_a_layer_only_a_pool_lists_is_told_to_list_it()
     assert!(said.contains("once every module is built"), "{said}");
 }
 
-#[injectable]
-struct CyclingFirst {
+layer!(CyclingFirst {
     #[inject]
     other: Arc<CyclingSecond>,
-}
+});
 
-#[injectable]
-struct CyclingSecond {
+layer!(CyclingSecond {
     #[inject]
     other: Arc<CyclingFirst>,
-}
-
-impl Layer for CyclingFirst {}
-impl Layer for CyclingSecond {}
-
-#[async_trait]
-impl Interceptor for CyclingFirst {
-    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
-        next.run(cx).await
-    }
-}
-
-#[async_trait]
-impl Interceptor for CyclingSecond {
-    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
-        next.run(cx).await
-    }
-}
+});
 
 #[module(providers = [GlobalInterceptors<(CyclingFirst, CyclingSecond)>])]
 struct ListsACycle;
@@ -487,14 +457,7 @@ async fn a_layer_a_pool_registers_injecting_a_scoped_provider_is_refused_naming_
 #[injectable(scope = request)]
 struct ScopedLayer;
 
-impl Layer for ScopedLayer {}
-
-#[async_trait]
-impl Interceptor for ScopedLayer {
-    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
-        next.run(cx).await
-    }
-}
+passes_through!(ScopedLayer);
 
 #[module(providers = [GlobalInterceptors<(ScopedLayer,)>])]
 struct ListsAScopedLayer;
@@ -511,14 +474,7 @@ async fn a_scoped_layer_a_pool_alone_lists_is_refused_as_a_layer() {
 /// Its registration registers nothing, as a hand-written one may.
 struct RegistersNothing;
 
-impl Layer for RegistersNothing {}
-
-#[async_trait]
-impl Interceptor for RegistersNothing {
-    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
-        next.run(cx).await
-    }
-}
+passes_through!(RegistersNothing);
 
 impl Discoverable for RegistersNothing {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {

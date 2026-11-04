@@ -123,7 +123,9 @@ pub mod __private {
     };
     pub use crate::scope::is_scope_token;
     pub use crate::stage::{RefusalMark, Refused, check_guards};
-    pub use crate::validate::{boot_validate_guards, validate_guard_chain, validate_route_chain};
+    pub use crate::validate::{
+        boot_validate_guards, identifying_guard, validate_guard_chain, validate_route_chain,
+    };
 
     pub use nest_rs_core::__private::{ResolvedLayer, compose_chain};
 }

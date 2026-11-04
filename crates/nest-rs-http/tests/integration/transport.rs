@@ -1453,3 +1453,41 @@ async fn a_controller_the_transport_serves_is_not_named_at_run() {
     logs.expect_one(target::APP, "app ready");
     logs.expect_none(target::APP, UNSERVED);
 }
+
+/// A surface mounted by hand, declared gated, carrying no unit.
+struct GatedByHand;
+
+impl nest_rs_core::Discoverable for GatedByHand {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<GatedByHand, HttpEndpointMeta>(
+            HttpEndpointMeta::new(&crate::GATED_MOUNT, "/gated", "gated", |_c, routes| {
+                routes.route(Method::GET, "/gated", crate::answering("served"));
+            })
+            .owned_by("GatedByHand"),
+        )
+    }
+}
+
+#[module(providers = [GatedByHand])]
+struct GatedByHandModule;
+
+/// Its posture says it runs a guard; served, it would answer every caller.
+#[tokio::test]
+async fn a_gated_surface_no_guard_covers_refuses_the_boot() {
+    let app = App::builder()
+        .module::<GatedByHandModule>()
+        .build()
+        .await
+        .expect("the module itself builds");
+    let refused = crate::built(&HttpConfig::default())
+        .configure(app.container())
+        .await
+        .expect_err("no guard covers it");
+    let said = refused.to_string();
+    assert!(
+        said.contains("/gated")
+            && said.contains("GlobalGuards")
+            && said.contains("Posture::Public"),
+        "{said}",
+    );
+}

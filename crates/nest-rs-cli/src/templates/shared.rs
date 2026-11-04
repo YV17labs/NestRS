@@ -434,10 +434,13 @@ pub(crate) static AGENTS_BODY: &str = concat!(
     r#"
 ## Access posture — declared per operation, never inferred
 
-Every query, message and tool declares its posture, or it does not compile; an
-HTTP route a guard covers may leave it to the guard, and one no guard covers
-declares it or refuses the boot. There are three declarations, and the answer
-picks between them — not the caller:
+A GraphQL operation declares its posture, or it does not compile: `/graphql`
+admits a caller with no credential, so the posture is what refuses a visitor. An
+HTTP route, a WebSocket message and an MCP operation a guard covers may leave it
+to the guard, and one no guard covers declares it or refuses the boot; so does
+an operation of an MCP endpoint `McpAccess::Public` opens, whatever guards stand
+beside it. There are three declarations, and the answer picks between them — not
+the caller:
 
 - `#[authorize(Action, Entity)]` — the class-level gate **plus** automatic
   field-level masking of the value returned. Reach for it whenever the answer is
@@ -447,8 +450,9 @@ picks between them — not the caller:
   scope challenge, on a capability no table holds (`#[subject] pub struct
   Exporting;`, granted with `ab.can(Action::Manage, Exporting)`), and no mask:
   the answer is no row.
-- `#[public]` — no gate and no mask: any caller the guards admitted, a visitor
-  included where the edge admits one. It is an opening, written on purpose.
+- `#[public]` — no gate and no mask: a caller with no credential is admitted. It
+  is an opening, written on purpose; behind an upgrade or an MCP endpoint that
+  authenticates, where it could open nothing, it refuses the boot.
 
 **Rows are ability-scoped, and the guards are what install the scope.** `Repo`
 filters every read by the caller's ambient `Ability`; with none installed a read

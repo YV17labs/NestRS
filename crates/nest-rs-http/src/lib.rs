@@ -262,8 +262,8 @@ pub mod __private {
     pub use crate::documented_payload::{
         DocumentedPayload, PayloadProbe, UndocumentedPayloadProbe,
     };
-    pub use crate::endpoint::{OriginCheck, checks_origin, guarded_by};
-    pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture};
+    pub use crate::endpoint::{OriginCheck, checks_origin, decided_per_unit, guarded_by};
+    pub use crate::endpoint_guards::{EndpointGuardsMeta, EndpointPosture, carried_request_chain};
     pub use crate::error::{OriginRefused, OriginRefusedReason};
     pub use crate::guard_stage::{
         attached, attached_pending, behind_guards, check_request, denial_to_http_error,

@@ -60,8 +60,8 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   (`#[authorize(Read, E, unmasked)]`) to keep the gate but mask a custom
 ///   shape (e.g. a cursor connection) yourself via
 ///   `nest_rs_authz::masked_output_ambient`.
-/// - `#[public]` — deliberately ungated: no `#[authorize]` gate, no response
-///   mask. Struct- and method-level `#[use_guards]` still run.
+/// - `#[public]` — a caller with no credential is admitted: no `#[authorize]`
+///   gate, no response mask. Struct- and method-level `#[use_guards]` still run.
 ///
 /// A `#[field_resolver]` takes neither: it inherits the operation's posture
 /// (bind `#[use_guards]` beside it for an extra per-field gate).

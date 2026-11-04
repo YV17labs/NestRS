@@ -3,7 +3,9 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{AccessGraphError, App, AppLifecycle, module, target};
+use nest_rs_core::{AccessGraphError, App, AppLifecycle, injectable, module, target};
+use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs_testing::LogCapture;
 use nest_rs_ws::{WsClient, WsModule, WsServer, gateway, messages};
 
 #[gateway(path = "/unwired")]
@@ -222,86 +224,4 @@ async fn a_service_in_a_module_the_gateway_imports_still_resolves_the_registry()
         .get::<RoomsNotifier>()
         .expect("RoomsNotifier is built");
     assert_eq!(notifier.live(), 0, "and it holds a real, empty registry");
-}
-
-use nest_rs_core::{Layer, Transport, async_trait, injectable};
-use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{HttpConfig, HttpModule, HttpTransport};
-use nest_rs_testing::LogCapture;
-
-#[injectable]
-#[derive(Default)]
-struct TicketGuard;
-
-impl Layer for TicketGuard {}
-
-#[async_trait]
-impl Guard for TicketGuard {
-    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        match nest_rs_http::HttpView::of(cx)?.request().header("x-ticket") {
-            Some(_) => Ok(()),
-            None => Err(Denial::unauthorized("missing ticket")),
-        }
-    }
-
-    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        Ok(())
-    }
-}
-
-impl GuardFor<nest_rs_http::HttpView> for TicketGuard {}
-
-#[gateway(path = "/guarded")]
-#[use_guards(TicketGuard)]
-struct GuardedGateway;
-
-#[messages]
-impl GuardedGateway {
-    #[subscribe_message("ping")]
-    #[public]
-    async fn ping(&self) -> String {
-        "pong".into()
-    }
-}
-
-#[module(imports = [WsModule], providers = [GuardedGateway, TicketGuard])]
-struct GuardedModule;
-
-const UNGUARDED_EDGES: &str = "unguarded self-mount edges detected";
-
-async fn configure_and_capture<M: nest_rs_core::Module + 'static>() -> Vec<String> {
-    let app = App::builder()
-        .module::<M>()
-        .build()
-        .await
-        .expect("the module builds");
-    let logs = LogCapture::install();
-    let mut transport =
-        HttpTransport::from_config(&HttpConfig::default()).expect("the defaults are in range");
-    transport
-        .configure(app.container())
-        .await
-        .expect("a lone gateway mounts");
-    logs.find("nest_rs::layers", UNGUARDED_EDGES)
-        .into_iter()
-        .map(|e| e.field("endpoints").unwrap_or_default())
-        .collect()
-}
-
-#[tokio::test]
-async fn a_gateway_binding_its_own_guards_is_not_reported_as_an_unguarded_edge() {
-    let warned = configure_and_capture::<GuardedModule>().await;
-    assert!(
-        warned.is_empty(),
-        "a gateway carrying #[use_guards] must not be listed as unguarded: {warned:?}",
-    );
-}
-
-#[tokio::test]
-async fn a_gateway_with_no_guard_at_all_is_still_reported() {
-    let warned = configure_and_capture::<WiredModule>().await;
-    assert!(
-        warned.iter().any(|e| e.contains("/wired")),
-        "an edge with neither global nor gateway guards must still warn: {warned:?}",
-    );
 }

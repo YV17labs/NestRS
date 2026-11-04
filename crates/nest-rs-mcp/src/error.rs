@@ -552,6 +552,41 @@ pub fn resource_not_found() -> McpError {
     )
 }
 
+/// An endpoint's operations, refused at the kernel's wiring step: the boot can
+/// read what the impl half cannot, the app's guards and its opening.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum McpPostureError {
+    /// Operations of an endpoint the app opened that state no posture, every
+    /// one of them.
+    #[error(
+        "operations stating no posture on an MCP endpoint `McpAccess::Public` opens: {operations} \
+         — no guard runs at an opened endpoint's request, so an operation's posture is what \
+         refuses a visitor; declare `#[authorize(Action, Subject)]`, or `#[public]` to open it on \
+         purpose, or leave the endpoint gated for its guards to cover it"
+    )]
+    Undeclared { operations: String },
+    /// `#[public]` operations behind a guard no caller without a credential
+    /// passes.
+    #[error(
+        "`#[public]` on {operations} can open nothing: the MCP endpoint's request runs `{guard}`, \
+         so a caller with no credential never reaches an operation — drop `#[public]`, the guards \
+         covering an operation deciding it (`#[authorize(Action, Subject)]` adds a gate), or open \
+         the endpoint with `McpModule::for_root(McpAccess::Public)`"
+    )]
+    PublicBehindGuard {
+        operations: String,
+        guard: &'static str,
+    },
+    /// `#[public]` operations of an endpoint denying every request.
+    #[error(
+        "`#[public]` on {operations} can open nothing: no guard runs at the MCP endpoint's \
+         request, so it denies every request — open the endpoint with \
+         `McpModule::for_root(McpAccess::Public)`, or list a global guard pool or \
+         `EndpointGuards<McpView, _>` and drop `#[public]`"
+    )]
+    PublicBehindDenial { operations: String },
+}
+
 /// MCP's words for a resource the server cannot read.
 const RESOURCE_NOT_FOUND: &str = "Resource not found";
 

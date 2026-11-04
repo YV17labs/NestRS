@@ -23,12 +23,9 @@ use nest_rs_codegen::__private::{
 };
 use nest_rs_codegen::take_flag_attr;
 
-/// WS's half of the shared posture grammar, mandatory per message.
+/// WS's half of the shared posture grammar: optional per message, the guards at
+/// the upgrade deciding one that states none.
 const POSTURE: PostureRules = PostureRules {
-    operation: "#[subscribe_message]",
-    public_means: "no gate and no mask — the guards bound on the gateway and beside \
-                   the message still run, and the connection's upgrade already \
-                   authenticated it",
     transport: "WebSockets",
     bind_unsupported_because: "a message takes one payload value, not the named id argument \
                                the binding reads. Keep `#[authorize(Action, Entity)]` and load \
@@ -277,7 +274,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 });
                 quote! { ::core::option::Option::Some(#class_gate) }
             }
-            Posture::Public => quote! { ::core::option::Option::None },
+            Posture::Public | Posture::Undeclared => quote! { ::core::option::Option::None },
         };
         let site = message_site(&MessageSite {
             self_ty: &self_ty,
@@ -303,11 +300,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 &#method_pipe_specs,
             );
         });
+        let guarded = !guards.is_empty();
         declared_messages.push(quote! {
             #(#cfgs)*
             __messages.push(::nest_rs_ws::__private::DeclaredMessage {
                 site: #site_ref,
                 pipes: #method_pipe_specs,
+                guarded: #guarded,
             });
         });
 
@@ -637,6 +636,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 let __carried = __sockets.clone();
                 builder.attach_meta::<#self_ty, ::nest_rs_ws::__private::nest_rs_http::HttpEndpointMeta>(
                     ::nest_rs_ws::__private::nest_rs_http::__private::checks_origin(
+                    ::nest_rs_ws::__private::nest_rs_http::__private::decided_per_unit(
                     ::nest_rs_ws::__private::nest_rs_http::__private::guarded_by(
                     ::nest_rs_ws::__private::nest_rs_http::HttpEndpointMeta::new(
                         <#self_ty>::__NESTRS_UPGRADE,
@@ -669,7 +669,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     .owned_by(#gateway_name)
                     .runs_detached(__sockets),
                     <#self_ty>::__nestrs_edge_guard_specs(),
-                    ),
+                    )),
                     ::nest_rs_ws::__private::nest_rs_http::__private::OriginCheck::Upgrades,
                     ::nest_rs_ws::__private::refused_origin,
                 ))

@@ -175,13 +175,11 @@ pub struct {{gateway}} {
 
 #[messages]
 impl {{gateway}} {
-    // Every message declares its access posture, and this scaffold's reply is a
-    // broadcast rather than entity rows — so `#[public]`: no gate and no mask on
-    // the message, the caller already admitted by the guards the upgrade ran.
-    // A message that answers with entity rows takes
-    // `#[authorize(Read, Entity)]` instead, and the mask comes with it.
+    // Covered by the two guards on the struct, which ran at the upgrade, so it
+    // needs no posture of its own; the boot refuses a message no guard covers.
+    // A message answering with entity rows declares
+    // `#[authorize(Read, Entity)]`, and the mask comes with it.
     #[subscribe_message("{{kebab}}.{{op}}")]
-    #[public]
     async fn {{op}}(&self, client: &WsClient) {
 {{op_body}}
         // Best-effort fan-out: a peer disconnecting mid-broadcast is normal, so

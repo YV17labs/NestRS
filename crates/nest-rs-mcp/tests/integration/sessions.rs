@@ -86,6 +86,19 @@ struct OwnedTools;
 #[tools]
 impl OwnedTools {
     #[tool(description = "Answers at once.")]
+    async fn ping(&self) -> Result<String, McpError> {
+        Ok("pong".to_owned())
+    }
+}
+
+/// The same path, on the endpoint an app opened.
+#[mcp(path = "/mcp/owned")]
+#[derive(Clone, Default)]
+struct OpenedTools;
+
+#[tools]
+impl OpenedTools {
+    #[tool(description = "Answers at once.")]
     #[public]
     async fn ping(&self) -> Result<String, McpError> {
         Ok("pong".to_owned())
@@ -99,7 +112,7 @@ struct GatedModule;
 
 #[module(
     imports = [crate::open_mcp()],
-    providers = [ByName, ByNameAuthn, OwnedTools, GlobalGuards<(ByNameAuthn,)>],
+    providers = [ByName, ByNameAuthn, OpenedTools, GlobalGuards<(ByNameAuthn,)>],
 )]
 struct PublicModule;
 

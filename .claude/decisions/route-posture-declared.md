@@ -73,3 +73,41 @@ an e2e suite boots the pool it covers routes with. A route the pool covers
 still needs no posture of its own; a pool declared by a module the app
 imports, where it would cover every route without a line of the app's,
 fails the boot.
+
+## 2026-11-04 — WebSockets and a gated MCP endpoint take this grammar
+
+Agreed by the owner on 2026-10-31 ("Tout faire (Recommandé)", the identity
+audit's second pass, its item on `#[public]`). The refusal above, "a guard-only
+route would have to write `#[public]`, labelling as open what is not", held for
+HTTP alone: six messages of the demo, behind an upgrade `AuthnGuard` runs, said
+`#[public]`, and `nestrs g ws` wrote it. So **`#[public]` now means one thing on
+every edge: a caller with no credential is admitted.** A WS message under its
+gateway's guards, the pool or a guard of its own, and an MCP operation under a
+`Gated` endpoint the pool or `EndpointGuards` cover, need no posture; one no guard
+covers refuses the boot like a route. GraphQL and an endpoint `McpAccess::Public`
+opens keep the mandatory posture: they admit a visitor in band, so "covered by a
+guard" does not mean authenticated there, and the posture is what refuses one.
+
+**`#[public]` that can open nothing refuses the boot**, on what the boot can read
+about the request carrying the unit: a guard declaring
+`GuardPhase::Authentication` or `Authorization` runs there, or a `Gated` endpoint
+runs no guard and denies every request. On HTTP the first is no contradiction, an
+authentication guard reading `#[public]` and admitting the visitor; a request's
+guards run before a WS or MCP unit is known, so nothing can read it there.
+
+**Refused:**
+
+- **`#[public]` refused beside any guard**, the audit's reading: a rate limit in
+  the pool identifies no one, so a visitor does reach the message, and refusing the
+  word would leave that opening no spelling, an absence where the first value asks
+  for a visible line. `GuardPhase::Other` is what the boot reads. A hand-written
+  authentication guard declaring no phase leaves `#[public]` in place, a mislabel
+  that errs closed.
+- **A subject-less `#[authorize]`** meaning any caller a principal backs (the
+  audit's other option): a second way to say what a covering guard says, on HTTP
+  already refused by this entry.
+- **A warn for a gateway no guard covers** (the transport's, until now): the opening
+  was an absence. A gateway's messages say `#[public]` or refuse the boot, and the
+  transport refuses a hand-built `Gated` self-mount running no guard, the same gap.
+  A gateway no guard covers and declaring no message has no line that could say
+  `#[public]`, its hooks running for any caller, and is refused too.

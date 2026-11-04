@@ -896,7 +896,7 @@ fn class_gate(posture: &Posture) -> TokenStream2 {
                     as ::nest_rs_core::__private::ClassGate,
             )
         },
-        Posture::Public => quote!(::core::option::Option::None),
+        Posture::Public | Posture::Undeclared => quote!(::core::option::Option::None),
     }
 }
 
@@ -1361,9 +1361,13 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
     let site_pushes = operations.all().map(|op| {
         let cfgs = &op.cfgs;
         let site = site_ref(self_ty, op.name());
+        let declares_posture = op.posture.is_declared();
         quote! {
             #(#cfgs)*
-            __nestrs_sites.push(#site);
+            __nestrs_sites.push(::nest_rs_mcp::__private::DeclaredOperation {
+                site: #site,
+                declares_posture: #declares_posture,
+            });
         }
     });
     let probes = operations.all().flat_map(|op| {
@@ -1384,10 +1388,11 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
         impl #self_ty {
             #(#items)*
 
-            /// The site each operation runs, for the boot to compose.
+            /// The site each operation runs and whether it states a posture,
+            /// for the boot to check and compose.
             #[doc(hidden)]
             pub fn __nestrs_mcp_operation_sites()
-                -> ::std::vec::Vec<&'static ::nest_rs_core::__private::Site>
+                -> ::std::vec::Vec<::nest_rs_mcp::__private::DeclaredOperation>
             {
                 #[allow(unused_mut, reason = "every operation may be compiled out")]
                 let mut __nestrs_sites = ::std::vec::Vec::new();
@@ -1610,12 +1615,11 @@ pub(crate) fn doc_comment(attrs: &[Attribute]) -> Option<TokenStream2> {
     Some(quote!(::core::concat!(#(#spaced),*)))
 }
 
-/// MCP's half of the shared posture grammar, per operation role.
+/// MCP's half of the shared posture grammar, per operation role: optional, the
+/// endpoint's guards deciding one that states none, and the boot refusing one
+/// an endpoint opened to every caller leaves undeclared.
 fn posture_rules(role: Role) -> PostureRules {
     PostureRules {
-        operation: role.attr(),
-        public_means: "no gate and no mask — `#[use_guards]` guards still run, and the \
-                       guards at the endpoint's request already authenticated it",
         transport: "MCP",
         bind_unsupported_because: match role {
             Role::Tool | Role::Prompt => {

@@ -11,16 +11,17 @@ use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{
     ClassGate, GuardStage, ResolvedLayer, new_unit_context, report_unresolved,
 };
-use nest_rs_core::{Container, Failure, Handler, Peer, UnitContext};
+use nest_rs_core::{Container, Failure, Handler, Peer, Posture, UnitContext};
 use nest_rs_guards::__private::{
     GlobalBucket, GuardSpec, Refused, SiteChainSources, boot_validate_guards, check_guards,
-    client_message, compose_site_chain, denial_code, denial_of, denial_reason,
+    client_message, compose_site_chain, denial_code, denial_of, denial_reason, identifying_guard,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::OriginRefused;
 
 use crate::envelope::{WsError, WsReply};
-use crate::message::message_site;
+use crate::error::GatewayPostureError;
+use crate::message::{DeclaredMessage, message_site};
 use crate::server::WsClient;
 use crate::view::WsView;
 
@@ -140,14 +141,58 @@ pub(crate) fn gate_alone(
 }
 
 /// The upgrade's guards of the gateway at `path`, phase-validated (an HTTP
-/// `GET`, the entry the check reads) and resolvable on `container`.
+/// `GET`, the entry the check reads) and resolvable on `container`, the pool's
+/// first.
 pub(crate) fn validate_upgrade(
     container: &Container,
     path: &str,
     upgrade: &[GuardSpec],
-) -> nest_rs_core::anyhow::Result<()> {
+) -> nest_rs_core::anyhow::Result<Vec<ResolvedLayer<dyn Guard>>> {
     boot_validate_guards(container, upgrade, &upgrade_site(path))
         .map_err(nest_rs_core::anyhow::Error::msg)
+}
+
+/// HTTP's posture grammar on the gateway at `path`, whose `upgrade` chain runs
+/// before any of its `messages`: one no guard covers says `#[public]`, and one
+/// saying it is reachable with no credential.
+pub(crate) fn check_posture(
+    path: &str,
+    upgrade: &[ResolvedLayer<dyn Guard>],
+    messages: &[DeclaredMessage],
+) -> Result<(), GatewayPostureError> {
+    let events = |of: &dyn Fn(&DeclaredMessage) -> bool| -> Vec<&str> {
+        messages
+            .iter()
+            .filter(|message| of(message))
+            .map(|message| message.site.handler().address())
+            .collect()
+    };
+    let is_public = |message: &DeclaredMessage| message.site.handler().posture() == Posture::Public;
+    if upgrade.is_empty() && messages.is_empty() {
+        return Err(GatewayPostureError::Unopened {
+            path: path.to_owned(),
+        });
+    }
+    if upgrade.is_empty() {
+        let uncovered = events(&|message| !message.guarded && !is_public(message));
+        if !uncovered.is_empty() {
+            return Err(GatewayPostureError::Uncovered {
+                path: path.to_owned(),
+                messages: uncovered.join(", "),
+            });
+        }
+    }
+    if let Some(guard) = identifying_guard(upgrade) {
+        let mislabelled = events(&is_public);
+        if !mislabelled.is_empty() {
+            return Err(GatewayPostureError::PublicBehindGuard {
+                path: path.to_owned(),
+                messages: mislabelled.join(", "),
+                guard,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// A gateway's upgrade from a browser origin the transport's policy refuses,
@@ -161,7 +206,7 @@ mod tests {
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
     use nest_rs_core::async_trait;
     use nest_rs_core::layer_chain::LayerSite;
-    use nest_rs_core::{AmbientValue, Layer, Posture};
+    use nest_rs_core::{AmbientValue, Layer};
     use serde_json::json;
 
     use super::*;

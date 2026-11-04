@@ -114,7 +114,6 @@ impl OrderedGateway {
     /// Reverse order on purpose: the per-message chain is not phase-validated.
     #[subscribe_message("ping")]
     #[use_guards(Authorize, Authenticate)]
-    #[public]
     async fn ping(&self, _client: &WsClient) -> String {
         "pong".into()
     }
@@ -454,5 +453,353 @@ mod request_decided {
             "{viewless:?}"
         );
         app.shutdown().await.expect("shuts down");
+    }
+}
+
+/// What the boot says of a gateway's posture: a message no guard covers, and a
+/// `#[public]` message no visitor could reach.
+mod posture {
+    use nest_rs_core::{Layer, Module, UnitContext, async_trait, injectable, module};
+    use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, GuardPhase};
+    use nest_rs_http::HttpView;
+    use nest_rs_testing::TestApp;
+    use nest_rs_testing::ws::WsApp;
+    use nest_rs_ws::{WsClient, WsModule, WsView, gateway, messages};
+
+    use super::Authenticate;
+
+    /// Admits every request and decides nothing about who is calling, as a rate
+    /// limit does.
+    #[injectable]
+    #[derive(Default)]
+    struct Throttle;
+
+    impl Layer for Throttle {}
+
+    #[async_trait]
+    impl Guard for Throttle {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for Throttle {}
+    impl GuardFor<WsView> for Throttle {}
+
+    async fn refusal<M: Module + 'static>() -> String {
+        match TestApp::for_module::<M>().await {
+            Ok(_) => panic!("the app must not boot"),
+            Err(err) => format!("{err:#}"),
+        }
+    }
+
+    async fn served<M: Module + 'static>() -> WsApp {
+        TestApp::builder()
+            .module::<M>()
+            .build_ws()
+            .await
+            .expect("the gateway boots")
+    }
+
+    async fn answer(app: &WsApp, path: &str, event: &str) -> serde_json::Value {
+        let mut socket = app.socket(path).connect().await;
+        socket.send(event, serde_json::json!({})).await;
+        socket.next_envelope().await["data"].take()
+    }
+
+    #[gateway(path = "/ws/open/uncovered")]
+    struct UncoveredGateway;
+
+    #[messages]
+    impl UncoveredGateway {
+        #[subscribe_message("first")]
+        async fn first(&self, _client: &WsClient) -> String {
+            "first".into()
+        }
+
+        #[subscribe_message("second")]
+        async fn second(&self, _client: &WsClient) -> String {
+            "second".into()
+        }
+
+        #[subscribe_message("said")]
+        #[public]
+        async fn said(&self, _client: &WsClient) -> String {
+            "said".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [UncoveredGateway])]
+    struct UncoveredModule;
+
+    #[tokio::test]
+    async fn a_message_no_guard_covers_refuses_the_boot_naming_every_such_message() {
+        let said = refusal::<UncoveredModule>().await;
+        assert!(
+            said.contains("/ws/open/uncovered")
+                && said.contains("first")
+                && said.contains("second"),
+            "{said}",
+        );
+        assert!(!said.contains("said"), "that one opened itself: {said}");
+        assert!(
+            said.contains("#[use_guards")
+                && said.contains("GlobalGuards")
+                && said.contains("#[public]"),
+            "the refusal names every remedy: {said}",
+        );
+    }
+
+    #[gateway(path = "/ws/open/hooks")]
+    struct HooksOnlyGateway;
+
+    #[messages]
+    impl HooksOnlyGateway {
+        #[on_connect]
+        async fn joined(&self, client: &WsClient) {
+            client.join("lobby");
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [HooksOnlyGateway])]
+    struct HooksOnlyModule;
+
+    #[tokio::test]
+    async fn a_gateway_no_guard_covers_and_no_message_opens_refuses_the_boot() {
+        let said = refusal::<HooksOnlyModule>().await;
+        assert!(
+            said.contains("/ws/open/hooks") && said.contains("#[use_guards"),
+            "its hooks run on any connection, and no line says so: {said}",
+        );
+    }
+
+    #[gateway(path = "/ws/covered/gateway")]
+    #[use_guards(Throttle)]
+    struct CoveredGateway;
+
+    #[messages]
+    impl CoveredGateway {
+        #[subscribe_message("ping")]
+        async fn ping(&self, _client: &WsClient) -> String {
+            "covered by the gateway".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Throttle, CoveredGateway])]
+    struct CoveredModule;
+
+    #[tokio::test]
+    async fn a_message_under_the_gateways_guards_needs_no_posture() {
+        let app = served::<CoveredModule>().await;
+        assert_eq!(
+            answer(&app, "/ws/covered/gateway", "ping").await,
+            "covered by the gateway",
+        );
+    }
+
+    #[gateway(path = "/ws/covered/pool")]
+    struct PooledGateway;
+
+    #[messages]
+    impl PooledGateway {
+        #[subscribe_message("ping")]
+        async fn ping(&self, _client: &WsClient) -> String {
+            "covered by the pool".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Throttle, PooledGateway])]
+    struct PooledModule;
+
+    #[module(imports = [PooledModule], providers = [GlobalGuards<(Throttle,)>])]
+    struct PooledApp;
+
+    #[tokio::test]
+    async fn a_message_under_the_pool_needs_no_posture() {
+        let app = served::<PooledApp>().await;
+        assert_eq!(
+            answer(&app, "/ws/covered/pool", "ping").await,
+            "covered by the pool",
+        );
+    }
+
+    #[gateway(path = "/ws/covered/beside")]
+    struct BesideGateway;
+
+    #[messages]
+    impl BesideGateway {
+        #[subscribe_message("ping")]
+        #[use_guards(Throttle)]
+        async fn ping(&self, _client: &WsClient) -> String {
+            "covered beside it".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Throttle, BesideGateway])]
+    struct BesideModule;
+
+    #[tokio::test]
+    async fn a_guard_beside_the_message_covers_it_too() {
+        let app = served::<BesideModule>().await;
+        assert_eq!(
+            answer(&app, "/ws/covered/beside", "ping").await,
+            "covered beside it",
+        );
+    }
+
+    #[gateway(path = "/ws/mislabelled/authenticated")]
+    #[use_guards(Authenticate)]
+    struct MislabelledGateway;
+
+    #[messages]
+    impl MislabelledGateway {
+        #[subscribe_message("mislabelled")]
+        #[public]
+        async fn mislabelled(&self, _client: &WsClient) -> String {
+            "reached by authenticated callers alone".into()
+        }
+
+        #[subscribe_message("honest")]
+        async fn honest(&self, _client: &WsClient) -> String {
+            "covered".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Authenticate, MislabelledGateway])]
+    struct MislabelledModule;
+
+    #[tokio::test]
+    async fn public_behind_an_authenticating_upgrade_refuses_the_boot_it_can_open_nothing() {
+        let said = refusal::<MislabelledModule>().await;
+        assert!(
+            said.contains("mislabelled") && said.contains("Authenticate"),
+            "the refusal names the message and the guard its upgrade runs: {said}",
+        );
+        assert!(!said.contains("honest"), "{said}");
+        assert!(
+            said.contains("drop `#[public]`"),
+            "a covered message needs no posture: {said}",
+        );
+    }
+
+    /// Reads who is calling, a visitor's branch of its own.
+    #[injectable]
+    #[derive(Default)]
+    struct Policy;
+
+    impl Layer for Policy {}
+
+    #[async_trait]
+    impl Guard for Policy {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authorization
+        }
+    }
+
+    impl GuardFor<HttpView> for Policy {}
+
+    #[gateway(path = "/ws/mislabelled/authorized")]
+    #[use_guards(Policy)]
+    struct MislabelledByAuthorizationGateway;
+
+    #[messages]
+    impl MislabelledByAuthorizationGateway {
+        #[subscribe_message("mislabelled")]
+        #[public]
+        async fn mislabelled(&self, _client: &WsClient) -> String {
+            "reached by authorized callers alone".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Policy, MislabelledByAuthorizationGateway])]
+    struct MislabelledByAuthorizationModule;
+
+    #[tokio::test]
+    async fn public_behind_an_authorizing_upgrade_refuses_the_boot_too() {
+        let said = refusal::<MislabelledByAuthorizationModule>().await;
+        assert!(
+            said.contains("mislabelled") && said.contains("Policy"),
+            "{said}"
+        );
+    }
+
+    #[gateway(path = "/ws/mislabelled/pool")]
+    struct MislabelledByThePoolGateway;
+
+    #[messages]
+    impl MislabelledByThePoolGateway {
+        #[subscribe_message("mislabelled")]
+        #[public]
+        async fn mislabelled(&self, _client: &WsClient) -> String {
+            "reached by authenticated callers alone".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Authenticate, MislabelledByThePoolGateway])]
+    struct MislabelledByThePoolModule;
+
+    #[module(imports = [MislabelledByThePoolModule], providers = [GlobalGuards<(Authenticate,)>])]
+    struct MislabelledByThePoolApp;
+
+    #[tokio::test]
+    async fn the_pools_authentication_refuses_a_public_message_as_the_gateways_does() {
+        let said = refusal::<MislabelledByThePoolApp>().await;
+        assert!(
+            said.contains("Authenticate") && said.contains("#[public]"),
+            "{said}"
+        );
+    }
+
+    #[gateway(path = "/ws/open/public")]
+    struct PublicGateway;
+
+    #[messages]
+    impl PublicGateway {
+        #[subscribe_message("ping")]
+        #[public]
+        async fn ping(&self, _client: &WsClient) -> String {
+            "a visitor reads this".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [PublicGateway])]
+    struct PublicModule;
+
+    #[tokio::test]
+    async fn public_on_an_open_gateway_admits_a_visitor() {
+        let app = served::<PublicModule>().await;
+        assert_eq!(
+            answer(&app, "/ws/open/public", "ping").await,
+            "a visitor reads this",
+        );
+    }
+
+    #[gateway(path = "/ws/open/throttled")]
+    #[use_guards(Throttle)]
+    struct ThrottledPublicGateway;
+
+    #[messages]
+    impl ThrottledPublicGateway {
+        #[subscribe_message("ping")]
+        #[public]
+        async fn ping(&self, _client: &WsClient) -> String {
+            "a visitor reads this, throttled".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Throttle, ThrottledPublicGateway])]
+    struct ThrottledPublicModule;
+
+    #[tokio::test]
+    async fn public_beside_a_guard_that_identifies_no_one_stays_an_opening() {
+        let app = served::<ThrottledPublicModule>().await;
+        assert_eq!(
+            answer(&app, "/ws/open/throttled", "ping").await,
+            "a visitor reads this, throttled",
+        );
     }
 }

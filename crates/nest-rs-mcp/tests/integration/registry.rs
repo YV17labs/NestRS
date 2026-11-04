@@ -2177,3 +2177,302 @@ async fn each_operation_mounts_on_a_line_of_its_own() {
             .is_empty()
     );
 }
+
+/// What the boot says of an endpoint's operations: HTTP's grammar where the
+/// endpoint authenticates before any operation runs, the posture mandatory
+/// where the app opened it.
+mod posture {
+    use nest_rs_core::{Layer, Module, UnitContext, async_trait, injectable, module};
+    use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, GuardPhase};
+    use nest_rs_http::{EndpointGuards, HttpView};
+    use nest_rs_mcp::{McpError, McpView, mcp, tools};
+    use nest_rs_testing::TestApp;
+    use nest_rs_testing::mcp::call_tool;
+
+    /// Admits every request and decides nothing about who is calling, as a rate
+    /// limit does.
+    #[injectable]
+    #[derive(Default)]
+    struct Throttle;
+
+    impl Layer for Throttle {}
+
+    #[async_trait]
+    impl Guard for Throttle {
+        async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            nest_rs_core::__private::set_actor_id("throttled");
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for Throttle {}
+    impl GuardFor<McpView> for Throttle {}
+
+    /// Declares it establishes who the caller is.
+    #[injectable]
+    #[derive(Default)]
+    struct Authenticate;
+
+    impl Layer for Authenticate {}
+
+    #[async_trait]
+    impl Guard for Authenticate {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+    }
+
+    impl GuardFor<HttpView> for Authenticate {}
+
+    /// A tool stating no posture, a prompt and a resource stating none, on a
+    /// path of its own.
+    #[mcp(path = "/mcp/undeclared")]
+    #[derive(Clone, Default)]
+    struct UndeclaredTool;
+
+    #[tools]
+    impl UndeclaredTool {
+        /// Answer.
+        #[tool]
+        async fn answer(&self) -> Result<String, McpError> {
+            Ok("answered".to_owned())
+        }
+
+        /// Draft.
+        #[prompt]
+        async fn draft(&self) -> Result<nest_rs_mcp::model::GetPromptResult, McpError> {
+            Ok(nest_rs_mcp::model::GetPromptResult::new(vec![]))
+        }
+
+        /// A file.
+        #[resource(template = "file://{name}")]
+        async fn file(&self, name: String) -> Result<String, McpError> {
+            Ok(name)
+        }
+
+        /// Stated, so the refusal leaves it out.
+        #[tool]
+        #[public]
+        async fn stated(&self) -> Result<String, McpError> {
+            Ok("stated".to_owned())
+        }
+
+        /// A guard beside it decides nothing about a visitor here: only the
+        /// posture says what an opened endpoint admits.
+        #[tool]
+        #[use_guards(Throttle)]
+        async fn guarded(&self) -> Result<String, McpError> {
+            Ok("guarded".to_owned())
+        }
+    }
+
+    #[module(imports = [crate::open_mcp()], providers = [Throttle, UndeclaredTool])]
+    struct OpenedUndeclaredModule;
+
+    async fn refusal<M: Module + 'static>() -> String {
+        match TestApp::for_module::<M>().await {
+            Ok(_) => panic!("the app must not boot"),
+            Err(err) => format!("{err:#}"),
+        }
+    }
+
+    async fn answers<M: Module + 'static>(path: &str, tool: &str, said: &str) {
+        let app = TestApp::for_module::<M>().await.expect("the app boots");
+        let body = call_tool(app.http(), path, tool, None).await;
+        assert!(body.contains(said), "{body}");
+    }
+
+    #[tokio::test]
+    async fn an_operation_of_an_opened_endpoint_declaring_no_posture_refuses_the_boot() {
+        let said = refusal::<OpenedUndeclaredModule>().await;
+        for named in ["answer", "draft", "file://{name}", "guarded"] {
+            assert!(said.contains(named), "names every such unit: {said}");
+        }
+        assert!(!said.contains("stated"), "{said}");
+        assert!(
+            said.contains("McpAccess::Public")
+                && said.contains("#[authorize")
+                && said.contains("#[public]"),
+            "says why and names both postures: {said}",
+        );
+    }
+
+    #[module(imports = [OpenedUndeclaredPoolModule], providers = [GlobalGuards<(Throttle,)>])]
+    struct OpenedUndeclaredPooledApp;
+
+    #[module(imports = [crate::open_mcp()], providers = [Throttle, UndeclaredTool])]
+    struct OpenedUndeclaredPoolModule;
+
+    #[tokio::test]
+    async fn the_pool_covers_nothing_on_an_opened_endpoint() {
+        let said = refusal::<OpenedUndeclaredPooledApp>().await;
+        assert!(
+            said.contains("answer"),
+            "no guard runs at its request: {said}"
+        );
+    }
+
+    #[module(providers = [Throttle, UndeclaredTool])]
+    struct PooledModule;
+
+    #[module(imports = [PooledModule], providers = [GlobalGuards<(Throttle,)>])]
+    struct PooledApp;
+
+    #[tokio::test]
+    async fn an_operation_under_the_pool_needs_no_posture() {
+        answers::<PooledApp>("/mcp/undeclared", "answer", "answered").await;
+    }
+
+    #[module(providers = [Throttle, UndeclaredTool, EndpointGuards<McpView, (Throttle,)>])]
+    struct DeclaredModule;
+
+    #[tokio::test]
+    async fn an_operation_under_the_endpoint_guards_needs_no_posture() {
+        answers::<DeclaredModule>("/mcp/undeclared", "answer", "answered").await;
+    }
+
+    #[mcp(path = "/mcp/public")]
+    #[derive(Clone, Default)]
+    struct PublicTool;
+
+    #[tools]
+    impl PublicTool {
+        /// Open.
+        #[tool]
+        #[public]
+        async fn open(&self) -> Result<String, McpError> {
+            Ok("a visitor reads this".to_owned())
+        }
+
+        /// Stated none.
+        #[tool]
+        async fn covered(&self) -> Result<String, McpError> {
+            Ok("covered".to_owned())
+        }
+    }
+
+    #[module(providers = [Authenticate, PublicTool, EndpointGuards<McpView, (Authenticate,)>])]
+    struct BehindAuthenticationModule;
+
+    #[tokio::test]
+    async fn public_behind_an_authenticating_endpoint_refuses_the_boot_it_can_open_nothing() {
+        let said = refusal::<BehindAuthenticationModule>().await;
+        assert!(
+            said.contains("open") && said.contains("Authenticate"),
+            "names the operation and the guard: {said}",
+        );
+        assert!(!said.contains("covered"), "{said}");
+        assert!(said.contains("drop `#[public]`"), "{said}");
+        assert!(said.contains("McpAccess::Public"), "{said}");
+    }
+
+    #[module(providers = [Authenticate, PublicTool])]
+    struct PoolAuthenticatesModule;
+
+    #[module(imports = [PoolAuthenticatesModule], providers = [GlobalGuards<(Authenticate,)>])]
+    struct PoolAuthenticatesApp;
+
+    #[tokio::test]
+    async fn the_pools_authentication_refuses_a_public_operation_as_endpoint_guards_do() {
+        let said = refusal::<PoolAuthenticatesApp>().await;
+        assert!(said.contains("Authenticate"), "{said}");
+    }
+
+    #[module(providers = [PublicTool])]
+    struct ClosedModule;
+
+    #[tokio::test]
+    async fn public_on_an_endpoint_denying_every_request_refuses_the_boot() {
+        let said = refusal::<ClosedModule>().await;
+        assert!(
+            said.contains("open") && said.contains("McpAccess::Public"),
+            "the opening is the endpoint's: {said}",
+        );
+    }
+
+    #[module(providers = [UndeclaredTool2])]
+    struct ClosedUndeclaredModule;
+
+    #[mcp(path = "/mcp/closed")]
+    #[derive(Clone, Default)]
+    struct UndeclaredTool2;
+
+    #[tools]
+    impl UndeclaredTool2 {
+        /// Stated none.
+        #[tool]
+        async fn covered(&self) -> Result<String, McpError> {
+            Ok("covered".to_owned())
+        }
+    }
+
+    /// Closed, so nothing it says could open it: the boot says so once, and every
+    /// request is refused.
+    #[tokio::test]
+    async fn a_gated_endpoint_with_no_guard_stays_deny_all_for_a_unit_declaring_nothing() {
+        let app = TestApp::for_module::<ClosedUndeclaredModule>()
+            .await
+            .expect("it boots");
+        app.http()
+            .post("/mcp/closed")
+            .send()
+            .await
+            .assert_status(nest_rs_http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[module(imports = [crate::open_mcp()], providers = [PublicTool2])]
+    struct OpenedPublicModule;
+
+    #[mcp(path = "/mcp/opened")]
+    #[derive(Clone, Default)]
+    struct PublicTool2;
+
+    #[tools]
+    impl PublicTool2 {
+        /// Open.
+        #[tool]
+        #[public]
+        async fn open(&self) -> Result<String, McpError> {
+            Ok("a visitor reads this".to_owned())
+        }
+    }
+
+    #[mcp(path = "/mcp/throttled")]
+    #[derive(Clone, Default)]
+    struct ThrottledPublicTool;
+
+    #[tools]
+    impl ThrottledPublicTool {
+        /// Open.
+        #[tool]
+        #[public]
+        async fn open(&self) -> Result<String, McpError> {
+            Ok("a visitor reads this, throttled".to_owned())
+        }
+    }
+
+    #[module(providers = [Throttle, ThrottledPublicTool])]
+    struct ThrottledPublicModule;
+
+    #[module(imports = [ThrottledPublicModule], providers = [GlobalGuards<(Throttle,)>])]
+    struct ThrottledPublicApp;
+
+    #[tokio::test]
+    async fn public_on_an_opened_endpoint_admits_a_visitor() {
+        answers::<OpenedPublicModule>("/mcp/opened", "open", "a visitor reads this").await;
+    }
+
+    #[tokio::test]
+    async fn public_behind_a_guard_that_identifies_no_one_stays_an_opening() {
+        answers::<ThrottledPublicApp>("/mcp/throttled", "open", "a visitor reads this, throttled")
+            .await;
+    }
+}

@@ -79,6 +79,21 @@ impl GuardedTool {
     }
 }
 
+/// The same host's operation under guards that authenticate: they cover it.
+#[mcp(path = "/mcp/guard")]
+#[use_guards(AuthzGuard)]
+#[derive(Clone, Default)]
+struct CoveredTool;
+
+#[tools]
+impl CoveredTool {
+    /// No posture: only the guard chain stands in front of the body.
+    #[tool]
+    async fn ping(&self) -> Result<String, McpError> {
+        Ok("pong".to_owned())
+    }
+}
+
 /// The endpoint is opened and nothing runs at its request — as when the app's
 /// authz module declaring the endpoint's guards never made it into the module
 /// tree.
@@ -95,7 +110,7 @@ struct UnscopedModule;
     ActorGuard,
     AuthzGuard,
     EndpointGuards<McpView, (ActorGuard, AuthzGuard)>,
-    GuardedTool,
+    CoveredTool,
 ])]
 struct ScopedModule;
 

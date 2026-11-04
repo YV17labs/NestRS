@@ -119,20 +119,54 @@ fn validate(
 
 /// Boot check for one controller or gateway upgrade: compose the global pool
 /// with the host-scope specs (the dedup a route's guard stage composes) and validate the
-/// result. A host-scope spec no imported module provides fails it, naming the
-/// guard and `label`. A route whose method scope declares guards is validated
-/// again, whole, as it mounts.
+/// result, which it answers. A host-scope spec no imported module provides
+/// fails it, naming the guard and `label`. A route whose method scope declares
+/// guards is validated again, whole, as it mounts.
 pub fn boot_validate_guards(
     container: &Container,
     controller_specs: &[GuardSpec],
     label: &str,
-) -> Result<(), String> {
+) -> Result<Vec<ResolvedLayer<dyn Guard>>, String> {
+    let chain = host_chain(container, controller_specs, label)?;
+    validate_guard_chain(label, &chain)?;
+    Ok(chain)
+}
+
+/// The global pool, then the host-scope specs, as a request running them composes
+/// them; a spec no imported module provides fails it, naming the guard and
+/// `label`.
+fn host_chain(
+    container: &Container,
+    host_specs: &[GuardSpec],
+    label: &str,
+) -> Result<Vec<ResolvedLayer<dyn Guard>>, String> {
     let global = resolve_global_guards(container);
-    let controller = resolve_scoped(container, controller_specs, LayerSite::Host, label)
+    let host = resolve_scoped(container, host_specs, LayerSite::Host, label)
         .map_err(|unresolved| unresolved.to_string())?;
-    let chain =
-        compose_chain::<dyn Guard>(dedup_bucket(global), controller, Vec::new(), &[], label);
-    validate_guard_chain(label, &chain)
+    Ok(compose_chain::<dyn Guard>(
+        dedup_bucket(global),
+        host,
+        Vec::new(),
+        &[],
+        label,
+    ))
+}
+
+/// The guard of a request's `chain` that a caller with no credential cannot get
+/// past: one declaring that it establishes or reads who the caller is
+/// ([`GuardPhase`]). A `#[public]` unit behind it can open nothing; a chain of
+/// [`Other`](GuardPhase::Other) guards — a rate limit — identifies no one, and
+/// still admits a visitor.
+pub fn identifying_guard(chain: &[ResolvedLayer<dyn Guard>]) -> Option<&'static str> {
+    chain
+        .iter()
+        .find(|entry| {
+            matches!(
+                entry.layer.phase(),
+                GuardPhase::Authentication | GuardPhase::Authorization
+            )
+        })
+        .map(|entry| entry.name)
 }
 
 #[cfg(test)]

@@ -165,12 +165,7 @@ pub(crate) fn request_stage(
     }
     .unwrap_or_else(|| meta.handler().posture());
     let declared: Vec<Arc<EndpointGuardsMeta>> = match carried {
-        Some(units) => discovery
-            .meta::<EndpointGuardsMeta>()
-            .into_iter()
-            .map(|found| found.meta)
-            .filter(|declared| declared.endpoint == units.view)
-            .collect(),
+        Some(units) => declared_for(&discovery, units.view),
         None => Vec::new(),
     };
     if posture == Posture::Public {
@@ -184,6 +179,45 @@ pub(crate) fn request_stage(
         return Ok(RequestStage::Open);
     }
 
+    let chain = composed_chain(container, &declared, meta.guards(), site)?;
+    validate_guard_chain(site, &chain).map_err(anyhow::Error::msg)?;
+    log_effective_chain(site, "guards", &chain);
+    Ok(match (chain.is_empty(), posture, carried) {
+        (false, ..) => RequestStage::Guarded(chain),
+        (true, Posture::Gated, Some(_)) => RequestStage::Denied,
+        (true, ..) => RequestStage::Open,
+    })
+}
+
+/// The guards a gated request carrying `V` units runs, in the order they run:
+/// the global pool and the [`EndpointGuards`] the app's modules declare for
+/// them, named `site` in a boot error.
+pub fn carried_request_chain<V: CarriedView>(
+    container: &Container,
+    site: &str,
+) -> anyhow::Result<Vec<ResolvedLayer<dyn Guard>>> {
+    let declared = declared_for(&Discovery::new(container), TypeId::of::<V>());
+    composed_chain(container, &declared, &[], site)
+}
+
+/// What the app's modules declare for the endpoint whose units are `endpoint`.
+fn declared_for(discovery: &Discovery<'_>, endpoint: TypeId) -> Vec<Arc<EndpointGuardsMeta>> {
+    discovery
+        .meta::<EndpointGuardsMeta>()
+        .into_iter()
+        .map(|found| found.meta)
+        .filter(|declared| declared.endpoint == endpoint)
+        .collect()
+}
+
+/// The pool, `declared`'s guards and the surface's own `host` guards, each once
+/// and in the order they run.
+fn composed_chain(
+    container: &Container,
+    declared: &[Arc<EndpointGuardsMeta>],
+    host: &[GuardSpec],
+    site: &str,
+) -> anyhow::Result<Vec<ResolvedLayer<dyn Guard>>> {
     let mut endpoint_specs: Vec<&GuardSpec> = Vec::new();
     for spec in declared.iter().flat_map(|declared| declared.specs()) {
         if !endpoint_specs
@@ -194,20 +228,19 @@ pub(crate) fn request_stage(
         }
     }
     let endpoint = resolve_scoped(container, endpoint_specs, LayerSite::Host, site)?;
-    let host = resolve_scoped(container, meta.guards(), LayerSite::Host, site)?;
+    let host = resolve_scoped(container, host, LayerSite::Host, site)?;
     let pool = dedup_bucket(resolve_global_guards(container));
     let covers: Vec<TypeId> = endpoint.iter().map(|entry| entry.type_id).collect();
     let (head, tail) = split_at_covered(pool, &covers);
     let broadest: Vec<ResolvedLayer<dyn Guard>> =
         head.into_iter().chain(endpoint).chain(tail).collect();
-    let chain = compose_chain::<dyn Guard>(broadest, host, Vec::new(), &[], site);
-    validate_guard_chain(site, &chain).map_err(anyhow::Error::msg)?;
-    log_effective_chain(site, "guards", &chain);
-    Ok(match (chain.is_empty(), posture, carried) {
-        (false, ..) => RequestStage::Guarded(chain),
-        (true, Posture::Gated, Some(_)) => RequestStage::Denied,
-        (true, ..) => RequestStage::Open,
-    })
+    Ok(compose_chain::<dyn Guard>(
+        broadest,
+        host,
+        Vec::new(),
+        &[],
+        site,
+    ))
 }
 
 /// Refuse every [`EndpointGuards`] whose units no mounted endpoint's request

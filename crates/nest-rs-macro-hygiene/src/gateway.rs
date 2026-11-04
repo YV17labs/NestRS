@@ -1,8 +1,8 @@
 //! `#[gateway]` + `#[use_guards]` + `#[messages]`: the guard-layer emission,
 //! a guard a message binds or `#[force_guards]` re-runs, the interceptors,
 //! exception filters and data pipes a gateway and its messages bind, a
-//! `Scoped<T>` and an `Ambient<T>` parameter, the message sites and the versioned
-//! mount.
+//! `Scoped<T>` and an `Ambient<T>` parameter, a message stating no posture, the
+//! message sites and the versioned mount.
 
 use nest_rs::core::{Ambient, Layer, UnitContext, async_trait, injectable};
 use nest_rs::guards::{Denial, Guard, GuardFor};
@@ -77,6 +77,9 @@ impl HygieneGateway {
     #[meta(HygieneLimit(10))]
     #[public]
     async fn ping(&self) {}
+
+    #[subscribe_message("hygiene.covered")]
+    async fn covered(&self) {}
 
     #[subscribe_message("hygiene.again")]
     #[public]

@@ -12,7 +12,6 @@ pub struct NotificationsGateway;
 #[messages]
 impl NotificationsGateway {
     #[subscribe_message("ping")]
-    #[public]
     async fn ping(&self, client: &WsClient) {
         if let Err(e) = client.broadcast("pong", &"hi") {
             tracing::warn!(target: crate::notifications::TARGET, error = %error_message(&e), "broadcast failed");

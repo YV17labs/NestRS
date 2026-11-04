@@ -1055,6 +1055,10 @@ fn generate_ws_over_a_feature_port_guards_the_upgrade_and_bootstraps_its_auth() 
         gateway.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
         "{gateway}"
     );
+    assert!(
+        !gateway.lines().any(|line| line.trim() == "#[public]"),
+        "an opening is the developer's line, and the upgrade's guards cover the message: {gateway}",
+    );
     let module = fs::read_to_string(src.join("posts/ws/module.rs")).unwrap();
     assert!(module.contains("AuthzModule"), "{module}");
     assert!(

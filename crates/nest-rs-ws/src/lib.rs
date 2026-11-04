@@ -46,7 +46,6 @@
 //! #[messages]
 //! impl ChatGateway {
 //!     #[subscribe_message("message")]
-//!     #[public]
 //!     async fn on_message(&self, msg: SendMessage) -> ChatMessage {
 //!         ChatMessage { text: msg.text }
 //!     }
@@ -61,14 +60,16 @@
 //! # }
 //! ```
 //!
-//! # Every message declares its access posture
+//! # A message's access posture
 //!
-//! `#[authorize(Action, Entity)]` or `#[public]`, and **neither is optional** —
-//! a message with no posture does not compile. `#[authorize]` emits the class
-//! gate (`nest_rs_authz::class_gate`) before the payload is deserialized and
-//! the reply mask (`nest_rs_authz::ws::masked_reply_for`) around the returned
-//! value. `#[public]` declares the message deliberately ungated: the guards bound
-//! on the gateway and beside the message still run.
+//! A message the gateway's guards, the app's pool or a guard of its own cover
+//! needs no posture, and the boot refuses one no guard covers that does not say
+//! `#[public]`, as it refuses such a route. `#[authorize(Action, Entity)]` emits
+//! the class gate (`nest_rs_authz::class_gate`) before the payload is deserialized
+//! and the reply mask (`nest_rs_authz::ws::masked_reply_for`) around the returned
+//! value. `#[public]` means a caller with no credential is admitted: behind an
+//! upgrade running a guard that establishes or reads who the caller is, it could
+//! open nothing, and the boot refuses it.
 //!
 //! The mask acts on the **serialized** reply, so a withheld column is absent from
 //! the frame rather than an error. It fails closed on a missing ambient ability
@@ -164,6 +165,7 @@ pub const TARGET: &str = "nest_rs::ws";
 mod ambient;
 mod config;
 mod envelope;
+mod error;
 mod gateway;
 mod guard;
 mod message;

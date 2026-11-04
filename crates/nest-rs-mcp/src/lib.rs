@@ -13,8 +13,9 @@
 //! Each request is one `mcp.operation` unit on core's pipeline, and a
 //! `#[tool]`, `#[prompt]`, `#[resource]` or `#[resources]` is a site of its
 //! own inside it, taking
-//! `#[use_guards(...)]` / `#[force_guards(...)]`, a **mandatory** access
-//! posture (`#[authorize(Action, Entity)]` or `#[public]`),
+//! `#[use_guards(...)]` / `#[force_guards(...)]`, an access posture
+//! (`#[authorize(Action, Entity)]` or `#[public]`, optional where the endpoint's
+//! guards cover the operation and mandatory on an endpoint the app opened),
 //! `#[use_exception_filters(...)]` and `#[use_interceptors(...)]`. Its tail then
 //! holds each argument it decoded to the rules its type declares, runs a pipe
 //! on its arguments (`Parameters<Piped<P>>`), and reads its `Scoped<T>` and
@@ -123,8 +124,9 @@ pub mod __private {
         operation_view, run_operation,
     };
     pub use crate::registry::{
-        DeclaredRoutes, DefaultDeclaredRoutes, DefaultOperationLayers, DefaultPromptRouter,
-        DefaultToolRouter, ENDPOINT, ToolsHost, declare_endpoint, hosts_on, register_host,
+        DeclaredOperation, DeclaredRoutes, DefaultDeclaredRoutes, DefaultOperationLayers,
+        DefaultPromptRouter, DefaultToolRouter, ENDPOINT, ToolsHost, declare_endpoint, hosts_on,
+        register_host,
     };
     pub use crate::resource::{
         MimeProbe, MimeProbeFallback, MimeProbeReads, ResourceBody, ResourceListing,
@@ -259,11 +261,12 @@ pub use rmcp;
 /// ```
 pub use nest_rs_mcp_macros::mcp;
 
-/// Declare an `#[mcp]` host's operations on its inherent impl block. Each tool
-/// declares its posture, `#[public]` or `#[authorize(Action, Entity)]`; the gate
-/// and the reply mask `#[authorize]` emits run in `nest_rs_authz::mcp`. Its
-/// arguments are held to the rules their type declares, a refusal answered
-/// `invalid_params` before the body runs.
+/// Declare an `#[mcp]` host's operations on its inherent impl block. A tool the
+/// endpoint's guards cover needs no posture; `#[authorize(Action, Entity)]` adds
+/// a gate and a reply mask, run in `nest_rs_authz::mcp`, and `#[public]` admits a
+/// caller with no credential, the one an endpoint the app opened takes when it
+/// declares no gate. Its arguments are held to the rules their type declares, a
+/// refusal answered `invalid_params` before the body runs.
 ///
 /// ```
 /// use std::sync::Arc;

@@ -82,24 +82,38 @@ guard, filter or interceptor loop of its own.
    into the view. A failure no exception filter answered is rendered by the
    edge's one rule (*Error opacity*, below) before the unit stage returns,
    so a unit-stage interceptor reads what goes out.
-5. **A mandatory posture per operation** — `#[authorize(Action, Subject)]` or
-   `#[public]`; no posture is a compile error with a trybuild snapshot. This is
-   what keeps *no authn/authz decision outside a guard* true. The grammar is one
-   `PostureRules` in `nest-rs-codegen` where it is the same grammar: `#[tools]`
-   and `#[messages]` take it verbatim. `#[operations]` and `#[routes]` parse
-   their own because only they bind a subject by id — `bind = Service`, read
-   from a synthesised id argument (`id_arg` renames it) or from the one
-   parameter the route's path names, its controller's included — into an
+5. **A posture where the guards do not already decide** —
+   `#[authorize(Action, Subject)]` or `#[public]`, and `#[public]` means one
+   thing on every edge: a caller with no credential is admitted. This is what
+   keeps *no authn/authz decision outside a guard* true. **Where an endpoint
+   admits a visitor in band, the posture is what refuses one, so it is
+   mandatory**: a GraphQL operation stating none is a compile error with a
+   trybuild snapshot, and an operation of an MCP endpoint `McpAccess::Public`
+   opens refuses the boot, whatever guard stands beside it. **Elsewhere a guard
+   covering the unit decides, and the posture is optional**: an HTTP route, a WS
+   message under its gateway's `#[use_guards]` at the `Gated` upgrade, the pool
+   or a guard of its own, and an MCP operation under a `Gated` endpoint the pool
+   or `EndpointGuards` cover; `#[authorize]` adds the gate and the mask. A route
+   or a message no guard covers says `#[public]` or refuses the boot, one error
+   naming every such unit and each remedy, since an impl half cannot see the
+   pool; so does a gateway no guard covers and declaring no message, whose hooks
+   run for any caller. **`#[public]` that can open nothing refuses the boot**: on
+   WS and MCP, behind a guard its request runs that declares
+   `GuardPhase::Authentication` or `Authorization`, and on a `Gated` endpoint
+   running no guard, which denies every request; behind `Other` guards alone, a
+   rate limit, which identify no one, it stays the opening it says, and on HTTP
+   an authentication guard reads it and admits the visitor.
+   The grammar is one `PostureRules` in `nest-rs-codegen` where it is the same
+   grammar: `#[tools]` and `#[messages]` take it verbatim. `#[operations]` and
+   `#[routes]` parse their own because only they bind a subject by id — `bind =
+   Service`, read from a synthesised id argument (`id_arg` renames it) or from the
+   one parameter the route's path names, its controller's included — into an
    `Authorized<A, E>` parameter, which carries the row and never the posture:
-   either without the other is a compile error, as is an entity written
-   beside `bind` other than the service's.
-   `#[routes]`' posture is optional on a route a guard covers, which the guard
-   decides, and a route no guard covers — the app's pool included — says
-   `#[public]` or refuses the boot, one error naming every such route and both
-   remedies; it refuses `#[authorize]` naming an entity on `#[sse]` — by the
-   subject's type, a stream taking a subject no table holds — and a
-   hand-written `Authorize<A, E>` anywhere but beside `#[public]` — by
-   spelling at compile time, by its type at boot
+   either without the other is a compile error, as is an entity written beside
+   `bind` other than the service's. `#[routes]` refuses `#[authorize]` naming an
+   entity on `#[sse]` — by the subject's type, a stream taking a subject no table
+   holds — and a hand-written `Authorize<A, E>` anywhere but beside `#[public]` —
+   by spelling at compile time, by its type at boot
    (`.claude/decisions/route-posture-declared.md`).
    An edge whose units have no caller (a job, a tick, an event) declares
    `Posture::System` and runs no guard stage.
@@ -314,7 +328,8 @@ the visible opening.
   with its posture: `Gated` (a WS upgrade, `/mcp`) and `InBand` (`/graphql`,
   its operations gating themselves) get the request stage the transport
   composes in front of the endpoint; `Public` (OpenAPI, health, static files)
-  is deliberately open. **The transport composes every self-mount's request
+  is deliberately open; a `Gated` one carrying no unit and running no guard
+  refuses the boot, but a gateway's, whose messages answer for it (item 5). **The transport composes every self-mount's request
   stage, one function for all** (`request_stage`): the global pool, the
   mount's own guards (a gateway's) and the `EndpointGuards<V, G>` the app's
   modules declare for the in-band units it carries, each guard once and in

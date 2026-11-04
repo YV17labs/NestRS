@@ -926,7 +926,6 @@ mod mcp {
     impl TickTool {
         /// Answer with a constant — the assertions are about what ran around it.
         #[tool]
-        #[public]
         async fn tick(&self) -> Result<String, McpError> {
             Ok(REACHED.to_owned())
         }
@@ -991,7 +990,6 @@ mod ws {
     #[messages]
     impl StalledGateway {
         #[subscribe_message("tick")]
-        #[public]
         async fn tick(&self) -> &'static str {
             REACHED
         }

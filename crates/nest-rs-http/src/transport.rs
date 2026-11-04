@@ -579,9 +579,7 @@ impl Transport for HttpTransport {
             }
             .into());
         }
-        // A warning, not a fail-secure stop: a gateway whose messages are all
-        // `#[public]` is a legitimate shape.
-        let mut unguarded_edges: Vec<String> = Vec::new();
+        let mut unguarded_mounts: Vec<String> = Vec::new();
         // The CORS layer's parsed list: the container's config read again
         // would be a second list, which a seeded transport config never reaches.
         let origins = OriginPolicy::new(
@@ -649,8 +647,11 @@ impl Transport for HttpTransport {
             let stage: Option<Arc<dyn GuardStage>> = match request_stage(container, &d.meta, &site)?
             {
                 RequestStage::Open => {
-                    if handler.posture() == Posture::Gated && d.meta.carried().is_none() {
-                        unguarded_edges.push(format!("{} ({})", d.meta.path(), d.meta.label()));
+                    if handler.posture() == Posture::Gated
+                        && d.meta.carried().is_none()
+                        && !d.meta.decided_per_unit()
+                    {
+                        unguarded_mounts.push(format!("{} ({})", d.meta.path(), d.meta.label()));
                     }
                     None
                 }
@@ -702,14 +703,11 @@ impl Transport for HttpTransport {
             routes.settle()?;
         }
         check_declarations_reached(container, &carried)?;
-        if !unguarded_edges.is_empty() {
-            tracing::warn!(
-                target: nest_rs_core::target::LAYERS,
-                count = unguarded_edges.len(),
-                endpoints = unguarded_edges.join(", ").as_str(),
-                hint = "register a global guard pool or gate the gateway with #[use_guards]",
-                "unguarded self-mount edges detected",
-            );
+        if !unguarded_mounts.is_empty() {
+            return Err(RouteError::UnguardedMount {
+                mounts: unguarded_mounts.join(", "),
+            }
+            .into());
         }
         // What the self-mounts registered, not what they declared: an entry below
         // a mount's path needs no declaration, and a versioned catch-all must not

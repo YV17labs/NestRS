@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
+use nest_rs::authz::Create;
 use nest_rs::core::{Ambient, error_message};
 use nest_rs::ws::{Opaque, Scoped, WsClient, WsError, gateway, messages};
 
-use super::guard::ModerationGuard;
 use super::request_seq::RequestSeq;
 use crate::Claims;
 use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
+use crate::chat::Posting;
 use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 use crate::chat::service::ChatService;
 
 #[gateway(path = "/ws")]
-#[use_guards(AuthnGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct ChatGateway {
     #[inject]
     svc: Arc<ChatService>,
@@ -31,8 +33,7 @@ impl ChatGateway {
     }
 
     #[subscribe_message("message")]
-    #[public]
-    #[use_guards(ModerationGuard)]
+    #[authorize(Create, Posting)]
     async fn on_message(
         &self,
         caller: Ambient<Claims>,
@@ -43,26 +44,22 @@ impl ChatGateway {
     }
 
     #[subscribe_message("history")]
-    #[public]
     async fn history(&self) -> Vec<ChatMessageDto> {
         self.svc.history()
     }
 
     #[subscribe_message("presence")]
-    #[public]
     async fn presence(&self) -> usize {
         self.svc.present()
     }
 
     #[subscribe_message("seq")]
-    #[public]
     async fn seq(&self, seq: Scoped<RequestSeq>) -> u64 {
         seq.value()
     }
 
     #[subscribe_message("typing")]
-    #[public]
-    #[use_guards(ModerationGuard)]
+    #[authorize(Create, Posting)]
     async fn typing(
         &self,
         caller: Ambient<Claims>,

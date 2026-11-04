@@ -149,7 +149,7 @@ async fn typing_is_broadcast_under_the_callers_name() {
 }
 
 #[tokio::test]
-async fn lifecycle_hooks_track_presence_and_a_per_message_guard_refuses_a_token_naming_no_user() {
+async fn lifecycle_hooks_track_presence_and_the_posting_gate_refuses_a_token_naming_no_user() {
     let (_db, app) = serve().await;
     let mut alice = open(&app, "/ws").await;
     wait_for_presence(&mut alice, 1).await;
@@ -161,21 +161,14 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_refuses_a_token_
         bot.send(event, json!({ "text": "hi" })).await;
         let denied = bot.next_envelope().await;
         assert_eq!(denied["event"], event);
-        assert!(
-            denied["data"]["error"]
-                .as_str()
-                .expect("error string")
-                .contains("naming a user"),
-            "{denied}",
-        );
+        assert_eq!(denied["data"]["code"], "FORBIDDEN", "{denied}");
     }
     alice.expect_silence(QUIET).await;
-    let refused = logs.find(features::chat::TARGET, "guard denied the message");
+    let refused = logs.find("nest_rs::authz", "authorization denied");
     assert_eq!(refused.len(), 2, "one line per denial: {refused:#?}");
     for line in &refused {
-        assert_eq!(line.field("reason").as_deref(), Some("not_a_user"));
+        assert_eq!(line.field("reason").as_deref(), Some("no_class_grant"));
     }
-    logs.expect_none("nest_rs::layers", "guard denied the message");
 
     bot.close(CloseCode::Normal, "done").await;
     wait_for_presence(&mut alice, 1).await;

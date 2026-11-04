@@ -54,8 +54,9 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `#[tool_handler]`/`#[prompt_handler]` + `get_info`) into generated code,
 /// writes the resource methods rmcp has no router for, and gives each
 /// operation the request layers every other edge has:
-/// `#[use_guards]` / `#[force_guards]`, a **mandatory** posture
-/// (`#[authorize(Action, Entity)]` or `#[public]`), `#[use_exception_filters]`,
+/// `#[use_guards]` / `#[force_guards]`, a posture
+/// (`#[authorize(Action, Entity)]` or `#[public]`, which the boot holds against who
+/// reaches the endpoint), `#[use_exception_filters]`,
 /// `#[use_interceptors]`, `Scoped<T>` and `Ambient<T>` parameters, per-argument pipes inside
 /// `Parameters<…>`, and response masking. The advertised capabilities are
 /// **derived** from the roles present, so a host cannot route what it forgot to

@@ -692,6 +692,14 @@ pub(crate) enum RouteError {
          module the app boots), or mark a route open on purpose with `#[public]`"
     )]
     Unguarded { routes: String },
+    /// Self-mounts declared gated that run no guard and carry no unit, every
+    /// one of them.
+    #[error(
+        "self-mounts declared `Posture::Gated` that no guard covers: {mounts} — a gated surface \
+         runs a guard; declare the app's global pool (`GlobalGuards<(...)>` in the providers of \
+         the module the app boots), or declare the surface `Posture::Public` to open it on purpose"
+    )]
+    UnguardedMount { mounts: String },
     /// Two spellings of one address.
     #[error(
         "duplicate route path: {first} mounts {first_template:?} and {second} mounts \

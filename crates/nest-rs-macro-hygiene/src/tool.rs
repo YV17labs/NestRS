@@ -1,7 +1,7 @@
 //! `#[mcp]` + `#[tools]`, through the umbrella alone: the layers a host and
 //! an operation bind, a `Scoped<T>` and an `Ambient<T>` parameter, an error of the
-//! domain's own type, and a resource read through its template beside the
-//! listing.
+//! domain's own type, an operation stating no posture, and a resource read
+//! through its template beside the listing.
 //!
 //! rmcp's `#[tool_router]`/`#[tool_handler]`/`#[prompt]` expand to bare `rmcp::`
 //! paths resolved at the call site; this file names no `rmcp`, so it stops
@@ -99,6 +99,11 @@ impl HygieneTool {
     #[public]
     fn ping(&self) -> Result<String, McpError> {
         Ok("pong".into())
+    }
+
+    #[tool(description = "Answer as the guards covering it decide.")]
+    fn covered(&self) -> Result<String, McpError> {
+        Ok("covered".into())
     }
 
     /// The host's guard re-run on this operation alone.

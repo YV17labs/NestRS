@@ -112,11 +112,12 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
 }
 
 /// The wiring `#[messages]` attaches for the gateway at `path`: its
-/// `upgrade` guards are phase-validated and resolvable, and each of its
-/// `messages` composes over its `host_pipes` — a layer no imported module
-/// provides, or two `#[meta]` values of one type at one level, fail the boot
-/// naming the site. A unit deadline the shutdown window cannot hold is said at
-/// `warn`.
+/// `upgrade` guards are phase-validated and resolvable, what its `messages`
+/// declare holds against them — one no guard covers says `#[public]`, and one
+/// saying it can be reached with no credential — and each composes over its
+/// `host_pipes` — a layer no imported module provides, or two `#[meta]` values
+/// of one type at one level, fail the boot naming the site. A unit deadline the
+/// shutdown window cannot hold is said at `warn`.
 pub fn wire_gateway(
     container: &Container,
     path: &str,
@@ -124,7 +125,8 @@ pub fn wire_gateway(
     host_pipes: &[PipeSpec],
     messages: &[DeclaredMessage],
 ) -> nest_rs_core::anyhow::Result<()> {
-    crate::guard::validate_upgrade(container, path, upgrade)?;
+    let upgrade = crate::guard::validate_upgrade(container, path, upgrade)?;
+    crate::guard::check_posture(path, &upgrade, messages)?;
     crate::message::compose_declared(container, host_pipes, messages)?;
     let window = container
         .get::<nest_rs_http::HttpConfig>()

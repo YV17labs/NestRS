@@ -4,6 +4,7 @@ use nest_rs::core::injectable;
 use super::constants;
 use crate::Claims;
 use crate::audio::Transcoding;
+use crate::chat::Posting;
 use crate::notifications as notification;
 use crate::orgs as org;
 use crate::posts as post;
@@ -57,6 +58,7 @@ impl AbilityFactory for AuthzAbility {
                     ])
                 })
                 .requires_scope(constants::POSTS_WRITE);
+            ab.can(Action::Create, Posting);
         }
     }
 }
@@ -300,6 +302,26 @@ mod tests {
             Action::Update,
             &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
         ));
+    }
+
+    #[test]
+    fn a_user_posts_in_chat_whatever_their_role_and_a_machine_never_does() {
+        for ab in [admin(Uuid::now_v7()), member(Uuid::now_v7())] {
+            assert!(ab.can_class(Action::Create, TypeId::of::<Posting>()));
+        }
+        let machine = ability_of(
+            vec![Role::Admin],
+            Uuid::now_v7(),
+            constants::all(),
+            Subject::Client("ci".into()),
+        );
+        assert!(!machine.can_class(Action::Create, TypeId::of::<Posting>()));
+        assert!(
+            machine
+                .missing_scopes(Action::Create, TypeId::of::<Posting>())
+                .is_empty(),
+            "no wider token would change it",
+        );
     }
 
     #[test]

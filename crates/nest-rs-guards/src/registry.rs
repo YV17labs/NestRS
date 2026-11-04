@@ -95,7 +95,7 @@ impl GlobalLayer for dyn Guard {
     const POOL: &'static str = "GlobalGuards";
 
     fn check(container: &Container) -> Result<(), String> {
-        crate::validate::boot_validate_guards(container, &[], "the global guard chain")
+        crate::validate::boot_validate_guards(container, &[], "the global guard chain").map(drop)
     }
 }
 

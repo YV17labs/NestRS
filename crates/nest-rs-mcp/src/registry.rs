@@ -17,12 +17,16 @@ use nest_rs_core::__private::Site;
 use nest_rs_core::{
     Container, ContainerBuilder, Discovery, Handler, Posture, WiringContribution, anyhow,
 };
-use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin, normalize_mount_path};
+use nest_rs_guards::__private::identifying_guard;
+use nest_rs_http::__private::{
+    OriginCheck, OriginRefused, carried_request_chain, checks_origin, normalize_mount_path,
+};
 use nest_rs_http::{DetachedWork, HttpEndpointMeta, HttpRoutes};
 use rmcp::model::{Prompt, ProtocolVersion, ResourceTemplate, Tool};
 
 use crate::composite::{CompositeHandler, common_protocol_versions};
 use crate::endpoint::{McpMount, endpoint};
+use crate::error::McpPostureError;
 use crate::host::McpHost;
 use crate::identity::{McpIdentity, ResolvedIdentity};
 use crate::module::McpModule;
@@ -66,13 +70,21 @@ type BuildHost = fn(&Container) -> Arc<dyn McpHost>;
 /// instance, for the mount's index and the boot's duplicate checks.
 type StaticRoutes = fn() -> DeclaredRoutes;
 
-/// The sites a host's `#[tools]` declares, one per operation, which the boot
+/// The operations a host's `#[tools]` declares, which the boot checks and
 /// composes.
-type OperationSites = fn() -> Vec<&'static Site>;
+type OperationSites = fn() -> Vec<DeclaredOperation>;
 
 /// The registry the boot's wiring step checks every endpoint and composes
 /// every operation's site for.
 const ENDPOINTS: &str = "nest_rs::mcp::endpoints";
+
+/// One operation a `#[tools]` impl declares, as the boot's checks read it.
+pub struct DeclaredOperation {
+    /// The site it runs.
+    pub site: &'static Site,
+    /// Whether it states a posture of its own, `#[authorize]` or `#[public]`.
+    pub declares_posture: bool,
+}
 
 /// The tools, prompts and resource templates a host declares, read without an
 /// instance.
@@ -155,9 +167,9 @@ impl McpHostMeta {
         (self.routes)()
     }
 
-    /// The sites its operations run, one per tool, prompt, resource and
-    /// listing `#[tools]` declares.
-    pub(crate) fn operation_sites(&self) -> Vec<&'static Site> {
+    /// Its operations, one per tool, prompt, resource and listing `#[tools]`
+    /// declares.
+    pub(crate) fn operations(&self) -> Vec<DeclaredOperation> {
         (self.sites)()
     }
 
@@ -234,8 +246,8 @@ pub trait DefaultOperationLayers: Sized + 'static {
         Vec::new()
     }
 
-    /// No decorated operations, so no site to compose.
-    fn __nestrs_mcp_operation_sites() -> Vec<&'static Site> {
+    /// No decorated operations, so no site to check or compose.
+    fn __nestrs_mcp_operation_sites() -> Vec<DeclaredOperation> {
         Vec::new()
     }
 }
@@ -311,8 +323,9 @@ pub fn register_host<P: 'static>(
 
 /// The boot's checks of every endpoint the app's hosts share, and the sites
 /// their operations run, composed: a contested identity, a name two hosts
-/// claim, protocol versions no host shares, a layer an operation declares that
-/// no module provides or two `#[meta]` values of one type refuse the app.
+/// claim, protocol versions no host shares, what an operation declares against
+/// who may reach it, a layer an operation declares that no module provides or
+/// two `#[meta]` values of one type refuse the app.
 fn wire_endpoints(container: &Container) -> anyhow::Result<()> {
     let metas = Discovery::new(container).meta::<McpHostMeta>();
     let paths: BTreeSet<String> = metas
@@ -325,12 +338,61 @@ fn wire_endpoints(container: &Container) -> anyhow::Result<()> {
     if !metas.is_empty() {
         crate::operation::REQUEST.chains(container)?;
     }
-    for discovered in &metas {
-        for site in discovered.meta.operation_sites() {
-            site.chains(container)?;
-        }
+    let operations: Vec<(&'static str, DeclaredOperation)> = metas
+        .iter()
+        .flat_map(|discovered| {
+            let host = discovered.meta.host();
+            discovered
+                .meta
+                .operations()
+                .into_iter()
+                .map(move |operation| (host, operation))
+        })
+        .collect();
+    check_postures(container, &operations)?;
+    for (_, operation) in &operations {
+        operation.site.chains(container)?;
     }
     Ok(())
+}
+
+/// What `operations`, each with its host, declare against who may reach them:
+/// an endpoint the app opened runs no guard, so each says its posture; a gated
+/// one's `#[public]` admits a caller with no credential, or says what it cannot.
+fn check_postures(
+    container: &Container,
+    operations: &[(&'static str, DeclaredOperation)],
+) -> anyhow::Result<()> {
+    let named = |of: &dyn Fn(&DeclaredOperation) -> bool| -> Vec<String> {
+        operations
+            .iter()
+            .filter(|(_, operation)| of(operation))
+            .map(|(host, operation)| format!("{host}::{}", operation.site.handler().address()))
+            .collect()
+    };
+    if crate::module::posture(container) == Posture::Public {
+        let undeclared = named(&|operation| !operation.declares_posture);
+        if undeclared.is_empty() {
+            return Ok(());
+        }
+        return Err(McpPostureError::Undeclared {
+            operations: undeclared.join(", "),
+        }
+        .into());
+    }
+    let public = named(&|operation| operation.site.handler().posture() == Posture::Public);
+    if public.is_empty() {
+        return Ok(());
+    }
+    let chain = carried_request_chain::<McpView>(container, "the MCP endpoints' request")?;
+    let operations = public.join(", ");
+    if chain.is_empty() {
+        return Err(McpPostureError::PublicBehindDenial { operations }.into());
+    }
+    match identifying_guard(&chain) {
+        Some(guard) => Err(McpPostureError::PublicBehindGuard { operations, guard }.into()),
+        None => Ok(()),
+    }
 }
 
 /// The checks of the endpoint at `path`, over the hosts that share it.
@@ -444,11 +506,11 @@ fn resolve(container: &Container, path: &str) -> Vec<ResolvedHost> {
 /// prompt and resource template, with the Rust method its site dispatches to
 /// — none for a host writing its own handler.
 fn log_mounted(host: &McpHostMeta, declared: &DeclaredRoutes, path: &str) {
-    let sites = host.operation_sites();
+    let operations = host.operations();
     let method_of = |address: &str| {
-        sites
+        operations
             .iter()
-            .map(|site| site.handler())
+            .map(|operation| operation.site.handler())
             .find(|handler| handler.address() == address)
             .map(nest_rs_core::Handler::method)
     };

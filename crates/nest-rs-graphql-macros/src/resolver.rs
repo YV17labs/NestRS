@@ -1095,8 +1095,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         &method.sig.ident,
                         posture_required(
                             "`#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]`",
-                            "no `#[authorize]` gate and no response mask — `#[use_guards]` \
-                             guards still run",
+                            "a caller with no credential is admitted: no `#[authorize]` gate and \
+                             no response mask — `#[use_guards]` guards still run",
                         ),
                     ));
                 }

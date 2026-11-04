@@ -168,6 +168,7 @@ pub struct HttpEndpointMeta {
     handler: &'static Handler,
     guards: Vec<GuardSpec>,
     carried: Option<Carried>,
+    decided_per_unit: bool,
     origin: Option<OriginGate>,
     detached: Option<DetachedWork>,
     mount: Arc<MountFn>,
@@ -227,6 +228,7 @@ impl HttpEndpointMeta {
             handler,
             guards: Vec::new(),
             carried: None,
+            decided_per_unit: false,
             origin: None,
             detached: None,
             mount: Arc::new(mount),
@@ -289,6 +291,12 @@ impl HttpEndpointMeta {
     /// them.
     pub(crate) fn carried(&self) -> Option<Carried> {
         self.carried
+    }
+
+    /// Whether what no guard covers is refused unit by unit, as
+    /// [`decided_per_unit`] declared.
+    pub(crate) fn decided_per_unit(&self) -> bool {
+        self.decided_per_unit
     }
 
     /// Its origin check, as [`checks_origin`] declared it.
@@ -396,6 +404,14 @@ pub const fn declare_endpoint<M: 'static>(
 /// guard the pool lists running once, at the pool's place.
 pub fn guarded_by(mut meta: HttpEndpointMeta, guards: Vec<GuardSpec>) -> HttpEndpointMeta {
     meta.guards = guards;
+    meta
+}
+
+/// `meta`, whose units each say whether no guard covering them opens them — a
+/// gateway's messages, refused unit by unit at the wiring step — so the
+/// transport does not refuse the mount for running no guard at its request.
+pub fn decided_per_unit(mut meta: HttpEndpointMeta) -> HttpEndpointMeta {
+    meta.decided_per_unit = true;
     meta
 }
 

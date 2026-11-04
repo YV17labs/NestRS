@@ -46,6 +46,8 @@ parking_lot.workspace = true
 # `#[derive(Validate)]` on `WsConfig` — the `Config` trait bounds it (empty
 # validation today, but the field maps are the framework's config contract).
 validator.workspace = true
+# `GatewayPostureError`, what the boot says of a gateway's posture.
+thiserror.workspace = true
 
 [dev-dependencies]
 # A denial that fails closed but logs nothing passes every reply assertion —
@@ -60,8 +62,6 @@ tokio = { workspace = true, features = ["test-util"] }
 # Both ends of a socket over an in-memory pipe, so a unit test drives the
 # connection loop past what a real peer can provoke (a writer that panics).
 tokio-tungstenite.workspace = true
-# The suites' domain errors, as an app writes them.
-thiserror.workspace = true
 
 [lints]
 workspace = true

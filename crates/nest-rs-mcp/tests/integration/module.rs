@@ -18,7 +18,6 @@ struct ReportsTool;
 #[tools]
 impl ReportsTool {
     #[tool(description = "Count the reports.")]
-    #[public]
     async fn count_reports(&self) -> Result<String, McpError> {
         Ok("0".into())
     }

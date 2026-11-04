@@ -41,7 +41,7 @@
 use syn::punctuated::Punctuated;
 use syn::{Expr, FnArg, ImplItemFn, Meta, Path, Token, Type};
 
-use crate::args::takes_value;
+use crate::args::{duplicate_argument, takes_value};
 use crate::attrs::take_flag_attr;
 use crate::meta::SitePosture;
 use crate::ty::nth_generic_type;
@@ -197,11 +197,19 @@ impl PostureRules {
         }
 
         let malformed = || {
-            syn::Error::new_spanned(
-                &attr,
-                "expected `#[authorize(Action, Entity)]` — e.g. `#[authorize(Read, \
-                 users::Entity)]`, optionally followed by `unmasked`",
-            )
+            let expected = match self.bind_unsupported_because {
+                Some(_) => {
+                    "expected `#[authorize(Action, Entity)]` — e.g. `#[authorize(Read, \
+                     users::Entity)]`, optionally followed by `unmasked`"
+                }
+                None => {
+                    "expected `#[authorize(Action, Entity)]` — e.g. `#[authorize(Read, \
+                     users::Entity)]`, or `#[authorize(Action, bind = Service)]`, which loads \
+                     the row its one variable names and lets the entity be omitted — optionally \
+                     followed by `unmasked`"
+                }
+            };
+            syn::Error::new_spanned(&attr, expected)
         };
         let args = attr
             .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
@@ -224,8 +232,7 @@ impl PostureRules {
                     if bind.is_some() {
                         return Err(syn::Error::new_spanned(
                             value,
-                            "`bind` is written twice — it picks the one service that loads the \
-                             subject",
+                            duplicate_argument("authorize", "bind"),
                         ));
                     }
                     let Expr::Path(service) = &value.value else {
@@ -420,6 +427,30 @@ mod tests {
             )))
             .err()
             .expect("one service loads the subject");
-        assert!(err.to_string().contains("twice"), "{err}");
+        assert_eq!(err.to_string(), duplicate_argument("authorize", "bind"));
+    }
+
+    #[test]
+    fn a_posture_it_cannot_read_names_bind_where_the_site_takes_it() {
+        let err = BINDING
+            .take(&mut method(quote!(
+                #[authorize(bind = PostsService)]
+                async fn post(&self, post: Authorized<Read, posts::Entity>) {}
+            )))
+            .err()
+            .expect("it names no action");
+        assert!(err.to_string().contains("bind = Service"), "{err}");
+    }
+
+    #[test]
+    fn a_posture_it_cannot_read_names_no_bind_where_the_site_refuses_it() {
+        let err = RULES
+            .take(&mut method(quote!(
+                #[authorize(Read)]
+                async fn ping(&self) {}
+            )))
+            .err()
+            .expect("it names no subject");
+        assert!(!err.to_string().contains("bind"), "{err}");
     }
 }

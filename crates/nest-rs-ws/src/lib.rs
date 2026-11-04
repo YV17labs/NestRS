@@ -242,11 +242,11 @@ pub use nest_rs_http::__private::websocket::CloseCode;
 /// Bind a `#[gateway]` impl block's message handlers.
 ///
 /// A handler's parameters are read by their shape: a reference is the
-/// `&`[`WsClient`], a [`Scoped<T>`](nest_rs_core::Scoped) a request-scoped provider the boot checks,
-/// and the one other parameter the payload `data` is decoded into.
-/// [`Gateway::dispatch`] calls a handler on its own, behind its posture's
-/// class gate — no guard, no layer — as a test does; on a socket each message
-/// runs through its site.
+/// `&`[`WsClient`], a [`Scoped<T>`](nest_rs_core::Scoped) a request-scoped
+/// provider the boot checks, and the one other parameter the payload `data` is
+/// decoded into. [`Gateway::dispatch`] calls a handler on its own, behind its
+/// posture's class gate — no guard, no layer — as a test does; on a socket each
+/// message runs through its site.
 ///
 /// ```
 /// use nest_rs_core::Discoverable;

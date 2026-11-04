@@ -44,9 +44,9 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// last segment, since no value tells a macro what to leave out of
 /// async-graphql's argument list, and each through a function returning core's
 /// type, so a namesake does not compile: `Scoped<T>` (`nest_rs_core::Scoped`), a
-/// provider from the request's scope, and `Ambient<T>` (`nest_rs_core::Ambient`), what a guard attached
-/// — a miss of either answers the opaque internal error, the type filed at
-/// `error`.
+/// provider from the request's scope, and `Ambient<T>` (`nest_rs_core::Ambient`),
+/// what a guard attached — a miss of either answers the opaque internal error,
+/// the type filed at `error`.
 ///
 /// A `#[field_resolver]`'s `&DataLoader<L>` parameter, read the same way, is the
 /// request's loader. It declares the need, as the method itself does for its

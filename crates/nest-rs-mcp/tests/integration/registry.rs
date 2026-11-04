@@ -8,13 +8,12 @@ use nest_rs_guards::GlobalGuards;
 use nest_rs_http::HttpEndpointMeta;
 use nest_rs_mcp::__private::hosts_on;
 use nest_rs_mcp::model::{
-    CallToolRequestParams, CallToolResponse, CompleteRequestParams, CompleteResult,
-    GetPromptRequestParams, GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult,
-    ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt, PromptMessage,
-    ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, Role, ServerCapabilities, ServerConfig, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, CompleteRequestParams, CompleteResult,
+    ContentBlock, GetPromptRequestParams, GetPromptResponse, GetPromptResult, Implementation,
+    ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt,
+    PromptMessage, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
+    ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities, ServerConfig, Tool,
 };
-use nest_rs_mcp::model::{CallToolResult, ContentBlock};
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::rmcp::serde_json::json;
 use nest_rs_mcp::rmcp::{prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router};

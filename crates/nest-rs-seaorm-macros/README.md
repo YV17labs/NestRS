@@ -1,6 +1,6 @@
 # nest-rs-seaorm-macros
 
-Macro crate for the NestRS framework — the #[expose] and #[wire_enum] decorator macros (a SeaORM entity to its wire DTO, inputs and GraphQL object); re-exported by nest-rs-seaorm: depend on that crate, not this one.
+Macro crate for the NestRS framework — the #[expose] decorator macro (a SeaORM entity to its wire DTO, inputs and GraphQL object); re-exported by nest-rs-seaorm: depend on that crate, not this one.
 
 A `proc-macro` companion crate — never added directly. Its decorators are re-exported by the surface crate, reached through the [`nest-rs`](https://crates.io/crates/nest-rs) umbrella.
 

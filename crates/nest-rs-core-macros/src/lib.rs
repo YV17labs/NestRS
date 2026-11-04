@@ -146,10 +146,11 @@ pub fn output(args: TokenStream, item: TokenStream) -> TokenStream {
 /// line), plus the value shape they and a column's derives require — `Clone`,
 /// `Copy`, `Debug`, `PartialEq`, `Eq` — for a column's enum or a claims role.
 ///
-/// Takes `graphql` alone, for `async_graphql::Enum` too, explicit because features
-/// unify across a workspace, and refuses anything but an enum of unit variants.
-/// It emits nothing from SeaORM: `EnumIter`, `DeriveActiveEnum` and their
-/// attributes stay the developer's. An enum only sent takes `#[output]`.
+/// Takes `graphql` alone, for `async_graphql::Enum` too, through the umbrella's
+/// `graphql` feature, explicit because features unify across a workspace, and
+/// refuses anything but an enum of unit variants. It emits nothing from SeaORM:
+/// `EnumIter`, `DeriveActiveEnum` and their attributes stay the developer's. An
+/// enum only sent takes `#[output]`.
 #[proc_macro_attribute]
 pub fn wire_enum(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(wire_enum::wire_enum(args.into(), item.into())).into()

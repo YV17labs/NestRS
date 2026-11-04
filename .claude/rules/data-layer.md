@@ -323,11 +323,11 @@ mask, decided by the subject's type:
   so a stripped key is omitted. It reads the reply as the frame does, by type
   (`ReplyValue`), so a bare value and a `Result` behind an alias mask alike.
 
-`masked_reply` / `masked_output_ambient` are for surfaces **no decorator
-reaches** — a hand-written MCP `ServerHandler`, a value built for the caller.
-Both mask for the ambient principal, never per recipient: a `WsServer::emit`
-to other connections carries what the sender may read. Inside a decorated
-handler they bypass the posture nobody can then `rg` for.
+`masked_reply` is for surfaces **no decorator reaches** — a hand-written MCP
+`ServerHandler`, a value built for the caller. It masks for the ambient
+principal, never per recipient: a `WsServer::emit` to other connections carries
+what the sender may read. Inside a decorated handler it bypasses the posture
+nobody can then `rg` for.
 
 ## Extractors and the carried ability
 

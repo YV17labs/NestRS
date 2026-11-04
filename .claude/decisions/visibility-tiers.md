@@ -107,7 +107,6 @@ too. The one compile-fail fixture calling `exception_filter` by hand now lists
 the type in `GlobalExceptionFilters<(…)>`, where a developer meets the
 refusal.
 
-
 **2026-11-04 — one concept, one path across the edges.** The identity audit's
 second pass found `Scoped<T>` four times, one identical newtype per edge, so a
 feature with three adapters imported three of them and the prelude's was

@@ -189,9 +189,9 @@ readers, and the two move in one change.
 - **A minor adds**: a tier-1 item; a variant or field where the type is
   `#[non_exhaustive]` or has a private field; a field to a configuration — a
   `#[config]` struct, a `Default` struct nested in one, `OpenTelemetryConfig`,
-  `McpIdentity` — documented as built over its base (`..Default::default()`, `from_env`), a
-  complete literal not covered; a key, a variable, a feature, a unit, a
-  `nest_rs::prelude` name; a public dependency's minor; the MSRV, named in the
+  `McpIdentity` — documented as built over its base (`..Default::default()`,
+  `from_env`), a complete literal not covered; a key, a variable, a feature, a
+  unit, a `nest_rs::prelude` name; a public dependency's minor; the MSRV, named in the
   changelog. **A patch fixes** behaviour and tier 2, and never raises the MSRV.
 - **A security fix refusing an insecure configuration that used to boot is a
   patch** (`decisions/semver-7x.md`, 2026-10-12): it ships under the

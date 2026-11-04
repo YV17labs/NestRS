@@ -41,7 +41,8 @@ redis-queue = ["nest-rs/redis-queue"]
 redis-schedule = ["nest-rs/redis-schedule"]
 redis-throttler = ["nest-rs/redis-throttler"]
 schedule = ["nest-rs/schedule"]
-# `#[expose]` and the entity every `#[authorize(Action, Entity)]` witness names. `#[crud]` rides `http` and `seaorm` together.
+# `#[expose]` and the entity every `#[authorize(Action, Entity)]` witness names.
+# `#[crud]` rides `http` and `seaorm` together.
 seaorm = ["nest-rs/seaorm"]
 # `queue_kit!` and `TestAuthority` beside `queue`, as a driver's suite reaches
 # them. Off by default for `redis-<port>`'s reason: it links the harness into

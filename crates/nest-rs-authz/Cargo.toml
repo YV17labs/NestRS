@@ -47,10 +47,10 @@ mcp = [
     # Same as GraphQL: the root guard's `check_http` is what `/mcp`'s request runs.
     "dep:nest-rs-http",
 ]
-# WebSocket surface: the per-message reply mask that `#[messages]` emits from an `#[authorize(Action, Entity)]`, beside the class
-# gate every edge shares. A gateway's upgrade runs the HTTP chain, and what a
-# message needs re-established is the ambient ability, which the connection
-# carries.
+# WebSocket surface: the per-message reply mask that `#[messages]` emits from an
+# `#[authorize(Action, Entity)]`, beside the class gate every edge shares. A
+# gateway's upgrade runs the HTTP chain, and what a message needs re-established
+# is the ambient ability, which the connection carries.
 ws = [
     "dep:nest-rs-ws",
     # The root guard's `check_http` entry is what runs on the upgrade.

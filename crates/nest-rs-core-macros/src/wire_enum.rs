@@ -2,18 +2,15 @@
 //! and `JsonSchema` routed through `nest_rs_core`, and `async_graphql::Enum`
 //! under its `graphql` key.
 
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Fields, Item, ItemEnum};
 
-pub(crate) fn wire_enum(args: TokenStream2, item: TokenStream2) -> TokenStream2 {
-    match expand(args, item) {
-        Ok(tokens) => tokens,
-        Err(err) => err.to_compile_error(),
-    }
+pub(crate) fn wire_enum(args: TokenStream, item: TokenStream) -> TokenStream {
+    expand(args, item).unwrap_or_else(syn::Error::into_compile_error)
 }
 
-fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
+fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let graphql = parse_args(args)?;
     let item = parse_enum(item)?;
 
@@ -32,11 +29,12 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         }
     }
 
+    let graphql_derive = graphql.then(|| quote!(::nest_rs_graphql::async_graphql::Enum,));
+    let graphql_crate =
+        graphql.then(|| quote!(#[graphql(crate = "::nest_rs_graphql::async_graphql")]));
+
     // Our derive leads the developer's attributes: a helper (`#[serde(rename_all)]`)
     // above the derive that claims it trips `legacy_derive_helpers`.
-    let graphql_derive = graphql_enum_derive(graphql);
-    let graphql_crate = graphql_crate_attr(graphql);
-
     Ok(quote! {
         #[derive(
             ::core::clone::Clone,
@@ -58,7 +56,7 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
 
 /// `graphql` is explicit, not inferred from the crate feature: features unify
 /// across a workspace, so one GraphQL app would derive `Enum` on every enum.
-fn parse_args(args: TokenStream2) -> syn::Result<bool> {
+fn parse_args(args: TokenStream) -> syn::Result<bool> {
     const WIRE_ENUM: nest_rs_codegen::Grammar =
         nest_rs_codegen::Grammar::new("wire_enum", &["graphql"]);
     let mut graphql = false;
@@ -72,7 +70,7 @@ fn parse_args(args: TokenStream2) -> syn::Result<bool> {
 /// Parse the item, naming the struct's decorators when the developer decorated
 /// one. Parsed as an [`Item`] first, so a syntax error inside an enum reports
 /// that error, not "the other decorator".
-fn parse_enum(item: TokenStream2) -> syn::Result<ItemEnum> {
+fn parse_enum(item: TokenStream) -> syn::Result<ItemEnum> {
     match syn::parse2::<Item>(item)? {
         Item::Enum(item) => Ok(item),
         other => Err(syn::Error::new_spanned(
@@ -81,30 +79,4 @@ fn parse_enum(item: TokenStream2) -> syn::Result<ItemEnum> {
              or `#[output]`, and an entity's `Model` `#[expose(name = \"…\")]`.",
         )),
     }
-}
-
-/// The framework's re-export of async-graphql, rerooted to the umbrella's
-/// `graphql` module: the root the derive and its `crate = ` override are pinned to.
-fn graphql_root() -> TokenStream2 {
-    quote!(::nest_rs_graphql::async_graphql)
-}
-
-/// `async_graphql::Enum` spliced into the derive list, under
-/// `#[wire_enum(graphql)]` only.
-fn graphql_enum_derive(graphql: bool) -> TokenStream2 {
-    if !graphql {
-        return TokenStream2::new();
-    }
-    let root = graphql_root();
-    quote! { #root::Enum, }
-}
-
-/// The `crate = ` override that derive needs, built from the tokens: a stale
-/// string would parse and fall back to the call site's prelude.
-fn graphql_crate_attr(graphql: bool) -> TokenStream2 {
-    if !graphql {
-        return TokenStream2::new();
-    }
-    let root: String = graphql_root().into_iter().map(|t| t.to_string()).collect();
-    quote! { #[graphql(crate = #root)] }
 }

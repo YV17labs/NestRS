@@ -34,9 +34,8 @@ feature of its own capability enables that concern (`http` enables `guards`
 and `pipes`, so `#[routes]` roots both), or when an attribute the developer
 writes drives the emission and the concern is attribute-gated in codegen's
 crate table (`#[authorize]` reaches `authz`, `#[crud]` `seaorm`,
-`#[wire_enum(graphql)]` `graphql`): `reroot`
-follows that path with the umbrella's check for its feature, under the `cfg`s
-around it. Never a bare third-party path — `::anyhow`, `::tracing`, `::uuid`
+`#[wire_enum(graphql)]` `graphql`): `reroot` follows that path with the
+umbrella's check for its feature, under the `cfg`s around it. Never a bare third-party path — `::anyhow`, `::tracing`, `::uuid`
 resolve against the consumer's extern prelude and break every app that lacks
 that direct dependency. Routing through the umbrella is also what dissolves
 the cycles: `nest-rs-guards` and `nest-rs-pipes` sit below the transports, on

@@ -39,6 +39,8 @@ pub enum PreludeTier {
 pub mod http {
     use nest_rs::prelude::*;
 
+    use super::PreludeService;
+
     #[controller(path = "/prelude")]
     pub struct PreludeController;
 
@@ -46,7 +48,7 @@ pub mod http {
     impl PreludeController {
         #[get("/")]
         #[public]
-        async fn index(&self, _service: Scoped<crate::prelude::PreludeService>) -> String {
+        async fn index(&self, _service: Scoped<PreludeService>) -> String {
             "ok".into()
         }
     }
@@ -56,6 +58,8 @@ pub mod http {
 pub mod graphql {
     use nest_rs::prelude::*;
 
+    use super::PreludeService;
+
     #[resolver]
     pub struct PreludeResolver;
 
@@ -63,7 +67,7 @@ pub mod graphql {
     impl PreludeResolver {
         #[query]
         #[public]
-        async fn prelude(&self, _service: Scoped<crate::prelude::PreludeService>) -> String {
+        async fn prelude(&self, _service: Scoped<PreludeService>) -> String {
             "ok".into()
         }
     }
@@ -72,6 +76,8 @@ pub mod graphql {
 #[cfg(feature = "mcp")]
 pub mod mcp {
     use nest_rs::prelude::*;
+
+    use super::PreludeService;
 
     #[mcp(path = "/prelude-mcp")]
     #[derive(Clone, Default)]
@@ -83,7 +89,7 @@ pub mod mcp {
         #[public]
         async fn ping(
             &self,
-            _service: Scoped<crate::prelude::PreludeService>,
+            _service: Scoped<PreludeService>,
         ) -> Result<String, nest_rs::mcp::McpError> {
             Ok("ok".into())
         }
@@ -94,6 +100,8 @@ pub mod mcp {
 pub mod ws {
     use nest_rs::prelude::*;
 
+    use super::PreludeService;
+
     #[gateway(path = "/prelude-ws")]
     #[derive(Default)]
     pub struct PreludeGateway;
@@ -102,7 +110,7 @@ pub mod ws {
     impl PreludeGateway {
         #[subscribe_message("prelude.ping")]
         #[public]
-        async fn ping(&self, _service: Scoped<crate::prelude::PreludeService>) {}
+        async fn ping(&self, _service: Scoped<PreludeService>) {}
     }
 }
 

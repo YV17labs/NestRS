@@ -8,10 +8,9 @@
 //!   The key that *was* read comes back as `suggestion` when one is near
 //!   enough to be the intended one, or is the key it names once renamed
 //!   (`HSTS` for `SECURITY_HEADERS_HSTS`).
-//! - **A retired key** — `variable read by nothing since 7.0`,
-//!   in the words every retired variable is said with. An unread key the crate
-//!   that retired it declares, under either spelling; the key it became comes
-//!   back as `read_as`.
+//! - **A retired key** — `variable read by nothing since 7.0`, in the words every
+//!   retired variable is said with. An unread key the crate that retired it
+//!   declares, under either spelling; the key it became comes back as `read_as`.
 //! - **A misspelled namespace** — [`MISSPELLED_CONFIG_NAMESPACE`]. The variable
 //!   spells a namespace this binary read otherwise than the loader reads it —
 //!   other separators (`OAUTH_RESOURCE` for `oauth__resource`, `SEAORM_URL` for

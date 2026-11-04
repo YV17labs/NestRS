@@ -7,6 +7,7 @@ use std::time::Duration;
 use nest_rs::config::{
     Bound, ConfigService, CountBounds, DurationBounds, Field, Floor, Result, config,
 };
+use nest_rs::pipes::validator::ValidationError;
 
 /// The window's range, read under `WINDOW_SECS`.
 const WINDOW: DurationBounds = DurationBounds::secs(
@@ -26,11 +27,9 @@ fn doubled(env: &ConfigService, field: Field, base: u32) -> Result<u32> {
 }
 
 /// A custom rule, naming `validator`'s error through the framework alone.
-fn not_thirteen(
-    retries: u32,
-) -> std::result::Result<(), nest_rs::pipes::validator::ValidationError> {
+fn not_thirteen(retries: u32) -> std::result::Result<(), ValidationError> {
     if retries == 13 {
-        return Err(nest_rs::pipes::validator::ValidationError::new("unlucky"));
+        return Err(ValidationError::new("unlucky"));
     }
     Ok(())
 }

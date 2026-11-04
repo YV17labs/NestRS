@@ -528,12 +528,8 @@ pub use nest_rs_core_macros::input;
 /// ```
 pub use nest_rs_core_macros::output;
 
-/// The enum both decoded and sent — a column's, a claims role: carries
-/// `Serialize`, `Deserialize` and `JsonSchema`, routed back here, with the
-/// `Clone`, `Copy`, `Debug`, `PartialEq` and `Eq` they require; `#[wire_enum(graphql)]`
-/// adds `async_graphql::Enum`, through the umbrella's `graphql` feature. It emits
-/// nothing from SeaORM: `EnumIter`, `DeriveActiveEnum` and how the column is stored
-/// stay yours.
+/// The enum both decoded and sent: carries `Serialize`/`Deserialize`/`JsonSchema`
+/// and routes each back here, for a column's enum or a claims role.
 ///
 /// ```
 /// use nest_rs_core::wire_enum;

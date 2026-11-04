@@ -46,8 +46,8 @@
 //! re-installs the `/mcp` request's context inside that dispatch, for every
 //! capability, so a handler method gets:
 //!
-//! * [`Scoped<T>`](nest_rs_core::Scoped), a parameter, for an `#[injectable(scope = request)]`
-//!   provider;
+//! * [`Scoped<T>`](nest_rs_core::Scoped), a parameter, for an
+//!   `#[injectable(scope = request)]` provider;
 //! * what the request's guards and layers made ambient — the caller's
 //!   ability — and its trace;
 //! * a `Repo`-backed body reading through the ambient executor of the

@@ -2,11 +2,10 @@
 //!
 //! A gateway writes no mask: `#[authorize(Action, Entity)]` beside a
 //! `#[subscribe_message]` makes `#[messages]` emit the class gate
-//! ([`class_gate`](crate::class_gate),
-//! every edge's), run in the message's guard stage, and the mask around its
-//! reply, exactly as `#[tools]` does on MCP, `#[operations]` on GraphQL and
-//! `#[routes]` on HTTP. `Gateway::dispatch`, below, calls the handler on its
-//! own, behind the class gate and inside the mask.
+//! ([`class_gate`](crate::class_gate), every edge's), run in the message's guard
+//! stage, and the mask around its reply, exactly as `#[tools]` does on MCP,
+//! `#[operations]` on GraphQL and `#[routes]` on HTTP. `Gateway::dispatch`, below,
+//! calls the handler on its own, behind the class gate and inside the mask.
 //!
 //! ```
 //! # use std::sync::Arc;

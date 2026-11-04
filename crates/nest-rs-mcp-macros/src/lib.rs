@@ -88,13 +88,12 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// - a parameter is request-scoped when its type's last segment is `Scoped`
 ///   (`nest_rs_core::Scoped`), what a guard attached when it is `Ambient`
-///   (`nest_rs_core::Ambient`) — each
-///   resolved in the tail through a function returning core's type, so a
-///   namesake does not compile, and neither an argument of the protocol —
-///   piped when it is `Parameters<Piped<P>>`, and on a `#[resource]` the
-///   template variable its name spells, or under `bind` the subject when its
-///   type's last segment is `Authorized`, which names the entity — each argument
-///   held to the rules its type declares;
+///   (`nest_rs_core::Ambient`) — each resolved in the tail through a function
+///   returning core's type, so a namesake does not compile, and neither an
+///   argument of the protocol — piped when it is `Parameters<Piped<P>>`, and on
+///   a `#[resource]` the template variable its name spells, or under `bind` the
+///   subject when its type's last segment is `Authorized`, which names the
+///   entity — each argument held to the rules its type declares;
 /// - a masked operation spells its return `Result<…>`, the mask reading
 ///   `Json<T>` or `Option<Json<T>>` to unwrap and a tool's opaque answers
 ///   (`CallToolResult`, `ContentBlock`, …) or a `ReadResourceResult`, bare or

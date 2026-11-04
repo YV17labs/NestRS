@@ -4,7 +4,7 @@
 
 use nest_rs_codegen::Grammar;
 use proc_macro2::{Group, Span, TokenStream as TokenStream2, TokenTree};
-use quote::{ToTokens, quote, quote_spanned};
+use quote::{quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{Expr, Ident, ItemStruct, LitStr, Path, Type, Visibility};
@@ -243,9 +243,10 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields, defaults: Option<&Path
                 return None;
             };
             let (vis, ty, setting) = (&field.vis, &field.ty, setting_ident(field));
-            // Every token naming the field's type goes through `BoundedField`
-            // at that type's location, so rustc says a type no range holds, or
-            // a range of the other kind, once — at the field.
+            // A `let`, not a nested `const`, whose type rustc would also
+            // normalize at the range's span, saying a type no range holds
+            // twice; the range keeps its spans, so its own mistake is said
+            // where it is written.
             let at = ty.span();
             let doc = format!(
                 "`{}`'s range, bound to the variable it is read from and the field that pins \
@@ -253,12 +254,11 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields, defaults: Option<&Path
                 field.ident.unraw()
             );
             let field = relocated(field_of(field), at);
-            let range = Ident::new("__NESTRS_RANGE", at);
-            let bounds = relocated(bounds.to_token_stream(), at);
+            let range = Ident::new("range", Span::mixed_site().located_at(at));
             Some(quote_spanned! {at=>
                 #[doc = #doc]
                 #vis const #setting: <#ty as ::nest_rs_config::BoundedField>::Setting = {
-                    const #range: <#ty as ::nest_rs_config::BoundedField>::Bounds = #bounds;
+                    let #range: <#ty as ::nest_rs_config::BoundedField>::Bounds = #bounds;
                     ::nest_rs_config::BoundedSetting::new(#range, #field)
                 };
             })

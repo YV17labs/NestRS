@@ -466,9 +466,12 @@ mod standalone {
             .await
             .expect("CLIENT PAUSE WRITE");
         let started = Instant::now();
+        // With an expiry, or a failure below would leave it for good.
         let held = redis::cmd("SET")
             .arg(&key)
             .arg("landed")
+            .arg("EX")
+            .arg(300)
             .query_async::<()>(&mut conn)
             .await;
         let took = started.elapsed();
@@ -516,7 +519,9 @@ mod standalone {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_redis_not_ready_yet_is_retried_until_it_serves() {
         for line in NOT_READY {
-            let proxy = ScriptedRedis::start(Some(crate::redis_url()), None).await;
+            // Database 0 takes no `SELECT`, so each answer meets the boot's proof;
+            // the connection files nothing there.
+            let proxy = ScriptedRedis::start(Some(crate::redis_url_on(0)), None).await;
             proxy.answer_with(Some(line));
             let ready = tokio::spawn({
                 let answer = Arc::clone(&proxy.answer);

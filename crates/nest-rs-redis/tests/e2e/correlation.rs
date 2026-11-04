@@ -119,6 +119,7 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     worker.shutdown().await.expect("clean shutdown");
+    crate::forget(CorrelationQueue::NAME).await;
 
     let seen = observed(seq).expect("the job ran and reported what it was running under");
 

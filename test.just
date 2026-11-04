@@ -9,6 +9,11 @@ redis_url := env_var_or_default("NESTRS_REDIS__URL", "rediss://valkey-standalone
 # redis_url := "rediss-sentinel://valkey-sentinel-1:26379?node=valkey-sentinel-2:26379&node=valkey-sentinel-3:26379&sentinelServiceName=nestrs"
 # redis_url := "rediss-cluster://valkey-cluster-1:6379?node=valkey-cluster-2:6379&node=valkey-cluster-3:6379"
 
+# Exported on the suite's shared database, `DB_SHARED` in its `main.rs`, which
+# refuses any other: the variable outranks what an app pins, so a URL naming
+# none would file the suite's jobs on database 0, development's.
+shared_redis_url := replace_regex(redis_url, '^([^/]+//[^/?]+)(/[^?]*)?', '$1/16')
+
 # Its tests that hold on one topology alone sit in a module named for it; a
 # failover in a `failover` module, and every node requiring a client certificate
 # in a `mutual_tls` one.
@@ -42,7 +47,7 @@ console_alone := "cargo nextest run -p nest-rs-opentelemetry --no-default-featur
 all: && doc
     #!/usr/bin/env bash
     set -euo pipefail
-    export NESTRS_REDIS__URL='{{redis_url}}'
+    export NESTRS_REDIS__URL='{{shared_redis_url}}'
     {{nextest}} -E 'not ({{elsewhere}}) and not ({{alone}}) and not ({{unasked}})'
     {{graphql_alone}}
     {{kernel_alone}}
@@ -69,7 +74,7 @@ integration:
 e2e:
     #!/usr/bin/env bash
     set -euo pipefail
-    export NESTRS_REDIS__URL='{{redis_url}}'
+    export NESTRS_REDIS__URL='{{shared_redis_url}}'
     {{nextest}} -E 'binary(e2e) and not ({{elsewhere}}) and not ({{alone}}) and not ({{unasked}})'
     if [ "{{topology}}" != standalone ]; then
         {{nextest}} --test-threads 1 -E '{{alone}}'

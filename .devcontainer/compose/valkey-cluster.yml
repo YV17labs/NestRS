@@ -59,6 +59,7 @@ configs:
       appendonly no
       save ""
       cluster-enabled yes
-      cluster-databases 16
+      databases 32
+      cluster-databases 32
       cluster-node-timeout 2000
       cluster-preferred-endpoint-type hostname

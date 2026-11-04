@@ -76,12 +76,16 @@ services:
   # Valkey, the open-source Redis the framework supports, on one server and on
   # TLS alone: the host every `rediss://` URL of the workspace reaches. Sentinel
   # and Cluster are dev container environments of their own, layering
-  # `valkey-sentinel.yml` or `valkey-cluster.yml` on this file.
+  # `valkey-sentinel.yml` or `valkey-cluster.yml` on this file. Thirty-two
+  # databases: 0 is development's, 1 to 8 the demo's suites', 9 to 16 the
+  # framework's, so no suite files a key where another reads.
   valkey-standalone:
     extends: {file: valkey.yml, service: valkey}
     restart: unless-stopped
     command:
       - valkey-server
+      - --databases
+      - "32"
       - --port
       - "0"
       - --tls-port

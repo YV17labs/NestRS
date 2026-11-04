@@ -108,15 +108,20 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
   (`provide_arc(db.connection())`), which keeps `SeaOrmModule` from opening
   its pool, and the guard drops the database. A dirty or unmigrated main
   database then fails nothing.
-- **Redis's sixteen databases are split between the workspaces.** 0 is the
-  developer's — what `nestrs run dev` drains — and the framework suite's
-  shared one; the demo holds the lower half above it, the framework the upper
-  half; a Cluster serves them too (`cluster-databases`). Each list is checked
-  at compile time where it is written: the
-  framework's `DB_*` constants in `nest-rs-redis`'s e2e `main.rs`, the demo's
-  `features::testing::RedisDatabase`, one variant per test, so two tests on
-  one database is a duplicate discriminant. A `FLUSHDB` in one half never
-  reaches a job the other filed.
+- **Redis's databases are split between development and the suites**, on
+  every Valkey the dev container runs, which declares enough for each
+  (`--databases`, a Cluster's `cluster-databases`): 0 is the developer's —
+  what `nestrs run dev` drains — and no suite files a key there; the demo's
+  suites hold a range above it, the framework's the range above theirs, its
+  shared tests on a database of their own, the one the URL `test.just` exports
+  names, and the suite refuses a URL naming another. Each list is checked at
+  compile time where it is written: the framework's `DB_*` constants in
+  `nest-rs-redis`'s e2e `main.rs`, below the count the dev container
+  declares, and the demo's `features::testing::RedisDatabase`, one variant
+  per test, so two tests on one database is a duplicate discriminant. A
+  `FLUSHDB` in one range never reaches a job another filed. The demo's range
+  bounds its worker tests: one more takes a database past the framework's, or
+  a queue-key namespace the queue binding does not have.
 - **A test that starts a worker drains a queue no other test pushes to.** In
   the framework the queue is named for the test. A demo test cannot name its
   queue — `audio` and `notifications` are the product's `#[queue]`s — so its
@@ -132,7 +137,7 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
   test uploads never sits among the objects a running app lists; the
   features' integration suite holds both profiles to
   `features::testing::SUITES_BUCKET`. The framework's storage suite shares
-  development's, as its Redis suite shares database 0.
+  development's bucket.
 - **A test needing its own database, user or proxy seeds its config**
   (`TestApp::provide`) on the suite's URL rewritten by `url_on`, `url_as` or
   `url_at`, never a `for_root` pin nor a URL of its own: the suite's own
@@ -140,7 +145,10 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
   back onto the shared database, or around a proxy the test put in front of
   it.
 - **What a test files where nothing drains, it names uniquely and deletes**
-  once its assertions are read — an object, a record, a job.
+  once its assertions are read — an object, a record, a job. A failing test
+  leaves no such name either: no later run would reach it, so what removes it
+  runs however the test ends (`nest-rs-redis`'s `forgetting`), or the key
+  expires.
 - **`nest-rs-redis`'s e2e runs on the Valkey topology its URL declares**: the
   dev container's one server by default, which CI runs too. With the
   `valkey-sentinel` or `valkey-cluster` dev container open, uncommenting its

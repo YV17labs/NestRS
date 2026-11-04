@@ -58,6 +58,7 @@ async fn redis_now() -> u64 {
 async fn a_delayed_push_waits_off_the_stream_until_redis_says_it_is_due() {
     let producer = crate::producer().await;
     let queue = format!("nestrs-e2e-producer-delay-{}", crate::this_run());
+    let _forgetting = crate::forgetting(&queue);
     let before = redis_now().await;
     let held = producer
         .push_with(
@@ -101,7 +102,6 @@ async fn a_delayed_push_waits_off_the_stream_until_redis_says_it_is_due() {
             .is_some(),
         "indexed by its job, for a cancel to find",
     );
-    crate::forget(&queue).await;
 }
 
 /// A push under a key another job on the queue holds is refused, naming that
@@ -111,6 +111,7 @@ async fn a_unique_push_under_a_held_key_is_refused_naming_the_holder_and_files_n
     let producer = crate::producer().await;
     let queue = format!("nestrs-e2e-unique-held-{}", crate::this_run());
     let elsewhere = format!("{queue}-elsewhere");
+    let _forgetting = (crate::forgetting(&queue), crate::forgetting(&elsewhere));
     let under = || PushOptions::default().with_unique("song-1");
 
     let first = producer
@@ -141,9 +142,6 @@ async fn a_unique_push_under_a_held_key_is_refused_naming_the_holder_and_files_n
         .push_with(Named::of(&elsewhere), json!({ "take": 1 }), under())
         .await
         .expect("a key is scoped to its queue");
-
-    crate::forget(&queue).await;
-    crate::forget(&elsewhere).await;
 }
 
 /// Pushes racing for one key file one job: the claim is read and taken in the
@@ -152,6 +150,7 @@ async fn a_unique_push_under_a_held_key_is_refused_naming_the_holder_and_files_n
 async fn unique_push_racing_for_one_key_files_exactly_one_job() {
     let producer = crate::producer().await;
     let queue = format!("nestrs-e2e-unique-race-{}", crate::this_run());
+    let _forgetting = crate::forgetting(&queue);
     let pushes = (0..16).map(|take| {
         let producer = producer.clone();
         let queue = queue.clone();
@@ -180,7 +179,6 @@ async fn unique_push_racing_for_one_key_files_exactly_one_job() {
         "every other push was refused naming it: {holders:?}",
     );
     assert_eq!(crate::filed(&queue).await, 1, "and one job was filed");
-    crate::forget(&queue).await;
 }
 
 /// A job no worker has taken is cancelled — `true`, once — whether it waits on
@@ -191,6 +189,7 @@ async fn unique_push_racing_for_one_key_files_exactly_one_job() {
 async fn cancellation_answers_true_once_for_a_waiting_job_and_leaves_nothing() {
     let producer = crate::producer().await;
     let queue = format!("nestrs-e2e-cancel-waiting-{}", crate::this_run());
+    let _forgetting = crate::forgetting(&queue);
     let waiting = producer
         .push_with(
             Named::of(&queue),
@@ -251,7 +250,6 @@ async fn cancellation_answers_true_once_for_a_waiting_job_and_leaves_nothing() {
         !producer.cancel(&stranger).await.expect("a cancel"),
         "a job the backend never knew is not cancelled",
     );
-    crate::forget(&queue).await;
 }
 
 /// What holds on one server alone: a double in front of it stands where a

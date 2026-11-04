@@ -87,3 +87,18 @@ the doc-hidden generic connection, its signature and the `Connect` trait the
 node connection implements, read against its source before the move. The
 redis release still offers no setting to skip `CLIENT SETINFO` on a Cluster's
 nodes.
+
+## 2026-10-31 — every topology declares thirty-two databases
+
+The framework's e2e suite shared database 0 with development, which
+`nestrs run dev` drains: each run left its queue streams and, at a failure,
+its keys there, among the developer's data. Sixteen databases left it nowhere
+else to go — 0 development's, 1 to 8 the demo's suites', 9 to 15 the
+framework's confined tests. Every Valkey of the dev container now declares
+thirty-two: the standalone server `--databases 32`, the Sentinel servers
+`databases 32`, the Cluster nodes `databases 32` and `cluster-databases 32`,
+so the suite's shared tests run on 16 on every topology, the URL `test.just`
+exports naming it, since the variable outranks what an app pins; `CONFIG GET
+databases` reads one count wherever the suite asks. Still one server per
+backend (`one-server-per-backend.md`): a database is not a server. Agreed by
+the owner on 2026-10-31 with the identity audit's second pass ("Tout faire").

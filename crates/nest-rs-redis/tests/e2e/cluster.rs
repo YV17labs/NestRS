@@ -127,7 +127,8 @@ async fn a_queue_runs_on_while_its_slot_moves_to_another_node() {
         .expect("the source migrates the slot");
 
     let user = crate::acl_user("nestrs-e2e-moved");
-    let as_worker = crate::documented_user("queue/delivery.mdx", "worker", &user, 0).await;
+    let as_worker =
+        crate::documented_user("queue/delivery.mdx", "worker", &user, crate::DB_SHARED).await;
     let replica = crate::replica_on::<MovedModule>(as_worker).await;
     let mut asked_while_moving = 0;
     for _ in 0..100 {
@@ -227,7 +228,7 @@ async fn a_blocked_read_follows_the_ask_of_a_slot_being_moved() {
         .await
         .expect("a push before the move");
 
-    let mut to_source = crate::node(&source.addr).await;
+    let mut to_source = crate::node_on(&source.addr, crate::DB_SHARED).await;
     let _: () = redis::cmd("CLUSTER")
         .arg("SETSLOT")
         .arg(slot)
@@ -260,7 +261,7 @@ async fn a_blocked_read_follows_the_ask_of_a_slot_being_moved() {
         .arg(host)
         .arg(port)
         .arg("")
-        .arg(0)
+        .arg(crate::DB_SHARED)
         .arg(5000)
         .arg("KEYS")
         .arg(&keys)
@@ -361,7 +362,8 @@ async fn a_queue_runs_on_through_an_atomic_migration_of_its_slot() {
         .find(|node| node.primary && node.id != source.id)
         .expect("a second primary");
     let user = crate::acl_user("nestrs-e2e-atomic");
-    let as_worker = crate::documented_user("queue/delivery.mdx", "worker", &user, 0).await;
+    let as_worker =
+        crate::documented_user("queue/delivery.mdx", "worker", &user, crate::DB_SHARED).await;
     let replica = crate::replica_on::<AtomicModule>(as_worker).await;
     let run = crate::this_run();
 
@@ -465,6 +467,7 @@ mod failover {
         .await;
         replica.worker.shutdown().await.expect("clean shutdown");
         frozen.thawed().await;
+        crate::forget(FailoverQueue::NAME).await;
     }
 }
 

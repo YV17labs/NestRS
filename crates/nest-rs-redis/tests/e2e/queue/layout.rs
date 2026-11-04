@@ -333,6 +333,9 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
             .all(|key| key.starts_with("nestrs:queue:{nestrs-e2e-acl")),
         "every key is under the queues' own: {keys:?}",
     );
+    crate::flush(&mut admin)
+        .await
+        .expect("leave the database empty");
 }
 
 /// How go-redis 9.22, KEDA 2.21's client, names itself on every connection.

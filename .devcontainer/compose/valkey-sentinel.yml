@@ -59,6 +59,7 @@ services:
 configs:
   valkey-sentinel-server.conf:
     content: |
+      databases 32
       port 0
       tls-port 6379
       tls-ca-cert-file /certs/ca.pem

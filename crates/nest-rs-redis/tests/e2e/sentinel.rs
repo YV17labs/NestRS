@@ -126,7 +126,7 @@ mod failover {
         let score: Option<f64> = redis::cmd("ZSCORE")
             .arg(crate::key_of(FailoverQueue::NAME, "due"))
             .arg(held.id().to_string())
-            .query_async(&mut crate::node(&after).await)
+            .query_async(&mut crate::node_on(&after, crate::DB_SHARED).await)
             .await
             .expect("ZSCORE");
         assert!(
@@ -135,6 +135,7 @@ mod failover {
         );
         replica.worker.shutdown().await.expect("clean shutdown");
         frozen.thawed().await;
+        crate::forget(FailoverQueue::NAME).await;
 
         assert!(
             score.is_some(),

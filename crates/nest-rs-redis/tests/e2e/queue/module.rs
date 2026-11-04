@@ -34,17 +34,12 @@ async fn the_queue_binding_resolves_both_the_concrete_and_the_portable_producer_
     // A live producer, not an empty registration — on a queue nothing drains,
     // so it is named for this run and deleted.
     let queue = format!("nestrs-e2e-portable-{}", crate::this_run());
+    let _forgetting = crate::forgetting(&queue);
     let receipt = producer
         .push(Named::of(&queue), serde_json::json!({ "probe": true }))
         .await
         .expect("the portable handle pushes onto the same connection");
     assert_eq!(receipt.queue().as_str(), queue);
-    crate::forget(&queue).await;
-    assert_eq!(
-        crate::filed(&queue).await,
-        0,
-        "the probe left nothing behind"
-    );
 }
 
 #[module(imports = [

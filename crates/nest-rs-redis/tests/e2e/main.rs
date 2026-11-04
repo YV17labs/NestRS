@@ -14,13 +14,13 @@
 //! for a client certificate, one test at a time once every other is done.
 //!
 //! Valkey is reached over TLS alone, at `<PREFIX>_REDIS__URL` or the dev
-//! container's `rediss://valkey-standalone:6379`, by name on every topology,
-//! its certificate verified as the framework verifies it by default — against
-//! the system's authorities, where the dev container and CI install the
-//! services'. A double the suite puts in front of it presents a certificate
-//! of the test authority's, which only a connection to the double trusts
-//! (`harness::tls`). This file holds the suite's shared fixtures and nothing
-//! else.
+//! container's `rediss://valkey-standalone:6379`, on databases of the suite's
+//! own, by name on every topology, its certificate verified as the framework
+//! verifies it by default — against the system's authorities, where the dev
+//! container and CI install the services'. A double the suite puts in front of
+//! it presents a certificate of the test authority's, which only a connection
+//! to the double trusts (`harness::tls`). This file holds the suite's shared
+//! fixtures and nothing else.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -60,12 +60,19 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 /// The Valkey the deployment names, as the app would read it, or the dev
-/// container's.
+/// container's, on [`DB_SHARED`]. The variable outranks what an app pins, so it
+/// names that database itself, as `test.just` exports it: on any other, an app
+/// would file its keys where its test does not read, 0 being development's.
 fn redis_url() -> String {
-    nest_rs_config::ConfigService::for_namespace("redis")
+    let url = nest_rs_config::ConfigService::for_namespace("redis")
         .get("URL")
         .expect("a readable Redis URL")
-        .unwrap_or_else(|| "rediss://valkey-standalone:6379".to_owned())
+        .unwrap_or_else(|| url_on("rediss://valkey-standalone:6379", DB_SHARED));
+    assert!(
+        url_on(&url, DB_SHARED) == url,
+        "the suite's Valkey URL names its shared database, {DB_SHARED}",
+    );
+    url
 }
 
 /// Pinned rather than read from the env: the framework workspace ships no
@@ -118,11 +125,13 @@ fn budget_past_net(refused: anyhow::Error) -> nest_rs_core::BudgetPastNetError {
 /// [`LEASE`], or the queue binding refuses the boot.
 const BUDGET: Duration = Duration::from_millis(500);
 
-/// The logical databases a test selects when its keys or its connections must
-/// not meet another test's — one per test, all declared here so that no two
-/// collide. Every other test shares database 0, on queue names of its own.
-/// The framework's are 9 to 15: the demo's suites run on the same Redis and
-/// hold 1 to 8, so a [`flush`] here never reaches a job one of theirs filed.
+/// The logical databases the suite selects, all declared here so that no two
+/// collide: one per test whose keys or connections must not meet another
+/// test's, and [`DB_SHARED`] for every other, on queue names of its own. The
+/// framework's are 9 to 16: development drains 0 and the demo's suites, on the
+/// same Valkey, hold 1 to 8, so nothing here files a key where either reads,
+/// and a [`flush`] never reaches a job one of theirs filed.
+const DB_SHARED: u8 = 16;
 const DB_CONFINED_TO_THE_PREFIX: u8 = 9;
 const DB_BLOCKED_READ: u8 = 10;
 const DB_CONNECTION_DROP: u8 = 11;
@@ -141,16 +150,22 @@ const DB_SELECT_RETRIED: u8 = 15;
 /// so its blocked read is the one `CLIENT LIST` finds there.
 const DB_TLS_BLOCKED_READ: u8 = 15;
 
-// Two tests sharing a database meet each other's keys and connections, Redis
-// ships sixteen, and the demo holds the lower half: all three facts are checked
-// where the lists are written, one per server.
+/// The databases every Valkey of the dev container declares
+/// (`--databases 32`, a Cluster's `cluster-databases`).
+const DATABASES: u8 = 32;
+
+// Two tests sharing a database meet each other's keys and connections, the
+// dev container's Valkey declares [`DATABASES`], and development and the demo
+// hold 0 to 8: all three facts are checked where the lists are written, one
+// per server.
 const _: () = {
     const fn hold_apart(dbs: &[u8]) {
         let mut i = 0;
         while i < dbs.len() {
             assert!(
-                dbs[i] >= 9 && dbs[i] < 16,
-                "a framework e2e database is 9 to 15; 1 to 8 are the demo's",
+                dbs[i] >= 9 && dbs[i] < DATABASES,
+                "a framework e2e database is 9 or above, below the count the dev container \
+                 declares; 0 is development's, 1 to 8 the demo's",
             );
             let mut j = i + 1;
             while j < dbs.len() {
@@ -161,6 +176,7 @@ const _: () = {
         }
     }
     hold_apart(&[
+        DB_SHARED,
         DB_CONFINED_TO_THE_PREFIX,
         DB_BLOCKED_READ,
         DB_CONNECTION_DROP,
@@ -327,12 +343,19 @@ fn node_url(addr: &str) -> String {
     format!("{scheme}://{userinfo}{addr}")
 }
 
-/// A connection to the one server at `addr`.
+/// A connection to the one server at `addr`, which sends no `SELECT`: a
+/// sentinel has no database to select.
 async fn node(addr: &str) -> redis::aio::MultiplexedConnection {
-    bare_client(&node_url(addr))
+    node_on(addr, 0).await
+}
+
+/// [`node`], on database `db`: a command naming a key, `CLUSTER GETKEYSINSLOT`
+/// and `MIGRATE` act on the database their connection selected.
+async fn node_on(addr: &str, db: u8) -> redis::aio::MultiplexedConnection {
+    bare_client(&url_on(&node_url(addr), db))
         .get_multiplexed_async_connection()
         .await
-        .unwrap_or_else(|error| panic!("{addr} answers: {error}"))
+        .unwrap_or_else(|error| panic!("{addr} answers on database {db}: {error}"))
 }
 
 /// The name the suite's sentinels monitor the primary under.
@@ -1024,7 +1047,7 @@ async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
 /// [`replica`], reaching Redis as `redis` says whatever the environment says:
 /// the config is seeded, which freezes it against the deployment's variables —
 /// the hermetic-test hatch, for a suite that needs a database or a user of its
-/// own while `<PREFIX>_REDIS__URL` points every other one at the shared Redis.
+/// own while `<PREFIX>_REDIS__URL` points every other one at the shared database.
 async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Replica {
     replica_of::<M>(HeadlessApp::builder().provide(redis)).await
 }
@@ -1238,6 +1261,36 @@ async fn forget(queue: &str) {
             .query_async(&mut connect().await)
             .await
             .expect("DEL");
+    }
+}
+
+/// What [`forgetting`] answers.
+#[must_use = "the queue is forgotten when this drops"]
+struct Forgetting(String);
+
+/// [`forget`] the queue named `queue` when the answer drops, however the test
+/// ends: a queue named for its run is one no later run's [`forget`] reaches.
+fn forgetting(queue: &str) -> Forgetting {
+    Forgetting(queue.to_owned())
+}
+
+impl Drop for Forgetting {
+    fn drop(&mut self) {
+        let queue = std::mem::take(&mut self.0);
+        // On a thread of its own: a panic unwinds through the test's runtime,
+        // which cannot be blocked on.
+        let forgot = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime of its own")
+                .block_on(forget(&queue));
+        })
+        .join();
+        assert!(
+            forgot.is_ok() || std::thread::panicking(),
+            "the test's queue is forgotten"
+        );
     }
 }
 

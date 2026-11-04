@@ -79,8 +79,9 @@ That last line declares the units your guard checks — see
 [A guard declares the edges it checks](/fundamentals/guards-beyond-http/#a-guard-declares-the-edges-it-checks).
 Without it, binding this guard on a route is a compile error.
 
-A guard is an `#[injectable]` provider listed in some module's
-`providers = [...]`. The access graph (see
+A guard is an `#[injectable]` provider: a module's `providers = [...]` lists it,
+unless the [app-wide pool](#the-three-scopes) alone names it and registers it. The
+access graph (see
 [Providers](/fundamentals/providers/#the-access-graph--wiring-checked-at-boot))
 ensures every controller / resolver / gateway that references it imports
 a module that builds it.
@@ -313,9 +314,11 @@ pub struct BlogModule;
 The pool lives in the module `main` boots, so `TestApp::builder().module::<BlogModule>()`
 boots it too: a suite never re-types it. Only that module declares it — one a
 module the app imports lists fails the boot, since a feature would otherwise
-choose what covers every route — and once. The pool resolves each guard once,
-at mount, so a guard in it is a singleton: a request-scoped or transient one
-fails the boot with `ScopedLayerError`.
+choose what covers every route — and once. The pool registers each guard it lists
+unless the app already does, so what that guard injects is held to the module's
+imports; a guard a feature's module lists stays that module's. The pool resolves
+each guard once, at mount, so a guard in it is a singleton: a request-scoped or
+transient one fails the boot with `ScopedLayerError`.
 
 Across scopes the chain composes **global → controller → handler**,
 outermost first. `Layer::priority` is an optional tiebreaker within one scope

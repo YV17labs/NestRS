@@ -1322,7 +1322,7 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A type in a pool no decorator makes a provider** does not compile:
   `` `X` is not a provider a module or an app-wide pool can register ``, where the
   pool names it. `#[injectable]` on it, or a `Discoverable` impl.
-- **A provider of the root injecting a layer only a pool lists** fails the boot with
+- **A singleton provider of the root injecting a layer only a pool lists** fails the boot with
   `UnbuiltProviderError`: ``only an app-wide pool's declaration lists it … list it in
   `AppModule`'s `providers` ``. A module injecting one fails the access graph, naming the
   root as the owner: list the layer in a module both reach.

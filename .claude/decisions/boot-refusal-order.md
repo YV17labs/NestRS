@@ -190,7 +190,10 @@ are read, so a duplicate, a stall or a refusal it files is read in the order
 above and the access graph still runs after it. Waiting for every module is what
 makes "already registered" a fact rather than a guess: a seed, a factory, a
 sibling listed later, a second root and a test's override all stand with no read
-of the descriptors, and a layer's optional dependency is never late.
+of the descriptors, and a layer's optional dependency is never late. A layer a
+module lists and could not build is not registered in its place: the stall stays,
+and with it the cause it names (an import cycle, a late registration), which a
+pool building the layer anyway would hide behind what next waited on it.
 
 A declaration reports its layers (`also_provides`) and what they inject through
 the methods `Discoverable` already has, so the 2026-10-31 entry's refusal of a
@@ -201,12 +204,18 @@ reads a listing under a key's own type before them, and the seal holds a
 declaration only to what the layers it registered inject, read off what it
 attached: a layer the app holds some other way is never built from its `#[inject]`
 fields, which for `ThrottlerGuard`, a factory's, name what no provider makes on
-purpose. A scoped layer is refused before those, as a layer, its one remedy.
+purpose. That holds in the access graph and the check of what a test's override
+removed. A walk of the graph follows no declaration at all: one node holds every
+layer it alone lists, so its report would read their dependencies as one
+provider's and name a cycle none of them is on. `record_stall` refuses a cycle among
+a pool's layers; one through a listed provider shows once the refusal's remedy, to
+list the layer, is applied. A scoped layer is refused before those, as a layer, its
+one remedy.
 
-**The price:** a provider of the root injecting a layer only a pool lists is
-built before that layer exists, and is refused saying to list it
+**The price:** a singleton provider of the root injecting a layer only a pool lists
+is built before that layer exists, and is refused saying to list it
 (`UnbuiltCause::RegisteredByAPool`), as NestJS's `APP_*` tokens are not injectable
-by class. **Refused:** registering a layer at the declaration's own step, where
+by class; a request-scoped one, built after the pool, boots. **Refused:** registering a layer at the declaration's own step, where
 "already provided" is a read of every reached descriptor that a hand-written
 module's later registration contradicts, and where the step's static wait on the
 layer's dependencies stalls on those of a layer something else provides.

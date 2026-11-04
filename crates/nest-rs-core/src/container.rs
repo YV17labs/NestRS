@@ -20,7 +20,7 @@ use crate::close::InstallRecord;
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
 use crate::error::FactoryKind;
 use crate::factory_inputs::FactoryInputs;
-use crate::layer_chain::__private::{SiteChains, provide_pooled_layers};
+use crate::layer_chain::__private::{PooledLayers, SiteChains, provide_pooled_layers};
 use crate::module::{Collecting, Module, Registering};
 use crate::net::check_budgets;
 
@@ -469,7 +469,7 @@ pub struct ContainerBuilder {
     /// their keys, each with the keys the override left absent.
     overridden_providers: Vec<OverriddenProvider>,
     /// The layers an app-wide pool registered, in order, then those it could
-    /// not: nothing else registers any of them.
+    /// not: no module lists any of them, and nothing else registers one.
     pooled_providers: Vec<TypeId>,
     /// The checks a seed of a factory's output passes before anything reads
     /// it, by the output's type ([`__private::check_seed`]).
@@ -658,6 +658,42 @@ impl ContainerBuilder {
     /// The layers an app-wide pool answers for, each after what it injects.
     pub(crate) fn pooled_providers(&self) -> &[TypeId] {
         &self.pooled_providers
+    }
+
+    /// Whether a `#[module]` lists `key` and could not build it, which stays
+    /// that module's to answer for.
+    pub(crate) fn stalled(&self, key: TypeId) -> bool {
+        self.stalls
+            .iter()
+            .any(|stall| stall.provides.contains(&key))
+    }
+
+    /// The providers a walk of the graph stops at: each a test's double stands
+    /// in for, never built, and each app-wide pool's declaration, holding no
+    /// field. What one reports its layers inject, each waiting on its own: a
+    /// cycle among them is the pool's to refuse, and one through a listed
+    /// provider shows once the layer is listed.
+    pub(crate) fn injecting_nothing(&self) -> HashSet<TypeId> {
+        self.overridden_providers
+            .iter()
+            .map(|o| o.provider.0)
+            .chain(
+                self.attached_meta::<PooledLayers>()
+                    .map(|pooled| pooled.declaration),
+            )
+            .collect()
+    }
+
+    /// The first module this builder imported that lists `provider`: what a
+    /// refusal names on a container built by hand, which enters none
+    /// ([`registering_module`](Self::registering_module)).
+    pub(crate) fn imported_module_listing(&self, provider: TypeId) -> Option<&'static str> {
+        let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
+        let roots: Vec<TypeId> = self.collected_order.iter().map(|(id, _)| *id).collect();
+        reachable_descriptors(&descriptors, &roots)
+            .iter()
+            .find(|module| module.providers.iter().any(|p| (p.provider)() == provider))
+            .map(|module| module.name)
     }
 
     /// Whether a test overrode `key`.
@@ -1635,8 +1671,13 @@ impl ContainerBuilder {
         }
         let waiting = self.waiting();
         if !waiting.is_empty()
-            && let Some(cycle) =
-                singleton_cycle(&descriptors, &roots, &scopes, &waiting, &overridden)
+            && let Some(cycle) = singleton_cycle(
+                &descriptors,
+                &roots,
+                &scopes,
+                &waiting,
+                &self.injecting_nothing(),
+            )
         {
             return Err(cycle.into());
         }

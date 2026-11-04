@@ -147,9 +147,15 @@ fn check_singleton_cycles(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
     scopes: &HashMap<TypeId, ProviderScope>,
-    overridden: &HashSet<TypeId>,
 ) -> Result<()> {
-    match singleton_cycle(descriptors, roots, scopes, &builder.waiting(), overridden) {
+    let injecting_nothing = builder.injecting_nothing();
+    match singleton_cycle(
+        descriptors,
+        roots,
+        scopes,
+        &builder.waiting(),
+        &injecting_nothing,
+    ) {
         Some(cycle) => Err(cycle.into()),
         None => Ok(()),
     }
@@ -167,11 +173,13 @@ fn check_unclaimed_overrides(builder: &ContainerBuilder) -> Result<()> {
 /// Fail the boot on the first provider the roots reach that injects a key a
 /// test override removed — one its overridden provider would have registered
 /// beside the key the test overrode. The providers `standing_in` are never
-/// built, so what they inject is not read.
+/// built, so what they inject is not read, as `linked` holds a declaration only
+/// to the layers it registers.
 fn check_overridden_dependencies(
     builder: &ContainerBuilder,
     reached: &[&ModuleDescriptor],
     standing_in: &HashSet<TypeId>,
+    linked: &LinkedDeclarations,
 ) -> Result<()> {
     let overridden = builder.overridden_providers();
     if overridden.iter().all(|o| o.absent.is_empty()) {
@@ -182,10 +190,10 @@ fn check_overridden_dependencies(
             if standing_in.contains(&(p.provider)()) {
                 continue;
             }
-            let (required, required_names) = ((p.injects)(), (p.inject_names)());
-            let (optional, optional_names) = ((p.injects_optional)(), (p.inject_optional_names)());
-            let injected = crate::access::labelled(&required, &required_names)
-                .chain(crate::access::labelled(&optional, &optional_names))
+            let injected = linked
+                .injected_by(p)
+                .into_iter()
+                .map(|(key, dependency, _)| (key, dependency))
                 .chain((p.injects_per_request)());
             for (key, dependency) in injected {
                 if let Some(removed) = overridden.iter().find(|o| o.absent.contains(&key)) {
@@ -1109,9 +1117,9 @@ fn seal(
     }
     // After the access graph, whose remedy names the owning module
     // (`.claude/decisions/boot-refusal-order.md`).
-    check_singleton_cycles(builder, descriptors, &ids, &scopes, &overridden)?;
+    check_singleton_cycles(builder, descriptors, &ids, &scopes)?;
     let reached = reachable_descriptors(descriptors, &ids);
-    check_overridden_dependencies(builder, &reached, &overridden)?;
+    check_overridden_dependencies(builder, &reached, &overridden, &linked)?;
     if let Some(unbuilt) = builder.unbuilt_refusal(&reached) {
         return Err(unbuilt.into());
     }
@@ -1120,10 +1128,10 @@ fn seal(
     }
     check_budgets(builder, &reached, None)?;
     let order = provider_order(descriptors, &ids);
-    // No provider a module lists waits on a layer only a pool lists, which the
+    // No singleton a module lists waits on a layer only a pool lists, which the
     // seal refused above, so those run last, in the order the pool built them.
     let hook_order = HookOrder::new(
-        dependency_order(descriptors, &ids, &overridden)
+        dependency_order(descriptors, &ids, &builder.injecting_nothing())
             .into_iter()
             .chain(builder.pooled_providers().iter().copied()),
     );

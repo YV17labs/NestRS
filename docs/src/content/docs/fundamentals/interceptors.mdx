@@ -80,9 +80,10 @@ impl Interceptor for Tracer {
 }
 ```
 
-A plain `#[injectable]` provider that implements `Interceptor`, listed in a
-module's `providers = [...]` and then bound for the whole app, per controller
-or per handler. `#[derive(Layer)]` writes the `Layer` impl every interceptor
+A plain `#[injectable]` provider that implements `Interceptor`, bound for the
+whole app, per controller or per handler: a module's `providers = [...]` lists it,
+unless [the app's list](#the-apps-list-globalinterceptors) alone names it and
+registers it. `#[derive(Layer)]` writes the `Layer` impl every interceptor
 extends; `#[layer(priority = -10)]` beside it orders the interceptor ahead of
 its stage's others within one scope.
 
@@ -168,9 +169,9 @@ pub struct ApiModule;
 another edge never runs it. What the interceptor injects is held to the imports
 of the module the app boots, and one the pool cannot build, or that is not a
 singleton, fails the boot naming it, as does a pool a module the app imports
-declares, or a second one. A provider of yours injecting the interceptor needs it
-listed in a module's `providers`: a pool registers what it alone lists once every
-module is built, and the boot says so.
+declares, or a second one. A singleton provider of yours injecting the interceptor
+needs it listed in a module's `providers`: a pool registers what it alone lists once
+every module is built, and the boot says so.
 
 A bare `#[interceptor]` does not compile, and its refusal names this list:
 importing a feature's module never adds a layer around every handler of your app.

@@ -14,9 +14,9 @@ use nest_rs_core::__private::InjectedFactory;
 use nest_rs_core::{
     AccessGraphError, App, Caught, Container, ContainerBuilder, Discoverable, ExceptionFilter,
     GlobalExceptionFilters, GlobalInterceptors, Interceptor, LateOptionalDependencyError, Layer,
-    MissingDependencyError, Next, Outcome, ProviderCycleError, ReachableProviders,
-    ScopeViolationError, ScopedLayerError, UnbuiltProviderError, UnitContext, async_trait, hooks,
-    injectable, module,
+    MissingDependencyError, Next, Outcome, OverriddenDependencyError, ProviderCycleError,
+    ReachableProviders, Registering, ScopeViolationError, ScopedLayerError, UnbuiltCause,
+    UnbuiltProviderError, UnitContext, async_trait, hooks, injectable, module,
 };
 
 use crate::refused_boot;
@@ -586,4 +586,368 @@ async fn a_container_built_by_hand_registers_what_a_pool_lists_too() {
     let builder = <GlobalInterceptors<(ByHand,)> as Discoverable>::register(Container::builder());
     let container = builder.build().expect("the container builds");
     assert!(container.get::<ByHand>().is_some());
+}
+
+trait Port: Send + Sync {}
+
+#[injectable]
+struct Bound;
+
+impl Port for Bound {}
+
+struct DoublePort;
+
+impl Port for DoublePort {}
+
+#[module(providers = [Bound as dyn Port])]
+struct BindsPort;
+
+layer!(ListedAndDoubled {
+    #[inject]
+    bound: Arc<Bound>,
+});
+
+#[module(
+    imports = [BindsPort],
+    providers = [ListedAndDoubled, GlobalInterceptors<(ListedAndDoubled,)>],
+)]
+struct ListsWhatATestDoubles;
+
+layer!(PooledAndDoubled {
+    #[inject]
+    bound: Arc<Bound>,
+});
+
+#[module(imports = [BindsPort], providers = [GlobalInterceptors<(PooledAndDoubled,)>])]
+struct PoolsWhatATestDoubles;
+
+#[tokio::test]
+async fn a_doubled_layer_answers_for_nothing_it_would_inject() {
+    App::builder()
+        .override_value(ListedAndDoubled {
+            bound: Arc::new(Bound),
+        })
+        .override_dyn::<dyn Port>(Arc::new(DoublePort))
+        .module::<ListsWhatATestDoubles>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("a module lists it: {refused:#}"));
+    App::builder()
+        .override_value(PooledAndDoubled {
+            bound: Arc::new(Bound),
+        })
+        .override_dyn::<dyn Port>(Arc::new(DoublePort))
+        .module::<PoolsWhatATestDoubles>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("a pool alone lists it: {refused:#}"));
+}
+
+layer!(LeftWithoutItsDependency {
+    #[inject]
+    bound: Arc<Bound>,
+});
+
+#[module(imports = [BindsPort], providers = [GlobalInterceptors<(LeftWithoutItsDependency,)>])]
+struct PoolsWhatATestStarves;
+
+#[tokio::test]
+async fn a_layer_a_pool_registers_injecting_what_a_test_removed_is_told_so() {
+    let Err(refused) = App::builder()
+        .override_dyn::<dyn Port>(Arc::new(DoublePort))
+        .module::<PoolsWhatATestStarves>()
+        .build()
+        .await
+    else {
+        panic!("the layer is built from nothing");
+    };
+    let removed = refused
+        .downcast_ref::<OverriddenDependencyError>()
+        .unwrap_or_else(|| panic!("not the override's: {refused:#}"));
+    assert!(removed.dependency.ends_with("Bound"), "{refused:#}");
+    assert!(
+        removed.consumer.contains("LeftWithoutItsDependency"),
+        "{refused:#}"
+    );
+}
+
+/// The refusal of a provider of `M`'s, told to list what it injects in `M`.
+async fn told_to_list_it<M: nest_rs_core::Module>(module: &str, provider: &str) {
+    let refused = refused_boot::<M>().await;
+    let unbuilt = refused
+        .downcast_ref::<UnbuiltProviderError>()
+        .unwrap_or_else(|| panic!("not told to list it: {refused:#}"));
+    assert_eq!(unbuilt.provider, provider, "{refused:#}");
+    assert_eq!(
+        unbuilt.cause,
+        UnbuiltCause::RegisteredByAPool,
+        "{refused:#}"
+    );
+    let said = refused.to_string();
+    assert!(
+        said.contains(&format!("`{module}`'s `providers`")),
+        "{said}"
+    );
+}
+
+layer!(SharedInner);
+
+layer!(SharedOuter {
+    #[inject]
+    inner: Arc<SharedInner>,
+});
+
+#[injectable]
+struct SharesTheInner {
+    #[inject]
+    inner: Arc<SharedInner>,
+}
+
+#[module(providers = [SharesTheInner, GlobalInterceptors<(SharedOuter, SharedInner)>])]
+struct PoolWhoseLayersShare;
+
+#[tokio::test]
+async fn a_pools_layers_injecting_each_other_are_no_cycle_with_what_injects_them() {
+    told_to_list_it::<PoolWhoseLayersShare>("PoolWhoseLayersShare", "SharesTheInner").await;
+}
+
+layer!(LayerAProviderWants);
+
+#[injectable]
+struct WantsOneLayer {
+    #[inject]
+    layer: Arc<LayerAProviderWants>,
+}
+
+layer!(LayerWantingTheProvider {
+    #[inject]
+    provider: Arc<WantsOneLayer>,
+});
+
+#[module(providers = [
+    WantsOneLayer,
+    GlobalInterceptors<(LayerAProviderWants, LayerWantingTheProvider)>,
+])]
+struct PoolAroundAProvider;
+
+#[module(providers = [
+    LayerAProviderWants,
+    WantsOneLayer,
+    GlobalInterceptors<(LayerAProviderWants, LayerWantingTheProvider)>,
+])]
+struct ListsTheLayerItWasToldTo;
+
+#[tokio::test]
+async fn two_layers_of_a_pool_are_no_cycle_through_a_provider_between_them() {
+    told_to_list_it::<PoolAroundAProvider>("PoolAroundAProvider", "WantsOneLayer").await;
+    assert!(
+        booted::<ListsTheLayerItWasToldTo>()
+            .await
+            .container()
+            .get::<LayerWantingTheProvider>()
+            .is_some(),
+        "the remedy is the sentence's",
+    );
+}
+
+layer!(LayerOnACycle {
+    #[inject]
+    provider: Arc<ProviderOnACycle>,
+});
+
+#[injectable]
+struct ProviderOnACycle {
+    #[inject]
+    layer: Arc<LayerOnACycle>,
+}
+
+#[module(providers = [ProviderOnACycle, GlobalInterceptors<(LayerOnACycle,)>])]
+struct PoolOnACycle;
+
+#[module(providers = [LayerOnACycle, ProviderOnACycle, GlobalInterceptors<(LayerOnACycle,)>])]
+struct ListsTheLayerOnACycle;
+
+#[tokio::test]
+async fn a_cycle_through_a_layer_only_a_pool_lists_shows_once_it_is_listed() {
+    told_to_list_it::<PoolOnACycle>("PoolOnACycle", "ProviderOnACycle").await;
+    let refused = refused_boot::<ListsTheLayerOnACycle>().await;
+    let cycle = refused
+        .downcast_ref::<ProviderCycleError>()
+        .unwrap_or_else(|| panic!("not a cycle's refusal: {refused:#}"));
+    let chain = cycle.chain.join(" ");
+    assert!(
+        chain.contains("LayerOnACycle") && chain.contains("ProviderOnACycle"),
+        "{refused:#}",
+    );
+}
+
+struct RegisteredLate;
+
+struct LateModule;
+
+impl nest_rs_core::Module for LateModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide(RegisteredLate)
+    }
+}
+
+layer!(WaitsOnTheLate {
+    #[inject]
+    late: Arc<RegisteredLate>,
+});
+
+#[module(providers = [WaitsOnTheLate, GlobalInterceptors<(WaitsOnTheLate,)>])]
+struct ListsWhatStalls;
+
+layer!(WaitsOnTheLateToo {
+    #[inject]
+    late: Arc<RegisteredLate>,
+});
+
+#[injectable]
+struct WantsWhatStalled {
+    #[inject]
+    layer: Arc<WaitsOnTheLateToo>,
+}
+
+#[module(providers = [
+    WaitsOnTheLateToo,
+    WantsWhatStalled,
+    GlobalInterceptors<(WaitsOnTheLateToo,)>,
+])]
+struct ListsWhatStallsAndItsConsumer;
+
+#[tokio::test]
+async fn a_layer_its_module_could_not_build_stays_that_modules_refusal() {
+    for (built, layer) in [
+        (
+            App::builder()
+                .module::<ListsWhatStalls>()
+                .module::<LateModule>()
+                .build()
+                .await,
+            "WaitsOnTheLate",
+        ),
+        (
+            App::builder()
+                .module::<ListsWhatStallsAndItsConsumer>()
+                .module::<LateModule>()
+                .build()
+                .await,
+            "WaitsOnTheLateToo",
+        ),
+    ] {
+        let Err(refused) = built else {
+            panic!("the pool built what `{layer}`'s module could not");
+        };
+        let unbuilt = refused
+            .downcast_ref::<UnbuiltProviderError>()
+            .unwrap_or_else(|| panic!("not the seal's: {refused:#}"));
+        assert_eq!(unbuilt.provider, layer, "{refused:#}");
+        assert_eq!(unbuilt.cause, UnbuiltCause::RegisteredLater, "{refused:#}");
+    }
+}
+
+#[injectable]
+struct AcrossTheCycle;
+
+layer!(WaitsAcrossTheCycle {
+    #[inject]
+    across: Arc<AcrossTheCycle>,
+});
+
+#[injectable]
+struct WantsWhatWaitsAcross {
+    #[inject]
+    layer: Arc<WaitsAcrossTheCycle>,
+}
+
+#[module(imports = [SecondOfTheCycle], providers = [WaitsAcrossTheCycle, WantsWhatWaitsAcross])]
+struct FirstOfTheCycle;
+
+#[module(imports = [FirstOfTheCycle], providers = [AcrossTheCycle])]
+struct SecondOfTheCycle;
+
+#[module(imports = [SecondOfTheCycle], providers = [GlobalInterceptors<(WaitsAcrossTheCycle,)>])]
+struct RootOfTheCycle;
+
+#[tokio::test]
+async fn an_import_cycle_stalling_a_layer_its_module_lists_is_named() {
+    let refused = refused_boot::<RootOfTheCycle>().await;
+    let unbuilt = refused
+        .downcast_ref::<UnbuiltProviderError>()
+        .unwrap_or_else(|| panic!("not the seal's: {refused:#}"));
+    assert_eq!(unbuilt.provider, "WaitsAcrossTheCycle", "{refused:#}");
+    assert_eq!(
+        unbuilt.cause,
+        UnbuiltCause::ImportCycle(vec!["FirstOfTheCycle", "SecondOfTheCycle"]),
+        "{refused:#}",
+    );
+}
+
+layer!(WantedInARequest);
+
+#[injectable(scope = request)]
+struct BuiltPerRequest {
+    #[inject]
+    layer: Arc<WantedInARequest>,
+}
+
+#[module(providers = [BuiltPerRequest, GlobalInterceptors<(WantedInARequest,)>])]
+struct ARequestWantsAPoolsLayer;
+
+#[tokio::test]
+async fn a_request_scoped_provider_injects_a_layer_only_a_pool_lists() {
+    let app = booted::<ARequestWantsAPoolsLayer>().await;
+    assert!(app.container().get::<WantedInARequest>().is_some());
+}
+
+struct NothingHere;
+
+layer!(HandBuiltNeedy {
+    #[inject]
+    nothing: Arc<NothingHere>,
+});
+
+#[module(providers = [GlobalInterceptors<(HandBuiltNeedy,)>])]
+struct HandBuiltRoot;
+
+#[test]
+fn a_refusal_on_a_container_built_by_hand_names_the_module_listing_the_pool() {
+    let Err(refused) = Container::builder().import::<HandBuiltRoot>().build() else {
+        panic!("the layer is built from nothing");
+    };
+    let said = refused.to_string();
+    assert!(said.starts_with("module `HandBuiltRoot`: "), "{said}");
+    assert!(
+        said.ends_with(
+            "`HandBuiltRoot` was imported on a container built by hand while nothing there \
+             provided it: provide it, or import what provides it, before `HandBuiltRoot`"
+        ),
+        "{said}",
+    );
+}
+
+layer!(NeedyWithNoModule {
+    #[inject]
+    nothing: Arc<NothingHere>,
+});
+
+#[test]
+fn a_refusal_with_no_module_names_the_declaration() {
+    type Declaration = GlobalInterceptors<(NeedyWithNoModule,)>;
+
+    let builder = <Declaration as Discoverable>::register(Container::builder());
+    let Err(refused) = builder.build() else {
+        panic!("the layer is built from nothing");
+    };
+    let said = refused.to_string();
+    assert!(
+        said.starts_with(&format!(
+            "module `{}`: ",
+            std::any::type_name::<Declaration>()
+        )),
+        "{said}",
+    );
+    assert!(!said.contains("no module"), "{said}");
 }

@@ -328,8 +328,12 @@ pub(crate) mod __private {
     }
 
     impl Unprovided {
-        fn module(&self) -> &'static str {
-            self.listed_by.unwrap_or("no module")
+        /// The module a refusal names: the one listing the declaration, or, a
+        /// declaration registered with no module, the declaration.
+        fn module(&self, builder: &ContainerBuilder) -> &'static str {
+            self.listed_by
+                .or_else(|| builder.imported_module_listing(self.declaration))
+                .unwrap_or(self.declared_by)
         }
 
         /// Run `step` as the module that listed the declaration registering.
@@ -347,10 +351,12 @@ pub(crate) mod __private {
 
     /// Register each layer a declaration lists that nothing registered once
     /// every module has, dependencies first — so whatever the app registers
-    /// itself, a module, a seed, a factory or a test's override, stands. A
-    /// layer waiting on what never came is left for the seal to refuse, as a
-    /// `#[module]` leaves a provider, one whose registration left it absent is
-    /// refused now, since a pool would silently run without it.
+    /// itself, a module, a seed, a factory or a test's override, stands, and one
+    /// a module lists and could not build stays that module's refusal, whose
+    /// cause the pool would hide. A layer waiting on what never came is left for
+    /// the seal to refuse, as a `#[module]` leaves a provider, one whose
+    /// registration left it absent is refused now, since a pool would silently
+    /// run without it.
     pub(crate) fn provide_pooled_layers(mut builder: ContainerBuilder) -> ContainerBuilder {
         let mut seen = HashSet::new();
         let mut waiting: Vec<Unprovided> = builder
@@ -364,6 +370,7 @@ pub(crate) mod __private {
                 })
             })
             .filter(|layer| seen.insert(layer.provider.key))
+            .filter(|layer| !builder.stalled(layer.provider.key))
             .collect();
         let scoped = builder.scoped_or_transient_ids();
         loop {
@@ -388,8 +395,9 @@ pub(crate) mod __private {
                         ))
                         .find(|(dependency, _)| scoped.contains(dependency))
                 {
+                    let module = layer.module(&builder);
                     builder = builder.refuse(ScopeViolationError {
-                        module: layer.module(),
+                        module,
                         consumer: layer.provider.name,
                         dependency,
                     });
@@ -409,8 +417,9 @@ pub(crate) mod __private {
                 builder = layer.registering(builder, layer.provider.register);
                 builder.note_pooled_provider(key);
                 if builder.origin(key).is_none() {
+                    let module = layer.module(&builder);
                     builder = builder.refuse(MissingDependencyError::new(
-                        layer.module(),
+                        module,
                         layer.declared_by,
                         layer.provider.name,
                     ));
@@ -436,7 +445,8 @@ pub(crate) mod __private {
             builder.note_pooled_provider(layer.provider.key);
         }
         let stalled = waiting.iter().map(|l| (l.provider.waits_on)()).collect();
-        record_stall(builder, first.declaration, first.module(), stalled)
+        let module = first.module(&builder);
+        record_stall(builder, first.declaration, module, stalled)
     }
 
     /// The app-wide pool of `L` resolved into [`LayerSite::Global`] entries, in

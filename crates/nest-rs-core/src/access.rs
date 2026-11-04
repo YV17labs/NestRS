@@ -217,6 +217,23 @@ impl LinkedDeclarations {
         self.pools.insert(declaration, injected);
         self.layers.entry(declaration).or_default().extend(layers);
     }
+
+    /// What `provider` injects in truth: a declaration reports what every layer
+    /// it lists injects, so a config one injects loads, and answers only for
+    /// those it registers.
+    pub(crate) fn injected_by(&self, provider: &ProviderDescriptor) -> Vec<Injection> {
+        self.pools
+            .get(&(provider.provider)())
+            .cloned()
+            .unwrap_or_else(|| {
+                injections(
+                    &(provider.injects)(),
+                    &(provider.inject_names)(),
+                    &(provider.injects_optional)(),
+                    &(provider.inject_optional_names)(),
+                )
+            })
+    }
 }
 
 /// Provider keys reachable from the running app's module tree — every provider
@@ -410,16 +427,7 @@ pub(crate) fn validate_access_graph(
                 }
                 .into());
             }
-            // A declaration reports what every layer it lists injects, so a
-            // config one injects loads; it answers only for those it registers.
-            let deps = linked.pools.get(&host).cloned().unwrap_or_else(|| {
-                injections(
-                    &(p.injects)(),
-                    &(p.inject_names)(),
-                    &(p.injects_optional)(),
-                    &(p.inject_optional_names)(),
-                )
-            });
+            let deps = linked.injected_by(p);
             // Without this, the register phase (which gates readiness on the
             // singleton map) silently drops a singleton holding a scoped or
             // transient dependency, and everything downstream of it — or, held
@@ -564,9 +572,9 @@ pub(crate) fn singleton_cycle(
     roots: &[TypeId],
     scopes: &HashMap<TypeId, ProviderScope>,
     waiting: &[TypeId],
-    overridden: &HashSet<TypeId>,
+    injecting_nothing: &HashSet<TypeId>,
 ) -> Option<ProviderCycleError> {
-    let graph = ProviderGraph::new(descriptors, roots, overridden, |p| {
+    let graph = ProviderGraph::new(descriptors, roots, injecting_nothing, |p| {
         !scopes.contains_key(&(p.provides)())
     });
     let starts = waiting
@@ -579,7 +587,7 @@ pub(crate) fn singleton_cycle(
 /// The providers the roots reach that a filter keeps, one node per provider
 /// type with its module, in declaration order, and an edge from each to the
 /// node registering what it injects, optionally or not — none from a provider
-/// a test's override stands in for, which is never built.
+/// [`injecting_nothing`](crate::ContainerBuilder::injecting_nothing).
 struct ProviderGraph<'a> {
     nodes: Vec<(&'a ModuleDescriptor, &'a ProviderDescriptor)>,
     node_of: HashMap<TypeId, usize>,
@@ -590,7 +598,7 @@ impl<'a> ProviderGraph<'a> {
     fn new(
         descriptors: &[&'a ModuleDescriptor],
         roots: &[TypeId],
-        overridden: &HashSet<TypeId>,
+        injecting_nothing: &HashSet<TypeId>,
         keep: impl Fn(&ProviderDescriptor) -> bool,
     ) -> Self {
         let by_id: HashMap<TypeId, &ModuleDescriptor> =
@@ -621,7 +629,7 @@ impl<'a> ProviderGraph<'a> {
         let edges = nodes
             .iter()
             .map(|(_, p)| {
-                if overridden.contains(&(p.provider)()) {
+                if injecting_nothing.contains(&(p.provider)()) {
                     return Vec::new();
                 }
                 (p.injects)()
@@ -862,13 +870,13 @@ pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]
 /// the graph does not order follow the composition — imported modules before
 /// their importer, imports as declared, then each module's `providers = [...]`
 /// left to right — and the earliest of them always goes next. A provider in
-/// `overridden` is a test's double, which injects nothing.
+/// `injecting_nothing` waits on none.
 pub(crate) fn dependency_order(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
-    overridden: &HashSet<TypeId>,
+    injecting_nothing: &HashSet<TypeId>,
 ) -> Vec<TypeId> {
-    let graph = ProviderGraph::new(descriptors, roots, overridden, |_| true);
+    let graph = ProviderGraph::new(descriptors, roots, injecting_nothing, |_| true);
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
     let module_rank = positions(modules_imports_first(roots, &by_id));

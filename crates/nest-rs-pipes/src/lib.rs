@@ -16,8 +16,9 @@
 //! List [`GlobalPipes`] in the providers of the module the app boots; its
 //! example runs it. The pool sits here, beside its contract, and each edge
 //! resolves it once, when it mounts: the HTTP route, `/graphql` and every
-//! WebSocket gateway. A global pipe the declaring module does not reach fails
-//! the boot of every app, whatever it serves.
+//! WebSocket gateway. Each entry is a provider, registered there unless the app
+//! already registers it, and what it injects is held to the root's imports in
+//! every app, whatever it serves.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

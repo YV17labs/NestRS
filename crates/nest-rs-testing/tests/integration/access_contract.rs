@@ -6,11 +6,11 @@
 use std::sync::Arc;
 
 use nest_rs_core::{
-    AccessGraphError, App, Layer, MissingDependencyError, async_trait, injectable, module,
+    AccessGraphError, App, Layer, MissingDependencyError, Scoped, async_trait, injectable, module,
 };
 use nest_rs_graphql::{async_graphql, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
-use nest_rs_http::{Scoped, controller, routes};
+use nest_rs_http::{controller, routes};
 // The name rmcp's `#[tool_router]` / `#[tool_handler]` expansions resolve.
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::{ServerHandler, mcp, tool_handler, tool_router};
@@ -394,7 +394,7 @@ struct BasketGateway;
 impl BasketGateway {
     #[subscribe_message("basket")]
     #[public]
-    async fn basket(&self, _basket: nest_rs_ws::Scoped<Basket>) -> &'static str {
+    async fn basket(&self, _basket: Scoped<Basket>) -> &'static str {
         "ok"
     }
 }
@@ -424,7 +424,7 @@ struct CouponGateway;
 impl CouponGateway {
     #[subscribe_message("coupon")]
     #[public]
-    async fn coupon(&self, _coupon: nest_rs_ws::Scoped<Coupon>) -> &'static str {
+    async fn coupon(&self, _coupon: Scoped<Coupon>) -> &'static str {
         "ok"
     }
 }

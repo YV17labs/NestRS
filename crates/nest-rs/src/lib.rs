@@ -298,8 +298,8 @@ macro_rules! __requires_end {
 /// HTTP-API case.
 pub mod prelude {
     pub use nest_rs_core::{
-        Ambient, App, AppBuilder, Container, ContainerBuilder, Module, Reflector, async_trait,
-        hooks, injectable, interceptor, module,
+        Ambient, App, AppBuilder, Container, ContainerBuilder, Module, Reflector, Scoped,
+        async_trait, hooks, injectable, interceptor, module,
     };
 
     // Outside every edge's feature: a headless worker needs `#[input]` too.
@@ -307,8 +307,8 @@ pub mod prelude {
 
     #[cfg(feature = "http")]
     pub use nest_rs_http::{
-        ClientIp, HttpConfig, HttpModule, Json, Path, Query, RawBody, Scoped, controller,
-        http_code, redirect, response_header, routes,
+        ClientIp, HttpConfig, HttpModule, Json, Path, Query, RawBody, controller, http_code,
+        redirect, response_header, routes,
     };
 
     #[cfg(feature = "config")]

@@ -42,9 +42,9 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Two parameters are no argument of the schema: the field's tail resolves
 /// them once the guards and the gate passed. They are read by their type's
 /// last segment, since no value tells a macro what to leave out of
-/// async-graphql's argument list, and each through a function returning its
-/// own type, so a namesake does not compile: `Scoped<T>`, a provider from the
-/// request's scope, and `Ambient<T>` (`nest_rs_core::Ambient`), what a guard attached
+/// async-graphql's argument list, and each through a function returning core's
+/// type, so a namesake does not compile: `Scoped<T>` (`nest_rs_core::Scoped`), a
+/// provider from the request's scope, and `Ambient<T>` (`nest_rs_core::Ambient`), what a guard attached
 /// — a miss of either answers the opaque internal error, the type filed at
 /// `error`.
 ///

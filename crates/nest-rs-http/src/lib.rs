@@ -233,7 +233,6 @@ pub use response::{IntoResponse, Response, ResponseBuilder};
 pub use response_body::OpenEndedBody;
 pub use route_template::RouteTemplate;
 pub use routes::HttpRoutes;
-pub use scope::Scoped;
 pub use security_headers::HttpSecurityHeaders;
 pub use shaper::{ResponseShaping, RouteFuture, RouteResponseShaper, ShapedEndpoint};
 pub use sse::{SseEvent, SseSettings, SseStream};

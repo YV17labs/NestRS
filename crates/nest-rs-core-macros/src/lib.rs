@@ -29,7 +29,7 @@ mod output;
 /// One key, `scope = singleton | request | transient` (default `singleton`):
 ///
 /// - `request` builds once per request, resolved through a `RequestScope` (e.g.
-///   the HTTP `Scoped<T>` extractor); it may depend on singletons and on other
+///   a handler's `Scoped<T>` parameter); it may depend on singletons and on other
 ///   request-scoped providers, one instance each per request, and no singleton
 ///   may depend on it.
 /// - `transient` builds a fresh instance on every resolution; it may depend on

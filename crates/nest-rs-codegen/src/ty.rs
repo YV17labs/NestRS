@@ -630,7 +630,7 @@ mod tests {
         for (ty, read) in [
             (parse_quote!(Scoped<Cart>), Some(TailParam::Scoped)),
             (
-                parse_quote!(nest_rs::ws::Scoped<Cart>),
+                parse_quote!(nest_rs::core::Scoped<Cart>),
                 Some(TailParam::Scoped),
             ),
             (parse_quote!(Ambient<Claims>), Some(TailParam::Ambient)),

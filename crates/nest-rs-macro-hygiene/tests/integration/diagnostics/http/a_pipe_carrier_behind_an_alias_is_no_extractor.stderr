@@ -12,9 +12,9 @@ error[E0277]: `Piped<Trim, nest_rs::http::Json<std::string::String>>` is not a h
              ClientIp
              RawBody
              Result<T, HttpError>
+             Scoped<T>
              nest_rs::http::Body
              nest_rs::http::Form<T>
-             nest_rs::http::Header<T>
            and $N others
 
 error[E0277]: `Piped<Trim, nest_rs::http::Json<std::string::String>>` is not a handler parameter
@@ -31,8 +31,8 @@ error[E0277]: `Piped<Trim, nest_rs::http::Json<std::string::String>>` is not a h
              ClientIp
              RawBody
              Result<T, HttpError>
+             Scoped<T>
              nest_rs::http::Body
              nest_rs::http::Form<T>
-             nest_rs::http::Header<T>
            and $N others
    = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

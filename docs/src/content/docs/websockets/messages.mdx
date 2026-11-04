@@ -81,7 +81,7 @@ is built once per message and shared by everything that message runs, and a
 handler takes it as a parameter:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
-use nest_rs::ws::Scoped;
+use nest_rs::core::Scoped;
 
 #[subscribe_message("seq")]
 async fn seq(&self, seq: Scoped<RequestSeq>) -> u64 {

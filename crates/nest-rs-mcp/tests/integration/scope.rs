@@ -6,12 +6,12 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nest_rs_core::{AccessGraphError, App, MissingDependencyError, injectable, module};
+use nest_rs_core::{AccessGraphError, App, MissingDependencyError, Scoped, injectable, module};
 use nest_rs_http::{BoxEndpoint, Endpoint, endpoint_fn};
 use nest_rs_mcp::__private::{McpMount, endpoint};
 use nest_rs_mcp::{
-    CallToolResult, ContentBlock, McpError, Scoped, ServerHandler, mcp, tool, tool_handler,
-    tool_router, tools,
+    CallToolResult, ContentBlock, McpError, ServerHandler, mcp, tool, tool_handler, tool_router,
+    tools,
 };
 use nest_rs_testing::TestApp;
 use nest_rs_testing::TestClient;

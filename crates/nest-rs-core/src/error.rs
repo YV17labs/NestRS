@@ -158,14 +158,14 @@ impl std::fmt::Display for MissingDependencyError {
 /// A **singleton** provider `#[inject]`s a `#[injectable(scope = request)]` or
 /// `scope = transient` provider, which is built per request or per
 /// resolution, never once at boot where the singleton is built. The remedy
-/// names the concept (`Scoped<T>`), never an edge crate: the kernel knows
-/// none.
+/// is a handler's [`Scoped<T>`](crate::Scoped) parameter.
 #[derive(Debug, Error)]
 #[error(
     "scope violation: `{consumer}` (in module `{module}`) is a singleton and injects \
      `{dependency}`, which is request-scoped or transient: `{consumer}` is built once, at boot, \
-     where no request exists to build `{dependency}` for it. Reach `{dependency}` through the \
-     `Scoped<T>` of the edge that dispatches the work, or make `{consumer}` request-scoped too."
+     where no request exists to build `{dependency}` for it. Reach `{dependency}` through a \
+     `Scoped<T>` parameter of the handler the edge dispatches, or make `{consumer}` \
+     request-scoped too."
 )]
 #[non_exhaustive]
 pub struct ScopeViolationError {

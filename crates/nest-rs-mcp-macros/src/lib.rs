@@ -86,9 +86,10 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 /// refused at its type. A few readings go by the spelling, since no type tells
 /// a macro them:
 ///
-/// - a parameter is request-scoped when its type's last segment is `Scoped`,
-///   what a guard attached when it is `Ambient` (`nest_rs_core::Ambient`) — each
-///   resolved in the tail through a function returning its own type, so a
+/// - a parameter is request-scoped when its type's last segment is `Scoped`
+///   (`nest_rs_core::Scoped`), what a guard attached when it is `Ambient`
+///   (`nest_rs_core::Ambient`) — each
+///   resolved in the tail through a function returning core's type, so a
 ///   namesake does not compile, and neither an argument of the protocol —
 ///   piped when it is `Parameters<Piped<P>>`, and on a `#[resource]` the
 ///   template variable its name spells, or under `bind` the subject when its

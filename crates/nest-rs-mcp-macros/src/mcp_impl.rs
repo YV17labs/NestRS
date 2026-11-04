@@ -830,7 +830,9 @@ fn dispatch(
     } = op;
     let name = op.name();
     let tail_prelude = tail.iter().map(|TailArg { ident, ty, kind }| match kind {
-        TailParam::Scoped => quote! { let #ident: #ty = ::nest_rs_mcp::__private::scoped()?; },
+        TailParam::Scoped => {
+            quote! { let #ident: #ty = ::nest_rs_mcp::__private::scoped_parameter()?; }
+        }
         TailParam::Ambient => {
             quote! { let #ident: #ty = ::nest_rs_mcp::__private::ambient_parameter()?; }
         }
@@ -1402,7 +1404,7 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
         // as it checks a `Scoped<T>` parameter's.
         let bound = op.bound.as_ref().map(|bound| -> Type {
             let service = &bound.service;
-            syn::parse_quote!(::nest_rs_mcp::Scoped<#service>)
+            syn::parse_quote!(::nest_rs_core::Scoped<#service>)
         });
         op.tail
             .iter()

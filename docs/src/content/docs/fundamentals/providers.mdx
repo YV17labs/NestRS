@@ -143,7 +143,7 @@ inject request-scoped types (they exist before any request). Reach them
 through the request boundary, not `#[inject]` on a singleton:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::Scoped;
+use nest_rs::core::Scoped;
 
 #[get("/trace")]
 async fn trace(&self, log: Scoped<RequestLogger>) -> String {
@@ -180,9 +180,8 @@ GraphQL `POST` carries shares it — one per message for WebSockets, one per
 operation on a graphql-ws socket, a subscription's for as long as it streams).
 Within a scope, request-scoped providers are cached and shared; across scopes,
 fresh instances are built. A WebSocket message, a GraphQL resolver and an MCP
-operation take them as a parameter, `nest_rs::ws::Scoped<T>`,
-`nest_rs::graphql::Scoped<T>` and `nest_rs::mcp::Scoped<T>` — no schema
-argument on GraphQL, and all three inside the access contract as HTTP's is. A
+operation take them as the same parameter a route does, `nest_rs::core::Scoped<T>`
+— no schema argument on GraphQL, and inside the access contract on all four. A
 request-scoped provider may itself inject another request-scoped provider (both
 share the per-request cache); providers waiting on each other fail the boot,
 naming the chain (`ProviderCycleError`).
@@ -327,7 +326,7 @@ instance built at boot, so binding anything else is a compile error: an edge
 host (`#[controller]`, `#[gateway]`, `#[resolver]`, `#[mcp]`) is built at
 mount, a `scope = request` provider once per request, and a
 `scope = transient` provider on every resolution. Bind a plain `#[injectable]`
-singleton, and reach a scoped provider through the edge's `Scoped<T>`.
+singleton, and reach a scoped provider through a `Scoped<T>` parameter.
 
 When you do not need to hide the impl, register `PostsService` directly
 in `PostsModule` — as in the snippets above. The trait pattern is optional:

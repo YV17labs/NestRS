@@ -170,7 +170,7 @@ shape a masked MCP operation unwraps (`Json<T>`, a resource's
 spells, the `Authorized<A, E>` parameter `bind` hands its subject and whose `E`
 names the entity, which `#[subscribe_message]` parameter is the payload (`&WsClient` by its reference, `Scoped<T>` and
 `Ambient<T>` by their names — each resolved through a function of the edge crate's
-`__private` returning its own type, so a namesake does not compile), the
+`__private` returning core's type, so a namesake does not compile), the
 `Scoped<T>` and `Ambient<T>` parameters `#[operations]` and `#[tools]` leave out of
 the protocol's arguments, read the same way, a `#[field_resolver]`'s
 `&DataLoader<L>`, whose `L` the boot reads the owner of, and the request parameters an

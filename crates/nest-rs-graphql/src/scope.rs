@@ -1,11 +1,10 @@
-//! A resolver's request-scoped providers — the GraphQL mirror of
-//! [`nest_rs_http::Scoped<T>`]. A [`Scoped<T>`] parameter resolves an
+//! GraphQL's reading of [`Scoped<T>`]: a resolver's parameter resolving an
 //! `#[injectable(scope = request)]` provider from the request the operation
 //! arrived on; the boot checks its provider like an `#[inject]`ed one.
 //!
 //! ```
-//! # use nest_rs_core::{injectable, module};
-//! # use nest_rs_graphql::{GraphqlModule, Scoped, operations, resolver};
+//! # use nest_rs_core::{Scoped, injectable, module};
+//! # use nest_rs_graphql::{GraphqlModule, operations, resolver};
 //! #
 //! # #[injectable(scope = request)]
 //! # #[derive(Default)]
@@ -50,65 +49,19 @@
 //! so a request-scoped provider is not reachable there; a batch reads the
 //! ambient values its request carries into it.
 
-use std::any::{TypeId, type_name};
-use std::ops::Deref;
-use std::sync::Arc;
+use std::any::type_name;
 
-use nest_rs_core::{Failure, ResolvesProvider};
+use nest_rs_core::{Failure, Scoped};
 
 use crate::error::{FieldFailure, Unprovided};
 
-/// Resolves a provider of type `T` from the request the operation arrived on,
-/// as a resolver method's parameter.
-///
-/// The provider is part of the boot's access contract
-/// ([`ResolvesProvider`]). Should it still be missing at an operation — one
-/// run outside any request, as a schema driven bare is — the field answers the
-/// opaque internal error and the type is filed at `error`, never answered.
-///
-/// ```
-/// use std::any::TypeId;
-///
-/// use nest_rs_core::ResolvesProvider;
-/// use nest_rs_graphql::Scoped;
-///
-/// struct Cart;
-///
-/// assert_eq!(Scoped::<Cart>::provider().0, TypeId::of::<Cart>());
-/// ```
-pub struct Scoped<T>(pub Arc<T>);
-
-impl<T> Scoped<T> {
-    /// Take the resolved provider handle out of the wrapper.
-    pub fn into_inner(self) -> Arc<T> {
-        self.0
-    }
-}
-
-impl<T> Deref for Scoped<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
-impl<T: 'static> ResolvesProvider for Scoped<T> {
-    fn provider() -> (TypeId, &'static str) {
-        (TypeId::of::<T>(), type_name::<T>())
-    }
-}
-
-/// A request-scoped parameter `#[operations]` resolves before the call.
-pub trait FromScope: Sized {
-    /// The provider from the running request's scope, or the field's failure.
-    fn from_scope() -> Result<Self, FieldFailure>;
-}
-
-impl<T: Send + Sync + 'static> FromScope for Scoped<T> {
-    fn from_scope() -> Result<Self, FieldFailure> {
-        let provider = nest_rs_core::current_request_scope().and_then(|scope| scope.get::<T>());
-        provider.map(Scoped).ok_or_else(unprovided::<T>)
-    }
+/// The `Scoped<T>` an operation takes, read in its tail once its guards
+/// passed; a miss — one run outside any request, as a schema driven bare is —
+/// answers the opaque internal error, the type filed at `error`, never
+/// answered.
+pub fn scoped_parameter<T: Send + Sync + 'static>() -> Result<Scoped<T>, FieldFailure> {
+    let provider = nest_rs_core::current_request_scope().and_then(|scope| scope.get::<T>());
+    provider.map(Scoped).ok_or_else(unprovided::<T>)
 }
 
 /// What a field reaching a provider that is not there fails with: the opaque
@@ -121,7 +74,6 @@ pub fn unprovided<T: 'static>() -> FieldFailure {
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_core::__private::{ParamProbe, ParamProbeFallback as _, ParamProbeResolves as _};
     use nest_rs_testing::LogCapture;
 
     use super::*;
@@ -130,28 +82,11 @@ mod tests {
         pub(super) struct Hidden;
     }
 
-    /// The probe `#[operations]` asks per parameter, written once at the
-    /// reference depth its expansion calls it.
-    macro_rules! probe {
-        ($ty:ty) => {
-            (&&ParamProbe::<$ty>::new()).resolved_provider()
-        };
-    }
-
-    #[test]
-    fn a_scoped_parameter_declares_the_provider_it_resolves() {
-        assert_eq!(
-            probe!(Scoped<red::Hidden>).map(|(id, _)| id),
-            Some(TypeId::of::<red::Hidden>()),
-        );
-        assert_eq!(probe!(i32), None);
-    }
-
     #[test]
     fn a_miss_answers_no_type_name_and_files_it() {
         let logs = LogCapture::install();
 
-        let Err(missed) = Scoped::<red::Hidden>::from_scope() else {
+        let Err(missed) = scoped_parameter::<red::Hidden>() else {
             panic!("no request scope is installed here");
         };
         let answered = missed.into_answer();

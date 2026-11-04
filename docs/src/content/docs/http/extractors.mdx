@@ -241,7 +241,7 @@ transaction handle, a per-request audit batch, a user-specific cache).
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::core::injectable;
-use nest_rs::http::Scoped;
+use nest_rs::core::Scoped;
 
 #[injectable(scope = request)]
 pub struct PerRequestAudit { /* ... */ }

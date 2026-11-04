@@ -345,7 +345,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     refusal("is an edge host, built at mount", ""),
                     refusal(
                         "is `scope = request`, built per request",
-                        &format!(", and reach `{name}` through the edge's `Scoped<T>`"),
+                        &format!(", and reach `{name}` through a `Scoped<T>` parameter"),
                     ),
                     refusal("is `scope = transient`, rebuilt at every resolution", ""),
                     refusal("states `ProviderResidency::SINGLETON = false`", ""),

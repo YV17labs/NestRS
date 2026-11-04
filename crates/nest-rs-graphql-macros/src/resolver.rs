@@ -762,7 +762,7 @@ fn tail_bindings(tail: &[(Ident, Type, TailParam)]) -> Vec<TokenStream2> {
     tail.iter()
         .map(|(ident, ty, kind)| match kind {
             TailParam::Scoped => quote! {
-                let #ident = <#ty as ::nest_rs_graphql::__private::FromScope>::from_scope()?;
+                let #ident: #ty = ::nest_rs_graphql::__private::scoped_parameter()?;
             },
             TailParam::Ambient => quote! {
                 let #ident: #ty = ::nest_rs_graphql::__private::ambient_parameter()?;
@@ -1188,10 +1188,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // The bound service resolves per call, so the boot checks its
             // provider as it checks a `Scoped<T>` parameter's.
             if let Some((service, ..)) = &bind_info {
-                scoped_params.push((
-                    cfgs.clone(),
-                    parse_quote!(::nest_rs_graphql::Scoped<#service>),
-                ));
+                scoped_params.push((cfgs.clone(), parse_quote!(::nest_rs_core::Scoped<#service>)));
                 unit_requirements.push(unit_of_work_required(&self_ty, &cfgs));
             }
             // Under `bind` with no entity written, the posture reads the `E` of

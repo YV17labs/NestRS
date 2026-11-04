@@ -147,6 +147,7 @@ pub mod problem;
 mod process_start;
 mod proof;
 pub mod request_scope;
+mod scope;
 mod secret;
 mod site;
 mod stderr_lines;
@@ -212,6 +213,7 @@ pub use proof::{Attempt, Proving, Unproved, prove};
 pub use request_scope::{
     RequestContinuation, RequestScope, TaskContext, current_request_scope, with_request_scope,
 };
+pub use scope::Scoped;
 pub use secret::Secret;
 pub use tenant::current_tenant_id;
 pub use trace_context::{

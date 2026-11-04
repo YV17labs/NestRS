@@ -183,9 +183,11 @@ guard, filter or interceptor loop of its own.
    `take_layers`, never a second refusal: a cell is built, pending (refused as a
    silent no-op until the edge runs the family) or refused with its fact, and
    the change that builds a family flips its cell.
-10. **Request scope** — `Scoped<T>`, a parameter the boot checks (its provider
-    is inside the access contract, through `ResolvesProvider` and the impl
-    half's probe — HTTP's, GraphQL's, WS's and MCP's today, as is the service
+10. **Request scope** — `nest_rs_core::Scoped<T>`, one parameter on every edge,
+    which each resolves as it resolves `Ambient<T>` (HTTP through its own
+    `FromRequest`, the others through a `__private` parameter function) and the
+    boot checks (its provider is inside the access contract, through
+    `ResolvesProvider` and the impl half's probe, as is the service
     `bind = Service` loads through on every edge taking it), a miss
     answered opaquely with the type on the operator's line.
 11. **A `#[config]` and its `for_root`** (`container.md`).

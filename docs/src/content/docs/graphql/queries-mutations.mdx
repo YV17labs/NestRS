@@ -235,7 +235,8 @@ The caller's `Ability` is neither: the field's unit carries it, the one its
 class gate checked, and its mask and every read under it see that one.
 
 ```rust title="crates/features/src/profile/graphql/resolver.rs"
-use nest_rs::graphql::{Scoped, operations, resolver};
+use nest_rs::core::Scoped;
+use nest_rs::graphql::{operations, resolver};
 
 #[query]
 #[public]

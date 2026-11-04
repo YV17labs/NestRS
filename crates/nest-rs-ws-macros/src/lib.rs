@@ -43,8 +43,8 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// A handler's parameters are read by their shape, since a macro reads tokens:
 /// a reference is the `&WsClient`, a type named `Scoped` a request-scoped
-/// provider — resolved by a function of `nest_rs_ws` that returns its own
-/// `Scoped`, so a namesake does not compile — a type named `Ambient` what a guard
+/// provider (`nest_rs_core::Scoped`, resolved by a function of `nest_rs_ws`
+/// that returns that type, so a namesake does not compile), a type named `Ambient` what a guard
 /// attached (`nest_rs_core::Ambient`, the upgrade's guards' or the message's,
 /// resolved the same way), and the one other parameter the payload. A miss of
 /// either answers the opaque error frame, the type filed at `error`.

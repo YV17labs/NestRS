@@ -51,7 +51,6 @@ pub use error::{
 };
 pub use module::{GraphqlModule, GraphqlSetup};
 pub use opaque::Opaque;
-pub use scope::Scoped;
 pub use view::{FieldRole, GraphqlView};
 
 #[doc(hidden)]
@@ -75,7 +74,7 @@ pub mod __private {
         GraphqlResolverRegistration, GraphqlRootMember, GraphqlSiteRegistration,
         GraphqlSubscriptionObject, ResolverDescriptor,
     };
-    pub use crate::scope::{FromScope, unprovided};
+    pub use crate::scope::{scoped_parameter, unprovided};
     pub use crate::subscription::{compose_schema, keep_masked_item};
 
     pub use inventory;

@@ -58,7 +58,7 @@ framework half.
 - **Providers are singletons unless scoped.** `scope = request` is built per
   request from the singleton root: it may inject singletons and other
   request-scoped providers (one instance each per request), never the reverse,
-  and a handler reaches it through the edge's `Scoped<T>`. `scope = transient`
+  and a handler reaches it through a `Scoped<T>` parameter. `scope = transient`
   is rebuilt on every resolution. A singleton injects neither, optionally or
   not (`ScopeViolationError`). Providers waiting on each other fail the boot
   naming the chain, whatever their scope and whichever modules list them

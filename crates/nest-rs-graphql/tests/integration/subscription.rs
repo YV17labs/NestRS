@@ -14,9 +14,9 @@ use async_graphql::futures_util::StreamExt as _;
 /// async-graphql's own `futures_util` re-export, reached through the framework.
 use async_graphql::futures_util::stream as futures_stream;
 use nest_rs_config::Surface;
-use nest_rs_core::module;
+use nest_rs_core::{Scoped, module};
 use nest_rs_graphql::async_graphql;
-use nest_rs_graphql::{GraphqlConfig, GraphqlModule, Scoped, operations, resolver};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_pipes::{Piped, Trim};
 use nest_rs_testing::{LogCapture, TestApp};
 use tokio::sync::broadcast;

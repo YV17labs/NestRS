@@ -4,11 +4,11 @@
 //! `Scoped<T>` and an `Ambient<T>` parameter, a message stating no posture, the
 //! message sites and the versioned mount.
 
-use nest_rs::core::{Ambient, Layer, UnitContext, async_trait, injectable};
+use nest_rs::core::{Ambient, Layer, Scoped, UnitContext, async_trait, injectable};
 use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::HttpView;
 use nest_rs::pipes::GlobalPipe;
-use nest_rs::ws::{Scoped, WsView, gateway, messages};
+use nest_rs::ws::{WsView, gateway, messages};
 
 /// Bound on the gateway struct, so it runs on the upgrade and owes
 /// `GuardFor<HttpView>`.

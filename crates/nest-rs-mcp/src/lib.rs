@@ -46,7 +46,7 @@
 //! re-installs the `/mcp` request's context inside that dispatch, for every
 //! capability, so a handler method gets:
 //!
-//! * [`Scoped<T>`](Scoped), a parameter, for an `#[injectable(scope = request)]`
+//! * [`Scoped<T>`](nest_rs_core::Scoped), a parameter, for an `#[injectable(scope = request)]`
 //!   provider;
 //! * what the request's guards and layers made ambient — the caller's
 //!   ability — and its trace;
@@ -103,9 +103,6 @@ pub use module::{McpModule, McpSetup};
 pub use operation::McpOperationKind;
 pub use propagate::PropagatingHandler;
 pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity};
-/// The `#[injectable(scope = request)]` provider an operation takes as a
-/// parameter — the MCP mirror of `nest_rs_http::Scoped<T>`.
-pub use scope::Scoped;
 pub use view::McpView;
 
 #[doc(hidden)]
@@ -132,7 +129,7 @@ pub mod __private {
     pub use crate::resource::{
         MimeProbe, MimeProbeFallback, MimeProbeReads, ResourceBody, ResourceListing, bound_subject,
     };
-    pub use crate::scope::scoped;
+    pub use crate::scope::scoped_parameter;
     pub use crate::uri_template::{TemplateMatch, TemplatePart, UriTemplate};
     pub use nest_rs_pipes::__private::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
     pub use rmcp::handler::server::prompt::IntoGetPromptResult;

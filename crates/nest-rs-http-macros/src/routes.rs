@@ -625,7 +625,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // the boot.
         param_types.extend(subject.as_ref().map(|bound| -> Type {
             let service = &bound.service;
-            parse_quote!(::nest_rs_http::Scoped<#service>)
+            parse_quote!(::nest_rs_core::Scoped<#service>)
         }));
         let handler = RouteHandler {
             method: method_const.clone(),

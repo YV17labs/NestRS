@@ -7,10 +7,10 @@
 //! paths resolved at the call site; this file names no `rmcp`, so it stops
 //! compiling if `#[tools]` ever stops carrying that import itself.
 
-use nest_rs::core::{Ambient, Layer, UnitContext, async_trait, input};
+use nest_rs::core::{Ambient, Layer, Scoped, UnitContext, async_trait, input};
 use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Resource, Role};
-use nest_rs::mcp::{Json, McpError, McpView, Parameters, Scoped, mcp, tools};
+use nest_rs::mcp::{Json, McpError, McpView, Parameters, mcp, tools};
 
 use crate::pipeline::{HygieneUnitAudit, HygieneUnitRefusal};
 

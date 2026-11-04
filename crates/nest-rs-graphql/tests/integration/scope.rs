@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use nest_rs_core::{injectable, module};
+use nest_rs_core::{Scoped, injectable, module};
 use nest_rs_graphql::async_graphql::SimpleObject;
-use nest_rs_graphql::{GraphqlModule, Scoped, operations, resolver};
+use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_testing::TestApp;
 
 /// A singleton source of monotonic stamps, shared across every request.
@@ -167,9 +167,9 @@ async fn a_field_resolver_reaches_the_request_scoped_instance_its_root_field_did
 /// A `Scoped<T>` parameter's provider is checked at boot like an `#[inject]`ed
 /// one: unimported, or offered by no module, it refuses the boot.
 mod access_contract {
-    use nest_rs_core::{AccessGraphError, MissingDependencyError, injectable, module};
+    use nest_rs_core::{AccessGraphError, MissingDependencyError, Scoped, injectable, module};
     use nest_rs_graphql::async_graphql::SimpleObject;
-    use nest_rs_graphql::{GraphqlModule, Scoped, operations, resolver};
+    use nest_rs_graphql::{GraphqlModule, operations, resolver};
     use nest_rs_testing::TestApp;
 
     #[injectable(scope = request)]

@@ -107,3 +107,15 @@ too. The one compile-fail fixture calling `exception_filter` by hand now lists
 the type in `GlobalExceptionFilters<(…)>`, where a developer meets the
 refusal.
 
+
+**2026-11-04 — one concept, one path across the edges.** The identity audit's
+second pass found `Scoped<T>` four times, one identical newtype per edge, so a
+feature with three adapters imported three of them and the prelude's was
+HTTP's. With the owner's agreement ("Tout faire (Recommandé)", 2026-10-31) it
+is `nest_rs::core::Scoped`, read by each edge as `Ambient<T>` is: HTTP through
+its own `FromRequest`, the others through a `__private` parameter function
+returning core's type, so a namesake still does not compile. `Opaque` stays per
+edge: its output *is* the edge's error type, which is what lets `.opaque()?`
+infer, and a core failure converted by `?` is an impl the orphan rule refuses on
+async-graphql's and rmcp's errors. `pipe_error`, `problem_error` and
+`denial_to_<edge>_error` stay tier 1, since the pages hand them out.

@@ -1,13 +1,12 @@
-//! Request-scoped providers on WS messages — the WS mirror of
-//! [`nest_rs_http::Scoped<T>`]: a `#[subscribe_message]` parameter resolving an
-//! `#[injectable(scope = request)]` provider from the scope each message runs
-//! in.
+//! WebSocket's reading of [`Scoped<T>`]: a `#[subscribe_message]` parameter
+//! resolving an `#[injectable(scope = request)]` provider from the scope each
+//! message runs in.
 //!
 //! ```
 //! # use std::sync::atomic::{AtomicU64, Ordering};
 //! # use std::sync::Arc;
-//! # use nest_rs_core::{injectable, module};
-//! # use nest_rs_ws::{Scoped, WsModule, gateway, messages};
+//! # use nest_rs_core::{Scoped, injectable, module};
+//! # use nest_rs_ws::{WsModule, gateway, messages};
 //! #
 //! # #[injectable]
 //! # #[derive(Default)]
@@ -59,55 +58,11 @@
 //! rebuilt for each message and shared within that one dispatch; with none in
 //! the app, every message shares one scope, which has nothing to build.
 
-use std::any::{TypeId, type_name};
-use std::ops::Deref;
-use std::sync::Arc;
+use std::any::type_name;
 
-use nest_rs_core::ResolvesProvider;
+use nest_rs_core::Scoped;
 
 use crate::envelope::{WsError, WsReply};
-
-/// Resolves a provider of type `T` from the current WS message's
-/// [`RequestScope`](nest_rs_core::RequestScope), declared as a
-/// `#[subscribe_message]` parameter — the per-message mirror of
-/// [`nest_rs_http::Scoped<T>`].
-///
-/// The provider is part of the boot's access contract
-/// ([`ResolvesProvider`]). Should it still be missing at a message, the
-/// message answers the opaque error frame and the type is filed at `error`,
-/// never answered.
-///
-/// ```
-/// use std::any::TypeId;
-///
-/// use nest_rs_core::ResolvesProvider;
-/// use nest_rs_ws::Scoped;
-///
-/// struct Cart;
-///
-/// assert_eq!(Scoped::<Cart>::provider().0, TypeId::of::<Cart>());
-/// ```
-pub struct Scoped<T>(pub Arc<T>);
-
-impl<T> Scoped<T> {
-    /// Take the resolved provider handle out of the wrapper.
-    pub fn into_inner(self) -> Arc<T> {
-        self.0
-    }
-}
-
-impl<T> Deref for Scoped<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
-impl<T: 'static> ResolvesProvider for Scoped<T> {
-    fn provider() -> (TypeId, &'static str) {
-        (TypeId::of::<T>(), type_name::<T>())
-    }
-}
 
 /// `T` from the running message's scope, for the `Scoped<T>` parameter
 /// `#[messages]` reads; a miss answers the opaque frame, the type filed at
@@ -141,9 +96,9 @@ fn opaque() -> WsReply {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use nest_rs_core::__private::{ParamProbe, ParamProbeFallback as _, ParamProbeResolves as _};
     use nest_rs_core::{Container, Correlation, RequestScope};
     use nest_rs_testing::LogCapture;
 
@@ -231,23 +186,5 @@ mod tests {
                 "{filed:#?}"
             );
         }
-    }
-
-    /// The probe `#[messages]` asks per parameter, written once at the
-    /// reference depth its expansion calls it.
-    macro_rules! probe {
-        ($ty:ty) => {
-            (&&ParamProbe::<$ty>::new()).resolved_provider()
-        };
-    }
-
-    #[test]
-    fn a_scoped_parameter_declares_its_provider_and_a_payload_none() {
-        assert_eq!(
-            probe!(Scoped<Probe>).map(|(id, _)| id),
-            Some(TypeId::of::<Probe>())
-        );
-        assert_eq!(probe!(String), None);
-        assert_eq!(probe!(&Scoped<Probe>), None, "a borrow resolves nothing");
     }
 }

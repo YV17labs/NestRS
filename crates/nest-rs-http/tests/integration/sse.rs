@@ -5,10 +5,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::{AmbientValue, Layer, ambient, injectable, module};
+use nest_rs_core::{AmbientValue, Layer, Scoped, ambient, injectable, module};
 use nest_rs_http::futures_util::StreamExt;
 use nest_rs_http::{
-    HttpConfig, HttpModule, Scoped, SseEvent, SseStream, controller, futures_util::stream, routes,
+    HttpConfig, HttpModule, SseEvent, SseStream, controller, futures_util::stream, routes,
 };
 use nest_rs_testing::LogCapture;
 use tokio::io::AsyncWriteExt;

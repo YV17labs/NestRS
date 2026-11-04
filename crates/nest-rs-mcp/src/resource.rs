@@ -1,14 +1,13 @@
 //! What a `#[resource]` read and a `#[resources]` listing answer, read by type.
 
-use std::error::Error as StdError;
 use std::marker::PhantomData;
 
-use nest_rs_core::Failure;
+use nest_rs_core::{Failure, ToProblem};
 use rmcp::handler::server::wrapper::Json;
 use rmcp::model::{ListResourcesResult, ReadResourceResult, Resource, ResourceContents};
 use serde::Serialize;
 
-use crate::error::{OperationAnswer, OperationFailure, resource_not_found};
+use crate::error::{ErrorReport, OperationAnswer, OperationFailure, resource_not_found};
 
 /// The media type a `Json<T>` resource is read as.
 const JSON: &str = "application/json";
@@ -85,14 +84,13 @@ impl<B: ResourceBody> ResourceBody for Option<B> {
 
 /// The subject `#[authorize(A, bind = S)]` loaded for a `#[resource]`, handed to
 /// its `Authorized<A, E>` parameter: none answers as a resource no template
-/// reads, the body never running, and a failure opaquely, its chain filed.
-pub fn bound_subject<T>(
-    loaded: Result<Option<T>, Box<dyn StdError + Send + Sync>>,
-) -> Result<T, OperationFailure> {
+/// reads, the body never running, and a failure by what it says, as a handler's
+/// error does.
+pub fn bound_subject<T, E: ToProblem>(loaded: Result<Option<T>, E>) -> Result<T, OperationFailure> {
     match loaded {
         Ok(Some(subject)) => Ok(subject),
         Ok(None) => Err(OperationFailure::from(resource_not_found())),
-        Err(failed) => Err(OperationFailure::unanswered(Failure::new(failed))),
+        Err(failed) => Err(ErrorReport(failed).into_failure()),
     }
 }
 

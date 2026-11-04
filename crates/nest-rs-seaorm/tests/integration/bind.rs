@@ -47,6 +47,8 @@ const FOUND: Uuid = Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0001);
 const DENIED: Uuid = Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0002);
 const FAILING: Uuid = Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0003);
 const MISSING: Uuid = Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0004);
+/// The id whose statement Postgres cancels at its bound.
+const CANCELLED: Uuid = Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0005);
 /// A v4 id, which no bound id is.
 const NOT_V7: &str = "2e2f1c6e-7a9b-4a7e-9d6b-1f0e5c1d2a3b";
 
@@ -80,6 +82,10 @@ impl CrudService for NotesService {
             DENIED => Ok(Access::Denied),
             FAILING => Err(DbErr::Custom(
                 "connection to db.internal refused".to_owned(),
+            )),
+            CANCELLED => Err(crate::error::refused(
+                "57014",
+                "canceling statement due to statement timeout",
             )),
             _ => Ok(Access::Missing),
         }
@@ -340,6 +346,27 @@ async fn a_load_that_fails_is_answered_opaquely_and_filed_with_its_chain() {
     assert_eq!((loads, bodies), (1, 0));
     let filed = logs.expect_one("nest_rs::mcp", "mcp operation failed");
     assert_eq!(filed.level, "error");
+}
+
+/// A statement cancelled at its bound is the server unable to serve in time, the
+/// class a route's bound load answers, whatever the row.
+#[tokio::test]
+async fn a_statement_cancelled_at_its_bound_answers_unavailable_filed_at_warn() {
+    let _serial = SERIAL.lock().await;
+    let app = app().await;
+    let logs = LogCapture::install();
+    let (answer, loads, bodies) = read(&app, "reader", &format!("note://{CANCELLED}")).await;
+    assert_eq!(answer["error"]["data"]["code"], "UNAVAILABLE", "{answer}");
+    assert_eq!((loads, bodies), (1, 0));
+    let filed = logs.expect_one("nest_rs::mcp", "mcp operation unavailable");
+    assert_eq!(filed.level, "warn");
+    assert!(
+        filed
+            .field("error")
+            .is_some_and(|error| error.contains("57014")),
+        "{:?}",
+        filed.fields,
+    );
 }
 
 /// As on every edge, a body a mask cannot read back ships nothing, its reason

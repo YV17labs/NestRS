@@ -88,7 +88,8 @@ load a route runs; the class gate and the mask read `E`, asserted `S::Entity`, a
 **One answer for what cannot be read holds**: `Denied`, `Missing` and an id no v7
 are the resource's not found, with no body run, so a reader cannot tell a row it was
 refused from a row that does not exist. A route's `400`, `403` and `404` have no
-counterpart here. A load that fails is opaque, its chain filed once.
+counterpart here. A load that fails answers as a route's does: a statement cancelled
+at its bound `UNAVAILABLE` at `warn`, anything else opaquely, its chain filed once.
 
 **Refused:** the key on a template naming none or several variables, which has no
 one id to read, and on a tool, a prompt or a listing, which name none. A resource

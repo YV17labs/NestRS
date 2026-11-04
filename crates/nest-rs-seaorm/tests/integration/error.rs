@@ -235,7 +235,7 @@ impl DatabaseError for Refusal {
     }
 }
 
-fn refused(code: &'static str, message: &'static str) -> DbErr {
+pub(crate) fn refused(code: &'static str, message: &'static str) -> DbErr {
     DbErr::Exec(RuntimeErr::SqlxError(Arc::new(SqlxError::Database(
         Box::new(Refusal { code, message }),
     ))))

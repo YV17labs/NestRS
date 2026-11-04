@@ -3,14 +3,13 @@
 //! Each edge says what a refusal answers there.
 
 use std::any::type_name;
-use std::error::Error;
 
 use nest_rs_authz::{ActionMarker, current_ability};
 use sea_orm::{DbErr, EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
-use crate::error::{UnwiredBind, UnwiredResource};
-use crate::{Access, Authorized, CrudService};
+use crate::error::UnwiredBind;
+use crate::{Access, Authorized, CrudService, ServiceError};
 
 /// Why no subject is handed over.
 pub(crate) enum Unbound {
@@ -65,10 +64,9 @@ where
 /// its template's one variable names, handed to its `Authorized<A, E>`
 /// parameter. `None` for an id that is no v7, a row the caller may not have and
 /// one that does not exist: one answer, so a reader cannot tell them apart. An
-/// `Err` is what the edge answers opaquely and files.
-pub async fn resource_bind<A, S>(
-    id: Uuid,
-) -> Result<Option<Authorized<A, S::Entity>>, Box<dyn Error + Send + Sync>>
+/// `Err` answers as a handler's own [`ServiceError`] does: a statement cancelled at
+/// its bound its `503`, anything else opaquely, its chain filed.
+pub async fn resource_bind<A, S>(id: Uuid) -> Result<Option<Authorized<A, S::Entity>>, ServiceError>
 where
     S: CrudService + 'static,
     <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
@@ -77,8 +75,11 @@ where
     match load::<A, S>(id).await {
         Ok(subject) => Ok(Some(subject)),
         Err(Unbound::NotV7 | Unbound::Denied | Unbound::Missing) => Ok(None),
-        Err(Unbound::Unwired { why, provider }) => Err(Box::new(UnwiredResource { provider, why })),
-        Err(Unbound::Failed(err)) => Err(Box::new(err)),
+        Err(Unbound::Unwired { why, provider }) => Err(ServiceError::internal_because(
+            format!("`{provider}` cannot load the subject its resource binds"),
+            why,
+        )),
+        Err(Unbound::Failed(err)) => Err(ServiceError::Db(err)),
     }
 }
 
@@ -115,7 +116,7 @@ mod tests {
         let Err(unwired) = resource_bind::<Read, NotesService>(Uuid::now_v7()).await else {
             panic!("no ability is ambient");
         };
-        let said = nest_rs_core::error_message(unwired.as_ref());
+        let said = nest_rs_core::error_message(&unwired);
         assert!(said.contains("NotesService"), "{said}");
         assert!(said.contains("ability guard"), "{said}");
     }

@@ -3,11 +3,15 @@
 //! operation no guard attaches an ability to answers opaquely, the remedy on
 //! the operator's line.
 
-use nest_rs_authz::{Read, Update};
-use nest_rs_core::{AccessGraphError, injectable, module};
-use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_seaorm::{Authorized, CrudService};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read, Update};
+use nest_rs_core::{AccessGraphError, async_trait, injectable, module};
+use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
+use nest_rs_http::EndpointGuards;
+use nest_rs_seaorm::{Access, Authorized, CrudService};
 use nest_rs_testing::{LogCapture, TestApp};
+use sea_orm::DbErr;
+
+use crate::always_authenticated::AlwaysAuthenticated;
 
 mod note {
     use nest_rs_seaorm::expose;
@@ -161,4 +165,86 @@ async fn a_bind_with_no_ability_answers_opaquely_and_files_the_remedy() {
     let line = logs.expect_one(nest_rs_authz::TARGET, "authorization denied");
     assert_eq!(line.level, "error");
     assert!(line.field("remedy").is_some(), "{:?}", line.fields);
+}
+
+#[injectable]
+#[derive(Default)]
+struct CancelledService;
+
+#[async_trait]
+impl CrudService for CancelledService {
+    type Entity = note::Entity;
+
+    async fn access(&self, _action: Action, _id: uuid::Uuid) -> Result<Access<note::Model>, DbErr> {
+        Err(crate::error::refused(
+            "57014",
+            "canceling statement due to statement timeout",
+        ))
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct EveryNote;
+
+impl AbilityFactory for EveryNote {
+    type Actor = crate::Anyone;
+
+    fn define(&self, _actor: &crate::Anyone, ab: &mut AbilityBuilder) {
+        ab.can(Action::Read, note::Entity);
+    }
+}
+
+#[resolver]
+struct CancelledResolver;
+
+#[operations]
+impl CancelledResolver {
+    #[query]
+    #[authorize(Read, bind = CancelledService)]
+    async fn cancelled_note(&self, note: Authorized<Read, note::Entity>) -> bool {
+        let _ = note;
+        true
+    }
+}
+
+#[module(
+    imports = [GraphqlModule, nest_rs_seaorm::SeaOrmDatabaseModule],
+    providers = [
+        CancelledService,
+        EveryNote,
+        AbilityGuard<EveryNote>,
+        AlwaysAuthenticated,
+        EndpointGuards<GraphqlView, (AlwaysAuthenticated, AbilityGuard<EveryNote>)>,
+        CancelledResolver,
+    ],
+)]
+struct CancelledModule;
+
+/// A statement cancelled at its bound is the server unable to serve in time, the
+/// class a route's bound load answers.
+#[tokio::test]
+async fn a_statement_cancelled_at_its_bound_answers_unavailable_filed_at_warn() {
+    let app = crate::over_an_unconnected_pool()
+        .module::<CancelledModule>()
+        .build()
+        .await
+        .expect("boots");
+    let logs = LogCapture::install();
+
+    let body = answer(&app, "cancelledNote").await;
+
+    assert_eq!(
+        body["errors"][0]["extensions"]["code"], "UNAVAILABLE",
+        "{body}"
+    );
+    let filed = logs.expect_one(nest_rs_graphql::TARGET, "graphql operation unavailable");
+    assert_eq!(filed.level, "warn");
+    assert!(
+        filed
+            .field("error")
+            .is_some_and(|error| error.contains("57014")),
+        "{:?}",
+        filed.fields,
+    );
 }

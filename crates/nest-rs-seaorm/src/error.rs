@@ -32,16 +32,6 @@ pub(crate) enum UnwiredBind {
     Provider,
 }
 
-/// The wiring defect a `#[resource]` hands its edge to file: the edge's line has
-/// one field, so the service is said in the chain.
-#[derive(Debug, thiserror::Error)]
-#[error("`{provider}` cannot load the subject its resource binds")]
-pub(crate) struct UnwiredResource {
-    pub(crate) provider: &'static str,
-    #[source]
-    pub(crate) why: UnwiredBind,
-}
-
 /// Failure modes shared by every service method. The business variants carry a
 /// client-facing message and map to their 4xx; the opaque ones (`Db`,
 /// `Internal`, `Masking`) answer a constant on every edge and keep their cause,

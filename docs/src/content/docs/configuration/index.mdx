@@ -227,10 +227,10 @@ takes that declaration alone, or before the config as a tuple, so the two
 still travel in one value:
 
 ```rust title="apps/api/src/module.rs"
-McpModule::for_root(McpIdentity::default().title("Acme assistant")),
+McpModule::for_root(McpIdentity { title: Some("Acme assistant".into()), ..Default::default() }),
 // or, pinning the server too:
 McpModule::for_root((
-    McpIdentity::default().title("Acme assistant"),
+    McpIdentity { title: Some("Acme assistant".into()), ..Default::default() },
     McpConfig { allowed_hosts: vec!["mcp.example.com".into()], ..Default::default() },
 )),
 ```

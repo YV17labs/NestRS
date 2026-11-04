@@ -215,7 +215,14 @@ pub use rmcp;
 /// # }
 /// #
 /// # #[module(imports = [
-/// #     McpModule::for_root((McpAccess::Public, McpIdentity::new("assistant", "1.0.0"))),
+/// #     McpModule::for_root((
+/// #         McpAccess::Public,
+/// #         McpIdentity {
+/// #             name: Some("assistant".into()),
+/// #             version: Some("1.0.0".into()),
+/// #             ..Default::default()
+/// #         },
+/// #     )),
 /// # ], providers = [
 /// #     MyService,
 /// #     PostsService,

@@ -13,68 +13,45 @@ use nest_rs_core::AppIdentity;
 use rmcp::model::{Icon, Implementation};
 
 /// What an app, or one `#[mcp]` host, says about the server behind an endpoint,
-/// over the binary's name, version and description: [`Default`] and its
-/// setters for what the app adds, [`new`](Self::new) to override the name and
-/// the version too, the `#[mcp]` attribute for a host's refinement of the fields
-/// it writes.
+/// over the binary's name, version and description. An app sets it one way, in a
+/// struct literal over [`Default`], so a new field stays a minor as a config's
+/// does; a host refines the fields its `#[mcp]` attribute writes.
+///
+/// ```
+/// use nest_rs_mcp::McpIdentity;
+///
+/// let identity = McpIdentity {
+///     title: Some("Acme assistant".into()),
+///     ..Default::default()
+/// };
+/// assert_eq!(identity.name, None, "the binary's");
+/// ```
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct McpIdentity {
-    name: Option<String>,
-    version: Option<String>,
-    title: Option<String>,
-    description: Option<String>,
-    website_url: Option<String>,
-    icons: Option<Vec<Icon>>,
-    instructions: Option<String>,
-}
-
-impl McpIdentity {
-    /// The app's own `serverInfo` under another name and version than the
-    /// binary's: what every endpoint it exposes reports unless a host overrides
-    /// it.
-    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
-        Self {
-            name: Some(name.into()),
-            version: Some(version.into()),
-            ..Self::default()
-        }
-    }
-
+    /// The `serverInfo` name every endpoint reports; `None` is the binary's. A
+    /// name set here needs a [`version`](Self::version) or a binary behind it.
+    pub name: Option<String>,
+    /// The `serverInfo` version; `None` is the binary's.
+    pub version: Option<String>,
     /// Display name for a human-facing client list, when it should differ from
     /// the machine `name`.
-    pub fn title(mut self, title: impl Into<String>) -> Self {
-        self.title = Some(title.into());
-        self
-    }
-
-    /// One line about what the server is, for a client's server list.
-    pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
+    pub title: Option<String>,
+    /// One line about what the server is, for a client's server list; `None` is
+    /// the binary's.
+    pub description: Option<String>,
     /// Homepage or documentation URL a client can offer the user.
-    pub fn website_url(mut self, url: impl Into<String>) -> Self {
-        self.website_url = Some(url.into());
-        self
-    }
-
+    pub website_url: Option<String>,
     /// Icons a client may show beside the server.
-    pub fn icons(mut self, icons: impl IntoIterator<Item = Icon>) -> Self {
-        self.icons = Some(icons.into_iter().collect());
-        self
-    }
-
+    pub icons: Option<Vec<Icon>>,
     /// How to use this server, which a client may fold into its system prompt;
     /// what each tool does belongs to its own `#[tool(description = "…")]`.
     ///
     /// Declared, it replaces whatever the hosts wrote through
     /// `ServerHandler::get_info`; left out, theirs are joined.
-    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
-        self.instructions = Some(instructions.into());
-        self
-    }
+    pub instructions: Option<String>,
+}
 
+impl McpIdentity {
     /// Whether this declaration states anything at all; an argumentless `#[mcp]`
     /// host is no claimant on its path.
     pub fn is_empty(&self) -> bool {
@@ -210,13 +187,14 @@ impl IdentityError {
              version — an endpoint reports both, and the version is the binary's, which a \
              feature library does not know and no #[nest_rs::main] captured in this process. \
              Start it from #[nest_rs::main], or name the app once with \
-             McpModule::for_root(McpIdentity::new(\"{name}\", version))",
+             McpModule::for_root(McpIdentity {{ name: Some(\"{name}\".into()), version: \
+             Some(version), ..Default::default() }})",
         )
     }
 }
 
 /// What the `#[mcp]` attribute declares; the version arrives from the binary,
-/// or from the app through [`McpIdentity::new`].
+/// or from the app's [`McpIdentity`].
 pub fn declared_identity(name: Option<&str>, title: Option<&str>) -> McpIdentity {
     McpIdentity {
         name: name.map(Into::into),
@@ -230,9 +208,13 @@ mod tests {
     use super::*;
 
     fn app() -> McpIdentity {
-        McpIdentity::new("assistant", "1.2.3")
-            .title("Assistant")
-            .instructions("Every result is scoped to the caller's token.")
+        McpIdentity {
+            name: Some("assistant".into()),
+            version: Some("1.2.3".into()),
+            title: Some("Assistant".into()),
+            instructions: Some("Every result is scoped to the caller's token.".into()),
+            ..McpIdentity::default()
+        }
     }
 
     #[test]
@@ -297,7 +279,10 @@ mod tests {
 
     #[test]
     fn instructions_alone_declare_without_naming() {
-        let app = McpIdentity::default().instructions("Ask before writing.");
+        let app = McpIdentity {
+            instructions: Some("Ask before writing.".into()),
+            ..McpIdentity::default()
+        };
         assert!(!app.is_empty());
         let resolved = resolve(None, Some(&app), None).expect("no error");
         assert!(resolved.is_declared());
@@ -354,7 +339,10 @@ mod tests {
 
     #[test]
     fn instructions_alone_leave_the_naming_to_the_hosts_and_the_binary() {
-        let app = McpIdentity::default().instructions("Ask before writing.");
+        let app = McpIdentity {
+            instructions: Some("Ask before writing.".into()),
+            ..McpIdentity::default()
+        };
         let resolved = resolve(None, Some(&app), Some(&binary())).expect("no error");
         assert!(resolved.implementation().is_none());
         assert_eq!(resolved.server_info(sdk_default()).name, "assistant-bin");
@@ -362,9 +350,11 @@ mod tests {
 
     #[test]
     fn the_app_and_a_host_refine_the_binarys_identity_per_field() {
-        let app = McpIdentity::default()
-            .title("Assistant")
-            .instructions("Ask before writing.");
+        let app = McpIdentity {
+            title: Some("Assistant".into()),
+            instructions: Some("Ask before writing.".into()),
+            ..McpIdentity::default()
+        };
         let resolved = resolve(None, Some(&app), Some(&binary())).expect("no error");
         let info = resolved.implementation().expect("named");
         assert_eq!(
@@ -385,7 +375,7 @@ mod tests {
         assert_eq!(
             (info.name.as_str(), info.version.as_str()),
             ("assistant", "1.2.3"),
-            "McpIdentity::new overrides both",
+            "the app's name and version override both",
         );
     }
 
@@ -402,11 +392,15 @@ mod tests {
     #[test]
     fn an_argumentless_mcp_host_declares_nothing() {
         assert!(declared_identity(None, None).is_empty());
-        assert!(!McpIdentity::new("a", "1").is_empty());
+        let named = McpIdentity {
+            name: Some("a".into()),
+            ..McpIdentity::default()
+        };
+        assert!(!named.is_empty());
     }
 
-    /// A field added to [`McpIdentity`] fails to compile here until listed; rustc
-    /// words it "inaccessible fields" inside a macro — list it, never write `..`.
+    /// A field added to [`McpIdentity`] fails to compile here until listed: list
+    /// it, never write `..`.
     macro_rules! every_field {
         ($($field:ident),+ $(,)?) => {{
             let McpIdentity { $($field: _),+ } = McpIdentity::default();

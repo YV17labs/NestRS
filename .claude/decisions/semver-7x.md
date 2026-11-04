@@ -103,6 +103,12 @@ over its base (`new`, `from_env`) as a config is built over
 `..Default::default()`: a new field is a minor, a complete literal not
 covered (`room-to-grow.md`).
 
+**2026-11-04 — `McpIdentity` grows as a config does.** It travels in
+`McpModule::for_root`'s value, so it is no `#[config]`, and an app sets it one way, in
+a literal over `Default`, as `OpenTelemetryConfig` is: a new field is a minor, a
+complete literal not covered. Agreed by the owner ("Tout faire (Recommandé)",
+2026-10-31, the identity audit's second pass).
+
 ## Open — the owner's
 
 Whether a security fix that refuses a configuration 7.x used to accept — an

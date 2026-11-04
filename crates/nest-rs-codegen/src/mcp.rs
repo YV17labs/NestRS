@@ -36,7 +36,7 @@ const TOOL_DESCRIPTION: &str =
 struct ServerField {
     /// The key as a host writes it, the identity field's own name.
     key: &'static str,
-    /// The `McpIdentity` call that takes it, spelled into the remedy.
+    /// The `McpIdentity` field that takes it, spelled into the remedy.
     declares: &'static str,
     /// What they may have meant instead; empty when nothing.
     instead: &'static str,
@@ -47,22 +47,22 @@ struct ServerField {
 const SERVER_FIELDS: [ServerField; 4] = [
     ServerField {
         key: "description",
-        declares: "description(\"…\")",
+        declares: "description: Some(\"…\".into())",
         instead: TOOL_DESCRIPTION,
     },
     ServerField {
         key: "website_url",
-        declares: "website_url(\"…\")",
+        declares: "website_url: Some(\"…\".into())",
         instead: "",
     },
     ServerField {
         key: "icons",
-        declares: "icons([…])",
+        declares: "icons: Some(vec![…])",
         instead: "",
     },
     ServerField {
         key: "instructions",
-        declares: "instructions(\"…\")",
+        declares: "instructions: Some(\"…\".into())",
         instead: TOOL_DESCRIPTION,
     },
 ];
@@ -77,7 +77,7 @@ fn server_field(key: &str) -> Option<String> {
 }
 
 impl ServerField {
-    /// The refusal: whose the field is, and the one call that takes it.
+    /// The refusal: whose the field is, and the one literal that takes it.
     fn refusal(&self) -> String {
         let Self {
             key,
@@ -86,7 +86,7 @@ impl ServerField {
         } = self;
         let mut message = format!(
             "#[mcp] takes no `{key}` — that describes the server, not one host, so it is \
-             declared once: McpModule::for_root(McpIdentity::default().{declares})",
+             declared once: McpModule::for_root(McpIdentity {{ {declares}, ..Default::default() }})",
         );
         if !instead.is_empty() {
             message.push_str(". ");
@@ -107,7 +107,7 @@ mod tests {
             assert!(message.contains(field.key), "{message}");
             assert!(
                 message.contains(field.declares),
-                "{} names no call to paste: {message}",
+                "{} names no field to paste: {message}",
                 field.key,
             );
             assert!(

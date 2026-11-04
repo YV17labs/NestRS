@@ -120,3 +120,9 @@ crates' `__private` with the trait they implement (`visibility-tiers.md`,
 2026-10-31): tier 2, they leave the list, which reads `Json`, `Query`,
 `Path`, `Form`, `Header`, `Ambient`, `RawBody`, `Scoped`, `Parameters`,
 `Piped`, `Decoded` and `TestResponse`.
+
+**2026-11-04 — `McpIdentity` is built over `Default`.** Its setters and `new(name,
+version)` are gone, as `OpenTelemetryConfig`'s went (above): a field is set one way, in
+a literal over its base, so it joins the configurations this decision lists and a new
+field stays a minor (`semver-7x.md`, this date). No environment twin came with it:
+`edges.md` still holds that identity travels in `for_root`'s value.

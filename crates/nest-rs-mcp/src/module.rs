@@ -51,9 +51,11 @@ impl McpModule {
     /// #[module(imports = [
     ///     McpModule::for_root(
     /// #       (McpAccess::Public,
-    ///         McpIdentity::default()
-    ///             .title("Assistant")
-    ///             .instructions("Every result is scoped to the caller's token."),
+    ///         McpIdentity {
+    ///             title: Some("Assistant".into()),
+    ///             instructions: Some("Every result is scoped to the caller's token.".into()),
+    ///             ..Default::default()
+    ///         },
     /// #       )
     ///     ),
     /// ])]
@@ -284,7 +286,10 @@ mod tests {
 
     #[test]
     fn each_declaration_reaches_the_setup_and_nothing_else_does() {
-        let identity = McpModule::for_root(McpIdentity::default().title("Assistant"));
+        let identity = McpModule::for_root(McpIdentity {
+            title: Some("Assistant".into()),
+            ..McpIdentity::default()
+        });
         assert!(identity.server.is_some() && identity.config.is_none());
         assert_eq!(identity.access, None, "gated unless opened in code");
 

@@ -810,7 +810,7 @@ fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> 
         .map(|host| host.name)
         .collect::<Vec<_>>()
         .join(", ");
-    let name_the_app = "McpModule::for_root(McpIdentity::new(name, version))";
+    let name_the_app = "McpModule::for_root(McpIdentity { name, version, .. })";
 
     if reported == sdk_default {
         tracing::warn!(

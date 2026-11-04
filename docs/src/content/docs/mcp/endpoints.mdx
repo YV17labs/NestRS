@@ -87,11 +87,11 @@ use nest_rs::core::module;
 use nest_rs::mcp::{McpIdentity, McpModule};
 
 #[module(imports = [
-    McpModule::for_root(
-        McpIdentity::default()
-            .title("Acme assistant")
-            .instructions("Ask before writing anything. Every result is scoped to your token."),
-    ),
+    McpModule::for_root(McpIdentity {
+        title: Some("Acme assistant".into()),
+        instructions: Some("Ask before writing anything. Every result is scoped to your token.".into()),
+        ..Default::default()
+    }),
     AudioMcpModule,
     UsersMcpModule,
     PostsMcpModule,
@@ -104,8 +104,8 @@ server** — a client may fold them into the model's system prompt — and on an
 endpoint several features share, no single host can see the whole. The name
 and version come from the binary, because `env!("CARGO_PKG_VERSION")` written
 in a shared feature library is the library's version rather than the
-deployment's; `McpIdentity::new(name, version)` overrides both when the
-server should report another.
+deployment's; the `name` and `version` fields override both when the server
+should report another.
 
 Keep them general: what a caller must know to use the surface at all. What each
 tool *does* is already carried by its own `#[tool(description = "…")]`, which is

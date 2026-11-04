@@ -101,7 +101,10 @@ struct AdapterOnlyRoot;
 /// A root pinning only the app's identity beside the adapter, as the demo's
 /// assistant does: the pin and the adapter's bare import are one module.
 #[module(imports = [
-    McpModule::for_root(McpIdentity::default().title("Reports")),
+    McpModule::for_root(McpIdentity {
+        title: Some("Reports".into()),
+        ..Default::default()
+    }),
     ReportsAdapterModule,
 ])]
 struct IdentityRoot;

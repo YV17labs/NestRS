@@ -43,8 +43,8 @@ for the whole line.
 - a public item, a decorator key, a variable, a feature or a unit;
 - a variant to a `#[non_exhaustive]` enum, or a field to a `#[non_exhaustive]`
   struct or to one with a private field;
-- a field to a `#[config]` struct, to a `Default` struct nested in one, or to
-  `OpenTelemetryConfig`;
+- a field to a `#[config]` struct, to a `Default` struct nested in one, to
+  `OpenTelemetryConfig` or to `McpIdentity`;
 - a name to `nest_rs::prelude`;
 - a third-party library's minor;
 - the minimum supported Rust version, named in the changelog.
@@ -78,7 +78,8 @@ settings for the whole line.
 `OpenTelemetryConfig` is read before the container exists, so it is no
 `#[config]`, but it grows the same way: start from
 `OpenTelemetryConfig::default()` or `from_env()`, and set what you change in a
-literal over that value.
+literal over that value. `McpIdentity`, which travels in `McpModule::for_root`'s
+value, grows the same way, in a literal over `Default`.
 
 ## Match and build the rest the way it grows
 

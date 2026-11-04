@@ -738,11 +738,13 @@ async fn initialize_advertises_the_union_of_capabilities_and_instructions() {
 
 /// The app naming itself once, for every endpoint no host on it refines.
 fn app_identity() -> McpSetup {
-    McpModule::for_root(
-        McpIdentity::new("composition-witness", "9.9.9")
-            .title("Composition witness")
-            .instructions("Endpoint instructions."),
-    )
+    McpModule::for_root(McpIdentity {
+        name: Some("composition-witness".into()),
+        version: Some("9.9.9".into()),
+        title: Some("Composition witness".into()),
+        instructions: Some("Endpoint instructions.".into()),
+        ..Default::default()
+    })
 }
 
 #[module(imports = [AlphaMcpModule, BetaMcpModule, app_identity()])]
@@ -1002,7 +1004,7 @@ async fn a_name_with_no_version_behind_it_fails_boot() {
         "the failure names the host and what it called itself: {err}",
     );
     assert!(
-        err.contains("McpIdentity::new"),
+        err.contains("McpIdentity {"),
         "…and carries the remedy at the seam that fixes it: {err}",
     );
 }
@@ -1066,7 +1068,11 @@ async fn an_identity_no_host_serves_fails_boot() {
 #[module(imports = [
     AlphaMcpModule,
     app_identity(),
-    McpModule::for_root(McpIdentity::new("second-witness", "0.0.1")),
+    McpModule::for_root(McpIdentity {
+        name: Some("second-witness".into()),
+        version: Some("0.0.1".into()),
+        ..Default::default()
+    }),
 ])]
 struct ContestedServerApp;
 
@@ -1249,7 +1255,7 @@ async fn an_endpoint_nobody_named_reports_the_sdk_and_is_told_so() {
     );
     let hint = event.field("hint").unwrap_or_default();
     assert!(
-        hint.contains("#[nest_rs::main]") && hint.contains("McpIdentity::new"),
+        hint.contains("#[nest_rs::main]") && hint.contains("McpIdentity {"),
         "no binary named this process, so starting it from main is a remedy: {hint}",
     );
 }
@@ -1333,7 +1339,7 @@ async fn self_named_peers_are_told_the_endpoint_reports_the_first() {
     );
     let hint = event.field("hint").unwrap_or_default();
     assert!(
-        hint.contains("#[mcp(name") && hint.contains("McpIdentity::new"),
+        hint.contains("#[mcp(name") && hint.contains("McpIdentity {"),
         "a binary identity already backs a host's name, so either declaration \
          settles the endpoint: {hint}",
     );

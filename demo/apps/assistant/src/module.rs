@@ -20,11 +20,11 @@ const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped
     imports = [
         ServerTimingModule,
         HealthModule,
-        McpModule::for_root(
-            McpIdentity::default()
-                .title(SERVER_TITLE)
-                .instructions(INSTRUCTIONS),
-        ),
+        McpModule::for_root(McpIdentity {
+            title: Some(SERVER_TITLE.into()),
+            instructions: Some(INSTRUCTIONS.into()),
+            ..Default::default()
+        }),
         OAuthResourceModule::for_root(constants::ALL),
         SeaOrmModule,
         SeaOrmDatabaseModule,

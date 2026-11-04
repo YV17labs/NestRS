@@ -26,7 +26,7 @@ declaration first, the config last, as a tuple —
 
 ```rust title="apps/api/src/module.rs"
 McpModule::for_root((
-    McpIdentity::default().title("Acme assistant"),
+    McpIdentity { title: Some("Acme assistant".into()), ..Default::default() },
     McpConfig {
         allowed_hosts: vec!["mcp.example.com".into()],
         ..Default::default()

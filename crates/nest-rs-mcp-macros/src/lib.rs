@@ -22,7 +22,7 @@ mod uri_template;
 /// `name` / `title` override the app's `McpIdentity` per field for that
 /// endpoint; two hosts on one path both declaring fails boot. `version` and
 /// `instructions` are refused: they are declared once, on the app's
-/// `McpModule::for_root(McpIdentity::…)`.
+/// `McpModule::for_root(McpIdentity { … })`.
 /// A `#[meta(EXPR)]` below it is declared for every operation of the host. The
 /// struct is concrete: each operation's site is a `static`, which no parameter
 /// of a generic struct reaches.

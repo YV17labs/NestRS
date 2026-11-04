@@ -5,8 +5,9 @@
 //! (cargo#16134), so suites spread over crates rebuild ring for each other.
 //!
 //! A refusal that lists a trait's implementors lists what the build links, so
-//! each test pins its snapshots to one feature set: the crate's default, and
-//! `graphql` alone for what a build without `authz` and `seaorm` says.
+//! each test pins its snapshots to one feature set: the crate's default, `graphql`
+//! alone for what a build without `authz` and `seaorm` says, and no feature for
+//! what a kernel decorator's key says in a build without its capability.
 
 #[cfg(all(
     feature = "authn",
@@ -40,8 +41,8 @@ fn every_decorator_refuses_in_the_words_pinned() {
     t.compile_fail("tests/integration/diagnostics/mcp/*.rs");
     t.compile_fail("tests/integration/diagnostics/queue/*.rs");
     t.compile_fail("tests/integration/diagnostics/schedule/*.rs");
-    // `#[expose(…, graphql)]` and `#[wire_enum(graphql)]` without the `graphql`
-    // feature are not pinned: every build that runs this suite has the feature on.
+    // `#[expose(…, graphql)]` without the `graphql` feature is not pinned: every
+    // build that runs this glob has the feature on.
     t.compile_fail("tests/integration/diagnostics/seaorm/*.rs");
     t.compile_fail("tests/integration/diagnostics/ws/*.rs");
 }
@@ -59,4 +60,31 @@ fn every_decorator_refuses_in_the_words_pinned() {
 fn an_attribute_names_the_feature_its_expansion_needs() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/integration/diagnostics/graphql/alone/*.rs");
+}
+
+/// What a kernel decorator's key says when its expansion needs a feature the build
+/// lacks: run by `just test` as `--no-default-features`.
+#[cfg(not(any(
+    feature = "authn",
+    feature = "authz",
+    feature = "config",
+    feature = "events",
+    feature = "graphql",
+    feature = "health",
+    feature = "http",
+    feature = "mcp",
+    feature = "queue",
+    feature = "redis-health",
+    feature = "redis-queue",
+    feature = "redis-schedule",
+    feature = "redis-throttler",
+    feature = "schedule",
+    feature = "seaorm",
+    feature = "testing",
+    feature = "ws",
+)))]
+#[test]
+fn a_key_names_the_feature_its_expansion_needs() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/integration/diagnostics/core/alone/*.rs");
 }

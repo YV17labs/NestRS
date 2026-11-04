@@ -5,8 +5,6 @@
 mod active;
 mod dto;
 #[cfg(feature = "graphql")]
-mod enum_column;
-#[cfg(feature = "graphql")]
 mod input;
 mod lifecycle;
 #[cfg(feature = "graphql")]

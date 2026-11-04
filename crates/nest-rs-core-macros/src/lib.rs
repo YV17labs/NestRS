@@ -121,9 +121,9 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `validator` or `schemars` line), plus `#[serde(deny_unknown_fields)]`, so an
 /// unknown field on the wire (e.g. `is_admin: true`) is rejected at parse time.
 ///
-/// Takes no argument, and only a struct with named fields. Other derives
-/// (`Debug`, `Clone`) may be added beside it; deriving one of the four again is
-/// a conflicting impl (`E0119`).
+/// Takes no argument, and only a struct with named fields; an enum of unit
+/// variants takes `#[wire_enum]`. Other derives (`Debug`, `Clone`) may be added
+/// beside it; deriving one of the four again is a conflicting impl (`E0119`).
 #[proc_macro_attribute]
 pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(input::input(args, item).into()).into()

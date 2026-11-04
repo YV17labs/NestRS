@@ -21,9 +21,9 @@ fn refuse_shape(item: &impl quote::ToTokens, shape: &str) -> syn::Error {
             "#[input] takes a struct with named fields, and this is {shape}. \
              `#[input]` bundles `validator::Validate`, whose derive supports only \
              that shape (`Serialize`, `Deserialize` and `JsonSchema` do not mind). \
-             For a tagged union, put `#[input]` on each variant's payload struct \
-             and derive the wire traits on the enum itself; for a newtype, give \
-             the field a name.",
+             An enum of unit variants takes `#[wire_enum]`; for a tagged union, put \
+             `#[input]` on each variant's payload struct and derive the wire traits \
+             on the enum itself; for a newtype, give the field a name.",
         ),
     )
 }

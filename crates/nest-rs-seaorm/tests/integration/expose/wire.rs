@@ -483,3 +483,52 @@ fn an_id_and_a_timestamp_keep_their_format_on_the_wire_string() {
         "a plain String claims no format: {json}",
     );
 }
+
+/// The wire-only arm: `#[wire_enum]`'s enum as a column of an entity with no
+/// GraphQL object.
+mod enum_column {
+    use nest_rs_core::wire_enum;
+    use nest_rs_seaorm::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[wire_enum]
+    #[derive(EnumIter, DeriveActiveEnum)]
+    #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+    #[serde(rename_all = "lowercase")]
+    pub enum Stage {
+        #[sea_orm(string_value = "draft")]
+        Draft,
+        #[sea_orm(string_value = "shipped")]
+        Shipped,
+    }
+
+    #[expose(name = "Release")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "releases")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[expose(input(create, update))]
+        pub stage: Stage,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    #[test]
+    fn the_enum_column_reaches_the_wire_dto_verbatim() {
+        let id = Uuid::now_v7();
+        let wire = Release::from(&Model {
+            id,
+            stage: Stage::Shipped,
+        });
+        assert_eq!(wire.stage, Stage::Shipped);
+        assert_eq!(
+            serde_json::to_value(&wire).expect("the wire DTO serializes")["stage"],
+            serde_json::json!("shipped"),
+        );
+    }
+}

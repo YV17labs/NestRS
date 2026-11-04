@@ -30,6 +30,10 @@ unasked := if postgres == "mutual-tls" { "none()" } else { "binary_id(nest-rs-se
 # union cannot reach.
 graphql_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --features graphql --test integration --no-fail-fast"
 
+# What a kernel decorator's key says in a build lacking the capability it reaches:
+# `#[wire_enum(graphql)]` on no feature at all, which the union cannot reach either.
+kernel_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --test integration --no-fail-fast"
+
 # What a binary without OTLP export refuses: nest-rs-opentelemetry built
 # without its `otlp` feature, the console alone, which the union turns on.
 console_alone := "cargo nextest run -p nest-rs-opentelemetry --no-default-features --no-fail-fast"
@@ -41,6 +45,7 @@ all: && doc
     export NESTRS_REDIS__URL='{{redis_url}}'
     {{nextest}} -E 'not ({{elsewhere}}) and not ({{alone}}) and not ({{unasked}})'
     {{graphql_alone}}
+    {{kernel_alone}}
     {{console_alone}} --lib --test integration
     # A failover moves the primaries every other test runs on, and a node
     # requiring a client certificate refuses their connections: last, one at a time.
@@ -57,6 +62,7 @@ unit:
 integration:
     {{nextest}} -E 'kind(test) and not binary(e2e)'
     {{graphql_alone}}
+    {{kernel_alone}}
     {{console_alone}} --test integration
 
 # The `tests/e2e` suites, against Postgres, Valkey and S3

@@ -9,9 +9,19 @@ use nest_rs::http::futures_util::stream;
 use nest_rs::http::{ClientIp, Header, HttpView, SseEvent, SseStream, controller, routes};
 use nest_rs::http::{Json, Multipart, Path};
 use nest_rs::pipes::GlobalPipe;
+use nest_rs::pipes::validator::ValidationError;
+
+/// A custom rule, naming `validator`'s error through the framework alone.
+fn not_blank(name: &str) -> Result<(), ValidationError> {
+    if name.trim().is_empty() {
+        return Err(ValidationError::new("blank"));
+    }
+    Ok(())
+}
 
 #[input]
 pub struct HygienePayload {
+    #[validate(custom(function = "not_blank"))]
     pub name: String,
 }
 

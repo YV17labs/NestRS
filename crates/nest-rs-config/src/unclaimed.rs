@@ -8,7 +8,7 @@
 //!   The key that *was* read comes back as `suggestion` when one is near
 //!   enough to be the intended one, or is the key it names once renamed
 //!   (`HSTS` for `SECURITY_HEADERS_HSTS`).
-//! - **A retired key** — [`RETIRED_VARIABLE`],
+//! - **A retired key** — `variable read by nothing since 7.0`,
 //!   in the words every retired variable is said with. An unread key the crate
 //!   that retired it declares, under either spelling; the key it became comes
 //!   back as `read_as`.
@@ -57,7 +57,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, PoisonError};
 
-use nest_rs_core::{EnvPrefix, RETIRED_VARIABLE};
+use nest_rs_core::__private::RETIRED_VARIABLE;
+use nest_rs_core::EnvPrefix;
 
 use crate::service::var_name;
 

@@ -32,7 +32,7 @@ use nest_rs_core::{RequestContinuation, RequestScope};
 use nest_rs_database::{
     AtomicError, ExecutorScope, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec, run_unit,
 };
-use nest_rs_http::RequestDeadline;
+use nest_rs_http::__private::RequestDeadline;
 use tracing::Instrument;
 
 use crate::loader::BatchSpan;

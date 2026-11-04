@@ -1,5 +1,5 @@
 //! Automatic reply masking through the real macro: `#[authorize(Action, Entity)]`
-//! beside a `#[subscribe_message]` makes `#[messages]` emit `masked_reply_for`
+//! beside a `#[subscribe_message]` makes `#[messages]` emit the mask
 //! around the reply — the gateway body writes no masking call.
 
 use std::sync::Arc;

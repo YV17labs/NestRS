@@ -40,15 +40,14 @@ graphql = [
     "dep:nest-rs-http",
 ]
 # MCP surface: the response mask. Masking inside a tool body is the
-# transport-free `masked_output_ambient`; the edge opens each operation's unit
-# of work through the bound `UnitOfWork`.
+# transport-free `masked_reply`; the edge opens each operation's unit of work
+# through the bound `UnitOfWork`.
 mcp = [
     "dep:nest-rs-mcp",
     # Same as GraphQL: the root guard's `check_http` is what `/mcp`'s request runs.
     "dep:nest-rs-http",
 ]
-# WebSocket surface: the per-message reply mask (`ws::masked_reply_for`) that
-# `#[messages]` emits from an `#[authorize(Action, Entity)]`, beside the class
+# WebSocket surface: the per-message reply mask that `#[messages]` emits from an `#[authorize(Action, Entity)]`, beside the class
 # gate every edge shares. A gateway's upgrade runs the HTTP chain, and what a
 # message needs re-established is the ambient ability, which the connection
 # carries.

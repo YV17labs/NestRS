@@ -994,7 +994,10 @@ mod tests {
             }
             let logs = nest_rs_testing::LogCapture::install();
             HttpConfig::resolve(None).expect("an unread variable is no refusal");
-            let lines = logs.find(nest_rs_config::TARGET, nest_rs_core::RETIRED_VARIABLE);
+            let lines = logs.find(
+                nest_rs_config::TARGET,
+                nest_rs_core::__private::RETIRED_VARIABLE,
+            );
             let named = |retired| {
                 lines
                     .iter()

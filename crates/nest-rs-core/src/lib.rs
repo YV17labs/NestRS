@@ -177,7 +177,7 @@ pub use discoverable::{
 };
 pub use discovery::{Discovered, Discovery};
 pub use env_flag::parse_bool;
-pub use env_prefix::{EnvPrefix, RETIRED_VARIABLE};
+pub use env_prefix::EnvPrefix;
 pub use error::{
     AccessGraphError, BootInterruptedError, BudgetPastNetError, ContainerError,
     ContestedDeclarationError, DecodeError, DuplicateMetaError, DuplicateProviderError,
@@ -252,6 +252,7 @@ pub mod __private {
     pub use crate::edge_runtime::{
         EdgeHosts, EdgeRuntime, ProbeRuntime, attaches_transport, registered_hosts,
     };
+    pub use crate::env_prefix::__private::RETIRED_VARIABLE;
     pub use crate::error_message::__private::find_in_chain;
     pub use crate::exception_filter::__private::ErasedExceptionFilter;
     pub use crate::exception_filter::{ExceptionFilterSpec, exception_filter};

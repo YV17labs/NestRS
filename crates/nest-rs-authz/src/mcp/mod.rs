@@ -4,9 +4,9 @@
 //! `EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>` a module declares —
 //! authenticate it with the same chain controllers use, and the caller's
 //! [`Ability`](crate::Ability) they attach is ambient for each operation the
-//! request carries. [`masked_value_for`] masks an operation's return value.
+//! request carries.
 //!
-//! A host does not call it directly: `#[authorize(Action, Entity)]` beside an
+//! A host writes no mask: `#[authorize(Action, Entity)]` beside an
 //! operation of `#[tools]` makes it emit the class gate
 //! ([`class_gate`](crate::class_gate), every edge's) and, beside a `#[tool]`
 //! or a `#[resource]`, the mask, exactly as `#[operations]` does on GraphQL
@@ -117,5 +117,3 @@
 //! guards attached around each operation.
 
 pub(crate) mod mask;
-
-pub use mask::masked_value_for;

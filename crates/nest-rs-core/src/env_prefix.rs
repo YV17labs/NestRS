@@ -13,13 +13,15 @@
 
 use std::sync::OnceLock;
 
-/// The event a variable under the prefix that 7.0 retired is said with, at
-/// `warn` and once, by the crate that retired it: set, it is read by nothing.
-/// Fields: `variable`, and `read_as` — what reads what it set now. A
-/// retirement the boot refuses, where losing the value in silence would open
-/// what it closed, is refused in the same words by `nest_rs_config`'s
-/// `ConfigError::Retired`.
-pub const RETIRED_VARIABLE: &str = "variable read by nothing since 7.0";
+pub(crate) mod __private {
+    /// The event a variable under the prefix that 7.0 retired is said with, at
+    /// `warn` and once, by the crate that retired it: set, it is read by nothing.
+    /// Fields: `variable`, and `read_as` — what reads what it set now. A
+    /// retirement the boot refuses, where losing the value in silence would open
+    /// what it closed, is refused in the same words by `nest_rs_config`'s
+    /// `ConfigError::Retired`.
+    pub const RETIRED_VARIABLE: &str = "variable read by nothing since 7.0";
+}
 
 /// The active environment-variable prefix.
 pub struct EnvPrefix;

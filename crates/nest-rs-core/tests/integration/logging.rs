@@ -107,7 +107,7 @@ const RETIRED_DEBUG: &str = "a line only the retired filter would open";
 
 /// The line the console says a set `<PREFIX>_LOG` with: every retired
 /// variable's.
-const RETIRED_SAID: &str = nest_rs_core::RETIRED_VARIABLE;
+const RETIRED_SAID: &str = nest_rs_core::__private::RETIRED_VARIABLE;
 
 /// An app booted twice under a set `<PREFIX>_LOG`, filing a `debug` line.
 #[nest_rs_core::main]

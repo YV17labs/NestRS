@@ -199,7 +199,6 @@ pub use http::response::Parts as ResponseParts;
 /// ```
 pub use http::uri::Scheme;
 
-pub use ambient::RejectedCredential;
 pub use body::Body;
 pub use client_ip::{ClientIp, ClientOrigin};
 pub use config::{
@@ -209,7 +208,6 @@ pub use config::{
 pub use controller::{HttpControllerMeta, HttpRouteMeta, RequestBodyMeta, SchemaFn};
 pub use cors::HttpCors;
 pub use created::Created;
-pub use deadline::RequestDeadline;
 pub use deprecation::DeprecationMeta;
 pub use detached::DetachedWork;
 pub use endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, declare_endpoint, endpoint_fn};
@@ -249,10 +247,12 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::ambient::RejectedCredential;
     pub use crate::canonical_host::CanonicalHost;
     pub use crate::controller::{
         HttpRouteParts, http_controller_meta, http_route_meta, route_denial_statuses, schema_of,
     };
+    pub use crate::deadline::RequestDeadline;
     pub use crate::deprecation::{deprecated_route, deprecation_meta};
     pub use crate::documented_answer::{
         AnswerDoc, AnswerProbe, DocumentedAnswer, PlainAnswerProbe,

@@ -1,11 +1,10 @@
 //! Field-level response masking for MCP operations — the transport analog of
-//! [`crate::graphql::masked_value_for`].
+//! GraphQL's.
 //!
 //! The framework-carried path is [`masked_value_for`], emitted automatically by
 //! `#[tools]` after every `#[authorize(Action, Entity)]`-declared operation; a
-//! host never calls it. [`crate::masked_output_ambient`] remains the manual
-//! primitive for a hand-written `ServerHandler` surface, which no decorator
-//! reaches.
+//! host never calls it. [`crate::masked_reply`] remains the manual primitive for
+//! a hand-written `ServerHandler` surface, which no decorator reaches.
 
 use nest_rs_core::Edge;
 use nest_rs_guards::Denial;
@@ -37,7 +36,7 @@ const NULLABLE_REMEDY: &str = "make the column `Option` on the entity, so a fiel
 /// MCP has no selection set: a mask that takes a key the return type requires
 /// **refuses the operation**. A column an ability rule may mask should be
 /// `Option` on the entity.
-pub fn masked_value_for<A, E, O>(value: O) -> Result<O, McpError>
+pub(crate) fn masked_value_for<A, E, O>(value: O) -> Result<O, McpError>
 where
     A: ActionMarker,
     E: WireModel,
@@ -149,7 +148,7 @@ where
     note = "a posture masks its reply against its entity's `#[expose]`d wire model, read and written as the entity's rows: expose the entity and answer a value that serializes and deserializes, or declare a capability no table holds with `#[subject]`, whose posture masks nothing"
 )]
 pub trait McpMask<A, O> {
-    /// [`masked_value_for`]'s answer on an entity; the value itself otherwise.
+    /// The response mask's answer on an entity; the value itself otherwise.
     fn masked_value(value: O) -> Result<O, McpError>;
 }
 

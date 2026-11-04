@@ -47,7 +47,6 @@ pub use factory::AbilityFactory;
 pub use gate::class_gate;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 pub use guard::AbilityGuard;
-pub use mask::masked_output_ambient;
 pub use predicate::{Predicate, PredicateBuilder};
 pub use subject::{RowSubject, Subject};
 
@@ -102,6 +101,7 @@ pub mod __private {
     pub use crate::graphql::mask::{GraphqlMask, graphql_masked_item, graphql_masked_value};
     #[cfg(feature = "http")]
     pub use crate::http::mask::RouteMask;
+    pub use crate::mask::masked_output_ambient;
     #[cfg(feature = "mcp")]
     pub use crate::mcp::mask::{McpMask, mcp_masked_value};
     pub use crate::subject::{NoRows, Rows, SubjectMask};

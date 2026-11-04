@@ -704,7 +704,7 @@ mod tests {
         let out = checked(quote! {
             fn read(ctx: &Ctx) -> Result<(), Error> {
                 ::nest_rs_authz::class_gate::<::nest_rs_authz::Read, Note>(ctx)?;
-                ::nest_rs_authz::graphql::masked_value_for::<::nest_rs_authz::Read, Note, _>(ctx, 0)
+                ::nest_rs_authz::__private::graphql_masked_value::<::nest_rs_authz::Read, Note, _>(ctx, 0)
             }
         });
         assert!(out.ends_with(&check("authz", quote!())), "{out}");

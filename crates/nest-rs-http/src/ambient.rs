@@ -109,8 +109,7 @@ fn read<T: AmbientValue + Clone>(extensions: &Extensions) -> Result<Ambient<T>, 
 ///
 /// Rejects with `500` if absent — the guard that should have attached it never
 /// ran on this route — but where an authentication guard rejected a presented
-/// credential on a `#[public]` route: the deferred `401`
-/// ([`RejectedCredential`]) answers.
+/// credential on a `#[public]` route: the `401` it deferred answers.
 impl<'a, T: AmbientValue + Clone> crate::FromRequest<'a> for Ambient<T> {
     async fn from_request(
         req: &'a crate::Request,

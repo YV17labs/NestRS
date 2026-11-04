@@ -14,10 +14,8 @@ use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, PrincipalIdenti
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, install_pending};
 use nest_rs_core::{Ambient, AmbientValue, Handler, Posture, injectable, module};
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::__private::{attached, attached_pending, check_request};
-use nest_rs_http::{
-    HttpConfig, HttpModule, RawBody, RejectedCredential, Request, StatusCode, controller, routes,
-};
+use nest_rs_http::__private::{RejectedCredential, attached, attached_pending, check_request};
+use nest_rs_http::{HttpConfig, HttpModule, RawBody, Request, StatusCode, controller, routes};
 use nest_rs_testing::{LogCapture, TestApp};
 
 /// A principal with an audit identity.

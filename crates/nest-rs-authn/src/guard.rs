@@ -13,7 +13,8 @@ use nest_rs_core::{
     ProviderResidency, Unanswered, UnitContext, async_trait, within,
 };
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardFor, GuardPhase, PrincipalClaim};
-use nest_rs_http::{HttpView, RejectedCredential};
+use nest_rs_http::__private::RejectedCredential;
+use nest_rs_http::HttpView;
 
 use crate::PrincipalIdentity;
 use crate::error::{AuthError, UNAVAILABLE, UnansweredError};

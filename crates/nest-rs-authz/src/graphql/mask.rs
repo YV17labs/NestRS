@@ -2,8 +2,7 @@
 //! [`crate::http::mask_entity_response`].
 //!
 //! The framework-carried path is [`masked_value_for`], emitted automatically by
-//! `#[operations]` after every `#[authorize(Action, Entity)]`-declared operation —
-//! a hand-written resolver never calls it.
+//! `#[operations]` after every `#[authorize(Action, Entity)]`-declared operation.
 
 use nest_rs_core::Edge;
 use nest_rs_graphql::async_graphql::{Context, Error};
@@ -25,7 +24,7 @@ use crate::{Ability, Action, ActionMarker};
 /// whether it survives — `Ok(None)` meaning this subscriber may not read this
 /// item at all.
 ///
-/// The streaming counterpart of [`masked_value_for`], emitted automatically by
+/// The streaming counterpart of the response mask, emitted automatically by
 /// `#[operations]` after every `#[authorize(Action, Entity)]`-declared
 /// `#[subscription]`, with the ability its class gate checked at the opening:
 /// an item arrives outside that unit, where a guard bound on the field no
@@ -103,7 +102,7 @@ where
 /// to have decided.
 ///
 /// [`Ability::mask_many`]: crate::Ability::mask_many
-pub fn masked_value_for<A, E, O>(ctx: &Context<'_>, value: O) -> Result<O, Error>
+pub(crate) fn masked_value_for<A, E, O>(ctx: &Context<'_>, value: O) -> Result<O, Error>
 where
     A: ActionMarker,
     E: WireModel,
@@ -145,7 +144,7 @@ where
     note = "a posture masks its reply against its entity's `#[expose]`d wire model, read and written as the entity's rows: expose the entity and answer a value that serializes and deserializes, or declare a capability no table holds with `#[subject]`, whose posture masks nothing"
 )]
 pub trait GraphqlMask<A, O> {
-    /// [`masked_value_for`]'s answer on an entity; the value itself otherwise.
+    /// The response mask's answer on an entity; the value itself otherwise.
     fn masked_value(ctx: &Context<'_>, value: O) -> Result<O, Error>;
 
     /// [`masked_item_for`]'s answer on an entity; the item itself otherwise.

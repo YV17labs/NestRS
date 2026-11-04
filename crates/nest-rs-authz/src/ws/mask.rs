@@ -32,7 +32,7 @@ use crate::{Action, ActionMarker, current_ability};
 /// Fails closed on the two cases that are wiring or data faults rather than
 /// policy: no ambient ability (nothing decided what this caller may read), and a
 /// body that cannot be reconciled with `E::Model` at all.
-pub fn masked_reply_for<A, E, O>(event: &'static str, value: &O) -> Result<Value, WsError>
+pub(crate) fn masked_reply_for<A, E, O>(event: &'static str, value: &O) -> Result<Value, WsError>
 where
     A: ActionMarker,
     E: WireModel,

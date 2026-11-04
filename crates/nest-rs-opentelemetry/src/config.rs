@@ -216,7 +216,7 @@ pub(crate) fn say_retired_variables() {
             variable = variable.as_str(),
             read_as = read_as(&variable),
             "{}",
-            nest_rs_core::RETIRED_VARIABLE,
+            nest_rs_core::__private::RETIRED_VARIABLE,
         );
     }
 }

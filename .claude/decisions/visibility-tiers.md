@@ -119,3 +119,18 @@ edge: its output *is* the edge's error type, which is what lets `.opaque()?`
 infer, and a core failure converted by `?` is an impl the orphan rule refuses on
 async-graphql's and rmcp's errors. `pipe_error`, `problem_error` and
 `denial_to_<edge>_error` stay tier 1, since the pages hand them out.
+
+**2026-11-04 — what is left of tier 1's expansion-only items.** The same audit
+found the 2026-10-31 entry's sweep incomplete, and the owner's agreement above
+covers finishing it. `RejectedCredential` (authn writes it, HTTP's `Ambient`
+reads it), `RequestDeadline` (GraphQL reads it), `masked_output_ambient`
+(`#[expose]`'s relation bridges emit it) and core's `RETIRED_VARIABLE`, whose
+sentence the pages quote and whose constant siblings alone read, moved to their
+crates' `__private`.
+`masked_value_for` on GraphQL and MCP and `masked_reply_for` on WebSocket became
+`pub(crate)`, since the expansions call the probes already in `__private` and
+nothing outside the crate called these. Staying tier 1, because a public
+signature or a page names them: `CarriedView`, `DetachedWork`, `TlsNames`,
+`TlsSetting`, `CloseCode`, `masked_item_for`, `mask_entity_response`. A body
+masking by hand reads `Ability::mask` for a row, `masked_reply` for a value it
+built.

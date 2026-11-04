@@ -19,10 +19,10 @@ use nest_rs_core::{
     Container, Discovery, Handler, Posture, ReachableProviders, UngatedDiscoveryError, UnitContext,
 };
 use nest_rs_guards::__private::global_guards_active;
-use nest_rs_http::__private::{EndpointGuardsMeta, with_view};
+use nest_rs_http::__private::{EndpointGuardsMeta, RequestDeadline, with_view};
 use nest_rs_http::{
-    Body, BodyError, Endpoint, HeaderValue, HttpError, Request, RequestDeadline, Response,
-    ResponseError, StatusCode, current_body_limit, declare_endpoint, header,
+    Body, BodyError, Endpoint, HeaderValue, HttpError, Request, Response, ResponseError,
+    StatusCode, current_body_limit, declare_endpoint, header,
 };
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError};
 

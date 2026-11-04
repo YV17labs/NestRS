@@ -1,12 +1,11 @@
 //! GraphQL bindings (feature `graphql`) — the resolver analog of
-//! `crate::http`: [`masked_value_for`] masks a resolver's return value and
-//! [`ability`] reads the ability the field's unit carries, which the guards
-//! attached — at the `/graphql` request (the app's global pool, or
+//! `crate::http`: [`ability`] reads the ability the field's unit carries, which
+//! the guards attached — at the `/graphql` request (the app's global pool, or
 //! `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` a module declares)
 //! or at the field itself.
 //!
-//! A resolver does not call these directly: `#[authorize(Action, Entity)]` on
-//! a `#[query]`/`#[mutation]` makes `#[resolver]` emit the class gate
+//! A resolver writes no mask: `#[authorize(Action, Entity)]` on a
+//! `#[query]`/`#[mutation]` makes `#[resolver]` emit the class gate
 //! ([`class_gate`](crate::class_gate), every edge's) and the response mask.
 //!
 //! The row an operation loads by id, `#[authorize(A, bind = S)]`, is
@@ -114,4 +113,4 @@ mod context;
 pub(crate) mod mask;
 
 pub use context::{ability, forbidden};
-pub use mask::{masked_item_for, masked_value_for};
+pub use mask::masked_item_for;

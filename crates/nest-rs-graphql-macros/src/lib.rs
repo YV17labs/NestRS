@@ -59,12 +59,12 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// - `#[authorize(Action, Entity)]` — the macro emits the class gate
 ///   (`nest_rs_authz::class_gate`, run after the operation's guards) before the
-///   call and automatic response masking (`masked_value_for`) after it. The mask sees through the
+///   call and automatic response masking after it. The mask sees through the
 ///   wire DTO itself, `Option<…>` and `Vec<…>`; scalars pass through; an
 ///   irreconcilable value fails **closed**. Append `unmasked`
 ///   (`#[authorize(Read, E, unmasked)]`) to keep the gate but mask a custom
-///   shape (e.g. a cursor connection) yourself via
-///   `nest_rs_authz::masked_output_ambient`.
+///   shape (e.g. a cursor connection) yourself, each row through
+///   `nest_rs_authz::Ability::mask`.
 /// - `#[public]` — a caller with no credential is admitted: no `#[authorize]`
 ///   gate, no response mask. Struct- and method-level `#[use_guards]` still run.
 ///
@@ -104,8 +104,8 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// class gate (`nest_rs_authz::class_gate`), the exception filters and
 /// interceptors (on a root field the app's, the modules' `#[interceptor]`s and
 /// the resolver's, then the method's; on a field resolver its own alone), the
-/// per-argument pipes, the inherent method, then the response mask
-/// (`nest_rs_authz::graphql::masked_value_for`) over what it returned.
+/// per-argument pipes, the inherent method, then the response mask over what it
+/// returned.
 #[proc_macro_attribute]
 pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::__private::reroot_impl_half(args.into(), |args| {

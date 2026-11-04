@@ -113,7 +113,7 @@ fn emit_pk_loader(
                 let mut __map: ::std::collections::HashMap<#pk_ty, #wire> =
                     ::std::collections::HashMap::with_capacity(__rows.len());
                 for __row in __rows {
-                    let __wire = ::nest_rs_authz::masked_output_ambient::<
+                    let __wire = ::nest_rs_authz::__private::masked_output_ambient::<
                         ::nest_rs_authz::Read,
                         Entity,
                         #wire,
@@ -314,7 +314,7 @@ fn emit_fk_loaders(
                             let mut __edges = ::std::vec::Vec::with_capacity(__page.items.len());
                             for __row in &__page.items {
                                 // `scoped(Read)` filters rows only; columns are masked here.
-                                let __wire = ::nest_rs_authz::masked_output_ambient::<
+                                let __wire = ::nest_rs_authz::__private::masked_output_ambient::<
                                     ::nest_rs_authz::Read,
                                     Entity,
                                     #wire,

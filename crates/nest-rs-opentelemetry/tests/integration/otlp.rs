@@ -400,7 +400,7 @@ fn a_variable_of_the_retired_namespace_is_said_at_warn() {
     )
     .expect("a retired variable fails no boot");
 
-    let event = logs.expect_one(TARGET, nest_rs_core::RETIRED_VARIABLE);
+    let event = logs.expect_one(TARGET, nest_rs_core::__private::RETIRED_VARIABLE);
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("variable").as_deref(), Some(retired.as_str()));
     assert_eq!(

@@ -1,5 +1,5 @@
 //! Automatic response masking through the real macros: `#[authorize(Action,
-//! Entity)]` on a `#[query]` makes `#[resolver]` emit `masked_value_for`
+//! Entity)]` on a `#[query]` makes `#[resolver]` emit the mask
 //! around the return value — the resolver body writes no masking call. Covers
 //! the wire shapes the wrapper sees through (bare DTO, `Vec`), the fail-closed
 //! path (a required field the mask strips ⇒ GraphQL error, never unmasked

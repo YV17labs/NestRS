@@ -1,5 +1,5 @@
 //! Automatic response masking through the real macro: `#[authorize(Action,
-//! Entity)]` beside a `#[tool]` makes `#[mcp]` emit `masked_value_for` around
+//! Entity)]` beside a `#[tool]` makes `#[mcp]` emit the mask around
 //! the returned value — the host body writes no masking call.
 //!
 //! The two shapes a tool actually returns are covered — the structured

@@ -144,7 +144,7 @@ pub(crate) fn say_retired_filter() {
             variable = variable.as_str(),
             read_as = "RUST_LOG",
             "{}",
-            crate::RETIRED_VARIABLE,
+            crate::env_prefix::__private::RETIRED_VARIABLE,
         );
     }
 }

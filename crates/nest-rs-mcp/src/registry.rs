@@ -363,29 +363,18 @@ fn check_postures(
     container: &Container,
     operations: &[(&'static str, DeclaredOperation)],
 ) -> anyhow::Result<()> {
-    let named = |of: &dyn Fn(&DeclaredOperation) -> bool| -> Vec<String> {
-        operations
-            .iter()
-            .filter(|(_, operation)| of(operation))
-            .map(|(host, operation)| format!("{host}::{}", operation.site.handler().address()))
-            .collect()
-    };
     if crate::module::posture(container) == Posture::Public {
-        let undeclared = named(&|operation| !operation.declares_posture);
-        if undeclared.is_empty() {
-            return Ok(());
-        }
-        return Err(McpPostureError::Undeclared {
-            operations: undeclared.join(", "),
-        }
-        .into());
+        return match named(operations, |operation| !operation.declares_posture) {
+            Some(operations) => Err(McpPostureError::Undeclared { operations }.into()),
+            None => Ok(()),
+        };
     }
-    let public = named(&|operation| operation.site.handler().posture() == Posture::Public);
-    if public.is_empty() {
+    let Some(operations) = named(operations, |operation| {
+        operation.site.handler().posture() == Posture::Public
+    }) else {
         return Ok(());
-    }
+    };
     let chain = carried_request_chain::<McpView>(container, "the MCP endpoints' request")?;
-    let operations = public.join(", ");
     if chain.is_empty() {
         return Err(McpPostureError::PublicBehindDenial { operations }.into());
     }
@@ -393,6 +382,20 @@ fn check_postures(
         Some(guard) => Err(McpPostureError::PublicBehindGuard { operations, guard }.into()),
         None => Ok(()),
     }
+}
+
+/// The `operations` that `of` picks, each under its host, as a refusal lists
+/// them; `None` when it picks none.
+fn named(
+    operations: &[(&'static str, DeclaredOperation)],
+    of: impl Fn(&DeclaredOperation) -> bool,
+) -> Option<String> {
+    let picked: Vec<String> = operations
+        .iter()
+        .filter(|(_, operation)| of(operation))
+        .map(|(host, operation)| format!("{host}::{}", operation.site.handler().address()))
+        .collect();
+    (!picked.is_empty()).then(|| picked.join(", "))
 }
 
 /// The checks of the endpoint at `path`, over the hosts that share it.

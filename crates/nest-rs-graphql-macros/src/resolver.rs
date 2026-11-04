@@ -16,18 +16,18 @@ use syn::{
 
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
-    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Conditional, DispatchKeys, HandlerSite,
-    HostBorrow, HostMeta, InjectableBody, SitePosture, TailParam, VersionedEdge, answer_span,
-    at_most_one_authorize, await_if_async, build_injectable_body, camel_case, cfg_attrs,
-    concrete_signature, delegated_attrs, exception_filter_specs, force_guard_typeids,
-    forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
-    handler_const, handler_ref, host_meta_fn, impl_self_ident, injected_keys_with_layers,
-    injected_methods_with_layers, injected_names_with_layers, injected_optional_fns,
-    injected_per_request_method, injects_impls, interceptor_specs, key_as_written, layer_deps,
-    normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
-    posture_contradiction, posture_required, reject_meta_on_operations, scoped_specs,
-    shared_receiver, site_const_ident, site_fn_ident, site_ref, tail_param, takes_value,
-    type_label, unit_of_work_required, unknown_argument, validate_argument,
+    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
+    HandlerSite, HostBorrow, HostMeta, InjectableBody, SitePosture, TailParam, VersionedEdge,
+    answer_span, at_most_one_authorize, authorized_entity, await_if_async, build_injectable_body,
+    camel_case, cfg_attrs, concrete_signature, delegated_attrs, exception_filter_specs,
+    force_guard_typeids, forwarded_arg_idents, forwarded_idents, from_container_method,
+    guard_capability_bounds, handler_const, handler_ref, host_meta_fn, impl_self_ident,
+    injected_keys_with_layers, injected_methods_with_layers, injected_names_with_layers,
+    injected_optional_fns, injected_per_request_method, injects_impls, interceptor_specs,
+    key_as_written, layer_deps, normalize_forwarded_args, one_role_per_method, piped_input,
+    posture_contradiction, reject_meta_on_operations, scoped_specs, shared_receiver,
+    site_const_ident, site_fn_ident, site_ref, spelled, tail_param, takes_value, type_label,
+    unit_of_work_required, unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -252,11 +252,7 @@ impl syn::parse::Parse for AuthorizeArg {
                 input
                     .parse()
                     .map(|p| AuthorizeArg::Bind(name, p))
-                    .map_err(refused(
-                        "bind",
-                        "the path of the service that loads the subject, e.g. \
-                     `bind = FilesService`",
-                    ))
+                    .map_err(refused("bind", BIND_TAKES))
             } else if name == "id_arg" {
                 input.parse().map(|i| AuthorizeArg::IdArg(name, i)).map_err(refused(
                     "id_arg",
@@ -287,6 +283,13 @@ const AUTHORIZE_SHAPE: &str = "expected `#[authorize(Action, Entity)]` — e.g. 
      response yourself. `bind = Service` (optionally `id_arg = ident`) binds the subject from an \
      id argument, and lets the entity be omitted (derived from `Service::Entity`): \
      `#[authorize(Update, bind = ArtworksService)]`";
+
+/// What an operation with no posture at all is told.
+const POSTURE_REQUIRED: &str = "every `#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]` \
+     declares its access posture: `#[authorize(Action, Entity)]` (class-level gate + automatic \
+     response masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` (a caller with no \
+     credential is admitted: no `#[authorize]` gate and no response mask — `#[use_guards]` guards \
+     still run)";
 
 fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpec>> {
     let Some(pos) = attrs.iter().position(|a| a.path().is_ident("authorize")) else {
@@ -353,16 +356,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
 
 /// The parameter typed `Authorized<A, E>`, matched on the last path segment.
 fn authorized_param(sig: &Signature) -> Option<&FnArg> {
-    sig.inputs.iter().find(|arg| {
-        let FnArg::Typed(pt) = arg else { return false };
-        let Type::Path(tp) = &*pt.ty else {
-            return false;
-        };
-        tp.path
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "Authorized")
-    })
+    sig.inputs.iter().find(|arg| spelled(arg, "Authorized"))
 }
 
 /// The ident of the parameter typed `Authorized<A, E>`, matched on the last path segment.
@@ -1091,14 +1085,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     ));
                 }
                 (None, false) => {
-                    return Err(syn::Error::new_spanned(
-                        &method.sig.ident,
-                        posture_required(
-                            "`#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]`",
-                            "a caller with no credential is admitted: no `#[authorize]` gate and \
-                             no response mask — `#[use_guards]` guards still run",
-                        ),
-                    ));
+                    return Err(syn::Error::new_spanned(&method.sig.ident, POSTURE_REQUIRED));
                 }
                 _ => {}
             }
@@ -1201,11 +1188,9 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     .as_ref()
                     .and_then(|spec| match (&spec.entity, &spec.bind) {
                         (Some(entity), _) => Some(quote!(#entity)),
-                        (None, Some(_)) => authorized_param(&sig).and_then(|arg| match arg {
-                            FnArg::Typed(pt) => nth_generic_type(&pt.ty, "Authorized", 1)
-                                .map(|entity| quote!(#entity)),
-                            FnArg::Receiver(_) => None,
-                        }),
+                        (None, Some(_)) => {
+                            authorized_entity(&sig.inputs).map(|entity| quote!(#entity))
+                        }
                         (None, None) => None,
                     });
             if let (

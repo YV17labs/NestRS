@@ -14,15 +14,16 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
-    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Conditional, DispatchKeys, HandlerSite,
-    HostBorrow, HostMeta, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath, SitePosture,
-    at_most_one_authorize, await_if_async, cfg_attrs, concrete_signature, deprecation_header,
-    exception_filter_specs, force_guard_typeids, guard_capability_bounds, handler_const,
-    handler_ref, impl_self_ident, injected_methods_with_layers, injected_per_request_method,
-    interceptor_specs, layer_deps, mixed_site_ident, normalize_forwarded_args, nth_generic_type,
-    one_role_per_method, posture_key_unsupported, refuse_rust_deprecated,
-    reject_meta_on_operations, scoped_specs, shared_receiver, site, takes_value, ungrouped_expr,
-    unit_of_work_required, unknown_argument, validate_argument,
+    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
+    HandlerSite, HostBorrow, HostMeta, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath, SitePosture,
+    at_most_one_authorize, authorized_entity, await_if_async, cfg_attrs, concrete_signature,
+    deprecation_header, exception_filter_specs, force_guard_typeids, guard_capability_bounds,
+    handler_const, handler_ref, impl_self_ident, injected_methods_with_layers,
+    injected_per_request_method, interceptor_specs, layer_deps, mixed_site_ident,
+    normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
+    refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
+    spelled, takes_value, ungrouped_expr, unit_of_work_required, unknown_argument,
+    validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -1227,12 +1228,7 @@ fn take_authorize(
                 let Expr::Path(service) = &nv.value else {
                     return Err(syn::Error::new_spanned(
                         &nv.value,
-                        takes_value(
-                            "authorize",
-                            Some("bind"),
-                            "the path of the service that loads the subject, e.g. \
-                             `bind = FilesService`",
-                        ),
+                        takes_value("authorize", Some("bind"), BIND_TAKES),
                     ));
                 };
                 bind = Some(service.path.clone());
@@ -1279,12 +1275,8 @@ fn take_authorize(
         // The `E` of the `Authorized<Action, E>` parameter, asserted the
         // service's once (`bound_entity`) rather than projected in every probe;
         // a route with none is refused by `bound_subject`.
-        (None, Some(service)) => inputs
-            .iter()
-            .find_map(|arg| match arg {
-                FnArg::Typed(pt) => nth_generic_type(&pt.ty, "Authorized", 1).cloned(),
-                FnArg::Receiver(_) => None,
-            })
+        (None, Some(service)) => authorized_entity(inputs)
+            .cloned()
             .unwrap_or_else(|| parse_quote!(<#service as ::nest_rs_seaorm::CrudService>::Entity)),
         (None, None) => return Err(malformed_authorize(&attr)),
     };
@@ -1331,17 +1323,6 @@ fn authorize_type(spec: &AuthorizeSpec, inputs: &[FnArg]) -> syn::Result<Type> {
     Ok(syn::parse_quote! {
         ::nest_rs_authz::http::Authorize<#action, #entity>
     })
-}
-
-/// Whether a parameter's type is spelled `name<..>`, read for a diagnostic or,
-/// for `Authorized`, the parameter `bind = Service` fills — the spelling
-/// `#[operations]` reads too.
-fn spelled(arg: &FnArg, name: &str) -> bool {
-    let FnArg::Typed(pt) = arg else { return false };
-    let Type::Path(tp) = pt.ty.as_ref() else {
-        return false;
-    };
-    tp.path.segments.last().is_some_and(|s| s.ident == name)
 }
 
 fn param_types(inputs: &[FnArg]) -> Vec<Type> {

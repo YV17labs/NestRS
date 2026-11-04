@@ -718,7 +718,6 @@ fn resource_wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2>
         .resource
         .iter()
         .flat_map(|decl| &decl.variables)
-        .filter(|arg| !arg.bound)
         .map(|arg| {
             let ident = &arg.ident;
             validate_statement(&quote!(&#ident))
@@ -844,11 +843,11 @@ fn dispatch(
             service,
             ..
         } = bound;
+        let id = resource::bound_id();
         // After the gate, so a refused caller pays for no read.
         quote! {
             let #ident: #ty = ::nest_rs_mcp::__private::bound_subject(
-                ::nest_rs_seaorm::__private::resource_bind::<#action, #service>(__nestrs_bound_id)
-                    .await,
+                ::nest_rs_seaorm::__private::resource_bind::<#action, #service>(#id).await,
             )?;
         }
     });

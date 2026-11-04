@@ -154,9 +154,9 @@ pub mod __private {
         DecoratorPair, Residency, parse_provider_host, provider_residency, residency_match,
     };
     pub use crate::posture::{
-        AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, ID_ARG_UNSUPPORTED_BECAUSE, Posture,
-        PostureRules, at_most_one_authorize, posture_contradiction, posture_key_unsupported,
-        posture_required,
+        AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, ID_ARG_UNSUPPORTED_BECAUSE,
+        Posture, PostureRules, at_most_one_authorize, authorized_entity, posture_contradiction,
+        posture_key_unsupported,
     };
     pub use crate::provider_site::{ProviderSite, host_layers_entry, site_const, site_ref};
     pub use crate::queue_name::{invalid_queue_name, is_valid_queue_name};
@@ -170,7 +170,7 @@ pub mod __private {
     pub use crate::ty::{
         HostBorrow, TailParam, answer_span, await_if_async, concrete_signature, generic_args,
         impl_self_ident, last_segment_ident, nth_generic_type, path_label, payload_arg_type,
-        piped_input, returns_unit, shared_receiver, tail_param, type_label,
+        piped_input, returns_unit, shared_receiver, spelled, tail_param, type_label,
     };
     pub use crate::ungrouped::ungrouped_expr;
     pub use crate::unit_of_work::unit_of_work_required;

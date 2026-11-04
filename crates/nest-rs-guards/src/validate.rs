@@ -140,17 +140,19 @@ pub fn validate_carried_chain(
     unit: &[ResolvedLayer<dyn Guard>],
     request: impl FnOnce() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
 ) -> Result<(), String> {
-    let required = || {
-        unit.iter().enumerate().filter_map(|(at, entry)| {
+    let required: Vec<_> = unit
+        .iter()
+        .enumerate()
+        .filter_map(|(at, entry)| {
             let expected = entry.layer.expected_principal()?;
             (!expected.or_visitor).then_some((at, entry.name, expected))
         })
-    };
-    if required().next().is_none() {
+        .collect();
+    if required.is_empty() {
         return Ok(());
     }
     let request = request()?;
-    for (at, guard, expected) in required() {
+    for (at, guard, expected) in required {
         let attached = request.iter().chain(&unit[..at]).any(|entry| {
             entry
                 .layer
@@ -166,17 +168,15 @@ pub fn validate_carried_chain(
 
 /// Boot check for one controller or gateway upgrade: compose the global pool
 /// with the host-scope specs (the dedup a route's guard stage composes) and validate the
-/// result, which it answers. A host-scope spec no imported module provides
-/// fails it, naming the guard and `label`. A route whose method scope declares
-/// guards is validated again, whole, as it mounts.
+/// result. A host-scope spec no imported module provides fails it, naming the
+/// guard and `label`. A route whose method scope declares guards is validated
+/// again, whole, as it mounts.
 pub fn boot_validate_guards(
     container: &Container,
     controller_specs: &[GuardSpec],
     label: &str,
-) -> Result<Vec<ResolvedLayer<dyn Guard>>, String> {
-    let chain = host_chain(container, controller_specs, label)?;
-    validate_guard_chain(label, &chain)?;
-    Ok(chain)
+) -> Result<(), String> {
+    validate_guard_chain(label, &host_chain(container, controller_specs, label)?)
 }
 
 /// The global pool, then the host-scope specs, as a request running them composes

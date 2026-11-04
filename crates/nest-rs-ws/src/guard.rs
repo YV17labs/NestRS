@@ -13,9 +13,9 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::{Container, Failure, Handler, Peer, Posture, UnitContext};
 use nest_rs_guards::__private::{
-    GlobalBucket, GuardSpec, Refused, SiteChainSources, boot_validate_guards, check_guards,
-    client_message, compose_site_chain, denial_code, denial_of, denial_reason, host_chain,
-    identifying_guard, validate_carried_chain,
+    GlobalBucket, GuardSpec, Refused, SiteChainSources, check_guards, client_message,
+    compose_site_chain, denial_code, denial_of, denial_reason, host_chain, identifying_guard,
+    validate_carried_chain, validate_guard_chain,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::OriginRefused;
@@ -151,8 +151,10 @@ pub(crate) fn validate_upgrade(
     path: &str,
     upgrade: &[GuardSpec],
 ) -> nest_rs_core::anyhow::Result<Vec<ResolvedLayer<dyn Guard>>> {
-    boot_validate_guards(container, upgrade, &upgrade_site(path))
-        .map_err(nest_rs_core::anyhow::Error::msg)
+    let site = upgrade_site(path);
+    let chain = host_chain(container, upgrade, &site).map_err(nest_rs_core::anyhow::Error::msg)?;
+    validate_guard_chain(&site, &chain).map_err(nest_rs_core::anyhow::Error::msg)?;
+    Ok(chain)
 }
 
 /// HTTP's posture grammar on the gateway at `path`, whose `upgrade` chain runs
@@ -163,39 +165,44 @@ pub(crate) fn check_posture(
     upgrade: &[ResolvedLayer<dyn Guard>],
     messages: &[DeclaredMessage],
 ) -> Result<(), GatewayPostureError> {
-    let events = |of: &dyn Fn(&DeclaredMessage) -> bool| -> Vec<&str> {
-        messages
-            .iter()
-            .filter(|message| of(message))
-            .map(|message| message.site.handler().address())
-            .collect()
-    };
-    let is_public = |message: &DeclaredMessage| message.site.handler().posture() == Posture::Public;
     if upgrade.is_empty() && messages.is_empty() {
         return Err(GatewayPostureError::Unopened {
             path: path.to_owned(),
         });
     }
-    if upgrade.is_empty() {
-        let uncovered = events(&|message| !message.guarded && !is_public(message));
-        if !uncovered.is_empty() {
-            return Err(GatewayPostureError::Uncovered {
-                path: path.to_owned(),
-                messages: uncovered.join(", "),
-            });
-        }
+    if upgrade.is_empty()
+        && let Some(uncovered) = events(messages, |m| !m.guarded && !is_public(m))
+    {
+        return Err(GatewayPostureError::Uncovered {
+            path: path.to_owned(),
+            messages: uncovered,
+        });
     }
-    if let Some(guard) = identifying_guard(upgrade) {
-        let mislabelled = events(&is_public);
-        if !mislabelled.is_empty() {
-            return Err(GatewayPostureError::PublicBehindGuard {
-                path: path.to_owned(),
-                messages: mislabelled.join(", "),
-                guard,
-            });
-        }
+    if let Some(guard) = identifying_guard(upgrade)
+        && let Some(mislabelled) = events(messages, is_public)
+    {
+        return Err(GatewayPostureError::PublicBehindGuard {
+            path: path.to_owned(),
+            messages: mislabelled,
+            guard,
+        });
     }
     Ok(())
+}
+
+fn is_public(message: &DeclaredMessage) -> bool {
+    message.site.handler().posture() == Posture::Public
+}
+
+/// The events of the `messages` that `of` picks, as a refusal lists them; `None`
+/// when it picks none.
+fn events(messages: &[DeclaredMessage], of: impl Fn(&DeclaredMessage) -> bool) -> Option<String> {
+    let picked: Vec<&str> = messages
+        .iter()
+        .filter(|message| of(message))
+        .map(|message| message.site.handler().address())
+        .collect();
+    (!picked.is_empty()).then(|| picked.join(", "))
 }
 
 /// A gateway's upgrade from a browser origin the transport's policy refuses,

@@ -2,7 +2,7 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{GenericArgument, Ident, PathArguments, Type, TypeParamBound};
+use syn::{FnArg, GenericArgument, Ident, PathArguments, Type, TypeParamBound};
 
 use crate::ungrouped::ungrouped_type;
 
@@ -117,6 +117,17 @@ impl TailParam {
 pub fn tail_param(ty: &Type) -> Option<TailParam> {
     let Type::Path(tp) = ty else { return None };
     TailParam::named(last_segment_ident(&tp.path))
+}
+
+/// Whether a parameter's type is spelled `name<..>`, by its last path segment:
+/// read for a diagnostic or, for `Authorized`, the parameter `bind = Service`
+/// fills.
+pub fn spelled(arg: &FnArg, name: &str) -> bool {
+    let FnArg::Typed(pt) = arg else { return false };
+    let Type::Path(tp) = pt.ty.as_ref() else {
+        return false;
+    };
+    last_segment_ident(&tp.path) == name
 }
 
 /// The last segment's ident of a path — the readable name in a diagnostic or a

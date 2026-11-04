@@ -41,6 +41,7 @@
 use syn::punctuated::Punctuated;
 use syn::{Expr, FnArg, ImplItemFn, Meta, Path, Token, Type};
 
+use crate::args::takes_value;
 use crate::attrs::take_flag_attr;
 use crate::meta::SitePosture;
 use crate::ty::nth_generic_type;
@@ -55,6 +56,10 @@ pub fn at_most_one_authorize(site: &str) -> String {
 /// its path instead.
 pub const ID_ARG_UNSUPPORTED_BECAUSE: &str = "it renames the argument GraphQL's `bind = Service` synthesises, and no other \
      transport synthesises one";
+
+/// What `bind` takes, for the sentence an edge prints for any other value.
+pub const BIND_TAKES: &str =
+    "the path of the service that loads the subject, e.g. `bind = FilesService`";
 
 /// The sentence an edge prints for `bind = Service` with no parameter to
 /// receive the subject it loads.
@@ -73,18 +78,6 @@ pub const AUTHORIZED_NEEDS_BIND: &str = "an `Authorized<Action, E>` parameter re
 /// The sentence an edge prints when an operation declares both postures.
 pub fn posture_contradiction() -> &'static str {
     "`#[authorize(...)]` and `#[public]` contradict — an operation is gated or public, not both"
-}
-
-/// The sentence an edge prints for an operation with no posture at all.
-///
-/// `operation` names what the edge calls one and `public_means` says what
-/// `#[public]` costs there.
-pub fn posture_required(operation: &str, public_means: &str) -> String {
-    format!(
-        "every {operation} declares its access posture: `#[authorize(Action, Entity)]` \
-         (class-level gate + automatic response masking — e.g. \
-         `#[authorize(Read, users::Entity)]`) or `#[public]` ({public_means})"
-    )
 }
 
 /// The sentence a site prints for an `#[authorize(...)]` key it cannot express.
@@ -238,7 +231,7 @@ impl PostureRules {
                     let Expr::Path(service) = &value.value else {
                         return Err(syn::Error::new_spanned(
                             &value.value,
-                            "`bind` takes the service's path, e.g. `bind = PostsService`",
+                            takes_value("authorize", Some("bind"), BIND_TAKES),
                         ));
                     };
                     bind = Some(service.path.clone());
@@ -262,10 +255,13 @@ impl PostureRules {
         let (action, entity) = match (positional.as_slice(), &bind) {
             ([action, entity], _) => (action.clone(), entity.clone()),
             ([action], Some(_)) => {
-                let entity = bound_entity(method).ok_or_else(|| {
-                    syn::Error::new_spanned(&method.sig.ident, BIND_NEEDS_AUTHORIZED)
-                })?;
-                (action.clone(), entity)
+                let Some(Type::Path(entity)) = authorized_entity(&method.sig.inputs) else {
+                    return Err(syn::Error::new_spanned(
+                        &method.sig.ident,
+                        BIND_NEEDS_AUTHORIZED,
+                    ));
+                };
+                (action.clone(), entity.path.clone())
             }
             _ => return Err(malformed()),
         };
@@ -278,16 +274,12 @@ impl PostureRules {
     }
 }
 
-/// The `E` of the method's `Authorized<Action, E>` parameter, as a path.
-fn bound_entity(method: &ImplItemFn) -> Option<Path> {
-    method.sig.inputs.iter().find_map(|arg| {
-        let FnArg::Typed(pt) = arg else {
-            return None;
-        };
-        match nth_generic_type(&pt.ty, "Authorized", 1)? {
-            Type::Path(entity) => Some(entity.path.clone()),
-            _ => None,
-        }
+/// The `E` of the `Authorized<Action, E>` parameter among `inputs`, the entity a
+/// posture naming none under `bind` reads.
+pub fn authorized_entity<'a>(inputs: impl IntoIterator<Item = &'a FnArg>) -> Option<&'a Type> {
+    inputs.into_iter().find_map(|arg| match arg {
+        FnArg::Typed(pt) => nth_generic_type(&pt.ty, "Authorized", 1),
+        FnArg::Receiver(_) => None,
     })
 }
 

@@ -21,7 +21,7 @@ use nest_rs_queue::{
 };
 use nest_rs_seaorm::queue::OutboxMigration;
 use nest_rs_seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
-use nest_rs_testing::{EphemeralDatabase, LogCapture, TestApp, wait_for, wait_until};
+use nest_rs_testing::{LogCapture, TestApp, TestAppBuilder, wait_for, wait_until};
 use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 use serde::{Deserialize, Serialize};
@@ -264,40 +264,47 @@ fn jobs_on(filing: &Arc<Filing>) -> Jobs {
     Jobs::new(Arc::clone(filing) as Arc<dyn JobProducer>)
 }
 
-/// An app over `db`, pushing onto `filing`, its route running `pushing`.
-async fn app_over(db: &EphemeralDatabase, filing: &Arc<Filing>, pushing: Pushing) -> TestApp {
+/// An app pushing onto `filing`, its route running `pushing`.
+fn app_of(filing: &Arc<Filing>, pushing: Pushing) -> TestAppBuilder {
     TestApp::builder()
-        .provide_arc(db.connection())
         .provide(jobs_on(filing))
         .provide(pushing)
+        .module::<OutboxAppModule>()
+}
+
+/// An app on a database of its own, with the outbox's table, pushing onto
+/// `filing`, its route running `pushing`.
+async fn app_over(filing: &Arc<Filing>, pushing: Pushing) -> TestApp {
+    app_of(filing, pushing)
+        .ephemeral_database::<OutboxMigrator>()
         .provide(OutboxConfig {
             sweep_interval: Duration::from_millis(100),
             stall_warning: Duration::from_secs(1),
             ..OutboxConfig::default()
         })
-        .module::<OutboxAppModule>()
         .build()
         .await
         .expect("the app boots over its own database")
 }
 
-async fn database() -> EphemeralDatabase {
-    EphemeralDatabase::create::<OutboxMigrator>()
-        .await
-        .expect("a database of its own, with the outbox's table")
+fn connection(app: &TestApp) -> Arc<DatabaseConnection> {
+    app.container()
+        .get::<DatabaseConnection>()
+        .expect("the app's pool is its own database")
 }
 
-/// The jobs the store keeps, oldest first.
-async fn kept(db: &DatabaseConnection) -> Vec<String> {
-    db.query_all_raw(Statement::from_string(
-        sea_orm::DatabaseBackend::Postgres,
-        "SELECT job_id::text AS id FROM nestrs_outbox ORDER BY seq",
-    ))
-    .await
-    .expect("the store is read")
-    .iter()
-    .map(|row| row.try_get::<String>("", "id").expect("an id"))
-    .collect()
+/// The jobs `app`'s store keeps, oldest first.
+async fn kept(app: &TestApp) -> Vec<String> {
+    connection(app)
+        .query_all_raw(Statement::from_string(
+            sea_orm::DatabaseBackend::Postgres,
+            "SELECT job_id::text AS id FROM nestrs_outbox ORDER BY seq",
+        ))
+        .await
+        .expect("the store is read")
+        .iter()
+        .map(|row| row.try_get::<String>("", "id").expect("an id"))
+        .collect()
 }
 
 fn ids(receipts: &Mutex<Vec<PushReceipt>>) -> Vec<String> {
@@ -364,11 +371,9 @@ where
 #[tokio::test]
 async fn a_push_inside_a_request_answering_4xx_keeps_nothing_and_one_answering_2xx_is_filed_after_its_commit()
  {
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let refused = Arc::new(Mutex::new(Vec::new()));
     let app = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &refused, 1, StatusCode::BAD_REQUEST),
     )
@@ -380,15 +385,10 @@ async fn a_push_inside_a_request_answering_4xx_keeps_nothing_and_one_answering_2
         1,
         "the push itself answered"
     );
-    assert!(
-        kept(&db.connection()).await.is_empty(),
-        "rolled back with the request"
-    );
+    assert!(kept(&app).await.is_empty(), "rolled back with the request");
 
-    // A second app on the same database: a closed app closes the pool it was seeded.
     let created = Arc::new(Mutex::new(Vec::new()));
     let creating = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &created, 1, StatusCode::CREATED),
     )
@@ -396,7 +396,7 @@ async fn a_push_inside_a_request_answering_4xx_keeps_nothing_and_one_answering_2
     let answer = creating.http().post("/outbox").send().await;
     assert_eq!(answer.0.status(), StatusCode::CREATED);
     assert_eq!(
-        kept(&db.connection()).await,
+        kept(&creating).await,
         ids(&created),
         "committed with the request, under the receipt's id"
     );
@@ -406,10 +406,7 @@ async fn a_push_inside_a_request_answering_4xx_keeps_nothing_and_one_answering_2
     );
 
     let relay = Relay::of(&creating).await;
-    wait_for(PATIENCE, || async {
-        kept(&db.connection()).await.is_empty()
-    })
-    .await;
+    wait_for(PATIENCE, || async { kept(&creating).await.is_empty() }).await;
     assert_eq!(
         filing
             .held()
@@ -426,11 +423,9 @@ async fn a_push_inside_a_request_answering_4xx_keeps_nothing_and_one_answering_2
 
 #[tokio::test]
 async fn a_push_of_many_inside_a_request_that_rolls_back_keeps_none() {
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let receipts = Arc::new(Mutex::new(Vec::new()));
     let app = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &receipts, 3, StatusCode::INTERNAL_SERVER_ERROR),
     )
@@ -441,27 +436,22 @@ async fn a_push_of_many_inside_a_request_that_rolls_back_keeps_none() {
         3,
         "the push itself answered"
     );
-    assert!(kept(&db.connection()).await.is_empty());
+    assert!(kept(&app).await.is_empty());
     assert!(filing.handed().is_empty());
     app.close().await;
 }
 
 #[tokio::test]
 async fn a_push_on_a_safe_request_is_filed_at_once() {
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let receipts = Arc::new(Mutex::new(Vec::new()));
     let app = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &receipts, 1, StatusCode::OK),
     )
     .await;
     app.http().get("/outbox").send().await;
-    assert!(
-        kept(&db.connection()).await.is_empty(),
-        "a pool keeps no outbox"
-    );
+    assert!(kept(&app).await.is_empty(), "a pool keeps no outbox");
     assert_eq!(
         filing
             .handed()
@@ -475,10 +465,8 @@ async fn a_push_on_a_safe_request_is_filed_at_once() {
 
 #[tokio::test]
 async fn a_push_from_a_listeners_unit_is_kept_by_its_transaction() {
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let app = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
@@ -491,7 +479,7 @@ async fn a_push_from_a_listeners_unit_is_kept_by_its_transaction() {
     .await
     .expect("the emitter's unit commits");
     assert_eq!(
-        kept(&db.connection()).await.len(),
+        kept(&app).await.len(),
         1,
         "the listener's own unit committed its record"
     );
@@ -510,10 +498,8 @@ impl From<AtomicError> for Refused {
 
 #[tokio::test]
 async fn a_push_inside_an_atomic_block_that_rolls_back_is_dropped_while_its_unit_commits() {
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let app = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
@@ -542,7 +528,7 @@ async fn a_push_inside_an_atomic_block_that_rolls_back_is_dropped_while_its_unit
     .await
     .expect("the unit commits");
     assert_eq!(
-        kept(&db.connection()).await,
+        kept(&app).await,
         [kept_id.lock().expect("lock").clone().expect("an id")],
         "the block's record went with its savepoint"
     );
@@ -551,10 +537,8 @@ async fn a_push_inside_an_atomic_block_that_rolls_back_is_dropped_while_its_unit
 
 #[tokio::test]
 async fn a_cancel_inside_a_unit_deletes_the_record_no_relay_filed() {
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let app = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
@@ -574,7 +558,7 @@ async fn a_cancel_inside_a_unit_deletes_the_record_no_relay_filed() {
     })
     .await
     .expect("committed");
-    assert_eq!(kept(&db.connection()).await.len(), 1);
+    assert_eq!(kept(&app).await.len(), 1);
 
     let receipt = receipt.lock().expect("lock").clone().expect("a receipt");
     in_a_unit(&app, {
@@ -586,7 +570,7 @@ async fn a_cancel_inside_a_unit_deletes_the_record_no_relay_filed() {
     })
     .await
     .expect("committed");
-    assert!(kept(&db.connection()).await.is_empty());
+    assert!(kept(&app).await.is_empty());
     app.close().await;
 }
 
@@ -609,7 +593,6 @@ async fn waiting_on_a_lock(db: &DatabaseConnection) -> i64 {
 /// lock: the cancel's answer.
 async fn a_cancel_meeting_a_claim<R>(
     app: &TestApp,
-    db: &DatabaseConnection,
     filing: &Arc<Filing>,
     receipt: PushReceipt,
     relay: R,
@@ -632,7 +615,7 @@ where
     let relaying = async {
         wait_for(PATIENCE, || async {
             let answered = answer.lock().expect("lock").is_some();
-            answered || waiting_on_a_lock(db).await == 1
+            answered || waiting_on_a_lock(&connection(app)).await == 1
         })
         .await;
         assert_eq!(
@@ -650,10 +633,8 @@ where
 
 #[tokio::test]
 async fn a_cancel_meeting_a_record_a_relay_holds_waits_for_its_settle_and_never_answers_too_late() {
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let app = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
@@ -666,7 +647,7 @@ async fn a_cancel_meeting_a_record_a_relay_holds_waits_for_its_settle_and_never_
     let filed = committed_note(&app, &filing, None).await;
     let claim = store.claim(10).await.expect("claimed");
     let seq = claim.records()[0].seq;
-    let cancelled = a_cancel_meeting_a_claim(&app, &db.connection(), &filing, filed.clone(), {
+    let cancelled = a_cancel_meeting_a_claim(&app, &filing, filed.clone(), {
         let filing = Arc::clone(&filing);
         async move {
             filing
@@ -686,7 +667,7 @@ async fn a_cancel_meeting_a_record_a_relay_holds_waits_for_its_settle_and_never_
 
     let left = committed_note(&app, &filing, None).await;
     let claim = store.claim(10).await.expect("claimed");
-    let cancelled = a_cancel_meeting_a_claim(&app, &db.connection(), &filing, left, async move {
+    let cancelled = a_cancel_meeting_a_claim(&app, &filing, left, async move {
         drop(claim);
     })
     .await;
@@ -694,7 +675,7 @@ async fn a_cancel_meeting_a_record_a_relay_holds_waits_for_its_settle_and_never_
         cancelled,
         "the relay let the record go unsettled: the cancel deletes it"
     );
-    assert!(kept(&db.connection()).await.is_empty());
+    assert!(kept(&app).await.is_empty());
     assert!(
         filing.handed().is_empty(),
         "neither reached the backend twice"
@@ -704,10 +685,8 @@ async fn a_cancel_meeting_a_record_a_relay_holds_waits_for_its_settle_and_never_
 
 #[tokio::test]
 async fn a_cancel_by_key_inside_a_unit_deletes_only_the_record_carrying_it() {
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let app = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
@@ -729,13 +708,12 @@ async fn a_cancel_by_key_inside_a_unit_deletes_only_the_record_carrying_it() {
     })
     .await
     .expect("committed");
-    assert_eq!(kept(&db.connection()).await, [other.id().to_string()]);
+    assert_eq!(kept(&app).await, [other.id().to_string()]);
     app.close().await;
 }
 
 #[tokio::test]
 async fn a_cancel_on_a_safe_request_deletes_the_committed_record_on_the_pool() {
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let receipt = Arc::new(Mutex::new(None::<PushReceipt>));
     let answer = Arc::new(Mutex::new(None));
@@ -753,13 +731,13 @@ async fn a_cancel_on_a_safe_request_deletes_the_committed_record_on_the_pool() {
             }
         }
     });
-    let app = app_over(&db, &filing, pushing).await;
+    let app = app_over(&filing, pushing).await;
     *receipt.lock().expect("lock") = Some(committed_note(&app, &filing, None).await);
 
     let answered = app.http().get("/outbox").send().await;
     assert_eq!(answered.0.status(), StatusCode::OK);
     assert_eq!(*answer.lock().expect("lock"), Some(true));
-    assert!(kept(&db.connection()).await.is_empty());
+    assert!(kept(&app).await.is_empty());
     assert!(filing.handed().is_empty());
     app.close().await;
 }
@@ -767,7 +745,6 @@ async fn a_cancel_on_a_safe_request_deletes_the_committed_record_on_the_pool() {
 #[tokio::test]
 async fn an_atomic_block_on_a_safe_request_keeps_its_push_until_it_commits_and_drops_it_on_rollback()
  {
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let receipts = Arc::new(Mutex::new(Vec::new()));
     let pushing = Pushing::running(&filing, {
@@ -797,12 +774,12 @@ async fn an_atomic_block_on_a_safe_request_keeps_its_push_until_it_commits_and_d
             }
         }
     });
-    let app = app_over(&db, &filing, pushing).await;
+    let app = app_over(&filing, pushing).await;
 
     let answered = app.http().get("/outbox").send().await;
     assert_eq!(answered.0.status(), StatusCode::OK);
     assert_eq!(
-        kept(&db.connection()).await,
+        kept(&app).await,
         ids(&receipts),
         "the committed block's record, never the rolled-back one's"
     );
@@ -842,10 +819,8 @@ async fn committed_note(app: &TestApp, filing: &Arc<Filing>, key: Option<&str>) 
 /// and the job is filed once.
 async fn a_relay_restarted_mid_pass(key: Option<&str>) {
     let logs = LogCapture::install();
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let app = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
@@ -860,10 +835,7 @@ async fn a_relay_restarted_mid_pass(key: Option<&str>) {
 
     filing.silent_after_filing.store(false, Ordering::SeqCst);
     let relay = Relay::of(&app).await;
-    wait_for(PATIENCE, || async {
-        kept(&db.connection()).await.is_empty()
-    })
-    .await;
+    wait_for(PATIENCE, || async { kept(&app).await.is_empty() }).await;
     assert_eq!(filing.handed().len(), 2, "the next relay sent it again");
     assert_eq!(
         filing.held(),
@@ -893,10 +865,8 @@ async fn a_keyed_record_a_restarted_relay_sends_again_holds_its_own_key_and_is_s
 #[tokio::test]
 async fn a_record_whose_key_another_job_holds_is_superseded_in_one_info_line() {
     let logs = LogCapture::install();
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let app = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
@@ -905,10 +875,7 @@ async fn a_record_whose_key_another_job_holds_is_superseded_in_one_info_line() {
     let superseded = committed_note(&app, &filing, Some("song")).await;
     let relay = Relay::of(&app).await;
 
-    wait_for(PATIENCE, || async {
-        kept(&db.connection()).await.is_empty()
-    })
-    .await;
+    wait_for(PATIENCE, || async { kept(&app).await.is_empty() }).await;
     assert_eq!(filing.held(), [holder.id().clone()]);
     let line = logs.expect_one(
         TARGET,
@@ -924,11 +891,9 @@ async fn a_record_whose_key_another_job_holds_is_superseded_in_one_info_line() {
 #[tokio::test]
 async fn a_backend_refusing_every_call_keeps_the_records_and_says_so_at_warn_then_error() {
     let logs = LogCapture::install();
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     filing.refusing.store(true, Ordering::SeqCst);
     let app = app_over(
-        &db,
         &filing,
         Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
     )
@@ -939,9 +904,8 @@ async fn a_backend_refusing_every_call_keeps_the_records_and_says_so_at_warn_the
     const STALLED: &str = "outbox records have waited past the stall warning unfiled; the store \
                            grows until the backend files them";
     wait_until(PATIENCE, || !logs.find(TARGET, STALLED).is_empty()).await;
-    assert_eq!(kept(&db.connection()).await.len(), 1, "nothing is lost");
-    let attempts: i32 = db
-        .connection()
+    assert_eq!(kept(&app).await.len(), 1, "nothing is lost");
+    let attempts: i32 = connection(&app)
         .query_one_raw(Statement::from_string(
             sea_orm::DatabaseBackend::Postgres,
             "SELECT attempts FROM nestrs_outbox",
@@ -965,44 +929,30 @@ async fn a_backend_refusing_every_call_keeps_the_records_and_says_so_at_warn_the
 
 #[tokio::test]
 async fn two_relays_on_one_table_never_file_one_record_twice() {
-    let db = database().await;
     let filing = Arc::new(Filing::default());
     let config = OutboxConfig {
         sweep_interval: Duration::from_millis(100),
         batch_size: 10,
         ..OutboxConfig::default()
     };
-    let replicas = [
-        TestApp::builder()
-            .provide_arc(db.connection())
-            .provide(jobs_on(&filing))
-            .provide(Pushing::then_answer(
-                &filing,
-                &Arc::default(),
-                1,
-                StatusCode::OK,
-            ))
-            .provide(config.clone())
-            .module::<OutboxAppModule>()
-            .build()
-            .await
-            .expect("the first replica boots"),
-        TestApp::builder()
-            .provide_arc(db.connection())
-            .provide(jobs_on(&filing))
-            .provide(Pushing::then_answer(
-                &filing,
-                &Arc::default(),
-                1,
-                StatusCode::OK,
-            ))
-            .provide(config)
-            .module::<OutboxAppModule>()
-            .build()
-            .await
-            .expect("the second replica boots"),
-    ];
-    in_a_unit(&replicas[0], {
+    let replica = || {
+        app_of(
+            &filing,
+            Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
+        )
+        .provide(config.clone())
+    };
+    let first = replica()
+        .ephemeral_database::<OutboxMigrator>()
+        .build()
+        .await
+        .expect("the first replica boots");
+    let second = replica()
+        .provide_arc(connection(&first))
+        .build()
+        .await
+        .expect("the second replica boots");
+    in_a_unit(&first, {
         let filing = Arc::clone(&filing);
         async move {
             jobs_on(&filing)
@@ -1014,12 +964,9 @@ async fn two_relays_on_one_table_never_file_one_record_twice() {
     })
     .await
     .expect("committed");
-    let relays = [Relay::of(&replicas[0]).await, Relay::of(&replicas[1]).await];
+    let relays = [Relay::of(&first).await, Relay::of(&second).await];
 
-    wait_for(PATIENCE, || async {
-        kept(&db.connection()).await.is_empty()
-    })
-    .await;
+    wait_for(PATIENCE, || async { kept(&first).await.is_empty() }).await;
     let handed = filing.handed();
     let mut distinct = handed.clone();
     distinct.sort();
@@ -1032,33 +979,24 @@ async fn two_relays_on_one_table_never_file_one_record_twice() {
     for relay in relays {
         relay.shutdown().await;
     }
-    for replica in replicas {
-        replica.close().await;
-    }
+    second.close().await;
+    first.close().await;
 }
 
 /// The test harness arms the outbox as the relay does at boot, through the
 /// one arming they share: a store without its table refuses the boot.
 #[tokio::test]
 async fn the_boot_refuses_naming_the_remedy_when_the_table_is_missing() {
-    let db = EphemeralDatabase::create::<NoMigrations>()
-        .await
-        .expect("a database of its own, never migrated");
     let filing = Arc::new(Filing::default());
-    let refused = TestApp::builder()
-        .provide_arc(db.connection())
-        .provide(jobs_on(&filing))
-        .provide(Pushing::then_answer(
-            &filing,
-            &Arc::default(),
-            1,
-            StatusCode::OK,
-        ))
-        .module::<OutboxAppModule>()
-        .build()
-        .await
-        .err()
-        .expect("an outbox store without its table refuses the boot");
+    let refused = app_of(
+        &filing,
+        Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
+    )
+    .ephemeral_database::<NoMigrations>()
+    .build()
+    .await
+    .err()
+    .expect("an outbox store without its table refuses the boot");
     assert_eq!(
         format!("{refused:#}"),
         "the outbox table `nestrs_outbox` is missing: run `nestrs g migration nestrs_outbox`, \

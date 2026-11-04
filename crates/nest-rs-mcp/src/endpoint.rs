@@ -2,8 +2,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::problem::code;
-use nest_rs_core::{Container, Correlation, Posture, Problem, current_request_scope};
+use nest_rs_core::{Container, Correlation, Posture, Problem, code, current_request_scope};
 use nest_rs_http::__private::{CanonicalHost, framework_sentence};
 use nest_rs_http::ResponseError as _;
 use nest_rs_http::{

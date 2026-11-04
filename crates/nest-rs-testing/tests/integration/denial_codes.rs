@@ -4,7 +4,7 @@
 //! error — the same one wherever it is read, an internal denial's included.
 
 use nest_rs_core::{Code, Layer, UnitContext, injectable, module};
-use nest_rs_core::{async_trait, problem::code};
+use nest_rs_core::{async_trait, code};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};

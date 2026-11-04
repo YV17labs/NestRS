@@ -134,11 +134,12 @@ pub(crate) fn parse_after(after: Option<&str>) -> Result<Option<PageCursor>, Pip
 pub fn graphql_page_cursor(after: Option<&str>) -> async_graphql::Result<Option<PageCursor>> {
     parse_after(after).map_err(|refused| {
         nest_rs_graphql::problem_error(
-            &nest_rs_core::Problem::new(400, nest_rs_core::problem::code::INVALID_ARGUMENT)
-                .with_detail(format!(
+            &nest_rs_core::Problem::new(400, nest_rs_core::code::INVALID_ARGUMENT).with_detail(
+                format!(
                     r#"Invalid value for argument "after", {}"#,
                     refused.message()
-                )),
+                ),
+            ),
         )
     })
 }

@@ -25,8 +25,7 @@ the client reads of each variant: a `Problem`, its status and the `code` a
 client branches on, and when you have one, a problem type of your own:
 
 ```rust title="crates/features/src/hello/error.rs"
-use nest_rs::core::problem::code;
-use nest_rs::core::{Problem, ToProblem};
+use nest_rs::core::{Problem, ToProblem, code};
 use thiserror::Error;
 
 const NAME_RESERVED: Problem = Problem::new(409, code::CONFLICT).with_type(

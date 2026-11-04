@@ -304,7 +304,7 @@ mod tests {
             panic!("the unwind is the answer");
         };
         assert_eq!(
-            crate::panic_message(payload.as_ref()),
+            crate::panic::panic_message(payload.as_ref()),
             "the backend unwound"
         );
     }
@@ -320,7 +320,7 @@ mod tests {
             panic!("the unwind is the answer");
         };
         assert_eq!(
-            crate::panic_message(payload.as_ref()),
+            crate::panic::panic_message(payload.as_ref()),
             "panicked before handing its future back"
         );
     }
@@ -335,6 +335,9 @@ mod tests {
         else {
             panic!("the unwind is the answer");
         };
-        assert_eq!(crate::panic_message(payload.as_ref()), "unwound mid-call");
+        assert_eq!(
+            crate::panic::panic_message(payload.as_ref()),
+            "unwound mid-call"
+        );
     }
 }

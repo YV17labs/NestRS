@@ -17,11 +17,10 @@ use nest_rs_core::__private::{
     GlobalLayers, GuardStage, ResolvedLayer, Site, Tail, dispatch, new_unit_context,
     report_unresolved, settled,
 };
-use nest_rs_core::anyhow;
-use nest_rs_core::problem::code;
 use nest_rs_core::{
     Container, Failure, Handler, Outcome, Problem, UnitContext, UnresolvedLayerError,
 };
+use nest_rs_core::{anyhow, code};
 use nest_rs_guards::__private::{
     GlobalBucket, GuardSpec, RefusalMark, SiteChainSources, check_guards, compose_site_chain,
     validate_carried_chain,

@@ -9,7 +9,7 @@ use crate::access::__private::ModuleDescriptor;
 use crate::access::{Composition, ReachableProviders};
 use crate::container::Container;
 use crate::discovery::Discovery;
-use crate::operation_log::Edge;
+use crate::edge::Edge;
 use crate::transport::{Transport, TransportContribution};
 
 /// Each host of an edge, by its type and the name a line gives it.

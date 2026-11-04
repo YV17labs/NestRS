@@ -214,7 +214,7 @@ guard, filter or interceptor loop of its own.
     `errors` names on every edge and nothing else does, each key as that
     edge's client spells the field, GraphQL's read off its schema's names,
     never re-cased — and every code the
-    framework emits is a `nest_rs_core::problem::code` constant, read off the
+    framework emits is a `nest_rs_core::code` constant, read off the
     standard that names its class (its module doc;
     `.claude/decisions/every-refusal-carries-its-class.md`). The edge decides **by type**
     where it names the handler's error — every edge's wrapper, HTTP's

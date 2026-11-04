@@ -8,7 +8,7 @@ use std::sync::Arc;
 use nest_rs_core::__private::{
     ResolvedLayer, compose_chain, dedup_bucket, log_effective_chain, resolve_scoped,
 };
-use nest_rs_core::layer_chain::LayerSite;
+use nest_rs_core::LayerSite;
 use nest_rs_core::{Container, ContainerBuilder, Discoverable, Discovery, Posture, UnitView};
 use nest_rs_guards::__private::{
     GuardSpec, guard, resolve_global_guards, split_at_covered, validate_guard_chain,

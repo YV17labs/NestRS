@@ -4,8 +4,7 @@ use std::error::Error;
 use std::fmt;
 
 use nest_rs_core::__private::{Withheld, find_in_chain};
-use nest_rs_core::problem::code;
-use nest_rs_core::{Code, DecodeError, Failure, OPAQUE_CLIENT_MESSAGE, Problem, ToProblem};
+use nest_rs_core::{Code, DecodeError, Failure, OPAQUE_CLIENT_MESSAGE, Problem, ToProblem, code};
 use nest_rs_pipes::PipeError;
 use serde::{Deserialize, Serialize};
 
@@ -123,7 +122,7 @@ impl WsEnvelope {
 pub struct WsError {
     /// The human-readable message — the frame's `data.error`.
     pub error: String,
-    /// The class a client branches on (`nest_rs_core::problem::code`) — the
+    /// The class a client branches on (`nest_rs_core::code`) — the
     /// frame's `data.code`; `None` on a frame a handler built with
     /// [`new`](Self::new), which names none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -191,8 +190,7 @@ impl WsError {
     /// `errors` when it has them.
     ///
     /// ```
-    /// use nest_rs_core::Problem;
-    /// use nest_rs_core::problem::code;
+    /// use nest_rs_core::{Problem, code};
     /// use nest_rs_ws::WsError;
     ///
     /// let frame = WsError::from_problem(&Problem::new(409, code::CONFLICT));
@@ -847,7 +845,7 @@ mod tests {
     /// frame's `data` beside its code; a problem naming none carries none.
     #[test]
     fn a_typed_problem_carries_its_type_title_and_field_map() {
-        use nest_rs_core::problem::code;
+        use nest_rs_core::code;
 
         let taken = Problem::new(409, code::CONFLICT)
             .with_type("https://example.com/problems/handle-taken", "Handle taken")
@@ -912,7 +910,7 @@ mod tests {
 
     impl ToProblem for Outage {
         fn to_problem(&self) -> Option<Problem> {
-            Some(Problem::new(503, nest_rs_core::problem::code::UNAVAILABLE).with_retry_after(30))
+            Some(Problem::new(503, nest_rs_core::code::UNAVAILABLE).with_retry_after(30))
         }
     }
 
@@ -948,7 +946,7 @@ mod tests {
     /// the class's own problem does.
     #[test]
     fn every_opaque_answer_names_the_internal_class() {
-        use nest_rs_core::problem::code;
+        use nest_rs_core::code;
 
         let _logs = nest_rs_testing::LogCapture::install();
         let frames = [
@@ -973,7 +971,7 @@ mod tests {
     /// withholds nothing, and files nothing.
     #[test]
     fn a_server_problem_files_the_chain_its_frame_withholds() {
-        use nest_rs_core::problem::code;
+        use nest_rs_core::code;
 
         let logs = nest_rs_testing::LogCapture::install();
         let failed = || logs.find(crate::TARGET, "websocket message failed");
@@ -1048,7 +1046,7 @@ mod tests {
     #[test]
     fn a_refusal_a_handler_answers_files_nothing_beside_its_line() {
         use nest_rs_core::anyhow::Error as Anyhow;
-        use nest_rs_core::problem::code;
+        use nest_rs_core::code;
 
         let logs = nest_rs_testing::LogCapture::install();
         let undecodable =

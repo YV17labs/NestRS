@@ -8,7 +8,7 @@
 use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::problem::code;
+use nest_rs_core::code;
 use nest_rs_core::{
     Caught, ExceptionFilter, GlobalExceptionFilters, Interceptor, Layer, Next, Outcome, Problem,
     UnitContext, async_trait, injectable, interceptor, module,

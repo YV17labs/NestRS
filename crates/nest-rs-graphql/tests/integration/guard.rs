@@ -565,7 +565,7 @@ mod unresolvable {
         );
         assert_eq!(
             json["errors"][0]["extensions"]["code"],
-            nest_rs_core::problem::code::INTERNAL.as_str(),
+            nest_rs_core::code::INTERNAL.as_str(),
             "under the internal class: {body}",
         );
         assert!(

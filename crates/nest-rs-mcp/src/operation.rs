@@ -14,7 +14,7 @@ use nest_rs_core::__private::{
     SiteLayers, Tail, compose_chain, declare_handler, declare_site, dedup_bucket, dispatch,
     log_effective_chain, new_unit_context, report_unresolved, resolve_scoped, settled,
 };
-use nest_rs_core::layer_chain::LayerSite;
+use nest_rs_core::LayerSite;
 use nest_rs_core::{
     Container, Deadline, Failure, Handler, Outcome, Posture, UnitContext, UnresolvedLayerError,
     anyhow,

@@ -27,7 +27,7 @@ use async_graphql::{
 };
 use nest_rs_core::__private::{RequestScopes, nested_continuation};
 use nest_rs_core::operation_log::{CANCELLED, ERROR, OK, PANIC};
-use nest_rs_core::problem::{Problem, code};
+use nest_rs_core::{Problem, code};
 use nest_rs_core::{RequestContinuation, RequestScope};
 use nest_rs_database::{
     AtomicError, ExecutorScope, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec, run_unit,

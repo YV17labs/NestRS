@@ -28,8 +28,7 @@ use crate::unit_context::UnitContext;
 /// wins.
 ///
 /// ```
-/// use nest_rs_core::problem::code;
-/// use nest_rs_core::{Caught, ExceptionFilter, Layer, Problem, UnitContext, async_trait};
+/// use nest_rs_core::{Caught, ExceptionFilter, Layer, Problem, UnitContext, async_trait, code};
 ///
 /// #[derive(Debug, thiserror::Error)]
 /// #[error("the order is already paid")]

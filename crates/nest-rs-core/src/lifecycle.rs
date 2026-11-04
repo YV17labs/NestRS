@@ -99,7 +99,7 @@ impl LifecyclePhase {
 
 pub(crate) use self::__private::{LifecycleHook, LifecycleUnitOfWork};
 
-/// `lifecycle` is public: its tier-2 items live here, reached only
+/// `lifecycle` is private: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;

@@ -1,7 +1,6 @@
 //! Test doubles: the one answer every opaque failure gets.
 
-use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
-use nest_rs_core::problem::code;
+use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, code};
 use rmcp::model::ErrorCode;
 
 use crate::McpError;

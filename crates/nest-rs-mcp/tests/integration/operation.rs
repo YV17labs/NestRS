@@ -843,7 +843,7 @@ impl nest_rs_core::ExceptionFilter for LedgerConflict {
     ) -> nest_rs_core::Caught {
         nest_rs_core::Caught::Problem(nest_rs_core::Problem::new(
             409,
-            nest_rs_core::problem::code::CONFLICT,
+            nest_rs_core::code::CONFLICT,
         ))
     }
 }
@@ -1008,7 +1008,7 @@ async fn an_operation_answering_through_an_alias_answers_as_the_spelled_result()
 struct Sealed;
 
 /// Answers [`Sealed`] with `code`.
-fn sealed_as(status: u16, code: nest_rs_core::problem::Code) -> nest_rs_core::Caught {
+fn sealed_as(status: u16, code: nest_rs_core::Code) -> nest_rs_core::Caught {
     nest_rs_core::Caught::Problem(nest_rs_core::Problem::new(status, code))
 }
 
@@ -1028,7 +1028,7 @@ impl nest_rs_core::ExceptionFilter for SealedAtMethod {
         _: &Sealed,
         _: &mut nest_rs_core::UnitContext<'_>,
     ) -> nest_rs_core::Caught {
-        sealed_as(409, nest_rs_core::problem::code::CONFLICT)
+        sealed_as(409, nest_rs_core::code::CONFLICT)
     }
 }
 
@@ -1048,7 +1048,7 @@ impl nest_rs_core::ExceptionFilter for SealedAtHost {
         _: &Sealed,
         _: &mut nest_rs_core::UnitContext<'_>,
     ) -> nest_rs_core::Caught {
-        sealed_as(404, nest_rs_core::problem::code::NOT_FOUND)
+        sealed_as(404, nest_rs_core::code::NOT_FOUND)
     }
 }
 
@@ -1068,7 +1068,7 @@ impl nest_rs_core::ExceptionFilter for SealedAtApp {
         _: &Sealed,
         _: &mut nest_rs_core::UnitContext<'_>,
     ) -> nest_rs_core::Caught {
-        sealed_as(400, nest_rs_core::problem::code::INVALID_ARGUMENT)
+        sealed_as(400, nest_rs_core::code::INVALID_ARGUMENT)
     }
 }
 

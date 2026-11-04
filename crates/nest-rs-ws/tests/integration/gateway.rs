@@ -273,7 +273,7 @@ impl TestGateway {
         Err(
             nest_rs_core::anyhow::Error::from(nest_rs_core::Problem::new(
                 404,
-                nest_rs_core::problem::code::NOT_FOUND,
+                nest_rs_core::code::NOT_FOUND,
             ))
             .context("loading the room"),
         )
@@ -298,7 +298,7 @@ struct Taken;
 impl nest_rs_core::ToProblem for Taken {
     fn to_problem(&self) -> Option<nest_rs_core::Problem> {
         Some(
-            nest_rs_core::Problem::new(409, nest_rs_core::problem::code::CONFLICT)
+            nest_rs_core::Problem::new(409, nest_rs_core::code::CONFLICT)
                 .with_detail("the handle is taken")
                 .with_retry_after(30),
         )
@@ -377,7 +377,7 @@ async fn result_err_becomes_an_opaque_error_frame() {
             assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE, "{msg}");
             assert_eq!(
                 msg.code.as_deref(),
-                Some(nest_rs_core::problem::code::INTERNAL.as_str()),
+                Some(nest_rs_core::code::INTERNAL.as_str()),
                 "{msg:?}",
             );
             assert!(
@@ -1329,7 +1329,7 @@ async fn a_message_past_its_deadline_is_answered_a_timeout_and_the_socket_goes_o
     assert_eq!(frame["data"]["reason"], "timeout", "{frame}");
     assert_eq!(
         frame["data"]["code"],
-        nest_rs_core::problem::code::UNAVAILABLE.as_str(),
+        nest_rs_core::code::UNAVAILABLE.as_str(),
         "{frame}"
     );
 
@@ -1857,8 +1857,8 @@ async fn a_hook_compiled_in_survives_a_compiled_out_one_declared_after_it() {
 async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_value() {
     const REPORT: &str = "invalid type: a string, expected u64 at line 1 column 24";
     let logs = nest_rs_testing::LogCapture::install();
-    let invalid = nest_rs_core::problem::code::INVALID_ARGUMENT.as_str();
-    let internal = nest_rs_core::problem::code::INTERNAL.as_str();
+    let invalid = nest_rs_core::code::INVALID_ARGUMENT.as_str();
+    let internal = nest_rs_core::code::INTERNAL.as_str();
     for (event, framed, class) in [
         ("decode_anyhow", REPORT.to_owned(), invalid),
         ("decode_serde", REPORT.to_owned(), invalid),
@@ -2197,7 +2197,7 @@ async fn a_message_handler_that_panics_files_panic_and_its_client_is_answered() 
         answer["data"],
         serde_json::json!({
             "error": nest_rs_core::OPAQUE_CLIENT_MESSAGE,
-            "code": nest_rs_core::problem::code::INTERNAL.as_str(),
+            "code": nest_rs_core::code::INTERNAL.as_str(),
         }),
         "{answer}"
     );

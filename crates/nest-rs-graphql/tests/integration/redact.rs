@@ -140,7 +140,7 @@ impl std::error::Error for Taken {}
 impl nest_rs_core::ToProblem for Taken {
     fn to_problem(&self) -> Option<nest_rs_core::Problem> {
         Some(
-            nest_rs_core::Problem::new(409, nest_rs_core::problem::code::CONFLICT)
+            nest_rs_core::Problem::new(409, nest_rs_core::code::CONFLICT)
                 .with_detail("the handle is taken"),
         )
     }

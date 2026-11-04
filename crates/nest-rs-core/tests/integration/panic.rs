@@ -344,7 +344,7 @@ fn a_panic_raised_as_a_cancelled_unit_is_dropped_is_filed_by_the_hook() {
     let unwound = unwound.expect_err("the drop's panic unwinds out of `main`");
 
     assert_eq!(
-        nest_rs_core::panic_message(unwound.as_ref()),
+        nest_rs_core::panic::panic_message(unwound.as_ref()),
         "dropped mid-flight"
     );
 

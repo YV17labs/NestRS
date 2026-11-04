@@ -693,7 +693,7 @@ mod tests {
         let failing = endpoint_fn(|_req| async {
             Err(HttpError::from(Problem::new(
                 409,
-                nest_rs_core::problem::code::CONFLICT,
+                nest_rs_core::code::CONFLICT,
             )))
         });
         let answered = site(&unit, UnitPolicy::ByMethod, failing)

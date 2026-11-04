@@ -129,8 +129,7 @@ mod tests {
     /// error and the in-band edges name it by.
     #[tokio::test]
     async fn a_refusal_answers_its_class_s_document() {
-        use nest_rs_core::Problem;
-        use nest_rs_core::problem::code;
+        use nest_rs_core::{Problem, code};
 
         for (unbound, class) in [
             (Unbound::Denied, Problem::new(403, code::FORBIDDEN)),

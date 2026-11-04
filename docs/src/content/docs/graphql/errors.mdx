@@ -90,7 +90,7 @@ log line carries it.
 ## Extensions and codes
 
 `extensions.code` is the stable class a client branches on without parsing the
-message. The framework's codes are constants in `nest_rs::core::problem::code`
+message. The framework's codes are constants in `nest_rs::core::code`
 — `UNAUTHENTICATED`, `FORBIDDEN`, `INSUFFICIENT_SCOPE`, `RATE_LIMITED`,
 `UNAVAILABLE`, `INVALID_ARGUMENT`, `NOT_FOUND`, `CONFLICT`, `INTERNAL`, and one
 per other status the framework answers, from `METHOD_NOT_ALLOWED` to
@@ -108,8 +108,7 @@ A feature's own error says its class through `ToProblem`, once for every
 edge — GraphQL, HTTP ([HTTP errors](/http/errors/)), WebSockets and MCP:
 
 ```rust title="crates/features/src/posts/error.rs"
-use nest_rs::core::problem::code;
-use nest_rs::core::{Code, Problem, ToProblem};
+use nest_rs::core::{Code, Problem, ToProblem, code};
 
 pub const SLUG_TAKEN: Code = Code::new("SLUG_TAKEN");
 

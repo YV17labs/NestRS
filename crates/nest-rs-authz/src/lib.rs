@@ -87,9 +87,9 @@ pub mod graphql;
 #[cfg(feature = "http")]
 pub mod http;
 #[cfg(feature = "mcp")]
-pub mod mcp;
+pub(crate) mod mcp;
 #[cfg(feature = "ws")]
-pub mod ws;
+pub(crate) mod ws;
 
 #[doc(hidden)]
 pub mod __private {

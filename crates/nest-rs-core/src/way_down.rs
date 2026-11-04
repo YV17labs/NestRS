@@ -611,7 +611,10 @@ mod tests {
             "the exit returned while the work ran: a panicking main is torn down bounded too",
         );
         assert!(took >= left, "within what the hooks left: took {took:?}");
-        assert_eq!(crate::panic_message(unwound.as_ref()), "main gave up");
+        assert_eq!(
+            crate::panic::panic_message(unwound.as_ref()),
+            "main gave up"
+        );
         logs.expect_one(
             crate::target::APP,
             "panicked where no unit of work contains it",

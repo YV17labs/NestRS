@@ -145,7 +145,7 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
     );
     assert_eq!(
         body_json["errors"][0]["extensions"]["code"],
-        nest_rs_core::problem::code::INTERNAL.as_str(),
+        nest_rs_core::code::INTERNAL.as_str(),
         "under the one code every opaque failure carries: {body}",
     );
     assert!(

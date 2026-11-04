@@ -1232,7 +1232,7 @@ async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
     );
     assert_eq!(
         answer["error"]["data"],
-        json!({ "code": nest_rs_core::problem::code::INTERNAL.as_str() }),
+        json!({ "code": nest_rs_core::code::INTERNAL.as_str() }),
         "the class every edge names an opaque failure by: {answer}",
     );
     assert!(
@@ -1410,7 +1410,7 @@ impl FailingTools {
     async fn taken(&self) -> Result<String, nest_rs_core::Problem> {
         Err(nest_rs_core::Problem::new(
             409,
-            nest_rs_core::problem::code::CONFLICT,
+            nest_rs_core::code::CONFLICT,
         ))
     }
 

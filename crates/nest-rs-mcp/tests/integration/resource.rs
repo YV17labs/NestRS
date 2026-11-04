@@ -459,7 +459,7 @@ async fn a_template_variable_breaking_its_rules_is_refused_before_the_body() {
     assert_eq!(refused["error"]["message"], "validation failed", "{body}");
     assert_eq!(
         refused["error"]["data"]["code"],
-        nest_rs_core::problem::code::INVALID_ARGUMENT.as_str(),
+        nest_rs_core::code::INVALID_ARGUMENT.as_str(),
         "{body}",
     );
     assert_eq!(

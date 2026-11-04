@@ -9,9 +9,10 @@ use std::sync::Arc;
 use tokio::time::Instant;
 
 use crate::ambient::{AmbientValue, Pending};
+use crate::edge::Edge;
 use crate::error::MissingAmbientError;
 use crate::handler::{Handler, Reflector};
-use crate::operation_log::{Edge, Unit};
+use crate::operation_log::Unit;
 use crate::outcome::Failure;
 
 /// Everything a layer knows about the unit it runs around: which unit, on which
@@ -240,8 +241,9 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
     use super::*;
+    use crate::edge::Edge;
     use crate::handler::{HandlerDeclaration, MetaLevels, Posture, declare_handler};
-    use crate::operation_log::{Edge, Kind, Unit};
+    use crate::operation_log::{Kind, Unit};
 
     const MESSAGE: Unit = crate::operation_log::__private::declare_unit(
         "nest-rs-ws",

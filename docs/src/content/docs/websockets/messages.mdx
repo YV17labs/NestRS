@@ -400,8 +400,7 @@ response.
 see why, so the error says what the client may read through `ToProblem`:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
-use nest_rs::core::problem::code;
-use nest_rs::core::{Problem, ToProblem};
+use nest_rs::core::{Problem, ToProblem, code};
 
 #[derive(thiserror::Error, Debug)]
 enum SendError {

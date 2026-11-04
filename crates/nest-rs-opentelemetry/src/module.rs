@@ -1,6 +1,6 @@
 use std::any::TypeId;
 
-use nest_rs_core::{Registering, container::ContainerBuilder, module::Module};
+use nest_rs_core::{ContainerBuilder, Module, Registering};
 
 use crate::Metrics;
 

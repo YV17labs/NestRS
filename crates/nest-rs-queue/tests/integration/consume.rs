@@ -2275,7 +2275,7 @@ impl AnsweringProcessor {
         let _ = job;
         Err(nest_rs_core::Problem::new(
             422,
-            nest_rs_core::problem::code::INVALID_ARGUMENT,
+            nest_rs_core::code::INVALID_ARGUMENT,
         ))
     }
 
@@ -2283,7 +2283,7 @@ impl AnsweringProcessor {
     async fn conflicting(&self, job: TranscodeCommand) -> anyhow::Result<()> {
         Err(anyhow::Error::new(nest_rs_core::Problem::new(
             409,
-            nest_rs_core::problem::code::CONFLICT,
+            nest_rs_core::code::CONFLICT,
         ))
         .context(format!("importing {}", job.file)))
     }
@@ -2297,10 +2297,7 @@ impl AnsweringProcessor {
     #[process(queue = RateLimitedQueue, retries = 3)]
     async fn rate_limited(&self, job: TranscodeCommand) -> Result<(), nest_rs_core::Problem> {
         let _ = job;
-        Err(
-            nest_rs_core::Problem::new(429, nest_rs_core::problem::code::RATE_LIMITED)
-                .with_retry_after(30),
-        )
+        Err(nest_rs_core::Problem::new(429, nest_rs_core::code::RATE_LIMITED).with_retry_after(30))
     }
 
     #[process(queue = UnavailableAnswerQueue, retries = 3)]
@@ -2308,7 +2305,7 @@ impl AnsweringProcessor {
         let _ = job;
         Err(nest_rs_core::Problem::new(
             503,
-            nest_rs_core::problem::code::UNAVAILABLE,
+            nest_rs_core::code::UNAVAILABLE,
         ))
     }
 

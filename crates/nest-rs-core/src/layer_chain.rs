@@ -1,16 +1,15 @@
 //! Layer chain composition — the dedup-by-`TypeId` logic shared by every
 //! execution site of the Layer System.
 //!
-//! Each resolved entry is tagged with its [`LayerSite`]; the chain keeps the
-//! broadest site for any duplicated [`TypeId`] and runs the sites from the
-//! broadest in, each ordered by [`Layer::priority`](crate::Layer::priority),
-//! declaration order breaking a tie.
+//! Each resolved entry is tagged with its [`LayerSite`](crate::LayerSite); the
+//! chain keeps the broadest site for any duplicated [`TypeId`] and runs the sites
+//! from the broadest in, each ordered by
+//! [`Layer::priority`](crate::Layer::priority), declaration order breaking a tie.
 
 use std::any::TypeId;
 use std::sync::Arc;
 
 use crate::container::Container;
-pub use crate::layer::LayerSite;
 
 /// One layer a site or the app-wide pool declares: the `TypeId` a chain dedups
 /// on, the type's name for diagnostics, and a `resolve` fn that recovers the
@@ -87,7 +86,7 @@ macro_rules! __global_layer_pool {
     };
 }
 
-/// `layer_chain` is public: its tier-2 items live here, reached only
+/// `layer_chain` is private: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::{Any, TypeId};
@@ -517,7 +516,7 @@ pub(crate) mod __private {
 mod tests {
     use super::__private::{ResolvedLayer, compose_chain, dedup_bucket};
     use super::*;
-    use crate::layer::Layer;
+    use crate::layer::{Layer, LayerSite};
 
     struct Authn;
     impl Layer for Authn {}

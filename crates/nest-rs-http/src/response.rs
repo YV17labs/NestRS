@@ -561,7 +561,7 @@ mod tests {
         use super::{RouteReturn, RouteReturnFallback as _};
 
         let conflict: std::result::Result<&'static str, nest_rs_core::Problem> = Err(
-            nest_rs_core::Problem::new(409, nest_rs_core::problem::code::CONFLICT),
+            nest_rs_core::Problem::new(409, nest_rs_core::code::CONFLICT),
         );
         let answered = RouteReturn(conflict).into_result();
         assert!(answered.is_err_and(|error| error.status() == StatusCode::CONFLICT));

@@ -6,8 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
 
-use nest_rs_core::__private::TenantId;
-use nest_rs_core::trace_context::field;
+use nest_rs_core::__private::{TenantId, field};
 use nest_rs_core::{
     AmbientValue, Container, ContainerBuilder, Discoverable, Layer, Net, Posture,
     ProviderResidency, Unanswered, UnitContext, async_trait, within,

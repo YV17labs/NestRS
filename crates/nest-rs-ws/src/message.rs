@@ -12,7 +12,7 @@ use nest_rs_core::__private::{
     log_effective_chain, new_unit_context, refuse_site, report_unresolved, resolve_global_layers,
     resolve_scoped,
 };
-use nest_rs_core::layer_chain::LayerSite;
+use nest_rs_core::LayerSite;
 use nest_rs_core::{Container, Failure, Handler, Outcome, Peer, Settled, UnitContext};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::__private::PipeSpec;

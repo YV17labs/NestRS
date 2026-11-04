@@ -46,7 +46,7 @@ mod redirect;
 mod registry;
 mod strategy;
 
-pub mod providers;
+mod providers;
 
 pub use module::SocialModule;
 pub use provider::{ProfileFuture, SocialProfile, SocialProvider, TokenFuture};

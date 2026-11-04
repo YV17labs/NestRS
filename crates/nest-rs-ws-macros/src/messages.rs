@@ -419,7 +419,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         };
 
         // The masked JSON ships, not a value round-tripped through the handler's
-        // type (see `nest_rs_authz::ws::mask`). `__ret` is bound by the arms below,
+        // type (see `nest-rs-authz/src/ws/mask.rs`). `__ret` is bound by the arms below,
         // past what `ReplyValue` split by type, so an alias hides no `Result` from
         // the mask; a mask's failure is an error frame, whatever the method returns.
         let reply = match &posture {

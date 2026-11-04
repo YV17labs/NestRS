@@ -28,8 +28,7 @@ use std::error::Error as StdError;
 
 use async_graphql::{Error, ErrorExtensions};
 use nest_rs_core::__private::{Withheld, caught_problem};
-use nest_rs_core::problem::code;
-use nest_rs_core::{DecodeError, Failure, Problem, ToProblem};
+use nest_rs_core::{DecodeError, Failure, Problem, ToProblem, code};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 
@@ -92,8 +91,7 @@ pub fn denial_to_graphql_error(denial: Denial) -> Error {
 /// failures inside an `async_graphql::Result` converts with it.
 ///
 /// ```
-/// use nest_rs_core::Problem;
-/// use nest_rs_core::problem::code;
+/// use nest_rs_core::{Problem, code};
 ///
 /// let error = nest_rs_graphql::problem_error(&Problem::new(409, code::CONFLICT));
 /// assert_eq!(error.message, "conflict");

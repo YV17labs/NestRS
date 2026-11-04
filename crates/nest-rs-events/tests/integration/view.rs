@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
-use nest_rs_core::problem::code;
+use nest_rs_core::code;
 use nest_rs_core::{
     App, Caught, Correlation, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, SpanId,
     TraceId, UnitContext, async_trait, current_span_id, current_trace_id, injectable, module,

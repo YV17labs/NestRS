@@ -27,6 +27,6 @@ pub(crate) fn not_blank_secret(
 }
 
 /// First-party GitHub OAuth provider.
-pub mod github;
+pub(crate) mod github;
 /// First-party Google OIDC provider.
-pub mod google;
+pub(crate) mod google;

@@ -6,8 +6,7 @@
 //! unmounted-route 404, a 413) onto the same `application/problem+json` envelope.
 
 use http::{HeaderValue, StatusCode, header};
-use nest_rs_core::problem::code;
-use nest_rs_core::{Code, DecodeError, Problem};
+use nest_rs_core::{Code, DecodeError, Problem, code};
 use serde::Serialize;
 
 use crate::HttpError;
@@ -102,8 +101,7 @@ impl ProblemDetails {
     /// member, on a `4xx`, and its code as the `code` extension member.
     ///
     /// ```
-    /// use nest_rs_core::Problem;
-    /// use nest_rs_core::problem::code;
+    /// use nest_rs_core::{Problem, code};
     /// use nest_rs_http::ProblemDetails;
     ///
     /// let document = ProblemDetails::from_problem(
@@ -783,7 +781,7 @@ mod tests {
         }
     }
 
-    /// The code set's rule, as `nest_rs_core::problem::code` states it: a
+    /// The code set's rule, as `nest_rs_core::code` states it: a
     /// class a status answers by its own name is that status's reason phrase
     /// in upper snake case — the document's `title` — and every other class
     /// is one a named standard reads off, listed here.

@@ -3,8 +3,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::problem::code;
-use nest_rs_core::{Edge, Problem};
+use nest_rs_core::{Edge, Problem, code};
 use nest_rs_graphql::async_graphql::{Error, ErrorExtensions, Result};
 use nest_rs_guards::Denial;
 

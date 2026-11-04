@@ -11,8 +11,7 @@ use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{
     ClassGate, GuardStage, ResolvedLayer, new_unit_context, report_unresolved,
 };
-use nest_rs_core::layer_chain::LayerSite;
-use nest_rs_core::{Container, Failure, Handler, Peer, Posture, UnitContext};
+use nest_rs_core::{Container, Failure, Handler, LayerSite, Peer, Posture, UnitContext};
 use nest_rs_guards::__private::{
     GlobalBucket, GuardSpec, Refused, SiteChainSources, check_guards, client_message,
     compose_site_chain, denial_code, denial_of, denial_reason, host_chain, identifying_guard,

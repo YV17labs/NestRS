@@ -1483,12 +1483,11 @@ mod keyed_outside_a_subgraph {
 mod around_the_federation_fields {
     use std::sync::Mutex;
 
-    use nest_rs_core::async_trait;
-    use nest_rs_core::problem::code;
     use nest_rs_core::{
         Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext,
         injectable, module,
     };
+    use nest_rs_core::{async_trait, code};
     use nest_rs_graphql::{FieldRole, GraphqlView};
     use nest_rs_testing::TestApp;
 

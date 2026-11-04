@@ -12,7 +12,7 @@ use nest_rs_core::__private::{
     SiteLayers, compose_chain, declare_handler, declare_site, dedup_bucket, log_effective_chain,
     report_unresolved, resolve_scoped,
 };
-use nest_rs_core::layer_chain::LayerSite;
+use nest_rs_core::LayerSite;
 use nest_rs_core::{Container, Handler, Posture};
 use nest_rs_guards::__private::{
     GuardSpec, boot_validate_guards, resolve_global_guards, validate_route_chain,

@@ -12,9 +12,10 @@ use std::time::{Duration, Instant};
 use nest_rs_core::__private::{
     Tail, UnitChains, caught_problem, dispatch, new_unit_context, settled,
 };
+use nest_rs_core::panic::panic_message;
 use nest_rs_core::{
     Container, Correlation, Failure, Outcome, Problem, ReachableProviders, RequestScope,
-    UngatedDiscoveryError, UnitContext, panic_message, with_request_scope,
+    UngatedDiscoveryError, UnitContext, with_request_scope,
 };
 use nest_rs_database::__private::run_unit_bounded;
 use nest_rs_database::{ExecutorScope, UnitOfWork, UnitSpec};

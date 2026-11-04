@@ -7,7 +7,7 @@ use nest_rs_core::{
     App, GlobalInterceptors, Interceptor, Layer, Module, Next, Outcome, Problem, ToProblem,
     Transport, UnitContext, injectable, module,
 };
-use nest_rs_core::{async_trait, input, problem::code};
+use nest_rs_core::{async_trait, code, input};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{
     Form, HttpConfig, HttpError, Json, Opaque, ProblemDetails, Query, RawBody, ResponseError,
@@ -154,7 +154,7 @@ impl FailureController {
     async fn carried(&self) -> anyhow::Result<String> {
         Err(anyhow::Error::from(nest_rs_core::Problem::new(
             404,
-            nest_rs_core::problem::code::NOT_FOUND,
+            nest_rs_core::code::NOT_FOUND,
         ))
         .context("loading the post"))
     }
@@ -163,7 +163,7 @@ impl FailureController {
     #[get("/taken")]
     #[public]
     async fn taken(&self) -> Result<String> {
-        let taken = nest_rs_core::Problem::new(409, nest_rs_core::problem::code::CONFLICT)
+        let taken = nest_rs_core::Problem::new(409, nest_rs_core::code::CONFLICT)
             .with_detail("the handle is taken")
             .with_retry_after(30);
         Err(HttpError::from(taken))
@@ -279,7 +279,7 @@ impl FailureController {
     async fn problem(&self) -> Result<String> {
         Err(HttpError::from(nest_rs_core::Problem::new(
             500,
-            nest_rs_core::problem::code::INTERNAL,
+            nest_rs_core::code::INTERNAL,
         )))
     }
 
@@ -352,7 +352,7 @@ impl ResponseError for Overdrawn {
 }
 
 fn server_problem() -> nest_rs_core::Problem {
-    nest_rs_core::Problem::new(503, nest_rs_core::problem::code::UNAVAILABLE).with_retry_after(30)
+    nest_rs_core::Problem::new(503, nest_rs_core::code::UNAVAILABLE).with_retry_after(30)
 }
 
 #[module(providers = [FailureController, Forwarding])]

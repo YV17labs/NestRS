@@ -14,7 +14,7 @@ use async_graphql::{
 use futures_util::TryStreamExt;
 use nest_rs_core::__private::serde::Serialize;
 use nest_rs_core::__private::serde::de::DeserializeOwned;
-use nest_rs_core::problem::code;
+use nest_rs_core::code;
 use nest_rs_core::{
     Container, Discovery, Handler, Posture, ReachableProviders, UngatedDiscoveryError, UnitContext,
 };

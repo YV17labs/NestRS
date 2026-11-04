@@ -227,7 +227,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-    use crate::operation_log::{Edge, Kind, Unit};
+    use crate::edge::Edge;
+    use crate::operation_log::{Kind, Unit};
 
     const REQUEST: Unit = crate::operation_log::__private::declare_unit(
         "nest-rs-http",

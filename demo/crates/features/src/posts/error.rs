@@ -1,5 +1,4 @@
-use nest_rs::core::problem::code;
-use nest_rs::core::{Problem, ToProblem};
+use nest_rs::core::{Problem, ToProblem, code};
 use nest_rs::queue::QueueError;
 use nest_rs::seaorm::ServiceError;
 use uuid::Uuid;
@@ -35,8 +34,7 @@ impl ToProblem for PostError {
 mod tests {
     use std::error::Error as _;
 
-    use nest_rs::core::ToProblem;
-    use nest_rs::core::problem::code;
+    use nest_rs::core::{ToProblem, code};
     use nest_rs::queue::QueueError;
     use uuid::Uuid;
 

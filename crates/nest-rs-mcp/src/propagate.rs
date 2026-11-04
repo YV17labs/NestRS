@@ -544,7 +544,7 @@ fn timed_out(method: &str, operation: Option<&str>, timeout: Duration) -> McpErr
         "the operation was not answered in time",
         ClassData {
             reason: Some(TIMEOUT_REASON),
-            ..ClassData::of(nest_rs_core::problem::code::UNAVAILABLE)
+            ..ClassData::of(nest_rs_core::code::UNAVAILABLE)
         }
         .into_data(),
     )
@@ -561,7 +561,7 @@ const TIMEOUT_REASON: &str = "timeout";
 fn cancelled_before_completion() -> McpError {
     McpError::internal_error(
         "the operation was cancelled before it completed",
-        ClassData::of(nest_rs_core::problem::code::UNAVAILABLE).into_data(),
+        ClassData::of(nest_rs_core::code::UNAVAILABLE).into_data(),
     )
 }
 
@@ -1072,7 +1072,7 @@ mod tests {
         assert_eq!(
             stopped.data,
             Some(serde_json::json!({
-                "code": nest_rs_core::problem::code::UNAVAILABLE.as_str(),
+                "code": nest_rs_core::code::UNAVAILABLE.as_str(),
             })),
         );
     }

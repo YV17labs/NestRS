@@ -26,7 +26,7 @@ pub(crate) use self::__private::{HostLayers, HostRequires, ModuleDescriptor, Pro
 /// How a boot error names a dependency whose provider reported no label.
 pub(crate) const UNNAMED_DEPENDENCY: &str = "<unnamed dependency>";
 
-/// `access` is public: its tier-2 items live here, reached only
+/// `access` is private: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;

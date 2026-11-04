@@ -5,7 +5,7 @@
 
 use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, resolve_scoped};
 use nest_rs_core::Container;
-use nest_rs_core::layer_chain::LayerSite;
+use nest_rs_core::LayerSite;
 
 use crate::registry::{GuardSpec, resolve_global_guards};
 use crate::{Guard, GuardPhase};
@@ -218,7 +218,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use nest_rs_core::layer_chain::LayerSite;
+    use nest_rs_core::LayerSite;
     use nest_rs_core::{Layer, UnitContext};
 
     use super::*;

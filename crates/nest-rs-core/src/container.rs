@@ -310,8 +310,9 @@ impl Container {
 
     /// Resolve a provider by type. Returns `None` if no provider was registered.
     ///
-    /// Bypasses the build-time access contract ([`crate::access`]) — prefer
-    /// declarative `#[inject]`. A transient provider is rebuilt on every call.
+    /// Bypasses the build-time access contract
+    /// ([`AccessGraphError`](crate::AccessGraphError)) — prefer declarative
+    /// `#[inject]`. A transient provider is rebuilt on every call.
     ///
     /// # Panics
     ///
@@ -1734,7 +1735,7 @@ impl ContainerBuilder {
     }
 }
 
-/// `container` is public: its tier-2 items live here, reached only
+/// `container` is private: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;

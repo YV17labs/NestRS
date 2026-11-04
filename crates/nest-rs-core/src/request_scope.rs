@@ -426,7 +426,7 @@ impl RequestScope {
     }
 }
 
-/// `request_scope` is public: its tier-2 items live here, reached only through
+/// `request_scope` is private: its tier-2 items live here, reached only through
 /// the crate's `__private`.
 pub(crate) mod __private {
     use std::sync::Arc;

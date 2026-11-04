@@ -144,3 +144,39 @@ makes `graphql` a row codegen's crate table gates on that attribute, with its
 `__requires_graphql` pair. Folding it into `#[input]` by direction was refused: every
 `#[expose]` entity's column enum needs both directions for the mask's round trip, and
 the `Clone`, `Copy`, `Eq` shape a GraphQL enum requires. `#[expose]` stays SeaORM's.
+
+**2026-11-04 — an item has one path, and that holds of a module's too.** The
+review of the entries above found `nest_rs::core::container::Container` beside
+`nest_rs::core::Container`: `nest_rs_core` re-exported at its root what its public
+modules also held, about ninety items, each frozen twice until 8.0, and the crate
+root is the only path any page teaches. The refusal in this file's first list,
+"making those modules private was refused: their paths are read", held for the
+paths it cited, and one of those is gone. So, with the owner's agreement ("Tout faire
+(Recommandé)", 2026-10-31):
+
+- `access`, `app`, `container`, `discoverable`, `discovery`, `env_flag`, `env_prefix`,
+  `error`, `error_message`, `layer`, `lifecycle`, `module`, `request_scope` and
+  `transport`, read by nothing outside the crate but `nest-rs-opentelemetry`'s one
+  import, are private. Each item's one path is the root.
+- `layer_chain`, which the 2026-10-31 entries kept public for `LayerSpec`, is private
+  too: `LayerSpec` and `LayerSite` are read at the root.
+- A module holding both what the root lists and what it does not gives each item
+  one path by what is read. `problem` is private and its constants are
+  `nest_rs::core::code`, beside `target` and `unit`, the same shape: a public module of
+  a type's constants. `trace_context` is private, its `field` constants tier 2, since
+  `operation_span!` and authn's guard alone read them. `Edge` moved to `edge.rs` and
+  stays at the root, where the demo and the pages read it. `panic` stays public, for
+  `contain` the pages hand out, so `panic_message` is read there and left the root.
+- What stays public holds nothing the root lists: `logging`, `operation_log`, `panic`,
+  `target`, `unit`.
+- A private module's `pub(crate) mod __private` stays where it is: the rule that put it
+  there is about reaching the item through the crate's `__private` alone, which still
+  holds.
+
+Beside them, `nest_rs::social::providers` is private (its modules and configs are read
+at `nest_rs::social`), and `nest_rs::authz::ws` and `nest_rs::authz::mcp` are
+crate-private, since their one export left and a public module with nothing in it is a
+path frozen for nothing. `McpIdentity::is_empty`, one caller in its crate, is
+`pub(crate)`. Every other crate was read for the same shape, and none holds it. The
+test stays a developer's line: an item whose module the pages teach keeps that module's
+path, and the root drops it.

@@ -10,7 +10,7 @@ use nest_rs_core::{
     Caught, DuplicateMetaError, ExceptionFilter, GlobalInterceptors, Interceptor, Layer, Next,
     Outcome, Problem, Scoped, UnitContext, WiringFailedError, injectable, module,
 };
-use nest_rs_core::{async_trait, problem::code};
+use nest_rs_core::{async_trait, code};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_testing::{LogCapture, TestApp};
 use nest_rs_ws::{CloseCode, WsConfig, WsModule, WsReply, WsView, gateway, messages};

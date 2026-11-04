@@ -69,7 +69,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_core::problem::code;
+    use nest_rs_core::code;
 
     use super::*;
 

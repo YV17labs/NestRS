@@ -4,7 +4,7 @@
 
 use async_graphql::futures_util::stream::{self, Stream};
 use async_graphql::{InputObject, SimpleObject};
-use nest_rs_core::problem::code;
+use nest_rs_core::code;
 use nest_rs_core::{Problem, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_testing::TestApp;

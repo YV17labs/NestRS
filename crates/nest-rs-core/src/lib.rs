@@ -97,27 +97,28 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-pub mod access;
+mod access;
 mod ambient;
 mod answer;
-pub mod app;
+mod app;
 mod app_dir;
 mod app_identity;
 mod app_lifecycle;
 mod backoff;
 mod budget;
 mod close;
-pub mod container;
+mod container;
 pub(crate) mod cycle_guard;
 mod decode_path;
-pub mod discoverable;
-pub mod discovery;
+mod discoverable;
+mod discovery;
 mod dispatch;
+mod edge;
 mod edge_runtime;
-pub mod env_flag;
-pub mod env_prefix;
-pub mod error;
-pub mod error_message;
+mod env_flag;
+mod env_prefix;
+mod error;
+mod error_message;
 mod exception_filter;
 #[cfg(feature = "logging")]
 mod export;
@@ -129,24 +130,24 @@ mod injects;
 mod instance;
 mod interceptor;
 mod job;
-pub mod layer;
-pub mod layer_chain;
-pub mod lifecycle;
+mod layer;
+mod layer_chain;
+mod lifecycle;
 mod line_safe;
 #[cfg(feature = "logging")]
 pub mod logging;
 mod millis;
-pub mod module;
+mod module;
 mod net;
 mod opaque;
 pub mod operation_log;
 mod outcome;
 pub mod panic;
 mod param;
-pub mod problem;
+mod problem;
 mod process_start;
 mod proof;
-pub mod request_scope;
+mod request_scope;
 mod scope;
 mod secret;
 mod site;
@@ -155,8 +156,8 @@ pub mod target;
 mod tenant;
 #[cfg(test)]
 mod testing;
-pub mod trace_context;
-pub mod transport;
+mod trace_context;
+mod transport;
 mod type_name;
 pub mod unit;
 mod unit_context;
@@ -176,6 +177,7 @@ pub use discoverable::{
     Discoverable, INERT_HOST_HINT, InertHost, ProviderResidency, inert_host, unresolved_host,
 };
 pub use discovery::{Discovered, Discovery};
+pub use edge::Edge;
 pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
 pub use error::{
@@ -204,11 +206,9 @@ pub use lifecycle::{LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, SHUTDOWN_SETTLE_TIME
 pub use module::{Collecting, DynamicModule, Module, Registering};
 pub use net::{Net, Unanswered, within};
 pub use opaque::{OPAQUE_CLIENT_MESSAGE, UNAVAILABLE_CLIENT_MESSAGE};
-pub use operation_log::Edge;
 pub use outcome::{Failure, Outcome, Settled};
-pub use panic::panic_message;
 pub use param::ResolvesProvider;
-pub use problem::{Code, Problem, ToProblem};
+pub use problem::{Code, Problem, ToProblem, code};
 pub use proof::{Attempt, Proving, Unproved, prove};
 pub use request_scope::{
     RequestContinuation, RequestScope, TaskContext, current_request_scope, with_request_scope,
@@ -295,6 +295,7 @@ pub mod __private {
         current_correlation, hex, link_span, pending_ids, set_actor_id, set_sampled,
         set_span_linker, with_pending_ids,
     };
+    pub use crate::trace_context::field;
     pub use crate::type_name::{short_type_name, shorten};
     pub use crate::unit_context::{
         new_unit_context, pending_of, run_layer, running_layer, take_pending,
@@ -358,7 +359,8 @@ pub use nest_rs_core_macros::hooks;
 ///
 /// Before the runtime exists it installs the process panic hook: a panic no
 /// unit of work contains is one `error` on `nest_rs::app`, its payload
-/// redacted by [`panic_message`], never Rust's default line on stderr.
+/// redacted by [`panic_message`](panic::panic_message), never Rust's default
+/// line on stderr.
 ///
 /// Before `main` runs it installs the `SIGINT` / `SIGTERM` handlers, so the
 /// first signal stops the boot at its next await or drains the serving app,

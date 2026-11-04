@@ -1131,7 +1131,7 @@ fn still_serving(serving: &Serving) -> Vec<Arc<str>> {
     names
 }
 
-/// `app` is public: its tier-2 items live here, reached only through the
+/// `app` is private: its tier-2 items live here, reached only through the
 /// crate's `__private`.
 pub(crate) mod __private {
     use std::any::Any;

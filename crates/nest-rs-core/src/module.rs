@@ -25,7 +25,7 @@ impl<M: ?Sized> Registering<M> {
     }
 }
 
-/// `module` is public: its tier-2 items live here, reached only
+/// `module` is private: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;

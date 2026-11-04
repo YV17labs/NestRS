@@ -3,8 +3,7 @@
 //! in words, worded once for every in-band edge; its class ([`denial_code`])
 //! is every edge's, HTTP's problem document included.
 
-use nest_rs_core::Code;
-use nest_rs_core::problem::code;
+use nest_rs_core::{Code, code};
 
 use crate::Denial;
 use crate::denial::Class;

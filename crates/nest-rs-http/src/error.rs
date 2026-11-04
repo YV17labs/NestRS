@@ -11,8 +11,7 @@ use std::time::Duration;
 use http::{Extensions, StatusCode};
 
 use nest_rs_core::__private::Withheld;
-use nest_rs_core::problem::code;
-use nest_rs_core::{DecodeError, Problem, ToProblem};
+use nest_rs_core::{DecodeError, Problem, ToProblem, code};
 
 use crate::headers::one_of;
 use crate::origin::OriginScheme;
@@ -123,8 +122,7 @@ impl ResponseError for BodyError {
 /// through its problem already, so a second mapping of it does not compile.
 ///
 /// ```compile_fail,E0119
-/// use nest_rs_core::problem::code;
-/// use nest_rs_core::{Problem, ToProblem};
+/// use nest_rs_core::{Problem, ToProblem, code};
 /// use nest_rs_http::{ResponseError, StatusCode};
 ///
 /// #[derive(Debug, thiserror::Error)]
@@ -167,8 +165,7 @@ pub trait ResponseError {
 /// answer withholds is filed once the answer is final, as on every edge.
 ///
 /// ```
-/// use nest_rs_core::problem::code;
-/// use nest_rs_core::{Problem, ToProblem};
+/// use nest_rs_core::{Problem, ToProblem, code};
 /// use nest_rs_http::{HttpError, StatusCode};
 ///
 /// #[derive(Debug, thiserror::Error)]

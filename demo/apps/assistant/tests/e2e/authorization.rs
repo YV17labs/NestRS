@@ -1,4 +1,4 @@
-use nest_rs::core::problem::code;
+use nest_rs::core::code;
 use nest_rs::http::{StatusCode, header};
 use nest_rs::testing::mcp::{call_method, initialize_request, open_session, post_message};
 use serde_json::{Value, json};

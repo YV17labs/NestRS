@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use nest_rs_core::problem::code;
+use nest_rs_core::code;
 use nest_rs_core::{
     App, Caught, Container, ExceptionFilter, GlobalInterceptors, Interceptor, Layer, Next, Outcome,
     Problem, Transport, UnitContext, async_trait, injectable, module,

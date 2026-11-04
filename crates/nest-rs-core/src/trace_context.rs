@@ -517,7 +517,7 @@ fn set_actor(shared: &Shared, actor_id: &str) {
     let _ = shared.actor.set(Arc::from(actor_id));
 }
 
-/// `trace_context` is public: its tier-2 items live here, reached only
+/// `trace_context` is private: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::sync::OnceLock;
@@ -675,14 +675,14 @@ macro_rules! operation_span {
         });
         if let Some(parent_span_id) = __correlation.parent_id() {
             __span.record(
-                $crate::trace_context::field::PARENT_SPAN_ID,
+                $crate::__private::field::PARENT_SPAN_ID,
                 $crate::tracing::field::display(parent_span_id),
             );
         }
         // Nothing re-authenticates an inherited unit (a WS message, a job), so
         // the span is filled here or never.
         if let Some(actor_id) = __correlation.actor_id() {
-            __span.record($crate::trace_context::field::ACTOR_ID, actor_id);
+            __span.record($crate::__private::field::ACTOR_ID, actor_id);
         }
         __span
     }};

@@ -7,7 +7,7 @@ use futures_util::FutureExt as _;
 use futures_util::future::Either;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use nest_rs_core::__private::{ClassGate, RequestScopes};
-use nest_rs_core::problem::code;
+use nest_rs_core::code;
 use nest_rs_core::{
     Container, Continuation, Correlation, Handler, RequestContinuation, operation_log,
 };

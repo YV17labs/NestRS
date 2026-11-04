@@ -149,7 +149,7 @@ where
     slot.map_or_else(|| Box::from(NO_MESSAGE), Into::into)
 }
 
-/// `error_message` is public: its tier-2 items live here, reached only through
+/// `error_message` is private: its tier-2 items live here, reached only through
 /// the crate's `__private`.
 pub(crate) mod __private {
     use std::error::Error;

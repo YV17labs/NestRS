@@ -6,7 +6,7 @@ use std::any::TypeId;
 use nest_rs_core::__private::{
     ResolvedLayer, compose_chain, dedup_bucket, log_effective_chain, resolve_scoped,
 };
-use nest_rs_core::layer_chain::LayerSite;
+use nest_rs_core::LayerSite;
 use nest_rs_core::{Container, UnresolvedLayerError};
 
 use crate::Guard;

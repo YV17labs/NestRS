@@ -250,7 +250,7 @@ pub use nest_rs_mcp_macros::mcp;
 
 /// Declare an `#[mcp]` host's operations on its inherent impl block. A tool the
 /// endpoint's guards cover needs no posture; `#[authorize(Action, Entity)]` adds
-/// a gate and a reply mask, run in `nest_rs_authz::mcp`, and `#[public]` admits a
+/// a gate and a reply mask, which are `nest-rs-authz`'s, and `#[public]` admits a
 /// caller with no credential, the one an endpoint the app opened takes when it
 /// declares no gate. Its arguments are held to the rules their type declares, a
 /// refusal answered `invalid_params` before the body runs.

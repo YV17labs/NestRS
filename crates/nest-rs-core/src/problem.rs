@@ -17,8 +17,7 @@
 //! code, with no `detail`) and its chain is logged once at `error`.
 //!
 //! ```
-//! use nest_rs_core::problem::code;
-//! use nest_rs_core::{Code, Problem, ToProblem};
+//! use nest_rs_core::{Code, Problem, ToProblem, code};
 //!
 //! const IDEMPOTENCY_KEY_REQUIRED: Code = Code::new("IDEMPOTENCY_KEY_REQUIRED");
 //! const ALREADY_PAID: Problem = Problem::new(409, code::CONFLICT).with_type(
@@ -194,8 +193,7 @@ pub mod code {
 /// is a compile error:
 ///
 /// ```
-/// use nest_rs_core::Problem;
-/// use nest_rs_core::problem::code;
+/// use nest_rs_core::{Problem, code};
 ///
 /// const TAKEN: Problem = Problem::new(409, code::CONFLICT);
 ///
@@ -205,8 +203,7 @@ pub mod code {
 /// ```
 ///
 /// ```compile_fail,E0080
-/// use nest_rs_core::Problem;
-/// use nest_rs_core::problem::code;
+/// use nest_rs_core::{Problem, code};
 ///
 /// const FINE: Problem = Problem::new(200, code::CONFLICT);
 /// ```
@@ -262,8 +259,7 @@ impl Problem {
     /// compile error:
     ///
     /// ```compile_fail,E0080
-    /// use nest_rs_core::Problem;
-    /// use nest_rs_core::problem::code;
+    /// use nest_rs_core::{Problem, code};
     ///
     /// const TAKEN: Problem =
     ///     Problem::new(409, code::CONFLICT).with_type("handle taken", "Handle taken");
@@ -316,8 +312,7 @@ impl Problem {
     /// the wire, [`errors`](Self::errors) answering `None` on a `5xx`.
     ///
     /// ```
-    /// use nest_rs_core::Problem;
-    /// use nest_rs_core::problem::code;
+    /// use nest_rs_core::{Problem, code};
     ///
     /// let fields = serde_json::json!({ "email": [{ "code": "email" }] });
     /// let problem = Problem::new(422, code::INVALID_ARGUMENT).with_errors(fields.clone());
@@ -391,8 +386,7 @@ impl Problem {
     /// and [`OPAQUE_CLIENT_MESSAGE`] otherwise.
     ///
     /// ```
-    /// use nest_rs_core::problem::code;
-    /// use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, Problem};
+    /// use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, Problem, code};
     ///
     /// assert_eq!(Problem::new(404, code::NOT_FOUND).client_message(), "not found");
     /// let failed = Problem::new(500, code::INTERNAL).with_detail("disk full");

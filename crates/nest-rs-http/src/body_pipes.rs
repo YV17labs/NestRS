@@ -8,7 +8,7 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::Container;
 use nest_rs_core::Handler;
-use nest_rs_core::layer_chain::LayerSite;
+use nest_rs_core::LayerSite;
 use nest_rs_pipes::__private::PipeSpec;
 use nest_rs_pipes::{ArgumentKind, GlobalPipe};
 use serde_json::Value;

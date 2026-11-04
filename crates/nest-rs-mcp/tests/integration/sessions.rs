@@ -9,8 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy, bearer_token};
-use nest_rs_core::problem::code;
-use nest_rs_core::{AmbientValue, injectable, module};
+use nest_rs_core::{AmbientValue, code, injectable, module};
 use nest_rs_guards::GlobalGuards;
 use nest_rs_http::{Request, StatusCode};
 use nest_rs_mcp::rmcp::transport::streamable_http_server::session::store::{

@@ -196,12 +196,11 @@ mod pipeline {
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use nest_rs_core::async_trait;
-    use nest_rs_core::problem::code;
     use nest_rs_core::{
         Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext,
         injectable, interceptor, module,
     };
+    use nest_rs_core::{async_trait, code};
     use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
     use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
     use nest_rs_graphql::{FieldRole, GraphqlModule, GraphqlView, operations, resolver};

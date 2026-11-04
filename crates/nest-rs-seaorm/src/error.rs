@@ -420,8 +420,7 @@ fn said_server(server: &(dyn DatabaseError + 'static)) -> String {
 /// opaquely, logging the cause.
 impl nest_rs_core::ToProblem for ServiceError {
     fn to_problem(&self) -> Option<nest_rs_core::Problem> {
-        use nest_rs_core::Problem;
-        use nest_rs_core::problem::code;
+        use nest_rs_core::{Problem, code};
 
         let problem = match self {
             Self::Validation(_) => Problem::new(400, code::INVALID_ARGUMENT),
@@ -447,8 +446,7 @@ impl nest_rs_core::ToProblem for ServiceError {
 /// invented.
 fn unavailable() -> nest_rs_core::Problem {
     use nest_rs_core::__private::retry_after_secs;
-    use nest_rs_core::Problem;
-    use nest_rs_core::problem::code;
+    use nest_rs_core::{Problem, code};
 
     let problem = Problem::new(503, code::UNAVAILABLE);
     let bound = crate::executor::current_executor()
@@ -478,8 +476,7 @@ impl From<ServiceError> for nest_rs_graphql::async_graphql::Error {
 /// failure a `500`, its error filed once at `error`.
 #[cfg(any(feature = "http", feature = "graphql"))]
 fn crud_problem(err: &DbErr, written: Option<Written>) -> nest_rs_core::Problem {
-    use nest_rs_core::Problem;
-    use nest_rs_core::problem::code;
+    use nest_rs_core::{Problem, code};
 
     match DbOutcome::of(err) {
         DbOutcome::Conflict => {
@@ -593,8 +590,7 @@ mod graphql {
 
     #[cfg(test)]
     mod tests {
-        use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
-        use nest_rs_core::problem::code;
+        use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, code};
         use nest_rs_graphql::CODE_EXTENSION;
 
         use super::*;
@@ -759,7 +755,7 @@ mod http {
 
     #[cfg(test)]
     mod tests {
-        use nest_rs_core::problem::code;
+        use nest_rs_core::code;
         use nest_rs_http::{Response, StatusCode};
 
         use super::super::ServiceError;
@@ -844,10 +840,7 @@ mod http {
                 serde_json::from_slice(&resp.into_body().into_bytes().await.expect("a body"))
                     .expect("problem json");
             assert_eq!(body["status"], 503);
-            assert_eq!(
-                body["code"],
-                nest_rs_core::problem::code::UNAVAILABLE.as_str()
-            );
+            assert_eq!(body["code"], nest_rs_core::code::UNAVAILABLE.as_str());
         }
 
         #[test]
@@ -1027,10 +1020,7 @@ mod http {
                     serde_json::from_slice(&resp.into_body().into_bytes().await.expect("a body"))
                         .expect("problem json");
                 assert_eq!(body["status"], 503);
-                assert_eq!(
-                    body["code"],
-                    nest_rs_core::problem::code::UNAVAILABLE.as_str()
-                );
+                assert_eq!(body["code"], nest_rs_core::code::UNAVAILABLE.as_str());
                 assert!(body.get("detail").is_none(), "a 5xx says no detail: {body}");
             }
             let crud = logs.expect_one(crate::target::ORM, "crud operation unavailable");
@@ -1055,11 +1045,11 @@ mod http {
             for (error, code) in [
                 (
                     ServiceError::conflict("taken"),
-                    nest_rs_core::problem::code::CONFLICT,
+                    nest_rs_core::code::CONFLICT,
                 ),
                 (
                     ServiceError::NotFound("post".into()),
-                    nest_rs_core::problem::code::NOT_FOUND,
+                    nest_rs_core::code::NOT_FOUND,
                 ),
             ] {
                 let (_, _, body) = body_json(error).await;
@@ -1387,7 +1377,7 @@ pub(crate) mod tests {
             .expect("an unavailable answer, not an opaque one");
         assert_eq!(
             (problem.status(), problem.code()),
-            (503, nest_rs_core::problem::code::UNAVAILABLE)
+            (503, nest_rs_core::code::UNAVAILABLE)
         );
         assert!(
             crate::retry::is_transient_failure(&cancelled_statement()),
@@ -1430,7 +1420,7 @@ pub(crate) mod tests {
         .expect("an unavailable answer");
         assert_eq!(
             (problem.status(), problem.code(), problem.retry_after()),
-            (503, nest_rs_core::problem::code::UNAVAILABLE, Some(3)),
+            (503, nest_rs_core::code::UNAVAILABLE, Some(3)),
         );
         let outside =
             nest_rs_core::ToProblem::to_problem(&ServiceError::from(cancelled_statement()))
@@ -1744,8 +1734,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_business_variant_says_its_problem_and_an_opaque_one_says_none() {
-        use nest_rs_core::ToProblem;
-        use nest_rs_core::problem::code;
+        use nest_rs_core::{ToProblem, code};
 
         let said = |error: ServiceError| {
             error

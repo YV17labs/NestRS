@@ -35,7 +35,7 @@ impl std::error::Error for LookupError {}
 impl nest_rs_core::ToProblem for LookupError {
     fn to_problem(&self) -> Option<nest_rs_core::Problem> {
         Some(
-            nest_rs_core::Problem::new(404, nest_rs_core::problem::code::NOT_FOUND)
+            nest_rs_core::Problem::new(404, nest_rs_core::code::NOT_FOUND)
                 .with_detail("nothing by that name"),
         )
     }

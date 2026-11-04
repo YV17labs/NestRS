@@ -54,8 +54,7 @@
 use std::error::Error as StdError;
 
 use nest_rs_core::__private::{Withheld, caught_problem, find_in_chain};
-use nest_rs_core::problem::code;
-use nest_rs_core::{Code, DecodeError, Failure, Problem, ToProblem};
+use nest_rs_core::{Code, DecodeError, Failure, Problem, ToProblem, code};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
@@ -165,8 +164,7 @@ impl ClassData<'_> {
 /// behind a `5xx` problem.
 ///
 /// ```
-/// use nest_rs_core::Problem;
-/// use nest_rs_core::problem::code;
+/// use nest_rs_core::{Problem, code};
 ///
 /// let error = nest_rs_mcp::problem_error(&Problem::new(404, code::NOT_FOUND));
 /// assert_eq!(error.message, "not found");
@@ -1029,7 +1027,7 @@ mod tests {
 
     #[test]
     fn a_problem_answers_its_family_its_sentence_and_its_code() {
-        use nest_rs_core::problem::code;
+        use nest_rs_core::code;
 
         let refused =
             problem_error(&Problem::new(409, code::CONFLICT).with_detail("the slug is taken"));
@@ -1092,7 +1090,7 @@ mod tests {
     /// withholds nothing and files none.
     #[test]
     fn a_server_problem_files_the_chain_its_answer_withholds() {
-        use nest_rs_core::problem::code;
+        use nest_rs_core::code;
 
         #[derive(Debug)]
         struct Outage;
@@ -1173,7 +1171,7 @@ mod tests {
 
     impl ToProblem for Conflicting {
         fn to_problem(&self) -> Option<Problem> {
-            Some(Problem::new(409, nest_rs_core::problem::code::CONFLICT))
+            Some(Problem::new(409, nest_rs_core::code::CONFLICT))
         }
     }
 
@@ -1210,11 +1208,9 @@ mod tests {
             Some("account 4111-1111 is frozen")
         );
 
-        let carried = nest_rs_core::anyhow::Error::from(Problem::new(
-            404,
-            nest_rs_core::problem::code::NOT_FOUND,
-        ))
-        .context("loading the post");
+        let carried =
+            nest_rs_core::anyhow::Error::from(Problem::new(404, nest_rs_core::code::NOT_FOUND))
+                .context("loading the post");
         let found = ErrorReport(carried).into_failure().into_answer();
         assert_eq!(found.message, "not found");
 
@@ -1239,7 +1235,7 @@ mod tests {
     /// error's `data` beside its code; a problem naming none carries none.
     #[test]
     fn a_typed_problem_carries_its_type_title_and_field_map() {
-        use nest_rs_core::problem::code;
+        use nest_rs_core::code;
 
         let taken = problem_error(
             &Problem::new(409, code::CONFLICT)

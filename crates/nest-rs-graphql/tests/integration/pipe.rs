@@ -253,7 +253,7 @@ async fn a_field_resolver_argument_breaking_its_rules_is_a_field_error_before_th
     assert_eq!(error["message"], "validation failed", "{refused}");
     assert_eq!(
         error["extensions"]["code"],
-        nest_rs_core::problem::code::INVALID_ARGUMENT.as_str(),
+        nest_rs_core::code::INVALID_ARGUMENT.as_str(),
         "{refused}",
     );
     assert_eq!(

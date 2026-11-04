@@ -24,8 +24,8 @@ use nest_rs_codegen::__private::{
     guard_capability_bounds, handler_const, handler_ref, host_meta_fn, impl_self_ident,
     injected_keys_with_layers, injected_methods_with_layers, injected_names_with_layers,
     injected_optional_fns, injected_per_request_method, injects_impls, interceptor_specs,
-    key_as_written, layer_deps, normalize_forwarded_args, one_role_per_method, piped_input,
-    posture_contradiction, reject_meta_on_operations, scoped_specs, shared_receiver,
+    key_as_written, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
+    piped_input, posture_contradiction, reject_meta_on_operations, scoped_specs, shared_receiver,
     site_const_ident, site_fn_ident, site_ref, spelled, tail_param, takes_value, type_label,
     unit_of_work_required, unknown_argument, validate_argument,
 };
@@ -901,6 +901,9 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let mut all_guard_paths: Vec<(Vec<TokenStream2>, Path)> = Vec::new();
     let mut all_layer_paths: Vec<(Vec<TokenStream2>, Path)> = Vec::new();
     let mut field_dep_types: Vec<(Vec<TokenStream2>, Type)> = Vec::new();
+    // One per field resolver and per `&DataLoader<L>` parameter: what the schema
+    // build reads a served field's needs off.
+    let mut field_needs: Vec<TokenStream2> = Vec::new();
     let mut scoped_params: Vec<(Vec<TokenStream2>, Type)> = Vec::new();
     // async-graphql does not refuse two methods on one field: its registry keeps
     // the last, its dispatch the first.
@@ -1054,8 +1057,19 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 gate: quote!(::core::option::Option::None),
             }));
             site_refs.push((cfgs.clone(), site_ref(&self_ty, &method_name)));
-            let (parent_ty, deleg, deps) = field_method(&self_ty, &deleg_attrs, &sig)?;
-            field_dep_types.extend(deps.into_iter().map(|dep| (cfgs.clone(), dep)));
+            let FieldMethod {
+                parent: parent_ty,
+                method: deleg,
+                injected,
+                loaders,
+            } = field_method(&self_ty, &deleg_attrs, &sig)?;
+            field_dep_types.extend(injected.into_iter().map(|dep| (cfgs.clone(), dep)));
+            field_needs.push(field_served(&self_ty, &parent_ty, &field, &cfgs));
+            field_needs.extend(
+                loaders
+                    .iter()
+                    .map(|loader| loader_read(&parent_ty, &field, loader, &cfgs)),
+            );
             let key = field_parent_key(&parent_ty);
             match field_groups
                 .iter_mut()
@@ -1556,6 +1570,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
         #(#unit_requirements)*
 
+        #(#field_needs)*
+
         #query_block
         #mutation_block
         #subscription_block
@@ -1575,15 +1591,65 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     })
 }
 
+/// A field resolver's `#[ComplexObject]` method, and what it reads.
+struct FieldMethod {
+    /// The object the field is served on.
+    parent: Type,
+    method: TokenStream2,
+    /// Each provider a `&T` parameter reads off the container.
+    injected: Vec<Type>,
+    /// Each loader a `&DataLoader<L>` parameter reads off the request.
+    loaders: Vec<Type>,
+}
+
+/// The need every `#[field_resolver]` declares: `#[ComplexObject]` serves it with
+/// its parent, so the schema build refuses it when the app does not reach its
+/// resolver.
+fn field_served(self_ty: &Type, parent: &Type, field: &str, cfgs: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        #(#cfgs)*
+        ::nest_rs_graphql::__private::inventory::submit! {
+            ::nest_rs_graphql::__private::GraphqlFieldRegistration {
+                parent: ::core::any::type_name::<#parent>,
+                field: #field,
+                resolver: || (
+                    ::core::any::TypeId::of::<#self_ty>(),
+                    ::core::any::type_name::<#self_ty>(),
+                ),
+                origin: ::core::module_path!(),
+            }
+        }
+    }
+}
+
+/// The need a `&DataLoader<loader>` parameter declares on `parent.field`: the
+/// schema build refuses it, as an exposed relation's, when the schema serves
+/// the field and the app does not reach the loader's owner.
+fn loader_read(parent: &Type, field: &str, loader: &Type, cfgs: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        #(#cfgs)*
+        ::nest_rs_graphql::__private::inventory::submit! {
+            ::nest_rs_graphql::__private::GraphqlRelationRegistration {
+                parent: ::core::any::type_name::<#parent>,
+                field: #field,
+                entity: ::core::any::type_name::<#parent>,
+                owner: <#loader as ::nest_rs_graphql::__private::LoaderOwner>::owner,
+                origin: ::core::module_path!(),
+            }
+        }
+    }
+}
+
 /// Build a field resolver's `#[ComplexObject]` method, the parent as `&self`,
 /// run through its site. Owned args become GraphQL field arguments,
-/// `&`-reference args are injected, a `Scoped<T>` resolves per request and a
-/// `Ambient<T>` from what a guard attached.
+/// `&`-reference args are injected, a `&DataLoader<L>` reads the request's
+/// loader, a `Scoped<T>` resolves per request and a `Ambient<T>` from what a
+/// guard attached.
 fn field_method(
     self_ty: &Type,
     deleg_attrs: &[Attribute],
     sig: &Signature,
-) -> syn::Result<(Type, TokenStream2, Vec<Type>)> {
+) -> syn::Result<FieldMethod> {
     let owned_sig = {
         let mut s = sig.clone();
         normalize_forwarded_args(s.inputs.iter_mut())?;
@@ -1623,7 +1689,8 @@ fn field_method(
     let mut call_args: Vec<TokenStream2> = Vec::new();
     let mut dep_bindings: Vec<TokenStream2> = Vec::new();
     let mut tail: Vec<(Ident, Type, TailParam)> = Vec::new();
-    let mut injected_deps: Vec<Type> = Vec::new();
+    let mut injected: Vec<Type> = Vec::new();
+    let mut loaders: Vec<Type> = Vec::new();
     for (arg, ident) in rest.iter().copied().zip(&rest_idents) {
         let FnArg::Typed(pt) = arg else { continue };
         // Before the injected-dep arm, which would ask the container for a `Context`.
@@ -1639,12 +1706,12 @@ fn field_method(
         if let Type::Reference(reference) = &*pt.ty {
             let dep_ty = &*reference.elem;
             let dep = format_ident!("__dep_{}", ident);
-            if is_dataloader(dep_ty) {
-                // Panics only if `GraphqlModule` was never imported.
+            if let Some(loader) = nth_generic_type(dep_ty, "DataLoader", 0) {
                 dep_bindings.push(quote! {
-                    let #dep = __ctx.data_unchecked::<#dep_ty>();
+                    let #dep = ::nest_rs_graphql::__private::seeded_loader::<#loader>(__ctx)?;
                 });
                 call_args.push(quote! { #dep });
+                loaders.push(loader.clone());
             } else {
                 dep_bindings.push(quote! {
                     let #dep = __container
@@ -1652,7 +1719,7 @@ fn field_method(
                         .ok_or_else(::nest_rs_graphql::__private::unprovided::<#dep_ty>)?;
                 });
                 call_args.push(quote! { &#dep });
-                injected_deps.push(dep_ty.clone());
+                injected.push(dep_ty.clone());
             }
         } else {
             call_args.push(quote! { #ident });
@@ -1696,7 +1763,12 @@ fn field_method(
             .await
         }
     };
-    Ok((parent_ty, method, injected_deps))
+    Ok(FieldMethod {
+        parent: parent_ty,
+        method,
+        injected,
+        loaders,
+    })
 }
 
 fn field_parent_label(sig: &Signature) -> String {
@@ -1750,14 +1822,6 @@ fn name_the_field(attrs: &mut Vec<Attribute>, field: &str) -> syn::Result<()> {
         None => attrs.push(parse_quote!(#[graphql(name = #name)])),
     }
     Ok(())
-}
-
-fn is_dataloader(ty: &Type) -> bool {
-    matches!(ty, Type::Path(tp) if tp
-        .path
-        .segments
-        .last()
-        .is_some_and(|s| s.ident == "DataLoader"))
 }
 
 fn async_graphql_root() -> TokenStream2 {

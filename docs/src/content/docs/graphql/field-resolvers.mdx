@@ -96,7 +96,8 @@ impl UsersResolver {
 ```
 
 If `avatar_for` does one DB call per parent, you have an N+1 — move
-the lookup behind a `#[dataloader]`. See [Dataloaders](/database/dataloaders/).
+the lookup behind a `#[dataloader]` and read it through a
+`&DataLoader<L>` parameter. See [Dataloaders](/database/dataloaders/).
 
 A `Scoped<T>` parameter reaches a request-scoped provider here as on a root
 field, and an `Ambient<T>` parameter what the request's guards attached, or its own
@@ -105,6 +106,17 @@ inside the root field that produced its parent — so it runs its resolver's and
 its own `#[use_guards]`, and only the interceptors and exception filters
 declared on it: never the app's pool, nor the resolver's interceptors, which
 would run once per row.
+
+## Its module is imported
+
+A field resolver is grafted onto its parent's GraphQL object when the crate
+compiles, so a schema serving the parent serves the field. The module gate still
+holds: a served field whose resolver the app does not reach refuses the boot,
+naming the import, rather than running outside every module the app declared.
+
+```text frame="terminal"
+a served field's resolver is one this app does not reach, so it would run outside every module the app imports: `User.avatarUrl` is resolved by `features::profiles::graphql::ProfilesResolver`: import `ProfilesGraphqlModule` into the module serving `User`
+```
 
 ## The single-`ComplexObject` rule
 
@@ -143,8 +155,8 @@ You have three honest ways out:
 
 `#[field_resolver]` infers the parent type from the first non-receiver,
 non-`ctx` argument by reference. Every other argument becomes a
-GraphQL input or, when it's an `#[inject]`ed dependency, comes from
-the container.
+GraphQL input or, when it's a reference, comes from the container — a
+`&DataLoader<L>` from the request.
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 #[field_resolver]

@@ -457,14 +457,11 @@ fn relation_registration(
     loader: &TokenStream2,
 ) -> TokenStream2 {
     let wire = &model.output_ident;
-    let root = graphql_root();
     let name = camel_case(&field.unraw().to_string());
     quote! {
         ::nest_rs_seaorm::__private::inventory::submit! {
             ::nest_rs_seaorm::__private::GraphqlRelationRegistration {
-                parent: || ::std::string::ToString::to_string(
-                    &<#wire as #root::OutputType>::type_name(),
-                ),
+                parent: ::core::any::type_name::<#wire>,
                 field: #name,
                 entity: ::core::any::type_name::<Entity>,
                 owner: <#loader as ::nest_rs_seaorm::__private::LoaderOwner>::owner,
@@ -497,25 +494,10 @@ fn emit_belongs_to_method(
         ) -> #root::Result<
             ::core::option::Option<<#target as ::nest_rs_seaorm::Exposed>::Wire>,
         > {
-            // Never `data_unchecked`: a loader whose owner module this app does
-            // not import would panic at request time.
-            let __loader = __ctx
-                .data_opt::<
-                    #root::dataloader::DataLoader<
-                        <#target as ::nest_rs_seaorm::graphql::PkLoadable>::Loader,
-                    >,
-                >()
-                .ok_or_else(|| {
-                    #root::Error::new(::std::format!(
-                        "relation `{}` is exposed but its dataloader `{}` is not seeded — the module providing it is not imported by (or reachable from) this app",
-                        ::core::stringify!(#name),
-                        ::core::any::type_name::<
-                            #root::dataloader::DataLoader<
-                                <#target as ::nest_rs_seaorm::graphql::PkLoadable>::Loader,
-                            >,
-                        >(),
-                    ))
-                })?;
+            let __loader = ::nest_rs_seaorm::__private::seeded_loader::<
+                <#target as ::nest_rs_seaorm::graphql::PkLoadable>::Loader,
+            >(__ctx)
+            .map_err(::nest_rs_seaorm::__private::FieldFailure::into_answer)?;
             let __key = #key_expr;
             ::core::result::Result::Ok(__loader.load_one(__key).await?)
         }
@@ -554,25 +536,10 @@ fn emit_has_many_method(
                 ::core::option::Option::as_deref(&after),
             )?;
             let __has_previous_page = ::core::option::Option::is_some(&__after);
-            // Never `data_unchecked`: a loader whose owner module this app does
-            // not import would panic at request time.
-            let __loader = __ctx
-                .data_opt::<
-                    #root::dataloader::DataLoader<
-                        <#target as #related>::Loader,
-                    >,
-                >()
-                .ok_or_else(|| {
-                    #root::Error::new(::std::format!(
-                        "relation `{}` is exposed but its dataloader `{}` is not seeded — the module providing it is not imported by (or reachable from) this app",
-                        ::core::stringify!(#name),
-                        ::core::any::type_name::<
-                            #root::dataloader::DataLoader<
-                                <#target as #related>::Loader,
-                            >,
-                        >(),
-                    ))
-                })?;
+            let __loader = ::nest_rs_seaorm::__private::seeded_loader::<
+                <#target as #related>::Loader,
+            >(__ctx)
+            .map_err(::nest_rs_seaorm::__private::FieldFailure::into_answer)?;
             let __page = __loader
                 .load_one(::nest_rs_seaorm::__private::relation_key(
                     #key_expr,

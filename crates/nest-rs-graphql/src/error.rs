@@ -282,6 +282,18 @@ pub(crate) struct Unprovided {
     pub(crate) provider: &'static str,
 }
 
+/// A loader a field reads that its request holds no seed of: the type goes on
+/// the operator's line, never to the client.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "`{field}` reads the dataloader `{loader}`, which this request holds no seed of — the module \
+     providing it is not imported by (or reachable from) this app"
+)]
+pub(crate) struct UnseededLoader {
+    pub(crate) field: String,
+    pub(crate) loader: &'static str,
+}
+
 /// A federation field reached on a schema that carries no container, so no
 /// site to run it on: refused rather than served past its guards.
 #[derive(Debug, thiserror::Error)]

@@ -21,7 +21,7 @@ use crate::endpoint::GetEndpoint;
 use crate::null_propagation::NullPropagated;
 use crate::operation_units::OperationUnits;
 use crate::redact::Redacted;
-use crate::resolver::{RESOLVERS, build_schema, check_operations, compose_sites};
+use crate::resolver::{RESOLVERS, ServedObjects, build_schema, check_operations, compose_sites};
 use crate::subscription::SubscriptionEndpoint;
 use crate::view::GraphqlView;
 
@@ -138,7 +138,9 @@ fn mount(
             ),
         }
     }
-    crate::loader::check_served_relations(container, &schema.names().into_iter().collect())?;
+    let served = ServedObjects::of(container)?;
+    crate::resolver::check_served_fields(container, &served)?;
+    crate::loader::check_served_relations(container, &served)?;
     let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
     let sdl = schema.sdl();
     let units = OperationUnits::new(

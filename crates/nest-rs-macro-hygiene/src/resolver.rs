@@ -143,8 +143,12 @@ impl ParcelResolver {
     /// A field resolver compiled out through a `#[cfg_attr]`, likewise.
     #[cfg_attr(all(), cfg(any()))]
     #[field_resolver]
-    fn gone(&self, parent: &Parcel) -> crate::does_not_exist::Output {
-        crate::does_not_exist::answer(parent)
+    fn gone(
+        &self,
+        parent: &Parcel,
+        loader: &crate::does_not_exist::DataLoader<crate::does_not_exist::Loader>,
+    ) -> crate::does_not_exist::Output {
+        crate::does_not_exist::answer(parent, loader)
     }
 }
 

@@ -425,7 +425,8 @@ dataloader that `#[expose(name = "…", service = <Path>)]` emits on the owning
 service, reached from the inverse side without naming the other service. Every
 batch goes through `Repo::scoped(Action::Read)`, so row filtering applies.
 The serving adapter imports the target's module, and a schema serving a
-relation whose loader's owner the app does not reach is refused at boot naming
+field whose loader's owner the app does not reach — a relation, a
+`#[field_resolver]`'s `&DataLoader<L>` parameter — is refused at boot naming
 that module. Leaving a relation unexposed opts it out; write a
 `#[field_resolver]` for a custom shape.
 

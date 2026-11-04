@@ -1,0 +1,31 @@
+error[E0107]: missing generics for struct `DataLoader`
+  --> tests/integration/diagnostics/graphql/field_resolver_reading_a_bare_dataloader.rs:27:51
+   |
+27 |     async fn label(&self, parent: &Note, labels: &DataLoader) -> String {
+   |                                                   ^^^^^^^^^^ expected at least 1 generic argument
+   |
+note: struct defined here, with at least 1 generic parameter: `T`
+  --> $CARGO/async-graphql-$VERSION/src/dataloader/mod.rs
+   |
+   | pub struct DataLoader<T, C = NoCache> {
+   |            ^^^^^^^^^^ -
+help: add missing generic argument
+   |
+27 |     async fn label(&self, parent: &Note, labels: &DataLoader<_>) -> String {
+   |                                                             +++
+
+error[E0107]: missing generics for struct `DataLoader`
+  --> tests/integration/diagnostics/graphql/field_resolver_reading_a_bare_dataloader.rs:27:51
+   |
+27 |     async fn label(&self, parent: &Note, labels: &DataLoader) -> String {
+   |                                                   ^^^^^^^^^^ expected at least 1 generic argument
+   |
+note: struct defined here, with at least 1 generic parameter: `T`
+  --> $CARGO/async-graphql-$VERSION/src/dataloader/mod.rs
+   |
+   | pub struct DataLoader<T, C = NoCache> {
+   |            ^^^^^^^^^^ -
+help: add missing generic argument
+   |
+27 |     async fn label(&self, parent: &Note, labels: &DataLoader<T>) -> String {
+   |                                                             +++

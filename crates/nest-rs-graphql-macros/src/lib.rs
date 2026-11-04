@@ -48,6 +48,11 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// — a miss of either answers the opaque internal error, the type filed at
 /// `error`.
 ///
+/// A `#[field_resolver]`'s `&DataLoader<L>` parameter, read the same way, is the
+/// request's loader. It declares the need, as the method itself does for its
+/// resolver: the schema build refuses a served field whose resolver, or whose
+/// loader's owner, the app does not reach, naming the module to import.
+///
 /// **Every `#[query]`/`#[mutation]`/`#[subscription]` declares its access
 /// posture** — forgetting one is a compile error, never a silently ungated
 /// operation:
@@ -155,7 +160,9 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `<Owner><Name>` and registers it with the link-time registry — no
 /// `#[module(providers = [...])]` entry. The loader is
 /// **request-scoped**, seeded into the GraphQL context and read by a
-/// `#[field_resolver]` as `&DataLoader<…>`.
+/// `#[field_resolver]` through a `&DataLoader<…>` parameter, which also declares
+/// the need: the schema build refuses a served field whose loader's owner the
+/// app does not reach, naming the module to import.
 ///
 /// # Generated loader names
 ///
@@ -168,9 +175,8 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// | `UsersService` | `by_org_id` | `UsersServiceByOrgId` |
 /// | `PostsService` | `author` | `PostsServiceAuthor` |
 ///
-/// Reference the loader by exactly that name from the `#[field_resolver]`
-/// (or auto-resolved relation) that reads it:
-/// `ctx.data_unchecked::<DataLoader<UsersServiceById>>()`.
+/// Name the loader exactly that from the `#[field_resolver]` that reads it:
+/// `author: &DataLoader<UsersServiceById>`.
 ///
 /// # Expands to
 ///

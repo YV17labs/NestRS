@@ -394,3 +394,215 @@ mod panicking_batch {
         );
     }
 }
+
+/// A `#[field_resolver]` reads a loader through a `&DataLoader<L>` parameter,
+/// which declares the need: the schema build checks it as it checks an exposed
+/// relation.
+mod field_parameter {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use nest_rs_core::{injectable, module};
+    use nest_rs_graphql::async_graphql::SimpleObject;
+    use nest_rs_graphql::async_graphql::dataloader::DataLoader;
+    use nest_rs_graphql::{GraphqlModule, dataloader, operations, resolver};
+    use nest_rs_testing::TestApp;
+
+    #[derive(Clone, SimpleObject)]
+    #[graphql(complex)]
+    struct Book {
+        id: i32,
+    }
+
+    #[injectable]
+    #[derive(Default)]
+    struct Catalogue {
+        batches: AtomicUsize,
+    }
+
+    #[dataloader]
+    impl Catalogue {
+        async fn labels(&self, keys: &[i32]) -> HashMap<i32, String> {
+            self.batches.fetch_add(1, Ordering::SeqCst);
+            keys.iter()
+                .map(|key| (*key, format!("book {key}")))
+                .collect()
+        }
+    }
+
+    #[resolver]
+    struct BooksResolver;
+
+    #[operations]
+    impl BooksResolver {
+        #[query]
+        #[public]
+        async fn books(&self) -> Vec<Book> {
+            vec![Book { id: 1 }, Book { id: 2 }]
+        }
+
+        #[field_resolver]
+        async fn label(&self, book: &Book, labels: &DataLoader<CatalogueLabels>) -> String {
+            let Ok(found) = labels.load_one(book.id).await;
+            found.unwrap_or_default()
+        }
+    }
+
+    #[module(imports = [GraphqlModule], providers = [Catalogue, BooksResolver])]
+    struct BooksApp;
+
+    #[tokio::test]
+    async fn a_loader_parameter_batches_every_parent_of_one_response() {
+        let app = TestApp::for_module::<BooksApp>()
+            .await
+            .expect("the schema boots");
+
+        let body: serde_json::Value = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ books { label } }" }))
+            .send()
+            .await
+            .json()
+            .await
+            .value()
+            .deserialize();
+
+        assert_eq!(
+            body["data"]["books"],
+            serde_json::json!([{ "label": "book 1" }, { "label": "book 2" }]),
+            "{body}",
+        );
+        let catalogue = app.container().get::<Catalogue>().expect("provided");
+        assert_eq!(catalogue.batches.load(Ordering::SeqCst), 1, "one batch");
+    }
+
+    #[derive(Clone, SimpleObject)]
+    #[graphql(complex)]
+    struct Volume {
+        id: i32,
+    }
+
+    #[injectable]
+    #[derive(Default)]
+    struct Archive;
+
+    #[dataloader]
+    impl Archive {
+        async fn shelves(&self, keys: &[i32]) -> HashMap<i32, String> {
+            keys.iter()
+                .map(|key| (*key, format!("shelf {key}")))
+                .collect()
+        }
+    }
+
+    #[module(providers = [Archive])]
+    struct ArchiveModule;
+
+    #[resolver]
+    struct VolumesResolver;
+
+    #[operations]
+    impl VolumesResolver {
+        #[query]
+        #[public]
+        async fn volumes(&self) -> Vec<Volume> {
+            vec![Volume { id: 1 }]
+        }
+
+        #[field_resolver]
+        #[graphql(name = "shelfLabel")]
+        async fn shelf(&self, volume: &Volume, shelves: &DataLoader<ArchiveShelves>) -> String {
+            let Ok(found) = shelves.load_one(volume.id).await;
+            found.unwrap_or_default()
+        }
+    }
+
+    #[module(imports = [GraphqlModule], providers = [VolumesResolver])]
+    struct VolumesGraphqlModule;
+
+    #[tokio::test]
+    async fn a_served_field_whose_loader_owner_is_not_reached_is_refused_naming_the_import() {
+        let Err(refused) = TestApp::for_module::<VolumesGraphqlModule>().await else {
+            panic!("every query selecting `shelfLabel` would fail");
+        };
+        let refused = nest_rs_core::error_message(refused.as_ref());
+
+        for named in ["`Volume.shelfLabel`", "Archive", "import `ArchiveModule`"] {
+            assert!(refused.contains(named), "names {named}: {refused}");
+        }
+    }
+
+    #[module(imports = [VolumesGraphqlModule, ArchiveModule])]
+    struct ShelvedApp;
+
+    #[derive(Clone, SimpleObject)]
+    #[graphql(complex)]
+    struct Binding {
+        id: i32,
+    }
+
+    #[derive(Clone, SimpleObject)]
+    struct Folio {
+        #[graphql(flatten)]
+        binding: Binding,
+    }
+
+    #[resolver]
+    struct FoliosResolver;
+
+    #[operations]
+    impl FoliosResolver {
+        #[query]
+        #[public]
+        async fn folio(&self) -> Folio {
+            Folio {
+                binding: Binding { id: 1 },
+            }
+        }
+
+        #[field_resolver]
+        async fn shelf(&self, binding: &Binding, shelves: &DataLoader<ArchiveShelves>) -> String {
+            let Ok(found) = shelves.load_one(binding.id).await;
+            found.unwrap_or_default()
+        }
+    }
+
+    #[module(imports = [GraphqlModule], providers = [FoliosResolver])]
+    struct FoliosApp;
+
+    #[tokio::test]
+    async fn a_flattened_parents_field_whose_loader_owner_is_not_reached_is_refused() {
+        let Err(refused) = TestApp::for_module::<FoliosApp>().await else {
+            panic!("a flattened object's field is served like any other");
+        };
+        let refused = nest_rs_core::error_message(refused.as_ref());
+
+        for named in ["`Binding.shelf`", "import `ArchiveModule`"] {
+            assert!(refused.contains(named), "names {named}: {refused}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_served_field_whose_loader_owner_is_imported_boots_and_reads_it() {
+        let app = TestApp::for_module::<ShelvedApp>()
+            .await
+            .expect("the loader `shelfLabel` reads is reached");
+
+        let body: serde_json::Value = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ volumes { shelfLabel } }" }))
+            .send()
+            .await
+            .json()
+            .await
+            .value()
+            .deserialize();
+
+        assert_eq!(
+            body["data"]["volumes"][0]["shelfLabel"], "shelf 1",
+            "{body}"
+        );
+    }
+}

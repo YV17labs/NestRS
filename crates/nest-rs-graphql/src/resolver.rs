@@ -30,7 +30,7 @@ use async_graphql::{
 };
 use nest_rs_core::__private::Site;
 use nest_rs_core::anyhow;
-use nest_rs_core::{Container, ReachableProviders, UngatedDiscoveryError};
+use nest_rs_core::{Container, InertHost, ReachableProviders, UngatedDiscoveryError};
 
 use crate::config::GraphqlConfig;
 
@@ -173,6 +173,112 @@ pub(crate) fn compose_sites(
         }
     }
     Ok(())
+}
+
+/// One `#[field_resolver]`, which `#[ComplexObject]` grafts onto its parent at
+/// compile time: a schema serving the parent serves the field whether or not
+/// the app reaches its resolver, so the schema build reads it against the
+/// module gate.
+pub struct GraphqlFieldRegistration {
+    /// The object the field is served on, as `std::any::type_name` spells it.
+    pub parent: fn() -> &'static str,
+    /// The field's GraphQL name.
+    pub field: &'static str,
+    /// The field's resolver, read against the reachable providers, and its name.
+    pub resolver: fn() -> (TypeId, &'static str),
+    /// Where the resolver is declared (`module_path!()`), which tells the app's
+    /// own declaration from a dependency's.
+    pub origin: &'static str,
+}
+
+inventory::collect!(GraphqlFieldRegistration);
+
+/// The objects a schema serves, each as async-graphql's registry holds it: its
+/// Rust type and its fields. Read by Rust type, never by GraphQL name, since a
+/// binary links objects of one name its schema does not all serve.
+pub(crate) struct ServedObjects(Registry);
+
+impl ServedObjects {
+    /// What the resolvers the app reaches serve.
+    pub(crate) fn of(container: &Container) -> Result<Self, UngatedDiscoveryError> {
+        let reachable = ReachableProviders::of(container, RESOLVERS)?;
+        let mut registry = Registry::default();
+        for reg in inventory::iter::<GraphqlResolverRegistration>() {
+            if reachable.reaches((reg.resolver_type_id)()) {
+                (reg.type_info)(&mut registry);
+            }
+        }
+        Ok(Self::from_registry(registry))
+    }
+
+    pub(crate) fn from_registry(registry: Registry) -> Self {
+        Self(registry)
+    }
+
+    /// The GraphQL name of the object the Rust type `parent` is served as, when
+    /// it is served with `field`.
+    pub(crate) fn serving(&self, parent: &str, field: &str) -> Option<&str> {
+        self.0.types.values().find_map(|ty| match ty {
+            MetaType::Object {
+                name,
+                fields,
+                rust_typename: Some(rust_typename),
+                ..
+            } if *rust_typename == parent && fields.contains_key(field) => Some(name.as_str()),
+            _ => None,
+        })
+    }
+}
+
+/// Refuse every field the schema serves whose `#[field_resolver]` the app does
+/// not reach — it would run outside every module the app imports, and fail on
+/// what its resolver injects — naming the field, its resolver and the module to
+/// import.
+pub(crate) fn check_served_fields(
+    container: &Container,
+    served: &ServedObjects,
+) -> anyhow::Result<()> {
+    let reachable = ReachableProviders::of(container, RESOLVERS)?;
+    let mut unreached: Vec<String> = inventory::iter::<GraphqlFieldRegistration>()
+        .filter(|field| !reachable.reaches((field.resolver)().0))
+        .filter_map(|field| {
+            let parent = served.serving((field.parent)(), field.field)?;
+            let (resolver_type, resolver) = (field.resolver)();
+            let remedy = import_remedy(container, field.origin, resolver_type, parent);
+            Some(format!(
+                "`{parent}.{}` is resolved by `{resolver}`: {remedy}",
+                field.field
+            ))
+        })
+        .collect();
+    if !unreached.is_empty() {
+        unreached.sort_unstable();
+        anyhow::bail!(
+            "a served field's resolver is one this app does not reach, so it would run outside \
+             every module the app imports: {}",
+            unreached.join("; ")
+        );
+    }
+    Ok(())
+}
+
+/// What a served field needing `host`, declared at `origin`, tells the app to
+/// do: the import its cause prescribes.
+pub(crate) fn import_remedy(
+    container: &Container,
+    origin: &str,
+    host: TypeId,
+    parent: &str,
+) -> Cow<'static, str> {
+    match nest_rs_core::inert_host(container, origin, host) {
+        InertHost::ModuleNotImported { module }
+        | InertHost::Dependency {
+            module: Some(module),
+        } => Cow::Owned(format!(
+            "import `{module}` into the module serving `{parent}`"
+        )),
+        cause => cause.hint(),
+    }
 }
 
 /// One generated resolver object, submitted by `#[operations]` and

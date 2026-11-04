@@ -1,5 +1,6 @@
 //! Module-gating: a resolver in a reachable module appears in the schema; a
-//! resolver in no reachable module is silently skipped.
+//! resolver in no reachable module is silently skipped, unless a served parent
+//! carries its `#[field_resolver]`, which refuses the boot.
 
 use nest_rs_config::Surface;
 use nest_rs_core::module;
@@ -465,4 +466,157 @@ async fn a_field_is_served_under_the_name_async_graphql_gives_the_method() {
         "fields async-graphql would serve that #[operations] does not: {missing:?} — served \
          {served:?}",
     );
+}
+
+/// `#[ComplexObject]` grafts a `#[field_resolver]` onto its parent at compile
+/// time, so a served parent serves the field whether or not the app reaches its
+/// resolver: the schema build refuses that, as the module gate requires.
+mod field_host {
+    use std::sync::Arc;
+
+    use nest_rs_core::{injectable, module};
+    use nest_rs_graphql::async_graphql::SimpleObject;
+    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+    use nest_rs_testing::TestApp;
+
+    #[derive(Clone, SimpleObject)]
+    #[graphql(complex)]
+    struct Leaf {
+        id: i32,
+    }
+
+    #[injectable]
+    #[derive(Default)]
+    struct Sap;
+
+    #[resolver]
+    struct LeavesResolver;
+
+    #[operations]
+    impl LeavesResolver {
+        #[query]
+        #[public]
+        async fn leaves(&self) -> Vec<Leaf> {
+            vec![Leaf { id: 1 }]
+        }
+    }
+
+    #[resolver]
+    struct LeafFieldsResolver {
+        #[inject]
+        sap: Arc<Sap>,
+    }
+
+    #[operations]
+    impl LeafFieldsResolver {
+        #[field_resolver]
+        async fn veins(&self, leaf: &Leaf) -> i32 {
+            let Self { sap: _ } = self;
+            leaf.id * 2
+        }
+    }
+
+    #[module(providers = [Sap, LeafFieldsResolver])]
+    struct LeafFieldsModule;
+
+    #[module(imports = [GraphqlModule], providers = [LeavesResolver])]
+    struct LeavesGraphqlModule;
+
+    #[tokio::test]
+    async fn a_served_field_whose_resolver_is_not_reached_is_refused_naming_the_import() {
+        let Err(refused) = TestApp::for_module::<LeavesGraphqlModule>().await else {
+            panic!("`veins` would be served outside every module the app imports");
+        };
+        let refused = nest_rs_core::error_message(refused.as_ref());
+
+        for named in [
+            "`Leaf.veins`",
+            "LeafFieldsResolver",
+            "import `LeafFieldsModule`",
+        ] {
+            assert!(refused.contains(named), "names {named}: {refused}");
+        }
+    }
+
+    #[module(imports = [LeavesGraphqlModule, LeafFieldsModule])]
+    struct LeafApp;
+
+    #[tokio::test]
+    async fn a_served_field_whose_resolver_is_imported_boots_and_answers() {
+        let app = TestApp::for_module::<LeafApp>()
+            .await
+            .expect("the resolver of `veins` is reached");
+
+        let body: serde_json::Value = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ leaves { veins } }" }))
+            .send()
+            .await
+            .json()
+            .await
+            .value()
+            .deserialize();
+
+        assert_eq!(body["data"]["leaves"][0]["veins"], 2, "{body}");
+    }
+
+    #[derive(Clone, SimpleObject)]
+    #[graphql(complex)]
+    struct Stem {
+        id: i32,
+    }
+
+    #[derive(Clone, SimpleObject)]
+    struct Stalk {
+        #[graphql(flatten)]
+        stem: Stem,
+    }
+
+    #[resolver]
+    struct StalksResolver;
+
+    #[operations]
+    impl StalksResolver {
+        #[query]
+        #[public]
+        async fn stalk(&self) -> Stalk {
+            Stalk {
+                stem: Stem { id: 1 },
+            }
+        }
+    }
+
+    #[resolver]
+    struct StemFieldsResolver;
+
+    #[operations]
+    impl StemFieldsResolver {
+        #[field_resolver]
+        async fn rings(&self, stem: &Stem) -> i32 {
+            stem.id + 1
+        }
+    }
+
+    #[module(providers = [StemFieldsResolver])]
+    struct StemFieldsModule;
+
+    #[module(imports = [GraphqlModule], providers = [StalksResolver])]
+    struct StalksGraphqlModule;
+
+    #[tokio::test]
+    async fn a_flattened_parents_field_whose_resolver_is_not_reached_is_refused() {
+        let Err(refused) = TestApp::for_module::<StalksGraphqlModule>().await else {
+            panic!("a flattened object's field is served like any other");
+        };
+        let refused = nest_rs_core::error_message(refused.as_ref());
+
+        for named in [
+            "`Stem.rings`",
+            "StemFieldsResolver",
+            "import `StemFieldsModule`",
+        ] {
+            assert!(refused.contains(named), "names {named}: {refused}");
+        }
+    }
 }

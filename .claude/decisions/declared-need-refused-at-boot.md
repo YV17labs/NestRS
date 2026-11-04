@@ -62,3 +62,32 @@ owner's "Tout faire"), and each failed every request it touched:
   name redis, so a named instance's `RedisConnection<Cache>` injected with no
   `RedisModule::for_root((Cache, …))` keeps the generic sentence; closing it
   takes a probe at the inject site, as a handler parameter's is asked.
+
+## 2026-11-04 — a hand-written reader and the field's own resolver, read by Rust type
+
+Agreed by the owner's "Tout faire (Recommandé)" of 2026-10-31 (identity audit,
+second pass). A `#[field_resolver]`'s `&DataLoader<L>` parameter now registers as
+a relation does, so a served field whose loader's owner the app does not reach
+is refused naming the import, which it still never takes; the parameter binds
+through `data_opt`, its absence failing the field with the type on the
+operator's line. A `Context` the body reads by hand declares nothing, so no
+boot reads it, and the docs teach only the parameter.
+
+Verifying that showed the same gap one step up: `#[ComplexObject]` grafts a field
+resolver onto its parent at compile time, so a served parent served the field
+whether or not the app reached its resolver — a panic on what the resolver
+injects, or, with nothing injected, a body running outside every module the app
+imports, which the module gate forbids (`forward-principal.md`). Each
+`#[field_resolver]` now registers its resolver, and the schema build refuses the
+same way.
+
+**What a served field is, moved.** `Schema::names` is a flat set: a binary links
+objects of one GraphQL name it does not all serve, and any field of that name on
+any type read as served, which refused correct apps once every field resolver
+registered. The check now reads what the reachable resolvers register into a
+registry of its own, each object with its Rust type and its fields, against the
+registration's `type_name`. The SDL stays refused, for the reason above.
+
+**Refused: a boot refusal for a `Context` body.** Nothing declares it, and reading
+one would take parsing a method body; a body that wants the check takes the
+parameter.

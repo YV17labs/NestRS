@@ -172,7 +172,8 @@ names the entity, which `#[subscribe_message]` parameter is the payload (`&WsCli
 `Ambient<T>` by their names — each resolved through a function of the edge crate's
 `__private` returning its own type, so a namesake does not compile), the
 `Scoped<T>` and `Ambient<T>` parameters `#[operations]` and `#[tools]` leave out of
-the protocol's arguments, read the same way, and the request parameters an
+the protocol's arguments, read the same way, a `#[field_resolver]`'s
+`&DataLoader<L>`, whose `L` the boot reads the owner of, and the request parameters an
 OpenAPI document lists off the extractor spelling them (`Json<T>`, `Form<T>`,
 `Query<T>`, `Header<T>`, `Path<…>`, `Multipart`; an extractor that is the body
 says so by type, `nest_rs_http::__private::DocumentedBody`). What a route

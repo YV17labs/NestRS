@@ -63,14 +63,16 @@ pub mod __private {
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate, FieldFailure};
     pub use crate::loader::{
         GraphqlLoaderRegistration, GraphqlRelationRegistration, LoaderOwner, batch_spawner,
+        seeded_loader,
     };
     pub use crate::operation::{
         FieldGuards, GraphqlSite, IsStreamReturn, ROOT_FIELD, answers_a_stream, field_guard_stage,
         field_name, run_field, run_nested,
     };
     pub use crate::resolver::{
-        GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration, GraphqlRootMember,
-        GraphqlSiteRegistration, GraphqlSubscriptionObject, ResolverDescriptor,
+        GraphqlFieldRegistration, GraphqlResolverKind, GraphqlResolverObject,
+        GraphqlResolverRegistration, GraphqlRootMember, GraphqlSiteRegistration,
+        GraphqlSubscriptionObject, ResolverDescriptor,
     };
     pub use crate::scope::{FromScope, unprovided};
     pub use crate::subscription::{compose_schema, keep_masked_item};

@@ -134,20 +134,32 @@ Three properties make this loader correct:
   applies, so a batch on behalf of one caller never returns another
   tenant's rows.
 
-A resolver injects the loader and calls `.load_one(key)` per parent — the
-runtime batches every call into a single query:
+A `#[field_resolver]` takes the loader as a parameter and calls `.load_one(key)`
+per parent — the runtime batches every call into a single query:
 
-```rust title="crates/features/src/posts/graphql/resolver.rs"
+```rust title="crates/features/src/authors/graphql/resolver.rs"
 #[field_resolver]
-async fn by_name(
+async fn namesakes(
     &self,
-    ctx: &Context<'_>,
-    name: String,
-) -> Result<Vec<Post>> {
-    let loader = ctx.data_unchecked::<DataLoader<PostsServiceByName>>();
-    Ok(loader.load_one(name).await?.unwrap_or_default())
+    author: &Author,
+    posts: &DataLoader<PostsServiceByName>,
+) -> Result<Vec<Post>, ServiceError> {
+    Ok(posts.load_one(author.name.clone()).await?.unwrap_or_default())
 }
 ```
+
+The parameter is the whole wiring, and it declares the need. A loader is seeded
+only for an owner the app reaches, so the schema build reads the parameter and
+refuses a served field whose loader's owner the app does not import, as it does
+for an [exposed relation](/graphql/relations/), naming the line to add:
+
+```text frame="terminal"
+a served field reads a loader this app does not reach, so every query selecting it would fail: `Author.namesakes` (declared on `features::authors::Author`) reads a loader of `features::posts::PostsService`: import `PostsModule` into the module serving `Author`
+```
+
+The loader's name comes from `#[dataloader]`, so the parameter takes only one
+`#[dataloader]` generated: the macro's own association is what the boot reads,
+and a hand-written `Loader` here is a compile error saying so.
 
 <Aside type="caution">
 Keep each loader as the framework builds it, caching no record. Never build

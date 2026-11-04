@@ -419,7 +419,11 @@ and names where it ran: a `#[field_resolver]` — no unit, once per parent row �
 runs its resolver's and its own guards, and only the interceptors and
 exception filters declared on it, none of the app's nor its resolver's; an
 `#[entity]` folds no pool where the federation site ran it; a
-`#[subscription]`'s layers run at its opening, never per item. Every field's
+`#[subscription]`'s layers run at its opening, never per item. A
+`#[field_resolver]` is grafted onto its parent at compile time, so the schema
+build refuses a served one whose resolver the app does not reach, by the parent's
+Rust type, since a binary links objects of one GraphQL name it does not all
+serve. Every field's
 site is composed at the wiring step, so a layer it declares that does not
 resolve, or two `#[meta]` values of one type, refuse the boot. A field's
 `Ability` is the unit's — the one its class gate checked — and its mask and

@@ -866,6 +866,7 @@ pub(crate) fn build_schema(
         DiscoveredSubscription::from_registry(&container),
     )
     .data(container.clone())
+    .data(crate::field_spellings::FieldSpellings::default())
     .extension(loaders);
     if let Some(gate) =
         crate::federation::FederationExtensionFactory::for_schema(&container, config)

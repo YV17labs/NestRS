@@ -164,6 +164,33 @@ it is filed at `error` on `nest_rs::graphql`. `None` is the opaque answer:
 `Code` declared in a `const` is checked when it compiles: `Code::new("conflict")`
 is refused, and so is a `Problem` whose status is not a `4xx` or a `5xx`.
 
+## Field errors use the schema's names
+
+`extensions.errors` names a field **as the schema spells it**, so a client matches
+a key to the field it sent. A Rust field `display_name` answers `displayName`, at
+every depth, a validation failure and a [`#[crud]` conflict](/database/crud/#when-the-database-refuses)
+alike, while an input declaring `rename_fields = "snake_case"` keeps `display_name`:
+
+```json
+{
+    "message": "validation failed",
+    "extensions": {
+        "code": "INVALID_ARGUMENT",
+        "errors": { "displayName": [{ "code": "length" }] }
+    }
+}
+```
+
+A key is matched against the names the schema's inputs and arguments serve, by
+what is left once case and underscores are set aside. So a key no input serves
+stays as it was said, and so does `__all__`, validator's key for a rule over a
+whole struct, and one whose field `#[graphql(name = "…")]` renamed to another
+word, which the schema's names cannot tell. Where two inputs of one schema spell
+one word differently, a key that is one of those spellings stays, and any other
+takes the first by input name. A
+[variable pipe](/fundamentals/pipes-beyond-http/) runs before the schema does and
+answers the map it wrote.
+
 ## `ServiceError`
 
 A `CrudService` method returns `Result<T, ServiceError>`, and `ServiceError`

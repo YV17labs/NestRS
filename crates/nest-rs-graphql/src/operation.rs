@@ -11,6 +11,7 @@ use std::task::{Context as TaskContext, Poll, ready};
 
 use async_graphql::parser::types::OperationType;
 use async_graphql::{Context, Error as GraphqlError};
+use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{
     GlobalLayers, GuardStage, ResolvedLayer, Site, Tail, dispatch, new_unit_context,
@@ -30,6 +31,7 @@ use nest_rs_http::__private::carried_request_chain;
 use tracing::Instrument;
 
 use crate::error::{FieldFailure, Reply, answer, rendered};
+use crate::field_spellings::spelled_by_schema;
 use crate::view::{FieldRole, GraphqlView};
 
 /// Which GraphQL site a field is — what decides whether its guard stage folds
@@ -204,7 +206,12 @@ where
         operation,
         kind.role(),
     );
-    in_field_unit(role, field_name(ctx), unit.run(tail))
+    in_field_unit(
+        role,
+        field_name(ctx),
+        unit.run(tail)
+            .map(move |answer| answer.map_err(|error| spelled_by_schema(ctx, error))),
+    )
 }
 
 /// `unit`, a root field playing `role` under the name `field`, as a
@@ -275,6 +282,7 @@ where
         kind.role(),
     )
     .run(tail)
+    .map(move |answer| answer.map_err(|error| spelled_by_schema(ctx, error)))
 }
 
 /// The operation type as a field's line names its role.

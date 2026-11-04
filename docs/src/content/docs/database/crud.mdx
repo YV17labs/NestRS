@@ -267,8 +267,10 @@ reaches the client or the log, since it quotes the input it refused.
 
 A create or an update a unique key refuses also names what the client can
 fix: the input's fields that key holds, under `errors` on HTTP and
-`extensions.errors` on GraphQL, in the shape a validation failure's fields
-take, and never the value, the index or the table:
+`extensions.errors` on GraphQL, each as that edge's client spells them
+([GraphQL names a field as its schema does](/graphql/errors/#field-errors-use-the-schemas-names)), in the
+shape a validation failure's fields take, and never the value, the index or the
+table:
 
 ```json
 {

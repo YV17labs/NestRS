@@ -29,6 +29,7 @@ mod context;
 mod endpoint;
 mod error;
 mod federation;
+mod field_spellings;
 mod loader;
 mod module;
 mod null_propagation;

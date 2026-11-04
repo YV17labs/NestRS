@@ -209,7 +209,9 @@ guard, filter or interceptor loop of its own.
     one constructor per edge, a problem HTTP builds from a status alone the
     class core names for that status, a decode failure and a pipe's refusal
     the `INVALID_ARGUMENT` one — the class beside the field map, which
-    `errors` names on every edge and nothing else does — and every code the
+    `errors` names on every edge and nothing else does, each key as that
+    edge's client spells the field, GraphQL's read off its schema's names,
+    never re-cased — and every code the
     framework emits is a `nest_rs_core::problem::code` constant, read off the
     standard that names its class (its module doc;
     `.claude/decisions/every-refusal-carries-its-class.md`). The edge decides **by type**

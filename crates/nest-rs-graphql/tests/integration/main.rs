@@ -12,6 +12,7 @@ mod context;
 mod duplicate_operation;
 mod endpoint;
 mod federation;
+mod field_spellings;
 mod global_pipe;
 mod guard;
 mod layer_pool;

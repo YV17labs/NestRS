@@ -169,3 +169,20 @@ none of them names nothing.
 - A hand-written service converting a unique violation through
   `ServiceError::from(DbErr)` answers the bare `409`, and so does a tool on
   MCP, which has no `#[crud]`.
+
+## 2026-11-04 — GraphQL names a two-word field as its schema does
+
+Agreed by the owner's "Tout faire (Recommandé)" of 2026-10-31 and "aucun angle
+mort". The Limit above on `org_id` is closed, for this conflict and for validation
+together: GraphQL's field unit respells every `extensions.errors` key off the
+names the schema's inputs and arguments serve, so a client matches a key to the
+field it sent, under whatever rename rule its input declares. HTTP keeps serde's
+name, which is what its client sends. Re-casing with camelCase was refused: it
+restates async-graphql's default in a second place, and answers wrong for an input
+under `rename_fields`.
+
+**The limits.** A field `#[graphql(name = "…")]` renames to another word stays a
+Rust name, since the registry holds no Rust name to read it through. Inputs of one
+schema spelling one word differently are told apart only when the key is itself
+one of those spellings. A variable pipe answers before the schema runs, in the map
+it wrote.

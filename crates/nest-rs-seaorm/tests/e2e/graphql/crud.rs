@@ -142,6 +142,82 @@ struct GizmosModule;
 )]
 struct BarredGizmosModule;
 
+/// A key over a column of two words, so its field's Rust name and its schema's differ.
+mod plate {
+    use super::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[expose(name = "Plate", graphql)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "crud_probe_plates")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[expose(input(create))]
+        pub serial_code: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[injectable]
+#[derive(Default)]
+struct PlatesService;
+
+impl CrudService for PlatesService {
+    type Entity = plate::Entity;
+}
+
+impl Creatable for PlatesService {
+    type Create = plate::CreatePlate;
+}
+
+#[injectable]
+#[derive(Default)]
+struct EveryPlate;
+
+impl AbilityFactory for EveryPlate {
+    type Actor = crate::Anyone;
+
+    fn define(&self, _actor: &crate::Anyone, ab: &mut AbilityBuilder) {
+        ab.can(Action::Read, plate::Entity);
+        ab.can(Action::Create, plate::Entity);
+    }
+}
+
+#[resolver]
+struct PlatesResolver {
+    #[inject]
+    svc: Arc<PlatesService>,
+}
+
+#[crud(service = PlatesService, ops = [get, create])]
+impl PlatesResolver {}
+
+#[module(
+    imports = [
+        SeaOrmModule::for_root(SeaOrmConfig {
+            url: crate::harness::url().into(),
+            ..Default::default()
+        }),
+        SeaOrmDatabaseModule,
+        GraphqlModule::for_root(GraphqlConfig::default()),
+    ],
+    providers = [
+        PlatesService,
+        EveryPlate,
+        AbilityGuard<EveryPlate>,
+        AlwaysAuthenticated,
+        EndpointGuards<GraphqlView, (AlwaysAuthenticated, AbilityGuard<EveryPlate>)>,
+        PlatesResolver,
+    ],
+)]
+struct PlatesModule;
+
 const CREATE: &str =
     "mutation($input: CreateGizmo!) { createGizmo(input: $input) { id email note } }";
 
@@ -211,6 +287,40 @@ fn errors_filed(logs: &LogCapture) -> Vec<String> {
         .into_iter()
         .map(|event| format!("{} {}", event.target, event.message))
         .collect()
+}
+
+#[tokio::test]
+async fn a_conflict_on_a_key_of_two_words_names_its_field_as_the_schema_spells_it() {
+    let conn = crate::harness::connect().await;
+    crate::harness::setup_shared_table(
+        &conn,
+        "crud_probe_plates",
+        "CREATE TABLE IF NOT EXISTS crud_probe_plates (
+            id UUID PRIMARY KEY,
+            serial_code TEXT CONSTRAINT crud_probe_plates_serial_code_key UNIQUE NOT NULL
+        );",
+    )
+    .await;
+    let app = TestApp::for_module::<PlatesModule>()
+        .await
+        .expect("the subgraph boots");
+    const CREATE_PLATE: &str =
+        "mutation($input: CreatePlate!) { createPlate(input: $input) { id } }";
+    let input = json!({ "input": { "serialCode": format!("serial-{}", Uuid::now_v7()) } });
+
+    let (_, first) = operation(&app, CREATE_PLATE, input.clone()).await;
+    assert!(
+        !first.contains("\"errors\""),
+        "the first one lands: {first}"
+    );
+
+    let (_, second) = operation(&app, CREATE_PLATE, input).await;
+    let answer: Value = serde_json::from_str(&second).expect("a GraphQL body");
+    assert_eq!(
+        answer["errors"][0]["extensions"]["errors"],
+        json!({ "serialCode": [{ "code": "unique" }] }),
+        "the key a client matches to the field it sent: {second}",
+    );
 }
 
 #[tokio::test]

@@ -313,8 +313,8 @@ pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //! (`features::authz::mcp`) so callers are authenticated and the ambient
 //! `Ability` is attached.
 //!
-//! Every operation then declares its own posture, exactly as a `#[query]` or an
-//! HTTP verb does:
+//! An operation those guards cover needs no posture of its own, as an HTTP route
+//! under a guard needs none. Where it gates more, it says so:
 //!
 //! * `#[authorize(Action, Entity)]` — the class-level gate plus automatic
 //!   field-level masking of the value you return. Reach for it whenever the
@@ -322,7 +322,10 @@ pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!   so the mask has a shape to work on.
 //! * `#[authorize(Action, Subject)]` on a `#[subject]` — the same gate on a
 //!   capability no table holds, and no mask: the answer is no row.
-//! * `#[public]` — no gate and no mask: any caller the endpoint admitted.
+//!
+//! `#[public]` admits a caller with no credential, so it belongs on an endpoint
+//! `McpAccess::Public` opens, where every operation states its posture; behind
+//! guards that authenticate it can open nothing, and the boot refuses it.
 //!
 //! Arguments are held to the rules their type declares, as on every other
 //! transport: `Parameters<T>` runs `validator` before the body and answers a

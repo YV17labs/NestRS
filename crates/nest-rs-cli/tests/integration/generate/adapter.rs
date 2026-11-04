@@ -588,6 +588,31 @@ fn generate_mcp_over_a_feature_port_gates_the_tool_on_the_ports_subject() {
     assert_fits_the_margin(&tool);
 }
 
+/// A generated tool's header teaches what the word means on every edge: an
+/// operation the endpoint's guards cover needs no posture, and `#[public]` admits
+/// a caller with no credential, so behind those guards it refuses the boot.
+#[test]
+fn generate_mcp_says_public_admits_a_caller_with_no_credential() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+
+    let tool =
+        fs::read_to_string(dir.path().join("crates/features/src/posts/mcp/tool.rs")).unwrap();
+    assert!(
+        tool.contains("needs no posture") && tool.contains("admits a caller with no credential"),
+        "{tool}",
+    );
+    assert!(
+        !tool.contains("declares its own posture") && !tool.contains("the endpoint admitted"),
+        "that is the meaning the word no longer has: {tool}",
+    );
+    assert_fits_the_margin(&tool);
+}
+
 /// Over a port that has an entity but no `CrudService`, the operation gates on
 /// the entity, and no `#[subject]` is written beside it.
 #[test]

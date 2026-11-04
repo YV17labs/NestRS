@@ -165,9 +165,10 @@ answers to `Discoverable::injected_per_request`, so the access graph checks it.
 Spelling decides only what no value can tell a macro, and each such reading is
 stated in the decorator's rustdoc: the wrapper async-graphql's derive itself
 reads by name, the `Json<T>` rmcp derives a tool's output schema from, the
-shape a masked MCP or WS operation unwraps (`Json<T>`, a resource's
+shape a masked MCP operation unwraps (`Json<T>`, a resource's
 `Option<Json<T>>`), the template variable a `#[resource]` parameter's name
-spells, which `#[subscribe_message]` parameter is the payload (`&WsClient` by its reference, `Scoped<T>` and
+spells, the `Authorized<A, E>` parameter `bind` hands its subject and whose `E`
+names the entity, which `#[subscribe_message]` parameter is the payload (`&WsClient` by its reference, `Scoped<T>` and
 `Ambient<T>` by their names — each resolved through a function of the edge crate's
 `__private` returning its own type, so a namesake does not compile), the
 `Scoped<T>` and `Ambient<T>` parameters `#[operations]` and `#[tools]` leave out of

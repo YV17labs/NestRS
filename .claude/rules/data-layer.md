@@ -331,9 +331,10 @@ handler they bypass the posture nobody can then `rg` for.
 
 ## Extractors and the carried ability
 
-**`#[authorize(A, bind = S)]`** loads and authorizes through the service (404
-absent, 403 denied) into the operation's `Authorized<A, E>` parameter, on HTTP
-and GraphQL alike, and needs an `AbilityGuard` on the route.
+**`#[authorize(A, bind = S)]`** loads and authorizes through the service into the
+operation's `Authorized<A, E>` parameter, and needs an `AbilityGuard` on the route:
+on HTTP and GraphQL 404 absent, 403 denied; on an MCP `#[resource]`, through the
+same load, one *Resource not found* for both, which hides existence.
 
 Each edge's authz half lives in `nest-rs-authz` and its data-layer half in
 `nest-rs-seaorm`, each behind the matching edge feature — **the split avoids a

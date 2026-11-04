@@ -230,10 +230,10 @@ impl PostsController {
 `AdminGuard` runs *on top of* the controller's two guards. Per-handler
 binding is **additive** — it does not replace the controller list.
 
-A route with no guards stays open, but silence is not a decision: the boot
-reports every route that binds no guard and is not marked `#[public]` in a
-single `warn` naming them ([below](#declare-on-the-provider)). Declaring
-the posture — a guard, or `#[public]` — is what makes it intentional.
+A route with no guards does not boot, since silence is not a decision: the boot
+refuses every route that binds no guard and is not marked `#[public]`, in one
+error naming them ([below](#declare-on-the-provider)). Declaring the posture — a
+guard, or `#[public]` — is what makes it intentional.
 
 The HTTP adapter imports the authz module transitively — same pattern as
 `UsersHttpModule` in the repo:

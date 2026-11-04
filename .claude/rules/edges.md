@@ -186,7 +186,7 @@ guard, filter or interceptor loop of its own.
 10. **Request scope** — `Scoped<T>`, a parameter the boot checks (its provider
     is inside the access contract, through `ResolvesProvider` and the impl
     half's probe — HTTP's, GraphQL's, WS's and MCP's today, as is the service
-    `bind = Service` loads through on either edge), a miss
+    `bind = Service` loads through on every edge taking it), a miss
     answered opaquely with the type on the operator's line.
 11. **A `#[config]` and its `for_root`** (`container.md`).
 12. **Error opacity** — an error that is neither the edge's own deliberate

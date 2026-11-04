@@ -85,7 +85,7 @@ one statement, no terminal `.add()` call. See
 [Policies](/security/authorization/policies/) for the full builder API.
 
 The trait has a second, defaulted branch — `define_visitor` — that the
-guard calls instead of `define` when a `#[public]` route is reached with
+guard calls instead of `define` when what `#[public]` opens is reached with
 no credential. It grants nothing until you write into it; see
 [Public reads](/security/authorization/public-reads/).
 
@@ -256,7 +256,7 @@ controller with the transport's authz module, and write a
   round trip `#[expose]` writes and the mask's steps are documented as
   internals (skip on a first pass).
 - [Public reads](/security/authorization/public-reads/) —
-  `define_visitor`, the anonymous branch a `#[public]` route reads.
+  `define_visitor`, the anonymous branch a `#[public]` unit reads.
 - [OAuth scopes](/security/authorization/scopes/) — `.requires_scope(...)`
   narrows a rule to the scope a *token* carries, and refuses with an
   `insufficient_scope` challenge naming what to request. Read it when

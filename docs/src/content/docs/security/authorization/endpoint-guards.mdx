@@ -237,12 +237,12 @@ guards on a real `GET`, so they declare `GuardFor<HttpView>`, not
 `GuardFor<WsView>`; `#[gateway]` emits that bound, and `GuardFor<WsView>` is
 what a guard bound beside a `#[subscribe_message]` owes instead.
 
-**Above that, a message declares its posture like an operation on any
-other transport**, and it is mandatory: `#[authorize(Action, Entity)]` or
-`#[public]`, or it does not compile. `#[authorize]` emits the class gate
-(`nest_rs::authz::class_gate`, every edge's) before the payload is deserialized and
-the reply mask afterwards — so a handler answering with entity rows
-writes **no masking call**. It fails closed when no ambient ability is
+**Above that, a message declares a posture where it gates more**, as a route
+does: the guards at the upgrade cover it, so it needs none of its own, and one no
+guard covers says `#[public]` or fails the boot. `#[authorize(Action, Entity)]`
+emits the class gate (`nest_rs::authz::class_gate`, every edge's) before the payload
+is deserialized and the reply mask afterwards — so a handler answering with entity
+rows writes **no masking call**. It fails closed when no ambient ability is
 present, which is exactly the state of a gateway that binds no `AuthzGuard`
 at its upgrade.
 

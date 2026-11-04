@@ -25,8 +25,9 @@
 //! running `check_http` apart from it.
 //!
 //! Response masking fails *closed* on a stripped **required** field — declare
-//! `unmasked` when a tool deliberately answers with a narrower projection — and
-//! `bind = Service` has no MCP form: an operation takes one `Parameters<T>`.
+//! `unmasked` when a tool deliberately answers with a narrower projection.
+//! `bind = Service` loads the row a `#[resource]`'s one template variable names;
+//! a tool, a prompt and a listing name no id and refuse it.
 //!
 //! # Every capability, not just tools
 //!

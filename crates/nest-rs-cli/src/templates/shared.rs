@@ -501,7 +501,7 @@ if let Some(user_id) = actor.sub.user_id() {
 ```
 
 `define` answers for an authenticated actor; `define_visitor` answers for a
-caller with no token, on a `#[public]` route only — a `#[public]` route reached
+caller with no token, on what `#[public]` opens — a `#[public]` route reached
 *with* a valid token uses `define`. `nestrs g resource` prints the lines to paste
 for the resource it just generated.
 

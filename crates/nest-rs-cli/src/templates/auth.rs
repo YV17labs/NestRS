@@ -238,7 +238,7 @@ impl AbilityFactory for AuthzAbility {
     /// `if let Some(user_id) = actor.sub.user_id()` — a client owns none.
     fn define(&self, _actor: &Claims, _ab: &mut AbilityBuilder) {}
 
-    /// What an *unauthenticated* caller may do, on a `#[public]` route only.
+    /// What an *unauthenticated* caller may do, on what `#[public]` opens.
     /// Empty on purpose: nothing is public until you say so here, and a route
     /// you open with `#[public]` still serves no row without a grant — a
     /// `can(Action::Read, …)` narrowed by `.when(…)` to the rows meant for

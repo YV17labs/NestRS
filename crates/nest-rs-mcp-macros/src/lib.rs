@@ -67,7 +67,11 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// `#[resource(template = "post://{id}")]` reads one resource: the template is
 /// RFC 6570 level 1, each `{variable}` a parameter of the method parsed with
-/// `FromStr`, and `resources/templates/list` advertises it with its `name`
+/// `FromStr` — or, under `#[authorize(Action, bind = Service)]` on a template
+/// naming one variable, the row it names, loaded through the service under the
+/// caller's ability into an `Authorized<Action, E>` parameter, a row denied, one
+/// missing and an id no v7 answering as a URI no template reads with no body run
+/// — and `resources/templates/list` advertises it with its `name`
 /// (the method's unless stated), `title`, `description` and the media type its
 /// answer is read as — `Json<T>` as `application/json`, a `String` as
 /// `text/plain`, a `ReadResourceResult` as built, any of them inside `Option`,
@@ -87,8 +91,9 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   resolved in the tail through a function returning its own type, so a
 ///   namesake does not compile, and neither an argument of the protocol —
 ///   piped when it is `Parameters<Piped<P>>`, and on a `#[resource]` the
-///   template variable its name spells — each argument held to the rules its
-///   type declares;
+///   template variable its name spells, or under `bind` the subject when its
+///   type's last segment is `Authorized`, which names the entity — each argument
+///   held to the rules its type declares;
 /// - a masked operation spells its return `Result<…>`, the mask reading
 ///   `Json<T>` or `Option<Json<T>>` to unwrap and a tool's opaque answers
 ///   (`CallToolResult`, `ContentBlock`, …) or a `ReadResourceResult`, bare or

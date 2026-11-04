@@ -80,7 +80,7 @@ struct Args {
 
 /// Every key `#[config]` takes on its struct, in the order its refusals list
 /// them.
-const CONFIG: Grammar =
+pub(crate) const CONFIG: Grammar =
     Grammar::new("config", &["namespace", "validate", "from_env"]).elsewhere(a_fields_key);
 
 /// A field's key written on the struct is not misspelled: it is told whose it is.

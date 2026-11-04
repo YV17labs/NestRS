@@ -1,6 +1,7 @@
 //! Module-gating: a resolver in a reachable module appears in the schema; a
 //! resolver in no reachable module is silently skipped.
 
+use nest_rs_config::Surface;
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_testing::TestApp;
@@ -25,7 +26,7 @@ struct AppWithLoose;
 
 // Linked into this binary, but unreachable here.
 #[module(imports = [GraphqlModule::for_root(GraphqlConfig {
-    introspection: nest_rs_config::Surface::Open,
+    introspection: Surface::Open,
     ..GraphqlConfig::default()
 })])]
 struct AppWithoutLoose;
@@ -402,7 +403,7 @@ struct OracleFeatureModule;
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        introspection: nest_rs_config::Surface::Open,
+        introspection: Surface::Open,
         ..GraphqlConfig::default()
     }),
     OracleFeatureModule,

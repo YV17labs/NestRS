@@ -16,8 +16,8 @@ mod overlay;
 /// Must sit **above** the derives so it sees them intact. `namespace` must be
 /// a non-empty lowercase string. It carries the `Validate` derive itself;
 /// `validate = "manual"` suppresses it for a config writing `impl Validate` by
-/// hand, `from_env = "manual"` the `impl Config` for one writing its overlay by
-/// hand. A field's own `#[config(…)]` names its reader: `bounds = RANGE` for a
+/// hand, and `from_env = "manual"` the `impl Config` for one writing its overlay
+/// by hand. A field's own `#[config(…)]` names its reader: `bounds = RANGE` for a
 /// duration or a count, which binds the range to the field as the associated
 /// `BoundedSetting` named for it, `json`, `count` or `with = path`, handed the
 /// field's key and path as the associated `Field` named for it.

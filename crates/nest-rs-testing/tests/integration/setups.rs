@@ -166,7 +166,6 @@ fn pinned_http() -> HttpConfig {
 fn pinned_openapi() -> OpenApiConfig {
     OpenApiConfig {
         enabled: nest_rs_config::Surface::Open,
-        emit: nest_rs_config::Surface::Closed,
         ..OpenApiConfig::default()
     }
 }

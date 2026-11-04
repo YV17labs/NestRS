@@ -49,20 +49,20 @@ impl Surface {
     /// Whether it is open in this process: [`ByProfile`](Self::ByProfile) under
     /// a declared development or test profile alone.
     pub fn is_open(self) -> bool {
-        self.resolved(!Environment::from_env().is_deployed())
+        self.resolved(|profile| !profile.is_deployed())
     }
 
     /// Whether the emit it gates writes its file in this process:
     /// [`ByProfile`](Self::ByProfile) under a declared development profile
     /// alone, since parallel suites would rewrite a committed file under test.
     pub fn writes(self) -> bool {
-        self.resolved(Environment::from_env() == Environment::Development)
+        self.resolved(|profile| profile == Environment::Development)
     }
 
-    /// A written opening or closing, or what the profile says.
-    fn resolved(self, by_profile: bool) -> bool {
+    /// A written opening or closing, or what `by_profile` makes of the profile.
+    fn resolved(self, by_profile: fn(Environment) -> bool) -> bool {
         match self {
-            Self::ByProfile => by_profile,
+            Self::ByProfile => by_profile(Environment::from_env()),
             Self::Open => true,
             Self::Closed => false,
         }
@@ -87,10 +87,8 @@ impl FromSetting for Surface {
     reason = "figment::Jail fixes the closure's error type"
 )]
 mod tests {
-    use validator::Validate;
-
     use super::*;
-    use crate::{Config, ConfigError, ConfigService, Namespaced};
+    use crate::{ConfigError, ConfigField as _, ConfigService};
 
     /// `read` under each profile a process can declare, `""` declaring none.
     fn by_profile(read: fn(Surface) -> bool, surface: Surface, expected: [bool; 6]) {
@@ -144,25 +142,11 @@ mod tests {
         assert_eq!(Surface::default(), Surface::ByProfile);
     }
 
-    #[derive(Clone, Debug, Default, Validate)]
-    struct Cfg {
-        open: Surface,
-    }
-    impl Namespaced for Cfg {
-        const NAMESPACE: &'static str = "surface_test";
-    }
-    impl Config for Cfg {
-        fn from_env(env: &ConfigService, base: Self) -> crate::Result<Self> {
-            use crate::ConfigField as _;
-            Ok(Self {
-                open: Surface::overlay(env, "OPEN", base.open)?,
-            })
-        }
-    }
+    const NAMESPACE: &str = "surface_test";
 
     fn read(vars: &[(&'static str, &'static str)], base: Surface) -> crate::Result<Surface> {
-        let env = ConfigService::with_vars(Cfg::NAMESPACE, vars.iter().copied());
-        Cfg::from_env(&env, Cfg { open: base }).map(|cfg| cfg.open)
+        let env = ConfigService::with_vars(NAMESPACE, vars.iter().copied());
+        Surface::overlay(&env, "OPEN", base)
     }
 
     #[test]
@@ -191,7 +175,7 @@ mod tests {
         let refused = read(&[("OPEN", "maybe")], Surface::ByProfile).expect_err("not a boolean");
         assert!(
             matches!(refused, ConfigError::Parse { ref var, .. }
-                if *var == crate::var_name(Cfg::NAMESPACE, "OPEN")),
+                if *var == crate::var_name(NAMESPACE, "OPEN")),
             "{refused}"
         );
         assert!(!refused.to_string().contains("maybe"), "{refused}");

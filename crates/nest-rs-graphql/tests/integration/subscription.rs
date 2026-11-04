@@ -13,6 +13,7 @@ use async_graphql::SimpleObject;
 use async_graphql::futures_util::StreamExt as _;
 /// async-graphql's own `futures_util` re-export, reached through the framework.
 use async_graphql::futures_util::stream as futures_stream;
+use nest_rs_config::Surface;
 use nest_rs_core::module;
 use nest_rs_graphql::async_graphql;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, Scoped, operations, resolver};
@@ -136,8 +137,8 @@ struct TickModule;
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        playground: nest_rs_config::Surface::Closed,
-        introspection: nest_rs_config::Surface::Open,
+        playground: Surface::Closed,
+        introspection: Surface::Open,
         ..GraphqlConfig::default()
     }),
     TickModule,
@@ -342,7 +343,7 @@ async fn a_public_subscription_is_reachable() {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        playground: nest_rs_config::Surface::Open,
+        playground: Surface::Open,
         ..GraphqlConfig::default()
     }),
     TickModule,

@@ -15,7 +15,8 @@ pub(crate) const FIELD: Grammar =
 
 /// A struct's key written on a field is not misspelled: it is told whose it is.
 fn the_structs_key(key: &str) -> Option<String> {
-    ["namespace", "validate", "from_env"]
+    crate::config::CONFIG
+        .keys()
         .contains(&key)
         .then(|| format!("#[config] `{key}` is the struct's: write it on `#[config(…)]` above it"))
 }

@@ -104,8 +104,6 @@ fn openapi(enabled: Surface) -> OpenApiSetup {
         enabled,
         title: "Widget API".into(),
         version: "9.9.9".into(),
-        // A written emit would put `openapi.json` in the runner's directory.
-        emit: Surface::Closed,
         ..OpenApiConfig::default()
     })
 }
@@ -744,29 +742,16 @@ fn a_pin_over_the_default_serves_nothing_in_a_deployment() {
 }
 
 #[test]
-#[expect(
-    clippy::result_large_err,
-    reason = "figment::Jail fixes the closure's error type"
-)]
 fn a_pin_over_the_default_writes_the_document_under_development() {
     let path = Removed(by_profile_document_path());
-    figment::Jail::expect_with(|jail| {
-        jail.set_env(nest_rs_config::Environment::var_name(), "development");
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("runtime")
-            .block_on(async {
-                let _app = TestApp::for_module::<EmitPathPinnedApp>()
-                    .await
-                    .expect("the documentation boots");
-                nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
-                    std::fs::read_to_string(&path.0).is_ok_and(|text| text.ends_with('\n'))
-                })
-                .await;
-            });
-        Ok(())
+    in_profile("development", || async {
+        let _app = TestApp::for_module::<EmitPathPinnedApp>()
+            .await
+            .expect("the documentation boots");
+        nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+            std::fs::read_to_string(&path.0).is_ok_and(|text| text.ends_with('\n'))
+        })
+        .await;
     });
 }
 

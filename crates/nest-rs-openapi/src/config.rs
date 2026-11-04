@@ -87,9 +87,7 @@ impl OpenApiConfig {
             emit_path: "openapi.json".into(),
         }
     }
-}
 
-impl OpenApiConfig {
     /// One `warn` when the documentation is served outside a development or
     /// test profile: honoured, since the deployment chose it, and said.
     pub(crate) fn warn_when_open(&self) {

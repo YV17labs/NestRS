@@ -84,11 +84,11 @@ is reviewed as an escape.
 
 `Repo` hands out no connection. A read that drops the ability goes through a
 method named for it — `unscoped`, `unscoped_by_id`, `insert_unscoped`,
-`with_tombstones` — whose rustdoc states the bar its caller must clear, so
-auditing the escapes is one search per name, `.query()` among them. Outside a
-unit of work, every `Repo` call returns an error naming the bindings that
-install one — a service called with no ambient executor is a wiring bug, not
-a silent miss.
+`insert_unscoped_or_existing`, `with_tombstones` — whose rustdoc states the
+bar its caller must clear, so auditing the escapes is one search per name,
+`.query()` among them. Outside a unit of work, every `Repo` call returns an
+error naming the bindings that install one — a service called with no ambient
+executor is a wiring bug, not a silent miss.
 
 ## Under the hood: the ambient executor
 

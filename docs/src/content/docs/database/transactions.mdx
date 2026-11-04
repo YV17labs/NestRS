@@ -187,30 +187,62 @@ The primitive underneath is `nest_rs::database::after_commit`, which the bus
 calls; a [database driver](/database/writing-a-driver/) implements it for its
 own transactions.
 
-## Atomic blocks
+## A unique key someone else may hold
 
-A statement that fails inside a transaction aborts the whole transaction, so a
-service that expects a failure — a unique key a concurrent request may have
-just taken — runs that statement in `nest_rs::database::atomic`. The block is a
-savepoint inside the request's transaction: an error rolls back the block
-alone, and the request carries on and commits.
+A statement that fails inside a transaction aborts the whole transaction, and
+the commonest failure a service expects is a unique key a concurrent request
+has just taken. An insert that should land, or meet the row already holding
+its key, says so instead of failing: `Repo::insert_unscoped_or_existing` sends
+`INSERT … ON CONFLICT (key) DO NOTHING RETURNING`, then reads the live row
+holding the key, so nothing fails and the transaction carries on.
 
 ```rust title="crates/features/src/users/service.rs (from the demo, abridged)"
-let linked = atomic(async {
-    Ok::<_, ServiceError>(
-        Repo::<UserIdentities>::insert_unscoped(new_identity_active(user_id, identity))
-            .await?,
+let linked = Repo::<UserIdentities>::insert_unscoped_or_existing(
+    new_identity_active(user_id, identity),
+    [
+        user_identity::Column::Provider,
+        user_identity::Column::Subject,
+    ],
+)
+.await?;
+if let Insertion::New(_) = linked {
+    // …
+}
+```
+
+`Insertion::New` holds the row inserted, `Insertion::Existing` the one that
+held the key. The key needs a unique index over exactly its columns; on an
+entity declared `soft_delete`, one over its live rows alone is inferred too,
+and a tombstone is never returned. It is `insert_unscoped`'s escape, under the
+same bar — provisioning before a principal exists, work no principal does.
+
+## Atomic blocks
+
+A statement that may fail any other way runs in `nest_rs::database::atomic`.
+The block is a savepoint inside the request's transaction: an error rolls back
+the block alone, and the request carries on and commits. Several statements
+that land together or not at all — a user and the identity it signs in
+with — run in one block too, which on a safe route is a transaction of its
+own.
+
+```rust title="crates/features/src/users/service.rs (from the demo, abridged)"
+let provisioned: Result<entity::Model, ServiceError> = atomic(async {
+    let user = match Repo::<Users>::insert_unscoped_or_existing(
+        active,
+        [entity::Column::Email],
     )
+    .await?
+    {
+        Insertion::New(user) => {
+            // …
+            user
+        }
+        Insertion::Existing(user) => user,
+    };
+    self.link_identity(user.id, identity).await?;
+    Ok(user)
 })
 .await;
-match linked {
-    Ok(_) => {
-        // …
-        Ok(())
-    }
-    Err(ServiceError::Conflict(_)) => Ok(()),
-    Err(e) => Err(e),
-}
 ```
 
 - **`Ok` keeps the block's writes** in the request's transaction, which still

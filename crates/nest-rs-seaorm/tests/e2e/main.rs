@@ -31,6 +31,7 @@ mod mutual_tls;
 mod public_visitor;
 mod queue;
 mod relational_authz;
+mod repo;
 mod scope;
 mod soft_delete;
 mod unique_key;

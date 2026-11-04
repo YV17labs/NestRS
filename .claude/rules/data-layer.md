@@ -40,7 +40,12 @@ callers must clear; the method's doc is the authority, not this list.
   uniqueness probes such as `resolve_unique_slug`.
 - **`Repo::insert_unscoped`** — the write pendant: pre-principal provisioning
   (a social-login user) and principal-less system work. An authorized create
-  stays on `Creatable`.
+  stays on `Creatable`. Its on-conflict form, `insert_unscoped_or_existing`,
+  under the same bar, returns the live row already holding a unique key
+  (`INSERT … ON CONFLICT (key) DO NOTHING RETURNING`, then a read), so a
+  collision a concurrent caller may cause never aborts the unit and needs no
+  savepoint; no savepoint wraps every write by default, a round trip per
+  write on the hot path.
 - **`Repo::with_tombstones`** — the ability-scoped read that keeps
   soft-deleted rows: an administrator's view of deleted records, a retention
   job. Every other read hides them. It reads only: no `Repo` write un-deletes

@@ -58,8 +58,9 @@ reason, and each is a place a reviewer must look.
 
 `Repo` hands out no connection, so a service cannot run a query of its own on
 the unit's executor. A read that drops the ability goes through a method named
-for it — `Repo::unscoped`, `unscoped_by_id`, `insert_unscoped`,
-`with_tombstones` — whose rustdoc states the bar its caller must clear. The
+for it — `Repo::unscoped`, `unscoped_by_id`, `insert_unscoped` (and its
+on-conflict form, `insert_unscoped_or_existing`), `with_tombstones` — whose
+rustdoc states the bar its caller must clear. The
 credential lookup before sign-in is one, and it reads **across every tenant**:
 
 ```rust title="crates/features/src/users/service.rs (from the demo)"
@@ -173,8 +174,9 @@ predicate is the bug to grep for.
 Run this before a tenant-facing release. Each step is one `grep` or one
 read:
 
-1. **Grep for `Repo::unscoped`, `unscoped_by_id`, `insert_unscoped` and
-   `with_tombstones`** in feature code. Confirm each call site clears the bar
+1. **Grep for `Repo::unscoped`, `unscoped_by_id`, `insert_unscoped` (which
+   finds `insert_unscoped_or_existing` too) and `with_tombstones`** in
+   feature code. Confirm each call site clears the bar
    the method's rustdoc states, and is not a forgotten scope.
 2. **Grep for `.query()`** in feature code. A `.query()` on a `Repo`
    select hands out the statement itself, and one rewritten there runs past

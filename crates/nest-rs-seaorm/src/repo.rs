@@ -2,18 +2,20 @@ use std::any::TypeId;
 use std::marker::PhantomData;
 
 use nest_rs_authz::{Action, current_ability};
-use nest_rs_database::{ExecutorScope, current_executor_scope};
-use sea_orm::sea_query::{Condition, Expr};
+use nest_rs_database::{ExecutorScope, atomic, current_executor_scope};
+use sea_orm::sea_query::{Condition, Expr, ExprTrait, OnConflict};
 use sea_orm::{
     ActiveModelBehavior, ActiveModelTrait, ColumnTrait, DbErr, Delete, DeleteResult, EntityTrait,
-    IntoActiveModel, Iterable, ModelTrait, PrimaryKeyToColumn, PrimaryKeyTrait, QueryFilter,
-    Select, Update, Value,
+    IdenStatic, Insert, IntoActiveModel, Iterable, ModelTrait, PrimaryKeyToColumn, PrimaryKeyTrait,
+    QueryFilter, Select, Update, Value,
 };
 
 use crate::column_default::fill_column_defaults;
+use crate::error::AtomicDbError;
 use crate::executor::{SeaOrmExecutor, current_executor};
+use crate::insertion::Insertion;
 use crate::select::RepoSelect;
-use crate::soft_delete::live_condition_of;
+use crate::soft_delete::{live_condition_of, tombstone_column};
 
 /// Row-level filter for `action` on `E`: the ambient ability's condition, and,
 /// for every action but [`Create`](Action::Create) and
@@ -257,6 +259,108 @@ impl<E: EntityTrait> Repo<E> {
         active.insert(&conn).await
     }
 
+    /// [`insert_unscoped`](Self::insert_unscoped), unless a live row already
+    /// holds the row's values of the unique `key`: then nothing is written and
+    /// that row is returned, [`Insertion::Existing`]. The conflict is absorbed
+    /// by the statement itself — `INSERT … ON CONFLICT (key) DO NOTHING
+    /// RETURNING`, then a read of the row holding the key — so it never aborts
+    /// the unit's transaction, and no savepoint wraps it.
+    ///
+    /// Bar: [`insert_unscoped`](Self::insert_unscoped)'s — pre-principal
+    /// provisioning and principal-less system work — where a concurrent
+    /// caller may have inserted the same key first (a social login's user and
+    /// its identity link). The key needs a unique index over exactly its
+    /// columns; on an entity declared `soft_delete`, one over its live rows
+    /// alone (`WHERE deleted_at IS NULL`) is inferred too, and a tombstone is
+    /// never returned.
+    ///
+    /// A key column the row leaves unset, or its `before_save` unsets, is refused
+    /// before anything is sent ([`DbErr::AttrNotSet`]), and the row holding the
+    /// key is read by what that hook returned, the values the insert sends. When
+    /// no live row holds the key after all — a
+    /// tombstone a unique index counts holds it, or the row was deleted since
+    /// — the insert is sent again inside a savepoint, so its own outcome
+    /// stands: the row, or the violation it meets
+    /// ([`DbOutcome::Conflict`](crate::DbOutcome::Conflict)).
+    ///
+    /// ```
+    /// # mod identity {
+    /// #     use sea_orm::entity::prelude::*;
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    /// #     #[sea_orm(table_name = "user_identity")]
+    /// #     pub struct Model {
+    /// #         #[sea_orm(primary_key, auto_increment = false)]
+    /// #         pub id: Uuid,
+    /// #         pub provider: String,
+    /// #         pub subject: String,
+    /// #     }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {}
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// use nest_rs_seaorm::{Insertion, Repo};
+    /// use sea_orm::{DbErr, Set};
+    ///
+    /// async fn link(provider: &str, subject: &str) -> Result<bool, DbErr> {
+    ///     let link = identity::ActiveModel {
+    ///         provider: Set(provider.to_owned()),
+    ///         subject: Set(subject.to_owned()),
+    ///         ..Default::default()
+    ///     };
+    ///     let key = [identity::Column::Provider, identity::Column::Subject];
+    ///     match Repo::<identity::Entity>::insert_unscoped_or_existing(link, key).await? {
+    ///         Insertion::New(_) => Ok(true),
+    ///         Insertion::Existing(_) => Ok(false),
+    ///     }
+    /// }
+    /// ```
+    pub async fn insert_unscoped_or_existing<const N: usize>(
+        mut active: E::ActiveModel,
+        key: [E::Column; N],
+    ) -> Result<Insertion<E::Model>, DbErr>
+    where
+        E::ActiveModel: ActiveModelBehavior + Send,
+        E::Model: IntoActiveModel<E::ActiveModel>,
+    {
+        const {
+            assert!(
+                N > 0,
+                "an on-conflict insert names the unique key it may meet"
+            )
+        };
+        let conn = Self::conn()?;
+        fill_column_defaults::<E>(&mut active);
+        holding_key_of::<E>(&active, key)?;
+        let active = E::ActiveModel::before_save(active, &conn, true).await?;
+        let held = holding_key_of::<E>(&active, key)?;
+        let entity = E::default().table_name();
+        // sea-orm 2.0's single-row `exec_with_returning`, `TryInsert`'s included,
+        // answers `RecordNotFound` to an empty `RETURNING`: only the list form
+        // tells the met key from a failure.
+        let inserted = absorbing_conflicts_on::<E>(active.clone(), key)
+            .exec_with_returning_many(&conn)
+            .await?;
+        let model = match inserted.into_iter().next() {
+            Some(model) => model,
+            None => {
+                if let Some(existing) = Self::unscoped().filter(held).one().await? {
+                    tracing::trace!(target: crate::target::ORM, entity, "insert unscoped met its key");
+                    return Ok(Insertion::Existing(existing));
+                }
+                atomic(async move {
+                    let conn = Self::conn()?;
+                    Ok::<_, AtomicDbError>(E::insert(active).exec_with_returning(&conn).await?)
+                })
+                .await
+                .map_err(DbErr::from)?
+            }
+        };
+        tracing::trace!(target: crate::target::ORM, entity, "insert unscoped");
+        E::ActiveModel::after_save(model, &conn, true)
+            .await
+            .map(Insertion::New)
+    }
+
     /// Update a row, gated by `condition_for(Update)` ANDed with the primary
     /// key: a row outside the caller's scope, or soft-deleted, is never touched
     /// and surfaces as [`DbErr::RecordNotUpdated`], so a caller cannot mutate by
@@ -334,6 +438,34 @@ impl<E: EntityTrait> Repo<E> {
         Self::scoped_save(active, Action::Delete).await?;
         Ok(())
     }
+}
+
+/// The rows holding `active`'s values of `key`, or the column it leaves unset.
+fn holding_key_of<E: EntityTrait>(
+    active: &E::ActiveModel,
+    key: impl IntoIterator<Item = E::Column>,
+) -> Result<Condition, DbErr> {
+    key.into_iter().try_fold(Condition::all(), |held, column| {
+        let value = active
+            .get(column)
+            .into_value()
+            .ok_or_else(|| DbErr::AttrNotSet(column.as_str().to_owned()))?;
+        Ok(held.add(column.eq(value)))
+    })
+}
+
+/// `active`'s insert, doing nothing on a conflict over `key` — over the live
+/// rows of a soft-deletable `E`, so a partial index over them is inferred.
+fn absorbing_conflicts_on<E: EntityTrait>(
+    active: E::ActiveModel,
+    key: impl IntoIterator<Item = E::Column>,
+) -> Insert<E::ActiveModel> {
+    let mut on_conflict = OnConflict::columns(key);
+    on_conflict.do_nothing();
+    if let Some(tombstone) = tombstone_column::<E>() {
+        on_conflict.target_and_where(Expr::col(tombstone).is_null());
+    }
+    E::insert(active).on_conflict(on_conflict)
 }
 
 /// `select`, without the tombstones of a soft-deletable `E`.
@@ -805,6 +937,112 @@ mod tests {
             s.contains("NULL"),
             "live filter must exclude tombstoned rows: {s}",
         );
+    }
+
+    /// The statement absorbs a conflict over its key alone, and over a
+    /// soft-deletable entity's live rows, so a partial index over them is the
+    /// one Postgres infers.
+    #[test]
+    fn an_on_conflict_insert_names_its_key_and_its_live_rows() {
+        let tombstoned = absorbing_conflicts_on::<tombstone::Entity>(
+            tombstone::ActiveModel {
+                id: Set(7),
+                ..Default::default()
+            },
+            [tombstone::Column::Id],
+        )
+        .build(DatabaseBackend::Postgres)
+        .to_string();
+        assert!(
+            tombstoned.ends_with(r#"ON CONFLICT ("id") WHERE "deleted_at" IS NULL DO NOTHING"#),
+            "{tombstoned}"
+        );
+
+        let plain = absorbing_conflicts_on::<widget::Entity>(
+            widget::ActiveModel {
+                id: Set(7),
+                org_id: Set(1),
+                name: Set("ada".to_owned()),
+            },
+            [widget::Column::OrgId, widget::Column::Name],
+        )
+        .build(DatabaseBackend::Postgres)
+        .to_string();
+        assert!(
+            plain.ends_with(r#"ON CONFLICT ("org_id", "name") DO NOTHING"#),
+            "{plain}"
+        );
+    }
+
+    /// A key the row leaves unset could read back no row: refused before any
+    /// hook runs or any statement is sent, on a pool that dials nothing.
+    #[tokio::test]
+    async fn an_on_conflict_insert_whose_key_is_unset_sends_nothing() {
+        let refused = with_job_executor(pool(), async {
+            Repo::<hooked::Entity>::insert_unscoped_or_existing(
+                hooked::ActiveModel {
+                    id: Set(1),
+                    ..Default::default()
+                },
+                [hooked::Column::Id, hooked::Column::Name],
+            )
+            .await
+        })
+        .await;
+
+        assert!(
+            matches!(&refused, Err(DbErr::AttrNotSet(column)) if column == "name"),
+            "{refused:?}"
+        );
+        assert_eq!(hooked::SAVES.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// A hook the key leaves: refused before a statement, on the same pool.
+    #[tokio::test]
+    async fn an_on_conflict_insert_whose_hook_unsets_its_key_sends_nothing() {
+        let refused = with_job_executor(pool(), async {
+            Repo::<unsetting::Entity>::insert_unscoped_or_existing(
+                unsetting::ActiveModel {
+                    id: Set(1),
+                    name: Set("ada".to_owned()),
+                },
+                [unsetting::Column::Name],
+            )
+            .await
+        })
+        .await;
+
+        assert!(
+            matches!(&refused, Err(DbErr::AttrNotSet(column)) if column == "name"),
+            "{refused:?}"
+        );
+    }
+
+    mod unsetting {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "unsetting")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            pub name: String,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        #[async_trait::async_trait]
+        impl ActiveModelBehavior for ActiveModel {
+            async fn before_save<C: ConnectionTrait>(
+                mut self,
+                _: &C,
+                _: bool,
+            ) -> Result<Self, DbErr> {
+                self.name = sea_orm::ActiveValue::NotSet;
+                Ok(self)
+            }
+        }
     }
 
     mod hooked {

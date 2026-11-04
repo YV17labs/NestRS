@@ -7,7 +7,7 @@ use nest_rs::core::{Secret, error_message, hooks, injectable};
 use nest_rs::database::atomic;
 use nest_rs::graphql::dataloader;
 use nest_rs::seaorm::{
-    Creatable, CreateModel, CrudService, Deletable, Repo, ServiceError, Updatable,
+    Creatable, CreateModel, CrudService, Deletable, Insertion, Repo, ServiceError, Updatable,
 };
 use sea_orm::{ColumnTrait, DbErr, QueryFilter, Set};
 use uuid::Uuid;
@@ -117,31 +117,24 @@ impl UsersService {
             .map_err(|e| social_store_unavailable(identity.provider, e))
     }
 
-    async fn link_identity(
-        &self,
-        user_id: Uuid,
-        identity: &SocialIdentity,
-    ) -> Result<(), ServiceError> {
-        let linked = atomic(async {
-            Ok::<_, ServiceError>(
-                Repo::<UserIdentities>::insert_unscoped(new_identity_active(user_id, identity))
-                    .await?,
-            )
-        })
-        .await;
-        match linked {
-            Ok(_) => {
-                tracing::debug!(
-                    target: crate::users::TARGET,
-                    provider = identity.provider,
-                    %user_id,
-                    "linked social identity to user",
-                );
-                Ok(())
-            }
-            Err(ServiceError::Conflict(_)) => Ok(()),
-            Err(e) => Err(e),
+    async fn link_identity(&self, user_id: Uuid, identity: &SocialIdentity) -> Result<(), DbErr> {
+        let linked = Repo::<UserIdentities>::insert_unscoped_or_existing(
+            new_identity_active(user_id, identity),
+            [
+                user_identity::Column::Provider,
+                user_identity::Column::Subject,
+            ],
+        )
+        .await?;
+        if let Insertion::New(_) = linked {
+            tracing::debug!(
+                target: crate::users::TARGET,
+                provider = identity.provider,
+                %user_id,
+                "linked social identity to user",
+            );
         }
+        Ok(())
     }
 
     async fn create_with_identity(
@@ -163,26 +156,24 @@ impl UsersService {
             AuthError::failed_because("identity resolution failed", e)
         })?;
 
-        atomic(async {
-            let inserted = atomic(async {
-                Ok::<_, ServiceError>(Repo::<Users>::insert_unscoped(active).await?)
-            })
-            .await;
-            let user = match inserted {
-                Ok(user) => {
+        let provisioned: Result<entity::Model, ServiceError> = atomic(async {
+            let user = match Repo::<Users>::insert_unscoped_or_existing(
+                active,
+                [entity::Column::Email],
+            )
+            .await?
+            {
+                Insertion::New(user) => {
                     tracing::debug!(target: crate::users::TARGET, id = %user.id, %org_id, provider = identity.provider, "provisioned a user from social login");
                     user
                 }
-                Err(conflict @ ServiceError::Conflict(_)) => {
-                    find_by_email(email).await?.ok_or(conflict)?
-                }
-                Err(e) => return Err(e),
+                Insertion::Existing(user) => user,
             };
             self.link_identity(user.id, identity).await?;
             Ok(user)
         })
-        .await
-        .map_err(|e| social_store_unavailable(identity.provider, e))
+        .await;
+        provisioned.map_err(|e| social_store_unavailable(identity.provider, e))
     }
 }
 

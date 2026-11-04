@@ -350,7 +350,7 @@ async fn a_mutating_request_linking_an_identity_a_rival_just_linked_commits() {
 
     let resolved = sign_in_beside(&app, github("77", "carol@example.com", true), org_id, rival)
         .await
-        .expect("the conflict rolled back alone, so the login resolves and its unit commits");
+        .expect("the met key aborts nothing, so the login resolves and its unit commits");
 
     assert_eq!(resolved.id, carol);
     assert_eq!(identity_count(conn.as_ref(), "github", "77").await, 1);
@@ -385,7 +385,7 @@ async fn a_mutating_request_provisioning_a_user_a_rival_just_created_links_it_an
         rival,
     )
     .await
-    .expect("the conflict rolled back alone, so the login resolves and its unit commits");
+    .expect("the met key aborts nothing, so the login resolves and its unit commits");
 
     assert_eq!(resolved.id, frank);
     assert_eq!(

@@ -1023,6 +1023,12 @@ mod required_principal {
         async fn ping(&self, _client: &WsClient) -> String {
             "unreachable".into()
         }
+
+        #[subscribe_message("open")]
+        #[public]
+        async fn open(&self, _client: &WsClient) -> String {
+            "the line opening the connection".into()
+        }
     }
 
     #[module(imports = [WsModule], providers = [NeedsClaims, UnwiredGateway])]

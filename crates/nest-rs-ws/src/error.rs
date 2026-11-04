@@ -16,15 +16,17 @@ pub(crate) enum GatewayPostureError {
          open on purpose with `#[public]`"
     )]
     Uncovered { path: String, messages: String },
-    /// A gateway with no guard at its upgrade and no message to say so.
+    /// A gateway with no guard at its upgrade and no `#[public]` message to say so.
     #[error(
-        "the gateway at {path} runs no guard at its upgrade and declares no message: its \
-         connection hooks run for any caller, and no line says so — bind a guard with \
-         `#[use_guards(...)]` on the gateway, or declare the app's global pool \
-         (`GlobalGuards<(...)>` in the providers of the module the app boots)"
+        "the gateway at {path} runs no guard at its upgrade and no message of it says \
+         `#[public]`: any caller connects, its connection hooks run and what the server emits \
+         reaches the socket, and no line says so — bind a guard with `#[use_guards(...)]` on the \
+         gateway, or declare the app's global pool (`GlobalGuards<(...)>` in the providers of \
+         the module the app boots), or mark a message open on purpose with `#[public]`"
     )]
     Unopened { path: String },
-    /// `#[public]` messages no caller without a credential reaches.
+    /// `#[public]` messages no caller without a credential reaches, past a guard
+    /// the gateway binds.
     #[error(
         "`#[public]` on {messages} of the gateway at {path} can open nothing: its upgrade runs \
          `{guard}`, so a caller with no credential never reaches a message — drop `#[public]`, \
@@ -32,6 +34,19 @@ pub(crate) enum GatewayPostureError {
          or take that guard off the upgrade to open the gateway"
     )]
     PublicBehindGuard {
+        path: String,
+        messages: String,
+        guard: &'static str,
+    },
+    /// The same, past a guard of the app's pool, which runs at every upgrade.
+    #[error(
+        "`#[public]` on {messages} of the gateway at {path} can open nothing: the app's pool \
+         runs `{guard}` at its upgrade, so a caller with no credential never reaches a message — \
+         drop `#[public]`, the guards covering a message deciding it \
+         (`#[authorize(Action, Subject)]` adds a gate); no gateway opens under the pool, so \
+         opening this one means moving `{guard}` from the pool onto the hosts it should cover"
+    )]
+    PublicBehindPool {
         path: String,
         messages: String,
         guard: &'static str,

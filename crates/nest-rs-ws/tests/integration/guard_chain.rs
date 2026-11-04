@@ -1,6 +1,5 @@
-//! Boot-time phase validation of a gateway's **upgrade** chain. The per-message
-//! chains are not validated: they run `check`, where the principal contract
-//! this check reads does not hold.
+//! Boot-time validation of a gateway's chains: its **upgrade**'s phases and
+//! principals, the principal half of each per-message chain, and its posture.
 
 use nest_rs_core::{AmbientValue, Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, GuardPhase, PrincipalClaim};
@@ -565,11 +564,45 @@ mod posture {
     struct HooksOnlyModule;
 
     #[tokio::test]
-    async fn a_gateway_no_guard_covers_and_no_message_opens_refuses_the_boot() {
+    async fn a_gateway_declaring_hooks_alone_refuses_the_boot() {
         let said = refusal::<HooksOnlyModule>().await;
         assert!(
             said.contains("/ws/open/hooks") && said.contains("#[use_guards"),
             "its hooks run on any connection, and no line says so: {said}",
+        );
+    }
+
+    #[gateway(path = "/ws/open/guarded-messages")]
+    struct GuardedMessagesGateway;
+
+    #[messages]
+    impl GuardedMessagesGateway {
+        #[on_connect]
+        async fn joined(&self, client: &WsClient) {
+            client.join("lobby");
+        }
+
+        #[subscribe_message("guarded")]
+        #[use_guards(Throttle)]
+        async fn guarded(&self, _client: &WsClient) -> String {
+            "guarded".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Throttle, GuardedMessagesGateway])]
+    struct GuardedMessagesModule;
+
+    /// A message's guard runs on that message alone: any caller still connects,
+    /// its hooks run, and what the server emits reaches the socket.
+    #[tokio::test]
+    async fn an_open_upgrade_under_messages_guarding_themselves_refuses_the_boot() {
+        let said = refusal::<GuardedMessagesModule>().await;
+        assert!(said.contains("/ws/open/guarded-messages"), "{said}");
+        assert!(
+            said.contains("#[use_guards")
+                && said.contains("GlobalGuards")
+                && said.contains("#[public]"),
+            "the refusal names every remedy: {said}",
         );
     }
 
@@ -633,6 +666,12 @@ mod posture {
         async fn ping(&self, _client: &WsClient) -> String {
             "covered beside it".into()
         }
+
+        #[subscribe_message("open")]
+        #[public]
+        async fn open(&self, _client: &WsClient) -> String {
+            "the line opening the connection".into()
+        }
     }
 
     #[module(imports = [WsModule], providers = [Throttle, BesideGateway])]
@@ -679,6 +718,10 @@ mod posture {
         assert!(
             said.contains("drop `#[public]`"),
             "a covered message needs no posture: {said}",
+        );
+        assert!(
+            said.contains("take that guard off the upgrade"),
+            "a guard the gateway binds, it can unbind: {said}",
         );
     }
 
@@ -751,6 +794,11 @@ mod posture {
         assert!(
             said.contains("Authenticate") && said.contains("#[public]"),
             "{said}"
+        );
+        assert!(
+            !said.contains("take that guard off") && said.contains("from the pool"),
+            "no gateway takes a pool's guard off its own upgrade, so opening one means \
+             moving the guard: {said}",
         );
     }
 

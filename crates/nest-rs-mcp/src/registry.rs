@@ -379,7 +379,11 @@ fn check_postures(
         return Err(McpPostureError::PublicBehindDenial { operations }.into());
     }
     match identifying_guard(&chain) {
-        Some(guard) => Err(McpPostureError::PublicBehindGuard { operations, guard }.into()),
+        Some(entry) => Err(McpPostureError::PublicBehindGuard {
+            operations,
+            guard: entry.name,
+        }
+        .into()),
         None => Ok(()),
     }
 }

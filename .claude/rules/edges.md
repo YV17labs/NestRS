@@ -96,13 +96,17 @@ guard, filter or interceptor loop of its own.
    or `EndpointGuards` cover; `#[authorize]` adds the gate and the mask. A route
    or a message no guard covers says `#[public]` or refuses the boot, one error
    naming every such unit and each remedy, since an impl half cannot see the
-   pool; so does a gateway no guard covers and declaring no message, whose hooks
-   run for any caller. **`#[public]` that can open nothing refuses the boot**: on
+   pool; so does a gateway running no guard at its upgrade with no `#[public]`
+   message, whatever guards its messages bind: a connection is no message, and
+   its hooks and what the server emits reach any caller.
+   **`#[public]` that can open nothing refuses the boot**: on
    WS and MCP, behind a guard its request runs that declares
    `GuardPhase::Authentication` or `Authorization`, and on a `Gated` endpoint
    running no guard, which denies every request; behind `Other` guards alone, a
    rate limit, which identify no one, it stays the opening it says, and on HTTP
-   an authentication guard reads it and admits the visitor. `AbilityGuard` reads
+   an authentication guard reads it and admits the visitor. No gateway opens
+   beneath the pool: its upgrade is `Gated`, so the refusal says to move the guard
+   onto the hosts it should cover. `AbilityGuard` reads
    it on every edge: a `#[public]` unit no ability reached takes the visitor's
    rules, as a `#[public]` route does, so a tool of an opened endpoint under the
    pool serves, and a gated unit still fails closed.

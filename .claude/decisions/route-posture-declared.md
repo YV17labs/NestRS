@@ -109,8 +109,9 @@ guards run before a WS or MCP unit is known, so nothing can read it there.
 - **A warn for a gateway no guard covers** (the transport's, until now): the opening
   was an absence. A gateway's messages say `#[public]` or refuse the boot, and the
   transport refuses a hand-built `Gated` self-mount running no guard, the same gap.
-  A gateway no guard covers and declaring no message has no line that could say
-  `#[public]`, its hooks running for any caller, and is refused too.
+  A gateway running no guard at its upgrade with no `#[public]` message has no line
+  saying it opens, whatever guards its messages bind, its hooks and what the server
+  emits reaching any caller, and is refused too.
 - **A boot refusal of `#[public]` beside an ability guard no request reaches**: the
   canonical pool folds `AuthzGuard` over an operation of an endpoint `McpAccess::Public`
   opens, so the refusal would leave that app no spelling for an open tool, the argument

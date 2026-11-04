@@ -52,9 +52,9 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 /// A handler a guard covers — the gateway's, the app's pool, its own — needs no
 /// access posture; `#[authorize(Action, Entity)]` adds the gate and the mask, and
 /// `#[public]` says a caller with no credential is admitted, the boot refusing a
-/// message no guard covers that says neither, and a `#[public]` behind an upgrade
-/// that identifies its caller. Each message runs as a site of the pipeline, in
-/// order:
+/// message no guard covers that says neither, a gateway running no guard at its
+/// upgrade with no `#[public]` message, and a `#[public]` behind an upgrade that
+/// identifies its caller. Each message runs as a site of the pipeline, in order:
 /// the guard stage (the app's pool, the message's guards, the class gate the
 /// posture emits), the exception filters and the interceptors (the message's
 /// and the gateway's beside the app's), the data pipes, the argument pipes, the

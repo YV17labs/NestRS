@@ -1562,11 +1562,16 @@ lists what the boot, a log or the wire shows when one is missed.
   Error: the `nest_rs::ws::gateways` wiring failed: `#[public]` on history of the gateway at /ws can open nothing: its upgrade runs `AuthnGuard`, so a caller with no credential never reaches a message — drop `#[public]`, the guards covering a message deciding it (`#[authorize(Action, Subject)]` adds a gate), or take that guard off the upgrade to open the gateway
   ```
 
-  Drop the word; the guards cover the unit. `#[public]` on a gated `/mcp` with no
-  guard at all stops it too, naming `McpModule::for_root(McpAccess::Public)`.
+  Drop the word; the guards cover the unit. Under the app's pool the sentence says to
+  move the guard from the pool onto the hosts it should cover, no gateway opening
+  beneath it. `#[public]` on a gated `/mcp` with no guard at all stops it too, naming
+  `McpModule::for_root(McpAccess::Public)`.
 - **A `#[public]` dropped from a message no guard covers, or from an operation of an
   endpoint `McpAccess::Public` opens**, stops the boot, naming every such unit: keep the
   word where the gateway or the endpoint is open on purpose, or bind a guard.
+- **A gateway with no guard at its upgrade whose messages each bind their own**, or one
+  declaring hooks alone, stops the boot: any caller connects and its hooks run. Bind a
+  guard on the gateway or the pool, or say `#[public]` on the message open on purpose.
 - **A guard declaring `expected_principal` beside an authentication guard of your own
   that declares no `produced_principal`** stops the boot, naming both the guard and the
   type. Declare it on the guard attaching it, or `or_visitor()` where the guard does

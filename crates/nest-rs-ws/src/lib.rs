@@ -64,7 +64,9 @@
 //!
 //! A message the gateway's guards, the app's pool or a guard of its own cover
 //! needs no posture, and the boot refuses one no guard covers that does not say
-//! `#[public]`, as it refuses such a route. `#[authorize(Action, Entity)]` emits
+//! `#[public]`, as it refuses such a route, and a gateway running no guard at its
+//! upgrade with no `#[public]` message, whatever guards its messages bind.
+//! `#[authorize(Action, Entity)]` emits
 //! the class gate (`nest_rs_authz::class_gate`) before the payload is deserialized
 //! and the reply mask (`nest_rs_authz::ws::masked_reply_for`) around the returned
 //! value. `#[public]` means a caller with no credential is admitted: behind an

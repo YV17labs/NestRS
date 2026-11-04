@@ -11,6 +11,7 @@ use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{
     ClassGate, GuardStage, ResolvedLayer, new_unit_context, report_unresolved,
 };
+use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, Failure, Handler, Peer, Posture, UnitContext};
 use nest_rs_guards::__private::{
     GlobalBucket, GuardSpec, Refused, SiteChainSources, check_guards, client_message,
@@ -159,32 +160,38 @@ pub(crate) fn validate_upgrade(
 
 /// HTTP's posture grammar on the gateway at `path`, whose `upgrade` chain runs
 /// before any of its `messages`: one no guard covers says `#[public]`, and one
-/// saying it is reachable with no credential.
+/// saying it is reachable with no credential. A connection is a unit no message
+/// guards, so an upgrade no guard runs at needs a `#[public]` message to say so.
 pub(crate) fn check_posture(
     path: &str,
     upgrade: &[ResolvedLayer<dyn Guard>],
     messages: &[DeclaredMessage],
 ) -> Result<(), GatewayPostureError> {
-    if upgrade.is_empty() && messages.is_empty() {
-        return Err(GatewayPostureError::Unopened {
-            path: path.to_owned(),
-        });
+    let path = path.to_owned();
+    if upgrade.is_empty() {
+        if let Some(messages) = events(messages, |m| !m.guarded && !is_public(m)) {
+            return Err(GatewayPostureError::Uncovered { path, messages });
+        }
+        if !messages.iter().any(is_public) {
+            return Err(GatewayPostureError::Unopened { path });
+        }
     }
-    if upgrade.is_empty()
-        && let Some(uncovered) = events(messages, |m| !m.guarded && !is_public(m))
+    if let Some(entry) = identifying_guard(upgrade)
+        && let Some(messages) = events(messages, is_public)
     {
-        return Err(GatewayPostureError::Uncovered {
-            path: path.to_owned(),
-            messages: uncovered,
-        });
-    }
-    if let Some(guard) = identifying_guard(upgrade)
-        && let Some(mislabelled) = events(messages, is_public)
-    {
-        return Err(GatewayPostureError::PublicBehindGuard {
-            path: path.to_owned(),
-            messages: mislabelled,
-            guard,
+        let guard = entry.name;
+        return Err(if matches!(entry.source, LayerSite::Global) {
+            GatewayPostureError::PublicBehindPool {
+                path,
+                messages,
+                guard,
+            }
+        } else {
+            GatewayPostureError::PublicBehindGuard {
+                path,
+                messages,
+                guard,
+            }
         });
     }
     Ok(())
@@ -215,7 +222,6 @@ pub fn refused_origin(refused: &OriginRefused) {
 mod tests {
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
     use nest_rs_core::async_trait;
-    use nest_rs_core::layer_chain::LayerSite;
     use nest_rs_core::{AmbientValue, Layer};
     use serde_json::json;
 

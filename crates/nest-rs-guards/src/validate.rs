@@ -204,16 +204,13 @@ pub fn host_chain(
 /// ([`GuardPhase`]). A `#[public]` unit behind it can open nothing; a chain of
 /// [`Other`](GuardPhase::Other) guards — a rate limit — identifies no one, and
 /// still admits a visitor.
-pub fn identifying_guard(chain: &[ResolvedLayer<dyn Guard>]) -> Option<&'static str> {
-    chain
-        .iter()
-        .find(|entry| {
-            matches!(
-                entry.layer.phase(),
-                GuardPhase::Authentication | GuardPhase::Authorization
-            )
-        })
-        .map(|entry| entry.name)
+pub fn identifying_guard(chain: &[ResolvedLayer<dyn Guard>]) -> Option<&ResolvedLayer<dyn Guard>> {
+    chain.iter().find(|entry| {
+        matches!(
+            entry.layer.phase(),
+            GuardPhase::Authentication | GuardPhase::Authorization
+        )
+    })
 }
 
 #[cfg(test)]

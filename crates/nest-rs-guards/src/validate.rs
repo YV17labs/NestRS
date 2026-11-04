@@ -15,10 +15,11 @@ use crate::{Guard, GuardPhase};
 /// Fails on: an `Authentication`-phase guard listed after an
 /// `Authorization`-phase one; a guard expecting a principal type produced
 /// only *later* in the chain; a guard expecting a principal type while the
-/// chain's producer(s) attach a **different** type. A consumer with no
-/// producer anywhere in the chain only warns — a controller may serve
-/// exclusively `#[public]` routes, where the authorization guard admits the
-/// anonymous actor.
+/// chain's producer(s) attach a **different** type; a guard requiring a
+/// principal nothing in the chain attaches. One doing without it
+/// ([`PrincipalClaim::or_visitor`](crate::PrincipalClaim::or_visitor)) only
+/// warns then — a controller may serve exclusively `#[public]` routes, where
+/// the authorization guard admits the anonymous actor.
 ///
 /// A guard is checked where it first runs: a `#[force_guards]` replay later in
 /// the chain is no misorder, since every guard between the two runs already
@@ -101,6 +102,7 @@ fn validate(
                     produced.join(", "),
                 ));
             }
+            None if !expected.or_visitor => return Err(unattached(label, entry.name, expected)),
             None if !warns(entry) => {}
             None => {
                 tracing::warn!(
@@ -112,6 +114,51 @@ fn validate(
                      non-public routes will answer 500",
                 );
             }
+        }
+    }
+    Ok(())
+}
+
+/// The refusal of a guard requiring a principal nothing attaches: every request
+/// it runs on would answer `500`.
+fn unattached(label: &str, guard: &str, expected: crate::PrincipalClaim) -> String {
+    format!(
+        "guard chain for {label}: `{guard}` requires principal `{}` and no guard in the chain \
+         attaches it — bind the guard attaching it ahead of `{guard}`, and have that guard \
+         declare it (`produced_principal`)",
+        expected.type_name,
+    )
+}
+
+/// The principal half of [`validate_guard_chain`] on a unit an in-band edge
+/// carries: each guard of its `unit` chain requiring a principal finds a guard
+/// attaching it there or in the chain its `request` ran, which the closure
+/// composes only for a chain that has such a guard. Ordering stays unchecked in
+/// band, and a guard doing without its principal reads what it finds.
+pub fn validate_carried_chain(
+    label: &str,
+    unit: &[ResolvedLayer<dyn Guard>],
+    request: impl FnOnce() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
+) -> Result<(), String> {
+    let required = || {
+        unit.iter().enumerate().filter_map(|(at, entry)| {
+            let expected = entry.layer.expected_principal()?;
+            (!expected.or_visitor).then_some((at, entry.name, expected))
+        })
+    };
+    if required().next().is_none() {
+        return Ok(());
+    }
+    let request = request()?;
+    for (at, guard, expected) in required() {
+        let attached = request.iter().chain(&unit[..at]).any(|entry| {
+            entry
+                .layer
+                .produced_principal()
+                .is_some_and(|produced| produced.type_id == expected.type_id)
+        });
+        if !attached {
+            return Err(unattached(label, guard, expected));
         }
     }
     Ok(())
@@ -135,7 +182,7 @@ pub fn boot_validate_guards(
 /// The global pool, then the host-scope specs, as a request running them composes
 /// them; a spec no imported module provides fails it, naming the guard and
 /// `label`.
-fn host_chain(
+pub fn host_chain(
     container: &Container,
     host_specs: &[GuardSpec],
     label: &str,
@@ -211,6 +258,19 @@ mod tests {
             GuardPhase::Authorization
         }
         fn expected_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<ClaimsA>().or_visitor())
+        }
+    }
+
+    /// Reads what it requires: its decision has no visitor branch.
+    struct Requires;
+    impl Layer for Requires {}
+    #[async_trait]
+    impl Guard for Requires {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+        fn expected_principal(&self) -> Option<PrincipalClaim> {
             Some(PrincipalClaim::of::<ClaimsA>())
         }
     }
@@ -267,6 +327,45 @@ mod tests {
         let err = validate_guard_chain("test", &chain).expect_err("mismatch");
         assert!(err.contains("ClaimsB"), "{err}");
         assert!(err.contains("ClaimsA"), "{err}");
+    }
+
+    #[test]
+    fn a_guard_requiring_a_principal_nothing_attaches_refuses_the_chain() {
+        let err = validate_guard_chain("test", &[entry(Requires, "Requires")])
+            .expect_err("every request would answer 500");
+        assert!(err.contains("Requires") && err.contains("ClaimsA"), "{err}");
+        validate_guard_chain(
+            "test",
+            &[entry(Authn, "Authn"), entry(Requires, "Requires")],
+        )
+        .expect("the chain attaches it");
+    }
+
+    #[test]
+    fn a_unit_finds_what_it_requires_in_its_requests_chain_or_ahead_of_it() {
+        let requires = [entry(Requires, "Requires")];
+        let refused = validate_carried_chain("field", &requires, || Ok(Vec::new()))
+            .expect_err("no guard attaches it");
+        assert!(
+            refused.contains("field") && refused.contains("Requires"),
+            "{refused}"
+        );
+        validate_carried_chain("field", &requires, || Ok(vec![entry(Authn, "Authn")]))
+            .expect("the request's chain attaches it");
+        validate_carried_chain(
+            "field",
+            &[entry(Authn, "Authn"), entry(Requires, "Requires")],
+            || Ok(Vec::new()),
+        )
+        .expect("a guard ahead of it attaches it");
+    }
+
+    #[test]
+    fn a_unit_with_nothing_to_require_never_composes_its_requests_chain() {
+        validate_carried_chain("field", &[entry(Authz, "Authz")], || {
+            panic!("an expectation with a visitor branch reads nothing at boot")
+        })
+        .expect("it does without");
     }
 
     #[test]

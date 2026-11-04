@@ -151,7 +151,13 @@ guard, filter or interceptor loop of its own.
    one decision, `check`, which `check_http` runs unless the guard overrides
    it, which it does only where the request differs from the unit; a
    precondition an earlier guard attached is `cx.require::<T>()?`, a `500`
-   naming both. **`check` has no default**, so no guard admits a unit it
+   naming both — but the principal the guard declares through
+   `expected_principal`, which answers by cause: the boot refuses a chain nothing
+   in which attaches it (a route's, or a unit's with the request carrying it,
+   whose `produced_principal` says who does), so its absence is a caller admitted
+   without one, the caller's `401` on every edge. A guard deciding a visitor
+   itself says `PrincipalClaim::or_visitor`, its unattached claim a `warn`
+   (`.claude/decisions/check-http-stays-on-guard.md`). **`check` has no default**, so no guard admits a unit it
    never decided — one whose decision is the request's alone admits the
    units it carries in one visible `Ok(())` — held by the trait, with a
    trybuild snapshot per in-band edge. Each emitter asserts

@@ -35,6 +35,9 @@ pub struct PrincipalClaim {
     pub type_id: TypeId,
     /// The principal's type name, for boot diagnostics.
     pub type_name: &'static str,
+    /// An expected principal whose absence the guard decides itself
+    /// ([`or_visitor`](Self::or_visitor)).
+    pub or_visitor: bool,
 }
 
 impl PrincipalClaim {
@@ -43,6 +46,19 @@ impl PrincipalClaim {
         Self {
             type_id: TypeId::of::<T>(),
             type_name: std::any::type_name::<T>(),
+            or_visitor: false,
+        }
+    }
+
+    /// An expected principal the guard does without: it reads it where it is,
+    /// and decides a caller with none itself, as an authorization guard builds a
+    /// visitor's ability. Nothing attaching it is no wiring defect, and is said
+    /// at `warn` rather than refusing the boot.
+    #[must_use]
+    pub fn or_visitor(self) -> Self {
+        Self {
+            or_visitor: true,
+            ..self
         }
     }
 }
@@ -75,7 +91,11 @@ type Check<'fut> = Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut
 /// makes known for the rest of the unit is attached with
 /// [`UnitContext::attach`]: ambient once the whole stage passed, never on a
 /// refused unit. What an earlier guard must have attached is read with
-/// [`UnitContext::require`], whose `?` refuses an unwired unit with a `500`.
+/// [`UnitContext::require`], and a principal declared through
+/// [`expected_principal`](Self::expected_principal) answers by cause: the boot
+/// refuses a chain nothing in which attaches it, so its absence at a unit is a
+/// caller the guard attaching it admitted without one, the caller's `401`. Any
+/// other value's absence is a `500`.
 ///
 /// The entries are written out as `#[async_trait]` writes an override, so an
 /// implementation is an ordinary `async fn` under `#[async_trait]` — one
@@ -142,7 +162,9 @@ pub trait Guard: Layer {
     /// The principal type this guard expects an earlier guard to have
     /// attached (an authorization guard's actor), if any. Boot-time chain
     /// validation fails the boot when an earlier guard attaches a **different**
-    /// type — the mismatch that would otherwise answer `500` on every request.
+    /// type, or when nothing in the chain attaches it, unless the claim says the
+    /// guard does without it ([`PrincipalClaim::or_visitor`]) — what would
+    /// otherwise answer `500` on every request.
     fn expected_principal(&self) -> Option<PrincipalClaim> {
         None
     }

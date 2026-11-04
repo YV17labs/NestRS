@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use features::authz::AuthzAbility;
 use features::notifications::{Entity as Notifications, NotificationsQueueModule};
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::{
@@ -9,6 +10,8 @@ use features::posts::{
 };
 use features::testing::RedisDatabase;
 use features::users::{ActiveModel as UserActive, UserRole};
+use features::{Claims, Role, Subject};
+use nest_rs::authz::{Ability, AbilityBuilder, AbilityFactory, with_ability};
 use nest_rs::core::module;
 use nest_rs::database::{
     ExecutorScope, Settlement, TransactionPolicy, UnitOfWork, UnitSpec, run_unit,
@@ -99,12 +102,25 @@ async fn status(conn: &DatabaseConnection, id: Uuid) -> PostStatus {
         .status
 }
 
+fn publisher(org_id: Uuid, user: Uuid) -> Arc<Ability> {
+    let claims = Claims {
+        sub: Subject::User(user),
+        client_id: None,
+        org_id,
+        roles: vec![Role::Admin],
+        scopes: Vec::new(),
+    };
+    let mut rules = AbilityBuilder::new();
+    AuthzAbility.define(&claims, &mut rules);
+    Arc::new(rules.build().expect("the rules build"))
+}
+
 async fn publish_in_an_attempt(
     unit_of_work: &Arc<dyn UnitOfWork>,
     svc: &PostsService,
     conn: &DatabaseConnection,
     id: Uuid,
-    actor_id: Uuid,
+    actor: Arc<Ability>,
     attempt_succeeds: bool,
 ) -> Settlement {
     let model = Posts::find_by_id(id)
@@ -121,7 +137,7 @@ async fn publish_in_an_attempt(
         Some(unit_of_work),
         spec,
         async move {
-            svc.publish(model, actor_id)
+            with_ability(actor, svc.publish(model))
                 .await
                 .expect("the post publishes inside the attempt");
             if attempt_succeeds { Ok(()) } else { Err(None) }
@@ -178,11 +194,27 @@ async fn a_publish_whose_transaction_rolls_back_enqueues_no_notification() {
         .expect("SeaOrmDatabaseModule binds the unit of work");
 
     assert_eq!(
-        publish_in_an_attempt(&unit_of_work, &svc, &conn, rolled_back, author_id, false).await,
+        publish_in_an_attempt(
+            &unit_of_work,
+            &svc,
+            &conn,
+            rolled_back,
+            publisher(org_id, author_id),
+            false,
+        )
+        .await,
         Settlement::Settled,
     );
     assert_eq!(
-        publish_in_an_attempt(&unit_of_work, &svc, &conn, committed, author_id, true).await,
+        publish_in_an_attempt(
+            &unit_of_work,
+            &svc,
+            &conn,
+            committed,
+            publisher(org_id, author_id),
+            true,
+        )
+        .await,
         Settlement::Settled,
     );
     assert_eq!(status(&conn, rolled_back).await, PostStatus::Draft);

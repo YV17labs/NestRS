@@ -30,3 +30,12 @@ stages at the same step is additive and Deferred: the ordering half would
 transfer as is, while the principal half still needs a notion of what a guard
 produces for `check` rather than for `check_http`, the one the validation
 reads.
+
+## 2026-11-04 — the principal half, for a guard that requires its principal
+
+Agreed by the owner on 2026-10-31 ("Tout faire (Recommandé)", the identity audit's
+second pass). An in-band unit's guard requiring its principal
+(`check-http-stays-on-guard.md`) is checked at the wiring step, over the unit's own
+chain and the one the request carrying it runs, whose `check_http` is what attaches.
+That is the notion of "produces" this entry waited for, and only that half needs it:
+ordering and a guard doing without its principal stay Deferred.

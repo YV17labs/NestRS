@@ -96,8 +96,9 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         GuardPhase::Authorization
     }
 
+    /// Its visitor branch decides a caller with none.
     fn expected_principal(&self) -> Option<PrincipalClaim> {
-        Some(PrincipalClaim::of::<F::Actor>())
+        Some(PrincipalClaim::of::<F::Actor>().or_visitor())
     }
 
     /// None: a request is refused here only for a wiring defect, a `500`. The

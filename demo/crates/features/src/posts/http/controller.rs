@@ -1,16 +1,13 @@
 use std::sync::Arc;
 
 use nest_rs::authz::Update;
-use nest_rs::core::Ambient;
 use nest_rs::http::{Json, Result, controller, crud};
 use nest_rs::seaorm::Authorized;
 
 use super::interceptor::PostAuditInterceptor;
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
-use crate::posts::{
-    Entity as PostEntity, Post, PostAuthor, PostAuthorGuard, PostError, PostsService,
-};
+use crate::posts::{Entity as PostEntity, Post, PostAuthorGuard, PostError, PostsService};
 
 #[controller(path = "/posts")]
 #[use_guards(AuthnGuard, AuthzGuard)]
@@ -39,12 +36,7 @@ impl PostsController {
                        service. Re-publishing an already published post returns RFC 9457 \
                        `application/problem+json` (409)."
     )]
-    async fn publish(
-        &self,
-        post: Authorized<Update, PostEntity>,
-        actor: Ambient<PostAuthor>,
-    ) -> Result<Json<Post>, PostError> {
-        let PostAuthor(actor_id) = *actor;
-        Ok(Json(self.svc.publish(post.into_inner(), actor_id).await?))
+    async fn publish(&self, post: Authorized<Update, PostEntity>) -> Result<Json<Post>, PostError> {
+        Ok(Json(self.svc.publish(post.into_inner()).await?))
     }
 }

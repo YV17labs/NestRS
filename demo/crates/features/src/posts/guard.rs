@@ -1,15 +1,7 @@
-use nest_rs::core::{AmbientValue, Layer, UnitContext, async_trait, injectable};
-use nest_rs::graphql::GraphqlView;
-use nest_rs::guards::{Denial, Guard, GuardFor};
-use nest_rs::http::HttpView;
-use uuid::Uuid;
+use nest_rs::core::{Layer, UnitContext, UnitView, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor, PrincipalClaim};
 
 use crate::Claims;
-
-#[derive(Debug, Clone, Copy)]
-pub struct PostAuthor(pub Uuid);
-
-impl AmbientValue for PostAuthor {}
 
 #[injectable]
 #[derive(Layer)]
@@ -17,20 +9,19 @@ pub struct PostAuthorGuard;
 
 #[async_trait]
 impl Guard for PostAuthorGuard {
-    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let claims = cx.require::<Claims>()?;
-        Self::attach_author(cx, &claims)
-    }
-
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let claims = cx
-            .ambient::<Claims>()
-            .ok_or_else(|| Self::user_required("no_claims"))?;
-        Self::attach_author(cx, &claims)
+        let claims = cx.require::<Claims>()?;
+        match claims.sub.user_id() {
+            Some(_) => Ok(()),
+            None => Err(
+                Denial::forbidden("writing a post takes a token naming a user")
+                    .with_reason("not_a_user"),
+            ),
+        }
     }
 
-    fn denial_statuses(&self, _public: bool) -> &'static [u16] {
-        &[403]
+    fn expected_principal(&self) -> Option<PrincipalClaim> {
+        Some(PrincipalClaim::of::<Claims>())
     }
 
     fn target(&self) -> &'static str {
@@ -38,21 +29,4 @@ impl Guard for PostAuthorGuard {
     }
 }
 
-impl GuardFor<HttpView> for PostAuthorGuard {}
-
-impl GuardFor<GraphqlView> for PostAuthorGuard {}
-
-impl PostAuthorGuard {
-    fn attach_author(cx: &mut UnitContext<'_>, claims: &Claims) -> Result<(), Denial> {
-        let author = claims
-            .sub
-            .user_id()
-            .ok_or_else(|| Self::user_required("not_a_user"))?;
-        cx.attach(PostAuthor(author));
-        Ok(())
-    }
-
-    fn user_required(reason: &'static str) -> Denial {
-        Denial::forbidden("writing a post takes a token naming a user").with_reason(reason)
-    }
-}
+impl<V: UnitView> GuardFor<V> for PostAuthorGuard {}

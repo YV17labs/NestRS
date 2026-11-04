@@ -6,12 +6,10 @@
 use std::any::TypeId;
 
 use nest_rs_core::{Edge, Failure, Posture, UnitContext};
+use nest_rs_guards::__private::UNAUTHENTICATED;
 use nest_rs_guards::Denial;
 
 use crate::{Ability, Action, ActionMarker, Subject};
-
-/// What a refused caller is told when no principal backs the unit.
-const UNAUTHENTICATED: &str = "unauthenticated";
 
 /// What a refused caller is told when its principal holds no grant on the
 /// class, or a denial no `when` narrows bars it.
@@ -29,7 +27,7 @@ pub(crate) const NO_AMBIENT_ABILITY: &str = "no ability reached a unit its postu
 /// The machine-readable denial reasons, spelled once.
 pub(crate) mod reason {
     /// No principal at all — the gate's first rung.
-    pub(crate) const ANONYMOUS_CALLER: &str = "anonymous_caller";
+    pub(crate) use nest_rs_guards::__private::ANONYMOUS_CALLER;
     /// A principal with no grant on the subject class.
     pub(crate) const NO_CLASS_GRANT: &str = "no_class_grant";
     /// A principal a denial no `when` narrows bars from the subject class,

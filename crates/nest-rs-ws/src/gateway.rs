@@ -1192,6 +1192,7 @@ mod tests {
             container,
             handler,
             crate::guard::MessageGuards {
+                upgrade: Vec::new(),
                 method: vec![nest_rs_guards::__private::guard::<DenyAll>()],
                 force: Vec::new(),
                 gate: None,

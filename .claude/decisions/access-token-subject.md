@@ -97,3 +97,23 @@ auth`'s `Subject` says where such a check goes rather than pointing at a
 registry that does not run it. A framework-owned `Subject<U>` would put the
 product's claims scheme in the framework (`architecture.md`, *The product's
 own*).
+
+## 2026-11-04 — who decides a client's post write, and where the audit row goes
+
+Agreed by the owner on 2026-10-31 ("Tout faire (Recommandé)", the identity audit's
+second pass). `PostAuthorGuard` no longer answers a client's create: the ability
+does, its `Create` grant on posts declared only under `actor.sub.user_id()`. It still
+answers a client's publish, whose one posture slot is
+`#[authorize(Update, bind = PostsService)]`, and a capability would drop the load and
+the mask; a client may still update, so `Update` cannot carry the rule.
+
+Chat's rule is the capability this file's rule would have named from the start,
+`#[subject] Posting`, granted under the same `user_id()`; `ModerationGuard` is gone
+(`subject-no-table-holds.md`).
+
+The publication audit row leaves `insert_unscoped`, whose bar is pre-principal
+provisioning and principal-less work, for `Creatable`: users are granted `Create` on
+the row with `actor_id` pinned to their own id, so the grant fills the actor and the
+re-check holds it (`create-fills-what-the-grants-pin.md`), and no guard, newtype or
+parameter threads it. `current_actor_id()` stays the audit identity for a line, a
+string the row's column would have to parse.

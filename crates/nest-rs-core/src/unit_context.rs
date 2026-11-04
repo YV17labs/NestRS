@@ -133,10 +133,12 @@ impl<'a> UnitContext<'a> {
     /// The `T` this unit carries, for a layer that cannot run without it — a
     /// guard whose precondition is an earlier guard's work. Absent, the unit
     /// fails, never passes: a guard's `?` answers the error as a `500` denial
-    /// that its edge files once at `error`, naming the guard and the value.
+    /// that its edge files once at `error`, naming the guard and the value —
+    /// unless `T` is the principal the guard declares expecting, whose absence
+    /// the boot proved a caller admitted without one: a `401`, on every edge.
     ///
-    /// A value whose absence is legitimate — a caller in-band GraphQL admits
-    /// anonymously — is read with [`ambient`](Self::ambient) and decided.
+    /// A value whose absence the layer decides itself is read with
+    /// [`ambient`](Self::ambient).
     pub fn require<T: AmbientValue>(&self) -> Result<Arc<T>, MissingAmbientError> {
         self.ambient::<T>().ok_or_else(MissingAmbientError::of::<T>)
     }

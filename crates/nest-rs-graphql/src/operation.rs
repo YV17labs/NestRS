@@ -23,8 +23,10 @@ use nest_rs_core::{
 };
 use nest_rs_guards::__private::{
     GlobalBucket, GuardSpec, RefusalMark, SiteChainSources, check_guards, compose_site_chain,
+    validate_carried_chain,
 };
 use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::__private::carried_request_chain;
 use tracing::Instrument;
 
 use crate::error::{FieldFailure, Reply, answer, rendered};
@@ -122,6 +124,11 @@ pub fn field_guard_stage(
         force,
     };
     let chain = compose_site_chain(container, label, sources, site.bucket(container))?;
+    validate_carried_chain(label, &chain, || {
+        carried_request_chain::<GraphqlView>(container, label)
+            .map_err(|unresolved| unresolved.to_string())
+    })
+    .map_err(anyhow::Error::msg)?;
     Ok(FieldGuardStage::of(chain, DENIED_OPERATION))
 }
 

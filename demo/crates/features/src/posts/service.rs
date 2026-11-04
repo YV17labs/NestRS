@@ -5,12 +5,12 @@ use nest_rs::events::EventBus;
 use nest_rs::queue::Jobs;
 use nest_rs::seaorm::{Creatable, CrudService, Deletable, Repo, ServiceError, Updatable};
 use sea_orm::{IntoActiveModel, Set};
-use uuid::Uuid;
 
 use super::entities::post::{CreatePost, Entity as Posts, Model, Post, PostStatus, UpdatePost};
 use super::entities::publication;
 use super::error::PostError;
 use super::event::PostPublishedEvent;
+use super::store::PublicationStore;
 use crate::notifications::{NotifyCommand, NotifyQueue};
 
 #[injectable]
@@ -19,6 +19,8 @@ pub struct PostsService {
     bus: Arc<EventBus>,
     #[inject]
     jobs: Arc<Jobs>,
+    #[inject]
+    publications: Arc<PublicationStore>,
 }
 
 impl CrudService for PostsService {
@@ -36,7 +38,7 @@ impl Updatable for PostsService {
 impl Deletable for PostsService {}
 
 impl PostsService {
-    pub async fn publish(&self, model: Model, actor_id: Uuid) -> Result<Post, PostError> {
+    pub async fn publish(&self, model: Model) -> Result<Post, PostError> {
         if model.status == PostStatus::Published {
             return Err(PostError::AlreadyPublished { id: model.id });
         }
@@ -56,16 +58,16 @@ impl PostsService {
         };
         let receipt = self.jobs.push(NotifyQueue, notification).await?;
 
-        Repo::<publication::Entity>::insert_unscoped(publication::ActiveModel {
-            post_id: Set(post_id),
-            actor_id: Set(actor_id),
-            ..Default::default()
-        })
-        .await
-        .map_err(|err| match ServiceError::from(err) {
-            ServiceError::Conflict(_) => PostError::AlreadyPublished { id: post_id },
-            other => PostError::Service(other),
-        })?;
+        self.publications
+            .create(publication::ActiveModel {
+                post_id: Set(post_id),
+                ..Default::default()
+            })
+            .await
+            .map_err(|err| match ServiceError::from(err) {
+                ServiceError::Conflict(_) => PostError::AlreadyPublished { id: post_id },
+                other => PostError::Service(other),
+            })?;
 
         tracing::debug!(
             target: crate::posts::TARGET,

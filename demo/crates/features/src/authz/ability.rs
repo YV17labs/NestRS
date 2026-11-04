@@ -58,6 +58,9 @@ impl AbilityFactory for AuthzAbility {
                     ])
                 })
                 .requires_scope(constants::POSTS_WRITE);
+            ab.can(Action::Create, post::publication::Entity)
+                .when(|p| p.eq(post::publication::Column::ActorId, author))
+                .requires_scope(constants::POSTS_WRITE);
             ab.can(Action::Create, Posting);
         }
     }
@@ -322,6 +325,32 @@ mod tests {
                 .is_empty(),
             "no wider token would change it",
         );
+    }
+
+    #[test]
+    fn a_publication_row_names_the_user_writing_it_and_a_machine_writes_none() {
+        let user = Uuid::now_v7();
+        let org = Uuid::now_v7();
+        let ab = ability_of(
+            vec![Role::Admin],
+            org,
+            constants::all(),
+            Subject::User(user),
+        );
+        let pinned: Vec<_> = ab
+            .pinned_values::<post::publication::Entity>(Action::Create)
+            .into_iter()
+            .map(|(column, value)| (column.as_str(), value))
+            .collect();
+        assert_eq!(pinned, [("actor_id", user.into())]);
+
+        let machine = ability_of(
+            vec![Role::Admin],
+            org,
+            constants::all(),
+            Subject::Client("ci".into()),
+        );
+        assert!(!machine.can_class(Action::Create, TypeId::of::<post::publication::Entity>()));
     }
 
     #[test]

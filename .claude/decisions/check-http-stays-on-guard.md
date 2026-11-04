@@ -106,3 +106,34 @@ they still allocate nothing; on HTTP, `check_http` still runs one future.
 **2026-10-31 — the pool's spelling.** `use_guards_global` is now
 `GlobalGuards<(…)>`, declared by the module the app boots; like the builder
 call, it takes no `GuardFor` bound, for the reasons above.
+
+## 2026-11-04 — `require` answers by cause, and the 2026-10-29 carve-out no longer arises
+
+Agreed by the owner on 2026-10-31 ("Tout faire (Recommandé)", the identity audit's
+second pass). "A value missing at the request means something else than at the
+unit" was the leak: `/graphql` admits a visitor, so every guard reading the
+principal had to know its edge, and the exemplar wrote its decision twice.
+`cx.require::<T>()` now answers by cause for the principal a guard declares through
+`expected_principal`: **the boot refuses a chain nothing in which attaches it** —
+a route's, and at the wiring step a unit's with the request carrying it, read off
+`produced_principal` — so its absence at a unit is a caller a guard attaching it
+admitted without one, the caller's `401` on every edge, never a `500`. Any other
+value's absence stays the wiring `500`, and a guard may declare
+`impl<V: UnitView> GuardFor<V>` once. The classification runs in the stage's refusal
+path, so the hot path pays for nothing.
+
+`PrincipalClaim::or_visitor` names a guard that does without it: `AbilityGuard`
+reads an actor where one is and decides a visitor with its factory's visitor branch,
+so nothing attaching it stays a `warn`, a controller of `#[public]` routes being a
+legitimate shape. An attaching guard that declares no `produced_principal` is refused
+beside a guard requiring its principal, and declares it.
+
+Refused: attaching a marker where an authentication guard admits a visitor, for the
+requiring guard to read. It would have told a wiring gap from a visitor at request
+time, at an allocation and an ambient scope on every anonymous request; the boot
+tells them apart for nothing. Refused too: reading the unit's posture to decide, a
+GraphQL field's posture being its own, never its request's.
+
+What it leaves: an attaching guard bound at the unit alone, whose `check` attaches
+nothing (`AuthnGuard` on a resolver, which `GuardFor` already refuses), passes the
+boot and answers `401`, as it would for a visitor.

@@ -14,7 +14,8 @@ use nest_rs_core::__private::{
 use nest_rs_core::{Container, Failure, Handler, Peer, Posture, UnitContext};
 use nest_rs_guards::__private::{
     GlobalBucket, GuardSpec, Refused, SiteChainSources, boot_validate_guards, check_guards,
-    client_message, compose_site_chain, denial_code, denial_of, denial_reason, identifying_guard,
+    client_message, compose_site_chain, denial_code, denial_of, denial_reason, host_chain,
+    identifying_guard, validate_carried_chain,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::OriginRefused;
@@ -32,6 +33,8 @@ fn upgrade_site(path: &str) -> String {
 
 /// What a message's guard stage composes, as `#[messages]` collects it.
 pub struct MessageGuards {
+    /// `#[use_guards]` on the gateway, which ran at the upgrade.
+    pub upgrade: Vec<GuardSpec>,
     /// `#[use_guards]` beside the message, `#[force_guards]` included.
     pub method: Vec<GuardSpec>,
     /// `#[force_guards]`: the guards the message re-runs.
@@ -43,24 +46,24 @@ pub struct MessageGuards {
 /// The guard stage of the message `handler` declares: the app-wide pool and
 /// the message's own guards, each once unless `#[force_guards]` replays one,
 /// then its class gate — `None` when it runs none. The gateway's own guards
-/// ran at the upgrade.
+/// ran at the upgrade, so a principal a guard here requires may be theirs.
 pub fn message_guard_stage(
     container: &Container,
     handler: &Handler,
     declared: MessageGuards,
 ) -> nest_rs_core::anyhow::Result<Option<Arc<dyn GuardStage>>> {
+    let site = message_site(handler);
     let sources = SiteChainSources {
         provider: Vec::new(),
         method: declared.method,
         force: declared.force,
     };
-    let guards = compose_site_chain(
-        container,
-        &message_site(handler),
-        sources,
-        GlobalBucket::Fold,
-    )
-    .inspect_err(report_unresolved)?;
+    let guards = compose_site_chain(container, &site, sources, GlobalBucket::Fold)
+        .inspect_err(report_unresolved)?;
+    validate_carried_chain(&site, &guards, || {
+        host_chain(container, &declared.upgrade, &site)
+    })
+    .map_err(nest_rs_core::anyhow::Error::msg)?;
     if guards.is_empty() && declared.gate.is_none() {
         return Ok(None);
     }

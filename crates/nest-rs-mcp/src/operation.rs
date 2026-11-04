@@ -19,8 +19,11 @@ use nest_rs_core::{
     Container, Deadline, Failure, Handler, Outcome, Posture, UnitContext, UnresolvedLayerError,
     anyhow,
 };
-use nest_rs_guards::__private::{GuardSpec, RefusalMark, check_guards, resolve_global_guards};
+use nest_rs_guards::__private::{
+    GuardSpec, RefusalMark, check_guards, resolve_global_guards, validate_carried_chain,
+};
 use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::__private::carried_request_chain;
 use rmcp::model::{
     CallToolRequestMethod, ConstString, GetPromptRequestMethod, ListResourcesRequestMethod,
     ReadResourceRequestMethod,
@@ -164,6 +167,15 @@ pub fn operation_guard_stage(
         &label,
     );
     log_effective_chain(&label, "guards", &chain);
+    validate_carried_chain(&label, &chain, || {
+        match crate::module::posture(container) {
+            // No guard runs at an opened endpoint's request.
+            Posture::Public => Ok(Vec::new()),
+            _ => carried_request_chain::<McpView>(container, &label)
+                .map_err(|unresolved| unresolved.to_string()),
+        }
+    })
+    .map_err(anyhow::Error::msg)?;
     if chain.is_empty() {
         return Ok(None);
     }

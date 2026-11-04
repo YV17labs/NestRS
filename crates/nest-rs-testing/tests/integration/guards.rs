@@ -745,3 +745,346 @@ async fn a_forced_authentication_replay_after_the_global_pool_boots_and_runs_aga
         "the global run, then the replay after the authorization guard",
     );
 }
+
+/// A guard's `cx.require::<T>()` answers by cause: the principal it declares
+/// expecting, absent where a guard attaching it ran and admitted a visitor, is
+/// the caller's `401`, on every edge; nothing attaching it refuses the boot.
+mod required_principal {
+    use nest_rs_core::{Posture, UnitContext, UnitView};
+    use nest_rs_graphql::GraphqlView;
+    use nest_rs_guards::{GuardPhase, PrincipalClaim};
+    use nest_rs_http::EndpointGuards;
+    use nest_rs_mcp::{McpError, McpView, mcp, tools};
+    use nest_rs_ws::{WsClient, WsModule, gateway, messages};
+    use serde_json::json;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct Claims;
+
+    impl AmbientValue for Claims {}
+
+    /// Attaches [`Claims`] for a caller sending `x-user`; admits the rest where
+    /// the site takes a visitor, refuses them elsewhere.
+    #[injectable]
+    #[derive(Default)]
+    struct Authn;
+
+    impl Layer for Authn {}
+
+    #[async_trait]
+    impl Guard for Authn {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            nest_rs_core::__private::set_actor_id("caller");
+            if HttpView::of(cx)?.request().header("x-user").is_some() {
+                cx.attach(Claims);
+                return Ok(());
+            }
+            match cx.reflector().posture() {
+                Posture::Public | Posture::InBand => Ok(()),
+                _ => Err(Denial::unauthorized("a credential is required")),
+            }
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        fn produced_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<Claims>())
+        }
+    }
+
+    impl GuardFor<HttpView> for Authn {}
+
+    /// One decision on every edge: the caller's claims, read and required.
+    #[injectable]
+    #[derive(Default)]
+    struct NeedsClaims;
+
+    impl Layer for NeedsClaims {}
+
+    #[async_trait]
+    impl Guard for NeedsClaims {
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            cx.require::<Claims>()?;
+            Ok(())
+        }
+
+        fn expected_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<Claims>())
+        }
+    }
+
+    impl<V: UnitView> GuardFor<V> for NeedsClaims {}
+
+    #[controller(path = "/required")]
+    #[use_guards(Authn)]
+    struct RequiredController;
+
+    #[routes]
+    impl RequiredController {
+        #[get("/open")]
+        #[public]
+        #[use_guards(NeedsClaims)]
+        async fn open(&self) -> &'static str {
+            "reached"
+        }
+
+        #[get("/gated")]
+        #[use_guards(NeedsClaims)]
+        async fn gated(&self) -> &'static str {
+            "reached"
+        }
+    }
+
+    #[resolver]
+    struct RequiredResolver;
+
+    #[operations]
+    impl RequiredResolver {
+        #[query]
+        #[public]
+        #[use_guards(NeedsClaims)]
+        async fn required(&self) -> i32 {
+            1
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [
+            Authn,
+            NeedsClaims,
+            RequiredController,
+            RequiredResolver,
+            EndpointGuards<GraphqlView, (Authn,)>,
+        ],
+    )]
+    struct RequiredModule;
+
+    async fn app() -> TestApp {
+        TestApp::for_module::<RequiredModule>()
+            .await
+            .expect("boots")
+    }
+
+    #[tokio::test]
+    async fn a_visitor_a_public_route_admitted_answers_401_never_a_wiring_500() {
+        let app = app().await;
+        app.http()
+            .get("/required/open")
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        app.http()
+            .get("/required/open")
+            .header("x-user", "ada")
+            .send()
+            .await
+            .assert_status(StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_guard_writes_one_check_and_a_gated_route_refuses_at_authentication() {
+        let app = app().await;
+        app.http()
+            .get("/required/gated")
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        app.http()
+            .get("/required/gated")
+            .header("x-user", "ada")
+            .send()
+            .await
+            .assert_status(StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_visitor_in_band_graphql_admitted_answers_unauthenticated() {
+        let app = app().await;
+        let refused: serde_json::Value = app
+            .http()
+            .post("/graphql")
+            .body_json(&json!({ "query": "{ required }" }))
+            .send()
+            .await
+            .json()
+            .await
+            .value()
+            .deserialize();
+        assert_eq!(
+            refused["errors"][0]["extensions"]["code"], "UNAUTHENTICATED",
+            "{refused}",
+        );
+        let served: serde_json::Value = app
+            .http()
+            .post("/graphql")
+            .header("x-user", "ada")
+            .body_json(&json!({ "query": "{ required }" }))
+            .send()
+            .await
+            .json()
+            .await
+            .value()
+            .deserialize();
+        assert_eq!(served["data"]["required"], 1, "{served}");
+    }
+
+    async fn boot_refusal<M: nest_rs_core::Module + 'static>() -> String {
+        match TestApp::for_module::<M>().await {
+            Ok(_) => panic!("nothing attaches the principal the guard requires"),
+            Err(err) => format!("{err:#}"),
+        }
+    }
+
+    fn names_the_gap(said: &str) {
+        assert!(
+            said.contains("NeedsClaims") && said.contains("Claims"),
+            "names the guard and the principal: {said}",
+        );
+    }
+
+    #[controller(path = "/unwired")]
+    struct UnwiredRouteController;
+
+    #[routes]
+    impl UnwiredRouteController {
+        #[get("/")]
+        #[use_guards(NeedsClaims)]
+        async fn route(&self) -> &'static str {
+            "unreachable"
+        }
+    }
+
+    #[module(providers = [NeedsClaims, UnwiredRouteController])]
+    struct UnwiredRouteModule;
+
+    #[tokio::test]
+    async fn a_route_nothing_attaches_the_required_principal_on_refuses_the_boot() {
+        names_the_gap(&boot_refusal::<UnwiredRouteModule>().await);
+    }
+
+    #[controller(path = "/unwired-open")]
+    struct UnwiredPublicRouteController;
+
+    #[routes]
+    impl UnwiredPublicRouteController {
+        #[get("/")]
+        #[public]
+        #[use_guards(NeedsClaims)]
+        async fn route(&self) -> &'static str {
+            "unreachable"
+        }
+    }
+
+    #[module(providers = [NeedsClaims, UnwiredPublicRouteController])]
+    struct UnwiredPublicRouteModule;
+
+    #[tokio::test]
+    async fn a_public_route_is_refused_it_too_where_only_a_visitor_could_ever_arrive() {
+        names_the_gap(&boot_refusal::<UnwiredPublicRouteModule>().await);
+    }
+
+    #[resolver]
+    struct UnwiredResolver;
+
+    #[operations]
+    impl UnwiredResolver {
+        #[query]
+        #[public]
+        #[use_guards(NeedsClaims)]
+        async fn unwired(&self) -> i32 {
+            1
+        }
+    }
+
+    #[module(imports = [GraphqlModule], providers = [NeedsClaims, UnwiredResolver])]
+    struct UnwiredFieldModule;
+
+    #[tokio::test]
+    async fn a_graphql_field_nothing_attaches_the_required_principal_on_refuses_the_boot() {
+        names_the_gap(&boot_refusal::<UnwiredFieldModule>().await);
+    }
+
+    #[gateway(path = "/ws/unwired")]
+    struct UnwiredGateway;
+
+    #[messages]
+    impl UnwiredGateway {
+        #[subscribe_message("ping")]
+        #[use_guards(NeedsClaims)]
+        async fn ping(&self, _client: &WsClient) -> String {
+            "unreachable".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [NeedsClaims, UnwiredGateway])]
+    struct UnwiredMessageModule;
+
+    #[tokio::test]
+    async fn a_message_nothing_attaches_the_required_principal_on_refuses_the_boot() {
+        names_the_gap(&boot_refusal::<UnwiredMessageModule>().await);
+    }
+
+    #[gateway(path = "/ws/wired")]
+    #[use_guards(Authn)]
+    struct WiredGateway;
+
+    #[messages]
+    impl WiredGateway {
+        #[subscribe_message("ping")]
+        #[use_guards(NeedsClaims)]
+        async fn ping(&self, _client: &WsClient) -> String {
+            "served".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Authn, NeedsClaims, WiredGateway])]
+    struct WiredMessageModule;
+
+    #[tokio::test]
+    async fn a_message_reads_the_principal_its_upgrade_attached() {
+        TestApp::for_module::<WiredMessageModule>()
+            .await
+            .expect("the upgrade's guard attaches it");
+    }
+
+    #[mcp(path = "/mcp/unwired")]
+    #[derive(Clone, Default)]
+    struct UnwiredTool;
+
+    #[tools]
+    impl UnwiredTool {
+        /// Answer.
+        #[tool]
+        #[use_guards(NeedsClaims)]
+        async fn answer(&self) -> Result<String, McpError> {
+            Ok("unreachable".to_owned())
+        }
+    }
+
+    #[module(providers = [NeedsClaims, UnwiredTool])]
+    struct UnwiredOperationModule;
+
+    #[tokio::test]
+    async fn an_mcp_operation_nothing_attaches_the_required_principal_on_refuses_the_boot() {
+        names_the_gap(&boot_refusal::<UnwiredOperationModule>().await);
+    }
+
+    #[module(providers = [Authn, NeedsClaims, UnwiredTool, EndpointGuards<McpView, (Authn,)>])]
+    struct WiredOperationModule;
+
+    #[tokio::test]
+    async fn an_mcp_operation_reads_the_principal_its_endpoint_guards_attached() {
+        TestApp::for_module::<WiredOperationModule>()
+            .await
+            .expect("the endpoint's guard attaches it");
+    }
+}

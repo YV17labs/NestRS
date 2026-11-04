@@ -233,6 +233,30 @@ pub fn denial_of(refused: &nest_rs_core::Failure) -> Denial {
 /// The reason a denial built from a [`MissingAmbientError`] names.
 pub(crate) const MISSING_AMBIENT: &str = "missing_ambient";
 
+/// What a refused caller is told when no principal backs the unit.
+pub const UNAUTHENTICATED: &str = "unauthenticated";
+
+/// The reason a denial of a caller no principal backs names.
+pub const ANONYMOUS_CALLER: &str = "anonymous_caller";
+
+/// The caller's refusal a guard's `require` of the principal it declares
+/// expecting is: the boot proved a guard attaching it runs ahead, so its absence
+/// is a caller that guard admitted without one. `denial` itself for any other.
+pub(crate) fn by_cause(denial: Denial, guard: &dyn crate::Guard) -> Denial {
+    let missing = denial
+        .source
+        .as_deref()
+        .and_then(|source| source.downcast_ref::<MissingAmbientError>());
+    match (missing, guard.expected_principal()) {
+        (Some(missing), Some(expected))
+            if !expected.or_visitor && missing.type_id == expected.type_id =>
+        {
+            Denial::unauthorized(UNAUTHENTICATED).with_reason(ANONYMOUS_CALLER)
+        }
+        _ => denial,
+    }
+}
+
 /// A wiring precondition a guard's `?` met
 /// ([`UnitContext::require`](nest_rs_core::UnitContext::require)): a `500`,
 /// filed once at `error` by the edge with the guard and the value it named.

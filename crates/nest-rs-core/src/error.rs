@@ -44,8 +44,9 @@ pub struct AccessGraphError {
 /// A layer required a value no earlier layer attached to its unit
 /// ([`UnitContext::require`](crate::UnitContext::require)): a wiring defect —
 /// the guard that attaches it is not bound, or runs after the one requiring
-/// it — never the caller's doing. A guard's `?` answers it as a `500` denial,
-/// filed once at `error` by the edge, naming the guard and the value.
+/// it — never the caller's doing, but for the principal a guard declares
+/// expecting, which the boot proves attached. A guard's `?` answers it as a `500`
+/// denial, filed once at `error` by the edge, naming the guard and the value.
 #[derive(Debug, Error)]
 #[error(
     "no `{}` is ambient on this unit: the layer that attaches it is not bound before the one \
@@ -56,6 +57,8 @@ pub struct AccessGraphError {
 pub struct MissingAmbientError {
     /// The type of the value required, as `std::any::type_name` spells it.
     pub value: &'static str,
+    /// That type's identity, which a guard's declared principal compares.
+    pub type_id: std::any::TypeId,
 }
 
 impl MissingAmbientError {
@@ -65,6 +68,7 @@ impl MissingAmbientError {
     pub fn of<T: 'static>() -> Self {
         Self {
             value: std::any::type_name::<T>(),
+            type_id: std::any::TypeId::of::<T>(),
         }
     }
 }

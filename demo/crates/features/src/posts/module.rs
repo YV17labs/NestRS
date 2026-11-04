@@ -4,9 +4,10 @@ use nest_rs::events::EventsModule;
 use super::feed::PostFeed;
 use super::guard::PostAuthorGuard;
 use super::service::PostsService;
+use super::store::PublicationStore;
 
 #[module(
     imports = [EventsModule],
-    providers = [PostsService, PostAuthorGuard, PostFeed],
+    providers = [PostsService, PublicationStore, PostAuthorGuard, PostFeed],
 )]
 pub struct PostsModule;

@@ -752,6 +752,7 @@ fn message_site(site: &MessageSite<'_>) -> EmittedSite {
                 __nestrs_container,
                 __nestrs_handler,
                 ::nest_rs_ws::__private::MessageGuards {
+                    upgrade: <#self_ty>::__nestrs_edge_guard_specs(),
                     method: #method_guard_specs,
                     force: #force_typeids,
                     gate: #gate,

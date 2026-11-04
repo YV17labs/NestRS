@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use nest_rs_core::__private::{ClassGate, ResolvedLayer, run_layer};
 use nest_rs_core::{AmbientValue, Continuation, UnitContext};
 
-use crate::denial::denial_of;
+use crate::denial::{by_cause, denial_of};
 use crate::line::file_denial;
 use crate::{Denial, Guard};
 
@@ -31,12 +31,13 @@ pub enum Refused {
 }
 
 impl Refused {
-    /// `denial`, raised by `guard` under the name `name`.
+    /// `denial`, raised by `guard` under the name `name`, read by cause: the
+    /// principal it requires, absent, is the caller's.
     pub fn by(name: &'static str, guard: &dyn Guard, denial: Denial) -> Self {
         Self::Guard {
             guard: name,
             target: guard.target(),
-            denial,
+            denial: by_cause(denial, guard),
         }
     }
 
@@ -109,7 +110,55 @@ pub async fn check_guards(
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::{Layer, MissingAmbientError, async_trait};
+
     use super::*;
+    use crate::PrincipalClaim;
+
+    struct Principal;
+    struct Tenant;
+
+    /// Requires [`Principal`], or does without it.
+    struct Requiring(fn() -> PrincipalClaim);
+
+    impl Layer for Requiring {}
+
+    #[async_trait]
+    impl Guard for Requiring {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
+        fn expected_principal(&self) -> Option<PrincipalClaim> {
+            Some((self.0)())
+        }
+    }
+
+    fn refused<T: 'static>(guard: &Requiring) -> Denial {
+        let raised = MissingAmbientError::of::<T>().into();
+        let Refused::Guard { denial, .. } = Refused::by("guard", guard, raised) else {
+            panic!("a guard's denial is a guard's");
+        };
+        denial
+    }
+
+    #[test]
+    fn the_principal_a_guard_requires_absent_is_the_callers_401() {
+        let denial = refused::<Principal>(&Requiring(PrincipalClaim::of::<Principal>));
+        assert_eq!(denial.http_status(), 401);
+        assert_eq!(denial.reason(), Some(crate::denial::ANONYMOUS_CALLER));
+    }
+
+    /// The guard deciding a visitor itself, reaching this path all the same, is
+    /// wiring it never wrote; another value's absence is no caller's doing.
+    #[test]
+    fn any_other_missing_value_stays_the_wiring_500() {
+        let doing_without = Requiring(|| PrincipalClaim::of::<Principal>().or_visitor());
+        assert_eq!(refused::<Principal>(&doing_without).http_status(), 500);
+
+        let requiring = Requiring(PrincipalClaim::of::<Principal>);
+        assert_eq!(refused::<Tenant>(&requiring).http_status(), 500);
+    }
 
     /// The units a request carries run on a batch (GraphQL) or a task of their
     /// own (MCP); nothing else the request hands on marks it.

@@ -184,10 +184,6 @@ const SEND_TIMEOUT: DurationBounds = DurationBounds::secs(
 
 pub(crate) const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 10_000;
 
-/// [`HttpConfig::version_header`], for a config that never met the
-/// environment.
-const VERSION_HEADER: Field = Field::new("VERSION_HEADER", "HttpConfig::version_header");
-
 const CONNECTIONS: CountBounds = CountBounds::new(
     Bound::new(
         1,
@@ -425,8 +421,8 @@ impl HttpConfig {
     /// whatever the strategy, for a config that never met the environment.
     pub(crate) fn version_selector(&self) -> Result<Option<VersionSelector>> {
         let header = header_name(
-            nest_rs_config::var_name(Self::NAMESPACE, VERSION_HEADER.key()),
-            VERSION_HEADER,
+            nest_rs_config::var_name(Self::NAMESPACE, Self::VERSION_HEADER.key()),
+            Self::VERSION_HEADER,
             &self.version_header,
             "",
         )?;

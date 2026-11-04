@@ -321,9 +321,12 @@ fn a_count_is_held_to_its_range_from_either_side() {
     );
 }
 
-/// A field's own reader is handed its key and the path it is pinned through.
+/// A field's own reader is handed its key and the path it is pinned through,
+/// bound once by the derive for every site that refuses a value set in code.
 #[test]
 fn a_reader_of_its_own_is_handed_its_field() {
+    assert_eq!(KilnConfig::HEAT.key(), "HEAT");
+    assert_eq!(KilnConfig::HEAT.path(), "KilnConfig::heat");
     let refused = read(
         &[],
         KilnConfig {

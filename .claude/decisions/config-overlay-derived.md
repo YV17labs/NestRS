@@ -129,7 +129,8 @@ tokens holds, since the trait impl on the real type answers. A count with a
 reason at each end is a `CountBounds` on a `usize`, which retired three
 hand-written readers (HTTP's connection cap, MCP's session cap, the outbox's
 batch), and a `with = path` reader is handed its `Field`, key and path, for
-the refusal of a value set in code.
+the refusal of a value set in code — bound to the struct the way a range is, so
+a check outside the reader types neither.
 
 The previous entry's "refusing the boot on" a retired key no longer holds
 whole: the nine security-header keys are refused at boot (B-160, security

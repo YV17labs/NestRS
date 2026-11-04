@@ -87,9 +87,11 @@ impl<T: FromSetting> ConfigField for Vec<T> {
 /// variable is read under — its name in SCREAMING_SNAKE — and the path code
 /// pins it through, `Config::field`.
 ///
-/// `#[config(with = reader)]` hands it to its reader, so a value set in code
-/// is refused naming the field it came from, and a [`BoundedSetting`](crate::BoundedSetting)
-/// holds one: both are read off the struct, never typed.
+/// `#[config(with = reader)]` binds it to the field as the associated constant
+/// named for it (`HttpConfig::VERSION_HEADER`) and hands it to its reader, so
+/// a value set in code is refused naming the field it came from, wherever it
+/// is checked; a [`BoundedSetting`](crate::BoundedSetting) holds one: both
+/// are read off the struct, never typed.
 ///
 /// ```
 /// use nest_rs_config::{ConfigError, ConfigService, Field, Result};

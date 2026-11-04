@@ -82,11 +82,11 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 /// key the field's name with a duration's unit after it; `json` decodes a
 /// structured value; `count` reads `0` as unlimited, `None`; `with = path`
 /// names a `fn(&ConfigService, Field, T) -> Result<T>`, handed the field's key
-/// and path ([`Field`]). On the struct, `defaults =
-/// path` names the profile-aware [`Config::defaults`], `validate = "manual"`
-/// leaves the `Validate` derive to a hand-written impl, and `from_env =
-/// "manual"` the whole `impl Config`, for an overlay whose fields depend on
-/// each other.
+/// and path as the associated [`Field`] named for it, which a check of a value
+/// set in code reads too. On the struct, `defaults = path` names the
+/// profile-aware [`Config::defaults`], `validate = "manual"` leaves the
+/// `Validate` derive to a hand-written impl, and `from_env = "manual"` the
+/// whole `impl Config`, for an overlay whose fields depend on each other.
 ///
 /// ```
 /// use std::time::Duration;

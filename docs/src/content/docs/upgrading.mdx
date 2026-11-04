@@ -619,12 +619,12 @@ lists what the boot, a log or the wire shows when one is missed.
    |---|---|
    | `providers = [Foo, Foo as dyn Trait]` | `providers = [Foo as dyn Trait]`: the binding holds `Foo` under its own type too |
    | `Foo` listed in one module and `Foo as dyn Trait` in another | list it once, as the binding, and import that module where `Arc<Foo>` is injected |
-   | a `scope = request` or `scope = transient` provider, or an edge host, bound `as dyn Trait` | bind a plain `#[injectable]` singleton; reach a scoped provider through the edge's `Scoped<T>` |
+   | a `scope = request` or `scope = transient` provider, or an edge host, bound `as dyn Trait` | bind a plain `#[injectable]` singleton; reach a scoped provider through a `Scoped<T>` parameter |
    | a request-scoped or transient provider listed in two modules, or one type registered under two scopes | register it once |
    | two modules importing each other, a provider of one injecting the other's | move what both need into a module both import |
    | a provider injecting a type a hand-written module or a `for_root` registers, from a module that does not import it | import that module in the provider's module |
    | an `Option<Arc<T>>` field whose `T` a module the app imports provides, outside the consumer's imports | import that module in the consumer's module |
-   | a singleton holding `Option<Arc<T>>` of a request-scoped or transient `T` | reach it through the edge's `Scoped<T>`, or make the consumer request-scoped |
+   | a singleton holding `Option<Arc<T>>` of a request-scoped or transient `T` | reach it through a `Scoped<T>` parameter, or make the consumer request-scoped |
    | request-scoped or transient providers injecting each other | move what both need into a third provider, pass the value as an argument, or publish an event |
    | `#[injectable(scope = transient)]` on a layer a `#[process]`, `#[scheduled]` or `#[on_event]` site binds | `#[injectable]`, a singleton: the site builds it once |
    | `T::from_container(&container)` on a decorated type | none: the container builds `T`; read it with `container.get::<T>()`, or register it with `<T as Discoverable>::register(builder)` in a test |
@@ -851,7 +851,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | a primary key with no `#[expose]` | `#[expose]` it: a masked reply reads a row's identity off the wire and never invents one |
     | `#[derive(Default)]` and `#[wire_enum]` on an enum a hidden column alone holds, there for the mask | optional: drop both and write `#[wire_default(Role::User)]` on the column — a hidden column's type needs no serde |
     | a hand-written `impl WireModelDefaults`, or `use nest_rs::authz::WireModelDefaults` | `#[expose(name = "…")]` on the entity: the trait is gone, and the round trip, the keys and the invented columns are the decorator's alone |
-    | `Ability::mask`, `mask_many`, `masked_output_ambient`, `masked_reply` or an `#[authorize(Action, Entity)]` mask on an entity no `#[expose]` decorates | `#[expose]` it — the rustc error says so |
+    | `Ability::mask`, `mask_many`, `masked_reply` or an `#[authorize(Action, Entity)]` mask on an entity no `#[expose]` decorates | `#[expose]` it — the rustc error says so |
     | a hidden column read off `Ability::mask`'s value | not a compile error: the value carries the exposed columns alone, whatever the grant |
     | a subscription or a `masked_reply` push whose grant is a relation, or reads a column the pushed type leaves out | refused: expose the column the rule reads, read-only, and send it |
 
@@ -898,8 +898,15 @@ lists what the boot, a log or the wire shows when one is missed.
     | `ServerInfo`, returned by a host's `get_info` | `nest_rs::mcp::ServerConfig` |
     | rmcp's `Parameters`, named from rmcp in an operation's signature | `nest_rs::mcp::Parameters`, the framework's own type with rmcp's shape |
     | an `impl McpHost` written by hand | the same with `negotiate_initialize` |
-    | `McpIdentity::declared(name, title)` | `#[mcp(name = …, title = …)]`, or `McpIdentity::new` for the app's own |
-    | `McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))` in `McpOptions::server` | `McpModule::for_root(McpIdentity::default())`, then its `title`, `instructions`…: the name, version and description are the binary's; `new` stays to report others |
+    | `McpIdentity::declared(name, title)` | `#[mcp(name = …, title = …)]`, or the app's own `McpIdentity` literal |
+    | `McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))` in `McpOptions::server` | `McpModule::for_root(McpIdentity { title: Some(…), ..Default::default() })`, or the bare import: the name, version and description are the binary's; its `name` and `version` fields report others |
+    | `McpIdentity::new(name, version).title(…).instructions(…)`, any setter | a literal over `Default`: `McpIdentity { name: Some(…), version: Some(…), title: Some(…), instructions: Some(…), ..Default::default() }` |
+    | `nest_rs::mcp::{tool, tool_router, tool_handler, prompt, prompt_router, prompt_handler, schemars, ToolRouter, PromptRouter}` in a host writing `ServerHandler` by hand, `nest_rs::mcp::{handler, transport, LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService}` | `nest_rs::mcp::rmcp::…`: `nest_rs::mcp` keeps rmcp whole there, and `#[tools]` needs none of them |
+    | `nest_rs::mcp::{CallToolResult, ContentBlock, ServerCapabilities, ProtocolVersion}` | `nest_rs::mcp::model::…` |
+    | `nest_rs::http::Scoped`, `nest_rs::ws::Scoped`, `nest_rs::graphql::Scoped`, `nest_rs::mcp::Scoped` | `nest_rs::core::Scoped`, which `nest_rs::prelude` names: one type on every edge |
+    | `nest_rs::authz::masked_output_ambient`, `nest_rs::authz::graphql::masked_value_for`, `nest_rs::authz::mcp::masked_value_for`, `nest_rs::authz::ws::masked_reply_for` in a body | `#[authorize(Action, Entity)]` arms the mask; under `unmasked`, `Ability::mask` for a row, `nest_rs::authz::masked_reply` for a value you built |
+    | `nest_rs::http::RejectedCredential`, `nest_rs::http::RequestDeadline` | nothing: authn's guards write the first and the edge the second, and neither is a developer's to name |
+    | `validator::ValidationError` in a `custom(function = …)` rule, on a `validator` line of your manifest | `nest_rs::pipes::validator::ValidationError`, and delete the line if nothing else names the crate |
     | `.map_err(\|e\| problem_error(&e))?` in an operation answering `McpError` | return the `ToProblem` error itself from an operation spelled `Result<T, E>` |
     | `#[mcp] struct Host<T>`, `#[tools] impl<T> Host<T>` | a non-generic host type per instantiation |
     | `nest_rs::mcp::McpMount`, `endpoint`, `resolve_operation_guard` | the `#[mcp]` host; a request's guards are the transport's |
@@ -921,7 +928,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | 6.x | 7.0 |
     |---|---|
     | an exhaustive `match` on a framework enum (`ApiVersioning`, `Action`, `WsReply`, …) | the same ending in `_ =>`, its arm the default your code means |
-    | `nest_rs::resource::{expose, wire_enum}` | `nest_rs::seaorm::{expose, wire_enum}` |
+    | `nest_rs::resource::{expose, wire_enum}` | `nest_rs::seaorm::expose`, `nest_rs::core::wire_enum` |
     | `nest_rs::resource::{PkLoadable, RelatedTo, RelationKey, RelationPage, SoleForeignKey}` | `nest_rs::seaorm::graphql::{…}` |
     | `nest_rs::resource::sea_orm` | `nest_rs::seaorm::sea_orm` |
     | a `pub use` re-exporting an entity's relation marker beside it, `By<Column>` (`posts::ByAuthorId`) | `posts::__ByAuthorId`, the marker `#[expose]` emits for a `via` relation, hidden like the rest of its expansion |
@@ -1291,6 +1298,10 @@ lists what the boot, a log or the wire shows when one is missed.
 
 ## What fails if you get it wrong
 
+- **An import of `Scoped` from an edge, of `wire_enum` from `nest_rs::seaorm`, of rmcp's
+  macros or types from `nest_rs::mcp`'s root, or an `McpIdentity` setter** fails to compile
+  (`E0432`, `E0599`): step 13 lists each with what replaces it. `#[wire_enum(graphql)]`
+  without the `graphql` feature fails naming the feature to add.
 - **A binary whose `main` installs no exporter, run where the deployment sets
   `OTEL_EXPORTER_OTLP_ENDPOINT`** (or a signal's own endpoint) — a platform
   injecting it into every pod included — fails `App::run` before serving,

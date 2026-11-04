@@ -92,4 +92,5 @@ text under development and test, JSON otherwise (`nest_rs_core::logging`).
 **A GraphQL app commits its SDL** (`apps/<app>/schema.graphql`), and an
 OpenAPI one its document (`apps/<app>/openapi.json`), each regenerated as a
 side effect of a development run — the profile arms the emit, and its path is
-the app crate's — there is no standalone generator.
+the app crate's — there is no standalone generator. Each is pinned to what the
+app serves by a test in the app's e2e suite.

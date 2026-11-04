@@ -14,6 +14,7 @@ mod module;
 mod openapi;
 mod orgs;
 mod posts;
+mod schema;
 mod scopes;
 mod subscription;
 mod users;

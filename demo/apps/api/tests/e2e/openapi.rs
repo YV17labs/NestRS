@@ -1,3 +1,4 @@
+use nest_rs::config::Environment;
 use serde_json::json;
 
 use crate::*;
@@ -211,6 +212,7 @@ async fn the_committed_document_is_the_one_the_app_serves() {
     assert!(
         served == committed,
         "apps/api/openapi.json is not what the api serves (paths differing: {stale:?}): run the \
-         api once under NESTRS_ENV=development, which rewrites it, and commit the diff",
+         api once under {}=development, which rewrites it, and commit the diff",
+        Environment::var_name(),
     );
 }

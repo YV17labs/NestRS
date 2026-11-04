@@ -102,7 +102,10 @@ guard, filter or interceptor loop of its own.
    `GuardPhase::Authentication` or `Authorization`, and on a `Gated` endpoint
    running no guard, which denies every request; behind `Other` guards alone, a
    rate limit, which identify no one, it stays the opening it says, and on HTTP
-   an authentication guard reads it and admits the visitor.
+   an authentication guard reads it and admits the visitor. `AbilityGuard` reads
+   it on every edge: a `#[public]` unit no ability reached takes the visitor's
+   rules, as a `#[public]` route does, so a tool of an opened endpoint under the
+   pool serves, and a gated unit still fails closed.
    The grammar is one `PostureRules` in `nest-rs-codegen` where it is the same
    grammar: `#[tools]` and `#[messages]` take it verbatim, and `bind = Service`
    on a `#[resource]` through it, reading the id from its template's one

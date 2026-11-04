@@ -141,9 +141,13 @@ principal (`UNAUTHENTICATED`) before consulting a single grant — which
 is what keeps the sentence above true on that transport: a visitor grant
 opens the `#[public]` operations on that entity and no others.
 
-**MCP refuses anonymous callers by design.** `/mcp` carries no
+**A gated `/mcp` refuses anonymous callers.** It carries no
 `Posture::InBand` (its requests read `Gated`), so an unauthenticated tool
 call is denied before the factory is consulted. `define_visitor` does not open it.
+`McpModule::for_root(McpAccess::Public)` does, and there an `AuthzGuard` the
+operation's chain runs — the pool's included — gives a `#[public]` tool these
+grants, as it does a `#[public]` WebSocket message under an upgrade no guard runs;
+an `#[authorize]` unit stays refused, no principal backing it.
 
 **A malformed visitor rule denies the request.** A rule whose relation
 predicate cannot be lowered fails ability construction, and the guard

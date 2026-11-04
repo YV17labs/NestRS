@@ -2,17 +2,17 @@
 //! decorators: `#[use_guards(AuthzGuard)]` on an `#[mcp]` host, which is the
 //! symmetric binding its HTTP, GraphQL and WS siblings already carry.
 //!
-//! Every `Guard::check_*` defaults to `Ok(())`, so both directions are asserted:
-//! only the pair tells a working check from a deny-all and from a no-op.
+//! Both directions are asserted: only the pair tells a working check from a
+//! deny-all and from a no-op.
 
-use nest_rs_authz::AbilityGuard;
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read};
 use nest_rs_core::{Layer, async_trait, injectable, module};
-use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::EndpointGuards;
 use nest_rs_mcp::{McpAccess, McpError, McpModule, McpView, mcp, tools};
 use nest_rs_testing::{LogCapture, TestApp, mcp::call_tool};
 
+use super::rules_read;
 use crate::widget;
 
 const PATH: &str = "/mcp/guard";
@@ -58,6 +58,10 @@ impl AbilityFactory for Rules {
     fn define(&self, _actor: &Self::Actor, ability: &mut AbilityBuilder) {
         ability.can(Action::Read, widget::Entity);
     }
+
+    fn define_visitor(&self, ability: &mut AbilityBuilder) {
+        ability.can(Action::Delete, widget::Entity);
+    }
 }
 
 /// The alias an app writes, bound here on an MCP host.
@@ -70,12 +74,19 @@ struct GuardedTool;
 
 #[tools]
 impl GuardedTool {
-    /// `#[public]` on purpose: no `authorize` is emitted, so only the guard chain
-    /// stands in front of the body.
+    /// Gated, with no mask to arm, so its posture states a caller is needed and
+    /// only the ability it reads stands in front of the body.
     #[tool]
-    #[public]
+    #[authorize(Read, widget::Entity, unmasked)]
     async fn ping(&self) -> Result<String, McpError> {
         Ok("pong".to_owned())
+    }
+
+    /// Admits a caller with no credential, the guard reading who that is.
+    #[tool]
+    #[public]
+    async fn open(&self) -> Result<String, McpError> {
+        Ok(rules_read())
     }
 }
 
@@ -115,7 +126,7 @@ struct UnscopedModule;
 struct ScopedModule;
 
 #[tokio::test]
-async fn an_operation_with_no_ambient_ability_is_refused() {
+async fn a_gated_operation_no_ability_reaches_is_refused() {
     // Thread-local: `#[tokio::test]` is a current-thread runtime, so the
     // endpoint's task runs on this thread.
     let logs = LogCapture::install();
@@ -126,8 +137,8 @@ async fn an_operation_with_no_ambient_ability_is_refused() {
     let body = call_tool(app.http(), PATH, "ping", None).await;
     assert!(
         !body.contains("pong"),
-        "nothing decided what this caller may do, so the operation fails closed \
-         rather than running unscoped: {body}",
+        "its posture needs a caller and nothing decided what this one may do, so the \
+         operation fails closed rather than running unscoped: {body}",
     );
     assert!(
         body.contains("error"),
@@ -171,4 +182,62 @@ async fn an_operation_the_endpoint_guards_scoped_reaches_the_body() {
          {body}",
     );
     logs.expect_none("nest_rs::authz", "authorization denied");
+}
+
+#[tokio::test]
+async fn a_public_operation_under_its_hosts_ability_guard_reads_the_visitors_rules() {
+    let app = TestApp::for_module::<UnscopedModule>()
+        .await
+        .expect("a host binding the ability guard boots");
+
+    let body = call_tool(app.http(), PATH, "open", None).await;
+    assert!(body.contains("visitor may delete"), "{body}");
+}
+
+#[mcp(path = "/mcp/guard/opened")]
+#[derive(Clone, Default)]
+struct OpenedTool;
+
+#[tools]
+impl OpenedTool {
+    /// Admits a caller with no credential: what its posture says on every edge.
+    #[tool]
+    #[public]
+    async fn open(&self) -> Result<String, McpError> {
+        Ok(rules_read())
+    }
+
+    /// Needs a caller, whom an opened endpoint's request never identifies.
+    #[tool]
+    #[authorize(Read, widget::Entity, unmasked)]
+    async fn gated(&self) -> Result<String, McpError> {
+        Ok("reached".to_owned())
+    }
+}
+
+#[module(
+    imports = [McpModule::for_root(McpAccess::Public)],
+    providers = [Rules, ActorGuard, AuthzGuard, OpenedTool],
+)]
+struct OpenedModule;
+
+/// The canonical pool over an endpoint the app opened: the operation's chain folds
+/// the pool, whatever opened the request.
+#[module(imports = [OpenedModule], providers = [GlobalGuards<(ActorGuard, AuthzGuard)>])]
+struct OpenedUnderThePool;
+
+#[tokio::test]
+async fn a_public_operation_of_an_opened_endpoint_serves_under_the_canonical_pool() {
+    let app = TestApp::for_module::<OpenedUnderThePool>()
+        .await
+        .expect("an opened endpoint under the pool boots");
+
+    let open = call_tool(app.http(), "/mcp/guard/opened", "open", None).await;
+    assert!(open.contains("visitor may delete"), "{open}");
+
+    let gated = call_tool(app.http(), "/mcp/guard/opened", "gated", None).await;
+    assert!(
+        !gated.contains("reached") && gated.contains("UNAUTHENTICATED"),
+        "a gated operation still needs a caller: {gated}",
+    );
 }

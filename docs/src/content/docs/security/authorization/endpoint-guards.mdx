@@ -290,6 +290,9 @@ McpModule::for_root(McpAccess::Public)
 A public `/mcp` runs no guard at its request, the global pool's included. A
 module declaring `EndpointGuards<McpView, _>` beside that opening fails the
 boot, naming the declaration — an opening never drops guards silently.
+An `AuthzGuard` in the per-operation chain still runs: a `#[public]` tool reads
+the visitor's rules there, as a `#[public]` route does, and an `#[authorize]` one
+answers `UNAUTHENTICATED`.
 
 What the endpoint runs is `check_http` — it holds a request, not an operation.
 A pooled guard's `check` runs in the **per-operation chain**, which folds the

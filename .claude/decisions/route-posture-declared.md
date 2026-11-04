@@ -111,3 +111,10 @@ guards run before a WS or MCP unit is known, so nothing can read it there.
   transport refuses a hand-built `Gated` self-mount running no guard, the same gap.
   A gateway no guard covers and declaring no message has no line that could say
   `#[public]`, its hooks running for any caller, and is refused too.
+- **A boot refusal of `#[public]` beside an ability guard no request reaches**: the
+  canonical pool folds `AuthzGuard` over an operation of an endpoint `McpAccess::Public`
+  opens, so the refusal would leave that app no spelling for an open tool, the argument
+  above for a rate limit. `AbilityGuard::check` builds the visitor's ability on a
+  `#[public]` unit no ability reached, as `check_http` does on a route, so the word
+  means one thing and the unit reads `define_visitor`'s rules; a gated unit still fails
+  closed.

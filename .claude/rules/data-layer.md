@@ -344,7 +344,10 @@ dependency cycle.** What they guarantee:
   guards, a gateway's upgrade, the `EndpointGuards` a module declares for
   `/graphql` or `/mcp` (one authn→authz ordering) — and it is ambient for
   every unit the request carries: each GraphQL operation and MCP tool call,
-  each WS message and hook. Nothing re-runs the chain below the request.
+  each WS message and hook. Nothing re-runs the chain below the request. A
+  `#[public]` unit no ability reached, on an opened MCP endpoint or under an open
+  upgrade, takes the visitor's rules at its own `AbilityGuard`, the pool's
+  included.
 - **A dataloader batch** runs off-task under what its request carries into a
   batch — the request's values, never one field's, and the pool — captured
   where a field asks the loader; nothing is bound for it.

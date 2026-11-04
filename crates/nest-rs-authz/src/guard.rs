@@ -1,5 +1,5 @@
 //! [`AbilityGuard<F>`] — request-scoped bridge from the authenticated actor to
-//! the [`Ability`](crate::Ability) the enforcement layers read. Generic over
+//! the [`Ability`] the enforcement layers read. Generic over
 //! the app's [`AbilityFactory`].
 
 use std::sync::Arc;
@@ -10,14 +10,14 @@ use nest_rs_core::{
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 
 use crate::gate::reason;
-use crate::{AbilityBuilder, AbilityFactory};
+use crate::{Ability, AbilityBuilder, AbilityFactory, MalformedRuleError};
 
 /// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AuthzAbility>)]`.
 /// `F::Actor` is the principal the authentication guard attached; its absence
 /// on a non-public route is a `500` (an authn guard must run first). On a
-/// `#[public]` route, and on an in-band endpoint (`/graphql`) whose operations
-/// gate themselves, the guard builds an Ability for the anonymous (visitor)
-/// actor — see the dev's `AbilityFactory` to define visitor rules.
+/// `#[public]` unit of any edge, and on an in-band endpoint (`/graphql`) whose
+/// operations gate themselves, the guard builds an Ability for the anonymous
+/// (visitor) actor — see the dev's `AbilityFactory` to define visitor rules.
 ///
 /// The ability is attached for the rest of the request: on a route, the reads
 /// it scopes run where the route's response mask arms them, and nowhere else.
@@ -29,6 +29,36 @@ use crate::{AbilityBuilder, AbilityFactory};
 pub struct AbilityGuard<F: AbilityFactory> {
     #[inject]
     factory: Arc<F>,
+}
+
+impl<F: AbilityFactory> AbilityGuard<F> {
+    /// A caller no credential backs: the factory's visitor branch decides.
+    fn visitor(&self) -> Result<Ability, MalformedRuleError> {
+        // No credential, so no scopes — `Some(empty)`, not `None`: a scope-gated
+        // visitor rule is withheld, never granted to everyone.
+        let mut builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
+        self.factory.define_visitor(&mut builder);
+        // Marked anonymous, so a posture's gate can refuse a visitor.
+        builder.build_visitor()
+    }
+}
+
+/// `built` attached for the rest of the unit. A malformed rule fails construction
+/// (fail-closed): the unit is denied rather than handed an ability whose denial
+/// evaporates.
+fn attach(
+    cx: &mut UnitContext<'_>,
+    built: Result<Ability, MalformedRuleError>,
+) -> Result<(), Denial> {
+    match built {
+        Ok(ability) => {
+            cx.attach(crate::context::AmbientAbility::new(ability));
+            Ok(())
+        }
+        Err(err) => Err(Denial::internal("authorization rules are misconfigured")
+            .with_reason(reason::RULES_MISCONFIGURED)
+            .with_source(err)),
+    }
 }
 
 /// Layer-System impl — listed after the authentication guard in the app's
@@ -44,42 +74,30 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
             Some(actor) => {
                 let mut builder = AbilityBuilder::new().with_granted_scopes(granted);
                 self.factory.define(&actor, &mut builder);
-                Some(builder.build())
+                builder.build()
             }
-            // `#[public]` or in band: no authenticated actor, so the factory's
-            // visitor branch decides.
+            // `#[public]` or in band: no authenticated actor.
             None if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand) => {
-                // No credential, so no scopes — `Some(empty)`, not `None`: a
-                // scope-gated visitor rule is withheld, never granted to everyone.
-                let mut builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
-                self.factory.define_visitor(&mut builder);
-                // `build_visitor` marks the ability anonymous, so a per-operation
-                // gate (GraphQL) can refuse an `#[authorize]` operation.
-                Some(builder.build_visitor())
+                self.visitor()
             }
-            None => None,
-        };
-        match built {
-            // A malformed rule fails construction (fail-closed): deny the
-            // request rather than attach an ability whose denial evaporates.
-            Some(Ok(ability)) => {
-                cx.attach(crate::context::AmbientAbility::new(ability));
-                Ok(())
-            }
-            Some(Err(err)) => Err(Denial::internal("authorization rules are misconfigured")
-                .with_reason(reason::RULES_MISCONFIGURED)
-                .with_source(err)),
             // Off a `#[public]` or in-band site, an actor is an earlier guard's
             // work: its absence is a wiring defect.
-            None => Err(MissingAmbientError::of::<F::Actor>().into()),
-        }
+            None => return Err(MissingAmbientError::of::<F::Actor>().into()),
+        };
+        attach(cx, built)
     }
 
-    /// Refuse a unit no ability reaches: the request that carried it did not
-    /// authenticate, or nothing re-established the ability for it.
+    /// Read the ability the unit's request attached. With none, a `#[public]` unit
+    /// is a visitor, whose rules it reads as a `#[public]` route does; any other
+    /// is refused: its request did not authenticate, or nothing re-established the
+    /// ability for it.
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         if crate::context::carried(cx).is_some() {
             return Ok(());
+        }
+        if cx.reflector().posture() == Posture::Public {
+            let visitor = self.visitor();
+            return attach(cx, visitor);
         }
         let refused = Denial::unauthorized(match cx.edge() {
             Some(Edge::Graphql) => {
@@ -120,18 +138,18 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
 /// struct on its upgrade, `/graphql` and `/mcp` on theirs.
 impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_http::HttpView> for AbilityGuard<F> {}
 
-/// `AbilityGuard` checks GraphQL: [`check`](Guard::check) refuses an operation
-/// no ability reaches. Declared so a resolver may bind it.
+/// `AbilityGuard` checks GraphQL: [`check`](Guard::check) refuses a gated
+/// operation no ability reaches. Declared so a resolver may bind it.
 #[cfg(feature = "graphql")]
 impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_graphql::GraphqlView> for AbilityGuard<F> {}
 
-/// And WebSocket messages, for the same reason: `check` refuses a message
+/// And WebSocket messages, for the same reason: `check` refuses a gated message
 /// whose connection never authenticated.
 #[cfg(feature = "ws")]
 impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_ws::WsView> for AbilityGuard<F> {}
 
-/// And MCP operations: [`check`](Guard::check) refuses an operation no ability
-/// reaches.
+/// And MCP operations: [`check`](Guard::check) refuses a gated operation no
+/// ability reaches.
 #[cfg(feature = "mcp")]
 impl<F: AbilityFactory> nest_rs_guards::GuardFor<nest_rs_mcp::McpView> for AbilityGuard<F> {}
 

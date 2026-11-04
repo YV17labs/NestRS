@@ -67,9 +67,9 @@ lists what the boot, a log or the wire shows when one is missed.
    - **A library the framework re-exported for its own expansions** —
      `nest_rs::core::{serde, validator, schemars}`,
      `nest_rs::http::{serde, validator}`, `nest_rs::queue::serde_json` — is a
-     dependency of your own
-     where your code names it; `#[input]`, `#[expose]` and `#[config]` still
-     need none.
+     dependency of your own where your code names it, but for `validator`, which
+     your code names at `nest_rs::pipes::validator`; `#[input]`, `#[expose]` and
+     `#[config]` still need none.
    - **A script running `nestrs g resource <name>` then `nestrs g migration
      create_<name>`** drops the second line: the resource writes its table's
      migration, from the columns it now takes (`nestrs g resource posts
@@ -327,7 +327,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `body: Valid<Json<T>>`, `Valid(input): Valid<Json<T>>` — and over `Query`, `Form`, `Path`, `Header` | `Json(input): Json<T>`: every extracted value is held to the rules its type declares, with nothing to wrap |
    | `nest_rs::http::Piped<P, E>`, read through `into_inner()` or `Deref` | `nest_rs::pipes::Piped<P, E>` spelled out in the handler's signature, bound `Piped(value)` — `into_inner()` and `Deref` still read it |
    | `Piped<P, E>` behind a type alias, or read with `FromRequest` on a route registered on `HttpRoutes` | the carrier spelled out where `#[routes]` reads it; by hand, extract `E`, then `Piped::<P, E>::apply(extracted.into_inner())` — `Piped` is no extractor |
-   | `impl nest_rs::http::IntoInner for MyExtractor<T>` | `impl nest_rs::pipes::Source for MyExtractor<T>` (`type Value`, `into_value`), and `validator::Validate` when `T` declares rules |
+   | `impl nest_rs::http::IntoInner for MyExtractor<T>` | `impl nest_rs::pipes::Source for MyExtractor<T>` (`type Value`, `into_value`), and `nest_rs::pipes::validator::Validate` when `T` declares rules |
    | `SseEvent::retry(ms)` | `SseEvent::message("").retry(Duration::from_millis(ms))` |
    | `match event { SseEvent::Message { .. } => … }` | none: an event is written, never read back |
    | `SseEvent::message(serde_json::to_string(&payload)…)`, with a fallback body when it fails | `SseEvent::json(&payload)`: a payload that does not serialize sends no event — its chain is filed and the stream ends there |
@@ -499,7 +499,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `nest_rs::http::{CarriedUnits, carried_units}` | nothing: the transport runs a `/graphql` or `/mcp` request on the pool itself |
    | `const GATE: Option<fn(&poem::Request) -> Option<poem::Response>>` on a `RouteResponseShaper` | `const GATE: Option<for<'b> fn(&mut UnitContext<'b>) -> Result<(), Failure>>`, refusing with a `Denial` (`Err(denial.into())`) |
    | `HttpBootCheck::new(\|container\| …)` listed as a provider's metadata | a step on `ContainerBuilder::provide_wiring`: it runs in every app importing the module |
-   | `nest_rs::guards::layer_chain` | `nest_rs::core::layer_chain` |
+   | `nest_rs::guards::layer_chain::{LayerSpec, LayerSite}` | `nest_rs::core::{LayerSpec, LayerSite}` |
    | `nest_rs::guards::{dispatch, RouteShaper, GraphqlSite, run_layered_graphql_chain, run_layered_mcp_chain, GuardAsWsMessageCheck}`, `nest_rs::http::{GlobalGuardsActive, Public}`, `nest_rs::ws::{WsMessageCheck, EventLayerTable, gateway_endpoint}`, `nest_rs::graphql::GraphqlFederationGuard`, `nest_rs::authz::run_ability_chain` | nothing: the decorators' expansions call each edge's own stage, which is no API |
    | `nest_rs::guards::denial_to_graphql_error`, `denial_to_ws_error`, `denial_to_mcp_error` | `nest_rs::graphql::denial_to_graphql_error`, `nest_rs::ws::denial_to_ws_error`, `nest_rs::mcp::denial_to_mcp_error` |
    | `nest_rs::guards::denial_to_http_response`, `denial_to_http_error` | a guard returns its `Denial`; an extractor answers a `ProblemDetails` or an error of its own implementing `ResponseError` |
@@ -901,6 +901,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `McpIdentity::declared(name, title)` | `#[mcp(name = …, title = …)]`, or the app's own `McpIdentity` literal |
     | `McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))` in `McpOptions::server` | `McpModule::for_root(McpIdentity { title: Some(…), ..Default::default() })`, or the bare import: the name, version and description are the binary's; its `name` and `version` fields report others |
     | `McpIdentity::new(name, version).title(…).instructions(…)`, any setter | a literal over `Default`: `McpIdentity { name: Some(…), version: Some(…), title: Some(…), instructions: Some(…), ..Default::default() }` |
+    | `McpIdentity::is_empty()` | `== McpIdentity::default()`: its fields are public |
     | `nest_rs::mcp::{tool, tool_router, tool_handler, prompt, prompt_router, prompt_handler, schemars, ToolRouter, PromptRouter}` in a host writing `ServerHandler` by hand, `nest_rs::mcp::{handler, transport, LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService}` | `nest_rs::mcp::rmcp::…`: `nest_rs::mcp` keeps rmcp whole there, and `#[tools]` needs none of them |
     | `nest_rs::mcp::{CallToolResult, ContentBlock, ServerCapabilities, ProtocolVersion}` | `nest_rs::mcp::model::…` |
     | `nest_rs::http::Scoped`, `nest_rs::ws::Scoped`, `nest_rs::graphql::Scoped`, `nest_rs::mcp::Scoped` | `nest_rs::core::Scoped`, which `nest_rs::prelude` names: one type on every edge |
@@ -932,13 +933,18 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::resource::{PkLoadable, RelatedTo, RelationKey, RelationPage, SoleForeignKey}` | `nest_rs::seaorm::graphql::{…}` |
     | `nest_rs::resource::sea_orm` | `nest_rs::seaorm::sea_orm` |
     | a `pub use` re-exporting an entity's relation marker beside it, `By<Column>` (`posts::ByAuthorId`) | `posts::__ByAuthorId`, the marker `#[expose]` emits for a `via` relation, hidden like the rest of its expansion |
-    | `nest_rs::resource::{serde, validator, schemars, chrono, uuid, serde_json, tracing, async_trait}`, `nest_rs::resource::graphql::{async_graphql, dataloader}` | a dependency of your own on that library, or `nest_rs::graphql::{async_graphql, dataloader}` |
+    | `nest_rs::resource::{serde, validator, schemars, chrono, uuid, serde_json, tracing, async_trait}`, `nest_rs::resource::graphql::{async_graphql, dataloader}` | `nest_rs::pipes::validator`, `nest_rs::graphql::{async_graphql, dataloader}`, or a dependency of your own on any other |
     | `nest_rs_seaorm::TARGET`, `nest_rs::resource::TARGET` | `nest_rs_seaorm::target::ORM`, `nest_rs::seaorm::target::LOADER` (the strings are unchanged) |
     | `nest_rs::health::unresolved_host` | `nest_rs::core::unresolved_host` |
     | `nest_rs::core::operation_log::EDGES` | `nest_rs::core::Edge::ALL`, each word through `Edge::as_str` |
+    | an item through `nest_rs::core::{access, app, container, discoverable, discovery, env_flag, env_prefix, error, error_message, layer, layer_chain, lifecycle, module, request_scope, trace_context, transport}::…` (`nest_rs::core::container::Container`) | the same item at `nest_rs::core::…` (`nest_rs::core::Container`): an item has one path, and those modules are private |
+    | `nest_rs::core::problem::{Code, Problem, ToProblem}`, `nest_rs::core::problem::code::CONFLICT` | `nest_rs::core::{Code, Problem, ToProblem}`, `nest_rs::core::code::CONFLICT` |
+    | `nest_rs::core::operation_log::Edge`, `nest_rs::core::panic_message` | `nest_rs::core::Edge`, `nest_rs::core::panic::panic_message` |
+    | `nest_rs::core::trace_context::field::…` | nothing public: the framework writes the correlation fields, and `trace_id`, `span_id` and `actor_id` come from context |
+    | `nest_rs::social::providers::github::…`, `nest_rs::social::providers::google::…` | `nest_rs::social::…` |
     | `EventBus::subscribe(listener)` on a bus of your own | a `#[listeners]` host with an `#[on_event]` method |
     | `nest_rs::pipes::{ValidateProbe, MaybeValidateFallback}`, `nest_rs::graphql::{ValidateProbe, MaybeValidateFallback}`, `nest_rs::ws::resolve_ws_data_pipe` | nothing public: the decorators emit them |
-    | `nest_rs::pipes::ValidationPipe`, `Piped<ValidationPipe<T>, E>`, `nest_rs::pipes::Valid` | nothing: every edge validates what it decodes; a hand-written check runs `validator::Validate` and converts with `nest_rs::pipes::PipeError::from` |
+    | `nest_rs::pipes::ValidationPipe`, `Piped<ValidationPipe<T>, E>`, `nest_rs::pipes::Valid` | nothing: every edge validates what it decodes; a hand-written check runs `nest_rs::pipes::validator::Validate` and converts with `nest_rs::pipes::PipeError::from` |
     | `#[input]` on a DTO an edge only sends | `#[output]` (`nest_rs::core::output`), `Serialize` and `JsonSchema` alone — not a compile error: `#[input]` still compiles, carrying a `Deserialize` and rules nothing reads |
     | any other item that was `#[doc(hidden)]` at a crate's root | nothing public: `__private` is not API |
     | `async_trait` from `nest_rs::http`, `ws`, `graphql`, `guards` or `queue` | `nest_rs::core::async_trait`, or `use nest_rs::prelude::*` |
@@ -1298,10 +1304,14 @@ lists what the boot, a log or the wire shows when one is missed.
 
 ## What fails if you get it wrong
 
-- **An import of `Scoped` from an edge, of `wire_enum` from `nest_rs::seaorm`, of rmcp's
-  macros or types from `nest_rs::mcp`'s root, or an `McpIdentity` setter** fails to compile
-  (`E0432`, `E0599`): step 13 lists each with what replaces it. `#[wire_enum(graphql)]`
+- **An import of `Scoped` from an edge, of rmcp's macros or types from `nest_rs::mcp`'s
+  root, an `McpIdentity` setter, of `wire_enum` from `nest_rs::resource`, or of an item
+  through a module `nest_rs::core` or `nest_rs::social` no longer opens** fails to compile
+  (`E0432`, `E0599`): steps 12 and 13 list each with what replaces it. `#[wire_enum(graphql)]`
   without the `graphql` feature fails naming the feature to add.
+- **An `McpIdentity` stating a name with no version behind it, or a version, a title, a
+  description, a website or icons with no name behind them**, refuses the boot in a process no
+  `#[nest_rs::main]` started, naming the literal to write; the binary fills both anywhere else.
 - **A binary whose `main` installs no exporter, run where the deployment sets
   `OTEL_EXPORTER_OTLP_ENDPOINT`** (or a signal's own endpoint) — a platform
   injecting it into every pod included — fails `App::run` before serving,

@@ -223,8 +223,9 @@ hook is the kernel's own unit, `lifecycle.hook`, declared by `nest-rs-core` as
 then read three times: by the span, by the log record's event name (what an
 OTLP exporter reports as `event.name`), and by the message a console prints. The *grammar* is
 `nest_rs_core::operation_log`'s and the closed list of edges is
-`nest_rs_core::Edge`; the names are not, for the same reason a span target is not — a unit name says who did
-the work, and only the crate it names declares it: `unit!` refuses any other.
+`nest_rs_core::Edge`; the names are not, for the same reason a span target is
+not — a unit name says who did the work, and only the crate it names declares
+it: `unit!` refuses any other.
 The test harness holds the one other root no edge dispatches, `testing.<unit>`
 on `nest_rs::testing`, declared by `nest-rs-testing`: `testing.unit` is the
 unit a suite runs a service's body in

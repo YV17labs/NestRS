@@ -456,6 +456,12 @@ fn generate_mcp_adapter_enables_the_mcp_feature() {
         features_cargo.contains("nest-rs") && features_cargo.contains("\"mcp\""),
         "`#[mcp]` needs the `mcp` feature: {features_cargo}",
     );
+    assert!(
+        !features_cargo.contains("seaorm"),
+        "a tool over a port with no entity turns on no ORM: {features_cargo}",
+    );
+    let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(!root_cargo.contains("seaorm"), "{root_cargo}");
 }
 
 /// A headless workspace (`default-features = false`) has no `http` until an
@@ -505,6 +511,12 @@ fn generate_graphql_adapter_enables_the_guards_graphql_feature() {
         features_cargo.contains("nest-rs") && features_cargo.contains("graphql"),
         "the guards crate has to gain the graphql feature: {features_cargo}"
     );
+    assert!(
+        !features_cargo.contains("seaorm"),
+        "an operation over a port with no entity turns on no ORM: {features_cargo}",
+    );
+    let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(!root_cargo.contains("seaorm"), "{root_cargo}");
 
     // A port with no entity gates its operation on the `#[subject]` written
     // beside its service, behind the guards its auth adapter brings.

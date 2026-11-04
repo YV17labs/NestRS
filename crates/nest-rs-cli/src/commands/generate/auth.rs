@@ -387,11 +387,7 @@ static GRAPHQL_AUTHZ: AuthzAdapter = AuthzAdapter {
         "each operation declares #[authorize(Action, Subject)] — an entity, or a",
         "#[subject] no table holds — or #[public].",
     ],
-    deps: &[
-        &super::cargo::AUTHZ,
-        &super::cargo::SEAORM,
-        &super::cargo::GRAPHQL,
-    ],
+    deps: &[&super::cargo::AUTHZ, &super::cargo::GRAPHQL],
     written_by_g_auth: false,
 };
 
@@ -410,11 +406,7 @@ static MCP_AUTHZ: AuthzAdapter = AuthzAdapter {
         "its guards: callers are authenticated and the ambient Ability is attached, so",
         "each tool's #[authorize(Action, Subject)] gate reads it.",
     ],
-    deps: &[
-        &super::cargo::AUTHZ,
-        &super::cargo::SEAORM,
-        &super::cargo::MCP,
-    ],
+    deps: &[&super::cargo::AUTHZ, &super::cargo::MCP],
     written_by_g_auth: false,
 };
 

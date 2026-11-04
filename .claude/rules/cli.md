@@ -76,7 +76,9 @@ adapter generator — every edge `Transport` carries — over both port shapes,
 from the root of a one-app workspace, which wires that app, so the edits it
 makes to that app's `module.rs` and manifest compile too, plus `nestrs new`'s
 second app, `g migration` and `g entity`'s retirement of a subject, and holds
-the result to the scaffold's own `clippy -D warnings`. Its e2e half replays
+the result to the scaffold's own `clippy -D warnings`; `g auth`, `g graphql` and
+`g mcp` also compile with `seaorm` off the root, the features crate alone, since
+`migrations` and `seed` read it there. Its e2e half replays
 every tutorial page that edits `blog` from the workspace root — `--app` naming
 the app, as a reader with two apps types it — and runs the suite they leave
 against the live Postgres. The integration suite's text assertions are not

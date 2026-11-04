@@ -334,6 +334,56 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
     );
 }
 
+/// A JWT-only tree: `g auth` and the two adapters whose authz module it brings
+/// over a port with no table write no `seaorm`, so a developer who took it off
+/// the root keeps it off. The features crate alone is checked: the scaffold's
+/// `migrations` and `seed` read `seaorm` off that root, and such a tree drops them.
+#[test]
+fn the_auth_adapters_compile_with_the_orm_off() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    nestrs(dir.path(), &["new", "acme"], &[]);
+    let workspace = dir.path().join("acme");
+    for args in [
+        &["g", "auth"][..],
+        &["g", "feature", "notes"],
+        &["g", "graphql", "notes"],
+        &["g", "mcp", "notes"],
+    ] {
+        nestrs(&workspace, args, &[]);
+    }
+
+    let features = read(&workspace, "crates/features/Cargo.toml");
+    assert!(!features.contains("seaorm"), "{features}");
+    let root = read(&workspace, "Cargo.toml");
+    assert!(root.contains(r#""seaorm""#), "{root}");
+    let root: String = root
+        .replace(r#""seaorm", "#, "")
+        .replace(r#", "seaorm""#, "");
+    assert!(!root.contains(r#""seaorm""#), "{root}");
+    std::fs::write(workspace.join("Cargo.toml"), root).expect("the manifest is writable");
+
+    patch_to_working_tree(&workspace);
+    let output = cargo(
+        &workspace,
+        &[
+            "clippy",
+            "-p",
+            "features",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        &[],
+    )
+    .expect("cargo runs");
+    assert!(
+        output.status.success(),
+        "the features crate does not compile with `seaorm` off:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 /// `nestrs g <edge> <feature>` for every framework edge but `skip`, each run
 /// **from inside the scaffolded app** (`-p apps/hello`), so the generator also
 /// edits the app's `module.rs` and manifest. The kernel's vocabulary, so an

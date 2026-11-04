@@ -116,7 +116,9 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::chain::{GlobalBucket, SiteChainSources, compose_site_chain, split_at_covered};
-    pub use crate::denial::{ANONYMOUS_CALLER, UNAUTHENTICATED, denial_of};
+    pub use crate::denial::{
+        ANONYMOUS_CALLER, UNAUTHENTICATED, denial_of, required_principal_absent,
+    };
     pub use crate::reason::{client_message, denial_code, denial_reason};
     pub use crate::registry::{
         GuardSpec, global_guards_active, guard, resolve_global_chain, resolve_global_guards,

@@ -117,8 +117,10 @@ principal had to know its edge, and the exemplar wrote its decision twice.
 `expected_principal`: **the boot refuses a chain nothing in which attaches it** —
 a route's, and at the wiring step a unit's with the request carrying it, read off
 `produced_principal` — so its absence at a unit is a caller a guard attaching it
-admitted without one, the caller's `401` on every edge, never a `500`. Any other
-value's absence stays the wiring `500`, and a guard may declare
+admitted without one, the caller's `401` on every edge, never a `500`. A `#[public]`
+route that set a rejected credential aside answers the `401` it earned
+(`RejectedCredential`, RFC 6750 §3's `error` with it), as an `Ambient` parameter does.
+Any other value's absence stays the wiring `500`, and a guard may declare
 `impl<V: UnitView> GuardFor<V>` once. The classification runs in the stage's refusal
 path, so the hot path pays for nothing.
 

@@ -3,6 +3,7 @@
 //! A guard returns `Err(Denial::...)`; each edge renders it in its native
 //! error form.
 
+use std::any::TypeId;
 use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
@@ -239,21 +240,24 @@ pub const UNAUTHENTICATED: &str = "unauthenticated";
 /// The reason a denial of a caller no principal backs names.
 pub const ANONYMOUS_CALLER: &str = "anonymous_caller";
 
-/// The caller's refusal a guard's `require` of the principal it declares
-/// expecting is: the boot proved a guard attaching it runs ahead, so its absence
-/// is a caller that guard admitted without one. `denial` itself for any other.
-pub(crate) fn by_cause(denial: Denial, guard: &dyn crate::Guard) -> Denial {
+/// The principal `guard` declares requiring, when `denial` is its `require`
+/// finding it absent: the boot proved a guard attaching it runs ahead, so the
+/// absence is a caller that guard admitted without one.
+pub fn required_principal_absent(denial: &Denial, guard: &dyn crate::Guard) -> Option<TypeId> {
     let missing = denial
         .source
-        .as_deref()
-        .and_then(|source| source.downcast_ref::<MissingAmbientError>());
-    match (missing, guard.expected_principal()) {
-        (Some(missing), Some(expected))
-            if !expected.or_visitor && missing.type_id == expected.type_id =>
-        {
-            Denial::unauthorized(UNAUTHENTICATED).with_reason(ANONYMOUS_CALLER)
-        }
-        _ => denial,
+        .as_deref()?
+        .downcast_ref::<MissingAmbientError>()?;
+    let expected = guard.expected_principal()?;
+    (!expected.or_visitor && missing.type_id == expected.type_id).then_some(expected.type_id)
+}
+
+/// The caller's refusal `denial` is, where `guard` found the principal it
+/// requires absent; `denial` itself for any other.
+pub(crate) fn by_cause(denial: Denial, guard: &dyn crate::Guard) -> Denial {
+    match required_principal_absent(&denial, guard) {
+        Some(_) => Denial::unauthorized(UNAUTHENTICATED).with_reason(ANONYMOUS_CALLER),
+        None => denial,
     }
 }
 

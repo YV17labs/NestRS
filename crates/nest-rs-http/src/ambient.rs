@@ -5,6 +5,7 @@ use std::any::TypeId;
 
 use http::{Extensions, StatusCode};
 use nest_rs_core::{Ambient, AmbientValue};
+use nest_rs_guards::Denial;
 
 use crate::problem::ProblemDetails;
 use crate::response::{IntoResponse, Response};
@@ -28,6 +29,10 @@ pub struct RejectedCredential {
     pub bearer_error: Option<&'static str>,
 }
 
+/// The reason a guard's refusal names when it answers a credential a `#[public]`
+/// route set aside: the line filed when it was set aside says why.
+const REJECTED_CREDENTIAL: &str = "rejected_credential";
+
 /// Why no guard's value is there to read.
 enum Absent<'a> {
     /// A `#[public]` route admitted a credential it refused: the deferred `401`.
@@ -48,6 +53,17 @@ impl RejectedCredential {
             client_message: client_message.into(),
             bearer_error,
         }
+    }
+
+    /// The deferred `401` as a guard answers it, reading the principal it requires
+    /// on the route ([`Self::deferred`]'s words and challenge).
+    pub(crate) fn denial(&self) -> Denial {
+        let message = self.client_message.clone();
+        match self.bearer_error {
+            Some(code) => Denial::invalid_credential(message, code),
+            None => Denial::unauthorized(message),
+        }
+        .with_reason(REJECTED_CREDENTIAL)
     }
 
     /// The deferred `401`: the guard's client-safe message, and the RFC 6750

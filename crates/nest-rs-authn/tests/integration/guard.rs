@@ -1135,3 +1135,149 @@ mod nets {
         .expect("a strategy reaching no store boots beside a slow one");
     }
 }
+
+/// A credential a `#[public]` route set aside earns its `401` wherever the
+/// principal is read: a parameter, or a guard requiring it (RFC 6750 §3).
+mod rejected_credential {
+    use nest_rs_core::{Layer, UnitContext};
+    use nest_rs_guards::{GuardFor, PrincipalClaim};
+    use nest_rs_http::header;
+
+    use super::*;
+
+    #[injectable]
+    #[derive(Default)]
+    struct BearerStrategy;
+
+    #[async_trait]
+    impl Strategy for BearerStrategy {
+        type Principal = super::Who;
+
+        async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError> {
+            match req.headers().get(header::AUTHORIZATION) {
+                None => Err(AuthError::MissingCredentials),
+                Some(bearer) if bearer == "Bearer good" => Ok(super::Who("ada")),
+                Some(_) => Err(AuthError::InvalidToken),
+            }
+        }
+    }
+
+    type BearerAuthn = AuthnGuard<BearerStrategy>;
+
+    #[injectable]
+    #[derive(Default)]
+    struct NeedsWho;
+
+    impl Layer for NeedsWho {}
+
+    #[async_trait]
+    impl Guard for NeedsWho {
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            cx.require::<super::Who>()?;
+            Ok(())
+        }
+
+        fn expected_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<super::Who>())
+        }
+    }
+
+    impl GuardFor<nest_rs_http::HttpView> for NeedsWho {}
+
+    #[controller(path = "/rejected")]
+    #[use_guards(BearerAuthn)]
+    struct RejectedController;
+
+    #[routes]
+    impl RejectedController {
+        #[get("/guarded")]
+        #[public]
+        #[use_guards(NeedsWho)]
+        async fn guarded(&self) -> &'static str {
+            "reached"
+        }
+
+        #[get("/parameter")]
+        #[public]
+        async fn parameter(&self, _who: Ambient<super::Who>) -> &'static str {
+            "reached"
+        }
+    }
+
+    #[module(
+        imports = [HttpModule],
+        providers = [BearerStrategy, BearerAuthn, NeedsWho, RejectedController],
+    )]
+    struct RejectedModule;
+
+    /// What `path` answers `credential`: its status, its challenge and its body.
+    async fn answer(
+        app: &TestApp,
+        path: &str,
+        credential: Option<&str>,
+    ) -> (StatusCode, String, serde_json::Value) {
+        let mut request = app.http().get(path);
+        if let Some(credential) = credential {
+            request = request.header(header::AUTHORIZATION, credential);
+        }
+        let response = request.send().await.0;
+        let status = response.status();
+        let challenge = response
+            .headers()
+            .get(header::WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let body = response.into_body().into_string().await.expect("a body");
+        let body = serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
+        (status, challenge, body)
+    }
+
+    #[tokio::test]
+    async fn a_guard_requiring_the_principal_answers_the_401_the_credential_earned() {
+        let app = TestApp::for_module::<RejectedModule>()
+            .await
+            .expect("boots");
+        let logs = LogCapture::install();
+
+        let (status, challenge, body) =
+            answer(&app, "/rejected/guarded", Some("Bearer forged")).await;
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert!(challenge.contains("invalid_token"), "{challenge}");
+        assert_eq!(body["detail"], "invalid token", "{body}");
+        let filed = logs.expect_one(nest_rs_core::target::LAYERS, "guard denied the request");
+        assert_eq!(
+            filed.field("reason").as_deref(),
+            Some("rejected_credential")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_401_answers_a_parameter_and_a_guard_reading_the_principal() {
+        let app = TestApp::for_module::<RejectedModule>()
+            .await
+            .expect("boots");
+
+        let by_guard = answer(&app, "/rejected/guarded", Some("Bearer forged")).await;
+        let by_parameter = answer(&app, "/rejected/parameter", Some("Bearer forged")).await;
+
+        assert_eq!(by_guard, by_parameter);
+    }
+
+    #[tokio::test]
+    async fn a_caller_with_no_credential_reads_as_one_that_sent_none() {
+        let app = TestApp::for_module::<RejectedModule>()
+            .await
+            .expect("boots");
+
+        let (status, challenge, body) = answer(&app, "/rejected/guarded", None).await;
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(
+            challenge, "Bearer",
+            "RFC 6750 §3: no reason for no credential"
+        );
+        assert_eq!(body["detail"], "unauthenticated", "{body}");
+    }
+}

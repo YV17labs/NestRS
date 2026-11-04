@@ -17,9 +17,12 @@ use nest_rs_core::__private::{
     new_unit_context, pending_of, take_pending,
 };
 use nest_rs_core::{AmbientValue, Failure, Handler, UnitContext};
-use nest_rs_guards::__private::{RefusalMark, Refused, denial_code, denial_of};
+use nest_rs_guards::__private::{
+    RefusalMark, Refused, denial_code, denial_of, required_principal_absent,
+};
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
 
+use crate::ambient::RejectedCredential;
 use crate::error::HttpError;
 use crate::problem::ProblemDetails;
 use crate::request::Request;
@@ -31,6 +34,26 @@ use crate::view::HttpView;
 /// stage and the work its endpoint runs off its task.
 #[derive(Clone, Default)]
 struct Attached(Pending);
+
+/// `denial`, raised by `guard` on the request `cx` runs: the principal it requires,
+/// absent behind a credential a `#[public]` route set aside, answers the `401` that
+/// credential earned, as an [`Ambient`](nest_rs_core::Ambient) parameter does.
+fn refused_by(
+    name: &'static str,
+    guard: &dyn Guard,
+    denial: Denial,
+    cx: &UnitContext<'_>,
+) -> Refused {
+    let earned = required_principal_absent(&denial, guard).and_then(|principal| {
+        cx.switch_to::<HttpView>()?
+            .request()
+            .extensions()
+            .get::<RejectedCredential>()
+            .filter(|rejected| rejected.principal == principal)
+            .map(RejectedCredential::denial)
+    });
+    Refused::by(name, guard, earned.unwrap_or(denial))
+}
 
 /// Run each of `guards`' [`check_http`](Guard::check_http), in order, on the
 /// unit `cx` describes, then each of the site's class `gates` on the same unit.
@@ -44,10 +67,9 @@ async fn run_guards(
         // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
         // blanket would nest a second boxed future per check.
         let guard = entry.layer.as_ref();
-        guard
-            .check_http(cx)
-            .await
-            .map_err(|denial| Refused::by(entry.name, guard, denial))?;
+        if let Err(denial) = guard.check_http(cx).await {
+            return Err(refused_by(entry.name, guard, denial, cx));
+        }
         // An answer is a refusal's own: one a guard that admitted left is never
         // served for a later refusal.
         if let Some(view) = cx.switch_to_mut::<HttpView>() {
@@ -271,7 +293,7 @@ pub async fn check_request<'g>(
         let mut cx = new_unit_context(handler, &mut view, None, None);
         for (name, guard) in guards {
             if let Err(denial) = guard.check_http(&mut cx).await {
-                return Err(Refused::by(name, guard, denial).into_denial(DENIED, &cx));
+                return Err(refused_by(name, guard, denial, &cx).into_denial(DENIED, &cx));
             }
         }
         Ok(take_pending(&mut cx))

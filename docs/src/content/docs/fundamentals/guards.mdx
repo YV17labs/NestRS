@@ -155,7 +155,9 @@ impl<V: UnitView> GuardFor<V> for PostAuthorGuard {}
 the message or the operation, naming the guard and the type, so the wiring gap never
 reaches a caller. **The guard attaching it ran and admitted a caller with none** —
 `/graphql` lets a visitor through to each field's own gate, a `#[public]` route lets
-one in: the caller's `401`, on every edge. Any other value's absence stays what it
+one in: the caller's `401`, on every edge, and on a `#[public]` route the
+`invalid_token` answer a credential it set aside earned, as an `Ambient<T>` parameter
+reads it. Any other value's absence stays what it
 always was, a `500` the edge files once at `error`, naming the guard and the type.
 A guard that does without the principal, and decides a visitor itself, reads it with
 `cx.ambient::<T>()` and declares `PrincipalClaim::of::<T>().or_visitor()`.

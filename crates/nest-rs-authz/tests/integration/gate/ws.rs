@@ -174,3 +174,36 @@ async fn dispatch_serves_a_granted_action_and_a_public_message() {
         "`#[public]` has no gate to run: {open}"
     );
 }
+
+#[gateway(path = "/ws/gate/uncovered")]
+struct UncoveredGateway;
+
+#[messages]
+impl UncoveredGateway {
+    #[subscribe_message("read")]
+    #[authorize(Read, widget::Entity)]
+    async fn read(&self) -> Result<String, WsError> {
+        Ok("never served".to_owned())
+    }
+}
+
+#[module(imports = [WsModule], providers = [UncoveredGateway])]
+struct UncoveredModule;
+
+/// A gate reads the ability a guard attaches, so with no guard it could only ever
+/// fail closed: the boot says so, as it does of such a route.
+#[tokio::test]
+async fn a_gated_message_no_guard_covers_refuses_the_boot() {
+    let Err(refused) = TestApp::builder()
+        .module::<UncoveredModule>()
+        .build_ws()
+        .await
+    else {
+        panic!("no guard attaches the ability its gate reads");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains("/ws/gate/uncovered") && said.contains("read"),
+        "{said}",
+    );
+}

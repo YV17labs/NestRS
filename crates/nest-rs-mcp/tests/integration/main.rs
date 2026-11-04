@@ -21,7 +21,7 @@ macro_rules! task_host {
         impl ::nest_rs_mcp::ServerHandler for $host {
             fn get_info(&self) -> ::nest_rs_mcp::ServerConfig {
                 ::nest_rs_mcp::ServerConfig::new(
-                    ::nest_rs_mcp::ServerCapabilities::builder()
+                    ::nest_rs_mcp::model::ServerCapabilities::builder()
                         .enable_tools()
                         .enable_tasks()
                         .build(),
@@ -61,18 +61,16 @@ macro_rules! task_host {
                     ::nest_rs_mcp::rmcp::task_manager::TaskOptions::new(),
                     |_| {
                         Box::pin(async {
-                            Ok(::nest_rs_mcp::CallToolResult::success(vec![
-                                ::nest_rs_mcp::ContentBlock::text("done"),
+                            Ok(::nest_rs_mcp::model::CallToolResult::success(vec![
+                                ::nest_rs_mcp::model::ContentBlock::text("done"),
                             ]))
                         })
                     },
                 );
-                Ok(
-                    ::nest_rs_mcp::CallToolResult::success(vec![
-                        ::nest_rs_mcp::ContentBlock::text(task.task_id),
-                    ])
-                    .into(),
-                )
+                Ok(::nest_rs_mcp::model::CallToolResult::success(vec![
+                    ::nest_rs_mcp::model::ContentBlock::text(task.task_id),
+                ])
+                .into())
             }
 
             async fn get_task(

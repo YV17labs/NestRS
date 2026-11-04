@@ -6,7 +6,8 @@ use nest_rs_http::StatusCode;
 use nest_rs_mcp::rmcp::transport::streamable_http_server::session::store::{
     SessionState, SessionStore, SessionStoreError,
 };
-use nest_rs_mcp::{ServerHandler, mcp, tool_handler, tool_router};
+use nest_rs_mcp::rmcp::{tool_handler, tool_router};
+use nest_rs_mcp::{ServerHandler, mcp};
 use nest_rs_testing::TestApp;
 
 #[mcp]
@@ -781,7 +782,7 @@ async fn a_stateless_request_is_served_while_the_sessions_are_full() {
     for _ in 0..2 {
         nest_rs_testing::mcp::open_session(app.http(), LISTENING, None).await;
     }
-    let version = nest_rs_mcp::ProtocolVersion::LATEST;
+    let version = nest_rs_mcp::model::ProtocolVersion::LATEST;
 
     let discovered = app
         .http()

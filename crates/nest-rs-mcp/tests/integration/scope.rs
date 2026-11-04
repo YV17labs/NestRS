@@ -9,10 +9,9 @@ use std::sync::{Arc, Mutex};
 use nest_rs_core::{AccessGraphError, App, MissingDependencyError, Scoped, injectable, module};
 use nest_rs_http::{BoxEndpoint, Endpoint, endpoint_fn};
 use nest_rs_mcp::__private::{McpMount, endpoint};
-use nest_rs_mcp::{
-    CallToolResult, ContentBlock, McpError, ServerHandler, mcp, tool, tool_handler, tool_router,
-    tools,
-};
+use nest_rs_mcp::model::{CallToolResult, ContentBlock};
+use nest_rs_mcp::rmcp::{tool, tool_handler, tool_router};
+use nest_rs_mcp::{McpError, ServerHandler, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::TestClient;
 use nest_rs_testing::mcp::{call_method, call_tool, open_session, result};

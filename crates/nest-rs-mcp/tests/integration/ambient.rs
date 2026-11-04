@@ -146,7 +146,7 @@ async fn a_session_operation_runs_under_its_requests_trace_caller_and_ambient() 
 #[tokio::test]
 async fn a_stateless_operation_runs_under_its_requests_trace_caller_and_ambient() {
     let app = TestApp::for_module::<AmbientModule>().await.expect("boots");
-    let version = nest_rs_mcp::ProtocolVersion::LATEST;
+    let version = nest_rs_mcp::model::ProtocolVersion::LATEST;
 
     let response = post_message_with(
         app.http(),

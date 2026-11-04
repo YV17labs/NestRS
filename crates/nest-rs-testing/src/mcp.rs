@@ -323,7 +323,7 @@ mod tests {
     fn the_stateless_driver_names_the_sdk_latest() {
         assert_eq!(
             super::STATELESS_PROTOCOL_VERSION,
-            nest_rs_mcp::ProtocolVersion::LATEST.as_str(),
+            nest_rs_mcp::model::ProtocolVersion::LATEST.as_str(),
             "rmcp moved its LATEST: bump `STATELESS_PROTOCOL_VERSION` to match",
         );
     }

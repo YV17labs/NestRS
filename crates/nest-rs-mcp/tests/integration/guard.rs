@@ -8,10 +8,9 @@ use std::sync::{Arc, Mutex};
 use nest_rs_core::{AmbientValue, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, GuardPhase};
 use nest_rs_http::{EndpointGuards, HttpView, StatusCode};
-use nest_rs_mcp::{
-    CallToolResult, ContentBlock, McpAccess, McpError, McpModule, McpView, ServerHandler, mcp,
-    tool, tool_handler, tool_router,
-};
+use nest_rs_mcp::model::{CallToolResult, ContentBlock};
+use nest_rs_mcp::rmcp::{tool, tool_handler, tool_router};
+use nest_rs_mcp::{McpAccess, McpError, McpModule, McpView, ServerHandler, mcp};
 use nest_rs_testing::mcp::{call_tool, initialize_request, post_message};
 use nest_rs_testing::{LogCapture, TestApp};
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule};

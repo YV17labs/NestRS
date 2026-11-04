@@ -135,7 +135,8 @@ methods have no decorator. A host serving one writes rmcp's `ServerHandler`
 itself and has no `#[tools]` block: `#[tools]` writes the whole handler, so it
 cannot share one with yours. The protocol types live under
 `nest_rs::mcp::model`, the per-operation handles under `nest_rs::mcp::service`,
-and anything newer than this page under `nest_rs::mcp::rmcp`. A request the
+and everything else — rmcp's `#[tool_router]` and `#[tool_handler]`, its
+transport types — under `nest_rs::mcp::rmcp`. A request the
 server sends the client — elicitation, sampling — goes out through the
 operation's peer on a session below protocol `2026-07-28`; that revision
 forbids one, so rmcp refuses it there, and the operation answers an

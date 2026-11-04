@@ -16,7 +16,8 @@ use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{EndpointGuards, HttpView};
-use nest_rs_mcp::{McpView, ServerHandler, mcp, tool_handler, tool_router};
+use nest_rs_mcp::rmcp::{tool_handler, tool_router};
+use nest_rs_mcp::{McpView, ServerHandler, mcp};
 // The name rmcp's `#[tool_router]` / `#[tool_handler]` expansions resolve.
 use nest_rs_http::StatusCode;
 use nest_rs_mcp::rmcp;

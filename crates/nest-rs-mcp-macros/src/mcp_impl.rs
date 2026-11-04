@@ -443,8 +443,8 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
             // rmcp's expansions emit bare `rmcp::` paths resolved at the call site.
             use ::nest_rs_mcp::rmcp;
-            use ::nest_rs_mcp::{ServerCapabilities, ServerConfig};
-            use ::nest_rs_mcp::{
+            use ::nest_rs_mcp::model::{ServerCapabilities, ServerConfig};
+            use ::nest_rs_mcp::rmcp::{
                 ServerHandler, prompt, prompt_handler, prompt_router, tool, tool_handler,
                 tool_router,
             };

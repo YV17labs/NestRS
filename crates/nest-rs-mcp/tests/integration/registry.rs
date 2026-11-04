@@ -14,13 +14,13 @@ use nest_rs_mcp::model::{
     ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
     ResourceContents, Role, ServerCapabilities, ServerConfig, Tool,
 };
+use nest_rs_mcp::model::{CallToolResult, ContentBlock};
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::rmcp::serde_json::json;
+use nest_rs_mcp::rmcp::{prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router};
 use nest_rs_mcp::service::{RequestContext, RoleServer};
 use nest_rs_mcp::{
-    CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpIdentity, McpModule, McpSetup,
-    ServerHandler, mcp, prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router,
-    tools,
+    DEFAULT_PATH, McpError, McpIdentity, McpModule, McpSetup, ServerHandler, mcp, tools,
 };
 use nest_rs_testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use nest_rs_testing::{LogCapture, TestApp};
@@ -901,7 +901,7 @@ async fn an_endpoint_nobody_named_reports_the_binarys_name_and_version() {
 
 /// The `server/discover` request of a stateless client, which opens no session.
 async fn discover(client: &nest_rs_testing::TestClient, path: &str) -> String {
-    let version = nest_rs_mcp::ProtocolVersion::LATEST;
+    let version = nest_rs_mcp::model::ProtocolVersion::LATEST;
     nest_rs_testing::mcp::post_message_with(
         client,
         path,

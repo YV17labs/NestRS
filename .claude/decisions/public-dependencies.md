@@ -118,3 +118,17 @@ Agreed by the owner's "Tout faire (Recommandé)" of 2026-10-31. futures-util sta
 public on a second count: the bus's read side returns `impl Stream`, the trait a
 subscription and an `#[sse]` route are written in. Narrowing to
 `futures_core::Stream` stays open, a re-export of the one trait.
+
+## 2026-11-04 — rmcp's root picks leave
+
+**`nest_rs::mcp` keeps `rmcp` whole, and only what a page or an expansion names
+beside it**: `model`, `service`, `McpError`, `ServerHandler`, `ServerConfig`,
+`Parameters`, `Json`. The identity audit's second pass found rmcp's host macros,
+its routers, the streamable-HTTP transport types, `schemars`, the `handler` and
+`transport` modules and the root `CallToolResult` and `ContentBlock` giving one item
+up to three paths, offering the router macros as a second way to write tools and
+freezing as API transport types no app mounts; `ServerCapabilities` and
+`ProtocolVersion`, added since, were the same. Each stays reachable through
+`nest_rs::mcp::model` or `nest_rs::mcp::rmcp`, where a host writing `ServerHandler`
+by hand reaches it and through which `#[tools]` emits. Agreed by the owner ("Tout
+faire (Recommandé)", 2026-10-31).

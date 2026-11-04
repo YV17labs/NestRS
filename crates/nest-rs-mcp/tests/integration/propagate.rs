@@ -1551,10 +1551,10 @@ const SUBSCRIBED: &str = "/mcp/subscribed";
 #[derive(Clone)]
 struct SubscribedHost;
 
-#[nest_rs_mcp::tool_router(allow_empty)]
+#[nest_rs_mcp::rmcp::tool_router(allow_empty)]
 impl SubscribedHost {}
 
-#[nest_rs_mcp::tool_handler]
+#[nest_rs_mcp::rmcp::tool_handler]
 impl ServerHandler for SubscribedHost {
     fn accepted_subscription_filter(
         &self,

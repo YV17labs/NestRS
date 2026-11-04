@@ -136,29 +136,16 @@ pub mod __private {
     pub use rmcp::handler::server::tool::IntoCallToolResult;
 }
 
-pub use rmcp::model::ProtocolVersion;
-/// What a host reports about itself and advertises.
-pub use rmcp::model::{ServerCapabilities, ServerConfig};
+/// What a host's `get_info` reports about itself and advertises.
+pub use rmcp::model::ServerConfig;
 pub use rmcp::{ErrorData as McpError, ServerHandler};
-/// Host decorators, rmcp's own. `#[tool_router]`/`#[prompt_router]` scan an inherent
-/// `impl` for `#[tool]`/`#[prompt]` methods; `#[tool_handler]`/
-/// `#[prompt_handler]` fill in the matching `ServerHandler` methods and stack on
-/// one `impl ServerHandler` block when a host serves both.
-pub use rmcp::{prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router};
 
 /// `Parameters<T>` deserializes an operation's typed input — the framework's
 /// own, refusing without the value; `Json<T>` returns a typed structured result
 /// (`structuredContent`, SEP-2106).
 pub use parameters::Parameters;
-pub use rmcp::handler::server::router::prompt::PromptRouter;
-pub use rmcp::handler::server::router::tool::ToolRouter;
 pub use rmcp::handler::server::wrapper::Json;
 
-/// The two results almost every tool body names.
-pub use rmcp::model::{CallToolResult, ContentBlock};
-
-/// Routers and argument wrappers behind the host decorators.
-pub use rmcp::handler;
 /// Every MCP protocol type: prompts, resources and templates, completion,
 /// logging, elicitation, the `tasks/*` trio, subscription filters, discovery,
 /// capabilities, content blocks, `_meta` and cache hints.
@@ -169,15 +156,10 @@ pub use rmcp::model;
 /// peer, and so does a request (sampling, elicitation) below protocol
 /// `2026-07-28`, which refuses it: there an `InputRequiredResult` asks.
 pub use rmcp::service;
-/// Transport plumbing, including the streamable-HTTP server this crate mounts.
-pub use rmcp::transport;
 
-pub use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-pub use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig, StreamableHttpService,
-};
-
-/// The rmcp SDK itself, at the exact version the framework built against.
+/// The rmcp SDK itself, at the exact version the framework built against, for
+/// a host writing `ServerHandler` by hand: its host macros, routers and
+/// transport plumbing are reached here.
 ///
 /// rmcp's macros expand to bare `rmcp::` paths: `#[tools]` imports this for them,
 /// and a host hand-writing `ServerHandler` imports it itself rather than adding

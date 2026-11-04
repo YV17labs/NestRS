@@ -3,7 +3,8 @@
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable, input, module};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{EndpointGuards, HttpView, StatusCode};
-use nest_rs_mcp::{McpError, McpView, Parameters, ProtocolVersion, mcp, tools};
+use nest_rs_mcp::model::ProtocolVersion;
+use nest_rs_mcp::{McpError, McpView, Parameters, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{self, call_tool_statelessly, initialize_request, post_message, result};
 use serde_json::json;

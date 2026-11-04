@@ -27,9 +27,11 @@ use nest_rs_codegen::take_flag_attr;
 /// the upgrade deciding one that states none.
 const POSTURE: PostureRules = PostureRules {
     transport: "WebSockets",
-    bind_unsupported_because: "a message takes one payload value, not the named id argument \
-                               the binding reads. Keep `#[authorize(Action, Entity)]` and load \
-                               the subject in the body with the service's `access`",
+    bind_unsupported_because: Some(
+        "a message takes one payload value, not the named id argument the binding reads. Keep \
+         `#[authorize(Action, Entity)]` and load the subject in the body with the service's \
+         `access`",
+    ),
 };
 
 /// `#[subscribe_message("chat")]`'s one argument, the event name, read as a
@@ -423,6 +425,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 action,
                 entity,
                 unmasked: false,
+                ..
             } => quote! {
                 ::core::result::Result::Ok(
                     ::nest_rs_authz::__private::ws_masked_reply::<#action, #entity, _>(

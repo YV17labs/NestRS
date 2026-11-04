@@ -9,7 +9,7 @@
 //! # fn main() -> syn::Result<()> {
 //! const POSTURE: PostureRules = PostureRules {
 //!     transport: "WebSockets",
-//!     bind_unsupported_because: "a message takes one payload value, not the …",
+//!     bind_unsupported_because: Some("a message takes one payload value, not the …"),
 //! };
 //! # let mut public: syn::ImplItemFn = syn::parse_quote! {
 //! #     #[public]
@@ -34,14 +34,16 @@
 //!
 //! GraphQL and HTTP keep their own parsers for
 //! `#[authorize(Update, bind = ArtworksService)]`: a field synthesises its id
-//! argument, a route reads its path's, and a message or a tool, taking one
-//! payload value, has no id to bind.
+//! argument, a route reads its path's. A `#[resource]` reads its one template
+//! variable through this one, and a message or a tool, taking one payload value,
+//! has no id to bind.
 
 use syn::punctuated::Punctuated;
-use syn::{ImplItemFn, Meta, Path, Token};
+use syn::{Expr, FnArg, ImplItemFn, Meta, Path, Token, Type};
 
 use crate::attrs::take_flag_attr;
 use crate::meta::SitePosture;
+use crate::ty::nth_generic_type;
 
 /// The sentence every site prints for a second `#[authorize(...)]`.
 pub fn at_most_one_authorize(site: &str) -> String {
@@ -106,11 +108,15 @@ pub enum Posture {
     Authorize {
         /// The action marker the gate demands (`Read`, `Update`, …).
         action: Path,
-        /// The entity the gate and the mask act on.
+        /// The entity the gate and the mask act on — under `bind` alone, the one
+        /// the `Authorized<Action, E>` parameter names.
         entity: Path,
         /// `unmasked`: keep the gate, leave masking to the body. For a shape the
         /// value-level round-trip cannot see through (a cursor connection).
         unmasked: bool,
+        /// `bind = Service`: the service that loads the subject into the
+        /// operation's `Authorized<Action, E>` parameter.
+        bind: Option<Path>,
     },
     /// `#[public]` — a caller with no credential is admitted, ungated and
     /// unmasked. Guards bound beside the operation still run.
@@ -151,9 +157,10 @@ impl Posture {
 pub struct PostureRules {
     /// The transport as an operator reads it — `"MCP"`, `"WebSockets"`.
     pub transport: &'static str,
-    /// Why `bind = Service` cannot be expressed here — the half after the dash;
-    /// [`posture_key_unsupported`] words the rest.
-    pub bind_unsupported_because: &'static str,
+    /// Why `bind = Service` cannot be expressed here — the half after the dash,
+    /// [`posture_key_unsupported`] wording the rest — or `None` where the
+    /// operation reads the one id the binding needs.
+    pub bind_unsupported_because: Option<&'static str>,
 }
 
 impl PostureRules {
@@ -174,7 +181,8 @@ impl PostureRules {
     }
 
     /// Parse and remove `#[authorize(Action, Entity)]` / `#[authorize(Action,
-    /// Entity, unmasked)]`.
+    /// Entity, unmasked)]`, and `#[authorize(Action, bind = Service)]` where the
+    /// operation reads an id.
     #[expect(
         clippy::map_err_ignore,
         reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
@@ -208,19 +216,32 @@ impl PostureRules {
 
         let mut positional: Vec<Path> = Vec::new();
         let mut unmasked = false;
+        let mut bind: Option<Path> = None;
         for meta in &args {
             match meta {
                 Meta::Path(path) if path.is_ident("unmasked") => unmasked = true,
                 Meta::Path(path) => positional.push(path.clone()),
                 Meta::NameValue(value) if value.path.is_ident("bind") => {
-                    return Err(syn::Error::new_spanned(
-                        value,
-                        posture_key_unsupported(
-                            "bind = Service",
-                            self.transport,
-                            self.bind_unsupported_because,
-                        ),
-                    ));
+                    if let Some(because) = self.bind_unsupported_because {
+                        return Err(syn::Error::new_spanned(
+                            value,
+                            posture_key_unsupported("bind = Service", self.transport, because),
+                        ));
+                    }
+                    if bind.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            value,
+                            "`bind` is written twice — it picks the one service that loads the \
+                             subject",
+                        ));
+                    }
+                    let Expr::Path(service) = &value.value else {
+                        return Err(syn::Error::new_spanned(
+                            &value.value,
+                            "`bind` takes the service's path, e.g. `bind = PostsService`",
+                        ));
+                    };
+                    bind = Some(service.path.clone());
                 }
                 Meta::NameValue(value) if value.path.is_ident("id_arg") => {
                     return Err(syn::Error::new_spanned(
@@ -236,15 +257,38 @@ impl PostureRules {
             }
         }
 
-        let [action, entity] = positional.as_slice() else {
-            return Err(malformed());
+        // Under `bind` the written entity is optional: the `Authorized<Action, E>`
+        // parameter names it, and the expansion asserts it the service's.
+        let (action, entity) = match (positional.as_slice(), &bind) {
+            ([action, entity], _) => (action.clone(), entity.clone()),
+            ([action], Some(_)) => {
+                let entity = bound_entity(method).ok_or_else(|| {
+                    syn::Error::new_spanned(&method.sig.ident, BIND_NEEDS_AUTHORIZED)
+                })?;
+                (action.clone(), entity)
+            }
+            _ => return Err(malformed()),
         };
         Ok(Some(Posture::Authorize {
-            action: action.clone(),
-            entity: entity.clone(),
+            action,
+            entity,
             unmasked,
+            bind,
         }))
     }
+}
+
+/// The `E` of the method's `Authorized<Action, E>` parameter, as a path.
+fn bound_entity(method: &ImplItemFn) -> Option<Path> {
+    method.sig.inputs.iter().find_map(|arg| {
+        let FnArg::Typed(pt) = arg else {
+            return None;
+        };
+        match nth_generic_type(&pt.ty, "Authorized", 1)? {
+            Type::Path(entity) => Some(entity.path.clone()),
+            _ => None,
+        }
+    })
 }
 
 #[cfg(test)]
@@ -254,7 +298,12 @@ mod tests {
 
     const RULES: PostureRules = PostureRules {
         transport: "WebSockets",
-        bind_unsupported_because: "a message takes one payload value",
+        bind_unsupported_because: Some("a message takes one payload value"),
+    };
+
+    const BINDING: PostureRules = PostureRules {
+        bind_unsupported_because: None,
+        ..RULES
     };
 
     fn method(tokens: proc_macro2::TokenStream) -> ImplItemFn {
@@ -341,5 +390,44 @@ mod tests {
             .err()
             .expect("`bind` is not available here");
         assert!(err.to_string().contains("bind = Service"), "{err}");
+    }
+
+    #[test]
+    fn a_bind_reads_its_entity_off_the_authorized_parameter() {
+        let posture = BINDING
+            .take(&mut method(quote!(
+                #[authorize(Read, bind = PostsService)]
+                async fn post(&self, post: Authorized<Read, posts::Entity>) {}
+            )))
+            .expect("a well-formed binding");
+        let Posture::Authorize { entity, bind, .. } = posture else {
+            panic!("expected the authorize posture");
+        };
+        assert_eq!(quote!(#entity).to_string(), "posts :: Entity");
+        assert_eq!(quote!(#bind).to_string(), "PostsService");
+    }
+
+    #[test]
+    fn a_bind_with_no_parameter_to_receive_its_subject_is_refused() {
+        let err = BINDING
+            .take(&mut method(quote!(
+                #[authorize(Read, bind = PostsService)]
+                async fn post(&self) {}
+            )))
+            .err()
+            .expect("nothing receives the subject");
+        assert!(err.to_string().contains("Authorized<Action, E>"), "{err}");
+    }
+
+    #[test]
+    fn a_bind_written_twice_is_refused() {
+        let err = BINDING
+            .take(&mut method(quote!(
+                #[authorize(Read, bind = PostsService, bind = OtherService)]
+                async fn post(&self, post: Authorized<Read, posts::Entity>) {}
+            )))
+            .err()
+            .expect("one service loads the subject");
+        assert!(err.to_string().contains("twice"), "{err}");
     }
 }

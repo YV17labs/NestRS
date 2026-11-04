@@ -1,7 +1,7 @@
 //! `#[mcp]` + `#[tools]`, through the umbrella alone: the layers a host and
 //! an operation bind, a `Scoped<T>` and an `Ambient<T>` parameter, an error of the
 //! domain's own type, an operation stating no posture, and a resource read
-//! through its template beside the listing.
+//! through its template beside the listing, one binding its subject by id.
 //!
 //! rmcp's `#[tool_router]`/`#[tool_handler]`/`#[prompt]` expand to bare `rmcp::`
 //! paths resolved at the call site; this file names no `rmcp`, so it stops
@@ -180,6 +180,19 @@ impl HygieneTool {
     #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
     fn counted(&self, id: u32) -> Result<String, McpError> {
         Ok(id.to_string())
+    }
+
+    #[cfg(all(feature = "http", feature = "seaorm"))]
+    #[resource(
+        template = "hygiene-note://{id}",
+        description = "Read one note, loaded."
+    )]
+    #[authorize(nest_rs::authz::Read, bind = crate::crud::HygieneCrudService)]
+    fn note(
+        &self,
+        note: nest_rs::seaorm::Authorized<nest_rs::authz::Read, crate::entity::Entity>,
+    ) -> Result<String, McpError> {
+        Ok(note.into_inner().id.to_string())
     }
 
     /// An operation compiled out takes its wrapper, route and guard with it.

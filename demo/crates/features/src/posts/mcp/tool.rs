@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use nest_rs::authz::{Action, Read};
+use nest_rs::authz::Read;
 use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Resource, Role};
 use nest_rs::mcp::{Json, McpError, Opaque, mcp, tools};
-use nest_rs::seaorm::{Access, CrudService};
-use uuid::Uuid;
+use nest_rs::seaorm::{Authorized, CrudService};
 
 use crate::posts::{Entity as PostEntity, Post, PostsService};
 
@@ -27,7 +26,7 @@ impl PostsTool {
     )]
     #[authorize(Read, PostEntity)]
     async fn list_posts(&self) -> Result<String, McpError> {
-        let rows = CrudService::list(&*self.svc).await.opaque()?;
+        let rows = self.svc.list().await.opaque()?;
 
         let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
         Ok(if titles.is_empty() {
@@ -43,7 +42,7 @@ impl PostsTool {
     )]
     #[authorize(Read, PostEntity, unmasked)]
     async fn draft_follow_up(&self) -> Result<GetPromptResult, McpError> {
-        let rows = CrudService::list(&*self.svc).await.opaque()?;
+        let rows = self.svc.list().await.opaque()?;
         let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
 
         Ok(GetPromptResult::new(vec![PromptMessage::new_text(
@@ -63,7 +62,7 @@ impl PostsTool {
     #[resources]
     #[authorize(Read, PostEntity, unmasked)]
     async fn posts(&self) -> Result<Vec<Resource>, McpError> {
-        let rows = CrudService::list(&*self.svc).await.opaque()?;
+        let rows = self.svc.list().await.opaque()?;
 
         Ok(rows
             .into_iter()
@@ -75,14 +74,8 @@ impl PostsTool {
         template = "post://{id}",
         description = "One post the caller is allowed to read, as JSON."
     )]
-    #[authorize(Read, PostEntity)]
-    async fn post(&self, id: Uuid) -> Result<Option<Json<Post>>, McpError> {
-        let access = CrudService::access(&*self.svc, Action::Read, id)
-            .await
-            .opaque()?;
-        Ok(match access {
-            Access::Found(post) => Some(Json(Post::from(&post))),
-            Access::Denied | Access::Missing => None,
-        })
+    #[authorize(Read, bind = PostsService)]
+    async fn post(&self, post: Authorized<Read, PostEntity>) -> Result<Json<Post>, McpError> {
+        Ok(Json(Post::from(&post.into_inner())))
     }
 }

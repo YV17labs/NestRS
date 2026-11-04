@@ -72,3 +72,24 @@ derives. The demo's posts host was that shape, its `list_posts` and
 The hand-written `ServerHandler` stays for what no decorator declares —
 completion, logging levels, subscriptions, the `tasks/*` trio, custom methods —
 and completion is its witness, in `nest-rs-mcp`'s registry suite.
+
+## 2026-11-04 — `bind = Service` on a resource whose template names one variable
+
+Agreed by the owner on 2026-10-31 ("Tout faire (Recommandé)", the identity audit's
+second pass). The refusal above rested on leanness, "three lines, a second loader
+for one caller", and fell to the families rule once HTTP and GraphQL shared the
+grammar: a host hand-managed an authorization load, a runtime `Action` beside the
+attribute's marker and a match over `Access`, the concern the identity says runs
+behind a decorator. `#[authorize(A, bind = S)]` on a `#[resource]` hands its
+`Authorized<A, E>` parameter the row its template's one variable names, through the
+load a route runs; the class gate and the mask read `E`, asserted `S::Entity`, and
+`S` joins the access contract with the unit of work.
+
+**One answer for what cannot be read holds**: `Denied`, `Missing` and an id no v7
+are the resource's not found, with no body run, so a reader cannot tell a row it was
+refused from a row that does not exist. A route's `400`, `403` and `404` have no
+counterpart here. A load that fails is opaque, its chain filed once.
+
+**Refused:** the key on a template naming none or several variables, which has no
+one id to read, and on a tool, a prompt or a listing, which name none. A resource
+reading a row off several variables keeps the service's `access` in its body.

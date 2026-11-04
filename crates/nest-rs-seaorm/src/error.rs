@@ -17,6 +17,31 @@ use sea_orm::sqlx::postgres::PgDatabaseError;
 use sea_orm::{DbErr, RuntimeErr, SqlxError};
 use validator::ValidationErrors;
 
+/// What a unit lacks to load the subject `#[authorize(A, bind = S)]` names: a
+/// wiring defect, never the caller's doing.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum UnwiredBind {
+    /// Nothing attached an ability to the unit.
+    #[error("no ability on the unit — is the ability guard applied to this site?")]
+    Ability,
+    /// The edge opened the unit outside a request scope.
+    #[error("no request scope on the unit — the transport edge must wrap the site")]
+    RequestScope,
+    /// The bound service is no provider of a module the app imports.
+    #[error("no provider for the bound service — add it to a module's providers")]
+    Provider,
+}
+
+/// The wiring defect a `#[resource]` hands its edge to file: the edge's line has
+/// one field, so the service is said in the chain.
+#[derive(Debug, thiserror::Error)]
+#[error("`{provider}` cannot load the subject its resource binds")]
+pub(crate) struct UnwiredResource {
+    pub(crate) provider: &'static str,
+    #[source]
+    pub(crate) why: UnwiredBind,
+}
+
 /// Failure modes shared by every service method. The business variants carry a
 /// client-facing message and map to their 4xx; the opaque ones (`Db`,
 /// `Internal`, `Masking`) answer a constant on every edge and keep their cause,

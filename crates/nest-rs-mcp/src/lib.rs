@@ -129,7 +129,7 @@ pub mod __private {
         register_host,
     };
     pub use crate::resource::{
-        MimeProbe, MimeProbeFallback, MimeProbeReads, ResourceBody, ResourceListing,
+        MimeProbe, MimeProbeFallback, MimeProbeReads, ResourceBody, ResourceListing, bound_subject,
     };
     pub use crate::scope::scoped;
     pub use crate::uri_template::{TemplateMatch, TemplatePart, UriTemplate};

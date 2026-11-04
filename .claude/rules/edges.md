@@ -104,10 +104,14 @@ guard, filter or interceptor loop of its own.
    rate limit, which identify no one, it stays the opening it says, and on HTTP
    an authentication guard reads it and admits the visitor.
    The grammar is one `PostureRules` in `nest-rs-codegen` where it is the same
-   grammar: `#[tools]` and `#[messages]` take it verbatim. `#[operations]` and
-   `#[routes]` parse their own because only they bind a subject by id — `bind =
-   Service`, read from a synthesised id argument (`id_arg` renames it) or from the
-   one parameter the route's path names, its controller's included — into an
+   grammar: `#[tools]` and `#[messages]` take it verbatim, and `bind = Service`
+   on a `#[resource]` through it, reading the id from its template's one
+   variable, `Denied`, `Missing` and an id no v7 answering the resource's not
+   found with no body run; a message, a tool, a prompt and a listing name no id
+   and refuse the key. `#[operations]` and `#[routes]` parse their own because
+   they bind a subject by id off their own address — from a synthesised id
+   argument (`id_arg` renames it) or from the one parameter the route's path
+   names, its controller's included. On all three the subject lands in an
    `Authorized<A, E>` parameter, which carries the row and never the posture:
    either without the other is a compile error, as is an entity written beside
    `bind` other than the service's. `#[routes]` refuses `#[authorize]` naming an

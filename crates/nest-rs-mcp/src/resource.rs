@@ -1,5 +1,6 @@
 //! What a `#[resource]` read and a `#[resources]` listing answer, read by type.
 
+use std::error::Error as StdError;
 use std::marker::PhantomData;
 
 use nest_rs_core::Failure;
@@ -79,6 +80,19 @@ impl<B: ResourceBody> ResourceBody for Option<B> {
             Some(body) => body.into_read(uri),
             None => Err(OperationFailure::from(resource_not_found())),
         }
+    }
+}
+
+/// The subject `#[authorize(A, bind = S)]` loaded for a `#[resource]`, handed to
+/// its `Authorized<A, E>` parameter: none answers as a resource no template
+/// reads, the body never running, and a failure opaquely, its chain filed.
+pub fn bound_subject<T>(
+    loaded: Result<Option<T>, Box<dyn StdError + Send + Sync>>,
+) -> Result<T, OperationFailure> {
+    match loaded {
+        Ok(Some(subject)) => Ok(subject),
+        Ok(None) => Err(OperationFailure::from(resource_not_found())),
+        Err(failed) => Err(OperationFailure::unanswered(Failure::new(failed))),
     }
 }
 

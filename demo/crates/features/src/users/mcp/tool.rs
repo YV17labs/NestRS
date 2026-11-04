@@ -21,7 +21,7 @@ impl UsersTool {
     )]
     #[authorize(Read, UserEntity, unmasked)]
     async fn list_people(&self) -> Result<Json<Vec<PersonDto>>, McpError> {
-        let rows = CrudService::list(&*self.svc).await.opaque()?;
+        let rows = self.svc.list().await.opaque()?;
 
         Ok(Json(
             rows.into_iter()

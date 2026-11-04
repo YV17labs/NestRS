@@ -3,12 +3,14 @@
 //! listing. rmcp routes neither, so the expansion writes the three
 //! `ServerHandler` methods that serve them itself.
 
-use nest_rs_codegen::__private::{generic_args, piped_input, tail_param};
+use nest_rs_codegen::__private::{
+    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Posture, generic_args, piped_input, tail_param,
+};
 use nest_rs_codegen::Grammar;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{Attribute, Expr, FnArg, ImplItemFn, LitStr, Meta, Signature, Type};
+use syn::{Attribute, Expr, FnArg, ImplItemFn, LitStr, Meta, Path, Signature, Type};
 
 use crate::mcp_impl::{Description, description_check, doc_comment};
 use crate::uri_template::{self, Part};
@@ -42,6 +44,97 @@ pub(crate) struct VariableArg {
     pub(crate) ty: Type,
     /// Its variable's position among the template's.
     pub(crate) index: usize,
+    /// The bound subject's id, which no parameter of the method takes.
+    pub(crate) bound: bool,
+}
+
+/// The subject `#[authorize(Action, bind = Service)]` loads into a `#[resource]`'s
+/// `Authorized<Action, E>` parameter, off its template's one variable.
+pub(crate) struct BoundSubject {
+    /// The parameter receiving it.
+    pub(crate) ident: syn::Ident,
+    pub(crate) ty: Type,
+    pub(crate) action: Path,
+    pub(crate) entity: Path,
+    pub(crate) service: Path,
+}
+
+/// The wrapper's parameter a bound subject's id arrives in.
+fn bound_id() -> syn::Ident {
+    format_ident!("__nestrs_bound_id")
+}
+
+/// Whether `ty` is spelled `Authorized<…>`, the parameter a binding fills.
+fn spelled_authorized(ty: &Type) -> bool {
+    generic_args(ty).is_some_and(|(name, _)| name == "Authorized")
+}
+
+/// The subject the `posture` of a `#[resource]` over the normalized `sig` binds,
+/// refusing a `bind` with no `Authorized` parameter to receive it, an `Authorized`
+/// parameter no `bind` fills, and a template naming other than the one id.
+pub(crate) fn bound_subject(
+    decl: &ResourceDecl,
+    sig: &Signature,
+    posture: &Posture,
+) -> syn::Result<Option<BoundSubject>> {
+    let mut parameters = sig.inputs.iter().filter_map(|input| {
+        let FnArg::Typed(pat_type) = input else {
+            return None;
+        };
+        spelled_authorized(&pat_type.ty).then_some(pat_type)
+    });
+    let parameter = parameters.next();
+    if let Some(second) = parameters.next() {
+        return Err(syn::Error::new_spanned(
+            second,
+            "a #[resource] binds one subject, so it takes one `Authorized<Action, E>` parameter",
+        ));
+    }
+    let bound = match posture {
+        Posture::Authorize {
+            action,
+            entity,
+            bind: Some(service),
+            ..
+        } => Some((action, entity, service)),
+        _ => None,
+    };
+    let (parameter, (action, entity, service)) = match (parameter, bound) {
+        (None, None) => return Ok(None),
+        (Some(parameter), None) => {
+            return Err(syn::Error::new_spanned(parameter, AUTHORIZED_NEEDS_BIND));
+        }
+        (None, Some(_)) => {
+            return Err(syn::Error::new_spanned(&sig.ident, BIND_NEEDS_AUTHORIZED));
+        }
+        (Some(parameter), Some(bound)) => (parameter, bound),
+    };
+    let variables = decl.variable_names().count();
+    if variables != 1 {
+        return Err(syn::Error::new_spanned(
+            &decl.template,
+            format!(
+                "`#[authorize(.., bind = Service)]` loads the subject from the template's one \
+                 variable, its id, and `{}` names {variables} — name the id alone, or keep \
+                 `#[authorize(Action, Entity)]` and load the row in the body with the service's \
+                 `access`",
+                decl.template.value(),
+            ),
+        ));
+    }
+    let syn::Pat::Ident(pat_ident) = &*parameter.pat else {
+        return Err(syn::Error::new_spanned(
+            &parameter.pat,
+            "an `Authorized<Action, E>` parameter binds a plain identifier",
+        ));
+    };
+    Ok(Some(BoundSubject {
+        ident: pat_ident.ident.clone(),
+        ty: (*parameter.ty).clone(),
+        action: action.clone(),
+        entity: entity.clone(),
+        service: service.clone(),
+    }))
 }
 
 impl ResourceDecl {
@@ -131,9 +224,22 @@ fn described(
 
 /// Pair each parameter of the normalized `sig` with the template variable that
 /// fills it, refusing a parameter no variable names, one wrapped as a tool's
-/// argument is, and a variable no parameter takes.
-pub(crate) fn bind_variables(decl: &mut ResourceDecl, sig: &Signature) -> syn::Result<()> {
+/// argument is, and a variable no parameter takes — the one a `bound` subject
+/// reads aside.
+pub(crate) fn bind_variables(
+    decl: &mut ResourceDecl,
+    sig: &Signature,
+    bound: bool,
+) -> syn::Result<()> {
     let mut variables = Vec::new();
+    if bound {
+        variables.push(VariableArg {
+            ident: bound_id(),
+            ty: syn::parse_quote!(::nest_rs_seaorm::__private::uuid::Uuid),
+            index: 0,
+            bound: true,
+        });
+    }
     for input in &sig.inputs {
         let FnArg::Typed(pat_type) = input else {
             continue;
@@ -141,7 +247,7 @@ pub(crate) fn bind_variables(decl: &mut ResourceDecl, sig: &Signature) -> syn::R
         let syn::Pat::Ident(pat_ident) = &*pat_type.pat else {
             continue;
         };
-        if tail_param(&pat_type.ty).is_some() {
+        if tail_param(&pat_type.ty).is_some() || spelled_authorized(&pat_type.ty) {
             continue;
         }
         let ident = &pat_ident.ident;
@@ -174,11 +280,12 @@ pub(crate) fn bind_variables(decl: &mut ResourceDecl, sig: &Signature) -> syn::R
             ident: ident.clone(),
             ty: (*pat_type.ty).clone(),
             index,
+            bound: false,
         });
     }
     if let Some(unread) = decl
         .variable_names()
-        .find(|name| !variables.iter().any(|arg| arg.ident == name))
+        .find(|name| !bound && !variables.iter().any(|arg| arg.ident == name))
     {
         return Err(syn::Error::new_spanned(
             &decl.template,

@@ -99,15 +99,14 @@ pub enum Access<M> {
 /// [`Deref`](std::ops::Deref), or own it with
 /// [`into_inner`](Authorized::into_inner).
 ///
-/// An HTTP route or a GraphQL operation receives it as a parameter when it
-/// declares `#[authorize(A, bind = S)]`: the attribute is the posture, and this
-/// type carries the row it loaded, nothing more.
+/// An HTTP route, a GraphQL operation or an MCP `#[resource]` receives it as a
+/// parameter when it declares `#[authorize(A, bind = S)]`: the attribute is the
+/// posture, and this type carries the row it loaded, nothing more.
 pub struct Authorized<A: ActionMarker, E: EntityTrait>(E::Model, PhantomData<fn() -> A>);
 
 impl<A: ActionMarker, E: EntityTrait> Authorized<A, E> {
     /// Crate-private: only a seam passing through [`CrudService::access`] mints
     /// the proof — `#[authorize(A, bind = S)]`'s loader on each edge.
-    #[cfg(any(feature = "graphql", feature = "http"))]
     pub(crate) fn new(model: E::Model) -> Self {
         Self(model, PhantomData)
     }
@@ -387,12 +386,12 @@ where
 }
 
 /// The entity a bound service loads, held by its one impl to the one the
-/// route names — written in `#[authorize(A, E, bind = S)]`, or read off its
+/// operation names — written in `#[authorize(A, E, bind = S)]`, or read off its
 /// `Authorized<A, E>` parameter — which the class gate and the mask read.
 #[diagnostic::on_unimplemented(
-    message = "the route names `{E}`, and the service `bind` names loads `{Self}`",
+    message = "the operation names `{E}`, and the service `bind` names loads `{Self}`",
     label = "the service loads another entity",
-    note = "the class gate, the response mask and the `Authorized<Action, E>` parameter read the entity the route names, the load reads the service's: name `{Self}` in both, or bind the service loading `{E}`"
+    note = "the class gate, the response mask and the `Authorized<Action, E>` parameter read the entity the operation names, the load reads the service's: name `{Self}` in both, or bind the service loading `{E}`"
 )]
 pub trait SameEntity<E> {}
 

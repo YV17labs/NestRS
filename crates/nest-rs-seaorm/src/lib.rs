@@ -55,6 +55,7 @@
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod atomic;
+mod bind;
 mod column_default;
 mod config;
 mod database;
@@ -111,6 +112,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::bind::resource_bind;
     pub use crate::config::DEFAULT_STATEMENT_TIMEOUT;
     pub use crate::error::masking;
     #[cfg(feature = "graphql")]

@@ -3,7 +3,8 @@
 //! trybuild snapshots in `nest-rs-macro-hygiene`'s suite — the pool's refusal
 //! of a server it cannot verify, before any login, the indicator the pool's
 //! module attaches, in `health/`, the unit of work under the
-//! HTTP edge's deadline, and a page cursor refused at every edge reading one.
+//! HTTP edge's deadline, a page cursor refused at every edge reading one, and
+//! what a `#[resource]`'s binding answers over a service standing in for the row.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -14,6 +15,7 @@
 
 #[path = "../harness/always_authenticated.rs"]
 mod always_authenticated;
+mod bind;
 mod database;
 mod error;
 mod expose;

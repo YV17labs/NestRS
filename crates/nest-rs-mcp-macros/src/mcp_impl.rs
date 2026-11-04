@@ -19,6 +19,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{
     Attribute, FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Meta, Path, Signature, Token, Type,
 };
@@ -31,7 +32,7 @@ use nest_rs_codegen::__private::{
     handler_const, handler_ref, impl_self_ident, interceptor_specs, layer_deps,
     normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
     reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident, site_fn_ident,
-    tail_param, ungrouped_expr, validate_argument,
+    tail_param, ungrouped_expr, unit_of_work_required, validate_argument,
 };
 use nest_rs_codegen::snake_case;
 
@@ -222,6 +223,9 @@ struct Operation {
     metas: Vec<syn::Expr>,
     /// A `#[resource]`'s template and the parameters its variables fill.
     resource: Option<ResourceDecl>,
+    /// The subject a `#[resource]`'s `#[authorize(Action, bind = Service)]`
+    /// loads.
+    bound: Option<resource::BoundSubject>,
 }
 
 impl Operation {
@@ -714,6 +718,7 @@ fn resource_wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2>
         .resource
         .iter()
         .flat_map(|decl| &decl.variables)
+        .filter(|arg| !arg.bound)
         .map(|arg| {
             let ident = &arg.ident;
             validate_statement(&quote!(&#ident))
@@ -831,6 +836,22 @@ fn dispatch(
             quote! { let #ident: #ty = ::nest_rs_mcp::__private::ambient_parameter()?; }
         }
     });
+    let bound_prelude = op.bound.as_ref().map(|bound| {
+        let resource::BoundSubject {
+            ident,
+            ty,
+            action,
+            service,
+            ..
+        } = bound;
+        // After the gate, so a refused caller pays for no read.
+        quote! {
+            let #ident: #ty = ::nest_rs_mcp::__private::bound_subject(
+                ::nest_rs_seaorm::__private::resource_bind::<#action, #service>(__nestrs_bound_id)
+                    .await,
+            )?;
+        }
+    });
     let call_args = forwarded_arg_idents(sig)?;
     let call = await_if_async(sig, quote!(<#self_ty>::#name(self, #(#call_args),*)));
     // What the method answers is read by its type, refused at its return type.
@@ -851,6 +872,7 @@ fn dispatch(
             ),
             move || async move {
                 #prelude
+                #bound_prelude
                 #(#tail_prelude)*
                 let #returned_by = #call;
                 match #answer {
@@ -955,6 +977,7 @@ fn masked(role: Role, posture: &Posture, sig: &Signature) -> syn::Result<TokenSt
         action,
         entity,
         unmasked: declared_unmasked,
+        ..
     } = posture
     else {
         return Ok(unmasked);
@@ -1219,8 +1242,12 @@ fn take_operation(
         Role::Tool | Role::Prompt => piped_args(&sig)?,
         Role::Resource | Role::Resources => Vec::new(),
     };
+    let mut bound = None;
     match (role, resource.as_mut()) {
-        (Role::Resource, Some(decl)) => resource::bind_variables(decl, &sig)?,
+        (Role::Resource, Some(decl)) => {
+            bound = resource::bound_subject(decl, &sig, &posture)?;
+            resource::bind_variables(decl, &sig, bound.is_some())?;
+        }
         (Role::Resources, _) => resource::refuse_listing_arguments(&sig)?,
         _ => {}
     }
@@ -1245,6 +1272,7 @@ fn take_operation(
         wire_name,
         metas,
         resource,
+        bound,
     })
 }
 
@@ -1371,10 +1399,18 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
         }
     });
     let probes = operations.all().flat_map(|op| {
+        // The bound service resolves per call, so the boot checks its provider
+        // as it checks a `Scoped<T>` parameter's.
+        let bound = op.bound.as_ref().map(|bound| -> Type {
+            let service = &bound.service;
+            syn::parse_quote!(::nest_rs_mcp::Scoped<#service>)
+        });
         op.tail
             .iter()
             .filter(|arg| arg.kind == TailParam::Scoped)
-            .map(move |TailArg { ty, .. }| {
+            .map(|TailArg { ty, .. }| ty.clone())
+            .chain(bound)
+            .map(move |ty| {
                 let cfgs = &op.cfgs;
                 quote! {
                     #(#cfgs)*
@@ -1384,7 +1420,21 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
                 }
             })
     });
+    let bound_checks = operations.resources.iter().filter_map(|op| {
+        let resource::BoundSubject {
+            entity, service, ..
+        } = op.bound.as_ref()?;
+        let cfgs = &op.cfgs;
+        let unit_of_work = unit_of_work_required(self_ty, cfgs);
+        Some(quote_spanned! {entity.span()=>
+            #(#cfgs)*
+            const _: () = ::nest_rs_seaorm::__private::bound_entity::<#service, #entity>();
+            #unit_of_work
+        })
+    });
     quote! {
+        #(#bound_checks)*
+
         impl #self_ty {
             #(#items)*
 
@@ -1622,17 +1672,15 @@ fn posture_rules(role: Role) -> PostureRules {
     PostureRules {
         transport: "MCP",
         bind_unsupported_because: match role {
-            Role::Tool | Role::Prompt => {
+            Role::Tool | Role::Prompt => Some(
                 "an operation takes one `Parameters<T>` struct, not the named id argument the \
                  binding reads. Keep `#[authorize(Action, Entity)]` and bind in the body with \
-                 the service's `access`"
-            }
-            Role::Resource => {
-                "a resource reads its row in the body, off its template's variables, and \
-                 answers `None` for one the caller may not read. Keep \
-                 `#[authorize(Action, Entity)]` and load it with the service's `access`"
-            }
-            Role::Resources => "a listing loads no one row to bind",
+                 the service's `access`",
+            ),
+            // The template's one variable is the id; `take_operation` refuses
+            // any other number of them.
+            Role::Resource => None,
+            Role::Resources => Some("a listing loads no one row to bind"),
         },
     }
 }

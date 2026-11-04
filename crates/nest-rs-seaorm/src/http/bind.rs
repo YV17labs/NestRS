@@ -1,11 +1,10 @@
-use std::any::type_name;
-
-use nest_rs_authz::{ActionMarker, current_ability};
+use nest_rs_authz::ActionMarker;
 use nest_rs_http::{HttpError, ProblemDetails, StatusCode};
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
-use crate::{Access, Authorized, CrudService, ServiceError};
+use crate::bind::{Unbound, load};
+use crate::{Authorized, CrudService, ServiceError};
 
 /// The subject `#[authorize(A, bind = S)]` loads for a route: the row its
 /// path's id names, through service `S` under the request's ability, handed to
@@ -27,77 +26,27 @@ where
     nest_rs_http::__private::MaskProbe::mark();
     let nest_rs_http::Path(id) =
         <nest_rs_http::Path<Uuid> as nest_rs_http::FromRequest>::from_request(req, body).await?;
-    load::<A, S>(id).await.map_err(Unbound::into_http)
+    load::<A, S>(id).await.map_err(into_http)
 }
 
-/// Why no entity is handed over.
-enum Unbound {
-    /// The id is not a UUID v7: `400`.
-    NotV7,
-    /// What the route needs to load it is missing — filed at `error` where it
-    /// was found: an opaque `500`.
-    Unwired,
-    /// The service failed reading the row.
-    Failed(ServiceError),
-    /// The row exists and the caller may not have it: `403`.
-    Denied,
-    /// No such row: `404`.
-    Missing,
-}
-
-/// The row `id` names, loaded through `S` under the request's ability.
-async fn load<A, S>(id: Uuid) -> Result<Authorized<A, S::Entity>, Unbound>
-where
-    S: CrudService + 'static,
-    <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
-    A: ActionMarker,
-{
-    if id.get_version_num() != 7 {
-        return Err(Unbound::NotV7);
-    }
-    if current_ability().is_none() {
-        tracing::error!(
-            target: crate::target::ORM,
-            provider = type_name::<S>(),
-            "missing request `Ability` — is the ability guard applied to this route?",
-        );
-        return Err(Unbound::Unwired);
-    }
-    let Some(scope) = nest_rs_core::current_request_scope() else {
-        tracing::error!(
-            target: crate::target::ORM,
-            provider = type_name::<S>(),
-            "request scope not installed — the transport edge must wrap the route tree",
-        );
-        return Err(Unbound::Unwired);
-    };
-    let Some(service) = scope.get::<S>() else {
-        tracing::error!(
-            target: crate::target::ORM,
-            provider = type_name::<S>(),
-            "no provider for the bound service — add it to a module's providers",
-        );
-        return Err(Unbound::Unwired);
-    };
-    match service.access(A::ACTION, id).await {
-        Ok(Access::Found(model)) => Ok(Authorized::new(model)),
-        Ok(Access::Denied) => Err(Unbound::Denied),
-        Ok(Access::Missing) => Err(Unbound::Missing),
-        Err(err) => Err(Unbound::Failed(ServiceError::Db(err))),
-    }
-}
-
-impl Unbound {
-    fn into_http(self) -> HttpError {
-        match self {
-            Self::NotV7 => ProblemDetails::bad_request()
-                .with_detail(nest_rs_core::UUID_V7_REQUIRED)
-                .into(),
-            Self::Unwired => ProblemDetails::internal().into(),
-            Self::Failed(err) => HttpError::from(err),
-            Self::Denied => HttpError::from_status(StatusCode::FORBIDDEN),
-            Self::Missing => HttpError::from_status(StatusCode::NOT_FOUND),
+/// What a route answers for the subject it could not load.
+fn into_http(unbound: Unbound) -> HttpError {
+    match unbound {
+        Unbound::NotV7 => ProblemDetails::bad_request()
+            .with_detail(nest_rs_core::UUID_V7_REQUIRED)
+            .into(),
+        Unbound::Unwired { why, provider } => {
+            tracing::error!(
+                target: crate::target::ORM,
+                provider,
+                error = %why,
+                "a bound subject cannot be loaded",
+            );
+            ProblemDetails::internal().into()
         }
+        Unbound::Failed(err) => HttpError::from(ServiceError::Db(err)),
+        Unbound::Denied => HttpError::from_status(StatusCode::FORBIDDEN),
+        Unbound::Missing => HttpError::from_status(StatusCode::NOT_FOUND),
     }
 }
 
@@ -137,7 +86,7 @@ mod tests {
         let Err(unbound) = load::<Read, NotesService>(Uuid::now_v7()).await else {
             panic!("no ability is ambient");
         };
-        let response = unbound.into_http().into_response();
+        let response = into_http(unbound).into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = response.into_body().into_string().await.expect("body");
         assert_eq!(document(&body), internal_document().await, "{body}");
@@ -147,11 +96,15 @@ mod tests {
         );
         assert!(!body.contains("Ability"), "{body}");
 
-        let event = logs.expect_one(
-            "nest_rs::orm",
-            "missing request `Ability` — is the ability guard applied to this route?",
-        );
+        let event = logs.expect_one("nest_rs::orm", "a bound subject cannot be loaded");
         assert_eq!(event.level, "error");
+        assert!(
+            event
+                .field("error")
+                .is_some_and(|why| why.contains("ability guard")),
+            "{:?}",
+            event.fields,
+        );
         assert!(
             event
                 .field("provider")
@@ -166,7 +119,7 @@ mod tests {
         let Err(unbound) = load::<Read, NotesService>(Uuid::new_v4()).await else {
             panic!("a v4 id is refused");
         };
-        let response = unbound.into_http().into_response();
+        let response = into_http(unbound).into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = response.into_body().into_string().await.expect("body");
         assert!(body.contains(nest_rs_core::UUID_V7_REQUIRED), "{body}");
@@ -188,7 +141,7 @@ mod tests {
                     .with_detail(nest_rs_core::UUID_V7_REQUIRED),
             ),
         ] {
-            let response = unbound.into_http().into_response();
+            let response = into_http(unbound).into_response();
             assert_eq!(response.status().as_u16(), class.status());
             let body = response.into_body().into_string().await.expect("body");
             assert_eq!(
@@ -201,10 +154,9 @@ mod tests {
 
     #[tokio::test]
     async fn db_errors_map_to_an_opaque_500_with_no_driver_text() {
-        let answered = Unbound::Failed(ServiceError::Db(DbErr::Custom(
+        let answered = into_http(Unbound::Failed(DbErr::Custom(
             "connection to db.internal:5432 refused".into(),
         )))
-        .into_http()
         .into_response();
         assert_eq!(answered.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = answered.into_body().into_string().await.expect("body");

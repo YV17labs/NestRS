@@ -240,3 +240,169 @@ async fn an_operation_whose_statement_is_blocked_is_answered_at_its_deadline() {
         "the cut operation's write was rolled back once the statement ran",
     );
 }
+
+/// `#[authorize(A, bind = S)]` on a `#[resource]`, over the service's own SQL: the
+/// row the ability admits reaches the body, and a row it refuses reads as one that
+/// does not exist.
+mod bound {
+    use nest_rs_authz::{AbilityBuilder, Action, Read};
+    use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
+    use nest_rs_guards::{Denial, Guard, GuardFor};
+    use nest_rs_http::{EndpointGuards, HttpView};
+    use nest_rs_mcp::{Json, McpError, McpView, mcp, tools};
+    use nest_rs_seaorm::{
+        Authorized, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule,
+    };
+    use nest_rs_testing::TestApp;
+    use nest_rs_testing::mcp::{call_method, open_session, result};
+    use sea_orm::ConnectionTrait;
+    use serde_json::{Value, json};
+    use uuid::Uuid;
+
+    mod note {
+        use nest_rs_seaorm::expose;
+        use sea_orm::entity::prelude::*;
+
+        #[expose(name = "BoundNote")]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "mcp_bound_note")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key, auto_increment = false)]
+            #[expose]
+            pub id: Uuid,
+            #[expose]
+            pub owner: String,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    #[injectable]
+    #[derive(Default)]
+    struct NotesService;
+
+    impl CrudService for NotesService {
+        type Entity = note::Entity;
+    }
+
+    /// The ability a caller named `mine` holds: its own notes alone.
+    #[injectable]
+    #[derive(Default)]
+    struct OwnNotes;
+
+    impl Layer for OwnNotes {}
+
+    #[async_trait]
+    impl Guard for OwnNotes {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            nest_rs_core::__private::set_actor_id("mine");
+            let mut ability = AbilityBuilder::new();
+            ability
+                .can(Action::Read, note::Entity)
+                .when(|p| p.eq(note::Column::Owner, "mine"));
+            cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+                ability.build().expect("a valid rule set"),
+            ));
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for OwnNotes {}
+
+    const PATH: &str = "/mcp/bound-notes";
+
+    #[nest_rs_core::input]
+    struct NoteDto {
+        id: Uuid,
+        owner: String,
+    }
+
+    #[mcp(path = "/mcp/bound-notes")]
+    #[derive(Clone, Default)]
+    struct NotesTool;
+
+    #[tools]
+    impl NotesTool {
+        /// A note, loaded and authorized.
+        #[resource(template = "bound-note://{id}")]
+        #[authorize(Read, bind = NotesService)]
+        async fn note(
+            &self,
+            note: Authorized<Read, note::Entity>,
+        ) -> Result<Json<NoteDto>, McpError> {
+            let note = note.into_inner();
+            Ok(Json(NoteDto {
+                id: note.id,
+                owner: note.owner,
+            }))
+        }
+    }
+
+    #[module(
+        imports = [
+            SeaOrmModule::for_root(SeaOrmConfig {
+                url: crate::harness::url().into(),
+                ..Default::default()
+            }),
+            SeaOrmDatabaseModule,
+        ],
+        providers = [OwnNotes, NotesService, NotesTool, EndpointGuards<McpView, (OwnNotes,)>],
+    )]
+    struct BoundModule;
+
+    async fn read(app: &TestApp, session: &str, id: Uuid) -> Value {
+        let body = call_method(
+            app.http(),
+            PATH,
+            session,
+            None,
+            "resources/read",
+            json!({ "uri": format!("bound-note://{id}") }),
+        )
+        .await;
+        result(&body)
+    }
+
+    #[tokio::test]
+    async fn the_row_the_ability_admits_is_read_and_a_refused_one_reads_as_missing() {
+        let conn = crate::harness::connect().await;
+        crate::harness::setup_shared_table(
+            &conn,
+            "mcp_bound_note",
+            "CREATE TABLE IF NOT EXISTS mcp_bound_note (id uuid PRIMARY KEY, owner text NOT NULL);",
+        )
+        .await;
+        let (mine, theirs) = (Uuid::now_v7(), Uuid::now_v7());
+        conn.execute_unprepared(&format!(
+            "INSERT INTO mcp_bound_note (id, owner) VALUES ('{mine}', 'mine'), ('{theirs}', 'theirs')"
+        ))
+        .await
+        .expect("seed the notes");
+
+        let app = TestApp::for_module::<BoundModule>()
+            .await
+            .expect("the tool host boots over live Postgres");
+        let session = open_session(app.http(), PATH, None).await;
+
+        let read_mine = read(&app, &session, mine).await;
+        let text = read_mine["result"]["contents"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a text body: {read_mine}"));
+        assert!(text.contains("mine"), "{read_mine}");
+
+        let refused = read(&app, &session, theirs).await;
+        let missing = read(&app, &session, Uuid::now_v7()).await;
+        assert_eq!(
+            refused["error"], missing["error"],
+            "a reader cannot tell a row it was refused from a row that does not exist",
+        );
+        assert_eq!(refused["error"]["data"]["code"], "NOT_FOUND", "{refused}");
+    }
+}

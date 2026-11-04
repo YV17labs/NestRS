@@ -1,5 +1,0 @@
-error: #[config] `defaults` takes the path of a `fn() -> Self`, e.g. `defaults = Self::for_profile`
- --> tests/integration/diagnostics/config/config_defaults_takes_a_path.rs:6:41
-  |
-6 | #[config(namespace = "kiln", defaults = "for_profile")]
-  |                                         ^^^^^^^^^^^^^

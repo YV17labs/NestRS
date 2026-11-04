@@ -45,7 +45,7 @@ fn config() -> StorageConfig {
         endpoint: Some("https://rustfs:9000".into()),
         access_key: "nestrs".into(),
         secret_key: "nestrs".into(),
-        ..StorageConfig::defaults()
+        ..StorageConfig::default()
     }))
     .expect("the suite's storage config resolves")
 }

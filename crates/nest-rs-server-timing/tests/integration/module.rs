@@ -1,6 +1,7 @@
 //! Covers `src/module.rs` — what each profile makes of the bare import, and
 //! the two openings outside development: the variable and the pin.
 
+use nest_rs_config::Surface;
 use nest_rs_core::module;
 use nest_rs_server_timing::{ServerTimingConfig, ServerTimingModule};
 use nest_rs_testing::LogCapture;
@@ -33,7 +34,7 @@ fn the_variable_opens_it_in_production() {
 }
 
 #[module(
-    imports = [ServerTimingModule::for_root(ServerTimingConfig { enabled: true })],
+    imports = [ServerTimingModule::for_root(ServerTimingConfig { enabled: Surface::Open })],
     providers = [ProbeController],
 )]
 struct PinnedModule;
@@ -51,6 +52,32 @@ fn a_pin_opens_it_in_production_and_the_boot_says_so() {
     );
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("environment").as_deref(), Some("production"));
+}
+
+#[module(
+    imports = [ServerTimingModule::for_root(ServerTimingConfig::default())],
+    providers = [ProbeController],
+)]
+struct PinnedOverTheDefaultModule;
+
+#[test]
+fn a_pin_over_the_default_leaves_the_header_to_the_profile() {
+    assert!(
+        in_profile(
+            "development",
+            &[],
+            probe_timing::<PinnedOverTheDefaultModule>
+        )
+        .is_some(),
+        "a pin closes nothing it does not name",
+    );
+    for profile in ["production", "staging", ""] {
+        assert_eq!(
+            in_profile(profile, &[], probe_timing::<PinnedOverTheDefaultModule>),
+            None,
+            "{profile:?}: outside development the default is still closed",
+        );
+    }
 }
 
 #[test]

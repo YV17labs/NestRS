@@ -281,21 +281,21 @@ Every field is settable via `<PREFIX>_STORAGE__*` env **or** a pinned
 `StorageConfig` — the framework-wide dual-path config rule:
 
 ```rust title="apps/api/src/module.rs"
-use nest_rs::config::Config;
 use nest_rs::storage::{StorageConfig, StorageModule};
 
 StorageModule::for_root(StorageConfig {
     url: "s3://acme-media".into(),
-    ..StorageConfig::defaults()
+    ..Default::default()
 }),
 ```
 
-`StorageConfig::defaults()` is the profile's base, the one the bare import
-starts from. `..Default::default()` is the production-safe value in every
-profile — no store, no credential, no plain HTTP. A declared development or
-test profile allows plain HTTP and names nothing more: the store, its endpoint
-and its pair are the deployment's, or the profile's `.env` file's, in every
-profile, so an unset one fails the boot by name instead of reaching a default.
+`Default` is the one base, the bare import's and a pin's — no store, no
+credential, and plain HTTP a
+[`Surface`](/configuration/advanced/#a-development-surface) left to the profile.
+A declared development or test profile allows plain HTTP and names nothing more:
+the store, its endpoint and its pair are the deployment's, or the profile's
+`.env` file's, in every profile, so an unset one fails the boot by name instead
+of reaching a default.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -306,7 +306,7 @@ profile, so an unset one fails the boot by name instead of reaching a default.
 | `REGION` | `us-east-1` | S3 only: the region requests are signed for |
 | `ACCESS_KEY` / `SECRET_KEY` | **none** | S3 only: static credentials |
 | `FORCE_PATH_STYLE` | `true` | S3 only: `true` ⇒ `endpoint/bucket/key`; `false` ⇒ virtual-hosted |
-| `ALLOW_HTTP` | `true` in dev/test, **`false` otherwise** | S3 only: reach the endpoint over plain `http://` — see the caution below |
+| `ALLOW_HTTP` | `Surface::ByProfile`: open in dev/test, **closed otherwise** | S3 only: reach the endpoint over plain `http://` — see the caution below |
 | `OPERATION_TIMEOUT_SECS` | `15` | the most a call, and the boot's proof, wait for the store, retries included |
 | `READ_TIMEOUT_SECS` | `30` | the most a download waits for its next bytes while it is read |
 
@@ -314,9 +314,8 @@ So every profile sets three keys at minimum — `URL`, `ACCESS_KEY` and
 `SECRET_KEY` — and `ENDPOINT` unless it is AWS.
 
 <Aside type="caution">
-`ALLOW_HTTP=false` — its value outside a declared development or test
-profile, and in every profile for a config pinned over `..Default::default()`
-— refuses a plain-`http://` endpoint **at boot**, naming
+`ALLOW_HTTP` closed — `false`, or unset outside a declared development or test
+profile — refuses a plain-`http://` endpoint **at boot**, naming
 `<PREFIX>_STORAGE__ENDPOINT`. It covers presigned URLs too: signing is a local
 computation, so a plaintext endpoint would otherwise hand clients a working URL
 carrying the SigV4 signature. Point it at an `https://` endpoint, or set

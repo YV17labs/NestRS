@@ -87,10 +87,11 @@ Three pieces do the heavy lifting:
 **The field's type chooses its reader.** A number, a string, a path, an
 address or a UUID parses as itself, a `bool` accepts the usual spellings
 (`1`/`true`/`yes`/`on` and their negatives), an `Option` keeps its base when
-the variable is unset, a `Vec` reads a comma-separated list, and a
-`nest_rs::core::Secret` holds what it reads out of every log. A value that
-does not read fails the boot naming the variable, never quoting it — no
-silent fallback. A type of your own implements `nest_rs::config::FromSetting`,
+the variable is unset, a `Vec` reads a comma-separated list, a
+`nest_rs::core::Secret` holds what it reads out of every log, and a
+`nest_rs::config::Surface`, [what a development run opens](/configuration/advanced/#a-development-surface),
+reads a boolean as open or closed. A value that does not read fails the boot
+naming the variable, never quoting it — no silent fallback. A type of your own implements `nest_rs::config::FromSetting`,
 three lines saying what a refused value was expected to be.
 
 **A field says what its type cannot**, with its own `#[config(…)]`:
@@ -164,7 +165,7 @@ The full precedence chain, highest first:
 | Real process environment | everything | The deployment is the last word — it is the only tier the code cannot see. |
 | Pinned in code (`for_root`) | `.env` for its whole namespace, defaults | A deliberate choice by the app's author; each `.env` key it shadows is named at boot. |
 | The `.env` cascade | defaults | Committed beside the code, so it reads as another default and defers to a pin. An app's own `apps/<app>/.env*` sits over the root's under `development` and `test`. |
-| `Config::defaults()` | — | The in-code baseline, profile-aware where safety demands it. |
+| `Default` | — | The one base every config has; what a development run opens is a [`Surface`](/configuration/advanced/#a-development-surface) in it, resolved where it is used. |
 
 <Aside type="note">
 Need a value nothing can override — a test that must not read the ambient
@@ -214,6 +215,10 @@ Most modules take the config itself:
 GraphqlModule::for_root(GraphqlConfig { max_depth: Some(12), ..Default::default() }),
 HttpModule::for_root(HttpConfig { compression: true, ..Default::default() }),
 ```
+
+A pin closes nothing it does not name: under `development`, the GraphQL line
+above keeps its playground, its introspection and its schema on disk, and in a
+deployment it opens none of them.
 
 A module that also carries a declaration with **no env twin** — the app's own
 MCP identity, its opening, the folder static files serve from the binary —
@@ -395,7 +400,7 @@ pub struct AppModule;
 - **The injection loads the config.** Once every module has collected, the
   boot queues a factory for each `#[config]` a provider of an imported module
   requires, unless a `for_root` pinned it already. The factory reads every
-  field over `C::defaults()`, then validates; on failure the boot aborts with
+  field over `C::default()`, then validates; on failure the boot aborts with
   the variable named. A config only an unimported module asks for is never
   read, and a test that seeds the config (`App::builder().provide(cfg)`)
   wins over the factory.
@@ -489,7 +494,7 @@ wrong and silent.
 ## Advanced
 
 A reader of your own (`with = path`), a rule spanning the whole struct, a
-profile-dependent baseline (`defaults = path`) and a hand-written overlay
+development surface (`Surface`) and a hand-written overlay
 (`from_env = "manual"`) are covered on
 [Advanced configuration](/configuration/advanced/), with the real
 `OAuthServerConfig` as the worked example.
@@ -508,7 +513,7 @@ profile-dependent baseline (`defaults = path`) and a hand-written overlay
 - [Overriding in tests](/configuration/testing/) — seed pinned values,
   isolate the environment, keep both suites hermetic.
 - [Advanced configuration](/configuration/advanced/) — a reader of your own,
-  whole-struct validation, a profile's baseline, a hand-written overlay.
+  whole-struct validation, a development surface, a hand-written overlay.
 - [Env-var reference](/configuration/env-reference/) — every `<PREFIX>_*`
   variable the framework reads, by namespace.
 

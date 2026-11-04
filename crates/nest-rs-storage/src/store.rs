@@ -202,9 +202,10 @@ fn s3<C: HttpConnector>(
     retries: RetryConfig,
 ) -> Result<AmazonS3> {
     let endpoint = config.endpoint.as_deref().unwrap_or_default();
+    let allow_http = config.allow_http.is_open();
     // `object_store`'s `with_allow_http` gates transfers only, so presigning
     // would mint a plaintext signed URL.
-    if is_plaintext(endpoint) && !config.allow_http {
+    if is_plaintext(endpoint) && !allow_http {
         return Err(StorageError::PlaintextEndpoint {
             endpoint: endpoint_shown(endpoint),
         });
@@ -212,7 +213,7 @@ fn s3<C: HttpConnector>(
     // One `ClientOptions` value: `with_client_options` replaces the whole set,
     // so a builder call made before it would be undone.
     let options = ClientOptions::new()
-        .with_allow_http(config.allow_http)
+        .with_allow_http(allow_http)
         // `object_store`'s default timeout bounds an attempt's body too,
         // cutting a download for its size; the budget and `download` do.
         .with_timeout_disabled()

@@ -102,13 +102,13 @@ pub(crate) fn check_seed<C: Config, I: Instance>(container: &Container) -> anyho
     check_under(&namespace, seeded).map_err(anyhow::Error::from)
 }
 
-/// The environment of `namespace` overlaid on `pinned`, or on `C::defaults()`,
+/// The environment of `namespace` overlaid on `pinned`, or on `C::default()`,
 /// then validated.
 fn resolve_under<C: Config>(namespace: Cow<'static, str>, pinned: Option<C>) -> Result<C> {
     let env = ConfigService::for_namespace(&namespace);
     let (env, base) = match pinned {
         Some(pinned) => (env.over_pinned(), pinned),
-        None => (env, C::defaults()),
+        None => (env, C::default()),
     };
     let config = read(&env, base)?;
     config
@@ -133,7 +133,7 @@ fn resolve_under<C: Config>(namespace: Cow<'static, str>, pinned: Option<C>) -> 
 /// **field**, reading the real process environment alone:
 ///
 /// ```text
-/// real env  >  pinned in code  >  .env cascade  >  Config::defaults()
+/// real env  >  pinned in code  >  .env cascade  >  Default
 /// ```
 ///
 /// A pin cuts its whole namespace off the `.env` cascade, the fields
@@ -163,23 +163,14 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
     #[doc(hidden)]
     const __WHOLE_FIELDS: &'static [&'static str] = &[];
 
-    /// The base the environment overlays when the call site pinned nothing.
-    ///
-    /// Defaults to [`Default::default`]. Name another with `#[config(defaults =
-    /// path)]` when a field's safe baseline depends on the active profile:
-    /// inside `from_env` it would also rewrite a pinned value.
-    fn defaults() -> Self {
-        Self::default()
-    }
-
     /// Resolve this config for the boot: the environment overlaid on `pinned`
-    /// when the call site supplied one, on [`defaults`](Self::defaults)
-    /// otherwise, then validated. A pinned base is outranked by the deployment
-    /// tier alone, an unpinned one by the `.env` cascade too.
+    /// when the call site supplied one, on `Default` otherwise, then validated.
+    /// A pinned base is outranked by the deployment tier alone, an unpinned one
+    /// by the `.env` cascade too.
     ///
     /// The boot resolves the default instance through it; a named instance
     /// takes the same steps under its own namespace, so an override reaches
-    /// the default instance alone, and [`defaults`](Self::defaults) every one.
+    /// the default instance alone.
     fn resolve(pinned: Option<Self>) -> Result<Self> {
         resolve_under(Cow::Borrowed(Self::NAMESPACE), pinned)
     }

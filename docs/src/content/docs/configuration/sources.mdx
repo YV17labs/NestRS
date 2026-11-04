@@ -85,7 +85,7 @@ let vault = Arc::new(
     VaultSource::fetch(&vault_client, "secret/api").await?,
 );
 let env = ConfigService::with_source("seaorm", vault);
-let db_config = SeaOrmConfig::from_env(&env, SeaOrmConfig::defaults())?;
+let db_config = SeaOrmConfig::from_env(&env, SeaOrmConfig::default())?;
 
 App::builder()
     .module::<AppModule>()

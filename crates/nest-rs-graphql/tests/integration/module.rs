@@ -210,8 +210,8 @@ async fn the_schema_mounted_over_a_container_no_app_sealed_is_refused_naming_its
 /// Both surfaces pinned open, as a deployment that wants them writes it.
 #[module(
     imports = [GraphqlModule::for_root(nest_rs_graphql::GraphqlConfig {
-        playground: true,
-        introspection: true,
+        playground: nest_rs_config::Surface::Open,
+        introspection: nest_rs_config::Surface::Open,
         ..nest_rs_graphql::GraphqlConfig::default()
     })],
     providers = [PingResolver],
@@ -222,7 +222,7 @@ struct OpenedApp;
 /// honoured, and the boot mounting them says so once for each.
 #[test]
 fn a_pin_opening_the_surfaces_in_production_is_said_at_boot() {
-    let logs = in_production(|| async {
+    let logs = in_profile("production", || async {
         let logs = nest_rs_testing::LogCapture::install();
         let app = TestApp::for_module::<OpenedApp>()
             .await
@@ -244,16 +244,78 @@ fn a_pin_opening_the_surfaces_in_production_is_said_at_boot() {
     }
 }
 
-/// Runs `boot` in a process that declares the production profile, which the
-/// boot reads off the process environment `figment::Jail` scopes.
+/// Where a pin of the path alone writes the SDL, per process.
+fn emitted_sdl() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "nest_rs_graphql_by_profile_{}.graphql",
+        std::process::id()
+    ))
+}
+
+/// One field pinned: the emit stays the profile's.
+#[module(
+    imports = [GraphqlModule::for_root(nest_rs_graphql::GraphqlConfig {
+        emit_path: emitted_sdl(),
+        ..nest_rs_graphql::GraphqlConfig::default()
+    })],
+    providers = [PingResolver],
+)]
+struct EmitPathPinnedApp;
+
+/// A pin of another field closes nothing it does not name and opens nothing in
+/// a deployment, a process declaring no profile among them, which boots silent.
+/// Under test, parallel suites would rewrite a committed file.
+#[test]
+fn a_pin_over_the_default_leaves_every_surface_to_the_profile() {
+    for (profile, open, writes) in [
+        ("development", true, true),
+        ("test", true, false),
+        ("staging", false, false),
+        ("production", false, false),
+        ("", false, false),
+    ] {
+        let _ = std::fs::remove_file(emitted_sdl());
+        let (page, introspected) = in_profile(profile, || async {
+            let logs = nest_rs_testing::LogCapture::install();
+            let app = TestApp::for_module::<EmitPathPinnedApp>()
+                .await
+                .unwrap_or_else(|refused| panic!("{profile:?} boots: {refused:#}"));
+            for surface in [
+                "GraphQL playground is enabled and public outside a dev profile",
+                "GraphQL introspection is enabled and public outside a dev profile",
+            ] {
+                logs.expect_none(nest_rs_graphql::TARGET, surface);
+            }
+            let page = app.http().get("/graphql").send().await.0.status();
+            let body: serde_json::Value = app
+                .http()
+                .post("/graphql")
+                .body_json(&serde_json::json!({ "query": "{ __schema { queryType { name } } }" }))
+                .send()
+                .await
+                .json()
+                .await
+                .value()
+                .deserialize();
+            (page, body["data"]["__schema"].is_object())
+        });
+        assert_eq!(page.is_success(), open, "{profile:?}: the playground");
+        assert_eq!(introspected, open, "{profile:?}: introspection");
+        assert_eq!(emitted_sdl().exists(), writes, "{profile:?}: the emit");
+    }
+    let _ = std::fs::remove_file(emitted_sdl());
+}
+
+/// Runs `boot` in a process that declares `profile`, which the boot reads off
+/// the process environment `figment::Jail` scopes.
 #[expect(
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
 )]
-fn in_production<F: std::future::Future>(boot: impl FnOnce() -> F) -> F::Output {
+fn in_profile<F: std::future::Future>(profile: &str, boot: impl FnOnce() -> F) -> F::Output {
     let mut out = None;
     figment::Jail::expect_with(|jail| {
-        jail.set_env(nest_rs_config::Environment::var_name(), "production");
+        jail.set_env(nest_rs_config::Environment::var_name(), profile);
         out = Some(
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()

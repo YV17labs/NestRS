@@ -1,6 +1,6 @@
 //! Covers `src/module.rs` — the composition contract `OpenApiModule` publishes.
 
-use nest_rs_config::Config;
+use nest_rs_config::Surface;
 use nest_rs_core::{Layer, async_trait, injectable, input, module};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::Multipart;
@@ -99,33 +99,32 @@ struct ImportForm {
     file: String,
 }
 
-// Pinned: the unpinned `enabled` default depends on the environment profile.
-fn openapi(enabled: bool) -> OpenApiSetup {
+fn openapi(enabled: Surface) -> OpenApiSetup {
     OpenApiModule::for_root(OpenApiConfig {
         enabled,
         title: "Widget API".into(),
         version: "9.9.9".into(),
-        // An enabled emit would write `openapi.json` into the runner's directory.
-        emit: false,
+        // A written emit would put `openapi.json` in the runner's directory.
+        emit: Surface::Closed,
         ..OpenApiConfig::default()
     })
 }
 
-#[module(imports = [openapi(true)], providers = [WidgetsController])]
+#[module(imports = [openapi(Surface::Open)], providers = [WidgetsController])]
 struct DocumentedApp;
 
-#[module(imports = [openapi(false)], providers = [WidgetsController])]
+#[module(imports = [openapi(Surface::Closed)], providers = [WidgetsController])]
 struct UndocumentedApp;
 
 #[module(imports = [OpenApiModule], providers = [WidgetsController])]
 struct UnpinnedApp;
 
-/// Pinned over the profile's defaults, as the docs teach a pin that keeps the
-/// documentation a development surface.
+/// One field pinned, as the docs teach: the documentation stays a development
+/// surface.
 fn pinned_over_the_profile() -> OpenApiSetup {
     OpenApiModule::for_root(OpenApiConfig {
         title: "Profile API".into(),
-        ..OpenApiConfig::defaults()
+        ..OpenApiConfig::default()
     })
 }
 
@@ -133,7 +132,7 @@ fn pinned_over_the_profile() -> OpenApiSetup {
 struct PinnedOverTheProfileApp;
 
 #[tokio::test]
-async fn the_test_profile_serves_the_documentation_unpinned_or_pinned_over_its_defaults() {
+async fn the_test_profile_serves_the_documentation_unpinned_or_pinned_over_the_default() {
     let unpinned = TestApp::for_module::<UnpinnedApp>().await.expect("boots");
     for path in ["/api-json", "/api"] {
         unpinned.http().get(path).send().await.assert_status_is_ok();
@@ -383,7 +382,7 @@ const DEPLOYMENT_POLICY: &str = "default-src 'self'";
 
 #[module(
     imports = [
-        openapi(true),
+        openapi(Surface::Open),
         HttpModule::for_root(HttpConfig {
             security_headers: HttpSecurityHeaders {
                 content_security_policy: Some(DEPLOYMENT_POLICY.into()),
@@ -441,7 +440,7 @@ async fn disabled_serves_neither_endpoint() {
 
 #[module(
     imports = [
-        openapi(true),
+        openapi(Surface::Open),
         HttpModule::for_root(HttpConfig {
             versioning: ApiVersioning::Header,
             default_version: Some("9".into()),
@@ -488,7 +487,7 @@ impl Guard for DenyEveryone {
 
 impl GuardFor<nest_rs_http::HttpView> for DenyEveryone {}
 
-#[module(imports = [openapi(true)], providers = [WidgetsController, DenyEveryone])]
+#[module(imports = [openapi(Surface::Open)], providers = [WidgetsController, DenyEveryone])]
 struct GuardedApp;
 
 #[module(imports = [GuardedApp], providers = [GlobalGuards<(DenyEveryone,)>])]
@@ -529,7 +528,7 @@ impl RootCatchAllController {
 
 #[module(
     imports = [
-        openapi(true),
+        openapi(Surface::Open),
         HttpModule::for_root(HttpConfig {
             versioning: ApiVersioning::Header,
             default_version: Some("1".into()),
@@ -616,8 +615,8 @@ async fn a_form_encoded_body_is_described_as_one() {
 #[module(
     imports = [
         OpenApiModule::for_root(OpenApiConfig {
-            enabled: true,
-            emit: true,
+            enabled: Surface::Open,
+            emit: Surface::Open,
             emit_path: unwritable_document_path(),
             ..OpenApiConfig::default()
         }),
@@ -691,8 +690,8 @@ fn landed_document_path() -> std::path::PathBuf {
 #[module(
     imports = [
         OpenApiModule::for_root(OpenApiConfig {
-            enabled: true,
-            emit: true,
+            enabled: Surface::Open,
+            emit: Surface::Open,
             emit_path: relative_document_path(),
             ..OpenApiConfig::default()
         }),
@@ -700,6 +699,76 @@ fn landed_document_path() -> std::path::PathBuf {
     providers = [WidgetsController],
 )]
 struct RelativeDocumentApp;
+
+/// Where a pin of the path alone writes the document, per process.
+fn by_profile_document_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "nest_rs_openapi_by_profile_{}.json",
+        std::process::id()
+    ))
+}
+
+/// One field pinned: the documentation and its emit stay the profile's.
+#[module(
+    imports = [
+        OpenApiModule::for_root(OpenApiConfig {
+            emit_path: by_profile_document_path(),
+            ..OpenApiConfig::default()
+        }),
+    ],
+    providers = [WidgetsController],
+)]
+struct EmitPathPinnedApp;
+
+#[test]
+fn a_pin_over_the_default_serves_nothing_in_a_deployment() {
+    for profile in ["staging", "production", ""] {
+        in_profile(profile, || async {
+            let logs = nest_rs_testing::LogCapture::install();
+            let app = TestApp::for_module::<PinnedOverTheProfileApp>()
+                .await
+                .unwrap_or_else(|refused| panic!("{profile:?} boots: {refused:#}"));
+            for path in ["/api-json", "/api"] {
+                app.http()
+                    .get(path)
+                    .send()
+                    .await
+                    .assert_status(StatusCode::NOT_FOUND);
+            }
+            logs.expect_none(
+                nest_rs_openapi::TARGET,
+                "OpenAPI documentation endpoints are enabled and public outside a dev profile",
+            );
+        });
+    }
+}
+
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn a_pin_over_the_default_writes_the_document_under_development() {
+    let path = Removed(by_profile_document_path());
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(nest_rs_config::Environment::var_name(), "development");
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let _app = TestApp::for_module::<EmitPathPinnedApp>()
+                    .await
+                    .expect("the documentation boots");
+                nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+                    std::fs::read_to_string(&path.0).is_ok_and(|text| text.ends_with('\n'))
+                })
+                .await;
+            });
+        Ok(())
+    });
+}
 
 /// Removes its file when dropped, so a failed run leaves none in the crate.
 struct Removed(std::path::PathBuf);
@@ -751,7 +820,7 @@ fn a_relative_emit_path_lands_in_the_crate_main_expanded_in() {
 /// boot mounting it says so.
 #[test]
 fn a_pin_opening_the_documentation_in_production_is_said_at_boot() {
-    let logs = in_production(|| async {
+    let logs = in_profile("production", || async {
         let logs = nest_rs_testing::LogCapture::install();
         let app = TestApp::for_module::<DocumentedApp>()
             .await
@@ -771,16 +840,16 @@ fn a_pin_opening_the_documentation_in_production_is_said_at_boot() {
     assert_eq!(event.field("environment").as_deref(), Some("production"));
 }
 
-/// Runs `boot` in a process that declares the production profile, which the
-/// boot reads off the process environment `figment::Jail` scopes.
+/// Runs `boot` in a process that declares `profile`, which the boot reads off
+/// the process environment `figment::Jail` scopes.
 #[expect(
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
 )]
-fn in_production<F: std::future::Future>(boot: impl FnOnce() -> F) -> F::Output {
+fn in_profile<F: std::future::Future>(profile: &str, boot: impl FnOnce() -> F) -> F::Output {
     let mut out = None;
     figment::Jail::expect_with(|jail| {
-        jail.set_env(nest_rs_config::Environment::var_name(), "production");
+        jail.set_env(nest_rs_config::Environment::var_name(), profile);
         out = Some(
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()

@@ -35,12 +35,13 @@ use crate::view::GraphqlView;
 /// imports [`GraphqlModule::for_root`] only to pin a [`GraphqlConfig`]. A
 /// resolver the app reaches without it is named at `warn` when the app runs.
 ///
-/// The bare import serves the playground and answers introspection under a
-/// declared development or test profile, and writes the schema's SDL beside the
-/// app's manifest under development; [`GraphqlConfig::default`] opens none of
-/// them, in any profile.
+/// The bare import, and a pin over [`GraphqlConfig::default`], serve the
+/// playground and answer introspection under a declared development or test
+/// profile, and write the schema's SDL beside the app's manifest under
+/// development; a deployment opens each by saying so.
 ///
 /// ```
+/// use nest_rs_config::Surface;
 /// use nest_rs_core::module;
 /// use nest_rs_graphql::{GraphqlConfig, GraphqlModule};
 ///
@@ -52,7 +53,7 @@ use crate::view::GraphqlView;
 /// # assert!(app.container().get::<GraphqlConfig>().is_some());
 ///
 /// let defaults = GraphqlConfig::default();
-/// assert!(!defaults.playground && !defaults.introspection && !defaults.emit);
+/// assert_eq!(defaults.playground, Surface::ByProfile);
 /// # Ok(())
 /// # }
 /// ```
@@ -119,7 +120,7 @@ fn mount(
 ) -> anyhow::Result<()> {
     let schema = build_schema(container.clone(), options, mounted)?;
     let bridge = Arc::new(OperationBridge::new(container.clone())?);
-    if options.emit {
+    if options.emit.writes() {
         let dest = nest_rs_core::__private::in_app_dir(&options.emit_path);
         let sdl = crate::resolver::render_sdl(&schema, options);
         match std::fs::write(&dest, &sdl) {
@@ -152,7 +153,7 @@ fn mount(
     );
     let get = GetEndpoint::new(
         SubscriptionEndpoint::new(units, bridge, options, mounted.clone(), binding),
-        options.playground.then(|| {
+        options.playground.is_open().then(|| {
             async_graphql::http::playground_source(
                 async_graphql::http::GraphQLPlaygroundConfig::new(options.path.as_str())
                     .subscription_endpoint(options.path.as_str()),

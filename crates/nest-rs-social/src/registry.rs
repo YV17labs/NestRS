@@ -123,7 +123,7 @@ where
             // check, and records the variables claimed so a second reader fails boot.
             let config = nest_rs_config::read::<C>(
                 &ConfigService::for_namespace(C::NAMESPACE),
-                C::defaults(),
+                C::default(),
             )?;
             if config.is_unconfigured() {
                 return Ok(None);

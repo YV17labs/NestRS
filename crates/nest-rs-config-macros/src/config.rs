@@ -31,7 +31,7 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     });
 
-    let from_env = (!args.manual_from_env).then(|| overlay(&item, &fields, args.defaults.as_ref()));
+    let from_env = (!args.manual_from_env).then(|| overlay(&item, &fields));
 
     // A provider's injection is the whole declaration of a config: the boot
     // queues its factory then. A generic config has no one type to file, and
@@ -76,13 +76,12 @@ struct Args {
     namespace: LitStr,
     manual_validate: bool,
     manual_from_env: bool,
-    defaults: Option<syn::Path>,
 }
 
 /// Every key `#[config]` takes on its struct, in the order its refusals list
 /// them.
-const CONFIG: Grammar = Grammar::new("config", &["namespace", "validate", "from_env", "defaults"])
-    .elsewhere(a_fields_key);
+const CONFIG: Grammar =
+    Grammar::new("config", &["namespace", "validate", "from_env"]).elsewhere(a_fields_key);
 
 /// A field's key written on the struct is not misspelled: it is told whose it is.
 fn a_fields_key(key: &str) -> Option<String> {
@@ -102,8 +101,7 @@ const MISSING_NAMESPACE: &str = "#[config] requires `namespace`, the stem of the
 fn parse_args(args: TokenStream2) -> syn::Result<Args> {
     let mut namespace: Option<LitStr> = None;
     let mut manual_validate = false;
-    let mut manual_from_env = None;
-    let mut defaults = None;
+    let mut manual_from_env = false;
     CONFIG.parse2(args, |arg| {
         match arg.key() {
             "namespace" => namespace = Some(arg.str_lit("redis__queue")?),
@@ -127,18 +125,7 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
                          struct to write `impl Config` itself, its overlay included",
                     ));
                 }
-                manual_from_env = Some(lit);
-            }
-            "defaults" => {
-                let value = arg.expr()?;
-                let syn::Expr::Path(path) = value else {
-                    return Err(syn::Error::new_spanned(
-                        &value,
-                        "#[config] `defaults` takes the path of a `fn() -> Self`, e.g. \
-                         `defaults = Self::for_profile`",
-                    ));
-                };
-                defaults = Some(path.path);
+                manual_from_env = true;
             }
             // The grammar hands over only its own keys.
             _ => {}
@@ -149,23 +136,10 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
     let lit = namespace
         .ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), MISSING_NAMESPACE))?;
     validate_namespace(&lit)?;
-    if let (Some(manual), Some(path)) = (&manual_from_env, &defaults) {
-        let mut refused = syn::Error::new_spanned(
-            path,
-            "#[config] `defaults` is the derived `impl Config`'s: under `from_env = \"manual\"` \
-             the struct's own `impl Config` writes `fn defaults()`",
-        );
-        refused.combine(syn::Error::new_spanned(
-            manual,
-            "the overlay is written by hand here",
-        ));
-        return Err(refused);
-    }
     Ok(Args {
         namespace: lit,
         manual_validate,
-        manual_from_env: manual_from_env.is_some(),
-        defaults,
+        manual_from_env,
     })
 }
 

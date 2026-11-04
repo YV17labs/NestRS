@@ -31,7 +31,7 @@ pub struct ConfigModule;
 
 impl ConfigModule {
     /// Queue the factory that resolves `C` for the instance `I` from the
-    /// environment over `C::defaults()` — what a bare import of the module
+    /// environment over `C::default()` — what a bare import of the module
     /// owning `C` queues. A pinned base for the same instance
     /// ([`provide_root`](Self::provide_root)) supersedes it, wherever the two
     /// fall in `imports = [..]`.

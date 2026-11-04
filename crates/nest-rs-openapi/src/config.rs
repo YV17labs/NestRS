@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use nest_rs_config::{ConfigError, ConfigService, Environment, Field, Result, config};
+use nest_rs_config::{ConfigError, ConfigService, Environment, Field, Result, Surface, config};
 use nest_rs_core::AppIdentity;
 
 use crate::contact::OpenApiContact;
@@ -12,17 +12,16 @@ use crate::license::OpenApiLicense;
 /// The OpenAPI document's `info` block plus the master enable switch, settable
 /// via `<PREFIX>_OPENAPI__*` or pinned through
 /// [`OpenApiModule::for_root`](crate::OpenApiModule::for_root).
-#[config(namespace = "openapi", defaults = Self::profile_defaults)]
+#[config(namespace = "openapi")]
 #[derive(Clone, Debug)]
 pub struct OpenApiConfig {
     /// Master switch for the documentation endpoints.
     ///
-    /// Both endpoints are **public**, unauthenticated, so `Default` keeps them
-    /// off — a config pinned over `..Default::default()` serves them in no
-    /// profile — and only a development or test profile's
-    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns them on.
-    /// Enabling them outside such a profile is honoured and logged at `warn`.
-    pub enabled: bool,
+    /// Both endpoints are **public**, unauthenticated, so `Default` leaves them
+    /// to the profile: served under a declared development or test profile
+    /// alone. Opening them outside one, [`Surface::Open`] or `true` from the
+    /// environment, is honoured and logged at `warn`.
+    pub enabled: Surface,
     /// The API title shown in the document `info` block and Swagger UI;
     /// defaults to the binary's package name ([`AppIdentity`]).
     pub title: String,
@@ -44,13 +43,12 @@ pub struct OpenApiConfig {
     pub license: Option<OpenApiLicense>,
     /// (Re)write [`emit_path`](Self::emit_path) with the document `/api-json`
     /// serves once at boot — the committed copy a pull request diffs. `Default`
-    /// keeps it off, and only a development profile's
-    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns it on:
-    /// under test, parallel suites would rewrite a committed file. With
-    /// [`enabled`](Self::enabled) off no document is built, so nothing is
-    /// written and the boot says so at `warn`; a write failure is logged,
+    /// leaves it to the profile: written under a declared development profile
+    /// alone, since under test parallel suites would rewrite a committed file.
+    /// With [`enabled`](Self::enabled) closed no document is built, so nothing
+    /// is written and the boot says so at `warn`; a write failure is logged,
     /// never fatal.
-    pub emit: bool,
+    pub emit: Surface,
     /// Where [`emit`](Self::emit) writes the JSON document. Default
     /// `openapi.json`; a relative path is the app crate's — the one
     /// `#[nest_rs::main]` expanded in — so each app of a workspace writes its
@@ -64,7 +62,7 @@ const UNNAMED_VERSION: &str = "0.1.0";
 
 impl Default for OpenApiConfig {
     /// The binary's name, version and description (its [`AppIdentity`]) in
-    /// the `info` block, and every endpoint closed.
+    /// the `info` block, and the endpoints left to the profile.
     fn default() -> Self {
         Self::named_by(AppIdentity::current())
     }
@@ -75,7 +73,7 @@ impl OpenApiConfig {
     /// no identity was captured.
     fn named_by(app: Option<&AppIdentity>) -> Self {
         Self {
-            enabled: false,
+            enabled: Surface::ByProfile,
             title: app.map_or(UNNAMED_TITLE, |app| app.name.as_str()).into(),
             version: app
                 .map_or(UNNAMED_VERSION, |app| app.version.as_str())
@@ -85,30 +83,18 @@ impl OpenApiConfig {
             terms_of_service: None,
             contact: None,
             license: None,
-            emit: false,
+            emit: Surface::ByProfile,
             emit_path: "openapi.json".into(),
         }
     }
 }
 
 impl OpenApiConfig {
-    /// The documentation served under a development or test profile, and the
-    /// document written under development — the base `Config::defaults`
-    /// returns; in the overlay it would rewrite a pinned value.
-    fn profile_defaults() -> Self {
-        let environment = Environment::from_env();
-        Self {
-            enabled: !environment.is_deployed(),
-            emit: environment == Environment::Development,
-            ..Self::default()
-        }
-    }
-
     /// One `warn` when the documentation is served outside a development or
     /// test profile: honoured, since the deployment chose it, and said.
     pub(crate) fn warn_when_open(&self) {
         let environment = Environment::from_env();
-        if self.enabled && environment.is_deployed() {
+        if environment.is_deployed() && self.enabled.is_open() {
             tracing::warn!(
                 target: crate::TARGET,
                 environment = environment.as_str(),
@@ -184,12 +170,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_struct_default_serves_nothing_and_names_the_api() {
+    fn the_struct_default_leaves_the_documentation_to_the_profile_and_names_the_api() {
         let d = OpenApiConfig::default();
-        assert!(
-            !d.enabled,
-            "public documentation is opened by the profile or in sight"
-        );
+        assert_eq!(d.enabled, Surface::ByProfile);
+        assert_eq!(d.emit, Surface::ByProfile);
         assert!(!d.title.is_empty());
         assert!(!d.version.is_empty());
         assert!(d.description.is_none());
@@ -227,7 +211,10 @@ mod tests {
                 },
             )
             .expect("ok");
-            assert!(!cfg.enabled, "a pin opens the docs only by saying so");
+            assert!(
+                !cfg.enabled.is_open(),
+                "a deployment opens the docs only by saying so"
+            );
             Ok(())
         });
     }
@@ -256,7 +243,7 @@ mod tests {
             ],
         );
         let cfg = OpenApiConfig::from_env(&service, Default::default()).expect("ok");
-        assert!(!cfg.enabled);
+        assert_eq!(cfg.enabled, Surface::Closed);
         assert_eq!(cfg.title, "Custom API");
         assert_eq!(cfg.version, "9.9.9");
         assert_eq!(cfg.description.as_deref(), Some("Generated docs"));
@@ -326,11 +313,15 @@ mod tests {
     fn enabled_reads_boolean_spellings() {
         let off = ConfigService::with_vars("openapi", [("ENABLED", "off")]);
         let cfg = OpenApiConfig::from_env(&off, Default::default()).expect("ok");
-        assert!(!cfg.enabled, "`off` disables the documentation endpoints");
+        assert_eq!(
+            cfg.enabled,
+            Surface::Closed,
+            "`off` closes the documentation endpoints"
+        );
 
         let on = ConfigService::with_vars("openapi", [("ENABLED", "true")]);
         let cfg = OpenApiConfig::from_env(&on, Default::default()).expect("ok");
-        assert!(cfg.enabled);
+        assert_eq!(cfg.enabled, Surface::Open);
     }
 
     #[test]
@@ -338,7 +329,7 @@ mod tests {
         clippy::result_large_err,
         reason = "figment::Jail fixes the closure's error type"
     )]
-    fn the_unpinned_default_serves_the_documentation_in_development_and_test_alone() {
+    fn the_default_serves_the_documentation_in_development_and_test_alone() {
         figment::Jail::expect_with(|jail| {
             for (profile, enabled) in [
                 ("development", true),
@@ -349,7 +340,7 @@ mod tests {
             ] {
                 jail.set_env(nest_rs_config::Environment::var_name(), profile);
                 assert_eq!(
-                    <OpenApiConfig as Config>::defaults().enabled,
+                    OpenApiConfig::default().enabled.is_open(),
                     enabled,
                     "{profile:?}"
                 );
@@ -363,7 +354,7 @@ mod tests {
         clippy::result_large_err,
         reason = "figment::Jail fixes the closure's error type"
     )]
-    fn the_unpinned_default_emits_the_document_under_development_alone() {
+    fn the_default_emits_the_document_under_development_alone() {
         figment::Jail::expect_with(|jail| {
             for (profile, emits) in [
                 ("development", true),
@@ -373,11 +364,7 @@ mod tests {
                 ("", false),
             ] {
                 jail.set_env(nest_rs_config::Environment::var_name(), profile);
-                assert_eq!(
-                    <OpenApiConfig as Config>::defaults().emit,
-                    emits,
-                    "{profile:?}"
-                );
+                assert_eq!(OpenApiConfig::default().emit.writes(), emits, "{profile:?}");
             }
             Ok(())
         });
@@ -409,7 +396,7 @@ mod tests {
                 Default::default(),
             )
             .expect("an explicit `true` is honoured, not overridden");
-            assert!(cfg.enabled, "the deployment's choice stands");
+            assert!(cfg.enabled.is_open(), "the deployment's choice stands");
             cfg.warn_when_open();
 
             let event = logs.expect_one(

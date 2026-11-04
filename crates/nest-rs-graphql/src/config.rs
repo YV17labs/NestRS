@@ -1,11 +1,11 @@
 //! [`GraphqlConfig`] — loaded from `<PREFIX>_GRAPHQL__*`, every field
-//! defaulting production-safe, the development surfaces armed by the declared
-//! profile alone.
+//! defaulting production-safe, the development surfaces left to the declared
+//! profile.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-use nest_rs_config::{Bound, DurationBounds, Environment, Floor, config};
+use nest_rs_config::{Bound, DurationBounds, Environment, Floor, Surface, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
@@ -44,13 +44,13 @@ const INTROSPECTION_OPEN: &str =
 /// GraphQL endpoint options, settable via `<PREFIX>_GRAPHQL__*` or pinned through
 /// [`GraphqlModule::for_root`](crate::GraphqlModule::for_root).
 ///
-/// `Default` is the production-safe value: no playground, no introspection, no
-/// schema written. A declared development or test profile's
-/// [`Config::defaults`](nest_rs_config::Config::defaults) serves the
-/// playground and answers introspection, and a development profile's writes
-/// the schema; a config pinned over `..Default::default()` gets none of it in
-/// any profile.
-#[config(namespace = "graphql", defaults = Self::profile_defaults)]
+/// `Default` is the production-safe value: its development surfaces are
+/// [`Surface::ByProfile`], so a deployment, or a process declaring no profile,
+/// gets no playground, no introspection and no schema written. A declared
+/// development or test profile serves the playground and answers introspection,
+/// and a development profile writes the schema, on the bare import and under a
+/// pin over `..Default::default()` alike.
+#[config(namespace = "graphql")]
 #[derive(Clone, Debug)]
 pub struct GraphqlConfig {
     /// Endpoint path. Default `/graphql`. One literal path: a template's `{`
@@ -59,18 +59,17 @@ pub struct GraphqlConfig {
     pub path: String,
     /// Serve the GraphQL Playground on `GET` for a browser's request.
     ///
-    /// The page is public, so `Default` keeps it off and only a development or
-    /// test profile's [`Config::defaults`](nest_rs_config::Config::defaults)
-    /// turns it on. Serving it outside such a profile is honoured and logged at
-    /// `warn`.
-    pub playground: bool,
+    /// The page is public, so `Default` leaves it to the profile: served under
+    /// a declared development or test profile alone. Serving it outside one,
+    /// [`Surface::Open`] or `true` from the environment, is honoured and logged
+    /// at `warn`.
+    pub playground: Surface,
     /// (Re)write [`emit_path`](Self::emit_path) with the schema's SDL once at
-    /// boot — the committed copy a pull request diffs. `Default` keeps it off,
-    /// and only a development profile's
-    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns it on:
-    /// under test, parallel suites would rewrite a committed file. A write
+    /// boot — the committed copy a pull request diffs. `Default` leaves it to
+    /// the profile: written under a declared development profile alone, since
+    /// under test parallel suites would rewrite a committed file. A write
     /// failure is logged, never fatal.
-    pub emit: bool,
+    pub emit: Surface,
     /// Where [`emit`](Self::emit) writes the SDL. Default `schema.graphql`; a
     /// relative path is the app crate's — the one `#[nest_rs::main]` expanded
     /// in — so each app of a workspace writes its own.
@@ -93,11 +92,12 @@ pub struct GraphqlConfig {
     #[validate(range(min = 1))]
     #[config(count)]
     pub max_complexity: Option<usize>,
-    /// Answer introspection queries. The schema is the API's documentation,
-    /// so `Default` keeps this off and only a development or test profile's
-    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns it on.
-    /// Answering them outside such a profile is honoured and logged at `warn`.
-    pub introspection: bool,
+    /// Answer introspection queries. The schema is the API's documentation, so
+    /// `Default` leaves this to the profile: answered under a declared
+    /// development or test profile alone. Answering them outside one,
+    /// [`Surface::Open`] or `true` from the environment, is honoured and logged
+    /// at `warn`.
+    pub introspection: Surface,
     /// Maximum number of operations in a single HTTP batch request.
     /// Default `10`.
     #[validate(range(min = 1))]
@@ -173,12 +173,12 @@ impl Default for GraphqlConfig {
     fn default() -> Self {
         Self {
             path: DEFAULT_PATH.into(),
-            playground: false,
-            emit: false,
+            playground: Surface::ByProfile,
+            emit: Surface::ByProfile,
             emit_path: "schema.graphql".into(),
             max_depth: Some(15),
             max_complexity: Some(2000),
-            introspection: false,
+            introspection: Surface::ByProfile,
             max_batch_size: 10,
             max_connection: Some(nest_rs_http::DEFAULT_MAX_CONNECTION),
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
@@ -192,21 +192,6 @@ impl Default for GraphqlConfig {
 }
 
 impl GraphqlConfig {
-    /// The playground and introspection open under a development or test
-    /// profile, and the schema written under development — the base
-    /// `Config::defaults` returns; in the overlay it would rewrite a pinned
-    /// value.
-    fn profile_defaults() -> Self {
-        let environment = Environment::from_env();
-        let open = !environment.is_deployed();
-        Self {
-            playground: open,
-            introspection: open,
-            emit: environment == Environment::Development,
-            ..Self::default()
-        }
-    }
-
     /// One `warn` per public surface open outside a development or test
     /// profile: honoured, since the deployment chose it, and said.
     pub(crate) fn warn_when_open(&self) {
@@ -214,15 +199,15 @@ impl GraphqlConfig {
         if !environment.is_deployed() {
             return;
         }
-        for (open, surface) in [
+        for (surface, said) in [
             (self.playground, PLAYGROUND_OPEN),
             (self.introspection, INTROSPECTION_OPEN),
         ] {
-            if open {
+            if surface.is_open() {
                 tracing::warn!(
                     target: crate::TARGET,
                     environment = environment.as_str(),
-                    "{surface}",
+                    "{said}",
                 );
             }
         }
@@ -250,12 +235,12 @@ mod tests {
     fn defaults_are_production_safe() {
         let d = GraphqlConfig::default();
         assert_eq!(d.path, "/graphql");
-        assert!(!d.playground, "playground exposed in prod is a CVE");
-        assert!(!d.emit, "writing SDL from prod is unwanted side effect");
+        assert_eq!(d.playground, Surface::ByProfile);
+        assert_eq!(d.introspection, Surface::ByProfile);
+        assert_eq!(d.emit, Surface::ByProfile);
         assert_eq!(d.emit_path, PathBuf::from("schema.graphql"));
         assert_eq!(d.max_depth, Some(15));
         assert_eq!(d.max_complexity, Some(2000));
-        assert!(!d.introspection);
         assert_eq!(d.max_batch_size, 10);
         assert!(
             !d.federation,
@@ -281,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn the_unpinned_default_opens_the_playground_and_introspection_in_development_and_test_alone() {
+    fn the_default_opens_the_playground_and_introspection_in_development_and_test_alone() {
         for (profile, open) in [
             ("development", true),
             ("test", true),
@@ -289,14 +274,22 @@ mod tests {
             ("production", false),
             ("", false),
         ] {
-            let d = in_profile(profile, <GraphqlConfig as Config>::defaults);
-            assert_eq!(d.playground, open, "{profile:?}");
-            assert_eq!(d.introspection, open, "{profile:?}");
+            let d = GraphqlConfig::default();
+            assert_eq!(
+                in_profile(profile, || d.playground.is_open()),
+                open,
+                "{profile:?}"
+            );
+            assert_eq!(
+                in_profile(profile, || d.introspection.is_open()),
+                open,
+                "{profile:?}"
+            );
         }
     }
 
     #[test]
-    fn the_unpinned_default_emits_the_schema_under_development_alone() {
+    fn the_default_emits_the_schema_under_development_alone() {
         for (profile, emits) in [
             ("development", true),
             ("test", false),
@@ -304,24 +297,12 @@ mod tests {
             ("production", false),
             ("", false),
         ] {
-            let d = in_profile(profile, <GraphqlConfig as Config>::defaults);
-            assert_eq!(d.emit, emits, "{profile:?}");
+            assert_eq!(
+                in_profile(profile, || GraphqlConfig::default().emit.writes()),
+                emits,
+                "{profile:?}"
+            );
         }
-    }
-
-    #[test]
-    fn a_pin_over_the_struct_default_opens_nothing_in_development() {
-        let cfg = in_profile("development", || {
-            GraphqlConfig::from_env(
-                &ConfigService::with_vars("graphql", []),
-                GraphqlConfig {
-                    max_depth: Some(9),
-                    ..GraphqlConfig::default()
-                },
-            )
-            .expect("ok")
-        });
-        assert!(!cfg.playground && !cfg.introspection && !cfg.emit);
     }
 
     #[test]
@@ -339,7 +320,8 @@ mod tests {
             cfg.warn_when_open();
             cfg
         });
-        assert!(cfg.playground && cfg.introspection);
+        assert_eq!(cfg.playground, Surface::Open);
+        assert_eq!(cfg.introspection, Surface::Open);
         for surface in [PLAYGROUND_OPEN, INTROSPECTION_OPEN] {
             let event = logs.expect_one("nest_rs::graphql", surface);
             assert_eq!(event.level, "warn");
@@ -353,9 +335,9 @@ mod tests {
         in_profile("development", || {
             GraphqlConfig::from_env(
                 &ConfigService::with_vars("graphql", []),
-                <GraphqlConfig as Config>::defaults(),
+                GraphqlConfig::default(),
             )
-            .expect("the profile's defaults resolve")
+            .expect("the default resolves")
             .warn_when_open();
         });
         for surface in [PLAYGROUND_OPEN, INTROSPECTION_OPEN] {
@@ -484,9 +466,9 @@ mod tests {
         );
         let cfg = GraphqlConfig::from_env(&service, Default::default()).expect("ok");
         assert_eq!(cfg.path, "/api/graphql");
-        assert!(cfg.playground);
+        assert_eq!(cfg.playground, Surface::Open);
         assert_eq!(cfg.emit_path, PathBuf::from("./schema-out.graphql"));
-        assert!(cfg.emit);
+        assert_eq!(cfg.emit, Surface::Open);
         assert_eq!(cfg.max_depth, Some(15));
         assert_eq!(cfg.max_complexity, Some(2000));
     }

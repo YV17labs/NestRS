@@ -2,40 +2,30 @@
 //! `<PREFIX>_SERVER_TIMING__*` or pinned through
 //! [`ServerTimingModule::for_root`](crate::ServerTimingModule::for_root).
 
-use nest_rs_config::{Environment, config};
+use nest_rs_config::{Environment, Surface, config};
 
 /// Whether responses carry `Server-Timing`, settable via
 /// `<PREFIX>_SERVER_TIMING__ENABLED` or pinned through
 /// [`ServerTimingModule::for_root`](crate::ServerTimingModule::for_root).
-#[config(namespace = "server_timing", defaults = Self::profile_defaults)]
+#[config(namespace = "server_timing")]
 #[derive(Clone, Debug, Default)]
 pub struct ServerTimingConfig {
     /// Stamp each response with the time its backends took.
     ///
-    /// The header reaches every client, so `Default` keeps it off — a config
-    /// pinned over `..Default::default()` stamps nothing in any profile — and
-    /// only a development or test profile's
-    /// [`Config::defaults`](nest_rs_config::Config::defaults) turns it on.
-    /// Enabling it outside such a profile is honoured and logged at `warn`.
-    pub enabled: bool,
+    /// The header reaches every client, so `Default` leaves it to the profile:
+    /// on under a declared development or test profile alone. Opening it
+    /// outside one, [`Surface::Open`] or `true` from the environment, is
+    /// honoured and logged at `warn`.
+    pub enabled: Surface,
 }
 
 impl ServerTimingConfig {
-    /// Off unless a development or test profile is declared — the base
-    /// `Config::defaults` returns; in the overlay it would rewrite a pinned
-    /// `enabled: true`.
-    fn profile_defaults() -> Self {
-        Self {
-            enabled: !Environment::from_env().is_deployed(),
-        }
-    }
-
     /// One `warn` when the header is on outside a development or test profile:
     /// honoured, since the deployment chose it, and said, since every client
     /// then reads the backends' timings.
     pub(crate) fn warn_when_open(&self) {
         let environment = Environment::from_env();
-        if self.enabled && environment.is_deployed() {
+        if environment.is_deployed() && self.enabled.is_open() {
             tracing::warn!(
                 target: crate::TARGET,
                 environment = environment.as_str(),
@@ -68,12 +58,7 @@ mod tests {
     }
 
     #[test]
-    fn the_struct_default_stamps_nothing() {
-        assert!(!ServerTimingConfig::default().enabled);
-    }
-
-    #[test]
-    fn the_unpinned_default_follows_the_profile() {
+    fn the_struct_default_follows_the_profile() {
         for (profile, enabled) in [
             ("development", true),
             ("test", true),
@@ -82,7 +67,7 @@ mod tests {
             ("", false),
         ] {
             assert_eq!(
-                in_profile(profile, ServerTimingConfig::defaults).enabled,
+                in_profile(profile, || ServerTimingConfig::default().enabled.is_open()),
                 enabled,
                 "{profile:?}",
             );
@@ -90,27 +75,24 @@ mod tests {
     }
 
     #[test]
-    fn a_pin_over_the_struct_default_stays_off_in_development() {
-        let cfg = in_profile("development", || {
-            ServerTimingConfig::from_env(
-                &ConfigService::with_vars("server_timing", []),
-                ServerTimingConfig::default(),
-            )
-        })
-        .expect("ok");
-        assert!(!cfg.enabled, "a pin opens the header only by saying so");
-    }
-
-    #[test]
     fn enabled_reads_boolean_spellings() {
         let off = ConfigService::with_vars("server_timing", [("ENABLED", "off")]);
-        let cfg =
-            ServerTimingConfig::from_env(&off, ServerTimingConfig { enabled: true }).expect("ok");
-        assert!(!cfg.enabled, "`off` overrides a pinned `true`");
+        let cfg = ServerTimingConfig::from_env(
+            &off,
+            ServerTimingConfig {
+                enabled: Surface::Open,
+            },
+        )
+        .expect("ok");
+        assert_eq!(
+            cfg.enabled,
+            Surface::Closed,
+            "`off` overrides a pinned opening"
+        );
 
         let on = ConfigService::with_vars("server_timing", [("ENABLED", "1")]);
         let cfg = ServerTimingConfig::from_env(&on, ServerTimingConfig::default()).expect("ok");
-        assert!(cfg.enabled);
+        assert_eq!(cfg.enabled, Surface::Open);
     }
 
     #[test]
@@ -133,7 +115,7 @@ mod tests {
                 ServerTimingConfig::default(),
             )
             .expect("an explicit `true` is honoured, not overridden");
-            assert!(cfg.enabled, "the deployment's choice stands");
+            assert!(cfg.enabled.is_open(), "the deployment's choice stands");
             cfg.warn_when_open();
 
             let event = logs.expect_one(crate::TARGET, ENABLED_OUTSIDE_DEV);
@@ -151,7 +133,7 @@ mod tests {
                 ServerTimingConfig::default(),
             )
             .expect("ok");
-            assert!(cfg.enabled);
+            assert!(cfg.enabled.is_open());
             cfg.warn_when_open();
             logs.expect_none(crate::TARGET, ENABLED_OUTSIDE_DEV);
         });
@@ -163,7 +145,7 @@ mod tests {
             let logs = nest_rs_testing::LogCapture::install();
             ServerTimingConfig::from_env(
                 &ConfigService::with_vars("server_timing", []),
-                ServerTimingConfig::defaults(),
+                ServerTimingConfig::default(),
             )
             .expect("ok")
             .warn_when_open();

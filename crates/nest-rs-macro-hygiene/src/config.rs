@@ -26,7 +26,7 @@ fn doubled(env: &ConfigService, field: Field, base: u32) -> Result<u32> {
 }
 
 /// Minimal config, one field per reader.
-#[config(namespace = "macro_hygiene", defaults = Self::profile_defaults)]
+#[config(namespace = "macro_hygiene")]
 #[derive(Clone, Debug)]
 pub struct MacroHygieneConfig {
     /// A validation rule, so the emitted `Validate` derive is exercised.
@@ -47,13 +47,6 @@ pub struct MacroHygieneConfig {
     /// Read through a function of its own.
     #[config(with = doubled)]
     pub heat: u32,
-}
-
-impl MacroHygieneConfig {
-    /// The base the derived `Config::defaults` returns.
-    fn profile_defaults() -> Self {
-        Self::default()
-    }
 }
 
 impl Default for MacroHygieneConfig {

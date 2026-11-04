@@ -136,7 +136,8 @@ struct TickModule;
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        introspection: true,
+        playground: nest_rs_config::Surface::Closed,
+        introspection: nest_rs_config::Surface::Open,
         ..GraphqlConfig::default()
     }),
     TickModule,
@@ -341,7 +342,7 @@ async fn a_public_subscription_is_reachable() {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        playground: true,
+        playground: nest_rs_config::Surface::Open,
         ..GraphqlConfig::default()
     }),
     TickModule,

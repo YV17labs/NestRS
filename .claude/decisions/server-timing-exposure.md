@@ -67,3 +67,13 @@ left, and on any stream it measures nothing. The decision at register stands:
 switched off, nothing registers and no unit runs a stage for it. Still open:
 the stage reading the authenticated caller, so a deployment could give its
 timings to its operators alone.
+
+**2026-11-04 — a development surface is a `Surface` field.** Agreed by the owner
+on 2026-10-31; the why is `undeclared-environment-is-production.md`'s entry of
+this date. `ServerTimingConfig::enabled` is `nest_rs::config::Surface`,
+`ByProfile` in `Default`, and the register decides once on `is_open()`, so a
+switched-off header still costs a request nothing. A later development surface
+takes this shape: an `ENABLED` key reading a boolean over a `Surface` field, with
+no hook of its config's own. A pinned opening is `Surface::Open`, and a pin over
+`ServerTimingConfig::default()` now leaves the header to the profile, where it
+stamped nothing in any.

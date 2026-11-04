@@ -71,8 +71,8 @@ nest-rs-ws = { path = "../nest-rs-ws" }
 # being approximated by a wall-clock sleep nobody would keep honest.
 tokio = { workspace = true, features = ["test-util"] }
 serde_json.workspace = true
-# `figment::Jail` isolates `<PREFIX>_ENV` for the profile `Config::defaults()`
-# reads from the *process* environment rather than a `ConfigService`.
+# `figment::Jail` isolates `<PREFIX>_ENV` for the profile a `Surface` reads from
+# the *process* environment rather than a `ConfigService`.
 figment = { workspace = true, features = ["test"] }
 # The thread's CPU clock, which std lacks: a cost a test compares is read on
 # it, since a thread waiting for a core accrues none.

@@ -30,8 +30,9 @@ pub enum StorageError {
     /// through a config built in code, since `StorageConfig` refuses the
     /// pairing at boot.
     #[error(
-        "refusing to address {endpoint} over plain HTTP: \
-         {allow_http_var} is false, so credentials must not travel unencrypted",
+        "refusing to address {endpoint} over plain HTTP: {allow_http_var} is false, or unset \
+         outside a declared development or test profile, so credentials must not travel \
+         unencrypted",
         allow_http_var = ::nest_rs_config::var_name("storage", "ALLOW_HTTP"),
     )]
     PlaintextEndpoint {

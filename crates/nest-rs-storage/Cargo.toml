@@ -89,7 +89,7 @@ rustls.workspace = true
 nest-rs-authn = { path = "../nest-rs-authn" }
 nest-rs-http = { path = "../nest-rs-http" }
 # `figment::Jail` declares a profile for the one config branch that reads the
-# process environment rather than a `ConfigService`: `Config::defaults`.
+# process environment rather than a `ConfigService`: a `Surface`.
 figment = { workspace = true, features = ["test"] }
 # A presigned URL's `X-Amz-Date` is read back with the library and the format
 # object_store writes it with.

@@ -250,3 +250,7 @@ goes through `ConfigModule::provide_root`.
 
 **2026-10-31 — `App::new` is gone.** The keyed-set argument above reads
 against `App::builder()`, the one boot left.
+
+**2026-11-04 — `Config::defaults` is gone.** The hook the entry above names left
+with the second base (`undeclared-environment-is-production.md`, its entry of this
+date): every instance overlays its environment on `Default`.

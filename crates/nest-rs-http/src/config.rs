@@ -968,7 +968,7 @@ mod tests {
             let read = HttpConfig::resolve(None).expect("an unread variable is no refusal");
             assert_eq!(
                 format!("{read:?}"),
-                format!("{:?}", HttpConfig::defaults()),
+                format!("{:?}", HttpConfig::default()),
                 "a set value changes nothing",
             );
             let line = logs.expect_one(

@@ -110,7 +110,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `#[tokio::main]` on a binary's `main` — an app, a `migrate` or `seed` tool | `#[nest_rs::main]`, and the `tokio` line a crate carried only for it dropped (its tests keep theirs as a dev-dependency) |
    | `let _environment = Environment::init();` on `main`'s first line | delete the line and its `use`: `#[nest_rs::main]` publishes the `.env` cascade before `main` runs; a binary without it calls `nest_rs::config::load_cascade(dir, Environment::from_env())` first thing |
    | `Environment::default()` or `Environment::from_env()` expected to be `Development` when `<PREFIX>_ENV` is unset | `Production`; branch on `Environment::declared()` to tell an undeclared process apart, or on `is_deployed()` for a development convenience |
-   | `!matches!(Environment::from_env(), Environment::Production \| Environment::Staging)` in a `Config::defaults()` of your own | `!Environment::from_env().is_deployed()` |
+   | `!matches!(Environment::from_env(), Environment::Production \| Environment::Staging)` in a `Config::defaults()` of your own | a `Surface` field, read with `is_open()` (step 8); `!Environment::from_env().is_deployed()` where you branch on the profile yourself |
    | a scaffolded project's URLs in `.env` | move them to `.env.development` and `.env.test`; export `<PREFIX>_ENV := "development"` in `db.just` |
    | a development or test run reaching Redis on `redis://127.0.0.1/`, or storage on `https://rustfs:9000` with the `nestrs` pair, with no variable set | name them in `.env.development` and `.env.test` — `<PREFIX>_REDIS__URL`, `<PREFIX>_STORAGE__URL`, `ENDPOINT`, `ACCESS_KEY`, `SECRET_KEY`: no profile names an address or a credential |
    | `<PREFIX>_GRAPHQL__PLAYGROUND=true`, `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION=false` or `<PREFIX>_LOG_FORMAT=text` in `.env.development` | delete the lines: a declared development or test profile serves the playground, answers introspection and writes text logs; a deployment writes JSON |
@@ -512,8 +512,8 @@ lists what the boot, a log or the wire shows when one is missed.
    imported bare to read its variables, and `for_root` takes only the value it
    pins — never `None`. A module's config is one value, pinned through
    `for_root` as a struct literal over its base: every `with_*` helper is gone. A config's
-   `Default` opens nothing in any profile — no loopback URL, no development
-   credential, no surface — while `Config::defaults()` is the profile's base,
+   `Default` is its one base — no loopback URL, no development credential, and what
+   a development run opens a `Surface` left to the profile, closed in a deployment —
    and a pinned config reads the process environment, never `.env`. A struct
    gaining fields within 7.x keeps a literal ending in `..Default::default()`
    compiling, as the [semver policy](/semver/) promises.
@@ -526,7 +526,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `ConfigModule::for_root()` first in a root's `imports` | delete it: the cascade needs no import, and the first config the boot loads registers `Environment` and says an undeclared one at `info` |
    | `HttpConfig::default().with_global_prefix(p)` (and every config `with_*`) | the field in a struct literal over `..Default::default()` |
    | `HealthConfig::default().with_probe_deadline(Duration::from_millis(400))` | `HealthConfig { probe_deadline: Duration::from_millis(400), ..Default::default() }` |
-   | `impl Config for MyConfig { fn from_env(…) }` beside `#[config(namespace = "…")]` | delete it: `#[config]` writes it, each field reading `<PREFIX>_<NAMESPACE>__<FIELD>`, its name in SCREAMING_SNAKE, through the reader its type chooses. A field your `from_env` read under another key is renamed, or its key is renamed in the deployment; a field it read with `env.json` takes `#[config(json)]`, one with `env.count` `#[config(count)]`, one it judged itself `#[config(with = your_fn)]` (`fn(&ConfigService, Field, T) -> Result<T>`); a `fn defaults()` moves to `#[config(defaults = Self::your_fn)]`. Fields that depend on each other keep the impl under `#[config(namespace = "…", from_env = "manual")]` |
+   | `impl Config for MyConfig { fn from_env(…) }` beside `#[config(namespace = "…")]` | delete it: `#[config]` writes it, each field reading `<PREFIX>_<NAMESPACE>__<FIELD>`, its name in SCREAMING_SNAKE, through the reader its type chooses. A field your `from_env` read under another key is renamed, or its key is renamed in the deployment; a field it read with `env.json` takes `#[config(json)]`, one with `env.count` `#[config(count)]`, one it judged itself `#[config(with = your_fn)]` (`fn(&ConfigService, Field, T) -> Result<T>`); a `fn defaults()` goes: what it set moves to `Default`, what it opened by profile to a `Surface` field, and a value that differs by profile to `.env.development` and `.env.test`. Fields that depend on each other keep the impl under `#[config(namespace = "…", from_env = "manual")]` |
    | a duration field `window_secs: u64` or `timeout_ms: Option<u64>` read through `DURATION.read(env, …)` | `window: Duration` with `#[config(bounds = WINDOW)]`, its default in `Default`; `Option<Duration>` only where `None` turns it off. The field's key takes the range's unit after it (`WINDOW_SECS`), so no variable moves |
    | `DurationBounds::secs("WINDOW_SECS", "MyConfig::window", floor, ceiling)` (or `millis`) | `DurationBounds::secs(floor, ceiling)`: the key and the path are the field's, which `#[config(bounds = …)]` binds the range to as `MyConfig::WINDOW` |
    | `Floor::UnitsOrOff(bound)` | `Floor::Units(bound)` on an `Option<Duration>` field: `0` from the environment and `None` in code are off because the field is an `Option` |
@@ -543,12 +543,16 @@ lists what the boot, a log or the wire shows when one is missed.
    | `HttpTls::from_files(cert, key)?.with_reload_secs(300)`, or `.with_reload_secs(0)` | `.with_reload(Some(Duration::from_secs(300)))`, or `.with_reload(None)` to stop the watch; a pinned `Some(Duration::ZERO)` fails the boot |
    | `HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })` — a pin of what varies by machine or by app — beside `<PREFIX>_HTTP__*` keys in `.env` files | no pin — the HTTP adapters import `HttpModule` bare — and `<PREFIX>_HTTP__PORT=3002` in the app's own `apps/<app>/.env`, read over the root's under `development` and `test`; the deployment sets it on the process. A pin takes its whole namespace off every `.env` file, and the boot names each key it shadows |
    | `RedisModule::for_root(RedisConfig { …, ..Default::default() })` relying on the loopback | `url` written in the pin, or `<PREFIX>_REDIS__URL` in the deployment: no profile holds a URL, and a pinned config reads the process environment, never `.env` |
-   | `StorageModule::for_root(StorageConfig { …, ..Default::default() })` relying on the development pair or on plain HTTP | `..StorageConfig::defaults()` for plain HTTP in development and test (with `use nest_rs::config::Config;`); the pair from the deployment's environment in every profile |
+   | `StorageModule::for_root(StorageConfig { …, ..Default::default() })` relying on the development pair | the pair from the deployment's environment in every profile; plain HTTP stays open in development and test over `..Default::default()` |
    | `GraphqlConfig { emit_sdl, schema_path, .. }`, `OpenApiConfig { emit_document, document_path, .. }` | `emit` and `emit_path` on both; a relative `emit_path` is resolved against the app crate's directory |
    | `GraphqlConfig { disable_introspection: false, .. }` | `introspection: true`: the field says what it serves, as `playground` does |
-   | `GraphqlModule::for_root(GraphqlConfig { …, ..Default::default() })` expecting the playground or introspection in development | `..GraphqlConfig::defaults()` for the profile's surfaces, or `playground: true` / `introspection: true` written in the pin |
-   | a suite asserting that the bare `GraphqlModule` answers a plain `GET` with `405`, or refuses introspection, under the test profile | pin `GraphqlModule::for_root(GraphqlConfig::default())`: the test profile opens both |
-   | `OpenApiModule::for_root(OpenApiConfig { …, ..OpenApiConfig::default() })` expecting `/api` served | `..OpenApiConfig::defaults()` to serve it in development and test only, or `enabled: true` written in the pin |
+   | `GraphqlConfig { playground: true, introspection: true, emit: true, .. }`, `OpenApiConfig { enabled: true, emit: true, .. }`, `ServerTimingConfig { enabled: true }`, `StorageConfig { allow_http: true, .. }`, and the same with `false` | `Surface::Open`, or `Surface::Closed`, from `nest_rs::config`: each field is a `Surface`, `ByProfile` in `Default`, and its variable keeps its name and reads the same booleans |
+   | a surface read as a `bool`, `config.enabled` | `config.enabled.is_open()`, resolved where it is used; an emit reads `writes()`, whose `ByProfile` opens under development alone |
+   | `#[config(namespace = "…", defaults = Self::for_profile)]`, or `fn defaults()` in an `impl Config`, setting a field by profile | a field it opened is a `Surface`, `ByProfile` in `Default`, and the code using it asks `is_open()`; a value that differs by profile and opens nothing (a pool size, a level) goes in `.env.development` and `.env.test`, never in a `Default` reading the profile; delete the function and the key |
+   | `..GraphqlConfig::defaults()`, `..StorageConfig::defaults()`, any `..T::defaults()` or `C::defaults()` | `..Default::default()`, `C::default()`: a config has one base. Drop `use nest_rs::config::Config;` if it was there for that |
+   | `GraphqlModule::for_root(GraphqlConfig { …, ..Default::default() })` expecting the playground or introspection in development | nothing to change: a pin closes nothing it does not name |
+   | a suite asserting that `GraphqlModule`, bare or pinned over `..Default::default()`, answers a plain `GET` with `405`, or refuses introspection, under the test profile | pin `playground: Surface::Closed` or `introspection: Surface::Closed`: the test profile opens both |
+   | `OpenApiModule::for_root(OpenApiConfig { …, ..OpenApiConfig::default() })` expecting `/api` served | served in development and test only; `enabled: Surface::Open` written in the pin opens it everywhere |
    | an `HttpConfig`, `StorageConfig`, `AuthnConfig`, `GraphqlConfig`, `WsConfig`, `McpConfig`, `OAuthClientConfig` or `OpenTelemetryConfig` literal written out whole | the same, ending in `..Default::default()` — each gained fields (`shutdown_timeout`; `operation_timeout`, `read_timeout`, `tls`; `jwks_uri`, `algorithms`, `tls`; the graphql-ws bounds; `message_timeout`, `connect_timeout`, `disconnect_timeout`; `operation_timeout`, `max_concurrent_sessions`, `session_idle_timeout`; `tls`) |
    | `McpModule::for_root(McpOptions { server: Some(identity), .. })` | `McpModule::for_root(identity)` |
    | `McpModule::for_root(McpOptions { config: Some(cfg), server: Some(identity) })` | `McpModule::for_root((identity, cfg))` — the declaration first, the config last; `McpAccess::Public` leads when the app opens the endpoint, `(McpAccess::Public, identity, cfg)` |
@@ -558,7 +562,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | `setting.shown()` in a refusal of your own | `setting.refuse("<what was expected>")` — the variable is named, the value never |
    | `OpenTelemetryConfig::from_env(name)` returning `Result<_, ConfigError>` | it returns `Result<_, OpenTelemetryError>`; a `ConfigError` of its own variables is inside `OpenTelemetryError::Config` |
    | `Err(OpenTelemetryError::InvalidLogFilter { value, .. })` | `Err(OpenTelemetryError::LogSettings(error))` — it names the variable or `OpenTelemetryConfig::log_filter`, never the directive |
-   | `LogFormat::resolve(raw)` | `LogSettings::from_env()?.format`, or `LogFormat::parse` with `LogFormat::by_profile` |
+   | `LogFormat::resolve(raw)` | `LogSettings::from_env()?.format`, or `LogFormat::parse` with `LogFormat::ByProfile`; what comes back may be `ByProfile`, so ask it `writes_json()`, never `== LogFormat::Json` |
+   | `LogFormat::by_profile()` | `LogFormat::ByProfile`, which `LogFormat::default()` now is, resolved where the console is built; `LogFormat::by_profile() == LogFormat::Json` is `LogFormat::ByProfile.writes_json()` |
    | `tracing_subscriber::fmt().with_env_filter(…).with_writer(ConsoleWriter::get()).init()` in a binary with no `App` | `nest_rs::core::logging::install_console(&LogSettings::from_env()?)` |
    | `nest_rs::config::crypto_provider()` | nothing to call: the framework installs the provider its clients and listeners use |
    | `let opts = config.connect_options();` | `let opts = config.connect_options()?;`, refused for an empty URL, an unverified `sslmode` or a connect budget out of range |
@@ -1625,6 +1630,18 @@ lists what the boot, a log or the wire shows when one is missed.
   files `no environment declared; running as production`, and each development
   convenience it relied on is refused naming its variable
   (`<PREFIX>_STORAGE__ALLOW_HTTP`, a loopback `http` redirect or resource).
+- **A config still naming the second base** fails to compile: `..T::defaults()` has no
+  such function, `#[config(defaults = …)]` is an ``unknown #[config] argument``, a
+  `fn defaults()` in an `impl Config` is no member of the trait, and a surface written as a
+  `bool` is a type mismatch against `Surface`. Production's behaviour does not move, but a
+  pin over `..Default::default()` under `development` or `test` now keeps what the profile
+  opens, so a suite asserting a surface closed there fails until it writes
+  `Surface::Closed`.
+- **A program reading a log format back** compiles and takes the other branch:
+  `LogSettings::from_env()?.format` and `OpenTelemetryConfig::from_env()?.log_format` are
+  `LogFormat::ByProfile` when `<PREFIX>_LOG_FORMAT` is unset, so `format == LogFormat::Json`,
+  or a `match` with its `_` arm, takes the text branch in production, with no error. The
+  question to ask is `format.writes_json()`.
 - **A run relying on the framework's development Redis or store** — the
   loopback, the dev container's RustFS — fails its boot naming
   `<PREFIX>_REDIS__URL`, `<PREFIX>_STORAGE__URL` or

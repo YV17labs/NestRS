@@ -130,7 +130,7 @@ let source = Arc::new(MapSource::from_iter([
     (var_name("seaorm", "MAX_CONNECTIONS"), "5"),
 ]));
 let env = ConfigService::with_source("seaorm", source);
-let cfg = SeaOrmConfig::from_env(&env, SeaOrmConfig::defaults()).unwrap();
+let cfg = SeaOrmConfig::from_env(&env, SeaOrmConfig::default()).unwrap();
 
 let app = TestApp::builder()
     .module::<AppModule>()
@@ -188,7 +188,7 @@ mod tests {
             ],
         );
 
-        let cfg = SignInConfig::from_env(&env, SignInConfig::defaults()).expect("parses");
+        let cfg = SignInConfig::from_env(&env, SignInConfig::default()).expect("parses");
 
         assert_eq!(cfg.resources, [RESOURCE, "https://mcp.example.com"]);
         assert_eq!(cfg.default_org_id, org);

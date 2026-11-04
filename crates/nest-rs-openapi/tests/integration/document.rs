@@ -1,5 +1,6 @@
 //! Covers `src/document.rs` — what the served document says about a version.
 
+use nest_rs_config::Surface;
 use nest_rs_core::module;
 use nest_rs_http::StatusCode;
 use nest_rs_http::{
@@ -75,11 +76,9 @@ impl HealthController {
     }
 }
 
-// Pinned: the unpinned `enabled` default depends on the environment profile.
 fn openapi() -> OpenApiSetup {
     OpenApiModule::for_root(OpenApiConfig {
-        enabled: true,
-        emit: false,
+        enabled: Surface::Open,
         ..OpenApiConfig::default()
     })
 }

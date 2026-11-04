@@ -28,7 +28,7 @@ struct ReportsService {
     imports = [StorageModule::for_root(StorageConfig {
         url: "s3://unreached".into(),
         endpoint: Some("http://127.0.0.1:9".into()),
-        allow_http: true,
+        allow_http: nest_rs_config::Surface::Open,
         access_key: "AKIAUNREACHED".into(),
         secret_key: "unreached-secret".into(),
         operation_timeout: Duration::from_secs(1),

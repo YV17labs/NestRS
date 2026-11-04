@@ -9,7 +9,7 @@ use crate::subscription::SubscriptionEndpoint;
 /// graphql-ws clients point their socket at the URL they POST to.
 pub(crate) struct GetEndpoint<E> {
     subscriptions: SubscriptionEndpoint<E>,
-    /// Rendered once at mount; `None` when the playground is off (the default).
+    /// Rendered once at mount; `None` when the playground is closed.
     playground: Option<Bytes>,
 }
 

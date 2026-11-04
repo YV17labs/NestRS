@@ -15,7 +15,7 @@ pub(crate) const FIELD: Grammar =
 
 /// A struct's key written on a field is not misspelled: it is told whose it is.
 fn the_structs_key(key: &str) -> Option<String> {
-    ["namespace", "validate", "from_env", "defaults"]
+    ["namespace", "validate", "from_env"]
         .contains(&key)
         .then(|| format!("#[config] `{key}` is the struct's: write it on `#[config(…)]` above it"))
 }
@@ -181,11 +181,10 @@ fn take_reader(attrs: &mut Vec<syn::Attribute>) -> syn::Result<Reader> {
     Ok(reader)
 }
 
-/// `impl Config`, its `from_env` the overlay of every field, and `defaults`
-/// when the struct named one; then, per field read through its binding — a
-/// bounded one's `BoundedSetting`, a `with` one's `Field` — that binding, an
-/// associated constant named for the field.
-pub(crate) fn overlay(item: &ItemStruct, fields: &Fields, defaults: Option<&Path>) -> TokenStream2 {
+/// `impl Config`, its `from_env` the overlay of every field; then, per field
+/// read through its binding — a bounded one's `BoundedSetting`, a `with` one's
+/// `Field` — that binding, an associated constant named for the field.
+pub(crate) fn overlay(item: &ItemStruct, fields: &Fields) -> TokenStream2 {
     let name = &item.ident;
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     // Mixed-site: a field named `env` or `base` cannot shadow them.
@@ -302,13 +301,6 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields, defaults: Option<&Path
     } else {
         quote! { ::core::result::Result::Ok(Self { #(#reads,)* }) }
     };
-    let defaults = defaults.map(|path| {
-        quote_spanned! {path.span()=>
-            fn defaults() -> Self {
-                #path()
-            }
-        }
-    });
     quote! {
         impl #impl_generics ::nest_rs_config::Config for #name #ty_generics #where_clause {
             fn from_env(
@@ -319,8 +311,6 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields, defaults: Option<&Path
             }
 
             #whole
-
-            #defaults
         }
 
         #bindings

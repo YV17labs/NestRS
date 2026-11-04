@@ -80,7 +80,7 @@ impl GadgetsResolver {
 
 #[module(imports = [GraphqlModule::for_root(GraphqlConfig {
     federation: true,
-    introspection: true,
+    introspection: nest_rs_config::Surface::Open,
     ..GraphqlConfig::default()
 })], providers = [GadgetsResolver, Witness])]
 struct GadgetsModule;

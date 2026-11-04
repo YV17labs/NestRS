@@ -65,7 +65,7 @@ fn snapshot_path(stem: &str) -> PathBuf {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        emit: true,
+        emit: nest_rs_config::Surface::Open,
         emit_path: snapshot_path("merged"),
         ..GraphqlConfig::default()
     }),
@@ -136,7 +136,7 @@ fn unwritable_path() -> PathBuf {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        emit: true,
+        emit: nest_rs_config::Surface::Open,
         emit_path: unwritable_path(),
         ..GraphqlConfig::default()
     }),
@@ -218,7 +218,7 @@ impl GadgetResolver {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        emit: true,
+        emit: nest_rs_config::Surface::Open,
         emit_path: snapshot_path("subgraph"),
         federation: true,
         ..GraphqlConfig::default()
@@ -307,7 +307,7 @@ fn relative_emit_path() -> PathBuf {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        emit: true,
+        emit: nest_rs_config::Surface::Open,
         emit_path: relative_emit_path(),
         ..GraphqlConfig::default()
     }),

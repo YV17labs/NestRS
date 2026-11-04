@@ -50,3 +50,14 @@ is served — a set `EMIT` with the documentation off writes nothing, and the
 boot says so at `warn`. Writing it anyway was refused: the document is built
 from the assembled container when the endpoint mounts, and no other boot step
 both sees that container and may write a file.
+
+**2026-11-04 — the opening is a `Surface`, and `defaults()` is gone.** Agreed by
+the owner on 2026-10-31; the why is
+`undeclared-environment-is-production.md`'s entry of this date.
+`OpenApiConfig`'s `enabled` and `emit`, and GraphQL's `playground`,
+`introspection` and `emit`, are `nest_rs::config::Surface` fields, `ByProfile`
+in `Default`, so a pin over `..Default::default()` keeps the documentation a
+development surface and serves it in no deployment. `GraphqlConfig::defaults()`,
+named above, went with the hook. Each key still reads a boolean, and a deployment
+opening a surface is still honoured and said at `warn`: what this decision settled
+for production has not moved.

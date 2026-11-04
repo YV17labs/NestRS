@@ -25,7 +25,7 @@ struct AppWithLoose;
 
 // Linked into this binary, but unreachable here.
 #[module(imports = [GraphqlModule::for_root(GraphqlConfig {
-    introspection: true,
+    introspection: nest_rs_config::Surface::Open,
     ..GraphqlConfig::default()
 })])]
 struct AppWithoutLoose;
@@ -402,7 +402,7 @@ struct OracleFeatureModule;
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        introspection: true,
+        introspection: nest_rs_config::Surface::Open,
         ..GraphqlConfig::default()
     }),
     OracleFeatureModule,

@@ -2,6 +2,7 @@
 //! playground, or a method refusal naming what the path serves — and which
 //! development surfaces the bare import opens under the suites' profile.
 
+use nest_rs_config::Surface;
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_http::{Method, StatusCode, header};
@@ -19,7 +20,13 @@ impl PingResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(GraphqlConfig::default())], providers = [PingResolver])]
+#[module(
+    imports = [GraphqlModule::for_root(GraphqlConfig {
+        playground: Surface::Closed,
+        ..GraphqlConfig::default()
+    })],
+    providers = [PingResolver],
+)]
 struct NoPlaygroundModule;
 
 #[module(imports = [GraphqlModule], providers = [PingResolver])]
@@ -27,7 +34,7 @@ struct BareModule;
 
 #[module(
     imports = [GraphqlModule::for_root(GraphqlConfig {
-        playground: true,
+        playground: Surface::Open,
         ..GraphqlConfig::default()
     })],
     providers = [PingResolver],
@@ -70,11 +77,32 @@ async fn a_plain_get_without_the_playground_is_405_naming_post() {
     }
 }
 
-/// The suites declare the test profile, whose `Config::defaults()` opens both
-/// development surfaces on the bare import, as it opens the documentation.
+/// What the configuration page teaches: one field pinned, the rest `Default`.
+#[module(
+    imports = [GraphqlModule::for_root(GraphqlConfig {
+        max_depth: Some(12),
+        ..GraphqlConfig::default()
+    })],
+    providers = [PingResolver],
+)]
+struct DepthPinnedModule;
+
+/// The suites declare the test profile, which opens both development surfaces
+/// on the bare import, as it opens the documentation.
 #[tokio::test]
 async fn the_bare_import_serves_the_playground_and_introspection_in_the_test_profile() {
-    let app = TestApp::for_module::<BareModule>().await.expect("boots");
+    serves_both_surfaces::<BareModule>().await;
+}
+
+/// A pin of another field leaves the surfaces to the profile: it closes
+/// nothing it does not name.
+#[tokio::test]
+async fn a_pin_of_another_field_keeps_the_development_surfaces_in_the_test_profile() {
+    serves_both_surfaces::<DepthPinnedModule>().await;
+}
+
+async fn serves_both_surfaces<M: nest_rs_core::Module + 'static>() {
+    let app = TestApp::for_module::<M>().await.expect("boots");
 
     let page = app.http().get("/graphql").send().await;
     page.assert_status_is_ok();

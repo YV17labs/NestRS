@@ -27,7 +27,8 @@ const VERSIONED_SPEC_PATTERN: &str = "/api-json/{*version}";
 ///
 /// Both endpoints are public, so they are served in a development or test
 /// profile alone until `<PREFIX>_OPENAPI__ENABLED=true` (or a pinned
-/// `OpenApiConfig { enabled: true, .. }`) opens them — see [`OpenApiConfig`].
+/// `OpenApiConfig { enabled: Surface::Open, .. }`) opens them — see
+/// [`OpenApiConfig`].
 /// A bare `OpenApiModule` import beside the app's `for_root` mounts nothing
 /// twice. It imports [`HttpModule`] bare, so the documentation is served
 /// wherever it is imported.
@@ -63,14 +64,14 @@ impl Module for OpenApiModule {
 
 fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuilder {
     options.warn_when_open();
-    if !options.enabled {
+    if !options.enabled.is_open() {
         tracing::info!(
             target: nest_rs_http::target::ROUTES,
             docs_path = DOCS_PATH,
             spec_path = SPEC_PATH,
             "openapi documentation disabled",
         );
-        if options.emit {
+        if options.emit.writes() {
             tracing::warn!(
                 target: crate::TARGET,
                 path = %nest_rs_core::__private::in_app_dir(&options.emit_path).display(),
@@ -84,7 +85,7 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
             // One ledger for every document, so a route collision is reported once.
             let mut reported = Reported::default();
             let default = spec(container, &options, None, &mut reported);
-            if options.emit {
+            if options.emit.writes() {
                 let dest = nest_rs_core::__private::in_app_dir(&options.emit_path);
                 let contents = format!("{default}\n");
                 tokio::task::spawn_blocking(move || match std::fs::write(&dest, &contents) {
@@ -155,10 +156,11 @@ fn document_path(version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nest_rs_config::Surface;
     use nest_rs_core::{App, Discovery, LateFactoryError, module};
     use nest_rs_http::HttpConfig;
 
-    fn mount_count(enabled: bool) -> usize {
+    fn mount_count(enabled: Surface) -> usize {
         let builder = register(
             ContainerBuilder::default(),
             OpenApiConfig {
@@ -197,7 +199,7 @@ mod tests {
     #[test]
     fn enabled_self_mounts_the_documentation_edge() {
         assert_eq!(
-            mount_count(true),
+            mount_count(Surface::Open),
             1,
             "enabled must self-mount the docs edge"
         );
@@ -209,7 +211,8 @@ mod tests {
         let builder = register(
             ContainerBuilder::default(),
             OpenApiConfig {
-                emit: true,
+                enabled: Surface::Closed,
+                emit: Surface::Open,
                 ..OpenApiConfig::default()
             },
         );
@@ -226,7 +229,14 @@ mod tests {
         assert_eq!(event.field("path").as_deref(), Some("openapi.json"));
 
         let silent = nest_rs_testing::LogCapture::install();
-        register(ContainerBuilder::default(), OpenApiConfig::default());
+        register(
+            ContainerBuilder::default(),
+            OpenApiConfig {
+                enabled: Surface::Closed,
+                emit: Surface::Closed,
+                ..OpenApiConfig::default()
+            },
+        );
         assert!(
             silent
                 .find(
@@ -241,7 +251,7 @@ mod tests {
     #[test]
     fn disabled_self_mounts_nothing() {
         assert_eq!(
-            mount_count(false),
+            mount_count(Surface::Closed),
             0,
             "disabled must mount neither /api nor /api-json — no public schema",
         );

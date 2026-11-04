@@ -6,7 +6,7 @@ use nest_rs::config::config;
 #[config(namespace = "kiln")]
 #[derive(Clone, Default)]
 struct KilnConfig {
-    #[config(defaults = Self::for_profile)]
+    #[config(from_env = "manual")]
     port: u16,
 }
 

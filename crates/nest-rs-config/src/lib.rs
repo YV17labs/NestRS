@@ -85,8 +85,7 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 /// structured value; `count` reads `0` as unlimited, `None`; `with = path`
 /// names a `fn(&ConfigService, Field, T) -> Result<T>`, handed the field's key
 /// and path as the associated [`Field`] named for it, which a check of a value
-/// set in code reads too. On the struct, `defaults = path` names the
-/// profile-aware [`Config::defaults`], `validate = "manual"` leaves the
+/// set in code reads too. On the struct, `validate = "manual"` leaves the
 /// `Validate` derive to a hand-written impl, and `from_env = "manual"` the
 /// whole `impl Config`, for an overlay whose fields depend on each other.
 ///

@@ -1,5 +1,5 @@
-error: #[config] `defaults` is the struct's: write it on `#[config(…)]` above it
+error: #[config] `from_env` is the struct's: write it on `#[config(…)]` above it
  --> tests/integration/diagnostics/config/config_struct_key_on_a_field.rs:9:14
   |
-9 |     #[config(defaults = Self::for_profile)]
+9 |     #[config(from_env = "manual")]
   |              ^^^^^^^^

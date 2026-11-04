@@ -91,7 +91,7 @@ impl Discoverable for ServerTiming {
             Err(refusal) => return builder.refuse(refusal),
         };
         config.warn_when_open();
-        if !config.enabled {
+        if !config.enabled.is_open() {
             return builder;
         }
         register_interceptor::<Self>(builder.provide(ServerTiming), InterceptorStage::Unit)

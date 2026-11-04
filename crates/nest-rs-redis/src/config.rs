@@ -126,19 +126,11 @@ mod tests {
     }
 
     #[test]
-    fn no_profile_names_a_redis_of_its_own() {
-        for profile in ["development", "test", "staging", "production", ""] {
-            let d = in_profile(profile, <RedisConfig as Config>::defaults);
-            assert!(
-                d.url.expose_secret().is_empty(),
-                "an address is the profile file's, never the framework's: {profile:?}"
-            );
-            assert_eq!(
-                d.connect_timeout,
-                RedisConfig::default().connect_timeout,
-                "{profile:?}"
-            );
-        }
+    fn the_default_names_no_redis() {
+        assert!(
+            RedisConfig::default().url.expose_secret().is_empty(),
+            "an address is the profile file's, never the framework's"
+        );
     }
 
     #[test]
@@ -174,7 +166,7 @@ mod tests {
             let refused = in_profile(profile, || {
                 RedisConfig::from_env(
                     &ConfigService::with_vars(namespace, []),
-                    base.unwrap_or_else(RedisConfig::defaults),
+                    base.unwrap_or_default(),
                 )
             })
             .expect_err("nothing names a Redis to dial")
@@ -339,7 +331,7 @@ mod tests {
             let cfg = in_profile(profile, || {
                 RedisConfig::from_env(
                     &ConfigService::with_vars("redis", [("URL", "redis://redis:6379/1")]),
-                    RedisConfig::defaults(),
+                    RedisConfig::default(),
                 )
             })
             .expect("set ⇒ ok");

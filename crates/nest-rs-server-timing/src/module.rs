@@ -9,13 +9,14 @@ use crate::interceptor::ServerTiming;
 /// test profiles, and elsewhere once [`ServerTimingConfig::enabled`] says so.
 ///
 /// ```
+/// use nest_rs_config::Surface;
 /// use nest_rs_core::module;
 /// use nest_rs_server_timing::{ServerTimingConfig, ServerTimingModule};
 ///
 /// #[module(imports = [ServerTimingModule])]
 /// struct ApiModule;
 ///
-/// #[module(imports = [ServerTimingModule::for_root(ServerTimingConfig { enabled: true })])]
+/// #[module(imports = [ServerTimingModule::for_root(ServerTimingConfig { enabled: Surface::Open })])]
 /// struct EverywhereModule;
 /// ```
 #[module(

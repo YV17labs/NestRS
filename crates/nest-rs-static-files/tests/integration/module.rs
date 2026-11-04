@@ -233,7 +233,7 @@ async fn the_files_sit_outside_the_global_prefix() {
 }
 
 #[module(imports = [
-    OpenApiModule::for_root(OpenApiConfig { enabled: true, ..Default::default() }),
+    OpenApiModule::for_root(OpenApiConfig { enabled: nest_rs_config::Surface::Open, ..Default::default() }),
     StaticFilesModule,
 ])]
 struct BesideOpenApiApp;

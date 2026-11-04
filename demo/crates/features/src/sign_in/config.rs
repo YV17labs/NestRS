@@ -159,7 +159,7 @@ mod tests {
             ],
         );
 
-        let cfg = SignInConfig::from_env(&env, SignInConfig::defaults()).expect("parses");
+        let cfg = SignInConfig::from_env(&env, SignInConfig::default()).expect("parses");
 
         assert_eq!(cfg.resources, [RESOURCE, "https://mcp.example.com"]);
         assert_eq!(cfg.default_org_id, org);

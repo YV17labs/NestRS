@@ -238,7 +238,7 @@ select it.
 
 For tooling, commit a `schema.graphql` alongside the binary. The
 framework writes one beside the app's `Cargo.toml` as a side effect of every
-development run — the profile turns `<PREFIX>_GRAPHQL__EMIT` on, and nothing
+development run — the profile opens `<PREFIX>_GRAPHQL__EMIT`, and nothing
 else does:
 
 ```bash frame="terminal"

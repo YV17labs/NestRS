@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use nest_rs_config::{
     Bound, BoundedSetting, ClientTls, Config, ConfigError, ConfigField, ConfigService,
-    DurationBounds, Environment, Field, Floor, Namespaced, Setting, config, endpoint_shown,
+    DurationBounds, Environment, Field, Floor, Namespaced, Setting, Surface, config,
+    endpoint_shown,
 };
 use nest_rs_core::Secret;
 
@@ -20,13 +21,10 @@ const DEFAULT_READ_TIMEOUT_SECS: u64 = 30;
 /// `<PREFIX>_STORAGE__*` keys: [`url`](Self::url) names the store, and its
 /// scheme picks the backend — `s3` or `memory`.
 ///
-/// `Default` is the production-safe value: no store named, no credential,
-/// plain HTTP refused, AWS's own endpoint. A declared development or test
-/// profile's [`Config::defaults`] allows plain HTTP and names no store either:
-/// the store, its endpoint and its pair are the deployment's, or the profile's
-/// `.env` file's, in every profile. A config pinned over `..Default::default()`
-/// refuses plain HTTP in any profile, and one pinned over
-/// `..StorageConfig::defaults()` allows it in development and test. The S3
+/// `Default` is the production-safe value: no store named, no credential, AWS's
+/// own endpoint, and plain HTTP left to the profile, allowed under a declared
+/// development or test profile alone. The store, its endpoint and its pair are
+/// the deployment's, or the profile's `.env` file's, in every profile. The S3
 /// settings are read for an `s3://` store alone: set beside `memory:///`, the
 /// boot refuses them.
 #[config(namespace = "storage", from_env = "manual")]
@@ -52,9 +50,9 @@ pub struct StorageConfig {
     /// S3 only: the secret access key requests are signed with.
     pub secret_key: Secret<String>,
     /// S3 only: allow reaching the endpoint over plain `http://`
-    /// (`<PREFIX>_STORAGE__ALLOW_HTTP`): `false` by default, and `true` only in
-    /// a declared development or test profile's [`Config::defaults`].
-    pub allow_http: bool,
+    /// (`<PREFIX>_STORAGE__ALLOW_HTTP`). `Default` leaves it to the profile:
+    /// allowed under a declared development or test profile alone.
+    pub allow_http: Surface,
     /// The most a call waits for the store's answer, every retry included,
     /// and the boot for its proof; a download's body is held by
     /// [`read_timeout`](Self::read_timeout) instead. Read from
@@ -103,7 +101,7 @@ impl Default for StorageConfig {
             force_path_style: true,
             access_key: Secret::default(),
             secret_key: Secret::default(),
-            allow_http: false,
+            allow_http: Surface::ByProfile,
             operation_timeout: Duration::from_secs(DEFAULT_OPERATION_TIMEOUT_SECS),
             read_timeout: Duration::from_secs(DEFAULT_READ_TIMEOUT_SECS),
             tls: ClientTls::default(),
@@ -112,15 +110,6 @@ impl Default for StorageConfig {
 }
 
 impl Config for StorageConfig {
-    /// In a declared development or test profile, plain HTTP over `Default`.
-    /// Here rather than in `from_env`, so it never rewrites a pinned struct.
-    fn defaults() -> Self {
-        Self {
-            allow_http: !Environment::from_env().is_deployed(),
-            ..Self::default()
-        }
-    }
-
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         let d = base;
         let url = env.setting("URL")?;
@@ -141,11 +130,16 @@ impl Config for StorageConfig {
                 ..d
             });
         }
-        let allow_http = env.flag("ALLOW_HTTP", d.allow_http)?;
+        let allow_http = Surface::overlay(env, "ALLOW_HTTP", d.allow_http)?;
         let access_key = env.setting("ACCESS_KEY")?;
         let secret_key = env.setting("SECRET_KEY")?;
         refuse_half_a_credential(env, &d, access_key.as_ref(), secret_key.as_ref())?;
-        let endpoint = resolve_endpoint(env, env.setting("ENDPOINT")?, d.endpoint, allow_http)?;
+        let endpoint = resolve_endpoint(
+            env,
+            env.setting("ENDPOINT")?,
+            d.endpoint,
+            allow_http.is_open(),
+        )?;
         let tls = ClientTls::overlay(env, "TLS", d.tls)?;
         refuse_tls(env, endpoint.as_deref(), &tls)?;
         Ok(Self {
@@ -285,10 +279,10 @@ fn resolve_endpoint(
     let allow_http_var = env.var_name("ALLOW_HTTP");
     let reason = |endpoint: &str| {
         format!(
-            "the plain-http endpoint {} is refused because {allow_http_var} is false (its \
-             value in `StorageConfig::default()`, and in `StorageConfig::defaults()` outside a \
-             declared development or test profile) — credentials and presigned URLs would travel \
-             unencrypted; use an https:// endpoint, or set {allow_http_var}=true to opt in",
+            "the plain-http endpoint {} is refused because {allow_http_var} is false, or unset \
+             outside a declared development or test profile — credentials and presigned URLs \
+             would travel unencrypted; use an https:// endpoint, or set {allow_http_var}=true to \
+             opt in",
             endpoint_shown(endpoint)
         )
     };
@@ -390,19 +384,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_struct_default_opens_nothing_in_any_profile() {
+    fn the_struct_default_names_nothing_and_leaves_plain_http_to_the_profile() {
         let d = StorageConfig::default();
-        assert!(
-            !d.allow_http,
-            "plain HTTP is opened by the profile or in sight"
-        );
+        assert_eq!(d.allow_http, Surface::ByProfile);
         assert!(
             d.access_key.expose_secret().is_empty() && d.secret_key.expose_secret().is_empty(),
             "a pair anyone can read is no credential"
         );
         assert!(
             d.url.is_empty() && d.endpoint.is_none(),
-            "no development server is named outside a declared profile"
+            "a store and its pair are the profile file's, never the framework's"
         );
     }
 
@@ -411,27 +402,19 @@ mod tests {
         clippy::result_large_err,
         reason = "figment::Jail fixes the closure's error type"
     )]
-    fn a_development_profile_opens_plain_http_and_names_no_store() {
+    fn plain_http_by_profile_opens_under_development_and_test_alone() {
         figment::Jail::expect_with(|jail| {
-            for profile in ["development", "test"] {
+            for (profile, open) in [
+                ("development", true),
+                ("test", true),
+                ("staging", false),
+                ("production", false),
+                ("", false),
+            ] {
                 jail.set_env(Environment::var_name(), profile);
-                let d = <StorageConfig as Config>::defaults();
-                assert!(d.allow_http, "{profile}");
-                assert!(
-                    d.url.is_empty()
-                        && d.endpoint.is_none()
-                        && d.access_key.expose_secret().is_empty()
-                        && d.secret_key.expose_secret().is_empty(),
-                    "a store and its pair are the profile file's, never the framework's: \
-                     {profile}"
-                );
-            }
-            for profile in ["staging", "production", ""] {
-                jail.set_env(Environment::var_name(), profile);
-                let d = <StorageConfig as Config>::defaults();
                 assert_eq!(
-                    format!("{d:?}"),
-                    format!("{:?}", StorageConfig::default()),
+                    StorageConfig::default().allow_http.is_open(),
+                    open,
                     "{profile:?}"
                 );
             }
@@ -444,19 +427,18 @@ mod tests {
         clippy::result_large_err,
         reason = "figment::Jail fixes the closure's error type"
     )]
-    fn a_pin_over_the_profiles_defaults_takes_its_pair_from_the_deployment_in_every_profile() {
+    fn a_pin_over_the_struct_default_takes_its_pair_from_the_deployment_in_every_profile() {
         figment::Jail::expect_with(|jail| {
-            let pin = || StorageConfig {
-                url: "s3://acme-media".into(),
-                ..StorageConfig::defaults()
-            };
             for profile in ["development", "test", "production"] {
                 jail.set_env(Environment::var_name(), profile);
-                let refused = StorageConfig::from_env(&unset(), pin())
+                let refused = StorageConfig::from_env(&unset(), s3())
                     .expect_err("no profile has a pair to give")
                     .to_string();
                 assert!(
-                    refused.contains(&nest_rs_config::var_name("storage", "ACCESS_KEY")),
+                    refused.starts_with(&format!(
+                        "invalid value for {}",
+                        nest_rs_config::var_name("storage", "ACCESS_KEY")
+                    )) && refused.contains("no default holds in any profile"),
                     "{profile}: {refused}"
                 );
             }
@@ -465,41 +447,67 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_http_endpoint_pinned_over_the_struct_default_is_refused_naming_the_opt_in() {
-        let refused = StorageConfig::from_env(
-            &unset(),
-            StorageConfig {
-                endpoint: Some("http://minio:9000".into()),
-                ..s3()
-            },
-        )
-        .expect_err("the struct default does not open plain HTTP")
-        .to_string();
-        assert!(
-            refused.contains(&nest_rs_config::var_name("storage", "ALLOW_HTTP")),
-            "{refused}"
-        );
-        assert!(
-            refused.contains(
-                "its value in `StorageConfig::default()`, and in `StorageConfig::defaults()` \
-                 outside a declared development or test profile"
-            ),
-            "the sentence says where the false comes from, whatever the profile: {refused}"
-        );
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_plain_http_endpoint_over_the_struct_default_in_a_deployment_is_refused_naming_the_opt_in()
+    {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(Environment::var_name(), "production");
+            let refused = StorageConfig::from_env(
+                &unset(),
+                StorageConfig {
+                    endpoint: Some("http://minio:9000".into()),
+                    ..s3()
+                },
+            )
+            .expect_err("a deployment does not open plain HTTP unless it says so")
+            .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("storage", "ALLOW_HTTP")),
+                "{refused}"
+            );
+            assert!(
+                refused
+                    .contains("is false, or unset outside a declared development or test profile"),
+                "the sentence says where the refusal comes from, whatever the profile: {refused}"
+            );
+            Ok(())
+        });
     }
 
+    /// A pin of the store leaves plain HTTP to the profile: open where a
+    /// development or test profile is declared, refused everywhere else.
     #[test]
-    fn a_pin_over_the_struct_default_takes_its_pair_from_the_deployment() {
-        let refused = StorageConfig::from_env(&unset(), s3())
-            .expect_err("the struct default holds no pair")
-            .to_string();
-        assert!(
-            refused.starts_with(&format!(
-                "invalid value for {}",
-                nest_rs_config::var_name("storage", "ACCESS_KEY")
-            )) && refused.contains("no default holds in any profile"),
-            "{refused}"
-        );
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_plain_http_endpoint_over_the_struct_default_follows_the_profile() {
+        figment::Jail::expect_with(|jail| {
+            let pin = || StorageConfig {
+                endpoint: Some("http://minio:9000".into()),
+                access_key: "key".into(),
+                secret_key: "secret".into(),
+                ..s3()
+            };
+            for (profile, opens) in [
+                ("development", true),
+                ("test", true),
+                ("staging", false),
+                ("production", false),
+                ("", false),
+            ] {
+                jail.set_env(Environment::var_name(), profile);
+                assert_eq!(
+                    StorageConfig::from_env(&unset(), pin()).is_ok(),
+                    opens,
+                    "{profile:?}"
+                );
+            }
+            Ok(())
+        });
     }
 
     fn unset() -> ConfigService {

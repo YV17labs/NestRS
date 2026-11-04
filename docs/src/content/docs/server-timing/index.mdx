@@ -138,18 +138,19 @@ dashboard that reads the header needs that line in its deployment.
 The same switch can be pinned in code, as `ServerTimingConfig`'s one field:
 
 ```rust title="apps/api/src/module.rs"
+use nest_rs::config::Surface;
 use nest_rs::core::module;
 use nest_rs::server_timing::{ServerTimingConfig, ServerTimingModule};
 
-#[module(imports = [ServerTimingModule::for_root(ServerTimingConfig { enabled: true })])]
+#[module(imports = [ServerTimingModule::for_root(ServerTimingConfig { enabled: Surface::Open })])]
 pub struct ApiModule;
 ```
 
 The variable still outranks the pin, field by field, so
 `<PREFIX>_SERVER_TIMING__ENABLED=false` closes a pinned header in one
 deployment.
-A pin over `ServerTimingConfig::default()` stamps nothing in any profile: the
-struct's default is the production one.
+A pin over `ServerTimingConfig::default()` leaves the header to the profile: on
+in development and test, off in a deployment.
 
 ## Reference
 

@@ -123,7 +123,7 @@ framework half.
 **A module is imported bare to read its environment, and `for_root` only
 pins.** Every module owning a `#[config]` implements `Module` by type, so its
 bare import (`HttpModule`, `RedisModule::<Cache>` for a named instance) queues
-the environment over `C::defaults()` and does its whole wiring; a module is
+the environment over `C::default()` and does its whole wiring; a module is
 configured in exactly one place, by exactly one value: `Module::for_root(x)`,
 where `x` carries everything the app pins about it. The `*Setup` it returns is
 opaque — no public method, no second constructor on the module type. A
@@ -234,21 +234,24 @@ arbitrates between variables or tiers.
 - **A combination of variables is the consumer's**, refused at boot in the one
   constructor every path reaches — config-driven or built in code — naming what
   is set, never settled by picking one.
-- **A `#[config]` type's `Default` is the production-safe value, and an
-  undeclared environment is production**: a development convenience — plain
-  HTTP, a public surface (the documentation, GraphQL's playground and
-  introspection, Server-Timing), a committed artifact's emit, a seed — lives
-  in `Config::defaults()`, armed only by a declared development or test
-  profile (`Environment::is_deployed` is the one test; an emit waits for
-  development alone, since parallel suites would rewrite the file), never in
-  `Default` nor by the cargo build profile, so a pin over
-  `..Default::default()` opens nothing in any profile and neither does a
-  process that forgot `<PREFIX>_ENV`. **An address or a credential is never a
-  default**, in any profile: the deployment names it, or the profile's `.env`
-  file — the scaffold's for its `compose.yml`, the demo's for the dev
-  container. The kernel's console, built before any config, reads the same
-  profile through the config crate it links (`ProfileSource`). Held by each
-  member's unit test, and review.
+- **A `#[config]` type has one base, its `Default`, which is production-safe,
+  and an undeclared environment is production**: a development convenience —
+  plain HTTP, a public surface (the documentation, GraphQL's playground and
+  introspection, Server-Timing), a committed artifact's emit, a seed — is a
+  `Surface` field, `ByProfile` in `Default`, resolved where it is used: open
+  only under a declared development or test profile (`Environment::is_deployed`
+  is the one test; an emit waits for development alone, since parallel suites
+  would rewrite the file), never by the cargo build profile, so a pin over
+  `..Default::default()` closes nothing it does not name and opens nothing in
+  any deployed or undeclared profile, where an opening is a written
+  `Surface::Open` or a set variable; and a profile read in the overlay would
+  rewrite a pin, so a written value is never touched. **An address or a
+  credential is never a default**, in any profile: the deployment names it, or
+  the profile's `.env` file — the scaffold's for its `compose.yml`, the demo's
+  for the dev container. The kernel's console, built before any config, reads
+  the same profile through the config crate it links (`ProfileSource`), and
+  `LogFormat` takes the same shape. Held by the field's type and each member's
+  unit test.
 - **A seed pins the value, never the checks**: a seeded config passes every
   bound and `validate()` before anything reads it (`Config::check`, run where
   the seed makes its factory skip), on every boot that drains factories, and

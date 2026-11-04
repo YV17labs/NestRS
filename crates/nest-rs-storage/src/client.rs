@@ -702,6 +702,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use http::StatusCode;
+    use nest_rs_config::Surface;
     use nest_rs_core::Secret;
     use object_store::ClientOptions;
     use object_store::client::{
@@ -729,7 +730,7 @@ mod tests {
     }
 
     /// An `s3://` config reaching `endpoint` with a pair of its own.
-    fn s3_at(endpoint: &str, allow_http: bool) -> StorageConfig {
+    fn s3_at(endpoint: &str, allow_http: Surface) -> StorageConfig {
         StorageConfig {
             url: "s3://bucket".into(),
             endpoint: Some(endpoint.into()),
@@ -847,7 +848,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_plaintext_endpoint_is_refused_when_http_is_disallowed_naming_the_opt_in() {
-        let Err(refused) = Storage::connect(&s3_at("http://k:s3cr3t@minio:9000", false)).await
+        let Err(refused) =
+            Storage::connect(&s3_at("http://k:s3cr3t@minio:9000", Surface::Closed)).await
         else {
             panic!("a plaintext presigned URL must never be minted");
         };
@@ -867,7 +869,7 @@ mod tests {
     #[tokio::test]
     async fn presigning_over_an_encrypted_endpoint_is_untouched() {
         // Signing is local: no server is needed.
-        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        let storage = Storage::unproved(s3_at("https://s3.example", Surface::Closed));
         let signed = storage
             .presign_get("k", Duration::from_secs(900))
             .await
@@ -885,7 +887,7 @@ mod tests {
     async fn a_presigned_key_is_addressed_under_the_urls_prefix() {
         let storage = Storage::unproved(StorageConfig {
             url: "s3://bucket/tenants/acme".into(),
-            ..s3_at("https://s3.example", false)
+            ..s3_at("https://s3.example", Surface::Closed)
         });
         let signed = storage
             .presign_put(
@@ -950,7 +952,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_presigned_url_never_lapses_before_its_expires_at_for_either_method() {
-        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        let storage = Storage::unproved(s3_at("https://s3.example", Surface::Closed));
         let expires = Duration::from_secs(900);
         let put = storage
             .presign_put("k", &SignedPut::new("image/png"), expires)
@@ -976,7 +978,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_presigned_put_binds_its_content_type_for_the_uploader_to_send() {
-        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        let storage = Storage::unproved(s3_at("https://s3.example", Surface::Closed));
         let put = storage
             .presign_put(
                 "covers/a.png",
@@ -1002,7 +1004,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_content_type_no_header_carries_is_refused_naming_the_field_never_the_value() {
-        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        let storage = Storage::unproved(s3_at("https://s3.example", Surface::Closed));
         for content_type in [
             "",
             " ",
@@ -1039,7 +1041,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_expiry_sigv4_cannot_sign_is_refused_for_either_method() {
-        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        let storage = Storage::unproved(s3_at("https://s3.example", Surface::Closed));
         let week = Duration::from_secs(7 * 24 * 60 * 60);
         for expires in [
             Duration::ZERO,
@@ -1078,7 +1080,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_presigned_requests_debug_withholds_the_signed_url() {
-        let storage = Storage::unproved(s3_at("https://s3.example", false));
+        let storage = Storage::unproved(s3_at("https://s3.example", Surface::Closed));
         let get = storage
             .presign_get("users/ada/avatar.png", Duration::from_secs(60))
             .await
@@ -1106,35 +1108,35 @@ mod tests {
                             inline(&issued.key),
                         )),
                     ),
-                    ..s3_at("https://s3.example", false)
+                    ..s3_at("https://s3.example", Surface::Closed)
                 },
                 "TLS_CERT",
             ),
             (
                 StorageConfig {
                     tls: nest_rs_config::ClientTls::new(Some(inline("no certificate")), None),
-                    ..s3_at("https://s3.example", false)
+                    ..s3_at("https://s3.example", Surface::Closed)
                 },
                 "TLS_CA_CERT",
             ),
             (
                 StorageConfig {
                     operation_timeout: Duration::ZERO,
-                    ..s3_at("https://s3.example", false)
+                    ..s3_at("https://s3.example", Surface::Closed)
                 },
                 "OPERATION_TIMEOUT_SECS",
             ),
             (
                 StorageConfig {
                     secret_key: Secret::default(),
-                    ..s3_at("https://s3.example", false)
+                    ..s3_at("https://s3.example", Surface::Closed)
                 },
                 "SECRET_KEY",
             ),
             (
                 StorageConfig {
                     url: "gs://bucket".into(),
-                    ..s3_at("https://s3.example", false)
+                    ..s3_at("https://s3.example", Surface::Closed)
                 },
                 "URL",
             ),
@@ -1233,7 +1235,7 @@ mod tests {
     #[tokio::test]
     async fn a_store_that_answered_before_the_cut_is_not_said_to_have_been_silent() {
         let budget = StorageConfig::default().operation_timeout;
-        let storage = Storage::unproved(s3_at(&store_answering_once().await, true));
+        let storage = Storage::unproved(s3_at(&store_answering_once().await, Surface::Open));
         let refused = tokio::time::timeout(budget * 2, storage.head("k"))
             .await
             .expect("cut within the budget")
@@ -1255,7 +1257,7 @@ mod tests {
             .expect("a port nothing listens on once its listener is dropped");
         let storage = Storage::unproved(StorageConfig {
             operation_timeout: Duration::from_secs(1),
-            ..s3_at(&format!("http://{closed}"), true)
+            ..s3_at(&format!("http://{closed}"), Surface::Open)
         });
         let refused = storage.head("k").await.expect_err("nothing listens");
         let chain = nest_rs_core::error_message(&refused);
@@ -1314,7 +1316,7 @@ mod tests {
             let storage = Storage::dialing(
                 StorageConfig {
                     operation_timeout: budget,
-                    ..s3_at("https://s3.test", false)
+                    ..s3_at("https://s3.test", Surface::Closed)
                 },
                 FailingOnce {
                     first,
@@ -1366,7 +1368,7 @@ mod tests {
         let storage = Storage::dialing(
             StorageConfig {
                 operation_timeout: budget,
-                ..s3_at("https://s3.test", false)
+                ..s3_at("https://s3.test", Surface::Closed)
             },
             RefusingAfter(budget / 10),
         );
@@ -1421,7 +1423,7 @@ mod tests {
     async fn every_call_s3_never_answers_fails_at_the_operation_budget_naming_it() {
         let budget = StorageConfig::default().operation_timeout;
         for (name, call) in CALLS {
-            let storage = Storage::unproved(s3_at(&silent_store().await, true));
+            let storage = Storage::unproved(s3_at(&silent_store().await, Surface::Open));
             let sent = tokio::time::Instant::now();
             let refused = tokio::time::timeout(budget * 2, call(storage))
                 .await

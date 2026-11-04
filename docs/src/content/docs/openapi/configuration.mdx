@@ -22,7 +22,7 @@ $ NESTRS_OPENAPI__TITLE="Publish API" \
 
 | Field | Env var | Default | Effect |
 |---|---|---|---|
-| `enabled` | `<PREFIX>_OPENAPI__ENABLED` | declared dev/test only | Serves `/api` and `/api-json`. Left on outside a dev profile, the boot logs a `warn` — the document and the UI are public. |
+| `enabled` | `<PREFIX>_OPENAPI__ENABLED` | `Surface::ByProfile`: open in declared dev/test only | Serves `/api` and `/api-json`. Opened outside a dev profile, the boot logs a `warn` — the document and the UI are public. |
 | `title` | `<PREFIX>_OPENAPI__TITLE` | the binary's package name | `info.title`. |
 | `version` | `<PREFIX>_OPENAPI__VERSION` | the binary's package version | `info.version` — your API's version, not the framework's. |
 | `summary` | `<PREFIX>_OPENAPI__SUMMARY` | none | `info.summary`, one line. |
@@ -30,7 +30,7 @@ $ NESTRS_OPENAPI__TITLE="Publish API" \
 | `terms_of_service` | `<PREFIX>_OPENAPI__TERMS_OF_SERVICE` | none | `info.termsOfService`, a URL. |
 | `contact` | `<PREFIX>_OPENAPI__CONTACT_NAME`, `__CONTACT_URL`, `__CONTACT_EMAIL` | none | `info.contact`; any one key makes it. |
 | `license` | `<PREFIX>_OPENAPI__LICENSE_NAME`, `__LICENSE_IDENTIFIER`, `__LICENSE_URL` | none | `info.license`: the name, then an SPDX identifier **or** a URL — both is a boot error, as OpenAPI 3.1 makes them exclusive, and either without a name is one too. |
-| `emit` | `<PREFIX>_OPENAPI__EMIT` | declared dev only | Writes the document `/api-json` serves to `emit_path` once at boot — the committed copy a pull request diffs. Off under test, so parallel suites never rewrite it. With `enabled` off no document is built: nothing is written, and the boot says so at `warn`. |
+| `emit` | `<PREFIX>_OPENAPI__EMIT` | `Surface::ByProfile`: open in declared dev only | Writes the document `/api-json` serves to `emit_path` once at boot — the committed copy a pull request diffs. Off under test, so parallel suites never rewrite it. With `enabled` closed no document is built: nothing is written, and the boot says so at `warn`. |
 | `emit_path` | `<PREFIX>_OPENAPI__EMIT_PATH` | `openapi.json` | Where `emit` writes; a relative path is the app crate's — the one `#[nest_rs::main]` expanded in — whatever directory the process runs from. |
 
 ## Pin it in code
@@ -38,14 +38,13 @@ $ NESTRS_OPENAPI__TITLE="Publish API" \
 Pass an `OpenApiConfig` at the import site instead of reading the environment:
 
 ```rust title="apps/api/src/module.rs"
-use nest_rs::config::Config;
 use nest_rs::openapi::{OpenApiConfig, OpenApiLicense, OpenApiModule};
 
 OpenApiModule::for_root(OpenApiConfig {
     title: "Publish API".into(),
     version: "2.1.0".into(),
     license: Some(OpenApiLicense::new("Apache 2.0").with_identifier("Apache-2.0")),
-    ..OpenApiConfig::defaults()
+    ..Default::default()
 })
 ```
 
@@ -53,17 +52,18 @@ The pinned struct is the *base* `<PREFIX>_OPENAPI__*` overlays, field by field �
 so the deployment can still override any one of them, a single contact or
 license key included. See the [precedence chain](/configuration/#the-dual-path-rule).
 
-`OpenApiConfig::defaults()` is the profile's base, so the documentation stays
-a development surface: served when the process declares development or test,
-closed elsewhere — a process that declares no `<PREFIX>_ENV` included. Over
-`..Default::default()` it is closed in every profile, until `enabled: true` in
-the pin or `<PREFIX>_OPENAPI__ENABLED=true` in the deployment opens it — a
-visible line, logged at `warn` outside a development or test profile.
+`enabled` and `emit` are [`Surface`](/configuration/advanced/#a-development-surface)s,
+left to the profile by `..Default::default()`, so the documentation stays a
+development surface: served when the process declares development or test,
+closed elsewhere — a process that declares no `<PREFIX>_ENV` included — until
+`enabled: Surface::Open` in the pin or `<PREFIX>_OPENAPI__ENABLED=true` in the
+deployment opens it, a visible line, logged at `warn` outside a development or
+test profile.
 
 ## The committed document
 
 A development run rewrites the file beside the app's `Cargo.toml` — the
-profile turns `emit` on, with nothing to set — and a pull request shows each
+profile opens `emit`, with nothing to set — and a pull request shows each
 change to the API contract as a diff of it. Pin it
 with a test that compares what the app serves to what is committed, as the
 demo's `api` app does — the suite then fails the day someone forgets to rerun:

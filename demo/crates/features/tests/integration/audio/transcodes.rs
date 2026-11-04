@@ -11,7 +11,7 @@ use nest_rs::testing::load_project_env;
 fn transcodes() -> RedisConfig {
     read(
         &ConfigService::for_namespace(&instance_namespace::<Transcodes>(RedisConfig::NAMESPACE)),
-        RedisConfig::defaults(),
+        RedisConfig::default(),
     )
     .expect("the Transcodes instance's Redis config parses")
 }

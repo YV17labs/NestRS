@@ -82,3 +82,42 @@ config and every injected config route through — now registers `Environment`
 and files the line, once per boot; `ConfigModule::for_root()` is gone
 (`.claude/decisions/bare-import-reads-for-root-pins.md`). The line keeps its
 level and its words.
+
+**2026-11-04 — a config has one base, and a development opening resolves where
+it is used.** Agreed by the owner on 2026-10-31 ("Tout faire (Recommandé)" to
+the identity audit's second pass, its cfg-2). This entry replaces the sentence
+above placing a development convenience in `Config::defaults()`, and the
+2026-10-28 entry's "no `Config::defaults()` names an endpoint", which holds of
+`Default`. That hook was a second base: `GraphqlConfig { max_depth: Some(12),
+..Default::default() }`, the form the configuration page teaches, turned the
+playground, introspection and the SDL emit off under development with no line
+to say so, and the base that kept them took a trait import to reach. The console
+kept the opposite rule, its `Default` reading the profile, and `LogFormat`'s own
+default was `Text`, the development value.
+
+A profile-gated setting is now the value `nest_rs::config::Surface`:
+`ByProfile`, `Default`'s, `Open` and `Closed`, written in code or read from a
+boolean. The consumer resolves it where it uses it, the framework's own at the
+boot, `is_open()` or, for an emit, `writes()`. A deployed or undeclared process resolves `ByProfile` closed, so
+production is unchanged and a deployment's opening is the same visible line; what
+moved is development, where a pin over `..Default::default()` now keeps its
+surfaces. `Config::defaults()` and `#[config(defaults = …)]` are gone, and
+`Default` is the one base a bare import, a named instance and a discovered
+provider read. `LogFormat` takes the same shape, `ByProfile`, `Text` and `Json`,
+resolved where the console is built, so no `Default` reads the process.
+`is_deployed` stays the one test, read in one place.
+
+**Refused:**
+
+- **A `Default` reading the profile, as the console's did.** A value then carries
+  the profile of the moment it was built, a config's `Default` differs by process,
+  and the overlay still cannot tell an opening written in code from one inherited.
+- **A profile rule in the overlay.** It would rewrite a deliberate pin, which is
+  why the hook existed; a written `Open` or `Closed` is never touched.
+- **`Option<bool>` for the three states.** `None` is off and nothing else
+  (`config-overlay-derived.md`).
+- **`From<bool>` for `Surface`, or a `bool` field beside it.** A second spelling
+  of `Open`, in a set where the point is to read which of the three was written.
+- **A second enum for an emit.** It has the same three states and differs only
+  in which profiles `ByProfile` opens; the consumer says so by the reader it
+  calls, where a parallel type would spread one fact over two names.

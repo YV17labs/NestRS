@@ -270,7 +270,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// # #[module(
 /// #     imports = [
 /// #         GraphqlModule::for_root(GraphqlConfig {
-/// #             introspection: true,
+/// #             introspection: nest_rs_config::Surface::Open,
 /// #             ..GraphqlConfig::default()
 /// #         }),
 /// #         nest_rs_seaorm::SeaOrmDatabaseModule,

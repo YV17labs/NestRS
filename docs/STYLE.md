@@ -216,7 +216,7 @@ wrong, each filed by a reader following a page verbatim — check them on sight:
   `cargo add` line and the `[dependencies]` block beside it say the same thing; a capability's
   page and its crate README install the umbrella with the feature.
 - **A table claiming to be complete.** A `#[config]` key table lists every field, and names the
-  profile when the struct's `defaults()` branches on it.
+  profile when a field is a `Surface`.
 - **A figure.** A count the landing or `/why/` states is one the repo still holds.
 - **A variable named for one deployment.** `NESTRS_ENV_PREFIX` renames every variable, so prose
   and a code comment write `<PREFIX>_SEAORM__URL`, inside backticks (bare, MDX reads a tag); a

@@ -110,8 +110,8 @@ async-trait.workspace = true
 # authority's certificate, and the dial to Valkey behind it. Already in the
 # tree through `redis`'s rustls support.
 tokio-rustls.workspace = true
-# `figment::Jail` declares each profile, so the tests show `Config::defaults`
-# names a Redis in none of them.
+# `figment::Jail` declares each profile, so the tests show an unset URL is
+# refused in all of them.
 figment = { workspace = true, features = ["test"] }
 
 [lints]

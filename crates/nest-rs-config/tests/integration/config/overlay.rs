@@ -7,7 +7,7 @@ use std::time::Duration;
 use nest_rs_config::__private::validator::Validate as _;
 use nest_rs_config::{
     Bound, Config, ConfigError, ConfigService, CountBounds, DurationBounds, Field, Floor,
-    FromSetting, Result, config, var_name,
+    FromSetting, Result, Surface, config, var_name,
 };
 use nest_rs_core::Secret;
 
@@ -422,23 +422,27 @@ fn a_failure_inside_a_json_field_names_the_one_variable_that_sets_it() {
     );
 }
 
-#[config(namespace = "overlay_profiled", defaults = profiled)]
+#[config(namespace = "overlay_surface")]
 #[derive(Clone, Debug, Default)]
-struct ProfiledConfig {
-    open: bool,
+struct SurfaceConfig {
+    samples: Surface,
 }
 
-fn profiled() -> ProfiledConfig {
-    ProfiledConfig { open: true }
-}
-
+/// A `Surface` field is read by its type alone: a boolean is written, unset is
+/// the base.
 #[test]
-fn a_profile_aware_base_is_the_one_defaults_names() {
-    assert!(ProfiledConfig::defaults().open);
-    assert!(
-        !ProfiledConfig::default().open,
-        "`Default` stays the production-safe value"
-    );
+fn a_surface_field_reads_a_boolean_over_its_base() {
+    let read = |vars: &[(&'static str, &'static str)]| {
+        SurfaceConfig::from_env(
+            &ConfigService::with_vars("overlay_surface", vars.iter().copied()),
+            SurfaceConfig::default(),
+        )
+        .expect("reads")
+        .samples
+    };
+    assert_eq!(read(&[]), Surface::ByProfile);
+    assert_eq!(read(&[("SAMPLES", "true")]), Surface::Open);
+    assert_eq!(read(&[("SAMPLES", "false")]), Surface::Closed);
 }
 
 #[config(namespace = "overlay_manual", from_env = "manual")]

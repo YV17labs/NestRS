@@ -16,14 +16,14 @@ note: required by a bound in `class_gate`
    | pub fn class_gate<A: ActionMarker, S: Subject>(cx: &mut UnitContext<'_>) -> Result<(), Failure> {
    |                                       ^^^^^^^ required by this bound in `class_gate`
 
-error[E0277]: `#[authorize]` arms no reply mask for this subject
+error[E0277]: `#[authorize]` cannot mask a reply of type `_` on this subject
   --> tests/integration/diagnostics/authz/authorize_on_a_type_that_is_no_subject.rs:16:25
    |
 16 |     #[authorize(Manage, Exporting)]
-   |                         ^^^^^^^^^ neither an `#[expose]`d entity nor a `#[subject]`
+   |                         ^^^^^^^^^ the reply must serialize and deserialize, and this subject be an `#[expose]`d entity or a `#[subject]`
    |
    = help: the trait `nest_rs::authz::__private::McpMask<nest_rs::authz::Manage, _>` is not implemented for `nest_rs::authz::__private::Rows<Exporting>`
-   = note: a posture masks its reply against its entity's `#[expose]`d wire model, read and written as the entity's rows: expose the entity and answer a value that serializes, or declare a capability no table holds with `#[subject]`, whose posture masks nothing
+   = note: a posture masks its reply against its entity's `#[expose]`d wire model, read and written as the entity's rows: expose the entity and answer a value that serializes and deserializes, or declare a capability no table holds with `#[subject]`, whose posture masks nothing
 note: required by a bound in `nest_rs::authz::__private::mcp_masked_value`
   --> $WORKSPACE/crates/nest-rs-authz/src/mcp/mask.rs
    |

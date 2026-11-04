@@ -77,8 +77,8 @@ where
 /// [`SubjectMask::Mask`]: an entity's rows mask it, a subject no table holds
 /// lets it through as any reply.
 #[diagnostic::on_unimplemented(
-    message = "`#[authorize]` arms no reply mask for this subject",
-    label = "neither an `#[expose]`d entity nor a `#[subject]`",
+    message = "`#[authorize]` cannot mask a reply of type `{O}` on this subject",
+    label = "the reply must serialize, and this subject be an `#[expose]`d entity or a `#[subject]`",
     note = "a posture masks its reply against its entity's `#[expose]`d wire model, read and written as the entity's rows: expose the entity and answer a value that serializes, or declare a capability no table holds with `#[subject]`, whose posture masks nothing"
 )]
 pub trait WsMask<A, O: ?Sized> {

@@ -74,8 +74,8 @@
 //! The mask acts on the **serialized** reply, so a withheld column is absent from
 //! the frame rather than an error. It fails closed on a missing ambient ability
 //! and a body that cannot be reconciled with the entity. `unmasked` keeps the
-//! gate and hands masking to the body. A masked handler returns a **literal**
-//! `Result<T, E>`.
+//! gate and hands masking to the body. It reads the reply by its type, as the frame
+//! does: a bare value, a `Result` and a `Result` behind an alias mask alike.
 //!
 //! # Return-type contract
 //!

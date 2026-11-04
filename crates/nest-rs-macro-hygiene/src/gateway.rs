@@ -133,6 +133,13 @@ impl HygieneGateway {
         Ok("queued".into())
     }
 
+    #[cfg(feature = "seaorm")]
+    #[subscribe_message("hygiene.bare_count")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn bare_count(&self) -> u64 {
+        0
+    }
+
     #[on_connect]
     #[meta(HygieneLimit(1))]
     fn connected(&self) {}

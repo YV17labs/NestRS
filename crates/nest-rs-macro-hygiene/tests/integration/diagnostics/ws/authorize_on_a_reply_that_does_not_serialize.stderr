@@ -1,0 +1,16 @@
+error[E0277]: `#[authorize]` arms no reply mask for this subject
+  --> tests/integration/diagnostics/ws/authorize_on_a_reply_that_does_not_serialize.rs:35:23
+   |
+35 |     #[authorize(Read, note::Entity)]
+   |                       ^^^^^^^^^^^^ neither an `#[expose]`d entity nor a `#[subject]`
+   |
+   = help: the trait `nest_rs::authz::__private::WsMask<nest_rs::authz::Read, NoWireShape>` is not implemented for `nest_rs::authz::__private::Rows<note::Entity>`
+   = note: a posture masks its reply against its entity's `#[expose]`d wire model, read and written as the entity's rows: expose the entity and answer a value that serializes, or declare a capability no table holds with `#[subject]`, whose posture masks nothing
+note: required by a bound in `nest_rs::authz::__private::ws_masked_reply`
+  --> $WORKSPACE/crates/nest-rs-authz/src/ws/mask.rs
+   |
+   | pub fn ws_masked_reply<A, S, O>(event: &'static str, value: &O) -> WsReply
+   |        --------------- required by a bound in this function
+...
+   |     S::Mask: WsMask<A, O>,
+   |              ^^^^^^^^^^^^ required by this bound in `ws_masked_reply`

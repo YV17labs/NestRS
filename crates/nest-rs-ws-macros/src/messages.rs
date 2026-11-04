@@ -419,7 +419,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         };
 
         // The masked JSON ships, not a value round-tripped through the handler's
-        // type (see `nest_rs_authz::ws::mask`). `__ret` is bound by the arms below.
+        // type (see `nest_rs_authz::ws::mask`). `__ret` is bound by the arms below,
+        // past what `ReplyValue` split by type, so an alias hides no `Result` from
+        // the mask; a mask's failure is an error frame, whatever the method returns.
         let reply = match &posture {
             Posture::Authorize {
                 action,
@@ -435,20 +437,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             },
             _ => quote! { ::core::result::Result::Ok(::nest_rs_ws::WsReply::reply(&__ret)) },
         };
-
-        if posture.masks() && matches!(return_kind, ReturnKind::Value | ReturnKind::Unit) {
-            return syn::Error::new_spanned(
-                &method.sig.output,
-                "a #[subscribe_message] declaring `#[authorize(Action, Entity)]` returns \
-                 `Result<T, E>`, spelled literally: the reply shape is decided \
-                 syntactically, so a `Result` behind an alias would be masked as the \
-                 `Result` itself, and a fail-closed mask needs an error channel. Return a \
-                 literal `Result`, or declare `#[authorize(Action, Entity, unmasked)]` and \
-                 mask in the body",
-            )
-            .to_compile_error()
-            .into();
-        }
 
         // The report is built in library code, never by a call here: on an
         // `Infallible` error that call would be unreachable code. Its tiers

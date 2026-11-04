@@ -320,8 +320,8 @@ mask, decided by the subject's type:
   it: rmcp needs the typed value back, so a mask stripping a required key
   refuses the operation. A masked operation spells its return `Result<…>`.
 - **WS** (`#[messages]`) — masks like HTTP: the envelope promises no schema,
-  so a stripped key is omitted. A masked message returns a *literal* `Result`,
-  because the reply shape is decided syntactically.
+  so a stripped key is omitted. It reads the reply as the frame does, by type
+  (`ReplyValue`), so a bare value and a `Result` behind an alias mask alike.
 
 `masked_reply` / `masked_output_ambient` are for surfaces **no decorator
 reaches** — a hand-written MCP `ServerHandler`, a value built for the caller.

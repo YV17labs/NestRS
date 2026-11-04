@@ -548,8 +548,8 @@ router parses. The rewrite is skipped when nothing is versioned.
 - **WS is not a `Transport`**: an upgrade is an HTTP `GET`, so a gateway
   self-mounts on `HttpTransport` and inherits its port, CORS and TLS. One
   envelope, `{event, data}`. A handler returns at most a `Result` around a
-  `Result`-free value, decided by type (`ReplyValue`); a `Result` inside an
-  `Option`, a `Vec` or a struct is data. An `Err` becomes a frame through
+  `Result`-free value, decided by type (`ReplyValue`), which is what the mask
+  reads too; a `Result` inside an `Option`, a `Vec` or a struct is data. An `Err` becomes a frame through
   `ErrorReport`, by its type, so the chain a frame withholds is read whenever
   the type has one, and filed as *Error opacity* says.
 - **MCP aggregates** behind one endpoint, since clients point at one URL; one

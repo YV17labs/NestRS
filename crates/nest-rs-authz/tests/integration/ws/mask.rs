@@ -38,6 +38,9 @@ struct PostDto {
     title: String,
 }
 
+/// The alias a macro reading the return's spelling cannot see through.
+type Replied<T> = Result<T, WsError>;
+
 #[gateway(path = "/ws/mask")]
 #[derive(Default)]
 struct MaskGateway;
@@ -103,6 +106,44 @@ impl MaskGateway {
             .collect())
     }
 
+    /// A value with no `Result` around it masks as one inside it does.
+    #[subscribe_message("bare_widgets")]
+    #[authorize(Read, widget::Entity)]
+    async fn bare_widgets(&self) -> Vec<WidgetDto> {
+        vec![
+            WidgetDto {
+                id: 1,
+                name: Some("first".to_owned()),
+            },
+            WidgetDto {
+                id: 2,
+                name: Some("second".to_owned()),
+            },
+        ]
+    }
+
+    /// A `Result` behind an alias masks by its type, never as `{"Ok": …}`.
+    #[subscribe_message("aliased_widgets")]
+    #[authorize(Read, widget::Entity)]
+    async fn aliased_widgets(&self) -> Replied<Vec<WidgetDto>> {
+        Ok(vec![WidgetDto {
+            id: 1,
+            name: Some("first".to_owned()),
+        }])
+    }
+
+    /// The alias's failure answers as any handler's does.
+    #[subscribe_message("aliased_failure")]
+    #[authorize(Read, widget::Entity)]
+    async fn aliased_failure(&self) -> Replied<Vec<WidgetDto>> {
+        Err(WsError::new("refused by the body"))
+    }
+
+    /// Nothing to reply: the gate alone holds.
+    #[subscribe_message("nothing")]
+    #[authorize(Read, widget::Entity)]
+    async fn nothing(&self) {}
+
     /// The opt-out: no gate, no mask.
     #[subscribe_message("raw_widget")]
     #[public]
@@ -153,6 +194,33 @@ async fn a_row_the_ability_refuses_is_dropped() {
         "…and a rule predicated on `id = 1` drops the other before it reaches a \
          model: {body}",
     );
+}
+
+/// The posture means one thing whatever the return type spells.
+#[tokio::test]
+async fn a_bare_value_and_an_aliased_result_are_masked_as_a_literal_result_is() {
+    for event in ["bare_widgets", "aliased_widgets"] {
+        let body = reply("viewer", event).await;
+        assert!(body.contains(r#""id":1"#), "{event}: {body}");
+        assert!(!body.contains("first"), "{event}: {body}");
+        assert!(!body.contains("Ok"), "{event}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn an_aliased_results_failure_is_an_error_frame_never_a_masked_reply() {
+    let body = reply("admin", "aliased_failure").await;
+    assert!(
+        body.starts_with("error:") && body.contains("refused by the body"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_message_replying_nothing_keeps_its_gate() {
+    assert_eq!(reply("admin", "nothing").await, "none");
+    let refused = reply("nobody", "nothing").await;
+    assert!(refused.starts_with("error:"), "{refused}");
 }
 
 #[tokio::test]

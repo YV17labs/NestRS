@@ -1495,7 +1495,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "validator",
 ]
 
 [[package]]

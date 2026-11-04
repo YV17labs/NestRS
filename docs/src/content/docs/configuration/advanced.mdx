@@ -130,7 +130,7 @@ impl<P> Validate for OAuthServerConfig<P> {
   authorizes on.
 - **"At least one client" and "no id twice" are struct-level rules**, so
   `impl Validate` is written by hand, building the same `ValidationErrors`
-  the derive would. They run after the load and abort the boot exactly like a
+  the derive would, each named through `nest_rs::pipes::validator`. They run after the load and abort the boot exactly like a
   derived rule, naming each refusal by the client's id, never its secret.
 
 The app imports its module with the payload type it owns; `SignInService`

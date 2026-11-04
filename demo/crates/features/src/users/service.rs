@@ -6,12 +6,12 @@ use nest_rs::authz::Action;
 use nest_rs::core::{Secret, error_message, hooks, injectable};
 use nest_rs::database::atomic;
 use nest_rs::graphql::dataloader;
+use nest_rs::pipes::validator::Validate;
 use nest_rs::seaorm::{
     Creatable, CreateModel, CrudService, Deletable, Insertion, Repo, ServiceError, Updatable,
 };
 use sea_orm::{ColumnTrait, DbErr, QueryFilter, Set};
 use uuid::Uuid;
-use validator::Validate;
 
 use super::entities::user as entity;
 use super::entities::user::{CreateUser, Entity as Users, UpdateUser, User};

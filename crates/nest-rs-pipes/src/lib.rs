@@ -40,6 +40,33 @@ pub use pipes::{
 pub use registry::{GlobalPipeList, GlobalPipes};
 pub use validate::validation_details;
 
+/// The `validator` crate, at the release the framework derives with: what a
+/// rule's author names — `ValidationError` in a `custom(function = …)`, on a
+/// `#[input]`, an `#[expose]`d column or a `#[config]`, and `Validate` where a
+/// body runs the rules itself — with no manifest line to keep in step.
+///
+/// ```
+/// use nest_rs_core::input;
+/// use nest_rs_pipes::validator::{Validate, ValidationError};
+///
+/// fn not_a_placeholder(title: &str) -> Result<(), ValidationError> {
+///     if title.eq_ignore_ascii_case("todo") {
+///         return Err(ValidationError::new("placeholder_title"));
+///     }
+///     Ok(())
+/// }
+///
+/// #[input]
+/// struct PostDto {
+///     #[validate(custom(function = "not_a_placeholder"))]
+///     title: String,
+/// }
+///
+/// let refused = PostDto { title: "TODO".into() }.validate().expect_err("refused");
+/// assert!(refused.field_errors().contains_key("title"));
+/// ```
+pub use validator;
+
 #[doc(hidden)]
 pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:

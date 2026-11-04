@@ -16,7 +16,7 @@ pub struct LoginDto {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use validator::Validate;
+    use nest_rs::pipes::validator::Validate;
 
     fn input(email: &str, password: &str) -> LoginDto {
         LoginDto {

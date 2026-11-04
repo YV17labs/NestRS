@@ -110,6 +110,10 @@ async fn create(&self, Json(input): Json<CreateUser>) -> Result<Created<Json<Use
 }
 ```
 
+A rule of your own is a function `custom(function = "…")` names, returning
+`nest_rs::pipes::validator::ValidationError`, the error of the release the
+framework derives with.
+
 The handler sees a validated `CreateUser`, and answers `201` with the new
 user's `Location`, as [responses](/http/responses/) teaches. `Json`, `Query`,
 `Form`, `Path` and `Header` answer for the value they carry, a list for each

@@ -27,7 +27,8 @@ cargo add nest-rs --features config
 ```
 
 `#[config]` carries the `Validate` derive itself, so a config struct needs no
-`validator` entry and no version to keep aligned with the framework's.
+`validator` entry and no version to keep aligned with the framework's; a custom
+rule names its error through `nest_rs::pipes::validator`.
 
 ## A typed config — by example
 

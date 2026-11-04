@@ -132,3 +132,16 @@ freezing as API transport types no app mounts; `ServerCapabilities` and
 `nest_rs::mcp::model` or `nest_rs::mcp::rmcp`, where a host writing `ServerHandler`
 by hand reaches it and through which `#[tools]` emits. Agreed by the owner ("Tout
 faire (Recommandé)", 2026-10-31).
+
+## 2026-11-04 — `nest_rs::pipes::validator` is validator, in tier 1
+
+`custom(function = …)` on a `#[input]`, an `#[expose]`d column or a `#[config]`
+makes the developer name `validator::ValidationError`, and that took a manifest
+line pinned to the framework's `0.x` minor, against the project's hard "no" on a
+decorator forcing one. It is re-exported whole beside the pipe that runs the rules,
+as `nest_rs::graphql::async_graphql` sits at its edge, and the umbrella's `seaorm`
+and `config` features enable `pipes`, a crate of pure transforms over what they link
+already, so neither needs a second feature to reach it. Its row above stands: a
+`0.x`, so its next minor is a nestrs major, and an app may still name it directly at
+a compatible requirement. Agreed by the owner ("Tout faire (Recommandé)",
+2026-10-31).

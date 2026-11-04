@@ -147,20 +147,19 @@ pub title: String,
 ```
 
 ```rust title="crates/features/src/posts/entity.rs (abridged)"
-fn not_a_placeholder_title(title: &str) -> Result<(), validator::ValidationError> {
+use nest_rs::pipes::validator::ValidationError;
+
+fn not_a_placeholder_title(title: &str) -> Result<(), ValidationError> {
     if title.eq_ignore_ascii_case("todo") {
-        return Err(validator::ValidationError::new("placeholder_title"));
+        return Err(ValidationError::new("placeholder_title"));
     }
     Ok(())
 }
 ```
 
-The function returns `validator`'s own error type, so the feature crate names
-that crate itself, at the release the framework derives with:
-
-```bash
-cargo add validator@0.21 -p features
-```
+The function returns `validator`'s own error type, which the framework
+re-exports at the release it derives with, so the feature crate's manifest gains
+no line.
 
 The error `code` (`"placeholder_title"`) surfaces in `errors.title[].code`
 — same shape, same client contract.

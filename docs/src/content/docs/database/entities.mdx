@@ -251,6 +251,21 @@ so the service never sees an invalid input. The full rule set
 (`length`, `email`, `range`, `url`, custom validators, …) is the
 `validator` crate's; see its docs for the catalogue.
 
+A custom rule is a function of yours, named by `custom(function = "…")`. It
+returns `validator`'s own error, which `nest_rs::pipes::validator` re-exports at
+the release the framework derives with, so your manifest gains no line:
+
+```rust title="crates/features/src/posts/entity.rs"
+use nest_rs::pipes::validator::ValidationError;
+
+fn not_a_placeholder_title(title: &str) -> Result<(), ValidationError> {
+    if title.eq_ignore_ascii_case("todo") {
+        return Err(ValidationError::new("placeholder_title"));
+    }
+    Ok(())
+}
+```
+
 A **relation** field cannot carry `input(...)` — only scalar columns
 are writable. Set the foreign-key column (`org_id`) as the input, not
 the relation (`org`).

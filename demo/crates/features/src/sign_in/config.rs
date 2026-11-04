@@ -1,8 +1,10 @@
 use nest_rs::config::config;
 use nest_rs::oauth::server::OAuthServerConfig;
+use nest_rs::pipes::validator::{
+    Validate, ValidationError, ValidationErrors, ValidationErrorsKind,
+};
 use serde::Deserialize;
 use uuid::Uuid;
-use validator::{Validate, ValidationError, ValidationErrors, ValidationErrorsKind};
 
 use crate::authz::constants;
 use crate::{Role, Subject};

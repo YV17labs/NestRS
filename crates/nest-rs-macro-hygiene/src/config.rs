@@ -25,12 +25,23 @@ fn doubled(env: &ConfigService, field: Field, base: u32) -> Result<u32> {
     Ok(env.parse::<u32>(field.key())?.map_or(base, |read| read * 2))
 }
 
+/// A custom rule, naming `validator`'s error through the framework alone.
+fn not_thirteen(
+    retries: u32,
+) -> std::result::Result<(), nest_rs::pipes::validator::ValidationError> {
+    if retries == 13 {
+        return Err(nest_rs::pipes::validator::ValidationError::new("unlucky"));
+    }
+    Ok(())
+}
+
 /// Minimal config, one field per reader.
 #[config(namespace = "macro_hygiene")]
 #[derive(Clone, Debug)]
 pub struct MacroHygieneConfig {
-    /// A validation rule, so the emitted `Validate` derive is exercised.
-    #[validate(range(min = 1))]
+    /// Validation rules, so the emitted `Validate` derive is exercised, a custom
+    /// one with no `validator` line in this manifest.
+    #[validate(range(min = 1), custom(function = "not_thirteen"))]
     pub retries: u32,
     /// Read through its bounds.
     #[config(bounds = WINDOW)]

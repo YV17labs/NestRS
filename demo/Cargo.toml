@@ -27,7 +27,6 @@ bytes = "1.12"
 futures-util = "0.3"
 async-trait = "0.1"
 parking_lot = "0.13"
-validator = { version = "0.21", features = ["derive"] }
 uuid = { version = "1.29", features = ["v7", "serde"] }
 sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
 sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }

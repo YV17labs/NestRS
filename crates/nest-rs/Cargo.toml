@@ -73,7 +73,10 @@ http = [
     "nest-rs-authz?/http",
     "nest-rs-testing?/http",
 ]
-config = ["dep:nest-rs-config"]
+# `pipes`: a config's custom rule, or its hand-written `Validate`, names
+# `nest_rs::pipes::validator`, which costs a config-only build a crate of pure
+# transforms on what it links already.
+config = ["dep:nest-rs-config", "pipes"]
 # Beside `testing`, the harness runs a unit of work through the app's binding
 # (`system_unit`).
 database = ["dep:nest-rs-database", "nest-rs-testing?/database"]
@@ -87,11 +90,13 @@ database = ["dep:nest-rs-database", "nest-rs-testing?/database"]
 # `#[expose]` implements the round trip `nest_rs_authz`'s masks read on every entity,
 # whether or not the developer writes a posture attribute. `nest-rs-seaorm`
 # depends on the crate already, so the feature carries what the expansion names
-# and costs no compilation.
+# and costs no compilation. `pipes` the same way: `nest-rs-seaorm` links it, and a
+# column's custom rule names `nest_rs::pipes::validator`.
 seaorm = [
     "dep:nest-rs-seaorm",
     "database",
     "authz",
+    "pipes",
     "nest-rs-testing?/orm",
 ]
 # `#[resolver]` names the guard chain and the pipe fold unconditionally

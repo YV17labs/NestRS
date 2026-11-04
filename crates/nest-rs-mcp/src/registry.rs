@@ -457,7 +457,12 @@ fn resolve_identity(
         container.get::<McpIdentity>().as_deref(),
         nest_rs_core::AppIdentity::current(),
     )
-    .map_err(|err| err.report(path, host.map_or("<none>", |meta| meta.host())))
+    .map_err(|err| {
+        let name_stated_by = host
+            .filter(|meta| meta.identity().name.is_some())
+            .map(|meta| meta.host());
+        err.report(path, name_stated_by)
+    })
 }
 
 /// Every host contributing to `path`, in registration order.
@@ -810,7 +815,7 @@ fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> 
         .map(|host| host.name)
         .collect::<Vec<_>>()
         .join(", ");
-    let name_the_app = "McpModule::for_root(McpIdentity { name, version, .. })";
+    let name_the_app = crate::identity::NAME_THE_APP;
 
     if reported == sdk_default {
         tracing::warn!(

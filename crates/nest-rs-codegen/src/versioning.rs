@@ -224,7 +224,8 @@ impl VersionedEdge {
                           library knows neither the binary's version nor, on a shared \
                           endpoint, the whole surface — so it is the binary's, read off its \
                           manifest by `#[nest_rs::main]`, or the app's, declared once on its \
-                          single `McpModule::for_root(McpIdentity { name, version, .. })`",
+                          single `McpModule::for_root(McpIdentity { name: Some(\"…\".into()), \
+                          version: Some(\"…\".into()), ..Default::default() })`",
             },
             Self::Queue => VersionAnswer {
                 decorator: "#[processor]",

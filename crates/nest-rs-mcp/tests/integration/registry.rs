@@ -19,7 +19,7 @@ use nest_rs_mcp::rmcp::serde_json::json;
 use nest_rs_mcp::rmcp::{prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router};
 use nest_rs_mcp::service::{RequestContext, RoleServer};
 use nest_rs_mcp::{
-    DEFAULT_PATH, McpError, McpIdentity, McpModule, McpSetup, ServerHandler, mcp, tools,
+    DEFAULT_PATH, McpAccess, McpError, McpIdentity, McpModule, McpSetup, ServerHandler, mcp, tools,
 };
 use nest_rs_testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use nest_rs_testing::{LogCapture, TestApp};
@@ -983,6 +983,72 @@ async fn a_host_naming_its_endpoint_stands_on_the_binarys_version() {
         Some(env!("CARGO_PKG_VERSION")),
         "{advertised}",
     );
+}
+
+/// Names nothing, so the app's own declaration is what is refused.
+#[mcp(path = "/mcp/unbacked")]
+#[derive(Clone)]
+struct UnclaimingTool;
+
+#[tool_router]
+impl UnclaimingTool {
+    #[tool(description = "Answers.")]
+    async fn unbacked_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("pong")]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for UnclaimingTool {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+}
+
+#[module(imports = [
+    McpModule::for_root((McpAccess::Public, McpIdentity {
+        name: Some("witness-app".into()),
+        ..Default::default()
+    })),
+], providers = [UnclaimingTool])]
+struct LoneNameApp;
+
+#[module(imports = [
+    McpModule::for_root((McpAccess::Public, McpIdentity {
+        version: Some("1.2.3".into()),
+        ..Default::default()
+    })),
+], providers = [UnclaimingTool])]
+struct LoneVersionApp;
+
+/// With no binary, a lone field of the app's says who stated it and what to
+/// write: no host stated this one.
+#[tokio::test]
+async fn an_apps_lone_name_and_lone_version_fail_boot_naming_the_app() {
+    let Err(err) = nest_rs_core::App::builder()
+        .module::<LoneNameApp>()
+        .build()
+        .await
+    else {
+        panic!("a name with no version anywhere must not boot");
+    };
+    let err = format!("{err:#}");
+    assert!(
+        err.contains("The app's McpIdentity") && err.contains("witness-app"),
+        "{err}"
+    );
+    assert!(!err.contains("<none>"), "{err}");
+
+    let Err(err) = nest_rs_core::App::builder()
+        .module::<LoneVersionApp>()
+        .build()
+        .await
+    else {
+        panic!("a version with no name anywhere must not boot");
+    };
+    let err = format!("{err:#}");
+    assert!(err.contains("/mcp/unbacked"), "{err}");
+    assert!(err.contains("McpIdentity {"), "{err}");
 }
 
 /// A process no `#[nest_rs::main]` nor harness named — a container built by

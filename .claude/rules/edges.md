@@ -588,8 +588,10 @@ router parses. The rewrite is skipped when nothing is versioned.
   `McpIdentity` on `McpModule::for_root` — branding and `instructions`, and a
   name or version only to override the binary's — and a host may refine only
   `name` and `title` for its endpoint; `instructions` on `#[mcp]` is a compile
-  error. Identity has no environment twin, which is why it travels in
-  `for_root`'s value, before the config (`container.md`, *`for_root`*).
+  error. With no binary behind it, a name with no version, or any field but
+  `instructions` with no name, fails the boot. Identity has no environment
+  twin, which is why it travels in `for_root`'s value, before the config
+  (`container.md`, *`for_root`*).
 - **OpenAPI** self-mounts a document **composed from the route table** (schemas
   through `schemars`, `#[api(...)]` enriches) and an offline Swagger UI that
   loads nothing from elsewhere. The document is 3.1 and states only what the

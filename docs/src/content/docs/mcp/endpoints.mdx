@@ -148,7 +148,8 @@ host names itself in its own `get_info`, the host's. Only a process no
 `#[nest_rs::main]` started (a container built by hand) has no binary to fall
 back on: a host that never overrides `get_info` then introduces itself to every
 client as **`rmcp`, at rmcp's version**, which is reported at boot on
-`nest_rs::mcp`, and a host's `name` with no version behind it fails the boot.
+`nest_rs::mcp`, and a `name` with no version behind it, or any other field but
+`instructions` with no name behind it, fails the boot.
 An identity declared in an app with no `#[mcp]` host at all fails boot
 outright.
 </Aside>

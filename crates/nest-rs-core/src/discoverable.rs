@@ -7,11 +7,18 @@ use std::borrow::Cow;
 use crate::access::{Composition, ModuleDescriptor};
 use crate::container::{Container, ContainerBuilder};
 
-/// Anything a `#[module]` can pull in via `providers = [...]`.
+/// Anything a `#[module]` can pull in via `providers = [...]`, or an app-wide
+/// pool's declaration can list.
 ///
 /// Decorator macros (`#[injectable]`, `#[interceptor]`, `#[scheduled]`,
 /// `#[mcp]`, `#[routes]`, …) emit a single `impl Discoverable for Self` that
 /// either registers a provider or attaches discovery metadata.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a provider a module or an app-wide pool can register",
+    label = "no decorator made this type a provider",
+    note = "add `#[injectable]` to the struct, or implement `Discoverable` when what it registers \
+            is more than a decorator can say"
+)]
 pub trait Discoverable {
     /// Provider types that must already be registered before
     /// [`register`](Discoverable::register) can build this one. Empty for

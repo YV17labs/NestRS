@@ -1,7 +1,6 @@
 //! Covers `src/exception_filter.rs` through a booted app: a filter the app's
 //! root declares is the container's own provider and answers a failed unit at
-//! any site, and the declaration fails the boot on a type the root does not
-//! reach.
+//! any site.
 
 use std::any::TypeId;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,8 +11,8 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::operation_log::Kind;
 use nest_rs_core::{
-    AccessGraphError, App, Caught, ExceptionFilter, GlobalExceptionFilters, Handler, Layer,
-    Outcome, Posture, UnitContext, UnitView, async_trait, injectable, module,
+    App, Caught, ExceptionFilter, GlobalExceptionFilters, Handler, Layer, Outcome, Posture,
+    UnitContext, UnitView, async_trait, injectable, module,
 };
 
 /// Answers every failure, counting the ones it answered.
@@ -35,11 +34,8 @@ impl ExceptionFilter for CatchAll {
     }
 }
 
-#[module(providers = [CatchAll, GlobalExceptionFilters<(CatchAll,)>])]
-struct CatchAllModule;
-
 #[module(providers = [GlobalExceptionFilters<(CatchAll,)>])]
-struct ReachesNoFilter;
+struct CatchAllModule;
 
 struct Jobs;
 struct JobView;
@@ -101,18 +97,4 @@ async fn a_filter_the_root_declares_answers_a_failed_unit_with_the_containers_ow
         1,
         "the instance the container holds is the one that answered",
     );
-}
-
-#[tokio::test]
-async fn a_filter_the_root_declares_and_does_not_reach_fails_the_boot_naming_it() {
-    let built = App::builder().module::<ReachesNoFilter>().build().await;
-    let Err(refused) = built else {
-        panic!("a global exception filter would silently drop");
-    };
-    assert!(
-        refused.downcast_ref::<AccessGraphError>().is_some(),
-        "not the access graph's refusal: {refused:#}"
-    );
-    let said = format!("{refused:#}");
-    assert!(said.contains("CatchAll"), "{said}");
 }

@@ -362,9 +362,8 @@ route reads it. Neither parameter is an argument of the tool: the input schema
 a client lists names neither, and an absent value answers opaquely, its type
 filed at `error`.
 
-The app's own interceptors (`GlobalInterceptors`, a module's
-`#[interceptor]`) run around every operation `#[tools]` declares too, outermost,
-after the guards. An `#[interceptor(stage = unit)]` serving MCP runs once
+The app's own interceptors (`GlobalInterceptors`) run around every operation
+`#[tools]` declares too, outermost, after the guards. An `#[interceptor(stage = unit)]` serving MCP runs once
 around every request — a listing, a handshake, a tool call alike, one naming
 no declared tool included — before rmcp decodes it; `Layer::serves` reads the unit, `nest_rs::mcp::unit::OPERATION`.
 Every operation's layers are composed at boot, so one that no module provides,

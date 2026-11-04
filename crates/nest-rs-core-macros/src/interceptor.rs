@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::Expr;
 
@@ -8,13 +8,10 @@ use nest_rs_codegen::__private::{key_as_written, parse_provider_host, unknown_va
 use crate::injectable::{InjectableScope, provider};
 
 pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
-    let expanded = parse_stage(args.into()).and_then(|stage| {
+    let expanded = parse_stage(args.into()).and_then(|()| {
         let item = parse_provider_host(input.into())?;
         let registered = quote! {
-            ::nest_rs_core::__private::register_interceptor::<Self>(
-                builder,
-                ::nest_rs_core::__private::InterceptorStage::#stage,
-            )
+            ::nest_rs_core::__private::register_interceptor::<Self>(builder)
         };
         provider(item, InjectableScope::Singleton, registered)
     });
@@ -27,8 +24,14 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
 const INTERCEPTOR: nest_rs_codegen::Grammar =
     nest_rs_codegen::Grammar::new("interceptor", &["stage"]).elsewhere(known_elsewhere);
 
-/// The stages as `stage = …` spells them, in the order a refusal lists them.
-const STAGES: [&str; 2] = ["unit", "handler"];
+/// The stage as `stage = …` spells it, in a refusal's list.
+const STAGES: [&str; 1] = ["unit"];
+
+/// The refusal of the stage the attribute does not declare, bare or spelled.
+const HANDLER_STAGE: &str = "#[interceptor] declares what a module brings around the guards and \
+     takes `stage = unit`: an app-wide interceptor at the handler stage is the root's — write \
+     `#[injectable]` on the struct and list it in `GlobalInterceptors<(…)>`, in the providers of \
+     the module the app boots";
 
 /// `priority` is the old HTTP attribute's key: here an interceptor orders
 /// itself through `#[derive(Layer)]`'s `#[layer(priority = …)]`.
@@ -40,10 +43,11 @@ fn known_elsewhere(key: &str) -> Option<String> {
     })
 }
 
-/// The stage `#[interceptor(…)]` declares, as the variant of
-/// `InterceptorStage` it names; `handler` when unwritten.
-fn parse_stage(args: TokenStream2) -> syn::Result<syn::Ident> {
-    let mut stage = "Handler";
+/// `#[interceptor(…)]`'s one sentence, `stage = unit`; anything else refused.
+fn parse_stage(args: TokenStream2) -> syn::Result<()> {
+    if args.is_empty() {
+        return Err(syn::Error::new(Span::call_site(), HANDLER_STAGE));
+    }
     INTERCEPTOR.parse2(args, |arg| {
         let value = arg.expr()?;
         let refused = |written: &str| {
@@ -55,12 +59,10 @@ fn parse_stage(args: TokenStream2) -> syn::Result<syn::Ident> {
         let Expr::Path(path) = &value else {
             return Err(refused(&quote!(#value).to_string()));
         };
-        stage = match key_as_written(&path.path).as_str() {
-            "unit" => "Unit",
-            "handler" => "Handler",
-            other => return Err(refused(other)),
-        };
-        Ok(())
-    })?;
-    Ok(syn::Ident::new(stage, proc_macro2::Span::call_site()))
+        match key_as_written(&path.path).as_str() {
+            "unit" => Ok(()),
+            "handler" => Err(syn::Error::new_spanned(&value, HANDLER_STAGE)),
+            other => Err(refused(other)),
+        }
+    })
 }

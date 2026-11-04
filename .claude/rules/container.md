@@ -30,10 +30,21 @@ framework half.
   imports, or registered by no module's providers, fails the boot at the
   wiring step naming it — a feature never chooses what covers every route —
   as does a second declaration of one family, naming the module listing
-  each; a layer the declaring module does not reach fails the access graph,
-  and so does one that is not a singleton, as a site's layer does
-  (`ScopedLayerError`): a pool resolves its layers once, at mount. The pools
-  are checked before every module's wiring.
+  each. **A pool registers what it lists**: each entry is a provider (the
+  list's `Discoverable` bound, so a compile error), registered once every
+  module has unless something in the app already registers it — a module, a
+  seed, a factory, or a test's override, which it claims — so a layer the root
+  owns is written once and a layer a feature lists stays the feature's. The
+  declaration reports each layer on its module's behalf and what each injects:
+  what one it registers injects is held to the root's reach, what any injects
+  loads itself, and a module injecting a layer only its root lists is refused
+  naming the root (`AccessGraphError`); a provider of the root injecting it is
+  refused too, told to list it (`UnbuiltCause::RegisteredByAPool`). One that is
+  not a singleton fails the access graph, as a site's layer does
+  (`ScopedLayerError`), since a pool resolves its layers once, at mount, and
+  one whose registration leaves it absent fails the boot
+  (`MissingDependencyError`), never dropped. The pools are checked before every
+  module's wiring.
 - **A factory comes in three kinds** — a default, a declaration, a dyn binding
   — each with or without the factory outputs it reads, written as one tuple
   (`FactoryInputs`, sealed): a new arity is an impl, never a new form.
@@ -558,7 +569,9 @@ any depth, and shutdown hooks run in the exact reverse, so nothing is torn down
 under a provider still using it. Ties follow module import order (imports
 first, as declared), then `providers` order; a host no module lists (a seed, a
 factory's output, a hand-written registration) runs before every listed one at
-init and after them at shutdown; a host's own hooks run in the order its `impl`
+init and after them at shutdown, and a layer only a pool lists, which nothing
+listed waits on, runs after them at init, in the order the pool built them, and
+before them at shutdown; a host's own hooks run in the order its `impl`
 declares them, the same both ways (across several `impl`s, by module path
 first); one hook at a time. A provider orders its hooks after another's by
 injecting it — the graph is the only order, never a name or a priority (held by

@@ -144,7 +144,7 @@
 //! pipeline as a route, as a `ws.message` unit: the unit stage, its guard stage
 //! (the app's pool, the message's own guards, then the class gate its posture
 //! declares), its exception filters (the message's, the gateway's, the app's),
-//! its handler stage (the app's interceptors, the modules', the gateway's
+//! its handler stage (the app's interceptors, the gateway's
 //! `#[use_interceptors]`, the message's) and its tail — the data pipes, the
 //! handler's own pipes, the call and the mask. A layer reads the message
 //! through [`WsView`] and may answer it through [`WsView::respond`].

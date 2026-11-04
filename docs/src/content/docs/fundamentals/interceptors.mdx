@@ -125,18 +125,16 @@ once** per unit, at the broadest scope that declares it. See
 [Guards / Declare on the provider](/fundamentals/guards/#declare-on-the-provider)
 for the worked example and the defense-in-depth argument.
 
-## Brought by a module: `#[interceptor]`
+## The app's list: `GlobalInterceptors`
 
-For infrastructure a module brings with its import, write `#[interceptor]` on
-the struct instead of `#[injectable]`. The struct is a singleton provider like
-any other, and importing its module adds it to every unit's handler stage —
-ordered with the app's global list by `Layer::priority`, the app's list then
-import order breaking a tie, no `#[use_interceptors]`
-anywhere. The demo's API audits every write it admits that way: its
-`ApiModule` imports `AuditHttpModule`, and nothing else names the interceptor.
+An interceptor around every handler is the app's to choose, so the module the
+app boots is the one place that says so: `GlobalInterceptors<(…)>` in its
+`providers`, the first listed outermost. The pool registers what it lists unless
+the app already does, so an interceptor is written once, and the module it sits
+in may list it or not. The demo's API audits every write it admits that way:
 
 ```rust title="crates/features/src/audit/http/interceptor.rs (from the demo, abridged)"
-#[interceptor]
+#[injectable]
 pub struct AuditInterceptor;
 
 impl Layer for AuditInterceptor {
@@ -155,15 +153,36 @@ impl Interceptor for AuditInterceptor {
 }
 ```
 
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
+#[module(
+    imports = [AuditHttpModule, /* … */],
+    providers = [
+        GlobalGuards<(AuthnGuard, AuthzGuard)>,
+        GlobalInterceptors<(AuditInterceptor,)>,
+    ],
+)]
+pub struct ApiModule;
+```
+
 `serves` is read once, as the app-wide list is composed for a site: a unit of
-another edge never runs it.
+another edge never runs it. What the interceptor injects is held to the imports
+of the module the app boots, and one the pool cannot build, or that is not a
+singleton, fails the boot naming it, as does a pool a module the app imports
+declares, or a second one. A provider of yours injecting the interceptor needs it
+listed in a module's `providers`: a pool registers what it alone lists once every
+module is built, and the boot says so.
+
+A bare `#[interceptor]` does not compile, and its refusal names this list:
+importing a feature's module never adds a layer around every handler of your app.
 
 ## The unit stage: `#[interceptor(stage = unit)]`
 
 Every interceptor above runs **after** the guards and the posture's class
 gate: a caching interceptor can never answer a caller the route refuses. The
 one opening is an interceptor its module declares at the unit stage, around
-the guards:
+the guards, which importing that module brings to every unit, with no line in
+the module the app boots — it is how a capability such as `Server-Timing` needs
+nothing but its import:
 
 ```rust
 #[interceptor(stage = unit)]
@@ -186,8 +205,7 @@ interceptor never runs before the access decision.
 Each root field of a GraphQL operation — a `#[query]`, a `#[mutation]`, an
 `#[entity]`, and the federation fields `_service` and `_entities` — is a unit
 of its own, `graphql.field`, inside the `/graphql` request that carried it.
-The app's interceptors, the modules' `#[interceptor]`s, the resolver's and the
-field's own run around it, after its guards and its class gate, exactly as
+The app's interceptors, the resolver's and the field's own run around it, after its guards and its class gate, exactly as
 around a route. `cx.unit()` names the unit, and `GraphqlView` says which field
 and the role it plays:
 

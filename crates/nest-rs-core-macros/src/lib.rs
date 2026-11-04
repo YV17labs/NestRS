@@ -41,19 +41,17 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(injectable::injectable(args, input).into()).into()
 }
 
-/// Declares a struct as an interceptor a module brings for every unit it
-/// serves: a singleton provider, built like an `#[injectable]` one, that each
-/// site composes from the container once.
+/// Declares a struct as an interceptor a module brings around the guards of
+/// every unit it serves: a singleton provider, built like an `#[injectable]`
+/// one, that each site composes from the container once.
 ///
-/// One key, `stage = handler | unit` (default `handler`):
+/// One key, required, `stage = unit`: it sees a denial too — an opening, written
+/// in the source. An app-wide interceptor at the handler stage, after the guards
+/// and the class gate, is the root's `GlobalInterceptors<(…)>`, and bare, or
+/// `stage = handler`, is refused naming it.
 ///
-/// - `handler` runs it after the guards and the class gate, after the
-///   interceptors the app lists, in module import order.
-/// - `unit` runs it around the guards, so it sees a denial too — an opening,
-///   written in the source.
-///
-/// Its order within its stage is its `Layer::priority`; a type the app also
-/// lists runs once.
+/// Its order within its stage is its `Layer::priority`, then module import
+/// order; a type the app also lists runs once.
 #[proc_macro_attribute]
 pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(interceptor::interceptor(args, input).into()).into()

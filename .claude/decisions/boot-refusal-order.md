@@ -179,3 +179,34 @@ at mount and shared by every request.
 **Refused:** a field on `ProviderDescriptor` filled by `#[module]` from a new
 `Discoverable` method — a macro ABI change and every hand-built descriptor —
 when the seal already runs after the register phase that records the pool.
+
+## 2026-11-04 — a pool registers what it lists, after every module
+
+Before: a pooled layer had to be a reached provider as well, so a root owning
+one wrote its type twice in one list. Now (the owner's "Tout faire (Recommandé)"
+of 2026-10-31) the boot registers each listed layer nothing else registered, once
+the register phase's modules are done and before the register phase's refusals
+are read, so a duplicate, a stall or a refusal it files is read in the order
+above and the access graph still runs after it. Waiting for every module is what
+makes "already registered" a fact rather than a guess: a seed, a factory, a
+sibling listed later, a second root and a test's override all stand with no read
+of the descriptors, and a layer's optional dependency is never late.
+
+A declaration reports its layers (`also_provides`) and what they inject through
+the methods `Discoverable` already has, so the 2026-10-31 entry's refusal of a
+new descriptor field stands; the collect phase needs that report, to load a
+config a layer injects, before anyone can tell which layers the pool will
+register. Its reports name a layer a module may also list, so the access graph
+reads a listing under a key's own type before them, and the seal holds a
+declaration only to what the layers it registered inject, read off what it
+attached: a layer the app holds some other way is never built from its `#[inject]`
+fields, which for `ThrottlerGuard`, a factory's, name what no provider makes on
+purpose. A scoped layer is refused before those, as a layer, its one remedy.
+
+**The price:** a provider of the root injecting a layer only a pool lists is
+built before that layer exists, and is refused saying to list it
+(`UnbuiltCause::RegisteredByAPool`), as NestJS's `APP_*` tokens are not injectable
+by class. **Refused:** registering a layer at the declaration's own step, where
+"already provided" is a read of every reached descriptor that a hand-written
+module's later registration contradicts, and where the step's static wait on the
+layer's dependencies stalls on those of a layer something else provides.

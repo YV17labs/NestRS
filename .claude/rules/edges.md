@@ -305,16 +305,16 @@ every unit, global and scoped together, outermost first:
 
 | Unit | Unit stage | Guards, then the class gate | Exception filters | Handler-stage interceptors | Pipes |
 |---|---|---|---|---|---|
-| HTTP route | runs | pool, controller, method (`check_http`) | method, controller, app | app, modules, controller, method | the pool over the body, `#[use_pipes]`, per argument |
+| HTTP route | runs | pool, controller, method (`check_http`) | method, controller, app | app, controller, method | the pool over the body, `#[use_pipes]`, per argument |
 | HTTP self-mount's request | runs | the request stage: pool, the mount's guards, `EndpointGuards` | app | — | `/graphql`'s variables, a POST's or a graphql-ws operation's |
 | HTTP fallback (`404`, `405`) | runs | — | app | — | — |
-| GraphQL root field | — (its request ran it) | pool, resolver, field (`check`) | field, resolver, app | app, modules, resolver, field | per argument |
+| GraphQL root field | — (its request ran it) | pool, resolver, field (`check`) | field, resolver, app | app, resolver, field | per argument |
 | `#[field_resolver]` call | — | resolver's, its own | its own | its own | per argument |
-| WS message | runs | pool, gateway, message (`check`) | message, gateway, app | app, modules, gateway, message | the pool over `data`, `#[use_pipes]`, per argument |
+| WS message | runs | pool, gateway, message (`check`) | message, gateway, app | app, gateway, message | the pool over `data`, `#[use_pipes]`, per argument |
 | WS connection hook | — | — (the upgrade's) | pending | pending | — |
 | MCP request (`mcp.operation`) | runs | — (the `/mcp` request's) | — | — | — |
-| its `#[tool]`, `#[prompt]`, `#[resource]` or `#[resources]` | — | pool, host, operation (`check`) | operation, host, app | app, modules, host, operation | per argument, inside `Parameters` (none on a resource role) |
-| Job attempt, tick, listener call | runs | — (no caller) | method, host, app | app, modules, host, method | per argument |
+| its `#[tool]`, `#[prompt]`, `#[resource]` or `#[resources]` | — | pool, host, operation (`check`) | operation, host, app | app, host, operation | per argument, inside `Parameters` (none on a resource role) |
+| Job attempt, tick, listener call | runs | — (no caller) | method, host, app | app, host, method | per argument |
 
 Every unit is one `Site` dispatched through core's pipeline inside `run_unit`
 (`.claude/decisions/one-execution-pipeline.md`), its stages in the table's
@@ -323,11 +323,13 @@ controller registers on `HttpRoutes` by hand is a route all the same, on one
 site for every such route: the app's guard pool, filters and interceptors,
 inside a unit of work. The view holds the request for the whole unit, so a
 layer reading it after the tail reads its head whole.
-`Layer::priority` orders within a stage's bucket, never across. **Two ways to
-be app-wide, both at the handler stage**: `GlobalInterceptors` (the module
-the app boots) and `#[interceptor]` (a module it imports); only `#[interceptor(stage = unit)]` runs
-around the guards — `Server-Timing`, the RFC 9728 challenge — and writing it is
-the visible opening.
+`Layer::priority` orders within a stage's bucket, never across. **One spelling
+per stage**: an app-wide interceptor at the handler stage is
+`GlobalInterceptors` alone, the module the app boots', since a feature never
+chooses what covers every route, and a bare `#[interceptor]` is refused naming
+it; `#[interceptor(stage = unit)]` alone runs around the guards, brought by the
+import of its module — `Server-Timing`, the RFC 9728 challenge — so a capability
+adds no line to the root, and writing it is the visible opening.
 
 - **A denial is answered by the guard stage**: exception filters do not see
   it, unit-stage interceptors observe it. **The posture's class gate runs with
@@ -413,7 +415,7 @@ the visible opening.
   by the OpenAPI suite.
 
 **The edge-neutral pipeline is in core** (`.claude/decisions/one-execution-pipeline.md`):
-`nest_rs::core::{Interceptor, ExceptionFilter}`, `#[interceptor]` (handler
+`nest_rs::core::{Interceptor, ExceptionFilter}`, `GlobalInterceptors` (handler
 stage) and `#[interceptor(stage = unit)]`, and one `dispatch`. HTTP, a GraphQL
 field, a WS message, an MCP operation, a job's attempt, a tick and a listener
 call run on it. A WS connection hook is a unit with no site yet: it carries

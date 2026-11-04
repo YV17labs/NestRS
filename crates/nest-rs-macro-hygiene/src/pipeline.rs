@@ -1,7 +1,8 @@
-//! `#[interceptor]` at both stages, and an exception filter, each deriving
-//! `Layer`: a consumer with no direct `async-trait` or `tracing` dependency
-//! compiles the provider and the registration it emits — and the layers a
-//! route, a gateway, an MCP host and the worker witnesses bind.
+//! `#[interceptor(stage = unit)]`, the interceptors a site binds, and an
+//! exception filter, each deriving `Layer`: a consumer with no direct
+//! `async-trait` or `tracing` dependency compiles the provider and the
+//! registration it emits — and the layers a route, a gateway, an MCP host and
+//! the worker witnesses bind.
 
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ use nest_rs::core::{
 #[nest_rs::core::injectable]
 pub struct HygieneClock;
 
-#[interceptor]
+#[nest_rs::core::injectable]
 #[derive(Layer)]
 #[layer(priority = -1)]
 pub struct HygieneAudit {
@@ -40,7 +41,7 @@ impl Interceptor for HygieneTiming {
     }
 }
 
-#[interceptor(stage = handler)]
+#[nest_rs::core::injectable]
 #[derive(Layer)]
 pub struct HygieneCache;
 

@@ -446,9 +446,9 @@ A message runs through the same [pipeline](/fundamentals/interceptors/) a route
 does, outermost first: the unit stage (`#[interceptor(stage = unit)]`), the
 guard stage — the app's pool, the message's `#[use_guards]`, then the class
 gate its posture declares — the exception filters (the message's, the
-gateway's, the app's), the handler stage (the app's interceptors, the ones
-modules bring, the gateway's, the message's), and last the message itself: its
-data pipes, its payload's own pipe, the call and the mask.
+gateway's, the app's), the handler stage (the app's interceptors, the
+gateway's, the message's), and last the message itself: its data pipes, its
+payload's own pipe, the call and the mask.
 
 Bound on the `#[gateway]` struct, a layer runs around every message of the
 gateway; bound beside a `#[subscribe_message]`, around that one. Each runs once

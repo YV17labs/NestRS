@@ -55,10 +55,8 @@ Every unit runs the same stages, outermost first:
 4. **The guard stage**: the global, host and method guards, then the
    `#[authorize]` class gate. A refusal is answered here.
 5. **Exception filters**: the method's, the host's, then the app's.
-6. **The handler stage**: the app-wide interceptors — the app's global list
-   and the modules' `#[interceptor]`s, ordered together by `Layer::priority`,
-   the app's list then import order breaking a tie — then the host's, then
-   the method's.
+6. **The handler stage**: the app's global list, ordered by `Layer::priority`,
+   the order written breaking a tie, then the host's, then the method's.
 7. **The tail**: the global pipes over the input, the rules each decoded
    argument's type declares, the per-argument pipes, the handler, the
    response mask, the reply.
@@ -96,12 +94,12 @@ framework runs before them reads an HTTP body: the transport wraps it, and
 whatever reads it first — a guard, the pipe pool, an extractor — reads it
 under [the body cap and its gap bound](/http/configuration/#request-body-size-limit).
 
-Two ways to be app-wide, both at the handler stage: `GlobalInterceptors<(…)>`
-is the app's list, declared by the module it boots, and `#[interceptor]` is
-what a module import brings. Only
-an interceptor its module declares `#[interceptor(stage = unit)]` runs around
-the guards — a `404` and a refusal included — and writing `stage = unit` is
-the visible line that opens it.
+One spelling per stage. At the handler stage an app-wide interceptor is the
+app's list, `GlobalInterceptors<(…)>`, declared by the module it boots: a feature
+never chooses what wraps every handler. Around the guards — a `404` and a refusal
+included — it is what a module import brings, `#[interceptor(stage = unit)]`, for
+a capability needing nothing but its import; writing `stage = unit` is the
+visible line that opens it.
 
 ## Order holds on every edge
 

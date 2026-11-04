@@ -354,3 +354,21 @@ and `use_exception_filters_global` left `AppBuilder`: the module the app boots
 lists `GlobalInterceptors<(…)>` and `GlobalExceptionFilters<(…)>`, so its
 suites run the layers `main` does. The two ways to be app-wide stay two, the
 app's declaration and a module's `#[interceptor]`, in that order.
+
+**2026-11-04 — one spelling per stage, the 2026-10-31 entry's two ways reopened
+at the handler stage, by the owner's "Tout faire (Recommandé)" of 2026-10-31
+(the identity audit's second pass).** An app-wide interceptor at the handler
+stage is the root's `GlobalInterceptors<(…)>` alone. A feature's module listing
+an `#[interceptor]` covered every unit with no line of the app's, the reason
+the pools are the root's (`route-posture-declared.md`), with nothing ranked above
+elegance to keep it: its one user was the demo's audit. So step 6 is the app's
+list, then host, then method: the modules' bucket is gone, and a site composes
+one list less. `#[interceptor]` takes `stage = unit` alone; bare, or `stage =
+handler`, is a compile error naming the list. Step 3 stands as written: that
+stage stays module-brought, since a capability (`Server-Timing`, the RFC 9728
+challenge) adds no line to the root that way, and `stage = unit` is the visible
+opening, so *What the one function holds* is unchanged. **Refused:** retiring
+the attribute too. It would put a `GlobalInterceptors` line beside every
+capability module an app imports, against *nothing to wire*, and move no decision
+out of the source. **Refused:** a stage key defaulting to `unit`, which would
+drop the visible line.

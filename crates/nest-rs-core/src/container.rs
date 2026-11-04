@@ -20,7 +20,7 @@ use crate::close::InstallRecord;
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
 use crate::error::FactoryKind;
 use crate::factory_inputs::FactoryInputs;
-use crate::layer_chain::__private::SiteChains;
+use crate::layer_chain::__private::{SiteChains, provide_pooled_layers};
 use crate::module::{Collecting, Module, Registering};
 use crate::net::check_budgets;
 
@@ -468,6 +468,9 @@ pub struct ContainerBuilder {
     /// The providers a `#[module]` never built because a test overrode one of
     /// their keys, each with the keys the override left absent.
     overridden_providers: Vec<OverriddenProvider>,
+    /// The layers an app-wide pool registered, in order, then those it could
+    /// not: nothing else registers any of them.
+    pooled_providers: Vec<TypeId>,
     /// The checks a seed of a factory's output passes before anything reads
     /// it, by the output's type ([`__private::check_seed`]).
     seed_checks: HashMap<TypeId, SeedCheck>,
@@ -510,6 +513,18 @@ pub(crate) struct Override {
     pub(crate) type_name: &'static str,
     /// Whether a seed, a factory or a provider would have registered it.
     pub(crate) claimed: bool,
+}
+
+/// How far the register phase took a key, as an app-wide pool reads it to
+/// register what it lists.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Registration {
+    /// Nothing registers it: no seed, factory, provider or override.
+    Absent,
+    /// A test's override holds it, which nothing claimed yet.
+    Overridden,
+    /// A registration of any scope holds it, or claimed the override.
+    Held,
 }
 
 /// A provider a `#[module]` lists that a test override stands in for: it is
@@ -638,6 +653,26 @@ impl ContainerBuilder {
             }
         }
         self
+    }
+
+    /// How far the register phase took `key`.
+    pub(crate) fn registration(&self, key: TypeId) -> Registration {
+        match self.origins.get(&key) {
+            None => Registration::Absent,
+            Some((Origin::Override, _)) => Registration::Overridden,
+            Some(_) => Registration::Held,
+        }
+    }
+
+    /// Note that an app-wide pool answers for `key`, which nothing else
+    /// registers.
+    pub(crate) fn note_pooled_provider(&mut self, key: TypeId) {
+        self.pooled_providers.push(key);
+    }
+
+    /// The layers an app-wide pool answers for, each after what it injects.
+    pub(crate) fn pooled_providers(&self) -> &[TypeId] {
+        &self.pooled_providers
     }
 
     /// Whether a test overrode `key`.
@@ -1520,6 +1555,7 @@ impl ContainerBuilder {
             return Err(contested.into());
         }
         self.seed_refusal()?;
+        self = provide_pooled_layers(self);
         self.register_refusal()?;
         self.seal_refusal()?;
         Ok(self.freeze())
@@ -1680,6 +1716,9 @@ impl ContainerBuilder {
         module: TypeId,
         keys: &[TypeId],
     ) -> crate::UnbuiltCause {
+        if keys.iter().any(|key| self.pooled_providers.contains(key)) {
+            return crate::UnbuiltCause::RegisteredByAPool;
+        }
         match unbuilt_cause(reached, module, keys) {
             crate::UnbuiltCause::RegisteredLater if !self.booting => {
                 crate::UnbuiltCause::ImportedFirst

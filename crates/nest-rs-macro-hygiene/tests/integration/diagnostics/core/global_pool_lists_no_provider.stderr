@@ -1,0 +1,28 @@
+error[E0277]: `Audit` is not a provider a module or an app-wide pool can register
+  --> tests/integration/diagnostics/core/global_pool_lists_no_provider.rs:19:23
+   |
+19 | #[module(providers = [GlobalInterceptors<(Audit,)>])]
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no decorator made this type a provider
+   |
+help: the trait `Discoverable` is not implemented for `Audit`
+  --> tests/integration/diagnostics/core/global_pool_lists_no_provider.rs:8:1
+   |
+ 8 | struct Audit;
+   | ^^^^^^^^^^^^
+   = note: add `#[injectable]` to the struct, or implement `Discoverable` when what it registers is more than a decorator can say
+   = help: the following other types implement trait `Discoverable`:
+             AbilityGuard<F>
+             AuthnGuard<S>
+             DevelopmentOnlyGuard
+             EndpointGuards<V, G>
+             GlobalExceptionFilters<L>
+             GlobalGuards<L>
+             GlobalInterceptors<L>
+             GlobalPipes<L>
+           and $N others
+   = note: required for `(Audit,)` to implement `GlobalInterceptorList`
+note: required by a bound in `GlobalInterceptors`
+  --> $WORKSPACE/crates/nest-rs-core/src/interceptor.rs
+   |
+   | pub struct GlobalInterceptors<I: GlobalInterceptorList>(PhantomData<fn() -> I>);
+   |                                  ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `GlobalInterceptors`

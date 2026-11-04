@@ -458,7 +458,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `forward_principal!(Claims);` in a module, `ctx.data::<Claims>()?` in a resolver | nothing in the module; a `claims: Ambient<Claims>` parameter on the operation, no argument of the schema |
    | `nest_rs::core::ambient::<Claims>()` read by hand in a resolver, a message handler or a tool, with an `.ok_or(…)` of its own | a `caller: Ambient<Claims>` parameter — not a compile error: the hand-written read still compiles, and the parameter answers a miss opaquely, its type filed at `error` |
    | `LoaderScope as dyn GraphqlBatchContext` in a module's `providers`, `use nest_rs::seaorm::graphql::LoaderScope;` | nothing: a DataLoader batch carries the request's ambient values itself |
-   | `impl McpToolContext for X` (`capture`, `around`), provided `as dyn McpToolContext` | an `#[interceptor]` or `#[interceptor(stage = unit)]` making the value ambient (`cx.attach`, `with_ambient`), read with `nest_rs::core::ambient::<T>()` |
+   | `impl McpToolContext for X` (`capture`, `around`), provided `as dyn McpToolContext` | an interceptor making the value ambient (`cx.attach`, `with_ambient`), in `GlobalInterceptors<(…)>` or `#[interceptor(stage = unit)]`, read with `nest_rs::core::ambient::<T>()` |
    | `#[use_guards(G)]` beside an `#[mcp]` host writing rmcp's `ServerHandler` | `EndpointGuards<McpView, G>` declared by a module, or the host's tools under `#[tools]` |
    | `impl SocketContext for MyBridge` listed `as dyn SocketContext`, carrying a value from the upgrade into each message | a guard on the gateway (or the app's pool) attaching the value with `cx.attach(value)` in `check_http`: the connection carries it into every message and hook |
    | `nest_rs::ws::{SocketContext, Captured, BoxFuture}` | nothing: the seam is gone |
@@ -485,7 +485,9 @@ lists what the boot, a log or the wire shows when one is missed.
    | `impl Filter` from `nest_rs::filters`, `#[use_filters(F)]`, `use_filters_global([filter::<F>()])` | an exception filter whose `type Exception = dyn Error + Send + Sync`, bound with `#[use_exception_filters(F)]` or `GlobalExceptionFilters<(F,)>` in the providers of the module `main` boots; `#[use_filters]` is refused naming it |
    | `LayerKind::Filter` | `LayerKind::ExceptionFilter` |
    | `use nest_rs::interceptors::AppBuilderInterceptorsExt;`, `AppBuilderExceptionFiltersExt`, `AppBuilderFiltersExt`, and `App::builder().use_interceptors_global([interceptor::<I>()])`, `.use_exception_filters_global([exception_filter::<F>()])` | `GlobalInterceptors<(I,)>` and `GlobalExceptionFilters<(F,)>` from `nest_rs::core`, in the providers of the module `main` boots |
-   | `#[nest_rs::http::interceptor(priority = n)]` | `#[nest_rs::core::interceptor]`, at the handler stage, or `#[interceptor(stage = unit)]` around the guards; the order within a stage is `Layer::priority` on the struct's `Layer` impl |
+   | `#[nest_rs::http::interceptor(priority = n)]`, a module bringing it to every handler | `#[injectable]` on the struct and `GlobalInterceptors<(I,)>` in the providers of the module `main` boots, at the handler stage: a bare `#[interceptor]` is refused naming it. Around the guards, `#[nest_rs::core::interceptor(stage = unit)]`, which its module's import brings; the order within a stage is `Layer::priority` on the struct's `Layer` impl |
+   | a layer listed twice at the root, `providers = [P, GlobalPipes<(P,)>]` | `providers = [GlobalPipes<(P,)>]`, each pool alike: a pool registers what it lists unless the app already does. The longer form still boots, and a layer a module lists stays that module's |
+   | a type in a pool that no decorator makes a provider, registered by hand or by a factory | `#[injectable]` on it, or a `Discoverable` impl: a pool's entries are providers, and the compiler says so where the pool names it |
    | `#[use_interceptors]` / `#[use_exception_filters]` on a `#[controller]` only | also on a `#[resolver]` and beside its fields, a `#[gateway]` and beside a `#[subscribe_message]`, an `#[mcp]` host and beside its `#[tool]`, `#[prompt]`, `#[resource]` and `#[resources]` methods, a `#[processor]`, `#[scheduled]` or `#[listeners]` block |
    | an interceptor or exception filter written around a gateway's handler bodies by hand | `#[use_interceptors(...)]` / `#[use_exception_filters(...)]` on the `#[gateway]` or beside a `#[subscribe_message]` |
    | a global interceptor or filter written for HTTP requests alone | the same with `fn serves(&self, unit: Unit) -> bool { unit == nest_rs::http::unit::REQUEST }` on its `Layer` impl — not a compile error: without it, it now runs around every unit on every edge |
@@ -1312,6 +1314,21 @@ lists what the boot, a log or the wire shows when one is missed.
 - **An `McpIdentity` stating a name with no version behind it, or a version, a title, a
   description, a website or icons with no name behind them**, refuses the boot in a process no
   `#[nest_rs::main]` started, naming the literal to write; the binary fills both anywhere else.
+- **A bare `#[interceptor]`, or `stage = handler`,** does not compile:
+  ``#[interceptor] declares what a module brings around the guards and takes `stage = unit` ``,
+  then where the other goes. `#[injectable]` on the struct and
+  `GlobalInterceptors<(I,)>` in the providers of the module `main` boots (step 7);
+  one that must see a refusal or a `404` is `#[interceptor(stage = unit)]`.
+- **A type in a pool no decorator makes a provider** does not compile:
+  `` `X` is not a provider a module or an app-wide pool can register ``, where the
+  pool names it. `#[injectable]` on it, or a `Discoverable` impl.
+- **A provider of the root injecting a layer only a pool lists** fails the boot with
+  `UnbuiltProviderError`: ``only an app-wide pool's declaration lists it … list it in
+  `AppModule`'s `providers` ``. A module injecting one fails the access graph, naming the
+  root as the owner: list the layer in a module both reach.
+- **A pool naming a layer whose module the root does not import** boots now, where it
+  was refused: the pool registers the layer as the root's, from what the root reaches.
+  Import the module when you meant its provider and its configuration.
 - **A binary whose `main` installs no exporter, run where the deployment sets
   `OTEL_EXPORTER_OTLP_ENDPOINT`** (or a signal's own endpoint) — a platform
   injecting it into every pod included — fails `App::run` before serving,

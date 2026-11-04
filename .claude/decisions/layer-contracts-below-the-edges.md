@@ -111,3 +111,11 @@ each family implements it for its own trait object and keeps its own list
 type, and no edge names a family above it. A declaration listed below the
 root, or twice, fails the boot; a layer its module does not reach fails the
 access graph. No departure from the record.
+
+**2026-11-04 — a pool registers what it lists.** The 2026-10-31 entry's "a layer
+its module does not reach fails the access graph" moved, by the owner's "Tout
+faire (Recommandé)" of 2026-10-31 (`boot-refusal-order.md`, same date): a layer
+nothing else registered is registered by the boot as the root's, and what it
+injects is what the graph holds to the root's reach. `declare_global` takes the
+list's providers too; the direction holds, with core's plumbing still in its
+`__private`, each family keeping its own list. No departure from the record.

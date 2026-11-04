@@ -26,7 +26,7 @@ use crate::error::{
     AccessError, ContainerError, FactoryCycleError, FactoryFailedError, InitFailedError,
     OverriddenDependencyError, UnclaimedOverrideError,
 };
-use crate::layer_chain::__private::PooledLayers;
+use crate::layer_chain::__private::{PooledLayers, provide_pooled_layers};
 use crate::lifecycle::{HookFailure, HookOrder, LifecyclePhase, run_phase, run_phase_lenient};
 use crate::millis::millis;
 use crate::module::Module;
@@ -1029,7 +1029,7 @@ async fn assemble(
     for hooks in modules {
         builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
     }
-    *slot = builder;
+    *slot = provide_pooled_layers(builder);
     check_register_phase(slot)?;
     check_unclaimed_overrides(slot)?;
 
@@ -1087,7 +1087,11 @@ fn seal(
         .collect();
     let mut linked = LinkedDeclarations::linked();
     for pooled in builder.attached_meta::<PooledLayers>() {
-        linked.pool(pooled.declaration, &pooled.layers);
+        linked.pool(
+            pooled.declaration,
+            &pooled.layers,
+            pooled.injected_by_its_own(builder),
+        );
     }
     validate_access_graph(
         descriptors,
@@ -1116,7 +1120,13 @@ fn seal(
     }
     check_budgets(builder, &reached, None)?;
     let order = provider_order(descriptors, &ids);
-    let hook_order = HookOrder::new(dependency_order(descriptors, &ids, &overridden));
+    // No provider a module lists waits on a layer only a pool lists, which the
+    // seal refused above, so those run last, in the order the pool built them.
+    let hook_order = HookOrder::new(
+        dependency_order(descriptors, &ids, &overridden)
+            .into_iter()
+            .chain(builder.pooled_providers().iter().copied()),
+    );
     Ok(Sealed {
         reachable: ReachableProviders::new(reachable_provider_ids(&order, global)),
         order: ProviderOrder::new(order),

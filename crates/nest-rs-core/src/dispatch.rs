@@ -250,7 +250,7 @@ mod tests {
     use crate::discoverable::Discoverable;
     use crate::exception_filter::__private::ErasedExceptionFilter;
     use crate::exception_filter::{ExceptionFilterSpec, GlobalExceptionFilters};
-    use crate::interceptor::__private::{InterceptorStage, register_interceptor};
+    use crate::interceptor::__private::register_interceptor;
     use crate::interceptor::GlobalInterceptors;
     use crate::layer_chain::__private::declare_global;
     use crate::outcome::__private::settled;
@@ -264,7 +264,6 @@ mod tests {
 
     struct UnitStage;
     struct AppListed;
-    struct ModuleBrought;
     struct OnTheHost;
     struct OnTheMethod;
 
@@ -279,6 +278,12 @@ mod tests {
     /// Declines every failure, writing that it was tried.
     struct Declining;
     impl Layer for Declining {}
+
+    impl Discoverable for Declining {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+    }
 
     #[async_trait]
     impl ExceptionFilter for Declining {
@@ -296,13 +301,11 @@ mod tests {
         let builder = ContainerBuilder::default()
             .provide(Recording::<UnitStage>::new("unit"))
             .provide(Recording::<AppListed>::new("app"))
-            .provide(Recording::<ModuleBrought>::new("module"))
             .provide(Recording::<OnTheHost>::new("host"))
             .provide(Recording::<OnTheMethod>::new("method"))
             .provide(Declining);
         let builder = GlobalInterceptors::<(Recording<AppListed>,)>::register(builder);
-        let builder = register_interceptor::<Recording<UnitStage>>(builder, InterceptorStage::Unit);
-        register_interceptor::<Recording<ModuleBrought>>(builder, InterceptorStage::Handler)
+        register_interceptor::<Recording<UnitStage>>(builder)
             .build()
             .expect("the container builds")
     }
@@ -377,13 +380,11 @@ mod tests {
                 "guards",
                 "gate",
                 "app in",
-                "module in",
                 "host in",
                 "method in",
                 "handler",
                 "method out",
                 "host out",
-                "module out",
                 "app out",
                 "unit out",
             ],
@@ -398,13 +399,11 @@ mod tests {
                 "guards",
                 "gate",
                 "app in",
-                "module in",
                 "host in",
                 "method in",
                 "handler",
                 "method out",
                 "host out",
-                "module out",
                 "app out",
                 "filter",
                 "unit out",
@@ -637,7 +636,7 @@ mod tests {
         class_gate: Option<ClassGate>,
     ) -> UnitChains {
         let builder = ContainerBuilder::default().provide(Outside);
-        let container = register_interceptor::<Outside>(builder, InterceptorStage::Unit)
+        let container = register_interceptor::<Outside>(builder)
             .build()
             .expect("the container builds");
         composed(
@@ -982,8 +981,9 @@ mod tests {
         let builder = declare_global::<dyn ErasedExceptionFilter, ExceptionFilterSpec>(
             builder,
             filters.into_iter().map(|spec| spec.0).collect(),
+            Vec::new(),
         );
-        let container = register_interceptor::<ReadsTheAnswer>(builder, InterceptorStage::Unit)
+        let container = register_interceptor::<ReadsTheAnswer>(builder)
             .build()
             .expect("the container builds");
         composed(
@@ -1019,6 +1019,12 @@ mod tests {
         struct Answering;
         impl Layer for Answering {}
 
+        impl Discoverable for Answering {
+            fn register(builder: ContainerBuilder) -> ContainerBuilder {
+                builder
+            }
+        }
+
         #[async_trait]
         impl ExceptionFilter for Answering {
             type Exception = HandlerFailed;
@@ -1033,7 +1039,7 @@ mod tests {
             .provide(ReadsTheAnswer)
             .provide(Answering);
         let builder = GlobalExceptionFilters::<(Answering,)>::register(builder);
-        let container = register_interceptor::<ReadsTheAnswer>(builder, InterceptorStage::Unit)
+        let container = register_interceptor::<ReadsTheAnswer>(builder)
             .build()
             .expect("the container builds");
         let chains = composed(
@@ -1054,6 +1060,12 @@ mod tests {
     async fn a_global_filter_answers_after_the_methods_declined() {
         struct Answering;
         impl Layer for Answering {}
+
+        impl Discoverable for Answering {
+            fn register(builder: ContainerBuilder) -> ContainerBuilder {
+                builder
+            }
+        }
 
         #[async_trait]
         impl ExceptionFilter for Answering {

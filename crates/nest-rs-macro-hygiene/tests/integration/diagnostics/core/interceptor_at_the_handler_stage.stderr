@@ -1,0 +1,13 @@
+error: #[interceptor] declares what a module brings around the guards and takes `stage = unit`: an app-wide interceptor at the handler stage is the root's — write `#[injectable]` on the struct and list it in `GlobalInterceptors<(…)>`, in the providers of the module the app boots
+ --> tests/integration/diagnostics/core/interceptor_at_the_handler_stage.rs:7:1
+  |
+7 | #[interceptor]
+  | ^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `interceptor` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: #[interceptor] declares what a module brings around the guards and takes `stage = unit`: an app-wide interceptor at the handler stage is the root's — write `#[injectable]` on the struct and list it in `GlobalInterceptors<(…)>`, in the providers of the module the app boots
+  --> tests/integration/diagnostics/core/interceptor_at_the_handler_stage.rs:11:23
+   |
+11 | #[interceptor(stage = handler)]
+   |                       ^^^^^^^

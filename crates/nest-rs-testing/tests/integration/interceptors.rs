@@ -1,8 +1,8 @@
 //! Interceptors on the HTTP pipeline: binding per handler and controller, the
 //! guards and the class gate before every handler-stage interceptor, the
 //! cross-scope `TypeId` dedup, the unit stage around the guards seeing what
-//! the router answers itself, a module's `#[interceptor]` being the
-//! container's own provider, and a route a controller registers by hand
+//! the router answers itself, a module's `#[interceptor(stage = unit)]` being
+//! the container's own provider, and a route a controller registers by hand
 //! running as a unit of the pipeline.
 
 use std::sync::Arc;
@@ -301,16 +301,15 @@ async fn same_interceptor_at_all_three_scopes_runs_once() {
     );
 }
 
-/// What a module's `#[interceptor]` counted, on the provider it depends on.
+/// What a module's interceptor counted, on the provider it depends on.
 #[injectable]
 #[derive(Default)]
 struct Units {
     seen: AtomicUsize,
 }
 
-/// A module's handler-stage interceptor whose dependency its module lists
-/// after it.
-#[interceptor]
+/// A module's interceptor whose dependency its module lists after it.
+#[interceptor(stage = unit)]
 struct CountUnits {
     #[inject]
     units: Arc<Units>,

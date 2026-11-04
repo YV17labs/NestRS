@@ -12,7 +12,7 @@ use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait,
 #[derive(Default)]
 struct Tracing;
 
-#[interceptor(stag = unit, stage = handler)]
+#[interceptor(stag = unit, stage = unit)]
 #[derive(Default)]
 struct Timing;
 

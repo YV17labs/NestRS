@@ -24,6 +24,7 @@ mod exception_filter;
 mod export;
 mod instance;
 mod interceptor;
+mod layer_chain;
 mod lifecycle;
 #[cfg(feature = "logging")]
 mod logging;

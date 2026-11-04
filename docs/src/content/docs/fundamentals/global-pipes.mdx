@@ -54,8 +54,8 @@ The `http` feature turns it on, and `http` is a default.
 ## Wire it in
 
 Unlike a per-argument [pipe](/fundamentals/pipes/), a global pipe is a
-provider: `#[injectable]`, listed in a module's `providers`, called with
-`&self`. The module the app boots lists it once:
+provider: `#[injectable]`, called with `&self`. The module the app boots lists
+it once, and the pool registers it unless the app already does:
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::pipes::GlobalPipes;
@@ -63,14 +63,15 @@ use features::pipes::TrimStrings;
 
 #[module(
     imports = [/* … */],
-    providers = [TrimStrings, GlobalPipes<(TrimStrings,)>],
+    providers = [GlobalPipes<(TrimStrings,)>],
 )]
 pub struct BlogModule;
 ```
 
-A pipe in the pool the declaring module does not reach fails the boot, naming
-it, whether or not the app serves HTTP; so does a pool a module the app
-imports declares, or a second one.
+What the pipe injects is held to that module's imports: a pipe the pool cannot
+build fails the boot, naming it, whether or not the app serves HTTP; so does a
+pool a module the app imports declares, or a second one. A pipe a feature's
+module lists stays that module's, and the pool only names it.
 
 ## What a pipe is handed
 

@@ -119,3 +119,12 @@ guards run before a WS or MCP unit is known, so nothing can read it there.
   `#[public]` unit no ability reached, as `check_http` does on a route, so the word
   means one thing and the unit reads `define_visitor`'s rules; a gated unit still fails
   closed.
+
+## 2026-11-04 — the reason holds for interceptors too
+
+"A feature never chooses what covers every route" named the pools while a
+module's `#[interceptor]` did exactly that at the handler stage. It now holds
+there (the owner's "Tout faire (Recommandé)" of 2026-10-31, the identity audit's
+second pass; `one-execution-pipeline.md`, the same date): that stage's app-wide
+list is the root's alone. What a module still brings runs at the unit stage,
+says so in its source, and decides no posture.

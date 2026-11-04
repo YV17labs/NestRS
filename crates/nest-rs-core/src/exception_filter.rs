@@ -133,8 +133,9 @@ fn layer_spec<F: ExceptionFilter>() -> LayerSpec<dyn __private::ErasedExceptionF
 /// The exception filters every unit tries after its method's and its host's,
 /// first listed first — declared once, in the providers of the module the app
 /// boots, so the binary and its test suites run the same pool. A module the
-/// app imports listing it fails the boot, as does a second declaration; a
-/// filter the declaring module does not reach fails the access graph.
+/// app imports listing it fails the boot, as does a second declaration. Each
+/// entry is a provider, registered here unless the app already registers it, so
+/// what it injects is held to the root's imports.
 ///
 /// ```
 /// use std::error::Error;
@@ -157,7 +158,7 @@ fn layer_spec<F: ExceptionFilter>() -> LayerSpec<dyn __private::ErasedExceptionF
 ///     }
 /// }
 ///
-/// #[module(providers = [Logged, GlobalExceptionFilters<(Logged,)>])]
+/// #[module(providers = [GlobalExceptionFilters<(Logged,)>])]
 /// struct AppModule;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> anyhow::Result<()> {
@@ -174,6 +175,10 @@ pub trait GlobalExceptionFilterList: listed::Listed + 'static {
     /// Each filter's spec, in order.
     #[doc(hidden)]
     fn __specs() -> Vec<LayerSpec<dyn __private::ErasedExceptionFilter>>;
+
+    /// Each entry, as the provider a pool registers where nothing else did.
+    #[doc(hidden)]
+    fn __providers() -> Vec<crate::layer_chain::__private::PooledProvider>;
 }
 
 mod listed {

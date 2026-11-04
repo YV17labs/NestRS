@@ -198,7 +198,7 @@ mod pipeline {
 
     use nest_rs_core::{
         Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext,
-        injectable, interceptor, module,
+        injectable, module,
     };
     use nest_rs_core::{async_trait, code};
     use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
@@ -469,47 +469,6 @@ mod pipeline {
             "{body}"
         );
         assert!(!body.to_string().contains("10.0.0.9"), "{body}");
-    }
-
-    static MODULE_WIDE: AtomicUsize = AtomicUsize::new(0);
-
-    /// A module's own `#[interceptor]`: app-wide, at the handler stage.
-    #[interceptor]
-    #[derive(Default)]
-    struct ModuleWide;
-
-    impl Layer for ModuleWide {}
-
-    #[async_trait]
-    impl Interceptor for ModuleWide {
-        async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
-            MODULE_WIDE.fetch_add(1, Ordering::SeqCst);
-            next.run(cx).await
-        }
-    }
-
-    #[module(
-        imports = [ShelfModule],
-        providers = [ModuleWide],
-    )]
-    struct ModuleWideRoot;
-
-    #[tokio::test]
-    async fn a_modules_interceptor_runs_around_each_root_field_once() {
-        let _serial = SERIAL.lock().await;
-        MODULE_WIDE.store(0, Ordering::SeqCst);
-        let app = TestApp::for_module::<ModuleWideRoot>()
-            .await
-            .expect("boots");
-
-        let body = post(&app, "{ count shelves { label } }").await;
-
-        assert_eq!(body["data"]["count"], 3, "{body}");
-        assert_eq!(
-            MODULE_WIDE.load(Ordering::SeqCst),
-            2,
-            "once per root field — none at the request, none per parent row: {body}",
-        );
     }
 
     static OPENINGS: AtomicUsize = AtomicUsize::new(0);

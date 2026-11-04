@@ -1,4 +1,4 @@
-use nest_rs::core::module;
+use nest_rs::core::{GlobalInterceptors, module};
 use nest_rs::guards::GlobalGuards;
 use nest_rs::health::HealthModule;
 use nest_rs::openapi::OpenApiModule;
@@ -8,7 +8,7 @@ use nest_rs::server_timing::ServerTimingModule;
 use nest_rs::throttler::ThrottlerModule;
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};
-use features::audit::AuditHttpModule;
+use features::audit::{AuditHttpModule, AuditInterceptor};
 use features::authn::AuthnGuard;
 use features::authz::AuthzGuard;
 use features::notifications::NotificationsHttpModule;
@@ -38,6 +38,9 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         AudioHttpModule,
         AudioScheduleModule,
     ],
-    providers = [GlobalGuards<(AuthnGuard, AuthzGuard)>],
+    providers = [
+        GlobalGuards<(AuthnGuard, AuthzGuard)>,
+        GlobalInterceptors<(AuditInterceptor,)>,
+    ],
 )]
 pub struct ApiModule;

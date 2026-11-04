@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::__private::{InterceptorStage, register_interceptor};
+use nest_rs_core::__private::register_interceptor;
 use nest_rs_core::operation_log::Unit;
 use nest_rs_core::{
     ContainerBuilder, Discoverable, Edge, Interceptor, Layer, Next, Outcome, UnitContext,
@@ -94,7 +94,7 @@ impl Discoverable for ServerTiming {
         if !config.enabled.is_open() {
             return builder;
         }
-        register_interceptor::<Self>(builder.provide(ServerTiming), InterceptorStage::Unit)
+        register_interceptor::<Self>(builder.provide(ServerTiming))
     }
 }
 

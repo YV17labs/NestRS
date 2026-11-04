@@ -1,7 +1,7 @@
-//! Boot-time fail-secure contract of the layer pool: a global layer its
-//! declaring module does not reach or that is not a singleton, a pool declared
-//! below the module the app boots or twice, a controller guard no module
-//! provides, or two controllers on one prefix, fail the boot.
+//! Boot-time fail-secure contract of the layer pool: a global layer injecting
+//! what no module provides or that is not a singleton, a pool declared below
+//! the module the app boots or twice, a controller guard no module provides, or
+//! two controllers on one prefix, fail the boot.
 
 use nest_rs_core::{
     Caught, ContainerBuilder, Discoverable, ExceptionFilter, GlobalExceptionFilters,
@@ -65,29 +65,67 @@ impl Guard for GhostGuard {
 
 impl GuardFor<nest_rs_http::HttpView> for GhostGuard {}
 
-/// Deliberately **not** listed in any module's providers.
-#[injectable]
-#[derive(Default)]
-struct GhostInterceptor;
+/// What no module provides, so what injects it cannot be built.
+struct NobodyProvides;
 
-impl Layer for GhostInterceptor {}
+/// A guard only its pool lists, injecting what no module provides.
+#[expect(dead_code, reason = "the boot refuses it, so nothing reads it")]
+#[injectable]
+struct NeedyGuard {
+    #[inject]
+    nobody: std::sync::Arc<NobodyProvides>,
+}
+
+impl Layer for NeedyGuard {}
 
 #[async_trait]
-impl Interceptor for GhostInterceptor {
+impl Guard for NeedyGuard {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for NeedyGuard {}
+
+/// An interceptor only its pool lists, injecting what no module provides.
+#[expect(dead_code, reason = "the boot refuses it, so nothing reads it")]
+#[injectable]
+struct NeedyInterceptor {
+    #[inject]
+    nobody: std::sync::Arc<NobodyProvides>,
+}
+
+impl Layer for NeedyInterceptor {}
+
+#[async_trait]
+impl Interceptor for NeedyInterceptor {
     async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
         next.run(cx).await
     }
 }
 
-/// Deliberately **not** listed in any module's providers.
+/// A filter only its pool lists, injecting what no module provides.
+#[expect(dead_code, reason = "the boot refuses it, so nothing reads it")]
 #[injectable]
-#[derive(Default)]
-struct GhostExceptionFilter;
+struct NeedyExceptionFilter {
+    #[inject]
+    nobody: std::sync::Arc<NobodyProvides>,
+}
 
-impl Layer for GhostExceptionFilter {}
+impl Layer for NeedyExceptionFilter {}
 
 #[async_trait]
-impl ExceptionFilter for GhostExceptionFilter {
+impl ExceptionFilter for NeedyExceptionFilter {
     type Exception = std::fmt::Error;
 
     async fn catch(&self, _err: &std::fmt::Error, _cx: &mut UnitContext<'_>) -> Caught {
@@ -95,14 +133,17 @@ impl ExceptionFilter for GhostExceptionFilter {
     }
 }
 
-/// Deliberately **not** listed in any module's providers.
+/// A pipe only its pool lists, injecting what no module provides.
+#[expect(dead_code, reason = "the boot refuses it, so nothing reads it")]
 #[injectable]
-#[derive(Default)]
-struct GhostPipe;
+struct NeedyPipe {
+    #[inject]
+    nobody: std::sync::Arc<NobodyProvides>,
+}
 
-impl Layer for GhostPipe {}
+impl Layer for NeedyPipe {}
 
-impl GlobalPipe for GhostPipe {}
+impl GlobalPipe for NeedyPipe {}
 
 #[module(providers = [WiredGuard])]
 struct GuardOnlyModule;
@@ -115,88 +156,88 @@ fn boot_error(result: anyhow::Result<TestApp>, expectation: &str) -> anyhow::Err
     }
 }
 
-/// The access graph's refusal of a global pool listing `layer`, which no
-/// module provides.
+/// The access graph's refusal of a global pool listing `layer`, which injects
+/// what no module provides.
 #[track_caller]
-fn refused_unreached(result: anyhow::Result<HeadlessApp>, layer: &str) {
+fn refused_unmet(result: anyhow::Result<HeadlessApp>, layer: &str) {
     let Err(err) = result else {
-        panic!("a pool listing {layer}, which nothing provides, would boot without it");
+        panic!("a pool listing {layer}, which cannot be built, would boot without it");
     };
     let chain = format!("{err:#}");
     let unmet = err
         .downcast_ref::<MissingDependencyError>()
         .unwrap_or_else(|| panic!("the access graph refuses it: {chain}"));
     assert!(
-        unmet.dependency.ends_with(layer) && unmet.consumer.contains(layer),
-        "the refusal names the declaration and {layer}: {chain}"
+        unmet.dependency.ends_with("NobodyProvides") && unmet.consumer.contains(layer),
+        "the refusal names the declaration of {layer} and what it needs: {chain}"
     );
 }
 
-#[module(providers = [WiredGuard, GlobalGuards<(GhostGuard,)>])]
-struct GhostGuardPoolModule;
+#[module(providers = [GlobalGuards<(NeedyGuard,)>])]
+struct NeedyGuardPoolModule;
 
 #[tokio::test]
-async fn a_global_guard_its_module_does_not_reach_fails_the_boot() {
+async fn a_global_guard_that_cannot_be_built_fails_the_boot() {
     let err = boot_error(
-        TestApp::for_module::<GhostGuardPoolModule>().await,
-        "a global guard with no provider must fail boot, not silently drop",
+        TestApp::for_module::<NeedyGuardPoolModule>().await,
+        "a global guard that cannot be built must fail boot, not silently drop",
     );
     assert!(
-        format!("{err:#}").contains("GhostGuard"),
+        format!("{err:#}").contains("NeedyGuard"),
         "the error names the unresolvable guard: {err:#}",
     );
 }
 
 #[tokio::test]
-async fn an_app_serving_no_http_still_fails_on_an_unreached_global_guard() {
-    refused_unreached(
+async fn an_app_serving_no_http_still_fails_on_a_global_guard_that_cannot_be_built() {
+    refused_unmet(
         HeadlessApp::builder()
-            .module::<GhostGuardPoolModule>()
+            .module::<NeedyGuardPoolModule>()
             .build_headless()
             .await,
-        "GhostGuard",
+        "NeedyGuard",
     );
 }
 
-#[module(providers = [WiredGuard, GlobalInterceptors<(GhostInterceptor,)>])]
-struct GhostInterceptorPoolModule;
+#[module(providers = [GlobalInterceptors<(NeedyInterceptor,)>])]
+struct NeedyInterceptorPoolModule;
 
 #[tokio::test]
-async fn an_app_serving_no_http_still_fails_on_an_unreached_global_interceptor() {
-    refused_unreached(
+async fn an_app_serving_no_http_still_fails_on_a_global_interceptor_that_cannot_be_built() {
+    refused_unmet(
         HeadlessApp::builder()
-            .module::<GhostInterceptorPoolModule>()
+            .module::<NeedyInterceptorPoolModule>()
             .build_headless()
             .await,
-        "GhostInterceptor",
+        "NeedyInterceptor",
     );
 }
 
-#[module(providers = [WiredGuard, GlobalPipes<(GhostPipe,)>])]
-struct GhostPipePoolModule;
+#[module(providers = [GlobalPipes<(NeedyPipe,)>])]
+struct NeedyPipePoolModule;
 
 #[tokio::test]
-async fn an_app_serving_no_http_still_fails_on_an_unreached_global_pipe() {
-    refused_unreached(
+async fn an_app_serving_no_http_still_fails_on_a_global_pipe_that_cannot_be_built() {
+    refused_unmet(
         HeadlessApp::builder()
-            .module::<GhostPipePoolModule>()
+            .module::<NeedyPipePoolModule>()
             .build_headless()
             .await,
-        "GhostPipe",
+        "NeedyPipe",
     );
 }
 
-#[module(providers = [WiredGuard, GlobalExceptionFilters<(GhostExceptionFilter,)>])]
-struct GhostExceptionFilterPoolModule;
+#[module(providers = [GlobalExceptionFilters<(NeedyExceptionFilter,)>])]
+struct NeedyExceptionFilterPoolModule;
 
 #[tokio::test]
-async fn an_app_serving_no_http_still_fails_on_an_unreached_global_exception_filter() {
-    refused_unreached(
+async fn an_app_serving_no_http_still_fails_on_a_global_filter_that_cannot_be_built() {
+    refused_unmet(
         HeadlessApp::builder()
-            .module::<GhostExceptionFilterPoolModule>()
+            .module::<NeedyExceptionFilterPoolModule>()
             .build_headless()
             .await,
-        "GhostExceptionFilter",
+        "NeedyExceptionFilter",
     );
 }
 

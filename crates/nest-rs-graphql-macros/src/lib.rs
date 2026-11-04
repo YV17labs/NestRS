@@ -102,8 +102,8 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Each delegating method runs its field's pipeline, in order: the guards (the
 /// app's pool on a root field, the resolver's and the method's), the posture's
 /// class gate (`nest_rs_authz::class_gate`), the exception filters and
-/// interceptors (on a root field the app's, the modules' `#[interceptor]`s and
-/// the resolver's, then the method's; on a field resolver its own alone), the
+/// interceptors (on a root field the app's and the resolver's, then the
+/// method's; on a field resolver its own alone), the
 /// per-argument pipes, the inherent method, then the response mask over what it
 /// returned.
 #[proc_macro_attribute]

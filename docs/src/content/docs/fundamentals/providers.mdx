@@ -102,7 +102,7 @@ the container and listed in `providers = [...]`:
 |-----------|----------------|
 | `#[injectable]` | `PostsService` — data layer |
 | `#[controller]` | `PostsController` — HTTP routes |
-| `#[interceptor]` | Cross-cutting HTTP wrapper (logging, DB context, …) |
+| `#[interceptor(stage = unit)]` | What a module brings around every unit's guards (timing, a challenge, …) |
 
 Other transports use the same idea (`#[resolver]`, `#[gateway]`,
 `#[processor]`, …) when you add them. See their categories when you need

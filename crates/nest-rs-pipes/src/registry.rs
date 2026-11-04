@@ -28,8 +28,9 @@ pub fn pipe<P: GlobalPipe + 'static>() -> PipeSpec {
 /// over the graphql-ws socket, and every WebSocket message's `data`, in the
 /// order listed — declared once, in the providers of the module the app boots,
 /// so the binary and its test suites run the same pool. A module the app
-/// imports listing it fails the boot, as does a second declaration; a pipe the
-/// declaring module does not reach fails the access graph.
+/// imports listing it fails the boot, as does a second declaration. Each entry
+/// is a provider, registered here unless the app already registers it, so what
+/// it injects is held to the root's imports.
 ///
 /// ```
 /// # use nest_rs_core::{App, Layer, injectable, module};
@@ -41,7 +42,7 @@ pub fn pipe<P: GlobalPipe + 'static>() -> PipeSpec {
 ///
 /// impl GlobalPipe for StripUnknownFields {}
 ///
-/// #[module(providers = [StripUnknownFields, GlobalPipes<(StripUnknownFields,)>])]
+/// #[module(providers = [GlobalPipes<(StripUnknownFields,)>])]
 /// struct AppModule;
 ///
 /// # #[nest_rs_core::main]
@@ -58,6 +59,10 @@ pub trait GlobalPipeList: listed::Listed + 'static {
     /// Each pipe's spec, in order.
     #[doc(hidden)]
     fn __specs() -> Vec<PipeSpec>;
+
+    /// Each entry, as the provider a pool registers where nothing else did.
+    #[doc(hidden)]
+    fn __providers() -> Vec<nest_rs_core::__private::PooledProvider>;
 }
 
 mod listed {

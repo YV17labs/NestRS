@@ -11,7 +11,6 @@ use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory};
 use crate::exception_filter::__private::ErasedExceptionFilter;
 use crate::exception_filter::ExceptionFilterSpec;
 use crate::handler::Handler;
-use crate::interceptor::__private::InterceptorStage;
 use crate::interceptor::{Interceptor, InterceptorSpec, module_interceptors};
 use crate::layer::{Layer, LayerSite};
 use crate::layer_chain::__private::{
@@ -229,7 +228,7 @@ pub struct UnitChains {
     pub(crate) class_gate: Option<ClassGate>,
     /// The method's first, then the host's, then the app's.
     pub(crate) exception_filters: Vec<ResolvedLayer<dyn ErasedExceptionFilter>>,
-    /// Outermost first: the app's, the modules', the host's, the method's.
+    /// Outermost first: the app's, the host's, the method's.
     pub(crate) handler_stage: Vec<ResolvedLayer<dyn Interceptor>>,
 }
 
@@ -276,7 +275,7 @@ impl UnitChains {
         let unit_stage = if global.unit_stage {
             let mut stage = resolve_scoped(
                 container,
-                module_interceptors(container, InterceptorStage::Unit),
+                module_interceptors(container),
                 LayerSite::Global,
                 &label,
             )?;
@@ -291,12 +290,6 @@ impl UnitChains {
         let mut global_interceptors = Vec::new();
         if global.handler_stage {
             global_interceptors.extend(resolve_global_layers::<dyn Interceptor>(container));
-            global_interceptors.extend(resolve_scoped(
-                container,
-                module_interceptors(container, InterceptorStage::Handler),
-                LayerSite::Global,
-                &label,
-            )?);
             global_interceptors.retain(|entry| entry.layer.serves(unit));
         }
         let mut handler_stage = compose_chain(
@@ -482,17 +475,16 @@ mod tests {
         declare_global::<dyn Interceptor, InterceptorSpec>(
             builder,
             specs.into_iter().map(|spec| spec.0).collect(),
+            Vec::new(),
         )
     }
 
     #[test]
-    fn the_handler_stage_runs_the_apps_then_the_modules_then_the_hosts_then_the_methods() {
+    fn the_handler_stage_runs_the_apps_then_the_hosts_then_the_methods() {
         let builder = ContainerBuilder::default()
             .provide(Recording::<First>::new("app"))
-            .provide(Recording::<Second>::new("module"))
             .provide(Recording::<Third>::new("host"))
             .provide(Recording::<Fourth>::new("method"));
-        let builder = register_interceptor::<Recording<Second>>(builder, InterceptorStage::Handler);
         let container = app_lists(builder, vec![interceptor::<Recording<First>>()])
             .build()
             .expect("the container builds");
@@ -510,26 +502,26 @@ mod tests {
         );
         assert_eq!(
             names(&chains.handler_stage),
-            [
-                "Recording<First>",
-                "Recording<Second>",
-                "Recording<Third>",
-                "Recording<Fourth>"
-            ],
+            ["Recording<First>", "Recording<Third>", "Recording<Fourth>"],
         );
     }
 
     #[test]
-    fn a_priority_orders_within_the_apps_wide_bucket_and_import_order_breaks_a_tie() {
+    fn a_priority_orders_within_the_apps_list_and_the_order_written_breaks_a_tie() {
         let builder = ContainerBuilder::default()
-            .provide(Recording::<First>::new("app"))
-            .provide(Recording::<Second>::new("late module").with_priority(5))
-            .provide(Recording::<Third>::new("early module").with_priority(-5));
-        let builder = register_interceptor::<Recording<Second>>(builder, InterceptorStage::Handler);
-        let builder = register_interceptor::<Recording<Third>>(builder, InterceptorStage::Handler);
-        let container = app_lists(builder, vec![interceptor::<Recording<First>>()])
-            .build()
-            .expect("the container builds");
+            .provide(Recording::<First>::new("first"))
+            .provide(Recording::<Second>::new("late").with_priority(5))
+            .provide(Recording::<Third>::new("early").with_priority(-5));
+        let container = app_lists(
+            builder,
+            vec![
+                interceptor::<Recording<Second>>(),
+                interceptor::<Recording<First>>(),
+                interceptor::<Recording<Third>>(),
+            ],
+        )
+        .build()
+        .expect("the container builds");
         let chains = composed(
             &container,
             &SEND,
@@ -547,9 +539,9 @@ mod tests {
             .provide(Recording::<First>::new("first"))
             .provide(Recording::<Second>::new("second").with_priority(-1))
             .provide(Recording::<Third>::new("third"));
-        let builder = register_interceptor::<Recording<First>>(builder, InterceptorStage::Unit);
-        let builder = register_interceptor::<Recording<Second>>(builder, InterceptorStage::Unit);
-        let container = register_interceptor::<Recording<Third>>(builder, InterceptorStage::Unit)
+        let builder = register_interceptor::<Recording<First>>(builder);
+        let builder = register_interceptor::<Recording<Second>>(builder);
+        let container = register_interceptor::<Recording<Third>>(builder)
             .build()
             .expect("the container builds");
         let chains = composed(
@@ -570,7 +562,7 @@ mod tests {
             .provide(Recording::<First>::new("unit stage").serving(JOB))
             .provide(Recording::<Second>::new("app").serving(JOB))
             .provide(Recording::<Third>::new("bound").serving(JOB));
-        let builder = register_interceptor::<Recording<First>>(builder, InterceptorStage::Unit);
+        let builder = register_interceptor::<Recording<First>>(builder);
         let container = app_lists(
             builder,
             vec![
@@ -610,7 +602,7 @@ mod tests {
     fn an_interceptor_at_the_unit_stage_runs_there_once_whatever_lists_it_at_the_handler_stage() {
         let logs = nest_rs_testing::LogCapture::install();
         let builder = ContainerBuilder::default().provide(Recording::<First>::new("timing"));
-        let builder = register_interceptor::<Recording<First>>(builder, InterceptorStage::Unit);
+        let builder = register_interceptor::<Recording<First>>(builder);
         let container = app_lists(builder, vec![interceptor::<Recording<First>>()])
             .build()
             .expect("the container builds");
@@ -644,35 +636,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_module_interceptor_the_app_also_lists_runs_once_where_the_app_listed_it() {
-        let builder = ContainerBuilder::default()
-            .provide(Recording::<First>::new("first"))
-            .provide(Recording::<Second>::new("second"));
-        let builder = register_interceptor::<Recording<First>>(builder, InterceptorStage::Handler);
-        let container = app_lists(
-            builder,
-            vec![
-                interceptor::<Recording<Second>>(),
-                interceptor::<Recording<First>>(),
-            ],
-        )
-        .build()
-        .expect("the container builds");
-        let chains = composed(
-            &container,
-            &SEND,
-            &declared(SiteLayers::default, GlobalLayers::ALL),
-        );
-        assert_eq!(
-            names(&chains.handler_stage),
-            ["Recording<Second>", "Recording<First>"],
-        );
-    }
-
     /// Declines every failure; `M` gives each one a type of its own.
     struct Declines<M>(std::marker::PhantomData<fn() -> M>);
     impl<M: 'static> Layer for Declines<M> {}
+
+    impl<M> Discoverable for Declines<M> {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+    }
 
     #[async_trait]
     impl<M: 'static> ExceptionFilter for Declines<M> {
@@ -719,7 +691,7 @@ mod tests {
             .provide(Recording::<First>::new("unit stage"))
             .provide(Recording::<Second>::new("app"))
             .provide(declines::<Third>());
-        let builder = register_interceptor::<Recording<First>>(builder, InterceptorStage::Unit);
+        let builder = register_interceptor::<Recording<First>>(builder);
         let builder = app_lists(builder, vec![interceptor::<Recording<Second>>()]);
         GlobalExceptionFilters::<(Declines<Third>,)>::register(builder)
             .build()

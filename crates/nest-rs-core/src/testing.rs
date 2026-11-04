@@ -12,6 +12,8 @@ use std::task::{Context, Poll, Waker};
 
 use async_trait::async_trait;
 
+use crate::container::ContainerBuilder;
+use crate::discoverable::Discoverable;
 use crate::dispatch::{BoxFuture, GuardStage, Tail};
 use crate::handler::{Handler, HandlerDeclaration, MetaLevels, Posture, declare_handler};
 use crate::layer::Layer;
@@ -95,6 +97,13 @@ pub(crate) struct Recording<M> {
     priority: i8,
     serves: Option<Unit>,
     marker: PhantomData<fn() -> M>,
+}
+
+// A test provides it by hand, so what a pool lists stands.
+impl<M> Discoverable for Recording<M> {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
+    }
 }
 
 impl<M> Recording<M> {

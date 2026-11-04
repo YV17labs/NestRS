@@ -27,7 +27,8 @@ use crate::unit_context::{UnitContext, take_pending};
 ///
 /// An interceptor runs at the handler stage, after the guards and the
 /// posture's class gate, unless its module declares it at the unit stage
-/// (`#[interceptor(stage = unit)]`), around the guards. What it returns says
+/// (`#[interceptor(stage = unit)]`), around the guards. App-wide at the handler
+/// stage, it is the root's to list, in [`GlobalInterceptors`]. What it returns says
 /// whether the unit ran or was answered ([`Settled`](crate::Settled)), so
 /// returning neither does not compile; and once the rest of the unit failed,
 /// answering success leaves it failed, with one `warn` naming the
@@ -290,11 +291,12 @@ fn layer_spec<I: Interceptor>() -> LayerSpec<dyn Interceptor> {
 }
 
 /// The interceptors every unit runs at the handler stage, after its guards and
-/// its posture's class gate, first listed outermost and before any a module
-/// brings — declared once, in the providers of the module the app boots, so
-/// the binary and its test suites run the same pool. A module the app imports
-/// listing it fails the boot, as does a second declaration; an interceptor the
-/// declaring module does not reach fails the access graph.
+/// its posture's class gate, first listed outermost — declared once, in the
+/// providers of the module the app boots, so the binary and its test suites run
+/// the same pool, and the one place an app-wide interceptor at that stage is
+/// written. A module the app imports listing it fails the boot, as does a
+/// second declaration. Each entry is a provider, registered here unless the app
+/// already registers it, so what it injects is held to the root's imports.
 ///
 /// An interceptor that must run around the guards — a timing, a challenge
 /// stamped on a refusal — is declared `#[interceptor(stage = unit)]` by its
@@ -317,7 +319,7 @@ fn layer_spec<I: Interceptor>() -> LayerSpec<dyn Interceptor> {
 ///     }
 /// }
 ///
-/// #[module(providers = [Audit, GlobalInterceptors<(Audit,)>])]
+/// #[module(providers = [GlobalInterceptors<(Audit,)>])]
 /// struct AppModule;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> anyhow::Result<()> {
@@ -334,6 +336,10 @@ pub trait GlobalInterceptorList: listed::Listed + 'static {
     /// Each interceptor's spec, in order.
     #[doc(hidden)]
     fn __specs() -> Vec<LayerSpec<dyn Interceptor>>;
+
+    /// Each entry, as the provider a pool registers where nothing else did.
+    #[doc(hidden)]
+    fn __providers() -> Vec<crate::layer_chain::__private::PooledProvider>;
 }
 
 mod listed {
@@ -360,67 +366,37 @@ pub(crate) mod __private {
     use crate::container::ContainerBuilder;
     use crate::layer_chain::LayerSpec;
 
-    /// Where `#[interceptor]` runs one: around the guards, or after them.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    #[non_exhaustive]
-    pub enum InterceptorStage {
-        /// `#[interceptor(stage = unit)]`: around the guard stage.
-        Unit,
-        /// `#[interceptor]`: after the guards and the class gate, with the
-        /// interceptors the app lists.
-        Handler,
-    }
-
-    impl InterceptorStage {
-        /// The stage as `#[interceptor]` spells it.
-        pub const fn as_str(self) -> &'static str {
-            match self {
-                Self::Unit => "unit",
-                Self::Handler => "handler",
-            }
-        }
-    }
-
-    /// An interceptor a module brings for every unit it serves, attached to
+    /// An interceptor a module brings around every unit it serves, attached to
     /// its provider so only an imported module's reaches a site.
     pub struct InterceptorRegistration {
-        /// Its stage.
-        pub stage: InterceptorStage,
         pub(crate) spec: LayerSpec<dyn Interceptor>,
     }
 
-    /// Register `I`, already provided, as an interceptor at `stage` — what
-    /// `#[interceptor]` expands to.
-    pub fn register_interceptor<I: Interceptor>(
-        builder: ContainerBuilder,
-        stage: InterceptorStage,
-    ) -> ContainerBuilder {
+    /// Register `I`, already provided, at the unit stage — what
+    /// `#[interceptor(stage = unit)]` expands to.
+    pub fn register_interceptor<I: Interceptor>(builder: ContainerBuilder) -> ContainerBuilder {
         let spec = layer_spec::<I>();
         tracing::debug!(
             target: crate::target::LAYERS,
             layer = crate::type_name::shorten(spec.name),
-            stage = stage.as_str(),
             "interceptor registered",
         );
-        builder.attach_meta::<I, InterceptorRegistration>(InterceptorRegistration { stage, spec })
+        builder.attach_meta::<I, InterceptorRegistration>(InterceptorRegistration { spec })
     }
 }
 
-/// The interceptors a module brought for `stage`, in import order.
-pub(crate) fn module_interceptors(
-    container: &Container,
-    stage: __private::InterceptorStage,
-) -> Vec<&LayerSpec<dyn Interceptor>> {
+/// The interceptors the app's modules brought, in import order.
+pub(crate) fn module_interceptors(container: &Container) -> Vec<&LayerSpec<dyn Interceptor>> {
     let order = container.get::<ProviderOrder>();
     let mut found: Vec<&LayerSpec<dyn Interceptor>> = container
         .metadata_entries(TypeId::of::<__private::InterceptorRegistration>())
         .into_iter()
         .flatten()
         .filter_map(|entry| {
-            let registration = entry
+            entry
                 .meta
-                .downcast_ref::<__private::InterceptorRegistration>()?;
-            (registration.stage == stage).then_some(&registration.spec)
+                .downcast_ref::<__private::InterceptorRegistration>()
+                .map(|registration| &registration.spec)
         })
         .collect();
     // Stable: registration order where the container records no declaration

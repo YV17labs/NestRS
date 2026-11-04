@@ -44,11 +44,12 @@ impl<L: ?Sized> LayerSpec<L> {
 }
 
 /// Implement one family's app-wide pool declaration: its sealed list trait on
-/// every tuple of one to eight layers, each spec built by `$spec`, and the
-/// declaration's `Discoverable`, whose `register` attaches the pool — and the
-/// layers the access graph holds the declaring module to, as it holds a site's
-/// host to the layers the site binds — so the four families cannot drift
-/// apart.
+/// every tuple of one to eight layers, each a provider and each spec built by
+/// `$spec`, and the declaration's `Discoverable`, whose `register` attaches the
+/// pool — and the layers the access graph holds the declaring module to, as it
+/// holds a site's host to the layers the site binds — and which reports its
+/// layers and what they inject, for the ones the boot registers on its behalf,
+/// so the four families cannot drift apart.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __global_layer_pool {
@@ -64,8 +65,32 @@ macro_rules! __global_layer_pool {
         );
 
         impl<L: $list> $crate::Discoverable for $pool<L> {
+            fn injected() -> ::std::vec::Vec<::std::any::TypeId> {
+                $crate::__private::PoolReport::of(&L::__providers()).injected
+            }
+
+            fn injected_names() -> ::std::vec::Vec<&'static str> {
+                $crate::__private::PoolReport::of(&L::__providers()).injected_names
+            }
+
+            fn injected_optional() -> ::std::vec::Vec<::std::any::TypeId> {
+                $crate::__private::PoolReport::of(&L::__providers()).injected_optional
+            }
+
+            fn injected_optional_names() -> ::std::vec::Vec<&'static str> {
+                $crate::__private::PoolReport::of(&L::__providers()).injected_optional_names
+            }
+
+            fn also_provides() -> ::std::vec::Vec<(::std::any::TypeId, &'static str)> {
+                $crate::__private::PoolReport::of(&L::__providers()).also_provides
+            }
+
             fn register(builder: $crate::ContainerBuilder) -> $crate::ContainerBuilder {
-                $crate::__private::declare_global::<$layer, Self>(builder, L::__specs())
+                $crate::__private::declare_global::<$layer, Self>(
+                    builder,
+                    L::__specs(),
+                    L::__providers(),
+                )
             }
         }
     };
@@ -76,9 +101,18 @@ macro_rules! __global_layer_pool {
     ) => {
         impl<$head: $bound $(, $tail: $bound)*> $sealed for ($head, $($tail,)*) {}
 
-        impl<$head: $bound $(, $tail: $bound)*> $list for ($head, $($tail,)*) {
+        impl<$head: $bound + $crate::Discoverable $(, $tail: $bound + $crate::Discoverable)*> $list
+            for ($head, $($tail,)*)
+        {
             fn __specs() -> ::std::vec::Vec<$crate::LayerSpec<$layer>> {
                 ::std::vec![$spec::<$head>() $(, $spec::<$tail>())*]
+            }
+
+            fn __providers() -> ::std::vec::Vec<$crate::__private::PooledProvider> {
+                ::std::vec![
+                    $crate::__private::PooledProvider::of::<$head>()
+                    $(, $crate::__private::PooledProvider::of::<$tail>())*
+                ]
             }
         }
 
@@ -90,13 +124,16 @@ macro_rules! __global_layer_pool {
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::{Any, TypeId};
+    use std::collections::HashSet;
     use std::sync::{Arc, Mutex, PoisonError};
 
     use super::LayerSpec;
-    use crate::access::{Composition, ModuleDescriptor};
-    use crate::container::{Container, ContainerBuilder};
+    use crate::Discoverable;
+    use crate::access::{Composition, ModuleDescriptor, labelled};
+    use crate::container::__private::{StalledProvider, record_stall};
+    use crate::container::{Container, ContainerBuilder, Registration};
     use crate::discovery::Discovery;
-    use crate::error::UnresolvedLayerError;
+    use crate::error::{MissingDependencyError, ScopeViolationError, UnresolvedLayerError};
     use crate::layer::{Layer, LayerSite};
 
     /// What one layer family says of the app-wide pool its root module
@@ -130,7 +167,148 @@ pub(crate) mod __private {
     /// since the pool resolves them once, at mount.
     pub(crate) struct PooledLayers {
         pub(crate) declaration: TypeId,
+        pub(crate) declared_by: &'static str,
+        pub(crate) listed_by: Option<&'static str>,
         pub(crate) layers: Vec<(TypeId, &'static str)>,
+        pub(crate) providers: Vec<PooledProvider>,
+    }
+
+    impl PooledLayers {
+        /// What the layers `builder` holds as this declaration's own inject,
+        /// each with its label and whether it is optional: a layer the app holds
+        /// any other way answers for itself, or was never built from them.
+        pub(crate) fn injected_by_its_own(
+            &self,
+            builder: &ContainerBuilder,
+        ) -> Vec<(TypeId, &'static str, bool)> {
+            let mut injected = Vec::new();
+            for provider in &self.providers {
+                if !builder.pooled_providers().contains(&provider.key) {
+                    continue;
+                }
+                let (ids, names) = ((provider.injected)(), (provider.injected_names)());
+                injected.extend(labelled(&ids, &names).map(|(id, name)| (id, name, false)));
+                let (ids, names) = (
+                    (provider.injected_optional)(),
+                    (provider.injected_optional_names)(),
+                );
+                injected.extend(labelled(&ids, &names).map(|(id, name)| (id, name, true)));
+            }
+            injected
+        }
+    }
+
+    /// One layer a declaration lists, as a provider: what the boot reads to
+    /// register it when nothing else in the app did, and what the declaration
+    /// reports of it.
+    #[derive(Clone, Copy)]
+    pub struct PooledProvider {
+        key: TypeId,
+        name: &'static str,
+        dependencies: fn() -> Vec<TypeId>,
+        dependency_names: fn() -> Vec<&'static str>,
+        optional_dependencies: fn() -> Vec<TypeId>,
+        optional_dependency_names: fn() -> Vec<&'static str>,
+        injected: fn() -> Vec<TypeId>,
+        injected_names: fn() -> Vec<&'static str>,
+        injected_optional: fn() -> Vec<TypeId>,
+        injected_optional_names: fn() -> Vec<&'static str>,
+        also_provides: fn() -> Vec<(TypeId, &'static str)>,
+        register: fn(ContainerBuilder) -> ContainerBuilder,
+        register_overridden: fn(ContainerBuilder) -> ContainerBuilder,
+    }
+
+    impl PooledProvider {
+        /// The layer `P` as a declaration lists it.
+        pub fn of<P: Discoverable + Layer>() -> Self {
+            Self {
+                key: TypeId::of::<P>(),
+                name: std::any::type_name::<P>(),
+                dependencies: P::dependencies,
+                dependency_names: P::dependency_names,
+                optional_dependencies: P::optional_dependencies,
+                optional_dependency_names: P::optional_dependency_names,
+                injected: P::injected,
+                injected_names: P::injected_names,
+                injected_optional: P::injected_optional,
+                injected_optional_names: P::injected_optional_names,
+                also_provides: P::also_provides,
+                register: P::register,
+                register_overridden: P::__nestrs_register_overridden,
+            }
+        }
+
+        /// Its required, then its optional, dependencies, each with its label.
+        fn waits_on(&self) -> Vec<(TypeId, &'static str)> {
+            let (required, required_names) = ((self.dependencies)(), (self.dependency_names)());
+            let (optional, optional_names) = (
+                (self.optional_dependencies)(),
+                (self.optional_dependency_names)(),
+            );
+            labelled(&required, &required_names)
+                .chain(labelled(&optional, &optional_names))
+                .collect()
+        }
+
+        fn stalled(&self) -> StalledProvider {
+            StalledProvider {
+                name: self.name,
+                provides: vec![self.key],
+                dependencies: (self.dependencies)(),
+                dependency_names: (self.dependency_names)(),
+                optional_dependencies: (self.optional_dependencies)(),
+                optional_dependency_names: (self.optional_dependency_names)(),
+            }
+        }
+    }
+
+    /// What a declaration reports, whichever of its layers the boot goes on to
+    /// register: all it lists, on its module's behalf — a listing under the
+    /// layer's own type keeps the name — and what each injects, read before the
+    /// factories run, so a config it injects loads.
+    pub struct PoolReport {
+        /// What every layer injects.
+        pub injected: Vec<TypeId>,
+        /// The label of each of [`injected`](Self::injected), in order.
+        pub injected_names: Vec<&'static str>,
+        /// What every layer injects optionally.
+        pub injected_optional: Vec<TypeId>,
+        /// The label of each of [`injected_optional`](Self::injected_optional),
+        /// in order.
+        pub injected_optional_names: Vec<&'static str>,
+        /// Every layer, and what each registers besides itself.
+        pub also_provides: Vec<(TypeId, &'static str)>,
+    }
+
+    impl PoolReport {
+        /// The report of `providers`, each entry's labels kept beside it.
+        pub fn of(providers: &[PooledProvider]) -> Self {
+            let mut report = Self {
+                injected: Vec::new(),
+                injected_names: Vec::new(),
+                injected_optional: Vec::new(),
+                injected_optional_names: Vec::new(),
+                also_provides: Vec::new(),
+            };
+            for provider in providers {
+                let (ids, names) = ((provider.injected)(), (provider.injected_names)());
+                for (id, name) in labelled(&ids, &names) {
+                    report.injected.push(id);
+                    report.injected_names.push(name);
+                }
+                let (ids, names) = (
+                    (provider.injected_optional)(),
+                    (provider.injected_optional_names)(),
+                );
+                for (id, name) in labelled(&ids, &names) {
+                    report.injected_optional.push(id);
+                    report.injected_optional_names.push(name);
+                }
+                report.also_provides.push((provider.key, provider.name));
+                report.also_provides.extend((provider.also_provides)());
+            }
+            report
+        }
     }
 
     /// The kernel's check of one family's pool, run at the wiring step before
@@ -142,18 +320,25 @@ pub(crate) mod __private {
 
     /// Attach the app-wide pool of `L` that the declaration `D` lists — what a
     /// `Global*` provider's `register` does — and its check at the wiring step.
+    /// `providers` are its layers, which the boot registers where nothing else
+    /// in the app did.
     pub fn declare_global<L: GlobalLayer + ?Sized, D: 'static>(
         builder: ContainerBuilder,
         specs: Vec<LayerSpec<L>>,
+        providers: Vec<PooledProvider>,
     ) -> ContainerBuilder {
+        let declared_by = std::any::type_name::<D>();
+        let listed_by = builder.registering_module();
         let pooled = PooledLayers {
             declaration: TypeId::of::<D>(),
+            declared_by,
+            listed_by,
             layers: specs.iter().map(|spec| (spec.type_id, spec.name)).collect(),
+            providers,
         };
-        let listed_by = builder.registering_module();
         builder
             .attach_meta::<D, GlobalPool<L>>(GlobalPool {
-                declared_by: std::any::type_name::<D>(),
+                declared_by,
                 listed_by,
                 specs,
             })
@@ -164,12 +349,137 @@ pub(crate) mod __private {
             })
     }
 
+    /// One layer still to register, with the declaration that listed it first.
+    #[derive(Clone, Copy)]
+    struct Unprovided {
+        provider: PooledProvider,
+        declared_by: &'static str,
+        declaration: TypeId,
+        listed_by: Option<&'static str>,
+    }
+
+    impl Unprovided {
+        fn module(&self) -> &'static str {
+            self.listed_by.unwrap_or("no module")
+        }
+
+        /// Run `step` as the module that listed the declaration registering.
+        fn registering(
+            &self,
+            builder: ContainerBuilder,
+            step: fn(ContainerBuilder) -> ContainerBuilder,
+        ) -> ContainerBuilder {
+            match self.listed_by {
+                Some(module) => step(builder.enter_root(module)).leave_import(),
+                None => step(builder),
+            }
+        }
+    }
+
+    /// Register each layer a declaration lists that nothing registered once
+    /// every module has, dependencies first — so whatever the app registers
+    /// itself, a module, a seed, a factory or a test's override, stands. A
+    /// layer waiting on what never came is left for the seal to refuse, as a
+    /// `#[module]` leaves a provider, one whose registration left it absent is
+    /// refused now, since a pool would silently run without it.
+    pub(crate) fn provide_pooled_layers(mut builder: ContainerBuilder) -> ContainerBuilder {
+        let mut seen = HashSet::new();
+        let mut waiting: Vec<Unprovided> = builder
+            .attached_meta::<PooledLayers>()
+            .flat_map(|pooled| {
+                pooled.providers.iter().map(|provider| Unprovided {
+                    provider: *provider,
+                    declared_by: pooled.declared_by,
+                    declaration: pooled.declaration,
+                    listed_by: pooled.listed_by,
+                })
+            })
+            .filter(|layer| seen.insert(layer.provider.key))
+            .collect();
+        let scoped = builder.scoped_or_transient_ids();
+        loop {
+            let pending: HashSet<TypeId> = waiting.iter().map(|l| l.provider.key).collect();
+            let mut still = Vec::new();
+            let mut progressed = false;
+            for layer in std::mem::take(&mut waiting) {
+                match builder.registration(layer.provider.key) {
+                    Registration::Held => continue,
+                    Registration::Overridden => {
+                        builder = layer.registering(builder, layer.provider.register_overridden);
+                        progressed = true;
+                        continue;
+                    }
+                    Registration::Absent => {}
+                }
+                if let Some((_, dependency)) = layer
+                    .provider
+                    .waits_on()
+                    .into_iter()
+                    .find(|(dependency, _)| scoped.contains(dependency))
+                {
+                    builder = builder.refuse(ScopeViolationError {
+                        module: layer.module(),
+                        consumer: layer.provider.name,
+                        dependency,
+                    });
+                    continue;
+                }
+                let required_ready = (layer.provider.dependencies)()
+                    .iter()
+                    .all(|dependency| builder.contains(*dependency));
+                let optional_ready =
+                    (layer.provider.optional_dependencies)()
+                        .iter()
+                        .all(|dependency| {
+                            builder.contains(*dependency) || !pending.contains(dependency)
+                        });
+                if !required_ready || !optional_ready {
+                    still.push(layer);
+                    continue;
+                }
+                builder = layer.registering(builder, layer.provider.register);
+                builder.note_pooled_provider(layer.provider.key);
+                progressed = true;
+                builder = if matches!(
+                    builder.registration(layer.provider.key),
+                    Registration::Absent
+                ) {
+                    builder.refuse(MissingDependencyError::new(
+                        layer.module(),
+                        layer.declared_by,
+                        layer.provider.name,
+                    ))
+                } else {
+                    tracing::debug!(
+                        target: crate::target::LAYERS,
+                        layer = crate::type_name::shorten(layer.provider.name),
+                        pool = crate::type_name::shorten(layer.declared_by),
+                        "a pool registered the layer it lists",
+                    );
+                    builder
+                };
+            }
+            waiting = still;
+            if waiting.is_empty() || !progressed {
+                break;
+            }
+        }
+        let Some(first) = waiting.first().copied() else {
+            return builder;
+        };
+        for layer in &waiting {
+            builder.note_pooled_provider(layer.provider.key);
+        }
+        let stalled = waiting.iter().map(|l| l.provider.stalled()).collect();
+        record_stall(builder, first.declaration, first.module(), stalled)
+    }
+
     /// The app-wide pool of `L` resolved into [`LayerSite::Global`] entries, in
     /// declaration order; empty when the app declares none.
     ///
-    /// The access graph refuses a declaration whose module does not reach each
-    /// of its layers' providers, or listing one that is not a singleton, so
-    /// every spec resolves on a booted container.
+    /// The boot leaves no layer of a pool that boots absent, and the access
+    /// graph refuses a declaration listing one that is not a singleton, so every
+    /// spec resolves on a booted container.
     pub fn resolve_global_layers<L: GlobalLayer + ?Sized>(
         container: &Container,
     ) -> Vec<ResolvedLayer<L>> {

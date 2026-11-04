@@ -30,8 +30,9 @@ pub fn guard<G: Guard + 'static>() -> GuardSpec {
 /// authentication before authorization — declared once, in the providers of
 /// the module the app boots, so the binary and its test suites run the same
 /// pool. A module the app imports listing it fails the boot, as does a second
-/// declaration or a pool out of phase order; a guard the declaring module does
-/// not reach fails the access graph.
+/// declaration or a pool out of phase order. Each entry is a provider,
+/// registered here unless the app already registers it, so what it injects is
+/// held to the root's imports.
 ///
 /// The pool takes no capability bound: it runs whichever entry a site calls,
 /// `check_http` at a route or a request stage and `check` at an in-band unit.
@@ -59,7 +60,7 @@ pub fn guard<G: Guard + 'static>() -> GuardSpec {
 /// #         Ok(())
 /// #     }
 /// # }
-/// #[module(providers = [AuthnGuard, AuthzGuard, GlobalGuards<(AuthnGuard, AuthzGuard)>])]
+/// #[module(providers = [GlobalGuards<(AuthnGuard, AuthzGuard)>])]
 /// struct AppModule;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> nest_rs_core::anyhow::Result<()> {
@@ -76,6 +77,10 @@ pub trait GlobalGuardList: listed::Listed + 'static {
     /// Each guard's spec, in order.
     #[doc(hidden)]
     fn __specs() -> Vec<GuardSpec>;
+
+    /// Each entry, as the provider a pool registers where nothing else did.
+    #[doc(hidden)]
+    fn __providers() -> Vec<nest_rs_core::__private::PooledProvider>;
 }
 
 mod listed {

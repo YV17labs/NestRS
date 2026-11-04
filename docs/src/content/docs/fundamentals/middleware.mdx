@@ -69,12 +69,10 @@ impl Interceptor for NoIndex {
 }
 ```
 
-Bind it for the whole app — either by writing `#[interceptor]` on the struct
-in place of `#[injectable]` (its module's import brings it to every route) or
-by listing `GlobalInterceptors<(NoIndex,)>` in the providers of the module the
-app boots. Either runs after the guards, so a refused request never reaches it;
-an interceptor that must see every answer, refusals and `404`s included, is
-declared `#[interceptor(stage = unit)]`.
+Bind it for the whole app by listing `GlobalInterceptors<(NoIndex,)>` in the
+providers of the module the app boots. It runs after the guards, so a refused
+request never reaches it; an interceptor that must see every answer, refusals
+and `404`s included, is declared `#[interceptor(stage = unit)]`.
 
 Do **not** write this one to stamp a correlation id: the framework already runs
 every request under a [trace](/fundamentals/correlation/) and reports it as

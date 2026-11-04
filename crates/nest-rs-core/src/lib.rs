@@ -262,14 +262,12 @@ pub mod __private {
     pub use crate::injected_factory::InjectedFactory;
     pub use crate::injects::Injects;
     pub use crate::instance::{InstanceDeclaration, InstanceSeal};
-    pub use crate::interceptor::__private::{
-        InterceptorRegistration, InterceptorStage, register_interceptor,
-    };
+    pub use crate::interceptor::__private::{InterceptorRegistration, register_interceptor};
     pub use crate::interceptor::{InterceptorSpec, interceptor};
     pub use crate::layer_chain::__private::{
-        GlobalLayer, ResolvedLayer, SiteChains, compose_chain, declare_global, dedup_bucket,
-        global_pool_declared, log_effective_chain, refuse_unresolved, report_unresolved,
-        resolve_global_layers, resolve_scoped,
+        GlobalLayer, PoolReport, PooledProvider, ResolvedLayer, SiteChains, compose_chain,
+        declare_global, dedup_bucket, global_pool_declared, log_effective_chain, refuse_unresolved,
+        report_unresolved, resolve_global_layers, resolve_scoped,
     };
     pub use crate::lifecycle::__private::{HookFuture, LifecycleHook, LifecycleUnitOfWork};
     #[cfg(feature = "logging")]
@@ -549,9 +547,11 @@ pub use nest_rs_core_macros::output;
 /// ```
 pub use nest_rs_core_macros::wire_enum;
 
-/// Declare a struct as an interceptor its module brings for every unit it
-/// serves — `#[interceptor]` after the guards and the class gate, or
-/// `#[interceptor(stage = unit)]` around them.
+/// Declare a struct as an interceptor its module brings around the guards of
+/// every unit it serves — `#[interceptor(stage = unit)]`, the one spelling, whose
+/// key is the visible opening. An app-wide interceptor after the guards and the
+/// class gate is the root's [`GlobalInterceptors`], and a bare `#[interceptor]`
+/// is refused naming it.
 ///
 /// The struct is a singleton provider, built like an `#[injectable]` one, and
 /// only an imported module's reaches a unit. A type the app also lists runs
@@ -572,7 +572,7 @@ pub use nest_rs_core_macros::wire_enum;
 ///     units: AtomicUsize,
 /// }
 ///
-/// #[interceptor]
+/// #[interceptor(stage = unit)]
 /// #[derive(Layer)]
 /// struct CountUnits {
 ///     #[inject]

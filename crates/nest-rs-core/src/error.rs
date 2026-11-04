@@ -671,6 +671,9 @@ pub enum UnbuiltCause {
     /// nothing there provided it: the builder runs its calls in the order they
     /// are written.
     ImportedFirst,
+    /// Only an app-wide pool's declaration lists it, and a pool registers what
+    /// it lists once every module is built.
+    RegisteredByAPool,
 }
 
 /// A provider built without an optional dependency the same boot registered
@@ -715,6 +718,13 @@ fn unbuilt_clause(cause: &UnbuiltCause, module: &str, count: usize) -> String {
              later: import that module in `{module}`'s `imports`",
             if count == 1 { "it" } else { "them" }
         ),
+        UnbuiltCause::RegisteredByAPool => {
+            let them = if count == 1 { "it" } else { "them" };
+            format!(
+                "only an app-wide pool's declaration lists {them}, and a pool registers what it \
+                 lists once every module is built: list {them} in `{module}`'s `providers`"
+            )
+        }
         UnbuiltCause::ImportedFirst => {
             let them = if count == 1 { "it" } else { "them" };
             format!(

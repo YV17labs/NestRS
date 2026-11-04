@@ -170,6 +170,10 @@ pub(crate) struct LinkedDeclarations {
     pub(crate) required: HostDependencies,
     /// Every [`DependencyRemedy`], by key.
     pub(crate) remedies: HashMap<TypeId, &'static str>,
+    /// What each app-wide pool's declaration injects in truth, by declaration:
+    /// the dependencies of the layers it registers itself, each flagged when
+    /// optional.
+    pub(crate) pools: HashMap<TypeId, Vec<(TypeId, &'static str, bool)>>,
 }
 
 impl LinkedDeclarations {
@@ -197,12 +201,20 @@ impl LinkedDeclarations {
             layers,
             required,
             remedies,
+            pools: HashMap::new(),
         }
     }
 
     /// Hold `declaration` to the `layers` its pool lists, as a site's host is
-    /// held to the layers it binds: the pool resolves them once, at mount.
-    pub(crate) fn pool(&mut self, declaration: TypeId, layers: &[(TypeId, &'static str)]) {
+    /// held to the layers it binds — the pool resolves them once, at mount — and
+    /// to what those it registers itself inject, which is `injected`.
+    pub(crate) fn pool(
+        &mut self,
+        declaration: TypeId,
+        layers: &[(TypeId, &'static str)],
+        injected: Vec<(TypeId, &'static str, bool)>,
+    ) {
+        self.pools.insert(declaration, injected);
         self.layers
             .entry(declaration)
             .or_default()
@@ -385,14 +397,39 @@ pub(crate) fn validate_access_graph(
             .iter()
             .filter(|p| !overridden.contains(&(p.provider)()))
         {
-            let (injects, names) = ((p.injects)(), (p.inject_names)());
-            let (optionals, optional_names) = ((p.injects_optional)(), (p.inject_optional_names)());
-            let required = labelled(&injects, &names);
-            let optional = labelled(&optionals, &optional_names);
-            let deps: Vec<(TypeId, &'static str, bool)> = required
-                .map(|(dep, name)| (dep, name, false))
-                .chain(optional.map(|(dep, name)| (dep, name, true)))
-                .collect();
+            let host = (p.provider)();
+            let bound_layers = linked.layers.get(&host).into_iter().flatten().copied();
+            // A site, or an app-wide pool, resolves its layers once, at boot: a
+            // request-scoped one would refuse there naming a missing import, a
+            // transient one be shared by every run.
+            if let Some((_, layer)) = bound_layers
+                .clone()
+                .find(|(layer, _)| scoped_or_transient.contains(layer))
+            {
+                return Err(ScopedLayerError {
+                    module: desc.name,
+                    host: provider_name(p),
+                    layer,
+                }
+                .into());
+            }
+            // A declaration reports what every layer it lists injects, so a
+            // config one injects loads; it answers only for those it registers.
+            let deps: Vec<(TypeId, &'static str, bool)> = match linked.pools.get(&host) {
+                Some(injected) => injected.clone(),
+                None => {
+                    let (injects, names) = ((p.injects)(), (p.inject_names)());
+                    let (optionals, optional_names) =
+                        ((p.injects_optional)(), (p.inject_optional_names)());
+                    labelled(&injects, &names)
+                        .map(|(dep, name)| (dep, name, false))
+                        .chain(
+                            labelled(&optionals, &optional_names)
+                                .map(|(dep, name)| (dep, name, true)),
+                        )
+                        .collect()
+                }
+            };
             // Without this, the register phase (which gates readiness on the
             // singleton map) silently drops a singleton holding a scoped or
             // transient dependency, and everything downstream of it — or, held
@@ -407,22 +444,6 @@ pub(crate) fn validate_access_graph(
                     module: desc.name,
                     consumer: p.name,
                     dependency,
-                }
-                .into());
-            }
-            let host = (p.provider)();
-            let bound_layers = linked.layers.get(&host).into_iter().flatten().copied();
-            // A site, or an app-wide pool, resolves its layers once, at boot: a
-            // request-scoped one would refuse there naming a missing import, a
-            // transient one be shared by every run.
-            if let Some((_, layer)) = bound_layers
-                .clone()
-                .find(|(layer, _)| scoped_or_transient.contains(layer))
-            {
-                return Err(ScopedLayerError {
-                    module: desc.name,
-                    host: provider_name(p),
-                    layer,
                 }
                 .into());
             }
@@ -472,17 +493,25 @@ pub(crate) fn validate_access_graph(
 
 /// The provider and the module of each key `modules` declare. First listing
 /// wins: it only names a module to import, and two imported modules
-/// registering one key already failed the boot (`DuplicateProviderError`).
+/// registering one key already failed the boot (`DuplicateProviderError`). A
+/// listing under the key's own type goes before what a provider registers on
+/// its module's behalf: a pool reports a layer a module may well list.
 fn owners<'a>(
     modules: impl Iterator<Item = &'a ModuleDescriptor>,
 ) -> HashMap<TypeId, (&'static str, &'static str)> {
     let mut owners = HashMap::new();
-    for d in modules {
-        for p in d.providers {
-            owners.entry((p.provides)()).or_insert((p.name, d.name));
-            for (key, label) in (p.also_provides)() {
-                owners.entry(key).or_insert((label, d.name));
-            }
+    let modules: Vec<&ModuleDescriptor> = modules.collect();
+    let providers = || {
+        modules
+            .iter()
+            .flat_map(|d| d.providers.iter().map(move |p| (*d, p)))
+    };
+    for (d, p) in providers() {
+        owners.entry((p.provides)()).or_insert((p.name, d.name));
+    }
+    for (d, p) in providers() {
+        for (key, label) in (p.also_provides)() {
+            owners.entry(key).or_insert((label, d.name));
         }
     }
     owners
@@ -575,7 +604,14 @@ impl<'a> ProviderGraph<'a> {
                     nodes.push((*module, p));
                     nodes.len() - 1
                 });
-                node_of.extend(provided_keys(p).map(|key| (key, node)));
+                // A listing under the key's own type goes before what a
+                // provider registers on its module's behalf: a pool reports a
+                // layer a module may well list.
+                node_of.insert((p.provides)(), node);
+                node_of.insert((p.provider)(), node);
+                for (key, _) in (p.also_provides)() {
+                    node_of.entry(key).or_insert(node);
+                }
             }
         }
         let edges = nodes
@@ -788,11 +824,14 @@ pub(crate) fn reachable_provider_ids(
 /// the roots along their `imports = [...]`, and within each module its
 /// `providers = [...]` left to right; first occurrence wins. A `Foo as dyn
 /// Trait` binding is ranked under both keys it holds, the trait object first.
+/// What a provider registers on its module's behalf follows them all — a layer
+/// only a pool lists hosts what discovery reads like any provider.
 pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]) -> Vec<TypeId> {
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
     let mut seen = HashSet::new();
     let mut order = Vec::new();
+    let mut on_their_modules_behalf = Vec::new();
     for module_id in reachable_in_order(roots, &by_id) {
         let Some(desc) = by_id.get(&module_id) else {
             continue;
@@ -803,8 +842,14 @@ pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]
                     order.push(key);
                 }
             }
+            on_their_modules_behalf.extend((p.also_provides)().into_iter().map(|(key, _)| key));
         }
     }
+    order.extend(
+        on_their_modules_behalf
+            .into_iter()
+            .filter(|key| seen.insert(*key)),
+    );
     order
 }
 

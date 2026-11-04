@@ -1,10 +1,10 @@
 use nest_rs::core::operation_log::Unit;
 use nest_rs::core::{
-    Edge, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, interceptor,
+    Edge, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable,
 };
 use nest_rs::http::HttpView;
 
-#[interceptor]
+#[injectable]
 pub struct AuditInterceptor;
 
 impl Layer for AuditInterceptor {

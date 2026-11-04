@@ -1,8 +1,8 @@
-//! Covers `src/interceptor.rs` through `#[interceptor]`: what a module brings
-//! is the container's own provider, runs only where its module is imported,
-//! after what the app's root declares and in import order — a
-//! `#[derive(Layer)]` priority ahead of both — once whatever else lists it, and
-//! the root's declaration fails the boot on a type it does not reach.
+//! Covers `src/interceptor.rs` through `#[interceptor(stage = unit)]` and the
+//! root's pool: what a module brings is the container's own provider, runs only
+//! where its module is imported, around what the app's root declares and in
+//! import order — a `#[derive(Layer)]` priority ahead of the others — and once
+//! whatever else lists it.
 
 use std::any::TypeId;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,8 +14,8 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::operation_log::Kind;
 use nest_rs_core::{
-    AccessGraphError, App, AppBuilder, GlobalInterceptors, Handler, Interceptor, Layer, Next,
-    Outcome, Posture, UnitContext, UnitView, async_trait, injectable, interceptor, module,
+    App, AppBuilder, GlobalInterceptors, Handler, Interceptor, Layer, Next, Outcome, Posture,
+    UnitContext, UnitView, async_trait, injectable, interceptor, module,
 };
 use nest_rs_testing::LogCapture;
 
@@ -37,8 +37,8 @@ impl Trail {
 }
 
 macro_rules! recording {
-    ($name:ident, $step:literal $(, $stage:ident)?) => {
-        #[interceptor$((stage = $stage))?]
+    ($name:ident, $step:literal, $declared:meta) => {
+        #[$declared]
         struct $name {
             #[inject]
             trail: Arc<Trail>,
@@ -56,10 +56,10 @@ macro_rules! recording {
     };
 }
 
-recording!(AppListed, "app");
-recording!(Tracing, "tracing");
-recording!(Metrics, "metrics");
-recording!(Timing, "timing", unit);
+recording!(AppListed, "app", injectable);
+recording!(Tracing, "tracing", interceptor(stage = unit));
+recording!(Metrics, "metrics", interceptor(stage = unit));
+recording!(Timing, "timing", interceptor(stage = unit));
 
 #[module(providers = [Trail])]
 struct TrailModule;
@@ -144,24 +144,24 @@ struct ImportsMetricsFirst;
 struct ImportsTracingFirst;
 
 #[tokio::test]
-async fn a_module_interceptor_runs_after_the_apps_own_in_import_order() {
+async fn a_module_interceptor_runs_around_the_apps_own_in_import_order() {
     let metrics_first = App::builder().module::<ImportsMetricsFirst>();
     assert_eq!(
         one_unit(&boot(metrics_first).await).await,
-        ["app", "metrics", "tracing"],
-        "the app's list first, then each module's in the order the root imports them",
+        ["metrics", "tracing", "app"],
+        "each module's in the order the root imports them, around the app's list",
     );
 
     let tracing_first = App::builder().module::<ImportsTracingFirst>();
     assert_eq!(
         one_unit(&boot(tracing_first).await).await,
-        ["app", "tracing", "metrics"]
+        ["tracing", "metrics", "app"]
     );
 }
 
 /// Brought by its module, ordered ahead of the stage's others by the priority
 /// its derive declares.
-#[interceptor]
+#[interceptor(stage = unit)]
 #[derive(Layer)]
 #[layer(priority = -1)]
 struct Prioritized {
@@ -191,7 +191,7 @@ async fn a_derived_priority_orders_an_interceptor_ahead_of_its_stage() {
     let builder = App::builder().module::<ImportsPrioritizedLast>();
     assert_eq!(
         one_unit(&boot(builder).await).await,
-        ["prioritized", "app", "tracing"],
+        ["prioritized", "tracing", "app"],
         "`#[layer(priority = -1)]` runs first, import order notwithstanding",
     );
 }
@@ -207,7 +207,7 @@ async fn an_interceptor_at_the_unit_stage_the_app_also_lists_runs_once() {
 }
 
 /// Counts the units it saw, on itself.
-#[interceptor]
+#[injectable]
 struct Counting {
     #[inject]
     trail: Arc<Trail>,
@@ -253,32 +253,11 @@ async fn a_module_the_app_does_not_import_brings_no_interceptor() {
     );
 }
 
-#[module(imports = [TrailModule], providers = [GlobalInterceptors<(Metrics,)>])]
-struct DeclaresAnUnreachedInterceptor;
-
 #[tokio::test]
-async fn an_interceptor_the_root_declares_and_does_not_reach_fails_the_boot_naming_it() {
-    let built = App::builder()
-        .module::<DeclaresAnUnreachedInterceptor>()
-        .build()
-        .await;
-    let Err(refused) = built else {
-        panic!("a global interceptor would silently drop");
-    };
-    assert!(
-        refused.downcast_ref::<AccessGraphError>().is_some(),
-        "not the access graph's refusal: {refused:#}"
-    );
-    let said = format!("{refused:#}");
-    assert!(said.contains("Metrics"), "{said}");
-}
-
-#[tokio::test]
-async fn the_boot_says_each_interceptors_stage() {
+async fn the_boot_says_what_a_module_brings() {
     let logs = LogCapture::install();
     boot(App::builder().module::<ImportsTiming>()).await;
     let registered = logs.expect_one(nest_rs_core::target::LAYERS, "interceptor registered");
     assert_eq!(registered.level, "debug");
     assert_eq!(registered.field("layer").as_deref(), Some("Timing"));
-    assert_eq!(registered.field("stage").as_deref(), Some("unit"));
 }

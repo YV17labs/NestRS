@@ -49,7 +49,7 @@
 //! }
 //! # #[module(
 //! #     imports = [GraphqlModule],
-//! #     providers = [NameGuard, MeResolver, GlobalGuards<(NameGuard,)>],
+//! #     providers = [MeResolver, GlobalGuards<(NameGuard,)>],
 //! # )]
 //! # struct AppModule;
 //! #

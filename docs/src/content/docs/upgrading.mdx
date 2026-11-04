@@ -372,7 +372,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `TestClient::new(transport.take_endpoint()?)` on a hand-booted transport | `transport.take_endpoint()?.call(request)`, or `TestApp` |
    | `HttpCors { .. }.into_middleware()` | nothing: set `HttpConfig::cors`, which the transport checks at boot |
    | `HttpCors { methods: vec!["TRACE".into()], .. }` | drop the forbidden method; list the methods a page sends (`PUT`, `DELETE`, …) |
-   | a CORS policy without `max_age`, whose preflight a browser kept a day | `max_age: Some(Duration::from_secs(86_400))`, or `<PREFIX>_HTTP__CORS_MAX_AGE=86400` — not a compile error: a preflight otherwise carries no `Access-Control-Max-Age` |
+   | a CORS policy without `max_age`, whose preflight a browser kept a day | `max_age: Some(Duration::from_secs(86_400))`, or `<PREFIX>_HTTP__CORS_MAX_AGE_SECS=86400` — not a compile error: a preflight otherwise carries no `Access-Control-Max-Age` |
    | a write guarded by `If-Match` against the `ETag` of a read `compression` encoded | read the tag the write sends from an unencoded answer (a request without `Accept-Encoding`) — not a compile error: an encoded answer's strong tag is now sent weak (`W/"…"`, RFC 9110 §8.8.3), and a weak tag matches no `If-Match` |
    | `current_body_limit().unwrap_or(RawBody::DEFAULT_LIMIT)` | `current_body_limit()` |
    | `normalize_error_response(poem_response)` | `normalize_error_response(response)`, with a `nest_rs::http::Response` |
@@ -526,11 +526,11 @@ lists what the boot, a log or the wire shows when one is missed.
    | `ConfigModule::for_root()` first in a root's `imports` | delete it: the cascade needs no import, and the first config the boot loads registers `Environment` and says an undeclared one at `info` |
    | `HttpConfig::default().with_global_prefix(p)` (and every config `with_*`) | the field in a struct literal over `..Default::default()` |
    | `HealthConfig::default().with_probe_deadline(Duration::from_millis(400))` | `HealthConfig { probe_deadline: Duration::from_millis(400), ..Default::default() }` |
-   | `impl Config for MyConfig { fn from_env(…) }` beside `#[config(namespace = "…")]` | delete it: `#[config]` writes it, each field reading `<PREFIX>_<NAMESPACE>__<FIELD>`, its name in SCREAMING_SNAKE, through the reader its type chooses. A field your `from_env` read under another key is renamed, or its key is renamed in the deployment; a field it read with `env.json` takes `#[config(json)]`, one with `env.count` `#[config(count)]`, one it judged itself `#[config(with = your_fn)]` (`fn(&ConfigService, &str, T) -> Result<T>`); a `fn defaults()` moves to `#[config(defaults = Self::your_fn)]`. Fields that depend on each other keep the impl under `#[config(namespace = "…", from_env = "manual")]` |
+   | `impl Config for MyConfig { fn from_env(…) }` beside `#[config(namespace = "…")]` | delete it: `#[config]` writes it, each field reading `<PREFIX>_<NAMESPACE>__<FIELD>`, its name in SCREAMING_SNAKE, through the reader its type chooses. A field your `from_env` read under another key is renamed, or its key is renamed in the deployment; a field it read with `env.json` takes `#[config(json)]`, one with `env.count` `#[config(count)]`, one it judged itself `#[config(with = your_fn)]` (`fn(&ConfigService, Field, T) -> Result<T>`); a `fn defaults()` moves to `#[config(defaults = Self::your_fn)]`. Fields that depend on each other keep the impl under `#[config(namespace = "…", from_env = "manual")]` |
    | a duration field `window_secs: u64` or `timeout_ms: Option<u64>` read through `DURATION.read(env, …)` | `window: Duration` with `#[config(bounds = WINDOW)]`, its default in `Default`; `Option<Duration>` only where `None` turns it off. The field's key takes the range's unit after it (`WINDOW_SECS`), so no variable moves |
    | `DurationBounds::secs("WINDOW_SECS", "MyConfig::window", floor, ceiling)` (or `millis`) | `DurationBounds::secs(floor, ceiling)`: the key and the path are the field's, which `#[config(bounds = …)]` binds the range to as `MyConfig::WINDOW` |
    | `Floor::UnitsOrOff(bound)` | `Floor::Units(bound)` on an `Option<Duration>` field: `0` from the environment and `None` in code are off because the field is an `Option` |
-   | `BOUNDS.key()`, `BOUNDS.field()`, `BOUNDS.check(namespace, field, value)` | `MyConfig::WINDOW.key()`, `.field().path()`, `.check(namespace, value)` — `var(namespace)` and `var_or_field(namespace)` name the variable whole |
+   | `BOUNDS.key()`, `BOUNDS.field()`, `BOUNDS.check(namespace, field, value)` | `MyConfig::WINDOW.key()`, `.field().path()`, `.check(namespace, value)` — a value set through another type's field names it, `MyConfig::WINDOW.pinned_through("MyOptions::window").check(namespace, value)`; `var(namespace)` and `var_or_field(namespace)` name the variable whole |
    | a count held to a range by a `with = reader` of your own | `#[config(bounds = RANGE)]` with `const RANGE: CountBounds = CountBounds::new(floor, ceiling)` on a `usize` |
    | `fn reader(env: &ConfigService, key: &str, base: T) -> Result<T>` named by `with = reader` | `fn reader(env: &ConfigService, field: Field, base: T) -> Result<T>`: `field.key()` is the key, `field.path()` the path a value set in code is refused under |
    | `nest_rs::http::{MAX_CONNECTION_FLOOR, MAX_CONNECTION_CEILING}`, `{SSE_KEEP_ALIVE_FLOOR, SSE_KEEP_ALIVE_CEILING}`, `{UNIT_TIMEOUT_FLOOR, UNIT_TIMEOUT_CEILING}` | `MAX_CONNECTION_BOUNDS`, `SSE_KEEP_ALIVE_BOUNDS`, `UNIT_TIMEOUT_BOUNDS`, each one `DurationBounds` named on the field |
@@ -1396,9 +1396,9 @@ lists what the boot, a log or the wire shows when one is missed.
   `DurationBounds::secs` given a key and a path fails to compile (two
   arguments, not four), a range on a type no range holds names the three that
   are (`Duration`, `Option<Duration>`, `usize`), and a range of the other kind
-  is refused at the field, `expected CountBounds, found DurationBounds`. A
-  `#[config(count)]` pinned at `Some(0)` with its variable unset fails the
-  boot: unlimited in code is `None`.
+  is refused at its name in the attribute, `expected CountBounds, found
+  DurationBounds`. A `#[config(count)]` pinned at `Some(0)` with its variable
+  unset fails the boot: unlimited in code is `None`.
 - **A deployment setting `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS` past
   1048576** fails its boot naming the variable — a million idle sessions hold
   over 100 GiB — and so does a cap pinned past it in code.

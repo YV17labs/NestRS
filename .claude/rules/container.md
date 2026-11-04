@@ -261,11 +261,12 @@ arbitrates between variables or tiers.
   `None`; a default sits in `Default`, never behind a `None`, and no field
   names a unit. Held by the derive's compile errors and its reads, which read
   off from the field's type and refuse a count pinned at `Some(0)`.
-- **A duration or a count a deployment sets has a floor and a ceiling**,
-  refused naming the variable whether pinned or read, never clamped. The floor
-  is where the thing stops working; the ceiling is where a value becomes a
-  slip, **and never above what the library or kernel it reaches accepts** — no
-  value the boot accepts may panic or be refused below it. A range names
+- **A duration a deployment sets has a floor and a ceiling, and so does a count
+  read through `CountBounds`**, refused naming the variable whether pinned or
+  read, never clamped. The floor is where the thing stops working; the ceiling
+  is where a value becomes a slip, **and never above what the library or kernel
+  it reaches accepts** — no value the boot accepts may panic or be refused
+  below it. A range names
   nothing but its ends and their reasons: the derive binds it to the field it
   bounds, whose name is its variable's key — a duration's unit after it — and
   whose type says whether `0` is off (an `Option<Duration>`; a pinned

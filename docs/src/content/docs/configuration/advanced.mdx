@@ -57,7 +57,10 @@ fn pseudonym_key(
 `env.setting(field.key())` keeps which spelling the deployment used — the
 variable or its `_FILE` — so `setting.refuse(reason)` names that one, and
 `reason` says what was expected, never the value; a value set in code is
-refused naming `field.path()`, which the derive read off the struct.
+refused naming `field.path()`, which the derive read off the struct. The
+derive binds that `Field` to the struct as well, `ThrottlerConfig::PSEUDONYM_KEY`,
+so a check of a value built in code outside the reader names the same key and
+path without typing either.
 
 ## A rule spanning the whole struct, on a generic config
 

@@ -31,7 +31,8 @@ cargo add nest-rs --features config
 
 ## A typed config — by example
 
-The common case is two short blocks: a `#[config]` struct and its `Default`.
+The common case is three short blocks: a duration's range, the `#[config]`
+struct and its `Default`.
 
 ```rust title="crates/features/src/posts/config.rs"
 use std::time::Duration;
@@ -99,7 +100,7 @@ three lines saying what a refused value was expected to be.
 | `bounds = RANGE` | A `Duration`, or an `Option<Duration>` whose `None` turns it off, held to the `DurationBounds` named — its variable the field's name with the unit after it (`CACHE_TTL_SECS`) — or a `usize` held to a `CountBounds`; bound to the field as `PostsConfig::CACHE_TTL`, the one place a sentence or a check reads its key and path |
 | `json` | A structured value — a list of records, a map — written as JSON |
 | `count` | An `Option<usize>` where `0` from the environment is `None`, unlimited, and a pinned `Some(0)` is refused |
-| `with = path` | Through a function of yours, `fn(&ConfigService, Field, T) -> Result<T>`, handed the field — its key and the path code pins it through — and its base |
+| `with = path` | Through a function of yours, `fn(&ConfigService, Field, T) -> Result<T>`, handed the field — its key and the path code pins it through, bound to the struct the way a range is — and its base |
 
 **A duration is a `Duration`; `None` is off and nothing else.** A field never
 names its unit — the key does, through its bounds — and its default sits in

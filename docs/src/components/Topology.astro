@@ -27,7 +27,7 @@ const split: Tier[] = [
       { app: 'auth', edges: 'HTTP', modules: ['sign_in'] },
       {
         app: 'api',
-        edges: 'HTTP · GraphQL · events · schedule',
+        edges: 'HTTP · GraphQL · schedule',
         modules: ['users', 'orgs', 'posts', 'audio', 'notifications', 'audit', 'authn', 'authz'],
       },
       { app: 'live', edges: 'WebSocket', modules: ['users', 'chat', 'notifications', 'authn'] },
@@ -43,7 +43,7 @@ const split: Tier[] = [
 
 const mono: Binary = {
   app: 'publish',
-  edges: 'HTTP · GraphQL · WebSocket · MCP · events · queue · schedule',
+  edges: 'HTTP · GraphQL · WebSocket · MCP · queue · schedule',
   modules,
 };
 

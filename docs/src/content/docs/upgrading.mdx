@@ -883,6 +883,9 @@ lists what the boot, a log or the wire shows when one is missed.
     | a presign `ttl` past 7 days, or under 1 second | a `ttl` within SigV4's bounds: anything else is `StorageError::Unsignable` |
     | keeping the content type supplied at upload, since `head` could not read it | `storage.head(&key).await?.and_then(\|meta\| meta.content_type)` |
     | `Scoped::<T>::from_context(ctx)?` in a resolver, a message or a tool body | a `cache: Scoped<T>` parameter on the method; a miss is answered opaquely and filed |
+    | `ctx.data_unchecked::<DataLoader<L>>()` in a `#[field_resolver]` | a `loader: &DataLoader<L>` parameter, which the boot checks |
+    | a `#[field_resolver]`'s `&DataLoader<L>` parameter, `L` a `Loader` written by hand and seeded through `GraphqlContextSeed` | `L` as a method of a `#[dataloader]` impl block, the parameter naming the loader it generates; or a `ctx: &Context<'_>` parameter and `ctx.data::<DataLoader<L>>()?`, which the boot does not check |
+    | a `tokio::sync::broadcast` provider, and a `#[listeners]` host feeding it, behind a `#[subscription]` | `#[inject] bus: Arc<EventBus>` and `self.bus.stream::<E>()`, from `nest_rs::events`; a subscription needing no `Err` returns the bare `impl Stream` |
     | `nest_rs::ws::WsScopeError` | nothing |
     | `#[query]` + `#[graphql(entity)]` | `#[entity]`, with `GraphqlConfig::federation` |
     | `GraphqlContextSeed { owner_type_id: \|\| Some(TypeId::of::<R>()), lifetime, seed }` | `GraphqlContextSeed::new(Some(TypeId::of::<R>), lifetime, seed)` |
@@ -1225,6 +1228,10 @@ lists what the boot, a log or the wire shows when one is missed.
       `data.errors`, which is now the field map alone; on MCP, a pipe's field
       map is under `error.data.errors`, its class at `error.data.code`; GraphQL
       reads `extensions.code`.
+    - **A GraphQL field error names a field as the schema spells it**:
+      `extensions.errors.orgId`, where it read `org_id`, at every depth, under
+      the rename rule the input declares. HTTP, WebSocket and MCP keep the name
+      serde reads.
     - **A value that does not decode is answered naming where**, never what was
       sent: ``query parameter `p`: …``, ``form field `p`: …``,
       ``JSON body at `p`: …``, and the same place in a WebSocket frame, an MCP
@@ -1749,7 +1756,16 @@ lists what the boot, a log or the wire shows when one is missed.
   seed one. A GraphQL schema serving an exposed relation whose target's module
   the app does not import names the field, the entity declaring it and the
   module, where 6.x counted the loader at `warn` and erred on every query
-  selecting the field.
+  selecting the field; so does a `#[field_resolver]`'s `&DataLoader<L>`
+  parameter, where 6.x panicked on each. A served `#[field_resolver]` whose
+  resolver the app does not reach names the field, the resolver and the module:
+  6.x panicked on what the resolver injects, or, with nothing injected, ran it
+  outside every module the app imports. Import the module it names.
+- **A `#[field_resolver]`'s `&DataLoader<L>` over a `Loader` written by hand**
+  fails to compile (`E0277`, `` `L` is no loader `#[dataloader]` generated ``),
+  where 6.x read what a `GraphqlContextSeed` seeded: only a generated loader says
+  which module owns it, so only that one the boot can check. Step 12 has the two
+  ways out.
 - **Layers.** The compile refuses every name step 7's left column lists, a
   guard listed by both `#[use_guards]` and `#[force_guards]`, a layer attribute
   an edge does not run — each with a sentence saying why — and a `#[meta]`

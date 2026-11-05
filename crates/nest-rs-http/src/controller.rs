@@ -29,7 +29,7 @@ pub enum RequestBodyMeta {
     /// the form's type, `None` for a bare [`Multipart`](crate::Multipart) parameter.
     Multipart(Option<SchemaFn>),
     /// A `Form<T>` extractor — `application/x-www-form-urlencoded`, carrying
-    /// `T`'s schema.
+    /// `T`'s schema; on `GET` it reads the query instead, and no body.
     Form(SchemaFn),
     /// A [`RawBody`](crate::RawBody) or [`Body`](crate::Body) extractor: any
     /// bytes, under any media type or none.

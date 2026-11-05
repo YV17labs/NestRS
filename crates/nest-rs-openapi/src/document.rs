@@ -9,7 +9,8 @@ use nest_rs_http::__private::{
     EdgeAnswers, VersionLocation, declared_versions, join_path, route_denials, version_location,
 };
 use nest_rs_http::{
-    HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RequestBodyMeta, RouteTemplate,
+    HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, Method, RequestBodyMeta,
+    RouteTemplate, SchemaFn,
 };
 use nest_rs_http::{ProblemDetails, StatusCode, header};
 use schemars::SchemaGenerator;
@@ -483,9 +484,15 @@ fn operation_object(
         op.insert("deprecated".into(), json!(true));
     }
 
+    let form_query = form_query(route);
     let mut parameters = typed_path_parameters(full_path, route.path_params(), generator);
     parameters.extend(expand_object_params(
         route.query_params(),
+        "query",
+        generator,
+    ));
+    parameters.extend(expand_object_params(
+        form_query.as_slice(),
         "query",
         generator,
     ));
@@ -496,12 +503,17 @@ fn operation_object(
     ));
     let selects_version = version_parameter.is_some();
     parameters.extend(version_parameter);
-    let takes_parameters = !parameters.is_empty();
-    if takes_parameters {
+    // Off what the route reads, not what expands: a map names no property, and
+    // its values are read all the same.
+    let takes_parameters = !parameters.is_empty()
+        || !route.query_params().is_empty()
+        || !route.header_params().is_empty()
+        || form_query.is_some();
+    if !parameters.is_empty() {
         op.insert("parameters".into(), Value::Array(parameters));
     }
 
-    if let Some(body) = route.request_body() {
+    if let Some(body) = body_read(route) {
         // A raw reader alone takes what it is sent, nothing included.
         let raw = matches!(body, RequestBodyMeta::Raw);
         let schema = match body.schema() {
@@ -625,6 +637,20 @@ fn operation_object(
     op.insert("responses".into(), Value::Object(responses));
 
     Value::Object(op)
+}
+
+/// The schema of a `Form<T>` reading the query, as it does on `GET`
+/// (`nest_rs_http::Form`), before any media type is looked at.
+fn form_query(route: &HttpRouteMeta) -> Option<SchemaFn> {
+    match route.request_body() {
+        Some(RequestBodyMeta::Form(schema)) if route.method() == Method::GET => Some(schema),
+        _ => None,
+    }
+}
+
+/// The body `route` reads, which a [`form_query`] is not.
+fn body_read(route: &HttpRouteMeta) -> Option<RequestBodyMeta> {
+    route.request_body().filter(|_| form_query(route).is_none())
 }
 
 /// Path parameters typed positionally from the handler's `Path<T>`, only when
@@ -763,7 +789,7 @@ fn edge_statuses(
     edge_answers: EdgeAnswers,
 ) -> BTreeSet<u16> {
     let mut out = BTreeSet::new();
-    let body = route.request_body();
+    let body = body_read(route);
     // Edge validation answers `400`, never `422` (`nest_rs_http::pipe_error`): a
     // parameter's value its type does not read, required or not, a path's among
     // them, and a body's; and a list linking its next page refuses a cursor no
@@ -1356,6 +1382,7 @@ mod tests {
     #[test]
     fn a_body_refusing_in_its_own_words_documents_them_on_its_400() {
         let mut parts = route("token", "/token");
+        parts.method = Method::POST;
         parts.request_body = Some(RequestBodyMeta::Form(schema_for_dummy));
         parts.request_refusal = Some(own_words);
 

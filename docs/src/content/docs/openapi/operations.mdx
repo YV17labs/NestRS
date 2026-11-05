@@ -97,6 +97,10 @@ apart, so a part renamed in one must be renamed in the other. A handler that tak
 `multipart/form-data` with a free-form object: the media type it accepts is
 knowledge a client needs, even when no type states the parts.
 
+A `Form<T>` on a `#[get]` reads the query, as a form on `GET` does, so the document
+lists its properties as `in: query` parameters, with the `400` a value can be refused
+with and nothing of a body.
+
 `response_content_type` replaces what the return type says on the success
 response and, with no `response = Type` beside it, types the body the way OpenAPI
 spells a stream — `string` with `format: binary`, or plain `string` for a `text/*`

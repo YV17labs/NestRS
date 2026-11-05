@@ -76,8 +76,10 @@ holds each against the live answer):
 - **What a route's inputs can refuse is listed by the input**: `415` for a body read by its media
   type, never `RawBody` or `Body`, which read any bytes, nor a `DocumentedBody` refusing in its own
   words; `400` for any parameter, optional and path ones included, each able to carry a value its
-  type does not read; `400` and `404` for a version parameter, a malformed token and a version
-  nothing serves. `RawBody` and `Body` document `*/*`, optional and binary.
+  type does not read, a map's too, which names no property to list; `400` and `404` for a version
+  parameter, a malformed token and a version nothing serves. `RawBody` and `Body` document `*/*`,
+  optional and binary. A `Form<T>` on `GET` reads the query, so it is its `in: query` parameters
+  and its `400`, none of a body's statuses.
 - **A body sent to a route taking none is not its answer.** It is refused `413` past the cap, and
   no document lists that: the route's contract is not to be sent one.
 

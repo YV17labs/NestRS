@@ -701,6 +701,7 @@ mod guards {
 
 /// What a route answers, read off a live request, beside what its document says.
 mod answers {
+    use std::collections::HashMap;
     use std::time::Duration;
 
     use futures_util::StreamExt as _;
@@ -882,6 +883,24 @@ mod answers {
         #[public]
         async fn retried(&self, head: Header<Retried>) -> String {
             format!("{:?}", head.0.retried)
+        }
+
+        #[get("/form-query")]
+        #[public]
+        async fn form_query(&self, Form(order): Form<Order>) -> String {
+            order.sku
+        }
+
+        #[get("/free-query")]
+        #[public]
+        async fn free_query(&self, Query(free): Query<HashMap<String, u32>>) -> String {
+            free.len().to_string()
+        }
+
+        #[get("/free-form-query")]
+        #[public]
+        async fn free_form_query(&self, Form(free): Form<HashMap<String, u32>>) -> String {
+            free.len().to_string()
         }
     }
 
@@ -1325,6 +1344,55 @@ mod answers {
             responses(&doc, "/bodies/vendored", "get")["200"]["content"],
             json!({ "application/vnd.api+json": { "schema": receipt_schema() } }),
         );
+    }
+
+    /// `Form` reads the query on `GET`, before any media type is looked at.
+    #[tokio::test]
+    async fn a_form_on_get_documents_its_query_and_nothing_of_a_body() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+
+        let read = app
+            .http()
+            .get("/orders/form-query?sku=x")
+            .content_type("text/plain")
+            .send()
+            .await;
+        read.assert_status_is_ok();
+        let refused = app.http().get("/orders/form-query").send().await;
+        refused.assert_status(StatusCode::BAD_REQUEST);
+
+        let operation = &doc["paths"]["/orders/form-query"]["get"];
+        assert!(operation.get("requestBody").is_none(), "{operation}");
+        assert_eq!(
+            operation["parameters"],
+            json!([{
+                "name": "sku",
+                "in": "query",
+                "required": true,
+                "schema": { "type": "string" },
+            }]),
+        );
+        let answers = &operation["responses"];
+        assert_a_problem(answers, "400");
+        for status in ["408", "413", "415"] {
+            assert!(answers.get(status).is_none(), "{status}: {answers}");
+        }
+    }
+
+    /// A map names no property to expand, and its values are still read.
+    #[tokio::test]
+    async fn a_parameter_map_documents_the_400_its_value_is_refused_with() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        for (route, sent) in [
+            ("/orders/free-query", "/orders/free-query?a=abc"),
+            ("/orders/free-form-query", "/orders/free-form-query?a=abc"),
+        ] {
+            let refused = app.http().get(sent).send().await;
+            refused.assert_status(StatusCode::BAD_REQUEST);
+            assert_a_problem(responses(&doc, route, "get"), "400");
+        }
     }
 
     #[tokio::test]

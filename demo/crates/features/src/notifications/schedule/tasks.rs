@@ -26,11 +26,9 @@ mod tests {
     use std::any::TypeId;
     use std::time::Duration;
 
-    use nest_rs::core::Discoverable;
     use nest_rs::schedule::{Replicas, ScheduledMethod, Trigger};
 
     use super::NotificationsTasks;
-    use crate::notifications::NotificationsService;
 
     #[test]
     fn the_purge_fires_hourly_on_one_replica() {
@@ -45,11 +43,5 @@ mod tests {
             purge.trigger(),
             Trigger::Interval(period) if period == Duration::from_secs(3600)
         ));
-    }
-
-    #[test]
-    fn injected_dependency_is_recorded_for_the_access_graph() {
-        assert!(NotificationsTasks::dependencies().contains(&TypeId::of::<NotificationsService>()));
-        assert!(NotificationsTasks::injected().contains(&TypeId::of::<NotificationsService>()));
     }
 }

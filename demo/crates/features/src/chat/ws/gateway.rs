@@ -76,19 +76,3 @@ impl ChatGateway {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::any::TypeId;
-
-    use nest_rs::core::Discoverable;
-
-    use super::ChatGateway;
-    use crate::chat::service::ChatService;
-
-    #[test]
-    fn gateway_declares_its_injected_dependency_for_the_access_graph() {
-        assert!(ChatGateway::dependencies().is_empty());
-        assert!(ChatGateway::injected().contains(&TypeId::of::<ChatService>()));
-    }
-}

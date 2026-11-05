@@ -50,29 +50,9 @@ impl AudioTasks {
 mod tests {
     use std::any::TypeId;
 
-    use nest_rs::core::Discoverable;
     use nest_rs::schedule::{Replicas, ScheduledMethod};
 
     use super::AudioTasks;
-    use crate::audio::AudioService;
-
-    #[test]
-    fn three_methods_are_discovered_through_the_inventory() {
-        let names: Vec<(&'static str, &'static str)> =
-            nest_rs::core::inventory::iter::<ScheduledMethod>()
-                .filter(|m| m.provider_type_id() == TypeId::of::<AudioTasks>())
-                .map(|m| (m.provider(), m.method()))
-                .collect();
-        assert!(
-            names.contains(&("AudioTasks", "enqueue_transcode")),
-            "{names:?}"
-        );
-        assert!(
-            names.contains(&("AudioTasks", "warmup_on_boot")),
-            "{names:?}"
-        );
-        assert!(names.contains(&("AudioTasks", "heartbeat")), "{names:?}");
-    }
 
     #[test]
     fn the_transcode_seed_fires_once_per_occurrence_and_the_heartbeat_on_each_replica() {
@@ -86,11 +66,5 @@ mod tests {
         assert_eq!(replicas("enqueue_transcode"), Some(Replicas::One));
         assert_eq!(replicas("heartbeat"), Some(Replicas::Each));
         assert_eq!(replicas("warmup_on_boot"), Some(Replicas::Each));
-    }
-
-    #[test]
-    fn injected_dependency_is_recorded_for_the_access_graph() {
-        assert!(AudioTasks::dependencies().contains(&TypeId::of::<AudioService>()));
-        assert!(AudioTasks::injected().contains(&TypeId::of::<AudioService>()));
     }
 }

@@ -23,6 +23,11 @@ slice: the port at the feature root, one adapter folder per edge.
   entry in the serving app's `module.rs`. `nestrs g feature/resource/<edge>`
   does all three. If the copy is not enough, fix the exemplar; never invent a
   second pattern.
+- **The exemplar tests its own decisions, never a decorator's expansion**: a
+  replica count, a retry policy, a period, the claims' identity mapping, an
+  ability rule — what the product chose. What `#[inject]`, `#[process]` or
+  `#[expose]` records, or a module registers, is the framework's suites' to
+  prove, so a copied feature inherits no test of the framework.
 - **Security is wired by composition, not ceremony.** Importing
   `SeaOrmModule`, `SeaOrmDatabaseModule` and `Authz<Edge>Module`
   turns on row filtering, the transaction scope and response masking. Guards

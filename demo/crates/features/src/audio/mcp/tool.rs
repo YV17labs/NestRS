@@ -31,22 +31,3 @@ impl AudioTool {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::any::TypeId;
-
-    use nest_rs::core::Discoverable;
-
-    use super::AudioTool;
-    use crate::audio::AudioService;
-
-    #[test]
-    fn mcp_tool_declares_its_injected_service_for_the_access_graph() {
-        assert!(AudioTool::dependencies().is_empty());
-        assert!(
-            AudioTool::injected().contains(&TypeId::of::<AudioService>()),
-            "the MCP tool's injected AudioService is recorded for the access graph",
-        );
-    }
-}

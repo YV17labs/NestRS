@@ -23,27 +23,17 @@ impl AudioProcessor {
 
 #[cfg(test)]
 mod tests {
-    use std::any::TypeId;
-
-    use nest_rs::core::Discoverable;
     use nest_rs::queue::ProcessMethod;
 
-    use super::AudioProcessor;
-    use crate::audio::{AUDIO_QUEUE, AudioService};
+    use crate::audio::AUDIO_QUEUE;
 
     #[test]
-    fn process_method_is_discovered_through_the_inventory() {
+    fn a_transcode_is_tried_three_times_four_at_a_time_on_the_audio_queue() {
         let transcode = nest_rs::core::inventory::iter::<ProcessMethod>()
             .find(|m| m.name() == "AudioProcessor::transcode")
             .expect("AudioProcessor::transcode is discovered");
         assert_eq!(transcode.queue(), AUDIO_QUEUE);
         assert_eq!(transcode.options().retries(), 3);
         assert_eq!(transcode.options().concurrency().get(), 4);
-    }
-
-    #[test]
-    fn injected_dependency_is_recorded_for_the_access_graph() {
-        assert!(AudioProcessor::dependencies().contains(&TypeId::of::<AudioService>()));
-        assert!(AudioProcessor::injected().contains(&TypeId::of::<AudioService>()));
     }
 }

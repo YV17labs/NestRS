@@ -33,21 +33,3 @@ impl UsersTool {
         ))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::any::TypeId;
-
-    use nest_rs::core::Discoverable;
-
-    use super::UsersTool;
-    use crate::users::UsersService;
-
-    #[test]
-    fn mcp_tool_declares_its_injected_service_for_the_access_graph() {
-        assert!(
-            UsersTool::injected().contains(&TypeId::of::<UsersService>()),
-            "the MCP tool's injected UsersService is recorded for the access graph",
-        );
-    }
-}

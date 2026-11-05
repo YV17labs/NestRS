@@ -194,6 +194,8 @@ async fn non_admin_is_forbidden_by_the_resolver_gate() {
         "a denial is a security event: `warn` or above, never `debug`",
     );
     assert_eq!(event.field("transport").as_deref(), Some("graphql"));
+    assert_eq!(event.field("kind").as_deref(), Some("query"));
+    assert_eq!(event.field("field").as_deref(), Some("widgetName"));
     assert!(
         event.field("subject").is_some_and(|s| s.contains("widget")),
         "the denial names the subject it refused, or an incident cannot tell \

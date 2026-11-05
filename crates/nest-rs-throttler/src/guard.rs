@@ -582,11 +582,8 @@ mod tests {
             line.field("reason").as_deref(),
             Some(reason::LIMIT_EXCEEDED)
         );
-        assert_eq!(
-            line.field("address").as_deref(),
-            Some(LOGIN.address()),
-            "the template the site declares, never the path a client sent",
-        );
+        assert_eq!(line.field("method").as_deref(), Some(LOGIN.method()));
+        assert_eq!(line.field("verb").as_deref(), Some("GET"));
     }
 
     #[test]

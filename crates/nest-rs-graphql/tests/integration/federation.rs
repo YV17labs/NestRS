@@ -280,7 +280,8 @@ async fn a_pooled_guard_refuses_a_reference_before_any_member_answers() {
     let event = logs.expect_one("nest_rs::layers", "guard denied the federation field");
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("unit").as_deref(), Some("graphql.field"));
-    assert_eq!(event.field("address").as_deref(), Some("_entities"));
+    assert_eq!(event.field("kind").as_deref(), Some("query"));
+    assert_eq!(event.field("field").as_deref(), Some("_entities"));
     assert!(
         event.field("guard").is_some_and(|g| g.contains("Closed")),
         "the event names the guard that refused, got {:?}",
@@ -419,7 +420,7 @@ async fn a_federation_denial_keeping_its_cause_files_the_chain() {
     );
     assert!(!body.to_string().contains("refused"), "{body}");
     let event = logs.expect_one("nest_rs::layers", "guard denied the federation field");
-    assert_eq!(event.field("address").as_deref(), Some("_service"));
+    assert_eq!(event.field("field").as_deref(), Some("_service"));
     assert_eq!(
         event.field("error").as_deref(),
         Some(crate::STORE_DOWN_CHAIN)

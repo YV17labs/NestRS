@@ -5,7 +5,7 @@
 
 use std::any::TypeId;
 
-use nest_rs_core::{Edge, Failure, Posture, UnitContext};
+use nest_rs_core::{Edge, Failure, Posture, ServedAddress, UnitContext};
 use nest_rs_guards::__private::UNAUTHENTICATED;
 use nest_rs_guards::Denial;
 
@@ -54,10 +54,9 @@ pub(crate) mod reason {
 pub(crate) struct Refusal<'a> {
     /// The edge that refused — its [`Edge`] word.
     pub transport: &'static str,
-    /// The edge's own name for the unit of work, where it has one beside the
-    /// subject: a WS event name. GraphQL and MCP report the operation on the
-    /// chain's own line instead.
-    pub event: Option<&'a str>,
+    /// Where the unit that refused is served, in the fields its `mounted` line
+    /// names it by, where a unit names one.
+    pub served: ServedAddress<'a>,
     /// The site that refused, by its host and method, where a unit names one.
     pub site: Option<(&'static str, &'static str)>,
     /// The action `#[authorize]` declared, where a posture declared one.
@@ -78,7 +77,7 @@ impl<'a> Refusal<'a> {
     pub(crate) fn on(transport: &'static str) -> Self {
         Self {
             transport,
-            event: None,
+            served: ServedAddress::default(),
             site: None,
             action: None,
             subject: None,
@@ -88,14 +87,13 @@ impl<'a> Refusal<'a> {
         }
     }
 
-    /// A refusal on the unit `cx` describes: its edge, and its event on WS.
+    /// A refusal on the unit `cx` describes: its edge, and its coordinates.
     pub(crate) fn of_unit(cx: &'a UnitContext<'_>) -> Self {
-        let edge = cx.edge();
         let handler = cx.handler();
         Self {
-            event: (edge == Some(Edge::Ws)).then(|| handler.address()),
+            served: cx.served_address().unwrap_or_default(),
             site: Some((handler.host_name(), handler.method())),
-            ..Self::on(edge.map_or("unit", Edge::as_str))
+            ..Self::on(cx.edge().map_or("unit", Edge::as_str))
         }
     }
 
@@ -115,7 +113,7 @@ impl<'a> Refusal<'a> {
 pub(crate) fn warn_denied(refusal: Refusal<'_>) {
     let Refusal {
         transport,
-        event,
+        served,
         site,
         action,
         subject,
@@ -126,9 +124,16 @@ pub(crate) fn warn_denied(refusal: Refusal<'_>) {
     tracing::warn!(
         target: crate::TARGET,
         transport,
-        event,
         host = site.map(|(host, _)| host),
         method = site.map(|(_, method)| method),
+        verb = served.verb,
+        path = served.path,
+        kind = served.kind,
+        field = served.field,
+        event = served.event,
+        tool = served.tool,
+        prompt = served.prompt,
+        resource = served.resource,
         // `Option<Action>` is not a `tracing` value; `field::debug` lets it be absent.
         action = action.map(tracing::field::debug),
         subject,
@@ -145,7 +150,7 @@ pub(crate) fn warn_denied(refusal: Refusal<'_>) {
 pub(crate) fn error_unreached(refusal: Refusal<'_>) {
     let Refusal {
         transport,
-        event,
+        served,
         site,
         action,
         subject,
@@ -155,9 +160,16 @@ pub(crate) fn error_unreached(refusal: Refusal<'_>) {
     tracing::error!(
         target: crate::TARGET,
         transport,
-        event,
         host = site.map(|(host, _)| host),
         method = site.map(|(_, method)| method),
+        verb = served.verb,
+        path = served.path,
+        kind = served.kind,
+        field = served.field,
+        event = served.event,
+        tool = served.tool,
+        prompt = served.prompt,
+        resource = served.resource,
         action = action.map(tracing::field::debug),
         subject,
         reason = reason::NO_AMBIENT_ABILITY,
@@ -223,7 +235,6 @@ pub(crate) fn error_unreached(refusal: Refusal<'_>) {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn class_gate<A: ActionMarker, S: Subject>(cx: &mut UnitContext<'_>) -> Result<(), Failure> {
-    let refusal = Refusal::of_unit(cx).declaring::<A, S>();
     let Some(ability) = crate::context::carried(cx) else {
         error_unreached(Refusal {
             remedy: Some(
@@ -231,7 +242,7 @@ pub fn class_gate<A: ActionMarker, S: Subject>(cx: &mut UnitContext<'_>) -> Resu
                  #[use_guards(AuthnGuard, AuthzGuard)], the app's global pool, or \
                  EndpointGuards for an in-band endpoint — and import AuthzModule",
             ),
-            ..refusal
+            ..Refusal::of_unit(cx).declaring::<A, S>()
         });
         return Err(Denial::internal(NO_AMBIENT_ABILITY).into());
     };
@@ -239,7 +250,7 @@ pub fn class_gate<A: ActionMarker, S: Subject>(cx: &mut UnitContext<'_>) -> Resu
     decide(&ability, A::ACTION, TypeId::of::<S>(), posture).map_err(|(why, denial)| {
         warn_denied(Refusal {
             reason: Some(why),
-            ..refusal
+            ..Refusal::of_unit(cx).declaring::<A, S>()
         });
         Failure::from(denial)
     })
@@ -284,9 +295,10 @@ mod tests {
     use nest_rs_core::{Handler, UnitView};
     use nest_rs_guards::Scope;
     use nest_rs_testing::LogCapture;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-    use crate::{AbilityBuilder, Read};
+    use crate::{AbilityBuilder, Read, Update};
 
     mod post {
         use sea_orm::entity::prelude::*;
@@ -366,6 +378,33 @@ mod tests {
         let logs = LogCapture::install();
         assert!(gated(&GATED, Some(reader())).is_ok());
         logs.expect_none(crate::TARGET, "authorization denied");
+    }
+
+    /// How many times a view was asked where its unit is served.
+    static ASKED: AtomicUsize = AtomicUsize::new(0);
+
+    struct CountingView;
+
+    impl UnitView for CountingView {
+        fn served_address(&self) -> Option<ServedAddress<'_>> {
+            ASKED.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
+
+    /// A unit's address is a refusal's to read: the admitted unit, the hot path,
+    /// pays for no view call.
+    #[test]
+    fn only_a_refused_unit_is_asked_where_it_is_served() {
+        let _logs = LogCapture::install();
+        let mut view = CountingView;
+        let mut cx = new_unit_context(&GATED, &mut view, None, None);
+        cx.attach(crate::context::AmbientAbility::new(reader()));
+        assert!(class_gate::<Read, Post>(&mut cx).is_ok());
+        assert_eq!(ASKED.load(Ordering::Relaxed), 0, "admitted");
+
+        assert!(class_gate::<Update, Post>(&mut cx).is_err());
+        assert_eq!(ASKED.load(Ordering::Relaxed), 1, "refused");
     }
 
     #[test]

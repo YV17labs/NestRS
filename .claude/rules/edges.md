@@ -62,6 +62,9 @@ guard, filter or interceptor loop of its own.
    unit is `<Edge>View`, in the edge crate's `view.rs`, implementing
    `UnitView` and reached through `cx.switch_to::<<Edge>View>()`; a layer
    answers or settles the unit through it, never through a slot of its own.
+   The view of a unit a guard can refuse states where it is served
+   (`UnitView::served_address`), in the fields of its `mounted` line, so a
+   denial joins that line.
 3. **The pipeline, inside the unit of work.** Each unit is one `Site` — its
    `Handler` and what its decorators bound — dispatched through core's
    `dispatch` inside `nest_rs_database::run_unit` (`run_unit_bounded` where

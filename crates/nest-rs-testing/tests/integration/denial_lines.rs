@@ -2,14 +2,20 @@
 //! the target the refusing guard declares (`Guard::target`, `nest_rs::layers`
 //! when it declares none), carrying the reason its denial names — a guard
 //! writes no line of its own. A guard writing its decision once in `check`
-//! refuses an HTTP request with it too.
+//! refuses an HTTP request with it too. The line names the guard as an app
+//! writes it and the unit by the coordinates its `mounted` line gives it, so
+//! the two join.
 
+use nest_rs_core::__private::short_type_name;
+use nest_rs_core::operation_log::OTHER;
 use nest_rs_core::{Layer, Module, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
-use nest_rs_http::StatusCode;
-use nest_rs_http::{HttpView, controller, routes};
+use nest_rs_http::{
+    ApiVersioning, DEFAULT_VERSION_HEADER, HttpConfig, HttpModule, HttpView, Method, StatusCode,
+    controller, routes,
+};
 use nest_rs_mcp::{McpError, McpView, mcp, tools};
 use nest_rs_testing::mcp::{call_tool_statelessly, initialize_request, post_message};
 use nest_rs_testing::{CapturedEvent, LogCapture, TestApp};
@@ -183,9 +189,66 @@ fn filed(logs: &LogCapture) -> usize {
     filed_since(logs, 0).len()
 }
 
+/// The coordinates a line names a unit by, beside its host and method.
+const COORDINATES: [&str; 8] = [
+    "verb", "path", "kind", "field", "event", "tool", "prompt", "resource",
+];
+
+/// `line`'s coordinates, each one absent unless `expected` names it, and each
+/// one it names as the unit's `mounted` line says it, where one mounts it.
+fn assert_joins_its_mount(
+    logs: &LogCapture,
+    edge: &str,
+    line: &CapturedEvent,
+    host: &str,
+    method: Option<&str>,
+    expected: &[(&str, &str)],
+) {
+    assert_eq!(line.field("host").as_deref(), Some(host), "{edge}");
+    assert_eq!(line.field("method").as_deref(), method, "{edge}");
+    assert_eq!(line.field("address"), None, "{edge}: {:?}", line.fields);
+    for coordinate in COORDINATES {
+        let named = expected
+            .iter()
+            .find(|(name, _)| *name == coordinate)
+            .map(|(_, value)| (*value).to_owned());
+        assert_eq!(
+            line.field(coordinate),
+            named,
+            "{edge}: {coordinate} in {:?}",
+            line.fields,
+        );
+    }
+    let Some(method) = method else {
+        return;
+    };
+    let mounted = logs
+        .find(nest_rs_http::target::ROUTES, "mounted")
+        .into_iter()
+        .find(|mounted| {
+            mounted.field("host").as_deref() == Some(host)
+                && mounted.field("method").as_deref() == Some(method)
+        })
+        .unwrap_or_else(|| panic!("{edge}: {host}::{method} mounted"));
+    for (coordinate, value) in expected {
+        assert_eq!(
+            mounted.field(coordinate).as_deref(),
+            Some(*value),
+            "{edge}: the mount's {coordinate} in {:?}",
+            mounted.fields,
+        );
+    }
+}
+
 /// The one line `edge`'s denial filed: the edge's, on the target the guard
 /// `named` declares, carrying the reason its denial names when it names one.
-fn assert_one_line(logs: &LogCapture, seen: usize, edge: &str, declared: bool, named: &str) {
+fn assert_one_line(
+    logs: &LogCapture,
+    seen: usize,
+    edge: &str,
+    declared: bool,
+    named: &str,
+) -> CapturedEvent {
     let lines = filed_since(logs, seen);
     let said: Vec<(&str, &str)> = lines
         .iter()
@@ -214,6 +277,7 @@ fn assert_one_line(logs: &LogCapture, seen: usize, edge: &str, declared: bool, n
             assert_eq!(line.field("reason"), None, "{edge}: {:?}", line.fields);
         }
     }
+    lines.into_iter().next().expect("one line")
 }
 
 #[module(imports = [EveryEdgeModule], providers = [GlobalGuards<(DeclaredDoor,)>])]
@@ -240,7 +304,7 @@ async fn booted<M: Module + 'static>() -> TestApp {
 /// Every edge's request, refused by `G`, the pool `M` declares, writing its
 /// one decision in `check`.
 async fn requests_refused<M: Module + 'static, G: Guard + 'static>(declared: bool) {
-    let named = std::any::type_name::<G>();
+    let named = short_type_name::<G>();
     let logs = LogCapture::install();
     let app = booted::<M>().await;
 
@@ -250,7 +314,15 @@ async fn requests_refused<M: Module + 'static, G: Guard + 'static>(declared: boo
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "a route", declared, named);
+    let line = assert_one_line(&logs, seen, "a route", declared, &named);
+    assert_joins_its_mount(
+        &logs,
+        "a route",
+        &line,
+        "DoorController",
+        Some("open"),
+        &[("verb", "GET"), ("path", "/door")],
+    );
 
     let seen = filed(&logs);
     app.http()
@@ -259,13 +331,29 @@ async fn requests_refused<M: Module + 'static, G: Guard + 'static>(declared: boo
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "/graphql", declared, named);
+    let line = assert_one_line(&logs, seen, "/graphql", declared, &named);
+    assert_joins_its_mount(
+        &logs,
+        "/graphql",
+        &line,
+        "GraphqlModule",
+        None,
+        &[("verb", "POST"), ("path", "/graphql")],
+    );
 
     let seen = filed(&logs);
     post_message(app.http(), "/mcp", None, None, &initialize_request())
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "/mcp", declared, named);
+    let line = assert_one_line(&logs, seen, "/mcp", declared, &named);
+    assert_joins_its_mount(
+        &logs,
+        "/mcp",
+        &line,
+        "McpModule",
+        None,
+        &[("verb", "POST"), ("path", "/mcp")],
+    );
 
     let seen = filed(&logs);
     app.http()
@@ -277,7 +365,15 @@ async fn requests_refused<M: Module + 'static, G: Guard + 'static>(declared: boo
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    assert_one_line(&logs, seen, "a gateway's upgrade", declared, named);
+    let line = assert_one_line(&logs, seen, "a gateway's upgrade", declared, &named);
+    assert_joins_its_mount(
+        &logs,
+        "a gateway's upgrade",
+        &line,
+        "DoorGateway",
+        None,
+        &[("verb", "GET"), ("path", "/ws/door")],
+    );
 }
 
 #[tokio::test]
@@ -290,9 +386,108 @@ async fn a_request_a_silent_guard_refuses_files_one_line_on_the_layers_target() 
     requests_refused::<SilentDoorPoolModule, SilentDoor>(false).await;
 }
 
+#[module(
+    imports = [HttpModule::for_root(HttpConfig {
+        global_prefix: Some("/api".into()),
+        ..HttpConfig::default()
+    })],
+    providers = [DeclaredDoor, DoorController, GlobalGuards<(DeclaredDoor,)>],
+)]
+struct PrefixedDoorModule;
+
+/// Under a global prefix the line names the path a client calls, as the route's
+/// `mounted` line does.
+#[tokio::test]
+async fn a_denial_names_the_path_served_under_the_global_prefix() {
+    let logs = LogCapture::install();
+    let app = booted::<PrefixedDoorModule>().await;
+
+    app.http()
+        .get("/api/door")
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    let line = logs.expect_one(ACME, "guard denied the request");
+    assert_joins_its_mount(
+        &logs,
+        "a route under a prefix",
+        &line,
+        "DoorController",
+        Some("open"),
+        &[("verb", "GET"), ("path", "/api/door")],
+    );
+}
+
+#[controller(path = "/door/versioned", version = "2")]
+#[derive(Default)]
+struct VersionedDoorController;
+
+#[routes]
+impl VersionedDoorController {
+    #[get("/")]
+    #[public]
+    async fn open(&self) -> &'static str {
+        "open"
+    }
+}
+
+#[module(
+    imports = [HttpModule::for_root(HttpConfig {
+        versioning: ApiVersioning::Header,
+        ..HttpConfig::default()
+    })],
+    providers = [DeclaredDoor, VersionedDoorController, GlobalGuards<(DeclaredDoor,)>],
+)]
+struct HeaderVersionedDoorModule;
+
+/// Under a version a header selects, `/v2` is where the route mounts, not what
+/// a client calls: its `mounted` line says the path called and `version` apart,
+/// and a denial, as the route's operation line does, says the template it
+/// matched. `host`, `method` and `verb` join the two.
+#[tokio::test]
+async fn a_denial_under_a_header_version_names_the_template_it_matched() {
+    let logs = LogCapture::install();
+    let app = booted::<HeaderVersionedDoorModule>().await;
+
+    app.http()
+        .get("/door/versioned")
+        .header(DEFAULT_VERSION_HEADER, "2")
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    let line = logs.expect_one(ACME, "guard denied the request");
+    assert_eq!(line.field("path").as_deref(), Some("/v2/door/versioned"));
+    let mounted = logs.expect_one(nest_rs_http::target::ROUTES, "mounted");
+    assert_eq!(mounted.field("path").as_deref(), Some("/door/versioned"));
+    assert_eq!(mounted.field("version").as_deref(), Some("2"));
+    for join in ["host", "method", "verb"] {
+        assert_eq!(line.field(join), mounted.field(join), "{join}");
+    }
+}
+
+/// A method only the client chose reaches no line: `/mcp` takes every method,
+/// and the line says it as the HTTP conventions do.
+#[tokio::test]
+async fn a_method_only_the_client_chose_is_said_as_the_conventions_say_it() {
+    let logs = LogCapture::install();
+    let app = booted::<DeclaredDoorPoolModule>().await;
+
+    app.http()
+        .request(Method::from_bytes(b"BREW").expect("a token"), "/mcp")
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    let line = logs.expect_one(ACME, "guard denied the request");
+    assert_eq!(line.field("verb").as_deref(), Some(OTHER));
+    assert!(!line.quotes("BREW"), "{:?}", line.fields);
+}
+
 /// Every in-band edge's unit, refused by `G`, the pool `M` declares.
 async fn units_refused<M: Module + 'static, G: Guard + 'static>(declared: bool) {
-    let named = std::any::type_name::<G>();
+    let named = short_type_name::<G>();
     let logs = LogCapture::install();
     let app = TestApp::builder()
         .module::<M>()
@@ -308,7 +503,15 @@ async fn units_refused<M: Module + 'static, G: Guard + 'static>(declared: bool) 
         refused["data"]["error"].is_string(),
         "the message is refused: {refused}"
     );
-    assert_one_line(&logs, seen, "a WS message", declared, named);
+    let line = assert_one_line(&logs, seen, "a WS message", declared, &named);
+    assert_joins_its_mount(
+        &logs,
+        "a WS message",
+        &line,
+        "DoorGateway",
+        Some("ping"),
+        &[("event", "ping")],
+    );
     drop(socket);
     app.close().await;
 
@@ -322,7 +525,15 @@ async fn units_refused<M: Module + 'static, G: Guard + 'static>(declared: bool) 
         .send()
         .await;
     graphql.assert_status(StatusCode::OK);
-    assert_one_line(&logs, seen, "a GraphQL operation", declared, named);
+    let line = assert_one_line(&logs, seen, "a GraphQL operation", declared, &named);
+    assert_joins_its_mount(
+        &logs,
+        "a GraphQL operation",
+        &line,
+        "DoorResolver",
+        Some("ping"),
+        &[("kind", "query"), ("field", "ping")],
+    );
 
     // No guard names a caller at the request, so no session opens for one: a
     // stateless call reaches the operation.
@@ -330,7 +541,15 @@ async fn units_refused<M: Module + 'static, G: Guard + 'static>(declared: bool) 
     let mcp =
         call_tool_statelessly(app.http(), "/mcp", "ping", None, &[], serde_json::json!({})).await;
     assert!(mcp.contains("closed"), "the tool call is refused: {mcp}");
-    assert_one_line(&logs, seen, "an MCP operation", declared, named);
+    let line = assert_one_line(&logs, seen, "an MCP operation", declared, &named);
+    assert_joins_its_mount(
+        &logs,
+        "an MCP operation",
+        &line,
+        "DoorTool",
+        Some("ping"),
+        &[("tool", "ping")],
+    );
 }
 
 #[tokio::test]

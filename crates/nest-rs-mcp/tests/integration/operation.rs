@@ -212,7 +212,7 @@ async fn an_operation_denial_keeping_its_cause_files_the_chain() {
         "…never the cause, and the body never ran: {refused}",
     );
     let event = logs.expect_one("nest_rs::layers", "guard denied the operation");
-    assert_eq!(event.field("address").as_deref(), Some("down"));
+    assert_eq!(event.field("tool").as_deref(), Some("down"));
     assert_eq!(
         event.field("error").as_deref(),
         Some(crate::STORE_DOWN_CHAIN)

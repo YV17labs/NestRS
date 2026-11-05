@@ -332,7 +332,7 @@ mod tests {
         assert!(line.is_none(), "the stage filed the denial itself");
         let event = logs.expect_one("nest_rs::layers", "guard denied the message");
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("address").as_deref(), Some("send"));
+        assert_eq!(event.field("event").as_deref(), Some("send"));
         assert_eq!(event.field("unit").as_deref(), Some("ws.message"));
         assert_eq!(event.field("error"), None, "a refused caller is no failure");
     }

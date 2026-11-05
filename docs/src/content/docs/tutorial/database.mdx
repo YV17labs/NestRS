@@ -210,12 +210,14 @@ $ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3001/posts
 ```
 
 ```text frame="terminal"
-WARN nest_rs::authn: guard denied the request guard="nest_rs_authn::guard::AuthnGuard<nest_rs_authn::strategies::jwt::JwtStrategy<features::authn::claims::Claims>>" unit="http.request" host="PostsController" address="/" status=401 reason="missing_credentials" error="missing credentials" trace_id=01a190f2f5e277bda79f735006bdcc6b span_id=0b5f30d871801957
+WARN nest_rs::authn: guard denied the request guard="AuthnGuard<JwtStrategy<Claims>>" unit="http.request" host="PostsController" method="list" verb="GET" path="/posts" status=401 reason="missing_credentials" error="missing credentials" trace_id=01a190f2f5e277bda79f735006bdcc6b span_id=0b5f30d871801957
 ```
 
 One denial, one line, filed by the edge on the target of the guard that
-decided it. It carries the request's `trace_id`, and no `actor_id` — nobody
-was authenticated, which is the whole story of a `401`. Drop
+decided it. It names the route by the `host`, `method`, `verb` and `path` of
+its `mounted` line above, so a filter on any of them finds both. It carries the
+request's `trace_id`, and no `actor_id` — nobody was authenticated, which is
+the whole story of a `401`. Drop
 `#[use_guards(...)]` from the controller and the boot refuses instead,
 naming every route no guard covers: a route runs a guard, or says
 `#[public]`.

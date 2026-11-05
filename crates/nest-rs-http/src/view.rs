@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex, PoisonError};
 
 use nest_rs_core::__private::new_unit_context;
-use nest_rs_core::{Handler, Settled, UnitContext, UnitView};
+use nest_rs_core::{Handler, ServedAddress, Settled, UnitContext, UnitView};
 use nest_rs_guards::Denial;
 
 use crate::request::Request;
@@ -77,7 +77,14 @@ pub struct HttpView {
     response: Option<Response>,
 }
 
-impl UnitView for HttpView {}
+impl UnitView for HttpView {
+    fn served_address(&self) -> Option<ServedAddress<'_>> {
+        Some(ServedAddress::route(
+            self.request.verb(),
+            self.request.route(),
+        ))
+    }
+}
 
 impl HttpView {
     /// The view of `request`, as the edge builds it for a unit.

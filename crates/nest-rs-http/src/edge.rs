@@ -316,6 +316,7 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
         let origin = ClientOrigin::of_with(&req, &self.trusted_proxies);
         let correlation = trace_context::resolve(&req, origin);
         let method = self.known_methods.name(req.method());
+        req.set_verb(method.clone());
         // Never gated: it carries `trace_id` onto every event and declares the
         // `actor_id` field the authn guard records into.
         let span = trace_context::request_span(&req, &correlation, origin, &method);
@@ -718,6 +719,7 @@ mod tests {
             scheme: http::uri::Scheme::HTTP,
             original_uri: head.uri.clone(),
             route: None,
+            verb: None,
             arrival: Some(arrival),
         };
         let resp = ep
@@ -736,6 +738,7 @@ mod tests {
             scheme: http::uri::Scheme::HTTP,
             original_uri: head.uri.clone(),
             route: None,
+            verb: None,
             arrival: Some(Instant::now()),
         };
         Request::from_raw(head, Body::empty(), facts)

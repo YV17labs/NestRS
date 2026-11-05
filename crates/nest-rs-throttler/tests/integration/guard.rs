@@ -123,9 +123,7 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
     let event = the_denial(&logs, "limit_exceeded");
     assert_eq!(event.level, "warn");
     assert!(
-        event
-            .field("address")
-            .is_some_and(|r| r.contains("/strict")),
+        event.field("path").is_some_and(|r| r.contains("/strict")),
         "the event names the route on its own field, got {:?}",
         event.fields,
     );
@@ -160,7 +158,7 @@ async fn the_bucket_key_is_the_declared_template() {
     let event = the_denial(&logs, "limit_exceeded");
     assert!(
         event
-            .field("address")
+            .field("path")
             .is_some_and(|route| route.ends_with("/items/{id}")),
         "the bucket is named as the route declares it, got {:?}",
         event.fields,
@@ -625,7 +623,7 @@ mod graphql {
             event.fields,
         );
         assert_eq!(
-            event.field("address").as_deref(),
+            event.field("field").as_deref(),
             Some("tick"),
             "the bucket is the field's, so the field is what the line names, \
              got {:?}",
@@ -768,7 +766,7 @@ mod mcp {
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("unit").as_deref(), Some("mcp.operation"));
         assert_eq!(
-            event.field("address").as_deref(),
+            event.field("tool").as_deref(),
             Some("tick"),
             "the bucket is the operation's, got {:?}",
             event.fields,
@@ -906,7 +904,7 @@ mod ws {
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("unit").as_deref(), Some("ws.message"));
         assert_eq!(
-            event.field("address").as_deref(),
+            event.field("event").as_deref(),
             Some("tick"),
             "the event names the unit, got {:?}",
             event.fields,
@@ -1078,12 +1076,13 @@ mod self_mount {
             .assert_status(StatusCode::TOO_MANY_REQUESTS);
 
         let event = super::the_denial(&logs, "limit_exceeded");
-        assert!(
-            event
-                .field("address")
-                .is_some_and(|mount| mount.starts_with("/files")),
-            "{:?}",
+        assert_eq!(
+            event.field("path").as_deref(),
+            Some("/files/{*name}"),
+            "the template it matched, which the mount's line does not say: {:?}",
             event.fields,
         );
+        let mounted = logs.expect_one("nest_rs::routes", "mounted endpoint");
+        assert_eq!(mounted.field("path").as_deref(), Some("/files"));
     }
 }

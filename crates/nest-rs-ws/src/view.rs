@@ -1,7 +1,7 @@
 //! [`WsView`], the WebSocket edge's view of the message it dispatches.
 
 use nest_rs_core::__private::Withheld;
-use nest_rs_core::{Failure, Settled, UnitContext, UnitView};
+use nest_rs_core::{Failure, ServedAddress, Settled, UnitContext, UnitView};
 
 use crate::envelope::{Rendered, WsReply};
 use crate::server::WsClient;
@@ -42,7 +42,11 @@ pub struct WsView {
     withheld: Option<Withheld>,
 }
 
-impl UnitView for WsView {}
+impl UnitView for WsView {
+    fn served_address(&self) -> Option<ServedAddress<'_>> {
+        Some(ServedAddress::event(self.event))
+    }
+}
 
 impl WsView {
     /// The view of `event`'s message `data`, arrived on `client`.

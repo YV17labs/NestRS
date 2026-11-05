@@ -31,7 +31,11 @@ something the guard depends on did not answer and the caller did nothing
 wrong. A guard writes no log line for its refusals: the edge that ran it files
 each denial once, `guard denied …` on the target the guard declares
 (`fn target`, `nest_rs::layers` when it declares none) — at `warn`, at `error`
-for a `500` — carrying the `reason` the denial names
+for a `500` — naming the guard as you write it (`AuthnGuard<JwtStrategy<Claims>>`)
+and the unit by the fields of its `mounted` line: `host` and `method`, then
+`verb` and `path` on a request, `kind` and `field` on a GraphQL operation, `event`
+on a WebSocket message, `tool`, `prompt` or `resource` on an MCP operation. It
+carries the `reason` the denial names
 (`Denial::forbidden("…").with_reason("banned_author")`) and, when the denial
 keeps what failed (`.with_source(err)`), the whole chain as its `error` field,
 while the caller reads the condition alone. On HTTP the denial is answered as a

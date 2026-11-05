@@ -150,6 +150,7 @@ mod proof;
 mod request_scope;
 mod scope;
 mod secret;
+mod served_address;
 mod site;
 mod stderr_lines;
 pub mod target;
@@ -215,6 +216,7 @@ pub use request_scope::{
 };
 pub use scope::Scoped;
 pub use secret::Secret;
+pub use served_address::ServedAddress;
 pub use tenant::current_tenant_id;
 pub use trace_context::{
     Correlation, SpanId, TraceFlags, TraceId, TraceParent, TraceState, current_actor_id,

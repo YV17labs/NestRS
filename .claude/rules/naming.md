@@ -50,9 +50,18 @@ owner or the commit body:
 | module, crate | what one directory shows | `ls`, `cargo tree` |
 | env var, config key | everything one deployment sets | `env \| sort`, a chart's values |
 | span target | every filter an operator writes | a log filter, a query |
+| log field, log message | every line one filter reads, across edges | a log filter, a query |
 | storage key | everything one backend holds for the app | a `SCAN`, a schema dump |
 | CLI command, flag | everything `--help` prints | `--help`, completion |
 | error variant | every outcome a caller matches | the `match`, the error docs |
+
+**One fact, one sentence; one unit, one field set.** A line says a fact in one
+message on one target with its edge a field, whichever edge it arose on. A line
+about a dispatched unit names it by the fields of its `mounted` line: `host` and
+`method`, then the edge's coordinates (`verb`+`path`, `kind`+`field`, `event`,
+`tool`, `prompt` or `resource`). A type reads as an app writes it, and a value in
+the word an operator sets or a standard names, never its `Debug`. Held by each
+edge's line tests.
 
 Two attempts yielding two schemes mean a fact about the domain is missing, not
 a better word: find the fact. A new crate, crate family or edge is proposed

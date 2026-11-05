@@ -158,7 +158,7 @@ impl KnownMethods {
 }
 
 /// `method` as the conventions' known set spells it, if it is one.
-fn conventional(method: &Method) -> Option<&'static str> {
+pub(crate) fn conventional(method: &Method) -> Option<&'static str> {
     Some(match method.as_str() {
         "CONNECT" => "CONNECT",
         "DELETE" => "DELETE",

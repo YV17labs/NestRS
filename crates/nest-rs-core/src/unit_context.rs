@@ -14,6 +14,7 @@ use crate::error::MissingAmbientError;
 use crate::handler::{Handler, Reflector};
 use crate::operation_log::Unit;
 use crate::outcome::Failure;
+use crate::served_address::ServedAddress;
 
 /// Everything a layer knows about the unit it runs around: which unit, on which
 /// edge, dispatched to which [`Handler`], for which [`Peer`], by when, and the
@@ -57,6 +58,11 @@ impl<'a> UnitContext<'a> {
     /// Reads what the site declared.
     pub fn reflector(&self) -> Reflector<'a> {
         self.handler.reflector()
+    }
+
+    /// Where the unit is served, as its edge's view states it.
+    pub fn served_address(&self) -> Option<ServedAddress<'_>> {
+        self.view.served_address()
     }
 
     /// Who is on the other end, as far as the edge can tell.
@@ -169,7 +175,14 @@ impl fmt::Debug for UnitContext<'_> {
 
 /// An edge's typed view of the unit it dispatches, reached through
 /// [`UnitContext::switch_to`]; each edge crate implements it on its own view.
-pub trait UnitView: Any + Send {}
+pub trait UnitView: Any + Send {
+    /// Where the unit is served, in the fields the edge's `mounted` line names
+    /// it by; `None`, the default, has a guard's denial say the handler's
+    /// [`address`](Handler::address) instead.
+    fn served_address(&self) -> Option<ServedAddress<'_>> {
+        None
+    }
+}
 
 /// Who is on the other end of a unit, as far as its edge can tell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

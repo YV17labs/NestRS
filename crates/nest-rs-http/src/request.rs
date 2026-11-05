@@ -1,6 +1,7 @@
 //! [`Request`], its builder, the body a handler sets apart, and
 //! [`FromRequest`], the trait a handler parameter reads it through.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -11,6 +12,7 @@ use http::header::AsHeaderName;
 use http::request::Parts as RequestParts;
 use http::uri::Scheme;
 use http::{Extensions, HeaderMap, HeaderName, HeaderValue, Method, Uri, Version, header};
+use nest_rs_core::operation_log::OTHER;
 
 use crate::body::Body;
 use crate::error::{BodyError, BoxError, Result};
@@ -44,6 +46,8 @@ pub(crate) struct RequestFacts {
     pub(crate) scheme: Scheme,
     pub(crate) original_uri: Uri,
     pub(crate) route: Option<Routed>,
+    /// The method as a line names it, once the edge has read it.
+    pub(crate) verb: Option<Cow<'static, str>>,
     /// When the accept loop handed the request over, hyper having read its
     /// head; `None` for a request built in process.
     pub(crate) arrival: Option<tokio::time::Instant>,
@@ -58,6 +62,7 @@ impl RequestFacts {
             scheme: uri.scheme().cloned().unwrap_or(Scheme::HTTP),
             original_uri: uri.clone(),
             route: None,
+            verb: None,
             arrival: None,
         }
     }
@@ -476,6 +481,20 @@ impl Request {
     /// taken by the edge, its one reader, so no crossing after it carries it.
     pub(crate) fn take_arrival(&mut self) -> Option<tokio::time::Instant> {
         self.facts.arrival.take()
+    }
+
+    /// The method as a line names it: the name the edge read off its known
+    /// methods, or, on a request no edge read, as the conventions spell it.
+    pub(crate) fn verb(&self) -> &str {
+        match &self.facts.verb {
+            Some(verb) => verb,
+            None => crate::trace_context::conventional(self.method()).unwrap_or(OTHER),
+        }
+    }
+
+    /// Records the method as a line names it.
+    pub(crate) fn set_verb(&mut self, verb: Cow<'static, str>) {
+        self.facts.verb = Some(verb);
     }
 
     /// Records the route the router matched: its template, and each

@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, OnceLock, PoisonError, RwLock};
 
+use nest_rs_core::__private::shorten;
 use nest_rs_core::UnitContext;
 use tracing_core::callsite::{self, Callsite};
 use tracing_core::field::{Field, FieldSet, Value};
@@ -15,11 +16,20 @@ use crate::Denial;
 use crate::denial::failure_chain;
 
 /// Every field a denial line carries, in the order its values are given.
-const FIELDS: [&str; 10] = [
+const FIELDS: [&str; 19] = [
     "message",
     "guard",
     "unit",
     "host",
+    "method",
+    "verb",
+    "path",
+    "kind",
+    "field",
+    "event",
+    "tool",
+    "prompt",
+    "resource",
     "address",
     "conn_id",
     "status",
@@ -97,12 +107,15 @@ fn line(target: &'static str, message: &'static str, level: Level) -> &'static L
 
 /// File `denial`, raised by the guard named `guard` on the unit `cx`, as
 /// `message` on the guard's `target`: at `error` for a `500`, a wiring defect,
-/// else at `warn`. The line names the guard, the unit
-/// (`http.request`, `ws.message`, …), its host and address and the connection
-/// it arrived on (`conn_id`, as every WebSocket line names it), the status, the
-/// denial's reason and `Retry-After`, and the chain behind a denial keeping a
-/// cause — never a denial's own text otherwise, which may name what no line
-/// carries.
+/// else at `warn`. The line names the guard as an app writes it, the unit
+/// (`http.request`, `ws.message`, …), its host, its method and where it is
+/// served, by the fields the unit's `mounted` line names it by
+/// ([`ServedAddress`](nest_rs_core::ServedAddress)) or the handler's `address`
+/// on a view stating none, the
+/// connection it arrived on (`conn_id`, as every WebSocket line names it), the
+/// status, the denial's reason and `Retry-After`, and the chain behind a denial
+/// keeping a cause — never a denial's own text otherwise, which may name what
+/// no line carries.
 pub(crate) fn file_denial(
     message: &'static str,
     guard: &'static str,
@@ -126,6 +139,15 @@ pub(crate) fn file_denial(
             Some(named),
             Some(unit),
             Some(host),
+            Some(method),
+            Some(verb),
+            Some(path),
+            Some(kind),
+            Some(field),
+            Some(event),
+            Some(tool),
+            Some(prompt),
+            Some(resource),
             Some(address),
             Some(conn_id),
             Some(status),
@@ -146,9 +168,16 @@ pub(crate) fn file_denial(
             return;
         }
         let message = tracing_core::field::display(message);
+        let guard = shorten(guard);
+        let guard = guard.as_str();
         let unit_name = cx.unit().name();
-        let host_name = cx.handler().host_name();
-        let addressed = cx.handler().address();
+        let handler = cx.handler();
+        let host_name = handler.host_name();
+        // A framework endpoint dispatches to no method of its own.
+        let dispatched = Some(handler.method()).filter(|method| !method.is_empty());
+        let served = cx.served_address();
+        let declared = served.is_none().then(|| handler.address());
+        let served = served.unwrap_or_default();
         let arrived_on = cx.peer().and_then(|peer| peer.connection);
         let code = denial.http_status();
         let why = denial.reason();
@@ -160,7 +189,16 @@ pub(crate) fn file_denial(
             (named, Some(&guard)),
             (unit, Some(&unit_name)),
             (host, Some(&host_name)),
-            (address, Some(&addressed)),
+            (method, Some(&dispatched)),
+            (verb, Some(&served.verb)),
+            (path, Some(&served.path)),
+            (kind, Some(&served.kind)),
+            (field, Some(&served.field)),
+            (event, Some(&served.event)),
+            (tool, Some(&served.tool)),
+            (prompt, Some(&served.prompt)),
+            (resource, Some(&served.resource)),
+            (address, Some(&declared)),
             (conn_id, Some(&arrived_on)),
             (status, Some(&code)),
             (reason, Some(&why)),
@@ -180,7 +218,7 @@ mod tests {
         HandlerDeclaration, MetaLevels, declare_handler, declare_unit, log_filter, new_unit_context,
     };
     use nest_rs_core::operation_log::Kind;
-    use nest_rs_core::{Handler, Posture, UnitView};
+    use nest_rs_core::{Handler, Posture, ServedAddress, UnitView};
     use tracing_subscriber::Registry;
     use tracing_subscriber::layer::{Context, SubscriberExt as _};
 
@@ -240,5 +278,69 @@ mod tests {
 
         let written = written.0.lock().unwrap_or_else(PoisonError::into_inner);
         assert_eq!(*written, ["acme::heard"]);
+    }
+
+    /// A view stating no address has the handler's said: a package's unit is
+    /// still named, by what its decorator declares.
+    #[test]
+    fn a_view_stating_no_address_has_the_handlers_said() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut view = Socket;
+        let cx = new_unit_context(&MESSAGE, &mut view, None, None);
+
+        file_denial(
+            "guard denied the message",
+            "acme::door::Door<acme::keys::Key>",
+            "acme::door",
+            &cx,
+            &Denial::forbidden("closed"),
+        );
+
+        let line = logs.expect_one("acme::door", "guard denied the message");
+        assert_eq!(line.field("guard").as_deref(), Some("Door<Key>"));
+        assert_eq!(line.field("host").as_deref(), Some("Host"));
+        assert_eq!(line.field("method").as_deref(), Some("send"));
+        assert_eq!(line.field("address").as_deref(), Some("send"));
+        assert_eq!(line.field("event"), None);
+    }
+
+    struct Stating;
+
+    impl UnitView for Stating {
+        fn served_address(&self) -> Option<ServedAddress<'_>> {
+            Some(ServedAddress::event("said"))
+        }
+    }
+
+    static MOUNT: Handler = declare_handler(HandlerDeclaration {
+        unit: declare_unit("nest-rs-ws", "nest_rs::ws", Kind::Server, "ws.message"),
+        host: TypeId::of::<Host>(),
+        host_name: "Host",
+        method: "",
+        address: "/mount",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    /// A view stating its address has it said in place of the handler's, and a
+    /// framework endpoint, which dispatches to no method, names none.
+    #[test]
+    fn a_stated_address_replaces_the_handlers_and_an_endpoint_names_no_method() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut view = Stating;
+        let cx = new_unit_context(&MOUNT, &mut view, None, None);
+
+        file_denial(
+            "guard denied the message",
+            "Door",
+            "acme::door",
+            &cx,
+            &Denial::forbidden("closed"),
+        );
+
+        let line = logs.expect_one("acme::door", "guard denied the message");
+        assert_eq!(line.field("event").as_deref(), Some("said"));
+        assert_eq!(line.field("address"), None);
+        assert_eq!(line.field("method"), None);
     }
 }

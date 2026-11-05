@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use nest_rs_core::UnitView;
+use nest_rs_core::{ServedAddress, UnitView};
 use nest_rs_http::CarriedView;
 
 use crate::operation::McpOperationKind;
@@ -85,7 +85,21 @@ pub struct McpView {
     host: Option<&'static str>,
 }
 
-impl UnitView for McpView {}
+impl UnitView for McpView {
+    fn served_address(&self) -> Option<ServedAddress<'_>> {
+        // An owned name is the one the client wrote, which reaches no line.
+        let Cow::Borrowed(name) = self.name.as_ref()? else {
+            return None;
+        };
+        Some(match self.kind? {
+            McpOperationKind::Tool => ServedAddress::tool(name),
+            McpOperationKind::Prompt => ServedAddress::prompt(name),
+            McpOperationKind::Resource | McpOperationKind::Resources => {
+                ServedAddress::resource(name)
+            }
+        })
+    }
+}
 
 /// `/mcp`'s request carries its operations.
 impl CarriedView for McpView {}
@@ -143,5 +157,43 @@ impl McpView {
     /// resource's URI to a template — when only the host can say.
     pub fn host(&self) -> Option<&'static str> {
         self.host
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_declared_operation_states_where_it_is_served() {
+        for (kind, name, served) in [
+            (McpOperationKind::Tool, "ping", ServedAddress::tool("ping")),
+            (
+                McpOperationKind::Prompt,
+                "greet",
+                ServedAddress::prompt("greet"),
+            ),
+            (
+                McpOperationKind::Resource,
+                "memo://{id}",
+                ServedAddress::resource("memo://{id}"),
+            ),
+        ] {
+            let view = McpView::declared(kind, name, "Host");
+            assert_eq!(view.served_address(), Some(served));
+        }
+    }
+
+    /// What a client wrote reaches no line: the name a request carries before
+    /// its site says the server's own.
+    #[test]
+    fn a_name_the_client_wrote_is_stated_nowhere() {
+        let view = McpView::request(
+            Cow::Borrowed("tools/call"),
+            Some(McpOperationKind::Tool),
+            Some("a client's name".to_owned()),
+            None,
+        );
+        assert_eq!(view.served_address(), None);
     }
 }

@@ -1,7 +1,7 @@
 //! [`GraphqlView`], the GraphQL edge's view of the field it dispatches.
 
 use async_graphql::parser::types::OperationType;
-use nest_rs_core::UnitView;
+use nest_rs_core::{ServedAddress, UnitView};
 use nest_rs_http::CarriedView;
 
 /// The GraphQL edge's view of one field a guard checks: which field, under
@@ -17,7 +17,14 @@ pub struct GraphqlView {
     role: FieldRole,
 }
 
-impl UnitView for GraphqlView {}
+impl UnitView for GraphqlView {
+    fn served_address(&self) -> Option<ServedAddress<'_>> {
+        Some(ServedAddress::field(
+            crate::operation::operation_label(self.operation),
+            self.field,
+        ))
+    }
+}
 
 /// `/graphql`'s request carries its operations.
 impl CarriedView for GraphqlView {}

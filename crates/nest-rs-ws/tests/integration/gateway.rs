@@ -2598,7 +2598,7 @@ async fn a_per_message_internal_denial_answers_opaquely_and_is_filed_once_on_the
         "{denied:#?}",
     );
     assert_eq!(
-        denied.field("address").as_deref(),
+        denied.field("event").as_deref(),
         Some("internal"),
         "{denied:#?}"
     );

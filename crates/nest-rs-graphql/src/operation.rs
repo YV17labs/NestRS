@@ -285,7 +285,7 @@ where
 }
 
 /// The operation type as a field's line names its role.
-fn operation_label(operation: OperationType) -> &'static str {
+pub(crate) fn operation_label(operation: OperationType) -> &'static str {
     match operation {
         OperationType::Query => "query",
         OperationType::Mutation => "mutation",

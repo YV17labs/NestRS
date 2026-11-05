@@ -36,8 +36,9 @@ async fn me(&self) -> Json<GreetReply> {
 
 ## Status + body pairs
 
-A `(StatusCode, T)` pair answers `T` under that status — useful when one
-route returns `202 Accepted` and another stays on the default `200`:
+A `(StatusCode, T)` pair answers `T` under that status, which the handler
+computes on each call — useful when one call returns `202 Accepted` and another
+stays on `200`:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::StatusCode;
@@ -48,8 +49,11 @@ async fn enqueue(&self) -> (StatusCode, &'static str) {
 }
 ```
 
-For anything richer than a static body, prefer `Json<T>` so the OpenAPI
-document picks up the shape.
+The OpenAPI document cannot name a status the handler computes, so it lists
+the [`2XX` range](/openapi/operations/#a-status-the-handler-computes) with `T`'s
+schema when `T` is a `Json<_>`, and a bare `StatusCode` the range alone. A
+status that never varies is a [`#[http_code(N)]`](#http_coden), which the document
+names.
 
 ## A create names what it created
 
@@ -186,7 +190,9 @@ async fn upsert(&self, Json(input): Json<CreatePost>) -> Result<Response> {
 
 A `Created` turned into a `Response` keeps its `Location`: the route still
 writes it. What the document cannot read off a `Response` is the status, so
-such a route documents `200`.
+such a route documents
+[the `2XX` range](/openapi/operations/#a-status-the-handler-computes), and no
+`Location`.
 
 The shapers are best when the value is the same on every call — that's
 why they live on the attribute line, not in the handler body.

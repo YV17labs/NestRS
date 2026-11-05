@@ -6,10 +6,10 @@ use std::sync::Arc;
 use nest_rs_config::Namespaced as _;
 use nest_rs_core::{ChallengeScheme, Container, DenialDocument, Discovery};
 use nest_rs_http::__private::{
-    VersionLocation, declared_versions, join_path, route_denials, version_location,
+    EdgeAnswers, VersionLocation, declared_versions, join_path, route_denials, version_location,
 };
 use nest_rs_http::{
-    HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RouteTemplate,
+    HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RequestBodyMeta, RouteTemplate,
 };
 use nest_rs_http::{ProblemDetails, StatusCode, header};
 use schemars::SchemaGenerator;
@@ -42,6 +42,9 @@ pub(crate) fn build_document(
     let mut generator = settings.into_generator();
 
     let selection = VersionSelection::resolve(container, claims);
+    let edge_answers = container
+        .get::<HttpConfig>()
+        .map_or_else(EdgeAnswers::default, |config| EdgeAnswers::of(&config));
 
     let controllers = discovery.meta::<HttpControllerMeta>();
     let mut entries: Vec<(&Arc<HttpControllerMeta>, Option<&'static str>)> = controllers
@@ -115,6 +118,7 @@ pub(crate) fn build_document(
                 &mut generator,
                 &denials,
                 version_parameter,
+                edge_answers,
             );
             let method = route.method().as_str();
             // OpenAPI 3.1 §4.8.10.1: an id is unique across the document. One id on one
@@ -455,7 +459,8 @@ fn guard_denials(
     })
 }
 
-/// `denials` are the refusals the route's guards declare ([`guard_denials`]).
+/// `denials` are the refusals the route's guards declare ([`guard_denials`]),
+/// `edge_answers` what the edge answers whatever the route declares.
 fn operation_object(
     route: &HttpRouteMeta,
     full_path: &RouteTemplate,
@@ -463,6 +468,7 @@ fn operation_object(
     generator: &mut SchemaGenerator,
     denials: &[(u16, DenialDocument)],
     version_parameter: Option<Value>,
+    edge_answers: EdgeAnswers,
 ) -> Value {
     let mut op = Map::new();
     op.insert("operationId".into(), json!(operation_id));
@@ -488,24 +494,25 @@ fn operation_object(
         "header",
         generator,
     ));
+    let selects_version = version_parameter.is_some();
     parameters.extend(version_parameter);
-    // A path parameter is exempt: omitting it reaches another route, never a `400`.
-    let requires_parameter = parameters
-        .iter()
-        .any(|p| p["required"] == true && p["in"] != "path");
-    if !parameters.is_empty() {
+    let takes_parameters = !parameters.is_empty();
+    if takes_parameters {
         op.insert("parameters".into(), Value::Array(parameters));
     }
 
     if let Some(body) = route.request_body() {
-        let schema = match body.schema() {
-            Some(schema_fn) => schema_fn(generator).to_value(),
+        let schema = match (body.schema(), body) {
+            (Some(schema_fn), _) => schema_fn(generator).to_value(),
+            (None, RequestBodyMeta::Raw) => stream_schema(body.media_type()),
             // A bare `Multipart`: the media type is known, the parts are not.
-            None => json!({ "type": "object", "additionalProperties": true }),
+            (None, _) => json!({ "type": "object", "additionalProperties": true }),
         };
+        // A raw reader alone takes what it is sent, nothing included.
+        let required = !matches!(body, RequestBodyMeta::Raw);
         op.insert(
             "requestBody".into(),
-            json!({ "required": true, "content": media_content(body.media_type(), schema) }),
+            json!({ "required": required, "content": media_content(body.media_type(), schema) }),
         );
     }
 
@@ -527,17 +534,17 @@ fn operation_object(
     let mut responses = Map::new();
     let status = route.success_status();
     let mut ok = Map::new();
-    let has_body = status != 204 && !is_redirect(status);
+    let has_body = status.is_none_or(|status| status != 204 && !is_redirect(status));
     let schema = has_body.then_some(route.response()).flatten();
+    let succeeded = status.map_or(COMPUTED_STATUS_DESCRIPTION, reason_phrase);
     ok.insert(
         "description".into(),
         json!(match (route.masked(), schema.is_some()) {
             (true, true) => format!(
-                "{} — field-level authorization applies: properties the caller's ability \
-                 does not grant are omitted from the response.",
-                reason_phrase(status),
+                "{succeeded} — field-level authorization applies: properties the caller's \
+                 ability does not grant are omitted from the response.",
             ),
-            _ => reason_phrase(status).to_owned(),
+            _ => succeeded.to_owned(),
         }),
     );
     let media = route.response_content_type().unwrap_or(JSON_MEDIA_TYPE);
@@ -560,8 +567,20 @@ fn operation_object(
     if !headers.is_empty() {
         ok.insert("headers".into(), Value::Object(headers));
     }
-    responses.insert(status.to_string(), Value::Object(ok));
-    let edge = edge_statuses(route, full_path, requires_parameter);
+    responses.insert(
+        status.map_or_else(
+            || COMPUTED_STATUS_RANGE.to_owned(),
+            |status| status.to_string(),
+        ),
+        Value::Object(ok),
+    );
+    let edge = edge_statuses(
+        route,
+        full_path,
+        takes_parameters,
+        selects_version,
+        edge_answers,
+    );
     for status in error_statuses(&edge, route, denials) {
         let declared = || denials.iter().filter(|(denied, _)| *denied == status);
         let own_body = declared()
@@ -586,7 +605,13 @@ fn operation_object(
                 _ => {}
             }
         }
-        responses.insert(status.to_string(), response);
+        match responses.get_mut(&status.to_string()) {
+            // An `#[http_code]` set this error as the route's answer: both can answer it.
+            Some(answered) => add_beside(answered, response),
+            None => {
+                responses.insert(status.to_string(), response);
+            }
+        }
     }
     // A body the handler writes itself sits beside the framework's problem
     // document for that status, when both can answer.
@@ -695,6 +720,23 @@ fn add_json_body(response: &mut Value, schema: Value) {
     }
 }
 
+/// What `other` documents for a status, beside what `response` does: its media
+/// types and its headers.
+fn add_beside(response: &mut Value, other: Value) {
+    let (Value::Object(response), Value::Object(other)) = (response, other) else {
+        return;
+    };
+    for key in ["content", "headers"] {
+        if let Some(Value::Object(added)) = other.get(key)
+            && let Value::Object(listed) = response
+                .entry(key)
+                .or_insert_with(|| Value::Object(Map::new()))
+        {
+            listed.extend(added.clone());
+        }
+    }
+}
+
 /// The error statuses an operation can actually produce, ascending: what the
 /// `edge` answers on the route's behalf, what its body refuses in its own words,
 /// and the `denials` its guards declare.
@@ -716,27 +758,39 @@ fn error_statuses(
 fn edge_statuses(
     route: &HttpRouteMeta,
     full_path: &RouteTemplate,
-    requires_parameter: bool,
+    takes_parameters: bool,
+    selects_version: bool,
+    edge_answers: EdgeAnswers,
 ) -> BTreeSet<u16> {
     let mut out = BTreeSet::new();
-    // Edge validation answers `400`, never `422` (`nest_rs_http::pipe_error`),
-    // and a list linking its next page refuses a cursor no page issued.
-    let body_refused_by_the_edge =
-        route.request_body().is_some() && route.request_refusal().is_none();
-    if body_refused_by_the_edge || requires_parameter || route.sets_next_link() {
+    let body = route.request_body();
+    // Edge validation answers `400`, never `422` (`nest_rs_http::pipe_error`): a
+    // parameter's value its type does not read, required or not, a path's among
+    // them, and a body's; and a list linking its next page refuses a cursor no
+    // page issued.
+    let body_refused_by_the_edge = body.is_some() && route.request_refusal().is_none();
+    if body_refused_by_the_edge || takes_parameters || route.sets_next_link() {
         out.insert(400);
     }
-    if route.request_body().is_some() {
-        // The transport's body cap, whatever the media type.
+    if body.is_some() {
+        // The transport's body cap and its gap, whatever the media type.
         out.insert(413);
+        if edge_answers.body_stalled {
+            out.insert(408);
+        }
+    }
+    // What a body's extractor reads off the `Content-Type`.
+    if body_refused_by_the_edge && !matches!(body, Some(RequestBodyMeta::Raw)) {
+        out.insert(415);
     }
     // An ability that does not grant the action is refused where the mask's
     // shaper reads it: the class gate `Authorize` runs, or a bound subject's load.
-    if route.masked() {
+    if route.masked() || edge_answers.origin_refused {
         out.insert(403);
     }
-    // Off the path, not `path_params`: a bound route can 404 and has none.
-    if full_path.parameters().next().is_some() {
+    // Off the path, not `path_params`: a bound route can 404 and has none. A
+    // version no controller serves is a path nothing mounted.
+    if full_path.parameters().next().is_some() || selects_version {
         out.insert(404);
     }
     if route.may_conflict() {
@@ -745,6 +799,9 @@ fn edge_statuses(
     // A handler's `Err` answers an opaque `500`; not `default`, which would
     // also claim a status a handler writes with a body of its own.
     out.insert(500);
+    if edge_answers.request_timed_out {
+        out.insert(503);
+    }
     out
 }
 
@@ -760,6 +817,13 @@ fn error_title(status: u16) -> String {
 fn is_redirect(status: u16) -> bool {
     (300..400).contains(&status)
 }
+
+/// The key of a success only the handler knows the status of, OpenAPI 3.1
+/// §4.8.16.2's range for it: a generated client reads it as the success it is,
+/// where `default` would type it as every status the document lists no other for.
+const COMPUTED_STATUS_RANGE: &str = "2XX";
+
+const COMPUTED_STATUS_DESCRIPTION: &str = "Success, under the status the handler sets at run time.";
 
 fn reason_phrase(status: u16) -> &'static str {
     StatusCode::from_u16(status)
@@ -838,10 +902,13 @@ fn retry_after_header(status: u16) -> Value {
 }
 
 /// The headers the success response carries on the framework's behalf.
-fn success_headers(route: &HttpRouteMeta, status: u16) -> Map<String, Value> {
+fn success_headers(route: &HttpRouteMeta, status: Option<u16>) -> Map<String, Value> {
     let mut headers = Map::new();
     if route.sets_location() {
-        headers.insert("Location".into(), location_header(status));
+        headers.insert(
+            "Location".into(),
+            location_header(status.is_some_and(is_redirect)),
+        );
     }
     if route.sets_next_link() {
         headers.insert(
@@ -887,8 +954,8 @@ fn success_headers(route: &HttpRouteMeta, status: u16) -> Map<String, Value> {
 
 /// The `Location` header, an absolute-path reference (`uri-reference`). Not
 /// `required`: a `#[crud]` create omits it for an entity not keyed on a `Uuid`.
-fn location_header(status: u16) -> Value {
-    let description = if is_redirect(status) {
+fn location_header(redirects: bool) -> Value {
+    let description = if redirects {
         "URI to follow for this resource."
     } else {
         "URI of the resource that was just created."
@@ -1126,7 +1193,7 @@ mod tests {
             sets_location: false,
             sets_next_link: false,
             response_headers: &[],
-            success_status: 200,
+            success_status: Some(200),
             public: false,
             deprecation: None,
             versions: &[],
@@ -1150,6 +1217,7 @@ mod tests {
             generator,
             &problems(statuses),
             version_parameter,
+            EdgeAnswers::default(),
         )
     }
 
@@ -1184,6 +1252,7 @@ mod tests {
                 (503, own),
             ],
             None,
+            EdgeAnswers::default(),
         );
 
         assert_eq!(op["security"], json!([{ "basicAuth": [] }]), "{op}");
@@ -1218,6 +1287,7 @@ mod tests {
             &mut g,
             &[(401, own)],
             None,
+            EdgeAnswers::default(),
         );
 
         assert_eq!(op["security"], json!([{ "basicAuth": [] }]), "{op}");
@@ -1238,6 +1308,7 @@ mod tests {
             &mut g,
             &[(401, DenialDocument::PROBLEM), (401, own)],
             None,
+            EdgeAnswers::default(),
         );
 
         assert_eq!(
@@ -1270,12 +1341,29 @@ mod tests {
                 &mut g,
                 &[(400, own)],
                 version_parameter,
+                EdgeAnswers::default(),
             );
 
             let listed = &op["responses"]["400"]["content"];
             assert!(listed.get(JSON_MEDIA_TYPE).is_some(), "{listed}");
             assert!(listed.get("application/problem+json").is_some(), "{listed}");
         }
+    }
+
+    fn token_operation(
+        meta: &HttpRouteMeta,
+        g: &mut SchemaGenerator,
+        version_parameter: Option<Value>,
+    ) -> Value {
+        operation_object(
+            meta,
+            &template("/token"),
+            "token",
+            g,
+            &[],
+            version_parameter,
+            EdgeAnswers::default(),
+        )
     }
 
     /// A body refusing in its protocol's own words documents them on its `400`,
@@ -1289,7 +1377,7 @@ mod tests {
         let meta = http_route_meta(parts);
 
         let mut g = generator();
-        let op = operation_object(&meta, &template("/token"), "token", &mut g, &[], None);
+        let op = token_operation(&meta, &mut g, None);
         let refused = &op["responses"]["400"]["content"];
         assert!(refused.get(JSON_MEDIA_TYPE).is_some(), "{refused}");
         assert!(
@@ -1298,10 +1386,14 @@ mod tests {
         );
         let capped = &op["responses"]["413"]["content"];
         assert!(capped.get("application/problem+json").is_some(), "{capped}");
+        assert!(
+            op["responses"].get("415").is_none(),
+            "a media type it refuses is a 400 in its words: {op}",
+        );
 
         let parameter = Some(json!({ "name": "v", "in": "header", "required": true }));
         let mut g = generator();
-        let op = operation_object(&meta, &template("/token"), "token", &mut g, &[], parameter);
+        let op = token_operation(&meta, &mut g, parameter);
         let both = &op["responses"]["400"]["content"];
         assert!(both.get(JSON_MEDIA_TYPE).is_some(), "{both}");
         assert!(both.get("application/problem+json").is_some(), "{both}");
@@ -1312,7 +1404,9 @@ mod tests {
         let bound = edge_statuses(
             &http_route_meta(route("get_user", "/users/{id}")),
             &template("/users/{id}"),
+            true,
             false,
+            EdgeAnswers::default(),
         );
         assert!(bound.contains(&404), "an `{{id}}` route advertises 404");
 
@@ -1320,6 +1414,8 @@ mod tests {
             &http_route_meta(route("weird", "/a-b/list")),
             &template("/a-b/list"),
             false,
+            false,
+            EdgeAnswers::default(),
         );
         assert!(
             !literal.contains(&404),
@@ -1382,7 +1478,7 @@ mod tests {
         let mut g = generator();
         let mut r = route("create", "/orgs");
         r.method = Method::POST;
-        r.success_status = 201;
+        r.success_status = Some(201);
         r.sets_location = true;
         let op = operation(&r, "/orgs", &mut g, &[], None);
         let created = &op["responses"]["201"];
@@ -1403,7 +1499,7 @@ mod tests {
     fn a_redirect_declares_the_location_it_sends() {
         let mut g = generator();
         let mut r = route("legacy", "/old");
-        r.success_status = 301;
+        r.success_status = Some(301);
         r.sets_location = true;
         let op = operation(&r, "/old", &mut g, &[], None);
         let moved = &op["responses"]["301"];
@@ -1482,7 +1578,13 @@ mod tests {
     fn a_route_whose_guards_declare_no_rate_limit_documents_no_429() {
         let meta = http_route_meta(route("list", "/audio"));
         let statuses = error_statuses(
-            &edge_statuses(&meta, &template("/audio"), false),
+            &edge_statuses(
+                &meta,
+                &template("/audio"),
+                false,
+                false,
+                EdgeAnswers::default(),
+            ),
             &meta,
             &problems(&[401, 403]),
         );
@@ -1618,7 +1720,7 @@ mod tests {
     fn a_bodyless_success_declares_no_streamed_content() {
         let mut g = generator();
         let mut r = route("purge", "/exports");
-        r.success_status = 204;
+        r.success_status = Some(204);
         r.response_content_type = Some("application/octet-stream");
         let op = operation(&r, "/exports", &mut g, &[], None);
         assert!(op["responses"]["204"].get("content").is_none());
@@ -1645,14 +1747,14 @@ mod tests {
     }
 
     #[test]
-    fn an_optional_header_does_not_advertise_a_400() {
+    fn an_optional_header_advertises_the_400_its_value_can_produce() {
         let mut g = generator();
         let mut r = route("events", "/audio/events");
         r.header_params = &[schema_for_optional];
         let op = operation(&r, "/audio/events", &mut g, &[], None);
         assert_eq!(op["parameters"][0]["in"], "header");
         assert_eq!(op["parameters"][0]["required"], false);
-        assert!(op["responses"].get("400").is_none(), "{op}");
+        assert!(op["responses"].get("400").is_some(), "{op}");
     }
 
     #[test]
@@ -1715,7 +1817,7 @@ mod tests {
         let mut r = route("delete_user", "/users/{id}");
         r.response = Some(schema_for_dummy);
         r.masked = true;
-        r.success_status = 204;
+        r.success_status = Some(204);
         let op = operation(&r, "/users/{id}", &mut g, &[], None);
         assert_eq!(op["responses"]["204"]["description"], "No Content");
         assert!(op["responses"]["204"].get("content").is_none());
@@ -1725,7 +1827,7 @@ mod tests {
     fn a_non_200_success_status_replaces_the_200_response() {
         let mut g = generator();
         let mut r = route("create_user", "/users");
-        r.success_status = 201;
+        r.success_status = Some(201);
         r.response = Some(schema_for_dummy);
         let op = operation(&r, "/users", &mut g, &[], None);
         assert!(op["responses"].get("200").is_none(), "no bogus 200");
@@ -1738,7 +1840,7 @@ mod tests {
         for (status, reason) in [(204, "No Content"), (307, "Temporary Redirect")] {
             let mut g = generator();
             let mut r = route("delete_user", "/users/{id}");
-            r.success_status = status;
+            r.success_status = Some(status);
             r.response = Some(schema_for_dummy);
             let op = operation(&r, "/users/{id}", &mut g, &[], None);
             let key = status.to_string();
@@ -2233,17 +2335,17 @@ mod tests {
     }
 
     #[test]
-    fn an_optional_query_property_advertises_no_400() {
+    fn an_optional_query_property_advertises_the_400_its_value_can_produce() {
         let mut g = generator();
         let mut r = route("list", "/posts");
         r.query_params = &[schema_for_optional];
         let op = operation(&r, "/posts", &mut g, &[], None);
         assert_eq!(op["parameters"][0]["required"], false);
-        assert!(op["responses"].get("400").is_none(), "{op}");
+        assert!(op["responses"].get("400").is_some(), "{op}");
     }
 
     #[test]
-    fn a_path_parameter_alone_advertises_no_400() {
+    fn a_path_parameter_advertises_the_400_its_value_can_produce() {
         let mut g = generator();
         let op = operation(
             &route("get", "/users/{id}"),
@@ -2254,6 +2356,44 @@ mod tests {
         );
         assert_eq!(op["parameters"][0]["in"], "path");
         assert_eq!(op["parameters"][0]["required"], true);
+        assert!(op["responses"].get("400").is_some(), "{op}");
+    }
+
+    /// The edge can answer that status too, so neither says it alone.
+    #[test]
+    fn an_error_status_a_handler_pins_keeps_its_body_beside_the_edges_problem() {
+        let mut g = generator();
+        let mut r = route("down", "/down");
+        r.success_status = Some(503);
+        r.response = Some(schema_for_dummy);
+        let op = operation_object(
+            &http_route_meta(r),
+            &template("/down"),
+            "down",
+            &mut g,
+            &[],
+            None,
+            EdgeAnswers {
+                request_timed_out: true,
+                ..EdgeAnswers::default()
+            },
+        );
+        let answer = &op["responses"]["503"];
+        assert!(answer["content"].get(JSON_MEDIA_TYPE).is_some(), "{answer}");
+        assert!(
+            answer["content"].get("application/problem+json").is_some(),
+            "{answer}",
+        );
+        assert_eq!(
+            answer["headers"]["Retry-After"]["schema"]["type"], "integer",
+            "{answer}",
+        );
+    }
+
+    #[test]
+    fn a_route_with_no_input_advertises_no_400() {
+        let mut g = generator();
+        let op = operation(&route("list", "/users"), "/users", &mut g, &[], None);
         assert!(op["responses"].get("400").is_none(), "{op}");
     }
 

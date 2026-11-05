@@ -253,13 +253,14 @@ pub mod __private {
 
     pub use crate::ambient::RejectedCredential;
     pub use crate::canonical_host::CanonicalHost;
+    pub use crate::config::EdgeAnswers;
     pub use crate::controller::{
         HttpRouteParts, http_controller_meta, http_route_meta, route_denials, schema_of,
     };
     pub use crate::deadline::RequestDeadline;
     pub use crate::deprecation::{deprecated_route, deprecation_meta};
     pub use crate::documented_answer::{
-        AnswerDoc, AnswerProbe, DocumentedAnswer, PlainAnswerProbe,
+        AnswerDoc, AnswerProbe, ComputedAnswerProbe, DocumentedAnswer,
     };
     pub use crate::documented_body::{BodyProbe, DocumentedBody, UndocumentedProbe};
     pub use crate::documented_payload::{

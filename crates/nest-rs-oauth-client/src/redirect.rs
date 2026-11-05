@@ -104,7 +104,7 @@ impl IntoResponse for AuthorizationRedirect {
 /// its `Location`.
 impl DocumentedAnswer for AuthorizationRedirect {
     const ANSWER: AnswerDoc = AnswerDoc {
-        status: 302,
+        status: Some(302),
         location: true,
         next_link: false,
     };

@@ -87,6 +87,7 @@ impl AudioController {
     }
 
     #[get("/download")]
+    #[http_code(200)]
     #[authorize(Manage, Transcoding)]
     #[meta(Throttle::per_minute(60))]
     #[api(

@@ -13,7 +13,7 @@ decorator, `#[sse]`.
 
 ```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)" {6-8}
 #[get("/download")]
-// … #[meta(…)], #[api(…)]
+// … #[http_code(200)], #[meta(…)], #[api(…)]
 async fn download(&self, Query(query): Query<TranscodeDto>) -> Result<Response> {
     let file = query.file;
     match self.svc.open_result(file).await.opaque()? {

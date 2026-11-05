@@ -4,7 +4,9 @@
 use std::fmt;
 
 use nest_rs_core::Secret;
-use nest_rs_http::__private::{DocumentedBody, DocumentedPayload, schema_of};
+use nest_rs_http::__private::{
+    AnswerDoc, DocumentedAnswer, DocumentedBody, DocumentedPayload, schema_of,
+};
 use nest_rs_http::SchemaFn;
 use nest_rs_http::{
     Form, FromRequest, HeaderValue, HttpError, IntoResponse, Json, Request, RequestBody,
@@ -370,6 +372,11 @@ impl AccessTokenResponse {
 
 impl DocumentedPayload for AccessTokenResponse {
     type Payload = Self;
+}
+
+/// RFC 6749 §5.1 answers `200`.
+impl DocumentedAnswer for AccessTokenResponse {
+    const ANSWER: AnswerDoc = AnswerDoc::OK;
 }
 
 impl IntoResponse for AccessTokenResponse {

@@ -7,7 +7,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use nest_rs_core::{Container, Module};
+use nest_rs_http::__private::{AnswerDoc, DocumentedAnswer, DocumentedPayload};
 use nest_rs_http::schemars::JsonSchema;
+use nest_rs_http::{HeaderValue, IntoResponse, Response, StatusCode};
 use serde::Serialize;
 
 /// Which Kubernetes-style probe an indicator participates in.
@@ -108,6 +110,42 @@ impl ProbeReport {
             info,
             error,
             details,
+        }
+    }
+}
+
+/// A route returning it answers `200` up and `503` down, and documents the
+/// report under each.
+impl DocumentedAnswer for ProbeReport {
+    const ANSWER: AnswerDoc = AnswerDoc::OK;
+}
+
+impl DocumentedPayload for ProbeReport {
+    type Payload = Self;
+}
+
+impl IntoResponse for ProbeReport {
+    fn into_response(self) -> Response {
+        let status = match self.status {
+            IndicatorStatus::Up => StatusCode::OK,
+            IndicatorStatus::Down => StatusCode::SERVICE_UNAVAILABLE,
+        };
+        // Never an empty 200 on failure: an orchestrator would read it as healthy.
+        match serde_json::to_vec(&self) {
+            Ok(body) => Response::builder()
+                .status(status)
+                .content_type(HeaderValue::from_static("application/json"))
+                .body(body),
+            Err(error) => {
+                tracing::error!(
+                    target: crate::TARGET,
+                    %error,
+                    "health report failed to serialize",
+                );
+                Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .finish()
+            }
         }
     }
 }

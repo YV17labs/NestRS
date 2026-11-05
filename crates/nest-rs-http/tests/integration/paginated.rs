@@ -56,7 +56,7 @@ async fn the_document_reads_the_link_and_the_body_off_the_return_type() {
     let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
     let route = &controllers[0].meta.routes()[0];
 
-    assert_eq!(route.success_status(), 200);
+    assert_eq!(route.success_status(), Some(200));
     assert!(route.sets_next_link());
     assert!(!route.sets_location());
     assert!(

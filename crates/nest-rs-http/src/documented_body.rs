@@ -9,7 +9,9 @@
 
 use std::marker::PhantomData;
 
+use crate::body::Body;
 use crate::controller::{RequestBodyMeta, SchemaFn};
+use crate::raw_body::RawBody;
 
 /// An extractor reading the request body as a type the route's document
 /// names: the body `#[routes]` documents for a parameter of this type.
@@ -22,6 +24,18 @@ pub trait DocumentedBody {
     /// problem document the edge renders.
     fn refusal() -> Option<SchemaFn> {
         None
+    }
+}
+
+impl DocumentedBody for RawBody {
+    fn request_body() -> RequestBodyMeta {
+        RequestBodyMeta::Raw
+    }
+}
+
+impl DocumentedBody for Body {
+    fn request_body() -> RequestBodyMeta {
+        RequestBodyMeta::Raw
     }
 }
 
@@ -148,6 +162,9 @@ mod tests {
         let documented = crate::__body_of!(Token).map(RequestBodyMeta::media_type);
         assert_eq!(documented, Some("application/x-www-form-urlencoded"));
         assert!(crate::__body_of!(String).is_none());
+        for raw in [crate::__body_of!(RawBody), crate::__body_of!(Body)] {
+            assert_eq!(raw.map(RequestBodyMeta::media_type), Some("*/*"));
+        }
         assert!(crate::__body_of!(&crate::Request).is_none());
     }
 

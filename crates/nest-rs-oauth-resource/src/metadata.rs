@@ -2,7 +2,9 @@
 //! serves, and the `WWW-Authenticate` challenge that points at it.
 
 use nest_rs_guards::__private::is_scope_token;
+use nest_rs_http::__private::{AnswerDoc, DocumentedAnswer};
 use nest_rs_http::challenge::BEARER;
+use nest_rs_http::{HeaderValue, IntoResponse, Response, StatusCode};
 use serde::Serialize;
 
 /// The well-known path RFC 9728 §3 reserves, served at the resource's root.
@@ -178,6 +180,35 @@ fn build_challenge(metadata_url: &str, scopes: &[String], error: Option<&str>) -
         params.push(format!("scope=\"{}\"", scopes.join(" ")));
     }
     format!("{BEARER} {}", params.join(", "))
+}
+
+/// RFC 9728 §3.2 answers `200`.
+impl DocumentedAnswer for ProtectedResourceMetadata {
+    const ANSWER: AnswerDoc = AnswerDoc::OK;
+}
+
+impl IntoResponse for ProtectedResourceMetadata {
+    fn into_response(self) -> Response {
+        // Never an empty 200: a client would read it as a resource with no
+        // authorization server and abandon the flow.
+        match serde_json::to_vec(&self) {
+            Ok(body) => Response::builder()
+                .status(StatusCode::OK)
+                .content_type(HeaderValue::from_static("application/json"))
+                .body(body),
+            Err(error) => {
+                tracing::error!(
+                    target: crate::TARGET,
+                    %error,
+                    resource = nest_rs_config::endpoint_shown(self.resource()).as_str(),
+                    "protected resource metadata failed to serialize",
+                );
+                Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .finish()
+            }
+        }
+    }
 }
 
 #[cfg(test)]

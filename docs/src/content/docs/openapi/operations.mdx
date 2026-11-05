@@ -35,10 +35,34 @@ why neither the generated `#[crud]` create nor its list needs an
 names no body. It wins over what the return type says, so it never needs to
 restate a typed answer.
 
+## A status the handler computes
+
+A type states its status: a body answers `200`, a `Created<T>` its `201`. What
+only the handler knows — a `(StatusCode, Json<T>)` pair, a bare `StatusCode`, a
+built `Response`, an answer of your own — is documented under `2XX`, the range
+OpenAPI offers for a status the document cannot name, with the body the pair or
+`response = Type` says:
+
+```rust title="crates/features/src/posts/http/controller.rs"
+#[post("/{id}/publish")]
+async fn publish(&self, Path(id): Path<Uuid>) -> Result<(StatusCode, Json<Post>)> {
+    let (post, already) = self.svc.publish(id).await?;
+    let status = if already { StatusCode::OK } else { StatusCode::ACCEPTED };
+    Ok((status, Json(post)))
+}
+```
+
+A generated client reads `2XX` as the success it is. A handler that always answers
+one status says so with [`#[http_code(N)]`](/http/responses/#http_coden), which the
+document names and every success answers; a status outside the range is one of
+[your own error bodies](#error-bodies-of-your-own).
+
 ## Bodies that are not JSON
 
 `multipart = Type` and `response_content_type = "…"` describe a body `Json<T>`
-cannot — an upload form, a streamed download.
+cannot — an upload form, a streamed download. A handler taking `RawBody` or `Body`
+declares nothing: the document says `*/*`, optional and binary, since it reads
+any bytes under any media type or none.
 
 ```rust title="crates/features/src/audio/http/controller.rs"
 #[post("/uploads/direct")]
@@ -49,6 +73,7 @@ cannot — an upload form, a streamed download.
 async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> { /* ... */ }
 
 #[get("/download")]
+#[http_code(200)]
 #[api(
     summary = "Stream a transcoded object back through the server",
     response_content_type = "audio/mpeg",
@@ -92,7 +117,8 @@ async fn events(&self, resume: Header<StreamResumeDto>) -> SseStream { /* ... */
 A missing required header, or a value that does not parse into its field's type,
 is rejected with the same RFC 9457 `400` every other edge rejection carries —
 naming the header and never quoting its value, because that is where credentials
-travel. A required header also makes the operation advertise its `400`.
+travel. Any parameter makes the operation advertise that `400`, an optional one
+and a path's included, since each can carry a value its type does not read.
 
 ## Error bodies of your own
 
@@ -107,10 +133,9 @@ answers `503` with the same report an orchestrator reads on success.
 #[public]
 #[api(
     summary = "Readiness probe: whether the process can take traffic",
-    response = ProbeReport,
     error(503 = ProbeReport),
 )]
-async fn ready(&self) -> Response { /* ... */ }
+async fn ready(&self) -> ProbeReport { /* ... */ }
 ```
 
 The body is documented as `application/json`, beside the problem document when

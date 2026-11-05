@@ -3099,6 +3099,7 @@ name = "nest-rs-openapi"
 version = "7.0.0"
 dependencies = [
  "figment",
+ "futures-util",
  "nest-rs-authn",
  "nest-rs-authz",
  "nest-rs-config",

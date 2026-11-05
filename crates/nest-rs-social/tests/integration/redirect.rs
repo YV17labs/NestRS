@@ -125,6 +125,6 @@ async fn the_route_documents_the_redirect_by_its_return_type() {
         .flat_map(|controller| controller.meta.routes().iter())
         .find(|route| route.handler() == "authorize")
         .expect("the authorize route is discovered");
-    assert_eq!(route.success_status(), 302);
+    assert_eq!(route.success_status(), Some(302));
     assert!(route.sets_location());
 }

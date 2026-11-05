@@ -83,7 +83,7 @@ async fn the_document_reads_the_status_the_location_and_the_body_off_the_return_
             .iter()
             .find(|route| route.handler() == handler)
             .expect("the route is declared");
-        assert_eq!(route.success_status(), 201, "{handler}");
+        assert_eq!(route.success_status(), Some(201), "{handler}");
         assert!(route.sets_location(), "{handler}");
         assert!(!route.sets_next_link(), "{handler}");
         let body = route

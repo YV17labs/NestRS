@@ -63,3 +63,41 @@ OpenAPI 3.1's Security Requirement Object makes a `security` list's entries alte
 object's schemes all required, and a chain runs every guard. A class gate's implied `401` joins
 only a chain with no `401` of its own: it is reached past that one, and would offer `Bearer`
 beside a guard challenging `Basic`, which is the symptom this entry closes.
+
+## 2026-11-05 — a document says what a route answers, read live against it
+
+Every status below was seen on a request and missing from the document (`nest-rs-openapi`'s suite
+holds each against the live answer):
+
+- **What the edge answers whatever the route declares is listed under the config it runs on**: the
+  request budget's `503`, a body's `408` while the gap sits under the budget (at or past it the
+  budget fires first, which the boot's `warn` says), and `403` under a CORS policy listing origins.
+  A `Default` of none is a document no transport serves.
+- **What a route's inputs can refuse is listed by the input**: `415` for a body read by its media
+  type, never `RawBody` or `Body`, which read any bytes, nor a `DocumentedBody` refusing in its own
+  words; `400` for any parameter, optional and path ones included, each able to carry a value its
+  type does not read; `400` and `404` for a version parameter, a malformed token and a version
+  nothing serves. `RawBody` and `Body` document `*/*`, optional and binary.
+- **A body sent to a route taking none is not its answer.** It is refused `413` past the cap, and
+  no document lists that: the route's contract is not to be sent one.
+
+**A status only the handler knows is `2XX`**, OpenAPI 3.1's range for it, with the body the answer
+says: a `(StatusCode, B)` pair, a bare `StatusCode`, a built `Response`, an application's own
+`IntoResponse`. A type states its status or the handler does, so the framework's own fixed answers
+state theirs. The pair stays: it is a developer's common spelling, and removing it for one way to
+say a status would make everyday code harder to fix a document (the owner's rule of 2026-11-05).
+`#[http_code(N)]` pins it where the status never varies. `default` stays refused, for the reason
+above: it would type as this body every status the document lists no other for.
+
+**A guard declaring a status outside `400` to `599` fails the boot** (`HttpGuardStage::new`),
+naming the guard, at every site: the document files a declared status over what else it says of
+it, and a declared `200` stood there for the route's success.
+
+**Refused:** removing `(StatusCode, B)` and bare `StatusCode` for `#[http_code]` and a built
+`Response`; a new `#[api]` key for a computed status; `200` for what no type states, the sentence
+the page used to carry about a built `Response`.
+
+**Left, named to the owner:** a required `Ambient<P>` on a `#[public]` route answers a deferred `401`
+the document does not list. Closing it takes the parameter's `P` read off the handler and matched
+against the principal the chain's guard defers for, since an `Ambient<T>` a guard attaches defers
+nothing.

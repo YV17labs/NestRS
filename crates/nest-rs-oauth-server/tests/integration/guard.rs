@@ -408,9 +408,10 @@ async fn the_document_says_basic_and_the_body_every_refusal_answers() {
     assert_eq!(scheme["scheme"], "basic", "{scheme}");
     for status in ["400", "401", "503"] {
         let answer = &operation["responses"][status]["content"];
-        assert!(
-            answer.get("application/problem+json").is_none(),
-            "{status}: {answer}"
+        assert_eq!(
+            answer.get("application/problem+json").is_some(),
+            status == "503",
+            "the edge's request deadline alone answers a problem here: {status}: {answer}",
         );
         let schema = &answer["application/json"]["schema"];
         let reference = schema["$ref"].as_str().expect("a named schema");

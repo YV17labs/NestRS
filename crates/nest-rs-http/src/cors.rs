@@ -485,6 +485,12 @@ pub(crate) fn holds_wildcard(values: &[String]) -> bool {
 }
 
 impl HttpCors {
+    /// Whether the policy this describes answers an origin `403`: one that is
+    /// on, and admits less than every origin.
+    pub(crate) fn refuses_an_origin(&self) -> bool {
+        !self.origins.is_empty() && !holds_wildcard(&self.origins)
+    }
+
     /// The entries of `list`.
     fn list(&self, list: CorsList) -> &[String] {
         match list {

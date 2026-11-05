@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_http::{HeaderValue, IntoResponse, Path, Response, StatusCode, controller, routes};
+use nest_rs_http::{IntoResponse, Path, Response, StatusCode, controller, routes};
 
 use crate::metadata::ProtectedResourceMetadata;
 
@@ -20,8 +20,8 @@ pub(crate) struct OAuthResourceController {
 impl OAuthResourceController {
     #[get("/oauth-protected-resource")]
     #[public]
-    async fn metadata(&self) -> Response {
-        self.document()
+    async fn metadata(&self) -> ProtectedResourceMetadata {
+        (*self.metadata).clone()
     }
 
     /// The path-aware form (RFC 9728 §3.1); the tail must be *this* resource's
@@ -32,29 +32,6 @@ impl OAuthResourceController {
         if resource_path.trim_end_matches('/') != self.metadata.resource_path() {
             return StatusCode::NOT_FOUND.into_response();
         }
-        self.document()
-    }
-
-    /// The frozen document, serialized, shared by both routes.
-    fn document(&self) -> Response {
-        // Never an empty 200: a client would read it as a resource with no
-        // authorization server and abandon the flow.
-        match serde_json::to_vec(&*self.metadata) {
-            Ok(body) => Response::builder()
-                .status(StatusCode::OK)
-                .content_type(HeaderValue::from_static("application/json"))
-                .body(body),
-            Err(error) => {
-                tracing::error!(
-                    target: crate::TARGET,
-                    %error,
-                    resource = nest_rs_config::endpoint_shown(self.metadata.resource()).as_str(),
-                    "protected resource metadata failed to serialize",
-                );
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .finish()
-            }
-        }
+        (*self.metadata).clone().into_response()
     }
 }

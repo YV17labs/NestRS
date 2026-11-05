@@ -5,11 +5,9 @@ use std::sync::Arc;
 
 use nest_rs_core::{Container, Discovery};
 use nest_rs_http::__private::{join_path, normalize_mount_path};
-use nest_rs_http::{
-    HeaderValue, HttpConfig, HttpControllerMeta, Response, StatusCode, controller, routes,
-};
+use nest_rs_http::{HttpConfig, HttpControllerMeta, controller, routes};
 
-use crate::indicator::{IndicatorStatus, ProbeKind, ProbeReport};
+use crate::indicator::{ProbeKind, ProbeReport};
 use crate::service::HealthService;
 
 /// Serves the Kubernetes-style probe endpoints under `/health`, delegating each
@@ -24,47 +22,23 @@ pub(crate) struct HealthController {
 impl HealthController {
     #[get("/live")]
     #[public]
-    #[api(summary = "Liveness probe: whether the process should keep running", response = ProbeReport, error(503 = ProbeReport))]
-    async fn live(&self) -> Response {
-        respond(self.svc.probe(ProbeKind::Liveness).await)
+    #[api(summary = "Liveness probe: whether the process should keep running", error(503 = ProbeReport))]
+    async fn live(&self) -> ProbeReport {
+        self.svc.probe(ProbeKind::Liveness).await
     }
 
     #[get("/ready")]
     #[public]
-    #[api(summary = "Readiness probe: whether the process can take traffic", response = ProbeReport, error(503 = ProbeReport))]
-    async fn ready(&self) -> Response {
-        respond(self.svc.probe(ProbeKind::Readiness).await)
+    #[api(summary = "Readiness probe: whether the process can take traffic", error(503 = ProbeReport))]
+    async fn ready(&self) -> ProbeReport {
+        self.svc.probe(ProbeKind::Readiness).await
     }
 
     #[get("/startup")]
     #[public]
-    #[api(summary = "Startup probe: whether the process has finished booting", response = ProbeReport, error(503 = ProbeReport))]
-    async fn startup(&self) -> Response {
-        respond(self.svc.probe(ProbeKind::Startup).await)
-    }
-}
-
-fn respond(report: ProbeReport) -> Response {
-    let status = match report.status {
-        IndicatorStatus::Up => StatusCode::OK,
-        IndicatorStatus::Down => StatusCode::SERVICE_UNAVAILABLE,
-    };
-    // Never an empty 200 on failure: an orchestrator would read it as healthy.
-    match serde_json::to_vec(&report) {
-        Ok(body) => Response::builder()
-            .status(status)
-            .content_type(HeaderValue::from_static("application/json"))
-            .body(body),
-        Err(error) => {
-            tracing::error!(
-                target: crate::TARGET,
-                %error,
-                "health report failed to serialize",
-            );
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .finish()
-        }
+    #[api(summary = "Startup probe: whether the process has finished booting", error(503 = ProbeReport))]
+    async fn startup(&self) -> ProbeReport {
+        self.svc.probe(ProbeKind::Startup).await
     }
 }
 

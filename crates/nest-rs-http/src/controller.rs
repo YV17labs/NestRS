@@ -31,6 +31,9 @@ pub enum RequestBodyMeta {
     /// A `Form<T>` extractor — `application/x-www-form-urlencoded`, carrying
     /// `T`'s schema.
     Form(SchemaFn),
+    /// A [`RawBody`](crate::RawBody) or [`Body`](crate::Body) extractor: any
+    /// bytes, under any media type or none.
+    Raw,
 }
 
 impl RequestBodyMeta {
@@ -40,6 +43,7 @@ impl RequestBodyMeta {
             Self::Json(_) => "application/json",
             Self::Multipart(_) => "multipart/form-data",
             Self::Form(_) => "application/x-www-form-urlencoded",
+            Self::Raw => "*/*",
         }
     }
 
@@ -49,6 +53,7 @@ impl RequestBodyMeta {
             Self::Json(schema) => Some(schema),
             Self::Multipart(schema) => schema,
             Self::Form(schema) => Some(schema),
+            Self::Raw => None,
         }
     }
 }
@@ -83,7 +88,7 @@ impl RequestBodyMeta {
 /// #   sets_location: false,
 /// #   sets_next_link: false,
 /// #   response_headers: &[],
-/// #   success_status: 200,
+/// #   success_status: Some(200),
 /// #   public: false,
 /// #   deprecation: None,
 /// #   site: todo!(),
@@ -122,7 +127,7 @@ pub struct HttpRouteParts {
     pub sets_location: bool,
     pub sets_next_link: bool,
     pub response_headers: &'static [(&'static str, &'static str)],
-    pub success_status: u16,
+    pub success_status: Option<u16>,
     pub public: bool,
     pub deprecation: Option<DeprecationMeta>,
     /// The site the route dispatches through, whose guard stage the route's
@@ -212,8 +217,8 @@ impl HttpRouteMeta {
     }
 
     /// Schema builder for the response payload — read off the return type,
-    /// a `Json<T>` bare, inside a `Created` or a
-    /// `Paginated` or inside a `Result`, an alias
+    /// a `Json<T>` bare, inside a `Created`, a
+    /// `Paginated` or a `(StatusCode, B)` pair or inside a `Result`, an alias
     /// included, or declared with `#[api(response = T)]` when the handler
     /// builds its own [`Response`](crate::Response).
     pub fn response(&self) -> Option<SchemaFn> {
@@ -286,10 +291,12 @@ impl HttpRouteMeta {
         self.parts.response_headers
     }
 
-    /// The effective **success** HTTP status this route emits — `200` unless a
-    /// `#[http_code(N)]` or `#[redirect(_, code)]` overrides it, or the return
-    /// type answers its own (a `Created` answer's `201`).
-    pub fn success_status(&self) -> u16 {
+    /// The effective **success** HTTP status this route emits — what a
+    /// `#[http_code(N)]` or `#[redirect(_, code)]` sets, or what the return type
+    /// states (`200` for a body, a `Created` answer's `201`) — or `None` when
+    /// only the handler knows it: a `(StatusCode, B)` pair, a bare `StatusCode`,
+    /// a built [`Response`](crate::Response), an answer of the application's own.
+    pub fn success_status(&self) -> Option<u16> {
         self.parts.success_status
     }
 
@@ -553,7 +560,7 @@ mod tests {
             sets_location: false,
             sets_next_link: false,
             response_headers: &[],
-            success_status: 200,
+            success_status: Some(200),
             public: false,
             deprecation: None,
             versions: &[],
@@ -605,7 +612,7 @@ mod tests {
             sets_location: true,
             sets_next_link: true,
             response_headers: &[("x-kind", "user")],
-            success_status: 201,
+            success_status: Some(201),
             public: true,
             deprecation: Some(deprecation),
             site: &SHOW_SITE,
@@ -633,7 +640,7 @@ mod tests {
         assert!(route.sets_location());
         assert!(route.sets_next_link());
         assert_eq!(route.response_headers(), &[("x-kind", "user")]);
-        assert_eq!(route.success_status(), 201);
+        assert_eq!(route.success_status(), Some(201));
         assert!(route.public());
         assert_eq!(route.deprecation(), Some(deprecation));
     }

@@ -697,3 +697,612 @@ mod guards {
         assert!(public.get("401").is_none(), "{public}");
     }
 }
+
+/// What a route answers, read off a live request, beside what its document says.
+mod answers {
+    use std::time::Duration;
+
+    use futures_util::StreamExt as _;
+    use nest_rs_core::{input, module, output};
+    use nest_rs_http::{
+        ApiVersioning, Body, Bytes, Form, Header, HttpConfig, HttpCors, HttpModule, IntoResponse,
+        Json, Multipart, Path, Query, RawBody, Response, Result, StatusCode, controller, routes,
+    };
+    use nest_rs_testing::{TestApp, TestClient};
+    use serde_json::{Value, json};
+
+    use super::{document, openapi};
+
+    const JSON_BODY: &str = "application/json";
+    const FORM_BODY: &str = "application/x-www-form-urlencoded";
+    const MULTIPART_BODY: &str = "multipart/form-data; boundary=x";
+
+    #[input]
+    struct Order {
+        sku: String,
+    }
+
+    #[output]
+    struct Receipt {
+        id: u32,
+    }
+
+    fn receipt() -> Json<Receipt> {
+        Json(Receipt { id: 7 })
+    }
+
+    #[input]
+    struct Limits {
+        limit: Option<u32>,
+    }
+
+    #[input]
+    struct Retried {
+        #[serde(rename = "X-Retried")]
+        retried: Option<u32>,
+    }
+
+    /// An answer of the application's own, whose status only it knows.
+    struct Teapot;
+
+    impl IntoResponse for Teapot {
+        fn into_response(self) -> Response {
+            StatusCode::IM_A_TEAPOT.into_response()
+        }
+    }
+
+    type Queued = (StatusCode, Json<Receipt>);
+
+    #[controller(path = "/orders")]
+    struct OrdersController;
+
+    #[routes]
+    impl OrdersController {
+        #[get("/slow")]
+        #[public]
+        async fn slow(&self) -> &'static str {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            "late"
+        }
+
+        #[post("/json")]
+        #[public]
+        async fn json(&self, Json(order): Json<Order>) -> String {
+            order.sku
+        }
+
+        #[post("/form")]
+        #[public]
+        async fn form(&self, Form(order): Form<Order>) -> String {
+            order.sku
+        }
+
+        #[post("/upload")]
+        #[public]
+        async fn upload(&self, mut parts: Multipart) -> Result<&'static str> {
+            while let Some(part) = parts.next_field().await? {
+                drop(part.bytes().await?);
+            }
+            Ok("taken")
+        }
+
+        #[post("/raw")]
+        #[public]
+        async fn raw(&self, body: RawBody) -> String {
+            body.0.len().to_string()
+        }
+
+        #[post("/stream")]
+        #[public]
+        async fn stream(&self, body: Body) -> Result<String> {
+            Ok(body.into_bytes().await?.len().to_string())
+        }
+
+        #[post("/pair")]
+        #[public]
+        async fn pair(&self) -> (StatusCode, Json<Receipt>) {
+            (StatusCode::ACCEPTED, receipt())
+        }
+
+        #[post("/result-pair")]
+        #[public]
+        async fn result_pair(&self) -> Result<Queued> {
+            Ok((StatusCode::ACCEPTED, receipt()))
+        }
+
+        #[post("/text-pair")]
+        #[public]
+        async fn text_pair(&self) -> (StatusCode, &'static str) {
+            (StatusCode::ACCEPTED, "queued")
+        }
+
+        #[post("/pinned-pair")]
+        #[public]
+        #[http_code(202)]
+        async fn pinned_pair(&self) -> (StatusCode, Json<Receipt>) {
+            (StatusCode::CREATED, receipt())
+        }
+
+        #[delete("/status")]
+        #[public]
+        async fn status(&self) -> StatusCode {
+            StatusCode::NO_CONTENT
+        }
+
+        #[delete("/result-status")]
+        #[public]
+        async fn result_status(&self) -> Result<StatusCode> {
+            Ok(StatusCode::NO_CONTENT)
+        }
+
+        #[post("/built")]
+        #[public]
+        #[api(response = Receipt)]
+        async fn built(&self) -> Response {
+            Response::builder().status(StatusCode::ACCEPTED).body("{}")
+        }
+
+        #[post("/own")]
+        #[public]
+        async fn own(&self) -> Teapot {
+            Teapot
+        }
+
+        #[get("/plain")]
+        #[public]
+        async fn plain(&self) -> Json<Receipt> {
+            receipt()
+        }
+
+        #[delete("/nothing")]
+        #[public]
+        async fn nothing(&self) {}
+
+        #[get("/item/{name}")]
+        #[public]
+        async fn item(&self, Path(name): Path<String>) -> String {
+            name
+        }
+
+        #[get("/numbered/{id}")]
+        #[public]
+        async fn numbered(&self, Path(id): Path<u32>) -> String {
+            id.to_string()
+        }
+
+        #[get("/filtered")]
+        #[public]
+        async fn filtered(&self, Query(limits): Query<Limits>) -> String {
+            format!("{:?}", limits.limit)
+        }
+
+        #[get("/retried")]
+        #[public]
+        async fn retried(&self, head: Header<Retried>) -> String {
+            format!("{:?}", head.0.retried)
+        }
+    }
+
+    #[module(imports = [openapi()], providers = [OrdersController])]
+    struct DefaultApp;
+
+    #[module(
+        imports = [
+            openapi(),
+            HttpModule::for_root(HttpConfig { request_timeout: None, ..HttpConfig::default() }),
+        ],
+        providers = [OrdersController],
+    )]
+    struct UnboundedApp;
+
+    #[module(
+        imports = [
+            openapi(),
+            HttpModule::for_root(HttpConfig {
+                request_timeout: Some(Duration::from_secs(5)),
+                body_read_timeout: Duration::from_secs(6),
+                ..HttpConfig::default()
+            }),
+        ],
+        providers = [OrdersController],
+    )]
+    struct GapPastTheBudgetApp;
+
+    #[module(
+        imports = [
+            openapi(),
+            HttpModule::for_root(HttpConfig { max_body_bytes: 8, ..HttpConfig::default() }),
+        ],
+        providers = [OrdersController],
+    )]
+    struct TightCapApp;
+
+    fn cors(origins: &[&str]) -> Option<HttpCors> {
+        Some(HttpCors {
+            origins: origins.iter().map(|origin| (*origin).to_owned()).collect(),
+            ..HttpCors::default()
+        })
+    }
+
+    #[module(
+        imports = [
+            openapi(),
+            HttpModule::for_root(HttpConfig {
+                cors: cors(&["https://app.example"]),
+                ..HttpConfig::default()
+            }),
+        ],
+        providers = [OrdersController],
+    )]
+    struct ListedOriginsApp;
+
+    #[module(
+        imports = [
+            openapi(),
+            HttpModule::for_root(HttpConfig { cors: cors(&["*"]), ..HttpConfig::default() }),
+        ],
+        providers = [OrdersController],
+    )]
+    struct EveryOriginApp;
+
+    #[module(
+        imports = [
+            openapi(),
+            HttpModule::for_root(HttpConfig {
+                versioning: ApiVersioning::Header,
+                default_version: Some("1".into()),
+                ..HttpConfig::default()
+            }),
+        ],
+        providers = [super::PostsV1Controller, super::PostsV2Controller],
+    )]
+    struct HeaderVersionedApp;
+
+    fn responses<'d>(document: &'d Value, path: &str, method: &str) -> &'d Value {
+        &document["paths"][path][method]["responses"]
+    }
+
+    #[track_caller]
+    fn assert_a_problem(responses: &Value, status: &str) {
+        assert!(
+            responses[status]["content"]["application/problem+json"]["schema"]["$ref"]
+                == "#/components/schemas/ProblemDetails",
+            "{status} is documented as the problem it answers: {responses}",
+        );
+    }
+
+    fn receipt_schema() -> Value {
+        json!({ "$ref": "#/components/schemas/Receipt" })
+    }
+
+    /// A body whose first bytes arrived and whose rest never does.
+    fn stalling() -> Body {
+        Body::from_stream(
+            futures_util::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"{"))])
+                .chain(futures_util::stream::pending()),
+        )
+    }
+
+    async fn stall(client: &TestClient, path: &str, media_type: &str) -> StatusCode {
+        let resp = client
+            .post(path)
+            .content_type(media_type)
+            .body(stalling())
+            .send()
+            .await;
+        resp.0.status()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unguarded_route_documents_the_timeout_503() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+
+        let live = app.http().get("/orders/slow").send().await;
+        live.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        live.assert_header_exist("retry-after");
+
+        let answers = responses(&doc, "/orders/slow", "get");
+        assert_a_problem(answers, "503");
+        assert_eq!(
+            answers["503"]["headers"]["Retry-After"]["schema"]["type"], "integer",
+            "{answers}",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_route_with_no_request_budget_documents_no_timeout_503() {
+        let app = TestApp::for_module::<UnboundedApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        let answers = responses(&doc, "/orders/slow", "get");
+        assert!(answers.get("503").is_none(), "{answers}");
+    }
+
+    #[tokio::test]
+    async fn a_body_documents_the_415_its_media_type_is_refused_with() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        for path in ["/orders/json", "/orders/form", "/orders/upload"] {
+            let live = app
+                .http()
+                .post(path)
+                .content_type("text/plain")
+                .body("x")
+                .send()
+                .await;
+            live.assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            assert_a_problem(responses(&doc, path, "post"), "415");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_body_documents_the_408_a_stall_is_answered() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        for (path, media_type) in [
+            ("/orders/json", JSON_BODY),
+            ("/orders/form", FORM_BODY),
+            ("/orders/upload", MULTIPART_BODY),
+            ("/orders/raw", "application/octet-stream"),
+            ("/orders/stream", "application/octet-stream"),
+        ] {
+            assert_eq!(
+                stall(app.http(), path, media_type).await,
+                StatusCode::REQUEST_TIMEOUT,
+                "{path}",
+            );
+            assert_a_problem(responses(&doc, path, "post"), "408");
+        }
+    }
+
+    /// The budget counts from the arrival, so a gap past it never fires.
+    #[tokio::test(start_paused = true)]
+    async fn a_gap_past_the_request_budget_documents_no_408() {
+        let app = TestApp::for_module::<GapPastTheBudgetApp>()
+            .await
+            .expect("boots");
+        let doc = document(&app, "/api-json").await;
+        assert_eq!(
+            stall(app.http(), "/orders/json", JSON_BODY).await,
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+        let answers = responses(&doc, "/orders/json", "post");
+        assert!(answers.get("408").is_none(), "{answers}");
+        assert_a_problem(answers, "503");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn with_no_request_budget_the_gap_alone_answers_and_is_documented() {
+        let app = TestApp::for_module::<UnboundedApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        assert_eq!(
+            stall(app.http(), "/orders/json", JSON_BODY).await,
+            StatusCode::REQUEST_TIMEOUT,
+        );
+        assert_a_problem(responses(&doc, "/orders/json", "post"), "408");
+    }
+
+    #[tokio::test]
+    async fn a_raw_body_takes_any_media_type_and_documents_what_the_edge_refuses() {
+        let app = TestApp::for_module::<TightCapApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        for path in ["/orders/raw", "/orders/stream"] {
+            let accepted = app
+                .http()
+                .post(path)
+                .content_type("text/plain")
+                .body("x")
+                .send()
+                .await;
+            accepted.assert_status_is_ok();
+            let refused = app.http().post(path).body(vec![0u8; 64]).send().await;
+            refused.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+
+            let body = &doc["paths"][path]["post"]["requestBody"];
+            assert_eq!(body["required"], false, "{body}");
+            assert_eq!(
+                body["content"]["*/*"]["schema"],
+                json!({ "type": "string", "format": "binary" }),
+                "{body}",
+            );
+            let answers = responses(&doc, path, "post");
+            assert_a_problem(answers, "413");
+            assert!(answers.get("415").is_none(), "{answers}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pair_documents_its_body_under_the_range_of_a_status_computed_at_run_time() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        for path in ["/orders/pair", "/orders/result-pair"] {
+            let live = app.http().post(path).send().await;
+            live.assert_status(StatusCode::ACCEPTED);
+
+            let answers = responses(&doc, path, "post");
+            assert!(answers.get("200").is_none(), "{answers}");
+            assert_eq!(
+                answers["2XX"]["content"]["application/json"]["schema"],
+                receipt_schema(),
+                "{answers}",
+            );
+        }
+        let text = responses(&doc, "/orders/text-pair", "post");
+        assert!(text.get("200").is_none(), "{text}");
+        assert!(text.get("2XX").is_some(), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_bare_status_documents_the_range_and_no_body() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        for path in ["/orders/status", "/orders/result-status"] {
+            let live = app.http().delete(path).send().await;
+            live.assert_status(StatusCode::NO_CONTENT);
+
+            let answers = responses(&doc, path, "delete");
+            assert!(answers.get("200").is_none(), "{answers}");
+            assert!(answers["2XX"].get("content").is_none(), "{answers}");
+            assert!(
+                answers["2XX"]["description"]
+                    .as_str()
+                    .is_some_and(|said| said.contains("run time")),
+                "{answers}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_built_response_documents_the_range_and_the_body_it_declares() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        let live = app.http().post("/orders/built").send().await;
+        live.assert_status(StatusCode::ACCEPTED);
+
+        let answers = responses(&doc, "/orders/built", "post");
+        assert!(answers.get("200").is_none(), "{answers}");
+        assert_eq!(
+            answers["2XX"]["content"]["application/json"]["schema"],
+            receipt_schema(),
+            "{answers}",
+        );
+    }
+
+    /// An answer of the application's own: only its `into_response` knows the
+    /// status.
+    #[tokio::test]
+    async fn an_answer_no_type_states_the_status_of_documents_the_range() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+
+        let own = app.http().post("/orders/own").send().await;
+        own.assert_status(StatusCode::IM_A_TEAPOT);
+
+        let answers = responses(&doc, "/orders/own", "post");
+        assert!(answers.get("200").is_none(), "{answers}");
+        assert!(answers.get("2XX").is_some(), "{answers}");
+    }
+
+    #[tokio::test]
+    async fn http_code_pins_a_computed_status_and_the_document_names_it() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        let live = app.http().post("/orders/pinned-pair").send().await;
+        live.assert_status(StatusCode::ACCEPTED);
+
+        let answers = responses(&doc, "/orders/pinned-pair", "post");
+        assert!(answers.get("2XX").is_none(), "{answers}");
+        assert_eq!(
+            answers["202"]["content"]["application/json"]["schema"],
+            receipt_schema(),
+            "{answers}",
+        );
+    }
+
+    #[tokio::test]
+    async fn an_answer_a_type_fixes_keeps_its_status() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        let answers = responses(&doc, "/orders/plain", "get");
+        assert!(answers.get("2XX").is_none(), "{answers}");
+        assert_eq!(
+            answers["200"]["content"]["application/json"]["schema"],
+            receipt_schema(),
+            "{answers}",
+        );
+        let answers = responses(&doc, "/orders/nothing", "delete");
+        assert!(answers.get("2XX").is_none(), "{answers}");
+        assert!(answers.get("200").is_some(), "{answers}");
+    }
+
+    /// A path parameter is the router's to decode and the handler's type to
+    /// read, so each can refuse the value a client sent.
+    #[tokio::test]
+    async fn a_path_parameter_documents_the_400_its_value_is_refused_with() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+
+        let undecodable = app.http().get("/orders/item/%FF").send().await;
+        undecodable.assert_status(StatusCode::BAD_REQUEST);
+        assert_a_problem(responses(&doc, "/orders/item/{name}", "get"), "400");
+
+        let untyped = app.http().get("/orders/numbered/abc").send().await;
+        untyped.assert_status(StatusCode::BAD_REQUEST);
+        assert_a_problem(responses(&doc, "/orders/numbered/{id}", "get"), "400");
+    }
+
+    #[tokio::test]
+    async fn an_optional_parameter_documents_the_400_its_value_is_refused_with() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+
+        let query = app.http().get("/orders/filtered?limit=abc").send().await;
+        query.assert_status(StatusCode::BAD_REQUEST);
+        assert_a_problem(responses(&doc, "/orders/filtered", "get"), "400");
+
+        let header = app
+            .http()
+            .get("/orders/retried")
+            .header("x-retried", "abc")
+            .send()
+            .await;
+        header.assert_status(StatusCode::BAD_REQUEST);
+        assert_a_problem(responses(&doc, "/orders/retried", "get"), "400");
+    }
+
+    #[tokio::test]
+    async fn a_version_parameter_documents_the_400_and_the_404_it_is_answered() {
+        let app = TestApp::for_module::<HeaderVersionedApp>()
+            .await
+            .expect("boots");
+        let doc = document(&app, "/api-json").await;
+        let header = nest_rs_http::DEFAULT_VERSION_HEADER;
+
+        let unserved = app.http().get("/posts").header(header, "9").send().await;
+        unserved.assert_status(StatusCode::NOT_FOUND);
+        let malformed = app
+            .http()
+            .get("/posts")
+            .header(header, "not a token")
+            .send()
+            .await;
+        malformed.assert_status(StatusCode::BAD_REQUEST);
+
+        let answers = responses(&doc, "/posts", "get");
+        assert_a_problem(answers, "400");
+        assert_a_problem(answers, "404");
+    }
+
+    #[tokio::test]
+    async fn a_listed_origin_policy_documents_the_403_it_refuses_another_with() {
+        let app = TestApp::for_module::<ListedOriginsApp>()
+            .await
+            .expect("boots");
+        let doc = document(&app, "/api-json").await;
+        let refused = app
+            .http()
+            .get("/orders/plain")
+            .header("origin", "https://elsewhere.example")
+            .send()
+            .await;
+        refused.assert_status(StatusCode::FORBIDDEN);
+        assert_a_problem(responses(&doc, "/orders/plain", "get"), "403");
+    }
+
+    #[tokio::test]
+    async fn a_policy_admitting_every_origin_documents_no_403() {
+        let app = TestApp::for_module::<EveryOriginApp>()
+            .await
+            .expect("boots");
+        let doc = document(&app, "/api-json").await;
+        let admitted = app
+            .http()
+            .get("/orders/plain")
+            .header("origin", "https://elsewhere.example")
+            .send()
+            .await;
+        admitted.assert_status_is_ok();
+        let answers = responses(&doc, "/orders/plain", "get");
+        assert!(answers.get("403").is_none(), "{answers}");
+    }
+}

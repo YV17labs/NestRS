@@ -452,7 +452,8 @@ adds no line to the root, and writing it is the visible opening.
   guard stage) and the one its body declares (`DocumentedBody::refusal`), never a
   guard's name, so an alias, a wrapper or the global pool is listed as it runs;
   what the edge answers on one of those statuses stays listed beside it; held by
-  the OpenAPI suite.
+  the OpenAPI suite. A guard declaring a status outside `400` to `599` fails the
+  boot (`HttpGuardStage::new`).
 
 **The edge-neutral pipeline is in core** (`.claude/decisions/one-execution-pipeline.md`):
 `nest_rs::core::{Interceptor, ExceptionFilter}`, `GlobalInterceptors` (handler
@@ -641,7 +642,9 @@ router parses. The rewrite is skipped when nothing is versioned.
 - **OpenAPI** self-mounts a document **composed from the route table** (schemas
   through `schemars`, `#[api(...)]` enriches) and an offline Swagger UI that
   loads nothing from elsewhere. The document is 3.1 and states only what the
-  framework knows (`.claude/decisions/openapi-document-scope.md`); it is a
+  framework knows (`.claude/decisions/openapi-document-scope.md`), what an edge
+  answers on a route's behalf under the transport's config included, and `2XX`
+  for a status only the handler knows; it is a
   development surface (`.claude/decisions/openapi-docs-exposure.md`). A route
   is deprecated with `#[api(deprecated = "…")]`, never Rust's `#[deprecated]`
   (`.claude/decisions/route-deprecation.md`), and a list links its next page

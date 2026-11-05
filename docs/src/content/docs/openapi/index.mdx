@@ -155,11 +155,20 @@ The document composes from the route table, so everything in it is derived:
   `security` naming it on a route whose guards can answer `401`, one requirement
   naming each scheme where a chain challenges two, since a chain runs every guard,
   and `security: []` on a `#[public]` one no guard still challenges;
-- the error statuses an operation can actually produce — `400`, `404`, `409`,
-  `413` and `500` where the route can answer them, `403` where a mask's
-  ability can be refused, and every status the route's guards
-  [declare](/fundamentals/guards/#what-a-routes-document-lists), the app's
-  pool included: `401` with its `WWW-Authenticate` challenge, `429` and `503`
+- the success status — a `#[http_code]`'s or a `#[redirect]`'s, or the one the
+  return type states — or
+  [the `2XX` range](/openapi/operations/#a-status-the-handler-computes) where
+  only the handler knows it;
+- the error statuses an operation can actually produce, read off what it takes
+  and the transport it runs on — `400` where a parameter or a body can be refused,
+  `404` where a path parameter or a version selects, `408` where a body can stall
+  under the [body-read deadline](/http/configuration/#connection-deadlines),
+  `409` where a write can conflict, `413` and `415` where a body can be refused,
+  `500` everywhere, `503` with its `Retry-After` under a
+  [request timeout](/http/configuration/#request-timeout), `403` where a mask's
+  ability can be refused or a CORS policy lists its origins — and every status the
+  route's guards [declare](/fundamentals/guards/#what-a-routes-document-lists), the
+  app's pool included: `401` with its `WWW-Authenticate` challenge, `429` and `503`
   with their `Retry-After` — as RFC 9457 `ProblemDetails`, or the body a guard or
   a request answers in its protocol's own words, each beside the other where both
   can answer one status, and beside any body `#[api(error(...))]` declares;
@@ -186,6 +195,14 @@ What the composer does not derive, it leaves to you:
 - **A response header a handler sets itself** on a `Response` it builds. The
   route table knows the ones the framework and `#[response_header]` send, not
   what a handler body writes.
+- **A status a handler answers on its own outside `2XX`.** A `(StatusCode, B)`
+  pair or a built `Response` answering a `404`, or an `Err` of its own, is documented
+  by [`#[api(error(404 = T))]`](/openapi/operations/#error-bodies-of-your-own), as
+  any body of your own is.
+- **A `401` a `#[public]` route defers.** A `#[public]` route taking a required
+  `Ambient<P>` answers a rejected credential's `401`, and an anonymous caller the
+  wiring `500`, while its document says `security: []` and lists no `401`. A route
+  that needs its principal is not `#[public]`.
 - **`externalDocs`**, the document-level link to further reading.
 - **OpenAPI 3.2.** The document is 3.1.2, the 3.1 line's current patch. A 3.2
   document is valid with no other change, but the TypeScript client

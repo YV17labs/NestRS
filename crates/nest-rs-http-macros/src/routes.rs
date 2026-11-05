@@ -817,27 +817,19 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let answer = match answered {
             Some(ty) => quote! { ::nest_rs_http::__answer_of!(#ty) },
-            None => quote! { ::core::option::Option::None },
+            None => quote! { ::nest_rs_http::__private::AnswerDoc::OK },
         };
         let success_status = if shaped_status {
-            quote! { #success_status }
+            quote! { ::core::option::Option::Some(#success_status) }
         } else {
-            quote! {
-                ::core::option::Option::map_or(__nestrs_answer, #success_status, |__a| __a.status)
-            }
+            quote! { __nestrs_answer.status }
         };
-        let sets_location = quote! {
-            #redirects
-                || ::core::option::Option::is_some_and(__nestrs_answer, |__a| __a.location)
-        };
-        let sets_next_link = quote! {
-            ::core::option::Option::is_some_and(__nestrs_answer, |__a| __a.next_link)
-        };
+        let sets_location = quote! { #redirects || __nestrs_answer.location };
+        let sets_next_link = quote! { __nestrs_answer.next_link };
         route_metas.push(quote! {
             #(#cfgs)*
             {
-            let __nestrs_answer: ::core::option::Option<::nest_rs_http::__private::AnswerDoc> =
-                #answer;
+            let __nestrs_answer: ::nest_rs_http::__private::AnswerDoc = #answer;
             ::nest_rs_http::__private::http_route_meta(::nest_rs_http::__private::HttpRouteParts {
                 method: ::nest_rs_http::Method::#method_const,
                 path: #route_path,

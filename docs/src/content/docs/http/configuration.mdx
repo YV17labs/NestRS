@@ -373,7 +373,9 @@ the budget every stalled body is, which one `warn` says at boot. Default
 `20` seconds — the [shutdown window](#shutdown)'s own, so a request admitted just
 before a stop is answered inside the window rather than cut;
 `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS=0` turns it off — the framework-wide
-spelling every duration ceiling uses, so `0` never means "zero seconds":
+spelling every duration ceiling uses, so `0` never means "zero seconds". The
+[OpenAPI document](/openapi/) follows: every route lists the `503` while the
+budget is on, and a route taking a body the `408` while the gap sits under it:
 
 ```bash title=".env.production" frame="terminal"
 NESTRS_HTTP__REQUEST_TIMEOUT_SECS=15

@@ -3,12 +3,13 @@
 //!
 //! `#[routes]` hands a handler's return type to [`PayloadProbe`], and the
 //! compiler answers which type the body's schema is read off — a `Json<T>`'s
-//! `T`, bare, inside a [`Created`] or a [`Paginated`], inside a `Result` — as
-//! [`AnswerProbe`](crate::__private::AnswerProbe) answers for the status, so an
-//! alias documents its body.
+//! `T`, bare, inside a [`Created`], a [`Paginated`] or a `(StatusCode, B)` pair,
+//! inside a `Result` — as [`AnswerProbe`](crate::__private::AnswerProbe) answers
+//! for the status, so an alias documents its body.
 
 use std::marker::PhantomData;
 
+use http::StatusCode;
 use schemars::JsonSchema;
 
 use crate::controller::{SchemaFn, schema_of};
@@ -18,9 +19,9 @@ use crate::paginated::Paginated;
 
 /// A return type whose body is JSON of a type the route's document names.
 ///
-/// Implemented here for [`Json`], a [`Created`] or [`Paginated`] answer of a
-/// documented body, and a `Result` of one; a sibling crate implements it for
-/// a typed answer that renders its own JSON.
+/// Implemented here for [`Json`], a [`Created`], [`Paginated`] or
+/// `(StatusCode, B)` answer of a documented body, and a `Result` of one; a
+/// sibling crate implements it for a typed answer that renders its own JSON.
 pub trait DocumentedPayload {
     /// The type whose JSON schema the body follows.
     type Payload;
@@ -35,6 +36,10 @@ impl<B: DocumentedPayload> DocumentedPayload for Created<B> {
 }
 
 impl<B: DocumentedPayload> DocumentedPayload for Paginated<B> {
+    type Payload = B::Payload;
+}
+
+impl<B: DocumentedPayload> DocumentedPayload for (StatusCode, B) {
     type Payload = B::Payload;
 }
 

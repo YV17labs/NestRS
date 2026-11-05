@@ -535,6 +535,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | `meta.routes`, `meta.path`, `meta.controller`, `meta.token`, `meta.versions` on an `HttpControllerMeta` | `meta.routes()`, `meta.path()`, `meta.controller()`, `meta.token()`, `meta.versions()` |
    | an `HttpRouteMeta { … }` or `HttpControllerMeta::new(…)` built by hand | none: a `#[controller]` struct and a `#[routes]` block record each route |
    | `route.throttled` on an `HttpRouteMeta` | none: a guard declares the `429` it answers in `Guard::denial_statuses`, and the route's OpenAPI document lists it |
+   | `route.success_status() == 200`, a `u16` | `route.success_status() == Some(200)`; `None` is a status only the handler knows, a `(StatusCode, B)` pair, a bare `StatusCode` or a built `Response`, which the document lists under `2XX` |
+   | a `match` on `RequestBodyMeta` naming `Json`, `Multipart` and `Form` | the same, and `RequestBodyMeta::Raw`, what a `RawBody` or `Body` parameter documents |
    | `fn mount(c: &Container, route: poem::Route) -> poem::Route` on a hand-written `Controller` | a `#[controller]` struct and a `#[routes]` block; a surface registering entries of its own is a self-mount, below |
    | `HttpEndpointMeta::new(path, label, mount)`, with `.exempt()` | `HttpEndpointMeta::new(&SITE, path, label, \|c, routes\| { routes.route(Method::GET, &path, ep); })` over `static SITE: Handler = nest_rs::http::declare_endpoint::<M>("M", path, posture)`, `M` the type that mounts it: `.exempt()` becomes `Posture::Public`, a mount the global pool gates `Posture::Gated`; `meta.handler().posture()` reads a mount's posture |
    | `route.nest(path, ep)` in a self-mount | `routes.route_any(&path, ep)`, at exactly `path`; its subtree is registered as `{path}/{*rest}` |
@@ -1344,6 +1346,13 @@ lists what the boot, a log or the wire shows when one is missed.
 
 ## What fails if you get it wrong
 
+- **A guard declaring a status outside `400` to `599` in `denial_statuses`** refuses the
+  boot, naming the guard and the status: list what its `Err` paths answer, an error each.
+- **A `(StatusCode, Json<T>)` route whose `T` has no schema** does not compile (`E0277`), as a
+  bare `Json<T>` route does not: derive it with `#[output]`.
+- **A client generated from `/api-json`** reads `2XX` where it read `200` on a route whose
+  status the handler computes, and new responses on every operation: a generated type naming
+  `200` for one moves, or the route says `#[http_code(200)]` where its status never varies.
 - **A lone Redis binding over a seeded `RedisConnection`** now reads the
   `RedisConfig` of the module it imports, so a suite with `<PREFIX>_REDIS__URL`
   unset is refused naming the variable: seed the `RedisConfig` beside the

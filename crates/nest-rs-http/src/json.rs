@@ -46,7 +46,7 @@ use crate::response::{IntoResponse, Response};
 /// ```
 ///
 /// A route answering one documents `T` off its return type, bare, inside a
-/// `Created` or a `Paginated`, inside a
+/// `Created`, a `Paginated` or a `(StatusCode, B)` pair, inside a
 /// `Result`, an alias included — so `T` has a schema, which `#[output]` derives:
 ///
 /// ```compile_fail,E0277
@@ -66,6 +66,27 @@ use crate::response::{IntoResponse, Response};
 ///     #[public]
 ///     async fn greet(&self) -> Json<Unschemed> {
 ///         Json(Unschemed { text: "hi".to_owned() })
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// use nest_rs_http::{Json, StatusCode, controller, routes};
+///
+/// #[derive(serde::Serialize)]
+/// struct Unschemed {
+///     text: String,
+/// }
+///
+/// #[controller(path = "/")]
+/// struct GreetingsController;
+///
+/// #[routes]
+/// impl GreetingsController {
+///     #[post("/")]
+///     #[public]
+///     async fn greet(&self) -> (StatusCode, Json<Unschemed>) {
+///         (StatusCode::ACCEPTED, Json(Unschemed { text: "hi".to_owned() }))
 ///     }
 /// }
 /// ```

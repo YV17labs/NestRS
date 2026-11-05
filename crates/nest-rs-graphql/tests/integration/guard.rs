@@ -825,3 +825,118 @@ mod request_decided {
         }
     }
 }
+
+/// A field's chain read after what its request ran: its guards run behind the
+/// request's, so an authentication guard behind an authorization guard is refused
+/// across the two.
+mod phase_order {
+    use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
+    use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
+    use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase};
+    use nest_rs_http::{EndpointGuards, HttpView};
+    use nest_rs_testing::TestApp;
+
+    use super::GqlResult;
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Identifies;
+
+    #[async_trait]
+    impl Guard for Identifies {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<GraphqlView> for Identifies {}
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Authorizes;
+
+    #[async_trait]
+    impl Guard for Authorizes {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authorization
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for Authorizes {}
+    impl GuardFor<GraphqlView> for Authorizes {}
+
+    #[resolver]
+    #[use_guards(Authorizes, Identifies)]
+    struct MisorderedResolver;
+
+    #[operations]
+    impl MisorderedResolver {
+        #[query]
+        #[public]
+        async fn misordered(&self) -> GqlResult<i32> {
+            Ok(0)
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [Authorizes, Identifies, MisorderedResolver],
+    )]
+    struct MisorderedFieldModule;
+
+    #[resolver]
+    #[use_guards(Identifies)]
+    struct AfterItsRequestResolver;
+
+    #[operations]
+    impl AfterItsRequestResolver {
+        #[query]
+        #[public]
+        async fn after_its_request(&self) -> GqlResult<i32> {
+            Ok(0)
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [
+            Authorizes,
+            Identifies,
+            EndpointGuards<GraphqlView, (Authorizes,)>,
+            AfterItsRequestResolver,
+        ],
+    )]
+    struct AfterItsRequestModule;
+
+    /// `boot` refused for an authentication guard after an authorization guard, naming
+    /// the two.
+    fn assert_misordered(boot: nest_rs_core::anyhow::Result<TestApp>) {
+        let Err(refused) = boot else {
+            panic!("the misordered chain booted");
+        };
+        let refused = format!("{refused:#}");
+        assert!(
+            refused.contains("Identifies") && refused.contains("Authorizes"),
+            "{refused}",
+        );
+        assert!(refused.contains("after authorization guard"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_field_listing_authentication_after_authorization_refuses_the_boot() {
+        assert_misordered(TestApp::for_module::<MisorderedFieldModule>().await);
+    }
+
+    #[tokio::test]
+    async fn a_field_authenticating_after_its_requests_authorization_refuses_the_boot() {
+        assert_misordered(TestApp::for_module::<AfterItsRequestModule>().await);
+    }
+}

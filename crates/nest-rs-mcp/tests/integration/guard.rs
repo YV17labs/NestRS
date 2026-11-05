@@ -10,7 +10,7 @@ use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, GuardPhase};
 use nest_rs_http::{EndpointGuards, HttpView, StatusCode};
 use nest_rs_mcp::model::{CallToolResult, ContentBlock};
 use nest_rs_mcp::rmcp::{tool, tool_handler, tool_router};
-use nest_rs_mcp::{McpAccess, McpError, McpModule, McpView, ServerHandler, mcp};
+use nest_rs_mcp::{McpAccess, McpError, McpModule, McpView, ServerHandler, mcp, tools};
 use nest_rs_testing::mcp::{call_tool, initialize_request, post_message};
 use nest_rs_testing::{LogCapture, TestApp};
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule};
@@ -372,6 +372,7 @@ impl Guard for Authorizing {
 }
 
 impl GuardFor<HttpView> for Authorizing {}
+impl GuardFor<McpView> for Authorizing {}
 
 /// Authenticates, declaring it.
 #[injectable]
@@ -392,6 +393,7 @@ impl Guard for Authenticating {
 }
 
 impl GuardFor<HttpView> for Authenticating {}
+impl GuardFor<McpView> for Authenticating {}
 
 #[module(providers = [
     Authorizing,
@@ -413,6 +415,68 @@ async fn endpoint_guards_out_of_phase_order_fail_the_boot() {
         said.contains("Authorizing") && said.contains("Authenticating"),
         "{said}",
     );
+}
+
+/// `boot` refused for an authentication guard after an authorization guard, naming the two.
+fn assert_misordered(boot: nest_rs_core::anyhow::Result<TestApp>) {
+    let Err(refused) = boot else {
+        panic!("the misordered chain booted");
+    };
+    let refused = format!("{refused:#}");
+    assert!(
+        refused.contains("Authorizing") && refused.contains("Authenticating"),
+        "{refused}",
+    );
+    assert!(refused.contains("after authorization guard"), "{refused}");
+}
+
+#[mcp(path = "/mcp/misordered")]
+#[use_guards(Authorizing, Authenticating)]
+#[derive(Clone)]
+struct MisorderedTool;
+
+#[tools]
+impl MisorderedTool {
+    /// Read.
+    #[tool]
+    async fn read_misordered(&self) -> Result<String, McpError> {
+        Ok(String::new())
+    }
+}
+
+#[module(providers = [Authorizing, Authenticating, MisorderedTool])]
+struct MisorderedToolModule;
+
+#[tokio::test]
+async fn a_tool_listing_authentication_after_authorization_refuses_the_boot() {
+    assert_misordered(TestApp::for_module::<MisorderedToolModule>().await);
+}
+
+#[mcp(path = "/mcp/after-its-request")]
+#[use_guards(Authenticating)]
+#[derive(Clone)]
+struct AfterItsRequestTool;
+
+#[tools]
+impl AfterItsRequestTool {
+    /// Read.
+    #[tool]
+    async fn read_after_its_request(&self) -> Result<String, McpError> {
+        Ok(String::new())
+    }
+}
+
+#[module(providers = [
+    Authorizing,
+    Authenticating,
+    AfterItsRequestTool,
+    EndpointGuards<McpView, (Authorizing,)>,
+])]
+struct AfterItsRequestToolModule;
+
+#[tokio::test]
+async fn a_tool_authenticating_after_its_requests_authorization_refuses_the_boot() {
+    assert_misordered(TestApp::for_module::<AfterItsRequestToolModule>().await);
 }
 
 /// What [`Attaching`] hands the operations of the request it checked.

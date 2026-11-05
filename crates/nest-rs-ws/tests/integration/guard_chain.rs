@@ -1,5 +1,5 @@
 //! Boot-time validation of a gateway's chains: its **upgrade**'s phases and
-//! principals, the principal half of each per-message chain, and its posture.
+//! principals, each message's read after them, and its posture.
 
 use nest_rs_core::{AmbientValue, Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, GuardPhase, PrincipalClaim};
@@ -110,7 +110,8 @@ struct OrderedGateway;
 
 #[messages]
 impl OrderedGateway {
-    /// Reverse order on purpose: the per-message chain is not phase-validated.
+    /// Reverse order on purpose: each first ran at the upgrade, in order, so listing
+    /// them again here replays what ran and misorders nothing.
     #[subscribe_message("ping")]
     #[use_guards(Authorize, Authenticate)]
     async fn ping(&self, _client: &WsClient) -> String {
@@ -122,12 +123,119 @@ impl OrderedGateway {
 struct OrderedModule;
 
 #[tokio::test]
-async fn a_correct_upgrade_chain_boots_whatever_the_messages_declare() {
+async fn a_message_listing_again_what_its_upgrade_ran_is_no_misorder() {
     TestApp::for_module::<OrderedModule>()
         .await
         .unwrap_or_else(|err| {
             panic!("authentication before authorization is the correct order: {err}")
         });
+}
+
+/// Establishes who the caller is with nothing a guard above reads, at a message alone.
+#[injectable]
+#[derive(Default)]
+struct AuthenticateAtTheMessage;
+
+impl Layer for AuthenticateAtTheMessage {}
+
+#[async_trait]
+impl Guard for AuthenticateAtTheMessage {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_ws::WsView> for AuthenticateAtTheMessage {}
+
+/// Decides what the caller may do, needing no principal to boot.
+#[injectable]
+#[derive(Default)]
+struct AuthorizeAnyone;
+
+impl Layer for AuthorizeAnyone {}
+
+#[async_trait]
+impl Guard for AuthorizeAnyone {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authorization
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for AuthorizeAnyone {}
+impl GuardFor<nest_rs_ws::WsView> for AuthorizeAnyone {}
+
+#[gateway(path = "/ws/misordered-message")]
+#[use_guards(Authenticate)]
+struct MisorderedMessageGateway;
+
+#[messages]
+impl MisorderedMessageGateway {
+    #[subscribe_message("ping")]
+    #[use_guards(AuthorizeAnyone, AuthenticateAtTheMessage)]
+    async fn ping(&self, _client: &WsClient) -> String {
+        "pong".into()
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [
+        MisorderedMessageGateway,
+        Authenticate,
+        AuthorizeAnyone,
+        AuthenticateAtTheMessage,
+    ],
+)]
+struct MisorderedMessageModule;
+
+#[gateway(path = "/ws/authenticating-after-its-upgrade")]
+#[use_guards(AuthorizeAnyone)]
+struct AfterItsUpgradeGateway;
+
+#[messages]
+impl AfterItsUpgradeGateway {
+    #[subscribe_message("ping")]
+    #[use_guards(AuthenticateAtTheMessage)]
+    async fn ping(&self, _client: &WsClient) -> String {
+        "pong".into()
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [AfterItsUpgradeGateway, AuthorizeAnyone, AuthenticateAtTheMessage],
+)]
+struct AfterItsUpgradeModule;
+
+/// `boot` refused for an authentication guard after an authorization guard, naming the two.
+fn assert_misordered(boot: nest_rs_core::anyhow::Result<TestApp>) {
+    let Err(refused) = boot else {
+        panic!("the misordered chain booted");
+    };
+    let refused = format!("{refused:#}");
+    assert!(
+        refused.contains("AuthenticateAtTheMessage") && refused.contains("AuthorizeAnyone"),
+        "{refused}",
+    );
+    assert!(refused.contains("after authorization guard"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_message_listing_authentication_after_authorization_refuses_the_boot() {
+    assert_misordered(TestApp::for_module::<MisorderedMessageModule>().await);
+}
+
+#[tokio::test]
+async fn a_message_authenticating_after_its_upgrades_authorization_refuses_the_boot() {
+    assert_misordered(TestApp::for_module::<AfterItsUpgradeModule>().await);
 }
 
 #[gateway(path = "/ws/bare")]

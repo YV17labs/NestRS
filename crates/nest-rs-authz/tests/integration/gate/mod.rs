@@ -529,6 +529,66 @@ impl UnreachedGateway {
 #[module(providers = [OnlyIdentifies, UnreachedGateway])]
 struct UnreachedMessageModule;
 
+#[derive(SimpleObject, serde::Serialize, serde::Deserialize)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct Keyed {
+    id: i32,
+}
+
+#[resolver]
+struct UnreachedEntityResolver;
+
+#[operations]
+impl UnreachedEntityResolver {
+    #[entity]
+    #[authorize(Read, widget::Entity, unmasked)]
+    async fn find_keyed_by_id(&self, id: i32) -> GqlResult<Keyed> {
+        Ok(Keyed { id })
+    }
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(nest_rs_graphql::GraphqlConfig {
+        federation: true,
+        ..nest_rs_graphql::GraphqlConfig::default()
+    })],
+    providers = [UnreachedEntityResolver],
+)]
+struct UnreachedEntityModule;
+
+#[tokio::test]
+async fn an_entity_gate_no_ability_guard_reaches_refuses_the_boot() {
+    assert_refused_naming(
+        TestApp::for_module::<UnreachedEntityModule>().await,
+        "find_keyed_by_id",
+    );
+}
+
+#[resolver]
+struct UnreachedSubscriptionResolver;
+
+#[operations]
+impl UnreachedSubscriptionResolver {
+    #[subscription]
+    #[authorize(Read, widget::Entity, unmasked)]
+    async fn unreached_stream(
+        &self,
+    ) -> impl nest_rs_graphql::async_graphql::futures_util::Stream<Item = i32> {
+        nest_rs_graphql::async_graphql::futures_util::stream::empty()
+    }
+}
+
+#[module(imports = [GraphqlModule], providers = [UnreachedSubscriptionResolver])]
+struct UnreachedSubscriptionModule;
+
+#[tokio::test]
+async fn a_subscription_gate_no_ability_guard_reaches_refuses_the_boot() {
+    assert_refused_naming(
+        TestApp::for_module::<UnreachedSubscriptionModule>().await,
+        "unreached_stream",
+    );
+}
+
 #[tokio::test]
 async fn a_message_gate_no_ability_guard_reaches_refuses_the_boot() {
     assert_refused_naming(

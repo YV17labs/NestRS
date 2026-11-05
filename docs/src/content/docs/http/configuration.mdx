@@ -220,7 +220,10 @@ or `user@`, and an internationalized host in its ASCII form
 at boot, and compared origin to origin (RFC 6454): `https://App.example:443`
 admits a page on `https://app.example`, since scheme and host compare without
 case and the default port is implied. The answer echoes the page's own
-`Origin` back, the bytes the browser checks.
+`Origin` back, the bytes the browser checks. Only the URL standard's special
+schemes (`http`, `https`, `ws`, `wss`, `ftp`, `file`) have their host read that
+way: an extension's or an embedded webview's scheme (`chrome-extension://`,
+`tauri://`) keeps its host's bytes, so `tauri://Localhost` lists itself alone.
 
 `origins: vec!["*".into()]` opens a fully public API to every origin, and a
 `*` in `methods` or `headers` admits every method or header. With

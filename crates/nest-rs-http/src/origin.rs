@@ -36,7 +36,8 @@ const X_FORWARDED_HOST: &str = "x-forwarded-host";
 /// request arrived over and its `Host` — or, from a trusted proxy alone, what
 /// `Forwarded` (`proto=`, `host=`) or `X-Forwarded-Proto` / `X-Forwarded-Host`
 /// say the client asked for. Origins compare per RFC 6454 §5: scheme and host
-/// without case, ports with the scheme's default filled in.
+/// without case, a non-special scheme's host byte for byte, ports with the
+/// scheme's default filled in.
 #[derive(Clone, Debug)]
 pub(crate) struct OriginPolicy {
     /// What the CORS policy lists; `None` without one.
@@ -268,8 +269,8 @@ enum Origin {
     Tuple(Tuple),
 }
 
-/// Scheme and host lowercased, IPv6 literals in their canonical text, and the
-/// port the scheme defaults to when none is written.
+/// Scheme lowercased, host as [`canonical_host`] reads it, and the port the
+/// scheme defaults to when none is written.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Tuple {
     scheme: String,
@@ -345,8 +346,8 @@ impl Tuple {
             ),
             None => return Err(NotAnOrigin::Host),
         };
-        let host = canonical_host(host)?;
         let scheme = scheme.to_ascii_lowercase();
+        let host = canonical_host(&scheme, host)?;
         let port = port.or_else(|| default_port(&scheme));
         Ok(Self { scheme, host, port })
     }
@@ -408,11 +409,13 @@ impl OriginScheme {
     }
 }
 
-/// `host` as two origins compare it: lowercase, an IPv6 literal in its
-/// canonical text, a host that ends in a number the IPv4 address the URL
-/// standard reads it as (`127.1` is `127.0.0.1`); refused when it is empty, a
-/// malformed literal, or ends in a number and is no IPv4 address.
-fn canonical_host(host: &str) -> Result<String, NotAnOrigin> {
+/// `host` as two origins over the lowercased `scheme` compare it, as the URL
+/// standard's *host parser* reads it: an IPv6 literal in its canonical text;
+/// over a special scheme, lowercase, a host that ends in a number the IPv4
+/// address it reads as (`127.1` is `127.0.0.1`); over any other, opaque, the
+/// bytes written. Refused when it is empty, a malformed literal, or, over a
+/// special scheme, ends in a number and is no IPv4 address.
+fn canonical_host(scheme: &str, host: &str) -> Result<String, NotAnOrigin> {
     if let Some(literal) = host.strip_prefix('[') {
         let address: Ipv6Addr = literal
             .strip_suffix(']')
@@ -423,6 +426,9 @@ fn canonical_host(host: &str) -> Result<String, NotAnOrigin> {
     if host.is_empty() {
         return Err(NotAnOrigin::NoHost);
     }
+    if !is_special(scheme) {
+        return Ok(host.to_owned());
+    }
     let host = host.to_ascii_lowercase();
     if !ends_in_a_number(&host) {
         return Ok(host);
@@ -430,6 +436,12 @@ fn canonical_host(host: &str) -> Result<String, NotAnOrigin> {
     ipv4(&host)
         .map(|address| address.to_string())
         .ok_or(NotAnOrigin::Host)
+}
+
+/// Whether the URL standard calls the lowercased `scheme` special (WHATWG URL,
+/// *special scheme*).
+fn is_special(scheme: &str) -> bool {
+    matches!(scheme, "ftp" | "file" | "http" | "https" | "ws" | "wss")
 }
 
 /// Whether the URL standard reads `host` as an IPv4 address (WHATWG URL,
@@ -633,6 +645,54 @@ mod tests {
                 .allows(&from_browser("https://127.0.0.1", "api.example"))
                 .is_ok()
         );
+    }
+
+    /// The URL standard parses a host as a domain or an address only over a
+    /// special scheme; over any other it stays opaque, its bytes the host, an
+    /// IPv6 literal aside, which it reads whatever the scheme.
+    #[test]
+    fn a_non_special_scheme_keeps_its_host_opaque() {
+        for (entry, origin) in [
+            ("foo://ABC", "foo://ABC"),
+            ("FOO://ABC", "foo://ABC"),
+            ("foo://127.1", "foo://127.1"),
+            ("foo://0x7f.0.0.1", "foo://0x7f.0.0.1"),
+            ("foo://app.1", "foo://app.1"),
+            ("foo://1.2.3.256", "foo://1.2.3.256"),
+            ("foo://ABC:8443", "foo://ABC:8443"),
+            ("foo://[0:0:0:0:0:0:0:1]", "foo://[::1]"),
+        ] {
+            assert_eq!(
+                Tuple::parse(entry).map(|tuple| tuple.serialization()),
+                Ok(origin.to_owned()),
+                "{entry}"
+            );
+        }
+        let listed = ListedOrigins::parse(&entries(&["foo://ABC", "foo://127.1"])).expect("parses");
+        let admits = |sent: &'static str| listed.admits(&HeaderValue::from_static(sent));
+        assert!(admits("foo://ABC"));
+        assert!(admits("foo://127.1"));
+        assert!(!admits("foo://abc"), "another host, in the standard's eyes");
+        assert!(!admits("foo://127.0.0.1"), "no address is read out of it");
+        for (entry, refused) in [
+            ("foo://", NotAnOrigin::NoHost),
+            ("foo://:8443", NotAnOrigin::NoHost),
+            ("foo://[nope]", NotAnOrigin::Host),
+            ("foo://a%2Eb", NotAnOrigin::Host),
+        ] {
+            assert_eq!(Tuple::parse(entry), Err(refused), "{entry}");
+        }
+    }
+
+    /// The six special schemes keep the host parser, each of them.
+    #[test]
+    fn a_special_scheme_reads_its_host_as_a_domain_or_an_address() {
+        for scheme in ["ftp", "file", "http", "https", "ws", "wss"] {
+            let of = |host: &str| Tuple::of(scheme, host).map(|tuple| tuple.host);
+            assert_eq!(of("APP.example"), Ok("app.example".to_owned()), "{scheme}");
+            assert_eq!(of("127.1"), Ok("127.0.0.1".to_owned()), "{scheme}");
+            assert_eq!(of("app.1"), Err(NotAnOrigin::Host), "{scheme}");
+        }
     }
 
     /// The CORS layer's reader: the bytes a browser sends, else the origin a

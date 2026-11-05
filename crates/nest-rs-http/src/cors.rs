@@ -62,8 +62,11 @@ pub struct HttpCors {
     /// internationalized host in IDNA's ASCII form (`xn--…`). It is compared
     /// as an origin (RFC 6454 §5): scheme and host without case, the scheme's
     /// default port implied, so `https://App.example:443` lists what
-    /// `https://app.example` does. `*` admits every origin; `null`, which any
-    /// sandboxed or `data:` document sends, fails the boot.
+    /// `https://app.example` does. A scheme the URL standard does not call
+    /// special (`chrome-extension`, `tauri`; `http`, `https`, `ws`, `wss`, `ftp`
+    /// and `file` are) keeps its host opaque, compared byte for byte, and reads
+    /// no address out of it. `*` admits every origin; `null`, which any sandboxed
+    /// or `data:` document sends, fails the boot.
     pub origins: Vec<String>,
     /// Allowed request methods (`Access-Control-Allow-Methods`); empty ⇒ the
     /// methods the routes serve and the CORS-safelisted `GET`, `HEAD`,

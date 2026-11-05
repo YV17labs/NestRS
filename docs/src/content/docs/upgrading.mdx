@@ -1994,7 +1994,9 @@ lists what the boot, a log or the wire shows when one is missed.
   forbidden method (`CONNECT`, `TRACE`, `TRACK`) fails the boot naming the list
   and the entry's place, never the entry. A preflight for a method no route
   serves is refused `403`, and each refused cross-origin request files one
-  `warn` on `nest_rs::http`.
+  `warn` on `nest_rs::http`. A scheme the URL standard does not call special
+  (`tauri://`, `chrome-extension://`) is compared byte for byte, its host's case
+  included: list it as the browser sends it.
 - **`<PREFIX>_HTTP__TRUSTED_PROXIES`** with a `/0` (`0.0.0.0/0`, `::/0`) or a
   range with address bits set past its prefix (`10.0.0.1/8`) fails the boot
   naming the entry's place. Name your proxies' own range, written from its first

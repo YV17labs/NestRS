@@ -421,3 +421,24 @@ connections, the transport routes on its own segment tree, answers CORS itself,
 decodes with serde_urlencoded and multer and encodes with async-compression,
 and poem is in no manifest or lockfile. The project map's opening line names
 hyper among the libraries the decorators sit over.
+
+## 2026-11-05 — a non-special scheme's host stays opaque
+
+The 2026-10-26 entry read every listed origin's host alike, and a run showed what
+that does: `foo://ABC` admitted `foo://abc`, `foo://127.1` admitted
+`foo://127.0.0.1` and `foo://app.1` failed the boot. The URL standard parses a host
+as a domain or an address only over its special schemes (`ftp`, `file`, `http`,
+`https`, `ws`, `wss`); over any other the host is opaque, its bytes. Now it keeps
+them. An IPv6 literal reads as one whatever the scheme, since the standard's host
+parser takes `[…]` before it looks at the scheme.
+
+**Refused:** keeping the lowercase comparison for a non-special scheme as the more
+forgiving one. Two extensions whose ids differ by case are two origins to the
+standard, and a list admits what it names. A percent-encoded host stays refused
+over every scheme: `http`'s `Authority`, which reads the entry, takes none in a
+hostname, and refusing it fails a boot in the open.
+
+**Not done:** `default_port` holds RFC 9110's and RFC 6455's four and not `ftp`'s
+`21`, which the URL standard's table gives. So `ftp://a:21` and `ftp://a` are two
+origins here and one there. No browser serves a page over `ftp`, so none sends
+either; it costs a line when one does.

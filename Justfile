@@ -109,13 +109,16 @@ mod test
 # (`href="crate::__private::…"`), and a trait method's `crate::` link the same on
 # an implementor in another crate, so the public pass renders alone and no page
 # of it may link there. A third party's trait on a blanket impl renders its own
-# (tracing's `Span`, itertools', tokio's `io`), which is not ours to write.
+# (tracing's `Span`, itertools', tokio's `io`), which is not ours to write. A page
+# prints a seam in a signature with no link, so what `#[expose]` emits on a row is
+# held by its bound's name (`src`, the pages of rustdoc's source view, is excluded).
 doc:
     RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --keep-going --document-private-items
     rm -rf "${CARGO_TARGET_DIR:-target}/doc"
     RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --keep-going
     test -f "${CARGO_TARGET_DIR:-target}/doc/nest_rs/index.html"
     ! grep -rhoE 'href="([^"]*__private[^"]*|crate::[^"]*)"' "${CARGO_TARGET_DIR:-target}/doc" --include='*.html' | grep -vE '"crate::(Span|Itertools::[a-z_]+|io::[A-Za-z]+)"'
+    ! grep -rl 'AModelCrossesNoWire' "${CARGO_TARGET_DIR:-target}/doc" --include='*.html' --exclude-dir=src
 
 # Every check CI runs: lint, docs and tests
 ci: lint doc test::all

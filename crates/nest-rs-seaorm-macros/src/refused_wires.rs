@@ -128,7 +128,8 @@ fn writes_a_model_ex(attr: &Attribute) -> bool {
 }
 
 /// [`emit`]'s impls on `target`, under the bound `nest-rs-seaorm`'s `hidden_columns`
-/// declares.
+/// declares, and hidden: the row's rustdoc page would read a refusal as a capability
+/// and print the bound's names.
 fn emit_on(target: &Ident, model: &ResourceModel) -> TokenStream {
     let private = quote!(::nest_rs_seaorm::__private);
     let (source, output) = (&model.source_ident, &model.output_ident);
@@ -137,6 +138,7 @@ fn emit_on(target: &Ident, model: &ResourceModel) -> TokenStream {
     let refused = quote!(<#private::HiddenColumns<'static> as #answer>::refused());
     let graphql = cfg!(feature = "graphql").then(|| emit_graphql_on(target, &bound, &refused));
     quote! {
+        #[doc(hidden)]
         impl #private::serde::Serialize for #target where #bound {
             fn serialize<__S: #private::serde::Serializer>(
                 &self,
@@ -146,6 +148,7 @@ fn emit_on(target: &Ident, model: &ResourceModel) -> TokenStream {
             }
         }
 
+        #[doc(hidden)]
         impl<'__de> #private::serde::Deserialize<'__de> for #target where #bound {
             fn deserialize<__D: #private::serde::Deserializer<'__de>>(
                 _: __D,
@@ -154,6 +157,7 @@ fn emit_on(target: &Ident, model: &ResourceModel) -> TokenStream {
             }
         }
 
+        #[doc(hidden)]
         impl #private::schemars::JsonSchema for #target where #bound {
             fn schema_name() -> ::std::borrow::Cow<'static, str> {
                 #refused
@@ -170,12 +174,14 @@ fn emit_on(target: &Ident, model: &ResourceModel) -> TokenStream {
     }
 }
 
-/// async-graphql's two wire traits, in a build that has them: GraphQL is a wire of
-/// its own, whichever entity declares `graphql`, since a row needs no key of
-/// `#[expose]`'s to take `#[derive(SimpleObject)]` above it.
+/// async-graphql's two wire traits, under this crate's `graphql` feature and not the
+/// key of `#[expose]`'s, which a row needs none of to take `#[derive(SimpleObject)]`
+/// above it. With the feature off, an async-graphql the app names itself stays open
+/// (`.claude/decisions/mask-provenance.md`, 2026-11-05).
 fn emit_graphql_on(target: &Ident, bound: &TokenStream, refused: &TokenStream) -> TokenStream {
     let root = graphql_root();
     quote! {
+        #[doc(hidden)]
         impl #root::OutputType for #target where #bound {
             fn type_name() -> ::std::borrow::Cow<'static, str> {
                 #refused
@@ -194,6 +200,7 @@ fn emit_graphql_on(target: &Ident, bound: &TokenStream, refused: &TokenStream) -
             }
         }
 
+        #[doc(hidden)]
         impl #root::InputType for #target where #bound {
             type RawValueType = Self;
 

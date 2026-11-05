@@ -383,9 +383,8 @@ fn generate_queue_adapter_module_imports_the_port() {
     assert!(!features_cargo.contains("tracing"), "{features_cargo}");
 }
 
-/// The generator wires `RedisModule` + `RedisQueueModule` and the feature
-/// that compiles the queue binding, `redis-queue` — `redis` alone is the
-/// connection, as `/queue/` documents.
+/// The generator wires `RedisQueueModule` and the feature that compiles it,
+/// `redis-queue` — `redis` alone is the connection, as `/queue/` documents.
 #[test]
 fn generate_queue_adapter_brings_the_queue_binding_feature() {
     let dir = tempfile::tempdir().unwrap();
@@ -915,22 +914,25 @@ fn generate_queue_writes_the_backend_binding_only_when_the_app_binds_none() {
 
         let module = fs::read_to_string(&module_rs).unwrap();
         assert!(module.contains("        AudioQueueModule,"), "{module}");
-        for ident in ["RedisModule", "RedisQueueModule"] {
-            assert_eq!(
-                module
-                    .matches(&format!("use nest_rs::redis::{ident};"))
-                    .count(),
-                usize::from(!bound),
-                "the binding is written only where the app has none: {module}",
-            );
-            assert_eq!(
-                module.matches(ident).count(),
-                if bound { 1 } else { 2 },
-                "listed once: {module}",
-            );
-        }
         assert_eq!(
-            printed.contains("beside RedisModule and RedisQueueModule"),
+            module
+                .matches("use nest_rs::redis::RedisQueueModule;")
+                .count(),
+            usize::from(!bound),
+            "the binding is written only where the app has none: {module}",
+        );
+        assert_eq!(
+            module.matches("        RedisQueueModule,").count(),
+            1,
+            "listed once: {module}",
+        );
+        assert_eq!(
+            module.contains("RedisModule"),
+            bound,
+            "the binding imports the connection, so only a root's pin names it: {module}",
+        );
+        assert_eq!(
+            printed.contains("beside RedisQueueModule."),
             !bound,
             "the run says what it wrote beside the adapter: {printed}",
         );
@@ -942,25 +944,19 @@ fn generate_queue_writes_the_backend_binding_only_when_the_app_binds_none() {
     }
 }
 
-/// The binding `g queue` writes reads Redis's default instance, so a root
-/// opening only a named one gains the default beside it, and a root binding
+/// The binding `g queue` writes imports the connection it runs on, so a root
+/// opening any instance of Redis gains the binding alone, and a root binding
 /// the queue in any form gains nothing.
 #[test]
-fn generate_queue_opens_the_default_instance_its_binding_reads() {
-    for (root_lines, written) in [
-        (
-            "RedisModule::<Cache>,",
-            &["RedisModule", "RedisQueueModule"][..],
-        ),
-        (
-            "RedisModule::for_root((Cache, cache())),",
-            &["RedisModule", "RedisQueueModule"],
-        ),
-        ("RedisModule::for_root(redis()),", &["RedisQueueModule"]),
-        ("RedisModule::<Unnamed>,", &["RedisQueueModule"]),
+fn generate_queue_never_writes_the_connection_its_binding_imports() {
+    for (root_lines, writes_the_binding) in [
+        ("RedisModule::<Cache>,", true),
+        ("RedisModule::for_root((Cache, cache())),", true),
+        ("RedisModule::for_root(redis()),", true),
+        ("RedisQueueModule::<Jobs>,", false),
         (
             "RedisModule::<Jobs>,\n        RedisQueueModule::<Jobs>,",
-            &[],
+            false,
         ),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -982,17 +978,19 @@ fn generate_queue_opens_the_default_instance_its_binding_reads() {
             module.contains(&format!("        {root_lines}")),
             "the root's own lines stay: {module}"
         );
-        for ident in ["RedisModule", "RedisQueueModule"] {
-            assert_eq!(
-                module.contains(&format!("        {ident},")),
-                written.contains(&ident),
-                "`{root_lines}`: {ident} is listed bare only when written: {module}",
-            );
-        }
-        let beside = if written.is_empty() {
-            String::new()
+        assert!(
+            !module.contains("        RedisModule,"),
+            "`{root_lines}`: the connection is the binding's to import: {module}",
+        );
+        assert_eq!(
+            module.contains("        RedisQueueModule,"),
+            writes_the_binding,
+            "`{root_lines}`: {module}",
+        );
+        let beside = if writes_the_binding {
+            ", beside RedisQueueModule"
         } else {
-            format!(", beside {}", written.join(" and "))
+            ""
         };
         assert!(
             printed.contains(&format!("AudioQueueModule is wired into `worker`{beside}.")),
@@ -1106,9 +1104,9 @@ fn generate_ws_over_a_feature_port_guards_the_upgrade_and_bootstraps_its_auth() 
 
 /// A `#[crud]` controller or resolver runs each call in the unit of work
 /// `SeaOrmDatabaseModule` binds, and an app without it is refused at boot: over
-/// a CRUD port, `g http` and `g graphql` write the data layer beside the
-/// adapter into an app that has none, as `g resource` does, and leave one that
-/// has it as it is.
+/// a CRUD port, `g http` and `g graphql` write the binding beside the adapter
+/// into an app that has none, as `g resource` does, and leave one that has it
+/// as it is.
 #[test]
 fn a_crud_adapter_brings_the_data_layer_into_an_app_without_one() {
     for (transport, module) in [
@@ -1129,10 +1127,9 @@ fn a_crud_adapter_brings_the_data_layer_into_an_app_without_one() {
             fs::write(&service, crud).unwrap();
             let module_rs = app.join("src/module.rs");
             if bound {
-                let with_db = fs::read_to_string(&module_rs).unwrap().replace(
-                    "    ],",
-                    "        SeaOrmModule,\n        SeaOrmDatabaseModule,\n    ],",
-                );
+                let with_db = fs::read_to_string(&module_rs)
+                    .unwrap()
+                    .replace("    ],", "        SeaOrmDatabaseModule,\n    ],");
                 fs::write(&module_rs, with_db).unwrap();
             }
 
@@ -1143,15 +1140,17 @@ fn a_crud_adapter_brings_the_data_layer_into_an_app_without_one() {
                 composed.contains(&format!("        {module},")),
                 "`g {transport}` wires {module}: {composed}"
             );
-            for ident in ["SeaOrmModule", "SeaOrmDatabaseModule"] {
-                assert_eq!(
-                    composed.matches(&format!("        {ident},")).count(),
-                    1,
-                    "the data layer is listed once: {composed}"
-                );
-            }
             assert_eq!(
-                printed.contains("beside SeaOrmModule, SeaOrmDatabaseModule"),
+                composed.matches("        SeaOrmDatabaseModule,").count(),
+                1,
+                "the binding is listed once: {composed}"
+            );
+            assert!(
+                !composed.contains("SeaOrmModule"),
+                "the binding imports the pool it runs on: {composed}"
+            );
+            assert_eq!(
+                printed.contains("beside SeaOrmDatabaseModule"),
                 !bound,
                 "the run says what it wrote beside the adapter: {printed}"
             );

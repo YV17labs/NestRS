@@ -117,7 +117,7 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
         names.snake,
         names.http_module()
     ));
-    let mut beside = Vec::from(data_layer());
+    let mut beside = vec![data_layer()];
     if scaffolded_auth {
         beside.push(auth::app_import());
     }

@@ -205,10 +205,10 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let edge = Import::new(format!("features::{}::{}", names.snake, tmodule));
     let mut beside = Vec::new();
     if needs_unit_of_work {
-        beside.extend(data_layer());
+        beside.push(data_layer());
     }
     if transport == Transport::Queue {
-        beside.extend(queue_backend());
+        beside.push(queue_backend());
     }
     if scaffolded_auth {
         beside.push(auth::app_import());
@@ -361,13 +361,9 @@ pub(crate) fn runtime_vars(transport: Transport) -> (String, String) {
 
 /// What an app binds at its root to run a queue adapter's jobs: the backend
 /// is the composition's choice, so no adapter imports it, and the generator
-/// writes it into the root that binds none — with the connection the bare
-/// binding reads, Redis's default instance, unless the root opens it.
-fn queue_backend() -> [Import; 2] {
-    [
-        Import::new("nest_rs::redis::RedisModule").opened_for("RedisQueueModule"),
-        Import::new("nest_rs::redis::RedisQueueModule"),
-    ]
+/// writes it into the root that binds none. It imports the connection it runs on.
+fn queue_backend() -> Import {
+    Import::new("nest_rs::redis::RedisQueueModule")
 }
 
 /// What a generated GraphQL or MCP adapter waits for in `authz/ability.rs`,
@@ -403,7 +399,7 @@ fn print_next_steps(
         println!(
             "  Push from a provider injecting Arc<nest_rs::queue::Jobs>: \
              `jobs.push({}, job)`. The app that pushes imports \
-             nest_rs::redis::RedisQueueModule beside RedisModule.",
+             nest_rs::redis::RedisQueueModule.",
             names.queue()
         );
     }

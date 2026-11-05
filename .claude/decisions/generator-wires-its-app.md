@@ -96,3 +96,15 @@ the retirement and its refusal), its scaffold suite (every column type and an
 entity's migration compiled under the scaffold's `clippy -D warnings`) and the
 e2e replay of every tutorial page that edits `blog`, which runs an every-type
 resource's round trip against the live Postgres.
+
+## 2026-11-05 — the exception goes: a binding imports the resource it reads
+
+`SeaOrmDatabaseModule` and each Redis binding now import their resource bare
+(`adapter-imports-its-transport.md`, 2026-11-05), agreed with the second audit's
+twenty items (the owner's "Tout faire (Recommandé)", 2026-10-31). So *the one
+resource a binding reads is the exception* above is gone with its reason: there
+is no binding left to fail the boot on a connection nothing opens. The generators
+write `SeaOrmDatabaseModule` under a `#[crud]` handler and `RedisQueueModule`
+under a processor, alone, and the scanner that read a root to tell whether it
+opens the default instance went with the pair it wrote. A root's own lines stay,
+a pinned resource among them, so the root still holds every choice it makes.
